@@ -1,6 +1,6 @@
 #!/bin/bash
 set -o pipefail
-# snapsend.sh v2.9 (Refactored)
+# snapsend.sh (run with -V for version; see git log for full changelog)
 # ------------------------------------------------------------------------------
 # Author: [Your Name]
 # Refactored: April 04, 2025
@@ -18,6 +18,7 @@ set -o pipefail
 #   -I               Full history send (send all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
 #   -f               Force full send (destroy target data and send full snapshot)
+#   -V               Print version and exit
 #
 # REMOTE format: [user@]host:dataset_path  (for remote replication).
 # If REMOTE is omitted or has no ':', the backup is done locally to the target path.
@@ -28,6 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
+VERSION='v2.10'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -474,7 +476,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezl:v:rnIuf" opt; do
+while getopts "m:ezl:v:rnIufV" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
@@ -486,9 +488,10 @@ while getopts "m:ezl:v:rnIuf" opt; do
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
         f) FORCE_FULL_SEND=1;;
-        *) 
+        V) echo "$VERSION"; exit 0;;
+        *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f" >&2
+            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -V" >&2
             exit 1
             ;;
     esac

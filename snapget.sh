@@ -1,6 +1,6 @@
 #!/bin/bash
 set -o pipefail
-# snapget.sh v2.9 (Twin of snapsend.sh)
+# snapget.sh (run with -V for version; see git log for full changelog) - twin of snapsend.sh
 # ------------------------------------------------------------------------------
 # Author: [Your Name]
 # Refactored: March 17, 2026
@@ -18,6 +18,7 @@ set -o pipefail
 #   -I               Full history receive (receive all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
 #   -f               Force full pull (destroy local target data and receive full snapshot)
+#   -V               Print version and exit
 #
 # REMOTE format: [user@]host:dataset_path  (source side for pull replication).
 # If REMOTE is omitted or has no ':', the operation is done locally from source path.
@@ -28,6 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
+VERSION='v2.10'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -482,7 +484,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezl:v:rnIuf" opt; do
+while getopts "m:ezl:v:rnIufV" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
@@ -494,9 +496,10 @@ while getopts "m:ezl:v:rnIuf" opt; do
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
         f) FORCE_FULL_SEND=1;;
+        V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f" >&2
+            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -V" >&2
             exit 1
             ;;
     esac

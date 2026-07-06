@@ -2,7 +2,7 @@
 
 # Author: Wojciech Kr�l & Chat-GPT 4
 # Email: lurk@lurk.com.pl
-# Ver: 1.1 from 2024-07-26
+# Version: run with -V/--version; see git log for full changelog
 
 # Description:
 # This script deletes ZFS snapshots based on a specified age threshold.
@@ -20,8 +20,15 @@
 # -w <weeks>           : Number of weeks.
 # -d <days>            : Number of days.
 # -h <hours>           : Number of hours.
+# -V, --version        : Print version and exit.
 
+VERSION='v1.2'
 EXIT_CODE=0
+
+if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
+    echo "$VERSION"
+    exit 0
+fi
 
 # Function to display script usage
 usage() {
