@@ -21,6 +21,8 @@
 # -d <days>            : Number of days.
 # -h <hours>           : Number of hours.
 
+EXIT_CODE=0
+
 # Function to display script usage
 usage() {
     echo "Usage: $0 [-R] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
@@ -108,6 +110,7 @@ delete_snapshots() {
             zfs destroy -R "${snapshot}"
             if [ $? -ne 0 ]; then
                 echo "Error deleting snapshot: ${snapshot}" >&2
+                EXIT_CODE=1
             fi
         else
             echo "Keeping snapshot: ${snapshot} (newer than threshold)" >&2
@@ -176,3 +179,5 @@ echo "Debug: threshold_date = $threshold_date ($(date -d "@$threshold_date"))" >
 
 # Process datasets
 process_datasets "$recurse" "$datasets_list" "$pattern" "$threshold_date"
+
+exit "$EXIT_CODE"
