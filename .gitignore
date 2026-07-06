@@ -1,0 +1,6 @@
+*
+!.gitignore
+!.gitattributes
+!snapsend.sh
+!snapget.sh
+!delsnaps.sh
