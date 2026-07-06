@@ -158,6 +158,17 @@ process_datasets() {
     done
 }
 
+command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exit 1; }
+
+# Prevents two invocations of this script from racing to destroy/list the
+# same snapshots at once (e.g. a manual run overlapping with a cron run).
+LOCKFILE="/var/run/$(basename "$0").lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance of $(basename "$0") is already running (lock: $LOCKFILE) - skipping this run" >&2
+    exit 0
+fi
+
 # Check number of arguments
 if [ "$#" -lt 3 ]; then
     usage

@@ -513,6 +513,21 @@ if ! command -v mbuffer >/dev/null; then
 fi
 
 command -v zfs >/dev/null || { echo "Error: zfs command not found." >&2; exit 1; }
+command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exit 1; }
+
+###############################################################################
+#BEGIN 5A2 [SINGLE-INSTANCE LOCK]
+###############################################################################
+# Prevents two invocations of this script (e.g. a manual run overlapping with
+# a scheduled cron run) from racing to send/recv into the same target dataset.
+LOCKFILE="/var/run/$(basename "$0").lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    log 0 "Another instance of $(basename "$0") is already running (lock: $LOCKFILE) - skipping this run"
+    exit 0
+fi
+###############################################################################
+#END 5A2
 
 ###############################################################################
 #BEGIN 5B [MAIN LOGIC]
