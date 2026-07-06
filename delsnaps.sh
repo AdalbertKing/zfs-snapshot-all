@@ -22,7 +22,7 @@
 # -h <hours>           : Number of hours.
 # -V, --version        : Print version and exit.
 
-VERSION='v1.2'
+VERSION='v1.3'
 EXIT_CODE=0
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
