@@ -284,6 +284,10 @@ transfer_data() {
     
     if [ -n "$remote_host" ]; then
         if [ $COMPRESSION -eq 1 ]; then
+            if ! ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "command -v pigz >/dev/null 2>&1"; then
+                log 0 "Compression requested but pigz is not installed on remote host $remote_host"
+                return 1
+            fi
             if ! "${send_args[@]}" | pigz -$COMPRESSION_LEVEL | ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "mbuffer -q -s $BUFFER_SIZE -m $MEMORY | pigz -d | $recv_cmd"; then
                 return 1
             fi
