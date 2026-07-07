@@ -22,7 +22,7 @@
 # -h <hours>           : Number of hours.
 # -V, --version        : Print version and exit.
 
-VERSION='v1.3'
+VERSION='v1.4'
 EXIT_CODE=0
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
@@ -83,10 +83,12 @@ delete_snapshots() {
     echo "Debug: Dataset = $ds" >&2
     echo "Debug: Pattern = $pat" >&2
 
-    # List all snapshots of this dataset, then keep only those whose
-    # snapshot name (the part after '@') starts with the literal pattern.
+    # List snapshots of THIS dataset only (non-recursive), then keep only those
+    # whose snapshot name (the part after '@') starts with the literal pattern.
+    # Recursion into children is handled by process_datasets_recursively so that
+    # each dataset is processed exactly once (see -R handling).
     local all_snapshots
-    all_snapshots=$(zfs list -H -o name -t snapshot -r "${ds}" 2>/dev/null)
+    all_snapshots=$(zfs list -H -o name -t snapshot "${ds}" 2>/dev/null)
 
     local snapshots=""
     local line snapname
@@ -133,7 +135,7 @@ process_datasets_recursively() {
 
     delete_snapshots "${base_ds}" "${pat}" "${th_date}"
 
-    child_datasets=$(zfs list -H -o name -t filesystem -r "${base_ds}" | grep -v "^${base_ds}$")
+    child_datasets=$(zfs list -H -o name -t filesystem,volume -r "${base_ds}" | grep -v "^${base_ds}$")
     for child in ${child_datasets}; do
         echo "Debug: Processing child dataset = $child" >&2
         delete_snapshots "${child}" "${pat}" "${th_date}"
