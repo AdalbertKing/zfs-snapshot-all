@@ -29,7 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.13'
+VERSION='v2.14'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -286,6 +286,68 @@ create_snapshot() {
 #END 3B
 
 ###############################################################################
+#BEGIN 3D [RESUMABLE TRANSFER SUPPORT]
+###############################################################################
+# If a prior zfs recv into $tgt_dataset was interrupted mid-stream, ZFS leaves
+# a resume token on the TARGET dataset (receive_resume_token property). In
+# snapget.sh the target is ALWAYS local (remote_host here refers to the
+# SOURCE), so these helpers are always called with an empty remote_host/user
+# -- kept as parameters anyway for symmetry with snapsend.sh's identical
+# helpers. Resume via `zfs send -t <token>` (run on whichever side holds the
+# source -- transfer_data() already routes that through ssh when needed);
+# give up (via `zfs receive -A`, which discards only the partial state, not
+# the dataset's existing history) after MAX_RESUME_ATTEMPTS failed attempts.
+MAX_RESUME_ATTEMPTS=3
+
+get_resume_token() {
+    local tgt_dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+    local token
+    if [ -n "$remote_host" ]; then
+        token=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+            "zfs get -H -o value receive_resume_token '$tgt_dataset' 2>/dev/null")
+    else
+        token=$(zfs get -H -o value receive_resume_token "$tgt_dataset" 2>/dev/null)
+    fi
+    if [ -n "$token" ] && [ "$token" != "-" ]; then
+        echo "$token"
+    fi
+}
+
+abandon_resume() {
+    local tgt_dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+    log 1 "Abandoning stuck resume state on $tgt_dataset (zfs receive -A)"
+    if [ -n "$remote_host" ]; then
+        ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
+    else
+        zfs receive -A "$tgt_dataset"
+    fi
+}
+
+resume_state_file() {
+    echo "/var/run/$(basename "$0").resume-attempts.$(echo "$1" | tr '/' '_')"
+}
+
+read_resume_attempts() {
+    cat "$(resume_state_file "$1")" 2>/dev/null || echo 0
+}
+
+increment_resume_attempts() {
+    local f
+    f=$(resume_state_file "$1")
+    echo "$(($(read_resume_attempts "$1") + 1))" > "$f"
+}
+
+reset_resume_attempts() {
+    rm -f "$(resume_state_file "$1")"
+}
+###############################################################################
+#END 3D
+
+###############################################################################
 #BEGIN 3C [DATA TRANSFER OPERATIONS]
 ###############################################################################
 transfer_data() {
@@ -373,6 +435,39 @@ process_dataset() {
         if ! zfs list -H "$src_dataset" &>/dev/null; then
             log 0 "Source dataset not found: $src_dataset"
             return 1
+        fi
+    fi
+
+    if [ $FORCE_FULL_SEND -ne 1 ]; then
+        # target is always local in snapget.sh -- pass empty remote_user/host
+        local resume_token
+        resume_token=$(get_resume_token "$tgt_dataset" "" "")
+        if [ -n "$resume_token" ]; then
+            local attempts
+            attempts=$(read_resume_attempts "$tgt_dataset")
+            if [ "$attempts" -ge "$MAX_RESUME_ATTEMPTS" ]; then
+                log 1 "Resume failed $attempts times for $tgt_dataset - abandoning stuck state"
+                abandon_resume "$tgt_dataset" "" ""
+                reset_resume_attempts "$tgt_dataset"
+                log 1 "Abandoned - falling through to normal transfer logic"
+            else
+                increment_resume_attempts "$tgt_dataset"
+                log 1 "Found resume token for $tgt_dataset - resuming interrupted transfer (attempt $((attempts + 1))/$MAX_RESUME_ATTEMPTS)"
+                local resume_recv_flags="-F"
+                [ $UNMOUNT -eq 1 ] && resume_recv_flags="$resume_recv_flags -u"
+                local resume_send_cmd="zfs send -t $resume_token"
+                local resume_recv_cmd="zfs recv $resume_recv_flags $tgt_dataset"
+                log 4 "RAW RESUME SEND COMMAND: $resume_send_cmd"
+                log 4 "RAW RESUME RECV COMMAND: $resume_recv_cmd"
+                if transfer_data "$resume_send_cmd" "$resume_recv_cmd" "$remote_host" "$remote_user"; then
+                    reset_resume_attempts "$tgt_dataset"
+                    log 1 "Resumed transfer completed successfully"
+                    return 0
+                else
+                    log 0 "Resume attempt failed"
+                    return 1
+                fi
+            fi
         fi
     fi
 
