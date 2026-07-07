@@ -29,7 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.14'
+VERSION='v2.15'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -421,7 +421,7 @@ process_dataset() {
             else
                 increment_resume_attempts "$tgt_dataset"
                 log 1 "Found resume token for $tgt_dataset - resuming interrupted transfer (attempt $((attempts + 1))/$MAX_RESUME_ATTEMPTS)"
-                local resume_recv_flags="-F"
+                local resume_recv_flags="-F -s"
                 [ $UNMOUNT -eq 1 ] && resume_recv_flags="$resume_recv_flags -u"
                 local resume_send_cmd="zfs send -t $resume_token"
                 local resume_recv_cmd="zfs recv $resume_recv_flags $tgt_dataset"
@@ -541,10 +541,13 @@ process_dataset() {
         fi
     fi
 
-    local recv_flags="-F"
+    # -s makes ZFS SAVE partial receive state on interruption (and expose a
+    # receive_resume_token) instead of rolling it back -- this is the
+    # precondition for the resumable-transfer logic above to ever fire.
+    local recv_flags="-F -s"
     [ $UNMOUNT -eq 1 ] && recv_flags="$recv_flags -u"
     local recv_cmd="zfs recv $recv_flags $tgt_dataset"
-    
+
     log 4 "RAW ZFS SEND COMMAND: $send_cmd"
     log 4 "RAW ZFS RECV COMMAND: $recv_cmd"
 
