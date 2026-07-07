@@ -22,7 +22,7 @@
 # -h <hours>           : Number of hours.
 # -V, --version        : Print version and exit.
 
-VERSION='v1.4'
+VERSION='v1.5'
 EXIT_CODE=0
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
@@ -162,15 +162,6 @@ process_datasets() {
 
 command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exit 1; }
 
-# Prevents two invocations of this script from racing to destroy/list the
-# same snapshots at once (e.g. a manual run overlapping with a cron run).
-LOCKFILE="/var/run/$(basename "$0").lock"
-exec 200>"$LOCKFILE"
-if ! flock -n 200; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance of $(basename "$0") is already running (lock: $LOCKFILE) - skipping this run" >&2
-    exit 0
-fi
-
 # Check number of arguments
 if [ "$#" -lt 3 ]; then
     usage
@@ -189,6 +180,18 @@ datasets_list="$1"
 shift
 pattern="$1"
 shift
+
+# Single-instance lock keyed on the operation target (datasets + pattern), so
+# two runs that would destroy the same snapshot set are serialized, while
+# unrelated prune jobs (different datasets/pattern) run concurrently instead of
+# blocking each other.
+LOCK_KEY=$(printf '%s\0%s' "$datasets_list" "$pattern" | md5sum | cut -d' ' -f1)
+LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance targeting the same datasets/pattern is already running (lock: $LOCKFILE) - skipping this run" >&2
+    exit 0
+fi
 
 # Parse time arguments
 parse_time_arguments "$@"

@@ -29,7 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.11'
+VERSION='v2.12'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -525,12 +525,18 @@ command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exi
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
 ###############################################################################
-# Prevents two invocations of this script (e.g. a manual run overlapping with
-# a scheduled cron run) from racing to send/recv into the same target dataset.
-LOCKFILE="/var/run/$(basename "$0").lock"
+# Prevent two invocations that target the SAME datasets+remote from racing to
+# send/recv into the same target dataset (e.g. a manual run overlapping with a
+# scheduled cron run). The lock is keyed on the operation target (datasets +
+# remote), NOT just the script name, so unrelated jobs (different datasets) run
+# concurrently instead of blocking each other. Options (-v, -z, ...) are
+# deliberately excluded from the key, so a manual run and a cron run of the same
+# target still serialize even if their option formatting differs (-v3 vs -v 3).
+LOCK_KEY=$(printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -d' ' -f1)
+LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
-    log 0 "Another instance of $(basename "$0") is already running (lock: $LOCKFILE) - skipping this run"
+    log 0 "Another instance targeting the same datasets is already running (lock: $LOCKFILE) - skipping this run"
     exit 0
 fi
 ###############################################################################
