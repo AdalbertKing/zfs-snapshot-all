@@ -18,6 +18,12 @@ set -o pipefail
 #   -I               Full history send (send all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
 #   -f               Force full send (destroy target data and send full snapshot)
+#   -p <PORT>         SSH port to use (default: 22)
+#   -k <FILE>         Verify remote host keys against this known_hosts file instead
+#                     of blindly trusting them (StrictHostKeyChecking=no is the
+#                     default when -k is omitted, unchanged from prior versions --
+#                     only opt into -k if you've already populated FILE, e.g. via
+#                     ssh-keyscan, and verified the fingerprint out of band)
 #   -V               Print version and exit
 #
 # REMOTE format: [user@]host:dataset_path  (for remote replication).
@@ -29,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.16'
+VERSION='v2.17'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -45,6 +51,7 @@ UNMOUNT=0
 FORCE_FULL_SEND=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
+KNOWN_HOSTS_FILE=""
 ###############################################################################
 #END 1
 
@@ -82,7 +89,7 @@ get_timestamp() {
     local remote_host="${4:-}"
     
     if [ -n "$remote_host" ]; then
-        local ts=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+        local ts=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs get -H -p -o value creation '${dataset}@${snapshot}' 2>/dev/null") || return 1
     else
         local ts=$(zfs get -H -p -o value creation "${dataset}@${snapshot}" 2>/dev/null) || return 1
@@ -105,7 +112,7 @@ get_sorted_snapshots() {
     
     local snaps
     if [ -n "$remote_host" ]; then
-        snaps=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+        snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || return 1
     else
         snaps=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null | awk -F '@' '{print $2}') || return 1
@@ -180,7 +187,7 @@ validate_remote_host() {
     
     # Get remote machine ID through SSH
     local remote_machine_id
-    remote_machine_id=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+    remote_machine_id=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
         "cat /etc/machine-id 2>/dev/null || echo 'UNKNOWN'" 2>/dev/null)
 
     # Core safety check
@@ -195,7 +202,7 @@ validate_remote_host() {
         local local_hostname
         local_hostname=$(hostname -f)
         local remote_hostname
-        remote_hostname=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "hostname -f")
+        remote_hostname=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "hostname -f")
         
         if [[ "$local_hostname" == "$remote_hostname" ]]; then
             log 0 "CRITICAL: Remote hostname matches local ($local_hostname)"
@@ -292,7 +299,7 @@ get_resume_token() {
     local remote_host="${3:-}"
     local token
     if [ -n "$remote_host" ]; then
-        token=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+        token=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs get -H -o value receive_resume_token '$tgt_dataset' 2>/dev/null")
     else
         token=$(zfs get -H -o value receive_resume_token "$tgt_dataset" 2>/dev/null)
@@ -308,7 +315,7 @@ abandon_resume() {
     local remote_host="${3:-}"
     log 1 "Abandoning stuck resume state on $tgt_dataset (zfs receive -A)"
     if [ -n "$remote_host" ]; then
-        ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
     else
         zfs receive -A "$tgt_dataset"
     fi
@@ -354,15 +361,15 @@ transfer_data() {
     
     if [ -n "$remote_host" ]; then
         if [ $COMPRESSION -eq 1 ]; then
-            if ! ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "command -v pigz >/dev/null 2>&1"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v pigz >/dev/null 2>&1"; then
                 log 0 "Compression requested but pigz is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! "${send_args[@]}" | pigz -$COMPRESSION_LEVEL | ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "mbuffer -q -s $BUFFER_SIZE -m $MEMORY | pigz -d | $recv_cmd"; then
+            if ! "${send_args[@]}" | pigz -$COMPRESSION_LEVEL | ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "mbuffer -q -s $BUFFER_SIZE -m $MEMORY | pigz -d | $recv_cmd"; then
                 return 1
             fi
         else
-            if ! "${send_args[@]}" | ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $recv_cmd"; then
+            if ! "${send_args[@]}" | ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $recv_cmd"; then
                 return 1
             fi
         fi
@@ -454,7 +461,7 @@ process_dataset() {
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         log 2 "Creating target dataset: $tgt_dataset"
         if [ -n "$remote_host" ]; then
-            ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" \
+            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs list '$tgt_dataset' >/dev/null 2>&1 || zfs create -p '$tgt_dataset'" || return 1
         else
             zfs list "$tgt_dataset" >/dev/null 2>&1 || zfs create -p "$tgt_dataset" || return 1
@@ -470,7 +477,7 @@ process_dataset() {
         
         if [ -n "$remote_host" ]; then
             log 4 "EXECUTING DESTROY ON REMOTE: $remote_host"
-            ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "$destroy_cmd"
+            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$destroy_cmd"
         else
             log 4 "EXECUTING DESTROY LOCALLY"
             zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R "$@" 2>/dev/null || true' -- {} || true
@@ -481,7 +488,7 @@ process_dataset() {
         log 4 "RAW ZFS CREATE COMMAND: $create_cmd"
         
         if [ -n "$remote_host" ]; then
-            ssh -o StrictHostKeyChecking=no -p "$PORT" "$remote_user@$remote_host" "$create_cmd" || return 1
+            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$create_cmd" || return 1
         else
             zfs create -p "$tgt_dataset" || return 1
         fi
@@ -582,7 +589,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezl:v:rnIufV" opt; do
+while getopts "m:ezl:v:rnIufVp:k:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
@@ -594,10 +601,12 @@ while getopts "m:ezl:v:rnIufV" opt; do
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
         f) FORCE_FULL_SEND=1;;
+        p) PORT="$OPTARG";;
+        k) KNOWN_HOSTS_FILE="$OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -V" >&2
+            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -p -k -V" >&2
             exit 1
             ;;
     esac
@@ -620,6 +629,17 @@ fi
 
 command -v zfs >/dev/null || { echo "Error: zfs command not found." >&2; exit 1; }
 command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exit 1; }
+
+# Built once, used by every ssh invocation below. Default (-k omitted) is
+# UNCHANGED from prior versions: StrictHostKeyChecking=no. Only opt into -k on
+# a host where KNOWN_HOSTS_FILE has already been populated (e.g. ssh-keyscan)
+# and the fingerprint verified out of band -- e.g. a backup host reaching
+# across an untrusted network, unlike the trusted-LAN default use case here.
+if [ -n "$KNOWN_HOSTS_FILE" ]; then
+    SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
+else
+    SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
+fi
 
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
