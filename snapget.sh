@@ -29,7 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.15'
+VERSION='v2.16'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -44,6 +44,7 @@ FULL_HISTORY_SEND=0
 UNMOUNT=0
 FORCE_FULL_SEND=0
 declare -a CONFLICT_SNAPSHOTS=()
+STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
 ###############################################################################
 #END 1
 
@@ -58,6 +59,15 @@ log() {
     local LEVEL=$1
     shift
     [ "$VERBOSE" -ge "$LEVEL" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >&2
+}
+
+# One line per processed dataset, appended to STATS_LOG. Best-effort: never
+# lets a logging failure (e.g. unwritable path) break the actual backup.
+emit_stats() {
+    local dataset="$1" target="$2" status="$3" duration="$4" resumed="${5:-no}"
+    {
+        echo "$(date -u +%FT%TZ) script=$(basename "$0") dataset=${dataset} target=${target} status=${status} duration_s=${duration} resumed=${resumed}"
+    } >> "$STATS_LOG" 2>/dev/null || true
 }
 ###############################################################################
 #END 2A
@@ -404,6 +414,7 @@ process_dataset() {
     local tgt_dataset="$2"
     local remote_user="$3"
     local remote_host="$4"
+    STATS_RESUMED="no"
     validate_remote_host "$remote_user" "$remote_host"
     log 3 "================================================"
     log 3 "PROCESSING DATASET:"
@@ -461,6 +472,7 @@ process_dataset() {
                 log 4 "RAW RESUME RECV COMMAND: $resume_recv_cmd"
                 if transfer_data "$resume_send_cmd" "$resume_recv_cmd" "$remote_host" "$remote_user"; then
                     reset_resume_attempts "$tgt_dataset"
+                    STATS_RESUMED="yes"
                     log 1 "Resumed transfer completed successfully"
                     return 0
                 else
@@ -571,6 +583,7 @@ process_dataset() {
     }
 
     log 1 "Transfer completed successfully"
+    return 0
 }
 ###############################################################################
 #END 4
@@ -635,6 +648,7 @@ LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     log 0 "Another instance targeting the same datasets is already running (lock: $LOCKFILE) - skipping this run"
+    emit_stats "$1" "${2:-}" "skipped_lock" "0"
     exit 0
 fi
 ###############################################################################
@@ -681,7 +695,13 @@ for dataset in "${DATASETS[@]}"; do
     if [ $DRY_RUN -eq 1 ]; then
         process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"
     else
-        process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST" || FAILED_DATASETS+=("$dataset")
+        stats_start=$(date +%s)
+        if process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"; then
+            emit_stats "$dataset" "$src_path" "success" "$(( $(date +%s) - stats_start ))" "$STATS_RESUMED"
+        else
+            emit_stats "$dataset" "$src_path" "failed" "$(( $(date +%s) - stats_start ))" "$STATS_RESUMED"
+            FAILED_DATASETS+=("$dataset")
+        fi
     fi
 done
 

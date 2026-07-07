@@ -22,13 +22,23 @@
 # -h <hours>           : Number of hours.
 # -V, --version        : Print version and exit.
 
-VERSION='v1.5'
+VERSION='v1.6'
 EXIT_CODE=0
+STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
     echo "$VERSION"
     exit 0
 fi
+
+# One line per processed dataset, appended to STATS_LOG. Best-effort: never
+# lets a logging failure (e.g. unwritable path) break the actual prune.
+emit_stats() {
+    local dataset="$1" pattern="$2" status="$3" duration="$4" deleted="$5" kept="$6"
+    {
+        echo "$(date -u +%FT%TZ) script=$(basename "$0") dataset=${dataset} pattern=${pattern} status=${status} duration_s=${duration} deleted=${deleted} kept=${kept}"
+    } >> "$STATS_LOG" 2>/dev/null || true
+}
 
 # Function to display script usage
 usage() {
@@ -78,6 +88,8 @@ delete_snapshots() {
     local ds="$1"
     local pat="$2"
     local th_date="$3"
+    local ds_start deleted_count=0 kept_count=0 ds_failed=0
+    ds_start=$(date +%s)
 
     echo "Debug: Inside delete_snapshots function" >&2
     echo "Debug: Dataset = $ds" >&2
@@ -103,6 +115,7 @@ delete_snapshots() {
     # If no snapshots are found, return early
     if [ -z "$snapshots" ]; then
         echo "No snapshots found for dataset $ds matching pattern $pat" >&2
+        emit_stats "$ds" "$pat" "success" "$(( $(date +%s) - ds_start ))" 0 0
         return 0
     fi
 
@@ -120,11 +133,18 @@ delete_snapshots() {
             if [ $? -ne 0 ]; then
                 echo "Error deleting snapshot: ${snapshot}" >&2
                 EXIT_CODE=1
+                ds_failed=1
+            else
+                deleted_count=$((deleted_count + 1))
             fi
         else
             echo "Keeping snapshot: ${snapshot} (newer than threshold)" >&2
+            kept_count=$((kept_count + 1))
         fi
     done <<< "$snapshots"
+
+    emit_stats "$ds" "$pat" "$([ "$ds_failed" -eq 0 ] && echo success || echo failed)" \
+        "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
 }
 
 # Function to recursively process datasets
@@ -190,6 +210,7 @@ LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance targeting the same datasets/pattern is already running (lock: $LOCKFILE) - skipping this run" >&2
+    emit_stats "$datasets_list" "$pattern" "skipped_lock" "0" "0" "0"
     exit 0
 fi
 
