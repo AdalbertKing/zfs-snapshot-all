@@ -29,7 +29,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.12'
+VERSION='v2.13'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -421,7 +421,7 @@ process_dataset() {
         log 1 "Force full send activated (-f)"
         local common_snapshot="null"
     else
-        if [[ " ${tgt_snaps[@]} " =~ " ${latest_snap} " ]]; then
+        if [[ " ${tgt_snaps[*]} " == *" ${latest_snap} "* ]]; then
             if validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
                 log 1 "Snapshot already exists in target - skipping"
                 return 0
