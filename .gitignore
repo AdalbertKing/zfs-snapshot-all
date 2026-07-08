@@ -4,3 +4,4 @@
 !snapsend.sh
 !snapget.sh
 !delsnaps.sh
+!gen-cron.sh
