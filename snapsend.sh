@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.17'
+VERSION='v2.18'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -142,7 +142,13 @@ find_conflicting_snapshots() {
     done
 
     if [ $RECURSIVE -eq 1 ]; then
-        local tgt_children=$(zfs list -H -o name -r "$tgt_dataset" | grep -v "^${tgt_dataset}$")
+        local tgt_children
+        if [ -n "$remote_host" ]; then
+            tgt_children=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+                "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -v "^${tgt_dataset}$")
+        else
+            tgt_children=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -v "^${tgt_dataset}$")
+        fi
 
         for tgt_child in $tgt_children; do
             local child_name="${tgt_child##*/}"
@@ -472,7 +478,7 @@ process_dataset() {
         log 1 "Force full send activated (-f)"
         log 2 "Destroying all snapshots and data on target dataset"
         
-        local destroy_cmd="zfs list -H -o name -r \"$tgt_dataset\" | tac | xargs -I{} sh -c 'zfs destroy -R {} 2>/dev/null || true'"
+        local destroy_cmd="zfs list -H -o name -r \"$tgt_dataset\" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R \"\$@\" 2>/dev/null || true' -- {}"
         log 4 "RAW ZFS DESTROY COMMAND: $destroy_cmd"  # debug logging
         
         if [ -n "$remote_host" ]; then
