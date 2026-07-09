@@ -21,7 +21,8 @@ set -o pipefail
 #              [flags="<snapsend.sh flags>"] notify="<notify-fail.sh description>"
 #
 #   add_retain tier=<label> schedule="<5-field cron>" prune_root="<pool/path>" \
-#              pattern="<snapshot name substring to match>" retain="<delsnaps.sh -h/-d/-w/-m/-y flags>" \
+#              pattern="<snapshot name substring to match>" \
+#              retain="<delsnaps.sh -h/-d/-w/-m/-y (age) or -H/-D/-W/-M/-Y (count) flags>" \
 #              notify="<notify-fail.sh description>"
 #
 # add_retain is deliberately separate from add_job: pruning in production runs
@@ -31,10 +32,17 @@ set -o pipefail
 # flags="-f" (force full send) and flags="-n" (dry-run) are rejected at generate
 # time: -f in a standing cron job means destroy-and-reseed the target every run,
 # -n never actually sends anything -- neither makes sense as a recurring job.
+#
+# All add_retain patterns sharing the same prune_root are validated against
+# each other at generate time: since delsnaps.sh matches by literal string
+# prefix, a pattern that is a prefix of (or equal to) another tier's pattern
+# for the same prune_root would let one tier's snapshots leak into another
+# tier's retention run. This is rejected regardless of retain mode -- it is
+# always a configuration mistake, not a valid use case.
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v1.0'
+VERSION='v1.1'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -46,6 +54,13 @@ MARKER_END="# END zfs-backup-managed"
 declare -a JOB_LINES=()
 declare -a RETAIN_LINES=()
 declare -A SEEN_RETAIN=()
+
+# Parallel arrays (index-aligned) recording every add_retain declaration's
+# prune_root/pattern/tier, for the cross-tier overlap check in
+# validate_retain_patterns (see BEGIN 3.5).
+declare -a RETAIN_ROOTS=()
+declare -a RETAIN_PATTERNS=()
+declare -a RETAIN_TIERS=()
 ###############################################################################
 #END 1
 
@@ -137,7 +152,34 @@ add_retain() {
     [ -z "${SEEN_RETAIN[$dedup_key]:-}" ] || die "add_retain: duplicate declaration for prune_root='$prune_root' tier='$tier' -- one add_retain per (prune_root,tier)"
     SEEN_RETAIN[$dedup_key]=1
 
+    RETAIN_ROOTS+=("$prune_root")
+    RETAIN_PATTERNS+=("$pattern")
+    RETAIN_TIERS+=("$tier")
+
     RETAIN_LINES+=("$schedule $REPO_DIR/delsnaps.sh -R \"$prune_root\" \"$pattern\" $retain 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+}
+
+# delsnaps.sh matches snapshots by literal string prefix ("$snapname" == "$pat"*).
+# If two add_retain declarations share a prune_root and one pattern is a prefix
+# of (or equal to) the other, a single snapshot can match both tiers' prune
+# runs. In age mode this is a latent correctness bug; in count mode it is
+# actively destructive (the finer-grained tier's snapshots -- always the most
+# recent -- eat the coarser tier's keep budget on the very first run). Catch
+# it here, once, across every tier for a given prune_root, rather than relying
+# on each cron job to independently guess it's scoped correctly.
+validate_retain_patterns() {
+    local n="${#RETAIN_ROOTS[@]}"
+    local i j pi pj
+    for ((i = 0; i < n; i++)); do
+        for ((j = i + 1; j < n; j++)); do
+            [ "${RETAIN_ROOTS[$i]}" = "${RETAIN_ROOTS[$j]}" ] || continue
+            pi="${RETAIN_PATTERNS[$i]}"
+            pj="${RETAIN_PATTERNS[$j]}"
+            if [[ "$pi" == "$pj"* ]] || [[ "$pj" == "$pi"* ]]; then
+                die "add_retain: pattern overlap for prune_root='${RETAIN_ROOTS[$i]}' -- tier='${RETAIN_TIERS[$i]}' pattern='$pi' and tier='${RETAIN_TIERS[$j]}' pattern='$pj': one pattern is a prefix of (or equal to) the other, so a single snapshot could match both retention rules. Use mutually exclusive prefixes (e.g. 'automated_daily_' / 'automated_weekly_', not 'automated_' / 'automated_daily_')."
+            fi
+        done
+    done
 }
 ###############################################################################
 #END 3
@@ -250,6 +292,8 @@ fi
 source "$CONFIG"
 
 [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || die "no add_job/add_retain declarations found in $CONFIG"
+
+validate_retain_patterns
 
 if [ "$INSTALL" -eq 1 ]; then
     install_crontab
