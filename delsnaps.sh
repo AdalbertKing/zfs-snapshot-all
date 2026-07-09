@@ -5,25 +5,45 @@
 # Version: run with -V/--version; see git log for full changelog
 
 # Description:
-# This script deletes ZFS snapshots based on a specified age threshold.
+# This script deletes ZFS snapshots, in one of two mutually exclusive modes:
+#   - age-based (lowercase flags): delete snapshots older than a threshold.
+#   - count-based (uppercase flags): keep the N most recently created
+#     snapshots matching the pattern, delete the rest.
 
 # Usage examples:
 # 1. Delete snapshots older than 1 year and 6 months for datasets "tank/data1" and "tank/data2" recursively:
 #    ./delsnaps.sh -R "tank/data1,tank/data2" "backup-" -y1 -m6 -d0 -h0
 # 2. Delete snapshots older than 2 years without recursion for dataset "tank/data3":
 #    ./delsnaps.sh "tank/data3" "snapshot-" -y2 -m0 -d0 -h0
+# 3. Keep only the 12 most recent monthly snapshots for dataset "tank/data4":
+#    ./delsnaps.sh "tank/data4" "monthly-" -M12
+# 4. Keep only the 24 most recent hourly snapshots, recursively:
+#    ./delsnaps.sh -R "tank/data5" "hourly-" -H24
+# 5. Preview (no destroy) what -M12 would do on dataset "tank/data4":
+#    ./delsnaps.sh -n "tank/data4" "monthly-" -M12
 
 # Options:
 # -R                   : Recursively process child datasets.
+# -n                   : Dry-run. Print what would be deleted/kept; never calls
+#                        `zfs destroy`. Can be combined with -R, in any order.
+# Age-based (sum to one threshold date; snapshots older than it are deleted):
 # -y <years>           : Number of years.
 # -m <months>          : Number of months.
 # -w <weeks>           : Number of weeks.
 # -d <days>            : Number of days.
 # -h <hours>           : Number of hours.
+# Count-based (sum to one keep-count; only the N most recent are kept):
+# -Y <count>           : Count contribution (years slot).
+# -M <count>           : Count contribution (months slot).
+# -W <count>           : Count contribution (weeks slot).
+# -D <count>           : Count contribution (days slot).
+# -H <count>           : Count contribution (hours slot).
 # -V, --version        : Print version and exit.
+# Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.6'
+VERSION='v1.8'
 EXIT_CODE=0
+DRY_RUN=false
 STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
@@ -42,123 +62,227 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "Usage: $0 [-R] [-n] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
     exit 1
 }
 
-# Function to parse time arguments
+# Function to parse time arguments. Sets a package of vars for both modes
+# plus age_flag_seen/count_flag_seen so the caller can tell which mode (if
+# either) was actually requested and reject mixing the two.
 parse_time_arguments() {
     years=0
     months=0
     weeks=0
     days=0
     hours=0
+    keep_years=0
+    keep_months=0
+    keep_weeks=0
+    keep_days=0
+    keep_hours=0
+    age_flag_seen=false
+    count_flag_seen=false
 
-    while getopts "y:m:w:d:h:" opt; do
+    while getopts "y:m:w:d:h:Y:M:W:D:H:" opt; do
         case ${opt} in
             y )
                 years=$OPTARG
+                age_flag_seen=true
                 ;;
             m )
                 months=$OPTARG
+                age_flag_seen=true
                 ;;
             w )
                 weeks=$OPTARG
+                age_flag_seen=true
                 ;;
             d )
                 days=$OPTARG
+                age_flag_seen=true
                 ;;
             h )
                 hours=$OPTARG
+                age_flag_seen=true
+                ;;
+            Y )
+                keep_years=$OPTARG
+                count_flag_seen=true
+                ;;
+            M )
+                keep_months=$OPTARG
+                count_flag_seen=true
+                ;;
+            W )
+                keep_weeks=$OPTARG
+                count_flag_seen=true
+                ;;
+            D )
+                keep_days=$OPTARG
+                count_flag_seen=true
+                ;;
+            H )
+                keep_hours=$OPTARG
+                count_flag_seen=true
                 ;;
             \? )
                 usage
                 ;;
         esac
     done
+
+    if [ "$age_flag_seen" = true ] && [ "$count_flag_seen" = true ]; then
+        echo "Error: cannot mix age-based (-y/-m/-w/-d/-h) and count-based (-Y/-M/-W/-D/-H) flags in one invocation" >&2
+        exit 1
+    fi
 }
 
-# Function to calculate the threshold date
+# Function to calculate the threshold date (age-based mode)
 calculate_threshold_date() {
     echo $(date -d "-${years} years -${months} months -${weeks} weeks -${days} days -${hours} hours" +%s)
 }
 
-# Function to delete snapshots
+# Function to calculate the keep-count (count-based mode)
+calculate_keep_count() {
+    echo $((keep_years + keep_months + keep_weeks + keep_days + keep_hours))
+}
+
+# Function to delete snapshots. mode is "age" (param = threshold epoch
+# seconds, delete anything older) or "count" (param = number of most
+# recently created matching snapshots to keep, delete the rest).
 delete_snapshots() {
     local ds="$1"
     local pat="$2"
-    local th_date="$3"
+    local mode="$3"
+    local param="$4"
     local ds_start deleted_count=0 kept_count=0 ds_failed=0
     ds_start=$(date +%s)
 
     echo "Debug: Inside delete_snapshots function" >&2
     echo "Debug: Dataset = $ds" >&2
     echo "Debug: Pattern = $pat" >&2
+    echo "Debug: Mode = $mode, Param = $param" >&2
 
-    # List snapshots of THIS dataset only (non-recursive), then keep only those
-    # whose snapshot name (the part after '@') starts with the literal pattern.
-    # Recursion into children is handled by process_datasets_recursively so that
-    # each dataset is processed exactly once (see -R handling).
+    # List snapshots of THIS dataset only (non-recursive), oldest-first, then
+    # keep only those whose snapshot name (the part after '@') starts with the
+    # literal pattern. Oldest-first ordering matters for count mode, where the
+    # last N entries in the filtered array are the ones to keep. Recursion
+    # into children is handled by process_datasets_recursively so that each
+    # dataset is processed exactly once (see -R handling).
     local all_snapshots
-    all_snapshots=$(zfs list -H -o name -t snapshot "${ds}" 2>/dev/null)
+    all_snapshots=$(zfs list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null)
 
-    local snapshots=""
+    local filtered=()
     local line snapname
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         snapname="${line#*@}"
         if [[ "$snapname" == "${pat}"* ]]; then
-            snapshots+="${line}"$'\n'
+            filtered+=("$line")
         fi
     done <<< "$all_snapshots"
 
     # If no snapshots are found, return early
-    if [ -z "$snapshots" ]; then
+    if [ "${#filtered[@]}" -eq 0 ]; then
         echo "No snapshots found for dataset $ds matching pattern $pat" >&2
         emit_stats "$ds" "$pat" "success" "$(( $(date +%s) - ds_start ))" 0 0
         return 0
     fi
 
-    echo "Debug: Snapshots found: ${snapshots}" >&2
+    echo "Debug: Snapshots found: ${filtered[*]}" >&2
 
-    while IFS= read -r snapshot; do
-        [ -z "$snapshot" ] && continue
-        creation_date_sec=$(zfs get -H -p -o value creation "${snapshot}")
+    if [ "$mode" = "count" ]; then
+        local total="${#filtered[@]}"
+        local keep=$param
+        [ "$keep" -lt 0 ] && keep=0
+        local to_delete=$((total - keep))
+        [ "$to_delete" -lt 0 ] && to_delete=0
 
-        echo "Debug: Snapshot = $snapshot, creation_date_sec = $creation_date_sec" >&2
-
-        if [ "${creation_date_sec}" -lt "${th_date}" ]; then
-            echo "Deleting snapshot: ${snapshot}" >&2
-            zfs destroy -R "${snapshot}"
-            if [ $? -ne 0 ]; then
-                echo "Error deleting snapshot: ${snapshot}" >&2
-                EXIT_CODE=1
-                ds_failed=1
+        local i=0 snapshot
+        for snapshot in "${filtered[@]}"; do
+            if [ "$i" -lt "$to_delete" ]; then
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would delete snapshot: ${snapshot}" >&2
+                    deleted_count=$((deleted_count + 1))
+                else
+                    echo "Deleting snapshot: ${snapshot}" >&2
+                    zfs destroy -R "${snapshot}"
+                    if [ $? -ne 0 ]; then
+                        echo "Error deleting snapshot: ${snapshot}" >&2
+                        EXIT_CODE=1
+                        ds_failed=1
+                    else
+                        deleted_count=$((deleted_count + 1))
+                    fi
+                fi
             else
-                deleted_count=$((deleted_count + 1))
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would keep snapshot: ${snapshot} (among last ${keep})" >&2
+                else
+                    echo "Keeping snapshot: ${snapshot} (among last ${keep})" >&2
+                fi
+                kept_count=$((kept_count + 1))
             fi
-        else
-            echo "Keeping snapshot: ${snapshot} (newer than threshold)" >&2
-            kept_count=$((kept_count + 1))
-        fi
-    done <<< "$snapshots"
+            i=$((i + 1))
+        done
+    else
+        local snapshot creation_date_sec
+        for snapshot in "${filtered[@]}"; do
+            creation_date_sec=$(zfs get -H -p -o value creation "${snapshot}")
 
-    emit_stats "$ds" "$pat" "$([ "$ds_failed" -eq 0 ] && echo success || echo failed)" \
-        "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
+            echo "Debug: Snapshot = $snapshot, creation_date_sec = $creation_date_sec" >&2
+
+            if [ "${creation_date_sec}" -lt "${param}" ]; then
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would delete snapshot: ${snapshot}" >&2
+                    deleted_count=$((deleted_count + 1))
+                else
+                    echo "Deleting snapshot: ${snapshot}" >&2
+                    zfs destroy -R "${snapshot}"
+                    if [ $? -ne 0 ]; then
+                        echo "Error deleting snapshot: ${snapshot}" >&2
+                        EXIT_CODE=1
+                        ds_failed=1
+                    else
+                        deleted_count=$((deleted_count + 1))
+                    fi
+                fi
+            else
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would keep snapshot: ${snapshot} (newer than threshold)" >&2
+                else
+                    echo "Keeping snapshot: ${snapshot} (newer than threshold)" >&2
+                fi
+                kept_count=$((kept_count + 1))
+            fi
+        done
+    fi
+
+    local status
+    if [ "$DRY_RUN" = true ]; then
+        status="dryrun"
+    elif [ "$ds_failed" -eq 0 ]; then
+        status="success"
+    else
+        status="failed"
+    fi
+    emit_stats "$ds" "$pat" "$status" "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
 }
 
 # Function to recursively process datasets
 process_datasets_recursively() {
     local base_ds="$1"
     local pat="$2"
-    local th_date="$3"
+    local mode="$3"
+    local param="$4"
 
-    delete_snapshots "${base_ds}" "${pat}" "${th_date}"
+    delete_snapshots "${base_ds}" "${pat}" "${mode}" "${param}"
 
     child_datasets=$(zfs list -H -o name -t filesystem,volume -r "${base_ds}" | grep -v "^${base_ds}$")
     for child in ${child_datasets}; do
         echo "Debug: Processing child dataset = $child" >&2
-        delete_snapshots "${child}" "${pat}" "${th_date}"
+        delete_snapshots "${child}" "${pat}" "${mode}" "${param}"
     done
 }
 
@@ -167,15 +291,16 @@ process_datasets() {
     local recurse="$1"
     local datasets_list="$2"
     local pattern="$3"
-    local threshold_date="$4"
+    local mode="$4"
+    local param="$5"
 
     IFS=',' read -r -a datasets <<< "$datasets_list"
 
     for dataset in "${datasets[@]}"; do
         if [ "$recurse" = true ]; then
-            process_datasets_recursively "${dataset}" "${pattern}" "${threshold_date}"
+            process_datasets_recursively "${dataset}" "${pattern}" "${mode}" "${param}"
         else
-            delete_snapshots "${dataset}" "${pattern}" "${threshold_date}"
+            delete_snapshots "${dataset}" "${pattern}" "${mode}" "${param}"
         fi
     done
 }
@@ -189,11 +314,14 @@ fi
 
 recurse=false
 
-# Check if first argument is -R
-if [ "$1" == "-R" ]; then
-    recurse=true
+# Consume leading -R/-n flags, in either order.
+while [ "$1" == "-R" ] || [ "$1" == "-n" ]; do
+    case "$1" in
+        -R) recurse=true ;;
+        -n) DRY_RUN=true ;;
+    esac
     shift
-fi
+done
 
 # Get arguments
 datasets_list="$1"
@@ -217,11 +345,17 @@ fi
 # Parse time arguments
 parse_time_arguments "$@"
 
-# Calculate threshold date
-threshold_date=$(calculate_threshold_date)
-echo "Debug: threshold_date = $threshold_date ($(date -d "@$threshold_date"))" >&2
+if [ "$count_flag_seen" = true ]; then
+    retain_mode="count"
+    retain_param=$(calculate_keep_count)
+    echo "Debug: mode=count keep_count=$retain_param" >&2
+else
+    retain_mode="age"
+    retain_param=$(calculate_threshold_date)
+    echo "Debug: mode=age threshold_date=$retain_param ($(date -d "@$retain_param"))" >&2
+fi
 
 # Process datasets
-process_datasets "$recurse" "$datasets_list" "$pattern" "$threshold_date"
+process_datasets "$recurse" "$datasets_list" "$pattern" "$retain_mode" "$retain_param"
 
 exit "$EXIT_CODE"
