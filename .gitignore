@@ -5,3 +5,4 @@
 !snapget.sh
 !delsnaps.sh
 !gen-cron.sh
+!deploy_new_server.sh
