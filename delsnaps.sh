@@ -9,6 +9,27 @@
 #   - age-based (lowercase flags): delete snapshots older than a threshold.
 #   - count-based (uppercase flags): keep the N most recently created
 #     snapshots matching the pattern, delete the rest.
+#
+# Each eligible snapshot is removed with a plain `zfs destroy` of exactly that
+# snapshot -- nothing else is touched. To prune a whole dataset tree, use -R,
+# which applies the SAME retention rule to every descendant dataset in turn
+# (each keeps its own newest N / its own within-threshold snapshots). A plain
+# destroy refuses to remove a snapshot that has dependent clones (e.g. a
+# Proxmox linked-clone VM/CT disk); such a snapshot is reported and skipped
+# rather than silently destroyed. Pass -F to override that ("clear-cut"): it
+# switches to `zfs destroy -R`, which additionally destroys same-named
+# snapshots on descendant datasets AND any clones, even outside the hierarchy.
+# -F is deliberately opt-in because it can remove live clones.
+#
+# Datasets may live on a remote host: prefix an entry with "[user@]host:"
+# (user defaults to root) and every zfs list/get/destroy for that dataset runs
+# over ssh on that host. An entry is remote only when it has a ':' AND the part
+# before it contains no '/', so plain local dataset names -- including the rare
+# ones that legally contain a ':' (e.g. tank/data:backup) -- keep working
+# exactly as before. Local and remote datasets can be mixed in one
+# comma-separated list. The Proxmox-reserved-snapshot guard and all dry-run
+# behaviour apply identically to remote datasets (names are filtered the same
+# way after listing).
 
 # Usage examples:
 # 1. Delete snapshots older than 1 year and 6 months for datasets "tank/data1" and "tank/data2" recursively:
@@ -21,11 +42,22 @@
 #    ./delsnaps.sh -R "tank/data5" "hourly-" -H24
 # 5. Preview (no destroy) what -M12 would do on dataset "tank/data4":
 #    ./delsnaps.sh -n "tank/data4" "monthly-" -M12
+# 6. Keep the 12 most recent monthly snapshots on a remote host, over ssh port 2222:
+#    ./delsnaps.sh -p2222 "backup@pve2:tank/data" "monthly-" -M12
 
 # Options:
-# -R                   : Recursively process child datasets.
+# -R                   : Recursively process child datasets (each with its own
+#                        retention). This is the correct way to prune a subtree.
 # -n                   : Dry-run. Print what would be deleted/kept; never calls
 #                        `zfs destroy`. Can be combined with -R, in any order.
+# -F                   : Clear-cut. Use `zfs destroy -R` instead of a plain
+#                        destroy, cascading to same-named descendant snapshots
+#                        and destroying dependent clones (even Proxmox linked
+#                        clones). Dangerous, opt-in.
+# -p <PORT>            : SSH port for remote datasets (default: 22).
+# -k <FILE>            : Verify remote host keys against this known_hosts file
+#                        (StrictHostKeyChecking=yes). Default when omitted is
+#                        StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh.
 # Age-based (sum to one threshold date; snapshots older than it are deleted):
 # -y <years>           : Number of years.
 # -m <months>          : Number of months.
@@ -41,9 +73,12 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.9'
+VERSION='v1.11'
 EXIT_CODE=0
 DRY_RUN=false
+CLEARCUT=false
+PORT=22
+KNOWN_HOSTS_FILE=""
 STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
 
 # Snapshot name prefixes reserved by Proxmox VE itself (storage replication,
@@ -62,6 +97,74 @@ is_protected_snapshot() {
     return 1
 }
 
+# Run a zfs subcommand either locally or on a remote host. First two args are
+# the remote user and host; an empty host means "run locally". The remaining
+# args are passed to zfs verbatim. For remote execution each arg is wrapped in
+# single quotes before being handed to the remote shell -- zfs dataset and
+# snapshot names cannot contain single quotes, so this is safe, and quoting the
+# flags too (e.g. '-H') is harmless. stdout, stderr and exit status all
+# propagate to the caller exactly as a local `zfs` call would.
+run_zfs() {
+    local ruser="$1" rhost="$2"
+    shift 2
+    if [ -n "$rhost" ]; then
+        local cmd="zfs" arg
+        for arg in "$@"; do
+            cmd+=" '${arg}'"
+        done
+        ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$cmd"
+    else
+        zfs "$@"
+    fi
+}
+
+# Destroy exactly one snapshot (local or remote), returning zfs's exit status.
+# Default is a plain `zfs destroy <snap>`: removes only that snapshot and, by
+# design, FAILS if it has dependent clones instead of taking them down with it.
+# Clear-cut mode (-F) uses `zfs destroy -R`, which cascades to same-named
+# descendant snapshots and destroys dependent clones (even outside the
+# hierarchy) -- the "wycinaj w pien" behaviour, opt-in because it can remove
+# live clones.
+destroy_one() {
+    local snap="$1" ruser="$2" rhost="$3"
+    if [ "$CLEARCUT" = true ]; then
+        run_zfs "$ruser" "$rhost" destroy -R "$snap"
+    else
+        run_zfs "$ruser" "$rhost" destroy "$snap"
+    fi
+}
+
+# Split a datasets-list entry into remote user/host/dataset. A remote entry is
+# "[user@]host:dataset" (user defaults to root); results come back via the
+# R_USER/R_HOST/R_DS globals (bash has no clean multi-value return).
+#
+# ZFS legally permits ':' inside dataset names, so a bare ':' cannot mean
+# "remote" on its own without breaking local names like tank/data:backup.
+# The distinguishing fact: the host part before the ':' never contains '/',
+# whereas a local dataset name that carries a colon always has its pool/child
+# '/' before that colon. So treat an entry as remote only when it has a ':'
+# AND nothing before the first ':' looks like a path. An empty R_HOST => local.
+parse_remote() {
+    local elem="$1" remote_part
+    # NB: compute remote_part on its own line -- doing it in the `local`
+    # declaration above would expand ${elem%%:*} before elem is assigned.
+    remote_part="${elem%%:*}"
+    if [[ "$elem" == *:* && "$remote_part" != */* ]]; then
+        R_DS="${elem#*:}"
+        if [[ "$remote_part" == *@* ]]; then
+            R_USER="${remote_part%%@*}"
+            R_HOST="${remote_part#*@}"
+        else
+            R_USER="root"
+            R_HOST="$remote_part"
+        fi
+    else
+        R_USER=""
+        R_HOST=""
+        R_DS="$elem"
+    fi
+}
+
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
     echo "$VERSION"
     exit 0
@@ -78,8 +181,10 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
-    echo "   or: $0 [-R] [-n] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "Usage: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
+    echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     exit 1
 }
 
@@ -172,11 +277,17 @@ delete_snapshots() {
     local pat="$2"
     local mode="$3"
     local param="$4"
+    local ruser="${5:-}"
+    local rhost="${6:-}"
     local ds_start deleted_count=0 kept_count=0 ds_failed=0
     ds_start=$(date +%s)
+    # Label used in stats/log output: prefix the host for remote datasets so a
+    # single stats log covering several hosts stays unambiguous.
+    local ds_label="$ds"
+    [ -n "$rhost" ] && ds_label="${rhost}:${ds}"
 
     echo "Debug: Inside delete_snapshots function" >&2
-    echo "Debug: Dataset = $ds" >&2
+    echo "Debug: Dataset = $ds_label" >&2
     echo "Debug: Pattern = $pat" >&2
     echo "Debug: Mode = $mode, Param = $param" >&2
 
@@ -187,7 +298,7 @@ delete_snapshots() {
     # into children is handled by process_datasets_recursively so that each
     # dataset is processed exactly once (see -R handling).
     local all_snapshots
-    all_snapshots=$(zfs list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null)
+    all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null)
 
     local filtered=()
     local line snapname
@@ -205,8 +316,8 @@ delete_snapshots() {
 
     # If no snapshots are found, return early
     if [ "${#filtered[@]}" -eq 0 ]; then
-        echo "No snapshots found for dataset $ds matching pattern $pat" >&2
-        emit_stats "$ds" "$pat" "success" "$(( $(date +%s) - ds_start ))" 0 0
+        echo "No snapshots found for dataset $ds_label matching pattern $pat" >&2
+        emit_stats "$ds_label" "$pat" "success" "$(( $(date +%s) - ds_start ))" 0 0
         return 0
     fi
 
@@ -227,13 +338,13 @@ delete_snapshots() {
                     deleted_count=$((deleted_count + 1))
                 else
                     echo "Deleting snapshot: ${snapshot}" >&2
-                    zfs destroy -R "${snapshot}"
-                    if [ $? -ne 0 ]; then
+                    if destroy_one "${snapshot}" "$ruser" "$rhost"; then
+                        deleted_count=$((deleted_count + 1))
+                    else
                         echo "Error deleting snapshot: ${snapshot}" >&2
+                        [ "$CLEARCUT" = false ] && echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
                         EXIT_CODE=1
                         ds_failed=1
-                    else
-                        deleted_count=$((deleted_count + 1))
                     fi
                 fi
             else
@@ -249,7 +360,7 @@ delete_snapshots() {
     else
         local snapshot creation_date_sec
         for snapshot in "${filtered[@]}"; do
-            creation_date_sec=$(zfs get -H -p -o value creation "${snapshot}")
+            creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}")
 
             echo "Debug: Snapshot = $snapshot, creation_date_sec = $creation_date_sec" >&2
 
@@ -259,13 +370,13 @@ delete_snapshots() {
                     deleted_count=$((deleted_count + 1))
                 else
                     echo "Deleting snapshot: ${snapshot}" >&2
-                    zfs destroy -R "${snapshot}"
-                    if [ $? -ne 0 ]; then
+                    if destroy_one "${snapshot}" "$ruser" "$rhost"; then
+                        deleted_count=$((deleted_count + 1))
+                    else
                         echo "Error deleting snapshot: ${snapshot}" >&2
+                        [ "$CLEARCUT" = false ] && echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
                         EXIT_CODE=1
                         ds_failed=1
-                    else
-                        deleted_count=$((deleted_count + 1))
                     fi
                 fi
             else
@@ -287,7 +398,7 @@ delete_snapshots() {
     else
         status="failed"
     fi
-    emit_stats "$ds" "$pat" "$status" "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
+    emit_stats "$ds_label" "$pat" "$status" "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
 }
 
 # Function to recursively process datasets
@@ -296,13 +407,20 @@ process_datasets_recursively() {
     local pat="$2"
     local mode="$3"
     local param="$4"
+    local ruser="${5:-}"
+    local rhost="${6:-}"
 
-    delete_snapshots "${base_ds}" "${pat}" "${mode}" "${param}"
+    delete_snapshots "${base_ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
 
-    child_datasets=$(zfs list -H -o name -t filesystem,volume -r "${base_ds}" | grep -v "^${base_ds}$")
-    for child in ${child_datasets}; do
+    # Fetch the full descendant list (local or over ssh) and drop base_ds itself
+    # in bash rather than piping the remote output through grep -- keeps the
+    # remote command a single quoted zfs call with no shell metacharacters.
+    local all_datasets child
+    all_datasets=$(run_zfs "$ruser" "$rhost" list -H -o name -t filesystem,volume -r "${base_ds}")
+    for child in ${all_datasets}; do
+        [ "$child" = "$base_ds" ] && continue
         echo "Debug: Processing child dataset = $child" >&2
-        delete_snapshots "${child}" "${pat}" "${mode}" "${param}"
+        delete_snapshots "${child}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
     done
 }
 
@@ -317,10 +435,12 @@ process_datasets() {
     IFS=',' read -r -a datasets <<< "$datasets_list"
 
     for dataset in "${datasets[@]}"; do
+        # parse_remote sets R_USER/R_HOST/R_DS; R_HOST empty => local dataset.
+        parse_remote "$dataset"
         if [ "$recurse" = true ]; then
-            process_datasets_recursively "${dataset}" "${pattern}" "${mode}" "${param}"
+            process_datasets_recursively "${R_DS}" "${pattern}" "${mode}" "${param}" "${R_USER}" "${R_HOST}"
         else
-            delete_snapshots "${dataset}" "${pattern}" "${mode}" "${param}"
+            delete_snapshots "${R_DS}" "${pattern}" "${mode}" "${param}" "${R_USER}" "${R_HOST}"
         fi
     done
 }
@@ -334,20 +454,58 @@ fi
 
 recurse=false
 
-# Consume leading -R/-n flags, in either order.
-while [ "$1" == "-R" ] || [ "$1" == "-n" ]; do
+# Consume leading option flags, in any order. -p/-k take an argument and accept
+# both the split (-p 2222) and attached (-p2222) forms. Anything that is not a
+# recognised flag ends the loop and is treated as the first positional
+# (datasets list).
+while [ "$#" -gt 0 ]; do
     case "$1" in
-        -R) recurse=true ;;
-        -n) DRY_RUN=true ;;
+        -R) recurse=true; shift ;;
+        -n) DRY_RUN=true; shift ;;
+        -F) CLEARCUT=true; shift ;;
+        -p) PORT="$2"; shift 2 ;;
+        -p*) PORT="${1#-p}"; shift ;;
+        -k) KNOWN_HOSTS_FILE="$2"; shift 2 ;;
+        -k*) KNOWN_HOSTS_FILE="${1#-k}"; shift ;;
+        *) break ;;
     esac
-    shift
 done
+
+# Re-check argument count now that option flags have been consumed.
+if [ "$#" -lt 2 ]; then
+    usage
+fi
 
 # Get arguments
 datasets_list="$1"
 shift
 pattern="$1"
 shift
+
+# Built once, used by every ssh invocation in run_zfs. Default (-k omitted) is
+# StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh. Only opt into -k on
+# a host where KNOWN_HOSTS_FILE has already been populated (e.g. via
+# ssh-keyscan) and the fingerprint verified out of band.
+if [ -n "$KNOWN_HOSTS_FILE" ]; then
+    SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
+else
+    SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
+fi
+
+# ssh is only required when at least one dataset entry is remote (has a ':').
+if [[ "$datasets_list" == *:* ]]; then
+    command -v ssh >/dev/null || { echo "Error: ssh command not found but a remote dataset was requested." >&2; exit 1; }
+fi
+
+# Loud, one-time warning: -F uses `zfs destroy -R`, which takes down dependent
+# clones (e.g. Proxmox linked-clone VM/CT disks) along with the snapshot.
+if [ "$CLEARCUT" = true ]; then
+    if [ "$DRY_RUN" = true ]; then
+        echo "WARNING: clear-cut mode (-F) active: real runs would use 'zfs destroy -R', removing descendant snapshots AND dependent clones (even Proxmox linked clones)." >&2
+    else
+        echo "WARNING: clear-cut mode (-F) active: using 'zfs destroy -R' -- this also destroys descendant snapshots AND dependent clones (even Proxmox linked clones)." >&2
+    fi
+fi
 
 # Single-instance lock keyed on the operation target (datasets + pattern), so
 # two runs that would destroy the same snapshot set are serialized, while
