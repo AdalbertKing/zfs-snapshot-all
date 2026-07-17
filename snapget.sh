@@ -499,7 +499,7 @@ process_dataset() {
         log 1 "Force full pull activated (-f)"
 
         local protected_snaps
-        protected_snaps=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
+        protected_snaps=$(zfs list -t snapshot -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
         if [ -n "$protected_snaps" ]; then
             log 0 "Refusing force full pull: $tgt_dataset (or a descendant) holds snapshot(s) reserved by Proxmox VE (replication/migration/vzdump):"
             log 0 "$protected_snaps"
