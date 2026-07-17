@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.17'
+VERSION='v2.18'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -497,6 +497,16 @@ process_dataset() {
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
         log 1 "Force full pull activated (-f)"
+
+        local protected_snaps
+        protected_snaps=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
+        if [ -n "$protected_snaps" ]; then
+            log 0 "Refusing force full pull: $tgt_dataset (or a descendant) holds snapshot(s) reserved by Proxmox VE (replication/migration/vzdump):"
+            log 0 "$protected_snaps"
+            log 0 "This target looks like it's managed by Proxmox VE outside this tool -- force full pull would destroy that state and break replication/migration/backup. Remove the conflicting job/snapshots yourself first if this is intentional."
+            return 1
+        fi
+
         log 2 "Destroying all snapshots and data on local target dataset"
 
         log 4 "EXECUTING DESTROY LOCALLY"

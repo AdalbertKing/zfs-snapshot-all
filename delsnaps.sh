@@ -41,10 +41,26 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.8'
+VERSION='v1.9'
 EXIT_CODE=0
 DRY_RUN=false
 STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
+
+# Snapshot name prefixes reserved by Proxmox VE itself (storage replication,
+# offline migration, vzdump). These are created/consumed exclusively by pvesr
+# and friends -- if this tool prunes one out from under them, the next
+# replication/migration/backup run breaks with a snapshot-chain mismatch that
+# this tool has no way to repair. Never eligible for deletion, no matter what
+# pattern a caller passes in.
+PROTECTED_PREFIXES=("__replicate_" "__migration__" "vzdump")
+
+is_protected_snapshot() {
+    local snapname="$1" prefix
+    for prefix in "${PROTECTED_PREFIXES[@]}"; do
+        [[ "$snapname" == "${prefix}"* ]] && return 0
+    done
+    return 1
+}
 
 if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
     echo "$VERSION"
@@ -178,6 +194,10 @@ delete_snapshots() {
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         snapname="${line#*@}"
+        if is_protected_snapshot "$snapname"; then
+            echo "Debug: Skipping protected snapshot (reserved by Proxmox VE): ${line}" >&2
+            continue
+        fi
         if [[ "$snapname" == "${pat}"* ]]; then
             filtered+=("$line")
         fi

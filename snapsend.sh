@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.18'
+VERSION='v2.19'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -476,8 +476,23 @@ process_dataset() {
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
         log 1 "Force full send activated (-f)"
+
+        local protected_snaps
+        if [ -n "$remote_host" ]; then
+            protected_snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+                "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -E '@(__replicate_|__migration__|vzdump)' || true)
+        else
+            protected_snaps=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
+        fi
+        if [ -n "$protected_snaps" ]; then
+            log 0 "Refusing force full send: $tgt_dataset (or a descendant) holds snapshot(s) reserved by Proxmox VE (replication/migration/vzdump):"
+            log 0 "$protected_snaps"
+            log 0 "This target looks like it's managed by Proxmox VE outside this tool -- force full send would destroy that state and break replication/migration/backup. Remove the conflicting job/snapshots yourself first if this is intentional."
+            return 1
+        fi
+
         log 2 "Destroying all snapshots and data on target dataset"
-        
+
         local destroy_cmd="zfs list -H -o name -r \"$tgt_dataset\" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R \"\$@\" 2>/dev/null || true' -- {}"
         log 4 "RAW ZFS DESTROY COMMAND: $destroy_cmd"  # debug logging
         
