@@ -472,6 +472,10 @@ process_dataset() {
         # this is what makes non-root incremental receive into this dataset
         # possible afterward. Only applies to this leaf -- any -p-created
         # ancestor still needs to already exist for a non-root run to succeed.
+        # Setting canmount here needs its own delegated 'canmount' property
+        # permission (zfs allow) in addition to create/mount/receive -- it is
+        # NOT bundled into the 'create' permission despite being set at
+        # create time. Confirmed live: "permission denied" without it.
         if [ -n "$remote_host" ]; then
             ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs list '$tgt_dataset' >/dev/null 2>&1 || zfs create -p -o canmount=noauto '$tgt_dataset'" || return 1
