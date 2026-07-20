@@ -8,3 +8,5 @@
 !gen-cron.sh
 !deploy_new_server.sh
 !deploy_backup_user.sh
+!test/
+!test/**
