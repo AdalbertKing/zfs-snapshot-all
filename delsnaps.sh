@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 
 # Author: Wojciech Kr�l & Chat-GPT 4
 # Email: lurk@lurk.com.pl
@@ -50,6 +51,8 @@
 #                        retention). This is the correct way to prune a subtree.
 # -n                   : Dry-run. Print what would be deleted/kept; never calls
 #                        `zfs destroy`. Can be combined with -R, in any order.
+# -v, --verbose        : Verbose tracing (the old "Debug:" lines). Off by
+#                        default; also enabled by DEBUG=1 in the environment.
 # -F                   : Clear-cut. Use `zfs destroy -R` instead of a plain
 #                        destroy, cascading to same-named descendant snapshots
 #                        and destroying dependent clones (even Proxmox linked
@@ -73,13 +76,22 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.14'
+VERSION='v1.15'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
 PORT=22
 KNOWN_HOSTS_FILE=""
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+# Verbose tracing. Off by default so cron logs stay clean (the old behaviour
+# printed every "Debug:" line unconditionally, flooding 2>>$CRON_LOG). Turn on
+# with -v/--verbose on the command line or DEBUG=1 in the environment.
+DEBUG="${DEBUG:-false}"
+
+dbg() {
+    [ "$DEBUG" = true ] && echo "Debug: $*" >&2
+    return 0
+}
 
 # Snapshot name prefixes reserved by Proxmox VE itself (storage replication,
 # offline migration, vzdump). These are created/consumed exclusively by pvesr
@@ -181,7 +193,7 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
     echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
@@ -286,10 +298,10 @@ delete_snapshots() {
     local ds_label="$ds"
     [ -n "$rhost" ] && ds_label="${rhost}:${ds}"
 
-    echo "Debug: Inside delete_snapshots function" >&2
-    echo "Debug: Dataset = $ds_label" >&2
-    echo "Debug: Pattern = $pat" >&2
-    echo "Debug: Mode = $mode, Param = $param" >&2
+    dbg "Inside delete_snapshots function"
+    dbg "Dataset = $ds_label"
+    dbg "Pattern = $pat"
+    dbg "Mode = $mode, Param = $param"
 
     # List snapshots of THIS dataset only (non-recursive), oldest-first, then
     # keep only those whose snapshot name (the part after '@') starts with the
@@ -306,7 +318,7 @@ delete_snapshots() {
         [ -z "$line" ] && continue
         snapname="${line#*@}"
         if is_protected_snapshot "$snapname"; then
-            echo "Debug: Skipping protected snapshot (reserved by Proxmox VE): ${line}" >&2
+            dbg "Skipping protected snapshot (reserved by Proxmox VE): ${line}"
             continue
         fi
         if [[ "$snapname" == "${pat}"* ]]; then
@@ -321,7 +333,7 @@ delete_snapshots() {
         return 0
     fi
 
-    echo "Debug: Snapshots found: ${filtered[*]}" >&2
+    dbg "Snapshots found: ${filtered[*]}"
 
     if [ "$mode" = "count" ]; then
         local total="${#filtered[@]}"
@@ -366,7 +378,7 @@ delete_snapshots() {
         for snapshot in "${filtered[@]}"; do
             creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}")
 
-            echo "Debug: Snapshot = $snapshot, creation_date_sec = $creation_date_sec" >&2
+            dbg "Snapshot = $snapshot, creation_date_sec = $creation_date_sec"
 
             if [ "${creation_date_sec}" -lt "${param}" ]; then
                 if [ "$DRY_RUN" = true ]; then
@@ -427,7 +439,7 @@ process_datasets_recursively() {
     all_datasets=$(run_zfs "$ruser" "$rhost" list -H -o name -t filesystem,volume -r "${base_ds}")
     for child in ${all_datasets}; do
         [ "$child" = "$base_ds" ] && continue
-        echo "Debug: Processing child dataset = $child" >&2
+        dbg "Processing child dataset = $child"
         delete_snapshots "${child}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
     done
 }
@@ -471,6 +483,7 @@ while [ "$#" -gt 0 ]; do
         -R) recurse=true; shift ;;
         -n) DRY_RUN=true; shift ;;
         -F) CLEARCUT=true; shift ;;
+        -v|--verbose) DEBUG=true; shift ;;
         -p) PORT="$2"; shift 2 ;;
         -p*) PORT="${1#-p}"; shift ;;
         -k) KNOWN_HOSTS_FILE="$2"; shift 2 ;;
@@ -536,11 +549,11 @@ parse_time_arguments "$@"
 if [ "$count_flag_seen" = true ]; then
     retain_mode="count"
     retain_param=$(calculate_keep_count)
-    echo "Debug: mode=count keep_count=$retain_param" >&2
+    dbg "mode=count keep_count=$retain_param"
 else
     retain_mode="age"
     retain_param=$(calculate_threshold_date)
-    echo "Debug: mode=age threshold_date=$retain_param ($(date -d "@$retain_param"))" >&2
+    dbg "mode=age threshold_date=$retain_param ($(date -d "@$retain_param"))"
 fi
 
 # Process datasets
