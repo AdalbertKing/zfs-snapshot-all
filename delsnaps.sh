@@ -73,7 +73,7 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.13'
+VERSION='v1.14'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -521,6 +521,7 @@ fi
 # blocking each other.
 LOCK_KEY=$(printf '%s\0%s' "$datasets_list" "$pattern" | md5sum | cut -d' ' -f1)
 LOCKDIR="${LOCKDIR:-/var/run}"
+[ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then

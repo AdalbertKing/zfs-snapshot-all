@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.23'
+VERSION='v2.24'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -328,7 +328,12 @@ abandon_resume() {
 }
 
 resume_state_file() {
-    echo "/var/run/$(basename "$0").resume-attempts.$(echo "$1" | tr '/' '_')"
+    # Same LOCKDIR override as the single-instance lock below -- keeping this on
+    # the hardcoded /var/run would make the resume-attempt counter unwritable for
+    # a non-root (LOCKDIR=~/run) run: reads would always see 0, so the
+    # MAX_RESUME_ATTEMPTS guard could never trip and a stuck resume would be
+    # retried on every run forever. LOCKDIR is set before process_dataset runs.
+    echo "${LOCKDIR:-/var/run}/$(basename "$0").resume-attempts.$(echo "$1" | tr '/' '_')"
 }
 
 read_resume_attempts() {
@@ -691,6 +696,7 @@ fi
 # target still serialize even if their option formatting differs (-v3 vs -v 3).
 LOCK_KEY=$(printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -d' ' -f1)
 LOCKDIR="${LOCKDIR:-/var/run}"
+[ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
