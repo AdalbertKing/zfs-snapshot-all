@@ -24,19 +24,31 @@
 #   - a git checkout of zfs-snapshot-all it can read+execute (separate from
 #     root's own /root/scripts checkout -- root's path/crontab are untouched)
 #   - that account's own auto-pull cron line
+#   - zfs allow delegation on the dataset(s) given as arguments (defaults to
+#     rpool/data and rpool/ROOT/pve-1 -- the standard Proxmox VE VM/CT-disk
+#     and root-filesystem locations). Delegation on a dataset WITHOUT -d
+#     applies to it and all descendants, INCLUDING ones that don't exist yet
+#     -- new VM/CT disks created later under rpool/data automatically
+#     inherit it, no per-VM re-run needed.
 #
-# What this does NOT automate (host/dataset-specific, your call):
-#   - zfs allow delegation on the actual dataset(s) this account should manage
+# What this does NOT automate (host-specific, your call):
 #   - exchanging its SSH pubkey with other hosts for remote replication
 #   - the actual snapsend/snapget/delsnaps cron job lines
-# See Part 5 (printed at the end) for these.
+# See Part 6 (printed at the end) for these.
 #
-# Usage: bash deploy_backup_user.sh [username]
+# Usage: bash deploy_backup_user.sh [username] [dataset ...]
 #   username defaults to "zfsbackup"
+#   dataset(s) default to: rpool/data  rpool/ROOT/pve-1
 # ------------------------------------------------------------------------------
 set -uo pipefail
 
 USERNAME="${1:-zfsbackup}"
+[ "$#" -gt 0 ] && shift
+if [ "$#" -gt 0 ]; then
+    DATASETS=("$@")
+else
+    DATASETS=(rpool/data "rpool/ROOT/pve-1")
+fi
 REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 HOMEDIR="/home/$USERNAME"
 REPO_DIR="$HOMEDIR/zfs-snapshot-all"
@@ -78,7 +90,7 @@ else
     su "$USERNAME" -c "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C '${USERNAME}@$(hostname -s)'" \
         || die "ssh-keygen failed"
 fi
-log "public key (see Part 5 below for what to do with it):"
+log "public key (see Part 6 below for what to do with it):"
 cat "$SSHDIR/id_ed25519.pub"
 
 # ------------------------------------------------------------------------------
@@ -127,21 +139,34 @@ else
     log "added auto-pull cron line to $USERNAME's crontab"
 fi
 
+# ------------------------------------------------------------------------------
+log "Part 5: ZFS delegation on ${DATASETS[*]}"
+# ------------------------------------------------------------------------------
+ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount"
+for ds in "${DATASETS[@]}"; do
+    if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+        warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"
+        continue
+    fi
+    zfs allow -u "$USERNAME" "$ZFS_PERMS" "$ds" || die "zfs allow failed for $ds"
+    log "delegated on $ds:"
+    zfs allow "$ds" | grep "$USERNAME" || true
+done
+
 echo
 log "===================================================================="
-log "Automated part done. Manual steps remaining (Part 5, host/dataset-specific):"
+log "Automated part done. Manual steps remaining (Part 6, host-specific):"
 log "===================================================================="
 cat <<EOF
 
-  1. Delegate ZFS permissions on the SPECIFIC dataset(s) this account should
-     manage (NOT scripted here -- picking the dataset scope is a security
-     decision only you should make):
+  1. If this account needs OTHER datasets besides ${DATASETS[*]}, re-run
+     with them as extra arguments, e.g.:
 
-       zfs allow -u $USERNAME snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount <dataset>
+       bash deploy_backup_user.sh $USERNAME rpool/data rpool/ROOT/pve-1 hdd/extra
 
-     Repeat per top-level dataset this account needs (permissions propagate
-     to all descendants). This exact permission set was live-tested against
-     ZFS 2.1.9 on pve1/pve2 -- see the zfs-snapshot-all git history
+     (safe to re-run -- zfs allow is idempotent and earlier parts skip
+     what's already done). This exact permission set was live-tested
+     against ZFS 2.1.9 on pve1/pve2 -- see the zfs-snapshot-all git history
      (commits around the LOCKDIR/canmount/hint changes) for what each
      permission is for and what happens if one is missing.
 
