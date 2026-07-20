@@ -73,13 +73,13 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.11'
+VERSION='v1.12'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
 PORT=22
 KNOWN_HOSTS_FILE=""
-STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
+STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 
 # Snapshot name prefixes reserved by Proxmox VE itself (storage replication,
 # offline migration, vzdump). These are created/consumed exclusively by pvesr
@@ -512,7 +512,8 @@ fi
 # unrelated prune jobs (different datasets/pattern) run concurrently instead of
 # blocking each other.
 LOCK_KEY=$(printf '%s\0%s' "$datasets_list" "$pattern" | md5sum | cut -d' ' -f1)
-LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
+LOCKDIR="${LOCKDIR:-/var/run}"
+LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance targeting the same datasets/pattern is already running (lock: $LOCKFILE) - skipping this run" >&2

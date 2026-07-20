@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.18'
+VERSION='v2.19'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -50,7 +50,7 @@ FULL_HISTORY_SEND=0
 UNMOUNT=0
 FORCE_FULL_SEND=0
 declare -a CONFLICT_SNAPSHOTS=()
-STATS_LOG="/root/scripts/zfs-snapshot-stats.log"
+STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 KNOWN_HOSTS_FILE=""
 ###############################################################################
 #END 1
@@ -674,7 +674,8 @@ fi
 # deliberately excluded from the key, so a manual run and a cron run of the same
 # target still serialize even if their option formatting differs (-v3 vs -v 3).
 LOCK_KEY=$(printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -d' ' -f1)
-LOCKFILE="/var/run/$(basename "$0").${LOCK_KEY}.lock"
+LOCKDIR="${LOCKDIR:-/var/run}"
+LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     log 0 "Another instance targeting the same datasets is already running (lock: $LOCKFILE) - skipping this run"
