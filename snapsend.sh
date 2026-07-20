@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.24'
+VERSION='v2.25'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -52,32 +52,25 @@ FORCE_FULL_SEND=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 KNOWN_HOSTS_FILE=""
+
+# Shared helpers (logging, stats, resumable-transfer bookkeeping) live in a
+# sibling library so snapsend.sh and snapget.sh can't drift apart on them.
+# Sourced here, right after config, so the functions exist before any call --
+# they read globals (VERBOSE/STATS_LOG/LOCKDIR/SSH_OPTS) only when called, all
+# of which are set by then.
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -r "$LIB_DIR/lib-zfs-snap.sh" ]; then
+    echo "Error: required library $LIB_DIR/lib-zfs-snap.sh not found (is the repo checkout complete?)" >&2
+    exit 1
+fi
+# shellcheck source=lib-zfs-snap.sh
+. "$LIB_DIR/lib-zfs-snap.sh"
 ###############################################################################
 #END 1
 
 ###############################################################################
 #BEGIN 2 [HELPER FUNCTIONS]
 ###############################################################################
-
-###############################################################################
-#BEGIN 2A [LOGGING FUNCTIONS]
-###############################################################################
-log() {
-    local LEVEL=$1
-    shift
-    [ "$VERBOSE" -ge "$LEVEL" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >&2
-}
-
-# One line per processed dataset, appended to STATS_LOG. Best-effort: never
-# lets a logging failure (e.g. unwritable path) break the actual backup.
-emit_stats() {
-    local dataset="$1" target="$2" status="$3" duration="$4" resumed="${5:-no}"
-    {
-        echo "$(date -u +%FT%TZ) script=$(basename "$0") dataset=${dataset} target=${target} status=${status} duration_s=${duration} resumed=${resumed}"
-    } >> "$STATS_LOG" 2>/dev/null || true
-}
-###############################################################################
-#END 2A
 
 ###############################################################################
 #BEGIN 2B [SNAPSHOT METADATA OPERATIONS]
@@ -292,63 +285,10 @@ create_snapshot() {
 ###############################################################################
 #BEGIN 3D [RESUMABLE TRANSFER SUPPORT]
 ###############################################################################
-# If a prior zfs recv into $tgt_dataset was interrupted mid-stream, ZFS leaves
-# a resume token on the TARGET dataset (receive_resume_token property). These
-# helpers detect that, resume via `zfs send -t <token>`, and give up (via
-# `zfs receive -A`, which discards only the partial state, not the dataset's
-# existing history) after MAX_RESUME_ATTEMPTS failed resume attempts.
-MAX_RESUME_ATTEMPTS=3
-
-get_resume_token() {
-    local tgt_dataset="$1"
-    local remote_user="${2:-}"
-    local remote_host="${3:-}"
-    local token
-    if [ -n "$remote_host" ]; then
-        token=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs get -H -o value receive_resume_token '$tgt_dataset' 2>/dev/null")
-    else
-        token=$(zfs get -H -o value receive_resume_token "$tgt_dataset" 2>/dev/null)
-    fi
-    if [ -n "$token" ] && [ "$token" != "-" ]; then
-        echo "$token"
-    fi
-}
-
-abandon_resume() {
-    local tgt_dataset="$1"
-    local remote_user="${2:-}"
-    local remote_host="${3:-}"
-    log 1 "Abandoning stuck resume state on $tgt_dataset (zfs receive -A)"
-    if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
-    else
-        zfs receive -A "$tgt_dataset"
-    fi
-}
-
-resume_state_file() {
-    # Same LOCKDIR override as the single-instance lock below -- keeping this on
-    # the hardcoded /var/run would make the resume-attempt counter unwritable for
-    # a non-root (LOCKDIR=~/run) run: reads would always see 0, so the
-    # MAX_RESUME_ATTEMPTS guard could never trip and a stuck resume would be
-    # retried on every run forever. LOCKDIR is set before process_dataset runs.
-    echo "${LOCKDIR:-/var/run}/$(basename "$0").resume-attempts.$(echo "$1" | tr '/' '_')"
-}
-
-read_resume_attempts() {
-    cat "$(resume_state_file "$1")" 2>/dev/null || echo 0
-}
-
-increment_resume_attempts() {
-    local f
-    f=$(resume_state_file "$1")
-    echo "$(($(read_resume_attempts "$1") + 1))" > "$f"
-}
-
-reset_resume_attempts() {
-    rm -f "$(resume_state_file "$1")"
-}
+# MAX_RESUME_ATTEMPTS and the resume helpers (get_resume_token, abandon_resume,
+# resume_state_file, read/increment/reset_resume_attempts) are byte-identical
+# between snapsend.sh and snapget.sh, so they live in lib-zfs-snap.sh (sourced
+# at the top). See the header comment there.
 ###############################################################################
 #END 3D
 

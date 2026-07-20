@@ -1,6 +1,7 @@
 *
 !.gitignore
 !.gitattributes
+!lib-zfs-snap.sh
 !snapsend.sh
 !snapget.sh
 !delsnaps.sh
