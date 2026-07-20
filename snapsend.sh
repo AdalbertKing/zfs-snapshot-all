@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.21'
+VERSION='v2.23'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -519,9 +519,15 @@ process_dataset() {
         log 4 "RAW ZFS CREATE COMMAND: $create_cmd"
 
         if [ -n "$remote_host" ]; then
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$create_cmd" || return 1
+            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$create_cmd" || {
+                log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root on $remote_host."
+                return 1
+            }
         else
-            zfs create -p -o canmount=noauto "$tgt_dataset" || return 1
+            zfs create -p -o canmount=noauto "$tgt_dataset" || {
+                log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
+                return 1
+            }
         fi
     fi
 
@@ -604,6 +610,7 @@ process_dataset() {
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {
         log 0 "Transfer failed"
+        [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: -f receives with a forced rollback, which needs to mount/unmount the target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, -f requires root${remote_host:+ on $remote_host}."
         return 1
     }
     

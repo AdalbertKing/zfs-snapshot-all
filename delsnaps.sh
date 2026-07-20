@@ -73,7 +73,7 @@
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
 
-VERSION='v1.12'
+VERSION='v1.13'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -342,7 +342,11 @@ delete_snapshots() {
                         deleted_count=$((deleted_count + 1))
                     else
                         echo "Error deleting snapshot: ${snapshot}" >&2
-                        [ "$CLEARCUT" = false ] && echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+                        if [ "$CLEARCUT" = false ]; then
+                            echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+                        else
+                            echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
+                        fi
                         EXIT_CODE=1
                         ds_failed=1
                     fi
@@ -374,7 +378,11 @@ delete_snapshots() {
                         deleted_count=$((deleted_count + 1))
                     else
                         echo "Error deleting snapshot: ${snapshot}" >&2
-                        [ "$CLEARCUT" = false ] && echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+                        if [ "$CLEARCUT" = false ]; then
+                            echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+                        else
+                            echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
+                        fi
                         EXIT_CODE=1
                         ds_failed=1
                     fi
