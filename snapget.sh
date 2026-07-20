@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.19'
+VERSION='v2.20'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -492,7 +492,13 @@ process_dataset() {
 
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         log 2 "Creating target dataset: $tgt_dataset"
-        zfs list "$tgt_dataset" >/dev/null 2>&1 || zfs create -p "$tgt_dataset" || return 1
+        # canmount=noauto: a freshly created target starts unmounted and stays
+        # that way across zfs receive's own mount/unmount cycles. On Linux,
+        # unprivileged users can't mount/unmount at all (unlike illumos), so
+        # this is what makes non-root incremental receive into this dataset
+        # possible afterward. Only applies to this leaf -- any -p-created
+        # ancestor still needs to already exist for a non-root run to succeed.
+        zfs list "$tgt_dataset" >/dev/null 2>&1 || zfs create -p -o canmount=noauto "$tgt_dataset" || return 1
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
@@ -513,7 +519,7 @@ process_dataset() {
         zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R "$@" 2>/dev/null || true' -- {} || true
 
         log 2 "Recreating target dataset"
-        zfs create -p "$tgt_dataset" || return 1
+        zfs create -p -o canmount=noauto "$tgt_dataset" || return 1
     fi
 
     if [ "$USE_EXISTING_SNAPSHOT" -eq 1 ]; then
