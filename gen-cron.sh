@@ -13,60 +13,76 @@ set -o pipefail
 #               this flag, the block is only printed to stdout for review.
 #   -V          Print version and exit
 #
-# Config file is INI: [defaults], [template_<tier>] sections, and one section
-# per dataset (header = the dataset's ZFS path). Fields resolve dataset >
-# template > defaults, in that order; a field left unset anywhere up the
-# chain simply doesn't apply.
+# CONFIG FORMAT v4 -- typed sections. Every section header (except [defaults])
+# carries an explicit TYPE prefix, split on the first ':'. The type declares
+# WHICH operations that section runs; the name after ':' is a literal ZFS path
+# or a tier name. There is NO magic: a target is always a path you wrote down.
+# The script never infers "same VM, two copies" -- rpool/data/vm1 and
+# hdd/backups/pve1/rpool/data/vm1 are two different, unrelated objects.
 #
 #   [defaults]
-#       host_label = pve2                    # used to auto-build notify text
-#       dst        = hdd/backups/pve2        # optional -- omit for local-only (no send target)
-#       prune_root = hdd/backups
+#       host_label = pve2                 # used to auto-build notify text
+#       dst        = hdd/backups/pve2     # optional -- omit for local-only (no send target)
 #
-#   [template_<tier>]                        # one per tier, e.g. template_hourly
-#       send_schedule    = <5-field cron>     # omit if this tier never sends here
+#   [template:<tier>]                     # a tier's full lifecycle (cadence + retention)
+#       send_schedule    = <5-field cron>  # omit if this tier never sends
 #       prefix           = <snapshot name prefix passed to snapsend.sh -m>
-#       notify_word      = backup             # default "backup"; e.g. "snapshot" for local-only jobs
+#       notify_word      = backup          # default "backup"; e.g. "snapshot" for local jobs
+#       tier_label       = <word>          # display name for the tier in notify text
+#                                          # (default: the tier itself; e.g. store_hourly -> hourly)
 #       notify_raw       = <literal notify-fail.sh text, bypasses auto-synthesis>
-#       prune_schedule   = <5-field cron>      # omit (all 4 prune_* fields) if this tier is never pruned
+#       prune_schedule   = <5-field cron>  # omit if this tier never prunes
 #       pattern          = <snapshot name prefix delsnaps.sh matches>
-#       prune_root       = <override the defaults prune_root for this tier>
-#       keep             = <N>                 # count-based retention -> -<TIER_LETTER><N>
-#       retain           = <raw delsnaps.sh flags>  # escape hatch, e.g. "-h 24"; mutually exclusive with keep
+#       keep             = <N>             # count-based retention -> -<TIER_LETTER><N>
+#       retain           = <raw delsnaps.sh flags>  # e.g. "-H24"; mutually exclusive with keep
 #       notify_raw_prune = <literal notify-fail.sh text for the prune line>
 #
-#   [<dataset/zfs/path>]
-#       use_template = <tier>[,<tier>...]     # comma list -- one dataset can span several tiers
-#       notify       = <short label>           # combined into auto-synthesized notify text
+#   [dataset:<zfs/path>]                  # a dataset you own end-to-end
+#       use_template = <tier>[,<tier>...]  # comma list -- one dataset can span several tiers
+#       notify       = <short label>
 #       flags        = <snapsend.sh flags>
-#       flags_<tier> = <per-tier flags override, when one tier genuinely differs>
-#       ...any template field can be overridden here the same way (dst, prune_root,
-#       send_schedule, prune_schedule, keep, retain, notify_raw, notify_raw_prune)
+#       flags_<tier> = <per-tier flags override>
+#       ...any template field can be overridden here (dst, send_schedule,
+#          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
+#     A dataset section runs, scoped to ITS OWN path, non-recursively:
+#       create(+send)  if its tiers resolve send_schedule
+#       self-prune     if its tiers resolve prune_schedule (retention defined
+#                      right here, at the dataset, independent of every other)
+#     Datasets sharing a resolved (send_schedule,dst,prefix,flags) merge into one
+#     send line; datasets sharing a resolved (prune_schedule,pattern,keep/retain)
+#     merge into one prune line that lists them BY FULL PATH, non-recursively.
+#     Inline prune NEVER collapses to a recursive -R sweep.
 #
-# Two datasets sharing a tier are merged into ONE send line when their
-# resolved (send_schedule, dst, prefix, flags) all match; prune similarly
-# merges into one recursive `-R prune_root` line when a tier's resolved
-# (prune_root, pattern, keep/retain, prune_schedule) equals that tier's own
-# un-overridden template default. Any dataset that overrides away from that
-# default gets its own non-recursive prune line, naming only itself -- an -R
-# sweep would otherwise also catch sibling datasets that did not opt in.
+#   [prune:<scope>]                       # standalone, additive prune of a scope
+#       use_template = <tier>[,<tier>...]  # borrows each tier's prune policy
+#       recursive    = yes|no              # default no; yes -> delsnaps.sh -R (subtree)
+#       clear_cut    = yes|no              # default no; yes -> delsnaps.sh -F (destroy -R clones)
+#       notify       = <short label>
+#     For scopes you do NOT create locally: a backup store receiving pushes from
+#     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
+#
+#   [monitor:<scope>]                     # RESERVED -- parsed, emits nothing yet
+#       (overdue-snapshot alerting, next stage)
 #
 # flags="-f" (force full send) and flags="-n" (dry-run) are rejected at generate
 # time: -f in a standing cron job means destroy-and-reseed the target every run,
 # -n never actually sends anything -- neither makes sense as a recurring job.
 #
-# Every tier's resolved prune pattern is validated against every other tier
-# sharing the same prune_root: since delsnaps.sh matches by literal string
-# prefix, a pattern that is a prefix of (or equal to) another tier's pattern
-# would let one tier's snapshots leak into another tier's retention run. This
-# is rejected regardless of retain mode -- it is always a configuration
-# mistake, not a valid use case.
+# Every resolved prune operation is validated against every other operation on
+# the SAME literal scope: since delsnaps.sh matches by literal string prefix, a
+# pattern that is a prefix of (or equal to) another pattern on that scope would
+# let one tier's snapshots leak into another tier's retention run. Rejected.
+#
+# prune-vs-inline overlap ("B" semantics): if a recursive [prune:S] and an inline
+# [dataset:X] both cover the same snapshots, BOTH lines are emitted and both run;
+# net effect is the strictest keep wins. The generator does NOT guard this --
+# prune priority is deliberate user discipline, not enforced magic.
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.0'
+VERSION='v4.0'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$SCRIPT_DIR"
+REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 CRON_LOG="${CRON_LOG:-/root/scripts/cron.log}"
 LOCKFILE="${GEN_CRON_LOCKFILE:-/var/run/gen-cron.install.lock}"
@@ -81,7 +97,8 @@ LSEP=$'\x1e'  # entity separator inside one group's member list
 
 declare -A INI=()
 declare -a SECTION_ORDER=()
-declare -A IS_TEMPLATE=()
+declare -A SECTION_KIND=()    # header -> defaults|template|dataset|prune|monitor
+declare -A SECTION_NAME=()    # header -> the name after ':' (path/tier/scope); "" for defaults
 declare -A SEEN_SECTION=()
 CUR_SECTION=""
 
@@ -95,7 +112,26 @@ declare -A TIER_LETTER=( [hourly]=H [daily]=D [weekly]=W [monthly]=M [yearly]=Y 
 die() { echo "gen-cron.sh: error: $*" >&2; exit 1; }
 
 usage() {
-    grep '^#' "${BASH_SOURCE[0]}" | sed -n '2,62p' | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+gen-cron.sh -- generate a crontab block for snapsend.sh/delsnaps.sh from an
+INI config of typed sections (config format v4).
+
+Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
+  -c <FILE>   Config file (default: jobs.<hostname -s>.conf next to this script)
+  --install   Install/replace the managed block in this user's crontab
+              (idempotent). Without it, the block is printed to stdout.
+  -V          Print version and exit
+  -h          Print this help
+
+Section types (header split on first ':'):
+  [defaults]           host_label, optional dst
+  [template:<tier>]    a tier's cadence + retention policy
+  [dataset:<path>]     owned dataset: create+send + inline self-prune (own path)
+  [prune:<scope>]      standalone additive prune (recursive=/clear_cut= opt-in)
+  [monitor:<scope>]    reserved (overdue-snapshot alerting -- next stage)
+
+See the comment header of this script for the full field reference.
+EOF
 }
 
 # Rejects flags that never make sense in a standing/recurring cron job.
@@ -121,18 +157,39 @@ trim() {
 ###############################################################################
 #BEGIN 3 [INI PARSING + FIELD RESOLUTION]
 ###############################################################################
+# Parses typed sections. The raw header string (e.g. "template:hourly",
+# "dataset:rpool/data/vm-106-disk-0", or "defaults") is used verbatim as the
+# INI key prefix and the section's identity -- kind+name together, so a
+# [dataset:X] and a [prune:X] never collide.
 parse_ini() {
-    local file="$1" line trimmed key val
+    local file="$1" line trimmed key val hdr kind name
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%%#*}"
         trimmed="$(trim "$line")"
         [ -z "$trimmed" ] && continue
         if [[ "$trimmed" =~ ^\[(.+)\]$ ]]; then
-            CUR_SECTION="${BASH_REMATCH[1]}"
-            [ -z "${SEEN_SECTION[$CUR_SECTION]+x}" ] || die "duplicate section '[$CUR_SECTION]' in $file"
-            SEEN_SECTION["$CUR_SECTION"]=1
-            SECTION_ORDER+=("$CUR_SECTION")
-            [[ "$CUR_SECTION" == template_* ]] && IS_TEMPLATE["$CUR_SECTION"]=1
+            hdr="$(trim "${BASH_REMATCH[1]}")"
+            if [ "$hdr" = "defaults" ]; then
+                kind="defaults"; name=""
+            else
+                case "$hdr" in
+                    *:*) : ;;
+                    *) die "section '[$hdr]' has no type prefix (expected defaults, or template:/dataset:/prune:/monitor: followed by a name)" ;;
+                esac
+                kind="$(trim "${hdr%%:*}")"
+                name="$(trim "${hdr#*:}")"
+                case "$kind" in
+                    template|dataset|prune|monitor) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/monitor)" ;;
+                esac
+                [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
+            fi
+            [ -z "${SEEN_SECTION[$hdr]+x}" ] || die "duplicate section '[$hdr]' in $file"
+            SEEN_SECTION["$hdr"]=1
+            CUR_SECTION="$hdr"
+            SECTION_ORDER+=("$hdr")
+            SECTION_KIND["$hdr"]="$kind"
+            SECTION_NAME["$hdr"]="$name"
             continue
         fi
         if [[ "$trimmed" == *"="* ]] && [ -n "$CUR_SECTION" ]; then
@@ -147,7 +204,7 @@ ini_has() { [ -n "${INI[$1${SEP}$2]+x}" ]; }
 ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
 
 # resolve_field FIELD DS TMPL DEFAULTS -- prints value, return 1 if unresolved.
-# Any of DS/TMPL/DEFAULTS may be "" to skip that layer.
+# Any of DS/TMPL/DEFAULTS may be "" to skip that layer. Each is a section header.
 resolve_field() {
     local field="$1" ds="$2" tmpl="$3" defaults="$4"
     if [ -n "$ds" ] && ini_has "$ds" "$field"; then ini_get "$ds" "$field"; return 0; fi
@@ -213,103 +270,125 @@ notify_text() {
 ###############################################################################
 #BEGIN 3.5 [ENTITY BUILDING]
 ###############################################################################
-# Walks every dataset section and (via its use_template list) every template,
-# resolving the send and/or prune fields for each. A tier contributes a send
-# line only if send_schedule resolves; a prune line only if ALL of
-# (prune_schedule, pattern, prune_root, keep-or-retain) resolve. If SOME but
-# not all of those four resolve, that's a config mistake (not a valid partial
-# state) and gen-cron.sh refuses to guess.
+# Walks dataset sections (create+send + inline self-prune, both scoped to the
+# dataset's own path) and prune sections (standalone additive tasks). A tier
+# contributes a send entity only if send_schedule resolves; an inline prune
+# entity only if prune_schedule resolves (then pattern + keep/retain are
+# required). monitor sections are parsed but produce nothing yet.
 build_entities() {
     ini_has defaults host_label || die "[defaults] must set host_label (used to build notify text)"
     local host_label
     host_label="$(resolve_field host_label "" "" defaults)"
 
-    declare -gA USED_TEMPLATE=()
     declare -ga SEND_ENTITIES=()
-    declare -ga PRUNE_ENTITIES=()
-    declare -gA CANON_PRUNE_KEY=()
+    declare -ga INLINE_PRUNE_ENTITIES=()
+    declare -ga PRUNE_SEC_ENTITIES=()
+    declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
-    local section
+    local section kind name
     for section in "${SECTION_ORDER[@]}"; do
-        [ "$section" = "defaults" ] && continue
-        [ -n "${IS_TEMPLATE[$section]+x}" ] && continue
+        kind="${SECTION_KIND[$section]}"
+        name="${SECTION_NAME[$section]}"
 
-        local tier_list
-        tier_list="$(resolve_field use_template "$section" "" "")" || die "dataset '$section' has no use_template"
-
-        local -a tiers=()
-        IFS=',' read -ra tiers <<< "$tier_list"
-        local tier
-        for tier in "${tiers[@]}"; do
-            tier="$(trim "$tier")"
-            local tmpl="template_${tier}"
-            [ -n "${IS_TEMPLATE[$tmpl]+x}" ] || die "dataset '$section' references unknown template '$tier' (expected a [template_${tier}] section)"
-            USED_TEMPLATE["$tier"]=1
-
-            # ---- send ----
-            local send_schedule
-            if send_schedule="$(resolve_field send_schedule "$section" "$tmpl" defaults)"; then
-                local dst prefix flags label raw_notify word notify
-                dst="$(resolve_field dst "$section" "$tmpl" defaults)" || dst=""
-                prefix="$(resolve_field prefix "$section" "$tmpl" defaults)" || die "dataset '$section' tier=$tier: send_schedule is set but 'prefix' did not resolve"
-                flags="$(resolve_field_tiered flags "$tier" "$section" "$tmpl" "")" || flags=""
-                lint_flags "$flags" "dataset '$section' tier=$tier"
-                label="$(resolve_field notify "$section" "" "")" || label=""
-                raw_notify="$(resolve_field notify_raw "$section" "$tmpl" "")" || raw_notify=""
-                word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
-                if [ -n "$raw_notify" ]; then
-                    notify="$raw_notify"
-                else
-                    notify="$(notify_text "$host_label" "$tier" "$word" "$label")"
-                fi
-                SEND_ENTITIES+=("${section}${SEP}${tier}${SEP}${send_schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}")
-            fi
-
-            # ---- prune ----
-            # prune_schedule is the deliberate "yes, prune this tier" signal.
-            # pattern/prune_root/keep-retain are only required once it's set --
-            # prune_root in particular usually has an ambient [defaults] value
-            # that every tier resolves whether or not it wants pruning, so it
-            # must never by itself imply "this tier opted into pruning".
-            local prune_schedule
-            if prune_schedule="$(resolve_field prune_schedule "$section" "$tmpl" defaults)"; then
-                local pattern prune_root retain_flag
-                pattern="$(resolve_field pattern "$section" "$tmpl" defaults)" || die "dataset '$section' tier=$tier: prune_schedule is set but 'pattern' did not resolve"
-                prune_root="$(resolve_field prune_root "$section" "$tmpl" defaults)" || die "dataset '$section' tier=$tier: prune_schedule is set but 'prune_root' did not resolve"
-                resolve_keep_retain "$section" "$tmpl" "$tier" || die "dataset '$section' tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
-                retain_flag="$RESOLVED_RETAIN"
-                local plabel praw pnotify
-                plabel="$(resolve_field notify "" "$tmpl" "")" || plabel=""
-                praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
-                if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$tier" "prune" "$plabel")"; fi
-                PRUNE_ENTITIES+=("${section}${SEP}${tier}${SEP}${prune_root}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}")
-            fi
-        done
+        case "$kind" in
+            defaults|monitor|template) continue ;;
+            dataset) build_dataset "$section" "$name" "$host_label" ;;
+            prune)   build_prune_section "$section" "$name" "$host_label" ;;
+        esac
     done
+}
 
-    # Canonical (no dataset override) prune key per tier, from template+defaults
-    # alone. Also fires a standalone prune line for any template no dataset
-    # ever referenced (a tier that's pruned but never sent from this host).
-    local t tier2
-    for t in "${SECTION_ORDER[@]}"; do
-        [ -z "${IS_TEMPLATE[$t]+x}" ] && continue
-        tier2="${t#template_}"
-        local prune_schedule
-        if prune_schedule="$(resolve_field prune_schedule "" "$t" defaults)"; then
-            local pattern prune_root retain_flag
-            pattern="$(resolve_field pattern "" "$t" defaults)" || die "[$t]: prune_schedule is set but 'pattern' did not resolve"
-            prune_root="$(resolve_field prune_root "" "$t" defaults)" || die "[$t]: prune_schedule is set but 'prune_root' did not resolve"
-            resolve_keep_retain "" "$t" "$tier2" || die "[$t]: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
-            retain_flag="$RESOLVED_RETAIN"
-            CANON_PRUNE_KEY["$tier2"]="${prune_root}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}"
-            if [ -z "${USED_TEMPLATE[$tier2]+x}" ]; then
-                local plabel praw pnotify
-                plabel="$(resolve_field notify "" "$t" "")" || plabel=""
-                praw="$(resolve_field notify_raw_prune "" "$t" "")" || praw=""
-                if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$tier2" "prune" "$plabel")"; fi
-                PRUNE_ENTITIES+=("${SEP}${tier2}${SEP}${CANON_PRUNE_KEY[$tier2]}${SEP}${pnotify}")
+# build_dataset SECTION_HEADER DATASET_PATH HOST_LABEL
+build_dataset() {
+    local ds="$1" ds_path="$2" host_label="$3"
+
+    local tier_list
+    tier_list="$(resolve_field use_template "$ds" "" "")" || die "[dataset:$ds_path] has no use_template"
+
+    local -a tiers=()
+    IFS=',' read -ra tiers <<< "$tier_list"
+    local tier tmpl
+    for tier in "${tiers[@]}"; do
+        tier="$(trim "$tier")"
+        tmpl="template:${tier}"
+        [ "${SECTION_KIND[$tmpl]:-}" = "template" ] || die "[dataset:$ds_path] references unknown template '$tier' (expected a [template:$tier] section)"
+
+        # Display name for notify text -- lets an internal tier id (e.g.
+        # store_hourly) surface as a friendlier word (hourly) in alerts.
+        # Never affects template lookup or the keep-retain tier letter.
+        local ntier
+        ntier="$(resolve_field tier_label "$ds" "$tmpl" "")" || ntier="$tier"
+
+        # ---- send ----
+        local send_schedule
+        if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
+            local dst prefix flags label raw_notify word notify
+            dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
+            prefix="$(resolve_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve"
+            flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
+            lint_flags "$flags" "[dataset:$ds_path] tier=$tier"
+            label="$(resolve_field notify "$ds" "" "")" || label=""
+            raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
+            word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
+            if [ -n "$raw_notify" ]; then
+                notify="$raw_notify"
+            else
+                notify="$(notify_text "$host_label" "$ntier" "$word" "$label")"
             fi
+            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}")
         fi
+
+        # ---- inline self-prune (own path, non-recursive) ----
+        # prune_schedule is the deliberate "yes, prune this dataset" signal.
+        local prune_schedule
+        if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
+            local pattern retain_flag plabel praw pnotify
+            pattern="$(resolve_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve"
+            resolve_keep_retain "$ds" "$tmpl" "$tier" || die "[dataset:$ds_path] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
+            retain_flag="$RESOLVED_RETAIN"
+            plabel="$(resolve_field notify "" "$tmpl" "")" || plabel=""
+            praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
+            if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
+            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}")
+            SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
+        fi
+    done
+}
+
+# build_prune_section SECTION_HEADER SCOPE HOST_LABEL
+build_prune_section() {
+    local sec="$1" scope="$2" host_label="$3"
+
+    local tier_list
+    tier_list="$(resolve_field use_template "$sec" "" "")" || die "[prune:$scope] has no use_template"
+
+    local recursive clearcut rec_raw cc_raw
+    rec_raw="$(resolve_field recursive "$sec" "" "")" || rec_raw="no"
+    cc_raw="$(resolve_field clear_cut "$sec" "" "")" || cc_raw="no"
+    [ "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && recursive=1 || recursive=0
+    [ "$(trim "$cc_raw"  | tr '[:upper:]' '[:lower:]')" = "yes" ] && clearcut=1  || clearcut=0
+
+    local -a tiers=()
+    IFS=',' read -ra tiers <<< "$tier_list"
+    local tier tmpl
+    for tier in "${tiers[@]}"; do
+        tier="$(trim "$tier")"
+        tmpl="template:${tier}"
+        [ "${SECTION_KIND[$tmpl]:-}" = "template" ] || die "[prune:$scope] references unknown template '$tier' (expected a [template:$tier] section)"
+
+        local ntier
+        ntier="$(resolve_field tier_label "$sec" "$tmpl" "")" || ntier="$tier"
+
+        local prune_schedule pattern retain_flag plabel praw pnotify
+        prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+        pattern="$(resolve_field pattern "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: prune_schedule is set but 'pattern' did not resolve"
+        resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
+        retain_flag="$RESOLVED_RETAIN"
+        plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
+        praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
+        if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
+        PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
+        SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
     done
 }
 ###############################################################################
@@ -318,11 +397,10 @@ build_entities() {
 ###############################################################################
 #BEGIN 3.6 [GROUPING]
 ###############################################################################
-# Two entities merge into one cron line when every field in their grouping
-# key matches exactly. Send groups by (schedule, dst, prefix, flags); prune
-# groups by (prune_root, pattern, retain, schedule) -- see BEGIN 3.5's header
-# comment and the emit functions in BEGIN 3.8 for what happens on a match vs.
-# a divergence.
+# Send groups by (schedule, dst, prefix, flags): identical resolved cadence and
+# target -> one snapsend line. Inline prune groups by (schedule, pattern,
+# retain): identical retention -> one delsnaps line listing the datasets by
+# full path. Prune sections are emitted one line per tier, not grouped.
 group_send() {
     declare -gA SEND_GROUPS=()
     declare -ga SEND_GROUP_ORDER=()
@@ -335,46 +413,45 @@ group_send() {
     done
 }
 
-group_prune() {
-    declare -gA PRUNE_GROUPS=()
-    declare -ga PRUNE_GROUP_ORDER=()
-    local e ds tier root pattern retain schedule notify key
-    for e in "${PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier root pattern retain schedule notify <<< "$e"
-        key="${root}${SEP}${pattern}${SEP}${retain}${SEP}${schedule}"
-        [ -z "${PRUNE_GROUPS[$key]+x}" ] && PRUNE_GROUP_ORDER+=("$key")
-        PRUNE_GROUPS["$key"]+="${e}${LSEP}"
+group_inline_prune() {
+    declare -gA INLINE_PRUNE_GROUPS=()
+    declare -ga INLINE_PRUNE_GROUP_ORDER=()
+    local e ds tier pattern retain schedule notify key
+    for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
+        IFS="$SEP" read -r ds tier pattern retain schedule notify <<< "$e"
+        key="${schedule}${SEP}${pattern}${SEP}${retain}"
+        [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
+        INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
 }
 ###############################################################################
 #END 3.6
 
 ###############################################################################
-#BEGIN 3.7 [CROSS-TIER PATTERN OVERLAP CHECK]
+#BEGIN 3.7 [SAME-SCOPE PATTERN OVERLAP CHECK]
 ###############################################################################
-# delsnaps.sh matches snapshots by literal string prefix. If two resolved
-# prune groups share a prune_root and one pattern is a prefix of (or equal
-# to) the other, a single snapshot could match both retention rules. Checked
-# on the final, resolved+grouped keys (not the raw config) so that two
-# different templates whose patterns happen to overlap are still caught,
-# regardless of how many datasets feed into each one.
+# delsnaps.sh matches snapshots by literal string prefix. If two resolved prune
+# operations target the SAME literal scope and one pattern is a prefix of (or
+# equal to) the other, a single snapshot could match both retention rules.
+# Checked on the final resolved (scope, pattern) pairs collected in build.
 validate_retain_patterns() {
-    local -a roots=() patterns=()
-    local key root pattern rest
-    for key in "${PRUNE_GROUP_ORDER[@]}"; do
-        IFS="$SEP" read -r root pattern rest <<< "$key"
-        roots+=("$root")
+    local -a scopes=() patterns=()
+    local pair scope pattern
+    for pair in "${SCOPE_PATTERNS[@]}"; do
+        IFS="$SEP" read -r scope pattern <<< "$pair"
+        scopes+=("$scope")
         patterns+=("$pattern")
     done
 
-    local n="${#roots[@]}" i j pi pj
+    local n="${#scopes[@]}" i j pi pj
     for ((i = 0; i < n; i++)); do
         for ((j = i + 1; j < n; j++)); do
-            [ "${roots[$i]}" = "${roots[$j]}" ] || continue
+            [ "${scopes[$i]}" = "${scopes[$j]}" ] || continue
             pi="${patterns[$i]}"
             pj="${patterns[$j]}"
+            [ "$pi" = "$pj" ] && continue   # same tier resolved twice is not a conflict
             if [[ "$pi" == "$pj"* ]] || [[ "$pj" == "$pi"* ]]; then
-                die "pattern overlap for prune_root='${roots[$i]}': pattern='$pi' and pattern='$pj' -- one is a prefix of (or equal to) the other, so a single snapshot could match both retention rules. Use mutually exclusive prefixes."
+                die "pattern overlap for scope='${scopes[$i]}': pattern='$pi' and pattern='$pj' -- one is a prefix of (or equal to) the other, so a single snapshot could match both retention rules. Use mutually exclusive prefixes."
             fi
         done
     done
@@ -450,36 +527,40 @@ emit_send() {
     done
 }
 
-emit_prune() {
-    local key list ds tier root pattern retain schedule notify
-    for key in "${PRUNE_GROUP_ORDER[@]}"; do
-        list="${PRUNE_GROUPS[$key]}"
+# Inline prune: one delsnaps line per (schedule,pattern,retain) group, listing
+# every member dataset BY FULL PATH, non-recursively. No -R, ever.
+emit_inline_prune() {
+    local key list ds tier pattern retain schedule notify
+    for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
+        list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier root pattern retain schedule notify <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify <<< "${members[0]}"
 
-        local is_canonical=0 tcheck
-        for tcheck in "${!CANON_PRUNE_KEY[@]}"; do
-            [ "${CANON_PRUNE_KEY[$tcheck]}" = "$key" ] && is_canonical=1 && break
+        local -a targets=()
+        local m mds mtier mpat mret msch mnot
+        for m in "${members[@]}"; do
+            IFS="$SEP" read -r mds mtier mpat mret msch mnot <<< "$m"
+            targets+=("$mds")
         done
+        local joined
+        joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local cmd
-        if [ "$is_canonical" -eq 1 ]; then
-            cmd="$REPO_DIR/delsnaps.sh -R \"$root\""
-        else
-            local -a targets=()
-            local m mds mtier mroot mpattern mretain msched mnotify base
-            for m in "${members[@]}"; do
-                IFS="$SEP" read -r mds mtier mroot mpattern mretain msched mnotify <<< "$m"
-                base="${mds##*/}"
-                targets+=("${mroot}/${base}")
-            done
-            local joined
-            joined="$(IFS=,; printf '%s' "${targets[*]}")"
-            cmd="$REPO_DIR/delsnaps.sh \"$joined\""
-        fi
-        cmd="$cmd \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh \"$joined\" \"$pattern\" $retain"
+        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+    done
+}
 
+# Prune sections: one standalone delsnaps line per tier. recursive -> -R,
+# clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
+emit_prune_sections() {
+    local e scope tier pattern retain schedule notify recursive clearcut
+    for e in "${PRUNE_SEC_ENTITIES[@]}"; do
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut <<< "$e"
+        local flag="" fflag=""
+        [ "$recursive" = "1" ] && flag="-R "
+        [ "$clearcut" = "1" ] && fflag="-F "
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
     done
 }
@@ -595,10 +676,11 @@ parse_ini "$CONFIG"
 
 build_entities
 group_send
-group_prune
+group_inline_prune
 validate_retain_patterns
 emit_send
-emit_prune
+emit_inline_prune
+emit_prune_sections
 
 [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || die "no send/prune rules resolved from $CONFIG"
 
