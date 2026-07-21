@@ -1,0 +1,1 @@
+monitor_crit (90m) must be >= monitor_warn (3h)

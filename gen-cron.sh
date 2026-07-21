@@ -36,6 +36,11 @@ set -o pipefail
 #       keep             = <N>             # count-based retention -> -<TIER_LETTER><N>
 #       retain           = <raw delsnaps.sh flags>  # e.g. "-H24"; mutually exclusive with keep
 #       notify_raw_prune = <literal notify-fail.sh text for the prune line>
+#       monitor_warn     = <duration>      # e.g. 90m/3h/9d -- age of the newest snapshot
+#       monitor_crit     = <duration>      # matching 'pattern' that trips WARN/CRIT. Both
+#                                          # must be set together, or neither. Omit both to
+#                                          # not monitor this tier. Requires 'pattern' too.
+#       monitor_schedule = <5-field cron>  # default: */15 * * * * if monitor_warn/crit are set
 #
 #   [dataset:<zfs/path>]                  # a dataset you own end-to-end
 #       use_template = <tier>[,<tier>...]  # comma list -- one dataset can span several tiers
@@ -61,8 +66,12 @@ set -o pipefail
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
 #
-#   [monitor:<scope>]                     # RESERVED -- parsed, emits nothing yet
-#       (overdue-snapshot alerting, next stage)
+# There is no separate [monitor:] section. A staleness check (check-snap-age.sh)
+# is derived AUTOMATICALLY, per tier, wherever a 'pattern' already resolves for
+# pruning -- i.e. every inline [dataset:] self-prune and every [prune:<scope>]
+# tier -- as long as that tier's template also sets monitor_warn/monitor_crit.
+# No new syntax: monitor just rides the same (scope,pattern) pair prune already
+# needed, scoped and recursive the same way that prune operation is.
 #
 # flags="-f" (force full send) and flags="-n" (dry-run) are rejected at generate
 # time: -f in a standing cron job means destroy-and-reseed the target every run,
@@ -80,7 +89,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.1'
+VERSION='v4.2'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -91,13 +100,14 @@ MARKER_END="# END zfs-backup-managed"
 
 declare -a JOB_LINES=()
 declare -a RETAIN_LINES=()
+declare -a MONITOR_LINES=()
 
 SEP=$'\x1c'   # field separator inside one encoded entity string
 LSEP=$'\x1e'  # entity separator inside one group's member list
 
 declare -A INI=()
 declare -a SECTION_ORDER=()
-declare -A SECTION_KIND=()    # header -> defaults|template|dataset|prune|monitor
+declare -A SECTION_KIND=()    # header -> defaults|template|dataset|prune
 declare -A SECTION_NAME=()    # header -> the name after ':' (path/tier/scope); "" for defaults
 declare -A SEEN_SECTION=()
 CUR_SECTION=""
@@ -128,7 +138,10 @@ Section types (header split on first ':'):
   [template:<tier>]    a tier's cadence + retention policy
   [dataset:<path>]     owned dataset: create+send + inline self-prune (own path)
   [prune:<scope>]      standalone additive prune (recursive=/clear_cut= opt-in)
-  [monitor:<scope>]    reserved (overdue-snapshot alerting -- next stage)
+
+Staleness monitoring (check-snap-age.sh) is NOT a section type -- set
+monitor_warn/monitor_crit on a [template:] and it rides every [dataset:]/
+[prune:] tier that already resolves that template's 'pattern'.
 
 See the comment header of this script for the full field reference.
 EOF
@@ -174,13 +187,13 @@ parse_ini() {
             else
                 case "$hdr" in
                     *:*) : ;;
-                    *) die "section '[$hdr]' has no type prefix (expected defaults, or template:/dataset:/prune:/monitor: followed by a name)" ;;
+                    *) die "section '[$hdr]' has no type prefix (expected defaults, or template:/dataset:/prune: followed by a name)" ;;
                 esac
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|monitor) : ;;
-                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/monitor)" ;;
+                    template|dataset|prune) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
             fi
@@ -265,6 +278,48 @@ notify_text() {
         printf '%s %s %s' "$host" "$tier" "$kind"
     fi
 }
+
+# duration_seconds STR CTX -- converts "<N>m/h/d" (same shorthand check-snap-age.sh
+# itself parses) to seconds, or dies with CTX prefixed. Validated here too so a
+# malformed threshold fails at generate time, not silently at 3am in cron.log.
+duration_seconds() {
+    local s="$1" ctx="$2"
+    [[ "$s" =~ ^([0-9]+)([mhd])$ ]] || die "$ctx: invalid duration '$s' (expected <N>m, <N>h, or <N>d)"
+    local num="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+        m) echo $((num * 60)) ;;
+        h) echo $((num * 3600)) ;;
+        d) echo $((num * 86400)) ;;
+    esac
+}
+
+# resolve_monitor DS TMPL CTX -- sets MONITOR_WARN/MONITOR_CRIT/MONITOR_SCHEDULE
+# globals and returns 0 if this tier is monitored (monitor_warn/monitor_crit
+# resolved -- both, or neither: exactly one is an error). Returns 1 if neither
+# resolved (tier not monitored, not an error). Must be called WITHOUT $(...)
+# command substitution -- see resolve_keep_retain's comment for why.
+MONITOR_WARN=""
+MONITOR_CRIT=""
+MONITOR_SCHEDULE=""
+MONITOR_SCHEDULE_DEFAULT="*/15 * * * *"
+resolve_monitor() {
+    local ds="$1" tmpl="$2" ctx="$3" have_warn=0 have_crit=0
+    MONITOR_WARN=""; MONITOR_CRIT=""; MONITOR_SCHEDULE=""
+    if MONITOR_WARN="$(resolve_field monitor_warn "$ds" "$tmpl" "")"; then have_warn=1; fi
+    if MONITOR_CRIT="$(resolve_field monitor_crit "$ds" "$tmpl" "")"; then have_crit=1; fi
+    if [ "$have_warn" -eq 0 ] && [ "$have_crit" -eq 0 ]; then
+        return 1
+    fi
+    if [ "$have_warn" -eq 0 ] || [ "$have_crit" -eq 0 ]; then
+        die "$ctx: monitor_warn and monitor_crit must both be set together (only one resolved)"
+    fi
+    local warn_sec crit_sec
+    warn_sec="$(duration_seconds "$MONITOR_WARN" "$ctx: monitor_warn")"
+    crit_sec="$(duration_seconds "$MONITOR_CRIT" "$ctx: monitor_crit")"
+    [ "$crit_sec" -ge "$warn_sec" ] || die "$ctx: monitor_crit ($MONITOR_CRIT) must be >= monitor_warn ($MONITOR_WARN)"
+    MONITOR_SCHEDULE="$(resolve_field monitor_schedule "$ds" "$tmpl" defaults)" || MONITOR_SCHEDULE="$MONITOR_SCHEDULE_DEFAULT"
+    return 0
+}
 ###############################################################################
 #END 3
 
@@ -275,7 +330,9 @@ notify_text() {
 # dataset's own path) and prune sections (standalone additive tasks). A tier
 # contributes a send entity only if send_schedule resolves; an inline prune
 # entity only if prune_schedule resolves (then pattern + keep/retain are
-# required). monitor sections are parsed but produce nothing yet.
+# required). A monitor entity rides along an inline/section prune entity
+# whenever that tier's monitor_warn/monitor_crit also resolve (see
+# resolve_monitor) -- there is no separate monitor section to walk.
 build_entities() {
     ini_has defaults host_label || die "[defaults] must set host_label (used to build notify text)"
     local host_label
@@ -284,6 +341,7 @@ build_entities() {
     declare -ga SEND_ENTITIES=()
     declare -ga INLINE_PRUNE_ENTITIES=()
     declare -ga PRUNE_SEC_ENTITIES=()
+    declare -ga MONITOR_ENTITIES=()
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
     local section kind name
@@ -292,7 +350,7 @@ build_entities() {
         name="${SECTION_NAME[$section]}"
 
         case "$kind" in
-            defaults|monitor|template) continue ;;
+            defaults|template) continue ;;
             dataset) build_dataset "$section" "$name" "$host_label" ;;
             prune)   build_prune_section "$section" "$name" "$host_label" ;;
         esac
@@ -352,6 +410,13 @@ build_dataset() {
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
             INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
+
+            # ---- monitor (rides this same pattern, own path, non-recursive) ----
+            if resolve_monitor "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier"; then
+                local mnotify
+                mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}")
+            fi
         fi
     done
 }
@@ -390,6 +455,13 @@ build_prune_section() {
         if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
         PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
         SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
+
+        # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
+        if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
+            local mnotify
+            mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}")
+        fi
     done
 }
 ###############################################################################
@@ -423,6 +495,21 @@ group_inline_prune() {
         key="${schedule}${SEP}${pattern}${SEP}${retain}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
+    done
+}
+
+# Monitor groups by (schedule, pattern, warn, crit, recursive): identical check
+# -> one check-snap-age.sh line listing the scopes by full path (comma list,
+# same as check-snap-age.sh already accepts for delsnaps-style datasets lists).
+group_monitor() {
+    declare -gA MONITOR_GROUPS=()
+    declare -ga MONITOR_GROUP_ORDER=()
+    local e scope pattern warn crit schedule recursive notify key
+    for e in "${MONITOR_ENTITIES[@]}"; do
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify <<< "$e"
+        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}"
+        [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
+        MONITOR_GROUPS["$key"]+="${e}${LSEP}"
     done
 }
 ###############################################################################
@@ -565,6 +652,33 @@ emit_prune_sections() {
         RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
     done
 }
+
+# Monitor: one check-snap-age.sh line per (schedule,pattern,warn,crit,recursive)
+# group, listing every member scope BY FULL PATH (comma list). recursive=1 ->
+# -R, mirroring the [prune:] section it rode in on.
+emit_monitor() {
+    local key list scope pattern warn crit schedule recursive notify
+    for key in "${MONITOR_GROUP_ORDER[@]}"; do
+        list="${MONITOR_GROUPS[$key]}"
+        local -a members=()
+        IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify <<< "${members[0]}"
+
+        local -a targets=()
+        local m mscope mpat mwarn mcrit msch mrec mnot
+        for m in "${members[@]}"; do
+            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot <<< "$m"
+            targets+=("$mscope")
+        done
+        local joined
+        joined="$(IFS=,; printf '%s' "${targets[*]}")"
+
+        local flag=""
+        [ "$recursive" = "1" ] && flag="-R "
+        local cmd="$REPO_DIR/check-snap-age.sh ${flag}\"$joined\" \"$pattern\" $warn $crit"
+        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+    done
+}
 ###############################################################################
 #END 3.8
 
@@ -580,6 +694,10 @@ generate_block() {
         echo ""
     fi
     for line in "${RETAIN_LINES[@]}"; do echo "$line"; done
+    if { [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ]; } && [ "${#MONITOR_LINES[@]}" -gt 0 ]; then
+        echo ""
+    fi
+    for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
     echo "$MARKER_END"
 }
 ###############################################################################
@@ -678,10 +796,12 @@ parse_ini "$CONFIG"
 build_entities
 group_send
 group_inline_prune
+group_monitor
 validate_retain_patterns
 emit_send
 emit_inline_prune
 emit_prune_sections
+emit_monitor
 
 [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || die "no send/prune rules resolved from $CONFIG"
 
