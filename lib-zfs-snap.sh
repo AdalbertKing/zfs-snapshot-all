@@ -112,6 +112,15 @@ reset_resume_attempts() {
 # this bookkeeping does yet -- callers gate these functions on
 # `[ $RECURSIVE -ne 1 ]` and fall straight through to FULL otherwise.
 #
+# How syncoid avoids this problem: it doesn't send a single `-R` stream at
+# all. `getchilddatasets()` enumerates the tree and `syncdataset()` -- the
+# same single-dataset sync/bookmark logic used without -r -- runs once per
+# child, in dependency order. So bookmarking "just works" per child with zero
+# extra machinery, because recursion there is a loop over the single-dataset
+# path, not a distinct code path. If -R here is ever replaced by an
+# equivalent per-child loop calling process_dataset(), these functions need
+# no changes to cover it -- confirmed by reading syncoid's source, 2026-07-22.
+#
 # NOT yet implemented: pruning of orphaned bookmarks (target retired, or
 # just stale). Each successful transfer replaces the one bookmark it keeps
 # per target, so these don't grow *per run* -- but a target dataset that
