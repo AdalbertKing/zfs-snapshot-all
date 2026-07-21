@@ -165,16 +165,11 @@ run_send -e -m "automated_hourly_" "$POOL/nomatch" "$BK"
 check "-e -m: no snapshot matching the prefix is an error, not a silent full send" \
       "1" "$RC"
 
-# Known wart, pinned deliberately rather than asserted away: process_dataset
-# creates the target dataset BEFORE it checks that a matching source snapshot
-# exists, so a job with a wrong -m prefix leaves an empty dataset behind on
-# every run. Harmless (no data is touched, and check-snap-age.sh skips
-# snapshot-less datasets it discovers under -R) but untidy. If the ordering is
-# ever fixed, this expectation flips to "no" -- that is the point of pinning it.
-check "-e -m: target dataset is still created before the failure (known wart)" "yes" \
+# A run that cannot succeed must not touch the target at all. process_dataset
+# resolves the source snapshot BEFORE creating (or, under -f, destroying) the
+# target, so a wrong -m prefix leaves nothing behind.
+check "-e -m: a doomed run does not even create the target dataset" "no" \
       "$(zfs list -H -o name "$(tgt_of nomatch)" >/dev/null 2>&1 && echo yes || echo no)"
-check "-e -m: but the abandoned target holds no snapshots" "0" \
-      "$(count_snaps "$(tgt_of nomatch)")"
 
 # --- local snapshot-only mode (no target argument) --------------------------
 
@@ -248,6 +243,20 @@ check "-f: rebuilds a clean target from scratch" "0" "$RC"
 check "-f: target holds only the freshly sent snapshot" "auto_2" \
       "$(snaps_of "$(tgt_of forced)")"
 
+# Regression guard for a destructive ordering bug: -f destroys the target
+# before re-sending, and the source snapshot used to be resolved only AFTER
+# that. So `-f -e -m <prefix matching nothing>` wiped every snapshot and all
+# data on the target and only then failed with "no source snapshots matching
+# message" -- the backup was gone until the next successful full send.
+# Verified destructive on a live pool before the fix.
+zfs create -p "$POOL/fsafe" || exit 1
+zfs snapshot "$POOL/fsafe@auto_1"
+run_send -e -m "auto_" "$POOL/fsafe" "$BK"
+TF="$(tgt_of fsafe)"
+run_send -f -e -m "NO_SUCH_PREFIX_" "$POOL/fsafe" "$BK"
+check "-f: a doomed run exits 1 without destroying the target" "1" "$RC"
+check "-f: the existing backup survives a doomed forced run" "auto_1" "$(snaps_of "$TF")"
+
 # --- missing source ---------------------------------------------------------
 
 run_send -m "auto_" "$POOL/does-not-exist" "$BK"
@@ -284,6 +293,13 @@ zfs create -p "$SRCBASE/$POOL/pullnomatch" || exit 1
 zfs snapshot "$SRCBASE/$POOL/pullnomatch@other_1"
 run_get -e -m "automated_hourly_" "$POOL/pullnomatch" "$SRCBASE"
 check "snapget: no snapshot matching the prefix is an error" "1" "$RC"
+check "snapget: a doomed run does not create the local target" "no" \
+      "$(zfs list -H -o name "$POOL/pullnomatch" >/dev/null 2>&1 && echo yes || echo no)"
+
+# snapget carries the same -f ordering fix as snapsend; keep both guarded.
+run_get -f -e -m "NO_SUCH_PREFIX_" "$POOL/pull" "$SRCBASE"
+check "snapget -f: a doomed forced run leaves the local target intact" "auto_1 auto_2" \
+      "$(snaps_of "$POOL/pull")"
 
 # --- summary ----------------------------------------------------------------
 

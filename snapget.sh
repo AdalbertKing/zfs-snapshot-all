@@ -432,6 +432,37 @@ process_dataset() {
         fi
     fi
 
+    # Work out WHAT is going to be pulled before touching the target in any
+    # way. This ordering is load-bearing, not cosmetic: everything below either
+    # creates the target dataset or, under -f, destroys it outright. Resolving
+    # the source snapshot afterwards meant a run that could never succeed still
+    # got that far -- `-f -e -m <prefix that matches nothing>` destroyed every
+    # snapshot and all data on the local target and only THEN reported "no
+    # source snapshots matching message". Same fix as snapsend.sh; keep the two
+    # in step.
+    if [ "$USE_EXISTING_SNAPSHOT" -eq 1 ]; then
+        local src_snaps
+        src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
+        if [ ${#src_snaps[@]} -eq 0 ]; then
+            log 0 "No source snapshots found"
+            return 1
+        fi
+
+        if [ -n "$MESSAGE" ]; then
+            src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
+            if [ ${#src_snaps[@]} -eq 0 ]; then
+                log 0 "No source snapshots matching message: $MESSAGE"
+                return 1
+            fi
+        fi
+
+        local latest_snap="${src_snaps[-1]}"
+        snapshot="${src_dataset}@${latest_snap}"
+    else
+        snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host") || return 1
+        latest_snap="${snapshot##*@}"
+    fi
+
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         log 2 "Creating target dataset: $tgt_dataset"
         # canmount=noauto: a freshly created target starts unmounted and stays
@@ -469,29 +500,6 @@ process_dataset() {
             log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
             return 1
         }
-    fi
-
-    if [ "$USE_EXISTING_SNAPSHOT" -eq 1 ]; then
-        local src_snaps
-        src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
-        if [ ${#src_snaps[@]} -eq 0 ]; then
-            log 0 "No source snapshots found"
-            return 1
-        fi
-
-        if [ -n "$MESSAGE" ]; then
-            src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
-            if [ ${#src_snaps[@]} -eq 0 ]; then
-                log 0 "No source snapshots matching message: $MESSAGE"
-                return 1
-            fi
-        fi
-
-        local latest_snap="${src_snaps[-1]}"
-        snapshot="${src_dataset}@${latest_snap}"
-    else
-        snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host") || return 1
-        latest_snap="${snapshot##*@}"
     fi
 
     local tgt_snaps
