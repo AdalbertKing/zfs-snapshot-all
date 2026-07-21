@@ -263,6 +263,76 @@ run_del "$POOL/nomatch" "auto_" -H1
 check "no matching snapshots leaves them alone" "manual_1" "$(snaps_of nomatch)"
 check "no matching snapshots is exit 0, not an error" "0" "$RC"
 
+# --- bookmark mode (-B) ------------------------------------------------------
+# snapsend.sh/snapget.sh leave a "tgt-<hash>" bookmark per target on the
+# source, refreshed on every successful transfer. -B prunes those by age --
+# see the "BOOKMARK PRUNING" header comment in delsnaps.sh for why age (not
+# count) is the only mode that makes sense here.
+
+# marks_of <dataset> -- surviving bookmark names (after '#'), space separated.
+marks_of() {
+    zfs list -H -o name -t bookmark "$POOL/$1" 2>/dev/null \
+        | sed 's/.*#//' | tr '\n' ' ' | sed 's/ $//'
+}
+
+mkds bm
+mksnaps bm seed_1
+zfs bookmark "$POOL/bm@seed_1" "$POOL/bm#tgt-aaa1111" || exit 1
+run_del -B "$POOL/bm" "tgt-" -h1
+check "bookmark age: threshold in the past keeps the bookmark" \
+      "tgt-aaa1111" "$(marks_of bm)"
+
+# Same strict-inequality boundary as snapshot age mode: sleep past "now"
+# before asserting deletion, otherwise this depends on how fast the
+# preceding command ran.
+sleep 2
+run_del -B "$POOL/bm" "tgt-" -h0
+check "bookmark age: threshold at now deletes it" "" "$(marks_of bm)"
+check "bookmark age: exit code 0" "0" "$RC"
+
+# Pattern matching applies to the bookmark name (after '#'), same prefix
+# semantics as snapshot mode -- a bookmark not matching the pattern must
+# survive regardless of age.
+mkds bmpat
+mksnaps bmpat seed_1
+zfs bookmark "$POOL/bmpat@seed_1" "$POOL/bmpat#tgt-bbb2222" || exit 1
+zfs bookmark "$POOL/bmpat@seed_1" "$POOL/bmpat#manual-keep" || exit 1
+sleep 2
+run_del -B "$POOL/bmpat" "tgt-" -h0
+check "bookmark pattern: only the matching bookmark is a candidate" \
+      "manual-keep" "$(marks_of bmpat)"
+
+# -B only supports age-based flags -- count-based retention is meaningless
+# for bookmarks (exactly one exists per target at a time by design).
+mkds bmcount
+mksnaps bmcount seed_1
+zfs bookmark "$POOL/bmcount@seed_1" "$POOL/bmcount#tgt-ccc3333" || exit 1
+run_del -B "$POOL/bmcount" "tgt-" -H1
+check "bookmark mode rejects count-based flags: exit 1" "1" "$RC"
+check "bookmark mode rejects count-based flags: destroys nothing" \
+      "tgt-ccc3333" "$(marks_of bmcount)"
+
+# -F is meaningless for bookmarks (no clones/dependents) -- confirm it's
+# accepted as a no-op rather than breaking the run.
+mkds bmforce
+mksnaps bmforce seed_1
+zfs bookmark "$POOL/bmforce@seed_1" "$POOL/bmforce#tgt-ddd4444" || exit 1
+sleep 2
+run_del -B -F "$POOL/bmforce" "tgt-" -h0
+check "bookmark mode: -F is accepted as a no-op, deletion still happens" \
+      "" "$(marks_of bmforce)"
+
+# -R must prune bookmarks on every descendant dataset too, same as snapshots.
+mkds bmtree bmtree/a
+mksnaps bmtree seed_1
+mksnaps bmtree/a seed_1
+zfs bookmark "$POOL/bmtree@seed_1" "$POOL/bmtree#tgt-eee5555" || exit 1
+zfs bookmark "$POOL/bmtree/a@seed_1" "$POOL/bmtree/a#tgt-fff6666" || exit 1
+sleep 2
+run_del -B -R "$POOL/bmtree" "tgt-" -h0
+check "bookmark recursive: parent bookmark pruned" "" "$(marks_of bmtree)"
+check "bookmark recursive: child bookmark pruned" "" "$(marks_of bmtree/a)"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

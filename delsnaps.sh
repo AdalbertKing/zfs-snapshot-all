@@ -57,6 +57,9 @@ set -o pipefail
 #                        destroy, cascading to same-named descendant snapshots
 #                        and destroying dependent clones (even Proxmox linked
 #                        clones). Dangerous, opt-in.
+# -B                   : Bookmark mode. Prune ZFS BOOKMARKS instead of
+#                        snapshots (see BOOKMARK PRUNING below). Age-based
+#                        only -- count-based flags are rejected in this mode.
 # -p <PORT>            : SSH port for remote datasets (default: 22).
 # -k <FILE>            : Verify remote host keys against this known_hosts file
 #                        (StrictHostKeyChecking=yes). Default when omitted is
@@ -75,11 +78,36 @@ set -o pipefail
 # -H <count>           : Count contribution (hours slot).
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
+#
+# BOOKMARK PRUNING (-B):
+# snapsend.sh/snapget.sh (see lib-zfs-snap.sh) leave a bookmark per target
+# (named "tgt-<8 hex chars>") on the SOURCE dataset, refreshed on every
+# successful transfer to that target. A target that stops being used
+# (decommissioned VM, retired backup job) leaves its bookmark behind forever
+# -- record_send_bookmark only ever replaces its OWN target's bookmark, it
+# has no way to know another one is now orphaned. -B prunes bookmarks by age
+# instead: a bookmark that has NOT been refreshed in the given threshold is
+# almost certainly orphaned, since any still-active target gets its bookmark
+# touched every time its job runs. Pick a threshold comfortably longer than
+# the longest real backup cycle you run, or this can prune a bookmark that
+# is just waiting out a long gap (an offline host, a paused job).
+# Only age-based flags apply (count-based makes no sense here: exactly one
+# bookmark exists per target at any time by design, there is nothing to keep
+# "the N most recent" of). Same PATTERN argument as snapshot mode, matched
+# against the bookmark name after '#' -- pass "tgt-" to match everything this
+# tool itself creates. Bookmarks are never clones and have no dependents, so
+# -F/clear-cut is a no-op in this mode: destruction is always a plain `zfs
+# destroy dataset#mark`. The Proxmox-reserved-prefix guard does not apply
+# (bookmarks are never __replicate_/__migration__/vzdump).
+#
+# Example: prune snapsend/snapget bookmarks untouched for 30+ days:
+#   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.15'
+VERSION='v1.16'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
+BOOKMARK_MODE=false
 PORT=22
 KNOWN_HOSTS_FILE=""
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
@@ -195,8 +223,10 @@ emit_stats() {
 usage() {
     echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
     echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
+    echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
     exit 1
 }
 
@@ -267,6 +297,11 @@ parse_time_arguments() {
 
     if [ "$age_flag_seen" = true ] && [ "$count_flag_seen" = true ]; then
         echo "Error: cannot mix age-based (-y/-m/-w/-d/-h) and count-based (-Y/-M/-W/-D/-H) flags in one invocation" >&2
+        exit 1
+    fi
+
+    if [ "$BOOKMARK_MODE" = true ] && [ "$count_flag_seen" = true ]; then
+        echo "Error: -B (bookmark mode) only supports age-based flags (-y/-m/-w/-d/-h) -- count-based retention doesn't apply to bookmarks (exactly one exists per target at a time by design)" >&2
         exit 1
     fi
 }
@@ -421,6 +456,99 @@ delete_snapshots() {
     emit_stats "$ds_label" "$pat" "$status" "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
 }
 
+# Prune bookmarks by age -- the -B counterpart to delete_snapshots' age
+# branch. Bookmarks are never clones and have no dependents (no -F concept),
+# aren't subject to the Proxmox-reserved-prefix guard (that's a snapshot-name
+# convention), and count-based retention is meaningless for them (parse_time_
+# arguments already rejects -Y/-M/-W/-D/-H with -B). See "BOOKMARK PRUNING"
+# in the header comment for why age is the right signal for "orphaned".
+delete_bookmarks() {
+    local ds="$1"
+    local pat="$2"
+    local threshold="$3"
+    local ruser="${4:-}"
+    local rhost="${5:-}"
+    local ds_start deleted_count=0 kept_count=0 ds_failed=0
+    ds_start=$(date +%s)
+    local ds_label="$ds"
+    [ -n "$rhost" ] && ds_label="${rhost}:${ds}"
+
+    dbg "Inside delete_bookmarks function"
+    dbg "Dataset = $ds_label, Pattern = $pat, threshold = $threshold"
+
+    local all_bookmarks
+    all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}" 2>/dev/null)
+
+    local filtered=()
+    local line markname
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        markname="${line#*#}"
+        [[ "$markname" == "${pat}"* ]] && filtered+=("$line")
+    done <<< "$all_bookmarks"
+
+    if [ "${#filtered[@]}" -eq 0 ]; then
+        echo "No bookmarks found for dataset $ds_label matching pattern $pat" >&2
+        emit_stats "$ds_label" "$pat" "success" "$(( $(date +%s) - ds_start ))" 0 0
+        return 0
+    fi
+
+    dbg "Bookmarks found: ${filtered[*]}"
+
+    local mark creation_date_sec
+    for mark in "${filtered[@]}"; do
+        creation_date_sec=$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${mark}")
+
+        dbg "Bookmark = $mark, creation_date_sec = $creation_date_sec"
+
+        if [ "${creation_date_sec}" -lt "${threshold}" ]; then
+            if [ "$DRY_RUN" = true ]; then
+                echo "[DRY-RUN] Would delete bookmark: ${mark}" >&2
+                deleted_count=$((deleted_count + 1))
+            else
+                echo "Deleting bookmark: ${mark}" >&2
+                if run_zfs "$ruser" "$rhost" destroy "${mark}"; then
+                    deleted_count=$((deleted_count + 1))
+                else
+                    echo "Error deleting bookmark: ${mark}" >&2
+                    EXIT_CODE=1
+                    ds_failed=1
+                fi
+            fi
+        else
+            if [ "$DRY_RUN" = true ]; then
+                echo "[DRY-RUN] Would keep bookmark: ${mark} (newer than threshold)" >&2
+            else
+                echo "Keeping bookmark: ${mark} (newer than threshold)" >&2
+            fi
+            kept_count=$((kept_count + 1))
+        fi
+    done
+
+    local status
+    if [ "$DRY_RUN" = true ]; then
+        status="dryrun"
+    elif [ "$ds_failed" -eq 0 ]; then
+        status="success"
+    else
+        status="failed"
+    fi
+    emit_stats "$ds_label" "$pat" "$status" "$(( $(date +%s) - ds_start ))" "$deleted_count" "$kept_count"
+}
+
+# Dispatch to delete_bookmarks (-B) or delete_snapshots (default) for one
+# dataset. mode/param are only meaningful for delete_snapshots -- delete_
+# bookmarks takes just the age threshold, which is param in age mode (the
+# only mode -B allows; parse_time_arguments already rejected count+-B).
+prune_one() {
+    local ds="$1" pat="$2" mode="$3" param="$4" ruser="${5:-}" rhost="${6:-}"
+    if [ "$BOOKMARK_MODE" = true ]; then
+        delete_bookmarks "${ds}" "${pat}" "${param}" "${ruser}" "${rhost}"
+    else
+        delete_snapshots "${ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
+    fi
+}
+
 # Function to recursively process datasets
 process_datasets_recursively() {
     local base_ds="$1"
@@ -430,7 +558,7 @@ process_datasets_recursively() {
     local ruser="${5:-}"
     local rhost="${6:-}"
 
-    delete_snapshots "${base_ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
+    prune_one "${base_ds}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
 
     # Fetch the full descendant list (local or over ssh) and drop base_ds itself
     # in bash rather than piping the remote output through grep -- keeps the
@@ -440,7 +568,7 @@ process_datasets_recursively() {
     for child in ${all_datasets}; do
         [ "$child" = "$base_ds" ] && continue
         dbg "Processing child dataset = $child"
-        delete_snapshots "${child}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
+        prune_one "${child}" "${pat}" "${mode}" "${param}" "${ruser}" "${rhost}"
     done
 }
 
@@ -460,7 +588,7 @@ process_datasets() {
         if [ "$recurse" = true ]; then
             process_datasets_recursively "${R_DS}" "${pattern}" "${mode}" "${param}" "${R_USER}" "${R_HOST}"
         else
-            delete_snapshots "${R_DS}" "${pattern}" "${mode}" "${param}" "${R_USER}" "${R_HOST}"
+            prune_one "${R_DS}" "${pattern}" "${mode}" "${param}" "${R_USER}" "${R_HOST}"
         fi
     done
 }
@@ -483,6 +611,7 @@ while [ "$#" -gt 0 ]; do
         -R) recurse=true; shift ;;
         -n) DRY_RUN=true; shift ;;
         -F) CLEARCUT=true; shift ;;
+        -B) BOOKMARK_MODE=true; shift ;;
         -v|--verbose) DEBUG=true; shift ;;
         -p) PORT="$2"; shift 2 ;;
         -p*) PORT="${1#-p}"; shift ;;
@@ -520,7 +649,11 @@ fi
 
 # Loud, one-time warning: -F uses `zfs destroy -R`, which takes down dependent
 # clones (e.g. Proxmox linked-clone VM/CT disks) along with the snapshot.
-if [ "$CLEARCUT" = true ]; then
+# Meaningless in bookmark mode (bookmarks have no clones/dependents; -B always
+# does a plain `zfs destroy`), so say so instead of silently ignoring it.
+if [ "$CLEARCUT" = true ] && [ "$BOOKMARK_MODE" = true ]; then
+    echo "NOTE: -F has no effect in bookmark mode (-B) -- bookmarks have no clones or dependents, destruction is always a plain 'zfs destroy'." >&2
+elif [ "$CLEARCUT" = true ]; then
     if [ "$DRY_RUN" = true ]; then
         echo "WARNING: clear-cut mode (-F) active: real runs would use 'zfs destroy -R', removing descendant snapshots AND dependent clones (even Proxmox linked clones)." >&2
     else
