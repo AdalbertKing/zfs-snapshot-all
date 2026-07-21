@@ -80,7 +80,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.0'
+VERSION='v4.1'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -195,6 +195,7 @@ parse_ini() {
         if [[ "$trimmed" == *"="* ]] && [ -n "$CUR_SECTION" ]; then
             key="$(trim "${trimmed%%=*}")"
             val="$(trim "${trimmed#*=}")"
+            [ -z "${INI[${CUR_SECTION}${SEP}${key}]+x}" ] || die "duplicate field '$key' in section '[$CUR_SECTION]' in $file -- the first value would be silently overwritten"
             INI["${CUR_SECTION}${SEP}${key}"]="$val"
         fi
     done < "$file"

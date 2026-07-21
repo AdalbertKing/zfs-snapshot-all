@@ -6,6 +6,7 @@
 !snapget.sh
 !delsnaps.sh
 !gen-cron.sh
+!check-snap-age.sh
 !deploy_new_server.sh
 !deploy_backup_user.sh
 !test/
