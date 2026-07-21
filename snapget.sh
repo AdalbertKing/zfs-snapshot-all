@@ -35,7 +35,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.24'
+VERSION='v2.25'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -533,9 +533,26 @@ process_dataset() {
     local recursive_send_flag=""
     [ $RECURSIVE -eq 1 ] && recursive_send_flag="-R"
 
+    local bookmark_base=""
+    if [[ "$common_snapshot" == "null" ]] && [ $RECURSIVE -ne 1 ]; then
+        # No common snapshot survives on either end -- before giving up to a
+        # FULL pull, check for a bookmark left by a prior run (see
+        # lib-zfs-snap.sh). Target is always local in snapget.sh, so the head
+        # GUID lookup gets no remote args; the source (where bookmarks live)
+        # may be remote, mirrored the same way find_common_snapshot already is.
+        local tgt_head_guid=""
+        if [ ${#tgt_snaps[@]} -gt 0 ]; then
+            tgt_head_guid=$(get_snapshot_guid "$tgt_dataset" "${tgt_snaps[-1]}")
+        fi
+        bookmark_base=$(find_bookmark_base "$src_dataset" "$tgt_head_guid" "$remote_user" "$remote_host")
+    fi
+
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
         send_cmd="zfs send $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
+    elif [ -n "$bookmark_base" ]; then
+        log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
+        send_cmd="zfs send -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
             log 1 "Performing full history pull"
@@ -562,6 +579,11 @@ process_dataset() {
         [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: -f receives with a forced rollback, which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, -f requires root."
         return 1
     }
+
+    # Refresh the per-target bookmark to what was just sent, regardless of
+    # which path got us here (-I, -i bookmark, or FULL) -- see
+    # record_send_bookmark in lib-zfs-snap.sh. Source may be remote here.
+    [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host"
 
     log 1 "Transfer completed successfully"
     return 0

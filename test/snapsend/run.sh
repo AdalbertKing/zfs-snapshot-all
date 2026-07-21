@@ -301,6 +301,79 @@ run_get -f -e -m "NO_SUCH_PREFIX_" "$POOL/pull" "$SRCBASE"
 check "snapget -f: a doomed forced run leaves the local target intact" "auto_1 auto_2" \
       "$(snaps_of "$POOL/pull")"
 
+# --- bookmark-backed incremental fallback ------------------------------------
+# Bookmarks store only a snapshot's txg+GUID (no data blocks), so `zfs send -i`
+# can still compute a diff against one after the snapshot itself is gone. This
+# is what saves a run from falling back to FULL once the common-base snapshot
+# has already been pruned off the source (e.g. pvesr's ~12h retention window).
+#
+# The key functional signal, used instead of grepping log text: `zfs recv`
+# always runs with -F (forced rollback). If the bookmark match fails and the
+# run falls through to a plain FULL send, -F rolls the target back to hold
+# ONLY the incoming snapshot. If the bookmark match succeeds, the send is a
+# real `-i` incremental, which does not roll back -- the target keeps its
+# prior history AND gains the new snapshot. So "does the old snapshot survive
+# alongside the new one" is a reliable proxy for "was the bookmark used."
+
+zfs create -p "$POOL/bm1" || exit 1
+zfs snapshot "$POOL/bm1@a"
+run_send -e "$POOL/bm1" "$BK"
+BM1T="$(tgt_of bm1)"
+check "bookmark: first send lands @a on target" "a" "$(snaps_of "$BM1T")"
+
+zfs destroy "$POOL/bm1@a"
+tick
+zfs snapshot "$POOL/bm1@c"
+run_send -e "$POOL/bm1" "$BK"
+check "bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
+check "bookmark: target keeps @a AND gains @c (incremental via bookmark, not a forced-rollback full)" "a c" \
+      "$(snaps_of "$BM1T")"
+check "bookmark: source bookmark GUID now matches the newly sent @c" \
+      "$(zfs get -H -p -o value guid "$POOL/bm1@c")" \
+      "$(zfs list -H -t bookmark -o guid "$POOL/bm1" 2>/dev/null | head -1)"
+
+# A bookmark whose GUID does NOT match the target's current head (e.g. someone
+# rebuilt the target independently) must never be trusted on a name-only
+# guess -- it must be silently skipped, falling through to the normal
+# no-common-base path exactly like having no bookmark at all.
+#
+# That fallback path is a PLAIN full send (no -f), which -- pre-existing
+# behaviour, nothing to do with bookmarks -- cannot land in a target that
+# already holds unrelated snapshots: `zfs receive -F` only rolls back
+# uncommitted filesystem changes, it does not destroy foreign snapshots the
+# way -f's explicit destroy+recreate does. So the correct, safe outcome here
+# is a clean failure that leaves the target untouched -- proof that the
+# mismatched bookmark was never used (if it had been, the send would have
+# used the wrong base and either errored differently or corrupted the
+# stream, not failed with ZFS's own "destination has snapshots" refusal).
+zfs create -p "$POOL/bm2" || exit 1
+zfs snapshot "$POOL/bm2@a"
+run_send -e "$POOL/bm2" "$BK"
+BM2T="$(tgt_of bm2)"
+zfs destroy "$POOL/bm2@a"
+tick
+zfs snapshot "$POOL/bm2@c"
+zfs destroy "${BM2T}@a"
+zfs snapshot "${BM2T}@rogue"
+run_send -e "$POOL/bm2" "$BK"
+check "bookmark: GUID mismatch is not used -- fails safely (pre-existing ZFS limit, not a bookmark bug)" "1" "$RC"
+check "bookmark: GUID mismatch never touches the target (no wrong-base send happened)" "rogue" \
+      "$(snaps_of "$BM2T")"
+
+# snapget.sh mirror -- same mechanism, source may be the remote side there.
+GSRC="$SRCBASE/$POOL/pullbm"
+zfs create -p "$GSRC" || exit 1
+zfs snapshot "${GSRC}@a"
+run_get -e "$POOL/pullbm" "$SRCBASE"
+check "snapget bookmark: first pull lands @a" "a" "$(snaps_of "$POOL/pullbm")"
+
+zfs destroy "${GSRC}@a"
+tick
+zfs snapshot "${GSRC}@c"
+run_get -e "$POOL/pullbm" "$SRCBASE"
+check "snapget bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
+check "snapget bookmark: local target keeps @a AND gains @c" "a c" "$(snaps_of "$POOL/pullbm")"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

@@ -95,3 +95,106 @@ increment_resume_attempts() {
 reset_resume_attempts() {
     rm -f "$(resume_state_file "$1")"
 }
+
+###############################################################################
+# BOOKMARK-BACKED INCREMENTAL FALLBACK
+###############################################################################
+# A ZFS bookmark (dataset#mark) records only a snapshot's txg+GUID -- zero
+# data blocks -- yet `zfs send -i` only needs that txg to compute a diff
+# against a newer snapshot. So a bookmark survives deleting the snapshot it
+# was made from and still anchors one more incremental. This is what saves a
+# run from falling back to a FULL send when the common-base snapshot has
+# already been pruned off the source (e.g. pvesr's ~12h retention on pve0)
+# before this tool got around to shipping it onward.
+#
+# Scope for v1: single dataset only, no recursion. A recursive stream would
+# need a bookmark (and a GUID match) on every child dataset, which none of
+# this bookkeeping does yet -- callers gate these functions on
+# `[ $RECURSIVE -ne 1 ]` and fall straight through to FULL otherwise.
+#
+# NOT yet implemented: pruning of orphaned bookmarks (target retired, or
+# just stale). Each successful transfer replaces the one bookmark it keeps
+# per target, so these don't grow *per run* -- but a target dataset that
+# stops being used entirely leaves its bookmark behind forever. Flagged as a
+# follow-up, not silently forgotten.
+
+# Emit the GUID of one dataset@snapshot. Mirrors get_timestamp's remote-vs-
+# local branching but reads the `guid` property instead of `creation`.
+get_snapshot_guid() {
+    local dataset="$1"
+    local snap="$2"
+    local remote_user="${3:-}"
+    local remote_host="${4:-}"
+    local guid
+    if [ -n "$remote_host" ]; then
+        guid=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs get -H -o value guid '${dataset}@${snap}' 2>/dev/null") || return 1
+    else
+        guid=$(zfs get -H -o value guid "${dataset}@${snap}" 2>/dev/null) || return 1
+    fi
+    [ -n "$guid" ] && echo "$guid"
+}
+
+# Short, stable per-target suffix for bookmark names -- lets one source
+# dataset feed several targets without their bookmarks colliding or
+# overwriting each other.
+bookmark_target_tag() {
+    printf '%s' "$1" | md5sum | cut -c1-8
+}
+
+# Look for a bookmark on $src_dataset whose GUID matches $tgt_head_guid --
+# the ZFS-level proof that the bookmark's txg is a valid incremental base for
+# whatever the target currently holds. Echoes "src_dataset#mark" on a match,
+# nothing otherwise. Deliberately GUID-only, never name-based: a stale or
+# renamed bookmark (source rolled back, target rebuilt independently) has a
+# different GUID and correctly falls through to FULL instead of being
+# trusted on a guess.
+find_bookmark_base() {
+    local src_dataset="$1"
+    local tgt_head_guid="$2"
+    local remote_user="${3:-}"
+    local remote_host="${4:-}"
+    [ -z "$tgt_head_guid" ] && return 0
+    local marks
+    if [ -n "$remote_host" ]; then
+        marks=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -t bookmark -o name,guid '$src_dataset' 2>/dev/null")
+    else
+        marks=$(zfs list -H -t bookmark -o name,guid "$src_dataset" 2>/dev/null)
+    fi
+    [ -z "$marks" ] && return 0
+    local name guid
+    while IFS=$'\t' read -r name guid; do
+        [ "$guid" = "$tgt_head_guid" ] && { echo "$name"; return 0; }
+    done <<< "$marks"
+}
+
+# After a successful transfer, refresh the per-target bookmark on the SOURCE
+# to the snapshot that was just sent. This is the insurance policy itself:
+# if the source's own retention deletes that snapshot before the next run,
+# the bookmark (metadata only) still anchors the next incremental. Only one
+# bookmark is kept per target (the old one is destroyed first), so this
+# doesn't accumulate across runs -- see the orphan-pruning gap noted above.
+# Best-effort: a failure here (e.g. missing 'zfs allow bookmark,destroy'
+# delegation for a non-root sender) logs a warning but does not fail the
+# transfer that already succeeded.
+record_send_bookmark() {
+    local src_dataset="$1"
+    local sent_snap="$2"
+    local tgt_dataset="$3"
+    local remote_user="${4:-}"
+    local remote_host="${5:-}"
+    local tag mark full
+    tag=$(bookmark_target_tag "$tgt_dataset")
+    mark="tgt-${tag}"
+    full="${src_dataset}#${mark}"
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -t bookmark -o name '$full' >/dev/null 2>&1 && zfs destroy '$full'; zfs bookmark '${src_dataset}@${sent_snap}' '$full'" \
+            || log 1 "Warning: failed to refresh bookmark $full on $remote_host (non-fatal)"
+    else
+        zfs list -H -t bookmark -o name "$full" >/dev/null 2>&1 && zfs destroy "$full"
+        zfs bookmark "${src_dataset}@${sent_snap}" "$full" \
+            || log 1 "Warning: failed to refresh bookmark $full (non-fatal)"
+    fi
+}
