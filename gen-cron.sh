@@ -89,7 +89,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.2'
+VERSION='v4.3'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -656,6 +656,12 @@ emit_prune_sections() {
 # Monitor: one check-snap-age.sh line per (schedule,pattern,warn,crit,recursive)
 # group, listing every member scope BY FULL PATH (comma list). recursive=1 ->
 # -R, mirroring the [prune:] section it rode in on.
+#
+# Unlike send/prune lines (plain "cmd || notify", any failure alerts equally),
+# a monitor line only alerts on CRITICAL (exit >=2); WARNING (exit 1) still
+# lands in cron.log via 2>>, since check-snap-age.sh already writes its status
+# lines to stderr, but does NOT page notify-fail.sh -- WARNING is "worth
+# noticing on the next log read", CRITICAL is "worth an email now".
 emit_monitor() {
     local key list scope pattern warn crit schedule recursive notify
     for key in "${MONITOR_GROUP_ORDER[@]}"; do
@@ -676,7 +682,7 @@ emit_monitor() {
         local flag=""
         [ "$recursive" = "1" ] && flag="-R "
         local cmd="$REPO_DIR/check-snap-age.sh ${flag}\"$joined\" \"$pattern\" $warn $crit"
-        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; [ \$? -ge 2 ] && $NOTIFY_SCRIPT \"$notify\"")
     done
 }
 ###############################################################################
