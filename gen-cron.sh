@@ -89,7 +89,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.4'
+VERSION='v4.5'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -413,9 +413,10 @@ build_dataset() {
 
             # ---- monitor (rides this same pattern, own path, non-recursive) ----
             if resolve_monitor "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier"; then
-                local mnotify
+                local mnotify mbroken
                 mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
-                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}")
+                mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}${SEP}${mbroken}")
             fi
         fi
     done
@@ -458,9 +459,10 @@ build_prune_section() {
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
         if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
-            local mnotify
+            local mnotify mbroken
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}")
+            mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}")
         fi
     done
 }
@@ -504,9 +506,9 @@ group_inline_prune() {
 group_monitor() {
     declare -gA MONITOR_GROUPS=()
     declare -ga MONITOR_GROUP_ORDER=()
-    local e scope pattern warn crit schedule recursive notify key
+    local e scope pattern warn crit schedule recursive notify broken key
     for e in "${MONITOR_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify <<< "$e"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken <<< "$e"
         key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
@@ -658,22 +660,37 @@ emit_prune_sections() {
 # -R, mirroring the [prune:] section it rode in on.
 #
 # Unlike send/prune lines (plain "cmd || notify", any failure alerts equally),
-# a monitor line only alerts on CRITICAL (exit >=2); WARNING (exit 1) still
-# lands in cron.log via 2>>, since check-snap-age.sh already writes its status
-# lines to stderr, but does NOT page notify-fail.sh -- WARNING is "worth
-# noticing on the next log read", CRITICAL is "worth an email now".
+# a monitor line reads the exit code and alerts with DIFFERENT wording per
+# outcome, following the Nagios convention check-snap-age.sh implements:
+#
+#   0 OK       -- silent.
+#   1 WARNING  -- logged to cron.log via 2>> only. check-snap-age.sh already
+#                 writes its status lines to stderr; WARNING is "worth noticing
+#                 on the next log read", not worth an email.
+#   2 CRITICAL -- emails the "<tier> stale" text: a snapshot really is too old.
+#   >=3        -- emails the "<tier> monitor BROKEN" text instead. This covers
+#                 UNKNOWN (3) from the script itself (bad threshold, missing
+#                 zfs, dataset gone) AND shell-level failures the script never
+#                 got to report: 126 (not executable), 127 (not found).
+#
+# Splitting >=3 from 2 is the whole point: both page, but they say different
+# things and need different fixes. Collapsing them (the old "exit >= 2" test)
+# produced a mail claiming snapshots were stale when the truth was that the
+# script had no execute bit and never ran -- and, worse, a typo'd threshold
+# exits 1, which that same test swallowed silently while the check verified
+# nothing at all, indefinitely.
 emit_monitor() {
-    local key list scope pattern warn crit schedule recursive notify
+    local key list scope pattern warn crit schedule recursive notify broken
     for key in "${MONITOR_GROUP_ORDER[@]}"; do
         list="${MONITOR_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mwarn mcrit msch mrec mnot
+        local m mscope mpat mwarn mcrit msch mrec mnot mbrk
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot <<< "$m"
+            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot mbrk <<< "$m"
             targets+=("$mscope")
         done
         local joined
@@ -682,7 +699,7 @@ emit_monitor() {
         local flag=""
         [ "$recursive" = "1" ] && flag="-R "
         local cmd="$REPO_DIR/check-snap-age.sh ${flag}\"$joined\" \"$pattern\" $warn $crit"
-        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; [ \$? -ge 2 ] && $NOTIFY_SCRIPT \"$notify\"")
+        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; rc=\$?; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\"; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\"")
     done
 }
 ###############################################################################

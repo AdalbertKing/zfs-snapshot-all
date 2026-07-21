@@ -6,6 +6,6 @@
 40 0 * * * /REPO/delsnaps.sh "tank/a,tank/b" "automated_daily" -D7 2>>/LOG || /NOTIFY "testhost daily prune"
 50 0 * * 0 /REPO/delsnaps.sh -R "backup/store" "automated_weekly" -W8 2>>/LOG || /NOTIFY "testhost weekly prune (store)"
 
-*/15 * * * * /REPO/check-snap-age.sh "tank/a,tank/b" "automated_hourly" 90m 3h 2>>/LOG; [ $? -ge 2 ] && /NOTIFY "testhost hourly stale"
-0 */6 * * * /REPO/check-snap-age.sh -R "backup/store" "automated_weekly" 9d 12d 2>>/LOG; [ $? -ge 2 ] && /NOTIFY "testhost weekly stale (store)"
+*/15 * * * * /REPO/check-snap-age.sh "tank/a,tank/b" "automated_hourly" 90m 3h 2>>/LOG; rc=$?; [ $rc -eq 2 ] && /NOTIFY "testhost hourly stale"; [ $rc -ge 3 ] && /NOTIFY "testhost hourly monitor BROKEN"
+0 */6 * * * /REPO/check-snap-age.sh -R "backup/store" "automated_weekly" 9d 12d 2>>/LOG; rc=$?; [ $rc -eq 2 ] && /NOTIFY "testhost weekly stale (store)"; [ $rc -ge 3 ] && /NOTIFY "testhost weekly monitor BROKEN (store)"
 # END zfs-backup-managed

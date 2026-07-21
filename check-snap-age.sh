@@ -31,26 +31,55 @@ set -o pipefail
 # <warn>/<crit> : duration strings, <N><unit> with unit m(inutes)/h(ours)/d(ays)
 #                 -- e.g. 90m, 3h, 9d. crit must be >= warn.
 #
-# Exit codes (Nagios convention): 0=OK, 1=WARNING, 2=CRITICAL.
+# Exit codes (Nagios convention): 0=OK, 1=WARNING, 2=CRITICAL, 3=UNKNOWN.
 # A dataset with NO snapshot matching the pattern at all is CRITICAL (nothing
-# has ever landed, or the pattern/dataset is wrong -- either way, worth paging).
+# has ever landed -- worth paging).
+#
+# UNKNOWN (3) means THE CHECK ITSELF could not answer the question -- bad
+# arguments, missing zfs, a dataset that does not exist -- as opposed to
+# "the answer is bad". This distinction matters because the caller cannot see
+# it otherwise: a monitor that never runs looks exactly like a monitor that
+# says everything is fine. Two concrete failures this prevents:
+#   - a typo'd threshold (e.g. "90x") used to exit 1, which the cron idiom
+#     read as WARNING and silently swallowed -- the check then never verified
+#     anything again, forever, without a single alert.
+#   - a non-executable script exits 126 from the shell, which the old
+#     "exit >= 2" test reported as a stale-snapshot CRITICAL, sending a mail
+#     whose text was simply untrue.
+# Callers should treat 2 and 3 as separate alerts with separate wording
+# (gen-cron.sh emits exactly that; see emit_monitor there).
+#
+# When several datasets are checked in one run, CRITICAL outranks UNKNOWN in
+# the final exit code: a genuinely stale snapshot is more actionable than an
+# unresolvable dataset name, and every finding is written to stderr anyway, so
+# the detail survives in the log even when the exit code can only carry one.
 #
 # Example:
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v1.1'
+VERSION='v2.0'
+
+EXIT_OK=0
+EXIT_WARNING=1
+EXIT_CRITICAL=2
+EXIT_UNKNOWN=3
 
 if [ "${1:-}" = "-V" ] || [ "${1:-}" = "--version" ]; then
     echo "$VERSION"
     exit 0
 fi
 
+# Every startup failure below exits UNKNOWN, never WARNING/CRITICAL: at this
+# point no snapshot has been examined, so any answer about staleness would be
+# fabricated.
 usage() {
     echo "Usage: $0 [-R] [-v] <comma-separated list of datasets> <pattern> <warn> <crit>" >&2
     echo "   warn/crit are durations like 90m, 3h, 9d" >&2
-    exit 1
+    exit "$EXIT_UNKNOWN"
 }
+
+command -v zfs >/dev/null || { echo "UNKNOWN -- 'zfs' command not found in PATH" >&2; exit "$EXIT_UNKNOWN"; }
 
 VERBOSE=false
 RECURSE=false
@@ -82,9 +111,9 @@ parse_duration() {
     esac
 }
 
-WARN_SEC=$(parse_duration "$WARN_ARG") || exit 1
-CRIT_SEC=$(parse_duration "$CRIT_ARG") || exit 1
-[ "$CRIT_SEC" -ge "$WARN_SEC" ] || { echo "crit ($CRIT_ARG) must be >= warn ($WARN_ARG)" >&2; exit 1; }
+WARN_SEC=$(parse_duration "$WARN_ARG") || exit "$EXIT_UNKNOWN"
+CRIT_SEC=$(parse_duration "$CRIT_ARG") || exit "$EXIT_UNKNOWN"
+[ "$CRIT_SEC" -ge "$WARN_SEC" ] || { echo "UNKNOWN -- crit ($CRIT_ARG) must be >= warn ($WARN_ARG)" >&2; exit "$EXIT_UNKNOWN"; }
 
 # Formats a seconds count back into the same "<N><unit>" shorthand, picking the
 # coarsest unit that divides evenly, purely for readable status lines.
@@ -100,7 +129,10 @@ fmt_duration() {
 }
 
 NOW=$(date +%s)
-WORST=0   # 0=OK 1=WARN 2=CRIT, tracks the max across every dataset checked
+WORST=0       # 0=OK 1=WARN 2=CRIT -- max CHECK RESULT across every dataset
+SAW_UNKNOWN=0 # tracked separately: UNKNOWN is not "worse CRITICAL", it is a
+              # different axis (we failed to look, vs we looked and it's bad),
+              # so it must not be folded into WORST by numeric max.
 
 # Checks one dataset (non-recursive: only ITS OWN snapshots, matching
 # delsnaps.sh's "list -t snapshot <dataset>" semantics). Bumps WORST as needed
@@ -117,6 +149,16 @@ WORST=0   # 0=OK 1=WARN 2=CRIT, tracks the max across every dataset checked
 check_one() {
     local ds="$1" explicit="$2"
     local newest="" newest_epoch="" line snapname any_snap=false
+
+    # A dataset that does not exist is UNKNOWN, not CRITICAL: "you asked about
+    # something that isn't here" is a config/typo problem, and reporting it as
+    # a stale snapshot would send a mail describing a backup failure that never
+    # happened.
+    if ! zfs list -H -o name -t filesystem,volume "$ds" >/dev/null 2>&1; then
+        echo "UNKNOWN dataset=$ds -- does not exist (typo, or removed since the config was written)" >&2
+        SAW_UNKNOWN=1
+        return
+    fi
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
@@ -169,4 +211,15 @@ for ds in "${DATASETS[@]}"; do
     fi
 done
 
-exit "$WORST"
+# CRITICAL outranks UNKNOWN (a real stale snapshot is the more actionable
+# finding); UNKNOWN outranks WARNING (a check that could not run is worse news
+# than one that ran and found things merely getting old). Every finding was
+# already printed to stderr, so nothing is lost by the exit code collapsing to
+# a single value.
+if [ "$WORST" -eq "$EXIT_CRITICAL" ]; then
+    exit "$EXIT_CRITICAL"
+elif [ "$SAW_UNKNOWN" -eq 1 ]; then
+    exit "$EXIT_UNKNOWN"
+else
+    exit "$WORST"
+fi
