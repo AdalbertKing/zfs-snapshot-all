@@ -39,7 +39,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v1.0'
+VERSION='v1.1'
 
 if [ "${1:-}" = "-V" ] || [ "${1:-}" = "--version" ]; then
     echo "$VERSION"
@@ -105,17 +105,31 @@ WORST=0   # 0=OK 1=WARN 2=CRIT, tracks the max across every dataset checked
 # Checks one dataset (non-recursive: only ITS OWN snapshots, matching
 # delsnaps.sh's "list -t snapshot <dataset>" semantics). Bumps WORST as needed
 # and prints a status line (always in -v mode, otherwise only when non-OK).
+#
+# explicit=true for a dataset named directly on the command line: "nothing
+# matches" there is always CRITICAL, the caller asked for this exact path.
+# explicit=false for a -R discovered descendant: a dataset that has NEVER had
+# ANY snapshot at all (not just none matching the pattern) is silently
+# skipped -- it's almost always an intermediate container in the hierarchy
+# (e.g. the parent of several real leaf datasets), not something meant to be
+# monitored on its own. A descendant that HAS other snapshots but none
+# matching the pattern is still a real finding and stays CRITICAL.
 check_one() {
-    local ds="$1"
-    local newest="" newest_epoch="" line snapname
+    local ds="$1" explicit="$2"
+    local newest="" newest_epoch="" line snapname any_snap=false
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        any_snap=true
         snapname="${line#*@}"
         [[ "$snapname" == "${PATTERN}"* ]] && newest="$line"
     done < <(zfs list -H -o name -s creation -t snapshot "$ds" 2>/dev/null)
 
     if [ -z "$newest" ]; then
+        if [ "$any_snap" = false ] && [ "$explicit" != true ]; then
+            [ "$VERBOSE" = true ] && echo "SKIP dataset=$ds -- no snapshots at all (not an explicit target, likely a container node)" >&2
+            return
+        fi
         echo "CRITICAL dataset=$ds pattern=$PATTERN -- no snapshot found matching this pattern" >&2
         [ "$WORST" -lt 2 ] && WORST=2
         return
@@ -138,14 +152,20 @@ check_one() {
     fi
 }
 
+# In -R mode the named dataset is a subtree ROOT, not necessarily a leaf that
+# should hold matching snapshots itself (that's the whole point of -R: check
+# whatever real leaves live under it) -- so it gets the same "empty container"
+# leniency as its discovered descendants, not the explicit/mandatory check.
 IFS=',' read -r -a DATASETS <<< "$DATASETS_LIST"
 for ds in "${DATASETS[@]}"; do
-    check_one "$ds"
     if [ "$RECURSE" = true ]; then
+        check_one "$ds" false
         while IFS= read -r child; do
             [ -z "$child" ] || [ "$child" = "$ds" ] && continue
-            check_one "$child"
+            check_one "$child" false
         done < <(zfs list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)
+    else
+        check_one "$ds" true
     fi
 done
 
