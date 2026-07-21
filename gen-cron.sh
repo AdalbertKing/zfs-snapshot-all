@@ -89,7 +89,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.3'
+VERSION='v4.4'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -733,6 +733,23 @@ install_crontab() {
     fi
     if [ "$begin_count" -ne "$end_count" ]; then
         die "malformed crontab: found $begin_count BEGIN marker(s) but $end_count END marker(s) -- fix manually before retrying"
+    fi
+
+    if [ "$begin_count" -eq 0 ] && [ -n "$current" ]; then
+        local conflicts
+        conflicts="$(printf '%s\n' "$current" | grep -E 'snapsend\.sh|delsnaps\.sh|check-snap-age\.sh' || true)"
+        if [ -n "$conflicts" ]; then
+            {
+                echo "gen-cron.sh: error: crontab has no managed block yet, but already contains"
+                echo "lines calling snapsend.sh/delsnaps.sh/check-snap-age.sh (listed below)."
+                echo "Appending blindly would run these jobs twice on overlapping schedules --"
+                echo "this is exactly what happened on pve1.11 (192.168.11.11) previously."
+                echo "Remove or migrate the old lines by hand first, then re-run --install."
+                echo "--- conflicting existing lines ---"
+                printf '%s\n' "$conflicts"
+            } >&2
+            exit 1
+        fi
     fi
 
     local new_block
