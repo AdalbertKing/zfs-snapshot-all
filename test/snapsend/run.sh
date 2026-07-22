@@ -38,8 +38,14 @@ IMG="$TMPD/pool.img"
 zpool list -H -o name 2>/dev/null | grep -qx "$POOL" && {
     echo "refusing to run: a pool named '$POOL' already exists" >&2; exit 1; }
 
+# Named up here, not where it is created: the trap has to know about it even if
+# the suite dies before reaching the compressed-send block, or an aborted run
+# leaves a stray pool on a production host.
+NOLZ4="nolz4test$$"
+
 cleanup() {
     zpool destroy -f "$POOL" 2>/dev/null
+    zpool destroy -f "$NOLZ4" 2>/dev/null
     rm -rf "$TMPD"
 }
 trap cleanup EXIT
@@ -632,6 +638,44 @@ zfs snapshot "$SRCBASE/$POOL/czpull@auto_1"
 run_get -Z -e -m "auto_" "$POOL/czpull" "$SRCBASE"
 check "snapget -Z: compressed pull exits 0" "0" "$RC"
 check "snapget -Z: the snapshot landed locally" "auto_1" "$(snaps_of "$POOL/czpull")"
+
+# --- compressed send (zfs send -c), automatic -----------------------------
+# `-c` ships records as they already sit on disk. It has no flag: it is on
+# whenever the target pool can take the stream. These tests pin BOTH halves of
+# that -- that it is used, and that it stands down instead of failing when it
+# cannot be.
+
+zfs create -p "$POOL/csend" || exit 1
+zfs snapshot "$POOL/csend@auto_1"
+cs_out="$("$SNAPSEND" -e -m "auto_" -v 4 "$POOL/csend" "$BK" 2>&1)"
+check "compressed send: used by default on a capable pool" "yes"       "$(printf '%s' "$cs_out" | grep -q 'Compressed send: using zfs send -c' && echo yes || echo no)"
+check "compressed send: -c really reaches the zfs send command" "yes"       "$(printf '%s' "$cs_out" | grep 'RAW ZFS SEND COMMAND' | grep -q -- ' -c ' && echo yes || echo no)"
+check "compressed send: the snapshot still arrived" "auto_1" "$(snaps_of "$(tgt_of csend)")"
+
+zfs snapshot "$POOL/csend@auto_2"
+cs_off="$(ZFS_SNAP_NO_COMPRESSED_SEND=1 "$SNAPSEND" -e -m "auto_" -v 4 "$POOL/csend" "$BK" 2>&1)"
+check "compressed send: ZFS_SNAP_NO_COMPRESSED_SEND=1 forces plain" "no"       "$(printf '%s' "$cs_off" | grep 'RAW ZFS SEND COMMAND' | grep -q -- ' -c ' && echo yes || echo no)"
+check "compressed send: forcing plain still transfers" "auto_1 auto_2" "$(snaps_of "$(tgt_of csend)")"
+
+# A pool that cannot receive a compressed stream. Built feature-by-feature:
+# `zpool create -d` disables everything, and extensible_dataset is then enabled
+# because `zfs recv -s` (which this script always uses) needs it -- without that
+# the receive fails for a reason unrelated to -c, which is exactly the confusion
+# this construction avoids. lz4_compress stays off, and that is the one under test.
+NOLZ4_IMG="$TMPD/nolz4.img"
+if ! zpool list -H -o name 2>/dev/null | grep -qx "$NOLZ4"; then
+    truncate -s 256M "$NOLZ4_IMG"
+    if zpool create -f -d -m none "$NOLZ4" "$NOLZ4_IMG" 2>/dev/null        && zpool set feature@extensible_dataset=enabled "$NOLZ4" 2>/dev/null; then
+        zfs snapshot "$POOL/csend@auto_3"
+        nl_out="$("$SNAPSEND" -e -m "auto_" -v 3 "$POOL/csend" "$NOLZ4/store" 2>&1)"
+        check "compressed send: stands down when the target pool lacks lz4_compress" "yes"               "$(printf '%s' "$nl_out" | grep -q 'lacks feature@lz4_compress' && echo yes || echo no)"
+        check "compressed send: standing down still completes the transfer" "yes"               "$(printf '%s' "$nl_out" | grep -q 'Transfer completed successfully' && echo yes || echo no)"
+        zpool destroy -f "$NOLZ4" 2>/dev/null
+    else
+        echo "SKIP compressed send: fallback cases (could not build a feature-poor pool)"
+    fi
+    rm -f "$NOLZ4_IMG"
+fi
 
 # --- summary ----------------------------------------------------------------
 
