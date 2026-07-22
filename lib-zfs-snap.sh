@@ -726,8 +726,13 @@ compressed_send_flag() {
 # What is currently frozen, so the thaw is exact rather than a guess. Only VMs
 # ever appear here: the container path flushes and returns, holding nothing.
 declare -a QUIESCE_FROZEN=()
-# Containers flushed in this run, so a guest with several disks is flushed once.
-declare -a QUIESCE_SYNCED=()
+# Guests already handled in this run, VM or container alike. One guest owns
+# several datasets (VM 107 has three disks, CT 102 has two), and quiescing is a
+# property of the GUEST, not of the disk: freezing a VM twice would need thawing
+# it twice, and re-syncing a container only widens the gap between the flush and
+# the snapshot. Without this the second disk of a running VM hit the
+# "already frozen" branch and shouted about it at log level 0.
+declare -a QUIESCE_HANDLED=()
 
 # Proxmox names guest disks vm-<id>-disk-N (VM) and subvol-<id>-disk-N (CT).
 # That convention IS the dataset-to-guest mapping -- there is no property to ask.
@@ -773,12 +778,18 @@ quiesce_freeze() {
     kind=$(quiesce_guest_kind "$id") || { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
     quiesce_guest_running "$id" "$kind" || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
 
+    case " ${QUIESCE_HANDLED[*]} " in
+        *" $id "*) log 3 "Quiesce: guest $id already handled in this run"; return 0 ;;
+    esac
+
     # An explicit mode that does not fit this guest is a config mistake worth
     # saying out loud, but still not worth failing a backup over.
     case "$mode/$kind" in
         agent/lxc)  log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=sync or auto"; return 0 ;;
         sync/qemu)  log 1 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here -- use quiesce=agent or auto"; return 0 ;;
     esac
+
+    QUIESCE_HANDLED+=("$id")
 
     case "$kind" in
         qemu)
@@ -796,15 +807,8 @@ quiesce_freeze() {
             ;;
         lxc)
             # A flush, not a freeze -- nothing is registered for thawing because
-            # nothing is held. Deliberately still done once per guest rather than
-            # once per dataset: `sync` inside the container flushes ALL of its
-            # filesystems, so calling it again for its second disk would only
-            # widen the gap between the flush and the snapshot.
-            case " ${QUIESCE_SYNCED[*]} " in
-                *" $id "*) log 3 "Quiesce: container $id already flushed in this run"; return 0 ;;
-            esac
+            # nothing is held.
             if pct exec "$id" -- sync >/dev/null 2>&1; then
-                QUIESCE_SYNCED+=("$id")
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
                 log 1 "Quiesce: 'pct exec $id -- sync' failed -- snapshot will be crash-consistent"
@@ -812,6 +816,25 @@ quiesce_freeze() {
             ;;
     esac
     return 0
+}
+
+# Which datasets to look for guests in. A RECURSIVE job names a PARENT --
+# pve1's hourly job is `snapsend.sh -r rpool/data`, one line covering every VM on
+# the pool -- and a parent's name matches no guest-disk pattern at all. Deriving
+# guests from the argument alone therefore quiesced NOTHING on exactly the jobs
+# that cover the most machines, while logging "not a Proxmox guest disk" and
+# reporting success: a config that promised consistency and silently delivered
+# none. So under -r the dataset is expanded to its children first.
+#
+# Only the NAMES are expanded. The snapshot itself stays a single recursive
+# `zfs snapshot -r parent@snap`, which is already atomic across the whole tree.
+quiesce_scope() {
+    local ds="$1" recursive="${2:-0}"
+    if [ "$recursive" -eq 1 ]; then
+        zfs list -H -o name -r "$ds" 2>/dev/null
+    else
+        printf '%s\n' "$ds"
+    fi
 }
 
 # Thaws everything this run froze, in reverse order, and empties the list so a
@@ -833,7 +856,7 @@ quiesce_thaw_all() {
         esac
     done
     QUIESCE_FROZEN=()
-    QUIESCE_SYNCED=()
+    QUIESCE_HANDLED=()
 }
 
 # Short, stable per-target suffix for bookmark names -- lets one source

@@ -106,7 +106,11 @@ set -o pipefail
 #
 #                    The dataset-to-guest mapping is the Proxmox naming
 #                    convention (vm-<id>-disk-N, subvol-<id>-disk-N); anything
-#                    else owns no guest and is snapshotted normally.
+#                    else owns no guest and is snapshotted normally. Under -r the
+#                    named dataset is a PARENT whose name matches nothing, so the
+#                    tree is expanded and the guests are taken from the children.
+#                    Each guest is quiesced once per run however many disks it
+#                    owns.
 #
 #                    THE FREEZE WINDOW CONTAINS ONLY `zfs snapshot`. Writes are
 #                    blocked while frozen, so the window must not contain the
@@ -147,7 +151,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.38'
+VERSION='v2.39'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -1088,7 +1092,12 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     quiesce_snap_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
     declare -a QUIESCE_SNAPS=()
     for dataset in "${DATASETS[@]}"; do
-        quiesce_freeze "$dataset" "$QUIESCE"
+        # Under -r the guests live in the CHILDREN, not in the named parent --
+        # see quiesce_scope. The snapshot list still names the parent, because
+        # `zfs snapshot -r parent@snap` covers the tree atomically by itself.
+        while IFS= read -r quiesce_ds; do
+            [ -n "$quiesce_ds" ] && quiesce_freeze "$quiesce_ds" "$QUIESCE"
+        done < <(quiesce_scope "$dataset" "$RECURSIVE")
         QUIESCE_SNAPS+=("${dataset}@${MESSAGE}${quiesce_snap_suffix}")
     done
 
