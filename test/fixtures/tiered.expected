@@ -2,8 +2,8 @@
 5 * * * * /REPO/snapsend.sh -m "automated_hourly_" -z -v 3 "tank/a,tank/b" 2>>/LOG || /NOTIFY "testhost hourly snapshot (groupA)"
 10 0 * * * /REPO/snapsend.sh -m "automated_daily_" -z -v 3 "tank/a,tank/b,tank/c" 2>>/LOG || /NOTIFY "testhost daily snapshot (groupA+groupC)"
 
-35 * * * * /REPO/delsnaps.sh "tank/a,tank/b" "automated_hourly" -H24 2>>/LOG || /NOTIFY "testhost hourly prune"
-40 0 * * * /REPO/delsnaps.sh "tank/a,tank/b" "automated_daily" -D7 2>>/LOG || /NOTIFY "testhost daily prune"
-40 0 * * * /REPO/delsnaps.sh "tank/c" "automated_daily" -D14 2>>/LOG || /NOTIFY "testhost daily prune"
+35 * * * * /REPO/delsnaps.sh "tank/a,tank/b" "automated_hourly" -H24 2>>/LOG || /NOTIFY "testhost hourly prune (groupA)"
+40 0 * * * /REPO/delsnaps.sh "tank/a,tank/b" "automated_daily" -D7 2>>/LOG || /NOTIFY "testhost daily prune (groupA)"
+40 0 * * * /REPO/delsnaps.sh "tank/c" "automated_daily" -D14 2>>/LOG || /NOTIFY "testhost daily prune (groupC)"
 50 0 * * * /REPO/delsnaps.sh -R "backup/store" "automated_daily" -D30 2>>/LOG || /NOTIFY "testhost daily prune (store)"
 # END zfs-backup-managed
