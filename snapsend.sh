@@ -142,7 +142,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.36'
+VERSION='v2.37'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -179,6 +179,9 @@ USE_EXISTING_SNAPSHOT=0
 # "no" (default), "agent" (qemu-guest-agent, VMs), "fs" (host fsfreeze, containers)
 # or "auto" (pick per guest). See the QUIESCE section in lib-zfs-snap.sh.
 QUIESCE=no
+# Set once the quiesce window has actually created the snapshots, so no later
+# code path creates a second, unquiesced copy.
+QUIESCE_SNAPPED=0
 RECURSIVE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
@@ -522,6 +525,18 @@ process_dataset() {
 
     if [[ "$src_dataset" == "$tgt_dataset" && -z "$remote_host" ]]; then
         log 1 "Running in local snapshot-only mode"
+        # This branch creates a snapshot unconditionally -- it predates
+        # USE_EXISTING_SNAPSHOT and deliberately still ignores it, because a
+        # snapshot-only run with -e would otherwise do nothing at all. But the
+        # quiesce window has ALREADY created this dataset's snapshot, and making
+        # a second one here would be an unquiesced copy taken moments later,
+        # silently undoing both the freeze and the atomicity of the single
+        # multi-dataset `zfs snapshot` it came from. Checked separately from
+        # USE_EXISTING_SNAPSHOT so -e keeps its own meaning.
+        if [ "${QUIESCE_SNAPPED:-0}" -eq 1 ]; then
+            log 1 "Snapshot for $src_dataset was already taken inside the quiesce window -- not creating a second, unquiesced one"
+            return 0
+        fi
         snapshot=$(create_snapshot "$src_dataset") || return 1
         log 1 "Successfully created local snapshot: $snapshot"
         return 0
@@ -1076,6 +1091,9 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     log 1 "Quiesce: taking one atomic snapshot of ${#QUIESCE_SNAPS[@]} dataset(s)"
     if zfs snapshot $quiesce_recursive_flag "${QUIESCE_SNAPS[@]}"; then
         USE_EXISTING_SNAPSHOT=1
+        # Separate from USE_EXISTING_SNAPSHOT because the snapshot-only branch in
+        # process_dataset deliberately ignores that one -- see the comment there.
+        QUIESCE_SNAPPED=1
     else
         # The guests are thawed by the trap either way. Failing here rather than
         # falling through matters: silently continuing would take unquiesced
