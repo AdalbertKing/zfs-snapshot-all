@@ -47,6 +47,8 @@ set -o pipefail
 #       notify       = <short label>
 #       flags        = <snapsend.sh flags>
 #       flags_<tier> = <per-tier flags override>
+#       autotune     = yes|no              # default yes; 'no' suppresses the
+#                                          # automatic -A described below
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
 #     A dataset section runs, scoped to ITS OWN path, non-recursively:
@@ -97,6 +99,16 @@ set -o pipefail
 # time: -f in a standing cron job means destroy-and-reseed the target every run,
 # -n never actually sends anything -- neither makes sense as a recurring job.
 #
+# -A (link auto-tuning) is ADDED automatically to every send whose resolved 'dst'
+# is remote, i.e. contains ':' -- the same test snapsend.sh itself uses to decide
+# whether to open an ssh connection. It measures the link and the data, then
+# decides whether compressing is worth it; over a real link that is worth ~29%,
+# and on a local target it can measure nothing at all, so the flag is added
+# exactly where it can pay off. Not added if 'flags' already has -A, nor if it
+# names a compressor explicitly (-z/-Z/-g), because an explicit flag beats -A
+# inside snapsend and the line would otherwise announce a no-op every run.
+# Suppress with autotune=no on the dataset, template or [defaults].
+#
 # Every resolved prune operation is validated against every other operation on
 # the SAME literal scope: since delsnaps.sh matches by literal string prefix, a
 # pattern that is a prefix of (or equal to) another pattern on that scope would
@@ -109,7 +121,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.7'
+VERSION='v4.8'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -166,6 +178,57 @@ monitor_warn/monitor_crit on a [template:] and it rides every [dataset:]/
 
 See the comment header of this script for the full field reference.
 EOF
+}
+
+# -A only ever pays off over a real link, and gen-cron already knows whether
+# there is one -- it just resolved 'dst'. So it adds the flag itself instead of
+# leaving it to be remembered per dataset: forgetting it is silent, and the whole
+# point of -A is to make a decision nobody remembers to make.
+#
+# "Remote" is decided by the SAME test snapsend.sh/snapget.sh use: a ':' in the
+# target (see their section 5B). ZFS does allow ':' inside a dataset name, so
+# this is not a bulletproof reading of the string -- it is deliberately the
+# CONSUMER's reading, because what decides whether -A can measure anything is
+# whether the script receiving this line opens an ssh connection, not what is
+# theoretically nameable.
+#
+# 'autotune = no' opts out. 'yes' is not the opposite of that: it means "where it
+# applies", so a [defaults] covering both local and remote datasets stays valid
+# instead of failing on the local ones.
+#
+# Validation lives in lint_autotune, NOT here: this function is called inside a
+# command substitution, where die() would exit the subshell and leave the script
+# running with rc=0 and the flag quietly dropped. Caught by
+# negative/autotune-bad-value, which is why it is a separate call.
+lint_autotune() {
+    local want="$1" ctx="$2"
+    case "$want" in
+        ""|yes|on|1|auto|no|off|0) return 0 ;;
+        *) die "$ctx: autotune='$want' -- expected yes or no" ;;
+    esac
+}
+
+maybe_add_autotune() {
+    local flags="$1" dst="$2" want="$3" tok
+    case "$want" in
+        no|off|0) printf '%s' "$flags"; return 0 ;;
+    esac
+    # Local target: nothing to measure, and snapsend would drop compression
+    # anyway (v2.32+).
+    case "$dst" in
+        *:*) ;;
+        *)   printf '%s' "$flags"; return 0 ;;
+    esac
+    for tok in $flags; do
+        case "$tok" in
+            -A) printf '%s' "$flags"; return 0 ;;
+            # An explicit compressor beats -A inside snapsend, which then logs
+            # that it stood down. Adding -A here would emit a cron line that
+            # announces a no-op on every run, so honour the flag and say nothing.
+            -z|-Z|-g) printf '%s' "$flags"; return 0 ;;
+        esac
+    done
+    if [ -n "$flags" ]; then printf '%s -A' "$flags"; else printf -- '-A'; fi
 }
 
 # Rejects flags that never make sense in a standing/recurring cron job.
@@ -409,6 +472,10 @@ build_dataset() {
             prefix="$(resolve_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier"
+            local autotune
+            autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
+            lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"
+            flags="$(maybe_add_autotune "$flags" "$dst" "$autotune")"
             label="$(resolve_field notify "$ds" "" "")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
