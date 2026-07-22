@@ -776,11 +776,18 @@ quiesce_freeze() {
 
     id=$(quiesce_guest_id "$ds") || { log 3 "Quiesce: '$ds' is not a Proxmox guest disk -- nothing to freeze"; return 0; }
     kind=$(quiesce_guest_kind "$id") || { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
-    quiesce_guest_running "$id" "$kind" || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
-
+    # Check AND mark here, as soon as the owning guest is known -- before the
+    # running check, not after. The decision being deduplicated is "what do we do
+    # about guest N", and that is settled once however it turns out. Marking only
+    # on the freeze path left stopped guests to be re-examined per disk, which on
+    # a recursive job over a whole pool means a `qm status` and a log line for
+    # every disk of every stopped VM.
     case " ${QUIESCE_HANDLED[*]} " in
         *" $id "*) log 3 "Quiesce: guest $id already handled in this run"; return 0 ;;
     esac
+    QUIESCE_HANDLED+=("$id")
+
+    quiesce_guest_running "$id" "$kind" || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
 
     # An explicit mode that does not fit this guest is a config mistake worth
     # saying out loud, but still not worth failing a backup over.
@@ -788,8 +795,6 @@ quiesce_freeze() {
         agent/lxc)  log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=sync or auto"; return 0 ;;
         sync/qemu)  log 1 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here -- use quiesce=agent or auto"; return 0 ;;
     esac
-
-    QUIESCE_HANDLED+=("$id")
 
     case "$kind" in
         qemu)
