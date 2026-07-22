@@ -552,10 +552,11 @@ comp_case() {  # comp_case <label> <dataset-suffix> <flag...>
     check "$label: the snapshot reached the target" "auto_1" "$(snaps_of "$(tgt_of "$name")")"
 }
 
-comp_case "-z (pigz)"          czpigz  -z
+comp_case "-z (default=zstd)"  czdef   -z
 comp_case "-Z (zstd)"          czzstd  -Z
+comp_case "-g (pigz)"          czpigz  -g
 comp_case "-Z -l 9 (zstd lvl)" czzstd9 -Z -l 9
-comp_case "-z -l 1 (pigz lvl)" czpigz1 -z -l 1
+comp_case "-g -l 1 (pigz lvl)" czpigz1 -g -l 1
 
 # An incremental has to survive the compressed path too -- that is the shape
 # every production job actually runs in.
@@ -564,26 +565,36 @@ run_send -Z -e -m "auto_" "$POOL/czzstd" "$BK"
 check "-Z: compressed incremental exits 0" "0" "$RC"
 check "-Z: compressed incremental appended" "auto_1 auto_2" "$(snaps_of "$(tgt_of czzstd)")"
 
-# The level default is per-tool and NOT shared: pigz 6, zstd 3. Pinned via the
-# verbose COMPRESSOR log line, because the two scales are not comparable and
-# silently handing zstd a 6 would make -Z look like a performance regression.
+# zstd is the DEFAULT compressor as of 2026-07-22: benchmarked on a real 1.5 GB
+# zfs send stream it beat pigz -6 on both ratio (2.34x vs 2.19x) and throughput
+# (454 vs 143 MB/s), so plain -z must select it. Pinned via the verbose
+# COMPRESSOR log line -- if someone flips the default back, this fails loudly.
 zfs create -p "$POOL/clvl" || exit 1
 zfs snapshot "$POOL/clvl@auto_1"
-check "-Z without -l uses zstd's own default level 3" "zstd -T0 -3 -c" \
-      "$("$SNAPSEND" -Z -e -m "auto_" -v 3 "$POOL/clvl" "$BK" 2>&1 \
-         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
-zfs create -p "$POOL/clvl2" || exit 1
-zfs snapshot "$POOL/clvl2@auto_1"
-check "-z without -l keeps pigz's default level 6" "pigz -6" \
-      "$("$SNAPSEND" -z -e -m "auto_" -v 3 "$POOL/clvl2" "$BK" 2>&1 \
+check "-z alone selects zstd at its own default level 3" "zstd -T0 -3 -c" \
+      "$("$SNAPSEND" -z -e -m "auto_" -v 3 "$POOL/clvl" "$BK" 2>&1 \
          | sed -n 's/.*COMPRESSOR: //p' | head -1)"
 
-# -z and -Z are last-one-wins rather than an error, so a config that appends a
-# flag cannot end up in an undefined state.
+# The level default is per-tool and NOT shared: zstd 3, pigz 6. The scales are
+# not comparable -- carrying pigz's 6 over to zstd would cost ~4x the CPU for ~4%
+# more ratio.
+zfs create -p "$POOL/clvl2" || exit 1
+zfs snapshot "$POOL/clvl2@auto_1"
+check "-g without -l keeps pigz's own default level 6" "pigz -6" \
+      "$("$SNAPSEND" -g -e -m "auto_" -v 3 "$POOL/clvl2" "$BK" 2>&1 \
+         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+
+# Compressor flags are last-one-wins rather than an error, so a config that
+# appends a flag cannot end up in an undefined state.
 zfs create -p "$POOL/clast" || exit 1
 zfs snapshot "$POOL/clast@auto_1"
-check "-z -Z: last flag wins (zstd)" "zstd -T0 -3 -c" \
-      "$("$SNAPSEND" -z -Z -e -m "auto_" -v 3 "$POOL/clast" "$BK" 2>&1 \
+check "-z -g: last flag wins (pigz)" "pigz -6" \
+      "$("$SNAPSEND" -z -g -e -m "auto_" -v 3 "$POOL/clast" "$BK" 2>&1 \
+         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+zfs create -p "$POOL/clast2" || exit 1
+zfs snapshot "$POOL/clast2@auto_1"
+check "-g -z: last flag wins (back to the zstd default)" "zstd -T0 -3 -c" \
+      "$("$SNAPSEND" -g -z -e -m "auto_" -v 3 "$POOL/clast2" "$BK" 2>&1 \
          | sed -n 's/.*COMPRESSOR: //p' | head -1)"
 
 # snapget mirror: there the compressor runs on the (possibly remote) source.
