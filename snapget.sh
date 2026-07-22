@@ -64,8 +64,10 @@ set -o pipefail
 #                     ssh-keyscan, and verified the fingerprint out of band)
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
-#                    it can flip nothing but compression. Cached per host for 7
-#                    days; ZFS_SNAP_RETUNE=1 forces a re-probe.
+#                    it can flip nothing but compression. Decided separately for
+#                    EACH dataset, since the ratio is a property of the data.
+#                    Cached 7 days -- link speed per host, ratio per dataset;
+#                    ZFS_SNAP_RETUNE=1 forces a re-probe.
 #
 #                    In snapget the SOURCE is remote and its compressor runs
 #                    there (see transfer_data), so the ratio is measured on the
@@ -91,7 +93,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.31'
+VERSION='v2.32'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -929,13 +931,17 @@ fi
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
-# "remote": snapget's source dataset lives on the far side, so the ratio must
-# be measured there -- that is also where its compressor runs.
+# -A decides compress-or-not from a measurement, PER DATASET -- taken inside the
+# loop below, not here, because the compression ratio is a property of the data
+# and one dataset's ratio must not decide for the rest. Mirrors snapsend.sh
+# section 5B; see the longer note there.
+AUTOTUNE_ACTIVE=0
 if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
     if [ $COMPRESSION_SET -eq 1 ]; then
         log 1 "Link tuning: -A ignored, compression was requested explicitly (-z/-Z/-g) -- honouring your flag"
     else
-        tune_apply "$REMOTE_USER@$REMOTE_HOST" "${DATASETS[0]}" remote
+        AUTOTUNE_ACTIVE=1
+        COMPRESSION_BASE=$COMPRESSION
     fi
 fi
 
@@ -947,6 +953,16 @@ for dataset in "${DATASETS[@]}"; do
         src_path="$dataset"
     fi
     src_path=$(echo "$src_path" | sed 's:///*:/:g; s:^/::')
+
+    # "remote": snapget's source lives on the far side, so the ratio must be
+    # measured there -- that is also where its compressor runs. And the name
+    # probed is src_path, NOT dataset: dataset is the LOCAL target, which under
+    # a SOURCE_BASE prefix does not exist on the remote at all, so the probe
+    # would have found no snapshot and quietly given up on every tuned run.
+    if [ $AUTOTUNE_ACTIVE -eq 1 ]; then
+        COMPRESSION=$COMPRESSION_BASE
+        tune_apply "$REMOTE_USER@$REMOTE_HOST" "$src_path" remote
+    fi
 
     log 1 "Processing: ${REMOTE_HOST:-local}:$src_path => $dataset"
 

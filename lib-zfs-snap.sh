@@ -306,7 +306,7 @@ tune_ssh_close() {
 # COMPRESSION untouched rather than failing the backup.
 
 TUNE_CACHE_TTL=$((7 * 24 * 3600))
-TUNE_PROBE_VERSION=1
+TUNE_PROBE_VERSION=2
 TUNE_SAMPLE_MB=64      # sample of a real `zfs send` stream used to measure ratio
 TUNE_MARGIN_PCT=5      # below this gain, not worth burning CPU
 
@@ -329,15 +329,83 @@ tune_cache_dir() {
     return 0
 }
 
-# Cache is keyed per HOST (one host = one VPN link, agreed with the operator),
-# not per dataset. The user@ part is stripped so root and zfsbackup share one
-# measurement of the same link.
+# TWO caches, because the verdict has two inputs with different scopes.
+#
+#   linktune.<host>_<port>            MB/s the link can carry. A property of the
+#                                     HOST (one host = one VPN link, agreed with
+#                                     the operator), so every dataset in a run
+#                                     shares it and only the first pays the probe.
+#   streamtune.<host>_<port>.<hash>   ratio and pipeline rates. A property of the
+#                                     DATA: the same host measured 2.34x on one
+#                                     dataset and 1.29x on another. Keying this
+#                                     per host too meant DATASETS[0]'s ratio
+#                                     silently decided for every other dataset in
+#                                     the run -- the bug this split fixes.
+#
+# The user@ part is stripped from the host in both, so root and zfsbackup share
+# one measurement of the same link and the same data.
+#
+# What is cached is the MEASUREMENT, never the verdict: the verdict is recomputed
+# from cached numbers on every run, so a change to TUNE_MARGIN_PCT or to
+# tune_decide takes effect at once instead of after the TTL drains.
 tune_cache_file() {
     local host="$1" dir safe
     dir=$(tune_cache_dir)
     [ -n "$dir" ] || return 1
     safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
     printf '%s/linktune.%s_%s' "$dir" "$safe" "${PORT:-22}"
+}
+
+# Dataset is HASHED, not escaped. Names contain '/' and can be long, and any
+# tr-style sanitiser would let 'tank/a-b' and 'tank/a_b' collapse onto one file,
+# i.e. one dataset's ratio applied to another -- exactly the failure being fixed.
+tune_stream_cache_file() {
+    local host="$1" dataset="$2" dir safe hash
+    dir=$(tune_cache_dir)
+    [ -n "$dir" ] || return 1
+    safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
+    hash=$(printf '%s' "$dataset" | md5sum | cut -c1-16)
+    printf '%s/streamtune.%s_%s.%s' "$dir" "$safe" "${PORT:-22}" "$hash"
+}
+
+# Echoes a cached line if it is fresh AND was produced by the current probe
+# method, returns 1 otherwise. The version must MATCH, not merely be present:
+# bumping TUNE_PROBE_VERSION is the only way a change to HOW we measure can
+# invalidate numbers from the old method, and without the comparison the field
+# would be written and never read.
+#
+# ZFS_SNAP_RETUNE=1 forces a miss. Its name must stay in sync with the -A docs
+# in both scripts; it is the only documented way to re-probe before the TTL.
+tune_cache_read() {
+    local f="$1" now="$2" line at ver
+    [ "${ZFS_SNAP_RETUNE:-0}" -ne 1 ] || return 1
+    [ -r "$f" ] || return 1
+    line=$(cat "$f" 2>/dev/null) || return 1
+    at=$(tune_field measured_at "$line")
+    ver=$(tune_field probe_version "$line")
+    [ -n "$at" ] && [ "$ver" = "$TUNE_PROBE_VERSION" ] || return 1
+    [ $((now - at)) -lt $TUNE_CACHE_TTL ] && [ $((now - at)) -ge 0 ] || return 1
+    printf '%s' "$line"
+}
+
+# Exact key match by splitting on whitespace, not a sed pattern: a regex loose
+# enough to find `ratio=` also finds it inside `xratio=`, and the fields here
+# deliberately share suffixes (raw_mbps, comp_mbps, link_mbps).
+tune_field() {
+    local k="$1" tok
+    for tok in $2; do
+        case "$tok" in
+            "$k"=*) printf '%s' "${tok#*=}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Write-then-rename, and failure is swallowed: a cache that cannot be written is
+# a slower next run, never a failed backup.
+tune_cache_write() {
+    local f="$1"; shift
+    printf '%s\n' "$*" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
 }
 
 # Measures how fast this link moves incompressible bytes, in MB/s. Uses
@@ -434,58 +502,65 @@ tune_apply() {
     # the cache filename host-less, i.e. every host sharing one cache entry --
     # a measurement of one link being applied to another.
     local host="${remote#*@}"
-    local f now line cached_at cached_ver verdict gain link stream ratio raw comp stream_remote=""
+    local lf sf now cached verdict gain link stream ratio raw comp stream_remote=""
     [ "$data_side" = "remote" ] && stream_remote="$remote"
 
-    f=$(tune_cache_file "$host") || {
+    lf=$(tune_cache_file "$host") && sf=$(tune_stream_cache_file "$host" "$dataset") || {
         log 1 "Link tuning: no writable cache dir -- leaving compression settings as given"
         return 0
     }
     now=$(date +%s)
 
-    # Name must stay in sync with the -A docs in both scripts; it is the only
-    # documented way to force a re-probe before the TTL expires.
-    if [ "${ZFS_SNAP_RETUNE:-0}" -ne 1 ] && [ -r "$f" ]; then
-        # shellcheck disable=SC1090
-        line=$(cat "$f" 2>/dev/null)
-        cached_at=$(printf '%s\n' "$line" | sed -n 's/.*measured_at=\([0-9]*\).*/\1/p')
-        verdict=$(printf '%s\n' "$line" | sed -n 's/.*compress=\([a-z]*\).*/\1/p')
-        # The probe version must match, not just be present. Bumping
-        # TUNE_PROBE_VERSION is how a change to HOW we measure invalidates
-        # verdicts produced by the old method -- without this check the version
-        # would be written and never read, and a stale verdict from a
-        # superseded probe would be trusted for its full TTL.
-        cached_ver=$(printf '%s\n' "$line" | sed -n 's/.*probe_version=\([0-9]*\).*/\1/p')
-        if [ -n "$cached_at" ] && [ -n "$verdict" ] \
-           && [ "$cached_ver" = "$TUNE_PROBE_VERSION" ] \
-           && [ $((now - cached_at)) -lt $TUNE_CACHE_TTL ] && [ $((now - cached_at)) -ge 0 ]; then
-            [ "$verdict" = "yes" ] && COMPRESSION=1 || COMPRESSION=0
-            log 2 "Link tuning: using cached verdict compress=$verdict for $host"
+    # --- link: per host, so this probe runs once per run no matter how many
+    #     datasets follow. 32 MB of urandom per dataset would be a real cost.
+    if cached=$(tune_cache_read "$lf" "$now"); then
+        link=$(tune_field link_mbps "$cached")
+        log 3 "Link tuning: cached link=${link}MB/s for $host"
+    else
+        link=$(tune_probe_link "$remote") || {
+            log 1 "Link tuning: link probe failed -- leaving compression settings as given"
             return 0
-        fi
+        }
+        tune_cache_write "$lf" \
+            "measured_at=$now probe_version=$TUNE_PROBE_VERSION link_mbps=$link host=$host"
     fi
 
-    link=$(tune_probe_link "$remote") || {
-        log 1 "Link tuning: link probe failed -- leaving compression settings as given"
-        return 0
-    }
-    stream=$(tune_probe_stream "$dataset" "$stream_remote") || {
-        log 1 "Link tuning: stream probe failed or gave an implausible result -- leaving compression settings as given"
-        return 0
-    }
-    read -r ratio raw comp <<< "$stream"
+    # --- stream: per host AND dataset, because the ratio is a property of the
+    #     data. This is the whole point of the split.
+    if cached=$(tune_cache_read "$sf" "$now"); then
+        ratio=$(tune_field ratio "$cached")
+        raw=$(tune_field raw_mbps "$cached")
+        comp=$(tune_field comp_mbps "$cached")
+        log 3 "Link tuning: cached ratio=${ratio} for $dataset"
+    else
+        stream=$(tune_probe_stream "$dataset" "$stream_remote") || {
+            log 1 "Link tuning: stream probe failed or gave an implausible result -- leaving compression settings as given"
+            return 0
+        }
+        read -r ratio raw comp <<< "$stream"
+        tune_cache_write "$sf" \
+            "measured_at=$now probe_version=$TUNE_PROBE_VERSION ratio=$ratio raw_mbps=$raw comp_mbps=$comp dataset=$dataset"
+    fi
 
-    read -r verdict gain <<< "$(tune_decide "$link" "$ratio" "$raw" "$comp")" || {
+    # A truncated or hand-edited cache file parses to empty fields, and awk would
+    # happily turn those into 0 and a confident "no". Checked here rather than
+    # trusted, so a damaged cache degrades to the caller's settings like every
+    # other failure path in this section.
+    [ -n "$link" ] && [ -n "$ratio" ] && [ -n "$raw" ] && [ -n "$comp" ] || {
+        log 1 "Link tuning: cached measurement unreadable -- leaving compression settings as given"
+        return 0
+    }
+
+    # `read` succeeds on the empty output of a failed awk, so its exit status
+    # says nothing about tune_decide. The verdict itself is what gets checked.
+    read -r verdict gain <<< "$(tune_decide "$link" "$ratio" "$raw" "$comp")"
+    [ -n "$verdict" ] || {
         log 1 "Link tuning: could not evaluate -- leaving compression settings as given"
         return 0
     }
 
     [ "$verdict" = "yes" ] && COMPRESSION=1 || COMPRESSION=0
-    log 1 "Link tuning: link=${link}MB/s ratio=${ratio} -> compress=${verdict} (gain ${gain}%)"
-
-    printf 'measured_at=%s probe_version=%s compress=%s link_mbps=%s ratio=%s dataset=%s\n' \
-        "$now" "$TUNE_PROBE_VERSION" "$verdict" "$link" "$ratio" "$dataset" \
-        > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+    log 1 "Link tuning: $dataset link=${link}MB/s ratio=${ratio} -> compress=${verdict} (gain ${gain}%)"
     return 0
 }
 

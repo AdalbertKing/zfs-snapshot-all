@@ -64,10 +64,12 @@ set -o pipefail
 #                     ssh-keyscan, and verified the fingerprint out of band)
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
-#                    it can flip nothing but compression. The verdict is cached
-#                    per host for 7 days (one host = one link), so the ~10s
-#                    probe runs at most weekly; set ZFS_SNAP_RETUNE=1 to force a
-#                    re-probe, or just don't pass -A.
+#                    it can flip nothing but compression. Decided separately for
+#                    EACH dataset, since the ratio is a property of the data.
+#                    Measurements are cached 7 days -- link speed per host (one
+#                    host = one link, probed once per run), ratio per dataset --
+#                    so the ~10s probe runs at most weekly; set
+#                    ZFS_SNAP_RETUNE=1 to force a re-probe, or just don't pass -A.
 #
 #                    It decides ONE thing on purpose. Measured 2026-07-22:
 #                    compress-or-not is worth ~29%, choosing the zstd level
@@ -98,7 +100,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.32'
+VERSION='v2.33'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -958,19 +960,34 @@ fi
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
-# -A decides compress-or-not from a measurement. Keyed per host, so one probe
-# covers every dataset in this run. Skipped in dry-run: -n must not push 32 MB
-# over the link just to report what it would have done.
+# -A decides compress-or-not from a measurement, PER DATASET -- the decision is
+# taken inside the loop below, not here. The compression ratio is a property of
+# the data (2.34x on one dataset, 1.29x on another, same host), so deciding once
+# from DATASETS[0] would apply one dataset's ratio to all the others. The link
+# half of the measurement is still probed once per host and cached, so the extra
+# datasets only cost a stream probe each.
+#
+# Skipped in dry-run: -n must not push 32 MB over the link just to report what
+# it would have done.
+AUTOTUNE_ACTIVE=0
 if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
     if [ $COMPRESSION_SET -eq 1 ]; then
         log 1 "Link tuning: -A ignored, compression was requested explicitly (-z/-Z/-g) -- honouring your flag"
     else
-        tune_apply "$REMOTE_USER@$REMOTE_HOST" "${DATASETS[0]}"
+        AUTOTUNE_ACTIVE=1
+        # The baseline to fall back to. tune_apply leaves COMPRESSION untouched
+        # when a probe fails, which without this would mean "keep the PREVIOUS
+        # dataset's verdict" rather than "keep what the user asked for".
+        COMPRESSION_BASE=$COMPRESSION
     fi
 fi
 
 declare -a FAILED_DATASETS=()
 for dataset in "${DATASETS[@]}"; do
+    if [ $AUTOTUNE_ACTIVE -eq 1 ]; then
+        COMPRESSION=$COMPRESSION_BASE
+        tune_apply "$REMOTE_USER@$REMOTE_HOST" "$dataset"
+    fi
     if [ -n "$TARGET_BASE" ]; then
         tgt_path="${TARGET_BASE}/${dataset}"
     else
