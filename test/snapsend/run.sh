@@ -532,10 +532,13 @@ fi
 
 # --- compression: -z (pigz) vs -Z (zstd) ------------------------------------
 # Both compressors sit in the same pipeline slot: send | COMPRESS | mbuffer |
-# DECOMPRESS | recv. Local mode exercises the whole chain, so a corrupted or
-# mismatched compressor pair shows up as a failed receive rather than silently
-# wrong data. pigz stays the default -- -Z must be opt-in so existing jobs are
-# untouched.
+# DECOMPRESS | recv -- but ONLY for a remote target. Since v2.32 a local send
+# drops compression entirely (compressing and decompressing on one host cannot
+# pay for itself), so what these local cases pin is the FLAG PARSING: which
+# compressor and level each flag selects, reported at selection time via the
+# COMPRESSOR log line. The pipeline itself is exercised by the remote path,
+# which this suite deliberately does not cover -- see the header note on local
+# mode. zstd is the default; -g must stay an opt-in escape hatch.
 
 # Writes real data so the compressor has something to chew on; an empty dataset
 # would pass even if the pipeline were nonsense.
@@ -596,6 +599,32 @@ zfs snapshot "$POOL/clast2@auto_1"
 check "-g -z: last flag wins (back to the zstd default)" "zstd -T0 -3 -c" \
       "$("$SNAPSEND" -g -z -e -m "auto_" -v 3 "$POOL/clast2" "$BK" 2>&1 \
          | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+
+# A local target must NOT compress (v2.32). The pipeline would be
+# send | zstd -c | mbuffer | zstd -d -c | recv on one machine: both halves paid
+# for, nothing between them but a pipe. This is the one case where an explicit
+# -z does not win, so it is pinned in both directions -- the flag is still
+# parsed (COMPRESSOR line above), and the transfer still succeeds, but the
+# stand-down is announced rather than silent.
+zfs create -p "$POOL/cloc" || exit 1
+zfs snapshot "$POOL/cloc@auto_1"
+cloc_out="$("$SNAPSEND" -z -e -m "auto_" -v 3 "$POOL/cloc" "$BK" 2>&1)"
+check "-z on a local target: says it is ignoring compression" "yes" \
+      "$(printf '%s' "$cloc_out" | grep -qi 'Compression ignored' && echo yes || echo no)"
+check "-z on a local target: still selected a compressor before standing down" \
+      "zstd -T0 -3 -c" \
+      "$(printf '%s' "$cloc_out" | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+check "-z on a local target: the snapshot still reached the target" "auto_1" \
+      "$(snaps_of "$(tgt_of cloc)")"
+
+# Without an explicit flag there is nothing to announce -- staying quiet matters
+# because every local cron job would otherwise log a line about a flag it never
+# passed.
+zfs create -p "$POOL/cloc2" || exit 1
+zfs snapshot "$POOL/cloc2@auto_1"
+check "local target without -z: stays quiet about compression" "no" \
+      "$("$SNAPSEND" -e -m "auto_" -v 3 "$POOL/cloc2" "$BK" 2>&1 \
+         | grep -qi 'Compression ignored' && echo yes || echo no)"
 
 # snapget mirror: there the compressor runs on the (possibly remote) source.
 zfs create -p "$SRCBASE/$POOL/czpull" || exit 1

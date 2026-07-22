@@ -10,7 +10,10 @@ set -o pipefail
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
 #   -e               Use existing latest snapshot instead of creating a new one
-#   -z               Compress the data stream (default compressor: zstd)
+#   -z               Compress the data stream (default compressor: zstd).
+#                    Ignored, with a log line, when the target is local: there
+#                    is no link between the compressor and the decompressor,
+#                    only a pipe on this same host, so it is pure CPU cost.
 #   -Z               Compress with zstd explicitly (same as -z; kept for clarity)
 #   -g               Compress with pigz instead -- the escape hatch for a host
 #                    where zstd is missing or unwanted
@@ -95,7 +98,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.31'
+VERSION='v2.32'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -406,8 +409,6 @@ transfer_data() {
     log 3 "SEND CMD: $send_cmd"
     log 3 "RECV CMD: $recv_cmd"
     
-    [ $COMPRESSION -eq 1 ] && log 3 "COMPRESSOR: $COMPRESS_PIPE"
-
     local send_args
     local recv_args
     IFS=' ' read -r -a send_args <<< "$send_cmd"
@@ -428,6 +429,10 @@ transfer_data() {
             fi
         fi
     else
+        # COMPRESSION is forced to 0 for a local target in section 5B, so this
+        # branch is not reachable in normal operation. Kept because it is the
+        # correct pipeline if compression is ever wanted here; the policy of not
+        # wanting it lives in one place, not spread into the transport layer.
         if [ $COMPRESSION -eq 1 ]; then
             if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
@@ -828,6 +833,12 @@ else
     DECOMPRESS_PIPE="pigz -d"
 fi
 
+# Reported where the compressor is CHOSEN, not where it is used. COMPRESS_PIPE
+# is invariant across datasets, so this belongs here rather than once per
+# transfer -- and it keeps the flag-to-compressor mapping observable even for a
+# local run, which no longer reaches the compressed pipeline at all.
+[ $COMPRESSION -eq 1 ] && log 3 "COMPRESSOR: $COMPRESS_PIPE"
+
 # Verify required commands are available
 if [ $COMPRESSION -eq 1 ] && ! command -v "$COMPRESSOR" >/dev/null; then
     log 0 "Compression requested but $COMPRESSOR is not installed."
@@ -922,6 +933,23 @@ if [[ -n "$REMOTE" ]]; then
     else
         TARGET_BASE="$REMOTE"
     fi
+fi
+
+# A local send has no link to save bytes on. The pipeline would be
+#   zfs send | zstd -c | mbuffer | zstd -d -c | zfs recv
+# i.e. compress and immediately decompress on the same machine, paying for both
+# and gaining nothing -- there is no network between the two halves, only a pipe
+# in memory. So -z/-Z/-g are dropped here rather than honoured, even though an
+# explicit flag normally wins: this is not a preference we are overriding, it is
+# an operation with no possible benefit.
+#
+# Deliberately placed AFTER the REMOTE_HOST parse above and BEFORE the tuning
+# block below -- the target is not known any earlier, and the check for the
+# compressor being installed must not fail a job that will not compress.
+if [ $COMPRESSION -eq 1 ] && [ -z "$REMOTE_HOST" ]; then
+    COMPRESSION=0
+    [ $COMPRESSION_SET -eq 1 ] && \
+        log 1 "Compression ignored: target is local, so compressing and decompressing on this same host would only cost CPU"
 fi
 
 # Connection reuse for every ssh call below (one run makes many). Safe to call
