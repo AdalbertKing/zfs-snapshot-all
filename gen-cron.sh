@@ -49,6 +49,9 @@ set -o pipefail
 #       flags_<tier> = <per-tier flags override>
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
+#       quiesce      = no|agent|fs|auto    # default no; freeze the Proxmox guest
+#                                          # that owns this dataset before
+#                                          # snapshotting it (snapsend.sh -q)
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
 #     A dataset section runs, scoped to ITS OWN path, non-recursively:
@@ -103,6 +106,12 @@ set -o pipefail
 # snapsend v2.32+ drops compression when both ends are the same host, so the flag
 # is dead weight that misdescribes the job. stdout stays clean either way.
 #
+# quiesce is NOT inferred, unlike -A. Whether a guest can be frozen depends on
+# what runs inside it and how much a brief write stall costs there, and neither is
+# visible from a dataset name -- so it is opt-in per dataset and simply becomes
+# `-q <mode>`. Warned about when combined with -e, which reuses an existing
+# snapshot and so has nothing for a freeze to make consistent.
+#
 # -A (link auto-tuning) is ADDED automatically to every send whose resolved 'dst'
 # is remote, i.e. contains ':' -- the same test snapsend.sh itself uses to decide
 # whether to open an ssh connection. It measures the link and the data, then
@@ -125,7 +134,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.9'
+VERSION='v4.10'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -238,6 +247,36 @@ maybe_add_autotune() {
     if [ -n "$flags" ]; then printf '%s -A' "$flags"; else printf -- '-A'; fi
 }
 
+# quiesce = agent|fs|auto|no. Unlike -A this is NOT inferred: whether a guest can
+# be frozen depends on what runs inside it and how much a brief write stall costs
+# there, and neither is visible from a dataset name. So it is opt-in per dataset.
+#
+# Validated outside the command substitution that uses it -- see lint_autotune for
+# why that separation is not optional.
+lint_quiesce() {
+    local want="$1" ctx="$2"
+    case "$want" in
+        ""|no|agent|fs|auto) return 0 ;;
+        *) die "$ctx: quiesce='$want' -- expected no, agent, fs or auto" ;;
+    esac
+}
+
+# -e means "use the snapshot that is already there", so there is nothing being
+# created for a freeze to make consistent. Emitting -q anyway would put a promise
+# in the crontab that the run cannot keep.
+maybe_add_quiesce() {
+    local flags="$1" want="$2" tok
+    case "$want" in
+        ""|no) printf '%s' "$flags"; return 0 ;;
+    esac
+    for tok in $flags; do
+        case "$tok" in
+            -q) printf '%s' "$flags"; return 0 ;;
+        esac
+    done
+    if [ -n "$flags" ]; then printf '%s -q %s' "$flags" "$want"; else printf -- '-q %s' "$want"; fi
+}
+
 # Rejects flags that never make sense in a standing/recurring cron job, and
 # warns about ones that are merely dead.
 #
@@ -254,6 +293,11 @@ lint_flags() {
         case "$tok" in
             -f) die "$ctx: flag -f (force full send) not allowed in a recurring job -- it would destroy and re-seed the target every run" ;;
             -n) die "$ctx: flag -n (dry-run) not allowed in a recurring job -- it never actually sends anything" ;;
+            -q)
+                case " $flags " in
+                    *" -e "*) warn "$ctx: -q has no effect together with -e -- -e reuses an existing snapshot, so there is nothing being created for a freeze to make consistent" ;;
+                esac
+                ;;
             -z|-Z|-g)
                 # Three cases, not two. An EMPTY dst is not "a local target" --
                 # it means no target at all: snapsend gets one argument, creates
@@ -499,11 +543,15 @@ build_dataset() {
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
             prefix="$(resolve_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
-            lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$dst"
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
             lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"
             flags="$(maybe_add_autotune "$flags" "$dst" "$autotune")"
+            local quiesce
+            quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
+            lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier"
+            flags="$(maybe_add_quiesce "$flags" "$quiesce")"
+            lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$dst"
             label="$(resolve_field notify "$ds" "" "")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"

@@ -89,6 +89,39 @@ set -o pipefail
 #                    An explicit -z/-Z/-g WINS: -A then logs that it stood
 #                    down and honours your flag. -A fills in a decision you
 #                    did not make; it never overrules one you did.
+#   -q <MODE>         Quiesce the Proxmox guest owning each dataset before
+#                    snapshotting it, so the snapshot is filesystem-consistent
+#                    instead of crash-consistent. MODE is one of:
+#                      no    (default) do nothing
+#                      agent qemu-guest-agent fsfreeze -- VMs
+#                      fs    host-side `fsfreeze -f` on the mountpoint -- containers,
+#                            which have no guest agent but whose subvol dataset is
+#                            mounted on the host
+#                      auto  pick per guest from its type
+#
+#                    The dataset-to-guest mapping is the Proxmox naming
+#                    convention (vm-<id>-disk-N, subvol-<id>-disk-N); anything
+#                    else owns no guest and is snapshotted normally.
+#
+#                    THE FREEZE WINDOW CONTAINS ONLY `zfs snapshot`. Writes are
+#                    blocked while frozen, so the window must not contain the
+#                    transfer -- and because one guest can own several datasets
+#                    (VM 107 has three disks), all of them are snapshotted in ONE
+#                    atomic `zfs snapshot` call inside a single window. Per-dataset
+#                    freezing would give one machine several different points in
+#                    time, which is the very thing being prevented.
+#
+#                    Thaw is guaranteed by an EXIT trap and shouts at log level 0
+#                    if it fails -- a guest left frozen is an outage.
+#
+#                    Filesystem-consistent is NOT application-consistent. A
+#                    database still replays its log on start. For a real quiesce,
+#                    put the engine's own (MySQL FLUSH TABLES WITH READ LOCK,
+#                    Postgres backup mode) in the guest's /etc/qemu/fsfreeze-hook,
+#                    which the agent runs inside the freeze.
+#
+#                    Ignored with -e (nothing is being created to quiesce) and
+#                    with -n.
 #   -V               Print version and exit
 #
 # COMPRESSED SEND is automatic (`zfs send -c`) and needs no flag: records are
@@ -109,7 +142,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.35'
+VERSION='v2.36'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -142,6 +175,10 @@ BUFFER_SIZE="128k"
 MEMORY="16M"
 PORT=22
 USE_EXISTING_SNAPSHOT=0
+# -q: quiesce the Proxmox guest that owns each dataset before snapshotting it.
+# "no" (default), "agent" (qemu-guest-agent, VMs), "fs" (host fsfreeze, containers)
+# or "auto" (pick per guest). See the QUIESCE section in lib-zfs-snap.sh.
+QUIESCE=no
 RECURSIVE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
@@ -801,11 +838,12 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:Aq:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
+        q) QUIESCE="$OPTARG";;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         g) COMPRESSION=1; COMPRESSOR="pigz"; COMPRESSION_SET=1;;
@@ -822,12 +860,17 @@ while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -V" >&2
             exit 1
             ;;
     esac
 done
 shift $((OPTIND-1))
+
+case "$QUIESCE" in
+    no|agent|fs|auto) ;;
+    *) echo "Error: -q '$QUIESCE' -- expected no, agent, fs or auto." >&2; exit 1 ;;
+esac
 
 [ $# -ge 1 ] || { echo "U�ycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
 ###############################################################################
@@ -998,6 +1041,51 @@ if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
         # dataset's verdict" rather than "keep what the user asked for".
         COMPRESSION_BASE=$COMPRESSION
     fi
+fi
+
+# Quiesce runs HERE, before the transfer loop, and not inside it. Two reasons,
+# and both are the whole point of the feature:
+#
+#   1. A frozen filesystem blocks writes, so the guest is stalled for as long as
+#      the window is open. `zfs snapshot` is instantaneous; sending is not (342 GB
+#      in one measured case). So the window contains the snapshot and nothing else.
+#   2. One guest can own several datasets -- VM 107 has three disks, CT 102 has
+#      two. Freezing and thawing per dataset would produce one window each, i.e.
+#      three different points in time for one machine, which is exactly the
+#      incoherence being prevented. ONE `zfs snapshot` with every dataset as an
+#      argument is atomic (verified on zfs-2.1.9), so all disks land on the same
+#      instant.
+#
+# Afterwards the normal loop runs with USE_EXISTING_SNAPSHOT=1: the snapshots
+# already exist, and -e picks the newest matching -m, which is the one just made.
+if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
+    # Wired before the first freeze, so an interrupt between freeze and thaw
+    # still thaws. The autotune trap is replaced rather than added to, because
+    # bash allows one EXIT trap -- both actions live in this one.
+    trap 'quiesce_thaw_all; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+    quiesce_snap_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
+    declare -a QUIESCE_SNAPS=()
+    for dataset in "${DATASETS[@]}"; do
+        quiesce_freeze "$dataset" "$QUIESCE"
+        QUIESCE_SNAPS+=("${dataset}@${MESSAGE}${quiesce_snap_suffix}")
+    done
+
+    quiesce_recursive_flag=""
+    [ $RECURSIVE -eq 1 ] && quiesce_recursive_flag="-r"
+    log 1 "Quiesce: taking one atomic snapshot of ${#QUIESCE_SNAPS[@]} dataset(s)"
+    if zfs snapshot $quiesce_recursive_flag "${QUIESCE_SNAPS[@]}"; then
+        USE_EXISTING_SNAPSHOT=1
+    else
+        # The guests are thawed by the trap either way. Failing here rather than
+        # falling through matters: silently continuing would take unquiesced
+        # snapshots one at a time and report success, which is the one outcome
+        # someone who asked for -q must never get without being told.
+        log 0 "Quiesce: the atomic snapshot failed -- refusing to fall back to unquiesced per-dataset snapshots"
+        quiesce_thaw_all
+        exit 1
+    fi
+    quiesce_thaw_all
 fi
 
 declare -a FAILED_DATASETS=()

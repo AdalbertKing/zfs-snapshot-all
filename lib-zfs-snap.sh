@@ -683,6 +683,151 @@ compressed_send_flag() {
     printf '%s' "-c"
 }
 
+###############################################################################
+# QUIESCE (-q) -- application-consistent snapshots of Proxmox guests
+###############################################################################
+# A ZFS snapshot of a running guest is CRASH-consistent: the image is whatever
+# the guest happened to have on its virtual disk at that instant, exactly as if
+# the power had been cut. Databases survive that (they replay their WAL on
+# start), but they pay a recovery, and anything not yet fsync'd is gone.
+#
+# Quiescing asks the guest to flush and hold still first. Two mechanisms, because
+# Proxmox has two kinds of guest:
+#
+#   qemu (VM)  -- `qm guest cmd <id> fsfreeze-freeze`. Runs INSIDE the guest via
+#                 qemu-guest-agent, which also runs /etc/qemu/fsfreeze-hook --
+#                 that is where a database's own quiesce belongs (MySQL FLUSH
+#                 TABLES WITH READ LOCK, Postgres backup mode). Without such a
+#                 hook this flushes the guest's page cache and freezes its
+#                 filesystems: filesystem-consistent, not application-consistent.
+#   lxc  (CT)  -- containers share the host kernel and `pct` has no fsfreeze, but
+#                 their subvol dataset IS mounted on the host, so the host can
+#                 freeze it directly with `fsfreeze -f <mountpoint>`.
+#
+# THE FREEZE WINDOW MUST CONTAIN ONLY `zfs snapshot`. A frozen filesystem blocks
+# writes, so a guest stays stalled for as long as the window is open. Taking the
+# snapshot is instantaneous; SENDING it is not (342 GB in one production case).
+# The caller is therefore expected to freeze, snapshot every dataset in ONE
+# atomic `zfs snapshot` call, thaw, and only then transfer.
+#
+# THAW IS GUARANTEED, not best-effort. A guest left frozen is an outage, so
+# quiesce_freeze registers what it froze and quiesce_thaw_all is wired to an EXIT
+# trap by the caller -- it runs on success, on failure, and on Ctrl-C.
+
+# What is currently frozen, so the thaw is exact rather than a guess:
+# "qemu:<id>" or "fs:<mountpoint>".
+declare -a QUIESCE_FROZEN=()
+
+# Proxmox names guest disks vm-<id>-disk-N (VM) and subvol-<id>-disk-N (CT).
+# That convention IS the dataset-to-guest mapping -- there is no property to ask.
+# Anything that does not match belongs to no guest and is simply not quiesced.
+quiesce_guest_id() {
+    local ds="$1" leaf="${1##*/}"
+    case "$leaf" in
+        vm-*-disk-*|subvol-*-disk-*)
+            leaf="${leaf#vm-}"; leaf="${leaf#subvol-}"
+            printf '%s' "${leaf%%-disk-*}"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# "qemu", "lxc", or nothing. Read from /etc/pve, which is the cluster filesystem
+# and therefore authoritative on this node.
+quiesce_guest_kind() {
+    local id="$1"
+    [ -f "/etc/pve/qemu-server/${id}.conf" ] && { printf 'qemu'; return 0; }
+    [ -f "/etc/pve/lxc/${id}.conf" ]        && { printf 'lxc';  return 0; }
+    return 1
+}
+
+quiesce_guest_running() {
+    local id="$1" kind="$2" st=""
+    case "$kind" in
+        qemu) st=$(qm  status "$id" 2>/dev/null) ;;
+        lxc)  st=$(pct status "$id" 2>/dev/null) ;;
+    esac
+    case "$st" in *running*) return 0 ;; esac
+    return 1
+}
+
+# Freezes whatever owns $1, if anything, and remembers it. Returns 0 even when it
+# does nothing: a dataset with no guest, a stopped guest or an unreachable agent
+# are all reasons to take an ordinary snapshot, not to fail a backup.
+quiesce_freeze() {
+    local ds="$1" mode="$2" id kind mnt
+    [ "$mode" = "no" ] && return 0
+
+    id=$(quiesce_guest_id "$ds") || { log 3 "Quiesce: '$ds' is not a Proxmox guest disk -- nothing to freeze"; return 0; }
+    kind=$(quiesce_guest_kind "$id") || { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
+    quiesce_guest_running "$id" "$kind" || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
+
+    # An explicit mode that does not fit this guest is a config mistake worth
+    # saying out loud, but still not worth failing a backup over.
+    case "$mode/$kind" in
+        agent/lxc) log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=fs or auto"; return 0 ;;
+        fs/qemu)   log 1 "Quiesce: guest $id is a VM, whose filesystems live inside the guest and cannot be frozen from the host -- use quiesce=agent or auto"; return 0 ;;
+    esac
+
+    case "$kind" in
+        qemu)
+            # Already frozen (a previous run died between freeze and thaw) is
+            # reported rather than re-frozen: freezing twice needs two thaws.
+            case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
+                *frozen*) log 0 "Quiesce: guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate"; return 0 ;;
+            esac
+            if qm guest cmd "$id" fsfreeze-freeze >/dev/null 2>&1; then
+                QUIESCE_FROZEN+=("qemu:$id")
+                log 1 "Quiesce: froze VM $id via qemu-guest-agent"
+            else
+                log 1 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy) -- snapshot will be crash-consistent"
+            fi
+            ;;
+        lxc)
+            mnt=$(zfs get -H -o value mountpoint "$ds" 2>/dev/null)
+            [ -n "$mnt" ] && [ "$mnt" != "none" ] && [ "$mnt" != "-" ] && [ -d "$mnt" ] || {
+                log 1 "Quiesce: container $id disk '$ds' has no usable mountpoint on this host -- snapshot will be crash-consistent"
+                return 0
+            }
+            if fsfreeze -f "$mnt" 2>/dev/null; then
+                QUIESCE_FROZEN+=("fs:$mnt")
+                log 1 "Quiesce: froze container $id filesystem at $mnt"
+            else
+                log 1 "Quiesce: fsfreeze -f failed on $mnt -- snapshot will be crash-consistent"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# Thaws everything this run froze, in reverse order, and empties the list so a
+# second call is harmless -- the EXIT trap fires even after an explicit thaw.
+# Every failure is shouted at log level 0: a guest that will not thaw is the one
+# outcome here that is worse than no quiescing at all.
+quiesce_thaw_all() {
+    local i entry
+    for (( i=${#QUIESCE_FROZEN[@]}-1; i>=0; i-- )); do
+        entry="${QUIESCE_FROZEN[$i]}"
+        case "$entry" in
+            qemu:*)
+                if qm guest cmd "${entry#qemu:}" fsfreeze-thaw >/dev/null 2>&1; then
+                    log 1 "Quiesce: thawed VM ${entry#qemu:}"
+                else
+                    log 0 "Quiesce: FAILED TO THAW VM ${entry#qemu:} -- that guest is still frozen and needs manual 'qm guest cmd ${entry#qemu:} fsfreeze-thaw'"
+                fi
+                ;;
+            fs:*)
+                if fsfreeze -u "${entry#fs:}" 2>/dev/null; then
+                    log 1 "Quiesce: thawed ${entry#fs:}"
+                else
+                    log 0 "Quiesce: FAILED TO THAW ${entry#fs:} -- that filesystem is still frozen and needs manual 'fsfreeze -u ${entry#fs:}'"
+                fi
+                ;;
+        esac
+    done
+    QUIESCE_FROZEN=()
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other.
