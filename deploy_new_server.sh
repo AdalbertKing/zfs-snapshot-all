@@ -4,18 +4,19 @@
 #
 # Bootstrap procedure for propagating zfs-snapshot-all (snapsend.sh/snapget.sh/
 # delsnaps.sh) from GitHub onto a new Proxmox/Debian host, including:
-#   - git install
+#   - verification and installation of every dependency the package needs
+#     (see the table in Part 1 -- it is derived from what the scripts invoke)
 #   - clone/update of /root/scripts/zfs-snapshot-all (handles both a fresh dir
 #     and one that already has plain-file copies of the scripts sitting in it)
 #   - notify-fail.sh mail-alert helper (fires on job failure)
 #   - check-pool-capacity.sh pool/quota alert (fires on slow-fill BEFORE a job fails)
-#   - dependency + permission verification
+#   - smoke test of all five shipped executables + a live compressor round-trip
 #   - auto-pull cron line
 #
-# This script is NOT part of the git repo (zfs-snapshot-all only tracks the 3
-# scripts) -- it is host-local infrastructure glue, same as cron.txt. Copy it
-# to the target server yourself (paste via heredoc, scp, whatever) and run it
-# as root:
+# This script IS tracked in the repo (alongside the 5 package scripts and
+# deploy_backup_user.sh). On a brand-new host you still have to get it there
+# before there is a checkout to run it from -- paste it via heredoc, scp it,
+# or curl it from GitHub -- then run it as root:
 #
 #   bash deploy_new_server.sh
 #
@@ -30,11 +31,28 @@ REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 REPO_DIR="/root/scripts/zfs-snapshot-all"
 NOTIFY_EMAIL="${NOTIFY_EMAIL:-lurk@lurk.com.pl}"   # override: NOTIFY_EMAIL=foo@bar bash deploy_new_server.sh
 
+# PROBLEMS lets --check-only return a meaningful exit code, so the audit can be
+# driven from cron or a loop over hosts instead of being read by eye.
+PROBLEMS=0
 log() { echo ">>> $*"; }
-warn() { echo "!!! $*" >&2; }
+warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
+# --check-only: report what is missing or broken and change NOTHING. No package
+# installs, no clone/pull, no files created, no crontab edits, and -- the one
+# that matters most on a live host -- no test email. Use it to audit a server
+# that is already running, where the full script's side effects are unwanted.
+CHECK_ONLY=0
+case "${1:-}" in
+    --check-only) CHECK_ONLY=1; shift ;;
+    -h|--help)
+        echo "Usage: $0 [--check-only]"
+        echo "  --check-only   audit dependencies and the checkout; make no changes"
+        exit 0 ;;
+esac
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
+[ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
 
 # On Proxmox, apt-get update commonly fails on the pve-enterprise repo (401,
 # no subscription) even though the other repos succeed. Try a plain install
@@ -50,42 +68,112 @@ apt_install_with_fallback() {
 }
 
 # ------------------------------------------------------------------------------
-log "Part 1: git"
+log "Part 1: dependencies"
 # ------------------------------------------------------------------------------
-if ! command -v git >/dev/null; then
-    log "git not found, installing..."
-    apt_install_with_fallback git || die "could not install git"
-fi
-log "git: $(git --version)"
+# The list below is derived from what the package's scripts ACTUALLY invoke, not
+# from memory -- re-derive it with:
+#   grep -ohE '\b(zfs|mbuffer|pigz|zstd|ssh|flock|mail|hostname|md5sum)\b' *.sh | sort -u
+# and keep this table in step. Severity decides what a miss costs:
+#
+#   required     -- the package cannot work at all; missing => FATAL
+#   compression  -- only jobs using -z/-Z/-g need it, but -z is on almost every
+#                   real cron line, so treat a miss as loud
+#   optional     -- degrades a feature, not the core; missing => warning
+#
+MISSING_OPTIONAL=""
 
-command -v flock >/dev/null || die "flock not found (util-linux) -- required by all 3 scripts for single-instance locking"
-command -v mail  >/dev/null || warn "no 'mail' command -- notify-fail.sh alerting will not work until postfix/mailutils is installed"
+# check_dep <command> <apt-package> <severity> <why>
+check_dep() {
+    local cmd="$1" pkg="$2" sev="$3" why="$4"
+
+    if command -v "$cmd" >/dev/null 2>&1; then
+        log "  [ok]      $cmd ($why)"
+        return 0
+    fi
+
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        case "$sev" in
+            required) warn "  [MISSING] $cmd (apt: $pkg) -- REQUIRED: $why" ;;
+            *)        warn "  [missing] $cmd (apt: $pkg) -- $why" ;;
+        esac
+        MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
+        return 1
+    fi
+
+    log "  [missing]  $cmd -- installing '$pkg' ($why)"
+    apt_install_with_fallback "$pkg" >/dev/null 2>&1 || true
+
+    if command -v "$cmd" >/dev/null 2>&1; then
+        log "  [installed] $cmd"
+        return 0
+    fi
+
+    case "$sev" in
+        required)
+            die "$cmd is REQUIRED and could not be installed from '$pkg' -- $why"
+            ;;
+        compression)
+            warn "$cmd could not be installed from '$pkg' -- $why"
+            MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
+            ;;
+        *)
+            warn "$cmd not available ('$pkg') -- $why"
+            MISSING_OPTIONAL="$MISSING_OPTIONAL $cmd"
+            ;;
+    esac
+    return 1
+}
+
+check_dep git      git              required    "cloning and auto-updating this repo"
+check_dep flock    util-linux       required    "single-instance locking in all send/prune scripts"
+check_dep mbuffer  mbuffer          required    "snapsend.sh/snapget.sh refuse to start without it, even without -z"
+check_dep hostname hostname         required    "validate_remote_host uses 'hostname -f' to refuse loopback replication"
+check_dep md5sum   coreutils        required    "per-target bookmark tags (lib-zfs-snap.sh)"
+check_dep awk      gawk             required    "snapshot list parsing"
+
+# zstd is the DEFAULT compressor since 2026-07-22 -- it measured better than pigz
+# on BOTH ratio and throughput (see the benchmark table in snapsend.sh's header).
+# So on a fresh host a missing zstd breaks every ordinary '-z' cron line, which
+# is why it is checked BEFORE pigz and treated as loud.
+check_dep zstd     zstd             compression "DEFAULT compressor for -z/-Z"
+check_dep pigz     pigz             compression "alternative compressor, selected with -g"
+
+check_dep ssh      openssh-client   optional    "remote push/pull; local-only hosts do not need it"
+check_dep mail     mailutils        optional    "notify-fail.sh / capacity + staleness alerting"
 
 # ------------------------------------------------------------------------------
-log "Part 1b: mbuffer / pigz (required by snapsend.sh and snapget.sh)"
+log "Part 1b: ZFS itself"
 # ------------------------------------------------------------------------------
-# mbuffer is required UNCONDITIONALLY by both scripts (they refuse to run
-# without it, even without -z). pigz is only needed by jobs using -z, but since
-# this deploy script can't know in advance which cron lines you'll add on this
-# host, and it's a tiny package, install it too -- matches what pve0/pve1
-# actually need since most of their jobs use -z.
-if ! command -v mbuffer >/dev/null; then
-    log "mbuffer not found, installing..."
-    apt_install_with_fallback mbuffer || die "could not install mbuffer -- snapsend.sh/snapget.sh will refuse to run without it"
+# Deliberately separate from the table: on a host without ZFS this is not a
+# missing utility, it is the wrong host. Installing zfsutils-linux would give a
+# working CLI with no pool support, which fails later and much less clearly.
+if ! command -v zfs >/dev/null 2>&1 && [ "$CHECK_ONLY" -eq 0 ]; then
+    warn "zfs command not found -- attempting zfsutils-linux (expected already present on Proxmox)"
+    apt_install_with_fallback zfsutils-linux >/dev/null 2>&1 || true
 fi
-log "mbuffer: $(command -v mbuffer)"
+command -v zfs >/dev/null 2>&1 || die "zfs not available -- this package manages ZFS snapshots and cannot do anything on this host"
 
-if ! command -v pigz >/dev/null; then
-    log "pigz not found, installing..."
-    apt_install_with_fallback pigz || warn "could not install pigz -- any cron line using -z will fail until this is fixed"
+# A CLI that cannot reach the kernel module is the failure that actually bites:
+# every script would run and report nothing rather than failing loudly.
+if ! zfs list -H >/dev/null 2>&1; then
+    die "the 'zfs' command exists but 'zfs list' fails -- kernel module not loaded, or no pools imported. Fix that before deploying backups here."
 fi
-if command -v pigz >/dev/null; then
-    log "pigz: $(pigz --version 2>&1 | head -1)"
-fi
+log "  [ok]      zfs $(zfs version 2>/dev/null | head -1 | awk '{print $NF}') -- $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')"
 
 # ------------------------------------------------------------------------------
 log "Part 2: deploy the repo into $REPO_DIR"
 # ------------------------------------------------------------------------------
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -d "$REPO_DIR/.git" ]; then
+        log "checkout present at $REPO_DIR ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null))"
+        d=$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)
+        [ -n "$d" ] && warn "checkout has local modifications -- 'git pull --ff-only' will fail:
+$d"
+    else
+        warn "no git checkout at $REPO_DIR -- run without --check-only to create it"
+    fi
+else
+
 mkdir -p "$(dirname "$REPO_DIR")"
 
 if [ -d "$REPO_DIR/.git" ]; then
@@ -122,6 +210,8 @@ else
     git clone "$REPO_URL" "$REPO_DIR" || die "git clone failed"
 fi
 
+fi   # end of CHECK_ONLY guard for Part 2
+
 # ------------------------------------------------------------------------------
 log "Part 3: verify the deployment"
 # ------------------------------------------------------------------------------
@@ -129,21 +219,60 @@ cd "$REPO_DIR" || die "cannot cd into $REPO_DIR"
 log "HEAD: $(git log -1 --oneline)"
 
 FAIL=0
-for f in snapsend.sh snapget.sh delsnaps.sh; do
+
+# lib-zfs-snap.sh is not optional: snapsend/snapget/delsnaps/gen-cron all source
+# it and exit immediately if it is missing. Check it FIRST, because without it
+# every -V below would fail and the real cause would be buried in the noise.
+if [ ! -r lib-zfs-snap.sh ]; then
+    die "lib-zfs-snap.sh missing from the checkout -- snapsend/snapget/delsnaps/gen-cron all source it and refuse to start. The clone is incomplete."
+fi
+log "  lib-zfs-snap.sh present"
+
+# All five executables the package ships, not just the original three: gen-cron.sh
+# (crontab generator) and check-snap-age.sh (staleness monitor) are part of the
+# package now and are just as easy to get wrong silently.
+for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh check-snap-age.sh; do
+    if [ ! -e "$f" ]; then
+        warn "$f is missing from the checkout"
+        FAIL=1
+        continue
+    fi
     if [ ! -x "$f" ]; then
-        warn "$f is not executable (chmod +x $f)"
+        warn "$f is not executable (fixing with chmod +x)"
         chmod +x "$f"
     fi
-    v=$(./"$f" -V 2>&1) || { warn "$f -V failed: $v"; FAIL=1; }
+    # Syntax check before execution: a truncated or CRLF-mangled file can still
+    # be executable, and the failure it produces later is far less obvious.
+    bash -n "$f" 2>/dev/null || { warn "$f fails 'bash -n' -- corrupt or wrong line endings?"; FAIL=1; continue; }
+    v=$(./"$f" -V 2>&1) || { warn "$f -V failed: $v"; FAIL=1; continue; }
     log "  $f -> $v"
 done
-[ "$FAIL" -eq 0 ] || warn "one or more scripts failed the -V smoke test -- investigate before relying on cron"
+[ "$FAIL" -eq 0 ] || warn "one or more scripts failed the smoke test -- investigate before relying on cron"
+
+# Prove the compressor actually round-trips ON THIS HOST rather than trusting
+# that the binary being present means it works. Cheap, and catches a broken or
+# shimmed install before a real transfer does.
+for c in zstd pigz; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    case "$c" in
+        zstd) probe="zstd -T0 -3 -c" ; unprobe="zstd -d -c" ;;
+        pigz) probe="pigz -6"        ; unprobe="pigz -d"    ;;
+    esac
+    if [ "$(echo zfs-snapshot-all | $probe | $unprobe 2>/dev/null)" = "zfs-snapshot-all" ]; then
+        log "  $c round-trip ok"
+    else
+        warn "$c is installed but failed a compress/decompress round-trip -- jobs using it will break"
+        FAIL=1
+    fi
+done
 
 # ------------------------------------------------------------------------------
 log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
 # ------------------------------------------------------------------------------
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-if [ -e "$NOTIFY_SCRIPT" ]; then
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -x "$NOTIFY_SCRIPT" ]; then log "  $NOTIFY_SCRIPT present"; else warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"; fi
+elif [ -e "$NOTIFY_SCRIPT" ]; then
     log "$NOTIFY_SCRIPT already exists, leaving it alone (edit NOTIFY_EMAIL inside manually if needed)"
 else
     cat > "$NOTIFY_SCRIPT" <<EOF
@@ -161,7 +290,9 @@ EOF
     log "created $NOTIFY_SCRIPT (alerts -> $NOTIFY_EMAIL)"
 fi
 
-if command -v mail >/dev/null; then
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    log "skipping the test email (check-only)"
+elif command -v mail >/dev/null; then
     log "sending a test alert to confirm mail delivery works from THIS host..."
     "$NOTIFY_SCRIPT" "deploy_new_server.sh test on $(hostname -f 2>/dev/null || hostname)"
     log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
@@ -180,6 +311,8 @@ log "Part 4b: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 PULL_LINE="15 * * * * cd $REPO_DIR && git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
 if crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
     log "auto-pull cron line already present, leaving it alone"
+elif [ "$CHECK_ONLY" -eq 1 ]; then
+    warn "auto-pull cron line MISSING -- this host would never pick up updates"
 else
     ( crontab -l 2>/dev/null; echo "$PULL_LINE" ) | crontab -
     log "added auto-pull cron line: $PULL_LINE"
@@ -209,7 +342,9 @@ log "Part 4d: check-pool-capacity.sh (pool/quota capacity alerting)"
 # fileserver LXC (subvol-101-disk-1) was independently at 91% of its own
 # refquota, neither of which any existing alert would have caught in advance.
 CAPACITY_SCRIPT="/root/scripts/check-pool-capacity.sh"
-if [ -e "$CAPACITY_SCRIPT" ]; then
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -x "$CAPACITY_SCRIPT" ]; then log "  $CAPACITY_SCRIPT present"; else warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"; fi
+elif [ -e "$CAPACITY_SCRIPT" ]; then
     log "$CAPACITY_SCRIPT already exists, leaving it alone (edit THRESHOLD/MAILTO inside manually if needed)"
 else
     cat > "$CAPACITY_SCRIPT" <<EOF
@@ -252,9 +387,43 @@ fi
 CAPACITY_LINE="0 8 * * * $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
 if crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
     log "capacity-check cron line already present, leaving it alone"
+elif [ "$CHECK_ONLY" -eq 1 ]; then
+    warn "capacity-check cron line MISSING -- no early warning before a pool fills up"
 else
     ( crontab -l 2>/dev/null; echo "$CAPACITY_LINE" ) | crontab -
     log "added capacity-check cron line: $CAPACITY_LINE"
+fi
+
+echo
+log "===================================================================="
+log "Dependency summary"
+log "===================================================================="
+if [ -n "$MISSING_OPTIONAL" ]; then
+    warn "still missing:$MISSING_OPTIONAL"
+    case "$MISSING_OPTIONAL" in
+        *zstd*) warn "  zstd is the DEFAULT compressor -- every cron line using -z will FAIL on this host until it is installed, or you must pass -g to force pigz instead" ;;
+    esac
+    case "$MISSING_OPTIONAL" in
+        *mail*) warn "  without 'mail' this host can run backups but cannot TELL YOU when one breaks -- fix before relying on it unattended" ;;
+    esac
+    case "$MISSING_OPTIONAL" in
+        *ssh*)  warn "  without ssh only local (same-host) jobs will work" ;;
+    esac
+else
+    log "all dependencies present"
+fi
+
+# In check-only mode the exit code IS the result -- 0 means this host is ready,
+# non-zero means something above needs attention. The full deploy path keeps
+# returning 0 on warnings, because there the warnings are advisory and the work
+# has already been done.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ "$PROBLEMS" -gt 0 ]; then
+        warn "audit found $PROBLEMS issue(s) on $(hostname -s 2>/dev/null || hostname)"
+        exit 1
+    fi
+    log "audit clean on $(hostname -s 2>/dev/null || hostname)"
+    exit 0
 fi
 
 echo
