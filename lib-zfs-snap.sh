@@ -468,10 +468,25 @@ tune_probe_stream() {
         if (rt<=0 || ct<=0) exit 1
         mb = rb/1048576
         raw = mb/rt; comp = mb/ct
-        # Compression cannot make the source produce input bytes faster. If it
-        # looks that way the cache still skewed the runs -- refuse rather than
-        # cache a lie for a week.
-        if (comp > raw*1.05) exit 1
+        # Compression cannot make the source produce input bytes faster, so
+        # comp > raw is always measurement error -- but the size of the error
+        # says what kind, and only one kind is worth discarding.
+        #
+        # A LARGE excess means the runs were skewed (the artefact the warm-up
+        # pass exists to prevent: one pass off disk, the next off ARC). Refuse,
+        # rather than cache a lie for a week.
+        if (comp > raw*1.5) exit 1
+        # A SMALL one is expected and harmless. The two passes are not perfectly
+        # symmetric -- the raw pass pushes all 64 MB into `wc`, the compressed
+        # pass only the compressed bytes -- and a disk-bound source is noisy well
+        # past a few percent (measured 88-120 MB/s for one unchanged setting).
+        # Both effects grow exactly when compression works, so rejecting here
+        # threw the measurement away on the datasets -A most needs to judge:
+        # observed live on pve0 refusing both an incompressible dataset and a
+        # highly compressible one, while ordinary VM disks (1.26x, 3.21x) passed.
+        # Clamping keeps the usable part -- the true rate cannot exceed raw, so
+        # raw is the honest estimate -- and errs against compression, never for it.
+        if (comp > raw) comp = raw
         printf "%.4f %.4f %.4f", rb/cb, raw, comp
     }'
 }
