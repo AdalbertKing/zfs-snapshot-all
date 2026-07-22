@@ -59,6 +59,31 @@ set -o pipefail
 #                     default when -k is omitted, unchanged from prior versions --
 #                     only opt into -k if you've already populated FILE, e.g. via
 #                     ssh-keyscan, and verified the fingerprint out of band)
+#   -A               Auto-tune the link: measure it, then decide whether -z is
+#                    worth it for THIS data. Opt-in, remote transfers only, and
+#                    it can flip nothing but compression. The verdict is cached
+#                    per host for 7 days (one host = one link), so the ~10s
+#                    probe runs at most weekly; set ZFS_SNAP_RETUNE=1 to force a
+#                    re-probe, or just don't pass -A.
+#
+#                    It decides ONE thing on purpose. Measured 2026-07-22:
+#                    compress-or-not is worth ~29%, choosing the zstd level
+#                    ~2%, and mbuffer -m nothing at all (16M/128M/1G were
+#                    indistinguishable against a real zfs recv, even to a slow
+#                    HDD target). So the level stays fixed and the buffer is
+#                    not tuned -- two sizing formulas were tried and both were
+#                    refuted by measurement.
+#
+#                    Ratio is measured on a real `zfs send` sample from the
+#                    dataset, never assumed: the same host measured 2.34x on
+#                    one dataset and 1.29x on another. Needs an existing
+#                    snapshot to sample -- on a dataset's very first run there
+#                    is none yet, so tuning quietly stands down that once.
+#                    Every failure path leaves your settings untouched.
+#
+#                    An explicit -z/-Z/-g WINS: -A then logs that it stood
+#                    down and honours your flag. -A fills in a decision you
+#                    did not make; it never overrules one you did.
 #   -V               Print version and exit
 #
 # REMOTE format: [user@]host:dataset_path  (for remote replication).
@@ -70,7 +95,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.29'
+VERSION='v2.30'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -92,6 +117,14 @@ FULL_HISTORY_SEND=0
 UNMOUNT=0
 FORCE_FULL_SEND=0
 RAW_SEND=0
+# -A: measure the link and the data, then decide whether compressing is worth
+# it. Opt-in, and it can only ever flip COMPRESSION -- never the target, the
+# snapshot, or anything else that could change what gets written.
+AUTOTUNE=0
+# Set by -z/-Z/-g. Lets -A tell "user said nothing about compression" apart from
+# "user explicitly asked for it" -- auto-tuning may fill the first case in, but
+# must never silently overrule the second.
+COMPRESSION_SET=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 KNOWN_HOSTS_FILE=""
@@ -726,13 +759,14 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
+        A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
-        z) COMPRESSION=1; COMPRESSOR="zstd";;
-        Z) COMPRESSION=1; COMPRESSOR="zstd";;
-        g) COMPRESSION=1; COMPRESSOR="pigz";;
+        z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
+        Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
+        g) COMPRESSION=1; COMPRESSOR="pigz"; COMPRESSION_SET=1;;
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
@@ -746,7 +780,7 @@ while getopts "m:ezZgl:v:rnIufwVp:k:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -V" >&2
             exit 1
             ;;
     esac
@@ -801,6 +835,28 @@ else
     SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
 fi
 
+# Fail fast instead of hanging forever. Without these there is NO timeout of any
+# kind on the ssh side, and the worst case is not a broken backup -- it is a
+# silent one:
+#
+#   a VPN that stops passing packets without closing the connection (the usual
+#   way a NAT'd tunnel dies) leaves ssh waiting indefinitely. The cron job never
+#   exits, so it never returns non-zero, so notify-fail.sh never fires. The next
+#   hour's run hits the flock, logs "already running", and skips -- and so does
+#   every run after it. Backups stop while everything still looks fine, until
+#   check-snap-age.sh eventually notices the snapshots going stale hours later.
+#
+# ConnectTimeout covers a dead peer at connect time; ServerAlive* covers one
+# that dies mid-transfer (4 x 15s = ~60s to notice). Together they turn that
+# hang into an ordinary failure -- which fires the alert AND leaves a resume
+# token, so the next run continues the stream instead of restarting it.
+#
+# These do NOT fire on a merely slow link: sshd answers keepalives at the
+# protocol level regardless of what the payload is doing, so a long `zfs recv`
+# txg commit or a saturated 20 Mbps VPN keeps replying and never trips the
+# counter.
+SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
 ###############################################################################
@@ -848,6 +904,23 @@ if [[ -n "$REMOTE" ]]; then
         TARGET_BASE=$(echo "$target_base" | sed 's:^/+::; s:/+$::')
     else
         TARGET_BASE="$REMOTE"
+    fi
+fi
+
+# Connection reuse for every ssh call below (one run makes many). Safe to call
+# unconditionally: it no-ops for a local run, and ControlMaster=auto falls back
+# to an ordinary connection if the master cannot be set up.
+tune_ssh_enable "$REMOTE_HOST"
+trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# -A decides compress-or-not from a measurement. Keyed per host, so one probe
+# covers every dataset in this run. Skipped in dry-run: -n must not push 32 MB
+# over the link just to report what it would have done.
+if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
+    if [ $COMPRESSION_SET -eq 1 ]; then
+        log 1 "Link tuning: -A ignored, compression was requested explicitly (-z/-Z/-g) -- honouring your flag"
+    else
+        tune_apply "$REMOTE_USER@$REMOTE_HOST" "${DATASETS[0]}"
     fi
 fi
 

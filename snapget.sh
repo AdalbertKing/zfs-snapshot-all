@@ -59,6 +59,24 @@ set -o pipefail
 #                     default when -k is omitted, unchanged from prior versions --
 #                     only opt into -k if you've already populated FILE, e.g. via
 #                     ssh-keyscan, and verified the fingerprint out of band)
+#   -A               Auto-tune the link: measure it, then decide whether -z is
+#                    worth it for THIS data. Opt-in, remote transfers only, and
+#                    it can flip nothing but compression. Cached per host for 7
+#                    days; ZFS_SNAP_RETUNE=1 forces a re-probe.
+#
+#                    In snapget the SOURCE is remote and its compressor runs
+#                    there (see transfer_data), so the ratio is measured on the
+#                    far side -- probing locally would measure the wrong
+#                    machine's disk and CPU.
+#
+#                    Decides ONE thing on purpose: measured 2026-07-22,
+#                    compress-or-not is worth ~29%, the zstd level ~2%, and
+#                    mbuffer -m nothing at all. Ratio is measured on a real
+#                    `zfs send` sample, never assumed (2.34x vs 1.29x on two
+#                    datasets of the same host). Needs an existing snapshot to
+#                    sample. Every failure path leaves your settings untouched.
+#
+#                    An explicit -z/-Z/-g WINS: -A stands down and honours it.
 #   -V               Print version and exit
 #
 # REMOTE format: [user@]host:dataset_path  (source side for pull replication).
@@ -70,7 +88,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.28'
+VERSION='v2.29'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -92,6 +110,13 @@ FULL_HISTORY_SEND=0
 UNMOUNT=0
 FORCE_FULL_SEND=0
 RAW_SEND=0
+# -A: measure the link and the data, then decide whether compressing is worth
+# it. Opt-in, and it can only ever flip COMPRESSION.
+AUTOTUNE=0
+# Set by -z/-Z/-g. Lets -A tell "user said nothing about compression" apart from
+# "user explicitly asked for it" -- auto-tuning may fill the first case in, but
+# must never silently overrule the second.
+COMPRESSION_SET=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 KNOWN_HOSTS_FILE=""
@@ -718,13 +743,14 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
+        A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
-        z) COMPRESSION=1; COMPRESSOR="zstd";;
-        Z) COMPRESSION=1; COMPRESSOR="zstd";;
-        g) COMPRESSION=1; COMPRESSOR="pigz";;
+        z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
+        Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
+        g) COMPRESSION=1; COMPRESSOR="pigz"; COMPRESSION_SET=1;;
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
@@ -738,7 +764,7 @@ while getopts "m:ezZgl:v:rnIufwVp:k:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -V" >&2
             exit 1
             ;;
     esac
@@ -792,6 +818,21 @@ else
     SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
 fi
 
+# Fail fast instead of hanging forever. Without these there is NO timeout of any
+# kind on the ssh side, and the worst case is not a broken backup -- it is a
+# silent one: a VPN that stops passing packets without closing the connection
+# leaves ssh waiting indefinitely, so the cron job never exits, never returns
+# non-zero, and never fires notify-fail.sh. Every later run then hits the flock
+# and skips, so backups stop while everything still looks healthy.
+#
+# ConnectTimeout covers a dead peer at connect time; ServerAlive* covers one that
+# dies mid-transfer (4 x 15s = ~60s). Together they turn that hang into an
+# ordinary failure -- which alerts AND leaves a resume token for the next run.
+#
+# These do NOT fire on a merely slow link: sshd answers keepalives at the
+# protocol level regardless of what the payload is doing.
+SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
 ###############################################################################
@@ -839,6 +880,21 @@ if [[ -n "$REMOTE" ]]; then
         SOURCE_BASE=$(echo "$source_base" | sed 's:^/+::; s:/+$::')
     else
         SOURCE_BASE="$REMOTE"
+    fi
+fi
+
+# Connection reuse for every ssh call below. No-ops for a local run, and
+# ControlMaster=auto falls back to an ordinary connection on failure.
+tune_ssh_enable "$REMOTE_HOST"
+trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# "remote": snapget's source dataset lives on the far side, so the ratio must
+# be measured there -- that is also where its compressor runs.
+if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
+    if [ $COMPRESSION_SET -eq 1 ]; then
+        log 1 "Link tuning: -A ignored, compression was requested explicitly (-z/-Z/-g) -- honouring your flag"
+    else
+        tune_apply "$REMOTE_USER@$REMOTE_HOST" "${DATASETS[0]}" remote
     fi
 fi
 

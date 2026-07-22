@@ -220,6 +220,275 @@ check_raw_compatibility() {
     return 0
 }
 
+###############################################################################
+# SSH CONNECTION REUSE (ControlMaster)
+###############################################################################
+# One run makes many small ssh calls (timestamps, snapshot lists, property
+# reads, target creation) plus the big transfer. Without multiplexing each of
+# them pays a full handshake.
+#
+# Measured 2026-07-22, pve0 -> pve1 on a gigabit LAN: a bare `ssh host true`
+# takes 150-230 ms, of which essentially all is handshake. With ControlMaster
+# the same call costs ~8 ms, and the measured transfer throughput rose from
+# 83.6 to 104.0 MB/s once the handshake stopped being counted inside it.
+#
+# Failure is non-fatal by construction: ControlMaster=auto falls back to an
+# ordinary connection if the master cannot be created, so a bad socket path
+# degrades to today's behaviour instead of breaking the run.
+
+# Socket for the multiplexer. Lives in the tuning cache dir, NEVER in /var/run:
+# that is tmpfs and, more importantly, not writable by the non-root zfsbackup
+# account. Returns empty when no usable path exists, which disables reuse.
+#
+# The name is kept short on purpose -- a unix socket path is capped around 104
+# characters, and ssh appends nothing but what we pass. Hence host_port rather
+# than ssh's own %h/%p/%r tokens plus a long directory.
+tune_control_path() {
+    local host="$1"
+    local dir safe p
+    dir=$(tune_cache_dir) || return 0
+    [ -n "$dir" ] || return 0
+    safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
+    p="${dir}/cm.${safe}_${PORT:-22}"
+    [ ${#p} -lt 100 ] && printf '%s' "$p"
+}
+
+# Appends multiplexing options to SSH_OPTS. Call once, AFTER SSH_OPTS is built
+# and only when the run actually talks to a remote host. Sets TUNE_SOCK so the
+# matching tune_ssh_close can shut the master down afterwards.
+TUNE_SOCK=""
+tune_ssh_enable() {
+    local host="$1"
+    [ -n "$host" ] || return 0
+    TUNE_SOCK=$(tune_control_path "$host")
+    if [ -z "$TUNE_SOCK" ]; then
+        log 2 "ControlMaster disabled (no writable short socket path) -- each ssh call pays a full handshake"
+        return 0
+    fi
+    SSH_OPTS+=(-o ControlMaster=auto -o "ControlPath=$TUNE_SOCK" -o ControlPersist=60)
+    log 3 "ControlMaster socket: $TUNE_SOCK"
+}
+
+# Closes the multiplexer. Without this the master lingers for ControlPersist
+# seconds after the script exits, holding a connection open for no reason.
+# Best-effort: never fails the run.
+tune_ssh_close() {
+    local remote="$1"
+    [ -n "$TUNE_SOCK" ] && [ -n "$remote" ] || return 0
+    ssh -o "ControlPath=$TUNE_SOCK" -O exit "$remote" >/dev/null 2>&1 || true
+    TUNE_SOCK=""
+}
+
+###############################################################################
+# LINK TUNING (opt-in, -A)
+###############################################################################
+# Decides ONE thing: whether compressing the stream is worth it for this link
+# and this data. That narrow scope is a measurement result, not an oversight --
+# see the numbers below.
+#
+# Deliberately NOT tuned here:
+#
+#   mbuffer -m. Measured 2026-07-22, pve0 <-> pve1, 2 GB incompressible, real
+#   `zfs recv` on the far side: 16M/128M/1G gave 109.9/109.3/109.8 MB/s to an
+#   SSD target and 89.3/-/78.3-88.8 MB/s to a slow HDD target. A 64x change in
+#   buffer size moved nothing beyond run-to-run noise, even in the slow-consumer
+#   case that most favours a big buffer. Two sizing formulas (bandwidth x delay,
+#   then bandwidth x recv-stall) were both refuted by that table, so there is
+#   nothing here to tune -- just pick a small constant.
+#
+#   zstd level. On a slow link every level is far faster than the link, so the
+#   highest ratio wins; but measured across levels the ratio barely moves
+#   (1.293 -> 1.323 from -3 to -19, for 53x the CPU). Level choice is worth
+#   ~2%, compress-or-not is worth ~29%. Only the latter is decided here.
+#
+# Everything degrades to the caller's existing settings: an unwritable cache,
+# a failed probe, a missing snapshot, or a nonsensical measurement all leave
+# COMPRESSION untouched rather than failing the backup.
+
+TUNE_CACHE_TTL=$((7 * 24 * 3600))
+TUNE_PROBE_VERSION=1
+TUNE_SAMPLE_MB=64      # sample of a real `zfs send` stream used to measure ratio
+TUNE_MARGIN_PCT=5      # below this gain, not worth burning CPU
+
+# First writable persistent directory, or empty. NOT LOCKDIR: that is /var/run
+# (tmpfs, wiped on reboot) for root but a real on-disk directory for the
+# zfsbackup account, so a cache with a multi-day TTL would silently get two
+# different lifetimes depending on who ran the script.
+tune_cache_dir() {
+    local candidates=() d
+    if [ -n "${ZFS_SNAP_CACHE_DIR:-}" ]; then
+        candidates=("$ZFS_SNAP_CACHE_DIR")
+    else
+        [ "$(id -u)" -eq 0 ] && candidates+=("/var/lib/zfs-snap")
+        [ -n "${HOME:-}" ] && [ "$HOME" != "/" ] && candidates+=("$HOME/.cache/zfs-snap")
+    fi
+    for d in "${candidates[@]}"; do
+        mkdir -p "$d" 2>/dev/null || continue
+        [ -w "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 0
+}
+
+# Cache is keyed per HOST (one host = one VPN link, agreed with the operator),
+# not per dataset. The user@ part is stripped so root and zfsbackup share one
+# measurement of the same link.
+tune_cache_file() {
+    local host="$1" dir safe
+    dir=$(tune_cache_dir)
+    [ -n "$dir" ] || return 1
+    safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
+    printf '%s/linktune.%s_%s' "$dir" "$safe" "${PORT:-22}"
+}
+
+# Measures how fast this link moves incompressible bytes, in MB/s. Uses
+# /dev/urandom precisely BECAUSE it is incompressible -- compressible probe data
+# would measure the compressor instead of the link.
+tune_probe_link() {
+    local remote="$1" mb=32 t0 t1
+    t0=$(date +%s.%N)
+    dd if=/dev/urandom bs=1M count=$mb 2>/dev/null \
+        | ssh "${SSH_OPTS[@]}" "$remote" "cat > /dev/null" 2>/dev/null || return 1
+    t1=$(date +%s.%N)
+    awk -v a="$t0" -v b="$t1" -v mb="$mb" \
+        'BEGIN{d=b-a; if(d<=0){exit 1} printf "%.4f", mb/d}'
+}
+
+# Measures compression ratio and pipeline rate on a REAL `zfs send` stream from
+# the dataset being backed up -- never on synthetic data. Ratio is a property of
+# the DATA: the same host measured 2.34x on one dataset and 1.29x on another, so
+# a table of ratios would be fiction.
+#
+# Three passes, not two. The first is a discarded warm-up: without it the first
+# pass reads from disk and the second from ARC, so whichever runs second looks
+# faster regardless of what it measures. That artefact was observed live
+# (compressed pass "faster" than raw, which is arithmetically impossible).
+#
+# Streams throughout -- no temp files, so there is no way to fill a pool.
+#
+# Runs WHERE THE DATA IS. snapsend reads a local dataset, but snapget's source
+# is the remote host and its compressor runs there too (snapget.sh:383,
+# `ssh host "zfs send | $COMPRESS_PIPE"`), so probing locally would measure the
+# wrong machine's disk and CPU entirely. Pass $2 to probe the remote side.
+tune_probe_stream() {
+    local dataset="$1" remote="${2:-}" script out raw_b raw_t comp_b comp_t
+
+    # One self-contained snippet, run on whichever side owns the data, so the
+    # sample never crosses the network -- only the four numbers come back.
+    script='
+      snap=$(zfs list -t snapshot -H -o name -s creation '"'$dataset'"' 2>/dev/null | tail -1)
+      [ -n "$snap" ] || exit 1
+      H="zfs send '"'"'$snap'"'"' 2>/dev/null | head -c '"$((TUNE_SAMPLE_MB * 1048576))"'"
+      eval "$H | cat > /dev/null" || exit 1
+      t0=$(date +%s.%N); rb=$(eval "$H | wc -c") || exit 1; t1=$(date +%s.%N)
+      t2=$(date +%s.%N); cb=$(eval "$H | '"$COMPRESS_PIPE"' | wc -c") || exit 1; t3=$(date +%s.%N)
+      echo "$rb $t0 $t1 $cb $t2 $t3"
+    '
+    if [ -n "$remote" ]; then
+        out=$(ssh "${SSH_OPTS[@]}" "$remote" "$script" 2>/dev/null) || return 1
+    else
+        out=$(sh -c "$script" 2>/dev/null) || return 1
+    fi
+
+    local t0 t1 t2 t3
+    read -r raw_b t0 t1 comp_b t2 t3 <<< "$out"
+    [ -n "${t3:-}" ] || return 1
+    [ "${raw_b:-0}" -gt 0 ] && [ "${comp_b:-0}" -gt 0 ] || return 1
+    raw_t=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.4f", b-a}')
+    comp_t=$(awk -v a="$t2" -v b="$t3" 'BEGIN{printf "%.4f", b-a}')
+
+    awk -v rb="$raw_b" -v rt="$raw_t" -v cb="$comp_b" -v ct="$comp_t" 'BEGIN{
+        if (rt<=0 || ct<=0) exit 1
+        mb = rb/1048576
+        raw = mb/rt; comp = mb/ct
+        # Compression cannot make the source produce input bytes faster. If it
+        # looks that way the cache still skewed the runs -- refuse rather than
+        # cache a lie for a week.
+        if (comp > raw*1.05) exit 1
+        printf "%.4f %.4f %.4f", rb/cb, raw, comp
+    }'
+}
+
+# effective = min(what the pipeline can produce, what the link can carry).
+# Both sides in MB/s of UNCOMPRESSED data delivered, so they are comparable.
+tune_decide() {
+    local link="$1" ratio="$2" raw="$3" comp="$4"
+    awk -v l="$link" -v r="$ratio" -v raw="$raw" -v c="$comp" -v m="$TUNE_MARGIN_PCT" 'BEGIN{
+        plain = (raw < l ? raw : l)
+        wcomp = (c < l*r ? c : l*r)
+        if (plain <= 0) exit 1
+        gain = (wcomp/plain - 1) * 100
+        printf "%s %.1f", (gain > m ? "yes" : "no"), gain
+    }'
+}
+
+# Entry point. Sets COMPRESSION (and logs why). Never returns non-zero in a way
+# that could abort the caller -- every failure path just leaves settings alone.
+# $3 ("remote"/"local") says which side owns the DATA -- snapsend sends local
+# data to a remote host, snapget pulls remote data to a local target. The link
+# probe always targets the remote host either way; only the stream probe cares.
+tune_apply() {
+    local remote="$1" dataset="$2" data_side="${3:-local}"
+    # Deliberately a SEPARATE statement: inside one `local`, every word is
+    # expanded before any assignment happens, so `host="${remote#*@}"` on the
+    # line above would read an empty `remote` and yield "". That silently made
+    # the cache filename host-less, i.e. every host sharing one cache entry --
+    # a measurement of one link being applied to another.
+    local host="${remote#*@}"
+    local f now line cached_at cached_ver verdict gain link stream ratio raw comp stream_remote=""
+    [ "$data_side" = "remote" ] && stream_remote="$remote"
+
+    f=$(tune_cache_file "$host") || {
+        log 1 "Link tuning: no writable cache dir -- leaving compression settings as given"
+        return 0
+    }
+    now=$(date +%s)
+
+    # Name must stay in sync with the -A docs in both scripts; it is the only
+    # documented way to force a re-probe before the TTL expires.
+    if [ "${ZFS_SNAP_RETUNE:-0}" -ne 1 ] && [ -r "$f" ]; then
+        # shellcheck disable=SC1090
+        line=$(cat "$f" 2>/dev/null)
+        cached_at=$(printf '%s\n' "$line" | sed -n 's/.*measured_at=\([0-9]*\).*/\1/p')
+        verdict=$(printf '%s\n' "$line" | sed -n 's/.*compress=\([a-z]*\).*/\1/p')
+        # The probe version must match, not just be present. Bumping
+        # TUNE_PROBE_VERSION is how a change to HOW we measure invalidates
+        # verdicts produced by the old method -- without this check the version
+        # would be written and never read, and a stale verdict from a
+        # superseded probe would be trusted for its full TTL.
+        cached_ver=$(printf '%s\n' "$line" | sed -n 's/.*probe_version=\([0-9]*\).*/\1/p')
+        if [ -n "$cached_at" ] && [ -n "$verdict" ] \
+           && [ "$cached_ver" = "$TUNE_PROBE_VERSION" ] \
+           && [ $((now - cached_at)) -lt $TUNE_CACHE_TTL ] && [ $((now - cached_at)) -ge 0 ]; then
+            [ "$verdict" = "yes" ] && COMPRESSION=1 || COMPRESSION=0
+            log 2 "Link tuning: using cached verdict compress=$verdict for $host"
+            return 0
+        fi
+    fi
+
+    link=$(tune_probe_link "$remote") || {
+        log 1 "Link tuning: link probe failed -- leaving compression settings as given"
+        return 0
+    }
+    stream=$(tune_probe_stream "$dataset" "$stream_remote") || {
+        log 1 "Link tuning: stream probe failed or gave an implausible result -- leaving compression settings as given"
+        return 0
+    }
+    read -r ratio raw comp <<< "$stream"
+
+    read -r verdict gain <<< "$(tune_decide "$link" "$ratio" "$raw" "$comp")" || {
+        log 1 "Link tuning: could not evaluate -- leaving compression settings as given"
+        return 0
+    }
+
+    [ "$verdict" = "yes" ] && COMPRESSION=1 || COMPRESSION=0
+    log 1 "Link tuning: link=${link}MB/s ratio=${ratio} -> compress=${verdict} (gain ${gain}%)"
+
+    printf 'measured_at=%s probe_version=%s compress=%s link_mbps=%s ratio=%s dataset=%s\n' \
+        "$now" "$TUNE_PROBE_VERSION" "$verdict" "$link" "$ratio" "$dataset" \
+        > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+    return 0
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other.
