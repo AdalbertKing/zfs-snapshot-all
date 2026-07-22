@@ -374,6 +374,105 @@ run_get -e "$POOL/pullbm" "$SRCBASE"
 check "snapget bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
 check "snapget bookmark: local target keeps @a AND gains @c" "a c" "$(snaps_of "$POOL/pullbm")"
 
+# --- -w raw send -------------------------------------------------------------
+# A raw stream carries the SOURCE dataset's own properties, encryption included,
+# so `zfs recv` must create the leaf target itself. Every other mode pre-creates
+# it (with canmount=noauto), and a raw stream cannot land on a pre-created plain
+# dataset -- ZFS refuses with "zfs receive -F cannot be used to ... overwrite an
+# unencrypted one with an encrypted one". So -w takes a different creation path,
+# and these tests pin it.
+#
+# Behaviour verified directly against zfs-2.1.9 before implementing: for an
+# UNENCRYPTED source -w is effectively a no-op (raw and non-raw streams
+# interoperate freely both ways), and rawness only becomes load-bearing once the
+# source is encrypted.
+
+RAWKEY="$TMPD/rawkey.bin"
+dd if=/dev/urandom of="$RAWKEY" bs=32 count=1 status=none
+chmod 400 "$RAWKEY"
+mkenc() { zfs create -o encryption=on -o keyformat=raw -o keylocation="file://$RAWKEY" "$1"; }
+
+if mkenc "$POOL/enc" 2>/dev/null; then
+    zfs snapshot "$POOL/enc@auto_1"
+    run_send -w -e -m "auto_" "$POOL/enc" "$BK"
+    TE="$(tgt_of enc)"
+    check "-w: raw send of an encrypted dataset exits 0" "0" "$RC"
+    check "-w: ciphertext landed -- the target is itself encrypted" "aes-256-gcm" \
+          "$(zfs get -H -o value encryption "$TE" 2>/dev/null)"
+    # The whole point: the receiving side holds data it cannot read.
+    check "-w: the target's key is unavailable" "unavailable" \
+          "$(zfs get -H -o value keystatus "$TE" 2>/dev/null)"
+    check "-w: the target is unmounted, so -u is not needed" "no" \
+          "$(zfs get -H -o value mounted "$TE" 2>/dev/null)"
+    # recv created the leaf, so canmount=noauto is reapplied afterwards instead
+    # of at create time -- the property that makes non-root receive work.
+    check "-w: canmount=noauto is restored after a recv-created target" "noauto" \
+          "$(zfs get -H -o value canmount "$TE" 2>/dev/null)"
+
+    tick; zfs snapshot "$POOL/enc@auto_2"
+    run_send -w -e -m "auto_" "$POOL/enc" "$BK"
+    check "-w: raw incremental exits 0" "0" "$RC"
+    check "-w: incremental appended without rolling back history" "auto_1 auto_2" \
+          "$(snaps_of "$TE")"
+
+    # A non-raw send of an encrypted dataset needs the key loaded; a raw one does
+    # not. This is the case -w exists for, so pin both halves.
+    mkenc "$POOL/nokey"
+    zfs snapshot "$POOL/nokey@auto_1"
+    zfs unmount "$POOL/nokey" 2>/dev/null
+    zfs unload-key "$POOL/nokey" 2>/dev/null
+    run_send -e -m "auto_" "$POOL/nokey" "$BK"
+    check "no -w: encrypted source with the key unloaded fails" "1" "$RC"
+
+    # Deliberately a fresh dataset: the failed run above already pre-created its
+    # target as a plain dataset, which would make this test measure the raw/
+    # non-raw mismatch instead of the key-less raw send.
+    mkenc "$POOL/nokey2"
+    zfs snapshot "$POOL/nokey2@auto_1"
+    zfs unmount "$POOL/nokey2" 2>/dev/null
+    zfs unload-key "$POOL/nokey2" 2>/dev/null
+    run_send -w -e -m "auto_" "$POOL/nokey2" "$BK"
+    check "-w: encrypted source with the key unloaded succeeds" "0" "$RC"
+
+    # -w must stay harmless on the unencrypted datasets that make up all current
+    # production use -- adding the flag to a running job must not change anything.
+    zfs create -p "$POOL/rawplain" || exit 1
+    zfs snapshot "$POOL/rawplain@auto_1"
+    run_send -w -e -m "auto_" "$POOL/rawplain" "$BK"
+    check "-w on an unencrypted dataset still succeeds" "0" "$RC"
+    check "-w on an unencrypted dataset leaves the target unencrypted" "off" \
+          "$(zfs get -H -o value encryption "$(tgt_of rawplain)" 2>/dev/null)"
+
+    mkenc "$POOL/rawtree"
+    zfs create "$POOL/rawtree/child"
+    run_send -w -r -m "auto_" "$POOL/rawtree" "$BK"
+    check "-w -r: the child dataset landed on the target" "yes" \
+          "$(zfs list -H -o name "$(tgt_of rawtree)/child" >/dev/null 2>&1 && echo yes || echo no)"
+
+    # Same bookmark fallback as above, but on the raw path -- the -i base must
+    # still anchor a real incremental rather than collapsing to a full send.
+    mkenc "$POOL/rawbm"
+    zfs snapshot "$POOL/rawbm@a"
+    run_send -w -e "$POOL/rawbm" "$BK"
+    zfs destroy "$POOL/rawbm@a"
+    tick; zfs snapshot "$POOL/rawbm@c"
+    run_send -w -e "$POOL/rawbm" "$BK"
+    check "-w: bookmark fallback exits 0 with the common base gone" "0" "$RC"
+    check "-w: bookmark fallback stayed incremental (kept @a, gained @c)" "a c" \
+          "$(snaps_of "$(tgt_of rawbm)")"
+
+    # snapget mirror.
+    zfs create -o encryption=on -o keyformat=raw -o keylocation="file://$RAWKEY" \
+        "$SRCBASE/$POOL/rawpull"
+    zfs snapshot "$SRCBASE/$POOL/rawpull@auto_1"
+    run_get -w -e -m "auto_" "$POOL/rawpull" "$SRCBASE"
+    check "snapget -w: raw pull exits 0" "0" "$RC"
+    check "snapget -w: the local target is encrypted" "aes-256-gcm" \
+          "$(zfs get -H -o value encryption "$POOL/rawpull" 2>/dev/null)"
+else
+    echo "SKIP -w raw send tests: this ZFS build cannot create encrypted datasets"
+fi
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

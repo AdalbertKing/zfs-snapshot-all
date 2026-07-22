@@ -144,6 +144,23 @@ get_snapshot_guid() {
     [ -n "$guid" ] && echo "$guid"
 }
 
+# True when the dataset exists. Needed by the -w (raw send) path: raw streams
+# carry their own dataset properties, so the leaf target must be created by
+# `zfs recv` rather than pre-created by us -- which means "target missing" is a
+# normal first-send state there, not a failure, and has to be told apart from
+# a genuine lookup error.
+target_exists() {
+    local dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -o name '$dataset' >/dev/null 2>&1"
+    else
+        zfs list -H -o name "$dataset" >/dev/null 2>&1
+    fi
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other.

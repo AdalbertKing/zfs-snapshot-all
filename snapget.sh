@@ -18,6 +18,16 @@ set -o pipefail
 #   -I               Full history receive (receive all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
 #   -f               Force full pull (destroy local target data and receive full snapshot)
+#   -w               Raw send (zfs send -w on the REMOTE source): pull records
+#                    exactly as they sit on disk. For an ENCRYPTED source this
+#                    pulls ciphertext, so this host never needs the key -- and the
+#                    source does not need it loaded either (a non-raw send of an
+#                    encrypted dataset refuses with "dataset key must be loaded").
+#                    A raw-received target comes up keystatus=unavailable and
+#                    mounted=no; no -u needed. For an UNENCRYPTED source -w is
+#                    effectively a no-op: verified on zfs-2.1.9 that raw and
+#                    non-raw streams interoperate freely in both directions there.
+#                    Rawness must NOT change mid-stream on an encrypted target.
 #   -p <PORT>         SSH port to use (default: 22)
 #   -k <FILE>         Verify remote host keys against this known_hosts file instead
 #                     of blindly trusting them (StrictHostKeyChecking=no is the
@@ -35,7 +45,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.25'
+VERSION='v2.26'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -49,6 +59,7 @@ DRY_RUN=0
 FULL_HISTORY_SEND=0
 UNMOUNT=0
 FORCE_FULL_SEND=0
+RAW_SEND=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 KNOWN_HOSTS_FILE=""
@@ -258,7 +269,15 @@ find_common_snapshot() {
     local src_snaps
     src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
 
+    # A target that does not exist has no snapshots and therefore no common
+    # base -- "null", not an error. This is reachable under -w, where the leaf
+    # is created by recv rather than pre-created, so the first pull legitimately
+    # runs against a target that is not there yet.
     local tgt_snaps
+    if ! target_exists "$tgt_dataset"; then
+        echo -n "null"
+        return 0
+    fi
     tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1
 
     for ((i=${#src_snaps[@]}-1; i>=0; i--)); do
@@ -475,7 +494,19 @@ process_dataset() {
         # permission (zfs allow) in addition to create/mount/receive -- it is
         # NOT bundled into the 'create' permission despite being set at
         # create time. Confirmed live: "permission denied" without it.
-        zfs list "$tgt_dataset" >/dev/null 2>&1 || zfs create -p -o canmount=noauto "$tgt_dataset" || return 1
+        #
+        # EXCEPTION for -w: a raw stream carries the source dataset's own
+        # properties, encryption included, so `zfs recv` has to CREATE the leaf
+        # itself. Pre-creating it here makes it a plain unencrypted dataset and
+        # ZFS then refuses the stream outright:
+        #   "zfs receive -F cannot be used to destroy an encrypted filesystem
+        #    or overwrite an unencrypted one with an encrypted one"
+        # So under -w only the PARENT is ensured (ancestors must exist for a
+        # non-root receive) and the leaf is left to recv. canmount=noauto is
+        # reapplied after a successful transfer instead of at create time.
+        local create_target="$tgt_dataset"
+        [ $RAW_SEND -eq 1 ] && create_target="${tgt_dataset%/*}"
+        zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=noauto "$create_target" || return 1
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
@@ -502,8 +533,20 @@ process_dataset() {
         }
     fi
 
+    # Under -w the leaf target is deliberately NOT pre-created (recv builds it
+    # from the raw stream), so on a first pull it does not exist yet and
+    # get_sorted_snapshots fails -- `zfs list` on a missing dataset exits 1 and
+    # pipefail propagates it. That is not an error here, it is the first-pull
+    # case: a target that does not exist simply has no snapshots. Every other
+    # mode still pre-creates the target, so a failure there remains a real one
+    # and is still reported. Target is always local in snapget.sh.
     local tgt_snaps
-    tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1
+    if [ $RAW_SEND -eq 1 ] && ! target_exists "$tgt_dataset"; then
+        log 2 "Target does not exist yet -- raw receive will create it"
+        tgt_snaps=()
+    else
+        tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1
+    fi
 
     log 3 "LATEST SOURCE SNAPSHOT: ${snapshot}"
     log 3 "EXISTING TARGET SNAPSHOTS:"
@@ -533,6 +576,17 @@ process_dataset() {
     local recursive_send_flag=""
     [ $RECURSIVE -eq 1 ] && recursive_send_flag="-R"
 
+    # -w rides along on every send path below EXCEPT the resume path above:
+    # `zfs send -t <token>` already encodes rawness in the token, and passing -w
+    # on top of it does not just error, it aborts (SIGABRT / rc=134,
+    # "internal error: Invalid argument" on zfs-2.1.9). Verified, not assumed.
+    #
+    # send_cmd is interpolated into the remote ssh command string (and only
+    # word-split locally), so an empty flag var collapses harmlessly either way --
+    # same reason recursive_send_flag can be empty.
+    local raw_send_flag=""
+    [ $RAW_SEND -eq 1 ] && raw_send_flag="-w"
+
     local bookmark_base=""
     if [[ "$common_snapshot" == "null" ]] && [ $RECURSIVE -ne 1 ]; then
         # No common snapshot survives on either end -- before giving up to a
@@ -549,17 +603,17 @@ process_dataset() {
 
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
-        send_cmd="zfs send $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
+        send_cmd="zfs send $raw_send_flag $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
-        send_cmd="zfs send -i $bookmark_base $snapshot"
+        send_cmd="zfs send $raw_send_flag -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
             log 1 "Performing full history pull"
-            send_cmd="zfs send $recursive_send_flag -R $snapshot"
+            send_cmd="zfs send $raw_send_flag $recursive_send_flag -R $snapshot"
         else
             log 1 "Performing standard full pull"
-            send_cmd="zfs send $recursive_send_flag $snapshot"
+            send_cmd="zfs send $raw_send_flag $recursive_send_flag $snapshot"
         fi
     fi
 
@@ -580,6 +634,17 @@ process_dataset() {
         return 1
     }
 
+    # Under -w the leaf was created by recv, not by us, so it never got
+    # canmount=noauto at create time. Reapply it now: it is what keeps the
+    # target unmounted across future receives and makes non-root incremental
+    # receive possible. Best-effort -- an encrypted target is already unmounted
+    # (keystatus=unavailable), so failing here costs nothing immediate. Target
+    # is always local in snapget.sh.
+    if [ $RAW_SEND -eq 1 ]; then
+        zfs set canmount=noauto "$tgt_dataset" 2>/dev/null \
+            || log 2 "Could not set canmount=noauto on $tgt_dataset (needs delegated 'canmount')"
+    fi
+
     # Refresh the per-target bookmark to what was just sent, regardless of
     # which path got us here (-I, -i bookmark, or FULL) -- see
     # record_send_bookmark in lib-zfs-snap.sh. Source may be remote here.
@@ -598,7 +663,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezl:v:rnIufVp:k:" opt; do
+while getopts "m:ezl:v:rnIufwVp:k:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
@@ -610,12 +675,13 @@ while getopts "m:ezl:v:rnIufVp:k:" opt; do
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
         f) FORCE_FULL_SEND=1;;
+        w) RAW_SEND=1;;
         p) PORT="$OPTARG";;
         k) KNOWN_HOSTS_FILE="$OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -p -k -V" >&2
+            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -w -p -k -V" >&2
             exit 1
             ;;
     esac
