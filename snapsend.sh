@@ -94,9 +94,14 @@ set -o pipefail
 #                    instead of crash-consistent. MODE is one of:
 #                      no    (default) do nothing
 #                      agent qemu-guest-agent fsfreeze -- VMs
-#                      fs    host-side `fsfreeze -f` on the mountpoint -- containers,
-#                            which have no guest agent but whose subvol dataset is
-#                            mounted on the host
+#                      sync  `pct exec <id> -- sync` -- containers. A FLUSH, not a
+#                            freeze: containers have no guest agent, and ZFS does
+#                            not implement FIFREEZE, so no ZFS mountpoint can be
+#                            frozen from the host either (measured on pve0, on a
+#                            live subvol and on a fresh empty dataset alike).
+#                            Writes are never blocked, so this is strictly weaker
+#                            than the VM path -- it flushes what the container has
+#                            buffered, and nothing more.
 #                      auto  pick per guest from its type
 #
 #                    The dataset-to-guest mapping is the Proxmox naming
@@ -142,7 +147,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.37'
+VERSION='v2.38'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -883,8 +888,9 @@ done
 shift $((OPTIND-1))
 
 case "$QUIESCE" in
-    no|agent|fs|auto) ;;
-    *) echo "Error: -q '$QUIESCE' -- expected no, agent, fs or auto." >&2; exit 1 ;;
+    no|agent|sync|auto) ;;
+    fs) echo "Error: -q fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host (measured). Use -q sync for containers, which flushes them instead." >&2; exit 1 ;;
+    *) echo "Error: -q '$QUIESCE' -- expected no, agent, sync or auto." >&2; exit 1 ;;
 esac
 
 [ $# -ge 1 ] || { echo "U�ycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }

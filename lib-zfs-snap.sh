@@ -694,15 +694,24 @@ compressed_send_flag() {
 # Quiescing asks the guest to flush and hold still first. Two mechanisms, because
 # Proxmox has two kinds of guest:
 #
-#   qemu (VM)  -- `qm guest cmd <id> fsfreeze-freeze`. Runs INSIDE the guest via
+#   qemu (VM)  -- a real freeze. `qm guest cmd <id> fsfreeze-freeze` runs INSIDE the guest via
 #                 qemu-guest-agent, which also runs /etc/qemu/fsfreeze-hook --
 #                 that is where a database's own quiesce belongs (MySQL FLUSH
 #                 TABLES WITH READ LOCK, Postgres backup mode). Without such a
 #                 hook this flushes the guest's page cache and freezes its
 #                 filesystems: filesystem-consistent, not application-consistent.
-#   lxc  (CT)  -- containers share the host kernel and `pct` has no fsfreeze, but
-#                 their subvol dataset IS mounted on the host, so the host can
-#                 freeze it directly with `fsfreeze -f <mountpoint>`.
+#   lxc  (CT)  -- CANNOT BE FROZEN AT ALL on this stack. Containers have no
+#                 guest agent, and freezing their dataset from the host does not
+#                 work either: ZFS does not implement the FIFREEZE ioctl, so
+#                 `fsfreeze -f` on any ZFS mountpoint returns "Operation not
+#                 supported" -- measured on pve0 against a live container subvol
+#                 AND against a freshly created empty dataset, so it is ZFS-wide,
+#                 not a property of one filesystem. The best available is a FLUSH:
+#                 `pct exec <id> -- sync` pushes the container's dirty pages into
+#                 ZFS before the snapshot. That is strictly weaker than a freeze
+#                 -- writes are never blocked, so a write landing between the sync
+#                 and the snapshot is still caught mid-flight -- and it is named
+#                 `sync` rather than `fs` so nobody reads it as a freeze.
 #
 # THE FREEZE WINDOW MUST CONTAIN ONLY `zfs snapshot`. A frozen filesystem blocks
 # writes, so a guest stays stalled for as long as the window is open. Taking the
@@ -714,9 +723,11 @@ compressed_send_flag() {
 # quiesce_freeze registers what it froze and quiesce_thaw_all is wired to an EXIT
 # trap by the caller -- it runs on success, on failure, and on Ctrl-C.
 
-# What is currently frozen, so the thaw is exact rather than a guess:
-# "qemu:<id>" or "fs:<mountpoint>".
+# What is currently frozen, so the thaw is exact rather than a guess. Only VMs
+# ever appear here: the container path flushes and returns, holding nothing.
 declare -a QUIESCE_FROZEN=()
+# Containers flushed in this run, so a guest with several disks is flushed once.
+declare -a QUIESCE_SYNCED=()
 
 # Proxmox names guest disks vm-<id>-disk-N (VM) and subvol-<id>-disk-N (CT).
 # That convention IS the dataset-to-guest mapping -- there is no property to ask.
@@ -765,8 +776,8 @@ quiesce_freeze() {
     # An explicit mode that does not fit this guest is a config mistake worth
     # saying out loud, but still not worth failing a backup over.
     case "$mode/$kind" in
-        agent/lxc) log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=fs or auto"; return 0 ;;
-        fs/qemu)   log 1 "Quiesce: guest $id is a VM, whose filesystems live inside the guest and cannot be frozen from the host -- use quiesce=agent or auto"; return 0 ;;
+        agent/lxc)  log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=sync or auto"; return 0 ;;
+        sync/qemu)  log 1 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here -- use quiesce=agent or auto"; return 0 ;;
     esac
 
     case "$kind" in
@@ -784,16 +795,19 @@ quiesce_freeze() {
             fi
             ;;
         lxc)
-            mnt=$(zfs get -H -o value mountpoint "$ds" 2>/dev/null)
-            [ -n "$mnt" ] && [ "$mnt" != "none" ] && [ "$mnt" != "-" ] && [ -d "$mnt" ] || {
-                log 1 "Quiesce: container $id disk '$ds' has no usable mountpoint on this host -- snapshot will be crash-consistent"
-                return 0
-            }
-            if fsfreeze -f "$mnt" 2>/dev/null; then
-                QUIESCE_FROZEN+=("fs:$mnt")
-                log 1 "Quiesce: froze container $id filesystem at $mnt"
+            # A flush, not a freeze -- nothing is registered for thawing because
+            # nothing is held. Deliberately still done once per guest rather than
+            # once per dataset: `sync` inside the container flushes ALL of its
+            # filesystems, so calling it again for its second disk would only
+            # widen the gap between the flush and the snapshot.
+            case " ${QUIESCE_SYNCED[*]} " in
+                *" $id "*) log 3 "Quiesce: container $id already flushed in this run"; return 0 ;;
+            esac
+            if pct exec "$id" -- sync >/dev/null 2>&1; then
+                QUIESCE_SYNCED+=("$id")
+                log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
-                log 1 "Quiesce: fsfreeze -f failed on $mnt -- snapshot will be crash-consistent"
+                log 1 "Quiesce: 'pct exec $id -- sync' failed -- snapshot will be crash-consistent"
             fi
             ;;
     esac
@@ -816,16 +830,10 @@ quiesce_thaw_all() {
                     log 0 "Quiesce: FAILED TO THAW VM ${entry#qemu:} -- that guest is still frozen and needs manual 'qm guest cmd ${entry#qemu:} fsfreeze-thaw'"
                 fi
                 ;;
-            fs:*)
-                if fsfreeze -u "${entry#fs:}" 2>/dev/null; then
-                    log 1 "Quiesce: thawed ${entry#fs:}"
-                else
-                    log 0 "Quiesce: FAILED TO THAW ${entry#fs:} -- that filesystem is still frozen and needs manual 'fsfreeze -u ${entry#fs:}'"
-                fi
-                ;;
         esac
     done
     QUIESCE_FROZEN=()
+    QUIESCE_SYNCED=()
 }
 
 # Short, stable per-target suffix for bookmark names -- lets one source

@@ -49,7 +49,7 @@ set -o pipefail
 #       flags_<tier> = <per-tier flags override>
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
-#       quiesce      = no|agent|fs|auto    # default no; freeze the Proxmox guest
+#       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
 #                                          # that owns this dataset before
 #                                          # snapshotting it (snapsend.sh -q)
 #       ...any template field can be overridden here (dst, send_schedule,
@@ -134,7 +134,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.10'
+VERSION='v4.11'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -256,8 +256,9 @@ maybe_add_autotune() {
 lint_quiesce() {
     local want="$1" ctx="$2"
     case "$want" in
-        ""|no|agent|fs|auto) return 0 ;;
-        *) die "$ctx: quiesce='$want' -- expected no, agent, fs or auto" ;;
+        ""|no|agent|sync|auto) return 0 ;;
+        fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;
+        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto" ;;
     esac
 }
 
