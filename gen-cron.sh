@@ -66,6 +66,26 @@ set -o pipefail
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
 #
+#   [prune-bookmarks:<scope>]             # standalone prune of ORPHANED bookmarks
+#       schedule     = <5-field cron>      # required
+#       age          = <raw delsnaps.sh age flags>  # e.g. "-d30"; required, age-only
+#                                          # (count-based makes no sense for bookmarks)
+#       pattern      = <bookmark name prefix>  # default "tgt-" -- what
+#                                          # record_send_bookmark (lib-zfs-snap.sh) names
+#                                          # its own bookmarks; override only if you know why
+#       recursive    = yes|no              # default no; yes -> delsnaps.sh -B -R
+#       notify       = <short label>
+#     snapsend.sh/snapget.sh refresh a per-target bookmark on every successful
+#     transfer, but nothing removes one for a target that stops being used --
+#     this is that cleanup. No tiers/templates: bookmark pruning is a single
+#     age-threshold operation on SOURCE datasets, unrelated to any send/prune
+#     tier's own schedule. Pick 'age' well past the longest real backup gap you
+#     expect, or an offline/paused job's still-live bookmark gets pruned too
+#     early. Not monitored by check-snap-age.sh (that tool watches snapshot
+#     staleness, not bookmarks) and not cross-checked against snapshot prune
+#     patterns (different ZFS object type, same-scope overlap is not a hazard
+#     the way it is between two snapshot-prune rules).
+#
 # There is no separate [monitor:] section. A staleness check (check-snap-age.sh)
 # is derived AUTOMATICALLY, per tier, wherever a 'pattern' already resolves for
 # pruning -- i.e. every inline [dataset:] self-prune and every [prune:<scope>]
@@ -89,7 +109,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.5'
+VERSION='v4.6'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -134,10 +154,11 @@ Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
   -h          Print this help
 
 Section types (header split on first ':'):
-  [defaults]           host_label, optional dst
-  [template:<tier>]    a tier's cadence + retention policy
-  [dataset:<path>]     owned dataset: create+send + inline self-prune (own path)
-  [prune:<scope>]      standalone additive prune (recursive=/clear_cut= opt-in)
+  [defaults]              host_label, optional dst
+  [template:<tier>]       a tier's cadence + retention policy
+  [dataset:<path>]        owned dataset: create+send + inline self-prune (own path)
+  [prune:<scope>]         standalone additive prune (recursive=/clear_cut= opt-in)
+  [prune-bookmarks:<scope>]  age-based cleanup of orphaned snapsend/snapget bookmarks
 
 Staleness monitoring (check-snap-age.sh) is NOT a section type -- set
 monitor_warn/monitor_crit on a [template:] and it rides every [dataset:]/
@@ -192,8 +213,8 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune) : ;;
-                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune)" ;;
+                    template|dataset|prune|prune-bookmarks) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
             fi
@@ -341,6 +362,7 @@ build_entities() {
     declare -ga SEND_ENTITIES=()
     declare -ga INLINE_PRUNE_ENTITIES=()
     declare -ga PRUNE_SEC_ENTITIES=()
+    declare -ga BOOKMARK_PRUNE_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
@@ -351,8 +373,9 @@ build_entities() {
 
         case "$kind" in
             defaults|template) continue ;;
-            dataset) build_dataset "$section" "$name" "$host_label" ;;
-            prune)   build_prune_section "$section" "$name" "$host_label" ;;
+            dataset)         build_dataset "$section" "$name" "$host_label" ;;
+            prune)            build_prune_section "$section" "$name" "$host_label" ;;
+            prune-bookmarks)  build_bookmark_prune_section "$section" "$name" "$host_label" ;;
         esac
     done
 }
@@ -466,6 +489,40 @@ build_prune_section() {
         fi
     done
 }
+
+# build_bookmark_prune_section SECTION_HEADER SCOPE HOST_LABEL
+# No templates/tiers: bookmark pruning is one age-threshold operation per
+# scope, unrelated to any send/prune tier's own cadence. Reads fields
+# directly off the section (ini_has/ini_get), not through resolve_field's
+# dataset/template/defaults layering -- there is no layering to do here.
+build_bookmark_prune_section() {
+    local sec="$1" scope="$2" host_label="$3"
+
+    ini_has "$sec" schedule || die "[prune-bookmarks:$scope] has no 'schedule'"
+    local schedule
+    schedule="$(ini_get "$sec" schedule)"
+
+    ini_has "$sec" age || die "[prune-bookmarks:$scope] has no 'age' (raw delsnaps.sh age flags, e.g. \"-d30\")"
+    local age
+    age="$(ini_get "$sec" age)"
+    local tok
+    for tok in $age; do
+        [ "$tok" = "-n" ] && die "[prune-bookmarks:$scope]: 'age' contains -n (dry-run) -- never actually prunes anything as a recurring job"
+    done
+
+    local pattern
+    if ini_has "$sec" pattern; then pattern="$(ini_get "$sec" pattern)"; else pattern="tgt-"; fi
+
+    local rec_raw recursive
+    rec_raw="$(resolve_field recursive "$sec" "" "")" || rec_raw="no"
+    [ "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && recursive=1 || recursive=0
+
+    local label notify
+    label="$(resolve_field notify "$sec" "" "")" || label=""
+    notify="$(notify_text "$host_label" "bookmarks" "prune" "$label")"
+
+    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}")
+}
 ###############################################################################
 #END 3.5
 
@@ -512,6 +569,20 @@ group_monitor() {
         key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
+    done
+}
+
+# Bookmark-prune groups by (schedule, pattern, age, recursive): identical
+# cleanup rule -> one delsnaps.sh -B line listing the scopes by full path.
+group_bookmark_prune() {
+    declare -gA BOOKMARK_PRUNE_GROUPS=()
+    declare -ga BOOKMARK_PRUNE_GROUP_ORDER=()
+    local e scope pattern age schedule notify recursive key
+    for e in "${BOOKMARK_PRUNE_ENTITIES[@]}"; do
+        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "$e"
+        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}"
+        [ -z "${BOOKMARK_PRUNE_GROUPS[$key]+x}" ] && BOOKMARK_PRUNE_GROUP_ORDER+=("$key")
+        BOOKMARK_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
 }
 ###############################################################################
@@ -702,6 +773,34 @@ emit_monitor() {
         MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; rc=\$?; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\"; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\"")
     done
 }
+
+# Bookmark prune: one delsnaps.sh -B line per (schedule,pattern,age,recursive)
+# group, listing every member scope BY FULL PATH. Not monitored (check-snap-
+# age.sh watches snapshot staleness, not bookmarks) and not part of the
+# same-scope pattern-overlap check (different ZFS object type than snapshots).
+emit_bookmark_prune() {
+    local key list scope pattern age schedule notify recursive
+    for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
+        list="${BOOKMARK_PRUNE_GROUPS[$key]}"
+        local -a members=()
+        IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "${members[0]}"
+
+        local -a targets=()
+        local m mscope mpat mage msch mnot mrec
+        for m in "${members[@]}"; do
+            IFS="$SEP" read -r mscope mpat mage msch mnot mrec <<< "$m"
+            targets+=("$mscope")
+        done
+        local joined
+        joined="$(IFS=,; printf '%s' "${targets[*]}")"
+
+        local flag=""
+        [ "$recursive" = "1" ] && flag="-R "
+        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}\"$joined\" \"$pattern\" $age"
+        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+    done
+}
 ###############################################################################
 #END 3.8
 
@@ -836,11 +935,13 @@ parse_ini "$CONFIG"
 build_entities
 group_send
 group_inline_prune
+group_bookmark_prune
 group_monitor
 validate_retain_patterns
 emit_send
 emit_inline_prune
 emit_prune_sections
+emit_bookmark_prune
 emit_monitor
 
 [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || die "no send/prune rules resolved from $CONFIG"
