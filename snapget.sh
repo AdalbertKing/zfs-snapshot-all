@@ -88,7 +88,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.29'
+VERSION='v2.30'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -101,7 +101,24 @@ COMPRESSOR="zstd"
 COMPRESSION_LEVEL=6
 COMPRESSION_LEVEL_SET=0
 BUFFER_SIZE="128k"
-MEMORY="1G"
+# 16M, not the 1G this used to be. Measured 2026-07-22 against a real `zfs recv`
+# -- 14 runs of 2 GB, both transfer paths, including the slow-consumer case that
+# most favours a big buffer:
+#
+#   remote, SSD target:  16M 109.9 | 128M 109.3 | 1G 109.8 MB/s
+#   remote, HDD target:  16M 89.3/86.6          | 1G 78.3/88.8
+#   local,  HDD target:  16M 119.7/108.1/107.9/87.4 | 1G 100.3/117.0/117.6/88.5
+#
+# A 64x change moves nothing outside run-to-run noise -- and that noise (88 to
+# 120 MB/s for one unchanged setting) is far larger than any gap between
+# settings. So the old 1G bought no throughput; it just reserved memory that on
+# these hosts belongs to the VMs.
+#
+# mbuffer's job is absorbing consumer stalls (a `zfs recv` txg commit), not
+# holding the TCP window -- that is the kernel's, and bandwidth-delay product
+# for these links is tens of KB. Two sizing formulas built on those ideas were
+# tried and both were refuted by the table above, hence a flat constant.
+MEMORY="16M"
 PORT=22
 USE_EXISTING_SNAPSHOT=0
 RECURSIVE=0
