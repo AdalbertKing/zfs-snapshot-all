@@ -84,6 +84,15 @@ set -o pipefail
 #                    An explicit -z/-Z/-g WINS: -A stands down and honours it.
 #   -V               Print version and exit
 #
+# COMPRESSED SEND is automatic (`zfs send -c`) and needs no flag: records are
+# sent as they already sit on disk, instead of being decompressed to build the
+# stream and recompressed on receive. Measured on real production snapshots
+# 2026-07-22: streams 18-56% smaller (342 GB -> 249 GB on one VM disk). Unlike
+# -z it costs no CPU -- it removes work rather than adding it -- so it applies to
+# LOCAL transfers too. Skipped automatically when the target pool cannot take the
+# stream (needs feature@lz4_compress at all, plus feature@zstd_compress for
+# zstd-compressed records); set ZFS_SNAP_NO_COMPRESSED_SEND=1 to force plain.
+#
 # REMOTE format: [user@]host:dataset_path  (source side for pull replication).
 # If REMOTE is omitted or has no ':', the operation is done locally from source path.
 #
@@ -93,7 +102,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.33'
+VERSION='v2.34'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -691,6 +700,14 @@ process_dataset() {
     local raw_send_flag=""
     [ $RAW_SEND -eq 1 ] && raw_send_flag="-w"
 
+    # Mirrors snapsend.sh, with the sides swapped: here the SOURCE is remote and
+    # the TARGET pool is local, so the arguments are the other way round. Getting
+    # them backwards would ask the wrong machine about its pool and show up only
+    # as an unexplained fallback to plain sends.
+    local comp_send_flag
+    comp_send_flag=$(compressed_send_flag "$src_dataset" "$tgt_dataset" ""                         "${remote_host:+${remote_user}@${remote_host}}")
+    [ -n "$comp_send_flag" ] && log 3 "Compressed send: using zfs send -c"
+
     local bookmark_base=""
     if [[ "$common_snapshot" == "null" ]] && [ $RECURSIVE -ne 1 ]; then
         # No common snapshot survives on either end -- before giving up to a
@@ -707,17 +724,17 @@ process_dataset() {
 
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
-        send_cmd="zfs send $raw_send_flag $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
-        send_cmd="zfs send $raw_send_flag -i $bookmark_base $snapshot"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
             log 1 "Performing full history pull"
-            send_cmd="zfs send $raw_send_flag $recursive_send_flag -R $snapshot"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag -R $snapshot"
         else
             log 1 "Performing standard full pull"
-            send_cmd="zfs send $raw_send_flag $recursive_send_flag $snapshot"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $snapshot"
         fi
     fi
 

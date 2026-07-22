@@ -579,6 +579,110 @@ tune_apply() {
     return 0
 }
 
+###############################################################################
+# COMPRESSED SEND (zfs send -c)
+###############################################################################
+# Sends records as they already sit on disk instead of decompressing them to
+# build the stream and recompressing them on receive. Measured 2026-07-22 with
+# `zfs send -nP` against real production snapshots on pve0:
+#
+#   hdd/data/vm-101-disk-0             6.6 GB -> 5.5 GB   (-18%)
+#   rpool/data/vm-100-disk-0         342.2 GB -> 249.1 GB (-27%)
+#   hdd/lxc/subvol-102-disk-0          1.1 GB -> 0.6 GB   (-47%)
+#   hdd/backups/pve1/rpool/ROOT/pve-1  4.0 GB -> 1.7 GB   (-56%)
+#
+# Unlike -z this is not a trade: there is no compressor in the pipe, so it costs
+# no CPU -- it SAVES the decompress/recompress that a plain send pays on both
+# ends. That is why it applies to local transfers too, where -z is dropped.
+#
+# On by default because of those numbers, and because probing on zfs-2.1.9 found
+# no interaction to be careful about:
+#   full / -I incremental / -R recursive / -w raw / compression=off source  all OK
+#   resume tokens are INDIFFERENT to it -- a token from a -c send resumes with or
+#     without -c, and a token from a plain send resumes with -c. (Note how much
+#     kinder that is than -w, where adding the flag to a resume aborts with
+#     SIGABRT -- see the comment in process_dataset.)
+#   a target already fed PLAIN streams accepts a -c incremental, and a target fed
+#     -c accepts a plain incremental again, so switching is reversible mid-history
+#
+# The ONE hazard is the receiving pool. Probed exactly:
+#
+#   target features        source compression=off | lz4 | zstd
+#   none (zpool create -d)          fail    fail    fail
+#   lz4_compress only                ok      ok     fail
+#
+# So lz4_compress is required for a compressed stream AT ALL, even from an
+# uncompressed dataset -- the stream FORMAT is what is gated, not the payload --
+# and zstd-compressed records additionally need zstd_compress. Failure is not
+# subtle ("pool must be upgraded to receive this stream") but it happens at recv
+# time, i.e. after the send has started, so it is checked up front instead.
+#
+# Set ZFS_SNAP_NO_COMPRESSED_SEND=1 to force plain sends. Deliberately an env var
+# rather than a flag: the guard below already handles the only known failure, so
+# a CLI flag would be one more thing to thread through gen-cron configs for a
+# case that should not arise.
+
+# Cache per (pool, remote) -- one zpool query per run, not per dataset.
+declare -A CSEND_POOL_CACHE=()
+
+# "enabled" and "active" both mean the pool can take it; "disabled" cannot.
+csend_pool_has() {
+    local pool="$1" feature="$2" remote="$3" key="$pool/$feature/$remote" val
+    if [ -n "${CSEND_POOL_CACHE[$key]+x}" ]; then
+        printf '%s' "${CSEND_POOL_CACHE[$key]}"
+        return 0
+    fi
+    if [ -n "$remote" ]; then
+        val=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool get -H -o value feature@$feature '$pool'" 2>/dev/null)
+    else
+        val=$(zpool get -H -o value "feature@$feature" "$pool" 2>/dev/null)
+    fi
+    case "$val" in
+        enabled|active) val=yes ;;
+        *)              val=no  ;;   # disabled, absent, or the query failed
+    esac
+    CSEND_POOL_CACHE["$key"]="$val"
+    printf '%s' "$val"
+}
+
+# Echoes "-c" when a compressed send is safe for this transfer, nothing
+# otherwise. Never fails the caller: an unanswerable question (query error,
+# unreadable property) resolves to a plain send, which always works.
+#
+# BOTH sides are parameters because the two scripts are mirror images --
+# snapsend reads a local dataset and writes to a possibly-remote pool, snapget
+# reads a remote dataset and writes locally. Passing the wrong one asks the wrong
+# machine about its pool, which is the sort of mistake that only shows up as an
+# unexplained fallback to plain sends.
+compressed_send_flag() {
+    local src_dataset="$1" tgt_dataset="$2" tgt_remote="${3:-}" src_remote="${4:-}" pool comp
+    [ "${ZFS_SNAP_NO_COMPRESSED_SEND:-0}" -ne 1 ] || return 0
+
+    pool="${tgt_dataset%%/*}"
+    [ -n "$pool" ] || return 0
+
+    [ "$(csend_pool_has "$pool" lz4_compress "$tgt_remote")" = "yes" ] || {
+        log 2 "Compressed send unavailable: target pool '$pool' lacks feature@lz4_compress"
+        return 0
+    }
+
+    if [ -n "$src_remote" ]; then
+        comp=$(ssh "${SSH_OPTS[@]}" "$src_remote" "zfs get -H -o value compression '$src_dataset'" 2>/dev/null)
+    else
+        comp=$(zfs get -H -o value compression "$src_dataset" 2>/dev/null)
+    fi
+    case "$comp" in
+        zstd*)
+            [ "$(csend_pool_has "$pool" zstd_compress "$tgt_remote")" = "yes" ] || {
+                log 2 "Compressed send unavailable: '$src_dataset' uses $comp but target pool '$pool' lacks feature@zstd_compress"
+                return 0
+            }
+            ;;
+    esac
+
+    printf '%s' "-c"
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other.
