@@ -99,6 +99,10 @@ set -o pipefail
 # time: -f in a standing cron job means destroy-and-reseed the target every run,
 # -n never actually sends anything -- neither makes sense as a recurring job.
 #
+# flags="-z"/"-Z"/"-g" on a LOCAL dst produce a WARNING on stderr (never fatal).
+# snapsend v2.32+ drops compression when both ends are the same host, so the flag
+# is dead weight that misdescribes the job. stdout stays clean either way.
+#
 # -A (link auto-tuning) is ADDED automatically to every send whose resolved 'dst'
 # is remote, i.e. contains ':' -- the same test snapsend.sh itself uses to decide
 # whether to open an ssh connection. It measures the link and the data, then
@@ -121,7 +125,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.8'
+VERSION='v4.9'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -152,6 +156,9 @@ declare -A TIER_LETTER=( [hourly]=H [daily]=D [weekly]=W [monthly]=M [yearly]=Y 
 #BEGIN 2 [HELPERS]
 ###############################################################################
 die() { echo "gen-cron.sh: error: $*" >&2; exit 1; }
+# stderr, never stdout: stdout IS the crontab block, and `gen-cron.sh > file` or
+# --install must not have a diagnostic land inside it.
+warn() { echo "gen-cron.sh: warning: $*" >&2; }
 
 usage() {
     cat <<'EOF'
@@ -231,13 +238,34 @@ maybe_add_autotune() {
     if [ -n "$flags" ]; then printf '%s -A' "$flags"; else printf -- '-A'; fi
 }
 
-# Rejects flags that never make sense in a standing/recurring cron job.
+# Rejects flags that never make sense in a standing/recurring cron job, and
+# warns about ones that are merely dead.
+#
+# -z/-Z/-g on a LOCAL target is a warning, not an error: since snapsend v2.32 the
+# script drops compression there anyway (the pipeline would be
+# `zfs send | zstd -c | mbuffer | zstd -d -c | zfs recv` -- both ends paid for,
+# with only an in-memory pipe between them), so the flag costs nothing but says
+# something untrue about the job. Deliberately NOT fatal: it is harmless at
+# runtime, and a regeneration that suddenly refuses to produce a crontab is worse
+# than one that produces a correct crontab and tells you to tidy the config.
 lint_flags() {
-    local flags="$1" ctx="$2" tok
+    local flags="$1" ctx="$2" dst="${3:-}" tok
     for tok in $flags; do
         case "$tok" in
             -f) die "$ctx: flag -f (force full send) not allowed in a recurring job -- it would destroy and re-seed the target every run" ;;
             -n) die "$ctx: flag -n (dry-run) not allowed in a recurring job -- it never actually sends anything" ;;
+            -z|-Z|-g)
+                # Three cases, not two. An EMPTY dst is not "a local target" --
+                # it means no target at all: snapsend gets one argument, creates
+                # a snapshot and transfers nothing. Saying "dst '' is local"
+                # there would be literally untrue and would send someone looking
+                # for a target that was never configured.
+                case "$dst" in
+                    *:*) ;;   # remote -- compression is real work there
+                    "")  warn "$ctx: flag $tok has no effect -- this job has no 'dst', so it only creates a snapshot and never transfers anything. Drop it." ;;
+                    *)   warn "$ctx: flag $tok has no effect -- dst '$dst' is local, and snapsend.sh (v2.32+) skips compression when both ends are the same host. Drop it, or point dst at a remote target." ;;
+                esac
+                ;;
         esac
     done
 }
@@ -471,7 +499,7 @@ build_dataset() {
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
             prefix="$(resolve_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
-            lint_flags "$flags" "[dataset:$ds_path] tier=$tier"
+            lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$dst"
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
             lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"
