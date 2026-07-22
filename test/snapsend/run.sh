@@ -469,6 +469,63 @@ if mkenc "$POOL/enc" 2>/dev/null; then
     check "snapget -w: raw pull exits 0" "0" "$RC"
     check "snapget -w: the local target is encrypted" "aes-256-gcm" \
           "$(zfs get -H -o value encryption "$POOL/rawpull" 2>/dev/null)"
+
+    # --- rawness-mismatch guardrail -----------------------------------------
+    # ZFS rejects these itself, but deep inside the pipe and with messages that
+    # do not say what to do. The guardrail refuses up front instead, BEFORE
+    # anything is created or destroyed, so a doomed run leaves no side effects.
+
+    # Adding -w to a job whose target was seeded non-raw.
+    mkenc "$POOL/gmix1"
+    zfs snapshot "$POOL/gmix1@auto_1"
+    run_send -e -m "auto_" "$POOL/gmix1" "$BK"
+    G1="$(tgt_of gmix1)"
+    tick; zfs snapshot "$POOL/gmix1@auto_2"
+    run_send -w -e -m "auto_" "$POOL/gmix1" "$BK"
+    check "guardrail: -w onto a non-raw-seeded target is refused" "1" "$RC"
+    check "guardrail: the refusal left the target untouched" "auto_1" "$(snaps_of "$G1")"
+
+    # Dropping -w from a job whose target was seeded raw.
+    mkenc "$POOL/gmix2"
+    zfs snapshot "$POOL/gmix2@auto_1"
+    run_send -w -e -m "auto_" "$POOL/gmix2" "$BK"
+    G2="$(tgt_of gmix2)"
+    tick; zfs snapshot "$POOL/gmix2@auto_2"
+    run_send -e -m "auto_" "$POOL/gmix2" "$BK"
+    check "guardrail: dropping -w on a raw-seeded target is refused" "1" "$RC"
+    check "guardrail: that refusal also left the target untouched" "auto_1" "$(snaps_of "$G2")"
+
+    # The stale-target case: a FAILED non-raw run still pre-creates an empty
+    # plain target, which then blocks -w. The guardrail must name it rather
+    # than letting ZFS emit "cannot perform raw receive on top of existing
+    # unencrypted dataset" from inside the pipe.
+    mkenc "$POOL/gstale"
+    zfs snapshot "$POOL/gstale@auto_1"
+    zfs unmount "$POOL/gstale" 2>/dev/null
+    zfs unload-key "$POOL/gstale" 2>/dev/null
+    run_send -e -m "auto_" "$POOL/gstale" "$BK"          # fails, leaves empty target
+    run_send -w -e -m "auto_" "$POOL/gstale" "$BK"
+    check "guardrail: an empty target left by a failed non-raw run is refused, not retried" \
+          "1" "$RC"
+
+    # -f destroys the target, so there is no seeding left to conflict with:
+    # the guardrail must stand aside and let the run re-seed raw.
+    run_send -f -w -e -m "auto_" "$POOL/gmix1" "$BK"
+    check "guardrail: -f re-seeds raw over a non-raw target instead of refusing" "0" "$RC"
+    check "-f -w: the rebuilt target is encrypted" "aes-256-gcm" \
+          "$(zfs get -H -o value encryption "$G1" 2>/dev/null)"
+
+    # An UNENCRYPTED source must never trip the guardrail -- verified on
+    # zfs-2.1.9 that raw and non-raw interoperate freely there, and all current
+    # production datasets are unencrypted.
+    zfs create -p "$POOL/gplain" || exit 1
+    zfs snapshot "$POOL/gplain@auto_1"
+    run_send -e -m "auto_" "$POOL/gplain" "$BK"
+    tick; zfs snapshot "$POOL/gplain@auto_2"
+    run_send -w -e -m "auto_" "$POOL/gplain" "$BK"
+    check "guardrail: adding -w to an unencrypted job is NOT refused" "0" "$RC"
+    check "guardrail: that unencrypted job kept its history" "auto_1 auto_2" \
+          "$(snaps_of "$(tgt_of gplain)")"
 else
     echo "SKIP -w raw send tests: this ZFS build cannot create encrypted datasets"
 fi

@@ -161,6 +161,65 @@ target_exists() {
     fi
 }
 
+# Emit a dataset's `encryption` property ("off" for unencrypted). Empty when the
+# dataset does not exist.
+dataset_encryption() {
+    local dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs get -H -o value encryption '$dataset' 2>/dev/null"
+    else
+        zfs get -H -o value encryption "$dataset" 2>/dev/null
+    fi
+}
+
+# Refuse a run whose rawness does not match what the existing target was seeded
+# with. ZFS rejects these itself, but with messages that do not say what to do
+# ("cannot perform raw receive on top of existing unencrypted dataset",
+# "inherited key must be loaded"), and the refusal happens deep inside the pipe
+# where it reads as a generic transfer failure.
+#
+# Verified on zfs-2.1.9: this only matters when the SOURCE is encrypted. For an
+# unencrypted source, raw and non-raw streams interoperate freely in both
+# directions and the two seedings are indistinguishable by property -- so the
+# check deliberately does nothing there rather than guessing.
+#
+# Returns 0 to proceed, 1 to refuse. Skip it under -f, which destroys the target
+# and therefore has no seeding left to conflict with.
+check_raw_compatibility() {
+    local src_dataset="$1" src_user="$2" src_host="$3"
+    local tgt_dataset="$4" tgt_user="$5" tgt_host="$6"
+    local raw="$7"
+
+    local src_enc
+    src_enc=$(dataset_encryption "$src_dataset" "$src_user" "$src_host")
+    [ -z "$src_enc" ] && return 0
+    [ "$src_enc" = "off" ] && return 0
+
+    # Target absent = nothing seeded yet, any rawness is fine.
+    local tgt_enc
+    tgt_enc=$(dataset_encryption "$tgt_dataset" "$tgt_user" "$tgt_host")
+    [ -z "$tgt_enc" ] && return 0
+
+    if [ "$raw" -eq 1 ] && [ "$tgt_enc" = "off" ]; then
+        log 0 "Refusing raw send: $src_dataset is encrypted ($src_enc) but the existing target $tgt_dataset is NOT ($tgt_enc)."
+        log 0 "A raw stream cannot be received on top of an unencrypted dataset -- ZFS would reject it as \"cannot perform raw receive on top of existing unencrypted dataset\"."
+        log 0 "The target was seeded by a non-raw run (note: a FAILED non-raw run also leaves an empty target behind). Either drop -w to keep sending decrypted, or destroy $tgt_dataset and let -w re-seed it from scratch."
+        return 1
+    fi
+
+    if [ "$raw" -ne 1 ] && [ "$tgt_enc" != "off" ]; then
+        log 0 "Refusing non-raw send: the existing target $tgt_dataset is encrypted ($tgt_enc), so it was seeded by a raw (-w) run."
+        log 0 "A decrypted stream cannot be received into it -- ZFS would reject it as \"inherited key must be loaded\"."
+        log 0 "Either add -w to keep this target raw, or destroy $tgt_dataset and let a non-raw run re-seed it."
+        return 1
+    fi
+
+    return 0
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other.

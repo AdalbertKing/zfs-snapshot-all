@@ -417,6 +417,17 @@ process_dataset() {
         fi
     fi
 
+    # Checked here, before anything is created, snapshotted or (under -f)
+    # destroyed: a rawness mismatch can never succeed, so a doomed run must not
+    # leave side effects behind. Skipped under -f, which destroys the target and
+    # so has no seeding left to conflict with. Orientation is mirrored vs
+    # snapsend.sh: here the SOURCE may be remote and the target is always local.
+    if [ $FORCE_FULL_SEND -ne 1 ]; then
+        check_raw_compatibility "$src_dataset" "$remote_user" "$remote_host" \
+                                "$tgt_dataset" "" "" \
+                                "$RAW_SEND" || return 1
+    fi
+
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         # target is always local in snapget.sh -- pass empty remote_user/host
         local resume_token
@@ -526,11 +537,21 @@ process_dataset() {
         log 4 "EXECUTING DESTROY LOCALLY"
         zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R "$@" 2>/dev/null || true' -- {} || true
 
+        # Under -w the leaf must be left for recv to create from the raw stream
+        # (see the creation block above) -- recreating it plain here would put
+        # back exactly the unencrypted dataset the raw stream cannot land on,
+        # turning every -f -w run into a guaranteed failure. The destroy above
+        # already removed the leaf; ancestors survive it, so recv has what it
+        # needs.
+        if [ $RAW_SEND -eq 1 ]; then
+            log 2 "Not recreating target dataset (-w: raw receive creates it)"
+        else
         log 2 "Recreating target dataset"
         zfs create -p -o canmount=noauto "$tgt_dataset" || {
             log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
             return 1
         }
+        fi
     fi
 
     # Under -w the leaf target is deliberately NOT pre-created (recv builds it
