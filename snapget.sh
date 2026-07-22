@@ -11,7 +11,13 @@ set -o pipefail
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
 #   -e               Use existing latest snapshot on source instead of creating a new one
 #   -z               Compress data stream with pigz during transfer
-#   -l <LEVEL>        Compression level for pigz (default: 6)
+#   -Z               Compress with zstd instead of pigz. Same role as -z (implies
+#                    it); the two are mutually exclusive, last one wins. zstd
+#                    gives a better ratio at comparable speed, which matters on
+#                    slow links -- pigz stays the default so existing jobs do not
+#                    change behaviour. Requires zstd on BOTH ends (checked).
+#   -l <LEVEL>        Compression level (default: 6 for pigz, 3 for zstd -- each
+#                    tool's own default; ranges differ, pigz 1-9 vs zstd 1-19)
 #   -v <LEVEL>        Verbosity level for logging (0=errors only, up to 4=debug)
 #   -r               Recursive mode (include child datasets in send/recv)
 #   -n               Dry-run mode (show conflicting snapshots without receiving)
@@ -45,11 +51,17 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.26'
+VERSION='v2.27'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
+# Which compressor -z/-Z selected, and whether -l was given explicitly. The
+# level default differs per tool (pigz 6, zstd 3 -- each tool's own), so it can
+# only be resolved after argument parsing; COMPRESSION_LEVEL stays 6 here so
+# nothing changes for existing pigz callers.
+COMPRESSOR="pigz"
 COMPRESSION_LEVEL=6
+COMPRESSION_LEVEL_SET=0
 BUFFER_SIZE="128k"
 MEMORY="1G"
 PORT=22
@@ -338,16 +350,18 @@ transfer_data() {
     log 3 "SEND CMD: $send_cmd"
     log 3 "RECV CMD: $recv_cmd"
 
+    [ $COMPRESSION -eq 1 ] && log 3 "COMPRESSOR: $COMPRESS_PIPE"
+
     local recv_args
     IFS=' ' read -r -a recv_args <<< "$recv_cmd"
 
     if [ -n "$remote_host" ]; then
         if [ $COMPRESSION -eq 1 ]; then
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v pigz >/dev/null 2>&1"; then
-                log 0 "Compression requested but pigz is not installed on remote host $remote_host"
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v $COMPRESSOR >/dev/null 2>&1"; then
+                log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | pigz -$COMPRESSION_LEVEL" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | pigz -d | "${recv_args[@]}"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
@@ -359,7 +373,7 @@ transfer_data() {
         local send_args
         IFS=' ' read -r -a send_args <<< "$send_cmd"
         if [ $COMPRESSION -eq 1 ]; then
-            if ! "${send_args[@]}" | pigz -$COMPRESSION_LEVEL | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | pigz -d | "${recv_args[@]}"; then
+            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
@@ -684,12 +698,13 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezl:v:rnIufwVp:k:" opt; do
+while getopts "m:ezZl:v:rnIufwVp:k:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
-        z) COMPRESSION=1;;
-        l) COMPRESSION_LEVEL="$OPTARG";;
+        z) COMPRESSION=1; COMPRESSOR="pigz";;
+        Z) COMPRESSION=1; COMPRESSOR="zstd";;
+        l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
         n) DRY_RUN=1;;
@@ -702,7 +717,7 @@ while getopts "m:ezl:v:rnIufwVp:k:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -l -v -r -n -I -u -f -w -p -k -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -l -v -r -n -I -u -f -w -p -k -V" >&2
             exit 1
             ;;
     esac
@@ -713,8 +728,27 @@ shift $((OPTIND-1))
 ###############################################################################
 #END 5A
 
-if [ $COMPRESSION -eq 1 ] && ! command -v pigz >/dev/null; then
-    log 0 "Compression requested but pigz is not installed."
+# Resolve the compression level default now that -Z/-l are both known: each tool
+# keeps its OWN default (pigz 6, zstd 3) rather than sharing one number, because
+# the scales are not comparable -- zstd 6 is far slower than pigz 6, and silently
+# applying it would make -Z look like a regression.
+if [ "$COMPRESSOR" = "zstd" ] && [ $COMPRESSION_LEVEL_SET -eq 0 ]; then
+    COMPRESSION_LEVEL=3
+fi
+
+# Built once, used by both pipeline branches. -T0 lets zstd use every core (pigz
+# is already multi-threaded by default); -c forces stdout so neither tool can
+# decide to write a file. COMPRESS_PIPE runs on the REMOTE source side here.
+if [ "$COMPRESSOR" = "zstd" ]; then
+    COMPRESS_PIPE="zstd -T0 -$COMPRESSION_LEVEL -c"
+    DECOMPRESS_PIPE="zstd -d -c"
+else
+    COMPRESS_PIPE="pigz -$COMPRESSION_LEVEL"
+    DECOMPRESS_PIPE="pigz -d"
+fi
+
+if [ $COMPRESSION -eq 1 ] && ! command -v "$COMPRESSOR" >/dev/null; then
+    log 0 "Compression requested but $COMPRESSOR is not installed."
     exit 1
 fi
 if ! command -v mbuffer >/dev/null; then

@@ -530,6 +530,69 @@ else
     echo "SKIP -w raw send tests: this ZFS build cannot create encrypted datasets"
 fi
 
+# --- compression: -z (pigz) vs -Z (zstd) ------------------------------------
+# Both compressors sit in the same pipeline slot: send | COMPRESS | mbuffer |
+# DECOMPRESS | recv. Local mode exercises the whole chain, so a corrupted or
+# mismatched compressor pair shows up as a failed receive rather than silently
+# wrong data. pigz stays the default -- -Z must be opt-in so existing jobs are
+# untouched.
+
+# Writes real data so the compressor has something to chew on; an empty dataset
+# would pass even if the pipeline were nonsense.
+fill() { dd if=/dev/urandom of="$1" bs=1M count=8 status=none 2>/dev/null; }
+
+comp_case() {  # comp_case <label> <dataset-suffix> <flag...>
+    local label="$1" name="$2"; shift 2
+    zfs create -p "$POOL/$name" || return 1
+    local mp; mp="$(zfs get -H -o value mountpoint "$POOL/$name")"
+    [ "$mp" != "none" ] && [ -d "$mp" ] && fill "$mp/blob"
+    zfs snapshot "$POOL/$name@auto_1"
+    run_send "$@" -e -m "auto_" "$POOL/$name" "$BK"
+    check "$label: exits 0" "0" "$RC"
+    check "$label: the snapshot reached the target" "auto_1" "$(snaps_of "$(tgt_of "$name")")"
+}
+
+comp_case "-z (pigz)"          czpigz  -z
+comp_case "-Z (zstd)"          czzstd  -Z
+comp_case "-Z -l 9 (zstd lvl)" czzstd9 -Z -l 9
+comp_case "-z -l 1 (pigz lvl)" czpigz1 -z -l 1
+
+# An incremental has to survive the compressed path too -- that is the shape
+# every production job actually runs in.
+tick; zfs snapshot "$POOL/czzstd@auto_2"
+run_send -Z -e -m "auto_" "$POOL/czzstd" "$BK"
+check "-Z: compressed incremental exits 0" "0" "$RC"
+check "-Z: compressed incremental appended" "auto_1 auto_2" "$(snaps_of "$(tgt_of czzstd)")"
+
+# The level default is per-tool and NOT shared: pigz 6, zstd 3. Pinned via the
+# verbose COMPRESSOR log line, because the two scales are not comparable and
+# silently handing zstd a 6 would make -Z look like a performance regression.
+zfs create -p "$POOL/clvl" || exit 1
+zfs snapshot "$POOL/clvl@auto_1"
+check "-Z without -l uses zstd's own default level 3" "zstd -T0 -3 -c" \
+      "$("$SNAPSEND" -Z -e -m "auto_" -v 3 "$POOL/clvl" "$BK" 2>&1 \
+         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+zfs create -p "$POOL/clvl2" || exit 1
+zfs snapshot "$POOL/clvl2@auto_1"
+check "-z without -l keeps pigz's default level 6" "pigz -6" \
+      "$("$SNAPSEND" -z -e -m "auto_" -v 3 "$POOL/clvl2" "$BK" 2>&1 \
+         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+
+# -z and -Z are last-one-wins rather than an error, so a config that appends a
+# flag cannot end up in an undefined state.
+zfs create -p "$POOL/clast" || exit 1
+zfs snapshot "$POOL/clast@auto_1"
+check "-z -Z: last flag wins (zstd)" "zstd -T0 -3 -c" \
+      "$("$SNAPSEND" -z -Z -e -m "auto_" -v 3 "$POOL/clast" "$BK" 2>&1 \
+         | sed -n 's/.*COMPRESSOR: //p' | head -1)"
+
+# snapget mirror: there the compressor runs on the (possibly remote) source.
+zfs create -p "$SRCBASE/$POOL/czpull" || exit 1
+zfs snapshot "$SRCBASE/$POOL/czpull@auto_1"
+run_get -Z -e -m "auto_" "$POOL/czpull" "$SRCBASE"
+check "snapget -Z: compressed pull exits 0" "0" "$RC"
+check "snapget -Z: the snapshot landed locally" "auto_1" "$(snaps_of "$POOL/czpull")"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
