@@ -102,7 +102,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.35'
+VERSION='v2.36'
 MESSAGE=""
 VERBOSE=0
 COMPRESSION=0
@@ -174,22 +174,9 @@ fi
 ###############################################################################
 #BEGIN 2B [SNAPSHOT METADATA OPERATIONS]
 ###############################################################################
-get_timestamp() {
-    local dataset="$1"
-    local snapshot="$2"
-    local remote_user="${3:-}"
-    local remote_host="${4:-}"
-
-    if [ -n "$remote_host" ]; then
-        local ts
-        ts=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs get -H -p -o value creation '${dataset}@${snapshot}' 2>/dev/null") || return 1
-    else
-        local ts
-        ts=$(zfs get -H -p -o value creation "${dataset}@${snapshot}" 2>/dev/null) || return 1
-    fi
-    echo "$ts"
-}
+# get_snapshot_guid / get_snapshot_guids live in lib-zfs-snap.sh -- shared
+# with snapsend.sh and with the bookmark-fallback code that already needed
+# per-snapshot GUID lookups.
 ###############################################################################
 #END 2B
 
@@ -332,15 +319,18 @@ validate_snapshot() {
     local remote_user="$4"
     local remote_host="$5"
 
-    local src_ts
-    src_ts=$(get_timestamp "$src_dataset" "$snapshot" "$remote_user" "$remote_host")
-    local tgt_ts
-    tgt_ts=$(get_timestamp "$tgt_dataset" "$snapshot")
+    # GUID, not creation timestamp: it's ZFS's own identity for a snapshot
+    # (1-second creation resolution can't tell two distinct snapshots apart),
+    # and it's what survives a rename on either side -- see find_common_snapshot.
+    local src_guid
+    src_guid=$(get_snapshot_guid "$src_dataset" "$snapshot" "$remote_user" "$remote_host")
+    local tgt_guid
+    tgt_guid=$(get_snapshot_guid "$tgt_dataset" "$snapshot")
 
-    if [ -z "$src_ts" ] || [ -z "$tgt_ts" ]; then
+    if [ -z "$src_guid" ] || [ -z "$tgt_guid" ]; then
         return 1
     fi
-    [ "$src_ts" -eq "$tgt_ts" ] && return 0 || return 1
+    [ "$src_guid" = "$tgt_guid" ] && return 0 || return 1
 }
 ###############################################################################
 #END 3A
@@ -375,6 +365,34 @@ find_common_snapshot() {
                     echo -n "${src_snaps[$i]}"
                     return 0
                 }
+            fi
+        done
+    done
+
+    # Names didn't line up -- the snapshot that both sides share may have
+    # been renamed on one of them since the last sync (dataset move, manual
+    # tidy-up, etc). GUID is unaffected by rename, and `zfs receive` keys an
+    # incremental off the stream's embedded fromguid, not off matching
+    # names, so a source-side name is all `-i` needs. Scan every pair,
+    # newest-target-first, for a source snapshot still carrying that GUID.
+    local tgt_names=() tgt_guids=()
+    while IFS=$'\t' read -r _n _g; do
+        [ -z "$_n" ] && continue
+        tgt_names+=("$_n"); tgt_guids+=("$_g")
+    done <<< "$(get_snapshot_guids "$tgt_dataset")"
+
+    local src_names=() src_guids=()
+    while IFS=$'\t' read -r _n _g; do
+        [ -z "$_n" ] && continue
+        src_names+=("$_n"); src_guids+=("$_g")
+    done <<< "$(get_snapshot_guids "$src_dataset" "$remote_user" "$remote_host")"
+
+    for ((j=${#tgt_guids[@]}-1; j>=0; j--)); do
+        [ -z "${tgt_guids[$j]}" ] && continue
+        for ((i=${#src_guids[@]}-1; i>=0; i--)); do
+            if [[ "${src_guids[$i]}" == "${tgt_guids[$j]}" ]]; then
+                echo -n "${src_names[$i]}"
+                return 0
             fi
         done
     done

@@ -744,6 +744,48 @@ check "snapget hold: sanity -- the GUID-mismatch pull really did fail" "1" "$RC"
 check "snapget hold: a non-resumable failure releases the hold on the source" "no" \
       "$(held_by_us "${GSRC3}@c" && echo yes || echo no)"
 
+# --- GUID-based common-snapshot matching (survives rename) ------------------
+# find_common_snapshot's fast path matches by name. If the shared snapshot got
+# renamed on either side since the last sync -- an admin tidy-up, or the
+# dataset itself was `zfs rename`d -- the name lists no longer intersect, but
+# the snapshot's GUID (its real ZFS identity) is unchanged by rename. The
+# fallback scans GUIDs directly, so this still finds an incremental base
+# instead of falling through to a full, rollback (-F) send.
+#
+# Same rollback-survival signal as the bookmark tests: a fallback FULL send
+# uses -F, which would wipe the renamed snapshot off the target. If it
+# survives alongside the newly-sent one, the GUID match -- not a full send --
+# is what actually ran.
+
+zfs create -p "$POOL/guidsend" || exit 1
+zfs snapshot "$POOL/guidsend@a"
+run_send -e "$POOL/guidsend" "$BK"
+GST="$(tgt_of guidsend)"
+check "guid-match: first send lands @a on target" "a" "$(snaps_of "$GST")"
+
+zfs rename "${GST}@a" "${GST}@renamed"
+tick
+zfs snapshot "$POOL/guidsend@b"
+run_send -e "$POOL/guidsend" "$BK"
+check "guid-match: exit 0 even though the target's snapshot was renamed" "0" "$RC"
+check "guid-match: target keeps the renamed snapshot AND gains the new one (incremental via GUID, not a rollback full)" \
+      "renamed b" "$(snaps_of "$GST")"
+
+# snapget mirror -- this time the rename happens on the LOCAL target.
+GSRC4="$SRCBASE/$POOL/guidpull"
+zfs create -p "$GSRC4" || exit 1
+zfs snapshot "${GSRC4}@a"
+run_get -e "$POOL/guidpull" "$SRCBASE"
+check "snapget guid-match: first pull lands @a" "a" "$(snaps_of "$POOL/guidpull")"
+
+zfs rename "$POOL/guidpull@a" "$POOL/guidpull@renamed"
+tick
+zfs snapshot "${GSRC4}@b"
+run_get -e "$POOL/guidpull" "$SRCBASE"
+check "snapget guid-match: exit 0 even though the local target's snapshot was renamed" "0" "$RC"
+check "snapget guid-match: target keeps the renamed snapshot AND gains the new one" \
+      "renamed b" "$(snaps_of "$POOL/guidpull")"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

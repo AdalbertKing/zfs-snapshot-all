@@ -210,6 +210,29 @@ get_snapshot_guid() {
     [ -n "$guid" ] && echo "$guid"
 }
 
+# Batch form of get_snapshot_guid: one "name<TAB>guid" line per snapshot,
+# oldest first. Used by find_common_snapshot's GUID-fallback scan so a
+# dataset with N snapshots costs one `zfs list` call instead of N `zfs get`
+# calls. Mirrors get_sorted_snapshots' depth/RECURSIVE handling exactly --
+# the two must walk the same set of snapshots or the fallback would compare
+# a name-based list against a differently-scoped GUID list.
+get_snapshot_guids() {
+    local dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+    local depth_option="-d 1"
+    [ "${RECURSIVE:-0}" -eq 1 ] && depth_option=""
+
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -o name,guid -t snapshot -s creation $depth_option '$dataset' 2>/dev/null" \
+            | awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}'
+    else
+        zfs list -H -o name,guid -t snapshot -s creation $depth_option "$dataset" 2>/dev/null \
+            | awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}'
+    fi
+}
+
 # True when the dataset exists. Needed by the -w (raw send) path: raw streams
 # carry their own dataset properties, so the leaf target must be created by
 # `zfs recv` rather than pre-created by us -- which means "target missing" is a
