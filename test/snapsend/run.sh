@@ -677,6 +677,73 @@ if ! zpool list -H -o name 2>/dev/null | grep -qx "$NOLZ4"; then
     rm -f "$NOLZ4_IMG"
 fi
 
+# --- hold-based protection for in-flight snapshots --------------------------
+# snapsend.sh/snapget.sh place a `zfs hold zfssnapall_inflight` on the source
+# snapshot for the duration of a transfer, so a delsnaps.sh run landing in the
+# same window cannot prune out from under it (see lib-zfs-snap.sh). The hold
+# must come OFF again once it is no longer needed, or every backup would
+# leave behind a snapshot delsnaps.sh can never prune (not even with -F --
+# holds block destroy regardless of -R).
+#
+# NOT covered here: a hold surviving because a genuine receive_resume_token
+# was left behind (a truly interrupted mid-stream receive). That needs a
+# deterministic way to kill `zfs receive` mid-transfer, which is inherently
+# timing-sensitive -- left for manual verification rather than risking a
+# flaky test. What IS covered: the hold comes off on a normal successful
+# transfer, and it also comes off on a failure that leaves NO resume token
+# (zfs receive refusing outright, before writing anything), which is exactly
+# the scenario that would otherwise strand a snapshot forever.
+
+held_by_us() {
+    zfs holds -H "$1" 2>/dev/null | awk '{print $2}' | grep -qx "zfssnapall_inflight"
+}
+
+zfs create -p "$POOL/holdok" || exit 1
+zfs snapshot "$POOL/holdok@auto_1"
+run_send -e -m "auto_" "$POOL/holdok" "$BK"
+check "hold: successful send releases the hold afterward" "no" \
+      "$(held_by_us "$POOL/holdok@auto_1" && echo yes || echo no)"
+
+# Same construction as the "bookmark: GUID mismatch" case above: a real `zfs
+# receive` refusal ("destination has snapshots"), not an early guardrail
+# return -- so the hold placed before the transfer attempt is genuinely
+# exercised, and there is no resume token to keep it alive for.
+zfs create -p "$POOL/holdfail" || exit 1
+zfs snapshot "$POOL/holdfail@a"
+run_send -e "$POOL/holdfail" "$BK"
+HF="$(tgt_of holdfail)"
+zfs destroy "$POOL/holdfail@a"
+tick
+zfs snapshot "$POOL/holdfail@c"
+zfs destroy "${HF}@a"
+zfs snapshot "${HF}@rogue"
+run_send -e "$POOL/holdfail" "$BK"
+check "hold: sanity -- the GUID-mismatch run really did fail" "1" "$RC"
+check "hold: a non-resumable failure releases the hold (does not strand it)" "no" \
+      "$(held_by_us "$POOL/holdfail@c" && echo yes || echo no)"
+
+# snapget mirror.
+GSRC2="$SRCBASE/$POOL/holdokpull"
+zfs create -p "$GSRC2" || exit 1
+zfs snapshot "${GSRC2}@auto_1"
+run_get -e -m "auto_" "$POOL/holdokpull" "$SRCBASE"
+check "snapget hold: successful pull releases the hold on the source" "no" \
+      "$(held_by_us "${GSRC2}@auto_1" && echo yes || echo no)"
+
+GSRC3="$SRCBASE/$POOL/holdfailpull"
+zfs create -p "$GSRC3" || exit 1
+zfs snapshot "${GSRC3}@a"
+run_get -e "$POOL/holdfailpull" "$SRCBASE"
+zfs destroy "${GSRC3}@a"
+tick
+zfs snapshot "${GSRC3}@c"
+zfs destroy "$POOL/holdfailpull@a"
+zfs snapshot "$POOL/holdfailpull@rogue"
+run_get -e "$POOL/holdfailpull" "$SRCBASE"
+check "snapget hold: sanity -- the GUID-mismatch pull really did fail" "1" "$RC"
+check "snapget hold: a non-resumable failure releases the hold on the source" "no" \
+      "$(held_by_us "${GSRC3}@c" && echo yes || echo no)"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

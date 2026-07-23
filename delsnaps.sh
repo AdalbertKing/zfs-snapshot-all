@@ -103,7 +103,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.16'
+VERSION='v1.17'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -111,6 +111,17 @@ BOOKMARK_MODE=false
 PORT=22
 KNOWN_HOSTS_FILE=""
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+
+# Must match HOLD_TAG in lib-zfs-snap.sh -- this script is standalone (no
+# `source`), so the tag is duplicated rather than shared. A snapshot held
+# under this tag is the source of a snapsend.sh/snapget.sh transfer currently
+# in flight (or one a stuck receive_resume_token still depends on); pruning
+# it out from under that transfer would break it, possibly unrecoverably if
+# it also destroys the only remaining incremental base. `zfs destroy` already
+# refuses a held snapshot on its own, but without recognizing the tag this
+# script would report that refusal as an error needing -F, when it is
+# actually working as designed -- see is_held_by_us.
+HOLD_TAG="zfssnapall_inflight"
 # Verbose tracing. Off by default so cron logs stay clean (the old behaviour
 # printed every "Debug:" line unconditionally, flooding 2>>$CRON_LOG). Turn on
 # with -v/--verbose on the command line or DEBUG=1 in the environment.
@@ -172,6 +183,19 @@ destroy_one() {
     else
         run_zfs "$ruser" "$rhost" destroy "$snap"
     fi
+}
+
+# True if $snap carries a hold tagged HOLD_TAG -- i.e. snapsend.sh/snapget.sh
+# currently has it in flight (or a stuck resume still depends on it). Checked
+# BEFORE attempting destroy_one, rather than parsing zfs's (locale-dependent)
+# error text after a failed destroy, so a protected snapshot is reported as an
+# expected, temporary skip instead of an error requiring -F/investigation.
+# `zfs holds` is a read-only listing, no extra delegation needed beyond what
+# destroy_one already requires.
+is_held_by_us() {
+    local snap="$1" ruser="$2" rhost="$3" tags
+    tags=$(run_zfs "$ruser" "$rhost" holds -H "$snap" 2>/dev/null | awk '{print $2}')
+    [[ "$tags" == *"$HOLD_TAG"* ]]
 }
 
 # Split a datasets-list entry into remote user/host/dataset. A remote entry is
@@ -380,7 +404,14 @@ delete_snapshots() {
         local i=0 snapshot
         for snapshot in "${filtered[@]}"; do
             if [ "$i" -lt "$to_delete" ]; then
-                if [ "$DRY_RUN" = true ]; then
+                if is_held_by_us "${snapshot}" "$ruser" "$rhost"; then
+                    if [ "$DRY_RUN" = true ]; then
+                        echo "[DRY-RUN] Would skip snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot}" >&2
+                    else
+                        echo "Skipping snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot} -- reconsidered next run" >&2
+                    fi
+                    kept_count=$((kept_count + 1))
+                elif [ "$DRY_RUN" = true ]; then
                     echo "[DRY-RUN] Would delete snapshot: ${snapshot}" >&2
                     deleted_count=$((deleted_count + 1))
                 else
@@ -416,7 +447,14 @@ delete_snapshots() {
             dbg "Snapshot = $snapshot, creation_date_sec = $creation_date_sec"
 
             if [ "${creation_date_sec}" -lt "${param}" ]; then
-                if [ "$DRY_RUN" = true ]; then
+                if is_held_by_us "${snapshot}" "$ruser" "$rhost"; then
+                    if [ "$DRY_RUN" = true ]; then
+                        echo "[DRY-RUN] Would skip snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot}" >&2
+                    else
+                        echo "Skipping snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot} -- reconsidered next run" >&2
+                    fi
+                    kept_count=$((kept_count + 1))
+                elif [ "$DRY_RUN" = true ]; then
                     echo "[DRY-RUN] Would delete snapshot: ${snapshot}" >&2
                     deleted_count=$((deleted_count + 1))
                 else

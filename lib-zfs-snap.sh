@@ -97,6 +97,72 @@ reset_resume_attempts() {
 }
 
 ###############################################################################
+# HOLD-BASED PROTECTION FOR IN-FLIGHT SNAPSHOTS
+###############################################################################
+# A snapshot that is the source of a `zfs send` currently in flight -- or that
+# a stuck receive_resume_token still depends on -- must not be pruned by a
+# delsnaps.sh run that happens to land in the same window. `zfs hold` is the
+# right primitive: it is enforced by ZFS itself (a plain `zfs destroy` on a
+# held snapshot fails), and unlike anything tracked in this script's own
+# state, it survives the process exiting, so it keeps protecting the
+# snapshot across every subsequent cron invocation for as long as a resume
+# stays stuck (see MAX_RESUME_ATTEMPTS above). Same HOLD_TAG is duplicated
+# (not sourced) into delsnaps.sh so it can recognize a hold placed by this
+# pair of scripts and report it as "in-flight, skipped" instead of the
+# generic dependent-clone error -- keep the two in sync if this ever changes.
+HOLD_TAG="zfssnapall_inflight"
+
+# Best-effort: a hold that fails to apply (e.g. a non-root user missing the
+# delegated 'hold' permission) must not abort a backup that would otherwise
+# succeed -- it just runs without the extra protection.
+hold_snapshot() {
+    local snap="$1" remote_user="${2:-}" remote_host="${3:-}"
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs hold '$HOLD_TAG' '$snap'" 2>/dev/null \
+            || log 2 "Could not place hold on $snap (missing delegated 'hold'?) -- continuing without in-flight protection"
+    else
+        zfs hold "$HOLD_TAG" "$snap" 2>/dev/null \
+            || log 2 "Could not place hold on $snap (missing delegated 'hold'?) -- continuing without in-flight protection"
+    fi
+}
+
+# Best-effort in the other direction too: releasing a hold that is already
+# gone (already released, or never got placed) is not an error worth failing
+# a run over.
+release_snapshot() {
+    local snap="$1" remote_user="${2:-}" remote_host="${3:-}"
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs release '$HOLD_TAG' '$snap'" 2>/dev/null || true
+    else
+        zfs release "$HOLD_TAG" "$snap" 2>/dev/null || true
+    fi
+}
+
+# Which exact snapshot is currently held for a given target -- tracked
+# separately from the resume-attempt counter (same LOCKDIR, same per-target
+# naming) because a stuck resume can span many cron invocations, and by the
+# time it is abandoned or succeeds, process_dataset's local $snapshot variable
+# from the ORIGINAL attempt is long gone. Reading `zfs holds` back and
+# matching on tag would work too, but requires re-deriving the exact
+# snapshot name from a possibly-remote host; recording it once, right where
+# it is created, is simpler and avoids an extra round trip.
+inflight_snap_file() {
+    echo "${LOCKDIR:-/var/run}/$(basename "$0").inflight-snap.$(echo "$1" | tr '/' '_')"
+}
+
+record_inflight_snap() {
+    echo "$2" > "$(inflight_snap_file "$1")" 2>/dev/null || true
+}
+
+read_inflight_snap() {
+    cat "$(inflight_snap_file "$1")" 2>/dev/null
+}
+
+clear_inflight_snap() {
+    rm -f "$(inflight_snap_file "$1")"
+}
+
+###############################################################################
 # BOOKMARK-BACKED INCREMENTAL FALLBACK
 ###############################################################################
 # A ZFS bookmark (dataset#mark) records only a snapshot's txg+GUID -- zero

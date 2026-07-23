@@ -243,6 +243,52 @@ check "clone guard: failure is reported as exit 1" "1" "$RC"
 run_del -F "$POOL/cloned" "auto_" -H1
 check "clear-cut: -F removes the cloned snapshot" "auto_2" "$(snaps_of cloned)"
 
+# --- hold-based protection for in-flight snapshots --------------------------
+# snapsend.sh/snapget.sh place a `zfs hold zfssnapall_inflight` on a snapshot
+# for the duration of a transfer (see lib-zfs-snap.sh), so a delsnaps.sh run
+# landing in the same window cannot prune it. Unlike the clone-dependency
+# guard above, this must NOT be reported as a failure requiring -F -- it is
+# expected, temporary, and resolves itself once the hold comes off.
+
+mkds held
+mksnaps held auto_1 auto_2 auto_3
+zfs hold zfssnapall_inflight "$POOL/held@auto_1" || exit 1
+run_del "$POOL/held" "auto_" -H1
+check "hold guard: the held snapshot survives count-based pruning" \
+      "auto_1 auto_3" "$(snaps_of held)"
+check "hold guard: unlike the clone guard, this is NOT reported as a failure" \
+      "0" "$RC"
+
+# Once the hold comes off, the snapshot is prunable again on the very next run
+# -- the protection is temporary, not a permanent retention override.
+zfs release zfssnapall_inflight "$POOL/held@auto_1" || exit 1
+run_del "$POOL/held" "auto_" -H1
+check "hold guard: releasing the hold lets the next run prune it normally" \
+      "auto_3" "$(snaps_of held)"
+
+# Same guard, age-based mode.
+mkds heldage
+mksnaps heldage auto_1 auto_2
+zfs hold zfssnapall_inflight "$POOL/heldage@auto_1" || exit 1
+sleep 2
+run_del "$POOL/heldage" "auto_" -h0
+check "hold guard (age mode): the held snapshot survives" \
+      "auto_1" "$(snaps_of heldage)"
+check "hold guard (age mode): not reported as a failure" "0" "$RC"
+zfs release zfssnapall_inflight "$POOL/heldage@auto_1" || exit 1
+
+# -F (clear-cut) must NOT override a hold -- holds block destroy regardless of
+# -R, unlike a dependent clone. If this ever changed it would be a real way to
+# lose data mid-transfer, so pin it explicitly rather than just asserting the
+# plain-destroy case above.
+mkds heldforce
+mksnaps heldforce auto_1 auto_2
+zfs hold zfssnapall_inflight "$POOL/heldforce@auto_1" || exit 1
+run_del -F "$POOL/heldforce" "auto_" -H1
+check "hold guard: -F does not override a hold either" \
+      "auto_1 auto_2" "$(snaps_of heldforce)"
+zfs release zfssnapall_inflight "$POOL/heldforce@auto_1" || exit 1
+
 # --- local dataset names containing ':' -------------------------------------
 
 # ZFS allows ':' in dataset names, so "remote" cannot simply mean "has a
