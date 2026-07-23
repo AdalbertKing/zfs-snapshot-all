@@ -103,7 +103,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.17'
+VERSION='v1.18'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -234,12 +234,27 @@ if [ "$1" == "-V" ] || [ "$1" == "--version" ]; then
     exit 0
 fi
 
-# One line per processed dataset, appended to STATS_LOG. Best-effort: never
-# lets a logging failure (e.g. unwritable path) break the actual prune.
+# Minimal JSON string escaping for values that come from config (dataset
+# list/pattern) rather than from a fixed set of literals we control.
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+
+# One JSON object per processed dataset, appended to STATS_LOG as JSON-lines
+# -- same schema convention as snapsend.sh/snapget.sh's emit_stats in
+# lib-zfs-snap.sh (kept as a separate copy here since delsnaps.sh is
+# standalone / not sourced), with deleted/kept counts in place of resumed.
+# Best-effort: never lets a logging failure break the actual prune.
 emit_stats() {
     local dataset="$1" pattern="$2" status="$3" duration="$4" deleted="$5" kept="$6"
     {
-        echo "$(date -u +%FT%TZ) script=$(basename "$0") dataset=${dataset} pattern=${pattern} status=${status} duration_s=${duration} deleted=${deleted} kept=${kept}"
+        printf '{"time":"%s","script":"%s","dataset":"%s","pattern":"%s","status":"%s","duration_s":%s,"deleted":%s,"kept":%s}\n' \
+            "$(date -u +%FT%TZ)" "$(basename "$0")" \
+            "$(json_escape "$dataset")" "$(json_escape "$pattern")" "$(json_escape "$status")" \
+            "$duration" "$deleted" "$kept"
     } >> "$STATS_LOG" 2>/dev/null || true
 }
 

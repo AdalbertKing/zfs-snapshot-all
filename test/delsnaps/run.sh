@@ -122,6 +122,22 @@ check "count: keeps the 3 newest, deletes the 2 oldest" \
       "auto_3 auto_4 auto_5" "$(snaps_of keepn)"
 check "count: exit code 0 on success" "0" "$RC"
 
+# --- structured (JSON-lines) stats log ---------------------------------------
+# STATS_LOG moved from "key=value" free text to one JSON object per line so it
+# can be queried with `jq` instead of regexed. Pin: valid JSON, and that
+# duration_s/deleted/kept keep JSON-native numeric types.
+STATS_LAST="$(tail -1 "$STATS_LOG")"
+if command -v jq >/dev/null 2>&1; then
+    check "stats log: latest line is valid JSON" "0" \
+          "$(echo "$STATS_LAST" | jq -e . >/dev/null 2>&1; echo $?)"
+    check "stats log: deleted/kept round-trip the count-mode prune" "2 3" \
+          "$(echo "$STATS_LAST" | jq -r '"\(.deleted) \(.kept)"')"
+    check "stats log: deleted is a JSON number, not a quoted string" "number" \
+          "$(echo "$STATS_LAST" | jq -r '.deleted | type')"
+else
+    echo "SKIP stats log JSON checks (jq not installed)"
+fi
+
 mkds keepall
 mksnaps keepall auto_1 auto_2
 run_del "$POOL/keepall" "auto_" -H10

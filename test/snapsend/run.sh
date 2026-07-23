@@ -118,6 +118,27 @@ check "full send: source and target hold the same snapshot" \
 check "full send: target is created with canmount=noauto" "noauto" \
       "$(zfs get -H -o value canmount "$T")"
 
+# --- structured (JSON-lines) stats log ---------------------------------------
+# STATS_LOG moved from "key=value" free text to one JSON object per line so it
+# can be queried with `jq` instead of regexed. Pin: valid JSON, and that
+# duration_s/resumed keep JSON-native types (number/boolean) rather than
+# becoming quoted strings that would need re-parsing anyway.
+STATS_LAST="$(tail -1 "$STATS_LOG")"
+if command -v jq >/dev/null 2>&1; then
+    check "stats log: latest line is valid JSON" "0" \
+          "$(echo "$STATS_LAST" | jq -e . >/dev/null 2>&1; echo $?)"
+    check "stats log: dataset field round-trips the full send" "$POOL/src" \
+          "$(echo "$STATS_LAST" | jq -r .dataset)"
+    check "stats log: status field round-trips" "success" \
+          "$(echo "$STATS_LAST" | jq -r .status)"
+    check "stats log: duration_s is a JSON number, not a quoted string" "number" \
+          "$(echo "$STATS_LAST" | jq -r '.duration_s | type')"
+    check "stats log: resumed is a JSON boolean, not the string yes/no" "boolean" \
+          "$(echo "$STATS_LAST" | jq -r '.resumed | type')"
+else
+    echo "SKIP stats log JSON checks (jq not installed)"
+fi
+
 tick
 run_send -m "auto_" "$POOL/src" "$BK"
 check "incremental: second run adds the new snapshot" "2" "$(count_snaps "$T")"

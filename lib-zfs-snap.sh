@@ -21,12 +21,28 @@ log() {
     [ "$VERBOSE" -ge "$LEVEL" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >&2
 }
 
-# One line per processed dataset, appended to STATS_LOG. Best-effort: never
-# lets a logging failure (e.g. unwritable path) break the actual backup.
+# Minimal JSON string escaping for values that come from config (dataset/
+# target paths) rather than from a fixed set of literals we control.
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+
+# One JSON object per processed dataset, appended to STATS_LOG as JSON-lines
+# (one line = one record, no top-level array) so history can be queried with
+# `jq` instead of parsed with regex. Best-effort: never lets a logging
+# failure (e.g. unwritable path) break the actual backup.
 emit_stats() {
     local dataset="$1" target="$2" status="$3" duration="$4" resumed="${5:-no}"
+    local resumed_bool="false"
+    [ "$resumed" = "yes" ] && resumed_bool="true"
     {
-        echo "$(date -u +%FT%TZ) script=$(basename "$0") dataset=${dataset} target=${target} status=${status} duration_s=${duration} resumed=${resumed}"
+        printf '{"time":"%s","script":"%s","dataset":"%s","target":"%s","status":"%s","duration_s":%s,"resumed":%s}\n' \
+            "$(date -u +%FT%TZ)" "$(basename "$0")" \
+            "$(json_escape "$dataset")" "$(json_escape "$target")" "$(json_escape "$status")" \
+            "$duration" "$resumed_bool"
     } >> "$STATS_LOG" 2>/dev/null || true
 }
 
