@@ -219,7 +219,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
-| `-F` | Reconcile before sending: destroy target-only snapshots (recursively under `-r`), then **fully resend the whole subtree this run** if any were found — required, not a shortcut: `zfs send -R -I` decides full-vs-incremental per child from the source's own history, so a merely-destroyed divergent snapshot still arrives as an incremental component with nothing to land on. Best-effort — a snapshot with a dependent clone, or reserved by Proxmox VE, is skipped, not cascaded. Try with `-n` first |
+| `-F` | Reconcile before sending (recursively under `-r`): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
 | `-V` | Print version and exit |
 
 ```bash

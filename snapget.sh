@@ -75,27 +75,28 @@ set -o pipefail
 #                    -x`). Repeatable. Applied on BOTH the normal and the
 #                    resumed receive -- unlike -o, this is receive-side state
 #                    and a resume token carries no property excludes of its own.
-#   -F               Reconcile before pulling: destroy (local) target
-#                    snapshots that do not exist on the source (recursively
-#                    under -r), then FULLY RE-PULL THE WHOLE SUBTREE this run
-#                    if any were found -- not just the branch that diverged.
-#                    Reuses the same scan `-n` already does for its report.
-#                    Best-effort: a plain `zfs destroy` (no -R) refuses a
-#                    snapshot with a dependent clone, same as delsnaps.sh --
-#                    logged and skipped, not cascaded. Snapshots reserved by
-#                    Proxmox VE (replicate/migration/vzdump) are never
-#                    touched.
-#                    Full-tree re-pull is not a shortcut we took -- it is
-#                    required: `zfs send -R -I` decides full-vs-incremental
-#                    PER CHILD from the SOURCE's own snapshot history, not
-#                    from what the target has, so a child whose divergent
-#                    snapshot we just destroyed still arrives as an
-#                    INCREMENTAL component if the source still has that base
-#                    -- and a target with nothing to receive it onto fails
-#                    worse than before (probed live on snapsend.sh: recv
-#                    tears the child dataset down instead of just erroring).
-#                    Opt-in; combine with `-n` first to see what it would
-#                    destroy.
+#   -F               Reconcile before pulling (recursively, under -r): if a
+#                    CHILD dataset has a snapshot named like the incremental
+#                    base but under a DIFFERENT GUID (independently created,
+#                    not the same snapshot despite the name -- the one shape
+#                    of divergence that actually breaks a recursive pull),
+#                    upgrade THIS run to a full re-pull of the whole subtree,
+#                    same as -f. Deliberately narrower than what `-n`
+#                    reports: a target-only snapshot that does NOT collide by
+#                    name (e.g. older history a shorter-retention source has
+#                    since pruned, common on an archive target) is normal and
+#                    left alone -- flagging that too would force an expensive
+#                    full re-pull on every single run against such a target.
+#                    Full-tree re-pull on a real collision is not a shortcut,
+#                    it's required: `zfs send -R -I` decides full-vs-
+#                    incremental PER CHILD from the SOURCE's own snapshot
+#                    history, not from what survives on the target, so
+#                    merely destroying the colliding snapshot still leaves
+#                    that child an incremental component with nothing valid
+#                    to land on (probed live on snapsend.sh: recv tears the
+#                    child dataset down instead of just erroring). Opt-in;
+#                    combine with `-n` first, though note `-n`'s report is
+#                    broader than what `-F` actually acts on.
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
 #                    it can flip nothing but compression. Decided separately for
@@ -144,7 +145,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.43'
+VERSION='v2.44'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -202,6 +203,8 @@ SSH_CIPHER=""
 # -F: reconcile (destroy target-only snapshots) before the real pull.
 RECONCILE=0
 declare -a CONFLICT_SNAPSHOTS=()
+# Used only by -F -- see find_recursive_name_collisions.
+declare -a NAME_COLLISIONS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 # Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
 # -- reused directly by check_pool_health in lib-zfs-snap.sh so a DEGRADED pool
@@ -321,6 +324,59 @@ find_conflicting_snapshots() {
 }
 ###############################################################################
 #END 2D
+###############################################################################
+###############################################################################
+#BEGIN 2E [RECONCILE: NARROW CHILD COLLISION CHECK, -F ONLY]
+###############################################################################
+# Deliberately narrower than find_conflicting_snapshots (which also flags
+# perfectly harmless target-only history from a longer local retention --
+# see the pve0 archive job, where -n always "fails" for exactly that reason,
+# by design: source has pruned snapshots the archive target still keeps).
+# Reusing that broader scan to trigger an automatic full resend would fire
+# on EVERY run against any target with different retention, defeating
+# incremental sends entirely.
+#
+# This only flags BASE_NAME existing on a child under a DIFFERENT GUID than
+# the same name on its source counterpart -- the one shape of divergence
+# that actually blocks `zfs send -R -I @BASE_NAME ...`, because that
+# incremental is keyed to BASE_NAME for every child that has it, regardless
+# of what else the child does or doesn't have. A child simply missing
+# BASE_NAME is not flagged -- zfs sends that branch in full within the same
+# -R stream on its own, no help needed.
+find_recursive_name_collisions() {
+    local src_dataset="$1"
+    local tgt_dataset="$2"
+    local remote_user="$3"
+    local remote_host="$4"
+    local base_name="$5"
+
+    [ -z "$base_name" ] && return 0
+    [ "$base_name" = "null" ] && return 0
+
+    # Target is always local in snapget.sh.
+    local tgt_children
+    tgt_children=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -v "^${tgt_dataset}$")
+
+    local tgt_child
+    for tgt_child in $tgt_children; do
+        local child_name="${tgt_child##*/}"
+        local src_child="${src_dataset}/${child_name}"
+
+        local tgt_guid
+        tgt_guid=$(get_snapshot_guid "$tgt_child" "$base_name")
+        if [ -n "$tgt_guid" ]; then
+            local src_guid
+            src_guid=$(get_snapshot_guid "$src_child" "$base_name" "$remote_user" "$remote_host")
+            if [ -z "$src_guid" ] || [ "$src_guid" != "$tgt_guid" ]; then
+                NAME_COLLISIONS+=("${tgt_child}@${base_name}")
+            fi
+        fi
+
+        find_recursive_name_collisions "$src_child" "$tgt_child" "$remote_user" "$remote_host" "$base_name"
+    done
+}
+###############################################################################
+#END 2E
 ###############################################################################
 ###############################################################################
 #BEGIN 2F [HOST VALIDATION]
@@ -550,6 +606,13 @@ process_dataset() {
     local remote_user="$3"
     local remote_host="$4"
     STATS_RESUMED="no"
+    # Local shadow: -F reconciliation below may escalate THIS run to a full
+    # pull by flipping this, same as -f, without touching the global (which
+    # would leak into other datasets in a multi-dataset invocation).
+    local FORCE_FULL_SEND=$FORCE_FULL_SEND
+    # Remembers whether -f itself was passed, before -F below can flip the
+    # shadow above -- used only to keep the "(-f)" log message honest.
+    local user_requested_full=$FORCE_FULL_SEND
     validate_remote_host "$remote_user" "$remote_host"
     [ -n "$remote_host" ] && check_pool_health "$src_dataset" "$remote_user" "$remote_host"
     check_pool_health "$tgt_dataset" "" ""
@@ -648,50 +711,39 @@ process_dataset() {
         fi
     fi
 
-    # -F: destroy target-only snapshots (recursively under -r, via the same
-    # scan -n uses to report them) before working out what to pull. Placed
-    # here, after resume handling and before target creation/-f, so it never
-    # fights either of those. Target is always local in snapget.sh, so the
-    # destroy never needs ssh.
+    # -F: if any child (recursively) has a snapshot named like the resolved
+    # top-level common snapshot but under a MISMATCHED GUID, this run's
+    # `zfs send -R -I` would ship an incremental keyed to that name for
+    # every child that has it -- fails hard for this one, and destroying its
+    # snapshot doesn't help either (source still offers that name, so the
+    # stream still tries an incremental against a target with nothing left
+    # to receive onto; probed live on snapsend.sh: recv tears the child down
+    # instead of just erroring). The only fix ZFS actually supports in one
+    # command is upgrading this whole run to what -f already does: destroy
+    # everything on target, recreate, full re-pull -- so that's what this
+    # does, via the local FORCE_FULL_SEND shadow declared at the top of this
+    # function, reusing -f's existing (already-guarded, already-tested)
+    # machinery rather than half-reimplementing it. Target is always local
+    # in snapget.sh, so the collision scan never needs ssh.
     #
-    # find_conflicting_snapshots can list the same snapshot twice (own scan +
-    # recursive-descent block) -- harmless for -n (sort -u before printing),
-    # fatal here without the same dedup: a second `zfs destroy` of an
-    # already-gone snapshot logs a scary but harmless error.
-    #
-    # A destroyed snapshot does NOT make the subsequent pull skip that child:
-    # `zfs send -R -I @A @B` decides full-vs-incremental PER CHILD from the
-    # SOURCE's own history (does @A exist there?), never from what the target
-    # actually has. If source's child still has @A, the stream carries an
-    # INCREMENTAL component for it regardless, and a target we just emptied
-    # has no base left to receive that onto -- worse than the divergence we
-    # started with (probed live on snapsend.sh: recv tears the child down
-    # instead of just erroring). So finding ANY conflict forces this run to
-    # drop -I entirely and fully re-pull the WHOLE subtree, not just the
-    # broken child -- there is no way to ask zfs for "incremental for these
-    # branches, full for that one" in one command.
-    local reconcile_forced_full=0
-    if [ $RECONCILE -eq 1 ] && [ $FORCE_FULL_SEND -ne 1 ]; then
-        CONFLICT_SNAPSHOTS=()
+    # Deliberately narrower than find_conflicting_snapshots/-n: a target-only
+    # snapshot that does NOT collide by name is normal and harmless (longer
+    # local retention -- see the pve0 archive job, where -n always "fails"
+    # for exactly that reason, by design). Triggering on that broader
+    # definition would force an expensive full re-pull on EVERY run against
+    # any target with different retention.
+    if [ $RECONCILE -eq 1 ] && [ $RECURSIVE -eq 1 ] && [ $FORCE_FULL_SEND -ne 1 ]; then
         local reconcile_common
         reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
-        find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"
-        if [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ]; then
-            reconcile_forced_full=1
-            local reconcile_snap
-            while IFS= read -r reconcile_snap; do
-                [ -n "$reconcile_snap" ] || continue
-                if [[ "$reconcile_snap" =~ @(__replicate_|__migration__|vzdump) ]]; then
-                    log 1 "Not reconciling $reconcile_snap -- reserved by Proxmox VE (replication/migration/vzdump)"
-                    continue
-                fi
-                log 1 "Reconciling (-F): destroying target-only snapshot $reconcile_snap"
-                zfs destroy "$reconcile_snap" \
-                    || log 1 "Could not destroy $reconcile_snap (dependent clone?) -- continuing"
-            done < <(printf "%s\n" "${CONFLICT_SNAPSHOTS[@]}" | sort -u)
-            CONFLICT_SNAPSHOTS=()
-            log 1 "Reconciliation found divergence -- forcing a full resend of the whole subtree this run"
+        NAME_COLLISIONS=()
+        find_recursive_name_collisions "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"
+        if [ ${#NAME_COLLISIONS[@]} -gt 0 ]; then
+            log 1 "Reconciling (-F): name collision(s) with a mismatched GUID would block the incremental pull:"
+            printf '%s\n' "${NAME_COLLISIONS[@]}" | sort -u | while IFS= read -r collision; do log 1 "  $collision"; done
+            log 1 "Upgrading this run to a full re-pull of the whole subtree (same as -f)"
+            FORCE_FULL_SEND=1
         fi
+        NAME_COLLISIONS=()
     fi
 
     # Work out WHAT is going to be pulled before touching the target in any
@@ -762,7 +814,11 @@ process_dataset() {
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
-        log 1 "Force full pull activated (-f)"
+        if [ $user_requested_full -eq 1 ]; then
+            log 1 "Force full pull activated (-f)"
+        else
+            log 1 "Full re-pull activated (-F reconciliation)"
+        fi
 
         local protected_snaps
         protected_snaps=$(zfs list -t snapshot -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
@@ -816,8 +872,7 @@ process_dataset() {
         log 3 "  ${tgt_dataset}@${snap}"
     done
 
-    if [ $FORCE_FULL_SEND -eq 1 ] || [ $reconcile_forced_full -eq 1 ]; then
-        [ $FORCE_FULL_SEND -eq 1 ] && log 1 "Force full pull activated (-f)"
+    if [ $FORCE_FULL_SEND -eq 1 ]; then
         local common_snapshot="null"
     else
         if [[ " ${tgt_snaps[*]} " == *" ${latest_snap} "* ]]; then
@@ -901,7 +956,7 @@ process_dataset() {
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {
         log 0 "Transfer failed"
-        [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: -f receives with a forced rollback, which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, -f requires root."
+        [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: a full pull/-f-style receive does a forced rollback, which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, this run needed root."
         # Only keep the hold if it is actually still useful: a
         # receive_resume_token means the resume branch above will need this
         # exact source snapshot on a later run. Without one (e.g. zfs recv
