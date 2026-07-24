@@ -160,7 +160,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.45'
+VERSION='v2.46'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -894,6 +894,8 @@ process_dataset() {
         if [[ " ${tgt_snaps[*]} " == *" ${latest_snap} "* ]]; then
             if validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
                 log 1 "Snapshot already exists in target - skipping"
+                release_snapshot "$snapshot" "$remote_user" "$remote_host"
+                clear_inflight_snap "$tgt_dataset"
                 return 0
             else
                 log 1 "Snapshot exists but timestamps differ - forcing full pull"
