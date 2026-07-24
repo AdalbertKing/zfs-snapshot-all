@@ -21,6 +21,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
   - [Quiescing Proxmox guests (`-q`)](#quiescing-proxmox-guests--q)
   - [Link autotuning (`-A`)](#link-autotuning--a)
   - [Compression](#compression)
+  - [Bandwidth limiting (`-b`)](#bandwidth-limiting--b)
   - [JSON-lines stats log](#json-lines-stats-log)
 - [snapsend.sh — push replication](#snapsendsh--push-replication)
 - [snapget.sh — pull replication](#snapgetsh--pull-replication)
@@ -37,8 +38,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.52 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.47 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.53 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.48 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.12 |
@@ -164,6 +165,39 @@ Two independent mechanisms:
   (`feature@lz4_compress`, plus `feature@zstd_compress` for zstd-compressed records); force plain
   with `ZFS_SNAP_NO_COMPRESSED_SEND=1`.
 
+### Bandwidth limiting (`-b`)
+
+`-b <RATE>` caps the transfer. RATE is an mbuffer rate spec — a plain number of **bytes** per
+second, or one with a `b`/`k`/`M`/`G` suffix (1024-based). Bytes, not bits: a 20 Mbps link is
+`-b 2M`. Default is no limit.
+
+It is applied as `mbuffer -r` to the mbuffer **already** in every pipeline, so it costs no extra
+process and no extra memory. That mbuffer sits on the receiving side, right after the wire and
+*before* any decompression — which is exactly where the bytes being counted are the bytes actually
+crossing the link, compressed or not. (syncoid's `--source-bwlimit` puts a limiter on the sending
+side, where it would have to sit after the compressor to mean the same thing.)
+
+The mechanism is backpressure: mbuffer drains the stream at RATE, stops reading the socket, TCP
+closes its window, the sender blocks. Buffers ahead of it — mbuffer's own 16 MB, the TCP window,
+ssh's — mean the opening moments of a transfer can outrun the limit before it settles; tens of MB,
+irrelevant on anything worth throttling.
+
+Measured on a 200 MB incompressible stream, metropolis pve2 → pve1:
+
+| | unthrottled | `-b 20M` | `-b 5M` |
+|---|---|---|---|
+| push (`snapsend.sh`) | 6.7 s | 14.1 s | 44.9 s |
+
+Both throttled figures are the transfer time the limit implies plus ~4 s of fixed overhead.
+
+On a **local** transfer there is no link, but the limit still applies and is still useful: it
+throttles pool-to-pool I/O so a large backup doesn't starve the guests.
+
+`-b` also feeds [`-A`](#link-autotuning--a): a limit makes the link slower than the probe measured,
+and compress-or-not turns on link speed, so `-A` decides against `min(measured, -b)` rather than
+against the raw probe. The cap is applied on the way into the decision, not stored in the cache —
+the measurement stays valid for its week, the cap belongs to one invocation.
+
 ### JSON-lines stats log
 
 Every run appends one JSON object per line to `STATS_LOG` (JSON-lines: one record per line, no
@@ -215,6 +249,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-p <PORT>` | SSH port (default 22) |
 | `-c <CIPHER_SPEC>` | SSH cipher(s) to request (`ssh -c`), e.g. `-c aes128-gcm@openssh.com` for a faster/weaker cipher on a CPU-bound link. Default: let ssh/sshd negotiate. No-op on a local run |
 | `-k <FILE>` | Verify the remote host key against this known_hosts file (default: trust on first use) |
+| `-b <RATE>` | Cap the transfer rate — see [Bandwidth limiting](#bandwidth-limiting--b) |
 | `-A` | Autotune the link — see [Link autotuning](#link-autotuning--a) |
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
 | `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
@@ -233,7 +268,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -A -i -o -x -F -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -b -A -i -o -x -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
