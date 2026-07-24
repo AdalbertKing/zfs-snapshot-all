@@ -205,7 +205,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-g` | Compress with pigz instead (escape hatch when zstd is unavailable) |
 | `-l <LEVEL>` | Compression level (default 3 for zstd, 6 for pigz — different scales, each tool's own default) |
 | `-v <LEVEL>` | Verbosity 0 (errors only) – 4 (debug) |
-| `-r` | Recursive: include child datasets (native `zfs send -R`) |
+| `-r` | Recursive: include child datasets, one atomic `zfs send -R` stream for the whole subtree |
+| `-R` | Flat-recursive, syncoid/sanoid-compatible: expand into every descendant first (`zfs list -r`, unlimited depth, same call syncoid's `getchilddatasets` makes), then send each one as its own independent job. A failing child doesn't abort its siblings; a GUID collision on one child only forces a full resend of that child, not the whole tree (`-F` is a no-op here — see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)). Mutually exclusive with `-r` |
 | `-n` | Dry-run: report conflicts, send nothing |
 | `-I` | Full-history send if no common base exists (instead of a plain full send) |
 | `-u` | Unmount the target after receive |
@@ -219,7 +220,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
-| `-F` | Reconcile before sending (recursively under `-r`): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
+| `-F` | Reconcile before sending (recursively under `-r`; a no-op under `-R`, see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
 | `-V` | Print version and exit |
 
 ```bash
@@ -232,14 +233,37 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -c -k -A -i -o -x -F -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -A -i -o -x -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
-`-F` always destroys locally since the target is always local here).
+`-F` always destroys locally since the target is always local here). `-R`'s descendant listing
+runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
+local.
 
 ```bash
 snapget.sh -v1 pool/data backuppool/data_backup
 snapget.sh -r pool/data user@sourcehost:tank/backups/data
 ```
+
+### Recursion: `-r` vs `-R`
+
+Both walk the full dataset tree with no depth limit — `zfs list -r`/`zfs send -R` have no `-d`
+cap, so a child-of-child-of-child-of-child nests exactly as deep as `-r` reaches. The difference
+is the unit of work, not the depth:
+
+- **`-r`**: one atomic `zfs send -R` stream carries the whole subtree; one `zfs recv` lands it
+  all at once. All-or-nothing, but a single GUID collision anywhere in the tree (see `-F`) forces
+  a full resend of everything, because `zfs send -R -I` decides full-vs-incremental per child from
+  the *source's* history, not from what survives on the target.
+- **`-R`**: syncoid/sanoid-compatible — expands the tree into a flat list first (`zfs list -r`,
+  same call syncoid's `getchilddatasets` makes), then runs each dataset through the normal
+  single-dataset send/recv path independently. A failing or colliding child only affects itself;
+  everything else still lands, same as `snapsend.sh`/`snapget.sh` already do today for
+  comma-separated top-level `DATASETS`.
+
+Use `-r` for a single guest's own disks where all-or-nothing is exactly what you want (see
+[Quiescing](#quiescing-proxmox-guests--q)). Use `-R` for a whole subtree of independent
+datasets (e.g. `hdd/backups/pve2` holding `rpool/data/vm1`, `rpool/data/vm2`, ...) where one
+dataset's problem shouldn't block the rest.
 
 ## delsnaps.sh — retention / pruning
 
