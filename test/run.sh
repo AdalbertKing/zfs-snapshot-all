@@ -16,7 +16,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GEN="$DIR/../gen-cron.sh"
 
 # Fixed, machine-independent paths so expected output is deterministic.
-export REPO_DIR="/REPO" NOTIFY_SCRIPT="/NOTIFY" CRON_LOG="/LOG"
+export REPO_DIR="/REPO" NOTIFY_SCRIPT="/NOTIFY" WARN_SCRIPT="/WARN" DIGEST_SCRIPT="/DIGEST" CRON_LOG="/LOG"
 
 gen() { bash "$GEN" -c "$1" 2>&1; }
 # Drop the machine-specific "# Source:" line and any stray CR, so the golden

@@ -331,6 +331,90 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
+# ------------------------------------------------------------------------------
+# Companion to notify-fail.sh: CRITICAL/BROKEN monitor findings still mail
+# immediately (rate-limited, Part 4 above). WARNING findings ("getting stale",
+# past monitor_warn but not yet monitor_crit) are not urgent enough to
+# interrupt anyone, so notify-warn.sh only queues them; alert-digest.sh mails
+# one summary per day and is silent if nothing queued. gen-cron.sh wires both
+# into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
+# this part only makes sure the two scripts exist on disk.
+WARN_SCRIPT="/root/scripts/notify-warn.sh"
+WARN_SCRIPT_MARKER="# notify-warn.sh v1"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -x "$WARN_SCRIPT" ]; then log "  $WARN_SCRIPT present"; else warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"; fi
+elif [ -e "$WARN_SCRIPT" ] && grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/dev/null; then
+    log "$WARN_SCRIPT already at v1, leaving it alone"
+else
+    cat > "$WARN_SCRIPT" <<EOF
+#!/bin/bash
+$WARN_SCRIPT_MARKER -- queues a WARNING-tier monitor finding for
+# alert-digest.sh to summarize once a day, instead of mailing it immediately.
+# Usage in cron: ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "job description"
+JOB="\$1"
+QUEUE="/root/scripts/warn-queue.log"
+printf '%s\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+EOF
+    chmod +x "$WARN_SCRIPT"
+    log "created $WARN_SCRIPT"
+fi
+
+DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v1"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -x "$DIGEST_SCRIPT" ]; then log "  $DIGEST_SCRIPT present"; else warn "  $DIGEST_SCRIPT missing -- WARNING findings would queue forever and never be seen"; fi
+elif [ -e "$DIGEST_SCRIPT" ] && grep -qF "$DIGEST_SCRIPT_MARKER" "$DIGEST_SCRIPT" 2>/dev/null; then
+    log "$DIGEST_SCRIPT already at v1, leaving it alone"
+else
+    cat > "$DIGEST_SCRIPT" <<EOF
+#!/bin/bash
+$DIGEST_SCRIPT_MARKER -- once a day, mails one summary of everything
+# notify-warn.sh queued since the last run instead of leaving each WARNING
+# unmailed and invisible. Silent (no mail at all) if nothing queued.
+QUEUE="/root/scripts/warn-queue.log"
+HOST=\$(hostname -f 2>/dev/null || hostname)
+TODAY=\$(date '+%Y-%m-%d')
+
+[ -s "\$QUEUE" ] || exit 0
+
+PROCESSING="\${QUEUE}.processing"
+mv "\$QUEUE" "\$PROCESSING"
+
+SUMMARY=\$(awk -F'\t' '
+{
+    key = \$2
+    count[key]++
+    if (!(key in first) || \$1 < first[key]) first[key] = \$1
+    if (!(key in last)  || \$1 > last[key])  last[key]  = \$1
+}
+END {
+    for (k in count) printf "%d\t%s\t%d\t%d\n", count[k], k, first[k], last[k]
+}' "\$PROCESSING" | sort -t\$'\t' -k1,1nr)
+
+BODY=""
+UNIQUE=0
+while IFS=\$'\t' read -r cnt msg first_ep last_ep; do
+    UNIQUE=\$((UNIQUE + 1))
+    t1=\$(date -d "@\$first_ep" '+%H:%M')
+    t2=\$(date -d "@\$last_ep" '+%H:%M')
+    range="\$t1"; [ "\$t1" != "\$t2" ] && range="\$t1 - \$t2"
+    BODY="\${BODY}\$(printf '  x%-4s %-55s (%s)\n' "\$cnt" "\$msg" "\$range")
+"
+done <<< "\$SUMMARY"
+
+TOTAL=\$(wc -l < "\$PROCESSING")
+
+printf 'WARNING -- getting stale, nie jeszcze critical:\n\n%s' "\$BODY" \\
+    | mail -s "[ZFS DIGEST] \$HOST -- \$TODAY (\$UNIQUE unikalnych, \$TOTAL zdarzen)" ${NOTIFY_EMAIL}
+
+rm -f "\$PROCESSING"
+EOF
+    chmod +x "$DIGEST_SCRIPT"
+    log "created $DIGEST_SCRIPT"
+fi
+
+# ------------------------------------------------------------------------------
 log "Part 4b: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # ------------------------------------------------------------------------------
 PULL_LINE="15 * * * * cd $REPO_DIR && git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
