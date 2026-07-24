@@ -60,7 +60,38 @@ set -o pipefail
 #                    the per-child sends start.
 #   -n               Dry-run mode (show conflicting snapshots without sending)
 #   -I               Full history send (send all snapshots if no common base)
-#   -u               Unmount target filesystem(s) after receive
+#   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
+#                    just received) is the DEFAULT since v2.54; this flag stays
+#                    so the cron lines that already pass it keep parsing. Use -U
+#                    to get mounting back.
+#   -U               Mount the target after receive -- the opt-out from the
+#                    default above. Wanted when the target is meant to be browsed
+#                    (a restore staging area, an archive somebody reads from),
+#                    not when it is pure replication storage.
+#
+# WHY NOT MOUNTING IS THE DEFAULT: a replication target is storage, not a
+# filesystem anyone works in, and mounting it ranges from clutter to hazard.
+#
+#   * Properties do not normally travel: a plain `zfs send` carries no
+#     properties, so a received dataset inherits `mountpoint` from its new
+#     parent and lands somewhere harmless under the target. But `-r` and `-I`
+#     both send a REPLICATION stream (`zfs send -R`), which DOES carry them --
+#     and a source whose mountpoint is set locally then brings that path along.
+#     `rpool/ROOT/pve-1` on a Proxmox host has `mountpoint=/` set locally, so a
+#     recursive backup of it, received without -u, asks ZFS to mount a copy of
+#     the root filesystem over the live root. Verified on the fleet 2026-07-25:
+#     that dataset really is backed up daily, and really does have a local
+#     mountpoint.
+#   * Even where it lands harmlessly, a mounted copy of every container rootfs
+#     is walked by anything that scans the filesystem (updatedb, AV, backup
+#     agents) for no benefit.
+#   * A non-root receiver cannot mount at all: on Linux mount(2) needs
+#     CAP_SYS_ADMIN no matter what `zfs allow` grants, so without -u the receive
+#     fails outright for the delegated zfsbackup deployments.
+#
+# Nothing already mounted is unmounted by this: `-u` only decides whether the
+# dataset is mounted AFTER a receive, so existing targets simply stop coming
+# back up as runs replace them.
 #   -f               Force full send (destroy target data and send full snapshot)
 #   -w               Raw send (zfs send -w): send records exactly as they sit on
 #                    disk. For an ENCRYPTED source this ships ciphertext, so the
@@ -243,7 +274,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.53'
+VERSION='v2.54'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -295,7 +326,12 @@ RECURSIVE=0
 FLAT_RECURSE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
-UNMOUNT=0
+# `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.54
+# -- a replication target is storage, not a filesystem anybody browses, and
+# mounting it is at best clutter and at worst dangerous (see the header). -U
+# turns mounting back on; -u is still accepted and is now a no-op, so every
+# existing cron line that passes it keeps working untouched.
+UNMOUNT=1
 FORCE_FULL_SEND=0
 RAW_SEND=0
 # -A: measure the link and the data, then decide whether compressing is worth
@@ -1146,7 +1182,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIufwVp:k:Aq:i:o:x:c:b:F" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1162,7 +1198,8 @@ while getopts "m:ezZgl:v:rRnIufwVp:k:Aq:i:o:x:c:b:F" opt; do
         R) FLAT_RECURSE=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
-        u) UNMOUNT=1;;
+        u) UNMOUNT=1;;   # no-op since v2.54 (this is the default); kept so existing cron lines keep parsing
+        U) UNMOUNT=0;;
         f) FORCE_FULL_SEND=1;;
         w) RAW_SEND=1;;
         p) PORT="$OPTARG";;
@@ -1175,7 +1212,7 @@ while getopts "m:ezZgl:v:rRnIufwVp:k:Aq:i:o:x:c:b:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Blad: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -q -i -o -x -c -b -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -q -i -o -x -c -b -U -F -V" >&2
             exit 1
             ;;
     esac

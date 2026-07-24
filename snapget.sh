@@ -59,7 +59,17 @@ set -o pipefail
 #                    below). Mutually exclusive with -r.
 #   -n               Dry-run mode (show conflicting snapshots without receiving)
 #   -I               Full history receive (receive all snapshots if no common base)
-#   -u               Unmount target filesystem(s) after receive
+#   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
+#                    just received) is the DEFAULT since v2.49; this flag stays
+#                    so the cron lines that already pass it keep parsing. Use -U
+#                    to get mounting back.
+#   -U               Mount the target after receive -- the opt-out from the
+#                    default above. Wanted when the target is meant to be browsed
+#                    (a restore staging area, an archive somebody reads from),
+#                    not when it is pure replication storage. See the long note
+#                    in snapsend.sh for the full reasoning; it applies verbatim
+#                    here, and doubly so, because snapget's target is ALWAYS
+#                    local -- an unwanted mount lands on this machine.
 #   -f               Force full pull (destroy local target data and receive full snapshot)
 #   -w               Raw send (zfs send -w on the REMOTE source): pull records
 #                    exactly as they sit on disk. For an ENCRYPTED source this
@@ -185,7 +195,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.48'
+VERSION='v2.49'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -230,7 +240,11 @@ RECURSIVE=0
 FLAT_RECURSE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
-UNMOUNT=0
+# `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.49
+# -- mirrors snapsend.sh v2.54, see the long note in its header. -U turns
+# mounting back on; -u is still accepted and is now a no-op, so every existing
+# cron line that passes it keeps working untouched.
+UNMOUNT=1
 FORCE_FULL_SEND=0
 RAW_SEND=0
 # -A: measure the link and the data, then decide whether compressing is worth
@@ -1055,7 +1069,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:b:F" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1070,7 +1084,8 @@ while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:b:F" opt; do
         R) FLAT_RECURSE=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
-        u) UNMOUNT=1;;
+        u) UNMOUNT=1;;   # no-op since v2.49 (this is the default); kept so existing cron lines keep parsing
+        U) UNMOUNT=0;;
         f) FORCE_FULL_SEND=1;;
         w) RAW_SEND=1;;
         p) PORT="$OPTARG";;
@@ -1083,7 +1098,7 @@ while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:b:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -b -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -b -U -F -V" >&2
             exit 1
             ;;
     esac
