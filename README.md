@@ -219,6 +219,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
+| `-F` | Reconcile before sending: destroy target-only snapshots (recursively under `-r`) so one divergent child can't sink the single atomic `-R` send. Best-effort — a snapshot with a dependent clone, or reserved by Proxmox VE, is skipped, not cascaded. Try with `-n` first |
 | `-V` | Print version and exit |
 
 ```bash
@@ -231,8 +232,9 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -c -k -A -i -o -x -V`) behaves identically, with
-source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive).
+(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -c -k -A -i -o -x -F -V`) behaves identically, with
+source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
+`-F` always destroys locally since the target is always local here).
 
 ```bash
 snapget.sh -v1 pool/data backuppool/data_backup

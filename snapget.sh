@@ -75,6 +75,17 @@ set -o pipefail
 #                    -x`). Repeatable. Applied on BOTH the normal and the
 #                    resumed receive -- unlike -o, this is receive-side state
 #                    and a resume token carries no property excludes of its own.
+#   -F               Reconcile before pulling: destroy (local) target
+#                    snapshots that do not exist on the source (recursively
+#                    under -r) before the real transfer, so one divergent
+#                    child cannot sink the single atomic `zfs send -R` for the
+#                    whole subtree. Reuses the same scan `-n` already does for
+#                    its report -- this just acts on it. Best-effort: a plain
+#                    `zfs destroy` (no -R) refuses a snapshot with a dependent
+#                    clone, same as delsnaps.sh -- logged and skipped, not
+#                    cascaded. Snapshots reserved by Proxmox VE
+#                    (replicate/migration/vzdump) are never touched. Opt-in;
+#                    combine with `-n` first to see what it would destroy.
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
 #                    it can flip nothing but compression. Decided separately for
@@ -123,7 +134,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.41'
+VERSION='v2.42'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -178,6 +189,8 @@ RECV_EXCLUDE_FLAGS=""
 # -c: ssh cipher spec (ssh -c), appended to SSH_OPTS once built. Empty = let
 # ssh/sshd negotiate their own default.
 SSH_CIPHER=""
+# -F: reconcile (destroy target-only snapshots) before the real pull.
+RECONCILE=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 # Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
@@ -625,6 +638,33 @@ process_dataset() {
         fi
     fi
 
+    # -F: destroy target-only snapshots (recursively under -r, via the same
+    # scan -n uses to report them) before working out what to pull. Placed
+    # here, after resume handling and before target creation/-f, so it never
+    # fights either of those. Best-effort and non-fatal -- a snapshot that
+    # survives (dependent clone, or a Proxmox-reserved name) just means the
+    # pull below fails the same way it always did without -F. Target is
+    # always local in snapget.sh, so the destroy never needs ssh.
+    if [ $RECONCILE -eq 1 ] && [ $FORCE_FULL_SEND -ne 1 ]; then
+        CONFLICT_SNAPSHOTS=()
+        local reconcile_common
+        reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
+        find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"
+        if [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ]; then
+            local reconcile_snap
+            for reconcile_snap in "${CONFLICT_SNAPSHOTS[@]}"; do
+                if [[ "$reconcile_snap" =~ @(__replicate_|__migration__|vzdump) ]]; then
+                    log 1 "Not reconciling $reconcile_snap -- reserved by Proxmox VE (replication/migration/vzdump)"
+                    continue
+                fi
+                log 1 "Reconciling (-F): destroying target-only snapshot $reconcile_snap"
+                zfs destroy "$reconcile_snap" \
+                    || log 1 "Could not destroy $reconcile_snap (dependent clone?) -- continuing"
+            done
+            CONFLICT_SNAPSHOTS=()
+        fi
+    fi
+
     # Work out WHAT is going to be pulled before touching the target in any
     # way. This ordering is load-bearing, not cosmetic: everything below either
     # creates the target dataset or, under -f, destroys it outright. Resolving
@@ -881,7 +921,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -903,10 +943,11 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:" opt; do
         o) EXTRA_SEND_OPTS="$OPTARG";;
         x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
         c) SSH_CIPHER="$OPTARG";;
+        F) RECONCILE=1;;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -o -x -c -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -o -x -c -F -V" >&2
             exit 1
             ;;
     esac
