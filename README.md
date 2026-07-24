@@ -212,6 +212,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-f` | Force full send: destroy target data, reseed from scratch |
 | `-w` | Raw send (`zfs send -w`) — ships an encrypted source as ciphertext with no key needed on either end; effectively a no-op on unencrypted data |
 | `-p <PORT>` | SSH port (default 22) |
+| `-c <CIPHER_SPEC>` | SSH cipher(s) to request (`ssh -c`), e.g. `-c aes128-gcm@openssh.com` for a faster/weaker cipher on a CPU-bound link. Default: let ssh/sshd negotiate. No-op on a local run |
 | `-k <FILE>` | Verify the remote host key against this known_hosts file (default: trust on first use) |
 | `-A` | Autotune the link — see [Link autotuning](#link-autotuning--a) |
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
@@ -230,7 +231,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -o -x -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -c -k -A -i -o -x -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive).
 
 ```bash

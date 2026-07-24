@@ -57,6 +57,10 @@ set -o pipefail
 #                    in both directions there. Rawness must NOT change mid-stream
 #                    on an encrypted target -- see the guardrail in process_dataset.
 #   -p <PORT>         SSH port to use (default: 22)
+#   -c <CIPHER_SPEC>   SSH cipher(s) to request (ssh -c), e.g. "aes128-gcm@openssh.com"
+#                    for a faster/weaker cipher on a CPU-bound link. Default (omitted)
+#                    is whatever ssh/sshd negotiate on their own. No-op on a local run
+#                    -- ssh is never invoked there.
 #   -k <FILE>         Verify remote host keys against this known_hosts file instead
 #                     of blindly trusting them (StrictHostKeyChecking=no is the
 #                     default when -k is omitted, unchanged from prior versions --
@@ -171,7 +175,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.45'
+VERSION='v2.46'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -230,6 +234,9 @@ COMPRESSION_SET=0
 # property excludes, one -x per occurrence, accumulated as repeated "-x PROP".
 EXTRA_SEND_OPTS=""
 RECV_EXCLUDE_FLAGS=""
+# -c: ssh cipher spec (ssh -c), appended to SSH_OPTS once built. Empty = let
+# ssh/sshd negotiate their own default.
+SSH_CIPHER=""
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 # Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
@@ -954,7 +961,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:c:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -976,10 +983,11 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:" opt; do
         k) KNOWN_HOSTS_FILE="$OPTARG";;
         o) EXTRA_SEND_OPTS="$OPTARG";;
         x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
+        c) SSH_CIPHER="$OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -i -o -x -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -i -o -x -c -V" >&2
             exit 1
             ;;
     esac
@@ -1067,6 +1075,11 @@ fi
 # txg commit or a saturated 20 Mbps VPN keeps replying and never trips the
 # counter.
 SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+
+# -c: request a specific cipher (e.g. a faster/weaker one on a CPU-bound link).
+# Omitted by default -- let ssh/sshd negotiate. No-op on a local run, since
+# SSH_OPTS is built either way but ssh is never actually invoked there.
+[ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
 
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
