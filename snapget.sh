@@ -77,15 +77,25 @@ set -o pipefail
 #                    and a resume token carries no property excludes of its own.
 #   -F               Reconcile before pulling: destroy (local) target
 #                    snapshots that do not exist on the source (recursively
-#                    under -r) before the real transfer, so one divergent
-#                    child cannot sink the single atomic `zfs send -R` for the
-#                    whole subtree. Reuses the same scan `-n` already does for
-#                    its report -- this just acts on it. Best-effort: a plain
-#                    `zfs destroy` (no -R) refuses a snapshot with a dependent
-#                    clone, same as delsnaps.sh -- logged and skipped, not
-#                    cascaded. Snapshots reserved by Proxmox VE
-#                    (replicate/migration/vzdump) are never touched. Opt-in;
-#                    combine with `-n` first to see what it would destroy.
+#                    under -r), then FULLY RE-PULL THE WHOLE SUBTREE this run
+#                    if any were found -- not just the branch that diverged.
+#                    Reuses the same scan `-n` already does for its report.
+#                    Best-effort: a plain `zfs destroy` (no -R) refuses a
+#                    snapshot with a dependent clone, same as delsnaps.sh --
+#                    logged and skipped, not cascaded. Snapshots reserved by
+#                    Proxmox VE (replicate/migration/vzdump) are never
+#                    touched.
+#                    Full-tree re-pull is not a shortcut we took -- it is
+#                    required: `zfs send -R -I` decides full-vs-incremental
+#                    PER CHILD from the SOURCE's own snapshot history, not
+#                    from what the target has, so a child whose divergent
+#                    snapshot we just destroyed still arrives as an
+#                    INCREMENTAL component if the source still has that base
+#                    -- and a target with nothing to receive it onto fails
+#                    worse than before (probed live on snapsend.sh: recv
+#                    tears the child dataset down instead of just erroring).
+#                    Opt-in; combine with `-n` first to see what it would
+#                    destroy.
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
 #                    it can flip nothing but compression. Decided separately for
@@ -641,18 +651,36 @@ process_dataset() {
     # -F: destroy target-only snapshots (recursively under -r, via the same
     # scan -n uses to report them) before working out what to pull. Placed
     # here, after resume handling and before target creation/-f, so it never
-    # fights either of those. Best-effort and non-fatal -- a snapshot that
-    # survives (dependent clone, or a Proxmox-reserved name) just means the
-    # pull below fails the same way it always did without -F. Target is
-    # always local in snapget.sh, so the destroy never needs ssh.
+    # fights either of those. Target is always local in snapget.sh, so the
+    # destroy never needs ssh.
+    #
+    # find_conflicting_snapshots can list the same snapshot twice (own scan +
+    # recursive-descent block) -- harmless for -n (sort -u before printing),
+    # fatal here without the same dedup: a second `zfs destroy` of an
+    # already-gone snapshot logs a scary but harmless error.
+    #
+    # A destroyed snapshot does NOT make the subsequent pull skip that child:
+    # `zfs send -R -I @A @B` decides full-vs-incremental PER CHILD from the
+    # SOURCE's own history (does @A exist there?), never from what the target
+    # actually has. If source's child still has @A, the stream carries an
+    # INCREMENTAL component for it regardless, and a target we just emptied
+    # has no base left to receive that onto -- worse than the divergence we
+    # started with (probed live on snapsend.sh: recv tears the child down
+    # instead of just erroring). So finding ANY conflict forces this run to
+    # drop -I entirely and fully re-pull the WHOLE subtree, not just the
+    # broken child -- there is no way to ask zfs for "incremental for these
+    # branches, full for that one" in one command.
+    local reconcile_forced_full=0
     if [ $RECONCILE -eq 1 ] && [ $FORCE_FULL_SEND -ne 1 ]; then
         CONFLICT_SNAPSHOTS=()
         local reconcile_common
         reconcile_common=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
         find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$reconcile_common"
         if [ ${#CONFLICT_SNAPSHOTS[@]} -gt 0 ]; then
+            reconcile_forced_full=1
             local reconcile_snap
-            for reconcile_snap in "${CONFLICT_SNAPSHOTS[@]}"; do
+            while IFS= read -r reconcile_snap; do
+                [ -n "$reconcile_snap" ] || continue
                 if [[ "$reconcile_snap" =~ @(__replicate_|__migration__|vzdump) ]]; then
                     log 1 "Not reconciling $reconcile_snap -- reserved by Proxmox VE (replication/migration/vzdump)"
                     continue
@@ -660,8 +688,9 @@ process_dataset() {
                 log 1 "Reconciling (-F): destroying target-only snapshot $reconcile_snap"
                 zfs destroy "$reconcile_snap" \
                     || log 1 "Could not destroy $reconcile_snap (dependent clone?) -- continuing"
-            done
+            done < <(printf "%s\n" "${CONFLICT_SNAPSHOTS[@]}" | sort -u)
             CONFLICT_SNAPSHOTS=()
+            log 1 "Reconciliation found divergence -- forcing a full resend of the whole subtree this run"
         fi
     fi
 
@@ -787,8 +816,8 @@ process_dataset() {
         log 3 "  ${tgt_dataset}@${snap}"
     done
 
-    if [ $FORCE_FULL_SEND -eq 1 ]; then
-        log 1 "Force full pull activated (-f)"
+    if [ $FORCE_FULL_SEND -eq 1 ] || [ $reconcile_forced_full -eq 1 ]; then
+        [ $FORCE_FULL_SEND -eq 1 ] && log 1 "Force full pull activated (-f)"
         local common_snapshot="null"
     else
         if [[ " ${tgt_snaps[*]} " == *" ${latest_snap} "* ]]; then
