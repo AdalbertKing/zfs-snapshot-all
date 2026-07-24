@@ -270,31 +270,56 @@ done
 log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
 # ------------------------------------------------------------------------------
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v2"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if [ -x "$NOTIFY_SCRIPT" ]; then log "  $NOTIFY_SCRIPT present"; else warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"; fi
-elif [ -e "$NOTIFY_SCRIPT" ]; then
-    log "$NOTIFY_SCRIPT already exists, leaving it alone (edit NOTIFY_EMAIL inside manually if needed)"
+    if [ ! -x "$NOTIFY_SCRIPT" ]; then
+        warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
+    elif grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
+        log "  $NOTIFY_SCRIPT present (v2, rate-limited)"
+    else
+        warn "  $NOTIFY_SCRIPT present but pre-v2 (no rate-limit) -- re-run without --check-only to upgrade"
+    fi
+elif [ -e "$NOTIFY_SCRIPT" ] && grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
+    log "$NOTIFY_SCRIPT already at v2, leaving it alone (edit NOTIFY_EMAIL/NOTIFY_COOLDOWN inside manually if needed)"
 else
+    [ -e "$NOTIFY_SCRIPT" ] && log "$NOTIFY_SCRIPT exists but predates rate-limiting -- upgrading to v2"
     cat > "$NOTIFY_SCRIPT" <<EOF
 #!/bin/bash
-# Sends a failure alert email for a cron job that returned non-zero.
+$NOTIFY_SCRIPT_MARKER -- sends a failure alert email for a cron job that
+# returned non-zero, but suppresses repeat sends of the SAME message within a
+# cooldown window so a flapping check (schedule drift, a stuck CRITICAL) does
+# not flood the inbox with dozens of identical mails.
 # Usage in cron: ... 2>>cron.log || /root/scripts/notify-fail.sh "job description"
 JOB="\$1"
 HOST=\$(hostname -f 2>/dev/null || hostname)
 NOW=\$(date '+%Y-%m-%d %H:%M:%S')
+NOW_EPOCH=\$(date +%s)
+
+STATE_DIR="/root/scripts/notify-state"
+COOLDOWN="\${NOTIFY_COOLDOWN:-14400}"   # 4h default; override: NOTIFY_COOLDOWN=3600 notify-fail.sh "..."
+mkdir -p "\$STATE_DIR"
+
+KEY=\$(printf '%s' "\$JOB" | md5sum | cut -d' ' -f1)
+LASTFILE="\$STATE_DIR/\$KEY"
+
+if [ -f "\$LASTFILE" ] && [ \$(( NOW_EPOCH - \$(cat "\$LASTFILE") )) -lt "\$COOLDOWN" ]; then
+    echo "notify-fail.sh: suppressed repeat within cooldown -- \${JOB}" >&2
+    exit 0
+fi
+echo "\$NOW_EPOCH" > "\$LASTFILE"
 
 echo "Zadanie '\${JOB}' zakonczylo sie bledem na \${HOST} o \${NOW}. Sprawdz /root/scripts/cron.log." \\
     | mail -s "[ZFS BACKUP] FAILURE: \${JOB} na \${HOST}" ${NOTIFY_EMAIL}
 EOF
     chmod +x "$NOTIFY_SCRIPT"
-    log "created $NOTIFY_SCRIPT (alerts -> $NOTIFY_EMAIL)"
+    log "created/upgraded $NOTIFY_SCRIPT (v2, alerts -> $NOTIFY_EMAIL, cooldown 4h)"
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "skipping the test email (check-only)"
 elif command -v mail >/dev/null; then
     log "sending a test alert to confirm mail delivery works from THIS host..."
-    "$NOTIFY_SCRIPT" "deploy_new_server.sh test on $(hostname -f 2>/dev/null || hostname)"
+    NOTIFY_COOLDOWN=0 "$NOTIFY_SCRIPT" "deploy_new_server.sh test on $(hostname -f 2>/dev/null || hostname)"
     log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
     log "If it does NOT arrive: this host's postfix likely can't deliver externally without a relay"
     log "(no relayhost configured is fine IF direct delivery to the recipient's MX works, as it did"
