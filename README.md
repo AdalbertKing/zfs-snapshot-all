@@ -22,6 +22,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
   - [Link autotuning (`-A`)](#link-autotuning--a)
   - [Compression](#compression)
   - [Bandwidth limiting (`-b`)](#bandwidth-limiting--b)
+  - [Mounting the target (`-u`/`-U`)](#mounting-the-target--u--u)
   - [JSON-lines stats log](#json-lines-stats-log)
 - [snapsend.sh — push replication](#snapsendsh--push-replication)
 - [snapget.sh — pull replication](#snapgetsh--pull-replication)
@@ -38,8 +39,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.53 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.48 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.54 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.49 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.12 |
@@ -198,6 +199,46 @@ and compress-or-not turns on link speed, so `-A` decides against `min(measured, 
 against the raw probe. The cap is applied on the way into the decision, not stored in the cache —
 the measurement stays valid for its week, the cap belongs to one invocation.
 
+### Mounting the target (`-u`/`-U`)
+
+**A replication target is not mounted.** That is the default since snapsend v2.54 / snapget v2.49;
+`-u` is still accepted (and now does nothing) so existing cron lines keep parsing, and `-U` opts
+back into mounting for a target that is genuinely meant to be browsed.
+
+The reason is not tidiness. A plain `zfs send` carries no properties, so a received dataset
+inherits `mountpoint` from its new parent and lands harmlessly under the target — but `-r` and
+`-I` both send a **replication stream** (`zfs send -R`), which *does* carry properties, and a
+source whose mountpoint is set locally brings that path along. Demonstrated live, 2026-07-25:
+
+```
+# source: rpool/mptest, mountpoint=/mnt/mptest_live (local)
+# received with mounting enabled, then:
+$ findmnt -n /mnt/mptest_live
+/mnt/mptest_live rpool/mptest              zfs rw,relatime,xattr,noacl
+/mnt/mptest_live rpool/mpoutU/rpool/mptest zfs rw,relatime,xattr,noacl   <- the BACKUP, on top
+```
+
+The backup copy mounted **over** the live dataset and shadowed it: anything reading that path now
+reads the backup. `rpool/ROOT/pve-1` has `mountpoint=/` set locally on every Proxmox host, so the
+same mechanism applied to a recursive backup of it points at `/`.
+
+Two smaller reasons: a mounted copy of every container rootfs gets walked by anything that scans
+the filesystem, for nothing; and a non-root receiver cannot mount at all (`mount(2)` needs
+`CAP_SYS_ADMIN` regardless of `zfs allow`), so the delegated `zfsbackup` deployments need this.
+
+What actually changes, precisely:
+
+| situation | before | now |
+|---|---|---|
+| target created by these scripts | already `canmount=noauto`, never mounted | unchanged |
+| incremental receive into a mounted target | stays mounted | unchanged — `-u` governs the moment of receipt, and an incremental doesn't remount |
+| full/initial receive into an existing mounted target | remounted afterwards | left unmounted |
+| `-w`/`-f`, where `recv` builds the leaf from the stream | mounted per the stream's own `mountpoint` | left unmounted |
+
+`canmount` on a pre-existing target is never rewritten, so `zfs mount <dataset>` brings any of
+them back by hand. `-U` sets `canmount=on` for targets it creates, since `canmount=noauto` would
+otherwise outrank the recv flag and make the opt-out silently powerless.
+
 ### JSON-lines stats log
 
 Every run appends one JSON object per line to `STATS_LOG` (JSON-lines: one record per line, no
@@ -243,7 +284,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-R` | Flat-recursive, syncoid/sanoid-compatible: expand into every descendant first (`zfs list -r`, unlimited depth, same call syncoid's `getchilddatasets` makes), then send each one as its own independent job. A failing child doesn't abort its siblings; a GUID collision on one child only forces a full resend of that child, not the whole tree (`-F` is a no-op here — see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)). Mutually exclusive with `-r` |
 | `-n` | Dry-run: report conflicts, send nothing |
 | `-I` | Full-history send if no common base exists (instead of a plain full send) |
-| `-u` | Unmount the target after receive |
+| `-u` | Accepted and ignored — not mounting is the default since v2.54. Kept so existing cron lines keep parsing |
+| `-U` | Mount the target after receive — the opt-out, see [Mounting the target](#mounting-the-target--u--u) |
 | `-f` | Force full send: destroy target data, reseed from scratch |
 | `-w` | Raw send (`zfs send -w`) — ships an encrypted source as ciphertext with no key needed on either end; effectively a no-op on unencrypted data |
 | `-p <PORT>` | SSH port (default 22) |
@@ -268,7 +310,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -b -A -i -o -x -F -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -b -A -i -o -x -U -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
