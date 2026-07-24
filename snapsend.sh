@@ -62,6 +62,17 @@ set -o pipefail
 #                     default when -k is omitted, unchanged from prior versions --
 #                     only opt into -k if you've already populated FILE, e.g. via
 #                     ssh-keyscan, and verified the fingerprint out of band)
+#   -o "<FLAGS>"       Extra raw flags appended verbatim to `zfs send` (e.g.
+#                    -o "-L -e" for large_block/embed_data). Passed through with
+#                    no validation -- same trust level as every other flag here.
+#                    Skipped on the resume path: `zfs send -t <token>` already
+#                    fixes the stream's format, and stacking more flags on top of
+#                    a token is what aborts -w (see above), so nothing is risked
+#                    there for a value nobody asked to be resumed.
+#   -x <PROPERTY>      Exclude PROPERTY from the receive side (`zfs recv -x`).
+#                    Repeatable. Applied on BOTH the normal and the resumed
+#                    receive -- unlike -o, this is receive-side state and a
+#                    resume token carries no property excludes of its own.
 #   -A               Auto-tune the link: measure it, then decide whether -z is
 #                    worth it for THIS data. Opt-in, remote transfers only, and
 #                    it can flip nothing but compression. Decided separately for
@@ -160,7 +171,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.44'
+VERSION='v2.45'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -215,6 +226,10 @@ AUTOTUNE=0
 # "user explicitly asked for it" -- auto-tuning may fill the first case in, but
 # must never silently overrule the second.
 COMPRESSION_SET=0
+# -o: raw flags appended verbatim to `zfs send` (e.g. "-L -e"). -x: recv-side
+# property excludes, one -x per occurrence, accumulated as repeated "-x PROP".
+EXTRA_SEND_OPTS=""
+RECV_EXCLUDE_FLAGS=""
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
 # Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
@@ -625,6 +640,7 @@ process_dataset() {
                 log 1 "Found resume token for $tgt_dataset - resuming interrupted transfer (attempt $((attempts + 1))/$MAX_RESUME_ATTEMPTS)"
                 local resume_recv_flags="-F -s"
                 [ $UNMOUNT -eq 1 ] && resume_recv_flags="$resume_recv_flags -u"
+                [ -n "$RECV_EXCLUDE_FLAGS" ] && resume_recv_flags="$resume_recv_flags$RECV_EXCLUDE_FLAGS"
                 local resume_send_cmd="zfs send -t $resume_token"
                 local resume_recv_cmd="zfs recv $resume_recv_flags $tgt_dataset"
                 log 4 "RAW RESUME SEND COMMAND: $resume_send_cmd"
@@ -857,17 +873,17 @@ process_dataset() {
 
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
-        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag -I ${src_dataset}@${common_snapshot} $snapshot"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
-        send_cmd="zfs send $raw_send_flag $comp_send_flag -i $bookmark_base $snapshot"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
             log 1 "Performing full history send"
-            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag -R $snapshot"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -R $snapshot"
         else
             log 1 "Performing standard full send"
-            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $snapshot"
+            send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $snapshot"
         fi
     fi
 
@@ -876,6 +892,7 @@ process_dataset() {
     # precondition for the resumable-transfer logic above to ever fire.
     local recv_flags="-F -s"
     [ $UNMOUNT -eq 1 ] && recv_flags="$recv_flags -u"
+    [ -n "$RECV_EXCLUDE_FLAGS" ] && recv_flags="$recv_flags$RECV_EXCLUDE_FLAGS"
     local recv_cmd="zfs recv $recv_flags $tgt_dataset"
 
     log 4 "RAW ZFS SEND COMMAND: $send_cmd"
@@ -937,7 +954,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -957,10 +974,12 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:" opt; do
         w) RAW_SEND=1;;
         p) PORT="$OPTARG";;
         k) KNOWN_HOSTS_FILE="$OPTARG";;
+        o) EXTRA_SEND_OPTS="$OPTARG";;
+        x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -i -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -i -o -x -V" >&2
             exit 1
             ;;
     esac

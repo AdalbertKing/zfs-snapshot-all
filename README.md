@@ -216,6 +216,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-A` | Autotune the link — see [Link autotuning](#link-autotuning--a) |
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
 | `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
+| `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
+| `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
 | `-V` | Print version and exit |
 
 ```bash
@@ -228,8 +230,8 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -V`) behaves identically, with source/target
-swapped.
+(`-m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -o -x -V`) behaves identically, with
+source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive).
 
 ```bash
 snapget.sh -v1 pool/data backuppool/data_backup
