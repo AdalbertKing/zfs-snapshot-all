@@ -789,6 +789,61 @@ compressed_send_flag() {
 }
 
 ###############################################################################
+# POOL HEALTH -- alert on DEGRADED/FAULTED pools, source and target
+###############################################################################
+# Cache per (pool, remote) -- one zpool query per run, same idiom as
+# csend_pool_has above.
+declare -A POOL_HEALTH_CACHE=()
+
+pool_health() {
+    local pool="$1" remote="$2" key="$pool/$remote" val
+    if [ -n "${POOL_HEALTH_CACHE[$key]+x}" ]; then
+        printf '%s' "${POOL_HEALTH_CACHE[$key]}"
+        return 0
+    fi
+    if [ -n "$remote" ]; then
+        val=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool list -H -o health '$pool'" 2>/dev/null)
+    else
+        val=$(zpool list -H -o health "$pool" 2>/dev/null)
+    fi
+    [ -n "$val" ] || val="UNKNOWN"
+    POOL_HEALTH_CACHE["$key"]="$val"
+    printf '%s' "$val"
+}
+
+# Checks the pool backing $dataset and, if it is not ONLINE, mails
+# NOTIFY_SCRIPT directly -- bypassing process_dataset's own return code on
+# purpose. A DEGRADED pool with a surviving mirror leg still sends fine, so
+# tying this to transfer success would either mask a real disk failure behind
+# a "job succeeded" exit code, or falsely report a working transfer as failed.
+# notify-fail.sh's own cooldown (default 4h) keeps this from mailing every run
+# even though the check itself runs on every invocation.
+#
+# remote_host="" means check locally. Called once per side from
+# process_dataset in both snapsend.sh (local src always, remote tgt if any)
+# and snapget.sh (remote src if any, local tgt always) -- one execution
+# therefore reports BOTH ends of a push/pull from wherever it already runs,
+# so the other side never needs its own separate pool-health cron/alert for
+# the same relationship.
+check_pool_health() {
+    local dataset="$1" remote_user="${2:-}" remote_host="${3:-}"
+    local pool health remote host_desc
+    pool="${dataset%%/*}"
+    [ -n "$pool" ] || return 0
+    if [ -n "$remote_host" ]; then
+        remote="$remote_user@$remote_host"
+        host_desc="$remote_host"
+    else
+        remote=""
+        host_desc="$(hostname -f 2>/dev/null || hostname)"
+    fi
+    health=$(pool_health "$pool" "$remote")
+    [ "$health" = "ONLINE" ] && return 0
+    log 0 "Pool '$pool' on $host_desc is $health"
+    "$NOTIFY_SCRIPT" "$host_desc pool $health: $pool" 2>/dev/null || true
+}
+
+###############################################################################
 # QUIESCE (-q) -- application-consistent snapshots of Proxmox guests
 ###############################################################################
 # A ZFS snapshot of a running guest is CRASH-consistent: the image is whatever

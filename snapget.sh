@@ -110,7 +110,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.38'
+VERSION='v2.39'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -159,6 +159,10 @@ AUTOTUNE=0
 COMPRESSION_SET=0
 declare -a CONFLICT_SNAPSHOTS=()
 STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+# Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
+# -- reused directly by check_pool_health in lib-zfs-snap.sh so a DEGRADED pool
+# alerts through the existing rate-limited path instead of a new one.
+NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 KNOWN_HOSTS_FILE=""
 
 # Shared helpers (logging, stats, resumable-transfer bookkeeping) live in a
@@ -503,6 +507,8 @@ process_dataset() {
     local remote_host="$4"
     STATS_RESUMED="no"
     validate_remote_host "$remote_user" "$remote_host"
+    [ -n "$remote_host" ] && check_pool_health "$src_dataset" "$remote_user" "$remote_host"
+    check_pool_health "$tgt_dataset" "" ""
     log 3 "================================================"
     log 3 "PROCESSING DATASET:"
     log 3 "SRC: $src_dataset"
