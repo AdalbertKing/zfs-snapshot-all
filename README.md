@@ -37,8 +37,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.44 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.39 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.52 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.47 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.12 |
@@ -264,6 +264,23 @@ Use `-r` for a single guest's own disks where all-or-nothing is exactly what you
 [Quiescing](#quiescing-proxmox-guests--q)). Use `-R` for a whole subtree of independent
 datasets (e.g. `hdd/backups/pve2` holding `rpool/data/vm1`, `rpool/data/vm2`, ...) where one
 dataset's problem shouldn't block the rest.
+
+**Forgetting both is caught.** Naming a dataset that only holds children — `rpool/data` on a
+Proxmox host, say — without `-r` or `-R` sends the parent and nothing else, and *reports success*:
+the parent is a real dataset, so the transfer genuinely succeeds, the stats log records success,
+and `check-snap-age.sh` sees a fresh snapshot. Nothing downstream is in a position to notice the
+data never left. Both scripts therefore check for immediate children whenever neither recursion
+flag is set and warn at verbosity 0 (i.e. even in a default cron run):
+
+```
+WARNING: rpool/data has 1 child dataset(s) but neither -r nor -R was given -- only rpool/data
+itself is being sent, its children are NOT. Add -R (independent per-dataset jobs) or -r (one
+atomic recursive stream) if you meant to include them.
+```
+
+It is a warning, not an error — replicating a parent alone is legitimate, and a job may
+deliberately split parent and children across schedules. It also fires under `-n`, since a preview
+is the best moment to learn the job is aimed at an empty container.
 
 ## delsnaps.sh — retention / pruning
 
