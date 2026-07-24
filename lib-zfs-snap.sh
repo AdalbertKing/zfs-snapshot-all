@@ -971,9 +971,11 @@ quiesce_thaw_all() {
 
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
-# overwriting each other.
+# overwriting each other. Optional $2 (-i/--identifier) folds a second,
+# independent job to the SAME target into the hash too, so it gets its own
+# bookmark instead of clobbering the first job's incremental base.
 bookmark_target_tag() {
-    printf '%s' "$1" | md5sum | cut -c1-8
+    printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -c1-8
 }
 
 # Look for a bookmark on $src_dataset whose GUID matches $tgt_head_guid --
@@ -1018,8 +1020,9 @@ record_send_bookmark() {
     local tgt_dataset="$3"
     local remote_user="${4:-}"
     local remote_host="${5:-}"
+    local identifier="${6:-}"
     local tag mark full
-    tag=$(bookmark_target_tag "$tgt_dataset")
+    tag=$(bookmark_target_tag "$tgt_dataset" "$identifier")
     mark="tgt-${tag}"
     full="${src_dataset}#${mark}"
     if [ -n "$remote_host" ]; then

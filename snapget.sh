@@ -82,6 +82,14 @@ set -o pipefail
 #                    sample. Every failure path leaves your settings untouched.
 #
 #                    An explicit -z/-Z/-g WINS: -A stands down and honours it.
+#   -i <TAG>          Identifier for this job. Folds TAG into both the lock
+#                    key and the per-target bookmark name, so a second,
+#                    genuinely independent job aimed at the SAME src/tgt pair
+#                    gets its own lock and its own bookmark instead of
+#                    serializing behind, or overwriting the incremental base
+#                    of, the first job. Omit it (the default) to keep today's
+#                    behaviour: all jobs to a given pair share one lock and
+#                    one bookmark.
 #   -V               Print version and exit
 #
 # COMPRESSED SEND is automatic (`zfs send -c`) and needs no flag: records are
@@ -102,8 +110,9 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.37'
+VERSION='v2.38'
 MESSAGE=""
+IDENTIFIER=""
 VERBOSE=0
 COMPRESSION=0
 # Which compressor -z/-Z/-g selected, and whether -l was given explicitly. zstd
@@ -828,7 +837,7 @@ process_dataset() {
     # Refresh the per-target bookmark to what was just sent, regardless of
     # which path got us here (-I, -i bookmark, or FULL) -- see
     # record_send_bookmark in lib-zfs-snap.sh. Source may be remote here.
-    [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host"
+    [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host" "$IDENTIFIER"
 
     log 1 "Transfer completed successfully"
     return 0
@@ -843,9 +852,10 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
+while getopts "m:ezZgl:v:rnIufwVp:k:Ai:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
+        i) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
@@ -864,7 +874,7 @@ while getopts "m:ezZgl:v:rnIufwVp:k:A" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -V" >&2
             exit 1
             ;;
     esac
@@ -949,7 +959,9 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # concurrently instead of blocking each other. Options (-v, -z, ...) are
 # deliberately excluded from the key, so a manual run and a cron run of the same
 # target still serialize even if their option formatting differs (-v3 vs -v 3).
-LOCK_KEY=$(printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -d' ' -f1)
+# -i/IDENTIFIER is the one deliberate exception: it exists precisely to let a
+# second, independent job aimed at the same pair opt OUT of this serialization.
+LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' -f1)
 LOCKDIR="${LOCKDIR:-/var/run}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"

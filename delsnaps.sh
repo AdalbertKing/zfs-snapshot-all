@@ -81,8 +81,9 @@ set -o pipefail
 #
 # BOOKMARK PRUNING (-B):
 # snapsend.sh/snapget.sh (see lib-zfs-snap.sh) leave a bookmark per target
-# (named "tgt-<8 hex chars>") on the SOURCE dataset, refreshed on every
-# successful transfer to that target. A target that stops being used
+# (named "tgt-<8 hex chars>", the hash covering target dataset + -i identifier
+# if one was given) on the SOURCE dataset, refreshed on every successful
+# transfer to that target. A target that stops being used
 # (decommissioned VM, retired backup job) leaves its bookmark behind forever
 # -- record_send_bookmark only ever replaces its OWN target's bookmark, it
 # has no way to know another one is now orphaned. -B prunes bookmarks by age
@@ -92,8 +93,8 @@ set -o pipefail
 # the longest real backup cycle you run, or this can prune a bookmark that
 # is just waiting out a long gap (an offline host, a paused job).
 # Only age-based flags apply (count-based makes no sense here: exactly one
-# bookmark exists per target at any time by design, there is nothing to keep
-# "the N most recent" of). Same PATTERN argument as snapshot mode, matched
+# bookmark exists per target+identifier pair at any time by design, there is
+# nothing to keep "the N most recent" of). Same PATTERN argument as snapshot mode, matched
 # against the bookmark name after '#' -- pass "tgt-" to match everything this
 # tool itself creates. Bookmarks are never clones and have no dependents, so
 # -F/clear-cut is a no-op in this mode: destruction is always a plain `zfs

@@ -807,6 +807,56 @@ check "snapget guid-match: exit 0 even though the local target's snapshot was re
 check "snapget guid-match: target keeps the renamed snapshot AND gains the new one" \
       "renamed b" "$(snaps_of "$POOL/guidpull")"
 
+# --- -i/--identifier: independent jobs to the same target get separate bookmarks
+# record_send_bookmark folds -i into bookmark_target_tag, so two jobs that both
+# send the SAME source to the SAME target under different identifiers must not
+# clobber each other's incremental-base bookmark. Each send below advances the
+# source with a fresh snapshot first, so every run is a real transfer (not the
+# "already exists - skipping" early return, which never reaches
+# record_send_bookmark at all).
+
+zfs create -p "$POOL/identsend" || exit 1
+zfs snapshot "$POOL/identsend@a"
+run_send -e -i jobA "$POOL/identsend" "$BK"
+check "identifier: jobA initial send succeeds" "0" "$RC"
+
+tick
+zfs snapshot "$POOL/identsend@b"
+run_send -e -i jobB "$POOL/identsend" "$BK"
+check "identifier: jobB send (different identifier, same target) succeeds" "0" "$RC"
+check "identifier: jobA and jobB now hold two DISTINCT bookmarks on the source" \
+      "2" "$(zfs list -H -t bookmark -o name "$POOL/identsend" 2>/dev/null | wc -l)"
+
+tick
+zfs snapshot "$POOL/identsend@c"
+run_send -e -i jobA "$POOL/identsend" "$BK"
+check "identifier: jobA re-run succeeds" "0" "$RC"
+check "identifier: jobA re-run refreshes its OWN bookmark, not a third" \
+      "2" "$(zfs list -H -t bookmark -o name "$POOL/identsend" 2>/dev/null | wc -l)"
+
+# snapget mirror -- record_send_bookmark still writes to the SOURCE dataset
+# (here under $SRCBASE, standing in for the remote), tagged by the LOCAL pull
+# target + identifier.
+GSRC5="$SRCBASE/$POOL/identpull"
+zfs create -p "$GSRC5" || exit 1
+zfs snapshot "${GSRC5}@a"
+run_get -e -i jobA "$POOL/identpull" "$SRCBASE"
+check "snapget identifier: jobA initial pull succeeds" "0" "$RC"
+
+tick
+zfs snapshot "${GSRC5}@b"
+run_get -e -i jobB "$POOL/identpull" "$SRCBASE"
+check "snapget identifier: jobB pull (different identifier, same target) succeeds" "0" "$RC"
+check "snapget identifier: jobA and jobB now hold two DISTINCT bookmarks on the source" \
+      "2" "$(zfs list -H -t bookmark -o name "$GSRC5" 2>/dev/null | wc -l)"
+
+tick
+zfs snapshot "${GSRC5}@c"
+run_get -e -i jobA "$POOL/identpull" "$SRCBASE"
+check "snapget identifier: jobA re-run succeeds" "0" "$RC"
+check "snapget identifier: jobA re-run refreshes its OWN bookmark, not a third" \
+      "2" "$(zfs list -H -t bookmark -o name "$GSRC5" 2>/dev/null | wc -l)"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
