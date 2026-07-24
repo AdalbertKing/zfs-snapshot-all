@@ -245,6 +245,10 @@ FULL_HISTORY_SEND=0
 # mounting back on; -u is still accepted and is now a no-op, so every existing
 # cron line that passes it keeps working untouched.
 UNMOUNT=1
+# canmount for targets this script creates -- see snapsend.sh for the full note.
+# Resolved from UNMOUNT after argument parsing so -U reaches the dataset, not
+# just the recv flag.
+TARGET_CANMOUNT="noauto"
 FORCE_FULL_SEND=0
 RAW_SEND=0
 # -A: measure the link and the data, then decide whether compressing is worth
@@ -872,7 +876,7 @@ process_dataset() {
         # reapplied after a successful transfer instead of at create time.
         local create_target="$tgt_dataset"
         [ $RAW_SEND -eq 1 ] && create_target="${tgt_dataset%/*}"
-        zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=noauto "$create_target" || return 1
+        zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=$TARGET_CANMOUNT "$create_target" || return 1
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
@@ -906,7 +910,7 @@ process_dataset() {
             log 2 "Not recreating target dataset (-w: raw receive creates it)"
         else
         log 2 "Recreating target dataset"
-        zfs create -p -o canmount=noauto "$tgt_dataset" || {
+        zfs create -p -o canmount=$TARGET_CANMOUNT "$tgt_dataset" || {
             log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
             return 1
         }
@@ -1047,8 +1051,8 @@ process_dataset() {
     # (keystatus=unavailable), so failing here costs nothing immediate. Target
     # is always local in snapget.sh.
     if [ $RAW_SEND -eq 1 ]; then
-        zfs set canmount=noauto "$tgt_dataset" 2>/dev/null \
-            || log 2 "Could not set canmount=noauto on $tgt_dataset (needs delegated 'canmount')"
+        zfs set canmount=$TARGET_CANMOUNT "$tgt_dataset" 2>/dev/null \
+            || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
     fi
 
     # Refresh the per-target bookmark to what was just sent, regardless of
@@ -1109,6 +1113,11 @@ if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
     exit 1
 fi
+
+# -U has to reach the dataset, not just the recv flag: a target created with
+# canmount=noauto stays unmounted no matter how it is received, so flipping only
+# the recv side would have made -U look supported while doing nothing.
+[ $UNMOUNT -eq 0 ] && TARGET_CANMOUNT="on"
 
 # Validated here rather than left to mbuffer: a typo would otherwise surface as
 # a dead pipeline mid-transfer, after the source snapshot has already been taken.

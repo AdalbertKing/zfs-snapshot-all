@@ -332,6 +332,14 @@ FULL_HISTORY_SEND=0
 # turns mounting back on; -u is still accepted and is now a no-op, so every
 # existing cron line that passes it keeps working untouched.
 UNMOUNT=1
+# The canmount value given to targets THIS script creates. `noauto` is what
+# actually keeps a target unmounted -- more so than `zfs recv -u`, which only
+# governs the moment of receipt -- and it is what makes non-root receive
+# possible at all (see the long comment at the create call). Resolved from
+# UNMOUNT after argument parsing, so -U reaches the dataset itself and not just
+# the recv flag; without that, -U would be silently powerless on any target this
+# script created.
+TARGET_CANMOUNT="noauto"
 FORCE_FULL_SEND=0
 RAW_SEND=0
 # -A: measure the link and the data, then decide whether compressing is worth
@@ -954,9 +962,9 @@ process_dataset() {
         [ $RAW_SEND -eq 1 ] && create_target="${tgt_dataset%/*}"
         if [ -n "$remote_host" ]; then
             ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs list '$create_target' >/dev/null 2>&1 || zfs create -p -o canmount=noauto '$create_target'" || return 1
+                "zfs list '$create_target' >/dev/null 2>&1 || zfs create -p -o canmount=$TARGET_CANMOUNT '$create_target'" || return 1
         else
-            zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=noauto "$create_target" || return 1
+            zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=$TARGET_CANMOUNT "$create_target" || return 1
         fi
     fi
 
@@ -1004,7 +1012,7 @@ process_dataset() {
             log 2 "Not recreating target dataset (-w: raw receive creates it)"
         else
         log 2 "Recreating target dataset"
-        local create_cmd="zfs create -p -o canmount=noauto \"$tgt_dataset\""
+        local create_cmd="zfs create -p -o canmount=$TARGET_CANMOUNT \"$tgt_dataset\""
         log 4 "RAW ZFS CREATE COMMAND: $create_cmd"
 
         if [ -n "$remote_host" ]; then
@@ -1013,7 +1021,7 @@ process_dataset() {
                 return 1
             }
         else
-            zfs create -p -o canmount=noauto "$tgt_dataset" || {
+            zfs create -p -o canmount=$TARGET_CANMOUNT "$tgt_dataset" || {
                 log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
                 return 1
             }
@@ -1156,11 +1164,11 @@ process_dataset() {
     if [ $RAW_SEND -eq 1 ]; then
         if [ -n "$remote_host" ]; then
             ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs set canmount=noauto '$tgt_dataset'" 2>/dev/null \
-                || log 2 "Could not set canmount=noauto on $tgt_dataset (needs delegated 'canmount')"
+                "zfs set canmount=$TARGET_CANMOUNT '$tgt_dataset'" 2>/dev/null \
+                || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
         else
-            zfs set canmount=noauto "$tgt_dataset" 2>/dev/null \
-                || log 2 "Could not set canmount=noauto on $tgt_dataset (needs delegated 'canmount')"
+            zfs set canmount=$TARGET_CANMOUNT "$tgt_dataset" 2>/dev/null \
+                || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
         fi
     fi
 
@@ -1229,6 +1237,11 @@ case "$QUIESCE" in
     fs) echo "Error: -q fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host (measured). Use -q sync for containers, which flushes them instead." >&2; exit 1 ;;
     *) echo "Error: -q '$QUIESCE' -- expected no, agent, sync or auto." >&2; exit 1 ;;
 esac
+
+# -U has to reach the dataset, not just the recv flag: a target created with
+# canmount=noauto stays unmounted no matter how it is received, so flipping only
+# the recv side would have made -U look supported while doing nothing.
+[ $UNMOUNT -eq 0 ] && TARGET_CANMOUNT="on"
 
 # Validated here rather than left to mbuffer: a typo would otherwise surface as
 # a dead pipeline mid-transfer, after the snapshot has already been taken.
