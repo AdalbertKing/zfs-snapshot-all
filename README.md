@@ -27,6 +27,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 - [delsnaps.sh — retention / pruning](#delsnapssh--retention--pruning)
 - [check-snap-age.sh — staleness monitor](#check-snap-agesh--staleness-monitor)
 - [gen-cron.sh — config-driven cron generator](#gen-cronsh--config-driven-cron-generator)
+- [Alerting](#alerting)
 - [deploy_new_server.sh / deploy_backup_user.sh](#deploy_new_serversh--deploy_backup_usersh)
 - [Worked scenarios](#worked-scenarios)
 - [Testing](#testing)
@@ -36,11 +37,11 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.43 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.38 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.44 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.39 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.11 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.12 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy_new_server.sh`](deploy_new_server.sh) | Bootstraps a brand-new host: dependencies, checkout, alerting, smoke test | — |
 | [`deploy_backup_user.sh`](deploy_backup_user.sh) | Bootstraps a non-root delegated service account to run the above without root | — |
@@ -381,16 +382,48 @@ gen-cron.sh -c jobs.pve2.conf              # print the generated block for revie
 gen-cron.sh -c jobs.pve2.conf --install    # install it into this user's crontab
 ```
 
+## Alerting
+
+Three layers, so a schedule drift or a real fault doesn't turn into a flood of identical mail:
+
+| Mechanism | Fires on | Cadence |
+|---|---|---|
+| `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | Immediate, but rate-limited: repeats of the *same* message within `NOTIFY_COOLDOWN` (default 4h) are suppressed. One state file per unique message (an md5 of its text) under `/root/scripts/notify-state/`. |
+| `notify-warn.sh` + `alert-digest.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Queued to `/root/scripts/warn-queue.log` (append-only, `epoch\tmessage`); `alert-digest.sh` mails **one** grouped summary/day (default `0 7 * * *`) — count + first/last-seen time per unique message — and clears the queue. Silent (no mail at all) if nothing queued. |
+| `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy_new_server.sh` |
+
+`gen-cron.sh` wires the first two straight into every generated monitor line (`[ $rc -eq 1 ] &&
+notify-warn.sh ...; [ $rc -eq 2 ] && notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`) —
+see [gen-cron.sh](#gen-cronsh--config-driven-cron-generator). `notify-fail.sh`, `notify-warn.sh`,
+and `alert-digest.sh` are not tracked as standalone files in this repo — `deploy_new_server.sh`
+creates/upgrades them on each host from a heredoc (see its `*_MARKER` comments for the
+version-detection that makes re-running it idempotent), so every host runs an identical, known
+copy without a file to hand-copy or drift.
+
+### Pool health (DEGRADED/FAULTED)
+
+`snapsend.sh`/`snapget.sh` check the ZFS pool backing every dataset they touch — via
+`check_pool_health()` in `lib-zfs-snap.sh` — the always-local side unconditionally, and the
+remote side too whenever the transfer actually is remote, reusing the same SSH connection the
+transfer already opens. A pool that isn't `ONLINE` mails through `notify-fail.sh` directly (same
+rate-limited path as above), deliberately independent of the transfer's own exit code: a
+`DEGRADED` pool with a surviving mirror leg still sends fine, so tying the alert to transfer
+success would either mask a real disk failure behind a "job succeeded" exit code, or falsely
+report a working transfer as failed. Because the check always runs from whichever side already
+opens the connection, one execution reports **both** ends of a push/pull — the other side never
+needs a separate pool-health cron of its own for the same relationship.
+
 ## deploy_new_server.sh / deploy_backup_user.sh
 
 - **`deploy_new_server.sh`** bootstraps a fresh Proxmox/Debian host as **root**: checks/installs
   every runtime dependency (table derived from what the scripts actually invoke), clones or
   updates the repo checkout at `/root/scripts/zfs-snapshot-all`, generates `notify-fail.sh`
-  (mail-on-failure) and `check-pool-capacity.sh` (mail before a pool fills up, ahead of any job
-  actually breaking), smoke-tests all shipped executables plus a live compressor round-trip, and
-  installs an auto-pull cron line. Idempotent — safe to re-run. It deliberately does **not**
-  touch your actual `snapsend`/`snapget`/`delsnaps` job lines (those are dataset-specific per
-  host); that stays a documented manual step (or use `gen-cron.sh`).
+  (mail-on-failure, rate-limited), `notify-warn.sh` + `alert-digest.sh` (daily WARNING digest),
+  and `check-pool-capacity.sh` (mail before a pool fills up, ahead of any job actually breaking)
+  — see [Alerting](#alerting) — smoke-tests all shipped executables plus a live compressor
+  round-trip, and installs an auto-pull cron line. Idempotent — safe to re-run. It deliberately
+  does **not** touch your actual `snapsend`/`snapget`/`delsnaps` job lines (those are
+  dataset-specific per host); that stays a documented manual step (or use `gen-cron.sh`).
 
   ```bash
   bash deploy_new_server.sh                # full bootstrap

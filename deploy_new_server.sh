@@ -8,7 +8,10 @@
 #     (see the table in Part 1 -- it is derived from what the scripts invoke)
 #   - clone/update of /root/scripts/zfs-snapshot-all (handles both a fresh dir
 #     and one that already has plain-file copies of the scripts sitting in it)
-#   - notify-fail.sh mail-alert helper (fires on job failure)
+#   - notify-fail.sh mail-alert helper (fires on job failure, CRITICAL/UNKNOWN
+#     staleness, or a DEGRADED/FAULTED pool -- rate-limited per unique message)
+#   - notify-warn.sh + alert-digest.sh (queues WARNING-tier staleness findings,
+#     mails one grouped summary/day instead of one mail per occurrence)
 #   - check-pool-capacity.sh pool/quota alert (fires on slow-fill BEFORE a job fails)
 #   - smoke test of all five shipped executables + a live compressor round-trip
 #   - auto-pull cron line
