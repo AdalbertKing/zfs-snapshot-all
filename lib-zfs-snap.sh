@@ -266,6 +266,47 @@ target_exists() {
     fi
 }
 
+# Warn when a dataset is only a container for its children and neither -r nor
+# -R was given. This is the quietest way to end up with a useless backup: the
+# send SUCCEEDS -- the parent is a real dataset and its (empty) contents ship
+# fine -- so the run reports success, the stats log records success, and the
+# staleness monitor is happy, while the data nobody explicitly named is simply
+# absent from the target. Nothing anywhere else in the pipeline notices.
+#
+# `-d 1` on purpose: one level is enough to prove the dataset is a container,
+# and it costs one cheap `zfs list` instead of walking the whole tree. The
+# parent itself comes back in that listing too, so it is filtered out by exact
+# name (grep -vxF, not an order assumption).
+#
+# WARNING, never fatal -- sending a parent alone is legitimate (its own
+# properties and data still replicate, and a job may deliberately split parent
+# and children across schedules). Logged at level 0 because a default-verbosity
+# cron run is the one place this mistake survives unnoticed, and every
+# production job today names a leaf, so this stays silent unless something is
+# actually off.
+warn_if_unrecursed_children() {
+    local dataset="$1"
+    local remote_user="${2:-}"
+    local remote_host="${3:-}"
+
+    local children
+    if [ -n "$remote_host" ]; then
+        children=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -H -o name -t filesystem,volume -r -d 1 '$dataset' 2>/dev/null" \
+            | grep -vxF "$dataset")
+    else
+        children=$(zfs list -H -o name -t filesystem,volume -r -d 1 "$dataset" 2>/dev/null \
+            | grep -vxF "$dataset")
+    fi
+    [ -z "$children" ] && return 0
+
+    local count
+    count=$(printf '%s\n' "$children" | wc -l)
+    log 0 "WARNING: $dataset has $count child dataset(s) but neither -r nor -R was given -- only $dataset itself is being sent, its children are NOT. Add -R (independent per-dataset jobs) or -r (one atomic recursive stream) if you meant to include them."
+    log 2 "Children not included: $(printf '%s' "$children" | tr '\n' ' ')"
+    return 0
+}
+
 # Emit a dataset's `encryption` property ("off" for unencrypted). Empty when the
 # dataset does not exist.
 dataset_encryption() {

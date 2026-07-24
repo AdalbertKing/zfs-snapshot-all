@@ -213,7 +213,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.51'
+VERSION='v2.52'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1333,6 +1333,18 @@ fi
 # to an ordinary connection if the master cannot be set up.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# Catch the container-parent mistake before any work starts: a dataset with
+# children, sent without -r/-R, ships nothing but the parent and still reports
+# success. Skipped only when a recursion flag is already set (the children are
+# covered then); deliberately NOT skipped under -n, since a preview run is the
+# best possible moment to be told the job is aimed at an empty container.
+# Source is always local in snapsend.sh, hence the empty remote args.
+if [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
+    for ds in "${DATASETS[@]}"; do
+        warn_if_unrecursed_children "$ds" "" ""
+    done
+fi
 
 # -A decides compress-or-not from a measurement, PER DATASET -- the decision is
 # taken inside the loop below, not here. The compression ratio is a property of

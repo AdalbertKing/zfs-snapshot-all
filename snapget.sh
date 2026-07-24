@@ -160,7 +160,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.46'
+VERSION='v2.47'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1247,6 +1247,20 @@ fi
 # ControlMaster=auto falls back to an ordinary connection on failure.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# Catch the container-parent mistake before any work starts -- see the same
+# block in snapsend.sh. Two differences here, both for the same reason snapget's
+# -R expansion differs: the source may be REMOTE (so the check gets the remote
+# args and rides the multiplexer opened just above -- hence the placement after
+# tune_ssh_enable, not next to the -R block), and the dataset name has to be
+# re-prefixed with SOURCE_BASE to address it on that source.
+if [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
+    for ds in "${DATASETS[@]}"; do
+        src_check="${SOURCE_BASE:+${SOURCE_BASE}/}${ds}"
+        src_check=$(echo "$src_check" | sed 's:///*:/:g; s:^/::')
+        warn_if_unrecursed_children "$src_check" "$REMOTE_USER" "$REMOTE_HOST"
+    done
+fi
 
 # -A decides compress-or-not from a measurement, PER DATASET -- taken inside the
 # loop below, not here, because the compression ratio is a property of the data
