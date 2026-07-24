@@ -42,6 +42,21 @@ set -o pipefail
 # Requires the chosen compressor on BOTH ends (checked before transfer).
 #   -v <LEVEL>        Verbosity level for logging (0=errors only, up to 4=debug)
 #   -r               Recursive mode (include child datasets in send/recv)
+#   -R               Flat-recursive mode, syncoid/sanoid-compatible: expands
+#                    each DATASET into itself plus every descendant of the
+#                    REMOTE source (`zfs list -r`, same call syncoid's
+#                    getchilddatasets makes, run over ssh when the source is
+#                    remote) BEFORE the main loop runs, then pulls each one as
+#                    its own independent, non-recursive job -- same walk depth
+#                    as -r (unlimited, ZFS itself has no -d cap), but the unit
+#                    of work is one dataset instead of the whole subtree in
+#                    one stream. A failing child does not abort its siblings
+#                    (it lands in the existing FAILED_DATASETS report, same as
+#                    today's comma-separated DATASETS already behave) and,
+#                    unlike -r, a GUID collision on one child only forces a
+#                    full re-pull of THAT child -- -F is a no-op under -R
+#                    because the collision -F exists for cannot arise (see -F
+#                    below). Mutually exclusive with -r.
 #   -n               Dry-run mode (show conflicting snapshots without receiving)
 #   -I               Full history receive (receive all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
@@ -145,7 +160,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.44'
+VERSION='v2.45'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -180,6 +195,7 @@ MEMORY="16M"
 PORT=22
 USE_EXISTING_SNAPSHOT=0
 RECURSIVE=0
+FLAT_RECURSE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
 UNMOUNT=0
@@ -1005,7 +1021,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:F" opt; do
+while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1017,6 +1033,7 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:F" opt; do
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
+        R) FLAT_RECURSE=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
@@ -1031,12 +1048,17 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Ai:o:x:c:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -i -o -x -c -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -F -V" >&2
             exit 1
             ;;
     esac
 done
 shift $((OPTIND-1))
+
+if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
+    echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
+    exit 1
+fi
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
 ###############################################################################
@@ -1161,6 +1183,49 @@ if [[ -n "$REMOTE" ]]; then
     else
         SOURCE_BASE="$REMOTE"
     fi
+fi
+
+# -R: expand each entry into itself + every descendant of the REMOTE source
+# (mirrors snapsend.sh's -R block; here the listing has to go over ssh when
+# REMOTE_HOST is set, since snapget's source -- unlike snapsend's -- may not
+# be local). Each discovered child comes back as a full path under
+# SOURCE_BASE; stripped back down to the bare "dataset" form (byte-offset
+# substring removal, not a glob strip, so nothing in SOURCE_BASE is
+# reinterpreted as a pattern) so it still works as both the local target path
+# and, re-prefixed with SOURCE_BASE below in the main loop, the source path.
+# Same ordering guarantee as snapsend.sh: `zfs list -r` lists a dataset before
+# any descendant, and sort -u preserves that (a parent's name always sorts
+# before "parent/anything").
+if [ $FLAT_RECURSE -eq 1 ]; then
+    declare -a EXPANDED_DATASETS=()
+    for ds in "${DATASETS[@]}"; do
+        src_root="${SOURCE_BASE:+${SOURCE_BASE}/}${ds}"
+        src_root=$(echo "$src_root" | sed 's:///*:/:g; s:^/::')
+        if [ -n "$REMOTE_HOST" ]; then
+            if ! ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "zfs list -H '$src_root' >/dev/null 2>&1"; then
+                log 0 "Source dataset not found on remote host: $src_root"
+                exit 1
+            fi
+            children=$(ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" \
+                "zfs list -H -o name -t filesystem,volume -r '$src_root' 2>/dev/null")
+        else
+            if ! zfs list -H "$src_root" &>/dev/null; then
+                log 0 "Source dataset not found: $src_root"
+                exit 1
+            fi
+            children=$(zfs list -H -o name -t filesystem,volume -r "$src_root" 2>/dev/null)
+        fi
+        while IFS= read -r child; do
+            [ -z "$child" ] && continue
+            if [ -n "$SOURCE_BASE" ]; then
+                EXPANDED_DATASETS+=("${child:$((${#SOURCE_BASE}+1))}")
+            else
+                EXPANDED_DATASETS+=("$child")
+            fi
+        done <<< "$children"
+    done
+    mapfile -t DATASETS < <(printf '%s\n' "${EXPANDED_DATASETS[@]}" | sort -u)
+    log 1 "Flat-recursive (-R): expanded to ${#DATASETS[@]} dataset(s): ${DATASETS[*]}"
 fi
 
 # A local pull has no link to save bytes on. The pipeline would be

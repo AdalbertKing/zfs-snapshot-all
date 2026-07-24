@@ -42,6 +42,22 @@ set -o pipefail
 # Requires the chosen compressor on BOTH ends (checked before transfer).
 #   -v <LEVEL>        Verbosity level for logging (0=errors only, up to 4=debug)
 #   -r               Recursive mode (include child datasets in send/recv)
+#   -R               Flat-recursive mode, syncoid/sanoid-compatible: expands
+#                    each DATASET into itself plus every descendant (`zfs list
+#                    -r`, same call syncoid's getchilddatasets makes) BEFORE
+#                    the main loop runs, then sends each one as its own
+#                    independent, non-recursive job -- same walk depth as -r
+#                    (unlimited, ZFS itself has no -d cap), but the unit of
+#                    work is one dataset instead of the whole subtree in one
+#                    stream. A failing child does not abort its siblings (it
+#                    lands in the existing FAILED_DATASETS report, same as
+#                    today's comma-separated DATASETS already behave) and,
+#                    unlike -r, a GUID collision on one child only forces a
+#                    full resend of THAT child -- -F is a no-op under -R
+#                    because the collision -F exists for cannot arise (see -F
+#                    below). Mutually exclusive with -r. Quiescing still takes
+#                    one atomic snapshot across the whole expanded set before
+#                    the per-child sends start.
 #   -n               Dry-run mode (show conflicting snapshots without sending)
 #   -I               Full history send (send all snapshots if no common base)
 #   -u               Unmount target filesystem(s) after receive
@@ -197,7 +213,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.49'
+VERSION='v2.50'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -239,6 +255,7 @@ QUIESCE=no
 # code path creates a second, unquiesced copy.
 QUIESCE_SNAPPED=0
 RECURSIVE=0
+FLAT_RECURSE=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
 UNMOUNT=0
@@ -1090,7 +1107,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:c:F" opt; do
+while getopts "m:ezZgl:v:rRnIufwVp:k:Aq:i:o:x:c:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1103,6 +1120,7 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:c:F" opt; do
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
+        R) FLAT_RECURSE=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;
@@ -1117,12 +1135,17 @@ while getopts "m:ezZgl:v:rnIufwVp:k:Aq:i:o:x:c:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "B��d: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -n -I -u -f -w -p -k -A -q -i -o -x -c -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -q -i -o -x -c -F -V" >&2
             exit 1
             ;;
     esac
 done
 shift $((OPTIND-1))
+
+if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
+    echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs send -R stream, -R = independent per-dataset sends)" >&2
+    exit 1
+fi
 
 case "$QUIESCE" in
     no|agent|sync|auto) ;;
@@ -1242,6 +1265,29 @@ fi
 DATASETS=$1
 REMOTE=${2:-}
 IFS=',' read -ra DATASETS <<< "$DATASETS"
+
+# -R: expand each entry into itself + every descendant (source is always
+# local here), same `zfs list -r` call syncoid's getchilddatasets makes --
+# unlimited depth, no -d cap. `zfs list -r` guarantees a dataset is listed
+# before any of its own descendants, so this order is safe to feed straight
+# into the per-dataset loop below with no topological sort needed. `sort -u`
+# only needs to dedupe overlapping inputs (e.g. "pool/a,pool/a/b" given
+# together) -- it cannot break parent-before-child ordering, since a parent
+# name is always lexicographically less than "parent/anything".
+if [ $FLAT_RECURSE -eq 1 ]; then
+    declare -a EXPANDED_DATASETS=()
+    for ds in "${DATASETS[@]}"; do
+        if ! zfs list -H "$ds" &>/dev/null; then
+            log 0 "Source dataset not found: $ds"
+            exit 1
+        fi
+        while IFS= read -r child; do
+            [ -n "$child" ] && EXPANDED_DATASETS+=("$child")
+        done < <(zfs list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)
+    done
+    mapfile -t DATASETS < <(printf '%s\n' "${EXPANDED_DATASETS[@]}" | sort -u)
+    log 1 "Flat-recursive (-R): expanded to ${#DATASETS[@]} dataset(s): ${DATASETS[*]}"
+fi
 
 TARGET_BASE=""
 REMOTE_USER="root"
