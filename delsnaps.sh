@@ -1,7 +1,7 @@
 #!/bin/bash
 set -o pipefail
 
-# Author: Wojciech Kr�l & Chat-GPT 4
+# Author: Wojciech Król & Chat-GPT 4
 # Email: lurk@lurk.com.pl
 # Version: run with -V/--version; see git log for full changelog
 

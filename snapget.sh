@@ -76,6 +76,31 @@ set -o pipefail
 #                    for a faster/weaker cipher on a CPU-bound link. Default (omitted)
 #                    is whatever ssh/sshd negotiate on their own. No-op on a local run
 #                    -- ssh is never invoked there.
+#   -b <RATE>         Cap the transfer rate. RATE is an mbuffer rate spec: a plain
+#                    number of BYTES per second, or one with a b/k/M/G suffix
+#                    (1024-based, mbuffer's own parser). BYTES, not bits -- a
+#                    20 Mbps link is `-b 2M`. Default (omitted) is no limit.
+#
+#                    Applied as `mbuffer -r` to the mbuffer that is ALREADY in
+#                    every pipeline, so this adds no process and no memory. In
+#                    snapget that mbuffer is always LOCAL (the target side is),
+#                    sitting immediately after ssh and BEFORE any decompression
+#                    -- so the bytes it limits are the bytes actually crossing
+#                    the link, compressed or not. Same position relative to the
+#                    stream as snapsend's, which is on the remote side there.
+#
+#                    The mechanism is backpressure: mbuffer drains the stream at
+#                    RATE, the socket stops being read, TCP closes its window and
+#                    the remote sender blocks. Buffers ahead of it mean the first
+#                    moments can outrun the limit before it settles -- tens of
+#                    MB, irrelevant on any transfer worth throttling.
+#
+#                    On a LOCAL pull there is no link, but the limit still
+#                    applies and still throttles pool-to-pool I/O.
+#
+#                    Interacts with -A on purpose: a limit makes the link slower
+#                    than the probe measured, which makes compression MORE
+#                    worthwhile, so -A decides against min(measured, -b).
 #   -k <FILE>         Verify remote host keys against this known_hosts file instead
 #                     of blindly trusting them (StrictHostKeyChecking=no is the
 #                     default when -k is omitted, unchanged from prior versions --
@@ -160,7 +185,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.47'
+VERSION='v2.48'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -192,6 +217,13 @@ BUFFER_SIZE="128k"
 # for these links is tens of KB. Two sizing formulas built on those ideas were
 # tried and both were refuted by the table above, hence a flat constant.
 MEMORY="16M"
+# -b: cap the transfer rate. Applied as `mbuffer -r` to the mbuffer already in
+# every pipeline, so this adds no process. BWLIMIT holds the raw spec as given
+# (also read by tune_apply in lib-zfs-snap.sh, which caps the probed link speed
+# with it); BWLIMIT_FLAG is the ready-made " -r <rate>" fragment, empty when no
+# limit was asked for. Mirrors snapsend.sh.
+BWLIMIT=""
+BWLIMIT_FLAG=""
 PORT=22
 USE_EXISTING_SNAPSHOT=0
 RECURSIVE=0
@@ -582,11 +614,11 @@ transfer_data() {
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | "${recv_args[@]}"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 return 1
             fi
         fi
@@ -598,11 +630,11 @@ transfer_data() {
         # correct pipeline if compression is ever wanted here; the policy of not
         # wanting it lives in one place, not spread into the transport layer.
         if [ $COMPRESSION -eq 1 ]; then
-            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
-            if ! "${send_args[@]}" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY | "${recv_args[@]}"; then
+            if ! "${send_args[@]}" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 return 1
             fi
         fi
@@ -1023,7 +1055,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:F" opt; do
+while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:b:F" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1046,11 +1078,12 @@ while getopts "m:ezZgl:v:rRnIufwVp:k:Ai:o:x:c:F" opt; do
         o) EXTRA_SEND_OPTS="$OPTARG";;
         x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
         c) SSH_CIPHER="$OPTARG";;
+        b) BWLIMIT="$OPTARG";;
         F) RECONCILE=1;;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -b -F -V" >&2
             exit 1
             ;;
     esac
@@ -1060,6 +1093,16 @@ shift $((OPTIND-1))
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
     exit 1
+fi
+
+# Validated here rather than left to mbuffer: a typo would otherwise surface as
+# a dead pipeline mid-transfer, after the source snapshot has already been taken.
+if [ -n "$BWLIMIT" ]; then
+    if [[ ! "$BWLIMIT" =~ ^[0-9]+[bkKmMgG]?$ ]]; then
+        echo "Error: -b '$BWLIMIT' -- expected an mbuffer rate: a plain number of BYTES per second, or one with a b/k/M/G suffix (e.g. 2M, 500k). Note BYTES, not bits: a 20 Mbps link is -b 2M." >&2
+        exit 1
+    fi
+    BWLIMIT_FLAG=" -r $BWLIMIT"
 fi
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }

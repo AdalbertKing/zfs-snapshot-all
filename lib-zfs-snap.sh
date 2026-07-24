@@ -637,6 +637,25 @@ tune_probe_stream() {
     }'
 }
 
+# Convert an mbuffer rate spec (the -b value: plain bytes/s, or a b/k/M/G
+# suffix, 1024-based exactly like mbuffer's own parser) into MB/s, so it can be
+# compared against a probed link speed. Emits nothing when there is no limit or
+# the spec is unparseable; every caller reads that as "no cap".
+bwlimit_to_mbps() {
+    local spec="${1:-}"
+    [ -n "$spec" ] || return 0
+    awk -v s="$spec" 'BEGIN{
+        n = s; sub(/[bkKmMgG]$/, "", n)
+        if (n !~ /^[0-9]+$/) exit 0
+        u = substr(s, length(s), 1)
+        mult = 1
+        if (u == "k" || u == "K") mult = 1024
+        else if (u == "m" || u == "M") mult = 1048576
+        else if (u == "g" || u == "G") mult = 1073741824
+        printf "%.4f", (n * mult) / 1048576
+    }'
+}
+
 # effective = min(what the pipeline can produce, what the link can carry).
 # Both sides in MB/s of UNCOMPRESSED data delivered, so they are comparable.
 tune_decide() {
@@ -711,6 +730,19 @@ tune_apply() {
         log 1 "Link tuning: cached measurement unreadable -- leaving compression settings as given"
         return 0
     }
+
+    # -b makes the link slower than the probe just measured, and the whole
+    # compress-or-not verdict turns on link speed: throttled to 2 MB/s,
+    # compressing is obviously worth it even though the probe clocked the LAN at
+    # 110 MB/s. Applied to the value on its way into tune_decide rather than
+    # cached with it -- the measurement is a property of the link and stays
+    # valid for a week, the cap is a property of this one invocation.
+    local cap
+    cap=$(bwlimit_to_mbps "${BWLIMIT:-}")
+    if [ -n "$cap" ] && awk -v c="$cap" -v l="$link" 'BEGIN{exit !(c>0 && c<l)}'; then
+        log 2 "Link tuning: -b $BWLIMIT (${cap} MB/s) is below the measured ${link} MB/s -- deciding against the limit, not the raw link"
+        link="$cap"
+    fi
 
     # `read` succeeds on the empty output of a failed awk, so its exit status
     # says nothing about tune_decide. The verdict itself is what gets checked.
