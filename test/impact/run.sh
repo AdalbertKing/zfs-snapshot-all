@@ -101,6 +101,14 @@ check "the graph renders as mermaid" "1" "$(echo "$OUT" | grep -c '^graph LR')"
 check "the graph includes contract nodes" "1" \
       "$(echo "$OUT" | grep -c 'contract: recv-side-creation')"
 
+# Mermaid node ids may only hold word characters. A path-derived id like
+# "F_test/impact/run_sh" parses as a link and silently breaks the whole
+# diagram -- the file still appears in the source, so it is easy to miss.
+check "graph node ids are mermaid-safe" "0" \
+      "$("$IMPACT" --graph | grep -cE '^  [A-Za-z]_[A-Za-z0-9_]*[/.]')"
+check "a path-named file still gets a node" "1" \
+      "$("$IMPACT" --graph | grep -c 'F_test_impact_run_sh')"
+
 OUT="$("$IMPACT" --all 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
 check "--all lists every declared suite" "6" \
       "$(echo "$OUT" | grep -cE '^  (sudo )?\./test/')"

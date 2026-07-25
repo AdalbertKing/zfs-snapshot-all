@@ -301,30 +301,35 @@ verify() {
 # ---------------------------------------------------------------------------
 # --graph: mermaid, so the thing can actually be looked at
 # ---------------------------------------------------------------------------
+# Mermaid node ids may only hold word characters -- a path like
+# "test/impact/run.sh" produces "F_test/impact/run_sh", which parses as a link
+# and silently breaks the whole diagram.
+node_id() { local n="$1"; printf '%s' "${n//[^a-zA-Z0-9_]/_}"; }
+
 emit_graph() {
     local name s consumer
     echo '```mermaid'
     echo 'graph LR'
     for name in $(sections_of_kind file); do
-        echo "  F_${name//[.-]/_}([\"$name\"])"
+        echo "  F_$(node_id "$name")([\"$name\"])"
     done
     for name in $(sections_of_kind suite); do
-        echo "  S_${name//[.-]/_}[\"suite: $name<br/>needs ${FIELD[suite:$name|needs]:-?}\"]"
+        echo "  S_$(node_id "$name")[\"suite: $name<br/>needs ${FIELD[suite:$name|needs]:-?}\"]"
     done
     for name in $(sections_of_kind manual); do
-        echo "  M_${name//[.-]/_}{{\"manual: $name\"}}"
+        echo "  M_$(node_id "$name"){{\"manual: $name\"}}"
     done
     for name in $(sections_of_kind contract); do
-        echo "  C_${name//[.-]/_}[/\"contract: $name\"/]"
+        echo "  C_$(node_id "$name")[/\"contract: $name\"/]"
     done
     for name in $(sections_of_kind file); do
-        while read -r s; do [ -n "$s" ] && echo "  F_${name//[.-]/_} --> S_${s//[.-]/_}"; done < <(list_of "file:$name" suites)
-        while read -r s; do [ -n "$s" ] && echo "  F_${name//[.-]/_} -.-> M_${s//[.-]/_}"; done < <(list_of "file:$name" manual)
-        while read -r s; do [ -n "$s" ] && echo "  F_${name//[.-]/_} ==> C_${s//[.-]/_}"; done < <(list_of "file:$name" contracts)
+        while read -r s; do [ -n "$s" ] && echo "  F_$(node_id "$name") --> S_$(node_id "$s")"; done < <(list_of "file:$name" suites)
+        while read -r s; do [ -n "$s" ] && echo "  F_$(node_id "$name") -.-> M_$(node_id "$s")"; done < <(list_of "file:$name" manual)
+        while read -r s; do [ -n "$s" ] && echo "  F_$(node_id "$name") ==> C_$(node_id "$s")"; done < <(list_of "file:$name" contracts)
     done
     for name in "${!SOURCED_BY[@]}"; do
         for consumer in ${SOURCED_BY[$name]}; do
-            echo "  F_${consumer//[.-]/_} --o F_${name//[.-]/_}"
+            echo "  F_$(node_id "$consumer") --o F_$(node_id "$name")"
         done
     done
     echo '```'
