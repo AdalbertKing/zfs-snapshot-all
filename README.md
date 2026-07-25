@@ -475,7 +475,7 @@ Section types (a header is always `[type:name]`, split on the first `:`, except 
 | `[defaults]` | `host_label` (used in notify text) and an optional default `dst` |
 | `[template:<tier>]` | One tier's full cadence + retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep`/`retain`, `monitor_warn`/`monitor_crit`, … |
 | `[dataset:<path>]` | A dataset you own end-to-end: `use_template = <tier>[,<tier>...]`, plus per-dataset overrides (`flags`, `quiesce`, `autotune`, `dst`, …). Runs create(+send) and inline self-prune, scoped to its own path only. |
-| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`. |
+| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only. |
 | `[prune-bookmarks:<scope>]` | Age-based cleanup of orphaned bookmarks — `schedule`, `age` (raw `delsnaps.sh` age flags), `pattern` (default `tgt-`), `recursive` |
 
 There is no separate `[monitor:]` section — a staleness check is derived **automatically**
@@ -495,6 +495,25 @@ A few things the generator enforces or automates for you:
   scope: since `delsnaps.sh` matches by literal string prefix, one tier's pattern being a prefix
   of another's would let its snapshots leak into the wrong retention run — rejected at generate
   time.
+
+**`prune = no`: a monitor without a second prune.** A recursive `[prune:hdd/backups]` already
+covers every leaf underneath it, but monitor thresholds are per tier, and a leaf that matters more
+than its siblings wants its own. Adding `[prune:hdd/backups/pve2/nextcloud]` just to hang
+`monitor_warn`/`monitor_crit` on it looks like a harmless duplicate — the same pattern, the same
+retention, "a no-op on the same snapshots". It is not. The two `delsnaps.sh` lines fire in the same
+minute and **race**: whichever loses finds the snapshot already gone and exits non-zero with
+`could not find any snapshots to destroy` plus a misleading hint about dependent clones. On pve2
+that fired 63 times in one day. `delsnaps`' own `flock` does not catch it either — the lock key is
+`md5(dataset_list + pattern)`, and the two lines legitimately hash differently because one passes
+`-R parent` and the other an explicit leaf.
+
+Setting `prune = no` on such a section emits **no** `delsnaps` line and keeps the monitor. It is
+rejected at generate time if the section then has no `monitor_warn`/`monitor_crit`, since it would
+emit nothing at all. Note the cross-check above only compares patterns on the *same literal
+scope* — containment across scopes stays your discipline; v4.15 gives you the way to express the
+fix, it does not try to detect every overlap. If a `delsnaps` job ever reports "could not find any
+snapshots to destroy" on a schedule, look for a second prune line whose scope contains that
+dataset at the same minute before chasing clones or holds.
 
 ```ini
 [defaults]
@@ -534,7 +553,7 @@ gen-cron.sh -c jobs.pve2.conf --install    # install it into this user's crontab
 and `alert-digest.sh` mails a single grouped summary once a day — or, if you ask for it, each
 finding mails the moment it happens.
 
-### Choosing the cadence — `/root/scripts/zfs-alert.conf`
+### Choosing the cadence — `/etc/zfs-alert.conf`
 
 One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to change.**
 
@@ -563,7 +582,7 @@ A finding travels exactly one of the two paths, so it is never reported twice. T
 `0 7 * * *`).
 
 ```bash
-sed -i 's/^ZFS_ALERT_MODE=.*/ZFS_ALERT_MODE=immediate/' /root/scripts/zfs-alert.conf
+sed -i 's/^ZFS_ALERT_MODE=.*/ZFS_ALERT_MODE=immediate/' /etc/zfs-alert.conf
 ```
 
 **Set `immediate` while bringing a host up.** A job you misconfigured today is a five-minute fix
