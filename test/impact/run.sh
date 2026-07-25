@@ -111,8 +111,11 @@ check "graph node ids are mermaid-safe" "0" \
 check "a path-named file still gets a node" "1" \
       "$("$IMPACT" --graph | grep -c 'F_test_impact_run_sh(\[')"
 
+# Derived from the graph, not hardcoded: a count literal here would have to be
+# edited every time a suite is added, and the version that goes stale is the
+# assertion, not the code.
 OUT="$("$IMPACT" --all 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
-check "--all lists every declared suite" "6" \
+check "--all lists every declared suite" "$(grep -c '^\[suite:' "$REPO/test/deps.conf")" \
       "$(echo "$OUT" | grep -cE '^  (sudo )?\./test/')"
 
 # --- summary -----------------------------------------------------------------

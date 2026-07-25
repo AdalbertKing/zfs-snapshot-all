@@ -1,0 +1,386 @@
+#!/bin/bash
+# Two-host campaign: everything the single-host suites structurally cannot reach.
+#
+# test/snapsend/run.sh is local-mode only, by design -- validate_remote_host()
+# refuses a loopback "replication" to the same machine, so ssh has never had a
+# repeatable test at all. This is that test. It is still a MANUAL obligation in
+# test/deps.conf (it needs a second real host), but running it is now one
+# command instead of a remembered ritual.
+#
+# Usage, FROM the source host:
+#   ./test/remote/run.sh --peer root@192.168.28.8
+#   ./test/remote/run.sh --peer zfsbackup@192.168.28.8 \
+#       --local-parent hdd/backuptest --peer-parent hdd/backuptest_targets
+#
+#   --peer          user@host of the OTHER machine (required)
+#   --local-parent  where to build scratch here      (default rpool)
+#   --peer-parent   where to build scratch there     (default hdd/backuptest_targets)
+#
+# SAFETY: every dataset this creates lives under <parent>/xcamp<PID>, refuses to
+# start if that already exists, and is destroyed by an EXIT trap on both hosts
+# even if a case fails partway. It never touches anything else. Run it against
+# a scratch parent, never a production path.
+#
+# Data integrity is checked by comparing the snapshot GUID on both sides rather
+# than by mounting and hashing: a GUID match proves the exact stream landed, and
+# it is the only check that also works for the delegated account, which cannot
+# mount anything. When this runs as root and the source mounted, one md5 is
+# compared as well, as an anchor for the GUID argument itself.
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
+SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
+
+PEER=""
+LPARENT="rpool"
+RPARENT="hdd/backuptest_targets"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --peer)         shift; PEER="${1:-}" ;;
+        --local-parent) shift; LPARENT="${1:-}" ;;
+        --peer-parent)  shift; RPARENT="${1:-}" ;;
+        -h|--help)      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+[ -n "$PEER" ] || { echo "--peer user@host is required" >&2; exit 1; }
+[ -x "$SNAPSEND" ] || { echo "cannot find executable snapsend.sh at $SNAPSEND" >&2; exit 1; }
+[ -x "$SNAPGET" ]  || { echo "cannot find executable snapget.sh at $SNAPGET" >&2; exit 1; }
+command -v zfs     >/dev/null || { echo "zfs not found" >&2; exit 1; }
+command -v mbuffer >/dev/null || { echo "mbuffer not found -- snapsend refuses to run without it" >&2; exit 1; }
+
+SSH="ssh -o BatchMode=yes -o ConnectTimeout=10"
+$SSH "$PEER" true 2>/dev/null || { echo "cannot ssh to $PEER non-interactively" >&2; exit 1; }
+
+TAG="xcamp$$"
+LROOT="$LPARENT/$TAG"
+RROOT="$RPARENT/$TAG"
+
+zfs list -H "$LROOT"          >/dev/null 2>&1 && { echo "refusing to run: $LROOT exists here" >&2; exit 1; }
+$SSH "$PEER" "zfs list -H '$RROOT'" >/dev/null 2>&1 && { echo "refusing to run: $RROOT exists on $PEER" >&2; exit 1; }
+
+# Keep this run's bookkeeping out of the host's real logs and lock dir.
+TMPD="$(mktemp -d)"
+export STATS_LOG="$TMPD/stats.log"
+export LOCKDIR="$TMPD"
+
+cleanup() {
+    # Release first: a case that fails before its transfer leaves a held
+    # snapshot, and `zfs destroy` would then report only "dataset is busy".
+    local s
+    for s in $(zfs list -H -o name -t snapshot -r "$LROOT" 2>/dev/null); do
+        zfs release zfssnapall_inflight "$s" 2>/dev/null
+    done
+    zfs destroy -R "$LROOT" 2>/dev/null
+    $SSH "$PEER" "for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs release zfssnapall_inflight \$s 2>/dev/null; done; zfs destroy -R '$RROOT' 2>/dev/null" 2>/dev/null
+    rm -rf "$TMPD"
+}
+trap cleanup EXIT
+
+PASS=0
+FAIL=0
+check() {
+    local label="$1" expected="$2" actual="$3"
+    if [ "$expected" = "$actual" ]; then
+        echo "PASS $label"; PASS=$((PASS + 1))
+    else
+        echo "FAIL $label"; echo "     expected: [$expected]"; echo "     actual:   [$actual]"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# --- helpers ----------------------------------------------------------------
+
+lz()  { zfs "$@" 2>/dev/null; }
+rz()  { $SSH "$PEER" "zfs $*" 2>/dev/null; }
+
+l_exists()  { zfs list -H "$1" >/dev/null 2>&1 && echo yes || echo no; }
+r_exists()  { $SSH "$PEER" "zfs list -H '$1'" >/dev/null 2>&1 && echo yes || echo no; }
+l_snaps()   { zfs list -H -o name -t snapshot -r "$1" 2>/dev/null | wc -l; }
+r_snaps()   { $SSH "$PEER" "zfs list -H -o name -t snapshot -r '$1' 2>/dev/null | wc -l" 2>/dev/null; }
+l_guid()    { zfs get -H -o value guid "$1" 2>/dev/null; }
+r_guid()    { $SSH "$PEER" "zfs get -H -o value guid '$1'" 2>/dev/null; }
+l_canmount(){ zfs get -H -o value canmount "$1" 2>/dev/null; }
+r_canmount(){ $SSH "$PEER" "zfs get -H -o value canmount '$1'" 2>/dev/null; }
+
+# Newest snapshot NAME (the @suffix) of a dataset.
+l_newest() { zfs list -H -o name -s creation -t snapshot -d 1 "$1" 2>/dev/null | tail -1 | sed 's/.*@//'; }
+r_newest() { $SSH "$PEER" "zfs list -H -o name -s creation -t snapshot -d 1 '$1' 2>/dev/null | tail -1 | sed 's/.*@//'"; }
+
+# Build the standard shape: root + keep + swap + swap/inner. canmount=noauto
+# throughout so this works unchanged for the delegated account, which cannot
+# mount. Data is written only where a mountpoint is actually usable.
+seed_local() {
+    local root="$1" d mp
+    for d in "" /keep /swap /swap/inner; do
+        zfs create -p -o canmount=noauto "$root$d" >/dev/null 2>&1 || return 1
+    done
+    for d in /keep /swap/inner; do
+        if zfs mount "$root$d" >/dev/null 2>&1; then
+            mp="$(zfs get -H -o value mountpoint "$root$d")"
+            [ -d "$mp" ] && dd if=/dev/urandom of="$mp/f" bs=64k count=8 status=none 2>/dev/null
+            zfs unmount "$root$d" >/dev/null 2>&1
+        fi
+    done
+    return 0
+}
+
+seed_peer() {
+    local root="$1"
+    $SSH "$PEER" "for d in '' /keep /swap /swap/inner; do zfs create -p -o canmount=noauto '$root'\$d || exit 1; done" >/dev/null 2>&1
+}
+
+RC=0
+send() { "$SNAPSEND" "$@" >"$TMPD/out" 2>&1; RC=$?; }
+get()  { "$SNAPGET"  "$@" >"$TMPD/out" 2>&1; RC=$?; }
+outgrep() { grep -c "$1" "$TMPD/out"; }
+
+# snapshot names carry a per-second timestamp, so consecutive runs need spacing
+tick() { sleep 1; }
+
+echo "=== two-host campaign: $(hostname) -> $PEER"
+echo "=== scratch: $LROOT (here) / $RROOT (there)"
+
+SRC="$LROOT/src"
+seed_local "$SRC" || { echo "could not seed the local source tree" >&2; exit 1; }
+
+# ============================================================================
+# A. snapsend, LOCAL target
+# ============================================================================
+echo "--- A. snapsend local"
+
+send -m a1_ "$SRC" "$LROOT/a1"
+check "A1 plain local: exit 0" "0" "$RC"
+check "A1 plain local: target created" "yes" "$(l_exists "$LROOT/a1/$SRC")"
+check "A1 plain local: exactly one snapshot" "1" "$(l_snaps "$LROOT/a1/$SRC")"
+check "A1 plain local: snapshot GUID matches the source" \
+      "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(l_guid "$LROOT/a1/$SRC@$(l_newest "$SRC")")"
+check "A1 plain local: children NOT sent (no -r/-R)" "no" "$(l_exists "$LROOT/a1/$SRC/keep")"
+check "A1 plain local: the container-parent warning fired" "1" "$(outgrep 'child dataset')"
+
+tick
+send -m a2_ -r "$SRC" "$LROOT/a2"
+check "A2 -r local: exit 0" "0" "$RC"
+check "A2 -r local: descendant landed" "yes" "$(l_exists "$LROOT/a2/$SRC/swap/inner")"
+check "A2 -r local: leaf GUID matches" \
+      "$(l_guid "$SRC/swap/inner@$(l_newest "$SRC/swap/inner")")" \
+      "$(l_guid "$LROOT/a2/$SRC/swap/inner@$(l_newest "$SRC/swap/inner")")"
+
+tick
+send -m a3_ -R "$SRC" "$LROOT/a3"
+check "A3 -R local: exit 0" "0" "$RC"
+check "A3 -R local: every dataset landed" "4" \
+      "$(zfs list -H -o name -r "$LROOT/a3" 2>/dev/null | grep -c "$SRC")"
+
+tick
+send -m a4_ -R -X 'swap$' "$SRC" "$LROOT/a4"
+check "A4 -R -X local: exit 0" "0" "$RC"
+check "A4 -R -X local: excluded dataset has no snapshot" "0" "$(l_snaps "$LROOT/a4/$SRC/swap")"
+check "A4 -R -X local: its child still landed" "1" "$(l_snaps "$LROOT/a4/$SRC/swap/inner")"
+check "A4 -R -X local: the intermediate level is canmount=noauto" "noauto" \
+      "$(l_canmount "$LROOT/a4/$SRC/swap")"
+
+tick
+send -m a5_ -R -S "$SRC" "$LROOT/a5"
+check "A5 -R -S local: exit 0" "0" "$RC"
+check "A5 -R -S local: the parent itself was not snapshotted" "0" \
+      "$(zfs list -H -o name -t snapshot -d 1 "$SRC" 2>/dev/null | grep -c 'a5_')"
+check "A5 -R -S local: children were" "1" "$(l_snaps "$LROOT/a5/$SRC/keep")"
+
+tick
+send -m a6_ -z "$SRC" "$LROOT/a6"
+check "A6 -z local: exit 0" "0" "$RC"
+check "A6 -z local: compression is dropped, with a reason" "1" "$(outgrep -i 'compression ignored')"
+check "A6 -z local: the transfer still lands" "1" "$(l_snaps "$LROOT/a6/$SRC")"
+
+# ============================================================================
+# B. snapsend, REMOTE target (the whole point of this file)
+# ============================================================================
+echo "--- B. snapsend remote (ssh)"
+
+tick
+send -m b1_ "$SRC" "$PEER:$RROOT/b1"
+check "B1 plain remote: exit 0" "0" "$RC"
+check "B1 plain remote: target created on the peer" "yes" "$(r_exists "$RROOT/b1/$SRC")"
+check "B1 plain remote: GUID matches across the link" \
+      "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/b1/$SRC@$(l_newest "$SRC")")"
+check "B1 plain remote: target created canmount=noauto" "noauto" "$(r_canmount "$RROOT/b1/$SRC")"
+
+tick
+send -m b2_ -z "$SRC" "$PEER:$RROOT/b2"
+check "B2 -z remote: exit 0" "0" "$RC"
+check "B2 -z remote: compression is NOT dropped over a link" "0" "$(outgrep -i 'compression ignored')"
+check "B2 -z remote: GUID matches after a compressed transfer" \
+      "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/b2/$SRC@$(l_newest "$SRC")")"
+
+tick
+send -m b3_ -r "$SRC" "$PEER:$RROOT/b3"
+check "B3 -r remote: exit 0" "0" "$RC"
+check "B3 -r remote: leaf GUID matches" \
+      "$(l_guid "$SRC/swap/inner@$(l_newest "$SRC/swap/inner")")" \
+      "$(r_guid "$RROOT/b3/$SRC/swap/inner@$(l_newest "$SRC/swap/inner")")"
+
+tick
+send -m b4_ -R "$SRC" "$PEER:$RROOT/b4"
+check "B4 -R remote: exit 0" "0" "$RC"
+check "B4 -R remote: every dataset landed" "4" \
+      "$($SSH "$PEER" "zfs list -H -o name -r '$RROOT/b4' 2>/dev/null" | grep -c "$SRC")"
+
+tick
+send -m b5_ -R -X 'swap$' "$SRC" "$PEER:$RROOT/b5"
+check "B5 -R -X remote: exit 0" "0" "$RC"
+check "B5 -R -X remote: excluded dataset has no snapshot" "0" "$(r_snaps "$RROOT/b5/$SRC/swap")"
+check "B5 -R -X remote: its child still landed" "1" "$(r_snaps "$RROOT/b5/$SRC/swap/inner")"
+check "B5 -R -X remote: the intermediate is canmount=noauto" "noauto" \
+      "$(r_canmount "$RROOT/b5/$SRC/swap")"
+
+tick
+send -m b6_ -R -S "$SRC" "$PEER:$RROOT/b6"
+check "B6 -R -S remote: exit 0" "0" "$RC"
+check "B6 -R -S remote: the parent was not sent" "no" "$(r_exists "$RROOT/b6/$SRC@")"
+check "B6 -R -S remote: children were" "1" "$(r_snaps "$RROOT/b6/$SRC/keep")"
+
+tick
+send -m b7_ -b 5M "$SRC" "$PEER:$RROOT/b7"
+check "B7 -b remote: exit 0" "0" "$RC"
+check "B7 -b remote: rate-limited transfer still lands" "1" "$(r_snaps "$RROOT/b7/$SRC")"
+
+# Incremental: the second run must recognise the target and send a delta, and a
+# third with nothing new must take the "already exists" path WITHOUT stranding
+# the hold it took on the way in.
+tick
+zfs snapshot "$SRC@extra_$$" >/dev/null 2>&1
+send -m b8_ -e "$SRC" "$PEER:$RROOT/b8"
+check "B8 incremental remote: first send (existing snapshot) exit 0" "0" "$RC"
+tick
+send -m b8_ -e "$SRC" "$PEER:$RROOT/b8"
+check "B8 incremental remote: re-run with nothing new exits 0" "0" "$RC"
+check "B8 incremental remote: no second copy appeared" "1" "$(r_snaps "$RROOT/b8/$SRC")"
+check "B8 incremental remote: no hold left on the source snapshot" "" \
+      "$(zfs holds -H "$SRC@extra_$$" 2>/dev/null | awk '{print $2}')"
+check "B8 incremental remote: a send bookmark exists on the source" "1" \
+      "$(zfs list -H -t bookmark -o name -d 1 "$SRC" 2>/dev/null | wc -l)"
+
+# ============================================================================
+# C. snapget, LOCAL source
+# ============================================================================
+echo "--- C. snapget local"
+# snapget's model is mirrored: source = <SOURCE_BASE>/<target dataset>, so the
+# source tree has to be built at that exact nested path.
+CBASE="$LROOT/cbase"
+CTGT="$LROOT/ctgt"
+seed_local "$CBASE/$CTGT" || { echo "could not seed the local pull source" >&2; exit 1; }
+
+tick
+get -m c1_ "$CTGT" "$CBASE"
+check "C1 plain local pull: exit 0" "0" "$RC"
+check "C1 plain local pull: GUID matches" \
+      "$(l_guid "$CBASE/$CTGT@$(l_newest "$CBASE/$CTGT")")" \
+      "$(l_guid "$CTGT@$(l_newest "$CBASE/$CTGT")")"
+
+tick
+get -m c2_ -r "$CTGT" "$CBASE"
+check "C2 -r local pull: exit 0" "0" "$RC"
+check "C2 -r local pull: descendant landed" "yes" "$(l_exists "$CTGT/swap/inner")"
+
+tick
+get -m c3_ -R "$CTGT" "$CBASE"
+check "C3 -R local pull: exit 0" "0" "$RC"
+check "C3 -R local pull: every dataset present locally" "4" \
+      "$(zfs list -H -o name -r "$CTGT" 2>/dev/null | wc -l)"
+
+tick
+CTGT2="$LROOT/ctgt2"
+seed_local "$CBASE/$CTGT2" >/dev/null
+get -m c4_ -R -X 'swap$' "$CTGT2" "$CBASE"
+check "C4 -R -X local pull: exit 0" "0" "$RC"
+check "C4 -R -X local pull: excluded dataset was not pulled" "0" "$(l_snaps "$CTGT2/swap")"
+check "C4 -R -X local pull: its child was" "1" "$(l_snaps "$CTGT2/swap/inner")"
+
+# ============================================================================
+# D. snapget, REMOTE source (ssh, the mirrored half of B)
+# ============================================================================
+echo "--- D. snapget remote (ssh)"
+DBASE="$RROOT/dbase"
+DTGT="$LROOT/dtgt"
+seed_peer "$DBASE/$DTGT" || { echo "could not seed the remote pull source" >&2; exit 1; }
+
+tick
+get -m d1_ "$DTGT" "$PEER:$DBASE"
+check "D1 plain remote pull: exit 0" "0" "$RC"
+check "D1 plain remote pull: GUID matches across the link" \
+      "$(r_guid "$DBASE/$DTGT@$(r_newest "$DBASE/$DTGT")")" \
+      "$(l_guid "$DTGT@$(r_newest "$DBASE/$DTGT")")"
+check "D1 plain remote pull: local target is canmount=noauto" "noauto" "$(l_canmount "$DTGT")"
+
+tick
+get -m d2_ -z "$DTGT" "$PEER:$DBASE"
+check "D2 -z remote pull: exit 0" "0" "$RC"
+check "D2 -z remote pull: compression is not dropped over a link" "0" "$(outgrep -i 'compression ignored')"
+
+tick
+DTGT3="$LROOT/dtgt3"
+seed_peer "$DBASE/$DTGT3"
+get -m d3_ -r "$DTGT3" "$PEER:$DBASE"
+check "D3 -r remote pull: exit 0" "0" "$RC"
+check "D3 -r remote pull: descendant landed locally" "yes" "$(l_exists "$DTGT3/swap/inner")"
+
+tick
+DTGT4="$LROOT/dtgt4"
+seed_peer "$DBASE/$DTGT4"
+get -m d4_ -R "$DTGT4" "$PEER:$DBASE"
+check "D4 -R remote pull: exit 0" "0" "$RC"
+check "D4 -R remote pull: every dataset present locally" "4" \
+      "$(zfs list -H -o name -r "$DTGT4" 2>/dev/null | wc -l)"
+
+tick
+DTGT5="$LROOT/dtgt5"
+seed_peer "$DBASE/$DTGT5"
+get -m d5_ -R -X 'swap$' "$DTGT5" "$PEER:$DBASE"
+check "D5 -R -X remote pull: exit 0" "0" "$RC"
+check "D5 -R -X remote pull: excluded dataset not pulled" "0" "$(l_snaps "$DTGT5/swap")"
+check "D5 -R -X remote pull: its child was" "1" "$(l_snaps "$DTGT5/swap/inner")"
+# The regex is matched against the FULL source-side path, which only a remote
+# run can really demonstrate: this pattern cannot match the local target name.
+tick
+DTGT6="$LROOT/dtgt6"
+seed_peer "$DBASE/$DTGT6"
+get -m d6_ -R -X "^$DBASE/$DTGT6/keep$" "$DTGT6" "$PEER:$DBASE"
+check "D6 -R -X remote pull: full source path matched" "0" "$RC"
+check "D6 -R -X remote pull: the full-path exclusion took effect" "no" "$(l_exists "$DTGT6/keep")"
+
+tick
+DTGT7="$LROOT/dtgt7"
+seed_peer "$DBASE/$DTGT7"
+get -m d7_ -R -S "$DTGT7" "$PEER:$DBASE"
+check "D7 -R -S remote pull: exit 0" "0" "$RC"
+check "D7 -R -S remote pull: the parent was not snapshotted on the source" "0" \
+      "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$DBASE/$DTGT7' 2>/dev/null | grep -c d7_")"
+check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")"
+
+# ============================================================================
+# E. hygiene -- what the campaign must leave behind: nothing
+# ============================================================================
+echo "--- E. hygiene"
+
+HELD=0
+for s in $(zfs list -H -o name -t snapshot -r "$LROOT" 2>/dev/null); do
+    zfs holds -H "$s" 2>/dev/null | grep -q zfssnapall && HELD=$((HELD + 1))
+done
+check "E1 no in-flight hold survived any case (local)" "0" "$HELD"
+
+check "E2 no in-flight hold survived on the peer" "0" \
+      "$($SSH "$PEER" "c=0; for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs holds -H \$s 2>/dev/null | grep -q zfssnapall && c=\$((c+1)); done; echo \$c")"
+
+check "E3 every level created on the peer is canmount=noauto" "0" \
+      "$($SSH "$PEER" "zfs get -H -o value canmount -r '$RROOT' 2>/dev/null | grep -vc noauto")"
+
+echo "--------------------------------------------"
+echo "PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ]
