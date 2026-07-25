@@ -43,7 +43,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.49 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.13 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy_new_server.sh`](deploy_new_server.sh) | Bootstraps a brand-new host: dependencies, checkout, alerting, smoke test | — |
 | [`deploy_backup_user.sh`](deploy_backup_user.sh) | Bootstraps a non-root delegated service account to run the above without root | — |
@@ -545,8 +545,19 @@ One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to ch
 | `ZFS_WARN_MODE` | `daily` | Same choice for WARNING-tier findings, set separately. |
 | `ZFS_ALERT_EMAIL` | deploy-time value | Where alerts go — changes all three scripts at once. |
 | `ZFS_ALERT_COOLDOWN` | `14400` (4h) | `immediate` only: seconds before the *same* message may mail again. Ignored in `daily` (the digest de-duplicates by counting). |
-| `ZFS_ALERT_STATE_DIR` | `/root/scripts/notify-state` | `immediate` only: where those cooldown timestamps live. |
-| `ZFS_ALERT_QUEUE` | `/root/scripts/alert-queue.log` | `daily` only: the queue the digest consumes. |
+| `ZFS_ALERT_STATE_DIR` | `/var/lib/zfs-snapshot-all/notify-state` | `immediate` only: where those cooldown timestamps live. |
+| `ZFS_ALERT_QUEUE` | `/var/lib/zfs-snapshot-all/alert-queue.log` | `daily` only: the queue the digest consumes. |
+
+The config lives at **`/etc/zfs-alert.conf`** and the queue under
+**`/var/lib/zfs-snapshot-all/`** (`2775 root:zfsalert`, setgid) rather than in `/root/scripts`,
+because `/root` is `0700`: a delegated non-root account (see `deploy_backup_user.sh`) cannot read
+or write anything under it. Opening `/root/scripts` to a group instead would be a privilege
+escalation — root executes those scripts from cron, so an account able to write there could
+replace them. The shared directory therefore holds **only data**; the scripts stay private to
+each account, and `deploy_backup_user.sh` gives the service account its own copies of
+`notify-fail.sh`/`notify-warn.sh` pointed at the same queue. `alert-digest.sh` is not duplicated
+— it runs as root over the shared queue, so the host still sends one mail a day covering both
+accounts. Hosts set up before this split are migrated automatically, queued findings included.
 
 A finding travels exactly one of the two paths, so it is never reported twice. The digest's
 *schedule* is not here — it is a cron line, emitted by `gen-cron.sh` (`DIGEST_SCHEDULE`, default
@@ -583,6 +594,14 @@ project does not touch, so a disk genuinely dropping out still pages immediately
 path. A silent day means "nothing was queued" — it is not proof of health, since a dead cron is
 also silent; a daily "all OK" per host was rejected because at fleet scale that is exactly the
 noise this replaced.
+
+**Log rotation** ships with the deploy scripts: `/etc/logrotate.d/zfs-snapshot-all` (root's logs)
+and `/etc/logrotate.d/zfs-snapshot-all-<user>` (the service account's), both monthly, keep 24,
+compressed. Two stanzas rather than one because of `create`: rotating the service account's logs
+into a root-owned file would leave that account unable to append, and its cron would stop logging
+silently. Neither stanza uses a `*.log` glob — the alert queue sits in the same directory and is
+state, not a log. Retention is long on purpose: diagnosing a backup problem means comparing runs
+weeks apart, and the volume is ~0.1 MB/day (a few MB on disk after ZFS compression).
 
 If `mail` fails, the digest puts the findings back on the queue and exits non-zero rather than
 dropping them — with one delivery a day, a lost run is a lost day of alerting.

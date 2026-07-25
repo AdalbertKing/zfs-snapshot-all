@@ -302,7 +302,56 @@ done
 # ------------------------------------------------------------------------------
 log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
 # ------------------------------------------------------------------------------
-ALERT_CONF="/root/scripts/zfs-alert.conf"
+# Shared alerting state, deliberately OUTSIDE /root. /root is 0700, so a
+# delegated non-root service account (deploy_backup_user.sh) cannot reach
+# anything under it -- not the queue, not the config, not the notify scripts.
+# The tempting shortcut, opening /root/scripts to a group, is a privilege
+# escalation: that directory holds scripts root executes from cron, so a
+# service account able to write there could replace them. Hence a separate
+# group-writable directory that contains only data.
+ALERT_GROUP="zfsalert"
+ALERT_SHARED_DIR="/var/lib/zfs-snapshot-all"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
+    if [ -d "$ALERT_SHARED_DIR" ]; then
+        log "  $ALERT_SHARED_DIR present ($(stat -c '%a %U:%G' "$ALERT_SHARED_DIR"))"
+    else
+        warn "  $ALERT_SHARED_DIR missing -- alert queue would fall back to a root-only path"
+    fi
+else
+    getent group "$ALERT_GROUP" >/dev/null || { groupadd --system "$ALERT_GROUP" && log "created group $ALERT_GROUP"; }
+    mkdir -p "$ALERT_SHARED_DIR/notify-state"
+    chgrp -R "$ALERT_GROUP" "$ALERT_SHARED_DIR"
+    # 2775: setgid, so every file created here inherits the group and stays
+    # writable by the other account no matter which one created it.
+    chmod 2775 "$ALERT_SHARED_DIR" "$ALERT_SHARED_DIR/notify-state"
+    log "shared alert dir $ALERT_SHARED_DIR (2775 root:$ALERT_GROUP)"
+fi
+
+ALERT_CONF="/etc/zfs-alert.conf"
+OLD_ALERT_CONF="/root/scripts/zfs-alert.conf"
+OLD_QUEUE="/root/scripts/alert-queue.log"
+if [ "$CHECK_ONLY" -eq 0 ]; then
+    # Migrate a host that was set up before the split. Move, don't copy: two
+    # readable configs would be two sources of truth, and the scripts prefer
+    # /etc, so a stale /root copy would silently do nothing while looking live.
+    if [ -f "$OLD_ALERT_CONF" ] && [ ! -f "$ALERT_CONF" ]; then
+        sed -e "s#^ZFS_ALERT_QUEUE=.*#ZFS_ALERT_QUEUE=$ALERT_SHARED_DIR/alert-queue.log#" \
+            -e "s#^ZFS_ALERT_STATE_DIR=.*#ZFS_ALERT_STATE_DIR=$ALERT_SHARED_DIR/notify-state#" \
+            "$OLD_ALERT_CONF" > "$ALERT_CONF" && rm -f "$OLD_ALERT_CONF"
+        chmod 0644 "$ALERT_CONF"
+        log "migrated $OLD_ALERT_CONF -> $ALERT_CONF (queue/state repointed at $ALERT_SHARED_DIR)"
+    fi
+    # Anything already queued must ride along, or the next digest reports a
+    # quiet day that was not quiet.
+    if [ -s "$OLD_QUEUE" ]; then
+        cat "$OLD_QUEUE" >> "$ALERT_SHARED_DIR/alert-queue.log" && rm -f "$OLD_QUEUE"
+        chgrp "$ALERT_GROUP" "$ALERT_SHARED_DIR/alert-queue.log" 2>/dev/null
+        chmod 0664 "$ALERT_SHARED_DIR/alert-queue.log" 2>/dev/null
+        log "migrated queued findings from $OLD_QUEUE"
+    fi
+fi
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ -r "$ALERT_CONF" ]; then
         log "  $ALERT_CONF present (mode: $(sed -n 's/^ZFS_ALERT_MODE=\([a-z]*\).*/\1/p' "$ALERT_CONF" | head -1))"
@@ -353,17 +402,66 @@ ZFS_ALERT_EMAIL=${NOTIFY_EMAIL}
 ZFS_ALERT_COOLDOWN=14400
 
 # Immediate mode only: where the per-message cooldown timestamps live.
-ZFS_ALERT_STATE_DIR=/root/scripts/notify-state
+ZFS_ALERT_STATE_DIR=${ALERT_SHARED_DIR}/notify-state
 
 # Queue file used by daily mode. The digest consumes it and deletes it; if mail
 # delivery fails the findings are put back rather than dropped.
-ZFS_ALERT_QUEUE=/root/scripts/alert-queue.log
+ZFS_ALERT_QUEUE=${ALERT_SHARED_DIR}/alert-queue.log
 
 # When the daily mail goes out. This is the cron SCHEDULE, so it lives in the
 # crontab, not here -- gen-cron.sh emits it (DIGEST_SCHEDULE, default 0 7 * * *).
 EOF
     chmod 0644 "$ALERT_CONF"
     log "created $ALERT_CONF (ZFS_ALERT_MODE=$ALERT_MODE)"
+fi
+
+LOGROTATE_CONF="/etc/logrotate.d/zfs-snapshot-all"
+LOGROTATE_MARKER="# zfs-snapshot-all logrotate v1"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -f "$LOGROTATE_CONF" ]; then log "  $LOGROTATE_CONF present"; else warn "  $LOGROTATE_CONF missing -- cron.log grows without bound"; fi
+elif [ -e "$LOGROTATE_CONF" ] && grep -qF "$LOGROTATE_MARKER" "$LOGROTATE_CONF" 2>/dev/null; then
+    log "$LOGROTATE_CONF already current, leaving it alone"
+else
+    # Measured before writing this: ~0.1 MB/day, i.e. 4-56 MB after 200-500 days,
+    # and ZFS compresses that ~11x on disk. So rotation is for bounded worst case
+    # and quick greps, NOT for space -- and retention stays LONG on purpose,
+    # because diagnosing a backup problem means comparing runs weeks apart.
+    #
+    # The file list is explicit, never /root/scripts/*.log: alert-queue.log and
+    # warn-queue.log live there too and are STATE, not logs. Rotating them would
+    # move the queue out from under alert-digest.sh and silently discard every
+    # finding waiting to be mailed.
+    #
+    # No copytruncate: each cron line opens its log fresh via 2>>, so a plain
+    # rename is safe -- a job running across the rotation just finishes writing
+    # into the .1 file. copytruncate would be strictly worse here, since it can
+    # lose whatever is written during the copy window.
+    cat > "$LOGROTATE_CONF" <<EOF
+$LOGROTATE_MARKER -- managed by deploy_new_server.sh, re-run it to update.
+# Deliberately NOT a *.log glob: the alert queue lives in the same directory and
+# is state, not a log -- rotating it would throw away queued findings.
+/root/scripts/cron.log
+/root/scripts/git-pull.log
+/root/scripts/zfs-snapshot-stats.log
+{
+    monthly
+    rotate 24
+    maxsize 50M
+    compress
+    delaycompress
+    notifempty
+    missingok
+    create 0644 root root
+}
+EOF
+    chmod 0644 "$LOGROTATE_CONF"
+    log "created $LOGROTATE_CONF (monthly, keep 24, compressed)"
+fi
+
+if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
+    logrotate --debug "$LOGROTATE_CONF" >/dev/null 2>&1 \
+        && log "  logrotate config parses cleanly" \
+        || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
 fi
 
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
@@ -402,12 +500,20 @@ $NOTIFY_SCRIPT_MARKER -- reports an ALERT-tier finding: a cron job that returned
 # dropping out still pages immediately through that separate path.
 # Usage in cron: ... 2>>cron.log || /root/scripts/notify-fail.sh "job description"
 JOB="\$1"
-CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+CONF="\${ZFS_ALERT_CONF:-}"
+if [ -z "\$CONF" ]; then
+    # /etc first: /root is 0700, so a delegated service account (see
+    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # location stays as a fallback so an un-migrated host keeps working.
+    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
+        [ -r "\$c" ] && { CONF="\$c"; break; }
+    done
+fi
 # shellcheck disable=SC1090
-[ -r "\$CONF" ] && . "\$CONF"
+[ -n "\$CONF" ] && . "\$CONF"
 
 MODE="\${ZFS_ALERT_MODE:-daily}"
-QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 EMAIL="\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
 
 if [ "\$MODE" != "immediate" ]; then
@@ -420,7 +526,7 @@ fi
 HOST=\$(hostname -f 2>/dev/null || hostname)
 NOW=\$(date '+%Y-%m-%d %H:%M:%S')
 NOW_EPOCH=\$(date +%s)
-STATE_DIR="\${ZFS_ALERT_STATE_DIR:-/root/scripts/notify-state}"
+STATE_DIR="\${ZFS_ALERT_STATE_DIR:-/var/lib/zfs-snapshot-all/notify-state}"
 COOLDOWN="\${ZFS_ALERT_COOLDOWN:-14400}"
 mkdir -p "\$STATE_DIR"
 
@@ -496,11 +602,19 @@ $WARN_SCRIPT_MARKER -- reports a WARNING-tier monitor finding ("getting stale",
 # the mailbox.
 # Usage in cron: ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "job description"
 JOB="\$1"
-CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+CONF="\${ZFS_ALERT_CONF:-}"
+if [ -z "\$CONF" ]; then
+    # /etc first: /root is 0700, so a delegated service account (see
+    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # location stays as a fallback so an un-migrated host keeps working.
+    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
+        [ -r "\$c" ] && { CONF="\$c"; break; }
+    done
+fi
 # shellcheck disable=SC1090
-[ -r "\$CONF" ] && . "\$CONF"
+[ -n "\$CONF" ] && . "\$CONF"
 
-QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
     HOST=\$(hostname -f 2>/dev/null || hostname)
     echo "ZFS warning: '\${JOB}' na \${HOST} o \$(date '+%Y-%m-%d %H:%M:%S')." \\
@@ -543,11 +657,19 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # healthy, since a dead cron would also be silent. That is the accepted
 # trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
 # from each is exactly the noise this replaced.
-CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+CONF="\${ZFS_ALERT_CONF:-}"
+if [ -z "\$CONF" ]; then
+    # /etc first: /root is 0700, so a delegated service account (see
+    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # location stays as a fallback so an un-migrated host keeps working.
+    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
+        [ -r "\$c" ] && { CONF="\$c"; break; }
+    done
+fi
 # shellcheck disable=SC1090
-[ -r "\$CONF" ] && . "\$CONF"
+[ -n "\$CONF" ] && . "\$CONF"
 
-QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 LEGACY_QUEUE="/root/scripts/warn-queue.log"
 HOST=\$(hostname -f 2>/dev/null || hostname)
 TODAY=\$(date '+%Y-%m-%d')

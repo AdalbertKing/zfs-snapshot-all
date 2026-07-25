@@ -140,6 +140,81 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+log "Part 4c: alerting access + log rotation for this account"
+# ------------------------------------------------------------------------------
+# This account cannot see ANYTHING under /root: that directory is 0700, so the
+# notify scripts, the alert config and the alert queue are all out of reach.
+# The shortcut of opening /root/scripts to a group is a privilege escalation --
+# root executes those scripts from cron, so an account able to write there could
+# replace them. Instead the two accounts share one group-writable DATA directory
+# (created by deploy_new_server.sh) and this account gets its own copies of the
+# two reporting scripts. alert-digest.sh stays root-only and reads the shared
+# queue, so the host still sends exactly ONE mail a day covering both accounts.
+ALERT_GROUP="zfsalert"
+ALERT_SHARED_DIR="/var/lib/zfs-snapshot-all"
+ALERT_CONF="/etc/zfs-alert.conf"
+
+if ! getent group "$ALERT_GROUP" >/dev/null; then
+    warn "group $ALERT_GROUP does not exist -- run deploy_new_server.sh on this host first; skipping alerting setup"
+elif [ ! -d "$ALERT_SHARED_DIR" ]; then
+    warn "$ALERT_SHARED_DIR missing -- run deploy_new_server.sh on this host first; skipping alerting setup"
+else
+    if id -nG "$USERNAME" | tr ' ' '\n' | grep -qx "$ALERT_GROUP"; then
+        log "$USERNAME already in group $ALERT_GROUP"
+    else
+        usermod -aG "$ALERT_GROUP" "$USERNAME" && log "added $USERNAME to group $ALERT_GROUP"
+        log "  NOTE: group membership applies to NEW sessions -- this account's cron picks it up on its next run"
+    fi
+
+    # Same two scripts root has, same shared queue, same config. Only the digest
+    # is not duplicated: two digests would mean two mails per host per day.
+    for s in notify-fail notify-warn; do
+        if [ -f "/root/scripts/$s.sh" ]; then
+            install -o "$USERNAME" -g "$USERNAME" -m 0755 "/root/scripts/$s.sh" "$HOMEDIR/$s.sh" \
+                && log "installed $HOMEDIR/$s.sh (copy of root's, same shared queue)"
+        else
+            warn "/root/scripts/$s.sh not found -- run deploy_new_server.sh first; $USERNAME has no way to report findings"
+        fi
+    done
+    [ -r "$ALERT_CONF" ] || warn "$ALERT_CONF missing -- this account will fall back to built-in defaults (daily)"
+fi
+
+LOGROTATE_CONF="/etc/logrotate.d/zfs-snapshot-all-$USERNAME"
+LOGROTATE_MARKER="# zfs-snapshot-all $USERNAME logrotate v1"
+if [ -e "$LOGROTATE_CONF" ] && grep -qF "$LOGROTATE_MARKER" "$LOGROTATE_CONF" 2>/dev/null; then
+    log "$LOGROTATE_CONF already current, leaving it alone"
+else
+    # A SEPARATE stanza from root's, and the reason is 'create': rotating these
+    # with root's stanza would hand the fresh file to root:root, and this account
+    # -- which owns the directory but not that file -- could no longer append.
+    # Its cron would stop logging silently, since the redirect is >> in the
+    # background with nobody reading the error.
+    cat > "$LOGROTATE_CONF" <<EOF
+$LOGROTATE_MARKER -- managed by deploy_backup_user.sh, re-run it to update.
+$HOMEDIR/git-pull.log
+$HOMEDIR/zfs-snapshot-stats.log
+{
+    monthly
+    rotate 24
+    maxsize 50M
+    compress
+    delaycompress
+    notifempty
+    missingok
+    su $USERNAME $USERNAME
+    create 0644 $USERNAME $USERNAME
+}
+EOF
+    chmod 0644 "$LOGROTATE_CONF"
+    log "created $LOGROTATE_CONF (monthly, keep 24, owned by $USERNAME)"
+fi
+if command -v logrotate >/dev/null; then
+    logrotate --debug "$LOGROTATE_CONF" >/dev/null 2>&1 \
+        && log "  logrotate config parses cleanly" \
+        || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
+fi
+
+# ------------------------------------------------------------------------------
 log "Part 5: ZFS delegation on ${DATASETS[*]}"
 # ------------------------------------------------------------------------------
 ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount"
