@@ -134,7 +134,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.13'
+VERSION='v4.14'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -985,7 +985,11 @@ generate_block() {
     for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
     if [ "${#MONITOR_LINES[@]}" -gt 0 ]; then
         echo ""
-        echo "$DIGEST_SCHEDULE $DIGEST_SCRIPT"
+        # Redirected like every other generated line: the digest is silent on
+        # the happy path, but it reports a failed mail delivery on stderr, and
+        # an unredirected stderr here is a cron mail -- from the very script
+        # whose job is to be the only mail this host sends.
+        echo "$DIGEST_SCHEDULE $DIGEST_SCRIPT 2>>$CRON_LOG"
     fi
     echo "$MARKER_END"
 }
