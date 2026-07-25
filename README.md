@@ -39,11 +39,11 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.54 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.55 |
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.49 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.12 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.13 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy_new_server.sh`](deploy_new_server.sh) | Bootstraps a brand-new host: dependencies, checkout, alerting, smoke test | — |
 | [`deploy_backup_user.sh`](deploy_backup_user.sh) | Bootstraps a non-root delegated service account to run the above without root | — |
@@ -102,6 +102,21 @@ recognizes this specific hold and reports it as "in-flight, skipped" instead of 
 dependent-object error. The hold is released as soon as the transfer either succeeds or fails
 without a resume token to protect.
 
+**Exception — datasets replicated by Proxmox VE are never held.** If a dataset carries any
+`@__replicate_` snapshot, the hold is skipped and the reason logged. `pvesr` moves data with
+`zfs send -Rpv | zfs recv -F`, and a forced receive of a *replication* stream destroys every
+destination snapshot the sending side no longer has — which, given the source runs its own
+retention, is most syncs. A held snapshot cannot be destroyed, so the receive aborts, and
+replication does not merely skip a cycle: it stays broken until someone releases the hold by
+hand. Watch for snapshots named `recv-<pid>-1` — that is what a forced receive does with a
+destination snapshot it could not delete, and it is the fingerprint of this having happened.
+
+Nothing is lost by skipping. The hold exists to stop `delsnaps.sh` pruning mid-send, but on a
+`pvesr`-managed dataset the snapshot set is not yours to defend — `pvesr` rewrites it to mirror
+the source on every sync, so a hold cannot win that race, only break the sync. The check cannot
+distinguish a replication source from a target and does not try: erring toward "skip" trades a
+little pruning protection for never wedging replication.
+
 ### `-i`/`--identifier`: independent jobs on the same pair
 
 Both scripts key their single-instance lock (`LOCK_KEY`) and their bookmark tag on `(source,
@@ -135,6 +150,15 @@ The freeze window contains **only** `zfs snapshot` — never the transfer, since
 guest-side while frozen. A guest owning several disks (e.g. 3) is quiesced exactly once per run,
 and all of its disks are snapshotted together inside one atomic window, so a multi-disk VM never
 ends up with disks pointing at different moments in time. Thaw is guaranteed by an `EXIT` trap.
+
+**Datasets spanning several pools are fine.** `zfs snapshot` accepts multiple names only within
+one pool, so the window issues one atomic call **per pool** rather than one call for everything.
+This costs nothing in coherence: every guest stays frozen until the last call returns, so no
+write can slip between them and all disks still land on the same instant. (Before v2.55 a single
+call was used for the whole list, and any job mixing e.g. `rpool/data/vm-1` with
+`hdd/vm-disks/subvol-2` failed outright, creating nothing. ZFS reports this as
+`cannot create snapshots : multiple snapshots of same fs not allowed`, which names the wrong
+constraint — it is one-pool-per-call, not a duplicate filesystem.)
 Filesystem-consistent is **not** application-consistent — for a true database-consistent
 snapshot, put the engine's own quiesce logic (`FLUSH TABLES WITH READ LOCK`, Postgres backup
 mode, …) in the guest's own `/etc/qemu/fsfreeze-hook`, which the agent runs inside the freeze.
@@ -517,7 +541,18 @@ Three layers, so a schedule drift or a real fault doesn't turn into a flood of i
 
 `gen-cron.sh` wires the first two straight into every generated monitor line (`[ $rc -eq 1 ] &&
 notify-warn.sh ...; [ $rc -eq 2 ] && notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`) —
-see [gen-cron.sh](#gen-cronsh--config-driven-cron-generator). `notify-fail.sh`, `notify-warn.sh`,
+see [gen-cron.sh](#gen-cronsh--config-driven-cron-generator).
+
+**Every command in a generated line redirects its own stderr to the cron log, the notify calls
+included.** cron mails whatever a job writes to stdout *or* stderr, and the notify scripts are
+not silent — `notify-fail.sh` announces its own cooldown suppression there. Redirecting only the
+monitored command (the behaviour before v4.13) meant a monitor sitting at CRITICAL sent a raw
+cron mail on *every tick* — 96/day per monitor at `*/15` — which is exactly the flood the
+rate-limiting exists to prevent. Note the redirect binds to one command, not to the whole line,
+so anything added to these lines needs its own. Setting `MAILTO=""` hides this symptom but also
+silences every other cron job on the host; fix the stream instead.
+
+`notify-fail.sh`, `notify-warn.sh`,
 and `alert-digest.sh` are not tracked as standalone files in this repo — `deploy_new_server.sh`
 creates/upgrades them on each host from a heredoc (see its `*_MARKER` comments for the
 version-detection that makes re-running it idempotent), so every host runs an identical, known
