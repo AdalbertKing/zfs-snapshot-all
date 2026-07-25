@@ -898,15 +898,52 @@ stuck partial state) and falls back to a normal incremental or full send.
 
 ## Testing
 
-Two different kinds of suite, deliberately kept apart:
+### Start here: what does *this* change oblige me to run?
+
+```bash
+./test/impact.sh              # uncommitted changes
+./test/impact.sh HEAD~3..HEAD # a commit range
+```
+
+`impact.sh` reads [`test/deps.conf`](test/deps.conf) — a hand-written dependency graph — and turns
+a diff into a concrete plan: which suites to run (cheap local ones first), which **contracts** to
+re-check, and which paths **no suite can cover** and therefore must be exercised by hand. Run it
+before deciding you are done; the suites below are what it points at.
+
+The graph carries three kinds of edge, and only the first is derivable from the code:
+
+- **source edges** — `snapsend.sh`/`snapget.sh` source `lib-zfs-snap.sh`, so a change to the lib
+  pulls in both consumers' obligations. `impact.sh` parses these out of the scripts itself and
+  `--verify` fails if reality and the graph disagree.
+- **suite edges** — which suite exercises which file. Declared, because a suite's subject is a
+  variable no parser can follow.
+- **contracts** — two files that must agree although neither includes the other: `gen-cron.sh`
+  hardcodes `check-snap-age.sh`'s exit codes in the cron lines it emits; `deploy.sh` must delegate
+  exactly the ZFS verbs the scripts invoke; `delsnaps.sh` duplicates the lib's hold tag; the
+  non-root path defaults in the scripts must equal the paths `deploy.sh` provisions. Nothing in the
+  code links any of those pairs, they are where the expensive mistakes live, and no tool can infer
+  them — which is why the graph is written by hand and validated rather than generated.
+
+```bash
+./test/impact.sh --graph      # mermaid rendering of the whole thing
+./test/impact.sh --verify     # drift check (also asserted by the impact suite)
+```
+
+`--verify` fails if a declared file is gone, a tracked `*.sh` is missing from the graph, a contract
+is listed on one side only, or a derived source edge is absent. **A new script that nobody has
+decided about therefore breaks the build** — that is the point: an unlisted file is an untested
+file nobody made a call on.
+
+### The suites
 
 ```bash
 ./test/run.sh          # gen-cron.sh config-parsing: golden fixtures + negative cases
 ./test/quiesce/run.sh   # quiesce (-q) bookkeeping: which guest owns a dataset, dedup, etc.
 ./test/tune/run.sh      # -A autotune cache bookkeeping (stubbed zfs on PATH)
+./test/impact/run.sh    # impact.sh itself, plus a live --verify of the real graph
 ```
 
-These three need **no root, no ZFS, no network** — plain bash + coreutils, so they run the same
+These four need **no root, no ZFS, no network** — plain bash + coreutils, so they run the same
 on a Debian host and a Git-Bash dev box. They cover decisions (which guest, which cache file,
 whether a threshold parses), not mechanism, on purpose.
 
@@ -921,6 +958,21 @@ machine. Each creates a PID-suffixed pool, redirects `STATS_LOG`/`LOCKDIR` to a 
 cleans up via an `EXIT` trap even if a test fails partway through. The remote (SSH) code paths are
 deliberately **not** covered here — a real remote host is needed for that, since
 `validate_remote_host()` refuses a loopback "replication" to the same machine by design.
+
+### What no suite covers
+
+Three areas are structurally out of reach, and `impact.sh` names them when a change touches them
+rather than letting a green summary imply otherwise:
+
+| Obligation | Why no suite can do it |
+|---|---|
+| `remote-ssh` | `validate_remote_host()` refuses loopback by design, so ssh needs a second real host |
+| `nonroot-account` | a delegated account cannot mount (no `CAP_SYS_ADMIN`, and no `zfs allow` grants it) and cannot read `/root` — **root cannot reach these failures at all** |
+| `force-full` | `-f`/`-F` destroy and recreate the target; root-only and destructive by nature |
+
+That middle row is not theoretical. On 2026-07-25 the suite was green at 161/161 and one run as the
+delegated account found four defects: `zfs create -p` mounting intermediates, `/root`-based path
+defaults, a missing `bookmark` delegation, and a hold leaked on every pre-transfer failure.
 
 ## Versioning
 
