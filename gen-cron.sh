@@ -134,7 +134,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.12'
+VERSION='v4.13'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -833,7 +833,7 @@ emit_send() {
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""
 
-        JOB_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify_out\"")
+        JOB_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify_out\" 2>>$CRON_LOG")
     done
 }
 
@@ -857,7 +857,7 @@ emit_inline_prune() {
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
         local cmd="$REPO_DIR/delsnaps.sh \"$joined\" \"$pattern\" $retain"
-        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\" 2>>$CRON_LOG")
     done
 }
 
@@ -871,7 +871,7 @@ emit_prune_sections() {
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}\"$scope\" \"$pattern\" $retain"
-        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\" 2>>$CRON_LOG")
     done
 }
 
@@ -902,6 +902,17 @@ emit_prune_sections() {
 # script had no execute bit and never ran -- and, worse, a typo'd threshold
 # exits 1, which that same test swallowed silently while the check verified
 # nothing at all, indefinitely.
+#
+# EVERY command in the line redirects stderr to $CRON_LOG, the notify calls
+# included -- not just the check. cron mails whatever a job writes to stdout OR
+# stderr, and the notify scripts are not silent: notify-fail.sh reports its own
+# cooldown suppression ("suppressed repeat within cooldown") on stderr. With the
+# redirect on the check alone, a monitor sitting at CRITICAL therefore sent a
+# raw cron mail on EVERY tick -- 96 a day per monitor at */15 -- which is the
+# exact flood the rate-limiting inside notify-fail.sh exists to prevent. The
+# same applies to the "|| notify" job and prune lines above, for the same reason.
+# Do not drop these redirects; a host with MAILTO="" set merely hides the
+# symptom, and not every host has it.
 emit_monitor() {
     local key list scope pattern warn crit schedule recursive notify broken warntext
     for key in "${MONITOR_GROUP_ORDER[@]}"; do
@@ -922,7 +933,7 @@ emit_monitor() {
         local flag=""
         [ "$recursive" = "1" ] && flag="-R "
         local cmd="$REPO_DIR/check-snap-age.sh ${flag}\"$joined\" \"$pattern\" $warn $crit"
-        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; rc=\$?; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$warntext\"; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\"; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\"")
+        MONITOR_LINES+=("$schedule $cmd 2>>$CRON_LOG; rc=\$?; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$warntext\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$notify\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$broken\" 2>>$CRON_LOG")
     done
 }
 
@@ -950,7 +961,7 @@ emit_bookmark_prune() {
         local flag=""
         [ "$recursive" = "1" ] && flag="-R "
         local cmd="$REPO_DIR/delsnaps.sh -B ${flag}\"$joined\" \"$pattern\" $age"
-        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\"")
+        RETAIN_LINES+=("$schedule $cmd 2>>$CRON_LOG || $NOTIFY_SCRIPT \"$notify\" 2>>$CRON_LOG")
     done
 }
 ###############################################################################

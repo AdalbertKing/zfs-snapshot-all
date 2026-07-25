@@ -230,9 +230,20 @@ set -o pipefail
 #                    blocked while frozen, so the window must not contain the
 #                    transfer -- and because one guest can own several datasets
 #                    (VM 107 has three disks), all of them are snapshotted in ONE
-#                    atomic `zfs snapshot` call inside a single window. Per-dataset
-#                    freezing would give one machine several different points in
-#                    time, which is the very thing being prevented.
+#                    atomic `zfs snapshot` call PER POOL inside a single window.
+#                    Per-dataset freezing would give one machine several different
+#                    points in time, which is the very thing being prevented.
+#
+#                    Why per pool and not one call for everything: `zfs snapshot`
+#                    takes multiple names only within a single pool. Given a list
+#                    spanning two (e.g. rpool/data/vm-106-disk-0 plus
+#                    hdd/vm-disks/subvol-101-disk-0) it refuses the whole call with
+#                    "cannot create snapshots : multiple snapshots of same fs not
+#                    allowed" -- a misleading message for what is really a same-pool
+#                    constraint, verified on zfs-2.1.9. Coherence does not depend on
+#                    the single ioctl anyway: the guests stay frozen across all of
+#                    the calls, so nothing can write between them and every disk
+#                    still lands on the same point in time.
 #
 #                    Thaw is guaranteed by an EXIT trap and shouts at log level 0
 #                    if it fails -- a guest left frozen is an outage.
@@ -274,7 +285,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.54'
+VERSION='v2.55'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1475,9 +1486,15 @@ fi
 #   2. One guest can own several datasets -- VM 107 has three disks, CT 102 has
 #      two. Freezing and thawing per dataset would produce one window each, i.e.
 #      three different points in time for one machine, which is exactly the
-#      incoherence being prevented. ONE `zfs snapshot` with every dataset as an
-#      argument is atomic (verified on zfs-2.1.9), so all disks land on the same
-#      instant.
+#      incoherence being prevented. ONE `zfs snapshot` with every dataset of a
+#      pool as an argument is atomic (verified on zfs-2.1.9), so all disks land
+#      on the same instant.
+#
+# The snapshots are grouped BY POOL because `zfs snapshot` accepts multiple names
+# only within one pool -- a cross-pool list is rejected outright, taking nothing
+# at all (see the -q documentation above for the exact message and why it is
+# misleading). Splitting per pool costs nothing in coherence: every guest stays
+# frozen until the last group is done, so no write can slip between the calls.
 #
 # Afterwards the normal loop runs with USE_EXISTING_SNAPSHOT=1: the snapshots
 # already exist, and -e picks the newest matching -m, which is the one just made.
@@ -1488,7 +1505,11 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     trap 'quiesce_thaw_all; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
     quiesce_snap_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
-    declare -a QUIESCE_SNAPS=()
+    # pool -> space-separated snapshot names. A space-joined string is safe as a
+    # list here because ZFS dataset names cannot contain whitespace, and bash has
+    # no array-of-arrays to hold this properly.
+    declare -A QUIESCE_SNAPS_BY_POOL=()
+    quiesce_snap_total=0
     for dataset in "${DATASETS[@]}"; do
         # Under -r the guests live in the CHILDREN, not in the named parent --
         # see quiesce_scope. The snapshot list still names the parent, because
@@ -1496,13 +1517,27 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         while IFS= read -r quiesce_ds; do
             [ -n "$quiesce_ds" ] && quiesce_freeze "$quiesce_ds" "$QUIESCE"
         done < <(quiesce_scope "$dataset" "$RECURSIVE")
-        QUIESCE_SNAPS+=("${dataset}@${MESSAGE}${quiesce_snap_suffix}")
+        quiesce_pool="${dataset%%/*}"
+        QUIESCE_SNAPS_BY_POOL[$quiesce_pool]+=" ${dataset}@${MESSAGE}${quiesce_snap_suffix}"
+        quiesce_snap_total=$((quiesce_snap_total + 1))
     done
 
     quiesce_recursive_flag=""
     [ $RECURSIVE -eq 1 ] && quiesce_recursive_flag="-r"
-    log 1 "Quiesce: taking one atomic snapshot of ${#QUIESCE_SNAPS[@]} dataset(s)"
-    if zfs snapshot $quiesce_recursive_flag "${QUIESCE_SNAPS[@]}"; then
+    log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
+    quiesce_snap_failed=0
+    for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
+        # Unquoted on purpose: the value is the space-separated list built above,
+        # and each name has to reach zfs as its own argument.
+        # shellcheck disable=SC2086
+        if ! zfs snapshot $quiesce_recursive_flag ${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]}; then
+            log 0 "Quiesce: the atomic snapshot of pool '$quiesce_pool' failed"
+            quiesce_snap_failed=1
+            break
+        fi
+    done
+
+    if [ $quiesce_snap_failed -eq 0 ]; then
         USE_EXISTING_SNAPSHOT=1
         # Separate from USE_EXISTING_SNAPSHOT because the snapshot-only branch in
         # process_dataset deliberately ignores that one -- see the comment there.
@@ -1512,6 +1547,11 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # falling through matters: silently continuing would take unquiesced
         # snapshots one at a time and report success, which is the one outcome
         # someone who asked for -q must never get without being told.
+        #
+        # Any pool that already succeeded keeps its snapshots: they were taken
+        # inside the freeze window and are perfectly valid, they match the
+        # configured retention pattern like any other, and destroying them would
+        # be throwing away good backups because a DIFFERENT pool failed.
         log 0 "Quiesce: the atomic snapshot failed -- refusing to fall back to unquiesced per-dataset snapshots"
         quiesce_thaw_all
         exit 1
