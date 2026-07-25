@@ -350,6 +350,12 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
         chmod 0664 "$ALERT_SHARED_DIR/alert-queue.log" 2>/dev/null
         log "migrated queued findings from $OLD_QUEUE"
     fi
+    # An existing queue may predate the umask fix and be 0644, which locks out
+    # whichever account did not happen to create it. Cheap to correct every run.
+    if [ -f "$ALERT_SHARED_DIR/alert-queue.log" ]; then
+        chgrp "$ALERT_GROUP" "$ALERT_SHARED_DIR/alert-queue.log" 2>/dev/null
+        chmod 0664 "$ALERT_SHARED_DIR/alert-queue.log" 2>/dev/null
+    fi
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
@@ -465,7 +471,7 @@ if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
 fi
 
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v6"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v7"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
@@ -519,6 +525,11 @@ EMAIL="\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
 if [ "\$MODE" != "immediate" ]; then
     # One line per finding: epoch, severity, text. Short single-line appends to
     # the same file from concurrent cron jobs do not interleave (under PIPE_BUF).
+    # 0002, so that if THIS process is the one that recreates the queue after
+    # the digest consumed it, the file lands group-writable. Both root and the
+    # delegated account append here; whichever gets there first would otherwise
+    # create it 0644 and lock the other one out until the next digest run.
+    umask 0002
     printf '%s\tALERT\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
     exit 0
 fi
@@ -576,7 +587,7 @@ log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v4"
+WARN_SCRIPT_MARKER="# notify-warn.sh v5"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$WARN_SCRIPT" ]; then
         warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
@@ -621,6 +632,8 @@ if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
         | mail -s "[ZFS BACKUP] WARNING: \${JOB} na \${HOST}" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
     exit 0
 fi
+# See notify-fail.sh: keep a recreated queue writable by BOTH accounts.
+umask 0002
 printf '%s\tWARN\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
 EOF
     chmod +x "$WARN_SCRIPT"
@@ -628,7 +641,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v4"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v5"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -753,7 +766,7 @@ else
     # point of a once-a-day digest is that a lost run is a lost DAY of alerting.
     # Deleting on failure is what the v1 digest did, and it silently discarded
     # everything queued whenever delivery broke.
-    cat "\$PROCESSING" >> "\$QUEUE" 2>/dev/null && rm -f "\$PROCESSING"
+    (umask 0002; cat "\$PROCESSING" >> "\$QUEUE") 2>/dev/null && rm -f "\$PROCESSING"
     echo "alert-digest.sh: mail delivery failed -- \$TOTAL finding(s) requeued for the next run" >&2
     exit 1
 fi
