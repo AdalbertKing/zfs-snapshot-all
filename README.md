@@ -531,13 +531,36 @@ gen-cron.sh -c jobs.pve2.conf --install    # install it into this user's crontab
 
 ## Alerting
 
-Three layers, so a schedule drift or a real fault doesn't turn into a flood of identical mail:
+**One mail per host per day. No more.** Every finding is recorded to a queue; `alert-digest.sh`
+mails a single grouped summary once a day and nothing at all on a day with nothing to report.
 
-| Mechanism | Fires on | Cadence |
+| Mechanism | Records | How |
 |---|---|---|
-| `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | Immediate, but rate-limited: repeats of the *same* message within `NOTIFY_COOLDOWN` (default 4h) are suppressed. One state file per unique message (an md5 of its text) under `/root/scripts/notify-state/`. |
-| `notify-warn.sh` + `alert-digest.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Queued to `/root/scripts/warn-queue.log` (append-only, `epoch\tmessage`); `alert-digest.sh` mails **one** grouped summary/day (default `0 7 * * *`) — count + first/last-seen time per unique message — and clears the queue. Silent (no mail at all) if nothing queued. |
+| `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | Appends `epoch\tALERT\tmessage` to `/root/scripts/alert-queue.log`. **Sends no mail.** |
+| `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Same queue, `epoch\tWARN\tmessage`. Sends no mail. |
+| `alert-digest.sh` | — | The only backup mail this host sends. Once a day (default `0 7 * * *`) it collapses the queue to one row per (severity, message) — count plus first/last-seen — ALERTs first, then WARNINGs, and mails **one** message. Subject carries the counts: `[ZFS] <host> <date> -- N alert / M warn`. |
 | `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy_new_server.sh` |
+
+**Why not mail immediately.** Up to v3, `notify-fail.sh` mailed on the spot, rate-limited per
+unique message text. The cooldown was keyed on the *message*, so every distinct finding kept its
+own independent counter and two jobs failing in the same cron tick sent two separate mails in the
+same second. Volume therefore scaled with the number of distinct findings rather than with the
+number of hosts — across a fleet that is a stream an operator starts filtering away, which is
+strictly worse than one daily summary that actually gets read.
+
+**What this costs.** An urgent finding waits until the digest runs. That is deliberate. Note it
+does *not* apply to hardware: Proxmox's own ZED pool-health mail is a separate mechanism this
+project does not touch, so a disk genuinely dropping out still pages immediately through that
+path. A silent day means "nothing was queued" — it is not proof of health, since a dead cron is
+also silent; a daily "all OK" per host was rejected because at fleet scale that is exactly the
+noise this replaced.
+
+If `mail` fails, the digest puts the findings back on the queue and exits non-zero rather than
+dropping them — with one delivery a day, a lost run is a lost day of alerting.
+
+The cron lines are unchanged by all of this: `gen-cron.sh` still emits the same
+`notify-warn.sh` / `notify-fail.sh` calls, and both scripts keep the same one-argument interface.
+Only what they do with the finding changed.
 
 `gen-cron.sh` wires the first two straight into every generated monitor line (`[ $rc -eq 1 ] &&
 notify-warn.sh ...; [ $rc -eq 2 ] && notify-fail.sh ...; [ $rc -ge 3 ] && notify-fail.sh ...`) —

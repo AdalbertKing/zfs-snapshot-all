@@ -8,10 +8,11 @@
 #     (see the table in Part 1 -- it is derived from what the scripts invoke)
 #   - clone/update of /root/scripts/zfs-snapshot-all (handles both a fresh dir
 #     and one that already has plain-file copies of the scripts sitting in it)
-#   - notify-fail.sh mail-alert helper (fires on job failure, CRITICAL/UNKNOWN
-#     staleness, or a DEGRADED/FAULTED pool -- rate-limited per unique message)
-#   - notify-warn.sh + alert-digest.sh (queues WARNING-tier staleness findings,
-#     mails one grouped summary/day instead of one mail per occurrence)
+#   - notify-fail.sh / notify-warn.sh: neither sends mail. Both record a finding
+#     (ALERT / WARN) into one queue for the digest below.
+#   - alert-digest.sh: the ONLY mail this host sends about backups -- one message
+#     a day covering every ALERT and WARNING queued since the last run, and no
+#     mail at all on a day with nothing to report.
 #   - check-pool-capacity.sh pool/quota alert (fires on slow-fill BEFORE a job fails)
 #   - smoke test of all five shipped executables + a live compressor round-trip
 #   - auto-pull cron line
@@ -273,59 +274,57 @@ done
 log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
 # ------------------------------------------------------------------------------
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v3"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v4"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
     elif grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
-        log "  $NOTIFY_SCRIPT present (v3, rate-limited)"
+        log "  $NOTIFY_SCRIPT present (v4, queues into the daily digest)"
     else
-        warn "  $NOTIFY_SCRIPT present but pre-v3 (old \"job failed\" wording, or no rate-limit) -- re-run without --check-only to upgrade"
+        warn "  $NOTIFY_SCRIPT present but pre-v4 (mails immediately, one mail per finding) -- re-run without --check-only to upgrade"
     fi
 elif [ -e "$NOTIFY_SCRIPT" ] && grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
-    log "$NOTIFY_SCRIPT already at v3, leaving it alone (edit NOTIFY_EMAIL/NOTIFY_COOLDOWN inside manually if needed)"
+    log "$NOTIFY_SCRIPT already at v4, leaving it alone"
 else
-    [ -e "$NOTIFY_SCRIPT" ] && log "$NOTIFY_SCRIPT exists but predates v3 -- upgrading (rate-limit + neutral wording)"
+    [ -e "$NOTIFY_SCRIPT" ] && log "$NOTIFY_SCRIPT exists but predates v4 -- upgrading (no more immediate mail; queues into the daily digest)"
     cat > "$NOTIFY_SCRIPT" <<EOF
 #!/bin/bash
-$NOTIFY_SCRIPT_MARKER -- sends an alert email for a cron job that returned
-# non-zero, a CRITICAL/UNKNOWN staleness finding, or a DEGRADED/FAULTED pool.
-# Suppresses repeat sends of the SAME message within a cooldown window so a
-# flapping check (schedule drift, a stuck CRITICAL) does not flood the inbox
-# with dozens of identical mails. Wording is deliberately NOT "job failed" --
-# JOB is not always a job that failed (e.g. a pool-health finding is a report,
-# not a failure), so a fixed "zakonczylo sie bledem" would misdescribe it.
+$NOTIFY_SCRIPT_MARKER -- records an ALERT-tier finding (a cron job that returned
+# non-zero, a CRITICAL/UNKNOWN staleness result, or a DEGRADED/FAULTED pool) for
+# alert-digest.sh to mail once a day. It does NOT send mail itself.
+#
+# Up to v3 this mailed immediately, rate-limited per unique message text. That
+# does not scale: the cooldown was keyed on the MESSAGE, so every distinct
+# finding kept its own independent counter and two jobs failing in the same cron
+# tick produced two separate mails at the same second. Across a fleet the volume
+# is the number of distinct findings, not the number of hosts, and the operator
+# ends up filtering the mail away -- which is worse than one late mail that
+# actually gets read. One host now sends at most one mail a day (see
+# alert-digest.sh), and nothing at all on a clean day.
+#
+# TRADE-OFF, deliberate: a genuinely urgent finding waits until the digest runs.
+# Proxmox's own ZED pool-health mail is a separate mechanism and is NOT affected,
+# so a disk actually dropping out still pages immediately through that path.
 # Usage in cron: ... 2>>cron.log || /root/scripts/notify-fail.sh "job description"
 JOB="\$1"
-HOST=\$(hostname -f 2>/dev/null || hostname)
-NOW=\$(date '+%Y-%m-%d %H:%M:%S')
-NOW_EPOCH=\$(date +%s)
+QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
 
-STATE_DIR="/root/scripts/notify-state"
-COOLDOWN="\${NOTIFY_COOLDOWN:-14400}"   # 4h default; override: NOTIFY_COOLDOWN=3600 notify-fail.sh "..."
-mkdir -p "\$STATE_DIR"
-
-KEY=\$(printf '%s' "\$JOB" | md5sum | cut -d' ' -f1)
-LASTFILE="\$STATE_DIR/\$KEY"
-
-if [ -f "\$LASTFILE" ] && [ \$(( NOW_EPOCH - \$(cat "\$LASTFILE") )) -lt "\$COOLDOWN" ]; then
-    echo "notify-fail.sh: suppressed repeat within cooldown -- \${JOB}" >&2
-    exit 0
-fi
-echo "\$NOW_EPOCH" > "\$LASTFILE"
-
-echo "ZFS alert: '\${JOB}' na \${HOST} o \${NOW}. Sprawdz /root/scripts/cron.log." \\
-    | mail -s "[ZFS BACKUP] ALERT: \${JOB} na \${HOST}" ${NOTIFY_EMAIL}
+# One line per finding: epoch, severity, text. Short single-line appends to the
+# same file from concurrent cron jobs do not interleave (well under PIPE_BUF).
+printf '%s\tALERT\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
 EOF
     chmod +x "$NOTIFY_SCRIPT"
-    log "created/upgraded $NOTIFY_SCRIPT (v3, alerts -> $NOTIFY_EMAIL, cooldown 4h)"
+    log "created/upgraded $NOTIFY_SCRIPT (v4, queues -> alert-digest.sh)"
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "skipping the test email (check-only)"
 elif command -v mail >/dev/null; then
-    log "sending a test alert to confirm mail delivery works from THIS host..."
-    NOTIFY_COOLDOWN=0 "$NOTIFY_SCRIPT" "deploy_new_server.sh test on $(hostname -f 2>/dev/null || hostname)"
+    log "sending a test email to confirm mail delivery works from THIS host..."
+    # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
+    # routing the delivery smoke test through it would prove nothing about mail.
+    echo "deploy_new_server.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
+        | mail -s "[ZFS BACKUP] test na $(hostname -f 2>/dev/null || hostname)" "$NOTIFY_EMAIL"
     log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
     log "If it does NOT arrive: this host's postfix likely can't deliver externally without a relay"
     log "(no relayhost configured is fine IF direct delivery to the recipient's MX works, as it did"
@@ -347,77 +346,154 @@ log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v1"
+WARN_SCRIPT_MARKER="# notify-warn.sh v2"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if [ -x "$WARN_SCRIPT" ]; then log "  $WARN_SCRIPT present"; else warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"; fi
+    if [ ! -x "$WARN_SCRIPT" ]; then
+        warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
+    elif grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/dev/null; then
+        log "  $WARN_SCRIPT present (v2, shared queue)"
+    else
+        warn "  $WARN_SCRIPT present but pre-v2 (writes the old warn-queue.log) -- re-run without --check-only to upgrade"
+    fi
 elif [ -e "$WARN_SCRIPT" ] && grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/dev/null; then
-    log "$WARN_SCRIPT already at v1, leaving it alone"
+    log "$WARN_SCRIPT already at v2, leaving it alone"
 else
     cat > "$WARN_SCRIPT" <<EOF
 #!/bin/bash
 $WARN_SCRIPT_MARKER -- queues a WARNING-tier monitor finding for
 # alert-digest.sh to summarize once a day, instead of mailing it immediately.
+# Same queue and same line format as notify-fail.sh (v4+), differing only in the
+# severity column -- that is what lets one digest cover both tiers in one mail.
 # Usage in cron: ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "job description"
 JOB="\$1"
-QUEUE="/root/scripts/warn-queue.log"
-printf '%s\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+printf '%s\tWARN\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
 EOF
     chmod +x "$WARN_SCRIPT"
-    log "created $WARN_SCRIPT"
+    log "created/upgraded $WARN_SCRIPT (v2, shared queue)"
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v1"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v2"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if [ -x "$DIGEST_SCRIPT" ]; then log "  $DIGEST_SCRIPT present"; else warn "  $DIGEST_SCRIPT missing -- WARNING findings would queue forever and never be seen"; fi
+    if [ ! -x "$DIGEST_SCRIPT" ]; then
+        warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
+    elif grep -qF "$DIGEST_SCRIPT_MARKER" "$DIGEST_SCRIPT" 2>/dev/null; then
+        log "  $DIGEST_SCRIPT present (v2, ALERT+WARN in one mail)"
+    else
+        warn "  $DIGEST_SCRIPT present but pre-v2 (WARN only; ALERTs from notify-fail v4 would never be mailed) -- re-run without --check-only to upgrade"
+    fi
 elif [ -e "$DIGEST_SCRIPT" ] && grep -qF "$DIGEST_SCRIPT_MARKER" "$DIGEST_SCRIPT" 2>/dev/null; then
-    log "$DIGEST_SCRIPT already at v1, leaving it alone"
+    log "$DIGEST_SCRIPT already at v2, leaving it alone"
 else
     cat > "$DIGEST_SCRIPT" <<EOF
 #!/bin/bash
-$DIGEST_SCRIPT_MARKER -- once a day, mails one summary of everything
-# notify-warn.sh queued since the last run instead of leaving each WARNING
-# unmailed and invisible. Silent (no mail at all) if nothing queued.
-QUEUE="/root/scripts/warn-queue.log"
+$DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
+# it summarises everything notify-fail.sh (ALERT) and notify-warn.sh (WARN)
+# queued since the last run, in ONE message, and is completely silent on a day
+# with nothing to report.
+#
+# One mail per host per day is the whole point: at fleet scale the previous
+# design (immediate mail per finding, rate-limited per message text) produced
+# mail proportional to the number of distinct findings, so two jobs failing in
+# the same cron tick sent two mails in the same second. An operator who filters
+# the alerting away is worse off than one who reads a single daily summary.
+#
+# A silent day means "nothing was queued" -- it does NOT prove the host is
+# healthy, since a dead cron would also be silent. That is the accepted
+# trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
+# from each is exactly the noise this replaced.
+QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+LEGACY_QUEUE="/root/scripts/warn-queue.log"
 HOST=\$(hostname -f 2>/dev/null || hostname)
 TODAY=\$(date '+%Y-%m-%d')
 
-[ -s "\$QUEUE" ] || exit 0
-
 PROCESSING="\${QUEUE}.processing"
-mv "\$QUEUE" "\$PROCESSING"
 
+# Claim the queue first, so findings arriving mid-run land in the NEXT digest
+# rather than being summarised and then deleted unread.
+if [ -s "\$QUEUE" ]; then
+    mv "\$QUEUE" "\$PROCESSING"
+else
+    : > "\$PROCESSING"
+fi
+
+# One-time carry-over: anything left by notify-warn.sh v1, which wrote a
+# two-column line (epoch, message) to a separate file. Normalised to WARN so a
+# host upgraded mid-day does not silently drop what it had already queued.
+if [ -s "\$LEGACY_QUEUE" ]; then
+    awk -F'\t' 'NF>=2 { printf "%s\tWARN\t%s\n", \$1, \$2 }' "\$LEGACY_QUEUE" >> "\$PROCESSING"
+    rm -f "\$LEGACY_QUEUE"
+fi
+
+[ -s "\$PROCESSING" ] || { rm -f "\$PROCESSING"; exit 0; }
+
+# Collapse to one row per (severity, message): count, first-seen, last-seen.
+# Sorted ALERT before WARN, then by count descending -- the worst and the
+# noisiest end up at the top of the mail where they get read.
 SUMMARY=\$(awk -F'\t' '
 {
-    key = \$2
+    sev = \$2; if (sev != "ALERT") sev = "WARN"
+    key = sev "\t" \$3
     count[key]++
     if (!(key in first) || \$1 < first[key]) first[key] = \$1
     if (!(key in last)  || \$1 > last[key])  last[key]  = \$1
 }
 END {
-    for (k in count) printf "%d\t%s\t%d\t%d\n", count[k], k, first[k], last[k]
-}' "\$PROCESSING" | sort -t\$'\t' -k1,1nr)
+    for (k in count) {
+        split(k, p, "\t")
+        rank = (p[1] == "ALERT") ? 0 : 1
+        printf "%d\t%s\t%d\t%s\t%d\t%d\n", rank, p[1], count[k], p[2], first[k], last[k]
+    }
+}' "\$PROCESSING" | sort -t\$'\t' -k1,1n -k3,3nr)
 
-BODY=""
-UNIQUE=0
-while IFS=\$'\t' read -r cnt msg first_ep last_ep; do
-    UNIQUE=\$((UNIQUE + 1))
+ALERT_BODY=""
+WARN_BODY=""
+N_ALERT=0
+N_WARN=0
+while IFS=\$'\t' read -r rank sev cnt msg first_ep last_ep; do
+    [ -n "\$sev" ] || continue
     t1=\$(date -d "@\$first_ep" '+%H:%M')
     t2=\$(date -d "@\$last_ep" '+%H:%M')
     range="\$t1"; [ "\$t1" != "\$t2" ] && range="\$t1 - \$t2"
-    BODY="\${BODY}\$(printf '  x%-4s %-55s (%s)\n' "\$cnt" "\$msg" "\$range")
+    line=\$(printf '  x%-4s %-55s (%s)' "\$cnt" "\$msg" "\$range")
+    if [ "\$sev" = "ALERT" ]; then
+        N_ALERT=\$((N_ALERT + 1))
+        ALERT_BODY="\${ALERT_BODY}\${line}
 "
+    else
+        N_WARN=\$((N_WARN + 1))
+        WARN_BODY="\${WARN_BODY}\${line}
+"
+    fi
 done <<< "\$SUMMARY"
 
 TOTAL=\$(wc -l < "\$PROCESSING")
 
-printf 'WARNING -- getting stale, nie jeszcze critical:\n\n%s' "\$BODY" \\
-    | mail -s "[ZFS DIGEST] \$HOST -- \$TODAY (\$UNIQUE unikalnych, \$TOTAL zdarzen)" ${NOTIFY_EMAIL}
-
-rm -f "\$PROCESSING"
+if {
+    printf 'Host: %s   Doba: %s   Zdarzen: %s\n' "\$HOST" "\$TODAY" "\$TOTAL"
+    if [ "\$N_ALERT" -gt 0 ]; then
+        printf '\nALERT -- zadanie padlo, backup przeterminowany albo pula nie jest ONLINE:\n\n%s' "\$ALERT_BODY"
+    fi
+    if [ "\$N_WARN" -gt 0 ]; then
+        printf '\nWARNING -- starzeje sie, jeszcze nie critical:\n\n%s' "\$WARN_BODY"
+    fi
+    printf '\nSzczegoly: /root/scripts/cron.log na %s\n' "\$HOST"
+} | mail -s "[ZFS] \$HOST \$TODAY -- \$N_ALERT alert / \$N_WARN warn" ${NOTIFY_EMAIL}; then
+    rm -f "\$PROCESSING"
+else
+    # Mail failed (no MTA, relay refused, mailutils missing). Put the findings
+    # back so the next run retries them: this is the ONLY copy, and the whole
+    # point of a once-a-day digest is that a lost run is a lost DAY of alerting.
+    # Deleting on failure is what the v1 digest did, and it silently discarded
+    # everything queued whenever delivery broke.
+    cat "\$PROCESSING" >> "\$QUEUE" 2>/dev/null && rm -f "\$PROCESSING"
+    echo "alert-digest.sh: mail delivery failed -- \$TOTAL finding(s) requeued for the next run" >&2
+    exit 1
+fi
 EOF
     chmod +x "$DIGEST_SCRIPT"
-    log "created $DIGEST_SCRIPT"
+    log "created/upgraded $DIGEST_SCRIPT (v2, one mail/day covering ALERT+WARN)"
 fi
 
 # ------------------------------------------------------------------------------
