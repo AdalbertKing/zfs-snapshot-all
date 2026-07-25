@@ -465,17 +465,17 @@ if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
 fi
 
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v5"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v6"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
     elif grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
-        log "  $NOTIFY_SCRIPT present (v4, queues into the daily digest)"
+        log "  $NOTIFY_SCRIPT present (current)"
     else
-        warn "  $NOTIFY_SCRIPT present but pre-v4 (mails immediately, one mail per finding) -- re-run without --check-only to upgrade"
+        warn "  $NOTIFY_SCRIPT present but outdated (wrong queue path, or mails immediately) -- re-run without --check-only to upgrade"
     fi
 elif [ -e "$NOTIFY_SCRIPT" ] && grep -qF "$NOTIFY_SCRIPT_MARKER" "$NOTIFY_SCRIPT" 2>/dev/null; then
-    log "$NOTIFY_SCRIPT already at v4, leaving it alone"
+    log "$NOTIFY_SCRIPT already current, leaving it alone"
 else
     [ -e "$NOTIFY_SCRIPT" ] && log "$NOTIFY_SCRIPT exists but predates v4 -- upgrading (no more immediate mail; queues into the daily digest)"
     cat > "$NOTIFY_SCRIPT" <<EOF
@@ -576,17 +576,17 @@ log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v3"
+WARN_SCRIPT_MARKER="# notify-warn.sh v4"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$WARN_SCRIPT" ]; then
         warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
     elif grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/dev/null; then
-        log "  $WARN_SCRIPT present (v2, shared queue)"
+        log "  $WARN_SCRIPT present (current)"
     else
-        warn "  $WARN_SCRIPT present but pre-v2 (writes the old warn-queue.log) -- re-run without --check-only to upgrade"
+        warn "  $WARN_SCRIPT present but outdated (wrong queue path) -- re-run without --check-only to upgrade"
     fi
 elif [ -e "$WARN_SCRIPT" ] && grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/dev/null; then
-    log "$WARN_SCRIPT already at v2, leaving it alone"
+    log "$WARN_SCRIPT already current, leaving it alone"
 else
     cat > "$WARN_SCRIPT" <<EOF
 #!/bin/bash
@@ -628,17 +628,17 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v3"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v4"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
     elif grep -qF "$DIGEST_SCRIPT_MARKER" "$DIGEST_SCRIPT" 2>/dev/null; then
-        log "  $DIGEST_SCRIPT present (v2, ALERT+WARN in one mail)"
+        log "  $DIGEST_SCRIPT present (current)"
     else
-        warn "  $DIGEST_SCRIPT present but pre-v2 (WARN only; ALERTs from notify-fail v4 would never be mailed) -- re-run without --check-only to upgrade"
+        warn "  $DIGEST_SCRIPT present but outdated (wrong queue path, or WARN-only) -- re-run without --check-only to upgrade"
     fi
 elif [ -e "$DIGEST_SCRIPT" ] && grep -qF "$DIGEST_SCRIPT_MARKER" "$DIGEST_SCRIPT" 2>/dev/null; then
-    log "$DIGEST_SCRIPT already at v2, leaving it alone"
+    log "$DIGEST_SCRIPT already current, leaving it alone"
 else
     cat > "$DIGEST_SCRIPT" <<EOF
 #!/bin/bash
