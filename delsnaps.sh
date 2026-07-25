@@ -104,7 +104,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.19'
+VERSION='v1.20'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -123,9 +123,13 @@ if [ "$(id -u)" -eq 0 ]; then
     ZFS_SNAP_DEFAULT_NOTIFY="/root/scripts/notify-fail.sh"
     ZFS_SNAP_DEFAULT_LOCKDIR="/var/run"
 else
-    ZFS_SNAP_DEFAULT_STATS="$HOME/zfs-snapshot-stats.log"
-    ZFS_SNAP_DEFAULT_NOTIFY="$HOME/notify-fail.sh"
-    ZFS_SNAP_DEFAULT_LOCKDIR="$HOME/run"
+    # HOME is set by cron and by `su`, but not by `env -i` or a bare systemd
+    # unit -- fall back to the passwd entry rather than resolving "$HOME/run"
+    # to "/run" and failing with a message that points at the wrong thing.
+    _zfs_snap_home="${HOME:-$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)}"
+    ZFS_SNAP_DEFAULT_STATS="$_zfs_snap_home/zfs-snapshot-stats.log"
+    ZFS_SNAP_DEFAULT_NOTIFY="$_zfs_snap_home/notify-fail.sh"
+    ZFS_SNAP_DEFAULT_LOCKDIR="$_zfs_snap_home/run"
 fi
 STATS_LOG="${STATS_LOG:-$ZFS_SNAP_DEFAULT_STATS}"
 

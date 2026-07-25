@@ -39,9 +39,9 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.58 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.52 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.19 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.59 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.53 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.20 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
