@@ -1,80 +1,96 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-# deploy_new_server.sh
+# deploy.sh -- one script, one host, everything zfs-snapshot-all needs.
 #
-# Bootstrap procedure for propagating zfs-snapshot-all (snapsend.sh/snapget.sh/
-# delsnaps.sh) from GitHub onto a new Proxmox/Debian host, including:
-#   - verification and installation of every dependency the package needs
-#     (see the table in Part 1 -- it is derived from what the scripts invoke)
-#   - clone/update of /root/scripts/zfs-snapshot-all (handles both a fresh dir
-#     and one that already has plain-file copies of the scripts sitting in it)
-#   - zfs-alert.conf: how loudly this host reports problems. ZFS_ALERT_MODE is
-#     'daily' by default (queue everything, one summary mail per host per day)
-#     and 'immediate' mails each finding as it happens -- worth setting while
-#     bringing a host up. Created once; never overwritten on re-run.
-#     Provision it directly with --alerts=immediate.
-#   - notify-fail.sh / notify-warn.sh: report an ALERT / WARN finding, either by
-#     queueing it or by mailing at once, per that config.
-#   - alert-digest.sh: in daily mode, the ONLY mail this host sends about
-#     backups -- one message covering every ALERT and WARNING queued since the
-#     last run, and no mail at all on a day with nothing to report.
-#   - check-pool-capacity.sh pool/quota alert (fires on slow-fill BEFORE a job fails)
-#   - smoke test of all five shipped executables + a live compressor round-trip
-#   - auto-pull cron line
+# Replaces the old deploy_new_server.sh + deploy_backup_user.sh pair. That split
+# was historical, not conceptual: it forced an ordering ("run the other one
+# first") that lived in a human's head rather than in the code, duplicated the
+# helpers and the repo-checkout logic, and produced two separate --check-only
+# verdicts for one machine. Everything below runs in the only correct order.
 #
-# This script IS tracked in the repo (alongside the 5 package scripts and
-# deploy_backup_user.sh). On a brand-new host you still have to get it there
-# before there is a checkout to run it from -- paste it via heredoc, scp it,
-# or curl it from GitHub -- then run it as root:
+# What it does, in order:
+#   1 dependencies          6 smoke test of the shipped executables
+#   2 repo checkout         7 root auto-pull cron line
+#   3 shared alert state    8 delegated non-root account (optional, see below)
+#   4 notify + digest
+#   5 capacity alerting
 #
-#   bash deploy_new_server.sh
+# Idempotent: safe to re-run, every part skips what is already done. It does NOT
+# touch the actual snapsend/snapget/delsnaps job lines -- those are per-host and
+# belong to gen-cron.sh.
 #
-# It is idempotent: safe to re-run. It does NOT touch your crontab's actual
-# snapsend/snapget/delsnaps job lines -- those are dataset-specific per host
-# and are a manual step documented at the end (Part 5 below), because getting
-# that wrong on a live host is exactly the kind of thing that bit us before.
+#   bash deploy.sh                      # host setup; maintains an existing
+#                                       # delegated account if one is found
+#   bash deploy.sh --check-only         # audit, change nothing
+#   bash deploy.sh --alerts=immediate   # mail every finding (see below)
+#   bash deploy.sh --backup-user=zfsbackup   # also CREATE the delegated account
 # ------------------------------------------------------------------------------
 set -uo pipefail
 
+# ==============================================================================
+#  WHAT THIS HOST GETS -- edit here, or override with a flag for one run
+# ==============================================================================
+# Where alerts are mailed.
+NOTIFY_EMAIL="${NOTIFY_EMAIL:-lurk@lurk.com.pl}"
+
+# daily     = queue findings, ONE summary mail per host per day (default)
+# immediate = mail each finding as it happens. Worth setting while bringing a
+#             host up: a misconfigured job you hear about within the hour is a
+#             five-minute fix, the same mistake read in tomorrow's digest has
+#             already cost a night of backups.
+# Only used when /etc/zfs-alert.conf does not exist yet -- an existing one is
+# never overwritten, so a hand-edited mode survives every re-run.
+ALERT_MODE="daily"
+
+# The delegated non-root account. THIS VARIABLE IS ABOUT CREATION, NOT
+# MAINTENANCE:
+#   empty        -- never create an account, but AUTO-DETECT an existing one and
+#                   keep it maintained (scripts, log rotation, alert access)
+#   "zfsbackup"  -- create it if missing, then maintain it
+# So a bare `bash deploy.sh` does the right thing on every host in the fleet
+# without anyone having to remember which machine has an account and which does
+# not; creating one stays a deliberate, explicit act.
+BACKUP_USER=""
+BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
+
 REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 REPO_DIR="/root/scripts/zfs-snapshot-all"
-NOTIFY_EMAIL="${NOTIFY_EMAIL:-lurk@lurk.com.pl}"   # override: NOTIFY_EMAIL=foo@bar bash deploy_new_server.sh
+# ==============================================================================
 
-# PROBLEMS lets --check-only return a meaningful exit code, so the audit can be
-# driven from cron or a loop over hosts instead of being read by eye.
+# PROBLEMS lets --check-only return a meaningful exit code for the WHOLE host,
+# account included -- so an audit can be driven from a loop over 18 hosts
+# instead of being read by eye.
 PROBLEMS=0
 log() { echo ">>> $*"; }
 warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
-# --check-only: report what is missing or broken and change NOTHING. No package
-# installs, no clone/pull, no files created, no crontab edits, and -- the one
-# that matters most on a live host -- no test email. Use it to audit a server
-# that is already running, where the full script's side effects are unwanted.
 CHECK_ONLY=0
-# How loudly this host alerts. Written into /root/scripts/zfs-alert.conf, which
-# is the single place an operator changes it afterwards -- see Part 4 below.
-#   daily     (default) every finding is queued; ONE mail per host per day
-#   immediate every finding mails the moment it happens, rate-limited per
-#             message. Worth choosing while BRINGING A HOST UP: a misconfigured
-#             job you hear about within the hour is a five-minute fix; the same
-#             mistake found in tomorrow's digest has already cost a night of
-#             backups. Switch to daily once the host has run clean for a while.
-ALERT_MODE="daily"
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --check-only) CHECK_ONLY=1; shift ;;
-        --alerts=*)   ALERT_MODE="${1#*=}"; shift ;;
-        --alerts)     ALERT_MODE="${2:-}"; shift 2 ;;
+        --check-only)   CHECK_ONLY=1; shift ;;
+        --alerts=*)     ALERT_MODE="${1#*=}"; shift ;;
+        --alerts)       ALERT_MODE="${2:-}"; shift 2 ;;
+        --backup-user=*) BACKUP_USER="${1#*=}"; shift ;;
+        --backup-user)  BACKUP_USER="${2:-}"; shift 2 ;;
+        --datasets=*)   BACKUP_USER_DATASETS="${1#*=}"; shift ;;
+        --datasets)     BACKUP_USER_DATASETS="${2:-}"; shift 2 ;;
+        --email=*)      NOTIFY_EMAIL="${1#*=}"; shift ;;
+        --email)        NOTIFY_EMAIL="${2:-}"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--check-only] [--alerts=daily|immediate]"
-            echo "  --check-only       audit dependencies and the checkout; make no changes"
-            echo "  --alerts=daily     (default) queue findings, one summary mail per host per day"
-            echo "  --alerts=immediate mail every finding as it happens -- recommended while"
-            echo "                     bringing a new host up, then switch back to daily"
-            echo
-            echo "Only used when /root/scripts/zfs-alert.conf does not exist yet; an existing"
-            echo "one is never overwritten. Change the mode later by editing that file."
+            cat <<'USAGE'
+Usage: deploy.sh [options]
+  --check-only            audit only; install, create and modify nothing
+  --alerts=daily          (default) queue findings, one summary mail per day
+  --alerts=immediate      mail each finding at once -- use while bringing a host up
+  --backup-user=NAME      also create the delegated non-root account NAME.
+                          Omit it and an EXISTING account is still detected and
+                          maintained; only creation needs to be asked for.
+  --datasets="A B"        datasets to delegate to that account
+  --email=ADDR            where alerts are mailed
+Defaults are the config block at the top of this script -- edit them there to
+make them permanent for a host.
+USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
@@ -101,7 +117,7 @@ apt_install_with_fallback() {
 }
 
 # ------------------------------------------------------------------------------
-log "Part 1: dependencies"
+log "Phase 1: dependencies"
 # ------------------------------------------------------------------------------
 # The list below is derived from what the package's scripts ACTUALLY invoke, not
 # from memory -- re-derive it with:
@@ -194,7 +210,7 @@ fi
 log "  [ok]      zfs $(zfs version 2>/dev/null | head -1 | awk '{print $NF}') -- $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')"
 
 # ------------------------------------------------------------------------------
-log "Part 2: deploy the repo into $REPO_DIR"
+log "Phase 2: deploy the repo into $REPO_DIR"
 # ------------------------------------------------------------------------------
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ -d "$REPO_DIR/.git" ]; then
@@ -246,7 +262,7 @@ fi
 fi   # end of CHECK_ONLY guard for Part 2
 
 # ------------------------------------------------------------------------------
-log "Part 3: verify the deployment"
+log "Phase 6: verify the deployment"
 # ------------------------------------------------------------------------------
 cd "$REPO_DIR" || die "cannot cd into $REPO_DIR"
 log "HEAD: $(git log -1 --oneline)"
@@ -300,10 +316,10 @@ for c in zstd pigz; do
 done
 
 # ------------------------------------------------------------------------------
-log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
+log "Phase 4: notify-fail.sh (alert reporting)"
 # ------------------------------------------------------------------------------
 # Shared alerting state, deliberately OUTSIDE /root. /root is 0700, so a
-# delegated non-root service account (deploy_backup_user.sh) cannot reach
+# delegated non-root service account (phase 8) cannot reach
 # anything under it -- not the queue, not the config, not the notify scripts.
 # The tempting shortcut, opening /root/scripts to a group, is a privilege
 # escalation: that directory holds scripts root executes from cron, so a
@@ -370,7 +386,7 @@ else
     cat > "$ALERT_CONF" <<EOF
 # zfs-alert.conf -- how this host reports backup problems.
 # Sourced by notify-fail.sh, notify-warn.sh and alert-digest.sh. Plain shell:
-# VAR=value, no spaces around '='. Re-running deploy_new_server.sh never
+# VAR=value, no spaces around '='. Re-running deploy.sh never
 # overwrites this file, so local changes survive an upgrade.
 #
 # ---------------------------------------------------------------------------
@@ -443,7 +459,7 @@ else
     # into the .1 file. copytruncate would be strictly worse here, since it can
     # lose whatever is written during the copy window.
     cat > "$LOGROTATE_CONF" <<EOF
-$LOGROTATE_MARKER -- managed by deploy_new_server.sh, re-run it to update.
+$LOGROTATE_MARKER -- managed by deploy.sh, re-run it to update.
 # Deliberately NOT a *.log glob: the alert queue lives in the same directory and
 # is state, not a log -- rotating it would throw away queued findings.
 /root/scripts/cron.log
@@ -509,7 +525,7 @@ JOB="\$1"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
-    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # phase 8) cannot read anything under it. The old in-/root
     # location stays as a fallback so an un-migrated host keeps working.
     for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
         [ -r "\$c" ] && { CONF="\$c"; break; }
@@ -564,7 +580,7 @@ elif command -v mail >/dev/null; then
     log "sending a test email to confirm mail delivery works from THIS host..."
     # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
     # routing the delivery smoke test through it would prove nothing about mail.
-    echo "deploy_new_server.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
+    echo "deploy.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
         | mail -s "[ZFS BACKUP] test na $(hostname -f 2>/dev/null || hostname)" "$NOTIFY_EMAIL"
     log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
     log "If it does NOT arrive: this host's postfix likely can't deliver externally without a relay"
@@ -577,7 +593,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
+log "Phase 4a: notify-warn.sh + alert-digest.sh (the daily digest)"
 # ------------------------------------------------------------------------------
 # Companion to notify-fail.sh: CRITICAL/BROKEN monitor findings still mail
 # immediately (rate-limited, Part 4 above). WARNING findings ("getting stale",
@@ -616,7 +632,7 @@ JOB="\$1"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
-    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # phase 8) cannot read anything under it. The old in-/root
     # location stays as a fallback so an un-migrated host keeps working.
     for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
         [ -r "\$c" ] && { CONF="\$c"; break; }
@@ -673,7 +689,7 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
-    # deploy_backup_user.sh) cannot read anything under it. The old in-/root
+    # phase 8) cannot read anything under it. The old in-/root
     # location stays as a fallback so an un-migrated host keeps working.
     for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
         [ -r "\$c" ] && { CONF="\$c"; break; }
@@ -776,7 +792,7 @@ EOF
 fi
 
 # ------------------------------------------------------------------------------
-log "Part 4b: auto-pull cron line (keeps this host's copy in sync with GitHub)"
+log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # ------------------------------------------------------------------------------
 PULL_LINE="15 * * * * cd $REPO_DIR && git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
 if crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
@@ -789,9 +805,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-log "Part 4c: single-instance lock sanity check (flock)"
+log "Phase 6a: single-instance lock sanity check (flock)"
 # ------------------------------------------------------------------------------
-TESTLOCK="/tmp/deploy_new_server_flock_test.$$"
+TESTLOCK="/tmp/deploy_flock_test.$$"
 ( exec 200>"$TESTLOCK"; flock 200; sleep 3 ) &
 HOLDER=$!
 sleep 1
@@ -804,7 +820,7 @@ wait "$HOLDER" 2>/dev/null
 rm -f "$TESTLOCK"
 
 # ------------------------------------------------------------------------------
-log "Part 4d: check-pool-capacity.sh (pool/quota capacity alerting)"
+log "Phase 5: check-pool-capacity.sh (pool/quota capacity alerting)"
 # ------------------------------------------------------------------------------
 # Catches slow-fill pool/quota exhaustion BEFORE it turns into a job failure --
 # notify-fail.sh only fires after a snapsend/delsnaps job has already broken.
@@ -883,6 +899,216 @@ else
     log "all dependencies present"
 fi
 
+
+
+# ------------------------------------------------------------------------------
+log "Phase 8: delegated non-root account"
+# ------------------------------------------------------------------------------
+# BACKUP_USER is about CREATION. Maintenance is automatic: if it is empty we
+# look for an account that already has its own checkout and keep that one up to
+# date. That is what lets a bare `bash deploy.sh` be correct on every host in
+# the fleet without anyone tracking which machine has an account.
+CREATE_ACCOUNT=1
+if [ -z "$BACKUP_USER" ]; then
+    CREATE_ACCOUNT=0
+    for _cand in /home/*/zfs-snapshot-all; do
+        [ -d "$_cand" ] || continue
+        _owner=$(stat -c %U "$(dirname "$_cand")" 2>/dev/null) || continue
+        id "$_owner" >/dev/null 2>&1 && { BACKUP_USER="$_owner"; break; }
+    done
+    [ -n "$BACKUP_USER" ] && log "detected existing delegated account: $BACKUP_USER (maintaining it; pass --backup-user to create one)"
+fi
+
+if [ -z "$BACKUP_USER" ]; then
+    log "no delegated account on this host and none requested -- skipping (pass --backup-user=NAME to create one)"
+elif [ "$CHECK_ONLY" -eq 1 ]; then
+    if id "$BACKUP_USER" >/dev/null 2>&1; then
+        log "  account $BACKUP_USER exists"
+        id -nG "$BACKUP_USER" | tr ' ' '
+' | grep -qx "zfsalert" || warn "  $BACKUP_USER not in group zfsalert -- it could not queue alerts"
+        [ -x "/home/$BACKUP_USER/notify-fail.sh" ] || warn "  /home/$BACKUP_USER/notify-fail.sh missing -- that account cannot report findings"
+        [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
+    else
+        warn "  account $BACKUP_USER does not exist -- re-run without --check-only to create it"
+    fi
+elif [ "$CREATE_ACCOUNT" -eq 0 ] && ! id "$BACKUP_USER" >/dev/null 2>&1; then
+    log "no delegated account to maintain -- skipping"
+else
+    USERNAME="$BACKUP_USER"
+    HOMEDIR="/home/$USERNAME"
+    # shellcheck disable=SC2206
+    DATASETS=($BACKUP_USER_DATASETS)
+    ACCOUNT_REPO_DIR="$HOMEDIR/zfs-snapshot-all"
+    # ------------------------------------------------------------------------------
+    log "Phase 8a: service account $USERNAME"
+    # ------------------------------------------------------------------------------
+    if id "$USERNAME" >/dev/null 2>&1; then
+        log "user $USERNAME already exists, leaving it alone"
+    else
+        useradd -m -s /bin/bash -c "zfs-snapshot-all delegated backup account" "$USERNAME" \
+            || die "useradd failed"
+        passwd -l "$USERNAME" >/dev/null || warn "could not lock password for $USERNAME"
+        log "created user $USERNAME (uid $(id -u "$USERNAME")), password locked (SSH key only)"
+    fi
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8b: lock/state directory"
+    # ------------------------------------------------------------------------------
+    RUNDIR="$HOMEDIR/run"
+    mkdir -p "$RUNDIR"
+    chown "$USERNAME:$USERNAME" "$RUNDIR"
+    log "LOCKDIR for this account: $RUNDIR"
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8c: SSH keypair"
+    # ------------------------------------------------------------------------------
+    SSHDIR="$HOMEDIR/.ssh"
+    if [ -f "$SSHDIR/id_ed25519" ]; then
+        log "SSH keypair already exists, leaving it alone"
+    else
+        su "$USERNAME" -c "mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C '${USERNAME}@$(hostname -s)'" \
+            || die "ssh-keygen failed"
+    fi
+    log "public key (see Part 6 below for what to do with it):"
+    cat "$SSHDIR/id_ed25519.pub"
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8d: repo checkout at $ACCOUNT_REPO_DIR (readable+executable by $USERNAME)"
+    # ------------------------------------------------------------------------------
+    if [ -d "$ACCOUNT_REPO_DIR/.git" ]; then
+        log "$ACCOUNT_REPO_DIR is already a git repo, pulling..."
+        su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' remote get-url origin 2>/dev/null" | grep -qF "$REPO_URL" \
+            || warn "existing repo's origin does not match $REPO_URL -- check manually"
+        su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' pull --ff-only origin main" \
+            || die "git pull --ff-only failed -- local repo has diverged, resolve manually"
+
+    elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then
+        log "$ACCOUNT_REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
+        BACKUP_DIR="${REPO_DIR}.bak-preGit-$(date +%Y%m%d%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+        for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh; do
+            if [ -e "$ACCOUNT_REPO_DIR/$f" ]; then
+                mv "$ACCOUNT_REPO_DIR/$f" "$BACKUP_DIR/"
+                log "  moved $f -> $BACKUP_DIR/"
+            fi
+        done
+        chown -R "$USERNAME:$USERNAME" "$BACKUP_DIR"
+
+        su "$USERNAME" -c "cd '$ACCOUNT_REPO_DIR' && git init && git remote add origin '$REPO_URL' && git fetch origin && git checkout -b main --track origin/main" \
+            || die "git init/checkout failed"
+
+        log "Diff against backup (should be empty besides new .git/.gitignore/.gitattributes):"
+        diff -rq "$BACKUP_DIR" "$ACCOUNT_REPO_DIR" 2>&1 | grep -v "^Only in $ACCOUNT_REPO_DIR:" || true
+
+    else
+        log "$ACCOUNT_REPO_DIR does not exist or is empty -- plain clone"
+        su "$USERNAME" -c "git clone '$REPO_URL' '$ACCOUNT_REPO_DIR'" || die "git clone failed"
+    fi
+    chmod +x "$ACCOUNT_REPO_DIR"/*.sh 2>/dev/null || true
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8e: auto-pull cron line (this account's own crontab)"
+    # ------------------------------------------------------------------------------
+    PULL_LINE="15 * * * * cd $ACCOUNT_REPO_DIR && git pull --ff-only origin main >>$HOMEDIR/git-pull.log 2>&1"
+    if su "$USERNAME" -c "crontab -l 2>/dev/null" | grep -qF "$ACCOUNT_REPO_DIR && git pull"; then
+        log "auto-pull cron line already present, leaving it alone"
+    else
+        su "$USERNAME" -c "(crontab -l 2>/dev/null; echo '$PULL_LINE') | crontab -" \
+            || warn "could not install auto-pull cron line -- add it manually"
+        log "added auto-pull cron line to $USERNAME's crontab"
+    fi
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8f: alerting access + log rotation for this account"
+    # ------------------------------------------------------------------------------
+    # This account cannot see ANYTHING under /root: that directory is 0700, so the
+    # notify scripts, the alert config and the alert queue are all out of reach.
+    # The shortcut of opening /root/scripts to a group is a privilege escalation --
+    # root executes those scripts from cron, so an account able to write there could
+    # replace them. Instead the two accounts share one group-writable DATA directory
+    # (created in phase 3 above) and this account gets its own copies of the
+    # two reporting scripts. alert-digest.sh stays root-only and reads the shared
+    # queue, so the host still sends exactly ONE mail a day covering both accounts.
+    ALERT_GROUP="zfsalert"
+    ALERT_SHARED_DIR="/var/lib/zfs-snapshot-all"
+    ALERT_CONF="/etc/zfs-alert.conf"
+
+    # No "did you run the other script first" guard here any more: phase 3 of THIS
+    # script created the group and the shared directory a few hundred lines above.
+    # Removing that ordering dependency is the whole point of the merge.
+        if id -nG "$USERNAME" | tr ' ' '\n' | grep -qx "$ALERT_GROUP"; then
+            log "$USERNAME already in group $ALERT_GROUP"
+        else
+            usermod -aG "$ALERT_GROUP" "$USERNAME" && log "added $USERNAME to group $ALERT_GROUP"
+            log "  NOTE: group membership applies to NEW sessions -- this account's cron picks it up on its next run"
+        fi
+
+        # Same two scripts root has, same shared queue, same config. Only the digest
+        # is not duplicated: two digests would mean two mails per host per day.
+        for s in notify-fail notify-warn; do
+            if [ -f "/root/scripts/$s.sh" ]; then
+                install -o "$USERNAME" -g "$USERNAME" -m 0755 "/root/scripts/$s.sh" "$HOMEDIR/$s.sh" \
+                    && log "installed $HOMEDIR/$s.sh (copy of root's, same shared queue)"
+            else
+                warn "/root/scripts/$s.sh not found -- $USERNAME has no way to report findings"
+            fi
+        done
+        [ -r "$ALERT_CONF" ] || warn "$ALERT_CONF missing -- this account will fall back to built-in defaults (daily)"
+
+    LOGROTATE_CONF="/etc/logrotate.d/zfs-snapshot-all-$USERNAME"
+    LOGROTATE_MARKER="# zfs-snapshot-all $USERNAME logrotate v1"
+    if [ -e "$LOGROTATE_CONF" ] && grep -qF "$LOGROTATE_MARKER" "$LOGROTATE_CONF" 2>/dev/null; then
+        log "$LOGROTATE_CONF already current, leaving it alone"
+    else
+        # A SEPARATE stanza from root's, and the reason is 'create': rotating these
+        # with root's stanza would hand the fresh file to root:root, and this account
+        # -- which owns the directory but not that file -- could no longer append.
+        # Its cron would stop logging silently, since the redirect is >> in the
+        # background with nobody reading the error.
+        cat > "$LOGROTATE_CONF" <<EOF
+$LOGROTATE_MARKER -- managed by deploy.sh, re-run it to update.
+$HOMEDIR/git-pull.log
+$HOMEDIR/zfs-snapshot-stats.log
+{
+    monthly
+    rotate 24
+    maxsize 50M
+    compress
+    delaycompress
+    notifempty
+    missingok
+    su $USERNAME $USERNAME
+    create 0644 $USERNAME $USERNAME
+}
+EOF
+        chmod 0644 "$LOGROTATE_CONF"
+        log "created $LOGROTATE_CONF (monthly, keep 24, owned by $USERNAME)"
+    fi
+    if command -v logrotate >/dev/null; then
+        logrotate --debug "$LOGROTATE_CONF" >/dev/null 2>&1 \
+            && log "  logrotate config parses cleanly" \
+            || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
+    fi
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8g: ZFS delegation on ${DATASETS[*]}"
+    # ------------------------------------------------------------------------------
+    ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount"
+    for ds in "${DATASETS[@]}"; do
+        if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+            warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"
+            continue
+        fi
+        zfs allow -u "$USERNAME" "$ZFS_PERMS" "$ds" || die "zfs allow failed for $ds"
+        log "delegated on $ds:"
+        zfs allow "$ds" | grep "$USERNAME" || true
+    done
+
+    echo
+    log "===================================================================="
+fi
+
+
 # In check-only mode the exit code IS the result -- 0 means this host is ready,
 # non-zero means something above needs attention. The full deploy path keeps
 # returning 0 on warnings, because there the warnings are advisory and the work
@@ -895,7 +1121,6 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     log "audit clean on $(hostname -s 2>/dev/null || hostname)"
     exit 0
 fi
-
 echo
 log "===================================================================="
 log "Automated part done. Manual steps remaining (Part 5, NOT scripted):"

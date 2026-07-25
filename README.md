@@ -30,7 +30,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 - [check-snap-age.sh — staleness monitor](#check-snap-agesh--staleness-monitor)
 - [gen-cron.sh — config-driven cron generator](#gen-cronsh--config-driven-cron-generator)
 - [Alerting](#alerting)
-- [deploy_new_server.sh / deploy_backup_user.sh](#deploy_new_serversh--deploy_backup_usersh)
+- [deploy.sh — one-script host bootstrap](#deploysh--one-script-host-bootstrap)
 - [Worked scenarios](#worked-scenarios)
 - [Testing](#testing)
 - [Versioning](#versioning)
@@ -45,8 +45,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
-| [`deploy_new_server.sh`](deploy_new_server.sh) | Bootstraps a brand-new host: dependencies, checkout, alerting, smoke test | — |
-| [`deploy_backup_user.sh`](deploy_backup_user.sh) | Bootstraps a non-root delegated service account to run the above without root | — |
+| [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
 Every executable answers `-V`/`--version`. Full changelog lives in `git log`, not in this file —
 this README describes current behavior, not history.
@@ -550,11 +549,11 @@ One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to ch
 
 The config lives at **`/etc/zfs-alert.conf`** and the queue under
 **`/var/lib/zfs-snapshot-all/`** (`2775 root:zfsalert`, setgid) rather than in `/root/scripts`,
-because `/root` is `0700`: a delegated non-root account (see `deploy_backup_user.sh`) cannot read
+because `/root` is `0700`: a delegated non-root account (phase 8) cannot read
 or write anything under it. Opening `/root/scripts` to a group instead would be a privilege
 escalation — root executes those scripts from cron, so an account able to write there could
 replace them. The shared directory therefore holds **only data**; the scripts stay private to
-each account, and `deploy_backup_user.sh` gives the service account its own copies of
+each account, and phase 8 gives the service account its own copies of
 `notify-fail.sh`/`notify-warn.sh` pointed at the same queue. `alert-digest.sh` is not duplicated
 — it runs as root over the shared queue, so the host still sends one mail a day covering both
 accounts. Hosts set up before this split are migrated automatically, queued findings included.
@@ -570,8 +569,8 @@ sed -i 's/^ZFS_ALERT_MODE=.*/ZFS_ALERT_MODE=immediate/' /root/scripts/zfs-alert.
 **Set `immediate` while bringing a host up.** A job you misconfigured today is a five-minute fix
 if you hear about it within the hour, and a lost night of backups if you read about it in
 tomorrow's digest. Provision it that way from the start with
-`bash deploy_new_server.sh --alerts=immediate`, then switch to `daily` once the host has run
-clean for a few days. `deploy_new_server.sh` creates this file once and **never overwrites it**,
+`bash deploy.sh --alerts=immediate`, then switch to `daily` once the host has run
+clean for a few days. `deploy.sh` creates this file once and **never overwrites it**,
 so the mode survives every re-run and upgrade.
 
 | Mechanism | Records | How |
@@ -579,7 +578,7 @@ so the mode survives every re-run and upgrade.
 | `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | `daily`: appends `epoch\tALERT\tmessage` to the queue, sends no mail. `immediate`: mails at once, rate-limited per message. |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Same queue, `epoch\tWARN\tmessage`, per `ZFS_WARN_MODE`. |
 | `alert-digest.sh` | — | The only backup mail this host sends. Once a day (default `0 7 * * *`) it collapses the queue to one row per (severity, message) — count plus first/last-seen — ALERTs first, then WARNINGs, and mails **one** message. Subject carries the counts: `[ZFS] <host> <date> -- N alert / M warn`. |
-| `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy_new_server.sh` |
+| `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy.sh` |
 
 **Why `daily` is the default.** Up to v3 there was no choice: `notify-fail.sh` always mailed on
 the spot, rate-limited per unique message text. The cooldown was keyed on the *message*, so every distinct finding kept its
@@ -624,7 +623,7 @@ so anything added to these lines needs its own. Setting `MAILTO=""` hides this s
 silences every other cron job on the host; fix the stream instead.
 
 `notify-fail.sh`, `notify-warn.sh`,
-and `alert-digest.sh` are not tracked as standalone files in this repo — `deploy_new_server.sh`
+and `alert-digest.sh` are not tracked as standalone files in this repo — `deploy.sh`
 creates/upgrades them on each host from a heredoc (see its `*_MARKER` comments for the
 version-detection that makes re-running it idempotent), so every host runs an identical, known
 copy without a file to hand-copy or drift.
@@ -642,9 +641,32 @@ report a working transfer as failed. Because the check always runs from whicheve
 opens the connection, one execution reports **both** ends of a push/pull — the other side never
 needs a separate pool-health cron of its own for the same relationship.
 
-## deploy_new_server.sh / deploy_backup_user.sh
+## deploy.sh — one-script host bootstrap
 
-- **`deploy_new_server.sh`** bootstraps a fresh Proxmox/Debian host as **root**: checks/installs
+One script per host, run as root, idempotent, safe to re-run. It replaced an earlier
+`deploy_new_server.sh` + `deploy_backup_user.sh` pair: that split was historical rather than
+conceptual, and it forced an ordering ("run the other one first") that lived in the operator's
+head instead of in the code, duplicated the helpers and the checkout logic, and produced two
+separate `--check-only` verdicts for one machine.
+
+```bash
+bash deploy.sh                          # host setup; maintains an existing account if found
+bash deploy.sh --check-only             # audit the WHOLE host, change nothing
+bash deploy.sh --alerts=immediate       # mail every finding — use while bringing a host up
+bash deploy.sh --backup-user=zfsbackup  # also CREATE the delegated non-root account
+```
+
+Defaults live in a config block at the top of the script (`NOTIFY_EMAIL`, `ALERT_MODE`,
+`BACKUP_USER`, `BACKUP_USER_DATASETS`); edit them to make a choice permanent for a host, or pass
+a flag for a single run.
+
+**`BACKUP_USER` is about creation, not maintenance.** Leave it empty and an existing delegated
+account is still auto-detected and kept up to date (its notify scripts, log rotation, group
+membership); only *creating* one has to be asked for. So a bare `bash deploy.sh` is the right
+command on every host in the fleet, whether or not that host has an account — nobody has to
+remember which is which.
+
+- **Phases 1–7 (always)** bootstrap a fresh Proxmox/Debian host as **root**: checks/installs
   every runtime dependency (table derived from what the scripts actually invoke), clones or
   updates the repo checkout at `/root/scripts/zfs-snapshot-all`, generates `notify-fail.sh`
   (mail-on-failure, rate-limited), `notify-warn.sh` + `alert-digest.sh` (daily WARNING digest),
@@ -654,12 +676,7 @@ needs a separate pool-health cron of its own for the same relationship.
   does **not** touch your actual `snapsend`/`snapget`/`delsnaps` job lines (those are
   dataset-specific per host); that stays a documented manual step (or use `gen-cron.sh`).
 
-  ```bash
-  bash deploy_new_server.sh                # full bootstrap
-  bash deploy_new_server.sh --check-only    # audit only — installs/modifies nothing, no test mail
-  ```
-
-- **`deploy_backup_user.sh`** bootstraps a dedicated, delegated **non-root** account (default
+- **Phase 8 (optional)** bootstraps a dedicated, delegated **non-root** account (default
   name `zfsbackup`) so replication doesn't need to run as root: creates the locked-password,
   SSH-key-only account, its own lock/state dir, its own checkout and auto-pull cron line, and
   `zfs allow` delegation on the dataset(s) given (default `rpool/data`, `rpool/ROOT/pve-1`).
@@ -674,8 +691,8 @@ needs a separate pool-health cron of its own for the same relationship.
   pointing here when they fail for that specific reason.
 
   ```bash
-  bash deploy_backup_user.sh                              # default user + default datasets
-  bash deploy_backup_user.sh zfsbackup rpool/data tank/vm  # custom user + datasets
+  bash deploy.sh --backup-user=zfsbackup                        # default datasets
+  bash deploy.sh --backup-user=zfsbackup --datasets="rpool/data tank/vm"
   ```
 
 ## Worked scenarios
@@ -684,7 +701,7 @@ needs a separate pool-health cron of its own for the same relationship.
 
 ```bash
 # On the new host, as root:
-bash deploy_new_server.sh
+bash deploy.sh
 
 # Write /root/scripts/zfs-snapshot-all/jobs.$(hostname -s).conf (see the gen-cron.sh
 # example above), then:
@@ -716,10 +733,10 @@ starts, so the multi-second freeze never overlaps the (potentially much longer) 
 On the backup target host:
 
 ```bash
-bash deploy_backup_user.sh zfsbackup rpool/data
+bash deploy.sh --backup-user=zfsbackup --datasets="rpool/data"
 ```
 
-`deploy_backup_user.sh` deliberately does **not** exchange SSH keys with the source host — that's
+Phase 8 deliberately does **not** exchange SSH keys with the source host — that's
 host-specific and stays a manual step: copy `~zfsbackup/.ssh/id_*.pub` to the source host's
 `authorized_keys` for whichever account (`root@source-host` below) will serve the send. Once
 that's in place:
