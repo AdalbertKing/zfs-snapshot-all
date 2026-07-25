@@ -128,11 +128,59 @@ reset_resume_attempts() {
 # generic dependent-clone error -- keep the two in sync if this ever changes.
 HOLD_TAG="zfssnapall_inflight"
 
+# A dataset Proxmox VE replicates with `pvesr` must never be held, and this is
+# the one exception to "a hold is free protection".
+#
+# pvesr moves data with `zfs send -Rpv | zfs recv -F` (PVE's ZFSPoolPlugin), and
+# a forced receive of a REPLICATION stream is specified to destroy every
+# destination snapshot the sending side no longer has. Since the source runs its
+# own retention, that pruning happens on essentially every sync. A held snapshot
+# cannot be destroyed, so the receive aborts -- and it does not merely skip one
+# cycle, it stays broken until a human releases the hold.
+#
+# Seen in production 2026-07-25: leaked holds on pve2's replica of
+# subvol-107-disk-0 stopped Nextcloud replication for 14h (FailCount 24), and on
+# the way there ZFS had quietly renamed four snapshots it could not delete to
+# `recv-<pid>-1`, which is what a forced receive does with a destination
+# snapshot that refuses to go away.
+#
+# Skipping the hold here costs nothing real: the hold exists to stop
+# delsnaps.sh pruning a snapshot mid-send, but on a pvesr-managed dataset the
+# snapshot set is not ours to defend -- pvesr rewrites it to mirror the source
+# on every sync, so a hold cannot win that race, only break the sync.
+#
+# The probe cannot tell a replication SOURCE from a TARGET (both carry
+# `__replicate_` snapshots) and deliberately does not try: erring toward "skip
+# the hold" trades a little pruning protection for never wedging replication,
+# and on a source the hold was not buying much anyway -- pvesr there only
+# destroys its OWN `__replicate_` bookkeeping snapshots, which this tool never
+# holds.
+declare -A PVESR_MANAGED_CACHE=()
+is_pvesr_managed() {
+    local ds="$1" remote_user="${2:-}" remote_host="${3:-}"
+    local key="${remote_host}:${ds}" found
+    if [ -z "${PVESR_MANAGED_CACHE[$key]+x}" ]; then
+        if [ -n "$remote_host" ]; then
+            found=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+                "zfs list -t snapshot -H -o name -d 1 '$ds' 2>/dev/null | grep -c '@__replicate_'" 2>/dev/null) || found=0
+        else
+            found=$(zfs list -t snapshot -H -o name -d 1 "$ds" 2>/dev/null | grep -c '@__replicate_') || found=0
+        fi
+        [[ "$found" =~ ^[0-9]+$ ]] || found=0
+        if [ "$found" -gt 0 ]; then PVESR_MANAGED_CACHE[$key]=1; else PVESR_MANAGED_CACHE[$key]=0; fi
+    fi
+    [ "${PVESR_MANAGED_CACHE[$key]}" -eq 1 ]
+}
+
 # Best-effort: a hold that fails to apply (e.g. a non-root user missing the
 # delegated 'hold' permission) must not abort a backup that would otherwise
 # succeed -- it just runs without the extra protection.
 hold_snapshot() {
     local snap="$1" remote_user="${2:-}" remote_host="${3:-}"
+    if is_pvesr_managed "${snap%@*}" "$remote_user" "$remote_host"; then
+        log 2 "Not holding $snap -- ${snap%@*} is replicated by Proxmox VE (pvesr); a hold there blocks its forced receive and wedges replication"
+        return 0
+    fi
     if [ -n "$remote_host" ]; then
         ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs hold '$HOLD_TAG' '$snap'" 2>/dev/null \
             || log 2 "Could not place hold on $snap (missing delegated 'hold'?) -- continuing without in-flight protection"
