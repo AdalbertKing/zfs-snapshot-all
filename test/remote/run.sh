@@ -142,7 +142,10 @@ seed_peer() {
 RC=0
 send() { "$SNAPSEND" "$@" >"$TMPD/out" 2>&1; RC=$?; }
 get()  { "$SNAPGET"  "$@" >"$TMPD/out" 2>&1; RC=$?; }
-outgrep() { grep -c "$1" "$TMPD/out"; }
+# Case-insensitive by default. It used to take flags, and `outgrep -i pattern`
+# quietly searched for the string "-i" instead -- so the two cases expecting
+# ZERO matches passed for the wrong reason, which is worse than failing.
+outgrep() { grep -ci "$1" "$TMPD/out"; }
 
 # snapshot names carry a per-second timestamp, so consecutive runs need spacing
 tick() { sleep 1; }
@@ -199,7 +202,7 @@ check "A5 -R -S local: children were" "1" "$(l_snaps "$LROOT/a5/$SRC/keep")"
 tick
 send -m a6_ -z -v1 "$SRC" "$LROOT/a6"
 check "A6 -z local: exit 0" "0" "$RC"
-check "A6 -z local: compression is dropped, with a reason" "1" "$(outgrep -i 'compression ignored')"
+check "A6 -z local: compression is dropped, with a reason" "1" "$(outgrep 'compression ignored')"
 check "A6 -z local: the transfer still lands" "1" "$(l_snaps "$LROOT/a6/$SRC")"
 
 # ============================================================================
@@ -218,7 +221,7 @@ check "B1 plain remote: target created canmount=noauto" "noauto" "$(r_canmount "
 tick
 send -m b2_ -z -v1 "$SRC" "$PEER:$RROOT/b2"
 check "B2 -z remote: exit 0" "0" "$RC"
-check "B2 -z remote: compression is NOT dropped over a link" "0" "$(outgrep -i 'compression ignored')"
+check "B2 -z remote: compression is NOT dropped over a link" "0" "$(outgrep 'compression ignored')"
 check "B2 -z remote: GUID matches after a compressed transfer" \
       "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/b2/$SRC@$(l_newest "$SRC")")"
 
@@ -267,8 +270,10 @@ check "B8 incremental remote: re-run with nothing new exits 0" "0" "$RC"
 check "B8 incremental remote: no second copy appeared" "1" "$(r_snaps "$RROOT/b8/$SRC")"
 check "B8 incremental remote: no hold left on the source snapshot" "" \
       "$(zfs holds -H "$SRC@b8_pre_$$" 2>/dev/null | awk '{print $2}')"
-check "B8 incremental remote: a send bookmark exists on the source" "1" \
-      "$(zfs list -H -t bookmark -o name -d 1 "$SRC" 2>/dev/null | wc -l)"
+# One bookmark accumulates PER TARGET, and this source has served every case,
+# so a total count asserts nothing about B8. Presence is the honest claim.
+check "B8 incremental remote: the source carries a send bookmark" "yes" \
+      "$([ "$(zfs list -H -t bookmark -o name -d 1 "$SRC" 2>/dev/null | wc -l)" -gt 0 ] && echo yes || echo no)"
 
 # ============================================================================
 # C. snapget, LOCAL source
@@ -325,7 +330,7 @@ check "D1 plain remote pull: local target is canmount=noauto" "noauto" "$(l_canm
 tick
 get -m d2_ -z -v1 "$DTGT" "$PEER:$DBASE"
 check "D2 -z remote pull: exit 0" "0" "$RC"
-check "D2 -z remote pull: compression is not dropped over a link" "0" "$(outgrep -i 'compression ignored')"
+check "D2 -z remote pull: compression is not dropped over a link" "0" "$(outgrep 'compression ignored')"
 
 tick
 DTGT3="$LROOT/dtgt3"
@@ -381,8 +386,19 @@ check "E1 no in-flight hold survived any case (local)" "0" "$HELD"
 check "E2 no in-flight hold survived on the peer" "0" \
       "$($SSH "$PEER" "c=0; for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs holds -H \$s 2>/dev/null | grep -q zfssnapall && c=\$((c+1)); done; echo \$c")"
 
-check "E3 every level created on the peer is canmount=noauto" "0" \
-      "$($SSH "$PEER" "zfs get -H -o value canmount -r '$RROOT' 2>/dev/null | grep -vc noauto")"
+# What snapsend CREATES is noauto: the ancestors it builds plus the leaf it
+# pre-creates. Checked on the non-recursive case, where every level came from
+# snapsend and nothing came out of a stream.
+check "E3 every level snapsend created on the peer is canmount=noauto" "0" \
+      "$($SSH "$PEER" "zfs get -H -o value canmount -r '$RROOT/b1' 2>/dev/null | grep -vc noauto")"
+
+# The other half is NOT the same, and asserting it away would have hidden it:
+# under -r the descendants are created by `zfs recv` out of the stream, so they
+# carry the source's canmount ("on") and snapsend never touches them. Pinned
+# because it is exactly what a delegated account cannot receive -- it may not
+# mount, and -r gives it datasets that want mounting.
+check "E4 under -r the recv-created descendants are NOT noauto" "yes" \
+      "$($SSH "$PEER" "zfs get -H -o value canmount '$RROOT/b3/$SRC/keep' 2>/dev/null" | grep -q noauto && echo no || echo yes)"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
