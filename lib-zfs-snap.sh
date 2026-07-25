@@ -355,6 +355,46 @@ warn_if_unrecursed_children() {
     return 0
 }
 
+# Create every MISSING ancestor of TARGET, one level at a time, each with
+# canmount=noauto. Existing levels are left exactly as they are.
+#
+# This exists because `zfs create -p` applies its -o properties to the FINAL
+# dataset only: every level it invents along the way gets canmount=on, and ZFS
+# then tries to mount it. On Linux an unprivileged user cannot mount at all --
+# no amount of `zfs allow` grants CAP_SYS_ADMIN -- so a delegated account
+# bootstrapping a multi-level target path failed with
+#   cannot mount '<intermediate>': Insufficient privileges
+# even though it was allowed to create the dataset. Found live on metropolis
+# pve1 via `-X` on a middle dataset, which is precisely the case that asks for
+# an intermediate to be created and left empty.
+#
+# Ancestors are pure structure -- they never receive a stream -- so noauto is
+# right for them regardless of -U, which stays a property of the leaf.
+ensure_target_ancestors() {
+    local target="$1" remote_user="${2:-}" remote_host="${3:-}"
+    local parent="${target%/*}"
+    [ "$parent" = "$target" ] && return 0    # a bare pool name: nothing above it
+
+    local -a parts=()
+    local oldifs="$IFS"
+    IFS='/' read -ra parts <<< "$parent"
+    IFS="$oldifs"
+    [ ${#parts[@]} -le 1 ] && return 0       # parent IS the pool
+
+    local acc="${parts[0]}" i cmd=""
+    for ((i = 1; i < ${#parts[@]}; i++)); do
+        acc="$acc/${parts[$i]}"
+        cmd+="zfs list -H '$acc' >/dev/null 2>&1 || zfs create -o canmount=noauto '$acc' || exit 1; "
+    done
+    [ -z "$cmd" ] && return 0
+
+    if [ -n "$remote_host" ]; then
+        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd exit 0"
+    else
+        sh -c "$cmd exit 0"
+    fi
+}
+
 # True when NAME matches any of the caller's EXCLUDE_PATTERNS (-X). The patterns
 # are extended regexes matched unanchored against the full dataset name, which is
 # syncoid's --exclude behaviour -- so `data/vm-1` catches `vm-10` too unless the

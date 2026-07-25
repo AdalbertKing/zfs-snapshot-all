@@ -1101,7 +1101,13 @@ EOF
     # ------------------------------------------------------------------------------
     log "Phase 8g: ZFS delegation on ${DATASETS[*]}"
     # ------------------------------------------------------------------------------
-    ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount"
+    # 'bookmark' is easy to leave out and fails quietly: without it every send
+    # ends "cannot create bookmark ... permission denied", logged as non-fatal,
+    # and the transfer still succeeds -- so nothing alerts. What is lost is the
+    # bookmark-backed incremental fallback: once the common-base SNAPSHOT is
+    # pruned on the source, that pair can only recover with a full resend.
+    # Found live on metropolis pve1, 2026-07-25.
+    ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
     for ds in "${DATASETS[@]}"; do
         if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
             warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"

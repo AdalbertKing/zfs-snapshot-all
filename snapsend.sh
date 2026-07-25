@@ -310,7 +310,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.56'
+VERSION='v2.57'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -402,11 +402,27 @@ RECONCILE=0
 declare -a CONFLICT_SNAPSHOTS=()
 # Used only by -F -- see find_recursive_name_collisions.
 declare -a NAME_COLLISIONS=()
-STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+# Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
+# read anything under /root (0700), so defaulting there gave it a stats log it
+# could not write ("Permission denied" once per dataset), a notify script it
+# could not execute, and a lock dir it could not create -- while deploy.sh had
+# already provisioned $HOME/run, $HOME/zfs-snapshot-stats.log (its logrotate
+# stanza rotates exactly that path) and $HOME/notify-fail.sh for it. The two
+# sides now agree. An explicit environment variable still wins over both.
+if [ "$(id -u)" -eq 0 ]; then
+    ZFS_SNAP_DEFAULT_STATS="/root/scripts/zfs-snapshot-stats.log"
+    ZFS_SNAP_DEFAULT_NOTIFY="/root/scripts/notify-fail.sh"
+    ZFS_SNAP_DEFAULT_LOCKDIR="/var/run"
+else
+    ZFS_SNAP_DEFAULT_STATS="$HOME/zfs-snapshot-stats.log"
+    ZFS_SNAP_DEFAULT_NOTIFY="$HOME/notify-fail.sh"
+    ZFS_SNAP_DEFAULT_LOCKDIR="$HOME/run"
+fi
+STATS_LOG="${STATS_LOG:-$ZFS_SNAP_DEFAULT_STATS}"
 # Same script notify-fail.sh already is for cron-line failures (see gen-cron.sh)
 # -- reused directly by check_pool_health in lib-zfs-snap.sh so a DEGRADED pool
 # alerts through the existing rate-limited path instead of a new one.
-NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
+NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$ZFS_SNAP_DEFAULT_NOTIFY}"
 KNOWN_HOSTS_FILE=""
 
 # Shared helpers (logging, stats, resumable-transfer bookkeeping) live in a
@@ -1000,11 +1016,18 @@ process_dataset() {
         # reapplied after a successful transfer instead of at create time.
         local create_target="$tgt_dataset"
         [ $RAW_SEND -eq 1 ] && create_target="${tgt_dataset%/*}"
+        # Ancestors first, each explicitly canmount=noauto -- `zfs create -p`
+        # would give them canmount=on and a non-root receive dies mounting them.
+        # See ensure_target_ancestors() in lib-zfs-snap.sh.
+        ensure_target_ancestors "$create_target" "$remote_user" "$remote_host" || {
+            log 0 "Failed to create the ancestor path of $create_target"
+            return 1
+        }
         if [ -n "$remote_host" ]; then
             ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs list '$create_target' >/dev/null 2>&1 || zfs create -p -o canmount=$TARGET_CANMOUNT '$create_target'" || return 1
+                "zfs list '$create_target' >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT '$create_target'" || return 1
         else
-            zfs list "$create_target" >/dev/null 2>&1 || zfs create -p -o canmount=$TARGET_CANMOUNT "$create_target" || return 1
+            zfs list "$create_target" >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT "$create_target" || return 1
         fi
     fi
 
@@ -1052,7 +1075,11 @@ process_dataset() {
             log 2 "Not recreating target dataset (-w: raw receive creates it)"
         else
         log 2 "Recreating target dataset"
-        local create_cmd="zfs create -p -o canmount=$TARGET_CANMOUNT \"$tgt_dataset\""
+        ensure_target_ancestors "$tgt_dataset" "$remote_user" "$remote_host" || {
+            log 0 "Failed to create the ancestor path of $tgt_dataset"
+            return 1
+        }
+        local create_cmd="zfs create -o canmount=$TARGET_CANMOUNT \"$tgt_dataset\""
         log 4 "RAW ZFS CREATE COMMAND: $create_cmd"
 
         if [ -n "$remote_host" ]; then
@@ -1061,7 +1088,7 @@ process_dataset() {
                 return 1
             }
         else
-            zfs create -p -o canmount=$TARGET_CANMOUNT "$tgt_dataset" || {
+            zfs create -o canmount=$TARGET_CANMOUNT "$tgt_dataset" || {
                 log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
                 return 1
             }
@@ -1413,7 +1440,7 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # -i/IDENTIFIER is the one deliberate exception: it exists precisely to let a
 # second, independent job aimed at the same pair opt OUT of this serialization.
 LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' -f1)
-LOCKDIR="${LOCKDIR:-/var/run}"
+LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"

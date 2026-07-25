@@ -104,14 +104,30 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.18'
+VERSION='v1.19'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
 BOOKMARK_MODE=false
 PORT=22
 KNOWN_HOSTS_FILE=""
-STATS_LOG="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+# Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
+# read anything under /root (0700), so defaulting there gave it a stats log it
+# could not write ("Permission denied" once per dataset), a notify script it
+# could not execute, and a lock dir it could not create -- while deploy.sh had
+# already provisioned $HOME/run, $HOME/zfs-snapshot-stats.log (its logrotate
+# stanza rotates exactly that path) and $HOME/notify-fail.sh for it. The two
+# sides now agree. An explicit environment variable still wins over both.
+if [ "$(id -u)" -eq 0 ]; then
+    ZFS_SNAP_DEFAULT_STATS="/root/scripts/zfs-snapshot-stats.log"
+    ZFS_SNAP_DEFAULT_NOTIFY="/root/scripts/notify-fail.sh"
+    ZFS_SNAP_DEFAULT_LOCKDIR="/var/run"
+else
+    ZFS_SNAP_DEFAULT_STATS="$HOME/zfs-snapshot-stats.log"
+    ZFS_SNAP_DEFAULT_NOTIFY="$HOME/notify-fail.sh"
+    ZFS_SNAP_DEFAULT_LOCKDIR="$HOME/run"
+fi
+STATS_LOG="${STATS_LOG:-$ZFS_SNAP_DEFAULT_STATS}"
 
 # Must match HOLD_TAG in lib-zfs-snap.sh -- this script is standalone (no
 # `source`), so the tag is duplicated rather than shared. A snapshot held
@@ -720,7 +736,7 @@ fi
 # unrelated prune jobs (different datasets/pattern) run concurrently instead of
 # blocking each other.
 LOCK_KEY=$(printf '%s\0%s' "$datasets_list" "$pattern" | md5sum | cut -d' ' -f1)
-LOCKDIR="${LOCKDIR:-/var/run}"
+LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
 exec 200>"$LOCKFILE"

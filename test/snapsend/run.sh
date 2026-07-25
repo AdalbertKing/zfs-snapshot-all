@@ -979,6 +979,33 @@ check "snapget -R -S: exit 0" "0" "$RC"
 check "snapget -R -S: the parent is NOT snapshotted on the source" "0" "$(count_snaps "$GS")"
 check "snapget -R -S: the child is pulled" "1" "$(count_snaps "$POOL/spull/a")"
 
+# --- target ancestors are created canmount=noauto, not canmount=on -----------
+# `zfs create -p` applies -o to the final dataset only, so every level it
+# invents got canmount=on and ZFS tried to mount it. Root does not notice; a
+# delegated non-root account cannot mount at all and the receive died with
+# "Insufficient privileges". Root cannot reproduce the failure, so what is
+# pinned here is the PROPERTY that makes it impossible.
+
+zfs create -p "$POOL/anc" || exit 1
+run_send -m "auto_" "$POOL/anc" "$BK/deep/deeper"
+check "ancestors: send into a brand-new multi-level target path succeeds" "0" "$RC"
+check "ancestors: an invented intermediate level is canmount=noauto" "noauto" \
+      "$(zfs get -H -o value canmount "$BK/deep")"
+check "ancestors: so is the level below it" "noauto" \
+      "$(zfs get -H -o value canmount "$BK/deep/deeper")"
+check "ancestors: the leaf still received its snapshot" "1" \
+      "$(count_snaps "$BK/deep/deeper/$POOL/anc")"
+
+# An ancestor that ALREADY exists must be left exactly as the operator set it --
+# the helper creates missing levels, it does not normalise existing ones.
+zfs create -o canmount=on "$BK/keepon" || exit 1
+tick
+zfs create -p "$POOL/anc2" || exit 1
+run_send -m "auto_" "$POOL/anc2" "$BK/keepon/sub"
+check "ancestors: send under a pre-existing ancestor succeeds" "0" "$RC"
+check "ancestors: a pre-existing ancestor keeps its own canmount" "on" \
+      "$(zfs get -H -o value canmount "$BK/keepon")"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
