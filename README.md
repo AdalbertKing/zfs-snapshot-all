@@ -39,9 +39,9 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.56 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.50 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.58 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.52 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.19 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
@@ -100,6 +100,13 @@ mid-transfer, because a plain `zfs destroy` on a held snapshot fails outright. `
 recognizes this specific hold and reports it as "in-flight, skipped" instead of a generic
 dependent-object error. The hold is released as soon as the transfer either succeeds or fails
 without a resume token to protect.
+
+The hold is taken right after the snapshot, i.e. *before* the target is created, so everything in
+between — ancestor creation, target creation, a refused force-full-send, listing target snapshots —
+runs while holding it. Every one of those failure paths releases it on the way out (v2.58): none of
+them has anything to come back for, and a stranded hold makes the source snapshot un-prunable
+forever while `zfs destroy` reports only a misleading `dataset is busy`. The transfer-failure path
+is the deliberate exception — with a resume token, a later run needs that exact snapshot.
 
 **Exception — datasets replicated by Proxmox VE are never held.** If a dataset carries any
 `@__replicate_` snapshot, the hold is skipped and the reason logged. `pvesr` moves data with
@@ -743,11 +750,19 @@ remember which is which.
   VM/CT disks created later under `rpool/data` inherit it automatically.
 
   On Linux, a delegated `mount` permission still can't actually mount/unmount without
-  `CAP_SYS_ADMIN`. Routine incremental replication is unaffected (new targets are created with
-  `canmount=noauto`, so there's no mount cycle to trip on), but this account still cannot
-  bootstrap a brand-new multi-level target path from scratch, run `-f`, or run `-F` against a
-  currently-mounted target/clone — those remain root's job, and `-f`/`-F` now print a hint
-  pointing here when they fail for that specific reason.
+  `CAP_SYS_ADMIN`. Routine incremental replication is unaffected, and since v2.57 **every** level
+  of a target path — not just the leaf — is created `canmount=noauto`, so a delegated account can
+  now bootstrap a brand-new multi-level target from scratch. (`zfs create -p` applies its `-o` to
+  the final dataset only; the levels it invents got `canmount=on`, ZFS tried to mount them, and the
+  receive died with `Insufficient privileges`. Root never saw it.) What still needs root: `-f`, and
+  `-F` against a currently-mounted target/clone — both print a hint pointing here when they fail
+  for that reason.
+
+  **Paths follow the account.** Run as non-root, `STATS_LOG`, `NOTIFY_SCRIPT` and `LOCKDIR` default
+  to `$HOME/zfs-snapshot-stats.log`, `$HOME/notify-fail.sh` and `$HOME/run` instead of their
+  counterparts under `/root` — which is `0700` and therefore unreadable to that account. The old
+  defaults produced one `Permission denied` per dataset, silently lost pool-health alerts, and a
+  hard error on the lock directory. An explicit environment variable still wins.
 
   ```bash
   bash deploy.sh --backup-user=zfsbackup                        # default datasets
