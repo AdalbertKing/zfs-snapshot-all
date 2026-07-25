@@ -386,19 +386,32 @@ check "E1 no in-flight hold survived any case (local)" "0" "$HELD"
 check "E2 no in-flight hold survived on the peer" "0" \
       "$($SSH "$PEER" "c=0; for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs holds -H \$s 2>/dev/null | grep -q zfssnapall && c=\$((c+1)); done; echo \$c")"
 
-# What snapsend CREATES is noauto: the ancestors it builds plus the leaf it
-# pre-creates. Checked on the non-recursive case, where every level came from
-# snapsend and nothing came out of a stream.
-check "E3 every level snapsend created on the peer is canmount=noauto" "0" \
-      "$($SSH "$PEER" "zfs get -H -o value canmount -r '$RROOT/b1' 2>/dev/null | grep -vc noauto")"
+# -t filesystem matters: a snapshot reports canmount as "-", and counting those
+# as "not noauto" is how the first version of this check failed for no reason.
+check "E3 every filesystem on the peer is canmount=noauto" "0" \
+      "$($SSH "$PEER" "zfs get -H -o value canmount -t filesystem -r '$RROOT/b1' 2>/dev/null | grep -vc noauto")"
 
-# The other half is NOT the same, and asserting it away would have hidden it:
-# under -r the descendants are created by `zfs recv` out of the stream, so they
-# carry the source's canmount ("on") and snapsend never touches them. Pinned
-# because it is exactly what a delegated account cannot receive -- it may not
-# mount, and -r gives it datasets that want mounting.
-check "E4 under -r the recv-created descendants are NOT noauto" "yes" \
-      "$($SSH "$PEER" "zfs get -H -o value canmount '$RROOT/b3/$SRC/keep' 2>/dev/null" | grep -q noauto && echo no || echo yes)"
+# The case that found a real gap. Under -r the descendants are created by
+# `zfs recv` out of the recursive stream, carrying the SOURCE's canmount -- so a
+# source child with canmount=on used to produce a MOUNTABLE child on the backup
+# host, i.e. the no-mount default stopped at the leaf. Seeded deliberately with
+# canmount=on, because a noauto source would pass this check while proving
+# nothing. snapsend v2.60 closes the subtree after the receive.
+tick
+ONSRC="$LROOT/onsrc"
+zfs create -o canmount=noauto "$ONSRC" >/dev/null 2>&1
+zfs create -o canmount=on "$ONSRC/onchild" >/dev/null 2>&1
+send -m e4_ -r "$ONSRC" "$PEER:$RROOT/e4"
+check "E4 -r with a canmount=on source: exit 0" "0" "$RC"
+check "E4 -r leaves no mountable descendant on the target" "noauto" \
+      "$(r_canmount "$RROOT/e4/$ONSRC/onchild")"
+check "E4 the source's own canmount is untouched" "on" "$(l_canmount "$ONSRC/onchild")"
+
+# -R never had the gap: it pre-creates each target itself.
+tick
+send -m e5_ -R "$ONSRC" "$PEER:$RROOT/e5"
+check "E5 -R with the same source is noauto too" "noauto" \
+      "$(r_canmount "$RROOT/e5/$ONSRC/onchild")"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

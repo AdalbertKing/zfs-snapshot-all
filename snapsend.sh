@@ -310,7 +310,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.59'
+VERSION='v2.60'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1248,6 +1248,27 @@ process_dataset() {
         else
             zfs set canmount=$TARGET_CANMOUNT "$tgt_dataset" 2>/dev/null \
                 || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
+        fi
+    fi
+
+    # Under -r the DESCENDANTS are created by `zfs recv` out of the recursive
+    # stream, not by this script, so they arrive carrying the source's own
+    # canmount -- "on" for any ordinary dataset. The no-mount default (v2.54)
+    # therefore stopped at the leaf: measured on metropolis 2026-07-25, a source
+    # child with canmount=on replicated with -r produced a MOUNTABLE child on
+    # the backup host, while the same source under -R came out noauto. That is
+    # exactly the shadow-mount hazard the default exists to prevent, and it is
+    # also what a delegated account cannot receive, since it may not mount.
+    # Applied to the whole received subtree, filesystems only (a volume has no
+    # canmount). Skipped under -U, where mounting is what was asked for.
+    if [ $RECURSIVE -eq 1 ] && [ "$TARGET_CANMOUNT" = "noauto" ]; then
+        local canmount_cmd="zfs list -H -o name -t filesystem -r '$tgt_dataset' 2>/dev/null | while IFS= read -r d; do zfs set canmount=noauto \"\$d\" 2>/dev/null; done"
+        if [ -n "$remote_host" ]; then
+            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$canmount_cmd" 2>/dev/null \
+                || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
+        else
+            eval "$canmount_cmd" 2>/dev/null \
+                || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
         fi
     fi
 

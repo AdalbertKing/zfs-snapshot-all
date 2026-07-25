@@ -217,7 +217,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.53'
+VERSION='v2.54'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1117,6 +1117,15 @@ process_dataset() {
     if [ $RAW_SEND -eq 1 ]; then
         zfs set canmount=$TARGET_CANMOUNT "$tgt_dataset" 2>/dev/null \
             || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
+    fi
+
+    # Same as snapsend.sh: under -r the descendants come out of the recursive
+    # stream carrying the SOURCE's canmount, so the no-mount default would stop
+    # at the leaf. Whole received subtree, filesystems only, skipped under -U.
+    if [ $RECURSIVE -eq 1 ] && [ "$TARGET_CANMOUNT" = "noauto" ]; then
+        zfs list -H -o name -t filesystem -r "$tgt_dataset" 2>/dev/null | while IFS= read -r d; do
+            zfs set canmount=noauto "$d" 2>/dev/null
+        done || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
     fi
 
     # Refresh the per-target bookmark to what was just sent, regardless of
