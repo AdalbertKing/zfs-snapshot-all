@@ -1004,7 +1004,15 @@ else
         log "$ACCOUNT_REPO_DIR does not exist or is empty -- plain clone"
         su "$USERNAME" -c "git clone '$REPO_URL' '$ACCOUNT_REPO_DIR'" || die "git clone failed"
     fi
-    chmod +x "$ACCOUNT_REPO_DIR"/*.sh 2>/dev/null || true
+    # Only the standalone executables, NEVER a blanket *.sh. lib-zfs-snap.sh is
+    # sourced, not executed, and git tracks it as 100644 -- chmod +x on it makes
+    # the checkout permanently dirty with a mode change, and the hourly
+    # `git pull --ff-only` this account runs then FAILS the first time that file
+    # changes upstream. Found on both metropolis accounts, inherited from the
+    # old deploy_backup_user.sh.
+    for f in snapsend.sh snapget.sh delsnaps.sh gen-cron.sh check-snap-age.sh deploy.sh; do
+        [ -e "$ACCOUNT_REPO_DIR/$f" ] && chmod +x "$ACCOUNT_REPO_DIR/$f"
+    done
 
     # ------------------------------------------------------------------------------
     log "Phase 8e: auto-pull cron line (this account's own crontab)"
