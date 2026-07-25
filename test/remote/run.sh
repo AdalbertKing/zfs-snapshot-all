@@ -102,8 +102,11 @@ rz()  { $SSH "$PEER" "zfs $*" 2>/dev/null; }
 
 l_exists()  { zfs list -H "$1" >/dev/null 2>&1 && echo yes || echo no; }
 r_exists()  { $SSH "$PEER" "zfs list -H '$1'" >/dev/null 2>&1 && echo yes || echo no; }
-l_snaps()   { zfs list -H -o name -t snapshot -r "$1" 2>/dev/null | wc -l; }
-r_snaps()   { $SSH "$PEER" "zfs list -H -o name -t snapshot -r '$1' 2>/dev/null | wc -l" 2>/dev/null; }
+# Snapshots OF THIS DATASET (-d 1), not of its subtree: an excluded parent whose
+# child was legitimately sent still has zero of its own, and a recursive count
+# would say otherwise.
+l_snaps()   { zfs list -H -o name -t snapshot -d 1 "$1" 2>/dev/null | wc -l; }
+r_snaps()   { $SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$1' 2>/dev/null | wc -l" 2>/dev/null; }
 l_guid()    { zfs get -H -o value guid "$1" 2>/dev/null; }
 r_guid()    { $SSH "$PEER" "zfs get -H -o value guid '$1'" 2>/dev/null; }
 l_canmount(){ zfs get -H -o value canmount "$1" 2>/dev/null; }
@@ -194,7 +197,7 @@ check "A5 -R -S local: the parent itself was not snapshotted" "0" \
 check "A5 -R -S local: children were" "1" "$(l_snaps "$LROOT/a5/$SRC/keep")"
 
 tick
-send -m a6_ -z "$SRC" "$LROOT/a6"
+send -m a6_ -z -v1 "$SRC" "$LROOT/a6"
 check "A6 -z local: exit 0" "0" "$RC"
 check "A6 -z local: compression is dropped, with a reason" "1" "$(outgrep -i 'compression ignored')"
 check "A6 -z local: the transfer still lands" "1" "$(l_snaps "$LROOT/a6/$SRC")"
@@ -213,7 +216,7 @@ check "B1 plain remote: GUID matches across the link" \
 check "B1 plain remote: target created canmount=noauto" "noauto" "$(r_canmount "$RROOT/b1/$SRC")"
 
 tick
-send -m b2_ -z "$SRC" "$PEER:$RROOT/b2"
+send -m b2_ -z -v1 "$SRC" "$PEER:$RROOT/b2"
 check "B2 -z remote: exit 0" "0" "$RC"
 check "B2 -z remote: compression is NOT dropped over a link" "0" "$(outgrep -i 'compression ignored')"
 check "B2 -z remote: GUID matches after a compressed transfer" \
@@ -255,7 +258,7 @@ check "B7 -b remote: rate-limited transfer still lands" "1" "$(r_snaps "$RROOT/b
 # third with nothing new must take the "already exists" path WITHOUT stranding
 # the hold it took on the way in.
 tick
-zfs snapshot "$SRC@extra_$$" >/dev/null 2>&1
+zfs snapshot "$SRC@b8_pre_$$" >/dev/null 2>&1
 send -m b8_ -e "$SRC" "$PEER:$RROOT/b8"
 check "B8 incremental remote: first send (existing snapshot) exit 0" "0" "$RC"
 tick
@@ -263,7 +266,7 @@ send -m b8_ -e "$SRC" "$PEER:$RROOT/b8"
 check "B8 incremental remote: re-run with nothing new exits 0" "0" "$RC"
 check "B8 incremental remote: no second copy appeared" "1" "$(r_snaps "$RROOT/b8/$SRC")"
 check "B8 incremental remote: no hold left on the source snapshot" "" \
-      "$(zfs holds -H "$SRC@extra_$$" 2>/dev/null | awk '{print $2}')"
+      "$(zfs holds -H "$SRC@b8_pre_$$" 2>/dev/null | awk '{print $2}')"
 check "B8 incremental remote: a send bookmark exists on the source" "1" \
       "$(zfs list -H -t bookmark -o name -d 1 "$SRC" 2>/dev/null | wc -l)"
 
@@ -320,7 +323,7 @@ check "D1 plain remote pull: GUID matches across the link" \
 check "D1 plain remote pull: local target is canmount=noauto" "noauto" "$(l_canmount "$DTGT")"
 
 tick
-get -m d2_ -z "$DTGT" "$PEER:$DBASE"
+get -m d2_ -z -v1 "$DTGT" "$PEER:$DBASE"
 check "D2 -z remote pull: exit 0" "0" "$RC"
 check "D2 -z remote pull: compression is not dropped over a link" "0" "$(outgrep -i 'compression ignored')"
 
