@@ -193,6 +193,24 @@ hold_snapshot() {
 # Best-effort in the other direction too: releasing a hold that is already
 # gone (already released, or never got placed) is not an error worth failing
 # a run over.
+# Give up on a dataset that is already holding its in-flight snapshot: release
+# the hold and forget the in-flight record, so a failure BEFORE the transfer
+# starts does not strand an un-prunable snapshot forever.
+#
+# The transfer-failure path is different and deliberately keeps the hold when a
+# resume token exists -- a later run needs that exact snapshot. Everything that
+# fails earlier (target creation, ancestor creation, a refused force-full-send)
+# has nothing to come back for. Found live: a delegated non-root run failing to
+# create the target left a held snapshot behind on every attempt, and `zfs
+# destroy` then reported the misleading "dataset is busy".
+# The held snapshot lives on the SOURCE, which is local for snapsend but may be
+# remote for snapget -- hence the optional remote args.
+abort_held_snapshot() {
+    local snap="$1" tgt_dataset="$2" remote_user="${3:-}" remote_host="${4:-}"
+    release_snapshot "$snap" "$remote_user" "$remote_host"
+    clear_inflight_snap "$tgt_dataset"
+}
+
 release_snapshot() {
     local snap="$1" remote_user="${2:-}" remote_host="${3:-}"
     if [ -n "$remote_host" ]; then

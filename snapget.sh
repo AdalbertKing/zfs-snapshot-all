@@ -217,7 +217,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.51'
+VERSION='v2.52'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -924,9 +924,11 @@ process_dataset() {
         # The target is always local here, so this never goes over ssh.
         ensure_target_ancestors "$create_target" "" "" || {
             log 0 "Failed to create the ancestor path of $create_target"
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         }
-        zfs list "$create_target" >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT "$create_target" || return 1
+        zfs list "$create_target" >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT "$create_target" || {
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1; }
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
@@ -942,6 +944,7 @@ process_dataset() {
             log 0 "Refusing force full pull: $tgt_dataset (or a descendant) holds snapshot(s) reserved by Proxmox VE (replication/migration/vzdump):"
             log 0 "$protected_snaps"
             log 0 "This target looks like it's managed by Proxmox VE outside this tool -- force full pull would destroy that state and break replication/migration/backup. Remove the conflicting job/snapshots yourself first if this is intentional."
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         fi
 
@@ -962,10 +965,12 @@ process_dataset() {
         log 2 "Recreating target dataset"
         ensure_target_ancestors "$tgt_dataset" "" "" || {
             log 0 "Failed to create the ancestor path of $tgt_dataset"
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         }
         zfs create -o canmount=$TARGET_CANMOUNT "$tgt_dataset" || {
             log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root."
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         }
         fi
@@ -983,7 +988,8 @@ process_dataset() {
         log 2 "Target does not exist yet -- raw receive will create it"
         tgt_snaps=()
     else
-        tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || return 1
+        tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || {
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1; }
     fi
 
     log 3 "LATEST SOURCE SNAPSHOT: ${snapshot}"

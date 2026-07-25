@@ -1006,6 +1006,28 @@ check "ancestors: send under a pre-existing ancestor succeeds" "0" "$RC"
 check "ancestors: a pre-existing ancestor keeps its own canmount" "on" \
       "$(zfs get -H -o value canmount "$BK/keepon")"
 
+# --- a failure BEFORE the transfer must not strand the hold ------------------
+# The hold is taken right after the snapshot, i.e. before the target is created.
+# Every early exit between those two points used to `return 1` without releasing
+# it, so the source snapshot became un-prunable and `zfs destroy` reported the
+# misleading "dataset is busy". Root rarely hits those paths; a delegated
+# non-root account hit them on every run (it cannot mount an intermediate).
+#
+# Forced here by making target creation fail for a reason root also sees: a
+# target path whose parent is a ZVOL, which cannot hold child datasets.
+
+zfs create -V 16M -s "$POOL/blockparent" || exit 1
+zfs create -p "$POOL/holdsrc" || exit 1
+run_send -m "auto_" "$POOL/holdsrc" "$POOL/blockparent"
+check "pre-transfer failure: the run reports failure" "1" "$RC"
+SRCSNAP="$(zfs list -H -o name -t snapshot "$POOL/holdsrc" | tail -1)"
+check "pre-transfer failure: a source snapshot was taken" "1" \
+      "$(count_snaps "$POOL/holdsrc")"
+check "pre-transfer failure: no hold is left on it" "" \
+      "$(zfs holds -H "$SRCSNAP" | awk '{print $2}')"
+check "pre-transfer failure: so the snapshot is destroyable" "0" \
+      "$(zfs destroy "$SRCSNAP" >/dev/null 2>&1; echo $?)"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
