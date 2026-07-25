@@ -106,8 +106,10 @@ check "the graph includes contract nodes" "1" \
 # diagram -- the file still appears in the source, so it is easy to miss.
 check "graph node ids are mermaid-safe" "0" \
       "$("$IMPACT" --graph | grep -cE '^  [A-Za-z]_[A-Za-z0-9_]*[/.]')"
+# Match the node DECLARATION, not every mention: the same id also appears on
+# each edge line, so a bare name count is not a fact about the graph.
 check "a path-named file still gets a node" "1" \
-      "$("$IMPACT" --graph | grep -c 'F_test_impact_run_sh')"
+      "$("$IMPACT" --graph | grep -c 'F_test_impact_run_sh(\[')"
 
 OUT="$("$IMPACT" --all 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
 check "--all lists every declared suite" "6" \
