@@ -67,6 +67,15 @@ set -o pipefail
 #       use_template = <tier>[,<tier>...]  # borrows each tier's prune policy
 #       recursive    = yes|no              # default no; yes -> delsnaps.sh -R (subtree)
 #       clear_cut    = yes|no              # default no; yes -> delsnaps.sh -F (destroy -R clones)
+#       prune        = yes|no              # default yes; no -> emit NO delsnaps line,
+#                                          # making this section a monitor carrier only.
+#                                          # Use for a leaf already covered by a recursive
+#                                          # [prune:<parent>]: repeating the rule here would
+#                                          # emit a second delsnaps line on the same schedule,
+#                                          # pattern and snapshots, and the two RACE -- the
+#                                          # loser reports "could not find any snapshots to
+#                                          # destroy" and alerts. Requires monitor_warn/crit,
+#                                          # or the section would emit nothing at all.
 #       notify       = <short label>
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
@@ -134,7 +143,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.14'
+VERSION='v4.15'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -617,16 +626,37 @@ build_prune_section() {
         local ntier
         ntier="$(resolve_field tier_label "$sec" "$tmpl" "")" || ntier="$tier"
 
-        local prune_schedule pattern retain_flag plabel praw pnotify
-        prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
-        pattern="$(resolve_field pattern "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: prune_schedule is set but 'pattern' did not resolve"
-        resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
-        retain_flag="$RESOLVED_RETAIN"
+        local prune_schedule pattern retain_flag plabel praw pnotify prune_raw emit_prune
+        # prune=no: this section is a MONITOR carrier only. The monitor derives
+        # from a (scope,pattern) pair that a prune already needed, which is
+        # normally exactly right -- but a leaf sitting under a recursive
+        # [prune:<parent>] is already pruned by that parent, so repeating the
+        # rule here emits a SECOND delsnaps line with the same schedule, the
+        # same pattern and the same retention over the same snapshots.
+        # That is not the harmless no-op it looks like: the two lines race, the
+        # loser finds the snapshots already gone, reports "could not find any
+        # snapshots to destroy", exits non-zero and raises an alert. Seen on
+        # pve2, 63 times in one day, two alerts landing in the same second.
+        # (delsnaps' own lock cannot prevent it -- it is keyed on the dataset
+        # list, and these two lines legitimately have different lists.)
+        prune_raw="$(resolve_field prune "$sec" "$tmpl" "")" || prune_raw="yes"
+        [ "$(trim "$prune_raw" | tr '[:upper:]' '[:lower:]')" = "no" ] && emit_prune=0 || emit_prune=1
+
         plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
-        praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
-        if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-        PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
-        SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
+        pattern="$(resolve_field pattern "$sec" "$tmpl" defaults)" \
+            || die "[prune:$scope] tier=$tier: 'pattern' did not resolve"
+
+        if [ "$emit_prune" -eq 1 ]; then
+            prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
+            retain_flag="$RESOLVED_RETAIN"
+            praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
+            if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
+            SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
+        elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
+            die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
+        fi
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
         if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
