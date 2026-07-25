@@ -355,6 +355,21 @@ warn_if_unrecursed_children() {
     return 0
 }
 
+# True when NAME matches any of the caller's EXCLUDE_PATTERNS (-X). The patterns
+# are extended regexes matched unanchored against the full dataset name, which is
+# syncoid's --exclude behaviour -- so `data/vm-1` catches `vm-10` too unless the
+# caller anchors it. Reads the array from the caller's scope rather than taking
+# it as arguments: both callers already keep it global, and passing an array
+# through bash costs more clarity than it buys.
+dataset_excluded() {
+    local name="$1" pat
+    [ ${#EXCLUDE_PATTERNS[@]} -eq 0 ] && return 1
+    for pat in "${EXCLUDE_PATTERNS[@]}"; do
+        printf '%s\n' "$name" | grep -Eq -- "$pat" && return 0
+    done
+    return 1
+}
+
 # Emit a dataset's `encryption` property ("off" for unencrypted). Empty when the
 # dataset does not exist.
 dataset_encryption() {

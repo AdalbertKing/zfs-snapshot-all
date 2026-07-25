@@ -57,6 +57,28 @@ set -o pipefail
 #                    full re-pull of THAT child -- -F is a no-op under -R
 #                    because the collision -F exists for cannot arise (see -F
 #                    below). Mutually exclusive with -r.
+#   -X <REGEX>        Under -R only: drop every expanded dataset whose full name
+#                    ON THE SOURCE matches REGEX -- an extended regex as
+#                    `grep -E` reads it, unanchored, so anchor it yourself with
+#                    ^ / $ when you mean the whole name. Repeatable; a dataset
+#                    goes if ANY -X hits. This is syncoid's --exclude with the
+#                    same semantics. The name tested is the full source-side
+#                    path (SOURCE_BASE included), i.e. what `zfs list` prints on
+#                    the source host -- not the shortened form this script
+#                    carries internally, so one regex reads the same here as it
+#                    does in the snapsend.sh command going the other way.
+#                    Excluding a dataset does NOT exclude its descendants -- but
+#                    mind the anchor: unanchored, a pattern matching a parent
+#                    matches its children too, since a child's full name
+#                    contains the parent's. See the longer note in snapsend.sh.
+#   -S               Under -R only: skip-parent -- pull the descendants of each
+#                    DATASET but never the DATASET itself. syncoid's
+#                    --skip-parent.
+#
+# Both are -R-only, and rejected otherwise rather than ignored. Under -r the
+# subtree is one atomic stream with nowhere to filter, and without recursion at
+# all there is nothing to exclude FROM. If the filters leave nothing to pull,
+# that is an error, not a silent success.
 #   -n               Dry-run mode (show conflicting snapshots without receiving)
 #   -I               Full history receive (receive all snapshots if no common base)
 #   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
@@ -195,7 +217,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.49'
+VERSION='v2.50'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -238,6 +260,11 @@ PORT=22
 USE_EXISTING_SNAPSHOT=0
 RECURSIVE=0
 FLAT_RECURSE=0
+# -X: extended regexes, matched against the full source-side dataset name; an
+# expanded dataset is dropped if ANY of them matches. -S: drop the listed
+# dataset itself, keep its descendants. Mirrors snapsend.sh.
+declare -a EXCLUDE_PATTERNS=()
+SKIP_PARENT=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
 # `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.49
@@ -1073,7 +1100,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:F" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:S" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1086,6 +1113,8 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:F" opt; do
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
         R) FLAT_RECURSE=1;;
+        X) EXCLUDE_PATTERNS+=("$OPTARG");;
+        S) SKIP_PARENT=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;   # no-op since v2.49 (this is the default); kept so existing cron lines keep parsing
@@ -1102,7 +1131,7 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -i -o -x -c -b -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1113,6 +1142,29 @@ if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
     exit 1
 fi
+
+# Rejected rather than ignored -- mirrors snapsend.sh: a filter that silently
+# does nothing is worse than one that refuses, because it looks like it worked.
+if [ $FLAT_RECURSE -eq 0 ]; then
+    if [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]; then
+        echo "Error: -X needs -R. Under -r the subtree is one atomic stream with nowhere to filter; without recursion, just do not list the dataset." >&2
+        exit 1
+    fi
+    if [ $SKIP_PARENT -eq 1 ]; then
+        echo "Error: -S needs -R. There is no parent to skip unless -R is expanding one." >&2
+        exit 1
+    fi
+fi
+
+# grep exits 2 on a malformed pattern, 1 on "no match" -- empty input can only
+# produce the latter, so >=2 is unambiguously a bad -X. Checked before any work.
+for _pat in "${EXCLUDE_PATTERNS[@]}"; do
+    printf '' | grep -E -- "$_pat" >/dev/null 2>&1
+    if [ $? -ge 2 ]; then
+        echo "Error: -X '$_pat' is not a valid extended regex (grep -E rejects it)." >&2
+        exit 1
+    fi
+done
 
 # -U has to reach the dataset, not just the recv flag: a target created with
 # canmount=noauto stays unmounted no matter how it is received, so flipping only
@@ -1286,6 +1338,18 @@ if [ $FLAT_RECURSE -eq 1 ]; then
         fi
         while IFS= read -r child; do
             [ -z "$child" ] && continue
+            # -S/-X are decided on the FULL source-side name, before the
+            # SOURCE_BASE prefix is stripped: that is the name the operator sees
+            # in `zfs list` on the source, and the one a matching snapsend.sh -X
+            # in the other direction would be written against.
+            if [ $SKIP_PARENT -eq 1 ] && [ "$child" = "$src_root" ]; then
+                log 2 "Skip-parent (-S): not pulling $child itself"
+                continue
+            fi
+            if dataset_excluded "$child"; then
+                log 2 "Excluded (-X): $child"
+                continue
+            fi
             if [ -n "$SOURCE_BASE" ]; then
                 EXPANDED_DATASETS+=("${child:$((${#SOURCE_BASE}+1))}")
             else
@@ -1293,6 +1357,12 @@ if [ $FLAT_RECURSE -eq 1 ]; then
             fi
         done <<< "$children"
     done
+    # Every candidate filtered out is an error, not a quiet success -- see the
+    # same block in snapsend.sh.
+    if [ ${#EXPANDED_DATASETS[@]} -eq 0 ]; then
+        log 0 "Flat-recursive (-R): nothing left to pull -- -X/-S filtered out every dataset under: ${DATASETS[*]}"
+        exit 1
+    fi
     mapfile -t DATASETS < <(printf '%s\n' "${EXPANDED_DATASETS[@]}" | sort -u)
     log 1 "Flat-recursive (-R): expanded to ${#DATASETS[@]} dataset(s): ${DATASETS[*]}"
 fi

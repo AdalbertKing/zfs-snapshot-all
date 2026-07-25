@@ -39,8 +39,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.55 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.49 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.56 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.50 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.18 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
@@ -305,6 +305,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-v <LEVEL>` | Verbosity 0 (errors only) – 4 (debug) |
 | `-r` | Recursive: include child datasets, one atomic `zfs send -R` stream for the whole subtree |
 | `-R` | Flat-recursive, syncoid/sanoid-compatible: expand into every descendant first (`zfs list -r`, unlimited depth, same call syncoid's `getchilddatasets` makes), then send each one as its own independent job. A failing child doesn't abort its siblings; a GUID collision on one child only forces a full resend of that child, not the whole tree (`-F` is a no-op here — see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)). Mutually exclusive with `-r` |
+| `-X <REGEX>` | **`-R` only.** Drop every expanded dataset whose full name matches REGEX (extended regex, unanchored). Repeatable — a dataset goes if any pattern hits. syncoid's `--exclude`. See [Filtering the expansion](#filtering-the-expansion--x--s) |
+| `-S` | **`-R` only.** Skip-parent: send the descendants but not the listed dataset itself. syncoid's `--skip-parent` |
 | `-n` | Dry-run: report conflicts, send nothing |
 | `-I` | Full-history send if no common base exists (instead of a plain full send) |
 | `-u` | Accepted and ignored — not mounting is the default since v2.54. Kept so existing cron lines keep parsing |
@@ -333,7 +335,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -c -k -b -A -i -o -x -U -F -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -c -k -b -A -i -o -x -U -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
@@ -381,6 +383,44 @@ atomic recursive stream) if you meant to include them.
 It is a warning, not an error — replicating a parent alone is legitimate, and a job may
 deliberately split parent and children across schedules. It also fires under `-n`, since a preview
 is the best moment to learn the job is aimed at an empty container.
+
+### Filtering the expansion — `-X`, `-S`
+
+`-R` makes filtering possible in the first place. Under `-r` the subtree is one atomic
+`zfs send -R` stream with nowhere to filter, so both flags are **rejected without `-R`** rather
+than ignored — a filter that silently does nothing is worse than one that refuses.
+
+```bash
+# Everything under rpool/data except the swap volumes:
+snapsend.sh -R -X 'swap' -m daily_ rpool/data user@backup:hdd/backups/pve1
+
+# Only the children — rpool/data itself is an empty container:
+snapsend.sh -R -S -m daily_ rpool/data user@backup:hdd/backups/pve1
+```
+
+- **`-X <REGEX>`** — syncoid's `--exclude`. An extended regex (`grep -E`), matched **unanchored**
+  against the dataset's full name. Repeatable; a dataset is dropped if any pattern matches. In
+  `snapget.sh` the name tested is the full **source-side** path (`SOURCE_BASE` included), so one
+  regex reads the same whichever direction the data moves.
+- **`-S`** — syncoid's `--skip-parent`. Send the descendants of each listed dataset, never the
+  dataset itself.
+
+**Anchoring matters more than it looks.** A child's full name contains its parent's, so an
+unanchored pattern that matches a parent also matches everything beneath it:
+
+| Pattern | `rpool/swap` | `rpool/swap/inner` |
+|---|---|---|
+| `-X swap` | excluded | **also excluded** |
+| `-X 'swap$'` | excluded | still sent |
+
+Both are legitimate — decide which you meant. Excluding a dataset does *not* by itself exclude its
+descendants: each expanded name is tested on its own, and `zfs create -p` still creates the
+skipped level on the target as an empty dataset so a surviving child has somewhere to land.
+
+**Filtering everything out is an error, not a quiet success** (exit 1, nothing snapshotted). A
+typo in a regex, or `-S` on a dataset that turns out to have no children, would otherwise exit 0
+having sent nothing — indistinguishable from a healthy run in cron, and invisible until a restore
+needs the data. Same reasoning as the container-parent warning above.
 
 ## delsnaps.sh — retention / pruning
 

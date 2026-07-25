@@ -58,6 +58,31 @@ set -o pipefail
 #                    below). Mutually exclusive with -r. Quiescing still takes
 #                    one atomic snapshot across the whole expanded set before
 #                    the per-child sends start.
+#   -X <REGEX>        Under -R only: drop every expanded dataset whose full name
+#                    matches REGEX -- an extended regex as `grep -E` reads it,
+#                    unanchored, so anchor it yourself with ^ / $ when you mean
+#                    the whole name. Repeatable; a dataset goes if ANY -X hits.
+#                    This is syncoid's --exclude with the same semantics.
+#                    Excluding a dataset does NOT exclude its descendants: every
+#                    expanded name is tested on its own, and `zfs create -p`
+#                    still makes the skipped level on the target as an empty
+#                    dataset, so a surviving child has somewhere to land.
+#                    BUT MIND THE ANCHOR: unanchored, a pattern that matches a
+#                    parent matches its children as well, since a child's full
+#                    name contains the parent's. `-X swap` drops rpool/swap AND
+#                    rpool/swap/inner; `-X 'swap$'` drops only rpool/swap.
+#                    Both behaviours are legitimate -- decide which you meant.
+#   -S               Under -R only: skip-parent -- send the descendants of each
+#                    DATASET but never the DATASET itself. syncoid's
+#                    --skip-parent. This is the container case: rpool/data holds
+#                    no data of its own and exists only to group vm-*-disk-*
+#                    beneath it.
+#
+# Both are -R-only, and rejected otherwise rather than ignored. Under -r the
+# subtree is one atomic `zfs send -R` stream with nowhere to filter, and without
+# recursion at all there is nothing to exclude FROM -- you just do not list the
+# dataset. If the filters leave nothing to send, that is an error, not a silent
+# success: a typo in a -X regex must not look like a clean run in cron.
 #   -n               Dry-run mode (show conflicting snapshots without sending)
 #   -I               Full history send (send all snapshots if no common base)
 #   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
@@ -285,7 +310,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.55'
+VERSION='v2.56'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -335,6 +360,10 @@ QUIESCE=no
 QUIESCE_SNAPPED=0
 RECURSIVE=0
 FLAT_RECURSE=0
+# -X: extended regexes; an expanded dataset is dropped if ANY of them matches.
+# -S: drop the listed dataset itself, keep its descendants.
+declare -a EXCLUDE_PATTERNS=()
+SKIP_PARENT=0
 DRY_RUN=0
 FULL_HISTORY_SEND=0
 # `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.54
@@ -1201,7 +1230,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:F" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:S" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1215,6 +1244,8 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:F" opt; do
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
         R) FLAT_RECURSE=1;;
+        X) EXCLUDE_PATTERNS+=("$OPTARG");;
+        S) SKIP_PARENT=1;;
         n) DRY_RUN=1;;
         I) FULL_HISTORY_SEND=1;;
         u) UNMOUNT=1;;   # no-op since v2.54 (this is the default); kept so existing cron lines keep parsing
@@ -1231,7 +1262,7 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:F" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Blad: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -n -I -u -f -w -p -k -A -q -i -o -x -c -b -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -q -i -o -x -c -b -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1242,6 +1273,30 @@ if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs send -R stream, -R = independent per-dataset sends)" >&2
     exit 1
 fi
+
+# Rejected rather than ignored: a filter that silently does nothing is worse
+# than one that refuses, because it looks like it worked.
+if [ $FLAT_RECURSE -eq 0 ]; then
+    if [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]; then
+        echo "Error: -X needs -R. Under -r the subtree is one atomic 'zfs send -R' stream with nowhere to filter; without recursion, just do not list the dataset." >&2
+        exit 1
+    fi
+    if [ $SKIP_PARENT -eq 1 ]; then
+        echo "Error: -S needs -R. There is no parent to skip unless -R is expanding one." >&2
+        exit 1
+    fi
+fi
+
+# Checked here so a bad regex fails before any snapshot is taken, not halfway
+# through the expansion. grep exits 2 on a malformed pattern, 1 on "no match" --
+# empty input can only ever produce the latter, so >=2 is unambiguously a bad -X.
+for _pat in "${EXCLUDE_PATTERNS[@]}"; do
+    printf '' | grep -E -- "$_pat" >/dev/null 2>&1
+    if [ $? -ge 2 ]; then
+        echo "Error: -X '$_pat' is not a valid extended regex (grep -E rejects it)." >&2
+        exit 1
+    fi
+done
 
 case "$QUIESCE" in
     no|agent|sync|auto) ;;
@@ -1393,9 +1448,26 @@ if [ $FLAT_RECURSE -eq 1 ]; then
             exit 1
         fi
         while IFS= read -r child; do
-            [ -n "$child" ] && EXPANDED_DATASETS+=("$child")
+            [ -z "$child" ] && continue
+            if [ $SKIP_PARENT -eq 1 ] && [ "$child" = "$ds" ]; then
+                log 2 "Skip-parent (-S): not sending $child itself"
+                continue
+            fi
+            if dataset_excluded "$child"; then
+                log 2 "Excluded (-X): $child"
+                continue
+            fi
+            EXPANDED_DATASETS+=("$child")
         done < <(zfs list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)
     done
+    # An empty set here means every candidate was filtered out. Failing loudly
+    # is the point: a -X typo or an -S on a childless dataset would otherwise
+    # exit 0 having sent nothing, which in cron is indistinguishable from a
+    # healthy run and stays invisible until a restore needs the data.
+    if [ ${#EXPANDED_DATASETS[@]} -eq 0 ]; then
+        log 0 "Flat-recursive (-R): nothing left to send -- -X/-S filtered out every dataset under: ${DATASETS[*]}"
+        exit 1
+    fi
     mapfile -t DATASETS < <(printf '%s\n' "${EXPANDED_DATASETS[@]}" | sort -u)
     log 1 "Flat-recursive (-R): expanded to ${#DATASETS[@]} dataset(s): ${DATASETS[*]}"
 fi

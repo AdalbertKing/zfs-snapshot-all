@@ -857,6 +857,128 @@ check "snapget identifier: jobA re-run succeeds" "0" "$RC"
 check "snapget identifier: jobA re-run refreshes its OWN bookmark, not a third" \
       "2" "$(zfs list -H -t bookmark -o name "$GSRC5" 2>/dev/null | wc -l)"
 
+# --- -X / -S: filtering the -R expansion -------------------------------------
+# Both only make sense while -R is building the dataset list, so the first thing
+# pinned is that they are REJECTED elsewhere rather than quietly ignored -- a
+# filter that does nothing while looking like it worked is the worst outcome.
+
+zfs create -p "$POOL/xtree" || exit 1
+zfs create -p "$POOL/xtree/keep" || exit 1
+zfs create -p "$POOL/xtree/swap" || exit 1
+zfs create -p "$POOL/xtree/swap/inner" || exit 1
+
+run_send -m "auto_" -X 'swap' "$POOL/xtree" "$BK"
+check "-X without -R is rejected" "1" "$RC"
+run_send -m "auto_" -S "$POOL/xtree" "$BK"
+check "-S without -R is rejected" "1" "$RC"
+run_send -m "auto_" -R -X '[' "$POOL/xtree" "$BK"
+check "-X with a malformed regex is rejected before any work" "1" "$RC"
+check "-X malformed: no snapshot was taken on the source" "0" \
+      "$(count_snaps "$POOL/xtree")"
+
+# Anchored on purpose: a bare 'swap' would also match "$POOL/xtree/swap/inner",
+# because the pattern is unanchored and a descendant's name CONTAINS its
+# parent's. That trap gets its own case below.
+tick
+run_send -m "auto_" -R -X 'swap$' "$POOL/xtree" "$BK"
+check "-R -X: exit 0" "0" "$RC"
+check "-R -X: the parent itself is still sent" "yes" \
+      "$(zfs list -H -o name "$(tgt_of xtree)" >/dev/null 2>&1 && echo yes || echo no)"
+check "-R -X: the non-matching child is sent" "yes" \
+      "$(zfs list -H -o name "$(tgt_of xtree/keep)" >/dev/null 2>&1 && echo yes || echo no)"
+# The excluded dataset must have no snapshot of its own on the SOURCE either --
+# filtering happens before the snapshot is created, not just before the send.
+check "-R -X: the matching child was never snapshotted" "0" \
+      "$(count_snaps "$POOL/xtree/swap")"
+# syncoid semantics: -X drops the matching dataset, NOT its descendants. The
+# child still lands, and `zfs create -p` supplies the skipped level as an empty
+# dataset so it has somewhere to go.
+check "-R -X: a descendant of an excluded dataset is still sent" "yes" \
+      "$(zfs list -H -o name "$(tgt_of xtree/swap/inner)" >/dev/null 2>&1 && echo yes || echo no)"
+check "-R -X: the skipped level exists on the target but holds no snapshot" "0" \
+      "$(count_snaps "$(tgt_of xtree/swap)")"
+
+# The flip side, and the easiest -X mistake to make: UNANCHORED, the same
+# pattern also matches every descendant, because a child's full name contains
+# its parent's. Pinned as behaviour, not as an accident -- it is what syncoid's
+# --exclude does too, and the fix is to anchor the pattern.
+tick
+zfs create -p "$POOL/utree/swap/inner" || exit 1
+run_send -m "auto_" -R -X 'swap' "$POOL/utree" "$BK"
+check "-R -X unanchored: exit 0" "0" "$RC"
+check "-R -X unanchored: the matching dataset is excluded" "0" \
+      "$(count_snaps "$POOL/utree/swap")"
+check "-R -X unanchored: its descendant matches too and is ALSO excluded" "0" \
+      "$(count_snaps "$POOL/utree/swap/inner")"
+
+tick
+zfs create -p "$POOL/stree" || exit 1
+zfs create -p "$POOL/stree/a" || exit 1
+zfs create -p "$POOL/stree/b" || exit 1
+run_send -m "auto_" -R -S "$POOL/stree" "$BK"
+check "-R -S: exit 0" "0" "$RC"
+check "-R -S: the parent is NOT snapshotted" "0" "$(count_snaps "$POOL/stree")"
+check "-R -S: child a is sent" "1" "$(count_snaps "$(tgt_of stree/a)")"
+check "-R -S: child b is sent" "1" "$(count_snaps "$(tgt_of stree/b)")"
+
+tick
+run_send -m "auto_" -R -S -X 'stree/(a|b)' "$POOL/stree" "$BK"
+check "-R -S -X: filtering everything out fails loudly instead of exiting 0" "1" "$RC"
+
+tick
+zfs create -p "$POOL/lonely" || exit 1
+run_send -m "auto_" -R -S "$POOL/lonely" "$BK"
+check "-R -S on a childless dataset is an error, not a silent no-op" "1" "$RC"
+check "-R -S on a childless dataset takes no snapshot" "0" "$(count_snaps "$POOL/lonely")"
+
+# Repeatability: two -X flags are OR-ed, a dataset goes if either matches.
+tick
+zfs create -p "$POOL/mtree" || exit 1
+zfs create -p "$POOL/mtree/one" || exit 1
+zfs create -p "$POOL/mtree/two" || exit 1
+zfs create -p "$POOL/mtree/three" || exit 1
+run_send -m "auto_" -R -X 'one$' -X 'two$' "$POOL/mtree" "$BK"
+check "-X is repeatable: exit 0" "0" "$RC"
+check "-X is repeatable: first pattern excluded" "0" "$(count_snaps "$POOL/mtree/one")"
+check "-X is repeatable: second pattern excluded" "0" "$(count_snaps "$POOL/mtree/two")"
+check "-X is repeatable: the unmatched child is still sent" "1" \
+      "$(count_snaps "$(tgt_of mtree/three)")"
+
+# snapget mirror. The name -X sees is the FULL source-side path (SOURCE_BASE
+# included), not the shortened form snapget carries internally -- so a regex
+# reads the same in both directions.
+GX="$SRCBASE/$POOL/xpull"
+zfs create -p "$GX" || exit 1
+zfs create -p "$GX/keep" || exit 1
+zfs create -p "$GX/swap" || exit 1
+
+run_get -m "auto_" -X 'swap' "$POOL/xpull" "$SRCBASE"
+check "snapget: -X without -R is rejected" "1" "$RC"
+
+tick
+run_get -m "auto_" -R -X 'swap' "$POOL/xpull" "$SRCBASE"
+check "snapget -R -X: exit 0" "0" "$RC"
+check "snapget -R -X: the non-matching child is pulled" "1" \
+      "$(count_snaps "$POOL/xpull/keep")"
+check "snapget -R -X: the matching child is not" "0" \
+      "$(count_snaps "$POOL/xpull/swap")"
+# Anchored against the full source path -- proves the match is not run against
+# the stripped "$POOL/xpull/..." form, where this pattern could never hit.
+tick
+run_get -m "auto_" -R -X "^$SRCBASE/$POOL/xpull/keep$" "$POOL/xpull" "$SRCBASE"
+check "snapget -R -X: regex is matched against the full source-side name" "0" "$RC"
+check "snapget -R -X: full-path exclusion kept 'keep' at its previous snapshot" "1" \
+      "$(count_snaps "$POOL/xpull/keep")"
+
+tick
+GS="$SRCBASE/$POOL/spull"
+zfs create -p "$GS" || exit 1
+zfs create -p "$GS/a" || exit 1
+run_get -m "auto_" -R -S "$POOL/spull" "$SRCBASE"
+check "snapget -R -S: exit 0" "0" "$RC"
+check "snapget -R -S: the parent is NOT snapshotted on the source" "0" "$(count_snaps "$GS")"
+check "snapget -R -S: the child is pulled" "1" "$(count_snaps "$POOL/spull/a")"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
