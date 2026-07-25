@@ -8,11 +8,16 @@
 #     (see the table in Part 1 -- it is derived from what the scripts invoke)
 #   - clone/update of /root/scripts/zfs-snapshot-all (handles both a fresh dir
 #     and one that already has plain-file copies of the scripts sitting in it)
-#   - notify-fail.sh / notify-warn.sh: neither sends mail. Both record a finding
-#     (ALERT / WARN) into one queue for the digest below.
-#   - alert-digest.sh: the ONLY mail this host sends about backups -- one message
-#     a day covering every ALERT and WARNING queued since the last run, and no
-#     mail at all on a day with nothing to report.
+#   - zfs-alert.conf: how loudly this host reports problems. ZFS_ALERT_MODE is
+#     'daily' by default (queue everything, one summary mail per host per day)
+#     and 'immediate' mails each finding as it happens -- worth setting while
+#     bringing a host up. Created once; never overwritten on re-run.
+#     Provision it directly with --alerts=immediate.
+#   - notify-fail.sh / notify-warn.sh: report an ALERT / WARN finding, either by
+#     queueing it or by mailing at once, per that config.
+#   - alert-digest.sh: in daily mode, the ONLY mail this host sends about
+#     backups -- one message covering every ALERT and WARNING queued since the
+#     last run, and no mail at all on a day with nothing to report.
 #   - check-pool-capacity.sh pool/quota alert (fires on slow-fill BEFORE a job fails)
 #   - smoke test of all five shipped executables + a live compressor round-trip
 #   - auto-pull cron line
@@ -47,12 +52,36 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 # that matters most on a live host -- no test email. Use it to audit a server
 # that is already running, where the full script's side effects are unwanted.
 CHECK_ONLY=0
-case "${1:-}" in
-    --check-only) CHECK_ONLY=1; shift ;;
-    -h|--help)
-        echo "Usage: $0 [--check-only]"
-        echo "  --check-only   audit dependencies and the checkout; make no changes"
-        exit 0 ;;
+# How loudly this host alerts. Written into /root/scripts/zfs-alert.conf, which
+# is the single place an operator changes it afterwards -- see Part 4 below.
+#   daily     (default) every finding is queued; ONE mail per host per day
+#   immediate every finding mails the moment it happens, rate-limited per
+#             message. Worth choosing while BRINGING A HOST UP: a misconfigured
+#             job you hear about within the hour is a five-minute fix; the same
+#             mistake found in tomorrow's digest has already cost a night of
+#             backups. Switch to daily once the host has run clean for a while.
+ALERT_MODE="daily"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --check-only) CHECK_ONLY=1; shift ;;
+        --alerts=*)   ALERT_MODE="${1#*=}"; shift ;;
+        --alerts)     ALERT_MODE="${2:-}"; shift 2 ;;
+        -h|--help)
+            echo "Usage: $0 [--check-only] [--alerts=daily|immediate]"
+            echo "  --check-only       audit dependencies and the checkout; make no changes"
+            echo "  --alerts=daily     (default) queue findings, one summary mail per host per day"
+            echo "  --alerts=immediate mail every finding as it happens -- recommended while"
+            echo "                     bringing a new host up, then switch back to daily"
+            echo
+            echo "Only used when /root/scripts/zfs-alert.conf does not exist yet; an existing"
+            echo "one is never overwritten. Change the mode later by editing that file."
+            exit 0 ;;
+        *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+    esac
+done
+case "$ALERT_MODE" in
+    daily|immediate) ;;
+    *) echo "--alerts must be 'daily' or 'immediate', got '$ALERT_MODE'" >&2; exit 2 ;;
 esac
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
@@ -273,8 +302,72 @@ done
 # ------------------------------------------------------------------------------
 log "Part 4: notify-fail.sh (mail alerting on cron job failure)"
 # ------------------------------------------------------------------------------
+ALERT_CONF="/root/scripts/zfs-alert.conf"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -r "$ALERT_CONF" ]; then
+        log "  $ALERT_CONF present (mode: $(sed -n 's/^ZFS_ALERT_MODE=\([a-z]*\).*/\1/p' "$ALERT_CONF" | head -1))"
+    else
+        warn "  $ALERT_CONF missing -- alerting falls back to built-in defaults (daily)"
+    fi
+elif [ -e "$ALERT_CONF" ]; then
+    log "$ALERT_CONF exists -- NOT overwritten (it is yours to edit; current mode: $(sed -n 's/^ZFS_ALERT_MODE=\([a-z]*\).*/\1/p' "$ALERT_CONF" | head -1))"
+else
+    cat > "$ALERT_CONF" <<EOF
+# zfs-alert.conf -- how this host reports backup problems.
+# Sourced by notify-fail.sh, notify-warn.sh and alert-digest.sh. Plain shell:
+# VAR=value, no spaces around '='. Re-running deploy_new_server.sh never
+# overwrites this file, so local changes survive an upgrade.
+#
+# ---------------------------------------------------------------------------
+#  ZFS_ALERT_MODE   daily | immediate      <-- THE ONE TO CHANGE
+# ---------------------------------------------------------------------------
+#   daily      (default) findings are queued and alert-digest.sh sends exactly
+#              ONE mail per host per day, covering alerts and warnings
+#              together. A day with nothing to report sends no mail at all.
+#              Chosen because at fleet scale a mail per finding is a stream the
+#              operator starts filtering away.
+#
+#   immediate  every ALERT mails the moment it happens. SET THIS WHILE BRINGING
+#              A HOST UP: a job you misconfigured today is a five-minute fix if
+#              you hear about it within the hour, and a lost night of backups if
+#              you read about it in tomorrow's digest. Switch back to daily once
+#              the host has run clean for a few days.
+#              Known cost, and the reason daily is the default: the rate limit
+#              is per MESSAGE, so two different jobs failing in the same cron
+#              tick send two separate mails at the same second.
+#
+# In immediate mode a finding is NOT also queued, so it is never reported twice.
+ZFS_ALERT_MODE=${ALERT_MODE}
+
+# Same choice for WARNING-tier findings ("getting stale", not yet critical).
+# Leave on daily unless you have a specific reason: warnings are by definition
+# the ones that are not urgent, and making them immediate is how an inbox that
+# gets read turns into one that gets filtered.
+ZFS_WARN_MODE=daily
+
+# Where alerts go. Changing it here changes it for all three scripts at once.
+ZFS_ALERT_EMAIL=${NOTIFY_EMAIL}
+
+# Immediate mode only: seconds before the SAME message may mail again.
+# Ignored entirely in daily mode (the digest de-duplicates by counting instead).
+ZFS_ALERT_COOLDOWN=14400
+
+# Immediate mode only: where the per-message cooldown timestamps live.
+ZFS_ALERT_STATE_DIR=/root/scripts/notify-state
+
+# Queue file used by daily mode. The digest consumes it and deletes it; if mail
+# delivery fails the findings are put back rather than dropped.
+ZFS_ALERT_QUEUE=/root/scripts/alert-queue.log
+
+# When the daily mail goes out. This is the cron SCHEDULE, so it lives in the
+# crontab, not here -- gen-cron.sh emits it (DIGEST_SCHEDULE, default 0 7 * * *).
+EOF
+    chmod 0644 "$ALERT_CONF"
+    log "created $ALERT_CONF (ZFS_ALERT_MODE=$ALERT_MODE)"
+fi
+
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v4"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v5"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
@@ -289,29 +382,60 @@ else
     [ -e "$NOTIFY_SCRIPT" ] && log "$NOTIFY_SCRIPT exists but predates v4 -- upgrading (no more immediate mail; queues into the daily digest)"
     cat > "$NOTIFY_SCRIPT" <<EOF
 #!/bin/bash
-$NOTIFY_SCRIPT_MARKER -- records an ALERT-tier finding (a cron job that returned
-# non-zero, a CRITICAL/UNKNOWN staleness result, or a DEGRADED/FAULTED pool) for
-# alert-digest.sh to mail once a day. It does NOT send mail itself.
+$NOTIFY_SCRIPT_MARKER -- reports an ALERT-tier finding: a cron job that returned
+# non-zero, a CRITICAL/UNKNOWN staleness result, or a DEGRADED/FAULTED pool.
 #
-# Up to v3 this mailed immediately, rate-limited per unique message text. That
-# does not scale: the cooldown was keyed on the MESSAGE, so every distinct
-# finding kept its own independent counter and two jobs failing in the same cron
-# tick produced two separate mails at the same second. Across a fleet the volume
-# is the number of distinct findings, not the number of hosts, and the operator
-# ends up filtering the mail away -- which is worse than one late mail that
-# actually gets read. One host now sends at most one mail a day (see
-# alert-digest.sh), and nothing at all on a clean day.
+# WHETHER IT MAILS NOW OR WAITS FOR THE DAILY DIGEST IS CONFIGURED, NOT BAKED IN.
+# Set ZFS_ALERT_MODE in /root/scripts/zfs-alert.conf:
+#   daily      (default) queue it; alert-digest.sh sends one mail a day
+#   immediate  mail it right now, rate-limited per message via
+#              ZFS_ALERT_COOLDOWN. Recommended while bringing a host up.
+# A finding is reported through exactly one of the two paths, never both.
 #
-# TRADE-OFF, deliberate: a genuinely urgent finding waits until the digest runs.
-# Proxmox's own ZED pool-health mail is a separate mechanism and is NOT affected,
-# so a disk actually dropping out still pages immediately through that path.
+# Why daily is the default: the immediate path's cooldown is keyed on the
+# MESSAGE, so every distinct finding keeps its own counter and two jobs failing
+# in the same cron tick send two mails in the same second. Volume then scales
+# with the number of distinct findings rather than with hosts, and an operator
+# who filters that away is worse off than one who reads a single daily summary.
+#
+# Either way Proxmox's own ZED pool-health mail is untouched, so a disk actually
+# dropping out still pages immediately through that separate path.
 # Usage in cron: ... 2>>cron.log || /root/scripts/notify-fail.sh "job description"
 JOB="\$1"
-QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+# shellcheck disable=SC1090
+[ -r "\$CONF" ] && . "\$CONF"
 
-# One line per finding: epoch, severity, text. Short single-line appends to the
-# same file from concurrent cron jobs do not interleave (well under PIPE_BUF).
-printf '%s\tALERT\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+MODE="\${ZFS_ALERT_MODE:-daily}"
+QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+EMAIL="\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
+
+if [ "\$MODE" != "immediate" ]; then
+    # One line per finding: epoch, severity, text. Short single-line appends to
+    # the same file from concurrent cron jobs do not interleave (under PIPE_BUF).
+    printf '%s\tALERT\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+    exit 0
+fi
+
+HOST=\$(hostname -f 2>/dev/null || hostname)
+NOW=\$(date '+%Y-%m-%d %H:%M:%S')
+NOW_EPOCH=\$(date +%s)
+STATE_DIR="\${ZFS_ALERT_STATE_DIR:-/root/scripts/notify-state}"
+COOLDOWN="\${ZFS_ALERT_COOLDOWN:-14400}"
+mkdir -p "\$STATE_DIR"
+
+KEY=\$(printf '%s' "\$JOB" | md5sum | cut -d' ' -f1)
+LASTFILE="\$STATE_DIR/\$KEY"
+if [ -f "\$LASTFILE" ] && [ \$(( NOW_EPOCH - \$(cat "\$LASTFILE") )) -lt "\$COOLDOWN" ]; then
+    # stderr, so the cron line's own 2>>cron.log swallows it. Unredirected, this
+    # single line was itself a cron mail on every tick -- 96/day per monitor.
+    echo "notify-fail.sh: suppressed repeat within cooldown -- \${JOB}" >&2
+    exit 0
+fi
+echo "\$NOW_EPOCH" > "\$LASTFILE"
+
+echo "ZFS alert: '\${JOB}' na \${HOST} o \${NOW}. Sprawdz /root/scripts/cron.log." \\
+    | mail -s "[ZFS BACKUP] ALERT: \${JOB} na \${HOST}" "\$EMAIL"
 EOF
     chmod +x "$NOTIFY_SCRIPT"
     log "created/upgraded $NOTIFY_SCRIPT (v4, queues -> alert-digest.sh)"
@@ -346,7 +470,7 @@ log "Part 4a: notify-warn.sh + alert-digest.sh (daily WARNING digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v2"
+WARN_SCRIPT_MARKER="# notify-warn.sh v3"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$WARN_SCRIPT" ]; then
         warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
@@ -360,13 +484,29 @@ elif [ -e "$WARN_SCRIPT" ] && grep -qF "$WARN_SCRIPT_MARKER" "$WARN_SCRIPT" 2>/d
 else
     cat > "$WARN_SCRIPT" <<EOF
 #!/bin/bash
-$WARN_SCRIPT_MARKER -- queues a WARNING-tier monitor finding for
-# alert-digest.sh to summarize once a day, instead of mailing it immediately.
-# Same queue and same line format as notify-fail.sh (v4+), differing only in the
+$WARN_SCRIPT_MARKER -- reports a WARNING-tier monitor finding ("getting stale",
+# past monitor_warn but not yet monitor_crit).
+#
+# Same queue and same line format as notify-fail.sh, differing only in the
 # severity column -- that is what lets one digest cover both tiers in one mail.
+# Controlled by ZFS_WARN_MODE in /root/scripts/zfs-alert.conf, separately from
+# ZFS_ALERT_MODE: daily (default) or immediate. Leave it on daily unless you
+# have a specific reason -- warnings are by definition the findings that are not
+# urgent, so mailing them on sight is the fastest way to train someone to ignore
+# the mailbox.
 # Usage in cron: ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "job description"
 JOB="\$1"
+CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+# shellcheck disable=SC1090
+[ -r "\$CONF" ] && . "\$CONF"
+
 QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
+if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
+    HOST=\$(hostname -f 2>/dev/null || hostname)
+    echo "ZFS warning: '\${JOB}' na \${HOST} o \$(date '+%Y-%m-%d %H:%M:%S')." \\
+        | mail -s "[ZFS BACKUP] WARNING: \${JOB} na \${HOST}" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
+    exit 0
+fi
 printf '%s\tWARN\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
 EOF
     chmod +x "$WARN_SCRIPT"
@@ -374,7 +514,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v2"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v3"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -403,6 +543,10 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # healthy, since a dead cron would also be silent. That is the accepted
 # trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
 # from each is exactly the noise this replaced.
+CONF="\${ZFS_ALERT_CONF:-/root/scripts/zfs-alert.conf}"
+# shellcheck disable=SC1090
+[ -r "\$CONF" ] && . "\$CONF"
+
 QUEUE="\${ZFS_ALERT_QUEUE:-/root/scripts/alert-queue.log}"
 LEGACY_QUEUE="/root/scripts/warn-queue.log"
 HOST=\$(hostname -f 2>/dev/null || hostname)
@@ -479,7 +623,7 @@ if {
         printf '\nWARNING -- starzeje sie, jeszcze nie critical:\n\n%s' "\$WARN_BODY"
     fi
     printf '\nSzczegoly: /root/scripts/cron.log na %s\n' "\$HOST"
-} | mail -s "[ZFS] \$HOST \$TODAY -- \$N_ALERT alert / \$N_WARN warn" ${NOTIFY_EMAIL}; then
+} | mail -s "[ZFS] \$HOST \$TODAY -- \$N_ALERT alert / \$N_WARN warn" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
     rm -f "\$PROCESSING"
 else
     # Mail failed (no MTA, relay refused, mailutils missing). Put the findings

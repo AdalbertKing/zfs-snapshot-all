@@ -531,18 +531,47 @@ gen-cron.sh -c jobs.pve2.conf --install    # install it into this user's crontab
 
 ## Alerting
 
-**One mail per host per day. No more.** Every finding is recorded to a queue; `alert-digest.sh`
-mails a single grouped summary once a day and nothing at all on a day with nothing to report.
+**Configurable per host, defaulting to one mail per day.** Every finding is recorded to a queue
+and `alert-digest.sh` mails a single grouped summary once a day — or, if you ask for it, each
+finding mails the moment it happens.
+
+### Choosing the cadence — `/root/scripts/zfs-alert.conf`
+
+One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to change.**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ZFS_ALERT_MODE` | `daily` | `daily` = queue every ALERT, one summary mail per host per day. **`immediate` = mail each ALERT as it happens.** |
+| `ZFS_WARN_MODE` | `daily` | Same choice for WARNING-tier findings, set separately. |
+| `ZFS_ALERT_EMAIL` | deploy-time value | Where alerts go — changes all three scripts at once. |
+| `ZFS_ALERT_COOLDOWN` | `14400` (4h) | `immediate` only: seconds before the *same* message may mail again. Ignored in `daily` (the digest de-duplicates by counting). |
+| `ZFS_ALERT_STATE_DIR` | `/root/scripts/notify-state` | `immediate` only: where those cooldown timestamps live. |
+| `ZFS_ALERT_QUEUE` | `/root/scripts/alert-queue.log` | `daily` only: the queue the digest consumes. |
+
+A finding travels exactly one of the two paths, so it is never reported twice. The digest's
+*schedule* is not here — it is a cron line, emitted by `gen-cron.sh` (`DIGEST_SCHEDULE`, default
+`0 7 * * *`).
+
+```bash
+sed -i 's/^ZFS_ALERT_MODE=.*/ZFS_ALERT_MODE=immediate/' /root/scripts/zfs-alert.conf
+```
+
+**Set `immediate` while bringing a host up.** A job you misconfigured today is a five-minute fix
+if you hear about it within the hour, and a lost night of backups if you read about it in
+tomorrow's digest. Provision it that way from the start with
+`bash deploy_new_server.sh --alerts=immediate`, then switch to `daily` once the host has run
+clean for a few days. `deploy_new_server.sh` creates this file once and **never overwrites it**,
+so the mode survives every re-run and upgrade.
 
 | Mechanism | Records | How |
 |---|---|---|
-| `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | Appends `epoch\tALERT\tmessage` to `/root/scripts/alert-queue.log`. **Sends no mail.** |
-| `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Same queue, `epoch\tWARN\tmessage`. Sends no mail. |
+| `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | `daily`: appends `epoch\tALERT\tmessage` to the queue, sends no mail. `immediate`: mails at once, rate-limited per message. |
+| `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Same queue, `epoch\tWARN\tmessage`, per `ZFS_WARN_MODE`. |
 | `alert-digest.sh` | — | The only backup mail this host sends. Once a day (default `0 7 * * *`) it collapses the queue to one row per (severity, message) — count plus first/last-seen — ALERTs first, then WARNINGs, and mails **one** message. Subject carries the counts: `[ZFS] <host> <date> -- N alert / M warn`. |
 | `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy_new_server.sh` |
 
-**Why not mail immediately.** Up to v3, `notify-fail.sh` mailed on the spot, rate-limited per
-unique message text. The cooldown was keyed on the *message*, so every distinct finding kept its
+**Why `daily` is the default.** Up to v3 there was no choice: `notify-fail.sh` always mailed on
+the spot, rate-limited per unique message text. The cooldown was keyed on the *message*, so every distinct finding kept its
 own independent counter and two jobs failing in the same cron tick sent two separate mails in the
 same second. Volume therefore scaled with the number of distinct findings rather than with the
 number of hosts — across a fleet that is a stream an operator starts filtering away, which is
