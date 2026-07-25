@@ -250,13 +250,26 @@ verify() {
     done < <(git -C "$REPO" ls-files '*.sh' 2>/dev/null)
 
     echo "== declared suites exist and are executable"
+    # The TRACKED mode is what matters, not this working copy's: git on Windows
+    # does not record the executable bit, so a suite added from a dev box lands
+    # on every host as 100644 and cannot be run there at all -- while `test -x`
+    # passes locally and hides it. Deployment is `git pull`, so the index is the
+    # thing that ships. Check it, and fall back to the filesystem outside a repo.
+    local mode
     for name in $(sections_of_kind suite); do
         cmd="${FIELD[suite:$name|cmd]:-}"
         [ -n "$cmd" ] || { echo "  [suite:$name] has no cmd"; rc=1; continue; }
         # strip a leading sudo and any args
         set -- $cmd
         [ "$1" = "sudo" ] && shift
-        [ -x "$REPO/${1#./}" ] || { echo "  [suite:$name] cmd not executable: $1"; rc=1; }
+        f="${1#./}"
+        [ -e "$REPO/$f" ] || { echo "  [suite:$name] cmd does not exist: $1"; rc=1; continue; }
+        mode="$(git -C "$REPO" ls-files -s "$f" 2>/dev/null | awk '{print $1}')"
+        if [ -n "$mode" ]; then
+            [ "$mode" = "100755" ] || { echo "  [suite:$name] $f is tracked $mode, not 100755 -- it will not be executable on any host (git update-index --chmod=+x $f)"; rc=1; }
+        else
+            [ -x "$REPO/$f" ] || { echo "  [suite:$name] cmd not executable: $1"; rc=1; }
+        fi
     done
 
     echo "== every suite referenced by a file is declared"
