@@ -133,6 +133,22 @@ set -o pipefail
 #                    for a faster/weaker cipher on a CPU-bound link. Default (omitted)
 #                    is whatever ssh/sshd negotiate on their own. No-op on a local run
 #                    -- ssh is never invoked there.
+#   -K <FILE>         SSH private key to authenticate with (ssh -i, plus -o
+#                    IdentitiesOnly=yes so an ssh-agent holding OTHER keys can't
+#                    make the server try them first and get this account locked
+#                    out by a max-auth-tries limit). Not "-i" -- that already
+#                    means --identifier here. Default: whatever the invoking
+#                    user's own ssh would pick (agent, ~/.ssh/config, etc).
+#   -O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", verbatim, e.g.
+#                    -O "ProxyJump=bastion". Repeatable; each becomes its own
+#                    -o. Syncoid's --sshoption. Placed FIRST on the ssh command
+#                    line -- OpenSSH keeps the FIRST value it sees for a given
+#                    key and ignores later ones (verified: `-o Port=2222 -p 22`
+#                    connects on 2222, not 22), so putting -K/-O ahead of -p/-k/
+#                    -c/ControlMaster lets an explicit -O override any of them,
+#                    including turning multiplexing off with
+#                    -O ControlMaster=no. No validation -- same trust level as
+#                    -o (raw send flags).
 #   -b <RATE>         Cap the transfer rate. RATE is an mbuffer rate spec: a plain
 #                    number of BYTES per second, or one with a b/k/M/G suffix
 #                    (1024-based, mbuffer's own parser). BYTES, not bits -- a
@@ -310,7 +326,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.61'
+VERSION='v2.62'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -397,6 +413,8 @@ RECV_EXCLUDE_FLAGS=""
 # -c: ssh cipher spec (ssh -c), appended to SSH_OPTS once built. Empty = let
 # ssh/sshd negotiate their own default.
 SSH_CIPHER=""
+SSH_KEY=""
+declare -a EXTRA_SSH_OPTS=()
 # -F: reconcile (destroy target-only snapshots) before the real send.
 RECONCILE=0
 declare -a CONFLICT_SNAPSHOTS=()
@@ -1290,7 +1308,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:S" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1317,12 +1335,14 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:S" opt; do
         o) EXTRA_SEND_OPTS="$OPTARG";;
         x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
         c) SSH_CIPHER="$OPTARG";;
+        K) SSH_KEY="$OPTARG";;
+        O) EXTRA_SSH_OPTS+=("$OPTARG");;
         b) BWLIMIT="$OPTARG";;
         F) RECONCILE=1;;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Blad: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -q -i -o -x -c -b -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -q -i -o -x -c -b -K -O -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1377,6 +1397,15 @@ if [ -n "$BWLIMIT" ]; then
         exit 1
     fi
     BWLIMIT_FLAG=" -r $BWLIMIT"
+fi
+
+# Checked here, not left for ssh to report mid-transfer after the snapshot is
+# already taken. Readable rather than just present: a key file that exists but
+# is world-readable makes ssh silently refuse it with "bad permissions" and no
+# earlier warning here would explain that failure at all.
+if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
+    echo "Error: -K '$SSH_KEY' is not a readable file." >&2
+    exit 1
 fi
 
 [ $# -ge 1 ] || { echo "Uzycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
@@ -1574,6 +1603,20 @@ fi
 # to an ordinary connection if the master cannot be set up.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# -K/-O go at the FRONT of the whole option list, added last so nothing appended
+# above (base StrictHostKeyChecking/UserKnownHostsFile/-p, -c, and tune_ssh_enable's
+# ControlMaster options) can out-rank them. OpenSSH keeps the FIRST value it sees
+# for a given key and ignores later ones -- verified live (`-o Port=2222 -p 22`
+# connects on 2222) -- so prepending is what makes an explicit -O actually able
+# to override any of those, including disabling multiplexing with
+# -O ControlMaster=no.
+if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
+    declare -a _front_ssh_opts=()
+    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
+    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
+    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
+fi
 
 # Catch the container-parent mistake before any work starts: a dataset with
 # children, sent without -r/-R, ships nothing but the parent and still reports

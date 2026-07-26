@@ -76,9 +76,21 @@ set -o pipefail
 #                                          # loser reports "could not find any snapshots to
 #                                          # destroy" and alerts. Requires monitor_warn/crit,
 #                                          # or the section would emit nothing at all.
+#       ssh_flags    = <-p/-k/-c/-K/-O only>  # SSH connection options for a REMOTE
+#                                          # scope (host:dataset) -- port, known_hosts,
+#                                          # cipher, private key, extra -o. See
+#                                          # delsnaps.sh -c/-K/-O. Warned about (not
+#                                          # rejected) on a local scope, same treatment
+#                                          # as flags="-z" on a local send dst.
 #       notify       = <short label>
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
+#     monitor_warn/monitor_crit are REJECTED on a remote (host:dataset) scope --
+#     check-snap-age.sh is local-only by design (see its own header), so a monitor
+#     riding a remote scope would run `zfs list` locally against a string like
+#     "user@host:tank/data" and report a permanent false UNKNOWN. Run
+#     check-snap-age.sh in ITS OWN cron line on the host that actually owns the
+#     dataset instead.
 #
 #   [prune-bookmarks:<scope>]             # standalone prune of ORPHANED bookmarks
 #       schedule     = <5-field cron>      # required
@@ -88,6 +100,10 @@ set -o pipefail
 #                                          # record_send_bookmark (lib-zfs-snap.sh) names
 #                                          # its own bookmarks; override only if you know why
 #       recursive    = yes|no              # default no; yes -> delsnaps.sh -B -R
+#       ssh_flags    = <-p/-k/-c/-K/-O only>  # same as [prune:]'s ssh_flags. The
+#                                          # real use case: bookmarks from a snapget.sh
+#                                          # PULL accumulate on the REMOTE source, so
+#                                          # cleaning them up needs to reach that host.
 #       notify       = <short label>
 #     snapsend.sh/snapget.sh refresh a per-target bookmark on every successful
 #     transfer, but nothing removes one for a target that stops being used --
@@ -143,7 +159,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.16'
+VERSION='v4.17'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -327,6 +343,38 @@ lint_flags() {
                     *)   warn "$ctx: flag $tok has no effect -- dst '$dst' is local, and snapsend.sh (v2.32+) skips compression when both ends are the same host. Drop it, or point dst at a remote target." ;;
                 esac
                 ;;
+        esac
+    done
+}
+
+# Validates ssh_flags on a [prune:]/[prune-bookmarks:] section. Deliberately
+# NARROW -- only -p/-k/-c/-K/-O are accepted, because everything else delsnaps.sh
+# takes either has its own dedicated field already (-R -> recursive=, -F ->
+# clear_cut=, -B is the section TYPE, retention -> retain=/age=) or never makes
+# sense in a standing job (-n). Allowing them through ssh_flags too would be a
+# second way to say the same thing, or a way to silently override what the
+# dedicated field already decided -- rejected, not warned, because there is no
+# legitimate reason to reach for it.
+#
+# On a LOCAL scope this is a WARNING, not a rejection, mirroring flags="-z" on a
+# local send dst: harmless at runtime (delsnaps.sh only opens ssh for entries
+# that actually look remote), but almost certainly a sign the scope itself is
+# wrong -- an operator who typed ssh_flags meant to reach a host.
+lint_ssh_flags() {
+    local flags="$1" ctx="$2" scope="$3" tok
+    [ -z "$flags" ] && return 0
+    case "$scope" in
+        *:*) ;;
+        *) warn "$ctx: ssh_flags is set but scope '$scope' has no ':' -- delsnaps.sh only opens ssh for entries that look remote, so this has no effect unless the scope itself is missing a host prefix" ;;
+    esac
+    for tok in $flags; do
+        case "$tok" in
+            -p|-k|-c|-K|-O) ;;
+            -R) die "$ctx: ssh_flags has -R -- use this section's own 'recursive = yes' instead" ;;
+            -F) die "$ctx: ssh_flags has -F -- use this section's own 'clear_cut = yes' instead" ;;
+            -B) die "$ctx: ssh_flags has -B -- bookmark mode is [prune-bookmarks:], not a flag to add here" ;;
+            -n) die "$ctx: ssh_flags has -n (dry-run) -- never actually prunes anything as a recurring job" ;;
+            -*) die "$ctx: ssh_flags has '$tok' -- only -p/-k/-c/-K/-O are accepted here (SSH connection options); retention and recursion have their own fields" ;;
         esac
     done
 }
@@ -619,6 +667,10 @@ build_prune_section() {
     [ "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && recursive=1 || recursive=0
     [ "$(trim "$cc_raw"  | tr '[:upper:]' '[:lower:]')" = "yes" ] && clearcut=1  || clearcut=0
 
+    local ssh_flags
+    ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
+    lint_ssh_flags "$ssh_flags" "[prune:$scope]" "$scope"
+
     local -a tiers=()
     IFS=',' read -ra tiers <<< "$tier_list"
     local tier tmpl
@@ -656,7 +708,7 @@ build_prune_section() {
             retain_flag="$RESOLVED_RETAIN"
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
             die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
@@ -664,6 +716,15 @@ build_prune_section() {
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
         if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
+            # check-snap-age.sh is local-only by design (its own header explains
+            # why: a monitor is meant to run on the host that owns the schedule).
+            # A remote scope handed to it would run `zfs list` locally against a
+            # literal string like "user@host:tank/data" -- not a real dataset --
+            # and report UNKNOWN forever, on the monitor's own schedule (as often
+            # as */15). Rejected here rather than left to become that flood.
+            case "$scope" in
+                *:*) die "[prune:$scope] tier=$tier: monitor_warn/monitor_crit set on a REMOTE scope -- check-snap-age.sh is local-only and would report false UNKNOWN forever. Run check-snap-age.sh in its own cron line on the host that owns '$scope' instead." ;;
+            esac
             local mnotify mbroken mwarntext
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
@@ -704,7 +765,11 @@ build_bookmark_prune_section() {
     label="$(resolve_field notify "$sec" "" "")" || label=""
     notify="$(notify_text "$host_label" "bookmarks" "prune" "$label")"
 
-    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}")
+    local ssh_flags
+    ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
+    lint_ssh_flags "$ssh_flags" "[prune-bookmarks:$scope]" "$scope"
+
+    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${ssh_flags}")
 }
 ###############################################################################
 #END 3.5
@@ -755,15 +820,20 @@ group_monitor() {
     done
 }
 
-# Bookmark-prune groups by (schedule, pattern, age, recursive): identical
-# cleanup rule -> one delsnaps.sh -B line listing the scopes by full path.
+# Bookmark-prune groups by (schedule, pattern, age, recursive, ssh_flags):
+# identical cleanup rule -> one delsnaps.sh -B line listing the scopes by full
+# path. ssh_flags is IN the key, not just carried along -- two remote scopes
+# that happen to share schedule/pattern/age/recursive but need different SSH
+# options (different port, different host) would otherwise merge into one
+# delsnaps.sh line built from only the FIRST member's ssh_flags, silently
+# using the wrong port/cipher/key for the other host's entries.
 group_bookmark_prune() {
     declare -gA BOOKMARK_PRUNE_GROUPS=()
     declare -ga BOOKMARK_PRUNE_GROUP_ORDER=()
-    local e scope pattern age schedule notify recursive key
+    local e scope pattern age schedule notify recursive sshflags key
     for e in "${BOOKMARK_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "$e"
+        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}"
         [ -z "${BOOKMARK_PRUNE_GROUPS[$key]+x}" ] && BOOKMARK_PRUNE_GROUP_ORDER+=("$key")
         BOOKMARK_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -914,13 +984,14 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut <<< "$e"
-        local flag="" fflag=""
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags <<< "$e"
+        local flag="" fflag="" sflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}\"$scope\" \"$pattern\" $retain"
+        [ -n "$sshflags" ] && sflag="$sshflags "
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -998,25 +1069,26 @@ emit_monitor() {
 # age.sh watches snapshot staleness, not bookmarks) and not part of the
 # same-scope pattern-overlap check (different ZFS object type than snapshots).
 emit_bookmark_prune() {
-    local key list scope pattern age schedule notify recursive
+    local key list scope pattern age schedule notify recursive sshflags
     for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
         list="${BOOKMARK_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mage msch mnot mrec
+        local m mscope mpat mage msch mnot mrec msshf
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mage msch mnot mrec <<< "$m"
+            IFS="$SEP" read -r mscope mpat mage msch mnot mrec msshf <<< "$m"
             targets+=("$mscope")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local flag=""
+        local flag="" sflag=""
         [ "$recursive" = "1" ] && flag="-R "
-        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}\"$joined\" \"$pattern\" $age"
+        [ -n "$sshflags" ] && sflag="$sshflags "
+        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${sflag}\"$joined\" \"$pattern\" $age"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }

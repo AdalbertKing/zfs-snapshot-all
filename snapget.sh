@@ -108,6 +108,16 @@ set -o pipefail
 #                    for a faster/weaker cipher on a CPU-bound link. Default (omitted)
 #                    is whatever ssh/sshd negotiate on their own. No-op on a local run
 #                    -- ssh is never invoked there.
+#   -K <FILE>         SSH private key to authenticate with (ssh -i, plus -o
+#                    IdentitiesOnly=yes so an agent holding OTHER keys can't get
+#                    this account locked out by a max-auth-tries limit). Not
+#                    "-i" -- that already means --identifier here.
+#   -O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", verbatim, e.g.
+#                    -O "ProxyJump=bastion". Repeatable. Syncoid's --sshoption.
+#                    Placed FIRST on the ssh command line so it can override
+#                    -p/-k/-c or even turn off multiplexing with
+#                    -O ControlMaster=no -- OpenSSH keeps the first value it
+#                    sees for a given key. No validation.
 #   -b <RATE>         Cap the transfer rate. RATE is an mbuffer rate spec: a plain
 #                    number of BYTES per second, or one with a b/k/M/G suffix
 #                    (1024-based, mbuffer's own parser). BYTES, not bits -- a
@@ -217,7 +227,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.55'
+VERSION='v2.56'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -293,6 +303,8 @@ RECV_EXCLUDE_FLAGS=""
 # -c: ssh cipher spec (ssh -c), appended to SSH_OPTS once built. Empty = let
 # ssh/sshd negotiate their own default.
 SSH_CIPHER=""
+SSH_KEY=""
+declare -a EXTRA_SSH_OPTS=()
 # -F: reconcile (destroy target-only snapshots) before the real pull.
 RECONCILE=0
 declare -a CONFLICT_SNAPSHOTS=()
@@ -1146,7 +1158,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:S" opt; do
+while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1172,12 +1184,14 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:S" opt; do
         o) EXTRA_SEND_OPTS="$OPTARG";;
         x) RECV_EXCLUDE_FLAGS="$RECV_EXCLUDE_FLAGS -x $OPTARG";;
         c) SSH_CIPHER="$OPTARG";;
+        K) SSH_KEY="$OPTARG";;
+        O) EXTRA_SSH_OPTS+=("$OPTARG");;
         b) BWLIMIT="$OPTARG";;
         F) RECONCILE=1;;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -K -O -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1225,6 +1239,14 @@ if [ -n "$BWLIMIT" ]; then
         exit 1
     fi
     BWLIMIT_FLAG=" -r $BWLIMIT"
+fi
+
+# Checked here, not left for ssh to report mid-transfer. Readable rather than
+# just present: a world-readable key file makes ssh silently refuse it with
+# "bad permissions", which an earlier check here would otherwise explain.
+if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
+    echo "Error: -K '$SSH_KEY' is not a readable file." >&2
+    exit 1
 fi
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
@@ -1430,6 +1452,17 @@ fi
 # ControlMaster=auto falls back to an ordinary connection on failure.
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+
+# -K/-O go at the FRONT of the option list, added last so nothing appended above
+# (base opts, -c, ControlMaster) can out-rank them -- OpenSSH keeps the FIRST
+# value it sees for a given key. See the identical block in snapsend.sh, where
+# this was verified live.
+if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
+    declare -a _front_ssh_opts=()
+    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
+    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
+    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
+fi
 
 # Catch the container-parent mistake before any work starts -- see the same
 # block in snapsend.sh. Two differences here, both for the same reason snapget's

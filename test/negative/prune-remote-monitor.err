@@ -1,0 +1,1 @@
+check-snap-age.sh is local-only and would report false UNKNOWN forever

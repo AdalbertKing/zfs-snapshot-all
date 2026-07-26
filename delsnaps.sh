@@ -64,6 +64,13 @@ set -o pipefail
 # -k <FILE>            : Verify remote host keys against this known_hosts file
 #                        (StrictHostKeyChecking=yes). Default when omitted is
 #                        StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh.
+# -c <CIPHER_SPEC>     : SSH cipher(s) to request (ssh -c). No-op with no remote
+#                        dataset entry. Matches snapsend.sh/snapget.sh -c.
+# -K <FILE>            : SSH private key to authenticate with (ssh -i, plus -o
+#                        IdentitiesOnly=yes). Matches snapsend.sh/snapget.sh -K.
+# -O <SSH_OPTION>      : Extra "ssh -o NAME=VALUE", verbatim. Repeatable.
+#                        Matches snapsend.sh/snapget.sh -O (see there for why it
+#                        is placed first on the ssh command line).
 # Age-based (sum to one threshold date; snapshots older than it are deleted):
 # -y <years>           : Number of years.
 # -m <months>          : Number of months.
@@ -104,13 +111,16 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.20'
+VERSION='v1.21'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
 BOOKMARK_MODE=false
 PORT=22
 KNOWN_HOSTS_FILE=""
+SSH_CIPHER=""
+SSH_KEY=""
+declare -a EXTRA_SSH_OPTS=()
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
 # could not write ("Permission denied" once per dataset), a notify script it
@@ -281,12 +291,13 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
-    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
-    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
+    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
+    echo "   -c/-K/-O: SSH cipher / private key / extra -o option, same as snapsend.sh/snapget.sh"
     exit 1
 }
 
@@ -691,9 +702,19 @@ while [ "$#" -gt 0 ]; do
         -p*) PORT="${1#-p}"; shift ;;
         -k) KNOWN_HOSTS_FILE="$2"; shift 2 ;;
         -k*) KNOWN_HOSTS_FILE="${1#-k}"; shift ;;
+        -c) SSH_CIPHER="$2"; shift 2 ;;
+        -c*) SSH_CIPHER="${1#-c}"; shift ;;
+        -K) SSH_KEY="$2"; shift 2 ;;
+        -K*) SSH_KEY="${1#-K}"; shift ;;
+        -O) EXTRA_SSH_OPTS+=("$2"); shift 2 ;;
         *) break ;;
     esac
 done
+
+if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
+    echo "Error: -K '$SSH_KEY' is not a readable file." >&2
+    exit 1
+fi
 
 # Re-check argument count now that option flags have been consumed.
 if [ "$#" -lt 2 ]; then
@@ -714,6 +735,20 @@ if [ -n "$KNOWN_HOSTS_FILE" ]; then
     SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
 else
     SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
+fi
+[ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
+
+# -K/-O go at the FRONT, added last so nothing built above can out-rank them --
+# OpenSSH keeps the FIRST value it sees for a given key (verified live in
+# snapsend.sh's identical block: `-o Port=2222 -p 22` connects on 2222).
+# delsnaps.sh has no ControlMaster multiplexing of its own to out-rank, unlike
+# snapsend.sh/snapget.sh, but the same ordering keeps the three scripts' -O
+# semantics identical rather than subtly different.
+if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
+    declare -a _front_ssh_opts=()
+    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
+    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
+    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
 fi
 
 # ssh is only required when at least one dataset entry is remote (has a ':').

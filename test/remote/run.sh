@@ -33,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
 SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
+DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
 
 PEER=""
 LPARENT="rpool"
@@ -52,6 +53,7 @@ done
 [ -n "$PEER" ] || { echo "--peer user@host is required" >&2; exit 1; }
 [ -x "$SNAPSEND" ] || { echo "cannot find executable snapsend.sh at $SNAPSEND" >&2; exit 1; }
 [ -x "$SNAPGET" ]  || { echo "cannot find executable snapget.sh at $SNAPGET" >&2; exit 1; }
+[ -x "$DELSNAPS" ] || { echo "cannot find executable delsnaps.sh at $DELSNAPS" >&2; exit 1; }
 command -v zfs     >/dev/null || { echo "zfs not found" >&2; exit 1; }
 command -v mbuffer >/dev/null || { echo "mbuffer not found -- snapsend refuses to run without it" >&2; exit 1; }
 
@@ -395,6 +397,79 @@ check "D7 -R -S remote pull: exit 0" "0" "$RC"
 check "D7 -R -S remote pull: the parent was not snapshotted on the source" "0" \
       "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$DBASE/$DTGT7' 2>/dev/null | grep -c d7_")"
 check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")"
+
+# ============================================================================
+# F. SSH option passthrough (-c/-K/-O), and that -O truly takes priority
+# ============================================================================
+echo "--- F. ssh option passthrough (-c/-K/-O)"
+
+# Auto-detected rather than hardcoded, so the positive -K case works run as
+# root (id_rsa) or as the delegated account (its own id_ed25519) without
+# assuming which.
+DEFAULT_KEY=""
+for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
+    [ -r "$k" ] && { DEFAULT_KEY="$k"; break; }
+done
+
+if [ -z "$DEFAULT_KEY" ]; then
+    echo "F. skipped -- no readable default identity under \$HOME/.ssh to test -K against"
+else
+    FSRC="$LROOT/fssh"
+    mk_noauto "$FSRC" >/dev/null 2>&1
+
+    tick
+    send -m f1_ -K "$DEFAULT_KEY" "$FSRC" "$PEER:$RROOT/f1"
+    check "F1 -K with the real identity: exit 0" "0" "$RC"
+    check "F1 -K with the real identity: GUID matches" \
+          "$(l_guid "$FSRC@$(l_newest "$FSRC")")" "$(r_guid "$RROOT/f1/$FSRC@$(l_newest "$FSRC")")"
+
+    # A throwaway, WRONG key + IdentitiesOnly=yes must fail auth cleanly. This is
+    # the only way to prove -K actually reaches ssh instead of ssh quietly
+    # falling back to the agent or the account's real default identity -- a
+    # "positive" case alone cannot tell the two apart.
+    WRONGKEY="$TMPD/wrong_id"
+    ssh-keygen -q -t ed25519 -N '' -f "$WRONGKEY" >/dev/null 2>&1
+    tick
+    send -m f2_ -K "$WRONGKEY" "$FSRC" "$PEER:$RROOT/f2"
+    check "F2 -K with a WRONG key + IdentitiesOnly=yes fails auth" "1" "$RC"
+    check "F2 -K wrong key: nothing landed on the peer" "no" "$(r_exists "$RROOT/f2/$FSRC")"
+
+    # -O is placed FIRST on the ssh command line specifically so it can
+    # override -p -- the only way to prove that ordering claim is to give it an
+    # option that CONFLICTS with -p and confirm -O wins (connection fails on the
+    # bogus port instead of succeeding on the real one).
+    tick
+    send -m f3_ -O "Port=1" -p 22 "$FSRC" "$PEER:$RROOT/f3"
+    check "F3 -O Port=1 overrides -p 22 and fails to connect" "1" "$RC"
+
+    # The harmless case: an -O that does not conflict with anything else.
+    tick
+    send -m f4_ -O "ConnectTimeout=8" "$FSRC" "$PEER:$RROOT/f4"
+    check "F4 -O with a harmless option still succeeds" "0" "$RC"
+    check "F4 -O harmless: GUID matches" \
+          "$(l_guid "$FSRC@$(l_newest "$FSRC")")" "$(r_guid "$RROOT/f4/$FSRC@$(l_newest "$FSRC")")"
+
+    # delsnaps.sh's -c is brand new (v2.62/v1.21, no prior remote-cipher test
+    # existed at all) -- proved end to end: a real cipher prunes a real remote
+    # snapshot; a bogus cipher name makes ssh itself refuse the connection
+    # before delsnaps.sh ever gets to run `zfs destroy`.
+    PROOT="$RROOT/dsprune"
+    $SSH "$PEER" "zfs create -o canmount=noauto '$PROOT'" >/dev/null 2>&1
+    $SSH "$PEER" "zfs snapshot '$PROOT@keep_1'" >/dev/null 2>&1
+    tick
+    $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_1'" >/dev/null 2>&1
+    "$DELSNAPS" -c aes128-ctr "$PEER:$PROOT" "prune_target_" -h0 >"$TMPD/ds.out" 2>&1
+    check "F5 delsnaps.sh -c with a real cipher: exit 0" "0" "$?"
+    check "F5 delsnaps.sh -c: only the targeted snapshot is gone, 'keep_1' survives" "1" \
+          "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null" | wc -l)"
+
+    tick
+    $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_2'" >/dev/null 2>&1
+    "$DELSNAPS" -c not-a-real-cipher "$PEER:$PROOT" "prune_target_" -h0 >"$TMPD/ds2.out" 2>&1
+    check "F6 delsnaps.sh -c with a bogus cipher: ssh refuses, delsnaps fails" "1" "$?"
+    check "F6 bogus cipher: the snapshot it would have pruned still exists" "1" \
+          "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null | grep -c prune_target_2")"
+fi
 
 # ============================================================================
 # E. hygiene -- what the campaign must leave behind: nothing
