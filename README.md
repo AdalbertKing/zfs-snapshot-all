@@ -39,11 +39,11 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.60 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.54 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.20 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.62 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.56 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.23 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.16 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.17 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -333,6 +333,8 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-p <PORT>` | SSH port (default 22) |
 | `-c <CIPHER_SPEC>` | SSH cipher(s) to request (`ssh -c`), e.g. `-c aes128-gcm@openssh.com` for a faster/weaker cipher on a CPU-bound link. Default: let ssh/sshd negotiate. No-op on a local run |
 | `-k <FILE>` | Verify the remote host key against this known_hosts file (default: trust on first use) |
+| `-K <FILE>` | SSH private key to authenticate with (`ssh -i`, plus `-o IdentitiesOnly=yes` so an agent holding other keys can't get the account locked out by a max-auth-tries limit). Not `-i` — that already means `--identifier` here |
+| `-O <SSH_OPTION>` | Extra `ssh -o NAME=VALUE`, verbatim, e.g. `-O "ProxyJump=bastion"`. Repeatable. Syncoid's `--sshoption`. Placed **first** on the ssh command line — OpenSSH keeps the first value it sees for a given key, so an explicit `-O` can override `-p`/`-k`/`-c`/`-K` or even disable multiplexing with `-O ControlMaster=no` (verified live: `-o Port=2222 -p 22` connects on 2222, not 22) |
 | `-b <RATE>` | Cap the transfer rate — see [Bandwidth limiting](#bandwidth-limiting--b) |
 | `-A` | Autotune the link — see [Link autotuning](#link-autotuning--a) |
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
@@ -352,7 +354,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -c -k -b -A -i -o -x -U -F -V`) behaves identically, with
+(`-m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -c -k -K -O -b -A -i -o -x -U -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
@@ -458,6 +460,9 @@ Options:
                    snapshots (age-based only)
 -p <PORT>          SSH port for remote datasets
 -k <FILE>          Known-hosts file for remote datasets
+-c <CIPHER_SPEC>   SSH cipher(s) to request — same as snapsend.sh/snapget.sh -c
+-K <FILE>          SSH private key (ssh -i + IdentitiesOnly=yes) — same as -K there
+-O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", repeatable, placed first — same as -O there
 -V, --version      Print version and exit
 ```
 
@@ -466,6 +471,16 @@ linked-clone disk) — it is reported and skipped, not silently destroyed. `-F` 
 cascading behavior when genuinely wanted. Datasets may be remote (`[user@]host:path`; remote only
 when there's a `:` with no `/` before it), and local/remote entries can be mixed in one
 comma-separated list.
+
+**A failed remote listing is a failure, not an empty result** (since v1.23). Before that fix, any
+ssh/zfs error while listing a remote dataset's snapshots or bookmarks — a wrong port after a
+firewall change, a revoked key, a bogus `-c` cipher, the host simply down — produced empty output
+indistinguishable from "this dataset genuinely has nothing matching the pattern", so the run logged
+"No snapshots found ... " and exited 0. A retention job on a remote target could therefore fail
+silently forever: no alert, snapshots piling up unpruned, and every run reporting success. Found
+live while proving `-c` actually reaches ssh (a bogus cipher name made ssh refuse the connection,
+and this is what was hiding the refusal) — now such a listing failure exits 1 and alerts like any
+other broken job.
 
 ```bash
 # Age-based, recursive, two datasets:
@@ -532,13 +547,36 @@ Section types (a header is always `[type:name]`, split on the first `:`, except 
 | `[defaults]` | `host_label` (used in notify text) and an optional default `dst` |
 | `[template:<tier>]` | One tier's full cadence + retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep`/`retain`, `monitor_warn`/`monitor_crit`, … |
 | `[dataset:<path>]` | A dataset you own end-to-end: `use_template = <tier>[,<tier>...]`, plus per-dataset overrides (`flags`, `quiesce`, `autotune`, `dst`, …). Runs create(+send) and inline self-prune, scoped to its own path only. |
-| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only. |
-| `[prune-bookmarks:<scope>]` | Age-based cleanup of orphaned bookmarks — `schedule`, `age` (raw `delsnaps.sh` age flags), `pattern` (default `tgt-`), `recursive` |
+| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only; `ssh_flags` for a remote (`host:path`) scope. |
+| `[prune-bookmarks:<scope>]` | Age-based cleanup of orphaned bookmarks — `schedule`, `age` (raw `delsnaps.sh` age flags), `pattern` (default `tgt-`), `recursive`, `ssh_flags` for a remote scope |
 
 There is no separate `[monitor:]` section — a staleness check is derived **automatically**
 wherever a tier's `pattern` already resolves for pruning, as long as that template also sets
 `monitor_warn`/`monitor_crit`. It reuses the same scope and recursion the prune operation needed;
-no new syntax.
+no new syntax. **Rejected on a remote `[prune:]` scope** — `check-snap-age.sh` is local-only by
+design (see its own header), so a monitor riding a `host:path` scope would run `zfs list` locally
+against that literal string and report a permanent false `UNKNOWN`. Run `check-snap-age.sh` in its
+own cron line on the host that actually owns the dataset instead.
+
+**`ssh_flags = <-p/-k/-c/-K/-O only>`** reaches a `[prune:]`/`[prune-bookmarks:]` section's remote
+scope with `delsnaps.sh`'s SSH options — port, known_hosts, cipher, private key, extra `-o`. Kept
+deliberately narrow: `-R`/`-F`/`-B`/`-n` are rejected here because they already have their own
+field (`recursive=`/`clear_cut=`) or their own section type (`-B` is what `[prune-bookmarks:]`
+*is*), so a second way to say the same thing would just be a second way to disagree with it. Set
+on a scope with no `:` it is a **warning**, not a rejection (delsnaps.sh only opens ssh for entries
+that look remote, so it is a harmless no-op there — but almost certainly means the scope itself is
+missing a host prefix). The real use case for `[prune-bookmarks:]`: a `snapget.sh` **pull**'s
+bookmarks accumulate on the **remote** source, so cleaning up an old one needs to reach that host.
+Two remote scopes sharing schedule/pattern/age/recursive but needing *different* `ssh_flags` (e.g.
+different ports) do **not** merge into one line — that key is part of the grouping, precisely so
+one line's flags can't silently apply to another host's entries.
+
+```ini
+[prune:root@192.168.28.9:hdd/pulled]
+use_template = hourly
+ssh_flags    = -p 2222 -k /etc/zfs-known-hosts -K /etc/zfs-backup-id_ed25519
+notify       = pulled
+```
 
 A few things the generator enforces or automates for you:
 
@@ -999,12 +1037,15 @@ sudo ./test/delsnaps/run.sh   # delsnaps.sh, including -B bookmark pruning
 ```
 
 The two-host campaign: the ssh path in both directions, which no single-host suite can reach
-(`validate_remote_host()` refuses a loopback replication by design). 79 checks covering snapsend
-and snapget, local and remote, plain / `-r` / `-R` / `-X` / `-S`, `-z` on both sides of the
-"local sends never compress" rule, `-b`, and an incremental re-run that must take the
-already-exists path without stranding its hold. Everything it creates lives under
-`<parent>/xcamp<PID>` and an `EXIT` trap destroys both sides even when a case fails. Run it as
-root, then again as the delegated account — that second run is the `nonroot-account` obligation:
+(`validate_remote_host()` refuses a loopback replication by design). 90 checks covering snapsend,
+snapget and delsnaps, local and remote, plain / `-r` / `-R` / `-X` / `-S`, `-z` on both sides of the
+"local sends never compress" rule, `-b`, an incremental re-run that must take the already-exists
+path without stranding its hold, and `-K`/`-O`/`-c` SSH option passthrough — including proving `-O`
+actually takes priority over `-p` (`-O "Port=1"` alongside the correct `-p` must fail to connect)
+and that a bad `-K`/bad `-c` fails authentication/negotiation cleanly rather than silently falling
+back to something that happens to work. Everything it creates lives under `<parent>/xcamp<PID>`
+and an `EXIT` trap destroys both sides even when a case fails. Run it as root, then again as the
+delegated account — that second run is the `nonroot-account` obligation:
 
 ```bash
 ./test/remote/run.sh --peer zfsbackup@<other-host> --local-parent hdd/backuptest
