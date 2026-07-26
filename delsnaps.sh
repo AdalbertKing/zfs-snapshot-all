@@ -111,7 +111,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.22'
+VERSION='v1.23'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -428,6 +428,11 @@ delete_snapshots() {
     if ! all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null); then
         echo "Error: could not list snapshots for $ds_label -- ssh/zfs failed (check connectivity, -p/-k/-c/-K/-O, or that the dataset exists)" >&2
         emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        # Set directly rather than relying on the caller to check this
+        # function's return value -- prune_one/process_datasets_recursively
+        # don't, the same way the destroy-failure paths below set it directly
+        # instead of trusting their own caller.
+        EXIT_CODE=1
         return 1
     fi
 
@@ -580,6 +585,7 @@ delete_bookmarks() {
     if ! all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}" 2>/dev/null); then
         echo "Error: could not list bookmarks for $ds_label -- ssh/zfs failed (check connectivity, -p/-k/-c/-K/-O, or that the dataset exists)" >&2
         emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        EXIT_CODE=1
         return 1
     fi
 
