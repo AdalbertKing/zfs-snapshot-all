@@ -39,8 +39,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.62 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.56 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.63 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.57 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.23 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.17 |
@@ -314,7 +314,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 
 | Flag | Meaning |
 |---|---|
-| `-m <MESSAGE>` | Prefix for the new snapshot's name |
+| `-m <MESSAGE>` | Prefix for the new snapshot's name. Omitting it is legal but warned about (v2.63/v2.57) — see below |
 | `-e` | Use the existing latest snapshot instead of creating a new one |
 | `-z` / `-Z` | Compress the stream with zstd (default compressor; `-Z` is an explicit synonym for `-z`) |
 | `-g` | Compress with pigz instead (escape hatch when zstd is unavailable) |
@@ -343,6 +343,21 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
 | `-F` | Reconcile before sending (recursively under `-r`; a no-op under `-R`, see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
 | `-V` | Print version and exit |
+
+**Running without `-m` at all is legal, but warned about (verbosity 0, survives a default cron
+run).** `create_snapshot()` builds the name as `${MESSAGE}$(date ...)`, so an empty `MESSAGE`
+produces a bare timestamp — `2026-07-26_22-51-22` instead of `automated_hourly_2026-07-26_22-51-22`
+— and `delsnaps.sh` matches by literal string **prefix**, so no real retention pattern will ever
+match it. Confirmed live: such a snapshot survived a real `delsnaps.sh -n ... "automated_hourly_"`
+untouched. It is not deleted by anything, ever, unless a rule specifically targets it. Every
+`gen-cron.sh`-generated line is safe from this — `prefix` is a required field there — so it only
+ever fires on a manual/interactive invocation.
+
+**The warning does NOT fire under `-e`.** With `-e`, nothing new is created at all — the newest
+existing snapshot on the dataset is picked up as-is, even one this tool never made: a manual
+`zfs snapshot`, a snapshot from another tool entirely. That is deliberate flexibility (letting a
+push/pull pick up whatever the newest snapshot happens to be, regardless of who made it), not an
+oversight, so it earns no warning.
 
 ```bash
 snapsend.sh -v1 pool/data backuppool/data_backup
