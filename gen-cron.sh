@@ -159,7 +159,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.17'
+VERSION='v4.18'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -448,6 +448,22 @@ resolve_field() {
     return 1
 }
 
+# Same as resolve_field, but for fields where a BLANK value is exactly as
+# broken as a missing one -- 'pattern' and 'prefix' have no sensible empty
+# meaning (unlike 'dst', where blank legitimately means "no target, snapshot
+# only"). ini_has only tests whether the key exists, so "pattern = " with
+# nothing after the '=' used to read as "resolved" with an empty string --
+# a config typo that silently produced a delsnaps.sh line with an empty
+# pattern (matches every snapshot) or a snapsend.sh -m "" (bare-timestamp
+# snapshot no retention job can ever match). Use this instead of resolve_field
+# wherever an empty resolved value would be just as wrong as no value at all.
+require_field() {
+    local field="$1" ds="$2" tmpl="$3" defaults="$4" val
+    val="$(resolve_field "$field" "$ds" "$tmpl" "$defaults")" || return 1
+    [ -n "$val" ] || return 1
+    printf '%s' "$val"
+}
+
 # resolve_field_tiered FIELD TIER DS TMPL DEFAULTS -- checks a per-tier
 # override on the dataset (field_<tier>) before falling back to resolve_field.
 resolve_field_tiered() {
@@ -477,6 +493,22 @@ resolve_keep_retain() {
         return 1
     fi
     if [ "$have_keep" -eq 0 ] && [ "$have_retain" -eq 0 ]; then
+        return 1
+    fi
+    # A key present but BLANK ("retain = " with nothing after it) is not the
+    # same as the key being absent, and ini_has only tests presence -- a config
+    # typo like this used to sail through as "resolved" with an empty value,
+    # producing "delsnaps.sh ... " with no threshold flag at all. Not a
+    # cosmetic gap: no flags at all silently defaults to age-mode with
+    # threshold=now, i.e. delete everything older than this exact instant --
+    # confirmed live, it deletes virtually everything a dataset already has.
+    # Treated the same as the key being missing.
+    if [ "$have_keep" -eq 1 ] && [ -z "$keep" ]; then
+        KEEP_RETAIN_ERROR="'keep' is set but blank"
+        return 1
+    fi
+    if [ "$have_retain" -eq 1 ] && [ -z "$retain" ]; then
+        KEEP_RETAIN_ERROR="'retain' is set but blank"
         return 1
     fi
     if [ "$have_keep" -eq 1 ]; then
@@ -606,7 +638,7 @@ build_dataset() {
         if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
             local dst prefix flags label raw_notify word notify
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
-            prefix="$(resolve_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve"
+            prefix="$(require_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve (missing, or set but blank)"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
@@ -633,7 +665,7 @@ build_dataset() {
         local prune_schedule
         if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
             local pattern retain_flag plabel praw pnotify
-            pattern="$(resolve_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve"
+            pattern="$(require_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve (missing, or set but blank)"
             resolve_keep_retain "$ds" "$tmpl" "$tier" || die "[dataset:$ds_path] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
@@ -699,8 +731,8 @@ build_prune_section() {
         [ "$(trim "$prune_raw" | tr '[:upper:]' '[:lower:]')" = "no" ] && emit_prune=0 || emit_prune=1
 
         plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
-        pattern="$(resolve_field pattern "$sec" "$tmpl" defaults)" \
-            || die "[prune:$scope] tier=$tier: 'pattern' did not resolve"
+        pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
+            || die "[prune:$scope] tier=$tier: 'pattern' did not resolve (missing, or set but blank)"
 
         if [ "$emit_prune" -eq 1 ]; then
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
@@ -754,8 +786,16 @@ build_bookmark_prune_section() {
         [ "$tok" = "-n" ] && die "[prune-bookmarks:$scope]: 'age' contains -n (dry-run) -- never actually prunes anything as a recurring job"
     done
 
+    # Unlike the two snapshot-pattern sites above, a blank value here falls
+    # back to the safe default rather than dying -- this field already HAS a
+    # sensible empty-means-default behaviour by design, so "pattern = " with
+    # nothing after it should behave exactly like the key being absent, not
+    # like an error. Blank was previously read as "resolved" with an empty
+    # string, which under the same glob match (`[[ "$markname" == "${pat}"*`)
+    # matches every bookmark on the scope instead of just this tool's own.
     local pattern
-    if ini_has "$sec" pattern; then pattern="$(ini_get "$sec" pattern)"; else pattern="tgt-"; fi
+    pattern="$(ini_get "$sec" pattern)"
+    if ! ini_has "$sec" pattern || [ -z "$pattern" ]; then pattern="tgt-"; fi
 
     local rec_raw recursive
     rec_raw="$(resolve_field recursive "$sec" "" "")" || rec_raw="no"
