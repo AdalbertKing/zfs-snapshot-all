@@ -502,6 +502,8 @@ check_raw_compatibility() {
 # Failure is non-fatal by construction: ControlMaster=auto falls back to an
 # ordinary connection if the master cannot be created, so a bad socket path
 # degrades to today's behaviour instead of breaking the run.
+#
+# The master is scoped to ONE RUN, deliberately -- see tune_control_path.
 
 # Socket for the multiplexer. Lives in the tuning cache dir, NEVER in /var/run:
 # that is tmpfs and, more importantly, not writable by the non-root zfsbackup
@@ -510,19 +512,33 @@ check_raw_compatibility() {
 # The name is kept short on purpose -- a unix socket path is capped around 104
 # characters, and ssh appends nothing but what we pass. Hence host_port rather
 # than ssh's own %h/%p/%r tokens plus a long directory.
+#
+# PER RUN, not per host: the $$ suffix is what keeps concurrent runs out of each
+# other's way. The socket used to be host_port only, so every run targeting the
+# same host shared one master -- and tune_ssh_close's `ssh -O exit` asks that
+# master to exit, which takes ITS OTHER SESSIONS DOWN WITH IT. gen-cron.sh emits
+# one line per dataset and they legitimately fire in the same minute (their
+# flock keys differ), so a short hourly job finishing first could kill a long
+# transfer's connection mid-stream. The saving being claimed here is within one
+# run -- many small calls plus the transfer -- so nothing is lost by not sharing.
 tune_control_path() {
     local host="$1"
     local dir safe p
     dir=$(tune_cache_dir) || return 0
     [ -n "$dir" ] || return 0
     safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
-    p="${dir}/cm.${safe}_${PORT:-22}"
+    p="${dir}/cm.${safe}_${PORT:-22}.$$"
     [ ${#p} -lt 100 ] && printf '%s' "$p"
 }
 
 # Appends multiplexing options to SSH_OPTS. Call once, AFTER SSH_OPTS is built
 # and only when the run actually talks to a remote host. Sets TUNE_SOCK so the
 # matching tune_ssh_close can shut the master down afterwards.
+#
+# A leftover socket file at our own path is possible (a run killed with -9 never
+# reached its trap, and PIDs get recycled). ssh reacts to that by printing
+# "ControlSocket ... already exists, disabling multiplexing" and continuing
+# unmultiplexed -- correct but silently slow, so probe and clear it instead.
 TUNE_SOCK=""
 tune_ssh_enable() {
     local host="$1"
@@ -532,17 +548,24 @@ tune_ssh_enable() {
         log 2 "ControlMaster disabled (no writable short socket path) -- each ssh call pays a full handshake"
         return 0
     fi
+    if [ -e "$TUNE_SOCK" ] && ! ssh -o "ControlPath=$TUNE_SOCK" -O check "$host" >/dev/null 2>&1; then
+        log 3 "removing a stale ControlMaster socket: $TUNE_SOCK"
+        rm -f "$TUNE_SOCK"
+    fi
     SSH_OPTS+=(-o ControlMaster=auto -o "ControlPath=$TUNE_SOCK" -o ControlPersist=60)
     log 3 "ControlMaster socket: $TUNE_SOCK"
 }
 
 # Closes the multiplexer. Without this the master lingers for ControlPersist
 # seconds after the script exits, holding a connection open for no reason.
+# Safe now that the socket is per run (see tune_control_path): `-O exit` only
+# ever reaches a master this run created.
 # Best-effort: never fails the run.
 tune_ssh_close() {
     local remote="$1"
     [ -n "$TUNE_SOCK" ] && [ -n "$remote" ] || return 0
     ssh -o "ControlPath=$TUNE_SOCK" -O exit "$remote" >/dev/null 2>&1 || true
+    rm -f "$TUNE_SOCK" 2>/dev/null || true
     TUNE_SOCK=""
 }
 
