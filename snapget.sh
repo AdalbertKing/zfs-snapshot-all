@@ -227,7 +227,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.56'
+VERSION='v2.57'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1247,6 +1247,14 @@ fi
 if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
     echo "Error: -K '$SSH_KEY' is not a readable file." >&2
     exit 1
+fi
+
+# Warned, not rejected -- see the identical block in snapsend.sh for the full
+# reasoning. Under -e nothing is created here at all: the newest existing
+# snapshot on the source is pulled in as-is, even one made by something else
+# entirely, and that flexibility stays untouched.
+if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
+    log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }

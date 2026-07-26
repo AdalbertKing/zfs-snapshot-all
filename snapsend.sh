@@ -326,7 +326,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.62'
+VERSION='v2.63'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1406,6 +1406,28 @@ fi
 if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then
     echo "Error: -K '$SSH_KEY' is not a readable file." >&2
     exit 1
+fi
+
+# Warned, not rejected -- deliberately still allowed. Only applies when a NEW
+# snapshot is actually about to be created: under -e nothing is created here at
+# all, and -e's own no-prefix path (see USE_EXISTING_SNAPSHOT above) exists
+# precisely so the newest snapshot on a dataset -- even one made by something
+# else entirely, a manual `zfs snapshot`, another tool -- can be picked up and
+# sent. That flexibility is the point and stays untouched.
+#
+# What actually changes: `${MESSAGE}$(date ...)` with MESSAGE empty produces a
+# bare timestamp, e.g. "2026-07-26_22-51-22" instead of
+# "automated_hourly_2026-07-26_22-51-22". delsnaps.sh matches by literal
+# string PREFIX, so a real retention job's pattern (which is never empty) will
+# never match it -- confirmed live: such a snapshot survived a real
+# `delsnaps.sh -n ... "automated_hourly_"` untouched. It is not deleted by
+# anything, ever, unless a rule targets it specifically. Every gen-cron.sh
+# generated line is safe from this -- 'prefix' is a required field there -- so
+# this is purely an interactive/manual-invocation risk. Verbosity 0: the same
+# reasoning as the container-parent warning, a default-verbosity cron run is
+# the one place a mistake like this survives unnoticed.
+if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
+    log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
 
 [ $# -ge 1 ] || { echo "Uzycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }

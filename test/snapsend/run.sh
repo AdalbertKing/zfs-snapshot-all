@@ -94,6 +94,14 @@ RC=0
 run_send() { "$SNAPSEND" "$@" >/dev/null 2>&1; RC=$?; }
 run_get()  { "$SNAPGET"  "$@" >/dev/null 2>&1; RC=$?; }
 
+# Captured variants, only for the cases that need to inspect what a run
+# actually PRINTED (a warning), not just its exit code or the resulting ZFS
+# state -- every other case in this suite only needs the latter, hence two
+# separate helpers rather than changing run_send/run_get themselves.
+OUT=""
+run_send_out() { OUT="$("$SNAPSEND" "$@" 2>&1)"; RC=$?; }
+run_get_out()  { OUT="$("$SNAPGET"  "$@" 2>&1)"; RC=$?; }
+
 # snapshot names are built from `date +%Y-%m-%d_%H-%M-%S`, so two runs inside
 # the same second would collide on an identical name. Space them out.
 tick() { sleep 1; }
@@ -191,6 +199,39 @@ zfs snapshot "$POOL/nomatch@other_1"
 run_send -e -m "automated_hourly_" "$POOL/nomatch" "$BK"
 check "-e -m: no snapshot matching the prefix is an error, not a silent full send" \
       "1" "$RC"
+
+# --- no -m: warned, not rejected ---------------------------------------------
+# A missing prefix is legal -- the resulting snapshot just cannot be matched by
+# any pattern-based delsnaps.sh retention job afterwards, so it accumulates
+# forever unless something specifically targets it. Warned at verbosity 0 (a
+# default cron run is the one place this mistake survives unnoticed), same
+# reasoning as the container-parent warning.
+
+zfs create -p "$POOL/nom1" || exit 1
+run_send_out "$POOL/nom1" "$BK"
+check "no -m: exit 0" "0" "$RC"
+check "no -m: the warning fired" "1" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
+check "no -m: the new snapshot has a bare timestamp, no prefix" "1" \
+      "$(zfs list -H -o name -t snapshot "$POOL/nom1" 2>/dev/null | grep -cE '@[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}$')"
+
+# -e with no -m must NOT warn: nothing new is being created here at all -- the
+# newest snapshot on the dataset is picked up as-is, even one this tool never
+# made (a manual `zfs snapshot`, another tool entirely). That is deliberate
+# flexibility, not an oversight, so it gets no warning.
+zfs create -p "$POOL/nom2" || exit 1
+zfs snapshot "$POOL/nom2@made_by_something_else"
+tick
+run_send_out -e "$POOL/nom2" "$BK"
+check "-e with no -m: exit 0" "0" "$RC"
+check "-e with no -m: does NOT warn (existing snapshot reused, nothing created)" "0" \
+      "$(printf '%s' "$OUT" | grep -c 'no -m given')"
+check "-e with no -m: the pre-existing snapshot was the one sent" \
+      "made_by_something_else" "$(snaps_of "$(tgt_of nom2)")"
+
+# Baseline: -m given at all suppresses the warning, obviously.
+zfs create -p "$POOL/nom3" || exit 1
+run_send_out -m "auto_" "$POOL/nom3" "$BK"
+check "-m given: does not warn" "0" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
 
 # A run that cannot succeed must not touch the target at all. process_dataset
 # resolves the source snapshot BEFORE creating (or, under -f, destroying) the
@@ -320,6 +361,22 @@ zfs create -p "$SRCBASE/$POOL/pullnomatch" || exit 1
 zfs snapshot "$SRCBASE/$POOL/pullnomatch@other_1"
 run_get -e -m "automated_hourly_" "$POOL/pullnomatch" "$SRCBASE"
 check "snapget: no snapshot matching the prefix is an error" "1" "$RC"
+
+# --- snapget mirror of the no -m warning -------------------------------------
+GNOM1="$SRCBASE/$POOL/gnom1"
+zfs create -p "$GNOM1" || exit 1
+run_get_out "$POOL/gnom1" "$SRCBASE"
+check "snapget no -m: exit 0" "0" "$RC"
+check "snapget no -m: the warning fired" "1" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
+
+GNOM2="$SRCBASE/$POOL/gnom2"
+zfs create -p "$GNOM2" || exit 1
+zfs snapshot "${GNOM2}@made_by_something_else"
+tick
+run_get_out -e "$POOL/gnom2" "$SRCBASE"
+check "snapget -e with no -m: does NOT warn" "0" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
+check "snapget -e with no -m: the pre-existing snapshot was the one pulled" \
+      "made_by_something_else" "$(snaps_of "$POOL/gnom2")"
 check "snapget: a doomed run does not create the local target" "no" \
       "$(zfs list -H -o name "$POOL/pullnomatch" >/dev/null 2>&1 && echo yes || echo no)"
 
