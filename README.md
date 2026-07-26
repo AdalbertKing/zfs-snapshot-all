@@ -43,7 +43,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.54 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.20 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.16 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -659,8 +659,34 @@ so the mode survives every re-run and upgrade.
 |---|---|---|
 | `notify-fail.sh` | Any job returning non-zero (`snapsend`/`snapget`/`delsnaps` failure), `check-snap-age.sh` CRITICAL/UNKNOWN, or a DEGRADED/FAULTED pool (see below) | `daily`: appends `epoch\tALERT\tmessage` to the queue, sends no mail. `immediate`: mails at once, rate-limited per message. |
 | `notify-warn.sh` | `check-snap-age.sh` WARNING (getting stale, not yet CRITICAL) | Same queue, `epoch\tWARN\tmessage`, per `ZFS_WARN_MODE`. |
-| `alert-digest.sh` | — | The only backup mail this host sends. Once a day (default `0 7 * * *`) it collapses the queue to one row per (severity, message) — count plus first/last-seen — ALERTs first, then WARNINGs, and mails **one** message. Subject carries the counts: `[ZFS] <host> <date> -- N alert / M warn`. |
+| `alert-digest.sh` | — | The only backup mail this host sends. Once a day (default `0 7 * * *`) it collapses the queue to one row per (severity, message) — count plus first/last-seen — ALERTs first, then WARNINGs, and mails **one** message. Subject carries the counts: `[ZFS] <host> <date> -- N alert / M warn`. Each row is followed by **what the finding actually said**, indented. |
 | `check-pool-capacity.sh` | A pool/dataset approaching its quota, ahead of any job actually failing from it | See `deploy.sh` |
+
+**What a finding carries.** A label alone (`pve0 hourly getting stale (vm-archive)`) is a string
+from your config — it identifies the job and nothing else. So since notify-fail v8 / notify-warn v6
+the finding travels with the text the job or the monitor actually produced, and `gen-cron.sh`
+v4.16 captures it: monitors keep `check-snap-age.sh`'s verdict in a variable, jobs write stderr to
+a temp file (still appended to `cron.log`, unchanged) and pass its last 8 lines on failure.
+
+```
+ALERT -- zadanie padlo, backup przeterminowany albo pula nie jest ONLINE:
+
+  x1    pve2 hourly prune (test)                                (16:36)
+        No snapshots found for dataset hdd/nie-ma matching pattern x_
+
+WARNING -- starzeje sie, jeszcze nie critical:
+
+  x1    pve2 daily getting stale (root)                         (16:36)
+        CRITICAL dataset=rpool/ROOT/pve-1 pattern=automated_daily
+        newest=automated_daily_2026-07-26_00-21-01 age=16h (warn=1m crit=2m)
+```
+
+The detail shown is from the **last** occurrence: for something firing every fifteen minutes, the
+most recent reading is the one that describes the state now. Queue entries written before v8/v6
+have three columns instead of four and simply show without detail, so nothing already queued is
+lost across the upgrade. A side effect of the capture worth knowing: a job's output reaches
+`cron.log` as one contiguous block when it finishes rather than streaming while it runs — which
+also stops two overlapping jobs interleaving their lines there.
 
 **Why `daily` is the default.** Up to v3 there was no choice: `notify-fail.sh` always mailed on
 the spot, rate-limited per unique message text. The cooldown was keyed on the *message*, so every distinct finding kept its
