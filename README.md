@@ -44,7 +44,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.56 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.21 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.16 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.17 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -530,10 +530,9 @@ of a few hundred snapshots was paying a few hundred key exchanges at 150–230 m
     "backup@pve2:tank/data" "monthly-" -M12
 ```
 
-`gen-cron.sh` has no field for `-p`/`-k`/`-c`: a prune line it generates for a remote scope uses
-port 22 and the default host-key policy. Pruning over a non-standard port or a pinned known-hosts
-file is a hand-written cron line or a wrapper, on purpose — `[prune:<scope>]` exists for the local
-backup store, not for reaching across a link.
+`gen-cron.sh` (v4.17+) generates these three too, from `ssh_port`/`known_hosts`/`ssh_cipher` on a
+`[prune:<scope>]`/`[prune-bookmarks:<scope>]` section (or inherited from `[defaults]`) — see
+[gen-cron.sh](#gen-cronsh--config-driven-cron-generator).
 
 **Bookmark pruning (`-B`)** cleans up the one-bookmark-per-target insurance policy
 `snapsend.sh`/`snapget.sh` leave behind (see [Bookmark-backed incremental
@@ -583,7 +582,7 @@ Section types (a header is always `[type:name]`, split on the first `:`, except 
 
 | Section | Purpose |
 |---|---|
-| `[defaults]` | `host_label` (used in notify text) and an optional default `dst` |
+| `[defaults]` | `host_label` (used in notify text), an optional default `dst`, and `ssh_port`/`known_hosts`/`ssh_cipher` (the ssh transport shared by every remote job unless a section overrides it) |
 | `[template:<tier>]` | One tier's full cadence + retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep`/`retain`, `monitor_warn`/`monitor_crit`, … |
 | `[dataset:<path>]` | A dataset you own end-to-end: `use_template = <tier>[,<tier>...]`, plus per-dataset overrides (`flags`, `quiesce`, `autotune`, `dst`, …). Runs create(+send) and inline self-prune, scoped to its own path only. |
 | `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only. |
@@ -607,6 +606,26 @@ A few things the generator enforces or automates for you:
   of another's would let its snapshots leak into the wrong retention run — rejected at generate
   time.
 
+**`ssh_port` / `known_hosts` / `ssh_cipher`: the transport for `-p`/`-k`/`-c`, generated instead of
+hand-written.** They resolve through the same dataset → template → `[defaults]` layering as every
+other field, and apply to any generated line that actually opens an ssh connection — a send whose
+`dst` is remote, and a `[prune:]`/`[prune-bookmarks:]` section whose scope is
+`[user@]host:dataset`. On a **local** target they are dropped with a warning, the same treatment
+`-z`/`-Z`/`-g` gets. Setting the same flag through `flags=`/`retain=`/`age=` as well is rejected —
+`delsnaps.sh` parses `-p`/`-k`/`-c` only *before* the dataset list, so one buried in raw retention
+text would be read as a dataset name instead of an option, which is exactly the failure these named
+fields exist to avoid. They take part in the grouping key too: two datasets that agree on
+everything else but reach the target through a different port stay two `snapsend.sh` lines, not
+one that silently used whichever port came first.
+
+**A remote `[prune:]` scope can be pruned over ssh, but never monitored.** `check-snap-age.sh` has
+no ssh mode — it is meant to run on the host that owns the schedule it verifies — so
+`monitor_warn`/`monitor_crit` on a scope written as `host:dataset` is rejected at generate time.
+Left unchecked it would generate a monitor line that hands `check-snap-age.sh` a string that is not
+a dataset name, which exits UNKNOWN and mails "monitor BROKEN" on every single tick forever. Monitor
+a remote store from a line that runs *on* that store instead, or drop the thresholds and keep just
+the prune.
+
 **`prune = no`: a monitor without a second prune.** A recursive `[prune:hdd/backups]` already
 covers every leaf underneath it, but monitor thresholds are per tier, and a leaf that matters more
 than its siblings wants its own. Adding `[prune:hdd/backups/pve2/nextcloud]` just to hang
@@ -628,8 +647,10 @@ dataset at the same minute before chasing clones or holds.
 
 ```ini
 [defaults]
-host_label = pve2
-dst        = hdd/backups/pve2
+host_label  = pve2
+dst         = hdd/backups/pve2
+ssh_port    = 22
+known_hosts = /root/.ssh/known_hosts.zfs
 
 [template:hourly]
 send_schedule    = 0 * * * *
@@ -651,6 +672,13 @@ monitor_crit     = 48h
 use_template = hourly,daily
 notify       = vm106
 quiesce      = agent
+
+# A backup store on the far end of the link -- pruned over ssh, monitored
+# nowhere here (that has to run on the store itself).
+[prune:backup@pve2:hdd/backups/pve1]
+use_template = daily
+recursive    = yes
+notify       = store
 ```
 
 ```bash

@@ -23,6 +23,17 @@ set -o pipefail
 #   [defaults]
 #       host_label = pve2                 # used to auto-build notify text
 #       dst        = hdd/backups/pve2     # optional -- omit for local-only (no send target)
+#       ssh_port    = <N>                 # -p: ssh port for every REMOTE job (default 22)
+#       known_hosts = </abs/path>         # -k: verify host keys against this file
+#       ssh_cipher  = <cipher[,cipher]>   # -c: cipher(s) to request
+#
+#   The three transport fields resolve like any other -- section, then template,
+#   then [defaults] -- and apply to every generated line that actually opens an
+#   ssh connection: sends with a remote 'dst', and prune / bookmark-prune
+#   sections whose scope is "[user@]host:dataset". They are dropped (with a
+#   warning) on a local target, rejected if 'flags' already carries the same
+#   flag, and they take part in the grouping key, so two jobs that differ only
+#   in port stay two lines.
 #
 #   [template:<tier>]                     # a tier's full lifecycle (cadence + retention)
 #       send_schedule    = <5-field cron>  # omit if this tier never sends
@@ -52,6 +63,7 @@ set -o pipefail
 #       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
 #                                          # that owns this dataset before
 #                                          # snapshotting it (snapsend.sh -q)
+#       ssh_port / known_hosts / ssh_cipher   # -p/-k/-c for the send, when dst is remote
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
 #     A dataset section runs, scoped to ITS OWN path, non-recursively:
@@ -64,9 +76,14 @@ set -o pipefail
 #     Inline prune NEVER collapses to a recursive -R sweep.
 #
 #   [prune:<scope>]                       # standalone, additive prune of a scope
+#                                          # scope may be REMOTE: [user@]host:dataset
 #       use_template = <tier>[,<tier>...]  # borrows each tier's prune policy
 #       recursive    = yes|no              # default no; yes -> delsnaps.sh -R (subtree)
 #       clear_cut    = yes|no              # default no; yes -> delsnaps.sh -F (destroy -R clones)
+#       ssh_port / known_hosts / ssh_cipher   # -p/-k/-c, remote scopes only
+#                                          # NOTE a remote scope cannot be MONITORED:
+#                                          # check-snap-age.sh has no ssh mode, so
+#                                          # monitor_warn/monitor_crit on one is rejected
 #       prune        = yes|no              # default yes; no -> emit NO delsnaps line,
 #                                          # making this section a monitor carrier only.
 #                                          # Use for a leaf already covered by a recursive
@@ -88,6 +105,9 @@ set -o pipefail
 #                                          # record_send_bookmark (lib-zfs-snap.sh) names
 #                                          # its own bookmarks; override only if you know why
 #       recursive    = yes|no              # default no; yes -> delsnaps.sh -B -R
+#       ssh_port / known_hosts / ssh_cipher   # -p/-k/-c, remote scopes only --
+#                                          # bookmarks live on the SOURCE dataset, which
+#                                          # for a receiving store is the other host
 #       notify       = <short label>
 #     snapsend.sh/snapget.sh refresh a per-target bookmark on every successful
 #     transfer, but nothing removes one for a target that stops being used --
@@ -143,7 +163,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.16'
+VERSION='v4.17'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -329,6 +349,119 @@ lint_flags() {
                 ;;
         esac
     done
+}
+
+###############################################################################
+# SSH TRANSPORT FIELDS (ssh_port / known_hosts / ssh_cipher)
+###############################################################################
+# snapsend.sh, snapget.sh and delsnaps.sh all take -p/-k/-c. Until now a send
+# could smuggle them through `flags`, and a prune could not express them at all:
+# a generated line for a remote scope always used port 22 and the default
+# host-key policy. These three named fields close that, and being named rather
+# than raw text is what lets them be validated here instead of failing at 3am.
+#
+# They resolve through the normal dataset -> template -> [defaults] layering, so
+# one [defaults] entry covers every job that crosses the same link.
+#
+# Validated OUTSIDE the command substitution that builds the flag string -- see
+# lint_autotune for why that separation is not optional (a die inside $(...)
+# kills the subshell, prints to a captured stream, and the run continues).
+# Remoteness is decided by the TARGET SCRIPT, and the two do not agree, so this
+# is passed in rather than guessed. snapsend.sh treats any colon in dst as
+# "[user@]host:dataset". delsnaps.sh is stricter: a colon counts only when
+# nothing before it contains a '/', so a dataset legitimately named
+# `pool/data:set` stays local there. Mirroring each one where it applies is the
+# point -- a warning that says "this is local" has to agree with the script that
+# will actually run.
+is_remote_dst()   { case "$1" in *:*) return 0 ;; *) return 1 ;; esac; }
+is_remote_scope() {
+    local s="$1"
+    case "$s" in
+        *:*) case "${s%%:*}" in */*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 1 ;;
+    esac
+}
+
+# lint_ssh PORT KNOWN_HOSTS CIPHER CTX TARGET REMOTE(1|0)
+lint_ssh() {
+    local port="$1" kh="$2" cipher="$3" ctx="$4" target="$5" remote="$6"
+
+    if [ -n "$port" ]; then
+        case "$port" in
+            *[!0-9]*|"") die "$ctx: ssh_port='$port' -- expected a plain port number" ;;
+        esac
+        { [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; } || die "$ctx: ssh_port='$port' -- out of range (1..65535)"
+    fi
+
+    if [ -n "$kh" ]; then
+        case "$kh" in
+            /*) ;;
+            *) die "$ctx: known_hosts='$kh' must be an absolute path -- cron has no useful working directory" ;;
+        esac
+        # A warning, not an error: the file may be provisioned after the crontab
+        # is generated (ssh-keyscan into it is a separate step). But say it now,
+        # because -k means StrictHostKeyChecking=yes and an empty or missing file
+        # then fails EVERY run rather than degrading.
+        [ -e "$kh" ] || warn "$ctx: known_hosts '$kh' does not exist yet -- -k implies StrictHostKeyChecking=yes, so every run fails until it is populated (ssh-keyscan) and the fingerprint verified out of band"
+    fi
+
+    if [ -n "$cipher" ]; then
+        case "$cipher" in
+            *[!A-Za-z0-9@._+,-]*) die "$ctx: ssh_cipher='$cipher' -- expected a cipher name or comma-separated list as ssh -c takes it, with no spaces" ;;
+        esac
+    fi
+
+    # Dead weight on a local target, exactly like -z/-Z/-g: harmless at runtime,
+    # so a warning rather than a refusal to generate a crontab. Three cases, not
+    # two -- an empty target is "no target at all", not "a local one".
+    if [ -n "$port$kh$cipher" ] && [ "$remote" -ne 1 ]; then
+        case "$target" in
+            "")  warn "$ctx: ssh_port/known_hosts/ssh_cipher have no effect -- this job has no 'dst', so it never opens an ssh connection. Drop them." ;;
+            *)   warn "$ctx: ssh_port/known_hosts/ssh_cipher have no effect -- '$target' is local, so no ssh is involved. Drop them, or point this job at a remote target." ;;
+        esac
+    fi
+}
+
+# ssh_flag_string PORT KNOWN_HOSTS CIPHER REMOTE(1|0) -- the flags to append, or
+# nothing at all for a local target (see lint_ssh: already warned about).
+ssh_flag_string() {
+    local port="$1" kh="$2" cipher="$3" remote="$4" out=""
+    [ "$remote" -eq 1 ] || return 0
+    [ -n "$port" ]   && out="$out -p $port"
+    [ -n "$kh" ]     && out="$out -k \"$kh\""
+    [ -n "$cipher" ] && out="$out -c $cipher"
+    printf '%s' "$out"
+}
+
+# The same flag cannot come from two places. `flags` is raw passthrough text, so
+# a config that sets both would emit e.g. `-p 2222 -p 2200` and let the target
+# script's last-wins parsing decide -- silently, and differently per script.
+lint_ssh_vs_flags() {
+    local flags="$1" port="$2" kh="$3" cipher="$4" ctx="$5" tok
+    for tok in $flags; do
+        case "$tok" in
+            -p|-p*) [ -n "$port" ]   && die "$ctx: ssh_port is set and 'flags' also carries $tok -- use one or the other" ;;
+            -k|-k*) [ -n "$kh" ]     && die "$ctx: known_hosts is set and 'flags' also carries $tok -- use one or the other" ;;
+            -c|-c*) [ -n "$cipher" ] && die "$ctx: ssh_cipher is set and 'flags' also carries $tok -- use one or the other" ;;
+        esac
+    done
+    return 0
+}
+
+# `retain` and `age` are raw delsnaps.sh flag text, but only the RETENTION part
+# of it: delsnaps consumes -p/-k/-c before the positional arguments, so a
+# transport flag buried in there would land after them and be read as a dataset
+# name. Named fields exist for this now, so say so instead of emitting a line
+# that fails at runtime.
+lint_raw_retention() {
+    local raw="$1" field="$2" ctx="$3" tok
+    for tok in $raw; do
+        case "$tok" in
+            -p|-p*|-k|-k*|-c|-c*)
+                die "$ctx: '$field' contains the transport flag $tok -- put it in ssh_port/known_hosts/ssh_cipher instead; delsnaps.sh only accepts those BEFORE the dataset list, so there it would be parsed as a dataset name" ;;
+        esac
+    done
+    return 0
 }
 
 trim() {
@@ -569,6 +702,18 @@ build_dataset() {
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$dst"
+            # Transport last, so lint_flags/maybe_add_* never have to reason about
+            # tokens that are not theirs -- and so the resolved flags string (and
+            # therefore the send GROUPING key) carries them: two datasets on the
+            # same schedule and target but different ports are not one job.
+            local sport skh scipher dst_remote
+            sport="$(resolve_field ssh_port "$ds" "$tmpl" defaults)" || sport=""
+            skh="$(resolve_field known_hosts "$ds" "$tmpl" defaults)" || skh=""
+            scipher="$(resolve_field ssh_cipher "$ds" "$tmpl" defaults)" || scipher=""
+            is_remote_dst "$dst" && dst_remote=1 || dst_remote=0
+            lint_ssh "$sport" "$skh" "$scipher" "[dataset:$ds_path] tier=$tier" "$dst" "$dst_remote"
+            lint_ssh_vs_flags "$flags" "$sport" "$skh" "$scipher" "[dataset:$ds_path] tier=$tier"
+            flags="$(trim "${flags}$(ssh_flag_string "$sport" "$skh" "$scipher" "$dst_remote")")"
             label="$(resolve_field notify "$ds" "" "")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
@@ -580,6 +725,19 @@ build_dataset() {
             SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}")
         fi
 
+        # A tier with no send has nothing to carry transport flags: the inline
+        # prune below always runs against this dataset's OWN local path, and a
+        # monitor is local by construction (check-snap-age.sh has no ssh mode).
+        # Silently resolving them to nothing is how a config grows a setting that
+        # looks applied and is not.
+        if ! resolve_field send_schedule "$ds" "$tmpl" defaults >/dev/null; then
+            local usport uskh uscipher
+            usport="$(resolve_field ssh_port "$ds" "$tmpl" defaults)" || usport=""
+            uskh="$(resolve_field known_hosts "$ds" "$tmpl" defaults)" || uskh=""
+            uscipher="$(resolve_field ssh_cipher "$ds" "$tmpl" defaults)" || uscipher=""
+            [ -n "$usport$uskh$uscipher" ] && warn "[dataset:$ds_path] tier=$tier: ssh_port/known_hosts/ssh_cipher resolve here but this tier has no send_schedule -- the inline prune runs on this dataset's own local path, so they apply to nothing"
+        fi
+
         # ---- inline self-prune (own path, non-recursive) ----
         # prune_schedule is the deliberate "yes, prune this dataset" signal.
         local prune_schedule
@@ -588,6 +746,7 @@ build_dataset() {
             pattern="$(resolve_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve"
             resolve_keep_retain "$ds" "$tmpl" "$tier" || die "[dataset:$ds_path] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
+            lint_raw_retention "$retain_flag" "keep/retain" "[dataset:$ds_path] tier=$tier"
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
@@ -654,15 +813,32 @@ build_prune_section() {
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
+            lint_raw_retention "$retain_flag" "keep/retain" "[prune:$scope] tier=$tier"
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}")
+            local psport pskh pscipher sshflags scope_remote
+            psport="$(resolve_field ssh_port "$sec" "$tmpl" defaults)" || psport=""
+            pskh="$(resolve_field known_hosts "$sec" "$tmpl" defaults)" || pskh=""
+            pscipher="$(resolve_field ssh_cipher "$sec" "$tmpl" defaults)" || pscipher=""
+            is_remote_scope "$scope" && scope_remote=1 || scope_remote=0
+            lint_ssh "$psport" "$pskh" "$pscipher" "[prune:$scope] tier=$tier" "$scope" "$scope_remote"
+            sshflags="$(trim "$(ssh_flag_string "$psport" "$pskh" "$pscipher" "$scope_remote")")"
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${sshflags}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
             die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
         fi
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
+        # A remote scope can be PRUNED over ssh but never MONITORED: staleness is
+        # checked by check-snap-age.sh, which is local-only by design (a monitor
+        # is meant to run on the host that owns the schedule). Emitting the line
+        # anyway would hand it "host:dataset", which is not a dataset name -- it
+        # exits UNKNOWN and mails "monitor BROKEN" on every single tick. Rejected
+        # here rather than discovered at 3am.
+        if is_remote_scope "$scope" && resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
+            die "[prune:$scope] tier=$tier: monitor_warn/monitor_crit on a REMOTE scope -- check-snap-age.sh has no ssh mode, so the generated monitor would report UNKNOWN forever. Monitor '$scope' from a cron line on ${scope%%:*} instead, or drop the thresholds and keep the prune"
+        fi
         if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
             local mnotify mbroken mwarntext
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
@@ -692,6 +868,7 @@ build_bookmark_prune_section() {
     for tok in $age; do
         [ "$tok" = "-n" ] && die "[prune-bookmarks:$scope]: 'age' contains -n (dry-run) -- never actually prunes anything as a recurring job"
     done
+    lint_raw_retention "$age" "age" "[prune-bookmarks:$scope]"
 
     local pattern
     if ini_has "$sec" pattern; then pattern="$(ini_get "$sec" pattern)"; else pattern="tgt-"; fi
@@ -704,7 +881,19 @@ build_bookmark_prune_section() {
     label="$(resolve_field notify "$sec" "" "")" || label=""
     notify="$(notify_text "$host_label" "bookmarks" "prune" "$label")"
 
-    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}")
+    # A bookmark lives on the SOURCE dataset, which for a store receiving pushes
+    # from elsewhere is on the other host -- so this scope is remote at least as
+    # often as a [prune:] one. Same three fields, same layering, [defaults]
+    # included (there are no templates here to sit in between).
+    local bsport bskh bscipher sshflags scope_remote
+    bsport="$(resolve_field ssh_port "$sec" "" defaults)" || bsport=""
+    bskh="$(resolve_field known_hosts "$sec" "" defaults)" || bskh=""
+    bscipher="$(resolve_field ssh_cipher "$sec" "" defaults)" || bscipher=""
+    is_remote_scope "$scope" && scope_remote=1 || scope_remote=0
+    lint_ssh "$bsport" "$bskh" "$bscipher" "[prune-bookmarks:$scope]" "$scope" "$scope_remote"
+    sshflags="$(trim "$(ssh_flag_string "$bsport" "$bskh" "$bscipher" "$scope_remote")")"
+
+    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${sshflags}")
 }
 ###############################################################################
 #END 3.5
@@ -755,15 +944,18 @@ group_monitor() {
     done
 }
 
-# Bookmark-prune groups by (schedule, pattern, age, recursive): identical
-# cleanup rule -> one delsnaps.sh -B line listing the scopes by full path.
+# Bookmark-prune groups by (schedule, pattern, age, recursive, ssh flags):
+# identical cleanup rule -> one delsnaps.sh -B line listing the scopes by full
+# path. The transport belongs in the key -- one delsnaps invocation applies ONE
+# -p/-k/-c to every entry in its dataset list, so two scopes reached on different
+# ports are two lines, not one.
 group_bookmark_prune() {
     declare -gA BOOKMARK_PRUNE_GROUPS=()
     declare -ga BOOKMARK_PRUNE_GROUP_ORDER=()
-    local e scope pattern age schedule notify recursive key
+    local e scope pattern age schedule notify recursive sshflags key
     for e in "${BOOKMARK_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "$e"
+        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}"
         [ -z "${BOOKMARK_PRUNE_GROUPS[$key]+x}" ] && BOOKMARK_PRUNE_GROUP_ORDER+=("$key")
         BOOKMARK_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -914,13 +1106,16 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut <<< "$e"
-        local flag="" fflag=""
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags <<< "$e"
+        local flag="" fflag="" sflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}\"$scope\" \"$pattern\" $retain"
+        # Transport flags go BEFORE the dataset list: delsnaps.sh consumes leading
+        # option flags and stops at the first non-flag word, which is the list.
+        [ -n "$sshflags" ] && sflag="$sshflags "
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -998,25 +1193,26 @@ emit_monitor() {
 # age.sh watches snapshot staleness, not bookmarks) and not part of the
 # same-scope pattern-overlap check (different ZFS object type than snapshots).
 emit_bookmark_prune() {
-    local key list scope pattern age schedule notify recursive
+    local key list scope pattern age schedule notify recursive sshflags
     for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
         list="${BOOKMARK_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern age schedule notify recursive <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mage msch mnot mrec
+        local m mscope mpat mage msch mnot mrec mssh
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mage msch mnot mrec <<< "$m"
+            IFS="$SEP" read -r mscope mpat mage msch mnot mrec mssh <<< "$m"
             targets+=("$mscope")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local flag=""
+        local flag="" sflag=""
         [ "$recursive" = "1" ] && flag="-R "
-        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}\"$joined\" \"$pattern\" $age"
+        [ -n "$sshflags" ] && sflag="$sshflags "
+        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${sflag}\"$joined\" \"$pattern\" $age"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
