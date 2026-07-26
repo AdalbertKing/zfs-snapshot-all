@@ -64,6 +64,15 @@ set -o pipefail
 # -k <FILE>            : Verify remote host keys against this known_hosts file
 #                        (StrictHostKeyChecking=yes). Default when omitted is
 #                        StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh.
+# -c <CIPHER_SPEC>     : SSH cipher(s) to request (ssh -c), e.g.
+#                        aes128-gcm@openssh.com on a CPU-bound link. Same flag
+#                        and same meaning as snapsend.sh/snapget.sh. Default:
+#                        let ssh/sshd negotiate. No-op when nothing is remote.
+#
+# The remote path also gets what snapsend.sh/snapget.sh already had: connect and
+# keepalive timeouts (so a half-dead VPN fails instead of hanging a cron line
+# forever) and one multiplexed ssh connection per host per run instead of a fresh
+# handshake for every single `zfs get creation` and `zfs destroy`.
 # Age-based (sum to one threshold date; snapshots older than it are deleted):
 # -y <years>           : Number of years.
 # -m <months>          : Number of months.
@@ -104,13 +113,14 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.20'
+VERSION='v1.21'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
 BOOKMARK_MODE=false
 PORT=22
 KNOWN_HOSTS_FILE=""
+SSH_CIPHER=""
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
 # could not write ("Permission denied" once per dataset), a notify script it
@@ -167,6 +177,114 @@ is_protected_snapshot() {
         [[ "$snapname" == "${prefix}"* ]] && return 0
     done
     return 1
+}
+
+###############################################################################
+# SSH CONNECTION REUSE (ControlMaster)
+###############################################################################
+# A remote prune is not one ssh call, it is one per snapshot: run_zfs is invoked
+# to read `creation` on every candidate and again to destroy each one. On a
+# dataset with a few hundred snapshots that is a few hundred full handshakes at
+# 150-230 ms each (measured pve0 -> pve1, gigabit LAN) -- minutes of pure
+# key exchange for work that takes seconds. Multiplexing turns each of those
+# into ~8 ms.
+#
+# Duplicated from lib-zfs-snap.sh's tune_ssh_* rather than shared, for the same
+# reason HOLD_TAG is: this script does not source the library. test/deps.conf
+# carries the ssh-opts contract so the two cannot drift unnoticed.
+#
+# Scoped to ONE RUN via $$. Sharing a master between runs means `ssh -O exit`
+# from whichever finishes first takes the other's sessions down with it, and
+# gen-cron.sh emits prune lines that legitimately fire in the same minute.
+SSH_REUSE_HOSTS=()
+SSH_REUSE_SOCK=""
+
+# Where the socket lives. Mirrors lib-zfs-snap.sh's tune_cache_dir: never
+# /var/run (tmpfs, and not writable by the delegated account), and the account's
+# own cache when not root. Prints nothing when no writable candidate exists,
+# which disables reuse.
+ssh_reuse_dir() {
+    local candidates=() d home
+    if [ -n "${ZFS_SNAP_CACHE_DIR:-}" ]; then
+        candidates=("$ZFS_SNAP_CACHE_DIR")
+    else
+        [ "$(id -u)" -eq 0 ] && candidates+=("/var/lib/zfs-snap")
+        home="${HOME:-$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)}"
+        [ -n "$home" ] && [ "$home" != "/" ] && candidates+=("$home/.cache/zfs-snap")
+    fi
+    for d in "${candidates[@]}"; do
+        mkdir -p "$d" 2>/dev/null || continue
+        [ -w "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 0
+}
+
+# Appends multiplexing options to SSH_OPTS, given the dataset list. Call once,
+# AFTER SSH_OPTS is built and only when something in it is actually remote.
+#
+# ONE MASTER PER HOST, because unlike snapsend.sh/snapget.sh (one remote host per
+# run, by construction) a datasets list may legitimately name several -- and a
+# single literal socket path shared across two hosts would not merely be slow,
+# it would multiplex the second host's calls onto the first host's connection.
+# Hence ssh's own %h/%p tokens: SSH IS THE ONE THAT EXPANDS THEM, at both enable
+# and teardown, so an ssh_config alias whose real HostName differs cannot make
+# the path we tear down diverge from the path we created. That is also why the
+# stale-socket cleanup lib-zfs-snap.sh does is absent here: it would mean
+# guessing the filename. A leftover socket (a run killed with -9) costs one
+# warning and an unmultiplexed run, which is exactly the old behaviour.
+#
+# The length guard uses the longest host in the list as a stand-in: a unix socket
+# path is capped around 104 characters and overflowing it shows up only as ssh
+# quietly declining to multiplex.
+ssh_reuse_enable() {
+    local list="$1" entry host longest="" dir probe seen h
+    local IFS=,
+    for entry in $list; do
+        case "$entry" in
+            *:*) : ;;
+            *) continue ;;
+        esac
+        host="${entry%%:*}"
+        host="${host##*@}"
+        [ -n "$host" ] || continue
+        seen=0
+        for h in ${SSH_REUSE_HOSTS[@]+"${SSH_REUSE_HOSTS[@]}"}; do
+            [ "$h" = "$host" ] && { seen=1; break; }
+        done
+        [ "$seen" -eq 1 ] || SSH_REUSE_HOSTS+=("$host")
+        [ ${#host} -gt ${#longest} ] && longest="$host"
+    done
+    unset IFS
+    [ ${#SSH_REUSE_HOSTS[@]} -gt 0 ] || return 0
+
+    dir=$(ssh_reuse_dir)
+    if [ -z "$dir" ]; then
+        dbg "ControlMaster disabled (no writable cache dir) -- each ssh call pays a full handshake"
+        return 0
+    fi
+    probe="${dir}/cmd.${longest}_${PORT}.$$"
+    if [ ${#probe} -ge 100 ]; then
+        dbg "ControlMaster disabled (socket path would be ${#probe} chars) -- each ssh call pays a full handshake"
+        return 0
+    fi
+    SSH_REUSE_SOCK="${dir}/cmd.%h_%p.$$"
+    SSH_OPTS+=(-o ControlMaster=auto -o "ControlPath=$SSH_REUSE_SOCK" -o ControlPersist=60)
+    dbg "ControlMaster socket: $SSH_REUSE_SOCK"
+    trap ssh_reuse_close EXIT
+}
+
+# Shuts every master this run opened. Without it each lingers for ControlPersist
+# seconds holding a connection open for nothing. The template is handed back to
+# ssh unexpanded, for the reason above. Best-effort throughout: this runs from an
+# EXIT trap and must never change the exit status.
+ssh_reuse_close() {
+    local rc=$? host
+    [ -n "$SSH_REUSE_SOCK" ] || return $rc
+    for host in ${SSH_REUSE_HOSTS[@]+"${SSH_REUSE_HOSTS[@]}"}; do
+        ssh -o "ControlPath=$SSH_REUSE_SOCK" -p "$PORT" -O exit "$host" >/dev/null 2>&1 || true
+    done
+    SSH_REUSE_SOCK=""
+    return $rc
 }
 
 # Run a zfs subcommand either locally or on a remote host. First two args are
@@ -281,9 +399,9 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
-    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
-    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
+    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c cipher] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c cipher] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c cipher] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
@@ -404,8 +522,22 @@ delete_snapshots() {
     # last N entries in the filtered array are the ones to keep. Recursion
     # into children is handled by process_datasets_recursively so that each
     # dataset is processed exactly once (see -R handling).
-    local all_snapshots
-    all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null)
+    # A FAILED listing is not an empty one. Over ssh those two used to be the
+    # same thing here: the listing was run with stderr discarded and its exit
+    # status ignored, so an unreachable peer produced no output, took the "no
+    # snapshots found" path, emitted status=success and exited 0. Retention on
+    # that target silently stopped happening -- no failure, nothing to alert on,
+    # and a stats log claiming the job ran fine. Locally the same hole swallowed
+    # a typo'd or destroyed dataset name.
+    local all_snapshots list_rc
+    all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}")
+    list_rc=$?
+    if [ "$list_rc" -ne 0 ]; then
+        echo "Error: could not list snapshots of $ds_label (exit $list_rc) -- refusing to read that as 'nothing to prune'" >&2
+        emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        EXIT_CODE=1
+        return 1
+    fi
 
     local filtered=()
     local line snapname
@@ -550,8 +682,17 @@ delete_bookmarks() {
     dbg "Inside delete_bookmarks function"
     dbg "Dataset = $ds_label, Pattern = $pat, threshold = $threshold"
 
-    local all_bookmarks
-    all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}" 2>/dev/null)
+    # Same distinction as in delete_snapshots: a listing that FAILED must not be
+    # reported as a dataset with nothing to prune.
+    local all_bookmarks list_rc
+    all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}")
+    list_rc=$?
+    if [ "$list_rc" -ne 0 ]; then
+        echo "Error: could not list bookmarks of $ds_label (exit $list_rc) -- refusing to read that as 'nothing to prune'" >&2
+        emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        EXIT_CODE=1
+        return 1
+    fi
 
     local filtered=()
     local line markname
@@ -637,8 +778,17 @@ process_datasets_recursively() {
     # Fetch the full descendant list (local or over ssh) and drop base_ds itself
     # in bash rather than piping the remote output through grep -- keeps the
     # remote command a single quoted zfs call with no shell metacharacters.
-    local all_datasets child
+    local all_datasets child list_rc
     all_datasets=$(run_zfs "$ruser" "$rhost" list -H -o name -t filesystem,volume -r "${base_ds}")
+    list_rc=$?
+    # Without this, an ssh failure here degrades -R into a single-dataset prune
+    # that still exits 0: every child keeps its snapshots forever and the run
+    # looks successful.
+    if [ "$list_rc" -ne 0 ]; then
+        echo "Error: could not list descendants of ${rhost:+$rhost:}${base_ds} (exit $list_rc) -- children were NOT pruned" >&2
+        EXIT_CODE=1
+        return 1
+    fi
     for child in ${all_datasets}; do
         [ "$child" = "$base_ds" ] && continue
         dbg "Processing child dataset = $child"
@@ -676,9 +826,9 @@ fi
 
 recurse=false
 
-# Consume leading option flags, in any order. -p/-k take an argument and accept
-# both the split (-p 2222) and attached (-p2222) forms. Anything that is not a
-# recognised flag ends the loop and is treated as the first positional
+# Consume leading option flags, in any order. -p/-k/-c take an argument and
+# accept both the split (-p 2222) and attached (-p2222) forms. Anything that is
+# not a recognised flag ends the loop and is treated as the first positional
 # (datasets list).
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -691,6 +841,8 @@ while [ "$#" -gt 0 ]; do
         -p*) PORT="${1#-p}"; shift ;;
         -k) KNOWN_HOSTS_FILE="$2"; shift 2 ;;
         -k*) KNOWN_HOSTS_FILE="${1#-k}"; shift ;;
+        -c) SSH_CIPHER="$2"; shift 2 ;;
+        -c*) SSH_CIPHER="${1#-c}"; shift ;;
         *) break ;;
     esac
 done
@@ -716,9 +868,26 @@ else
     SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
 fi
 
+# Fail fast instead of hanging forever -- the same reasoning as snapsend.sh, and
+# for a while the same omission: a VPN that stops passing packets without
+# closing the connection leaves ssh waiting with NO timeout of any kind. A prune
+# is not a transfer, so the consequence differs in shape but not in kind: the
+# cron line never exits, so it never returns non-zero, so nothing alerts; the
+# retention it was supposed to enforce silently stops happening and the target
+# fills up. ConnectTimeout covers a dead peer at connect time, ServerAlive*
+# covers one that dies mid-command (4 x 15s = ~60s to notice). Neither fires on
+# a merely slow link -- sshd answers keepalives at the protocol level however
+# long a `zfs destroy` takes to commit.
+SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+
+# -c: request a specific cipher, same meaning as in snapsend.sh/snapget.sh (a
+# faster/weaker one on a CPU-bound link). No-op when nothing is remote.
+[ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
+
 # ssh is only required when at least one dataset entry is remote (has a ':').
 if [[ "$datasets_list" == *:* ]]; then
     command -v ssh >/dev/null || { echo "Error: ssh command not found but a remote dataset was requested." >&2; exit 1; }
+    ssh_reuse_enable "$datasets_list"
 fi
 
 # Loud, one-time warning: -F uses `zfs destroy -R`, which takes down dependent

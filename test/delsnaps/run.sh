@@ -233,6 +233,34 @@ sleep 2
 run_del "$POOL/age" "auto_" -h0
 check "age: threshold at now deletes everything strictly older" "" "$(snaps_of age)"
 
+# --- a listing that FAILED is not an empty one -------------------------------
+
+# The distinction this pins: `zfs list` failing (dataset gone, renamed, typo'd
+# in a config -- or, over ssh, an unreachable peer) used to take the same path
+# as a dataset with no matching snapshots. It printed "No snapshots found",
+# logged status=success and exited 0, so retention could stop happening on a
+# target indefinitely with nothing to alert on. The empty case must still be a
+# success, though, which is why both halves are asserted here.
+mkds empty
+run_del "$POOL/empty" "auto_" -H1
+check "empty dataset: no matching snapshots is a success" "0" "$RC"
+
+DEL_OUT="$(mktemp)"
+"$DELSNAPS" "$POOL/definitely_not_here" "auto_" -H1 >"$DEL_OUT" 2>&1
+RC=$?
+check "missing dataset: exits non-zero" "1" "$RC"
+check "missing dataset: reported as a listing failure, not as 'nothing to prune'" "1" \
+      "$(grep -c 'could not list snapshots' "$DEL_OUT")"
+check "missing dataset: the stats row says failed" "failed" \
+      "$(tail -1 "$STATS_LOG" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
+
+"$DELSNAPS" -B "$POOL/definitely_not_here" "tgt-" -d30 >"$DEL_OUT" 2>&1
+RC=$?
+check "missing dataset (-B): exits non-zero" "1" "$RC"
+check "missing dataset (-B): reported as a listing failure" "1" \
+      "$(grep -c 'could not list bookmarks' "$DEL_OUT")"
+rm -f "$DEL_OUT"
+
 # --- mode mixing is rejected ------------------------------------------------
 
 mkds mixed
