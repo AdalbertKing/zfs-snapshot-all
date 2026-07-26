@@ -722,7 +722,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v7"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v8"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -841,9 +841,16 @@ while IFS=\$'\t' read -r rank sev cnt msg first_ep last_ep detail; do
     line=\$(printf '  x%-4s %-55s (%s)' "\$cnt" "\$msg" "\$range")
     # Unflatten and indent under the heading it belongs to. \001 went in where
     # the newlines were; a multi-line failure comes back out as multiple lines.
+    #
+    # A row with NO detail says so, rather than just looking thin: silence there
+    # is ambiguous -- it could be an entry queued before the detail existed, or
+    # a caller that forgot to pass it -- and the reader cannot tell which.
     if [ -n "\$detail" ]; then
         line="\$line
 \$(printf '%s' "\$detail" | tr '\001' '\n' | sed 's/^/        /')"
+    else
+        line="\$line
+        (bez szczegolow -- wpis zakolejkowany przed przebudowa alertow)"
     fi
     if [ "\$sev" = "ALERT" ]; then
         N_ALERT=\$((N_ALERT + 1))
@@ -921,22 +928,39 @@ log "Phase 5: check-pool-capacity.sh (pool/quota capacity alerting)"
 # fileserver LXC (subvol-101-disk-1) was independently at 91% of its own
 # refquota, neither of which any existing alert would have caught in advance.
 CAPACITY_SCRIPT="/root/scripts/check-pool-capacity.sh"
+CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v2"
 if [ "$CHECK_ONLY" -eq 1 ]; then
-    if [ -x "$CAPACITY_SCRIPT" ]; then log "  $CAPACITY_SCRIPT present"; else warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"; fi
-elif [ -e "$CAPACITY_SCRIPT" ]; then
-    log "$CAPACITY_SCRIPT already exists, leaving it alone (edit THRESHOLD/MAILTO inside manually if needed)"
+    if [ ! -x "$CAPACITY_SCRIPT" ]; then
+        warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"
+    elif grep -qF "$CAPACITY_SCRIPT_MARKER" "$CAPACITY_SCRIPT" 2>/dev/null; then
+        log "  $CAPACITY_SCRIPT present (current)"
+    else
+        warn "  $CAPACITY_SCRIPT present but outdated (mails on its own instead of joining the daily digest) -- re-run without --check-only to upgrade"
+    fi
+elif [ -e "$CAPACITY_SCRIPT" ] && grep -qF "$CAPACITY_SCRIPT_MARKER" "$CAPACITY_SCRIPT" 2>/dev/null; then
+    log "$CAPACITY_SCRIPT already current, leaving it alone"
 else
     cat > "$CAPACITY_SCRIPT" <<EOF
 #!/bin/bash
-# Alerts by email if any zpool, or any dataset with a refquota set, crosses a
-# capacity threshold.
+$CAPACITY_SCRIPT_MARKER -- warns before a zpool, or a dataset with a refquota,
+# fills up. Catches slow exhaustion BEFORE it turns into a failed job.
+#
+# It reports through notify-fail.sh rather than mailing directly. Sending its
+# own mail made it the one thing on the host that ignored the one-mail-per-day
+# rule, and at fleet scale a second channel is a second thing to start
+# filtering. Going through the queue also means the finding arrives with its
+# numbers attached, in the same digest as everything else.
 # Usage in cron: 0 8 * * * /root/scripts/check-pool-capacity.sh
 THRESHOLD=85
 HOST=\$(hostname -f 2>/dev/null || hostname)
-MAILTO="${NOTIFY_EMAIL}"
+NOTIFY="\${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 
 alert() {
-    echo "\$2" | mail -s "[ZFS CAPACITY] \$1" "\$MAILTO"
+    if [ -x "\$NOTIFY" ]; then
+        "\$NOTIFY" "\$1" "\$2"
+    else
+        echo "\$2" | mail -s "[ZFS CAPACITY] \$1" "${NOTIFY_EMAIL}"
+    fi
 }
 
 for pool in \$(zpool list -H -o name); do
