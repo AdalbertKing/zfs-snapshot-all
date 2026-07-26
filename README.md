@@ -43,7 +43,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.57 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.23 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.17 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.18 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -487,6 +487,22 @@ cascading behavior when genuinely wanted. Datasets may be remote (`[user@]host:p
 when there's a `:` with no `/` before it), and local/remote entries can be mixed in one
 comma-separated list.
 
+**An empty pattern, or no age/count flags at all, is deliberately unrestricted — by design, not
+oversight.** Matching is by literal string prefix (`[[ "$snapname" == "${pat}"* ]]`), so an empty
+pattern matches *every* snapshot on the scope, not just ones without one. And with no age/count
+flag given at all, the script silently defaults to age-mode with threshold = right now, which
+deletes everything already there. Both are confirmed live behavior, and **neither is going to be
+validated away**: this is an admin tool, not a consumer one, and the same philosophy that doesn't
+put a confirmation prompt on `rm -rf *` doesn't put one here either — an operator who explicitly
+asks to prune every snapshot on a scope, regardless of who created it, gets exactly that. The two
+things that still survive *any* invocation of this kind: `is_protected_snapshot()` (Proxmox's own
+`__replicate_`/`__migration__`/`vzdump` snapshots, never touched by any pattern or threshold) and a
+`zfssnapall_inflight` hold (a snapshot mid-transfer cannot be destroyed regardless of what matched
+it — `zfs destroy` refuses and it is reported, not silently skipped). Combine an empty pattern with
+`-F` and both the match scope and the destroy method are at their most permissive at once — worth
+knowing before reaching for both together. What *is* guarded is the config generator producing this
+by accident rather than by request — see `gen-cron.sh`'s blank-vs-missing field handling below.
+
 **A failed remote listing is a failure, not an empty result** (since v1.23). Before that fix, any
 ssh/zfs error while listing a remote dataset's snapshots or bookmarks — a wrong port after a
 firewall change, a revoked key, a bogus `-c` cipher, the host simply down — produced empty output
@@ -605,6 +621,20 @@ A few things the generator enforces or automates for you:
   scope: since `delsnaps.sh` matches by literal string prefix, one tier's pattern being a prefix
   of another's would let its snapshots leak into the wrong retention run — rejected at generate
   time.
+- **A key present but blank is treated exactly like the key being absent**, for `prefix`, `pattern`
+  and `retain`/`keep` (v4.18). `ini_has()` only tests whether a key exists in the config, not
+  whether its value is non-empty, so `pattern = ` with nothing after the `=` used to read as
+  "resolved" with an empty string and sail straight past the "required field" check. The
+  consequence is real, not cosmetic: an empty `pattern` makes `delsnaps.sh` match *every* snapshot
+  on the scope (it matches by prefix, and everything starts with `""`), and an empty `retain`
+  produces a `delsnaps.sh` line with no threshold flag at all, which silently defaults to age-mode
+  with threshold=now — deleting virtually everything the dataset already has. Neither ever showed
+  up as an error; it just quietly generated the single most destructive line the config could
+  produce. `[prune-bookmarks:]`'s `pattern` is the one exception: that field already has a sensible
+  default (`tgt-`) when omitted, so a blank value now falls back to the same default instead of
+  being rejected — matching its own designed behavior rather than being promoted to an error.
+  `dst` keeps its own legitimate blank meaning (no target, snapshot only) untouched; this only
+  applies to fields with no sane empty meaning at all.
 
 **`prune = no`: a monitor without a second prune.** A recursive `[prune:hdd/backups]` already
 covers every leaf underneath it, but monitor thresholds are per tier, and a leaf that matters more
