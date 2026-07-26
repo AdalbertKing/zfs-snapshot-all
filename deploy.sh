@@ -487,7 +487,7 @@ if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
 fi
 
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v7"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v8"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
@@ -520,8 +520,17 @@ $NOTIFY_SCRIPT_MARKER -- reports an ALERT-tier finding: a cron job that returned
 #
 # Either way Proxmox's own ZED pool-health mail is untouched, so a disk actually
 # dropping out still pages immediately through that separate path.
-# Usage in cron: ... 2>>cron.log || /root/scripts/notify-fail.sh "job description"
+# Usage in cron:
+#   ... || /root/scripts/notify-fail.sh "job description" "what it actually said"
+#
+# The SECOND argument is the finding itself: the failing command's own output, or
+# check-snap-age.sh's verdict line carrying the real dataset, age and thresholds.
+# Without it the digest can only report that something called "pve0 hourly backup
+# (vm-101)" went wrong -- a label from the config, nothing anyone can act on --
+# while the actual text went to cron.log where nobody reads it. Optional, so cron
+# lines generated before v4.16 keep working unchanged.
 JOB="\$1"
+DETAIL="\${2:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -546,7 +555,15 @@ if [ "\$MODE" != "immediate" ]; then
     # delegated account append here; whichever gets there first would otherwise
     # create it 0644 and lock the other one out until the next digest run.
     umask 0002
-    printf '%s\tALERT\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+    # Four tab-separated columns now: epoch, severity, label, detail. A finding
+    # has to stay ONE line -- concurrent appends from separate cron jobs are only
+    # atomic while each write is a single short line (PIPE_BUF) -- so the detail
+    # is flattened: tabs to spaces so the field split survives, newlines to \001,
+    # which alert-digest.sh turns back into newlines. A control byte rather than
+    # a backslash escape, because nothing in a ZFS error message can collide
+    # with it and there is no un-escaping to get wrong.
+    DETAIL_FLAT=\$(printf '%s' "\$DETAIL" | tr '\t' ' ' | tr '\n' '\001')
+    printf '%s\tALERT\t%s\t%s\n' "\$(date +%s)" "\$JOB" "\$DETAIL_FLAT" >> "\$QUEUE"
     exit 0
 fi
 
@@ -567,8 +584,14 @@ if [ -f "\$LASTFILE" ] && [ \$(( NOW_EPOCH - \$(cat "\$LASTFILE") )) -lt "\$COOL
 fi
 echo "\$NOW_EPOCH" > "\$LASTFILE"
 
-echo "ZFS alert: '\${JOB}' na \${HOST} o \${NOW}. Sprawdz /root/scripts/cron.log." \\
-    | mail -s "[ZFS BACKUP] ALERT: \${JOB} na \${HOST}" "\$EMAIL"
+{
+    printf "ZFS alert: '%s' na %s o %s.\n" "\${JOB}" "\${HOST}" "\${NOW}"
+    if [ -n "\$DETAIL" ]; then
+        printf '\nCo zglosilo zadanie:\n\n'
+        printf '%s\n' "\$DETAIL" | sed 's/^/    /'
+    fi
+    printf '\nPelny log: /root/scripts/cron.log na %s\n' "\${HOST}"
+} | mail -s "[ZFS BACKUP] ALERT: \${JOB} na \${HOST}" "\$EMAIL"
 EOF
     chmod +x "$NOTIFY_SCRIPT"
     log "created/upgraded $NOTIFY_SCRIPT (v4, queues -> alert-digest.sh)"
@@ -603,7 +626,7 @@ log "Phase 4a: notify-warn.sh + alert-digest.sh (the daily digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v5"
+WARN_SCRIPT_MARKER="# notify-warn.sh v6"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$WARN_SCRIPT" ]; then
         warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
@@ -627,8 +650,13 @@ $WARN_SCRIPT_MARKER -- reports a WARNING-tier monitor finding ("getting stale",
 # have a specific reason -- warnings are by definition the findings that are not
 # urgent, so mailing them on sight is the fastest way to train someone to ignore
 # the mailbox.
-# Usage in cron: ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "job description"
+# Usage in cron:
+#   ... ; [ \$rc -eq 1 ] && /root/scripts/notify-warn.sh "label" "\$verdict"
+# The second argument is check-snap-age.sh's own verdict line -- dataset,
+# pattern, newest snapshot, actual age, thresholds. See notify-fail.sh for why a
+# label alone is not enough to act on.
 JOB="\$1"
+DETAIL="\${2:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -644,20 +672,23 @@ fi
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
     HOST=\$(hostname -f 2>/dev/null || hostname)
-    echo "ZFS warning: '\${JOB}' na \${HOST} o \$(date '+%Y-%m-%d %H:%M:%S')." \\
-        | mail -s "[ZFS BACKUP] WARNING: \${JOB} na \${HOST}" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
+    {
+        printf "ZFS warning: '%s' na %s o %s.\n" "\${JOB}" "\${HOST}" "\$(date '+%Y-%m-%d %H:%M:%S')"
+        [ -n "\$DETAIL" ] && { printf '\nCo zglosil monitor:\n\n'; printf '%s\n' "\$DETAIL" | sed 's/^/    /'; }
+    } | mail -s "[ZFS BACKUP] WARNING: \${JOB} na \${HOST}" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
     exit 0
 fi
 # See notify-fail.sh: keep a recreated queue writable by BOTH accounts.
 umask 0002
-printf '%s\tWARN\t%s\n' "\$(date +%s)" "\$JOB" >> "\$QUEUE"
+DETAIL_FLAT=\$(printf '%s' "\$DETAIL" | tr '\t' ' ' | tr '\n' '\001')
+printf '%s\tWARN\t%s\t%s\n' "\$(date +%s)" "\$JOB" "\$DETAIL_FLAT" >> "\$QUEUE"
 EOF
     chmod +x "$WARN_SCRIPT"
     log "created/upgraded $WARN_SCRIPT (v2, shared queue)"
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v5"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v6"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -726,19 +757,24 @@ fi
 # Collapse to one row per (severity, message): count, first-seen, last-seen.
 # Sorted ALERT before WARN, then by count descending -- the worst and the
 # noisiest end up at the top of the mail where they get read.
+# The fourth column (detail) is what the finding actually SAID -- the failing
+# command's output, or the monitor's verdict with the real age and thresholds.
+# Kept from the LAST occurrence: for a condition repeating every 15 minutes the
+# most recent reading is the one that describes the state now. Lines queued
+# before v8/v6 have no fourth column and simply carry no detail.
 SUMMARY=\$(awk -F'\t' '
 {
     sev = \$2; if (sev != "ALERT") sev = "WARN"
     key = sev "\t" \$3
     count[key]++
     if (!(key in first) || \$1 < first[key]) first[key] = \$1
-    if (!(key in last)  || \$1 > last[key])  last[key]  = \$1
+    if (!(key in last)  || \$1 > last[key])  { last[key] = \$1; detail[key] = \$4 }
 }
 END {
     for (k in count) {
         split(k, p, "\t")
         rank = (p[1] == "ALERT") ? 0 : 1
-        printf "%d\t%s\t%d\t%s\t%d\t%d\n", rank, p[1], count[k], p[2], first[k], last[k]
+        printf "%d\t%s\t%d\t%s\t%d\t%d\t%s\n", rank, p[1], count[k], p[2], first[k], last[k], detail[k]
     }
 }' "\$PROCESSING" | sort -t\$'\t' -k1,1n -k3,3nr)
 
@@ -746,12 +782,18 @@ ALERT_BODY=""
 WARN_BODY=""
 N_ALERT=0
 N_WARN=0
-while IFS=\$'\t' read -r rank sev cnt msg first_ep last_ep; do
+while IFS=\$'\t' read -r rank sev cnt msg first_ep last_ep detail; do
     [ -n "\$sev" ] || continue
     t1=\$(date -d "@\$first_ep" '+%H:%M')
     t2=\$(date -d "@\$last_ep" '+%H:%M')
     range="\$t1"; [ "\$t1" != "\$t2" ] && range="\$t1 - \$t2"
     line=\$(printf '  x%-4s %-55s (%s)' "\$cnt" "\$msg" "\$range")
+    # Unflatten and indent under the heading it belongs to. \001 went in where
+    # the newlines were; a multi-line failure comes back out as multiple lines.
+    if [ -n "\$detail" ]; then
+        line="\$line
+\$(printf '%s' "\$detail" | tr '\001' '\n' | sed 's/^/        /')"
+    fi
     if [ "\$sev" = "ALERT" ]; then
         N_ALERT=\$((N_ALERT + 1))
         ALERT_BODY="\${ALERT_BODY}\${line}
