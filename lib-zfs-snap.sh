@@ -1034,7 +1034,18 @@ check_pool_health() {
     health=$(pool_health "$pool" "$remote")
     [ "$health" = "ONLINE" ] && return 0
     log 0 "Pool '$pool' on $host_desc is $health"
-    "$NOTIFY_SCRIPT" "$host_desc pool $health: $pool" 2>/dev/null || true
+    # Send the vdev table with the alert, not just the word DEGRADED. "pool
+    # DEGRADED: rpool" tells the reader to go and log in; the config/status
+    # excerpt tells them WHICH disk, and whether it is resilvering or dead. The
+    # header lines (state/status/action) plus the tree are the useful part;
+    # scan/errors detail can stay in the log.
+    local detail=""
+    if [ -n "$remote" ]; then
+        detail=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool status '$pool' 2>/dev/null | head -n 24")
+    else
+        detail=$(zpool status "$pool" 2>/dev/null | head -n 24)
+    fi
+    "$NOTIFY_SCRIPT" "$host_desc pool $health: $pool" "$detail" 2>/dev/null || true
 }
 
 ###############################################################################
