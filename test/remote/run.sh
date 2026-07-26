@@ -451,21 +451,25 @@ else
 
     # delsnaps.sh's -c is brand new (v2.62/v1.21, no prior remote-cipher test
     # existed at all) -- proved end to end: a real cipher prunes a real remote
-    # snapshot; a bogus cipher name makes ssh itself refuse the connection
-    # before delsnaps.sh ever gets to run `zfs destroy`.
+    # snapshot; a bogus cipher name makes ssh itself refuse the connection, and
+    # delsnaps.sh now (v1.22) reports that as a FAILURE rather than "no
+    # snapshots found". -H0 (count-based: keep the 0 most recent match), not
+    # -h0 (age-based) -- age=0 raced against the snapshot's own creation
+    # second and "kept" it as not yet older than the threshold, which is a
+    # test bug this caught on the very first live run, not a delsnaps one.
     PROOT="$RROOT/dsprune"
     $SSH "$PEER" "zfs create -o canmount=noauto '$PROOT'" >/dev/null 2>&1
     $SSH "$PEER" "zfs snapshot '$PROOT@keep_1'" >/dev/null 2>&1
     tick
     $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_1'" >/dev/null 2>&1
-    "$DELSNAPS" -c aes128-ctr "$PEER:$PROOT" "prune_target_" -h0 >"$TMPD/ds.out" 2>&1
+    "$DELSNAPS" -c aes128-ctr "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds.out" 2>&1
     check "F5 delsnaps.sh -c with a real cipher: exit 0" "0" "$?"
     check "F5 delsnaps.sh -c: only the targeted snapshot is gone, 'keep_1' survives" "1" \
           "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null" | wc -l)"
 
     tick
     $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_2'" >/dev/null 2>&1
-    "$DELSNAPS" -c not-a-real-cipher "$PEER:$PROOT" "prune_target_" -h0 >"$TMPD/ds2.out" 2>&1
+    "$DELSNAPS" -c not-a-real-cipher "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds2.out" 2>&1
     check "F6 delsnaps.sh -c with a bogus cipher: ssh refuses, delsnaps fails" "1" "$?"
     check "F6 bogus cipher: the snapshot it would have pruned still exists" "1" \
           "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null | grep -c prune_target_2")"

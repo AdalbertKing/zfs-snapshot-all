@@ -111,7 +111,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.21'
+VERSION='v1.22'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -415,8 +415,21 @@ delete_snapshots() {
     # last N entries in the filtered array are the ones to keep. Recursion
     # into children is handled by process_datasets_recursively so that each
     # dataset is processed exactly once (see -R handling).
+    # If the listing itself fails -- wrong SSH port/cipher/key, a revoked
+    # authorized_keys entry, the host simply unreachable -- this must NOT look
+    # like "the dataset just happens to have nothing to prune". Before this
+    # check, it did: $? was never inspected, so an ssh failure produced empty
+    # output exactly like a genuinely empty dataset, and the caller reported
+    # "No snapshots found ... success". A retention job that keeps "succeeding"
+    # while silently doing nothing is worse than one that fails loudly -- found
+    # live while proving -c actually reaches ssh (a bogus cipher name made ssh
+    # refuse the connection, and this is what was hiding that refusal).
     local all_snapshots
-    all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null)
+    if ! all_snapshots=$(run_zfs "$ruser" "$rhost" list -H -o name -s creation -t snapshot "${ds}" 2>/dev/null); then
+        echo "Error: could not list snapshots for $ds_label -- ssh/zfs failed (check connectivity, -p/-k/-c/-K/-O, or that the dataset exists)" >&2
+        emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        return 1
+    fi
 
     local filtered=()
     local line snapname
@@ -561,8 +574,14 @@ delete_bookmarks() {
     dbg "Inside delete_bookmarks function"
     dbg "Dataset = $ds_label, Pattern = $pat, threshold = $threshold"
 
+    # Same reasoning as delete_snapshots: an ssh/zfs failure here must not read
+    # as "no bookmarks to prune".
     local all_bookmarks
-    all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}" 2>/dev/null)
+    if ! all_bookmarks=$(run_zfs "$ruser" "$rhost" list -H -o name -t bookmark "${ds}" 2>/dev/null); then
+        echo "Error: could not list bookmarks for $ds_label -- ssh/zfs failed (check connectivity, -p/-k/-c/-K/-O, or that the dataset exists)" >&2
+        emit_stats "$ds_label" "$pat" "failed" "$(( $(date +%s) - ds_start ))" 0 0
+        return 1
+    fi
 
     local filtered=()
     local line markname
