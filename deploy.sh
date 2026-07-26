@@ -487,7 +487,7 @@ if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
 fi
 
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
-NOTIFY_SCRIPT_MARKER="# notify-fail.sh v8"   # bump this comment when the heredoc body below changes
+NOTIFY_SCRIPT_MARKER="# notify-fail.sh v9"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$NOTIFY_SCRIPT" ]; then
         warn "  $NOTIFY_SCRIPT missing -- job failures would be silent"
@@ -531,6 +531,14 @@ $NOTIFY_SCRIPT_MARKER -- reports an ALERT-tier finding: a cron job that returned
 # lines generated before v4.16 keep working unchanged.
 JOB="\$1"
 DETAIL="\${2:-}"
+# The ENVIRONMENT wins over the config file. Sourcing the config last looks
+# harmless until you notice these are exactly the knobs a test sets: a run with
+# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
+# instead -- summarised it, mailed it and deleted it. Snapshot the env values
+# before the config can overwrite them, then put them back.
+_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
+_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
+_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -542,6 +550,15 @@ if [ -z "\$CONF" ]; then
 fi
 # shellcheck disable=SC1090
 [ -n "\$CONF" ] && . "\$CONF"
+_restore_env() {
+    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
+    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
+    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
+    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
+    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
+    return 0
+}
+_restore_env
 
 MODE="\${ZFS_ALERT_MODE:-daily}"
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
@@ -626,7 +643,7 @@ log "Phase 4a: notify-warn.sh + alert-digest.sh (the daily digest)"
 # into the crontab on its own (WARN_SCRIPT/DIGEST_SCRIPT/DIGEST_SCHEDULE) --
 # this part only makes sure the two scripts exist on disk.
 WARN_SCRIPT="/root/scripts/notify-warn.sh"
-WARN_SCRIPT_MARKER="# notify-warn.sh v6"
+WARN_SCRIPT_MARKER="# notify-warn.sh v7"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$WARN_SCRIPT" ]; then
         warn "  $WARN_SCRIPT missing -- WARNING monitor lines would error out"
@@ -657,6 +674,14 @@ $WARN_SCRIPT_MARKER -- reports a WARNING-tier monitor finding ("getting stale",
 # label alone is not enough to act on.
 JOB="\$1"
 DETAIL="\${2:-}"
+# The ENVIRONMENT wins over the config file. Sourcing the config last looks
+# harmless until you notice these are exactly the knobs a test sets: a run with
+# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
+# instead -- summarised it, mailed it and deleted it. Snapshot the env values
+# before the config can overwrite them, then put them back.
+_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
+_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
+_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -668,6 +693,15 @@ if [ -z "\$CONF" ]; then
 fi
 # shellcheck disable=SC1090
 [ -n "\$CONF" ] && . "\$CONF"
+_restore_env() {
+    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
+    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
+    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
+    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
+    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
+    return 0
+}
+_restore_env
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
@@ -688,7 +722,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v6"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v7"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -717,6 +751,14 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # healthy, since a dead cron would also be silent. That is the accepted
 # trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
 # from each is exactly the noise this replaced.
+# The ENVIRONMENT wins over the config file. Sourcing the config last looks
+# harmless until you notice these are exactly the knobs a test sets: a run with
+# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
+# instead -- summarised it, mailed it and deleted it. Snapshot the env values
+# before the config can overwrite them, then put them back.
+_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
+_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
+_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -728,6 +770,15 @@ if [ -z "\$CONF" ]; then
 fi
 # shellcheck disable=SC1090
 [ -n "\$CONF" ] && . "\$CONF"
+_restore_env() {
+    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
+    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
+    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
+    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
+    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
+    return 0
+}
+_restore_env
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 LEGACY_QUEUE="/root/scripts/warn-queue.log"

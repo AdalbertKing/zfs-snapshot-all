@@ -638,6 +638,12 @@ A finding travels exactly one of the two paths, so it is never reported twice. T
 *schedule* is not here — it is a cron line, emitted by `gen-cron.sh` (`DIGEST_SCHEDULE`, default
 `0 7 * * *`).
 
+**The environment beats the file.** Setting any of these variables before invoking a script wins
+over what the config says, which is what makes `ZFS_ALERT_QUEUE=/tmp/q ./alert-digest.sh` a safe
+way to try things. It was the other way round until v9/v7/v7 — the config was sourced after the
+environment was read, so a test aimed at a scratch queue silently summarised, mailed and then
+**deleted the production queue** instead. Found exactly that way.
+
 ```bash
 sed -i 's/^ZFS_ALERT_MODE=.*/ZFS_ALERT_MODE=immediate/' /etc/zfs-alert.conf
 ```
