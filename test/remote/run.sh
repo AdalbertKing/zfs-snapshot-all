@@ -1,11 +1,16 @@
 #!/bin/bash
 # Two-host campaign: everything the single-host suites structurally cannot reach.
 #
-# test/snapsend/run.sh is local-mode only, by design -- validate_remote_host()
-# refuses a loopback "replication" to the same machine, so ssh has never had a
-# repeatable test at all. This is that test. It is still a MANUAL obligation in
-# test/deps.conf (it needs a second real host), but running it is now one
-# command instead of a remembered ritual.
+# test/snapsend/run.sh and test/delsnaps/run.sh are local-mode only, by design --
+# validate_remote_host() refuses a loopback "replication" to the same machine, so
+# ssh has never had a repeatable test at all. This is that test: push
+# (snapsend.sh), pull (snapget.sh) and prune (delsnaps.sh) over the link, plus
+# the transport flags themselves. It is declared as the `remote` suite in
+# test/deps.conf with "needs = a SECOND host" -- not runnable unattended, but one
+# command rather than a remembered ritual.
+#
+# Sections: A/B snapsend local+remote, C/D snapget local+remote, F the ssh
+# transport options, G delsnaps over ssh, E what must be left behind (nothing).
 #
 # Usage, FROM the source host:
 #   ./test/remote/run.sh --peer root@192.168.28.8
@@ -33,6 +38,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
 SNAPGET="${SNAPGET:-$REPO/snapget.sh}"
+DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
 
 PEER=""
 LPARENT="rpool"
@@ -43,7 +49,7 @@ while [ $# -gt 0 ]; do
         --peer)         shift; PEER="${1:-}" ;;
         --local-parent) shift; LPARENT="${1:-}" ;;
         --peer-parent)  shift; RPARENT="${1:-}" ;;
-        -h|--help)      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)      sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
     shift
@@ -52,6 +58,7 @@ done
 [ -n "$PEER" ] || { echo "--peer user@host is required" >&2; exit 1; }
 [ -x "$SNAPSEND" ] || { echo "cannot find executable snapsend.sh at $SNAPSEND" >&2; exit 1; }
 [ -x "$SNAPGET" ]  || { echo "cannot find executable snapget.sh at $SNAPGET" >&2; exit 1; }
+[ -x "$DELSNAPS" ] || { echo "cannot find executable delsnaps.sh at $DELSNAPS" >&2; exit 1; }
 command -v zfs     >/dev/null || { echo "zfs not found" >&2; exit 1; }
 command -v mbuffer >/dev/null || { echo "mbuffer not found -- snapsend refuses to run without it" >&2; exit 1; }
 
@@ -65,10 +72,14 @@ RROOT="$RPARENT/$TAG"
 zfs list -H "$LROOT"          >/dev/null 2>&1 && { echo "refusing to run: $LROOT exists here" >&2; exit 1; }
 $SSH "$PEER" "zfs list -H '$RROOT'" >/dev/null 2>&1 && { echo "refusing to run: $RROOT exists on $PEER" >&2; exit 1; }
 
-# Keep this run's bookkeeping out of the host's real logs and lock dir.
+# Keep this run's bookkeeping out of the host's real logs and lock dir. The
+# cache dir matters for the same reason plus one more: it is where the scripts
+# put their ControlMaster sockets, so redirecting it here is what lets section F
+# assert that none survive the run.
 TMPD="$(mktemp -d)"
 export STATS_LOG="$TMPD/stats.log"
 export LOCKDIR="$TMPD"
+export ZFS_SNAP_CACHE_DIR="$TMPD/cache"
 
 cleanup() {
     # Release first: a case that fails before its transfer leaves a held
@@ -85,6 +96,7 @@ trap cleanup EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 check() {
     local label="$1" expected="$2" actual="$3"
     if [ "$expected" = "$actual" ]; then
@@ -93,6 +105,13 @@ check() {
         echo "FAIL $label"; echo "     expected: [$expected]"; echo "     actual:   [$actual]"
         FAIL=$((FAIL + 1))
     fi
+}
+
+# For a case whose PRECONDITION is missing (no ssh-keyscan, sshd refusing a
+# cipher the client offers). Counted and named, never silently dropped: a case
+# that quietly disappears is indistinguishable from one that passed.
+skip() {
+    echo "SKIP $1 -- $2"; SKIP=$((SKIP + 1))
 }
 
 # --- helpers ----------------------------------------------------------------
@@ -166,6 +185,11 @@ seed_peer() {
 RC=0
 send() { "$SNAPSEND" "$@" >"$TMPD/out" 2>&1; RC=$?; }
 get()  { "$SNAPGET"  "$@" >"$TMPD/out" 2>&1; RC=$?; }
+del()  { "$DELSNAPS" "$@" >"$TMPD/out" 2>&1; RC=$?; }
+# Exit status as a word, for the cases that must FAIL: asserting a specific
+# non-zero number would pin an implementation detail (which ssh error surfaced
+# first), while "it refused" is the actual contract.
+rcword() { [ "$RC" -eq 0 ] && echo zero || echo nonzero; }
 # Case-insensitive by default. It used to take flags, and `outgrep -i pattern`
 # quietly searched for the string "-i" instead -- so the two cases expecting
 # ZERO matches passed for the wrong reason, which is worse than failing.
@@ -397,6 +421,203 @@ check "D7 -R -S remote pull: the parent was not snapshotted on the source" "0" \
 check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")"
 
 # ============================================================================
+# F. the ssh transport options themselves -- -p, -c, -k, connection reuse
+# ============================================================================
+# These four were the last part of the ssh path with no test at all, and they
+# share a failure mode that a happy-path check cannot see: a flag that never
+# reaches ssh still produces a working transfer. So each one is asserted twice,
+# once with a value that must work and once with a value that must be REFUSED.
+# Only the refusal proves the flag was actually passed through.
+#
+# The refusal cases carry a second assertion for free: each one dies AFTER
+# snapshotting the source but BEFORE the transfer, which is precisely the path
+# that used to strand an in-flight hold. E1/E2 below are what catch that, so they
+# are load-bearing for this section, not just a tidy-up.
+echo "--- F. ssh transport options"
+
+PEER_HOST="${PEER##*@}"
+
+tick
+send -m f1_ -p 22 "$SRC" "$PEER:$RROOT/f1"
+check "F1 -p 22 remote: exit 0" "0" "$RC"
+check "F1 -p 22 remote: GUID matches" \
+      "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/f1/$SRC@$(l_newest "$SRC")")"
+
+tick
+send -m f2_ -p 65000 "$SRC" "$PEER:$RROOT/f2"
+check "F2 -p on a closed port: refused, not silently ignored" "nonzero" "$(rcword)"
+check "F2 -p on a closed port: nothing was created there" "no" "$(r_exists "$RROOT/f2")"
+
+# A cipher sshd is certain to have -- but if this build somehow lacks it, that is
+# a precondition failure, not a defect in the flag, so it is skipped not failed.
+CIPHER="aes128-gcm@openssh.com"
+tick
+if $SSH -c "$CIPHER" "$PEER" true 2>/dev/null; then
+    send -m f3_ -c "$CIPHER" "$SRC" "$PEER:$RROOT/f3"
+    check "F3 -c <cipher> remote: exit 0" "0" "$RC"
+    check "F3 -c <cipher> remote: GUID matches after the negotiated cipher" \
+          "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/f3/$SRC@$(l_newest "$SRC")")"
+else
+    skip "F3 -c <cipher> remote" "$PEER does not accept $CIPHER"
+fi
+
+tick
+send -m f4_ -c not-a-real-cipher "$SRC" "$PEER:$RROOT/f4"
+check "F4 -c with a bogus cipher: refused" "nonzero" "$(rcword)"
+check "F4 -c with a bogus cipher: nothing was created there" "no" "$(r_exists "$RROOT/f4")"
+
+# -k switches on StrictHostKeyChecking=yes against a file WE name. The positive
+# case needs a populated known_hosts, which is what ssh-keyscan is for.
+KH="$TMPD/known_hosts"
+tick
+if command -v ssh-keyscan >/dev/null && ssh-keyscan -T 10 -p 22 -H "$PEER_HOST" >"$KH" 2>/dev/null && [ -s "$KH" ]; then
+    send -m f5_ -k "$KH" "$SRC" "$PEER:$RROOT/f5"
+    check "F5 -k with the peer's real key: exit 0" "0" "$RC"
+    check "F5 -k with the peer's real key: GUID matches" \
+          "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$RROOT/f5/$SRC@$(l_newest "$SRC")")"
+else
+    skip "F5 -k with the peer's real key" "ssh-keyscan unavailable or returned nothing for $PEER_HOST"
+fi
+
+# The one that matters: an EMPTY known_hosts must make the run fail. If -k were
+# dropped on the floor, StrictHostKeyChecking would stay "no" and this would
+# happily succeed -- which is exactly the silent hole the flag exists to close.
+: >"$TMPD/empty_hosts"
+tick
+send -m f6_ -k "$TMPD/empty_hosts" "$SRC" "$PEER:$RROOT/f6"
+check "F6 -k with an empty known_hosts: refused (host key not trusted)" "nonzero" "$(rcword)"
+check "F6 -k with an empty known_hosts: nothing was created there" "no" "$(r_exists "$RROOT/f6")"
+
+# Connection reuse. -v3 is where the socket path is logged; the assertion that
+# actually matters is the second one, since a master left running holds a
+# connection open long after the run and used to be shared between runs.
+tick
+send -m f7_ -v3 "$SRC" "$PEER:$RROOT/f7"
+check "F7 reuse: exit 0" "0" "$RC"
+check "F7 reuse: a ControlMaster socket was set up for the run" "1" "$(outgrep 'ControlMaster socket')"
+# The trailing .<pid> is the whole point: a socket named after the host alone is
+# shared between concurrent runs, and closing it takes the other run's sessions
+# down with it.
+check "F7 reuse: the socket name is scoped to one run (trailing pid)" "1" \
+      "$(grep -c 'ControlMaster socket:.*\.[0-9][0-9]*$' "$TMPD/out")"
+check "F7 reuse: no socket survived the run" "0" \
+      "$(ls "$ZFS_SNAP_CACHE_DIR" 2>/dev/null | grep -c '^cm')"
+
+# snapget builds SSH_OPTS on its own, so the passthrough has to be proven there
+# too -- the same flag on the pull side is a separate code path, not a rerun.
+tick
+if $SSH -c "$CIPHER" "$PEER" true 2>/dev/null; then
+    FTGT="$LROOT/ftgt"
+    seed_peer "$DBASE/$FTGT"
+    get -m f8_ -p 22 -c "$CIPHER" "$FTGT" "$PEER:$DBASE"
+    check "F8 snapget -p/-c remote pull: exit 0" "0" "$RC"
+    check "F8 snapget -p/-c remote pull: GUID matches" \
+          "$(r_guid "$DBASE/$FTGT@$(r_newest "$DBASE/$FTGT")")" \
+          "$(l_guid "$FTGT@$(r_newest "$DBASE/$FTGT")")"
+else
+    skip "F8 snapget -p/-c remote pull" "$PEER does not accept $CIPHER"
+fi
+
+tick
+get -m f9_ -p 65000 "$LROOT/f9tgt" "$PEER:$DBASE"
+check "F9 snapget -p on a closed port: refused" "nonzero" "$(rcword)"
+check "F9 snapget -p on a closed port: no local target appeared" "no" "$(l_exists "$LROOT/f9tgt")"
+
+# ============================================================================
+# G. delsnaps over ssh -- retention on the far end of the link
+# ============================================================================
+# The other half of "the ssh option": the scripts that PUSH over ssh have been
+# exercised above, but the one that PRUNES over ssh had no coverage on either
+# host. It is also the script that makes the most ssh calls -- one `zfs get
+# creation` per candidate plus one per destroy.
+echo "--- G. delsnaps over ssh"
+
+GDS="$RROOT/gprune"
+rz create -o canmount=noauto "$GDS"       >/dev/null 2>&1
+rz create -o canmount=noauto "$GDS/child" >/dev/null 2>&1
+# -r so parent and child get the same three names; spaced out because count-based
+# retention orders by creation time and a tie is not an order.
+for i in 1 2 3; do
+    rz snapshot -r "$GDS@gp_$i" >/dev/null 2>&1
+    [ "$i" -lt 3 ] && tick
+done
+check "G0 seeding: three snapshots on the peer" "3" "$(r_snaps "$GDS")"
+
+del -n "$PEER:$GDS" gp_ -H1
+check "G1 -n over ssh: exit 0" "0" "$RC"
+check "G1 -n over ssh: says what it WOULD delete" "1" "$(outgrep 'would delete snapshot')"
+check "G1 -n over ssh: destroyed nothing" "3" "$(r_snaps "$GDS")"
+
+del "$PEER:$GDS" gp_ -H2
+check "G2 -H2 over ssh: exit 0" "0" "$RC"
+check "G2 -H2 over ssh: exactly two survive" "2" "$(r_snaps "$GDS")"
+check "G2 -H2 over ssh: the OLDEST is the one that went" "no" "$(r_exists "$GDS@gp_1")"
+check "G2 -H2 over ssh: the child was untouched (no -R)" "3" "$(r_snaps "$GDS/child")"
+
+del "$PEER:$GDS" gp_ -d1
+check "G3 age over ssh: exit 0" "0" "$RC"
+check "G3 age over ssh: snapshots younger than the threshold are kept" "2" "$(r_snaps "$GDS")"
+
+del -R "$PEER:$GDS" gp_ -H1
+check "G4 -R over ssh: exit 0" "0" "$RC"
+check "G4 -R over ssh: the parent kept one" "1" "$(r_snaps "$GDS")"
+check "G4 -R over ssh: the child was pruned to one as well" "1" "$(r_snaps "$GDS/child")"
+
+# The in-flight hold, recognised across the link: delsnaps.sh duplicates the
+# lib's tag (hold-tag contract) and must report the refusal as by-design rather
+# than as an error needing -F.
+GHELD="$(r_newest "$GDS")"
+rz hold zfssnapall_inflight "$GDS@$GHELD" >/dev/null 2>&1
+del "$PEER:$GDS" gp_ -H0
+check "G5 held snapshot over ssh: exit 0 (a skip is not an error)" "0" "$RC"
+check "G5 held snapshot over ssh: named as in-flight" "1" "$(outgrep 'in-flight')"
+check "G5 held snapshot over ssh: still there" "1" "$(r_snaps "$GDS")"
+rz release zfssnapall_inflight "$GDS@$GHELD" >/dev/null 2>&1
+
+# -B over ssh. A bookmark's age is its creation time, so "keep" is provable with
+# a day's threshold and "prune" with a zero one; no clock faking needed.
+GBK="$RROOT/gbook"
+rz create -o canmount=noauto "$GBK" >/dev/null 2>&1
+rz snapshot "$GBK@gb_1"             >/dev/null 2>&1
+rz bookmark "$GBK@gb_1" "$GBK#tgt-deadbeef" >/dev/null 2>&1
+check "G6 seeding: one bookmark on the peer" "1" \
+      "$($SSH "$PEER" "zfs list -H -o name -t bookmark -d 1 '$GBK' 2>/dev/null | wc -l" 2>/dev/null)"
+
+del -B "$PEER:$GBK" tgt- -d1
+check "G6 -B over ssh: exit 0" "0" "$RC"
+check "G6 -B over ssh: a fresh bookmark is kept" "1" \
+      "$($SSH "$PEER" "zfs list -H -o name -t bookmark -d 1 '$GBK' 2>/dev/null | wc -l" 2>/dev/null)"
+
+del -B "$PEER:$GBK" tgt- -h0
+check "G7 -B over ssh: exit 0" "0" "$RC"
+check "G7 -B over ssh: past the threshold it is destroyed" "0" \
+      "$($SSH "$PEER" "zfs list -H -o name -t bookmark -d 1 '$GBK' 2>/dev/null | wc -l" 2>/dev/null)"
+check "G7 -B over ssh: the snapshot it pointed at is untouched" "1" "$(r_snaps "$GBK")"
+
+# An unreachable peer must FAIL the prune, not report success with nothing to do.
+# This is the case that used to pass for the worst possible reason: the listing
+# came back empty, "No snapshots found" was printed, status=success was logged and
+# the exit code was 0 -- so retention could stop happening on a target for weeks
+# without a single alert. It doubles as the -p passthrough check: if -p were
+# dropped, this would reach port 22 and prune for real.
+del -p 65000 "$PEER:$GDS" gp_ -H0
+check "G8 unreachable peer: refused" "nonzero" "$(rcword)"
+check "G8 unreachable peer: said it could not list, not 'nothing to prune'" "1" \
+      "$(outgrep 'could not list snapshots')"
+check "G8 unreachable peer: destroyed nothing" "1" "$(r_snaps "$GDS")"
+
+del -R -p 65000 "$PEER:$GDS" gp_ -H0
+check "G9 unreachable peer under -R: refused" "nonzero" "$(rcword)"
+check "G9 unreachable peer under -R: destroyed nothing" "1" "$(r_snaps "$GDS")"
+
+# Same distinction locally: a dataset that is simply gone (renamed, destroyed,
+# a typo in the config) is a failure, not an empty prune.
+del "$LROOT/definitely_not_here" gp_ -H1
+check "G10 missing local dataset: refused" "nonzero" "$(rcword)"
+check "G10 missing local dataset: named as a listing failure" "1" \
+      "$(outgrep 'could not list snapshots')"
+
+# ============================================================================
 # E. hygiene -- what the campaign must leave behind: nothing
 # ============================================================================
 echo "--- E. hygiene"
@@ -441,6 +662,15 @@ send -m e5_ -R "$ONSRC" "$PEER:$RROOT/e5"
 check "E5 -R with the same source is noauto too" "noauto" \
       "$(r_canmount "$RROOT/e5/$ONSRC/onchild")"
 
+# Sockets are per run and closed on the way out; a leftover means a master is
+# still holding a connection open. Checked here as well as in F7 because every
+# section after F7 opens its own -- delsnaps.sh included, which is the one that
+# relies on ssh unlinking the socket itself (it hands the %h template back to ssh
+# rather than guessing the expanded filename), hence the tick first.
+tick
+check "E6 no ControlMaster socket survived the campaign" "0" \
+      "$(ls "$ZFS_SNAP_CACHE_DIR" 2>/dev/null | grep -c '^cm')"
+
 echo "--------------------------------------------"
-echo "PASS=$PASS FAIL=$FAIL"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

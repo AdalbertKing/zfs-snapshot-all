@@ -22,6 +22,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
   - [Link autotuning (`-A`)](#link-autotuning--a)
   - [Compression](#compression)
   - [Bandwidth limiting (`-b`)](#bandwidth-limiting--b)
+  - [SSH connection reuse](#ssh-connection-reuse)
   - [Mounting the target (`-u`/`-U`)](#mounting-the-target--u--u)
   - [JSON-lines stats log](#json-lines-stats-log)
 - [snapsend.sh — push replication](#snapsendsh--push-replication)
@@ -39,9 +40,9 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.60 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.54 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.20 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.62 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.56 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.21 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.16 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
@@ -228,6 +229,29 @@ throttles pool-to-pool I/O so a large backup doesn't starve the guests.
 and compress-or-not turns on link speed, so `-A` decides against `min(measured, -b)` rather than
 against the raw probe. The cap is applied on the way into the decision, not stored in the cache —
 the measurement stays valid for its week, the cap belongs to one invocation.
+
+### SSH connection reuse
+
+One remote run makes many small ssh calls — timestamps, snapshot lists, property reads, target
+creation, a hold and a release — plus the transfer itself. Each of those pays a full handshake
+unless they share a connection, so every script that talks over ssh enables OpenSSH multiplexing
+(`ControlMaster=auto`) for the duration of the run and shuts the master down on the way out.
+
+Measured 2026-07-22, pve0 → pve1 on a gigabit LAN: a bare `ssh host true` costs 150–230 ms, almost
+all of it handshake, and ~8 ms once multiplexed. Transfer throughput rose from 83.6 to 104.0 MB/s
+once the handshake stopped being counted inside it. `delsnaps.sh` gains the most in call count:
+its remote path runs one `zfs get creation` per candidate snapshot and one `zfs destroy` per
+deletion.
+
+**The master is scoped to one run, not to one host** — the socket carries the pid. It used to be
+named after host and port alone, which meant every run targeting the same host shared one master,
+and the teardown (`ssh -O exit`) asks that master to exit, *taking its other sessions down with it*.
+`gen-cron.sh` emits one line per dataset and they legitimately fire in the same minute (their
+`flock` keys differ), so a short hourly job finishing first could break a long transfer's
+connection mid-stream. The saving being claimed here is within a single run, so nothing is lost by
+not sharing. Failure stays non-fatal throughout: `ControlMaster=auto` falls back to an ordinary
+connection, and a socket left behind by a `kill -9`'d run is probed and cleared rather than silently
+disabling reuse.
 
 ### Mounting the target (`-u`/`-U`)
 
@@ -458,6 +482,9 @@ Options:
                    snapshots (age-based only)
 -p <PORT>          SSH port for remote datasets
 -k <FILE>          Known-hosts file for remote datasets
+-c <CIPHER_SPEC>   SSH cipher(s) to request (`ssh -c`) — same flag and meaning as in
+                   snapsend.sh/snapget.sh. Default: let ssh/sshd negotiate. No-op when
+                   nothing in the dataset list is remote
 -V, --version      Print version and exit
 ```
 
@@ -466,6 +493,24 @@ linked-clone disk) — it is reported and skipped, not silently destroyed. `-F` 
 cascading behavior when genuinely wanted. Datasets may be remote (`[user@]host:path`; remote only
 when there's a `:` with no `/` before it), and local/remote entries can be mixed in one
 comma-separated list.
+
+**The remote path is the same transport the replication scripts use.** For a while it wasn't, in
+two ways that only showed up when a link or a name went bad:
+
+- **A half-dead link hung the prune forever.** `snapsend.sh`/`snapget.sh` have carried
+  `ConnectTimeout` plus `ServerAlive*` for exactly this; `delsnaps.sh` had neither, so a VPN that
+  stopped passing packets without closing the connection left the cron line waiting indefinitely —
+  never exiting, therefore never failing, therefore never alerting, while the target it was
+  supposed to keep trimmed filled up.
+- **A listing that FAILED read as "nothing to prune".** The snapshot/bookmark/descendant listings
+  ran with their exit status ignored and stderr discarded, so an unreachable peer — or a local
+  dataset that had been renamed or destroyed — produced no output, printed `No snapshots found`,
+  logged `status=success` and exited 0. Now a failed listing is an error: non-zero exit, a stats
+  row of `failed`, and under `-R` it refuses rather than quietly pruning only the parent.
+
+One more thing the remote path now shares: **one multiplexed ssh connection per host per run**
+instead of a fresh handshake for every `zfs get creation` and every `zfs destroy` — a remote prune
+of a few hundred snapshots was paying a few hundred key exchanges at 150–230 ms each.
 
 ```bash
 # Age-based, recursive, two datasets:
@@ -479,7 +524,16 @@ comma-separated list.
 
 # Remote, custom SSH port:
 ./delsnaps.sh -p2222 "backup@pve2:tank/data" "monthly-" -M12
+
+# Remote over a CPU-bound link, verifying the host key against a known_hosts file:
+./delsnaps.sh -c aes128-gcm@openssh.com -k /root/.ssh/known_hosts.zfs \
+    "backup@pve2:tank/data" "monthly-" -M12
 ```
+
+`gen-cron.sh` has no field for `-p`/`-k`/`-c`: a prune line it generates for a remote scope uses
+port 22 and the default host-key policy. Pruning over a non-standard port or a pinned known-hosts
+file is a hand-written cron line or a wrapper, on purpose — `[prune:<scope>]` exists for the local
+backup store, not for reaching across a link.
 
 **Bookmark pruning (`-B`)** cleans up the one-bookmark-per-target insurance policy
 `snapsend.sh`/`snapget.sh` leave behind (see [Bookmark-backed incremental
@@ -998,13 +1052,27 @@ sudo ./test/delsnaps/run.sh   # delsnaps.sh, including -B bookmark pruning
 ./test/remote/run.sh --peer root@<other-host>
 ```
 
-The two-host campaign: the ssh path in both directions, which no single-host suite can reach
-(`validate_remote_host()` refuses a loopback replication by design). 79 checks covering snapsend
-and snapget, local and remote, plain / `-r` / `-R` / `-X` / `-S`, `-z` on both sides of the
-"local sends never compress" rule, `-b`, and an incremental re-run that must take the
-already-exists path without stranding its hold. Everything it creates lives under
-`<parent>/xcamp<PID>` and an `EXIT` trap destroys both sides even when a case fails. Run it as
-root, then again as the delegated account — that second run is the `nonroot-account` obligation:
+The two-host campaign: the ssh path in all three directions — push, pull, and prune — which no
+single-host suite can reach (`validate_remote_host()` refuses a loopback replication by design).
+129 checks covering `snapsend.sh`, `snapget.sh` and `delsnaps.sh`, local and remote, plain / `-r` /
+`-R` / `-X` / `-S`, `-z` on both sides of the "local sends never compress" rule, `-b`, an
+incremental re-run that must take the already-exists path without stranding its hold, remote
+retention (count- and age-based, `-n`, `-R`, `-B`, and an in-flight hold recognised across the
+link), and the transport flags themselves.
+
+**Each transport flag is asserted twice — once with a value that must work, once with a value that
+must be refused.** A flag that never reaches `ssh` still produces a perfectly good transfer, so
+only the refusal proves the passthrough: `-p` against a closed port, `-c` with a bogus cipher name,
+`-k` against an empty known_hosts file (if `-k` were dropped, `StrictHostKeyChecking` would stay
+`no` and the case would pass while the flag did nothing). Connection reuse is checked the same way
+round: the socket must exist during the run, be named per run rather than per host, and be gone
+afterwards.
+
+Everything it creates lives under `<parent>/xcamp<PID>` and an `EXIT` trap destroys both sides even
+when a case fails. A case whose *precondition* is missing (no `ssh-keyscan` on the box, an sshd that
+won't take the cipher) reports `SKIP` and is counted separately — a vanished case is
+indistinguishable from a passing one. Run it as root, then again as the delegated account — that
+second run is the `nonroot-account` obligation:
 
 ```bash
 ./test/remote/run.sh --peer zfsbackup@<other-host> --local-parent hdd/backuptest
@@ -1014,23 +1082,26 @@ Integrity is checked by comparing snapshot GUIDs rather than by mounting and has
 proves the exact stream landed, and it is the only check that also works for an account that
 cannot mount anything.
 
-These two run against real, throwaway ZFS pools backed by sparse files — they need root and a
-working `zfs`/`mbuffer`, so run them on a spare pool or a real host, never on a non-ZFS dev
-machine. Each creates a PID-suffixed pool, redirects `STATS_LOG`/`LOCKDIR` to a temp dir, and
-cleans up via an `EXIT` trap even if a test fails partway through. The remote (SSH) code paths are
-deliberately **not** covered here — a real remote host is needed for that, since
-`validate_remote_host()` refuses a loopback "replication" to the same machine by design.
+The two root suites run against real, throwaway ZFS pools backed by sparse files — they need root
+and a working `zfs`/`mbuffer`, so run them on a spare pool or a real host, never on a non-ZFS dev
+machine. Each creates a PID-suffixed pool, redirects `STATS_LOG`/`LOCKDIR`/`ZFS_SNAP_CACHE_DIR` to a
+temp dir, and cleans up via an `EXIT` trap even if a test fails partway through. They are
+**local-mode only** by design; the ssh code paths belong to the two-host campaign above, since
+`validate_remote_host()` refuses a loopback "replication" to the same machine.
 
 ### What no suite covers
 
-Three areas are structurally out of reach, and `impact.sh` names them when a change touches them
+Two areas are structurally out of reach, and `impact.sh` names them when a change touches them
 rather than letting a green summary imply otherwise:
 
 | Obligation | Why no suite can do it |
 |---|---|
-| `remote-ssh` | `validate_remote_host()` refuses loopback by design, so ssh needs a second real host |
 | `nonroot-account` | a delegated account cannot mount (no `CAP_SYS_ADMIN`, and no `zfs allow` grants it) and cannot read `/root` — **root cannot reach these failures at all** |
 | `force-full` | `-f`/`-F` destroy and recreate the target; root-only and destructive by nature |
+
+The ssh path used to be a third row. It is now the `remote` suite instead — still not something CI
+can run (it needs a second real host, which is why `impact.sh` prints it with that precondition
+attached), but a scripted campaign rather than a remembered ritual.
 
 That middle row is not theoretical. On 2026-07-25 the suite was green at 161/161 and one run as the
 delegated account found four defects: `zfs create -p` mounting intermediates, `/root`-based path
