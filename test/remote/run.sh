@@ -119,10 +119,26 @@ r_newest() { $SSH "$PEER" "zfs list -H -o name -s creation -t snapshot -d 1 '$1'
 # Build the standard shape: root + keep + swap + swap/inner. canmount=noauto
 # throughout so this works unchanged for the delegated account, which cannot
 # mount. Data is written only where a mountpoint is actually usable.
+# Create DS and every missing level above it, each explicitly canmount=noauto.
+# `zfs create -p` cannot be used here for the same reason snapsend.sh stopped
+# using it: -p applies -o to the final dataset only, every level it invents gets
+# canmount=on, and the delegated account then dies mounting it. The seeding of a
+# test must not fail in the exact way the test exists to check.
+mk_noauto() {
+    local ds="$1" acc="" part
+    local IFS=/
+    for part in $ds; do
+        acc="${acc:+$acc/}$part"
+        [ "$acc" = "$part" ] && continue          # the pool itself
+        zfs list -H "$acc" >/dev/null 2>&1 || zfs create -o canmount=noauto "$acc" || return 1
+    done
+    return 0
+}
+
 seed_local() {
     local root="$1" d mp
     for d in "" /keep /swap /swap/inner; do
-        zfs create -p -o canmount=noauto "$root$d" >/dev/null 2>&1 || return 1
+        mk_noauto "$root$d" >/dev/null 2>&1 || return 1
     done
     for d in /keep /swap/inner; do
         if zfs mount "$root$d" >/dev/null 2>&1; then
@@ -136,7 +152,15 @@ seed_local() {
 
 seed_peer() {
     local root="$1"
-    $SSH "$PEER" "for d in '' /keep /swap /swap/inner; do zfs create -p -o canmount=noauto '$root'\$d || exit 1; done" >/dev/null 2>&1
+    # Same level-by-level construction as mk_noauto, done remotely in one hop.
+    $SSH "$PEER" "for d in '' /keep /swap /swap/inner; do
+        ds='$root'\$d; acc=''
+        IFS=/; for part in \$ds; do
+            [ -z \"\$acc\" ] && { acc=\$part; continue; }
+            acc=\$acc/\$part
+            zfs list -H \"\$acc\" >/dev/null 2>&1 || zfs create -o canmount=noauto \"\$acc\" || exit 1
+        done; unset IFS
+    done" >/dev/null 2>&1
 }
 
 RC=0
@@ -399,8 +423,12 @@ check "E3 every filesystem on the peer is canmount=noauto" "0" \
 # nothing. snapsend v2.60 closes the subtree after the receive.
 tick
 ONSRC="$LROOT/onsrc"
-zfs create -o canmount=noauto "$ONSRC" >/dev/null 2>&1
-zfs create -o canmount=on "$ONSRC/onchild" >/dev/null 2>&1
+mk_noauto "$ONSRC" >/dev/null 2>&1
+mk_noauto "$ONSRC/onchild" >/dev/null 2>&1
+# Created noauto, then flipped: `zfs create -o canmount=on` would try to MOUNT
+# it, which the delegated account cannot do -- and this case has to run as that
+# account too. Setting the property afterwards mounts nothing.
+zfs set canmount=on "$ONSRC/onchild" >/dev/null 2>&1
 send -m e4_ -r "$ONSRC" "$PEER:$RROOT/e4"
 check "E4 -r with a canmount=on source: exit 0" "0" "$RC"
 check "E4 -r leaves no mountable descendant on the target" "noauto" \
