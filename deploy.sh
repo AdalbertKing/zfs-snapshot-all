@@ -66,9 +66,14 @@ warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS + 1)); }
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 CHECK_ONLY=0
+SEND_TEST_MAIL=0
+# Set when THIS run creates the alert config, i.e. the host is being set up for
+# the first time -- the only moment a delivery smoke test proves anything new.
+FIRST_TIME_SETUP=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --check-only)   CHECK_ONLY=1; shift ;;
+        --test-mail)    SEND_TEST_MAIL=1; shift ;;
         --alerts=*)     ALERT_MODE="${1#*=}"; shift ;;
         --alerts)       ALERT_MODE="${2:-}"; shift 2 ;;
         --backup-user=*) BACKUP_USER="${1#*=}"; shift ;;
@@ -81,6 +86,7 @@ while [ "$#" -gt 0 ]; do
             cat <<'USAGE'
 Usage: deploy.sh [options]
   --check-only            audit only; install, create and modify nothing
+  --test-mail             send a delivery smoke test (automatic on first setup only)
   --alerts=daily          (default) queue findings, one summary mail per day
   --alerts=immediate      mail each finding at once -- use while bringing a host up
   --backup-user=NAME      also create the delegated non-root account NAME.
@@ -383,6 +389,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 elif [ -e "$ALERT_CONF" ]; then
     log "$ALERT_CONF exists -- NOT overwritten (it is yours to edit; current mode: $(sed -n 's/^ZFS_ALERT_MODE=\([a-z]*\).*/\1/p' "$ALERT_CONF" | head -1))"
 else
+    FIRST_TIME_SETUP=1
     cat > "$ALERT_CONF" <<EOF
 # zfs-alert.conf -- how this host reports backup problems.
 # Sourced by notify-fail.sh, notify-warn.sh and alert-digest.sh. Plain shell:
@@ -614,8 +621,15 @@ EOF
     log "created/upgraded $NOTIFY_SCRIPT (v4, queues -> alert-digest.sh)"
 fi
 
+# The delivery smoke test used to run on EVERY invocation. Re-running deploy.sh
+# is the normal way to upgrade the alert scripts, so every upgrade sent one mail
+# per host: four hosts upgraded three times in an afternoon put twelve messages
+# in the operator's inbox, none of which said anything about backups. That is
+# the very mailbox the one-mail-per-day rule exists to protect.
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "skipping the test email (check-only)"
+elif [ "$SEND_TEST_MAIL" -eq 0 ] && [ "$FIRST_TIME_SETUP" -eq 0 ]; then
+    log "skipping the test email (host already set up -- pass --test-mail to force one)"
 elif command -v mail >/dev/null; then
     log "sending a test email to confirm mail delivery works from THIS host..."
     # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
