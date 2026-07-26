@@ -39,8 +39,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.59 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.53 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.60 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.54 |
 | [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.20 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
 | [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.15 |
@@ -268,6 +268,16 @@ What actually changes, precisely:
 `canmount` on a pre-existing target is never rewritten, so `zfs mount <dataset>` brings any of
 them back by hand. `-U` sets `canmount=on` for targets it creates, since `canmount=noauto` would
 otherwise outrank the recv flag and make the opt-out silently powerless.
+
+**Under `-r` the default used to stop at the leaf** (fixed in snapsend v2.60 / snapget v2.54).
+`canmount=noauto` is set on what these scripts *create* — the leaf and the ancestor path — but a
+recursive stream's descendants are created by `zfs recv` itself and arrive carrying the **source's**
+`canmount`. Measured on metropolis: a source child with `canmount=on`, replicated with `-r`,
+produced a mountable child on the backup host, while the same source under `-R` came out `noauto`
+because `-R` pre-creates every target itself. Since ordinary datasets are `canmount=on`, that was
+the shadow-mount hazard above, reachable through the recursion flag most jobs use. Both scripts now
+close the received subtree after a successful recursive transfer (filesystems only; skipped under
+`-U`). The source's own `canmount` is never touched.
 
 ### JSON-lines stats log
 
@@ -951,6 +961,26 @@ whether a threshold parses), not mechanism, on purpose.
 sudo ./test/snapsend/run.sh   # snapsend.sh / snapget.sh, local-mode integration
 sudo ./test/delsnaps/run.sh   # delsnaps.sh, including -B bookmark pruning
 ```
+
+```bash
+./test/remote/run.sh --peer root@<other-host>
+```
+
+The two-host campaign: the ssh path in both directions, which no single-host suite can reach
+(`validate_remote_host()` refuses a loopback replication by design). 79 checks covering snapsend
+and snapget, local and remote, plain / `-r` / `-R` / `-X` / `-S`, `-z` on both sides of the
+"local sends never compress" rule, `-b`, and an incremental re-run that must take the
+already-exists path without stranding its hold. Everything it creates lives under
+`<parent>/xcamp<PID>` and an `EXIT` trap destroys both sides even when a case fails. Run it as
+root, then again as the delegated account — that second run is the `nonroot-account` obligation:
+
+```bash
+./test/remote/run.sh --peer zfsbackup@<other-host> --local-parent hdd/backuptest
+```
+
+Integrity is checked by comparing snapshot GUIDs rather than by mounting and hashing: a GUID match
+proves the exact stream landed, and it is the only check that also works for an account that
+cannot mount anything.
 
 These two run against real, throwaway ZFS pools backed by sparse files — they need root and a
 working `zfs`/`mbuffer`, so run them on a spare pool or a real host, never on a non-ZFS dev
