@@ -395,6 +395,21 @@ run_del -B -R "$POOL/bmtree" "tgt-" -h0
 check "bookmark recursive: parent bookmark pruned" "" "$(marks_of bmtree)"
 check "bookmark recursive: child bookmark pruned" "" "$(marks_of bmtree/a)"
 
+# --- a dataset argument that looks like a flag must fail loudly -------------
+# A malformed invocation (an unrecognized flag like the lowercase "-r", which
+# does not exist in this script, shifted by mistake into the dataset-list
+# position) used to be silently reinterpreted by zfs's OWN parser -- without
+# a `--` separator, `zfs list ... "-r"` doesn't mean "dataset named -r", it
+# means "recurse" to zfs itself, with no target, so it lists every dataset on
+# the host. That returns a real (if useless) result, so the "no matches"
+# path reported quiet success instead of ever reaching the dataset the
+# caller meant. Pinning both a real flag-shaped dataset and the exact
+# scenario that found this: "-r" is not a delsnaps.sh flag, so it lands in
+# the dataset-list slot by accident, same as a typo would.
+run_del "-r" "auto_" -H3
+check "a dataset value shaped like a flag fails loudly, not silent success" \
+      "1" "$RC"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

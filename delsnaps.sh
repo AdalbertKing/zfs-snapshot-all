@@ -111,7 +111,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.23'
+VERSION='v1.24'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -189,14 +189,33 @@ is_protected_snapshot() {
 run_zfs() {
     local ruser="$1" rhost="$2"
     shift 2
+    # `--` is inserted right before the FINAL argument, which in every call
+    # site in this script is the dataset/snapshot/bookmark name. Without it, a
+    # name that happens to start with '-' is not passed to zfs as data -- zfs
+    # has its own getopt-style parser and reads it as ONE OF ITS OWN flags.
+    # Confirmed live: this script's own argument parsing can produce exactly
+    # such a string by accident (an unrecognized flag like the lowercase "-r",
+    # which does not exist here, ends up shifted into the dataset-list
+    # position instead of erroring). Without --, `zfs list ... "-r"` is not
+    # "dataset -r not found" -- zfs reads "-r" as ITS OWN recurse flag with no
+    # target, and recurses from the implicit root: every dataset on the host,
+    # not the one the caller meant. With --, the same call correctly fails
+    # "dataset does not exist", which this script's own exit-code check (see
+    # delete_snapshots/delete_bookmarks) already turns into a loud failure
+    # instead of a silent, scope-widened "success".
+    local -a args=("$@")
+    local last=$(( ${#args[@]} - 1 ))
+    local target="${args[$last]}"
+    unset 'args[last]'
     if [ -n "$rhost" ]; then
         local cmd="zfs" arg
-        for arg in "$@"; do
+        for arg in "${args[@]}"; do
             cmd+=" '${arg}'"
         done
+        cmd+=" -- '${target}'"
         ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$cmd"
     else
-        zfs "$@"
+        zfs "${args[@]}" -- "$target"
     fi
 }
 
