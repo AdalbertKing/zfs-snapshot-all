@@ -41,11 +41,11 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 | Script | Role | Version |
 |---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.63 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.57 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.25 |
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.65 |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.59 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age-, count-, or GFS-tower-based) and orphaned bookmarks | v1.28 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.20 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.21 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -549,6 +549,8 @@ Options:
                    same-named descendant snapshots AND dependent clones. Opt-in; dangerous.
 -B                 Bookmark mode: prune orphaned snapsend/snapget bookmarks instead of
                    snapshots (age-based only)
+-G                 GFS cascading ladder instead of a flat count sum — count-based
+                   (-H/-D/-W/-M/-Y) only, see "GFS cascading ladder" below
 -p <PORT>          SSH port for remote datasets
 -k <FILE>          Known-hosts file for remote datasets
 -P <prefix>:<keep> How many of the NEWEST reserved snapshots to protect, per dataset
@@ -639,6 +641,48 @@ cycle, or a paused/offline job's still-valid bookmark gets pruned too early.
 ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 ```
 
+**GFS cascading ladder (`-G`)** — for a dataset with no naming convention to prune by at all:
+snapshots taken with no `-m` (bare timestamps — see the ["running without `-m`" note in the
+snapsend.sh section](#snapsendsh--push-replication)), or any other scope where every snapshot
+looks alike to `delsnaps.sh`'s pattern matching. The plain count-based flags normally **sum**:
+`-H24 -D7` keeps 31 total, whichever 31 snapshots are newest, regardless of how they're spread out
+in time. `-G` gives the same five letters a different, GFS (Grandfather-Father-Son) meaning: each
+becomes its own non-overlapping tier of a cascading tower, walked in a fixed order, each tier's
+coverage starting exactly where the previous one's ends:
+
+| Flag | Tier | Bucket width | Survivor kept |
+|---|---|---|---|
+| `-H<N>` | Hourly | 1 hour | newest snapshot in that hour |
+| `-D<N>` | Daily | 1 day, right after the hourly tier's coverage ends | newest snapshot in that day |
+| `-W<N>` | Weekly | 1 week, right after the daily tier ends | newest snapshot in that week |
+| `-M<N>` | Monthly | 30 days, right after the weekly tier ends | newest snapshot in that month |
+| `-Y<N>` | Yearly | 365 days, right after the monthly tier ends | newest snapshot in that year |
+
+A letter left out simply has no rung — `-H24 -D7` alone is a valid two-tier ladder. An empty bucket
+(a gap in the source's own snapshot cadence) has no survivor; nothing is invented to fill it, so a
+period the source genuinely missed stays missing in the ladder too. Anything older than the
+outermost requested tier, and anything inside a tier that isn't that bucket's own survivor, gets
+deleted — subject to the same reserved-prefix and in-flight-hold protections as every other mode.
+Under `-R`, every descendant gets its own independent ladder, but all of them share one "now" —
+computed once at the start of the run rather than re-read per dataset, so a multi-dataset run
+never drifts between datasets mid-run.
+
+```bash
+# Thousands of unpruned, unpatterned hourly snapshots -- delsnaps has nothing but
+# elapsed time to key retention off. Preview first, always, the first time -G
+# touches a real dataset:
+./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
+
+# Output looks right? Drop -n and it actually prunes:
+./delsnaps.sh -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
+```
+
+`-G` also works with a real pattern, not only an empty one — the ladder buckets whatever matches
+the pattern first, so a scope mixing several naming schemes can still be pointed at just one of
+them. Rejected outright: mixed with age-based lowercase flags (no ladder meaning for those), with
+`-B` (bookmarks have no "N representatives" concept — exactly one exists per target by design), or
+given with no `-H`/`-D`/`-W`/`-M`/`-Y` at all (nothing to build a ladder from).
+
 ## check-snap-age.sh — staleness monitor
 
 Read-only Nagios-style check: for each dataset, finds the newest snapshot whose name (after `@`)
@@ -678,7 +722,7 @@ Section types (a header is always `[type:name]`, split on the first `:`, except 
 | `[defaults]` | `host_label` (used in notify text) and an optional default `dst` |
 | `[template:<tier>]` | One tier's full cadence + retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep`/`retain`, `monitor_warn`/`monitor_crit`, … |
 | `[dataset:<path>]` | A dataset you own end-to-end: `use_template = <tier>[,<tier>...]`, plus per-dataset overrides (`flags`, `quiesce`, `autotune`, `dst`, …). Runs create(+send) and inline self-prune, scoped to its own path only. |
-| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only; `ssh_flags` for a remote (`host:path`) scope. |
+| `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only; `ssh_flags` for a remote (`host:path`) scope; `gfs = yes` + `gfs_pattern` combine every tier's retain into one cascading `-G` ladder instead of one flat line per tier — see below. |
 | `[excluded:<prefix>]` | How many of the **newest** snapshots carrying a Proxmox-reserved prefix to protect, per dataset: `keep = <N>` or `keep = all`. Emits `-P` onto every snapshot-prune line |
 | `[prune-bookmarks:<scope>]` | Age-based cleanup of orphaned bookmarks — `schedule`, `age` (raw `delsnaps.sh` age flags), `pattern` (default `tgt-`), `recursive`, `ssh_flags` for a remote scope |
 
@@ -755,6 +799,56 @@ scope* — containment across scopes stays your discipline; v4.15 gives you the 
 fix, it does not try to detect every overlap. If a `delsnaps` job ever reports "could not find any
 snapshots to destroy" on a schedule, look for a second prune line whose scope contains that
 dataset at the same minute before chasing clones or holds.
+
+**`gfs = yes`: one combined `-G` ladder instead of one line per tier.** A `[prune:]` scope backing
+a dataset with no naming convention of its own — see [GFS cascading
+ladder](#delsnapssh--retention--pruning) in the `delsnaps.sh` section for what problem this
+solves — would otherwise still need one `[template:]` tier per rung, each emitting its own flat
+`delsnaps.sh` line. `gfs = yes` combines every tier listed in `use_template` into ONE
+`delsnaps.sh -G` line covering the whole cascade:
+
+```ini
+[template:store_hourly]
+prune_schedule = 51 * * * *
+pattern        = automated_hourly
+retain         = -H24
+monitor_warn   = 90m
+monitor_crit   = 3h
+
+[template:store_daily]
+prune_schedule = 53 0 * * *
+pattern        = automated_daily
+retain         = -D7
+
+[template:store_weekly]
+prune_schedule = 55 0 * * 0
+pattern        = automated_weekly
+retain         = -W4
+
+[prune:backup/store]
+use_template = store_hourly,store_daily,store_weekly
+recursive    = yes
+gfs          = yes
+gfs_pattern  = automated_
+notify       = store
+```
+
+generates one prune line, on the first-listed tier's own schedule, instead of three:
+
+```
+51 * * * * ... delsnaps.sh -G -R "backup/store" "automated_" -H24 -D7 -W4 ...
+```
+
+Each tier's own `retain` must resolve to exactly one count flag (`-H`/`-D`/`-W`/`-M`/`-Y` followed
+by a number) — an age-based `retain=`, or a multi-flag string, is rejected at generate time under
+`gfs = yes`, same as `-G` itself rejects them. `gfs_pattern` is deliberately a *separate* field
+from each tier's own `pattern`: the per-tier `pattern` (`automated_hourly`, `automated_daily`, …)
+keeps driving that tier's own monitor completely untouched — `store_hourly`'s
+`monitor_warn`/`monitor_crit` above still emit their own staleness check exactly as they would
+without `gfs` — while `gfs_pattern` is the wider net the combined ladder needs to see every
+contributing tier's snapshots in one pool. A tier with `prune = no` under `gfs = yes` is skipped
+from the combined ladder (same "monitor carrier only" semantics as the non-`gfs` path above) but
+keeps its own monitor.
 
 ```ini
 [defaults]
@@ -1121,6 +1215,32 @@ scheduled (or manual) run of the same command detects the token via `get_resume_
 resumes with `zfs send -t <token>` instead of restarting the whole transfer. If it fails to
 resume 3 times running, the next run gives up cleanly (`zfs receive -A`, discarding only the
 stuck partial state) and falls back to a normal incremental or full send.
+
+### 9. Thinning years of unpatterned snapshots into a GFS tower
+
+A dataset has been snapshotted hourly for months with no `-m` prefix — bare timestamps only, so
+`delsnaps.sh`'s pattern-based pruning has nothing to key off, and nobody ever added a retention
+job for it. A flat count-based prune would need one job per tier; `-G` collapses it into one:
+
+```bash
+# Preview first: how many would actually go, and does the shape look right?
+./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
+
+# Looks right -- run it for real:
+./delsnaps.sh -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
+```
+
+The empty pattern (`""`) matches every snapshot on the scope, same as it always has — `-G` only
+changes what happens to that matched set. Instead of one flat "keep the 50 newest", the tower keeps
+24 one-per-hour, then 7 one-per-day right after that, then 4 one-per-week, 12 one-per-month, 3
+one-per-year, each tier starting exactly where the previous one's coverage ends. A dataset that has
+actually been snapshotting hourly the whole time ends up close to the flat-count total either way;
+one with an *irregular* history — a burst of extra snapshots on one day, then a week of silence —
+instead gets exactly one survivor per bucket the data actually reached, which is where the two
+schemes diverge, sometimes sharply. Before switching a live retention job over from flat counts to
+`-G`, dry-run **both** and diff their "would delete" sets — on irregular data, the tower can
+legitimately claim snapshots a flat count never would have, because the flat scheme's cliff was
+never tight enough to reach them in the first place.
 
 ## Testing
 
