@@ -159,7 +159,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.18'
+VERSION='v4.19'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -1283,7 +1283,15 @@ emit_prune_sections
 emit_bookmark_prune
 emit_monitor
 
-[ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || die "no send/prune rules resolved from $CONFIG"
+# MONITOR_LINES counts too. A config made only of monitor carriers
+# ([prune:<scope>] with prune = no) resolves zero send and zero prune rules by
+# design, yet produces a perfectly valid crontab of staleness checks -- the
+# obvious case being a host that WATCHES datasets whose retention is run
+# somewhere else. Counting only send/prune rejected that config as "empty"
+# while sitting on a block it had already generated. Found by a scenario test
+# whose whole point was a monitor-only config.
+[ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ] || [ "${#MONITOR_LINES[@]}" -gt 0 ] \
+    || die "no send/prune/monitor rules resolved from $CONFIG"
 
 if [ "$INSTALL" -eq 1 ]; then
     install_crontab
