@@ -100,10 +100,12 @@ set -o pipefail
 # -H <count>           : Count contribution (hours slot).
 # -V, --version        : Print version and exit.
 # Age-based and count-based flags cannot be mixed in one invocation.
+# -G                    : GFS cascading ladder instead of a flat sum -- see
+#                        "GFS LADDER" below. Count-based letters only.
 #
 # BOOKMARK PRUNING (-B):
 # snapsend.sh/snapget.sh (see lib-zfs-snap.sh) leave a bookmark per target
-# (named "tgt-<8 hex chars>", the hash covering target dataset + -i identifier
+# (named "tgt-<8 hex chars>", the hash covering target dataset + -j identifier
 # if one was given) on the SOURCE dataset, refreshed on every successful
 # transfer to that target. A target that stops being used
 # (decommissioned VM, retired backup job) leaves its bookmark behind forever
@@ -125,8 +127,42 @@ set -o pipefail
 #
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
+#
+# GFS LADDER (-G):
+# An alternative to plain count-based retention for a dataset with NO naming
+# convention to lean on (e.g. snapshots taken with no -m on snapsend.sh/
+# snapget.sh, all bare timestamps -- see the pattern="" case above). Reuses
+# the same -H/-D/-W/-M/-Y letters, but instead of summing them into one flat
+# keep-count, each one becomes its own rung of a cascading tower:
+#   -H<N>  the N most recent HOURS, one snapshot kept per hour
+#   -D<N>  the N DAYS right after that, one kept per day
+#   -W<N>  the N WEEKS right after that, one kept per week
+#   -M<N>  the N MONTHS right after that, one kept per month (30-day buckets)
+#   -Y<N>  the N YEARS right after that, one kept per year (365-day buckets)
+# Always in that order (H -> D -> W -> M -> Y); a letter not given simply has
+# no rung. Each rung starts exactly where the previous one ends, so ranges
+# never overlap -- a daily bucket can never re-pick a snapshot an hourly
+# bucket already claimed. Within one bucket, the survivor is the NEWEST
+# snapshot whose creation time falls inside it; an empty bucket (a gap in the
+# source cadence) simply has no survivor -- nothing is invented to fill it.
+# Anything older than the outermost requested rung, and anything inside a
+# rung that isn't a bucket's survivor, is deleted (subject to the same
+# reserved-prefix and in-flight-hold protections as every other mode).
+#
+# Opt-in and orthogonal to pattern -- works with a real pattern too, not only
+# an empty one. Without -G, delsnaps.sh behaves exactly as it always has,
+# INCLUDING combining multiple -H/-D/-W/-M/-Y into one flat summed keep-count
+# (unchanged; -G only gives that combination a new meaning when asked for).
+# Rejected outright: mixed with age-based lowercase flags (no ladder meaning
+# for those), with -B (bookmarks have no "N representatives" concept), or
+# given with no -H/-D/-W/-M/-Y at all (nothing to build a ladder from).
+#
+# Example: a dataset with thousands of unpruned bare-timestamp hourly
+# snapshots, thin it into a classic tower in one shot:
+#   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
+# (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.26'
+VERSION='v1.27'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -137,6 +173,19 @@ SSH_CIPHER=""
 SSH_KEY=""
 declare -a EXTRA_SSH_OPTS=()
 declare -a PROTECT_SPECS=()
+# -G: cascading GFS ladder instead of a flat summed count. GFS_KEEP holds the
+# per-tier N (populated from keep_hours/keep_days/... after parse_time_arguments
+# runs); GFS_NOW is the single anchor epoch for the whole invocation, set once
+# before any dataset is processed so a multi-dataset/-R run shares one
+# consistent "now" rather than drifting between datasets. GFS_UNIT_SECONDS are
+# fixed-width bucket sizes, not calendar-aware -- every bucket within a tier is
+# exactly the same width (a "month" is 30 days, a "year" 365), which is simpler
+# and more uniform than real calendar months (28-31 days) at the cost of
+# calendar precision this tool never needed anyway.
+GFS_MODE=false
+declare -A GFS_KEEP=()
+GFS_NOW=""
+declare -Ar GFS_UNIT_SECONDS=( [H]=3600 [D]=86400 [W]=604800 [M]=2592000 [Y]=31536000 )
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
 # could not write ("Permission denied" once per dataset), a notify script it
@@ -380,9 +429,11 @@ usage() {
     echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
     echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
     echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
+    echo "   or: $0 -G [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -H<N> -D<N> -W<N> -M<N> -Y<N>  (cascading GFS ladder, see header)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
+    echo "   -G GFS ladder: -H/-D/-W/-M/-Y become cascading tiers instead of a flat summed count"
     echo "   -c/-K/-O: SSH cipher / private key / extra -o option, same as snapsend.sh/snapget.sh"
     echo "   -P <prefix>:<keep>: protect only the <keep> newest reserved snapshots per dataset"
     echo "                       (default: __replicate_/__migration__/vzdump all protected)"
@@ -596,6 +647,88 @@ delete_snapshots() {
                 kept_count=$((kept_count + 1))
             fi
             i=$((i + 1))
+        done
+    elif [ "$mode" = "gfs" ]; then
+        # Cascading GFS ladder -- see the header comment ("GFS LADDER") for the
+        # full design. Creation times are fetched up front (one call per
+        # snapshot, same convention as age mode below) so every bucket
+        # comparison afterward is a plain integer test, no repeated zfs calls.
+        local -a gfs_times=()
+        local snapshot
+        for snapshot in "${filtered[@]}"; do
+            gfs_times+=("$(run_zfs "$ruser" "$rhost" get -H -p -o value creation "${snapshot}")")
+        done
+
+        # Which snapshot (if any) survives each bucket, and its label (e.g.
+        # "H#3") for the log line -- built tier by tier, cascading: each
+        # tier's range starts exactly where the previous (finer) tier's range
+        # ended, so ranges never overlap and a coarser tier can never re-pick
+        # a snapshot a finer one already claimed.
+        local -A gfs_survivor_label=()
+        local gfs_cascade_end="$GFS_NOW" gfs_tier gfs_unit gfs_n gfs_tier_start
+        local gfs_i gfs_bucket_hi gfs_bucket_lo gfs_idx gfs_best_name gfs_best_time gfs_t gfs_label
+        for gfs_tier in H D W M Y; do
+            gfs_n="${GFS_KEEP[$gfs_tier]:-0}"
+            [ "$gfs_n" -gt 0 ] || continue
+            gfs_unit="${GFS_UNIT_SECONDS[$gfs_tier]}"
+            gfs_tier_start="$gfs_cascade_end"
+            for ((gfs_i = 1; gfs_i <= gfs_n; gfs_i++)); do
+                gfs_bucket_hi=$(( gfs_tier_start - (gfs_i - 1) * gfs_unit ))
+                gfs_bucket_lo=$(( gfs_tier_start - gfs_i * gfs_unit ))
+                gfs_best_name=""
+                gfs_best_time=-1
+                for ((gfs_idx = 0; gfs_idx < ${#filtered[@]}; gfs_idx++)); do
+                    gfs_t="${gfs_times[$gfs_idx]}"
+                    if [ "$gfs_t" -gt "$gfs_bucket_lo" ] && [ "$gfs_t" -le "$gfs_bucket_hi" ] \
+                       && [ "$gfs_t" -gt "$gfs_best_time" ]; then
+                        gfs_best_time="$gfs_t"
+                        gfs_best_name="${filtered[$gfs_idx]}"
+                    fi
+                done
+                gfs_label="${gfs_tier}#${gfs_i}"
+                if [ -n "$gfs_best_name" ]; then
+                    gfs_survivor_label["$gfs_best_name"]="$gfs_label"
+                    dbg "GFS bucket $gfs_label ($(date -d "@$gfs_bucket_lo" '+%F %T') , $(date -d "@$gfs_bucket_hi" '+%F %T')]: keep $gfs_best_name"
+                else
+                    dbg "GFS bucket $gfs_label ($(date -d "@$gfs_bucket_lo" '+%F %T') , $(date -d "@$gfs_bucket_hi" '+%F %T')]: empty, no survivor"
+                fi
+            done
+            gfs_cascade_end=$(( gfs_tier_start - gfs_n * gfs_unit ))
+        done
+
+        for snapshot in "${filtered[@]}"; do
+            if [ -n "${gfs_survivor_label[$snapshot]:-}" ]; then
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would keep snapshot: ${snapshot} (GFS ${gfs_survivor_label[$snapshot]})" >&2
+                else
+                    echo "Keeping snapshot: ${snapshot} (GFS ${gfs_survivor_label[$snapshot]})" >&2
+                fi
+                kept_count=$((kept_count + 1))
+            elif is_held_by_us "${snapshot}" "$ruser" "$rhost"; then
+                if [ "$DRY_RUN" = true ]; then
+                    echo "[DRY-RUN] Would skip snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot}" >&2
+                else
+                    echo "Skipping snapshot (in-flight, protected by hold '$HOLD_TAG'): ${snapshot} -- reconsidered next run" >&2
+                fi
+                kept_count=$((kept_count + 1))
+            elif [ "$DRY_RUN" = true ]; then
+                echo "[DRY-RUN] Would delete snapshot: ${snapshot}" >&2
+                deleted_count=$((deleted_count + 1))
+            else
+                echo "Deleting snapshot: ${snapshot}" >&2
+                if destroy_one "${snapshot}" "$ruser" "$rhost"; then
+                    deleted_count=$((deleted_count + 1))
+                else
+                    echo "Error deleting snapshot: ${snapshot}" >&2
+                    if [ "$CLEARCUT" = false ]; then
+                        echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+                    else
+                        echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
+                    fi
+                    EXIT_CODE=1
+                    ds_failed=1
+                fi
+            fi
         done
     else
         local snapshot creation_date_sec
@@ -815,6 +948,7 @@ while [ "$#" -gt 0 ]; do
         -n) DRY_RUN=true; shift ;;
         -F) CLEARCUT=true; shift ;;
         -B) BOOKMARK_MODE=true; shift ;;
+        -G) GFS_MODE=true; shift ;;
         -v|--verbose) DEBUG=true; shift ;;
         -p) PORT="$2"; shift 2 ;;
         -p*) PORT="${1#-p}"; shift ;;
@@ -927,7 +1061,35 @@ fi
 # Parse time arguments
 parse_time_arguments "$@"
 
-if [ "$count_flag_seen" = true ]; then
+# -G validation: checked here, after parse_time_arguments has already run, so
+# age_flag_seen/count_flag_seen reflect exactly what was typed. Rejected
+# rather than silently reinterpreted, same reasoning as every other flag
+# conflict in this script -- a config mistake here is destructive, not cosmetic.
+if [ "$GFS_MODE" = true ]; then
+    if [ "$age_flag_seen" = true ]; then
+        echo "Error: -G (GFS ladder) only takes count-based flags (-H/-D/-W/-M/-Y) -- age-based flags (-y/-m/-w/-d/-h) have no ladder meaning." >&2
+        exit 1
+    fi
+    if [ "$BOOKMARK_MODE" = true ]; then
+        echo "Error: -G (GFS ladder) does not apply to -B (bookmark mode) -- exactly one bookmark exists per target by design, there is nothing to build a ladder of representatives from." >&2
+        exit 1
+    fi
+    if [ "$count_flag_seen" = false ]; then
+        echo "Error: -G (GFS ladder) needs at least one of -H/-D/-W/-M/-Y -- none were given, nothing to build a ladder from." >&2
+        exit 1
+    fi
+fi
+
+if [ "$GFS_MODE" = true ]; then
+    retain_mode="gfs"
+    retain_param=0   # unused in gfs mode -- the real per-tier counts live in GFS_KEEP
+    GFS_KEEP=( [H]="$keep_hours" [D]="$keep_days" [W]="$keep_weeks" [M]="$keep_months" [Y]="$keep_years" )
+    # One anchor for the whole run, computed once -- a multi-dataset or -R
+    # invocation shares a single consistent "now" instead of drifting slightly
+    # between datasets processed moments apart.
+    GFS_NOW=$(date +%s)
+    dbg "mode=gfs now=$GFS_NOW keep=H:${keep_hours} D:${keep_days} W:${keep_weeks} M:${keep_months} Y:${keep_years}"
+elif [ "$count_flag_seen" = true ]; then
     retain_mode="count"
     retain_param=$(calculate_keep_count)
     dbg "mode=count keep_count=$retain_param"
