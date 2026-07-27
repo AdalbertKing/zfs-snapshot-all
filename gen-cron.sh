@@ -159,7 +159,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.19'
+VERSION='v4.20'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -178,6 +178,8 @@ MARKER_END="# END zfs-backup-managed"
 declare -a JOB_LINES=()
 declare -a RETAIN_LINES=()
 declare -a MONITOR_LINES=()
+# Global -P fragment built from [excluded:] sections; empty means "defaults".
+PROTECT_FLAGS=""
 
 SEP=$'\x1c'   # field separator inside one encoded entity string
 LSEP=$'\x1e'  # entity separator inside one group's member list
@@ -413,8 +415,8 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|prune-bookmarks) : ;;
-                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks)" ;;
+                    template|dataset|prune|prune-bookmarks|excluded) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
             fi
@@ -599,17 +601,46 @@ build_entities() {
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
     local section kind name
+    # [excluded:] first: it produces a global flag fragment that every emitted
+    # delsnaps line carries, so it has to be resolved before any of them exist.
+    PROTECT_FLAGS=""
+    for section in "${SECTION_ORDER[@]}"; do
+        [ "${SECTION_KIND[$section]}" = "excluded" ] || continue
+        build_excluded_section "$section" "${SECTION_NAME[$section]}"
+    done
+
     for section in "${SECTION_ORDER[@]}"; do
         kind="${SECTION_KIND[$section]}"
         name="${SECTION_NAME[$section]}"
 
         case "$kind" in
-            defaults|template) continue ;;
+            defaults|template|excluded) continue ;;
             dataset)         build_dataset "$section" "$name" "$host_label" ;;
             prune)            build_prune_section "$section" "$name" "$host_label" ;;
             prune-bookmarks)  build_bookmark_prune_section "$section" "$name" "$host_label" ;;
         esac
     done
+}
+
+# build_excluded_section SECTION_HEADER PREFIX
+# [excluded:<prefix>] with `keep = N` -- how many of the NEWEST snapshots
+# carrying a Proxmox-reserved prefix delsnaps.sh must leave alone, per dataset.
+# Appends to the global PROTECT_FLAGS fragment pasted onto every delsnaps line.
+#
+# Global rather than per-scope on purpose: protection is a property of the
+# snapshot NAME, not of where it lives, and a per-scope version would let the
+# same reserved prefix be protected on one dataset and prunable on another --
+# which is exactly the kind of split that goes wrong quietly.
+build_excluded_section() {
+    local sec="$1" prefix="$2" keep
+    ini_has "$sec" keep || die "[excluded:$prefix] has no 'keep' (how many NEWEST to protect: a number, or 'all')"
+    keep="$(trim "$(ini_get "$sec" keep)")"
+    case "$keep" in
+        all|0|[1-9]|[1-9][0-9]*) ;;
+        "") die "[excluded:$prefix]: 'keep' is set but blank -- use a number, or 'all'" ;;
+        *) die "[excluded:$prefix]: keep='$keep' -- expected a non-negative integer or 'all'" ;;
+    esac
+    PROTECT_FLAGS="$PROTECT_FLAGS-P \"$prefix:$keep\" "
 }
 
 # build_dataset SECTION_HEADER DATASET_PATH HOST_LABEL
@@ -1016,7 +1047,7 @@ emit_inline_prune() {
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local cmd="$REPO_DIR/delsnaps.sh \"$joined\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -1031,7 +1062,7 @@ emit_prune_sections() {
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}\"$scope\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }

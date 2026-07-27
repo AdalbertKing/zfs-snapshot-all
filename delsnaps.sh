@@ -71,6 +71,21 @@ set -o pipefail
 # -O <SSH_OPTION>      : Extra "ssh -o NAME=VALUE", verbatim. Repeatable.
 #                        Matches snapsend.sh/snapget.sh -O (see there for why it
 #                        is placed first on the ssh command line).
+# -P <prefix>:<keep>   : How many of the NEWEST snapshots carrying a reserved
+#                        prefix to protect, per dataset. Repeatable; a prefix
+#                        not named keeps its default. Defaults are
+#                        __replicate_/__migration__/vzdump = "all", i.e. the
+#                        absolute protection this script has always had.
+#                          -P "__replicate_:1"  keep the newest one, older ones
+#                                               become eligible for the normal
+#                                               pattern match
+#                          -P "__replicate_:0"  no protection for that prefix
+#                        Only relaxes the guard -- an older reserved snapshot
+#                        still has to MATCH the run's pattern to be deleted, so
+#                        a routine "automated_hourly_" run never touches one.
+#                        Point: on a backup target that received a replication
+#                        stream (-r/-I carry every snapshot), these accumulate
+#                        forever and only the newest has any value.
 # Age-based (sum to one threshold date; snapshots older than it are deleted):
 # -y <years>           : Number of years.
 # -m <months>          : Number of months.
@@ -111,7 +126,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.24'
+VERSION='v1.25'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -121,6 +136,7 @@ KNOWN_HOSTS_FILE=""
 SSH_CIPHER=""
 SSH_KEY=""
 declare -a EXTRA_SSH_OPTS=()
+declare -a PROTECT_SPECS=()
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
 # could not write ("Permission denied" once per dataset), a notify script it
@@ -165,18 +181,69 @@ dbg() {
 
 # Snapshot name prefixes reserved by Proxmox VE itself (storage replication,
 # offline migration, vzdump). These are created/consumed exclusively by pvesr
-# and friends -- if this tool prunes one out from under them, the next
-# replication/migration/backup run breaks with a snapshot-chain mismatch that
-# this tool has no way to repair. Never eligible for deletion, no matter what
-# pattern a caller passes in.
-PROTECTED_PREFIXES=("__replicate_" "__migration__" "vzdump")
+# and friends -- prune one out from under them and the next
+# replication/migration/backup run breaks with a snapshot-chain mismatch this
+# tool cannot repair.
+#
+# The value is HOW MANY of the newest matching snapshots to keep, per dataset:
+#   all   -- protect every one (the default, and the pre-v1.25 behaviour)
+#   <N>   -- protect the N newest, let anything older fall through to the
+#            normal pattern match
+#   0     -- no protection for that prefix at all
+#
+# Why a count and not a boolean: on the SOURCE, pvesr keeps exactly one of its
+# own snapshots per dataset and removes the rest itself, so the distinction
+# never comes up. On a BACKUP TARGET that received a replication stream (-r/-I
+# carry every snapshot, not just the ones this tool made) nothing prunes them
+# and they accumulate forever -- while only the newest common one has any value
+# for a future incremental. Absolute protection made that garbage immortal.
+#
+# Defaults stay absolute so no existing invocation changes behaviour; -P is an
+# opt-in relaxation, per prefix, leaving the prefixes it does not name alone.
+declare -A PROTECT_KEEP=(
+    ["__replicate_"]="all"
+    ["__migration__"]="all"
+    ["vzdump"]="all"
+)
 
-is_protected_snapshot() {
-    local snapname="$1" prefix
-    for prefix in "${PROTECTED_PREFIXES[@]}"; do
-        [[ "$snapname" == "${prefix}"* ]] && return 0
+# Build the set of snapshots to protect FOR ONE DATASET. Per dataset, not
+# globally: each dataset carries its own replication chain, so "the newest one"
+# only means anything within a single dataset.
+#
+# Input is the dataset's snapshot list, oldest first (`zfs list -s creation`),
+# so the N newest matching a prefix are simply the last N of the matches.
+build_protected_set() {
+    local all="$1" prefix keep line i n start
+    declare -gA PROTECTED_NOW=()
+    for prefix in "${!PROTECT_KEEP[@]}"; do
+        keep="${PROTECT_KEEP[$prefix]}"
+        [ "$keep" = "0" ] && continue
+        local -a matching=()
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [[ "${line#*@}" == "${prefix}"* ]] && matching+=("$line")
+        done <<< "$all"
+        n=${#matching[@]}
+        [ "$n" -eq 0 ] && continue
+        start=0
+        if [ "$keep" != "all" ]; then
+            start=$(( n - keep ))
+            [ "$start" -lt 0 ] && start=0
+        fi
+        for ((i = start; i < n; i++)); do
+            PROTECTED_NOW["${matching[$i]}"]=1
+        done
+        if [ "$keep" != "all" ] && [ "$start" -gt 0 ]; then
+            dbg "Protection: '$prefix' keeping $keep newest of $n; $start older now prunable"
+        fi
     done
-    return 1
+}
+
+# True when this exact snapshot is protected for the dataset currently being
+# processed. Takes the FULL name (dataset@snap) because build_protected_set
+# keys on it -- two datasets can legitimately hold the same snapshot name.
+is_protected_snapshot() {
+    [ -n "${PROTECTED_NOW[$1]:-}" ]
 }
 
 # Run a zfs subcommand either locally or on a remote host. First two args are
@@ -310,13 +377,15 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
-    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
-    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
+    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
     echo "   -c/-K/-O: SSH cipher / private key / extra -o option, same as snapsend.sh/snapget.sh"
+    echo "   -P <prefix>:<keep>: protect only the <keep> newest reserved snapshots per dataset"
+    echo "                       (default: __replicate_/__migration__/vzdump all protected)"
     exit 1
 }
 
@@ -455,12 +524,17 @@ delete_snapshots() {
         return 1
     fi
 
+    # Which reserved snapshots are off-limits for THIS dataset, given the
+    # per-prefix keep counts. Recomputed per dataset because "the N newest"
+    # is only meaningful within one dataset's own chain.
+    build_protected_set "$all_snapshots"
+
     local filtered=()
     local line snapname
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         snapname="${line#*@}"
-        if is_protected_snapshot "$snapname"; then
+        if is_protected_snapshot "$line"; then
             dbg "Skipping protected snapshot (reserved by Proxmox VE): ${line}"
             continue
         fi
@@ -751,8 +825,28 @@ while [ "$#" -gt 0 ]; do
         -K) SSH_KEY="$2"; shift 2 ;;
         -K*) SSH_KEY="${1#-K}"; shift ;;
         -O) EXTRA_SSH_OPTS+=("$2"); shift 2 ;;
+        -P) PROTECT_SPECS+=("$2"); shift 2 ;;
+        -P*) PROTECT_SPECS+=("${1#-P}"); shift ;;
         *) break ;;
     esac
+done
+
+# -P <prefix>:<keep> -- override the protection keep-count for one reserved
+# prefix. Repeatable; prefixes not named keep their default. Validated here so
+# a typo fails before anything is destroyed, not halfway through a dataset.
+for _spec in "${PROTECT_SPECS[@]}"; do
+    case "$_spec" in
+        *:*) ;;
+        *) echo "Error: -P '$_spec' -- expected <prefix>:<keep>, e.g. -P '__replicate_:1'" >&2; exit 1 ;;
+    esac
+    _pfx="${_spec%:*}"
+    _keep="${_spec##*:}"
+    [ -n "$_pfx" ] || { echo "Error: -P '$_spec' has an empty prefix" >&2; exit 1; }
+    case "$_keep" in
+        all|0|[1-9]|[1-9][0-9]*) ;;
+        *) echo "Error: -P '$_spec' -- keep must be 'all', 0, or a positive integer" >&2; exit 1 ;;
+    esac
+    PROTECT_KEEP["$_pfx"]="$_keep"
 done
 
 if [ -n "$SSH_KEY" ] && [ ! -r "$SSH_KEY" ]; then

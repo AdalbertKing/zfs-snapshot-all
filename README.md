@@ -41,9 +41,9 @@ No package to install beyond the scripts themselves and their runtime dependenci
 |---|---|---|
 | [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.63 |
 | [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.57 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.23 |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age- or count-based) and orphaned bookmarks | v1.25 |
 | [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.19 |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.20 |
 | [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
 | [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
 
@@ -475,6 +475,8 @@ Options:
                    snapshots (age-based only)
 -p <PORT>          SSH port for remote datasets
 -k <FILE>          Known-hosts file for remote datasets
+-P <prefix>:<keep> How many of the NEWEST reserved snapshots to protect, per dataset
+                   (default: __replicate_/__migration__/vzdump all protected)
 -c <CIPHER_SPEC>   SSH cipher(s) to request — same as snapsend.sh/snapget.sh -c
 -K <FILE>          SSH private key (ssh -i + IdentitiesOnly=yes) — same as -K there
 -O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", repeatable, placed first — same as -O there
@@ -486,6 +488,28 @@ linked-clone disk) — it is reported and skipped, not silently destroyed. `-F` 
 cascading behavior when genuinely wanted. Datasets may be remote (`[user@]host:path`; remote only
 when there's a `:` with no `/` before it), and local/remote entries can be mixed in one
 comma-separated list.
+
+**Reserved-prefix protection is a keep-count, not a boolean** (since v1.25). Snapshots named
+`__replicate_*`, `__migration__*` and `vzdump*` belong to Proxmox itself, and pruning one out from
+under `pvesr` breaks the replication chain irreparably — so by default *all* of them are protected,
+exactly as before. But absolute protection also makes them **immortal**, which is wrong in one
+specific place: a **backup target** that received a replication stream. `-r`/`-I` carry every
+snapshot on the source, not just the ones this tool made, so those reserved snapshots land on the
+target where nothing ever prunes them — while only the newest one has any value for a future
+incremental. `-P <prefix>:<keep>` (or `[excluded:<prefix>]` in the config) sets how many of the
+**newest** to keep, *per dataset*:
+
+```bash
+./delsnaps.sh -P "__replicate_:1" tank/backups "__replicate_" -H0   # keep the newest, prune the rest
+```
+
+Three properties worth knowing. It is **per prefix** — relaxing `__replicate_` leaves
+`__migration__` and `vzdump` absolutely protected, so one decision never silently widens into
+three. It is **per dataset**, because each dataset carries its own replication chain and "the
+newest" is meaningless across them. And it only **relaxes a guard, never widens a match**: an older
+reserved snapshot still has to match the run's pattern to be deleted, so a routine
+`"automated_hourly_"` job cannot touch one even with protection fully disabled (`:0`) — verified
+live.
 
 **An empty pattern, or no age/count flags at all, is deliberately unrestricted — by design, not
 oversight.** Matching is by literal string prefix (`[[ "$snapname" == "${pat}"* ]]`), so an empty
@@ -579,6 +603,7 @@ Section types (a header is always `[type:name]`, split on the first `:`, except 
 | `[template:<tier>]` | One tier's full cadence + retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep`/`retain`, `monitor_warn`/`monitor_crit`, … |
 | `[dataset:<path>]` | A dataset you own end-to-end: `use_template = <tier>[,<tier>...]`, plus per-dataset overrides (`flags`, `quiesce`, `autotune`, `dst`, …). Runs create(+send) and inline self-prune, scoped to its own path only. |
 | `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store receiving pushes from elsewhere). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only; `ssh_flags` for a remote (`host:path`) scope. |
+| `[excluded:<prefix>]` | How many of the **newest** snapshots carrying a Proxmox-reserved prefix to protect, per dataset: `keep = <N>` or `keep = all`. Emits `-P` onto every snapshot-prune line |
 | `[prune-bookmarks:<scope>]` | Age-based cleanup of orphaned bookmarks — `schedule`, `age` (raw `delsnaps.sh` age flags), `pattern` (default `tgt-`), `recursive`, `ssh_flags` for a remote scope |
 
 There is no separate `[monitor:]` section — a staleness check is derived **automatically**

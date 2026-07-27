@@ -185,6 +185,65 @@ run_del "$POOL/protected" "" -H0
 check "protected: __replicate_/__migration__/vzdump survive an empty pattern + keep 0" \
       "__replicate_101-0_1 __migration__1 vzdump_1" "$(snaps_of protected)"
 
+# --- -P: protect only the N newest reserved snapshots, per dataset ----------
+# Absolute protection makes reserved snapshots immortal, which is right on a
+# live source (pvesr owns them) but wrong on a backup target that received a
+# replication stream: -r/-I carry every snapshot, nothing prunes them, and only
+# the newest has any value for a future incremental.
+
+mkds keepnewest
+mksnaps keepnewest __replicate_1 __replicate_2 __replicate_3 __replicate_4
+run_del -P "__replicate_:1" "$POOL/keepnewest" "__replicate_" -H0
+check "-P keep 1: only the NEWEST reserved snapshot survives" \
+      "__replicate_4" "$(snaps_of keepnewest)"
+
+mkds keeptwo
+mksnaps keeptwo __replicate_1 __replicate_2 __replicate_3 __replicate_4
+run_del -P "__replicate_:2" "$POOL/keeptwo" "__replicate_" -H0
+check "-P keep 2: the two newest survive" \
+      "__replicate_3 __replicate_4" "$(snaps_of keeptwo)"
+
+# A prefix NOT named by -P keeps its default (absolute) protection -- so
+# relaxing one reserved prefix must not quietly unprotect the others.
+mkds keepother
+mksnaps keepother __replicate_1 __replicate_2 __migration__1 vzdump_1
+run_del -P "__replicate_:1" "$POOL/keepother" "" -H0
+check "-P on one prefix leaves the others absolutely protected" \
+      "__replicate_2 __migration__1 vzdump_1" "$(snaps_of keepother)"
+
+# keep 0 = no protection at all for that prefix.
+mkds keepzero2
+mksnaps keepzero2 __replicate_1 __replicate_2
+run_del -P "__replicate_:0" "$POOL/keepzero2" "__replicate_" -H0
+check "-P keep 0: no protection for that prefix" "" "$(snaps_of keepzero2)"
+
+# The keep-count is per DATASET, not global: each dataset carries its own
+# replication chain, so "the newest" only means anything within one.
+mkds perds perds/a perds/b
+mksnaps perds/a __replicate_a1 __replicate_a2
+mksnaps perds/b __replicate_b1 __replicate_b2
+run_del -R -P "__replicate_:1" "$POOL/perds" "__replicate_" -H0
+check "-P is per-dataset: child a keeps its own newest" "__replicate_a2" "$(snaps_of perds/a)"
+check "-P is per-dataset: child b keeps its own newest" "__replicate_b2" "$(snaps_of perds/b)"
+
+# The guard only stops a DELIBERATE prune of reserved snapshots. Even with
+# protection fully off, a routine run whose pattern doesn't match them leaves
+# them alone -- which is why a normal hourly job can never touch pvesr's state.
+mkds routine
+mksnaps routine __replicate_1 auto_1 auto_2
+run_del -P "__replicate_:0" "$POOL/routine" "auto_" -H0
+check "an unrelated pattern never reaches reserved snapshots, protection or not" \
+      "__replicate_1" "$(snaps_of routine)"
+
+# A malformed -P must fail before anything is destroyed.
+mkds badspec
+mksnaps badspec auto_1
+run_del -P "no-colon" "$POOL/badspec" "auto_" -H0
+check "-P without a colon is rejected" "1" "$RC"
+run_del -P "__replicate_:banana" "$POOL/badspec" "auto_" -H0
+check "-P with a non-numeric keep is rejected" "1" "$RC"
+check "a rejected -P destroys nothing" "auto_1" "$(snaps_of badspec)"
+
 # --- dry run ----------------------------------------------------------------
 
 mkds dry
