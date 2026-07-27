@@ -198,6 +198,89 @@ check "incremental: intermediate tier snapshots ride along" "yes" \
          && zfs list -H -o name -t snapshot "$TM" | grep -q '@tier_weekly' \
          && echo yes || echo no)"
 
+# --- -i : skip intermediates, send only the diff to newest ------------------
+# The mirror image of the test above: same setup, but -i must NOT carry the
+# intermediate tier snapshots -- only the base (already on the target from the
+# first send) and the newest land.
+zfs create -p "$POOL/skipmid" || exit 1
+run_send -m "auto_" "$POOL/skipmid" "$BK"
+TSM="$(tgt_of skipmid)"
+tick; zfs snapshot "$POOL/skipmid@tier_daily"
+tick; zfs snapshot "$POOL/skipmid@tier_weekly"
+tick; zfs snapshot "$POOL/skipmid@tier_final"
+run_send -i -e "$POOL/skipmid" "$BK"
+check "-i: exit code 0" "0" "$RC"
+check "-i: intermediate tiers do NOT ride along" "no" \
+      "$(zfs list -H -o name -t snapshot "$TSM" | grep -q '@tier_daily' \
+         && echo yes || echo no)"
+check "-i: the newest still lands" "yes" \
+      "$(zfs list -H -o name -t snapshot "$TSM" | grep -q '@tier_final' && echo yes || echo no)"
+
+# -i combined with -r: one atomic recursive stream, and the SAME elision
+# applies tree-wide -- base and newest on every dataset in the subtree,
+# intermediates on none. (Live-verified once already during design; pinned
+# here so it stays true.)
+zfs create -p "$POOL/skiprec" || exit 1
+zfs create -p "$POOL/skiprec/child" || exit 1
+run_send -r -m "auto_" "$POOL/skiprec" "$BK"
+TSR="$(tgt_of skiprec)"
+tick; zfs snapshot -r "$POOL/skiprec@mid"
+tick; zfs snapshot -r "$POOL/skiprec@newest"
+run_send -r -i -e "$POOL/skiprec" "$BK"
+check "-i -r: parent skips the intermediate" "no" \
+      "$(zfs list -H -o name -t snapshot "$TSR" | grep -q '@mid' && echo yes || echo no)"
+check "-i -r: child skips the intermediate too" "no" \
+      "$(zfs list -H -o name -t snapshot "$TSR/child" | grep -q '@mid' && echo yes || echo no)"
+check "-i -r: parent still gains the newest" "yes" \
+      "$(zfs list -H -o name -t snapshot "$TSR" | grep -q '@newest' && echo yes || echo no)"
+check "-i -r: child still gains the newest" "yes" \
+      "$(zfs list -H -o name -t snapshot "$TSR/child" | grep -q '@newest' && echo yes || echo no)"
+
+# --- -T : auto-catch-up threshold --------------------------------------------
+# The mechanism measures elapsed time against the dataset's OWN observed
+# interval, so it is unit-agnostic -- a real gap of a couple of seconds
+# between snapshots stands in for "hours" exactly as well as an actual hour
+# would, letting this run in a normal test suite instead of waiting.
+zfs create -p "$POOL/thresh" || exit 1
+run_send -m "auto_" "$POOL/thresh" "$BK"
+TT="$(tgt_of thresh)"
+tick; zfs snapshot "$POOL/thresh@t2"
+tick; zfs snapshot "$POOL/thresh@t3"
+tick; zfs snapshot "$POOL/thresh@t4"
+tick
+
+# A high threshold: elapsed time since the common base is nowhere near
+# threshold * own-interval, so -T must stand down and every intermediate
+# still rides along, same as the default.
+run_send -e -m "auto_" -T 1000 "$POOL/thresh" "$BK"
+check "-T high threshold: stands down, exit 0" "0" "$RC"
+check "-T high threshold: intermediates still ride along" "yes" \
+      "$(zfs list -H -o name -t snapshot "$TT" | grep -q '@t2' && echo yes || echo no)"
+
+# Reset the target back to just the base and try again with a threshold of 1:
+# more than 1 of the dataset's own (few-second) intervals has clearly elapsed,
+# so -T must trigger and behave exactly like an explicit -i would.
+zfs destroy -R "$TT"
+FIRST_TT="$(zfs list -H -o name -s creation -t snapshot "$POOL/thresh" | head -1 | sed 's/.*@//')"
+zfs send "$POOL/thresh@$FIRST_TT" | zfs recv -o canmount=noauto "$TT"
+run_send -e -m "auto_" -T 1 "$POOL/thresh" "$BK"
+check "-T low threshold: triggers catch-up, exit 0" "0" "$RC"
+check "-T low threshold: intermediates do NOT ride along" "no" \
+      "$(zfs list -H -o name -t snapshot "$TT" | grep -q '@t2' && echo yes || echo no)"
+check "-T low threshold: the newest still lands" "yes" \
+      "$(zfs list -H -o name -t snapshot "$TT" | grep -q '@t4' && echo yes || echo no)"
+
+# An explicit -i always wins over -T's inference -- -T must not even attempt
+# its measurement once -i is already given.
+zfs create -p "$POOL/threshwin" || exit 1
+run_send -m "auto_" "$POOL/threshwin" "$BK"
+TTW="$(tgt_of threshwin)"
+tick; zfs snapshot "$POOL/threshwin@mid"
+tick; zfs snapshot "$POOL/threshwin@newest"
+run_send -e -m "auto_" -i -T 1000 "$POOL/threshwin" "$BK"
+check "-i wins over -T: intermediates skipped despite a stand-down threshold" "no" \
+      "$(zfs list -H -o name -t snapshot "$TTW" | grep -q '@mid' && echo yes || echo no)"
+
 # --- -e : use an existing snapshot instead of creating one ------------------
 
 zfs create -p "$POOL/ex" || exit 1

@@ -321,6 +321,87 @@ check "mixing age and count flags exits 1" "1" "$RC"
 check "mixing age and count flags destroys nothing" \
       "auto_1 auto_2 auto_3" "$(snaps_of mixed)"
 
+# --- -G: cascading GFS ladder -------------------------------------------------
+# See the "GFS LADDER" block in delsnaps.sh's own header for the full design.
+# Real snapshot creation times cannot be backdated on a live pool (same
+# constraint the age-mode tests above already work around), so most of what
+# follows either stays within a single bucket (burst selection, provable with
+# ordinary few-second gaps) or uses the GFS_NOW environment override to shift
+# the ladder's ANCHOR forward instead of the snapshots backward -- a snapshot
+# created moments ago can be made to look, say, 26 real hours old to the
+# ladder without waiting. GFS_NOW always defaults to the real clock; only
+# these tests ever set it.
+
+# Burst: several snapshots seconds apart all land in the SAME hourly bucket
+# (H#1) -- only the newest one should survive it, everyone else in that
+# bucket is a loser, not a keeper.
+mkds gfsburst
+mksnaps gfsburst auto_1 auto_2 auto_3 auto_4
+run_del -G "$POOL/gfsburst" "auto_" -H24
+check "-G burst: only the newest snapshot in the shared bucket survives" \
+      "auto_4" "$(snaps_of gfsburst)"
+check "-G burst: exit code 0" "0" "$RC"
+
+# Cascade boundary: shift the anchor so this cluster looks ~26h old -- outside
+# the 24h hourly window entirely, so H must end up with ZERO survivors and the
+# cluster's newest must land in D's FIRST bucket instead (D starts exactly
+# where H's range ends, at -24h, so a 26h-old snapshot is squarely inside
+# D#1's (-48h,-24h] window). Proves the cascade actually starts the next tier
+# where the previous one stops, not independently from "now".
+mkds gfscascade
+mksnaps gfscascade auto_1 auto_2 auto_3
+GFS_NOW=$(( $(date +%s) + 26*3600 )) run_del -G "$POOL/gfscascade" "auto_" -H24 -D7
+check "-G cascade: a 26h-old cluster is NOT kept by the hourly tier" \
+      "auto_3" "$(snaps_of gfscascade)"
+check "-G cascade: exit code 0" "0" "$RC"
+
+# Older than every requested rung entirely (here: past H24+D7+W4's combined
+# ~36-day reach) falls outside all buckets and must be deleted outright, not
+# quietly kept for lack of a matching rung.
+mkds gfsoutside
+mksnaps gfsoutside auto_1
+GFS_NOW=$(( $(date +%s) + 40*86400 )) run_del -G "$POOL/gfsoutside" "auto_" -H24 -D7 -W4
+check "-G outside every rung: deleted, not silently kept" "" "$(snaps_of gfsoutside)"
+
+# -R: parent and child each get their OWN independent ladder, same as every
+# other retention mode already does under -R.
+mkds gfsr gfsr/child
+mksnaps gfsr p1 p2 p3
+mksnaps gfsr/child c1 c2 c3
+run_del -G -R "$POOL/gfsr" "" -H24
+check "-G -R: parent's own ladder keeps only its newest" "p3" "$(snaps_of gfsr)"
+check "-G -R: child's own ladder keeps only its newest" "c3" "$(snaps_of gfsr/child)"
+
+# Hold guard: a snapshot that LOSES its bucket but is still held must be
+# skipped, not destroyed -- same protection every other mode already gets.
+mkds gfshold
+mksnaps gfshold auto_1 auto_2
+zfs hold zfssnapall_inflight "$POOL/gfshold@auto_1" || exit 1
+run_del -G "$POOL/gfshold" "auto_" -H24
+check "-G hold guard: a held loser survives anyway" \
+      "auto_1 auto_2" "$(snaps_of gfshold)"
+check "-G hold guard: not reported as a failure" "0" "$RC"
+zfs release zfssnapall_inflight "$POOL/gfshold@auto_1" 2>/dev/null
+
+# --- -G validation ------------------------------------------------------------
+
+mkds gfsage
+mksnaps gfsage auto_1
+run_del -G "$POOL/gfsage" "auto_" -h24
+check "-G rejects age-based flags: exit 1" "1" "$RC"
+check "-G rejects age-based flags: destroys nothing" "auto_1" "$(snaps_of gfsage)"
+
+mkds gfsbook
+mksnaps gfsbook auto_1
+run_del -G -B "$POOL/gfsbook" "tgt-" -H24
+check "-G rejects bookmark mode: exit 1" "1" "$RC"
+
+mkds gfsempty
+mksnaps gfsempty auto_1
+run_del -G "$POOL/gfsempty" "auto_"
+check "-G with no H/D/W/M/Y at all: exit 1" "1" "$RC"
+check "-G with no H/D/W/M/Y at all: destroys nothing" "auto_1" "$(snaps_of gfsempty)"
+
 # --- clone dependency guard -------------------------------------------------
 
 # A plain `zfs destroy` refuses a snapshot that has a dependent clone (a
