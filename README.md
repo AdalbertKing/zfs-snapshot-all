@@ -1035,6 +1035,10 @@ a diff into a concrete plan: which suites to run (cheap local ones first), which
 re-check, and which paths **no suite can cover** and therefore must be exercised by hand. Run it
 before deciding you are done; the suites below are what it points at.
 
+> The design, the reasoning behind it, and how to lift it into an unrelated project are written up
+> separately in **[test/GRAPH-TESTING.md](test/GRAPH-TESTING.md)** — including the field notes for
+> every mistake made building it.
+
 The graph carries three kinds of edge, and only the first is derivable from the code:
 
 - **source edges** — `snapsend.sh`/`snapget.sh` source `lib-zfs-snap.sh`, so a change to the lib
