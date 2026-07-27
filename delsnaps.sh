@@ -63,7 +63,7 @@ set -o pipefail
 # -p <PORT>            : SSH port for remote datasets (default: 22).
 # -k <FILE>            : Verify remote host keys against this known_hosts file
 #                        (StrictHostKeyChecking=yes). Default when omitted is
-#                        StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh.
+#                        StrictHostKeyChecking=accept-new, matching snapsend.sh/snapget.sh.
 # -c <CIPHER_SPEC>     : SSH cipher(s) to request (ssh -c). No-op with no remote
 #                        dataset entry. Matches snapsend.sh/snapget.sh -c.
 # -K <FILE>            : SSH private key to authenticate with (ssh -i, plus -o
@@ -126,7 +126,7 @@ set -o pipefail
 # Example: prune snapsend/snapget bookmarks untouched for 30+ days:
 #   ./delsnaps.sh -B -R "tank/data" "tgt-" -d30
 
-VERSION='v1.25'
+VERSION='v1.26'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -866,13 +866,14 @@ pattern="$1"
 shift
 
 # Built once, used by every ssh invocation in run_zfs. Default (-k omitted) is
-# StrictHostKeyChecking=no, matching snapsend.sh/snapget.sh. Only opt into -k on
-# a host where KNOWN_HOSTS_FILE has already been populated (e.g. via
+# StrictHostKeyChecking=accept-new, matching snapsend.sh/snapget.sh: trust the
+# host key on first connection, refuse if it ever changes afterward. Only opt
+# into -k on a host where KNOWN_HOSTS_FILE has already been populated (e.g. via
 # ssh-keyscan) and the fingerprint verified out of band.
 if [ -n "$KNOWN_HOSTS_FILE" ]; then
     SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
 else
-    SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
+    SSH_OPTS=(-o StrictHostKeyChecking=accept-new -p "$PORT")
 fi
 [ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
 

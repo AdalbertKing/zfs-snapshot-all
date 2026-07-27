@@ -413,6 +413,84 @@ ensure_target_ancestors() {
     fi
 }
 
+###############################################################################
+# HOST VALIDATION -- refuse a loopback transfer (remote host is actually this
+# same machine), and cache the answer per remote for the whole run
+###############################################################################
+# Byte-identical between snapsend.sh and snapget.sh before this moved here --
+# the remote side of a run is the SAME host for every dataset in DATASETS, so
+# calling this once per dataset (as both scripts did, from inside
+# process_dataset) paid a full `ssh ... cat /etc/machine-id` round trip per
+# dataset for an answer that cannot change mid-run. Cached here the same way
+# pool_health/csend_pool_has already are: one entry per remote_user@remote_host,
+# a real question asked at most once, everything after that a lookup.
+declare -A VALIDATED_REMOTE_CACHE=()
+
+validate_remote_host() {
+    local remote_user="$1"
+    local remote_host="$2"
+
+    [ -z "$remote_host" ] && return 0  # Skip check for local transfers
+
+    local key="$remote_user@$remote_host"
+    [ -n "${VALIDATED_REMOTE_CACHE[$key]+x}" ] && return 0
+
+    # Get local machine ID (works on systemd-based distros)
+    local local_machine_id
+    local_machine_id=$(cat /etc/machine-id 2>/dev/null || echo "UNKNOWN")
+
+    # Get remote machine ID through SSH
+    local remote_machine_id
+    remote_machine_id=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        "cat /etc/machine-id 2>/dev/null || echo 'UNKNOWN'" 2>/dev/null)
+
+    # Core safety check
+    if [[ "$local_machine_id" != "UNKNOWN" && "$local_machine_id" == "$remote_machine_id" ]]; then
+        log 0 "CRITICAL: Remote host $remote_host has identical machine-id to local system"
+        log 0 "This indicates loopback transfer attempt. Aborting."
+        exit 1
+    fi
+
+    # Fallback check for non-systemd systems
+    if [[ "$local_machine_id" == "UNKNOWN" ]]; then
+        local local_hostname
+        local_hostname=$(hostname -f)
+        local remote_hostname
+        remote_hostname=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "hostname -f")
+
+        if [[ "$local_hostname" == "$remote_hostname" ]]; then
+            log 0 "CRITICAL: Remote hostname matches local ($local_hostname)"
+            log 0 "Possible loopback transfer. Use local mode instead."
+            exit 1
+        fi
+    fi
+
+    VALIDATED_REMOTE_CACHE["$key"]=1
+}
+
+# Echoes "yes" when COMPRESSOR is confirmed present on the remote host, "no"
+# otherwise -- cached per (remote, compressor) for the whole run, same idiom as
+# above: the remote does not gain or lose a binary mid-run, so this is a real
+# `command -v` over ssh at most once per compressor per run, a lookup after
+# that.
+declare -A REMOTE_COMPRESSOR_CACHE=()
+
+remote_has_compressor() {
+    local remote_user="$1" remote_host="$2" compressor="$3" key val
+    key="$remote_user@$remote_host/$compressor"
+    if [ -n "${REMOTE_COMPRESSOR_CACHE[$key]+x}" ]; then
+        printf '%s' "${REMOTE_COMPRESSOR_CACHE[$key]}"
+        return 0
+    fi
+    if ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v $compressor >/dev/null 2>&1"; then
+        val=yes
+    else
+        val=no
+    fi
+    REMOTE_COMPRESSOR_CACHE["$key"]="$val"
+    printf '%s' "$val"
+}
+
 # True when NAME matches any of the caller's EXCLUDE_PATTERNS (-X). The patterns
 # are extended regexes matched unanchored against the full dataset name, which is
 # syncoid's --exclude behaviour -- so `data/vm-1` catches `vm-10` too unless the

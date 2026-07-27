@@ -10,18 +10,29 @@ set -o pipefail
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
 #   -e               Use existing latest snapshot on source instead of creating a new one
-#   -z               Compress the data stream (default compressor: zstd).
-#                    Ignored, with a log line, when the source is local: there
-#                    is no link between the compressor and the decompressor,
-#                    only a pipe on this same host, so it is pure CPU cost.
+#   -z               Compress the data stream (default compressor: zstd). Redundant
+#                    against a remote source -- see "COMPRESSION DEFAULT" below,
+#                    this is now ON by default there. Ignored, with a log line,
+#                    when the source is local: there is no link between the
+#                    compressor and the decompressor, only a pipe on this same
+#                    host, so it is pure CPU cost.
 #   -Z               Compress with zstd explicitly (same as -z; kept for clarity)
 #   -g               Compress with pigz instead -- the escape hatch for a host
 #                    where zstd is missing or unwanted
+#   -N               No compression. Opts out of the default-on behaviour against
+#                    a remote source (see below). No-op against a local source,
+#                    which never compresses regardless of any flag. Contradicts
+#                    -z/-Z/-g (pick one).
 #   -l <LEVEL>        Compression level (default: 3 for zstd, 6 for pigz -- each
 #                    tool's own default; ranges differ, zstd 1-19 vs pigz 1-9)
 #
 # The compressor flags are last-one-wins, so appending one to an existing command
 # is always well-defined.
+#
+# COMPRESSION DEFAULT: ON (zstd -3) whenever the source is remote and neither
+# -z/-Z/-g nor -N was given -- new since v2.58 (mirrors snapsend.sh v2.64). A
+# plain `-N` restores the old off-by-default behaviour for one invocation. -A,
+# if given, still gets the final per-dataset say over whatever this picks.
 #
 # WHY zstd IS THE DEFAULT (measured 2026-07-22 on pve0, Xeon E5-1620 v2, 8 cores,
 # against a real 1.5 GB `zfs send` stream of a production VM disk):
@@ -144,10 +155,11 @@ set -o pipefail
 #                    than the probe measured, which makes compression MORE
 #                    worthwhile, so -A decides against min(measured, -b).
 #   -k <FILE>         Verify remote host keys against this known_hosts file instead
-#                     of blindly trusting them (StrictHostKeyChecking=no is the
-#                     default when -k is omitted, unchanged from prior versions --
-#                     only opt into -k if you've already populated FILE, e.g. via
-#                     ssh-keyscan, and verified the fingerprint out of band)
+#                     of the default (StrictHostKeyChecking=accept-new when -k is
+#                     omitted: trust-on-first-use, then refuse if the key ever
+#                     changes -- only opt into -k if you've already populated
+#                     FILE, e.g. via ssh-keyscan, and verified the fingerprint
+#                     out of band)
 #   -o "<FLAGS>"       Extra raw flags appended verbatim to `zfs send` on the
 #                    REMOTE source (e.g. -o "-L -e" for large_block/embed_data).
 #                    Passed through with no validation -- same trust level as
@@ -198,7 +210,7 @@ set -o pipefail
 #                    datasets of the same host). Needs an existing snapshot to
 #                    sample. Every failure path leaves your settings untouched.
 #
-#                    An explicit -z/-Z/-g WINS: -A stands down and honours it.
+#                    An explicit -z/-Z/-g or -N WINS: -A stands down and honours it.
 #   -i <TAG>          Identifier for this job. Folds TAG into both the lock
 #                    key and the per-target bookmark name, so a second,
 #                    genuinely independent job aimed at the SAME src/tgt pair
@@ -227,7 +239,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.57'
+VERSION='v2.58'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -295,6 +307,10 @@ AUTOTUNE=0
 # "user explicitly asked for it" -- auto-tuning may fill the first case in, but
 # must never silently overrule the second.
 COMPRESSION_SET=0
+# -N: opt out of the on-by-default compression for a remote source (see the
+# REMOTE_HOST block in section 5B). Meaningless for a local source, which never
+# compresses regardless.
+NO_COMPRESS=0
 # -o: raw flags appended verbatim to the remote `zfs send` (e.g. "-L -e"). -x:
 # local recv-side property excludes, one -x per occurrence, accumulated as
 # repeated "-x PROP".
@@ -506,38 +522,8 @@ find_recursive_name_collisions() {
 ###############################################################################
 #BEGIN 2F [HOST VALIDATION]
 ###############################################################################
-validate_remote_host() {
-    local remote_user="$1"
-    local remote_host="$2"
-
-    [ -z "$remote_host" ] && return 0  # Skip check for local transfers
-
-    local local_machine_id
-    local_machine_id=$(cat /etc/machine-id 2>/dev/null || echo "UNKNOWN")
-
-    local remote_machine_id
-    remote_machine_id=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-        "cat /etc/machine-id 2>/dev/null || echo 'UNKNOWN'" 2>/dev/null)
-
-    if [[ "$local_machine_id" != "UNKNOWN" && "$local_machine_id" == "$remote_machine_id" ]]; then
-        log 0 "CRITICAL: Remote host $remote_host has identical machine-id to local system"
-        log 0 "This indicates loopback transfer attempt. Aborting."
-        exit 1
-    fi
-
-    if [[ "$local_machine_id" == "UNKNOWN" ]]; then
-        local local_hostname
-        local_hostname=$(hostname -f)
-        local remote_hostname
-        remote_hostname=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "hostname -f")
-
-        if [[ "$local_hostname" == "$remote_hostname" ]]; then
-            log 0 "CRITICAL: Remote hostname matches local ($local_hostname)"
-            log 0 "Possible loopback transfer. Use local mode instead."
-            exit 1
-        fi
-    fi
-}
+# validate_remote_host() now lives in lib-zfs-snap.sh (shared with snapsend.sh,
+# was byte-identical here) with a per-remote cache -- see the comment there.
 ###############################################################################
 #END 2F
 
@@ -687,7 +673,7 @@ transfer_data() {
 
     if [ -n "$remote_host" ]; then
         if [ $COMPRESSION -eq 1 ]; then
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v $COMPRESSOR >/dev/null 2>&1"; then
+            if [ "$(remote_has_compressor "$remote_user" "$remote_host" "$COMPRESSOR")" != "yes" ]; then
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
@@ -1158,7 +1144,7 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
+while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         i) IDENTIFIER="$OPTARG";;
@@ -1167,6 +1153,7 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         g) COMPRESSION=1; COMPRESSOR="pigz"; COMPRESSION_SET=1;;
+        N) NO_COMPRESS=1;;
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
         r) RECURSIVE=1;;
@@ -1191,12 +1178,17 @@ while getopts "m:ezZgl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -K -O -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -K -O -U -F -V" >&2
             exit 1
             ;;
     esac
 done
 shift $((OPTIND-1))
+
+if [ $NO_COMPRESS -eq 1 ] && [ $COMPRESSION_SET -eq 1 ]; then
+    echo "Error: -N (no compression) contradicts -z/-Z/-g (compress with...) -- pick one." >&2
+    exit 1
+fi
 
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
@@ -1300,14 +1292,18 @@ command -v zfs >/dev/null || { echo "Error: zfs command not found." >&2; exit 1;
 command -v flock >/dev/null || { echo "Error: flock command not found." >&2; exit 1; }
 
 # Built once, used by every ssh invocation below. Default (-k omitted) is
-# UNCHANGED from prior versions: StrictHostKeyChecking=no. Only opt into -k on
-# a host where KNOWN_HOSTS_FILE has already been populated (e.g. ssh-keyscan)
-# and the fingerprint verified out of band -- e.g. a backup host reaching
-# across an untrusted network, unlike the trusted-LAN default use case here.
+# StrictHostKeyChecking=accept-new: the FIRST connection to a given host trusts
+# and records its key (same as "no" ever did), but every connection AFTER that
+# is checked against what got recorded -- a host key that changes later (a
+# swapped/MITM'd box, a reused IP pointing somewhere else) is refused instead of
+# silently trusted again. Only opt into -k on a host where KNOWN_HOSTS_FILE has
+# already been populated (e.g. ssh-keyscan) and the fingerprint verified out of
+# band -- e.g. a backup host reaching across an untrusted network, unlike the
+# trusted-LAN default use case here.
 if [ -n "$KNOWN_HOSTS_FILE" ]; then
     SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
 else
-    SSH_OPTS=(-o StrictHostKeyChecking=no -p "$PORT")
+    SSH_OPTS=(-o StrictHostKeyChecking=accept-new -p "$PORT")
 fi
 
 # Fail fast instead of hanging forever. Without these there is NO timeout of any
@@ -1443,6 +1439,15 @@ if [ $FLAT_RECURSE -eq 1 ]; then
     log 1 "Flat-recursive (-R): expanded to ${#DATASETS[@]} dataset(s): ${DATASETS[*]}"
 fi
 
+# Compress by default when the source is remote and the caller said nothing
+# about it -- mirrors snapsend.sh section 5B (same reasoning: a plain
+# invocation over ssh is the common case this most helps). An explicit
+# -z/-Z/-g still wins outright; -N opts back out to the old default.
+if [ -n "$REMOTE_HOST" ] && [ $COMPRESSION_SET -eq 0 ] && [ $NO_COMPRESS -eq 0 ]; then
+    COMPRESSION=1
+    log 1 "Compression: zstd -$COMPRESSION_LEVEL (default for a remote source -- pass -N to disable, -g for pigz, -A to auto-decide per dataset)"
+fi
+
 # A local pull has no link to save bytes on. The pipeline would be
 #   zfs send | zstd -c | mbuffer | zstd -d -c | zfs recv
 # i.e. compress and immediately decompress on the same machine, paying for both
@@ -1494,6 +1499,12 @@ AUTOTUNE_ACTIVE=0
 if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
     if [ $COMPRESSION_SET -eq 1 ]; then
         log 1 "Link tuning: -A ignored, compression was requested explicitly (-z/-Z/-g) -- honouring your flag"
+    elif [ $NO_COMPRESS -eq 1 ]; then
+        # -N is just as explicit a request as -z, in the other direction -- see
+        # the longer note in snapsend.sh. Without this, gen-cron.sh's automatic
+        # -A on every remote dst would silently re-enable compression a config
+        # explicitly turned off.
+        log 1 "Link tuning: -A ignored, compression was explicitly disabled (-N) -- honouring your flag"
     else
         AUTOTUNE_ACTIVE=1
         COMPRESSION_BASE=$COMPRESSION
