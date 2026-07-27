@@ -184,7 +184,11 @@ declare -a PROTECT_SPECS=()
 # calendar precision this tool never needed anyway.
 GFS_MODE=false
 declare -A GFS_KEEP=()
-GFS_NOW=""
+# Preserves an environment-provided override (see the GFS_NOW assignment
+# below, and its comment, for why) -- this bare declaration must NOT clobber
+# it with an unconditional "", or the override would already be lost before
+# the real logic ever reads it. Confirmed live: this exact bug shipped once.
+GFS_NOW="${GFS_NOW:-}"
 declare -Ar GFS_UNIT_SECONDS=( [H]=3600 [D]=86400 [W]=604800 [M]=2592000 [Y]=31536000 )
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
