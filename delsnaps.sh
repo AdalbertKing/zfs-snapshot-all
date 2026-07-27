@@ -162,7 +162,7 @@ set -o pipefail
 #   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
 # (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.27'
+VERSION='v1.28'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -184,7 +184,11 @@ declare -a PROTECT_SPECS=()
 # calendar precision this tool never needed anyway.
 GFS_MODE=false
 declare -A GFS_KEEP=()
-GFS_NOW=""
+# Preserves an environment-provided override (see the GFS_NOW assignment
+# below, and its comment, for why) -- this bare declaration must NOT clobber
+# it with an unconditional "", or the override would already be lost before
+# the real logic ever reads it. Confirmed live: this exact bug shipped once.
+GFS_NOW="${GFS_NOW:-}"
 declare -Ar GFS_UNIT_SECONDS=( [H]=3600 [D]=86400 [W]=604800 [M]=2592000 [Y]=31536000 )
 # Default paths follow the ACCOUNT, not root. A delegated non-root run cannot
 # read anything under /root (0700), so defaulting there gave it a stats log it
@@ -1086,8 +1090,15 @@ if [ "$GFS_MODE" = true ]; then
     GFS_KEEP=( [H]="$keep_hours" [D]="$keep_days" [W]="$keep_weeks" [M]="$keep_months" [Y]="$keep_years" )
     # One anchor for the whole run, computed once -- a multi-dataset or -R
     # invocation shares a single consistent "now" instead of drifting slightly
-    # between datasets processed moments apart.
-    GFS_NOW=$(date +%s)
+    # between datasets processed moments apart. Overridable via the GFS_NOW
+    # environment variable -- real snapshot creation times can't be backdated
+    # on a live pool (see test/delsnaps/run.sh's age-mode tests for the same
+    # constraint), but shifting the ANCHOR forward instead lets a test make a
+    # snapshot created moments ago look e.g. 26 real hours old to the ladder,
+    # exercising genuine cross-tier cascading without waiting. Same idiom as
+    # ZFS_SNAP_RETUNE elsewhere in this project: a real value always wins,
+    # this only ever fires when a test explicitly sets it.
+    GFS_NOW="${GFS_NOW:-$(date +%s)}"
     dbg "mode=gfs now=$GFS_NOW keep=H:${keep_hours} D:${keep_days} W:${keep_weeks} M:${keep_months} Y:${keep_years}"
 elif [ "$count_flag_seen" = true ]; then
     retain_mode="count"
