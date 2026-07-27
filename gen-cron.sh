@@ -82,6 +82,31 @@ set -o pipefail
 #                                          # delsnaps.sh -c/-K/-O. Warned about (not
 #                                          # rejected) on a local scope, same treatment
 #                                          # as flags="-z" on a local send dst.
+#       gfs          = yes|no              # default no; yes -> ONE combined
+#                                          # delsnaps.sh -G line covering every
+#                                          # tier in use_template at once
+#                                          # (cascading GFS ladder) instead of
+#                                          # one flat-count line per tier. Each
+#                                          # tier's retain/keep must resolve to
+#                                          # a single count flag (-H/-D/-W/-M/-Y
+#                                          # <N>); age-based retain= or a mixed
+#                                          # multi-flag string is rejected. Runs
+#                                          # on the FIRST tier's own
+#                                          # prune_schedule (list use_template
+#                                          # finest-first). Each tier's own
+#                                          # 'pattern' still drives ITS OWN
+#                                          # monitor untouched -- gfs does not
+#                                          # change monitoring, only how
+#                                          # retention is grouped.
+#       gfs_pattern  = <shared prefix>     # REQUIRED when gfs=yes. The ONE
+#                                          # prefix the combined ladder matches
+#                                          # against -- deliberately separate
+#                                          # from each tier's own 'pattern',
+#                                          # since the ladder has to see every
+#                                          # contributing tier's snapshots to
+#                                          # bucket them by elapsed time. See
+#                                          # delsnaps.sh's own header ("GFS
+#                                          # LADDER") for the full mechanism.
 #       notify       = <short label>
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
@@ -187,7 +212,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.20'
+VERSION='v4.21'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -624,6 +649,7 @@ build_entities() {
     declare -ga SEND_ENTITIES=()
     declare -ga INLINE_PRUNE_ENTITIES=()
     declare -ga PRUNE_SEC_ENTITIES=()
+    declare -ga GFS_PRUNE_SEC_ENTITIES=()
     declare -ga BOOKMARK_PRUNE_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
@@ -762,6 +788,25 @@ build_prune_section() {
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune:$scope]" "$scope"
 
+    # gfs=yes: every tier in use_template contributes its retain COUNT LETTER
+    # to ONE combined delsnaps.sh -G line (cascading ladder) instead of each
+    # getting its own separate line summed flat. See delsnaps.sh's own header
+    # ("GFS LADDER") for what -G actually does. gfs_pattern is a SEPARATE field
+    # from the per-template 'pattern' on purpose: the per-template patterns
+    # (automated_hourly, automated_daily, ...) stay exactly as they are and
+    # keep driving each tier's own MONITOR (freshness is still checked per
+    # tier, unaffected by how retention is grouped) -- gfs_pattern is the one
+    # shared prefix the COMBINED ladder call matches against, which is a
+    # different, wider net by design (it has to see snapshots from every
+    # contributing tier to bucket them by elapsed time).
+    local gfs_raw gfs=0 gfs_pattern="" gfs_retain_parts="" gfs_schedule=""
+    gfs_raw="$(resolve_field gfs "$sec" "" "")" || gfs_raw="no"
+    [ "$(trim "$gfs_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && gfs=1
+    if [ "$gfs" -eq 1 ]; then
+        gfs_pattern="$(require_field gfs_pattern "$sec" "" defaults)" \
+            || die "[prune:$scope]: gfs=yes needs 'gfs_pattern' (the ONE shared prefix the combined -G ladder matches against -- distinct from each tier's own 'pattern', which still drives its own monitor)"
+    fi
+
     local -a tiers=()
     IFS=',' read -ra tiers <<< "$tier_list"
     local tier tmpl
@@ -793,7 +838,24 @@ build_prune_section() {
         pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
             || die "[prune:$scope] tier=$tier: 'pattern' did not resolve (missing, or set but blank)"
 
-        if [ "$emit_prune" -eq 1 ]; then
+        if [ "$emit_prune" -eq 1 ] && [ "$gfs" -eq 1 ]; then
+            prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
+            retain_flag="$RESOLVED_RETAIN"
+            # gfs mode only takes count-based single-letter flags -- -G itself
+            # rejects age flags and needs exactly one letter per tier to build
+            # the ladder from, so a malformed or multi-flag retain= is caught
+            # here rather than surfacing as a cryptic delsnaps.sh error later.
+            [[ "$retain_flag" =~ ^-[HDWMY][0-9]+$ ]] \
+                || die "[prune:$scope] tier=$tier: gfs=yes needs a single count-based retain flag (-H/-D/-W/-M/-Y followed by a number), got '$retain_flag'"
+            gfs_retain_parts="${gfs_retain_parts}${retain_flag} "
+            # The combined line runs on the FIRST contributing tier's own
+            # schedule (by convention use_template is listed finest-first,
+            # e.g. store_hourly,store_daily,store_weekly) -- the finest tier
+            # needs the most frequent re-evaluation, and re-running the coarser
+            # buckets' arithmetic on that same tick is cheap and idempotent.
+            [ -z "$gfs_schedule" ] && gfs_schedule="$prune_schedule"
+        elif [ "$emit_prune" -eq 1 ]; then
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
@@ -823,6 +885,26 @@ build_prune_section() {
             MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}")
         fi
     done
+
+    # One combined entity for the whole section, built from every tier's
+    # contribution collected in the loop above -- not per-tier, because the
+    # whole point of gfs=yes is ONE delsnaps.sh -G line covering every tier at
+    # once instead of one line each.
+    if [ "$gfs" -eq 1 ]; then
+        gfs_retain_parts="$(trim "$gfs_retain_parts")"
+        [ -n "$gfs_retain_parts" ] || die "[prune:$scope]: gfs=yes but no tier in use_template actually contributed a retain value (all prune=no?) -- nothing for -G to build a ladder from"
+        local gpraw gpnotify
+        gpraw="$(resolve_field notify_raw_prune "$sec" "" "")" || gpraw=""
+        if [ -n "$gpraw" ]; then
+            gpnotify="$gpraw"
+        else
+            local gplabel
+            gplabel="$(resolve_field notify "$sec" "" "")" || gplabel=""
+            gpnotify="$(notify_text "$host_label" "gfs" "prune" "$gplabel")"
+        fi
+        GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
+        SCOPE_PATTERNS+=("${scope}${SEP}${gfs_pattern}")
+    fi
 }
 
 # build_bookmark_prune_section SECTION_HEADER SCOPE HOST_LABEL
@@ -1095,6 +1177,21 @@ emit_prune_sections() {
     done
 }
 
+# gfs=yes sections: one combined delsnaps.sh -G line per section, covering
+# every contributing tier's retain count at once (see build_prune_section).
+emit_gfs_prune_sections() {
+    local e scope pattern retain schedule notify recursive clearcut sshflags
+    for e in "${GFS_PRUNE_SEC_ENTITIES[@]}"; do
+        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags <<< "$e"
+        local flag="" fflag="" sflag=""
+        [ "$recursive" = "1" ] && flag="-R "
+        [ "$clearcut" = "1" ] && fflag="-F "
+        [ -n "$sshflags" ] && sflag="$sshflags "
+        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+    done
+}
+
 # Monitor: one check-snap-age.sh line per (schedule,pattern,warn,crit,recursive)
 # group, listing every member scope BY FULL PATH (comma list). recursive=1 ->
 # -R, mirroring the [prune:] section it rode in on.
@@ -1339,6 +1436,7 @@ validate_retain_patterns
 emit_send
 emit_inline_prune
 emit_prune_sections
+emit_gfs_prune_sections
 emit_bookmark_prune
 emit_monitor
 
