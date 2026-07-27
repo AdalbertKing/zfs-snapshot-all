@@ -251,8 +251,11 @@ tick
 
 # A high threshold: elapsed time since the common base is nowhere near
 # threshold * own-interval, so -T must stand down and every intermediate
-# still rides along, same as the default.
-run_send -e -m "auto_" -T 1000 "$POOL/thresh" "$BK"
+# still rides along, same as the default. -e with no -m: t2/t3/t4 don't carry
+# the "auto_" prefix the first snapshot did, so a -m filter here would hide
+# them from -e entirely and make this a no-op "already exists" skip instead
+# of a real send -- bare -e picks the true newest regardless of name.
+run_send -e -T 1000 "$POOL/thresh" "$BK"
 check "-T high threshold: stands down, exit 0" "0" "$RC"
 check "-T high threshold: intermediates still ride along" "yes" \
       "$(zfs list -H -o name -t snapshot "$TT" | grep -q '@t2' && echo yes || echo no)"
@@ -263,7 +266,7 @@ check "-T high threshold: intermediates still ride along" "yes" \
 zfs destroy -R "$TT"
 FIRST_TT="$(zfs list -H -o name -s creation -t snapshot "$POOL/thresh" | head -1 | sed 's/.*@//')"
 zfs send "$POOL/thresh@$FIRST_TT" | zfs recv -o canmount=noauto "$TT"
-run_send -e -m "auto_" -T 1 "$POOL/thresh" "$BK"
+run_send -e -T 1 "$POOL/thresh" "$BK"
 check "-T low threshold: triggers catch-up, exit 0" "0" "$RC"
 check "-T low threshold: intermediates do NOT ride along" "no" \
       "$(zfs list -H -o name -t snapshot "$TT" | grep -q '@t2' && echo yes || echo no)"
@@ -277,7 +280,7 @@ run_send -m "auto_" "$POOL/threshwin" "$BK"
 TTW="$(tgt_of threshwin)"
 tick; zfs snapshot "$POOL/threshwin@mid"
 tick; zfs snapshot "$POOL/threshwin@newest"
-run_send -e -m "auto_" -i -T 1000 "$POOL/threshwin" "$BK"
+run_send -e -i -T 1000 "$POOL/threshwin" "$BK"
 check "-i wins over -T: intermediates skipped despite a stand-down threshold" "no" \
       "$(zfs list -H -o name -t snapshot "$TTW" | grep -q '@mid' && echo yes || echo no)"
 
