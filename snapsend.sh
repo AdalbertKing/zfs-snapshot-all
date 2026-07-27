@@ -96,7 +96,62 @@ set -o pipefail
 # dataset. If the filters leave nothing to send, that is an error, not a silent
 # success: a typo in a -X regex must not look like a clean run in cron.
 #   -n               Dry-run mode (show conflicting snapshots without sending)
-#   -I               Full history send (send all snapshots if no common base)
+#   -H               Full history send (send all snapshots if no common base).
+#                    Was -I; renamed so -I doesn't collide with -i below and,
+#                    unlike -i, never matched what real `zfs send -I` means
+#                    anyway (this is about the NO-common-base case, not about
+#                    intermediates) -- H for "full History" is honest about it.
+#   -i               When a common snapshot IS found, send only the DIFF to
+#                    the newest one (`zfs send -i`) instead of every
+#                    intermediate snapshot in between (`zfs send -I`, the
+#                    default -- no flag needed for that, it already happens).
+#                    Chosen to match `zfs send -i` literally: an admin who
+#                    knows the real flag gets the real letter. Intended for a
+#                    target that has been offline a long time -- with the
+#                    default every hourly/daily/etc snapshot taken while it
+#                    was gone lands on the target and is streamed in full;
+#                    -i carries only the final state, in one step. Trade-off:
+#                    the target gains none of the intermediate snapshots' OWN
+#                    history (nothing to prune later that was never there, and
+#                    nothing to restore FROM at those points in time) -- only
+#                    the base and the newest exist there afterward.
+#                    Combines with -r: `zfs send -R -i` is valid and recursive
+#                    (verified live: base+newest land on every dataset in the
+#                    subtree, intermediates on none), so one -i decision covers
+#                    the whole tree atomically, same as the -I default does.
+#                    Also correct, with no special-casing needed, under -R:
+#                    each expanded dataset already gets its own independent
+#                    common-base lookup and send command, so -i just flips
+#                    that same per-dataset choice for each of them in turn.
+#                    A no-op (logged at level 2) when there is no common
+#                    snapshot to begin with -- the bookmark-fallback path
+#                    already sends a single diff, and neither full-send path
+#                    (-H's own "no common base" meaning, or a plain full send)
+#                    does an incremental at all, so there is nothing to skip
+#                    in either case.
+#   -T <N>            Catch-up threshold: auto-switch THIS dataset to -i when
+#                    more than N of its OWN snapshot intervals have elapsed
+#                    since the common base -- e.g. N=24 means "about a day"
+#                    for an hourly job (own interval ~1h) but "about 24 days"
+#                    for a daily job (own interval ~24h), so the SAME number
+#                    lands in the right place for either cadence without
+#                    per-tier configuration. Deliberately relative, not an
+#                    absolute time or snapshot count: those create a cliff at
+#                    an arbitrary line (23h offline keeps everything, 26h
+#                    keeps nothing, for a 3-hour difference that means
+#                    nothing on its own), whereas "how many of ITS OWN
+#                    intervals" scales the cliff to match what each tier's
+#                    snapshots are actually worth. Own interval is MEASURED
+#                    (gap between the two newest snapshots on the source
+#                    matching this run's -m prefix), never assumed -- same
+#                    house style as -A. Unmeasurable (fewer than two matching
+#                    snapshots, a degenerate interval, an unreadable common
+#                    snapshot) always resolves to "no", i.e. today's default
+#                    (-I) stays untouched. An explicit -i still wins outright
+#                    and skips this check entirely -- -T only fills in a
+#                    decision nobody made explicitly, per dataset, same as -A
+#                    never overrules an explicit -z/-Z/-g/-N. Omitted (the
+#                    default) disables the auto-check completely.
 #   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
 #                    just received) is the DEFAULT since v2.54; this flag stays
 #                    so the cron lines that already pass it keep parsing. Use -U
@@ -111,7 +166,7 @@ set -o pipefail
 #
 #   * Properties do not normally travel: a plain `zfs send` carries no
 #     properties, so a received dataset inherits `mountpoint` from its new
-#     parent and lands somewhere harmless under the target. But `-r` and `-I`
+#     parent and lands somewhere harmless under the target. But `-r` and `-H`
 #     both send a REPLICATION stream (`zfs send -R`), which DOES carry them --
 #     and a source whose mountpoint is set locally then brings that path along.
 #     `rpool/ROOT/pve-1` on a Proxmox host has `mountpoint=/` set locally, so a
@@ -148,9 +203,9 @@ set -o pipefail
 #   -K <FILE>         SSH private key to authenticate with (ssh -i, plus -o
 #                    IdentitiesOnly=yes so an ssh-agent holding OTHER keys can't
 #                    make the server try them first and get this account locked
-#                    out by a max-auth-tries limit). Not "-i" -- that already
-#                    means --identifier here. Default: whatever the invoking
-#                    user's own ssh would pick (agent, ~/.ssh/config, etc).
+#                    out by a max-auth-tries limit). Not "-i" -- that means
+#                    skip-intermediates here (see above). Default: whatever the
+#                    invoking user's own ssh would pick (agent, ~/.ssh/config).
 #   -O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", verbatim, e.g.
 #                    -O "ProxyJump=bastion". Repeatable; each becomes its own
 #                    -o. Syncoid's --sshoption. Placed FIRST on the ssh command
@@ -310,7 +365,7 @@ set -o pipefail
 #
 #                    Ignored with -e (nothing is being created to quiesce) and
 #                    with -n.
-#   -i <TAG>          Identifier for this job. Folds TAG into both the lock
+#   -j <TAG>          Identifier for this job. Folds TAG into both the lock
 #                    key and the per-target bookmark name, so a second,
 #                    genuinely independent job aimed at the SAME src/tgt pair
 #                    (different retention, different snapshot pattern) gets
@@ -318,7 +373,8 @@ set -o pipefail
 #                    behind, or overwriting the incremental base of, the
 #                    first job. Omit it (the default) to keep today's
 #                    behaviour: all jobs to a given pair share one lock and
-#                    one bookmark, so they always serialize.
+#                    one bookmark, so they always serialize. (Was -i; moved to
+#                    free that letter for its literal zfs meaning -- see -i.)
 #   -V               Print version and exit
 #
 # COMPRESSED SEND is automatic (`zfs send -c`) and needs no flag: records are
@@ -339,7 +395,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.64'
+VERSION='v2.65'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -394,7 +450,17 @@ FLAT_RECURSE=0
 declare -a EXCLUDE_PATTERNS=()
 SKIP_PARENT=0
 DRY_RUN=0
+# -H: full history send when no common base exists at all (was -I -- renamed,
+# see the header, to stop colliding with -i's real zfs meaning below).
 FULL_HISTORY_SEND=0
+# -i: when a common snapshot is found, send only the diff to newest (real
+# `zfs send -i`) instead of every intermediate (`-I`, the default). See the
+# header for why -- this is the letter's literal zfs meaning on purpose.
+SKIP_INTERMEDIATES=0
+# -T: auto-switch a dataset to skip-intermediates when more than this many of
+# ITS OWN snapshot intervals have elapsed since the common base. Empty (the
+# default) disables the check. See the header for the full reasoning.
+THRESHOLD_INTERVALS=""
 # `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.54
 # -- a replication target is storage, not a filesystem anybody browses, and
 # mounting it is at best clutter and at worst dangerous (see the header). -U
@@ -826,6 +892,11 @@ process_dataset() {
     # Remembers whether -f itself was passed, before -F below can flip the
     # shadow above -- used only to keep the "(-f)" log message honest.
     local user_requested_full=$FORCE_FULL_SEND
+    # Local shadow: -T's auto-check below may flip THIS dataset to
+    # skip-intermediates without touching the global -- each dataset in a
+    # multi-dataset invocation gets its own fresh copy of whatever the user
+    # actually passed on the command line, and its own independent measurement.
+    local SKIP_INTERMEDIATES=$SKIP_INTERMEDIATES
     validate_remote_host "$remote_user" "$remote_host"
     check_pool_health "$src_dataset" "" ""
     [ -n "$remote_host" ] && check_pool_health "$tgt_dataset" "$remote_user" "$remote_host"
@@ -1191,9 +1262,27 @@ process_dataset() {
 
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
-        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${common_snapshot} $snapshot"
+        # -T: only when the user did NOT already say -i explicitly (the shadow
+        # above is 1 from the start of this call in that case, so this whole
+        # block is skipped -- an explicit flag always wins over an inferred
+        # one, same precedent as -A never overruling an explicit -z/-Z/-g/-N).
+        if [ $SKIP_INTERMEDIATES -eq 0 ] && [ -n "$THRESHOLD_INTERVALS" ]; then
+            if [ "$(auto_skip_intermediates "$src_dataset" "$MESSAGE" "$common_snapshot" "$THRESHOLD_INTERVALS" "" "")" = "yes" ]; then
+                log 1 "Catch-up (-T $THRESHOLD_INTERVALS): more than $THRESHOLD_INTERVALS of this dataset's own snapshot intervals have elapsed since the common base -- sending only the diff to newest"
+                SKIP_INTERMEDIATES=1
+            fi
+        fi
+        # -i (SKIP_INTERMEDIATES): the diff to newest only, none of the
+        # snapshots in between -- literal `zfs send -i` in place of the
+        # default `-I`. Valid combined with $recursive_send_flag (verified
+        # live: `zfs send -R -i` is accepted and correctly elides
+        # intermediates on every dataset in the subtree, same as -I does today).
+        local incr_flag="-I"
+        [ $SKIP_INTERMEDIATES -eq 1 ] && incr_flag="-i"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $incr_flag ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but already sending a single diff via bookmark -- nothing to skip"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
@@ -1203,6 +1292,7 @@ process_dataset() {
             log 1 "Performing standard full send"
             send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $snapshot"
         fi
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but there is no common snapshot to diff against -- nothing to skip"
     fi
 
     # -s makes ZFS SAVE partial receive state on interruption (and expose a
@@ -1276,8 +1366,9 @@ process_dataset() {
     fi
 
     # Refresh the per-target bookmark to what was just sent, regardless of
-    # which path got us here (-I, -i bookmark, or FULL) -- see
-    # record_send_bookmark in lib-zfs-snap.sh. Source is always local here.
+    # which path got us here (common-base incremental, bookmark incremental,
+    # or FULL) -- see record_send_bookmark in lib-zfs-snap.sh. Source is
+    # always local here.
     [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "" "" "$IDENTIFIER"
 
     log 1 "Transfer completed successfully"
@@ -1293,10 +1384,10 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:SK:O:" opt; do
+while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
-        i) IDENTIFIER="$OPTARG";;
+        j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         q) QUIESCE="$OPTARG";;
@@ -1311,7 +1402,9 @@ while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:SK:O:" opt; do
         X) EXCLUDE_PATTERNS+=("$OPTARG");;
         S) SKIP_PARENT=1;;
         n) DRY_RUN=1;;
-        I) FULL_HISTORY_SEND=1;;
+        H) FULL_HISTORY_SEND=1;;
+        i) SKIP_INTERMEDIATES=1;;
+        T) THRESHOLD_INTERVALS="$OPTARG";;
         u) UNMOUNT=1;;   # no-op since v2.54 (this is the default); kept so existing cron lines keep parsing
         U) UNMOUNT=0;;
         f) FORCE_FULL_SEND=1;;
@@ -1328,7 +1421,7 @@ while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Aq:i:o:x:c:b:FX:SK:O:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Blad: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -I -u -f -w -p -k -A -q -i -o -x -c -b -K -O -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -q -j -o -x -c -b -K -O -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1388,6 +1481,16 @@ if [ -n "$BWLIMIT" ]; then
         exit 1
     fi
     BWLIMIT_FLAG=" -r $BWLIMIT"
+fi
+
+# Validated here for the same reason as -b: a typo should fail before any
+# snapshot is taken, not silently disable the check (0 or a negative number
+# would otherwise mean "always" or "never" by accident rather than by intent).
+if [ -n "$THRESHOLD_INTERVALS" ]; then
+    if [[ ! "$THRESHOLD_INTERVALS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: -T '$THRESHOLD_INTERVALS' -- expected a positive integer: how many of a dataset's OWN snapshot intervals to tolerate before auto-switching that dataset to -i." >&2
+        exit 1
+    fi
 fi
 
 # Checked here, not left for ssh to report mid-transfer after the snapshot is
@@ -1516,7 +1619,7 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # concurrently instead of blocking each other. Options (-v, -z, ...) are
 # deliberately excluded from the key, so a manual run and a cron run of the same
 # target still serialize even if their option formatting differs (-v3 vs -v 3).
-# -i/IDENTIFIER is the one deliberate exception: it exists precisely to let a
+# -j/IDENTIFIER is the one deliberate exception: it exists precisely to let a
 # second, independent job aimed at the same pair opt OUT of this serialization.
 LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' -f1)
 LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"

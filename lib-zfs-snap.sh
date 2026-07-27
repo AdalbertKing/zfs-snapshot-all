@@ -1127,6 +1127,97 @@ check_pool_health() {
 }
 
 ###############################################################################
+# CATCH-UP THRESHOLD (-T) -- auto-decide -i (skip intermediates) from how many
+# of a dataset's OWN snapshot intervals have elapsed since the common base
+###############################################################################
+# -i (skip-intermediates) is a hard switch: -I (all intermediates) or -i (diff
+# only), nothing in between. A THRESHOLD expressed in absolute time or an
+# absolute snapshot count creates a cliff at an arbitrary line -- 23h offline
+# on an hourly job keeps everything, 26h keeps nothing, for a 3-hour
+# difference that means nothing on its own. The fix: express the threshold
+# relative to THIS dataset's own observed cadence ("more than N of ITS OWN
+# intervals have elapsed"), not an absolute number. The same threshold N then
+# lands at a sensible place for every tier without per-tier configuration --
+# N=24 means "about a day" for an hourly job (own interval ~1h) and "about
+# 24 days" for a daily job (own interval ~24h), so a dataset offline 5 days
+# on a daily cadence stays under threshold and keeps sending every daily,
+# while an hourly dataset offline 26 hours crosses it and catches up in one
+# diff. One number, two different absolute cliffs, both in the right place.
+#
+# Measured, not assumed (same house style as tune_apply's link/ratio probe):
+# the interval is the gap between the two NEWEST snapshots on the SOURCE
+# matching this run's own -m prefix (empty prefix = no filter, same
+# convention -e's own lookup uses). Every unmeasurable case -- fewer than two
+# matching snapshots, a zero/negative interval, a common snapshot whose own
+# creation time can't be read -- resolves to "no", i.e. keep the safe default
+# (-I, all intermediates). This never fails the caller.
+auto_skip_intermediates() {
+    local src_dataset="$1" message="$2" common_snapshot="$3" threshold="$4"
+    local remote_user="${5:-}" remote_host="${6:-}"
+
+    local listing
+    if [ -n "$remote_host" ]; then
+        listing=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            "zfs list -Hp -o name,creation -t snapshot -s creation -d 1 '$src_dataset' 2>/dev/null")
+    else
+        listing=$(zfs list -Hp -o name,creation -t snapshot -s creation -d 1 "$src_dataset" 2>/dev/null)
+    fi
+    [ -n "$listing" ] || { printf 'no'; return 0; }
+
+    local -a names=() times=()
+    local name time suffix
+    while IFS=$'\t' read -r name time; do
+        [ -z "$name" ] && continue
+        suffix="${name##*@}"
+        if [ -n "$message" ]; then
+            case "$suffix" in
+                "$message"*) ;;
+                *) continue ;;
+            esac
+        fi
+        names+=("$suffix")
+        times+=("$time")
+    done <<< "$listing"
+
+    # Fewer than two matching snapshots: no cadence to measure yet (this run's
+    # very first cycle for this prefix, or a message that matches nothing).
+    [ ${#names[@]} -ge 2 ] || { printf 'no'; return 0; }
+
+    local newest_t="${times[-1]}" prev_t="${times[-2]}"
+    local own_interval=$(( newest_t - prev_t ))
+    # Degenerate (two snapshots the same second, or a clock oddity): refuse to
+    # guess rather than divide by -- effectively -- nothing.
+    [ "$own_interval" -gt 0 ] || { printf 'no'; return 0; }
+
+    # common_snapshot's creation time, reusing this same listing where
+    # possible (it is almost always in there) -- a direct lookup only when it
+    # is not, e.g. an older snapshot from before the current -m convention.
+    local common_t="" i
+    for ((i = 0; i < ${#names[@]}; i++)); do
+        if [ "${names[$i]}" = "$common_snapshot" ]; then
+            common_t="${times[$i]}"
+            break
+        fi
+    done
+    if [ -z "$common_t" ]; then
+        if [ -n "$remote_host" ]; then
+            common_t=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+                "zfs get -Hp -o value creation '${src_dataset}@${common_snapshot}'" 2>/dev/null)
+        else
+            common_t=$(zfs get -Hp -o value creation "${src_dataset}@${common_snapshot}" 2>/dev/null)
+        fi
+    fi
+    [ -n "$common_t" ] || { printf 'no'; return 0; }
+
+    local elapsed=$(( $(date +%s) - common_t ))
+    if [ "$elapsed" -gt $(( own_interval * threshold )) ]; then
+        printf 'yes'
+    else
+        printf 'no'
+    fi
+}
+
+###############################################################################
 # QUIESCE (-q) -- application-consistent snapshots of Proxmox guests
 ###############################################################################
 # A ZFS snapshot of a running guest is CRASH-consistent: the image is whatever

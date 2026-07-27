@@ -91,7 +91,24 @@ set -o pipefail
 # all there is nothing to exclude FROM. If the filters leave nothing to pull,
 # that is an error, not a silent success.
 #   -n               Dry-run mode (show conflicting snapshots without receiving)
-#   -I               Full history receive (receive all snapshots if no common base)
+#   -H               Full history receive when no common base exists at all.
+#                    Was -I; renamed to free -i for its real zfs meaning below.
+#                    Mirrors snapsend.sh's -H.
+#   -i               When a common snapshot IS found, pull only the DIFF to
+#                    the newest one (`zfs send -i`) instead of every
+#                    intermediate snapshot in between (`-I`, the default --
+#                    no flag needed for that, it already happens). Mirrors
+#                    snapsend.sh's -i exactly -- see there for the full
+#                    reasoning, the live-verified -r interaction, and why -R
+#                    needs no special-casing. No-op (logged at level 2) when
+#                    there is no common snapshot to begin with.
+#   -T <N>            Catch-up threshold: auto-switch THIS dataset to -i when
+#                    more than N of its OWN snapshot intervals have elapsed
+#                    since the common base. Mirrors snapsend.sh's -T exactly
+#                    -- see there for the full reasoning (why relative to the
+#                    dataset's own cadence, not an absolute time/count) and
+#                    how the interval is measured. An explicit -i still wins
+#                    outright. Omitted (the default) disables the check.
 #   -u               Accepted and ignored. `zfs recv -u` (do not mount what was
 #                    just received) is the DEFAULT since v2.49; this flag stays
 #                    so the cron lines that already pass it keep parsing. Use -U
@@ -122,7 +139,7 @@ set -o pipefail
 #   -K <FILE>         SSH private key to authenticate with (ssh -i, plus -o
 #                    IdentitiesOnly=yes so an agent holding OTHER keys can't get
 #                    this account locked out by a max-auth-tries limit). Not
-#                    "-i" -- that already means --identifier here.
+#                    "-i" -- that means skip-intermediates here (see above).
 #   -O <SSH_OPTION>    Extra "ssh -o NAME=VALUE", verbatim, e.g.
 #                    -O "ProxyJump=bastion". Repeatable. Syncoid's --sshoption.
 #                    Placed FIRST on the ssh command line so it can override
@@ -211,14 +228,15 @@ set -o pipefail
 #                    sample. Every failure path leaves your settings untouched.
 #
 #                    An explicit -z/-Z/-g or -N WINS: -A stands down and honours it.
-#   -i <TAG>          Identifier for this job. Folds TAG into both the lock
+#   -j <TAG>          Identifier for this job. Folds TAG into both the lock
 #                    key and the per-target bookmark name, so a second,
 #                    genuinely independent job aimed at the SAME src/tgt pair
 #                    gets its own lock and its own bookmark instead of
 #                    serializing behind, or overwriting the incremental base
 #                    of, the first job. Omit it (the default) to keep today's
 #                    behaviour: all jobs to a given pair share one lock and
-#                    one bookmark.
+#                    one bookmark. (Was -i; moved to free that letter for its
+#                    literal zfs meaning -- see -i above.)
 #   -V               Print version and exit
 #
 # COMPRESSED SEND is automatic (`zfs send -c`) and needs no flag: records are
@@ -239,7 +257,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.58'
+VERSION='v2.59'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -288,7 +306,17 @@ FLAT_RECURSE=0
 declare -a EXCLUDE_PATTERNS=()
 SKIP_PARENT=0
 DRY_RUN=0
+# -H: full history receive when no common base exists at all (was -I). Mirrors
+# snapsend.sh.
 FULL_HISTORY_SEND=0
+# -i: when a common snapshot is found, pull only the diff to newest (real
+# `zfs send -i`) instead of every intermediate (`-I`, the default). Mirrors
+# snapsend.sh.
+SKIP_INTERMEDIATES=0
+# -T: auto-switch to skip-intermediates when more than this many of the
+# dataset's own snapshot intervals have elapsed since the common base. Empty
+# (the default) disables the check. Mirrors snapsend.sh.
+THRESHOLD_INTERVALS=""
 # `zfs recv -u`: do not mount what was just received. ON BY DEFAULT since v2.49
 # -- mirrors snapsend.sh v2.54, see the long note in its header. -U turns
 # mounting back on; -u is still accepted and is now a no-op, so every existing
@@ -724,6 +752,9 @@ process_dataset() {
     # Remembers whether -f itself was passed, before -F below can flip the
     # shadow above -- used only to keep the "(-f)" log message honest.
     local user_requested_full=$FORCE_FULL_SEND
+    # Local shadow: -T's auto-check below may flip THIS dataset to
+    # skip-intermediates without touching the global. Mirrors snapsend.sh.
+    local SKIP_INTERMEDIATES=$SKIP_INTERMEDIATES
     validate_remote_host "$remote_user" "$remote_host"
     [ -n "$remote_host" ] && check_pool_health "$src_dataset" "$remote_user" "$remote_host"
     check_pool_health "$tgt_dataset" "" ""
@@ -1058,9 +1089,23 @@ process_dataset() {
 
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
-        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS -I ${src_dataset}@${common_snapshot} $snapshot"
+        # -T: mirrors snapsend.sh exactly, source may be remote here so both
+        # remote args are passed through (empty for a local source).
+        if [ $SKIP_INTERMEDIATES -eq 0 ] && [ -n "$THRESHOLD_INTERVALS" ]; then
+            if [ "$(auto_skip_intermediates "$src_dataset" "$MESSAGE" "$common_snapshot" "$THRESHOLD_INTERVALS" "$remote_user" "$remote_host")" = "yes" ]; then
+                log 1 "Catch-up (-T $THRESHOLD_INTERVALS): more than $THRESHOLD_INTERVALS of this dataset's own snapshot intervals have elapsed since the common base -- pulling only the diff to newest"
+                SKIP_INTERMEDIATES=1
+            fi
+        fi
+        # -i (SKIP_INTERMEDIATES): the diff to newest only -- literal
+        # `zfs send -i` in place of the default `-I`. Mirrors snapsend.sh
+        # exactly -- see there for the live-verified -r/-R reasoning.
+        local incr_flag="-I"
+        [ $SKIP_INTERMEDIATES -eq 1 ] && incr_flag="-i"
+        send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $incr_flag ${src_dataset}@${common_snapshot} $snapshot"
     elif [ -n "$bookmark_base" ]; then
         log 1 "No common snapshot, but a bookmark still anchors an incremental: $bookmark_base"
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but already sending a single diff via bookmark -- nothing to skip"
         send_cmd="zfs send $raw_send_flag $comp_send_flag $EXTRA_SEND_OPTS -i $bookmark_base $snapshot"
     else
         if [ $FULL_HISTORY_SEND -eq 1 ]; then
@@ -1070,6 +1115,7 @@ process_dataset() {
             log 1 "Performing standard full pull"
             send_cmd="zfs send $raw_send_flag $comp_send_flag $recursive_send_flag $EXTRA_SEND_OPTS $snapshot"
         fi
+        [ $SKIP_INTERMEDIATES -eq 1 ] && log 2 "-i requested but there is no common snapshot to diff against -- nothing to skip"
     fi
 
     # -s makes ZFS SAVE partial receive state on interruption (and expose a
@@ -1127,8 +1173,9 @@ process_dataset() {
     fi
 
     # Refresh the per-target bookmark to what was just sent, regardless of
-    # which path got us here (-I, -i bookmark, or FULL) -- see
-    # record_send_bookmark in lib-zfs-snap.sh. Source may be remote here.
+    # which path got us here (common-base incremental, bookmark incremental,
+    # or FULL) -- see record_send_bookmark in lib-zfs-snap.sh. Source may be
+    # remote here.
     [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "$remote_user" "$remote_host" "$IDENTIFIER"
 
     log 1 "Transfer completed successfully"
@@ -1144,10 +1191,10 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
+while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
-        i) IDENTIFIER="$OPTARG";;
+        j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
@@ -1161,7 +1208,9 @@ while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
         X) EXCLUDE_PATTERNS+=("$OPTARG");;
         S) SKIP_PARENT=1;;
         n) DRY_RUN=1;;
-        I) FULL_HISTORY_SEND=1;;
+        H) FULL_HISTORY_SEND=1;;
+        i) SKIP_INTERMEDIATES=1;;
+        T) THRESHOLD_INTERVALS="$OPTARG";;
         u) UNMOUNT=1;;   # no-op since v2.49 (this is the default); kept so existing cron lines keep parsing
         U) UNMOUNT=0;;
         f) FORCE_FULL_SEND=1;;
@@ -1178,7 +1227,7 @@ while getopts "m:ezZgNl:v:rRnIuUfwVp:k:Ai:o:x:c:b:FX:SK:O:" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -I -u -f -w -p -k -A -i -o -x -c -b -K -O -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -j -o -x -c -b -K -O -U -F -V" >&2
             exit 1
             ;;
     esac
@@ -1231,6 +1280,14 @@ if [ -n "$BWLIMIT" ]; then
         exit 1
     fi
     BWLIMIT_FLAG=" -r $BWLIMIT"
+fi
+
+# Validated here for the same reason as -b. Mirrors snapsend.sh.
+if [ -n "$THRESHOLD_INTERVALS" ]; then
+    if [[ ! "$THRESHOLD_INTERVALS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: -T '$THRESHOLD_INTERVALS' -- expected a positive integer: how many of a dataset's OWN snapshot intervals to tolerate before auto-switching that dataset to -i." >&2
+        exit 1
+    fi
 fi
 
 # Checked here, not left for ssh to report mid-transfer. Readable rather than
@@ -1336,7 +1393,7 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # concurrently instead of blocking each other. Options (-v, -z, ...) are
 # deliberately excluded from the key, so a manual run and a cron run of the same
 # target still serialize even if their option formatting differs (-v3 vs -v 3).
-# -i/IDENTIFIER is the one deliberate exception: it exists precisely to let a
+# -j/IDENTIFIER is the one deliberate exception: it exists precisely to let a
 # second, independent job aimed at the same pair opt OUT of this serialization.
 LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' -f1)
 LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"

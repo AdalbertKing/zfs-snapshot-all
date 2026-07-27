@@ -17,7 +17,8 @@ No package to install beyond the scripts themselves and their runtime dependenci
   - [Bookmark-backed incremental fallback](#bookmark-backed-incremental-fallback)
   - [Resumable transfers](#resumable-transfers)
   - [Hold-based protection for in-flight snapshots](#hold-based-protection-for-in-flight-snapshots)
-  - [`-i`/`--identifier`: independent jobs on the same pair](#-i--identifier-independent-jobs-on-the-same-pair)
+  - [`-j`/`--identifier`: independent jobs on the same pair](#-j--identifier-independent-jobs-on-the-same-pair)
+  - [Skipping intermediate snapshots (`-i`)](#skipping-intermediate-snapshots--i)
   - [Quiescing Proxmox guests (`-q`)](#quiescing-proxmox-guests--q)
   - [Link autotuning (`-A`)](#link-autotuning--a)
   - [Compression](#compression)
@@ -78,7 +79,7 @@ bookmark was based on later gets pruned from the source (by `delsnaps.sh`, befor
 caught up), the next run's `find_bookmark_base()` still finds a valid incremental base via the
 bookmark instead of falling through to a full send.
 
-Bookmark names are `tgt-<8 hex chars>`, an md5 hash of the target dataset path (and the `-i`
+Bookmark names are `tgt-<8 hex chars>`, an md5 hash of the target dataset path (and the `-j`
 identifier, if any — see below). Nothing else on the source touches this, so it accumulates
 exactly one bookmark per (target, identifier) pair forever, until a target is retired — see
 [`delsnaps.sh -B`](#delsnapssh--retention--pruning) for cleaning those up.
@@ -123,19 +124,49 @@ the source on every sync, so a hold cannot win that race, only break the sync. T
 distinguish a replication source from a target and does not try: erring toward "skip" trades a
 little pruning protection for never wedging replication.
 
-### `-i`/`--identifier`: independent jobs on the same pair
+### `-j`/`--identifier`: independent jobs on the same pair
 
 Both scripts key their single-instance lock (`LOCK_KEY`) and their bookmark tag on `(source,
 target)` alone by default — deliberately, so a manual run and a scheduled cron run of the *same*
-job always serialize instead of racing. `-i <TAG>` folds an extra tag into both, letting a
+job always serialize instead of racing. `-j <TAG>` folds an extra tag into both, letting a
 **second, genuinely independent job** aimed at the same source/target pair get its own lock and
 its own incremental-base bookmark instead of colliding with, or serializing behind, the first.
-Omit it (the default) to keep today's behavior unchanged.
+Omit it (the default) to keep today's behavior unchanged. (This flag was `-i` before v2.65/v2.59;
+moved to free that letter for its literal zfs meaning — see below.)
 
 ```bash
 # Two schedules hitting the same target, deliberately kept independent:
-./snapsend.sh -e -i hourly  tank/data backup/tank/data
-./snapsend.sh -e -i offsite tank/data backup/tank/data
+./snapsend.sh -e -j hourly  tank/data backup/tank/data
+./snapsend.sh -e -j offsite tank/data backup/tank/data
+```
+
+### Skipping intermediate snapshots (`-i`)
+
+When a common base is found, an incremental normally runs `zfs send -I <base> <newest>`, which
+carries **every** snapshot in between as its own landed snapshot on the target — this is what lets
+a lower-frequency tier (daily/weekly/...) ride an hourly job's incremental to the archive (see
+[incrementals carry intermediate snapshots](#resumable-transfers) above). `-i` switches that one
+send to `zfs send -i <base> <newest>` instead: only the diff to the newest snapshot, none of the
+snapshots in between.
+
+Meant for a target that has been offline a long time: with the default, every hourly/daily/etc
+snapshot taken while it was gone lands on the target and streams in full. `-i` carries only the
+final state, in one step. Trade-off: the target gains none of the intermediate snapshots' own
+history — nothing to restore from at those in-between points, nothing extra for `delsnaps.sh` to
+prune later, because it was never there.
+
+Combines with `-r` (one atomic recursive stream): `zfs send -R -i` is valid and recursive,
+verified live — base and newest land on every dataset in the subtree, intermediates on none, same
+as the `-I` default's own tree-wide behavior. Needs no special-casing under `-R` (independent
+per-dataset jobs) either — each expanded dataset already gets its own common-base lookup and send
+command, so `-i` just flips that same per-dataset choice for each of them in turn. A no-op (logged,
+not rejected) when there is no common snapshot to begin with — the bookmark-fallback path already
+sends a single diff by construction.
+
+```bash
+# Target has been offline for a week; catch it up in one step instead of
+# replaying every hourly/daily snapshot taken in the meantime:
+./snapsend.sh -i tank/data backup/tank/data
 ```
 
 ### Quiescing Proxmox guests (`-q`)
@@ -237,7 +268,7 @@ back into mounting for a target that is genuinely meant to be browsed.
 
 The reason is not tidiness. A plain `zfs send` carries no properties, so a received dataset
 inherits `mountpoint` from its new parent and lands harmlessly under the target — but `-r` and
-`-I` both send a **replication stream** (`zfs send -R`), which *does* carry properties, and a
+`-H` both send a **replication stream** (`zfs send -R`), which *does* carry properties, and a
 source whose mountpoint is set locally brings that path along. Demonstrated live, 2026-07-25:
 
 ```
@@ -325,7 +356,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-X <REGEX>` | **`-R` only.** Drop every expanded dataset whose full name matches REGEX (extended regex, unanchored). Repeatable — a dataset goes if any pattern hits. syncoid's `--exclude`. See [Filtering the expansion](#filtering-the-expansion--x--s) |
 | `-S` | **`-R` only.** Skip-parent: send the descendants but not the listed dataset itself. syncoid's `--skip-parent` |
 | `-n` | Dry-run: report conflicts, send nothing |
-| `-I` | Full-history send if no common base exists (instead of a plain full send) |
+| `-H` | Full-history send if no common base exists (instead of a plain full send). Was `-I` before v2.65/v2.59 |
 | `-u` | Accepted and ignored — not mounting is the default since v2.54. Kept so existing cron lines keep parsing |
 | `-U` | Mount the target after receive — the opt-out, see [Mounting the target](#mounting-the-target--u--u) |
 | `-f` | Force full send: destroy target data, reseed from scratch |
@@ -333,12 +364,13 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-p <PORT>` | SSH port (default 22) |
 | `-c <CIPHER_SPEC>` | SSH cipher(s) to request (`ssh -c`), e.g. `-c aes128-gcm@openssh.com` for a faster/weaker cipher on a CPU-bound link. Default: let ssh/sshd negotiate. No-op on a local run |
 | `-k <FILE>` | Verify the remote host key against this known_hosts file (default: trust on first use) |
-| `-K <FILE>` | SSH private key to authenticate with (`ssh -i`, plus `-o IdentitiesOnly=yes` so an agent holding other keys can't get the account locked out by a max-auth-tries limit). Not `-i` — that already means `--identifier` here |
+| `-K <FILE>` | SSH private key to authenticate with (`ssh -i`, plus `-o IdentitiesOnly=yes` so an agent holding other keys can't get the account locked out by a max-auth-tries limit). Not `-i` — that means skip-intermediates here |
 | `-O <SSH_OPTION>` | Extra `ssh -o NAME=VALUE`, verbatim, e.g. `-O "ProxyJump=bastion"`. Repeatable. Syncoid's `--sshoption`. Placed **first** on the ssh command line — OpenSSH keeps the first value it sees for a given key, so an explicit `-O` can override `-p`/`-k`/`-c`/`-K` or even disable multiplexing with `-O ControlMaster=no` (verified live: `-o Port=2222 -p 22` connects on 2222, not 22) |
 | `-b <RATE>` | Cap the transfer rate — see [Bandwidth limiting](#bandwidth-limiting--b) |
 | `-A` | Autotune the link — see [Link autotuning](#link-autotuning--a) |
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
-| `-i <TAG>` | Job identifier — see [`-i`/`--identifier`](#-i--identifier-independent-jobs-on-the-same-pair) |
+| `-j <TAG>` | Job identifier — see [`-j`/`--identifier`](#-j--identifier-independent-jobs-on-the-same-pair). Was `-i` before v2.65/v2.59 |
+| `-i` | Skip intermediate snapshots on an incremental (`zfs send -i` instead of the default `-I`) — see [Skipping intermediate snapshots](#skipping-intermediate-snapshots--i) |
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
 | `-F` | Reconcile before sending (recursively under `-r`; a no-op under `-R`, see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
@@ -369,7 +401,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -l -v -r -R -X -S -n -I -u -f -w -p -c -k -K -O -b -A -i -o -x -U -F -V`) behaves identically, with
+(`-m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -u -f -w -p -c -k -K -O -b -A -j -o -x -U -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
@@ -493,7 +525,7 @@ comma-separated list.
 `__replicate_*`, `__migration__*` and `vzdump*` belong to Proxmox itself, and pruning one out from
 under `pvesr` breaks the replication chain irreparably — so by default *all* of them are protected,
 exactly as before. But absolute protection also makes them **immortal**, which is wrong in one
-specific place: a **backup target** that received a replication stream. `-r`/`-I` carry every
+specific place: a **backup target** that received a replication stream. `-r`/`-H` carry every
 snapshot on the source, not just the ones this tool made, so those reserved snapshots land on the
 target where nothing ever prunes them — while only the newest one has any value for a future
 incremental. `-P <prefix>:<keep>` (or `[excluded:<prefix>]` in the config) sets how many of the
@@ -1008,13 +1040,13 @@ the target's current head, and sends `-i <bookmark> @c` instead of falling back 
 ### 6. Two independent schedules landing in the same target
 
 ```bash
-./snapsend.sh -e -i hourly  tank/data backup/tank/data
-./snapsend.sh -e -i offsite tank/data backup/tank/data
+./snapsend.sh -e -j hourly  tank/data backup/tank/data
+./snapsend.sh -e -j offsite tank/data backup/tank/data
 ```
 
-Without `-i` these would share one lock (so a scheduling overlap serializes rather than races —
+Without `-j` these would share one lock (so a scheduling overlap serializes rather than races —
 correct on its own) and one bookmark (so whichever job ran last would silently become the only
-one with a valid incremental base, breaking the other). With distinct `-i` tags each job gets its
+one with a valid incremental base, breaking the other). With distinct `-j` tags each job gets its
 own lock and its own `tgt-<hash>` bookmark, so both can be relied on independently.
 
 ### 7. Cleaning up bookmarks from a retired target
