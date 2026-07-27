@@ -55,6 +55,26 @@ zpool create -f -m none "$POOL" "$IMG" || { echo "zpool create failed" >&2; exit
 
 export STATS_LOG="$TMPD/stats.log"
 export LOCKDIR="$TMPD"
+# Alerting must NEVER touch the host's real queue. Any script under test that
+# hits a pool-health problem calls $NOTIFY_SCRIPT, which by default queues into
+# /var/lib/zfs-snapshot-all/alert-queue.log -- and the 07:00 digest then mails
+# it as if it were production. That happened for real on 2026-07-26: this
+# suite's deliberately-broken-ssh cases made pool_health return UNKNOWN (an
+# unreachable host genuinely IS unknown), and 12 such alerts reached the
+# operator's inbox the next morning. Redirect both the queue and the notify
+# script itself; env beats the config file since notify-fail v9.
+export ZFS_ALERT_QUEUE="$TMPD/alert-queue.log"
+export ZFS_ALERT_CONF="$TMPD/zfs-alert.conf"
+cat > "$ZFS_ALERT_CONF" <<CONFEOF
+ZFS_ALERT_MODE=daily
+ZFS_WARN_MODE=daily
+ZFS_ALERT_QUEUE=$TMPD/alert-queue.log
+CONFEOF
+export NOTIFY_SCRIPT="$TMPD/notify-fail-stub.sh"
+printf '#!/bin/bash
+printf "%%s\t%%s\n" "$1" "$2" >> "%s/alerts-seen.log"
+' "$TMPD" > "$NOTIFY_SCRIPT"
+chmod +x "$NOTIFY_SCRIPT"
 
 PASS=0
 FAIL=0
