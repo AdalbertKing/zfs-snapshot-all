@@ -116,6 +116,34 @@ set -o pipefail
 #     patterns (different ZFS object type, same-scope overlap is not a hazard
 #     the way it is between two snapshot-prune rules).
 #
+#   [excluded:<prefix>]                   # how much of a RESERVED prefix to protect
+#       keep         = <N> | all           # required. How many of the NEWEST
+#                                          # snapshots carrying <prefix> delsnaps.sh
+#                                          # must leave alone, PER DATASET.
+#     Proxmox owns __replicate_/__migration__/vzdump snapshots, and pruning one out
+#     from under pvesr breaks the replication chain irreparably -- so all three
+#     default to "all" (absolute protection) and stay that way unless a section
+#     here says otherwise. Emits `delsnaps.sh -P "<prefix>:<keep>"` onto every
+#     snapshot-prune line the config produces (never onto the -B bookmark line:
+#     the guard never applied to bookmarks).
+#
+#     Why a count rather than a boolean: on a SOURCE, pvesr keeps exactly one of
+#     its own snapshots per dataset and deletes the rest itself, so the question
+#     never arises. On a BACKUP TARGET that received a replication stream (-r/-I
+#     carry every snapshot the source has, not just the ones this tool made)
+#     nothing prunes them and they accumulate forever, while only the newest has
+#     any value for a future incremental. Absolute protection made that garbage
+#     immortal.
+#
+#     Global, not per-scope: protection is a property of the snapshot NAME, not
+#     of where it lives, and a per-scope version would let the same reserved
+#     prefix be protected on one dataset and prunable on another -- exactly the
+#     kind of split that goes wrong quietly.
+#
+#     This only RELAXES a guard; it never widens a match. An older reserved
+#     snapshot still has to match the run's own 'pattern' to be deleted, so a
+#     routine automated_hourly_ job cannot touch one even at keep = 0.
+#
 # There is no separate [monitor:] section. A staleness check (check-snap-age.sh)
 # is derived AUTOMATICALLY, per tier, wherever a 'pattern' already resolves for
 # pruning -- i.e. every inline [dataset:] self-prune and every [prune:<scope>]
