@@ -19,6 +19,7 @@ No package to install beyond the scripts themselves and their runtime dependenci
   - [Hold-based protection for in-flight snapshots](#hold-based-protection-for-in-flight-snapshots)
   - [`-j`/`--identifier`: independent jobs on the same pair](#-j--identifier-independent-jobs-on-the-same-pair)
   - [Skipping intermediate snapshots (`-i`)](#skipping-intermediate-snapshots--i)
+    - [Auto-deciding it: `-T <N>` (catch-up threshold)](#auto-deciding-it--t-n-catch-up-threshold)
   - [Quiescing Proxmox guests (`-q`)](#quiescing-proxmox-guests--q)
   - [Link autotuning (`-A`)](#link-autotuning--a)
   - [Compression](#compression)
@@ -168,6 +169,48 @@ sends a single diff by construction.
 # replaying every hourly/daily snapshot taken in the meantime:
 ./snapsend.sh -i tank/data backup/tank/data
 ```
+
+#### Auto-deciding it: `-T <N>` (catch-up threshold)
+
+`-i` above is a manual, all-or-nothing choice per invocation. `-T <N>` decides it automatically,
+per dataset, from how long the target has actually been behind — but expressed **relative to that
+dataset's own snapshot cadence**, not an absolute time or count.
+
+An absolute threshold creates an arbitrary cliff: pick "24 hours" and a target offline 23h keeps
+every intermediate while one offline 26h keeps none, for a 3-hour difference that means nothing on
+its own. Worse, the same absolute number is wrong across tiers on the same fleet — an hourly job
+piles up ~24 snapshots in a day, a daily job piles up only ~1. `-T` fixes both: the threshold is
+"more than N of THIS dataset's own intervals", where the interval is *measured* (the gap between
+the two newest snapshots on the source matching this run's `-m` prefix — never assumed, same house
+style as [`-A`](#link-autotuning--a)). The same `N` then lands in the right place for any cadence:
+
+| dataset's own cadence | own interval (measured) | `-T 24` cliff at |
+|---|---|---|
+| hourly | ~1h | ~24h offline |
+| daily | ~24h | ~24 days offline |
+
+So a daily-tier dataset offline **5 days** stays comfortably under an `N=24` threshold and keeps
+sending every daily snapshot as normal — while an hourly-tier dataset offline **26 hours** crosses
+the same `N=24` threshold and catches up in a single diff. One number, two different absolute
+cliffs, each landing where that tier's snapshots actually stop being worth replaying individually.
+
+```bash
+# Auto-catch-up once more than 24 of a dataset's own intervals have elapsed
+# since the common base -- works the same whether this job is hourly or daily:
+./snapsend.sh -T 24 tank/data backup/tank/data
+```
+
+Unmeasurable cases (fewer than two matching snapshots on the source, a degenerate zero/negative
+interval, a common snapshot whose creation time can't be read) always resolve to "no" — i.e. today's
+default (`-I`, all intermediates) stays untouched; `-T` never fails a run, only fills in a decision.
+An explicit `-i` still wins outright and skips the check entirely (same precedent as `-A` never
+overruling an explicit `-z`/`-Z`/`-g`/`-N`).
+
+**Known open edge case:** a job whose `-m` prefix matches *multiple* tiers at once (e.g. pve0's
+archive anchor `-e -m automated_` matches hourly/daily/weekly/monthly/annual in one broad prefix)
+will measure its "own interval" from whichever tier is most frequent among the matches — usually
+hourly — which understates the interval for the coarser tiers riding along in the same stream.
+Not addressed by `-T` today; a single-tier `-m` prefix per job sidesteps it entirely.
 
 ### Quiescing Proxmox guests (`-q`)
 
@@ -371,6 +414,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-q <MODE>` | Quiesce the owning Proxmox guest first — see [Quiescing](#quiescing-proxmox-guests--q) |
 | `-j <TAG>` | Job identifier — see [`-j`/`--identifier`](#-j--identifier-independent-jobs-on-the-same-pair). Was `-i` before v2.65/v2.59 |
 | `-i` | Skip intermediate snapshots on an incremental (`zfs send -i` instead of the default `-I`) — see [Skipping intermediate snapshots](#skipping-intermediate-snapshots--i) |
+| `-T <N>` | Auto-switch to `-i` once more than N of a dataset's own snapshot intervals have elapsed since the common base — see [catch-up threshold](#auto-deciding-it--t-n-catch-up-threshold) |
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation — same trust level as any other flag. Skipped on the resume path (the resume token already fixes the stream format) |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable. Applied on both the normal and the resumed receive |
 | `-F` | Reconcile before sending (recursively under `-r`; a no-op under `-R`, see [Recursion: `-r` vs `-R`](#recursion--r-vs--r)): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, same as `-f`. Narrower than `-n`'s report on purpose — a target-only snapshot that isn't a name collision (e.g. an archive keeping longer history than source) is normal and left alone, or every run against such a target would force an expensive full resend |
@@ -401,7 +445,7 @@ snapsend.sh -r pool/data user@backuphost:tank/backups/data
 The mirror image of `snapsend.sh`: the target is always local, the source may be local or remote.
 Same option surface, minus `-q` (quiescing only makes sense on the side that creates the
 snapshot, which for a pull is a remote host this side doesn't control) — everything else
-(`-m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -u -f -w -p -c -k -K -O -b -A -j -o -x -U -F -V`) behaves identically, with
+(`-m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -c -k -K -O -b -A -j -o -x -U -F -V`) behaves identically, with
 source/target swapped (`-o` still applies to the remote `zfs send`, `-x` to the local receive,
 `-F` always destroys locally since the target is always local here). `-R`'s descendant listing
 runs over ssh when the source is remote, since unlike `snapsend.sh` the source here isn't always
