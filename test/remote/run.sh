@@ -66,6 +66,9 @@ RROOT="$RPARENT/$TAG"
 
 zfs list -H "$LROOT"          >/dev/null 2>&1 && { echo "refusing to run: $LROOT exists here" >&2; exit 1; }
 $SSH "$PEER" "zfs list -H '$RROOT'" >/dev/null 2>&1 && { echo "refusing to run: $RROOT exists on $PEER" >&2; exit 1; }
+# Sync mode (section G) lands at the IDENTICAL path on the peer, not under
+# $RROOT, so that name has to be free there too.
+$SSH "$PEER" "zfs list -H '$LROOT'" >/dev/null 2>&1 && { echo "refusing to run: $LROOT exists on $PEER (sync mode needs it free)" >&2; exit 1; }
 
 # Keep this run's bookkeeping out of the host's real logs and lock dir.
 TMPD="$(mktemp -d)"
@@ -101,6 +104,10 @@ cleanup() {
     done
     zfs destroy -R "$LROOT" 2>/dev/null
     $SSH "$PEER" "for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs release zfssnapall_inflight \$s 2>/dev/null; done; zfs destroy -R '$RROOT' 2>/dev/null" 2>/dev/null
+    # Sync mode (section G) lands at the IDENTICAL path, not under $RROOT --
+    # its peer-side footprint lives under $LROOT instead, so that needs its
+    # own release+destroy on the peer too.
+    $SSH "$PEER" "for s in \$(zfs list -H -o name -t snapshot -r '$LROOT' 2>/dev/null); do zfs release zfssnapall_inflight \$s 2>/dev/null; done; zfs destroy -R '$LROOT' 2>/dev/null" 2>/dev/null
     rm -rf "$TMPD"
 }
 trap cleanup EXIT
@@ -493,6 +500,48 @@ else
     check "F6 delsnaps.sh -c with a bogus cipher: ssh refuses, delsnaps fails" "1" "$?"
     check "F6 bogus cipher: the snapshot it would have pruned still exists" "1" \
           "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null | grep -c prune_target_2")"
+fi
+
+# ============================================================================
+# G. sync mode (bare user@host, no ':', no base -- mirrors to the identical
+#    path instead of nesting under one). See snapsend.sh/snapget.sh headers.
+# ============================================================================
+echo "--- G. sync mode (bare user@host)"
+
+tick
+send -m g1_ "$SRC" "$PEER"
+check "G1 snapsend sync: exit 0" "0" "$RC"
+check "G1 snapsend sync: landed at the IDENTICAL path on the peer" "yes" "$(r_exists "$SRC")"
+check "G1 snapsend sync: GUID matches" \
+      "$(l_guid "$SRC@$(l_newest "$SRC")")" "$(r_guid "$SRC@$(l_newest "$SRC")")"
+check "G1 snapsend sync: nothing landed under \$RROOT (proves no base was applied)" "no" "$(r_exists "$RROOT/$SRC")"
+
+tick
+GSRC="$LROOT/gsync-src"
+seed_peer "$GSRC" || { echo "could not seed the peer-side sync-pull source" >&2; exit 1; }
+get -m g2_ "$GSRC" "$PEER"
+check "G2 snapget sync: exit 0" "0" "$RC"
+check "G2 snapget sync: landed locally at the IDENTICAL path" "yes" "$(l_exists "$GSRC")"
+check "G2 snapget sync: GUID matches" \
+      "$(r_guid "$GSRC@$(r_newest "$GSRC")")" "$(l_guid "$GSRC@$(r_newest "$GSRC")")"
+
+# Self-sync guard: validate_remote_host (lib-zfs-snap.sh) compares
+# /etc/machine-id over ssh and refuses a "remote" that turns out to be this
+# same host. Needs this host to be reachable under its own address via ssh --
+# not guaranteed in every environment, so that precondition failing is a
+# clearly-labelled SKIP, not a false FAIL of the feature itself.
+tick
+SELF_ADDR="$(whoami)@$(hostname -f 2>/dev/null || hostname)"
+if $SSH "$SELF_ADDR" true 2>/dev/null; then
+    send -m g3_ "$SRC" "$SELF_ADDR"
+    check "G3 self-sync refused (machine-id guard fired)" "1" "$(outgrep 'identical machine-id')"
+    # Pinning the ACTUAL current exit code, not the one it arguably should be:
+    # the guard aborts but still exits 0, which would read as success in a real
+    # cron line. Known wart, flagged separately, deliberately not "fixed" here --
+    # this test documents today's real behavior, not an aspiration.
+    check "G3 self-sync: exit code (known wart -- reads as success in cron)" "0" "$RC"
+else
+    echo "SKIP G3 self-sync check -- $SELF_ADDR is not reachable via ssh from itself in this environment"
 fi
 
 # ============================================================================
