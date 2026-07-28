@@ -2,5 +2,5 @@
 59 * * * * e=$(mktemp); /REPO/snapsend.sh -m "automated_" -A "tank/push-base" "user@far:backup/base" 2>"$e"; rc=$?; cat "$e" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "pve1 hourly backup (push base)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
 59 * * * * e=$(mktemp); /REPO/snapsend.sh -m "automated_" -A "tank/push-sync" "user@far" 2>"$e"; rc=$?; cat "$e" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "pve1 hourly backup (push sync)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
 59 * * * * e=$(mktemp); /REPO/snapsend.sh -m "automated_" "tank/push-local" "backup/local" 2>"$e"; rc=$?; cat "$e" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "pve1 hourly backup (push local)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
-59 * * * * e=$(mktemp); /REPO/snapget.sh -m "automated_" -A "tank/pull-sync" "user@far" 2>"$e"; rc=$?; cat "$e" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "pve1 hourly backup (pull sync)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
+59 * * * * e=$(mktemp); /REPO/snapget.sh -m "automated_" -A "user@far:tank/pull-sync" 2>"$e"; rc=$?; cat "$e" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "pve1 hourly backup (pull sync)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
 # END zfs-backup-managed

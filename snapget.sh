@@ -6,7 +6,7 @@ set -o pipefail
 # Refactored: March 17, 2026
 # Description: ZFS snapshot manager with force full pull
 #
-# Usage: snapget.sh [options] DATASETS [REMOTE]
+# Usage: snapget.sh [options] REMOTE_DATASETS [LOCAL_BASE]
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
 #   -e               Use existing latest snapshot on source instead of creating a new one
@@ -74,10 +74,11 @@ set -o pipefail
 #                    ^ / $ when you mean the whole name. Repeatable; a dataset
 #                    goes if ANY -X hits. This is syncoid's --exclude with the
 #                    same semantics. The name tested is the full source-side
-#                    path (SOURCE_BASE included), i.e. what `zfs list` prints on
-#                    the source host -- not the shortened form this script
-#                    carries internally, so one regex reads the same here as it
-#                    does in the snapsend.sh command going the other way.
+#                    path exactly as given in REMOTE_DATASETS (or discovered
+#                    under -R), i.e. what `zfs list` prints on the source host
+#                    -- not the local name this script writes to, so one regex
+#                    reads the same here as it does in the snapsend.sh command
+#                    going the other way.
 #                    Excluding a dataset does NOT exclude its descendants -- but
 #                    mind the anchor: unanchored, a pattern matching a parent
 #                    matches its children too, since a child's full name
@@ -248,29 +249,40 @@ set -o pipefail
 # stream (needs feature@lz4_compress at all, plus feature@zstd_compress for
 # zstd-compressed records); set ZFS_SNAP_NO_COMPRESSED_SEND=1 to force plain.
 #
-# REMOTE format, three shapes (twin of snapsend.sh's own three -- see its
-# header for the full rationale):
-#   [user@]host:dataset_path   PULL from a BASE -- the actual source read is
-#                              dataset_path/<local dataset name>, mirroring
-#                              snapsend.sh's own dst=base convention.
-#   [user@]host                SYNC mode -- no ':', but '@' makes this
-#                              unambiguously remote (a ZFS name can never
-#                              contain '@'). Pulls the IDENTICAL dataset path
-#                              from that host instead of nesting under a base.
+# REMOTE_DATASETS / LOCAL_BASE (v2.61+, flipped from earlier versions -- see
+# git log if you remember the old `DATASETS [REMOTE]` shape): snapget.sh
+# mirrors snapsend.sh exactly, just on the opposite side. The rule is one
+# sentence: whichever side is READ is given LITERALLY (with a host: prefix
+# when it is not this machine); whichever side is WRITTEN gets an optional
+# BASE for relocation (never a host: prefix, because it is always this
+# machine). For a pull, the READ side is remote -- so REMOTE_DATASETS is a
+# comma list of the REAL, existing names on the source, each written
+# [user@]host:dataset_path (exactly what `zfs list` shows there, no base
+# arithmetic). All entries must share the same [user@]host. LOCAL_BASE is a
+# plain local path -- never a host, never a ':' -- prepended to each entry's
+# dataset_path to build where it lands here.
+#
+#   [user@]host:dataset_path[,[user@]host:dataset_path...]   REMOTE_DATASETS,
+#                              always required. A bare dataset_path with no
+#                              ':' at all (no host) pulls from a LOCAL source
+#                              instead -- no ssh, used for local-to-local
+#                              relocation/testing.
+#   LOCAL_BASE                 Optional. Omit it for SYNC mode: the local
+#                              name is then IDENTICAL to the remote one.
 #                              Refused if the resolved host is THIS host
 #                              (validate_remote_host, same guard as
 #                              snapsend.sh).
-#   dataset_path (no ':', no '@')  LOCAL mode -- local-to-local pull under a
-#                              different name.
 #
 # Examples:
-#   snapget.sh -v1 pool/data backuppool/data_backup
-#   snapget.sh -r pool/data user@sourcehost:tank/backups/data
-#   snapget.sh -r pool/data user@sourcehost              # sync: pulls pool/data from sourcehost
+#   snapget.sh -v1 backuphost:pool/data backuppool/data_backup
+#     -> creates backuppool/data_backup/pool/data here
+#   snapget.sh -r sourcehost:tank/data                    # sync: identical local name
+#   snapget.sh pve2:rpool/data/v1,pve2:rpool/data/v2 hdd/backups/kopia-pve1
+#     -> creates hdd/backups/kopia-pve1/rpool/data/v1 and .../v2 here
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.60'
+VERSION='v2.61'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1319,7 +1331,7 @@ if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
     log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
 
-[ $# -ge 1 ] || { echo "Użycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "Użycie: $0 [opcje] REMOTE_DATASETS [LOCAL_BASE]" >&2; exit 1; }
 ###############################################################################
 #END 5A
 
@@ -1424,75 +1436,82 @@ fi
 ###############################################################################
 #BEGIN 5B [MAIN LOGIC]
 ###############################################################################
-DATASETS=$1
-REMOTE=${2:-}
-IFS=',' read -ra DATASETS <<< "$DATASETS"
+# Flipped in v2.61: the READ side (remote) is always given literally, the
+# WRITE side (local) gets the optional base. See the header doc above.
+RAW_DATASETS=$1
+LOCAL_BASE=${2:-}
+IFS=',' read -ra RAW_DATASETS <<< "$RAW_DATASETS"
 
-SOURCE_BASE=""
 REMOTE_USER="root"
 REMOTE_HOST=""
-
-if [[ -n "$REMOTE" ]]; then
-    if [[ "$REMOTE" == *":"* ]]; then
-        IFS=':' read -r remote_part source_base <<< "$REMOTE"
-
-        if [[ "$remote_part" == *"@"* ]]; then
-            IFS='@' read -r REMOTE_USER REMOTE_HOST <<< "$remote_part"
+declare -a DATASETS=()
+_first_item=1
+for _item in "${RAW_DATASETS[@]}"; do
+    _item_user="root"
+    _item_host=""
+    _item_path="$_item"
+    if [[ "$_item" == *":"* ]]; then
+        IFS=':' read -r _host_part _item_path <<< "$_item"
+        if [[ "$_host_part" == *"@"* ]]; then
+            IFS='@' read -r _item_user _item_host <<< "$_host_part"
         else
-            REMOTE_HOST="$remote_part"
+            _item_host="$_host_part"
         fi
-
-        SOURCE_BASE=$(echo "$source_base" | sed 's:^/+::; s:/+$::')
-    elif [[ "$REMOTE" == *"@"* ]]; then
-        # SYNC mode: bare user@host, no path -- twin of snapsend.sh's own sync
-        # mode. A ZFS dataset name can never contain '@', so this is
-        # unambiguous, never a local path. SOURCE_BASE stays "" so the
-        # REMOTE read is the SAME dataset name as the local target, not
-        # nested under anything. validate_remote_host (wherever REMOTE_HOST
-        # is non-empty) refuses if that host is this one.
-        IFS='@' read -r REMOTE_USER REMOTE_HOST <<< "$REMOTE"
-    else
-        SOURCE_BASE="$REMOTE"
     fi
+    # A bare entry with no ':' at all (no host) is a LOCAL source -- no ssh,
+    # used for local-to-local relocation/testing. Every entry must agree on
+    # the same [user@]host: one ssh connection per run, and a silent partial
+    # read from the wrong host is worse than refusing outright.
+    if [ $_first_item -eq 1 ]; then
+        REMOTE_USER="$_item_user"
+        REMOTE_HOST="$_item_host"
+        _first_item=0
+    elif [ "$_item_host" != "$REMOTE_HOST" ] || [ "$_item_user" != "$REMOTE_USER" ]; then
+        log 0 "All comma-separated REMOTE_DATASETS entries must share the same [user@]host -- got '${REMOTE_USER}@${REMOTE_HOST}' and '${_item_user}@${_item_host}'"
+        exit 1
+    fi
+    DATASETS+=("$_item_path")
+done
+
+# LOCAL_BASE is always a plain local path, never a host. A leftover ':' or
+# '@' here is almost certainly muscle memory from the pre-v2.61 argument
+# order, where this position used to carry the remote host -- refuse instead
+# of silently misreading it as a very strange literal local dataset name.
+if [[ "$LOCAL_BASE" == *":"* ]] || [[ "$LOCAL_BASE" == *"@"* ]]; then
+    log 0 "Second argument must be a plain local path, no host -- remote source(s) go in the FIRST argument as [user@]host:dataset now (v2.61+). Got: $LOCAL_BASE"
+    exit 1
 fi
+LOCAL_BASE=$(echo "$LOCAL_BASE" | sed 's:^/+::; s:/+$::')
 
 # -R: expand each entry into itself + every descendant of the REMOTE source
-# (mirrors snapsend.sh's -R block; here the listing has to go over ssh when
-# REMOTE_HOST is set, since snapget's source -- unlike snapsend's -- may not
-# be local). Each discovered child comes back as a full path under
-# SOURCE_BASE; stripped back down to the bare "dataset" form (byte-offset
-# substring removal, not a glob strip, so nothing in SOURCE_BASE is
-# reinterpreted as a pattern) so it still works as both the local target path
-# and, re-prefixed with SOURCE_BASE below in the main loop, the source path.
-# Same ordering guarantee as snapsend.sh: `zfs list -r` lists a dataset before
-# any descendant, and sort -u preserves that (a parent's name always sorts
-# before "parent/anything").
+# (mirrors snapsend.sh's -R block exactly, just on the source side instead of
+# the target side -- the listing goes over ssh when REMOTE_HOST is set, since
+# snapget's source -- unlike snapsend's -- may not be local). Each discovered
+# child comes back as a full path exactly as `zfs list` on the source prints
+# it -- no base to strip, LOCAL_BASE is only ever applied once, uniformly, in
+# the main loop below. Same ordering guarantee as snapsend.sh: `zfs list -r`
+# lists a dataset before any descendant, and sort -u preserves that (a
+# parent's name always sorts before "parent/anything").
 if [ $FLAT_RECURSE -eq 1 ]; then
     declare -a EXPANDED_DATASETS=()
     for ds in "${DATASETS[@]}"; do
-        src_root="${SOURCE_BASE:+${SOURCE_BASE}/}${ds}"
-        src_root=$(echo "$src_root" | sed 's:///*:/:g; s:^/::')
         if [ -n "$REMOTE_HOST" ]; then
-            if ! ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "zfs list -H '$src_root' >/dev/null 2>&1"; then
-                log 0 "Source dataset not found on remote host: $src_root"
+            if ! ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "zfs list -H '$ds' >/dev/null 2>&1"; then
+                log 0 "Source dataset not found on remote host: $ds"
                 exit 1
             fi
             children=$(ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" \
-                "zfs list -H -o name -t filesystem,volume -r '$src_root' 2>/dev/null")
+                "zfs list -H -o name -t filesystem,volume -r '$ds' 2>/dev/null")
         else
-            if ! zfs list -H "$src_root" &>/dev/null; then
-                log 0 "Source dataset not found: $src_root"
+            if ! zfs list -H "$ds" &>/dev/null; then
+                log 0 "Source dataset not found: $ds"
                 exit 1
             fi
-            children=$(zfs list -H -o name -t filesystem,volume -r "$src_root" 2>/dev/null)
+            children=$(zfs list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)
         fi
         while IFS= read -r child; do
             [ -z "$child" ] && continue
-            # -S/-X are decided on the FULL source-side name, before the
-            # SOURCE_BASE prefix is stripped: that is the name the operator sees
-            # in `zfs list` on the source, and the one a matching snapsend.sh -X
-            # in the other direction would be written against.
-            if [ $SKIP_PARENT -eq 1 ] && [ "$child" = "$src_root" ]; then
+            if [ $SKIP_PARENT -eq 1 ] && [ "$child" = "$ds" ]; then
                 log 2 "Skip-parent (-S): not pulling $child itself"
                 continue
             fi
@@ -1500,11 +1519,7 @@ if [ $FLAT_RECURSE -eq 1 ]; then
                 log 2 "Excluded (-X): $child"
                 continue
             fi
-            if [ -n "$SOURCE_BASE" ]; then
-                EXPANDED_DATASETS+=("${child:$((${#SOURCE_BASE}+1))}")
-            else
-                EXPANDED_DATASETS+=("$child")
-            fi
+            EXPANDED_DATASETS+=("$child")
         done <<< "$children"
     done
     # Every candidate filtered out is an error, not a quiet success -- see the
@@ -1556,16 +1571,14 @@ if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
 fi
 
 # Catch the container-parent mistake before any work starts -- see the same
-# block in snapsend.sh. Two differences here, both for the same reason snapget's
-# -R expansion differs: the source may be REMOTE (so the check gets the remote
-# args and rides the multiplexer opened just above -- hence the placement after
-# tune_ssh_enable, not next to the -R block), and the dataset name has to be
-# re-prefixed with SOURCE_BASE to address it on that source.
+# block in snapsend.sh. One difference here, for the same reason snapget's -R
+# expansion differs: the source may be REMOTE, so the check gets the remote
+# args and rides the multiplexer opened just above (hence the placement after
+# tune_ssh_enable, not next to the -R block). No re-prefixing needed any
+# more -- $ds IS the full source-side name now.
 if [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
     for ds in "${DATASETS[@]}"; do
-        src_check="${SOURCE_BASE:+${SOURCE_BASE}/}${ds}"
-        src_check=$(echo "$src_check" | sed 's:///*:/:g; s:^/::')
-        warn_if_unrecursed_children "$src_check" "$REMOTE_USER" "$REMOTE_HOST"
+        warn_if_unrecursed_children "$ds" "$REMOTE_USER" "$REMOTE_HOST"
     done
 fi
 
@@ -1590,19 +1603,17 @@ if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
 fi
 
 declare -a FAILED_DATASETS=()
-for dataset in "${DATASETS[@]}"; do
-    if [ -n "$SOURCE_BASE" ]; then
-        src_path="${SOURCE_BASE}/${dataset}"
+for src_path in "${DATASETS[@]}"; do
+    if [ -n "$LOCAL_BASE" ]; then
+        dataset="${LOCAL_BASE}/${src_path}"
     else
-        src_path="$dataset"
+        dataset="$src_path"
     fi
-    src_path=$(echo "$src_path" | sed 's:///*:/:g; s:^/::')
+    dataset=$(echo "$dataset" | sed 's:///*:/:g; s:^/::')
 
     # "remote": snapget's source lives on the far side, so the ratio must be
-    # measured there -- that is also where its compressor runs. And the name
-    # probed is src_path, NOT dataset: dataset is the LOCAL target, which under
-    # a SOURCE_BASE prefix does not exist on the remote at all, so the probe
-    # would have found no snapshot and quietly given up on every tuned run.
+    # measured there -- that is also where its compressor runs. src_path is
+    # already the literal source-side name now, no prefixing needed.
     if [ $AUTOTUNE_ACTIVE -eq 1 ]; then
         COMPRESSION=$COMPRESSION_BASE
         tune_apply "$REMOTE_USER@$REMOTE_HOST" "$src_path" remote

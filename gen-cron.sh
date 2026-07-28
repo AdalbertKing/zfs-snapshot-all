@@ -56,22 +56,46 @@ set -o pipefail
 #                                          # snapsend.sh sends TO dst (remote if it
 #                                          # contains ':', else local-to-local).
 #                                          # Omit entirely for a local snapshot only.
-#       src          = <[user@]host:path>  # PULL: <zfs/path> is the local
-#                                          # DESTINATION, snapget.sh pulls FROM src
-#                                          # (see snapget.sh's own header -- it is
-#                                          # snapsend.sh's twin, same flags, mirrored
-#                                          # direction: DATASETS is local, REMOTE is
-#                                          # the far end, but for snapget the far end
-#                                          # is where the data comes FROM). Setting
-#                                          # both dst and src on the same section is
-#                                          # rejected -- one section is one direction.
-#                                          # A [defaults] 'dst' that other push
-#                                          # datasets rely on is NOT automatically
-#                                          # blank here: a pull dataset in a config
-#                                          # that also has a global default dst MUST
-#                                          # override it explicitly ('dst = ', blank)
-#                                          # or generation refuses (looks ambiguous:
-#                                          # both a resolved dst AND a resolved src).
+#       src          = <[user@]host:path>  # PULL: 'path' is the LITERAL,
+#                                          # real name on the remote host --
+#                                          # exactly what `zfs list` shows
+#                                          # there, not a base (snapget.sh
+#                                          # v2.61+: whichever side is READ is
+#                                          # given literally; whichever side
+#                                          # is WRITTEN gets an optional base.
+#                                          # For a pull the remote is READ, so
+#                                          # it is given literally here). The
+#                                          # section's own <zfs/path> is the
+#                                          # local DESTINATION as always, and
+#                                          # MUST end with 'path' verbatim
+#                                          # (e.g. local dataset:<zfs/path> =
+#                                          # hdd/backups/x/pool/data, src =
+#                                          # host:pool/data) -- generation
+#                                          # dies with a clear message if it
+#                                          # does not, since there is no base
+#                                          # that could reconcile an
+#                                          # unrelated local name with a
+#                                          # fixed remote one. If <zfs/path>
+#                                          # equals 'path' exactly, the
+#                                          # generated call omits the local
+#                                          # base entirely (sync mode).
+#                                          # Setting both dst and src on the
+#                                          # same section is rejected -- one
+#                                          # section is one direction. A
+#                                          # [defaults] 'dst' that other push
+#                                          # datasets rely on is NOT
+#                                          # automatically blank here: a pull
+#                                          # dataset in a config that also has
+#                                          # a global default dst MUST
+#                                          # override it explicitly ('dst = ',
+#                                          # blank) or generation refuses
+#                                          # (looks ambiguous: both a resolved
+#                                          # dst AND a resolved src).
+#                                          # Pull datasets never group: each
+#                                          # has its own literal remote name,
+#                                          # so merging into one snapget.sh
+#                                          # call never makes sense the way it
+#                                          # does for push.
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
 #     A dataset section runs, scoped to ITS OWN path, non-recursively:
@@ -232,7 +256,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.23'
+VERSION='v4.24'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -753,6 +777,17 @@ build_dataset() {
             if [ -n "$src" ]; then
                 direction="pull"
                 remote_spec="$src"
+                # A colon is mandatory now (v4.24+): 'src' must be a LITERAL
+                # [user@]host:path, never a bare host. Sync mode is expressed
+                # structurally instead (the section's own path equalling
+                # 'path' exactly), so there is no bare-host shorthand left to
+                # accept here -- and a bare host passed straight through
+                # would land in snapget.sh's REMOTE_DATASETS position and be
+                # misread as a local dataset literally named after the host.
+                case "$src" in
+                    *:*) ;;
+                    *) die "[dataset:$ds_path] tier=$tier: src='$src' has no ':' -- must be [user@]host:path with the LITERAL remote dataset name (e.g. 'pve2:rpool/data'). Sync mode is expressed by making the section's own path equal that name exactly, not by omitting the path here." ;;
+                esac
             else
                 direction="push"
                 remote_spec="$dst"
@@ -1109,6 +1144,34 @@ emit_send() {
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
         IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
 
+        # Pull never groups: 'dst' here holds 'src's raw value, a LITERAL
+        # remote name, so two different local datasets could only land in the
+        # same group by coincidentally pulling the identical remote source --
+        # a config mistake, not something to silently merge (snapget.sh's
+        # single LOCAL_BASE argument cannot place two different local
+        # destinations in one call anyway).
+        if [ "$direction" = "pull" ]; then
+            if [ "${#members[@]}" -gt 1 ]; then
+                die "[dataset:$ds] and other section(s) all resolved the identical src='$dst' -- pull datasets cannot be merged (snapget.sh needs one local destination per literal remote name). Give each a distinct remote path, or split them onto different schedules/prefixes/flags."
+            fi
+            local remote_name local_base
+            remote_name="${dst#*:}"
+            if [ "$ds" = "$remote_name" ]; then
+                local_base=""
+            elif [[ "$ds" == */"$remote_name" ]]; then
+                local_base="${ds%/$remote_name}"
+            else
+                die "[dataset:$ds] direction=pull: the local path must end with the remote dataset name ('$remote_name', from src='$dst') -- e.g. local dataset:<base>/$remote_name. snapget.sh has no way to reconcile an unrelated local name with a fixed remote one."
+            fi
+            local cmd
+            cmd="$REPO_DIR/snapget.sh -m \"$prefix\""
+            [ -n "$flags" ] && cmd="$cmd $flags"
+            cmd="$cmd \"$dst\""
+            [ -n "$local_base" ] && cmd="$cmd \"$local_base\""
+            JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+            continue
+        fi
+
         local src notify_out
         if [ "${#members[@]}" -eq 1 ]; then
             src="$ds"
@@ -1155,18 +1218,9 @@ emit_send() {
             fi
         fi
 
-        # direction is uniform across every member of this group (it is part of
-        # the grouping key), so members[0]'s value applies to the whole line.
-        # pull: 'ds'/'src' here is the LOCAL destination, 'dst' (the group key's
-        # remote-spec slot) is the remote SOURCE -- snapget.sh's own argument
-        # order is identical to snapsend.sh's (DATASETS [REMOTE]), only which
-        # end each name refers to is mirrored.
+        # Only push reaches here -- pull already emitted and 'continue'd above.
         local cmd
-        if [ "$direction" = "pull" ]; then
-            cmd="$REPO_DIR/snapget.sh -m \"$prefix\""
-        else
-            cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
-        fi
+        cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""

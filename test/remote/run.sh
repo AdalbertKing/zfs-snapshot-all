@@ -332,34 +332,40 @@ check "B8 incremental remote: the source carries a send bookmark" "yes" \
 # C. snapget, LOCAL source
 # ============================================================================
 echo "--- C. snapget local"
-# snapget's model is mirrored: source = <SOURCE_BASE>/<target dataset>, so the
-# source tree has to be built at that exact nested path.
-CBASE="$LROOT/cbase"
-CTGT="$LROOT/ctgt"
-seed_local "$CBASE/$CTGT" || { echo "could not seed the local pull source" >&2; exit 1; }
+# v2.61+ model: arg1 is the LITERAL existing source (read side, given as-is,
+# no base needed to find it); LOCAL_BASE (arg2) places the result. A
+# same-host relocation has no sync form (source and target can never share a
+# name), so LOCAL_BASE is always given -- the resulting target is
+# LOCAL_BASE/<arg1's full name>, computed below rather than hand-typed, since
+# that concatenation is exactly the behaviour under test.
+CSRC="$LROOT/csrc"
+CTGT_BASE="$LROOT/ctgt-area"
+seed_local "$CSRC" || { echo "could not seed the local pull source" >&2; exit 1; }
+CTGT="$CTGT_BASE/$CSRC"
 
 tick
-get -m c1_ "$CTGT" "$CBASE"
+get -m c1_ "$CSRC" "$CTGT_BASE"
 check "C1 plain local pull: exit 0" "0" "$RC"
 check "C1 plain local pull: GUID matches" \
-      "$(l_guid "$CBASE/$CTGT@$(l_newest "$CBASE/$CTGT")")" \
-      "$(l_guid "$CTGT@$(l_newest "$CBASE/$CTGT")")"
+      "$(l_guid "$CSRC@$(l_newest "$CSRC")")" \
+      "$(l_guid "$CTGT@$(l_newest "$CSRC")")"
 
 tick
-get -m c2_ -r "$CTGT" "$CBASE"
+get -m c2_ -r "$CSRC" "$CTGT_BASE"
 check "C2 -r local pull: exit 0" "0" "$RC"
 check "C2 -r local pull: descendant landed" "yes" "$(l_exists "$CTGT/swap/inner")"
 
 tick
-get -m c3_ -R "$CTGT" "$CBASE"
+get -m c3_ -R "$CSRC" "$CTGT_BASE"
 check "C3 -R local pull: exit 0" "0" "$RC"
 check "C3 -R local pull: every dataset present locally" "4" \
       "$(zfs list -H -o name -r "$CTGT" 2>/dev/null | wc -l)"
 
 tick
-CTGT2="$LROOT/ctgt2"
-seed_local "$CBASE/$CTGT2" >/dev/null
-get -m c4_ -R -X 'swap$' "$CTGT2" "$CBASE"
+CSRC2="$LROOT/csrc2"
+seed_local "$CSRC2" >/dev/null
+CTGT2="$CTGT_BASE/$CSRC2"
+get -m c4_ -R -X 'swap$' "$CSRC2" "$CTGT_BASE"
 check "C4 -R -X local pull: exit 0" "0" "$RC"
 check "C4 -R -X local pull: excluded dataset was not pulled" "0" "$(l_snaps "$CTGT2/swap")"
 check "C4 -R -X local pull: its child was" "1" "$(l_snaps "$CTGT2/swap/inner")"
@@ -368,61 +374,71 @@ check "C4 -R -X local pull: its child was" "1" "$(l_snaps "$CTGT2/swap/inner")"
 # D. snapget, REMOTE source (ssh, the mirrored half of B)
 # ============================================================================
 echo "--- D. snapget remote (ssh)"
+# v2.61+ model: arg1 is [user@]host:LITERAL_remote_name (exactly what `zfs
+# list` shows on the peer); LOCAL_BASE (arg2) places the result here as
+# LOCAL_BASE/<that literal name>.
 DBASE="$RROOT/dbase"
-DTGT="$LROOT/dtgt"
-seed_peer "$DBASE/$DTGT" || { echo "could not seed the remote pull source" >&2; exit 1; }
+DTGT_BASE="$LROOT/dtgt-area"
+DSRC="$DBASE/dsrc"
+seed_peer "$DSRC" || { echo "could not seed the remote pull source" >&2; exit 1; }
+DTGT="$DTGT_BASE/$DSRC"
 
 tick
-get -m d1_ "$DTGT" "$PEER:$DBASE"
+get -m d1_ "$PEER:$DSRC" "$DTGT_BASE"
 check "D1 plain remote pull: exit 0" "0" "$RC"
 check "D1 plain remote pull: GUID matches across the link" \
-      "$(r_guid "$DBASE/$DTGT@$(r_newest "$DBASE/$DTGT")")" \
-      "$(l_guid "$DTGT@$(r_newest "$DBASE/$DTGT")")"
+      "$(r_guid "$DSRC@$(r_newest "$DSRC")")" \
+      "$(l_guid "$DTGT@$(r_newest "$DSRC")")"
 check "D1 plain remote pull: local target is canmount=noauto" "noauto" "$(l_canmount "$DTGT")"
 
 tick
-get -m d2_ -z -v1 "$DTGT" "$PEER:$DBASE"
+get -m d2_ -z -v1 "$PEER:$DSRC" "$DTGT_BASE"
 check "D2 -z remote pull: exit 0" "0" "$RC"
 check "D2 -z remote pull: compression is not dropped over a link" "0" "$(outgrep 'compression ignored')"
 
 tick
-DTGT3="$LROOT/dtgt3"
-seed_peer "$DBASE/$DTGT3"
-get -m d3_ -r "$DTGT3" "$PEER:$DBASE"
+DSRC3="$DBASE/dsrc3"
+DTGT3="$DTGT_BASE/$DSRC3"
+seed_peer "$DSRC3"
+get -m d3_ -r "$PEER:$DSRC3" "$DTGT_BASE"
 check "D3 -r remote pull: exit 0" "0" "$RC"
 check "D3 -r remote pull: descendant landed locally" "yes" "$(l_exists "$DTGT3/swap/inner")"
 
 tick
-DTGT4="$LROOT/dtgt4"
-seed_peer "$DBASE/$DTGT4"
-get -m d4_ -R "$DTGT4" "$PEER:$DBASE"
+DSRC4="$DBASE/dsrc4"
+DTGT4="$DTGT_BASE/$DSRC4"
+seed_peer "$DSRC4"
+get -m d4_ -R "$PEER:$DSRC4" "$DTGT_BASE"
 check "D4 -R remote pull: exit 0" "0" "$RC"
 check "D4 -R remote pull: every dataset present locally" "4" \
       "$(zfs list -H -o name -r "$DTGT4" 2>/dev/null | wc -l)"
 
 tick
-DTGT5="$LROOT/dtgt5"
-seed_peer "$DBASE/$DTGT5"
-get -m d5_ -R -X 'swap$' "$DTGT5" "$PEER:$DBASE"
+DSRC5="$DBASE/dsrc5"
+DTGT5="$DTGT_BASE/$DSRC5"
+seed_peer "$DSRC5"
+get -m d5_ -R -X 'swap$' "$PEER:$DSRC5" "$DTGT_BASE"
 check "D5 -R -X remote pull: exit 0" "0" "$RC"
 check "D5 -R -X remote pull: excluded dataset not pulled" "0" "$(l_snaps "$DTGT5/swap")"
 check "D5 -R -X remote pull: its child was" "1" "$(l_snaps "$DTGT5/swap/inner")"
 # The regex is matched against the FULL source-side path, which only a remote
 # run can really demonstrate: this pattern cannot match the local target name.
 tick
-DTGT6="$LROOT/dtgt6"
-seed_peer "$DBASE/$DTGT6"
-get -m d6_ -R -X "^$DBASE/$DTGT6/keep$" "$DTGT6" "$PEER:$DBASE"
+DSRC6="$DBASE/dsrc6"
+DTGT6="$DTGT_BASE/$DSRC6"
+seed_peer "$DSRC6"
+get -m d6_ -R -X "^$DSRC6/keep$" "$PEER:$DSRC6" "$DTGT_BASE"
 check "D6 -R -X remote pull: full source path matched" "0" "$RC"
 check "D6 -R -X remote pull: the full-path exclusion took effect" "no" "$(l_exists "$DTGT6/keep")"
 
 tick
-DTGT7="$LROOT/dtgt7"
-seed_peer "$DBASE/$DTGT7"
-get -m d7_ -R -S "$DTGT7" "$PEER:$DBASE"
+DSRC7="$DBASE/dsrc7"
+DTGT7="$DTGT_BASE/$DSRC7"
+seed_peer "$DSRC7"
+get -m d7_ -R -S "$PEER:$DSRC7" "$DTGT_BASE"
 check "D7 -R -S remote pull: exit 0" "0" "$RC"
 check "D7 -R -S remote pull: the parent was not snapshotted on the source" "0" \
-      "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$DBASE/$DTGT7' 2>/dev/null | grep -c d7_")"
+      "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$DSRC7' 2>/dev/null | grep -c d7_")"
 check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")"
 
 # ============================================================================
@@ -519,7 +535,7 @@ check "G1 snapsend sync: nothing landed under \$RROOT (proves no base was applie
 tick
 GSRC="$LROOT/gsync-src"
 seed_peer "$GSRC" || { echo "could not seed the peer-side sync-pull source" >&2; exit 1; }
-get -m g2_ "$GSRC" "$PEER"
+get -m g2_ "$PEER:$GSRC"
 check "G2 snapget sync: exit 0" "0" "$RC"
 check "G2 snapget sync: landed locally at the IDENTICAL path" "yes" "$(l_exists "$GSRC")"
 check "G2 snapget sync: GUID matches" \
