@@ -70,6 +70,21 @@ SEND_TEST_MAIL=0
 # Set when THIS run creates the alert config, i.e. the host is being set up for
 # the first time -- the only moment a delivery smoke test proves anything new.
 FIRST_TIME_SETUP=0
+
+# ---- peer pairing (--pair/--join) -- see PAIRING-DESIGN.md -----------------
+PAIR_MODE=0
+JOIN_MODE=0
+JOIN_PACKAGE=""
+PEER_ROLE="pull"
+PEER_HOST=""
+PEER_DATASETS=""
+PEER_TARGET=""
+PEER_AS="delegated"
+PEER_PORT="22"
+PEER_ROTATE=0
+PEER_REVOKE_OLD=0
+PEER_DRAFT_CONFIG=0
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --check-only)   CHECK_ONLY=1; shift ;;
@@ -82,6 +97,24 @@ while [ "$#" -gt 0 ]; do
         --datasets)     BACKUP_USER_DATASETS="${2:-}"; shift 2 ;;
         --email=*)      NOTIFY_EMAIL="${1#*=}"; shift ;;
         --email)        NOTIFY_EMAIL="${2:-}"; shift 2 ;;
+        --pair)         PAIR_MODE=1; shift ;;
+        --join=*)       JOIN_MODE=1; JOIN_PACKAGE="${1#*=}"; shift ;;
+        --join)         JOIN_MODE=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
+        --role=*)       PEER_ROLE="${1#*=}"; shift ;;
+        --role)         PEER_ROLE="${2:-}"; shift 2 ;;
+        --peer=*)       PEER_HOST="${1#*=}"; shift ;;
+        --peer)         PEER_HOST="${2:-}"; shift 2 ;;
+        --peer-datasets=*) PEER_DATASETS="${1#*=}"; shift ;;
+        --peer-datasets)   PEER_DATASETS="${2:-}"; shift 2 ;;
+        --target=*)     PEER_TARGET="${1#*=}"; shift ;;
+        --target)       PEER_TARGET="${2:-}"; shift 2 ;;
+        --as=*)         PEER_AS="${1#*=}"; shift ;;
+        --as)           PEER_AS="${2:-}"; shift 2 ;;
+        --port=*)       PEER_PORT="${1#*=}"; shift ;;
+        --port)         PEER_PORT="${2:-}"; shift 2 ;;
+        --rotate)       PEER_ROTATE=1; shift ;;
+        --revoke-old)   PEER_REVOKE_OLD=1; shift ;;
+        --draft-config) PEER_DRAFT_CONFIG=1; shift ;;
         -h|--help)
             cat <<'USAGE'
 Usage: deploy.sh [options]
@@ -96,6 +129,29 @@ Usage: deploy.sh [options]
   --email=ADDR            where alerts are mailed
 Defaults are the config block at the top of this script -- edit them there to
 make them permanent for a host.
+
+Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
+  --pair                  initiate pairing with a peer (run on the host that
+                          will connect: the collector for --role=pull, the
+                          source for --role=push)
+    --role=pull|push        pull (default): this host pulls via snapget.sh.
+                            push: this host pushes via snapsend.sh.
+    --peer=HOST             the other host's hostname/IP
+    --peer-datasets="A B"   datasets involved in this relationship
+    --target=DATASET        where snapshots land -- local dataset for pull,
+                            remote dataset (on the peer) for push
+    --as=root|delegated     delegated (default): isolated per-peer account on
+                            the peer. root: parity with today's clustered
+                            hosts -- no isolation, use only when the hosts
+                            already fully trust each other
+    --port=N                ssh port (default 22)
+    --rotate                generate a new key alongside the existing one
+    --revoke-old             finish a rotation: remove the old key on both ends
+    --draft-config           after --join has run on the peer: list its
+                            datasets and write a reviewed-by-hand .suggested
+                            file (never installs anything)
+  --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
+                          (run on the second host, once, from its console)
 USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -105,6 +161,28 @@ case "$ALERT_MODE" in
     daily|immediate) ;;
     *) echo "--alerts must be 'daily' or 'immediate', got '$ALERT_MODE'" >&2; exit 2 ;;
 esac
+case "$PEER_ROLE" in
+    pull|push) ;;
+    *) echo "--role must be 'pull' or 'push', got '$PEER_ROLE'" >&2; exit 2 ;;
+esac
+case "$PEER_AS" in
+    root|delegated) ;;
+    *) echo "--as must be 'root' or 'delegated', got '$PEER_AS'" >&2; exit 2 ;;
+esac
+if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
+    echo "--pair and --join are mutually exclusive" >&2; exit 2
+fi
+if { [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ]; } && [ "$CHECK_ONLY" -eq 1 ]; then
+    echo "--check-only cannot be combined with --pair/--join -- these mutate state by design (new keys, new accounts, new grants)" >&2
+    exit 2
+fi
+if [ "$PAIR_MODE" -eq 1 ] && [ -z "$PEER_HOST" ]; then
+    echo "--pair requires --peer=HOST" >&2; exit 2
+fi
+if [ $(( PEER_ROTATE + PEER_REVOKE_OLD + PEER_DRAFT_CONFIG )) -gt 1 ]; then
+    echo "--rotate, --revoke-old and --draft-config are mutually exclusive -- pick one" >&2
+    exit 2
+fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
@@ -1030,7 +1108,414 @@ else
     log "all dependencies present"
 fi
 
+# ------------------------------------------------------------------------------
+# Peer pairing (--pair / --join) -- see PAIRING-DESIGN.md for the full design.
+# Two hosts with NO prior trust (not necessarily a Proxmox cluster). Runs after
+# the dependency/repo/alerting/capacity phases above, but is otherwise a
+# separate one-shot operation: it deliberately does NOT touch Phase 8's
+# BACKUP_USER account below (a different, unrelated delegation) and never
+# adds cron lines -- that stays manual, same as everything else in Part 5.
+# ------------------------------------------------------------------------------
+PEER_STATE_DIR="/etc/zfs-snapshot-all/peers"
+PEER_KEY_DIR="/root/.ssh/pairing"
 
+# A filesystem/account-name-safe label derived from --peer. A hostname can
+# contain characters that are fine in DNS but not in a Unix username or a bare
+# filename, so this is the ONE place that gets sanitised -- the manifest path,
+# the key file name and the proposed account name are all built from it.
+peer_label() {
+    printf '%s' "$PEER_HOST" | tr -c 'A-Za-z0-9._-' '-'
+}
+
+peer_manifest_path() {
+    echo "$PEER_STATE_DIR/$1.conf"
+}
+
+pubkey_fingerprint() {
+    ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
+}
+
+# do_pair -- runs on the host that will connect (collector for pull, source
+# for push). Generates/reuses a key dedicated to THIS relationship, pins the
+# peer's host key, and produces the wsad for manual transfer.
+do_pair() {
+    local label; label=$(peer_label)
+    local mpath; mpath=$(peer_manifest_path "$label")
+    mkdir -p "$PEER_STATE_DIR" "$PEER_KEY_DIR"
+    chmod 700 "$PEER_KEY_DIR"
+
+    if [ "$PEER_REVOKE_OLD" -eq 1 ]; then
+        do_revoke_old "$label" "$mpath"
+        return
+    fi
+    if [ "$PEER_DRAFT_CONFIG" -eq 1 ]; then
+        do_draft_config "$label" "$mpath"
+        return
+    fi
+
+    if [ "$PEER_ROTATE" -eq 1 ]; then
+        [ -r "$mpath" ] || die "--rotate needs an existing pairing for '$PEER_HOST' -- run --pair once first (without --rotate)"
+        # shellcheck disable=SC1090
+        . "$mpath"
+        [ "${PEER_ROTATING:-no}" = "yes" ] && die "peer '$PEER_HOST' already has a rotation in progress -- finish it with --revoke-old first, or remove ${PEER_KEY_DIR}/${label}_ed25519.new by hand to restart"
+        PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
+        PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
+        PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
+        [ -n "$PEER_DATASETS" ] || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+    else
+        if [ -r "$mpath" ]; then
+            # Re-pairing an existing relationship. Role/target/account-mode are
+            # identity-defining for this relationship and must NOT silently
+            # drift back to CLI defaults just because this invocation didn't
+            # repeat them -- --role/--as default to "pull"/"delegated" whether
+            # or not the admin typed them, so there is no way to tell "typed
+            # the default" from "didn't type it at all". The saved manifest
+            # always wins for these three; only the dataset list is allowed to
+            # change here (additively, see below).
+            local requested_datasets="$PEER_DATASETS"
+            # shellcheck disable=SC1090
+            . "$mpath"
+            PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
+            PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
+            PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
+            [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+            log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the wsad"
+            if [ -n "$requested_datasets" ] && [ "${PEER_SAVED_DATASETS:-}" != "$requested_datasets" ]; then
+                log "dataset list changed: '${PEER_SAVED_DATASETS:-}' -> '$requested_datasets'"
+                log "(additive only on the --join side -- nothing already granted is ever revoked automatically)"
+            fi
+        else
+            [ -n "$PEER_DATASETS" ] || die "--pair requires --peer-datasets=\"...\""
+            [ -n "$PEER_TARGET" ] || die "--pair requires --target=DATASET"
+        fi
+    fi
+
+    local keyfile="$PEER_KEY_DIR/${label}_ed25519"
+    local active_keyfile="$keyfile"
+
+    # ---- host key pinning: ssh-keyscan needs no prior trust, so this adds
+    # zero manual steps compared to today's accept-new (see PAIRING-DESIGN.md,
+    # decision B) ----
+    log "fetching host key for $PEER_HOST:$PEER_PORT via ssh-keyscan..."
+    local scan; scan=$(ssh-keyscan -p "$PEER_PORT" -t ed25519 "$PEER_HOST" 2>/dev/null)
+    [ -n "$scan" ] || die "ssh-keyscan got nothing back from $PEER_HOST:$PEER_PORT -- host unreachable, wrong port, or sshd not up yet"
+    local fp; fp=$(printf '%s\n' "$scan" | ssh-keygen -lf - 2>/dev/null | head -1)
+    log "host key fingerprint for $PEER_HOST: $fp"
+    log "CONFIRM this matches what you see connecting to $PEER_HOST directly before relying on it."
+    mkdir -p /root/.ssh; chmod 700 /root/.ssh
+    if grep -qF "$scan" /root/.ssh/known_hosts 2>/dev/null; then
+        log "$PEER_HOST's host key already pinned, leaving known_hosts alone"
+    else
+        printf '%s\n' "$scan" >> /root/.ssh/known_hosts
+        log "pinned $PEER_HOST's host key to /root/.ssh/known_hosts"
+    fi
+
+    # ---- dedicated per-peer keypair ----
+    if [ "$PEER_ROTATE" -eq 1 ]; then
+        active_keyfile="${keyfile}.new"
+        [ -f "$active_keyfile" ] && die "a rotation is already in progress ($active_keyfile exists)"
+        ssh-keygen -t ed25519 -N '' -f "$active_keyfile" -C "pairing-${label}-rotated-$(date +%Y%m%d)" \
+            || die "ssh-keygen failed"
+        log "generated a NEW key for rotation: $active_keyfile (old key untouched, both work until --revoke-old)"
+    elif [ -f "$keyfile" ]; then
+        log "keypair for '$PEER_HOST' already exists ($keyfile), reusing it -- pass --rotate to replace it instead"
+    else
+        ssh-keygen -t ed25519 -N '' -f "$keyfile" -C "pairing-${label}-$(date +%Y%m%d)" \
+            || die "ssh-keygen failed"
+        log "generated keypair for '$PEER_HOST': $keyfile"
+    fi
+
+    # ---- target dataset: created HERE only for pull (local to this host).
+    # For push the target is remote -- there is no trust to the peer yet at
+    # --pair time, so that creation happens during --join instead.
+    # Per the naming convention (<target>/<host-zrodla>/<dataset>), the actual
+    # per-relationship root is target/label, not the bare target -- otherwise
+    # a second peer pairing to the same --target parent would land in the same
+    # spot. ----
+    if [ "$PEER_ROLE" = "pull" ] && [ "$PEER_ROTATE" -eq 0 ]; then
+        local dest_root="$PEER_TARGET/$label"
+        if zfs list -H -o name "$dest_root" >/dev/null 2>&1; then
+            log "target dataset $dest_root already exists"
+        else
+            zfs create -p "$dest_root" && log "created target dataset $dest_root" \
+                || die "zfs create -p $dest_root failed"
+        fi
+    fi
+
+    local my_label; my_label=$(hostname -s 2>/dev/null || hostname)
+    local proposed_account="zfsbackup-${my_label}"
+    [ "$PEER_AS" = "root" ] && proposed_account="root"
+
+    local pub; pub=$(cat "${active_keyfile}.pub")
+    local rotating="no" prev_pub=""
+    if [ "$PEER_ROTATE" -eq 1 ]; then
+        rotating="yes"
+        prev_pub=$(cat "${keyfile}.pub" 2>/dev/null || echo "")
+    fi
+    cat > "$mpath" <<EOF
+# peer pairing manifest (initiator side) -- managed by deploy.sh --pair, do not edit by hand
+PEER_SAVED_ROLE=$PEER_ROLE
+PEER_SAVED_DATASETS="$PEER_DATASETS"
+PEER_SAVED_TARGET=$PEER_TARGET
+PEER_SAVED_AS=$PEER_AS
+PEER_SAVED_ACCOUNT=$proposed_account
+PEER_SAVED_PORT=$PEER_PORT
+PEER_ROTATING=$rotating
+PEER_CURRENT_PUBKEY='$pub'
+PEER_PREVIOUS_PUBKEY='$prev_pub'
+EOF
+    chmod 0600 "$mpath"
+
+    local workdir; workdir=$(mktemp -d)
+    cp "${active_keyfile}.pub" "$workdir/pubkey.pub"
+    cat > "$workdir/peer.conf" <<EOF
+# wsad parowania -- wygenerowane przez deploy.sh --pair, konsumowane przez --join
+PEER_CONF_ROLE=$PEER_ROLE
+PEER_CONF_DATASETS="$PEER_DATASETS"
+PEER_CONF_TARGET=$PEER_TARGET
+PEER_CONF_AS=$PEER_AS
+PEER_CONF_ACCOUNT=$proposed_account
+PEER_CONF_PORT=$PEER_PORT
+PEER_CONF_INITIATOR_LABEL=$my_label
+EOF
+    local outdir="/root/scripts/pairing"
+    mkdir -p "$outdir"
+    local suffix=""; [ "$PEER_ROTATE" -eq 1 ] && suffix="-rotate"
+    local pkg="$outdir/${my_label}-to-${label}${suffix}.tgz"
+    tar -C "$workdir" -czf "$pkg" peer.conf pubkey.pub
+    rm -rf "$workdir"
+
+    echo
+    log "===================================================================="
+    log "Wsad gotowy: $pkg"
+    log "Przenies go recznie na $PEER_HOST i uruchom tam z konsoli:"
+    log "  scp $pkg root@$PEER_HOST:/root/"
+    log "  ssh root@$PEER_HOST"
+    log "  ./deploy.sh --join=/root/$(basename "$pkg")"
+    if [ "$PEER_ROTATE" -eq 1 ]; then
+        log "Po --join tam: zweryfikuj dry-runem z NOWYM kluczem ($active_keyfile -n),"
+        log "dopiero potem tutaj: --pair --peer=$PEER_HOST --revoke-old"
+    fi
+    log "===================================================================="
+}
+
+# do_join -- runs on the second host, once, from its own console. Consumes the
+# wsad produced by --pair: never touches any account/relationship other than
+# the one this specific package describes.
+do_join() {
+    [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
+    local workdir; workdir=$(mktemp -d)
+    tar -C "$workdir" -xzf "$JOIN_PACKAGE" || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
+    [ -r "$workdir/peer.conf" ] && [ -r "$workdir/pubkey.pub" ] || die "$JOIN_PACKAGE is missing peer.conf or pubkey.pub -- not a valid wsad"
+    # shellcheck disable=SC1090
+    . "$workdir/peer.conf"
+    [ -n "${PEER_CONF_ROLE:-}" ] || die "peer.conf missing PEER_CONF_ROLE"
+    [ -n "${PEER_CONF_TARGET:-}" ] || die "peer.conf missing PEER_CONF_TARGET"
+    [ -n "${PEER_CONF_ACCOUNT:-}" ] || die "peer.conf missing PEER_CONF_ACCOUNT"
+
+    local label; label=$(printf '%s' "${PEER_CONF_INITIATOR_LABEL:-unknown}" | tr -c 'A-Za-z0-9._-' '-')
+    local mpath; mpath=$(peer_manifest_path "$label")
+    local new_fp; new_fp=$(pubkey_fingerprint "$workdir/pubkey.pub")
+    local new_pub; new_pub=$(cat "$workdir/pubkey.pub")
+    mkdir -p "$PEER_STATE_DIR"
+
+    # ---- collision detection: manifest already exists under this label with
+    # a DIFFERENT account/target -- that is two unrelated peers colliding on
+    # the same label, not a rotation. Refuse rather than guess. A matching
+    # account/target with a different key is treated as a legitimate rotation
+    # driven by --rotate on the other side. ----
+    if [ -r "$mpath" ]; then
+        # shellcheck disable=SC1090
+        . "$mpath"
+        if [ -n "${PEER_JOIN_FINGERPRINT:-}" ] && [ "$PEER_JOIN_FINGERPRINT" != "$new_fp" ]; then
+            if [ "${PEER_JOIN_ACCOUNT:-}" != "$PEER_CONF_ACCOUNT" ] || [ "${PEER_JOIN_TARGET:-}" != "$PEER_CONF_TARGET" ]; then
+                die "manifest for label '$label' already exists with a DIFFERENT account/target ($PEER_JOIN_ACCOUNT/$PEER_JOIN_TARGET vs $PEER_CONF_ACCOUNT/$PEER_CONF_TARGET) -- this looks like a label collision between two unrelated peers, not a rotation. Resolve by hand, do not re-run blindly."
+            fi
+            log "new key for an already-known peer '$label' (rotation) -- adding alongside the existing one"
+        fi
+    fi
+
+    local account="$PEER_CONF_ACCOUNT"
+    local home_dir="/root"
+    if [ "$PEER_CONF_AS" != "root" ]; then
+        if id "$account" >/dev/null 2>&1; then
+            log "account $account already exists, leaving it alone"
+        else
+            useradd -m -s /bin/bash -c "zfs-snapshot-all peer account for $label" "$account" || die "useradd failed"
+            passwd -l "$account" >/dev/null || warn "could not lock password for $account"
+            log "created isolated peer account $account"
+        fi
+        home_dir="/home/$account"
+    fi
+
+    local ssh_dir="$home_dir/.ssh"
+    local ak="$ssh_dir/authorized_keys"
+    mkdir -p "$ssh_dir"
+    chmod 700 "$ssh_dir"
+    touch "$ak"
+    if grep -qF "$new_pub" "$ak" 2>/dev/null; then
+        log "this exact key is already in $ak, leaving it alone"
+    else
+        echo "$new_pub" >> "$ak"
+        log "appended new key to $ak (append-only, existing keys untouched)"
+    fi
+    chmod 600 "$ak"
+    if [ "$PEER_CONF_AS" != "root" ]; then
+        chown -R "$account:$account" "$ssh_dir"
+    fi
+
+    # ---- target dataset: created HERE only for push (this host is the
+    # receiver in that role). For pull it was already created by --pair.
+    # Per the naming convention (<target>/<host-zrodla>/<dataset>), the root
+    # to create/allow is target/initiator-label -- the initiator IS the
+    # "source host" from this side's point of view in push mode. ----
+    local push_dest_root=""
+    if [ "$PEER_CONF_ROLE" = "push" ]; then
+        push_dest_root="$PEER_CONF_TARGET/${PEER_CONF_INITIATOR_LABEL:-$label}"
+        if zfs list -H -o name "$push_dest_root" >/dev/null 2>&1; then
+            log "target dataset $push_dest_root already exists"
+        else
+            zfs create -p "$push_dest_root" && log "created target dataset $push_dest_root" \
+                || die "zfs create -p $push_dest_root failed"
+        fi
+    fi
+
+    # ---- zfs allow: the permission set AND the scope depend on the ROLE, not
+    # one blanket list. pull: this host is the SOURCE, delegate exactly the
+    # listed datasets (they exist here) with sending permissions. push: this
+    # host is the TARGET, delegate the per-relationship destination ROOT
+    # (push_dest_root) with receiving permissions -- zfs allow is inherited to
+    # descendants, so this covers every dataset 'zfs receive' creates under it
+    # without needing (or being able) to know the source's dataset names in
+    # advance. Bookmarks only make sense on the send side. Skipped entirely
+    # for --as=root, which already has full authority. ----
+    if [ "$PEER_CONF_AS" != "root" ]; then
+        if [ "$PEER_CONF_ROLE" = "pull" ]; then
+            local perms="snapshot,destroy,send,hold,release,bookmark"
+            for ds in $PEER_CONF_DATASETS; do
+                if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+                    warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $account $perms $ds)"
+                    continue
+                fi
+                zfs allow -u "$account" "$perms" "$ds" || die "zfs allow failed for $ds"
+                log "delegated ($perms) on $ds to $account"
+            done
+        else
+            local perms="receive,create,mount,rollback,canmount"
+            zfs allow -u "$account" "$perms" "$push_dest_root" || die "zfs allow failed for $push_dest_root"
+            log "delegated ($perms) on $push_dest_root to $account (inherited by every dataset received under it)"
+        fi
+    fi
+
+    cat > "$mpath" <<EOF
+# peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
+PEER_JOIN_ROLE=$PEER_CONF_ROLE
+PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
+PEER_JOIN_TARGET=$PEER_CONF_TARGET
+PEER_JOIN_ACCOUNT=$account
+PEER_JOIN_FINGERPRINT=$new_fp
+EOF
+    chmod 0600 "$mpath"
+    rm -rf "$workdir"
+
+    echo
+    log "===================================================================="
+    log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
+    log "Zadne linie crona NIE zostaly dodane -- to pozostaje reczne, jak w Czesci 5."
+    log "===================================================================="
+}
+
+# do_revoke_old -- the ONLY step in this whole feature that removes something.
+# Deliberately its own explicit command, only runs mid-rotation, and only ever
+# touches the one exact key line recorded at --rotate time.
+do_revoke_old() {
+    local label="$1" mpath="$2"
+    [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' -- nothing to revoke"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ "${PEER_ROTATING:-no}" = "yes" ] || die "peer '$PEER_HOST' is not mid-rotation (manifest says rotating=no) -- nothing to revoke"
+
+    local keyfile="$PEER_KEY_DIR/${label}_ed25519"
+    local newkey="${keyfile}.new"
+    [ -f "$newkey" ] || die "expected $newkey from --rotate, not found -- rotation state is inconsistent, resolve by hand"
+    [ -n "${PEER_PREVIOUS_PUBKEY:-}" ] || die "manifest has no PEER_PREVIOUS_PUBKEY -- cannot safely identify which line to remove, resolve by hand"
+
+    local remote_user="${PEER_SAVED_ACCOUNT:-root}"
+    log "removing the OLD key from ${remote_user}@${PEER_HOST} using the already-verified NEW key..."
+    # The old key's exact content travels over stdin, never embedded in the
+    # remote command line -- avoids any shell-quoting risk on either end.
+    printf '%s\n' "$PEER_PREVIOUS_PUBKEY" | ssh -i "$newkey" -p "${PEER_SAVED_PORT:-22}" \
+        -o BatchMode=yes -o StrictHostKeyChecking=yes "${remote_user}@${PEER_HOST}" \
+        'read -r oldline; f=~/.ssh/authorized_keys; grep -vF "$oldline" "$f" > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"' \
+        || die "could not remove the old key on the peer over SSH -- did you verify the new key with a dry-run first? Old key left in place, nothing changed."
+
+    rm -f "$keyfile" "${keyfile}.pub"
+    mv "$newkey" "$keyfile"
+    mv "${newkey}.pub" "${keyfile}.pub"
+    local new_current; new_current=$(cat "${keyfile}.pub")
+    sed -i -e 's/^PEER_ROTATING=.*/PEER_ROTATING=no/' \
+           -e "s|^PEER_PREVIOUS_PUBKEY=.*|PEER_PREVIOUS_PUBKEY=''|" \
+        "$mpath"
+    # PEER_CURRENT_PUBKEY may contain '/' or other sed-hostile characters (it
+    # is base64), so it is rewritten with a fresh cat > rather than another
+    # sed substitution.
+    grep -v '^PEER_CURRENT_PUBKEY=' "$mpath" > "${mpath}.tmp"
+    printf "PEER_CURRENT_PUBKEY='%s'\n" "$new_current" >> "${mpath}.tmp"
+    mv "${mpath}.tmp" "$mpath"
+    log "rotation complete for '$PEER_HOST' -- $keyfile is now the only active key, cron lines referencing it need no change"
+}
+
+# do_draft_config -- best-effort, deliberately conservative. gen-cron.sh's INI
+# is template-based ([dataset:X] refers to a [template:tier] this script has
+# no way to know), so this does NOT fabricate schedule/retention/tiers -- it
+# only lists what exists on the peer plus the conventional target path, as
+# commented-out candidates for a human to turn into real [dataset:] sections.
+do_draft_config() {
+    local label="$1" mpath="$2"
+    [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' yet -- run --pair (and --join on the peer) first"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    local keyfile="$PEER_KEY_DIR/${label}_ed25519"
+    [ -f "$keyfile" ] || die "expected keyfile $keyfile not found"
+    local remote_user="${PEER_SAVED_ACCOUNT:-root}"
+
+    log "listing datasets on ${remote_user}@${PEER_HOST} via the pairing key..."
+    local list
+    list=$(ssh -i "$keyfile" -p "${PEER_SAVED_PORT:-22}" -o BatchMode=yes "${remote_user}@${PEER_HOST}" \
+        "zfs list -H -o name") || die "could not list datasets on $PEER_HOST -- has --join run there yet?"
+
+    local outdir="/root/scripts/pairing"
+    mkdir -p "$outdir"
+    local out="$outdir/${label}.conf.suggested"
+    {
+        echo "# Kandydaci z hosta '$PEER_HOST', wygenerowane przez --draft-config."
+        echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
+        echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
+        echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
+        echo "# ten generator ich nie zna i ich nie zgaduje."
+        echo "#"
+        echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
+        echo "# cron-configs: '[dataset:<path>]', 'dst = <target>', 'tiers = ...'."
+        echo
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            echo "# [dataset:$ds]"
+            echo "#   dst = ${PEER_SAVED_TARGET}/${label}/${ds}"
+            echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+            echo
+        done <<< "$list"
+    } > "$out"
+    log "draft napisany: $out -- przejrzyj recznie przed dotknieciem cron-configs"
+}
+
+if [ "$PAIR_MODE" -eq 1 ]; then
+    do_pair
+    exit 0
+fi
+if [ "$JOIN_MODE" -eq 1 ]; then
+    do_join
+    exit 0
+fi
 
 # ------------------------------------------------------------------------------
 log "Phase 8: delegated non-root account"
