@@ -386,16 +386,32 @@ set -o pipefail
 # stream (needs feature@lz4_compress at all, plus feature@zstd_compress for
 # zstd-compressed records); set ZFS_SNAP_NO_COMPRESSED_SEND=1 to force plain.
 #
-# REMOTE format: [user@]host:dataset_path  (for remote replication).
-# If REMOTE is omitted or has no ':', the backup is done locally to the target path.
+# REMOTE format, three shapes:
+#   [user@]host:dataset_path   BACKUP mode -- sends into dataset_path (a BASE:
+#                              the actual target is dataset_path/<local dataset
+#                              name>, so this nests under wherever dataset_path
+#                              points).
+#   [user@]host                SYNC mode -- no ':', but the '@' makes this
+#                              unambiguously a remote address (a ZFS dataset
+#                              name can never contain '@', so there is no
+#                              parsing overlap with a local path). Mirrors to
+#                              the IDENTICAL dataset path on that host instead
+#                              of nesting under a base -- for keeping a second
+#                              host a live mirror of this one. Refused if the
+#                              resolved host turns out to be THIS host
+#                              (validate_remote_host compares /etc/machine-id)
+#                              -- a dataset cannot sync to itself.
+#   dataset_path (no ':', no '@')  LOCAL mode -- local-to-local copy under a
+#                              different name, nothing remote at all.
 #
 # Examples:
 #   snapsend.sh -v1 pool/data backuppool/data_backup
 #   snapsend.sh -r pool/data user@backuphost:tank/backups/data
+#   snapsend.sh -r pool/data user@backuphost              # sync: mirrors as pool/data on backuphost
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.65'
+VERSION='v2.66'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1688,14 +1704,23 @@ REMOTE_HOST=""
 if [[ -n "$REMOTE" ]]; then
     if [[ "$REMOTE" == *":"* ]]; then
         IFS=':' read -r remote_part target_base <<< "$REMOTE"
-        
+
         if [[ "$remote_part" == *"@"* ]]; then
             IFS='@' read -r REMOTE_USER REMOTE_HOST <<< "$remote_part"
         else
             REMOTE_HOST="$remote_part"
         fi
-        
+
         TARGET_BASE=$(echo "$target_base" | sed 's:^/+::; s:/+$::')
+    elif [[ "$REMOTE" == *"@"* ]]; then
+        # SYNC mode: bare user@host, no path. A ZFS dataset name can never
+        # contain '@' (it is the snapshot separator), so this can never collide
+        # with a local-path REMOTE -- unambiguous by construction, no heuristic
+        # guessing. TARGET_BASE stays "" so the target resolves to the SAME
+        # dataset name on the remote host, not nested under anything.
+        # validate_remote_host (called downstream wherever REMOTE_HOST is
+        # non-empty) refuses if that host turns out to be this one.
+        IFS='@' read -r REMOTE_USER REMOTE_HOST <<< "$REMOTE"
     else
         TARGET_BASE="$REMOTE"
     fi

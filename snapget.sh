@@ -248,16 +248,29 @@ set -o pipefail
 # stream (needs feature@lz4_compress at all, plus feature@zstd_compress for
 # zstd-compressed records); set ZFS_SNAP_NO_COMPRESSED_SEND=1 to force plain.
 #
-# REMOTE format: [user@]host:dataset_path  (source side for pull replication).
-# If REMOTE is omitted or has no ':', the operation is done locally from source path.
+# REMOTE format, three shapes (twin of snapsend.sh's own three -- see its
+# header for the full rationale):
+#   [user@]host:dataset_path   PULL from a BASE -- the actual source read is
+#                              dataset_path/<local dataset name>, mirroring
+#                              snapsend.sh's own dst=base convention.
+#   [user@]host                SYNC mode -- no ':', but '@' makes this
+#                              unambiguously remote (a ZFS name can never
+#                              contain '@'). Pulls the IDENTICAL dataset path
+#                              from that host instead of nesting under a base.
+#                              Refused if the resolved host is THIS host
+#                              (validate_remote_host, same guard as
+#                              snapsend.sh).
+#   dataset_path (no ':', no '@')  LOCAL mode -- local-to-local pull under a
+#                              different name.
 #
 # Examples:
 #   snapget.sh -v1 pool/data backuppool/data_backup
 #   snapget.sh -r pool/data user@sourcehost:tank/backups/data
+#   snapget.sh -r pool/data user@sourcehost              # sync: pulls pool/data from sourcehost
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.59'
+VERSION='v2.60'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1430,6 +1443,14 @@ if [[ -n "$REMOTE" ]]; then
         fi
 
         SOURCE_BASE=$(echo "$source_base" | sed 's:^/+::; s:/+$::')
+    elif [[ "$REMOTE" == *"@"* ]]; then
+        # SYNC mode: bare user@host, no path -- twin of snapsend.sh's own sync
+        # mode. A ZFS dataset name can never contain '@', so this is
+        # unambiguous, never a local path. SOURCE_BASE stays "" so the
+        # REMOTE read is the SAME dataset name as the local target, not
+        # nested under anything. validate_remote_host (wherever REMOTE_HOST
+        # is non-empty) refuses if that host is this one.
+        IFS='@' read -r REMOTE_USER REMOTE_HOST <<< "$REMOTE"
     else
         SOURCE_BASE="$REMOTE"
     fi

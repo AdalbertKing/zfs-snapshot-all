@@ -232,7 +232,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.22'
+VERSION='v4.23'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -338,9 +338,11 @@ maybe_add_autotune() {
         no|off|0) printf '%s' "$flags"; return 0 ;;
     esac
     # Local target: nothing to measure, and snapsend would drop compression
-    # anyway (v2.32+).
+    # anyway (v2.32+). '@' with no ':' is snapsend/snapget's SYNC mode (bare
+    # user@host, mirrors to the identical path) -- just as remote as host:base,
+    # so it must not be misread as local here.
     case "$dst" in
-        *:*) ;;
+        *:*|*@*) ;;
         *)   printf '%s' "$flags"; return 0 ;;
     esac
     for tok in $flags; do
@@ -414,7 +416,7 @@ lint_flags() {
                 # there would be literally untrue and would send someone looking
                 # for a target that was never configured.
                 case "$dst" in
-                    *:*) ;;   # remote -- compression is real work there
+                    *:*|*@*) ;;   # remote (host:base, or bare user@host sync mode) -- compression is real work there
                     "")  warn "$ctx: flag $tok has no effect -- this job has no 'dst', so it only creates a snapshot and never transfers anything. Drop it." ;;
                     *)   warn "$ctx: flag $tok has no effect -- dst '$dst' is local, and snapsend.sh (v2.32+) skips compression when both ends are the same host. Drop it, or point dst at a remote target." ;;
                 esac
