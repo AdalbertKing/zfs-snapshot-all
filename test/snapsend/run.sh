@@ -442,40 +442,48 @@ check "missing source dataset exits 1" "1" "$RC"
 
 # --- snapget.sh (pull direction, local mode) --------------------------------
 
-# snapget.sh takes the SAME argument shape as snapsend.sh but assigns the two
-# positions the opposite way round, because it pulls instead of pushes:
+# snapget.sh v2.61+ is symmetric with snapsend.sh, not opposite-assigned:
+# whichever side is READ is given literally (arg1); whichever side is
+# WRITTEN gets an optional base for relocation (arg2, never a host prefix).
 #
-#   snapsend.sh <source>  <target-base>   -> target = <target-base>/<source>
-#   snapget.sh  <target>  <source-base>   -> source = <source-base>/<target>
+#   snapsend.sh <source>          <target-base>  -> target = <target-base>/<source>
+#   snapget.sh  <literal-source>  <local-base>    -> target = <local-base>/<literal-source>
 #
-# So the first argument is the dataset that gets WRITTEN in one script and the
-# dataset that gets READ in the other. Pinning it here because getting it
-# backwards is an easy and expensive mistake, and the failure is silent-ish:
-# it just reports a missing source.
+# So arg1 is always the dataset that gets READ in both scripts; arg2 is
+# always the dataset that gets WRITTEN, relocatable via base in both. Pinning
+# it here because getting it backwards is an easy and expensive mistake, and
+# the failure is silent-ish: it just reports a missing source.
 SRCBASE="$POOL/origin"
+# v2.61 flip: arg1 is the literal source (created below at $SRCBASE/$POOL/<leaf>,
+# unchanged from before), arg2 is now a LOCAL_BASE for relocation, not a base
+# used to locate the source. Every pulled target through this whole section
+# therefore lands at $PULLED/$SRCBASE/$POOL/<leaf> instead of the old bare
+# $POOL/<leaf> -- defined once here, used by every case below.
+LOCALPULL="$POOL/lp"
+PULLED="$LOCALPULL/$SRCBASE"
 zfs create -p "$SRCBASE/$POOL/pull" || exit 1
 zfs snapshot "$SRCBASE/$POOL/pull@auto_1"
-run_get -e -m "auto_" "$POOL/pull" "$SRCBASE"
+run_get -e -m "auto_" "$SRCBASE/$POOL/pull" "$LOCALPULL"
 check "snapget: local pull lands the snapshot on the local target" "auto_1" \
-      "$(snaps_of "$POOL/pull")"
+      "$(snaps_of "$PULLED/$POOL/pull")"
 check "snapget: exit 0" "0" "$RC"
 check "snapget: target is created with canmount=noauto" "noauto" \
-      "$(zfs get -H -o value canmount "$POOL/pull")"
+      "$(zfs get -H -o value canmount "$PULLED/$POOL/pull")"
 
 tick; zfs snapshot "$SRCBASE/$POOL/pull@auto_2"
-run_get -e -m "auto_" "$POOL/pull" "$SRCBASE"
+run_get -e -m "auto_" "$SRCBASE/$POOL/pull" "$LOCALPULL"
 check "snapget: incremental pull adds the new snapshot" "auto_1 auto_2" \
-      "$(snaps_of "$POOL/pull")"
+      "$(snaps_of "$PULLED/$POOL/pull")"
 
 zfs create -p "$SRCBASE/$POOL/pullnomatch" || exit 1
 zfs snapshot "$SRCBASE/$POOL/pullnomatch@other_1"
-run_get -e -m "automated_hourly_" "$POOL/pullnomatch" "$SRCBASE"
+run_get -e -m "automated_hourly_" "$SRCBASE/$POOL/pullnomatch" "$LOCALPULL"
 check "snapget: no snapshot matching the prefix is an error" "1" "$RC"
 
 # --- snapget mirror of the no -m warning -------------------------------------
 GNOM1="$SRCBASE/$POOL/gnom1"
 zfs create -p "$GNOM1" || exit 1
-run_get_out "$POOL/gnom1" "$SRCBASE"
+run_get_out "$GNOM1" "$LOCALPULL"
 check "snapget no -m: exit 0" "0" "$RC"
 check "snapget no -m: the warning fired" "1" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
 
@@ -483,17 +491,17 @@ GNOM2="$SRCBASE/$POOL/gnom2"
 zfs create -p "$GNOM2" || exit 1
 zfs snapshot "${GNOM2}@made_by_something_else"
 tick
-run_get_out -e "$POOL/gnom2" "$SRCBASE"
+run_get_out -e "$GNOM2" "$LOCALPULL"
 check "snapget -e with no -m: does NOT warn" "0" "$(printf '%s' "$OUT" | grep -c 'no -m given')"
 check "snapget -e with no -m: the pre-existing snapshot was the one pulled" \
-      "made_by_something_else" "$(snaps_of "$POOL/gnom2")"
+      "made_by_something_else" "$(snaps_of "$PULLED/$POOL/gnom2")"
 check "snapget: a doomed run does not create the local target" "no" \
-      "$(zfs list -H -o name "$POOL/pullnomatch" >/dev/null 2>&1 && echo yes || echo no)"
+      "$(zfs list -H -o name "$PULLED/$POOL/pullnomatch" >/dev/null 2>&1 && echo yes || echo no)"
 
 # snapget carries the same -f ordering fix as snapsend; keep both guarded.
-run_get -f -e -m "NO_SUCH_PREFIX_" "$POOL/pull" "$SRCBASE"
+run_get -f -e -m "NO_SUCH_PREFIX_" "$SRCBASE/$POOL/pull" "$LOCALPULL"
 check "snapget -f: a doomed forced run leaves the local target intact" "auto_1 auto_2" \
-      "$(snaps_of "$POOL/pull")"
+      "$(snaps_of "$PULLED/$POOL/pull")"
 
 # --- bookmark-backed incremental fallback ------------------------------------
 # Bookmarks store only a snapshot's txg+GUID (no data blocks), so `zfs send -i`
@@ -558,15 +566,15 @@ check "bookmark: GUID mismatch never touches the target (no wrong-base send happ
 GSRC="$SRCBASE/$POOL/pullbm"
 zfs create -p "$GSRC" || exit 1
 zfs snapshot "${GSRC}@a"
-run_get -e "$POOL/pullbm" "$SRCBASE"
-check "snapget bookmark: first pull lands @a" "a" "$(snaps_of "$POOL/pullbm")"
+run_get -e "$GSRC" "$LOCALPULL"
+check "snapget bookmark: first pull lands @a" "a" "$(snaps_of "$PULLED/$POOL/pullbm")"
 
 zfs destroy "${GSRC}@a"
 tick
 zfs snapshot "${GSRC}@c"
-run_get -e "$POOL/pullbm" "$SRCBASE"
+run_get -e "$GSRC" "$LOCALPULL"
 check "snapget bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
-check "snapget bookmark: local target keeps @a AND gains @c" "a c" "$(snaps_of "$POOL/pullbm")"
+check "snapget bookmark: local target keeps @a AND gains @c" "a c" "$(snaps_of "$PULLED/$POOL/pullbm")"
 
 # --- -w raw send -------------------------------------------------------------
 # A raw stream carries the SOURCE dataset's own properties, encryption included,
@@ -659,10 +667,10 @@ if mkenc "$POOL/enc" 2>/dev/null; then
     zfs create -o encryption=on -o keyformat=raw -o keylocation="file://$RAWKEY" \
         "$SRCBASE/$POOL/rawpull"
     zfs snapshot "$SRCBASE/$POOL/rawpull@auto_1"
-    run_get -w -e -m "auto_" "$POOL/rawpull" "$SRCBASE"
+    run_get -w -e -m "auto_" "$SRCBASE/$POOL/rawpull" "$LOCALPULL"
     check "snapget -w: raw pull exits 0" "0" "$RC"
     check "snapget -w: the local target is encrypted" "aes-256-gcm" \
-          "$(zfs get -H -o value encryption "$POOL/rawpull" 2>/dev/null)"
+          "$(zfs get -H -o value encryption "$PULLED/$POOL/rawpull" 2>/dev/null)"
 
     # --- rawness-mismatch guardrail -----------------------------------------
     # ZFS rejects these itself, but deep inside the pipe and with messages that
@@ -823,9 +831,9 @@ check "local target without -z: stays quiet about compression" "no" \
 # snapget mirror: there the compressor runs on the (possibly remote) source.
 zfs create -p "$SRCBASE/$POOL/czpull" || exit 1
 zfs snapshot "$SRCBASE/$POOL/czpull@auto_1"
-run_get -Z -e -m "auto_" "$POOL/czpull" "$SRCBASE"
+run_get -Z -e -m "auto_" "$SRCBASE/$POOL/czpull" "$LOCALPULL"
 check "snapget -Z: compressed pull exits 0" "0" "$RC"
-check "snapget -Z: the snapshot landed locally" "auto_1" "$(snaps_of "$POOL/czpull")"
+check "snapget -Z: the snapshot landed locally" "auto_1" "$(snaps_of "$PULLED/$POOL/czpull")"
 
 # --- compressed send (zfs send -c), automatic -----------------------------
 # `-c` ships records as they already sit on disk. It has no flag: it is on
@@ -914,20 +922,21 @@ check "hold: a non-resumable failure releases the hold (does not strand it)" "no
 GSRC2="$SRCBASE/$POOL/holdokpull"
 zfs create -p "$GSRC2" || exit 1
 zfs snapshot "${GSRC2}@auto_1"
-run_get -e -m "auto_" "$POOL/holdokpull" "$SRCBASE"
+run_get -e -m "auto_" "$GSRC2" "$LOCALPULL"
 check "snapget hold: successful pull releases the hold on the source" "no" \
       "$(held_by_us "${GSRC2}@auto_1" && echo yes || echo no)"
 
 GSRC3="$SRCBASE/$POOL/holdfailpull"
+GTGT3="$PULLED/$POOL/holdfailpull"
 zfs create -p "$GSRC3" || exit 1
 zfs snapshot "${GSRC3}@a"
-run_get -e "$POOL/holdfailpull" "$SRCBASE"
+run_get -e "$GSRC3" "$LOCALPULL"
 zfs destroy "${GSRC3}@a"
 tick
 zfs snapshot "${GSRC3}@c"
-zfs destroy "$POOL/holdfailpull@a"
-zfs snapshot "$POOL/holdfailpull@rogue"
-run_get -e "$POOL/holdfailpull" "$SRCBASE"
+zfs destroy "${GTGT3}@a"
+zfs snapshot "${GTGT3}@rogue"
+run_get -e "$GSRC3" "$LOCALPULL"
 check "snapget hold: sanity -- the GUID-mismatch pull really did fail" "1" "$RC"
 check "snapget hold: a non-resumable failure releases the hold on the source" "no" \
       "$(held_by_us "${GSRC3}@c" && echo yes || echo no)"
@@ -961,18 +970,19 @@ check "guid-match: target keeps the renamed snapshot AND gains the new one (incr
 
 # snapget mirror -- this time the rename happens on the LOCAL target.
 GSRC4="$SRCBASE/$POOL/guidpull"
+GTGT4="$PULLED/$POOL/guidpull"
 zfs create -p "$GSRC4" || exit 1
 zfs snapshot "${GSRC4}@a"
-run_get -e "$POOL/guidpull" "$SRCBASE"
-check "snapget guid-match: first pull lands @a" "a" "$(snaps_of "$POOL/guidpull")"
+run_get -e "$GSRC4" "$LOCALPULL"
+check "snapget guid-match: first pull lands @a" "a" "$(snaps_of "$GTGT4")"
 
-zfs rename "$POOL/guidpull@a" "$POOL/guidpull@renamed"
+zfs rename "${GTGT4}@a" "${GTGT4}@renamed"
 tick
 zfs snapshot "${GSRC4}@b"
-run_get -e "$POOL/guidpull" "$SRCBASE"
+run_get -e "$GSRC4" "$LOCALPULL"
 check "snapget guid-match: exit 0 even though the local target's snapshot was renamed" "0" "$RC"
 check "snapget guid-match: target keeps the renamed snapshot AND gains the new one" \
-      "renamed b" "$(snaps_of "$POOL/guidpull")"
+      "renamed b" "$(snaps_of "$GTGT4")"
 
 # --- -j/--identifier: independent jobs to the same target get separate bookmarks
 # record_send_bookmark folds -j into bookmark_target_tag, so two jobs that both
@@ -1007,19 +1017,19 @@ check "identifier: jobA re-run refreshes its OWN bookmark, not a third" \
 GSRC5="$SRCBASE/$POOL/identpull"
 zfs create -p "$GSRC5" || exit 1
 zfs snapshot "${GSRC5}@a"
-run_get -e -j jobA "$POOL/identpull" "$SRCBASE"
+run_get -e -j jobA "$GSRC5" "$LOCALPULL"
 check "snapget identifier: jobA initial pull succeeds" "0" "$RC"
 
 tick
 zfs snapshot "${GSRC5}@b"
-run_get -e -j jobB "$POOL/identpull" "$SRCBASE"
+run_get -e -j jobB "$GSRC5" "$LOCALPULL"
 check "snapget identifier: jobB pull (different identifier, same target) succeeds" "0" "$RC"
 check "snapget identifier: jobA and jobB now hold two DISTINCT bookmarks on the source" \
       "2" "$(zfs list -H -t bookmark -o name "$GSRC5" 2>/dev/null | wc -l)"
 
 tick
 zfs snapshot "${GSRC5}@c"
-run_get -e -j jobA "$POOL/identpull" "$SRCBASE"
+run_get -e -j jobA "$GSRC5" "$LOCALPULL"
 check "snapget identifier: jobA re-run succeeds" "0" "$RC"
 check "snapget identifier: jobA re-run refreshes its OWN bookmark, not a third" \
       "2" "$(zfs list -H -t bookmark -o name "$GSRC5" 2>/dev/null | wc -l)"
@@ -1111,40 +1121,40 @@ check "-X is repeatable: second pattern excluded" "0" "$(count_snaps "$POOL/mtre
 check "-X is repeatable: the unmatched child is still sent" "1" \
       "$(count_snaps "$(tgt_of mtree/three)")"
 
-# snapget mirror. The name -X sees is the FULL source-side path (SOURCE_BASE
-# included), not the shortened form snapget carries internally -- so a regex
-# reads the same in both directions.
+# snapget mirror. The name -X sees is the FULL source-side path exactly as
+# given/discovered (v2.61+: arg1 IS that literal path now, nothing to strip)
+# -- so a regex reads the same in both directions.
 GX="$SRCBASE/$POOL/xpull"
 zfs create -p "$GX" || exit 1
 zfs create -p "$GX/keep" || exit 1
 zfs create -p "$GX/swap" || exit 1
 
-run_get -m "auto_" -X 'swap' "$POOL/xpull" "$SRCBASE"
+run_get -m "auto_" -X 'swap' "$GX" "$LOCALPULL"
 check "snapget: -X without -R is rejected" "1" "$RC"
 
 tick
-run_get -m "auto_" -R -X 'swap' "$POOL/xpull" "$SRCBASE"
+run_get -m "auto_" -R -X 'swap' "$GX" "$LOCALPULL"
 check "snapget -R -X: exit 0" "0" "$RC"
 check "snapget -R -X: the non-matching child is pulled" "1" \
-      "$(count_snaps "$POOL/xpull/keep")"
+      "$(count_snaps "$PULLED/$POOL/xpull/keep")"
 check "snapget -R -X: the matching child is not" "0" \
-      "$(count_snaps "$POOL/xpull/swap")"
-# Anchored against the full source path -- proves the match is not run against
-# the stripped "$POOL/xpull/..." form, where this pattern could never hit.
+      "$(count_snaps "$PULLED/$POOL/xpull/swap")"
+# Anchored against the full source path -- proves the match runs against $GX,
+# not the local target name, where this pattern could never hit.
 tick
-run_get -m "auto_" -R -X "^$SRCBASE/$POOL/xpull/keep$" "$POOL/xpull" "$SRCBASE"
+run_get -m "auto_" -R -X "^$GX/keep$" "$GX" "$LOCALPULL"
 check "snapget -R -X: regex is matched against the full source-side name" "0" "$RC"
 check "snapget -R -X: full-path exclusion kept 'keep' at its previous snapshot" "1" \
-      "$(count_snaps "$POOL/xpull/keep")"
+      "$(count_snaps "$PULLED/$POOL/xpull/keep")"
 
 tick
 GS="$SRCBASE/$POOL/spull"
 zfs create -p "$GS" || exit 1
 zfs create -p "$GS/a" || exit 1
-run_get -m "auto_" -R -S "$POOL/spull" "$SRCBASE"
+run_get -m "auto_" -R -S "$GS" "$LOCALPULL"
 check "snapget -R -S: exit 0" "0" "$RC"
 check "snapget -R -S: the parent is NOT snapshotted on the source" "0" "$(count_snaps "$GS")"
-check "snapget -R -S: the child is pulled" "1" "$(count_snaps "$POOL/spull/a")"
+check "snapget -R -S: the child is pulled" "1" "$(count_snaps "$PULLED/$POOL/spull/a")"
 
 # --- target ancestors are created canmount=noauto, not canmount=on -----------
 # `zfs create -p` applies -o to the final dataset only, so every level it
