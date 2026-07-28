@@ -2,6 +2,7 @@
 !.gitignore
 !.gitattributes
 !README.md
+!PAIRING-DESIGN.md
 !lib-zfs-snap.sh
 !snapsend.sh
 !snapget.sh
