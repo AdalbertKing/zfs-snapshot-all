@@ -45,13 +45,33 @@ set -o pipefail
 #   [dataset:<zfs/path>]                  # a dataset you own end-to-end
 #       use_template = <tier>[,<tier>...]  # comma list -- one dataset can span several tiers
 #       notify       = <short label>
-#       flags        = <snapsend.sh flags>
+#       flags        = <snapsend.sh flags, or snapget.sh flags when 'src' is set>
 #       flags_<tier> = <per-tier flags override>
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
 #       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
 #                                          # that owns this dataset before
 #                                          # snapshotting it (snapsend.sh -q)
+#       dst          = <target>            # PUSH: <zfs/path> is the local SOURCE,
+#                                          # snapsend.sh sends TO dst (remote if it
+#                                          # contains ':', else local-to-local).
+#                                          # Omit entirely for a local snapshot only.
+#       src          = <[user@]host:path>  # PULL: <zfs/path> is the local
+#                                          # DESTINATION, snapget.sh pulls FROM src
+#                                          # (see snapget.sh's own header -- it is
+#                                          # snapsend.sh's twin, same flags, mirrored
+#                                          # direction: DATASETS is local, REMOTE is
+#                                          # the far end, but for snapget the far end
+#                                          # is where the data comes FROM). Setting
+#                                          # both dst and src on the same section is
+#                                          # rejected -- one section is one direction.
+#                                          # A [defaults] 'dst' that other push
+#                                          # datasets rely on is NOT automatically
+#                                          # blank here: a pull dataset in a config
+#                                          # that also has a global default dst MUST
+#                                          # override it explicitly ('dst = ', blank)
+#                                          # or generation refuses (looks ambiguous:
+#                                          # both a resolved dst AND a resolved src).
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
 #     A dataset section runs, scoped to ITS OWN path, non-recursively:
@@ -212,7 +232,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.21'
+VERSION='v4.22'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
@@ -271,7 +291,8 @@ Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
 Section types (header split on first ':'):
   [defaults]              host_label, optional dst
   [template:<tier>]       a tier's cadence + retention policy
-  [dataset:<path>]        owned dataset: create+send + inline self-prune (own path)
+  [dataset:<path>]        owned dataset: create+send/pull (dst=push, src=pull)
+                          + inline self-prune (own path)
   [prune:<scope>]         standalone additive prune (recursive=/clear_cut= opt-in)
   [prune-bookmarks:<scope>]  age-based cleanup of orphaned snapsend/snapget bookmarks
 
@@ -721,19 +742,30 @@ build_dataset() {
         # ---- send ----
         local send_schedule
         if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
-            local dst prefix flags label raw_notify word notify
+            local dst src prefix flags label raw_notify word notify direction remote_spec
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
+            src="$(resolve_field src "$ds" "$tmpl" defaults)" || src=""
+            if [ -n "$dst" ] && [ -n "$src" ]; then
+                die "[dataset:$ds_path] tier=$tier: both 'dst' and 'src' resolved -- a dataset section pushes (dst) or pulls (src), never both. If a [defaults] dst is meant for other datasets, override it here with a blank 'dst = '."
+            fi
+            if [ -n "$src" ]; then
+                direction="pull"
+                remote_spec="$src"
+            else
+                direction="push"
+                remote_spec="$dst"
+            fi
             prefix="$(require_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve (missing, or set but blank)"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
             lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"
-            flags="$(maybe_add_autotune "$flags" "$dst" "$autotune")"
+            flags="$(maybe_add_autotune "$flags" "$remote_spec" "$autotune")"
             local quiesce
             quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
-            lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$dst"
+            lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
             label="$(resolve_field notify "$ds" "" "")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
@@ -742,7 +774,12 @@ build_dataset() {
             else
                 notify="$(notify_text "$host_label" "$ntier" "$word" "$label")"
             fi
-            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}")
+            # The 4th field carries whichever remote spec resolved (dst for push,
+            # src for pull) -- 'direction' (9th field, added below) disambiguates
+            # which one it is for emit_send. Kept in the SAME slot rather than
+            # adding a parallel field so group_send's existing key shape needs only
+            # one addition (direction itself) instead of two.
+            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}")
         fi
 
         # ---- inline self-prune (own path, non-recursive) ----
@@ -965,10 +1002,13 @@ build_bookmark_prune_section() {
 group_send() {
     declare -gA SEND_GROUPS=()
     declare -ga SEND_GROUP_ORDER=()
-    local e ds tier schedule dst prefix flags notify label key
+    local e ds tier schedule dst prefix flags notify label direction key
     for e in "${SEND_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label <<< "$e"
-        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "$e"
+        # direction is IN the key: a push and a pull could otherwise share an
+        # identical (schedule,remote-spec,prefix,flags) tuple by coincidence and
+        # merge into one line that calls the wrong script for half its members.
+        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}"
         [ -z "${SEND_GROUPS[$key]+x}" ] && SEND_GROUP_ORDER+=("$key")
         SEND_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -1060,12 +1100,12 @@ validate_retain_patterns() {
 # Appends into JOB_LINES/RETAIN_LINES (consumed unchanged by generate_block
 # in BEGIN 4) rather than printing directly.
 emit_send() {
-    local key list ds tier schedule dst prefix flags notify label
+    local key list ds tier schedule dst prefix flags notify label direction
     for key in "${SEND_GROUP_ORDER[@]}"; do
         list="${SEND_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
 
         local src notify_out
         if [ "${#members[@]}" -eq 1 ]; then
@@ -1073,9 +1113,9 @@ emit_send() {
             notify_out="$notify"
         else
             local -a datasets=() notifies=()
-            local m mds mtier msch mdst mpre mflg mnot mlab
+            local m mds mtier msch mdst mpre mflg mnot mlab mdir
             for m in "${members[@]}"; do
-                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab <<< "$m"
+                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
                 datasets+=("$mds")
                 notifies+=("$mnot")
             done
@@ -1095,7 +1135,7 @@ emit_send() {
                 local -a lseen=()
                 local f2 e2
                 for m in "${members[@]}"; do
-                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab <<< "$m"
+                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
                     [ -z "$mlab" ] && continue
                     f2=0
                     for e2 in "${lseen[@]}"; do [ "$e2" = "$mlab" ] && f2=1 && break; done
@@ -1113,7 +1153,18 @@ emit_send() {
             fi
         fi
 
-        local cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
+        # direction is uniform across every member of this group (it is part of
+        # the grouping key), so members[0]'s value applies to the whole line.
+        # pull: 'ds'/'src' here is the LOCAL destination, 'dst' (the group key's
+        # remote-spec slot) is the remote SOURCE -- snapget.sh's own argument
+        # order is identical to snapsend.sh's (DATASETS [REMOTE]), only which
+        # end each name refers to is mirrored.
+        local cmd
+        if [ "$direction" = "pull" ]; then
+            cmd="$REPO_DIR/snapget.sh -m \"$prefix\""
+        else
+            cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
+        fi
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""
