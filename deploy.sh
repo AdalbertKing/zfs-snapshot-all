@@ -942,7 +942,7 @@ log "Phase 5: check-pool-capacity.sh (pool/quota capacity alerting)"
 # fileserver LXC (subvol-101-disk-1) was independently at 91% of its own
 # refquota, neither of which any existing alert would have caught in advance.
 CAPACITY_SCRIPT="/root/scripts/check-pool-capacity.sh"
-CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v2"
+CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v3"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$CAPACITY_SCRIPT" ]; then
         warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"
@@ -965,7 +965,7 @@ $CAPACITY_SCRIPT_MARKER -- warns before a zpool, or a dataset with a refquota,
 # filtering. Going through the queue also means the finding arrives with its
 # numbers attached, in the same digest as everything else.
 # Usage in cron: 0 8 * * * /root/scripts/check-pool-capacity.sh
-THRESHOLD=85
+THRESHOLD=90
 HOST=\$(hostname -f 2>/dev/null || hostname)
 NOTIFY="\${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 
@@ -998,7 +998,7 @@ zfs list -Hp -o name,referenced,refquota -t filesystem | while IFS=\$'\t' read -
 done
 EOF
     chmod +x "$CAPACITY_SCRIPT"
-    log "created $CAPACITY_SCRIPT (alerts -> $NOTIFY_EMAIL, threshold 85%)"
+    log "created $CAPACITY_SCRIPT (alerts -> $NOTIFY_EMAIL, threshold 90%)"
 fi
 
 CAPACITY_LINE="0 8 * * * $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
