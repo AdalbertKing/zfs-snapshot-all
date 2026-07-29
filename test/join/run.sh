@@ -63,8 +63,20 @@ expect_reject() {
         bad "$name" "REJECTED BUT THE PACKAGE STILL EXECUTED -- canary $CANARY exists"
         rm -f "$CANARY"; return
     fi
+    if printf '%s' "$out" | grep -q 'unbound variable'; then
+        bad "$name" "rejected, but the cleanup trap itself failed: $(printf '%s' "$out" | grep 'unbound variable' | head -1)"
+        return
+    fi
     ok "$name"
 }
+
+# "Failure removes the temporary directory" is a claim, so it gets checked.
+# It was false when first written -- the trap referenced a function-local
+# variable and fired at shell exit, where that name no longer exists. Every
+# assertion above still passed while every rejected package leaked a directory,
+# which is exactly why this counts what is on disk instead.
+tmp_count() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -newer "$WORK" 2>/dev/null | wc -l; }
+TMP_BEFORE="$(tmp_count)"
 
 new_case() { D="$WORK/$1"; mkdir -p "$D"; good_conf > "$D/peer.conf"; printf '%s\n' "$GOODKEY" > "$D/pubkey.pub"; }
 
@@ -225,6 +237,14 @@ check_val PEER_CONF_INITIATOR_LABEL  pve1
 # The one value --pair writes wrapped in quotes: the parser must hand back the
 # list, not the quotes.
 check_val PEER_CONF_DATASETS         "tank/a tank/b"
+
+TMP_AFTER="$(tmp_count)"
+if [ "$TMP_AFTER" -le "$TMP_BEFORE" ]; then
+    ok "cleanup/no temp directory left behind"
+else
+    bad "cleanup/no temp directory left behind" \
+        "$((TMP_AFTER - TMP_BEFORE)) directories leaked under ${TMPDIR:-/tmp} across the run"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

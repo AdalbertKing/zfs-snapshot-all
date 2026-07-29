@@ -89,6 +89,9 @@ PAIR_MODE=0
 JOIN_MODE=0
 JOIN_PACKAGE=""
 JOIN_CHECK=0
+# Where an unpacked package lives while it is being checked. Global so the
+# EXIT trap can still see it; see do_join.
+JOIN_WORKDIR=""
 PEER_ROLE="pull"
 PEER_HOST=""
 PEER_DATASETS=""
@@ -257,6 +260,12 @@ if [ $(( PEER_ROTATE + PEER_REVOKE_OLD + PEER_DRAFT_CONFIG )) -gt 1 ]; then
     exit 2
 fi
 
+# Used by --join/--join-check to identify a key; lives up here because the
+# package handling below runs before the rest of this script is even defined.
+pubkey_fingerprint() {
+    ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
+}
+
 # ============================================================================
 # The wsad package is UNTRUSTED STRUCTURED DATA, not code.
 #
@@ -424,9 +433,10 @@ do_join_check() {
     [ -n "$JOIN_PACKAGE" ] || die "--join-check needs a package path"
     [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
     assert_package_members "$JOIN_PACKAGE"
-    local workdir; workdir=$(mktemp -d) || die "mktemp -d failed"
+    JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
+    local workdir="$JOIN_WORKDIR"
     chmod 700 "$workdir"
-    trap 'rm -rf "$workdir"' EXIT
+    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
     tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
         || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
     local f
@@ -1404,9 +1414,6 @@ peer_manifest_path() {
     echo "$PEER_STATE_DIR/$1.conf"
 }
 
-pubkey_fingerprint() {
-    ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
-}
 
 # True for addresses that can only be on a private network: RFC1918, loopback,
 # link-local, CGNAT, and their IPv6 equivalents (ULA fc00::/7, fe80::/10, ::1).
@@ -1756,13 +1763,19 @@ do_join() {
     # package has been read and accepted. ----
     assert_package_members "$JOIN_PACKAGE"
 
-    local workdir; workdir=$(mktemp -d) || die "mktemp -d failed"
+    # GLOBAL, not local: the trap below runs at shell exit, by which time a
+    # function-local variable is out of scope -- under `set -u` the trap then
+    # dies on an unbound variable and removes nothing at all. Found by running
+    # --join-check for real, not by reading it: the suite's own assertions still
+    # passed while every rejected package leaked a temp dir.
+    JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
+    local workdir="$JOIN_WORKDIR"
     chmod 700 "$workdir"
     # A rejected package must leave nothing behind, including on every path
     # below that die()s. EXIT, not RETURN: die() exits the shell, so a RETURN
     # trap -- the obvious choice -- would fire on exactly the paths that do not
     # need it and on none of the ones that do.
-    trap 'rm -rf "$workdir"' EXIT
+    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
     # --no-same-owner/--no-same-permissions: the archive does not get to decide
     # who owns what it unpacks, nor to hand itself a setuid bit.
     tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
