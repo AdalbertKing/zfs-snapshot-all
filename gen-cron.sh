@@ -23,6 +23,22 @@ set -o pipefail
 #   [defaults]
 #       host_label = pve2                 # used to auto-build notify text
 #       dst        = hdd/backups/pve2     # optional -- omit for local-only (no send target)
+#     The five paths that end up inside every generated line. All optional, all
+#     absolute, all overridden by the environment variable of the same name in
+#     upper case (env > config > default). Set them when the jobs do NOT run as
+#     root: the defaults live under /root/scripts, which a delegated account can
+#     neither read nor write, and the result is a working backup whose alerting
+#     silently goes nowhere.
+#       repo_dir      = /home/zfsbackup/zfs-snapshot-all   # default: this script's dir
+#       notify_script = /home/zfsbackup/notify-fail.sh     # default: /root/scripts/notify-fail.sh
+#       warn_script   = /home/zfsbackup/notify-warn.sh     # default: /root/scripts/notify-warn.sh
+#       digest_script = /home/zfsbackup/alert-digest.sh    # default: /root/scripts/alert-digest.sh
+#       cron_log      = /home/zfsbackup/cron.log           # default: /root/scripts/cron.log
+#
+#   Unknown field names are REJECTED, in every section type. Until 2026-07-29
+#   they were stored and never looked at, so a typo -- or a field that never
+#   existed, as deploy.sh's --draft-config emitted for months -- produced a
+#   config that generated cleanly and did not do what it said.
 #
 #   [template:<tier>]                     # a tier's full lifecycle (cadence + retention)
 #       send_schedule    = <5-field cron>  # omit if this tier never sends
@@ -256,8 +272,17 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.24'
+VERSION='v4.25'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Captured BEFORE defaulting, because "was this given?" cannot be recovered
+# afterwards -- once REPO_DIR holds SCRIPT_DIR there is no telling whether the
+# environment said so or the default did.
+REPO_DIR_ENV="${REPO_DIR:-}"
+NOTIFY_SCRIPT_ENV="${NOTIFY_SCRIPT:-}"
+WARN_SCRIPT_ENV="${WARN_SCRIPT:-}"
+DIGEST_SCRIPT_ENV="${DIGEST_SCRIPT:-}"
+CRON_LOG_ENV="${CRON_LOG:-}"
+
 REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
 NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 WARN_SCRIPT="${WARN_SCRIPT:-/root/scripts/notify-warn.sh}"
@@ -551,6 +576,115 @@ parse_ini() {
 
 ini_has() { [ -n "${INI[$1${SEP}$2]+x}" ]; }
 ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
+
+# ---------------------------------------------------------------------------
+# Which field names each section kind actually READS.
+#
+# The parser has always stored every key it saw and only ever asked for the ones
+# it knows, so a name it does not know disappeared without a word. That is not a
+# theoretical tidiness problem: deploy.sh's --draft-config spent its whole life
+# emitting `tiers = ...`, a field that exists nowhere in this script, and the
+# only symptom was gen-cron dying with "has no use_template" -- naming a field
+# the admin had never been told to write, on a line they had never typed.
+#
+# The lists mirror the resolve_field/require_field/ini_has call sites; a field
+# is listed for a kind when that kind's section is one of the places the lookup
+# for it looks. Verified against every live v4 config and every fixture before
+# it was turned on -- see PROJECT notes; the v3 files (prune_root) are not live
+# and are not expected to pass.
+declare -A FIELD_OK=()
+_allow_fields() {
+    local kind="$1"; shift
+    local f; for f in "$@"; do FIELD_OK["${kind}${SEP}${f}"]=1; done
+}
+# Everything a [template:] can carry, and therefore everything a [dataset:] or
+# [prune:] may override on itself.
+POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
+               tier_label notify notify_raw notify_raw_prune notify_word
+               monitor_warn monitor_crit monitor_schedule
+               dst src autotune quiesce flags"
+# shellcheck disable=SC2086
+_allow_fields defaults  host_label repo_dir notify_script warn_script \
+                        digest_script cron_log $POLICY_FIELDS
+# shellcheck disable=SC2086
+_allow_fields template  $POLICY_FIELDS
+# shellcheck disable=SC2086
+_allow_fields dataset   use_template $POLICY_FIELDS
+# shellcheck disable=SC2086
+_allow_fields prune     use_template recursive clear_cut prune ssh_flags \
+                        gfs gfs_pattern $POLICY_FIELDS
+_allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify
+_allow_fields excluded  keep
+
+# The single most useful thing to say about a rejected field is "you put it in
+# the wrong kind of section", which is a different mistake from "you misspelled
+# it" and needs a different fix.
+field_valid_elsewhere() {
+    local field="$1" k out=""
+    for k in defaults template dataset prune prune-bookmarks excluded; do
+        [ -n "${FIELD_OK[${k}${SEP}${field}]+x}" ] && out="$out [$k:]"
+    done
+    printf '%s' "$out"
+}
+
+# ---------------------------------------------------------------------------
+# The five paths that end up INSIDE every generated cron line. They were
+# settable only through the environment, which meant a config could not describe
+# its own host: every line said /root/scripts/*, and a job running as a
+# delegated account cannot read notify-fail.sh there nor write cron.log there.
+# The failure is quiet in the worst way -- the backup itself works, and only the
+# alerting silently goes nowhere.
+#
+# Precedence: environment > [defaults] > built-in. The environment stays on top
+# because that is the ad-hoc, this-one-run override (and what the test harness
+# uses); the config is the durable, per-host answer.
+#
+# Absolute paths only. A relative one would resolve against cron's working
+# directory, not the admin's, which is a different directory on every run.
+apply_path_settings() {
+    _path_setting REPO_DIR      repo_dir       "$REPO_DIR_ENV"
+    _path_setting NOTIFY_SCRIPT notify_script  "$NOTIFY_SCRIPT_ENV"
+    _path_setting WARN_SCRIPT   warn_script    "$WARN_SCRIPT_ENV"
+    _path_setting DIGEST_SCRIPT digest_script  "$DIGEST_SCRIPT_ENV"
+    _path_setting CRON_LOG      cron_log       "$CRON_LOG_ENV"
+}
+_path_setting() {
+    local var="$1" field="$2" envval="$3" val
+    ini_has defaults "$field" || return 0
+    val="$(trim "$(ini_get defaults "$field")")"
+    # Blank is rejected rather than ignored, same as pattern=/retain=/prefix=:
+    # a field someone bothered to write and left empty is a mistake, not a way
+    # of asking for the default.
+    [ -n "$val" ] || die "[defaults] has '$field' but it is blank -- give it an absolute path, or remove the line to keep the default"
+    case "$val" in
+        /*) ;;
+        *) die "[defaults] $field='$val' must be an absolute path -- a relative one resolves against cron's working directory, not yours" ;;
+    esac
+    # Checked even when the environment is about to out-rank it. Validating only
+    # the value that wins would mean a broken config line errors exclusively on
+    # the host that happens NOT to set the variable -- which is the worst place
+    # to find out, and invisible to a test harness that exports all five.
+    [ -n "$envval" ] || printf -v "$var" '%s' "$val"
+}
+
+validate_field_names() {
+    local key hdr field kind elsewhere
+    for key in "${!INI[@]}"; do
+        hdr="${key%%${SEP}*}"
+        field="${key#*${SEP}}"
+        kind="${SECTION_KIND[$hdr]:-}"
+        [ -n "$kind" ] || continue
+        [ -n "${FIELD_OK[${kind}${SEP}${field}]+x}" ] && continue
+        # flags_<tier>: a per-tier override of 'flags', so the tier part cannot
+        # be enumerated ahead of time.
+        case "$field" in flags_*) [ "$kind" = "dataset" ] && continue ;; esac
+        elsewhere="$(field_valid_elsewhere "$field")"
+        if [ -n "$elsewhere" ]; then
+            die "[$hdr] has '$field', which gen-cron.sh does not read in a [$kind:] section (it is valid in:$elsewhere). Move it, or remove it -- left here it does nothing at all."
+        fi
+        die "[$hdr] has '$field', which is not a field gen-cron.sh reads anywhere. Check the spelling against the field reference in this script's header. Until now an unknown field was stored and silently ignored, which is why a typo could look like a working config."
+    done
+}
 
 # resolve_field FIELD DS TMPL DEFAULTS -- prints value, return 1 if unresolved.
 # Any of DS/TMPL/DEFAULTS may be "" to skip that layer. Each is a section header.
@@ -1533,6 +1667,14 @@ while [ $# -gt 0 ]; do
         -c) CONFIG="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
+        # Prints "<kind> <field>" for every accepted field and exits. Exists so
+        # the suite can check the allow-list against the lookups in the code
+        # WITHOUT re-parsing this file's source text -- a check that scrapes the
+        # declaration would break on a line continuation rather than on a real
+        # drift, and a test that fails for formatting reasons gets muted.
+        --dump-fields)
+            for _k in "${!FIELD_OK[@]}"; do printf '%s %s\n' "${_k%%${SEP}*}" "${_k#*${SEP}}"; done | sort
+            exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (see -h)" ;;
     esac
@@ -1545,6 +1687,8 @@ fi
 
 parse_ini "$CONFIG"
 [ "${#SECTION_ORDER[@]}" -gt 0 ] || die "no sections found in $CONFIG"
+validate_field_names
+apply_path_settings
 
 build_entities
 group_send

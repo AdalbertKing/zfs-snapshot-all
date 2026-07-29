@@ -65,6 +65,64 @@ for cfg in "$DIR"/negative/*.conf; do
     fi
 done
 
+# ---- [defaults] path settings ----
+# These need the five environment variables UNSET, and this harness exports all
+# of them at the top so golden output stays machine-independent. That export is
+# exactly why the config-field path could never be exercised by an ordinary
+# fixture: the environment always won, so a fixture would have passed whether or
+# not the feature worked at all. Run explicitly with `env -u` instead.
+check() {
+    local what="$1" out="$2" want="$3"
+    if printf '%s' "$out" | grep -qF -- "$want"; then
+        echo "PASS paths/$what"; pass=$((pass+1))
+    else
+        echo "FAIL paths/$what (no '$want' in output)"; printf '  %s\n' "$out" | head -3; fail=$((fail+1))
+    fi
+}
+pathcfg="$(mktemp)"
+cat > "$pathcfg" <<'EOF'
+[defaults]
+	host_label    = t
+	repo_dir      = /home/zfsbackup/zfs-snapshot-all
+	notify_script = /home/zfsbackup/notify-fail.sh
+	cron_log      = /home/zfsbackup/cron.log
+[template:hourly]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:tank/x]
+	use_template = hourly
+EOF
+noenv_out="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG \
+    bash "$GEN" -c "$pathcfg" 2>&1)"
+check "repo_dir from config"      "$noenv_out" "/home/zfsbackup/zfs-snapshot-all/snapsend.sh"
+check "notify_script from config" "$noenv_out" "/home/zfsbackup/notify-fail.sh"
+check "cron_log from config"      "$noenv_out" "/home/zfsbackup/cron.log"
+# The other half of the contract: an explicit environment variable still wins.
+env_out="$(gen "$pathcfg")"
+check "env out-ranks config"      "$env_out" "/REPO/snapsend.sh"
+rm -f "$pathcfg"
+
+# ---- allow-list vs the lookups in the code ----
+# Unknown fields are now rejected, which turns "add a field, forget the
+# allow-list" into a config that used to work and suddenly does not. This is
+# the guard: every field name the code asks for by literal must be accepted.
+#
+# The accepted set comes from gen-cron.sh --dump-fields (authoritative, no
+# source scraping). The used set is a grep, deliberately: if it misses a call
+# site the test loses coverage, which is survivable -- a scraper that produced
+# FALSE failures on a reformatted line would just get muted, which is not.
+declared="$(bash "$GEN" --dump-fields | awk '{print $2}' | sort -u)"
+used="$( { grep -oE '\b(resolve_field|require_field|resolve_field_tiered) +"?[a-z_]+"?' "$GEN"
+           grep -oE '\b(ini_has|ini_get) +("\$[a-z_]+"|defaults) +"?[a-z_]+"?' "$GEN"
+         } | sed -E 's/.* +"?([a-z_]+)"?$/\1/' | sort -u )"
+missing="$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$used") | tr '\n' ' ')"
+missing="$(printf '%s' "$missing" | sed 's/ *$//')"
+if [ -z "$missing" ]; then
+    echo "PASS fields/every looked-up field is in the allow-list"; pass=$((pass+1))
+else
+    echo "FAIL fields/looked up but not accepted: $missing"; fail=$((fail+1))
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]
