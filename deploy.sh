@@ -169,10 +169,11 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             already fully trust each other
     --local-user=NAME       the account HERE that will run the generated jobs
                             (e.g. zfsbackup). Installs a readable copy of the
-                            pairing key for it, and for --role=pull delegates
-                            the target root to it. Independent of --as, which
-                            is about the account on the PEER. Omit and the
-                            jobs are assumed to run as root.
+                            pairing key AND of the peer's pinned host key for
+                            it, and for --role=pull delegates the target root
+                            to it. Independent of --as, which is about the
+                            account on the PEER. Omit and the jobs are assumed
+                            to run as root.
     --port=N                ssh port (default 22)
     --allow-public-peer     accept a --peer NAME that resolves outside RFC1918
                             (refused by default -- see the note on search
@@ -1236,30 +1237,64 @@ assert_peer_address_sane() {
     fi
 }
 
+# The scanned host key belongs to the RELATIONSHIP, not to whichever account
+# happened to run --pair. It is therefore written to a per-peer file holding
+# exactly one key -- what the generated job points -k at -- as well as to
+# /root/.ssh/known_hosts, which deploy.sh's own ssh calls read (--revoke-old
+# connects with StrictHostKeyChecking=yes).
+pin_host_key() {
+    local scan="$1" file="$2"
+    if grep -qF "$scan" "$file" 2>/dev/null; then
+        log "host key for $PEER_HOST already pinned in $file"
+        return 0
+    fi
+    printf '%s\n' "$scan" >> "$file" || die "could not write $file"
+    log "pinned $PEER_HOST's host key to $file"
+}
+
 # Hole the pairing feature had until 2026-07-29: the key lives in
 # /root/.ssh/pairing (0700, root), but for --role=pull the job that uses it is a
 # snapget.sh cron line, and the whole point of a delegated account is that this
 # line does NOT run as root. -K pointed at a file the running account could not
 # read, and nothing said so until the job failed.
 #
+# The pinned host key had the identical hole one layer down, and both are
+# installed HERE, by one function, on purpose: they are the two halves of "this
+# job authenticates the peer and the peer authenticates this job", they are
+# wanted at exactly the same moments, and keeping them in separate functions is
+# how one of them silently stops being refreshed on rotation.
+#
 # The copy is deliberate rather than a chmod: /root/.ssh/pairing stays 0700 and
 # root-owned, and only the ONE key for this relationship crosses over.
-install_local_pairing_key() {
-    local src_key="$1" label="$2" user="$3"
+install_local_pairing_files() {
+    local src_key="$1" src_kh="$2" label="$3" user="$4"
     local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
     [ -n "$home_dir" ] || die "cannot determine home directory for --local-user='$user'"
     local group; group=$(id -gn "$user")
-    local dest="$home_dir/.ssh/pairing-${label}_ed25519"
     mkdir -p "$home_dir/.ssh"
     chown "$user:$group" "$home_dir/.ssh"
     chmod 700 "$home_dir/.ssh"
+
+    local dest="$home_dir/.ssh/pairing-${label}_ed25519"
     install -o "$user" -g "$group" -m 600 "$src_key" "$dest" \
         || die "could not install a readable copy of the pairing key at $dest"
     log "installed a copy of the pairing key for $user: $dest"
-    # Deliberately prints nothing but the log line: an earlier version also
+
+    # Missing only for a pairing made before host-key pinning existed. Not
+    # fatal: the key half is what makes the job work at all, and --draft-config
+    # notices the absent file and declines to emit a -k pointing at nothing.
+    if [ -f "$src_kh" ]; then
+        local dest_kh="$home_dir/.ssh/pairing-${label}_known_hosts"
+        install -o "$user" -g "$group" -m 600 "$src_kh" "$dest_kh" \
+            || die "could not install a readable copy of the pinned host key at $dest_kh"
+        log "installed the pinned host key for $user: $dest_kh"
+    else
+        warn "no pinned host-key file at $src_kh -- $user gets no -k, jobs will fall back to accept-new. Re-run --pair to create it."
+    fi
+    # Deliberately prints nothing but the log lines: an earlier version also
     # echoed $dest as a return value, which forced callers to redirect stdout
-    # and silently swallowed the log with it. Callers that need the path ask
-    # local_keyfile_path instead.
+    # and silently swallowed the log with it. Callers that need a path ask
+    # local_keyfile_path / local_knownhosts_path instead.
 }
 
 # Where the GENERATED job should look for the key: the local-user copy when
@@ -1271,6 +1306,19 @@ local_keyfile_path() {
         [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_ed25519"; return 0; }
     fi
     printf '%s' "$PEER_KEY_DIR/${label}_ed25519"
+}
+
+# Same question for the pinned host key. Root's job gets the per-peer file too,
+# not /root/.ssh/known_hosts: that file accumulates whatever accept-new has
+# recorded over the years, and pinning "one key, verified once at pair time" is
+# the whole point of the -k the draft emits.
+local_knownhosts_path() {
+    local label="$1" user="$2"
+    if [ -n "$user" ]; then
+        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
+        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_known_hosts"; return 0; }
+    fi
+    printf '%s' "$PEER_KEY_DIR/${label}_known_hosts"
 }
 
 # do_pair -- runs on the host that will connect (collector for pull, source
@@ -1346,12 +1394,9 @@ do_pair() {
     log "host key fingerprint for $PEER_HOST: $fp"
     log "CONFIRM this matches what you see connecting to $PEER_HOST directly before relying on it."
     mkdir -p /root/.ssh; chmod 700 /root/.ssh
-    if grep -qF "$scan" /root/.ssh/known_hosts 2>/dev/null; then
-        log "$PEER_HOST's host key already pinned, leaving known_hosts alone"
-    else
-        printf '%s\n' "$scan" >> /root/.ssh/known_hosts
-        log "pinned $PEER_HOST's host key to /root/.ssh/known_hosts"
-    fi
+    pin_host_key "$scan" /root/.ssh/known_hosts
+    local peer_kh="$PEER_KEY_DIR/${label}_known_hosts"
+    pin_host_key "$scan" "$peer_kh"
 
     # ---- dedicated per-peer keypair ----
     if [ "$PEER_ROTATE" -eq 1 ]; then
@@ -1374,7 +1419,7 @@ do_pair() {
     # refreshes this copy). That is what makes rotation zero-downtime for a
     # delegated account too, not just for root. ----
     if [ -n "$PEER_LOCAL_USER" ] && [ "$PEER_ROTATE" -eq 0 ]; then
-        install_local_pairing_key "$keyfile" "$label" "$PEER_LOCAL_USER"
+        install_local_pairing_files "$keyfile" "$peer_kh" "$label" "$PEER_LOCAL_USER"
     fi
 
     # ---- target dataset: created HERE only for pull (local to this host).
@@ -1624,7 +1669,8 @@ do_revoke_old() {
     # miss this and rotation quietly breaks every job running as that account
     # while root's own path keeps working, which is the worst way to find out.
     if [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
-        install_local_pairing_key "$keyfile" "$label" "$PEER_SAVED_LOCAL_USER"
+        install_local_pairing_files "$keyfile" "$PEER_KEY_DIR/${label}_known_hosts" \
+            "$label" "$PEER_SAVED_LOCAL_USER"
     fi
     local new_current; new_current=$(cat "${keyfile}.pub")
     sed -i -e 's/^PEER_ROTATING=.*/PEER_ROTATING=no/' \
@@ -1758,6 +1804,21 @@ do_draft_config() {
         warn "expected $job_keyfile for ${PEER_SAVED_LOCAL_USER} but it is not there -- re-run --pair with --local-user=${PEER_SAVED_LOCAL_USER} to reinstall it"
     fi
 
+    # The other half: -k. --pair verifies the peer's host key by hand (keyscan,
+    # fingerprint, "CONFIRM this"), and until 2026-07-29 that verification then
+    # sat in a file the job never opened -- so the nightly connection fell back
+    # to accept-new and trusted whatever answered on its own first run. Emitted
+    # only when the pinned file actually exists: a -k pointing at nothing turns
+    # StrictHostKeyChecking=yes into a job that can never connect at all, which
+    # is a worse outcome than the accept-new it replaces.
+    local job_knownhosts; job_knownhosts=$(local_knownhosts_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
+    local kh_flag=""
+    if [ -f "$job_knownhosts" ]; then
+        kh_flag=" -k ${job_knownhosts}"
+    else
+        warn "no pinned host-key file at $job_knownhosts -- this pairing predates host-key pinning for the job account, so the draft omits -k and the job would use accept-new. Re-run: bash deploy.sh --pair --peer=$PEER_HOST${PEER_SAVED_LOCAL_USER:+ --local-user=$PEER_SAVED_LOCAL_USER}"
+    fi
+
     local outdir="/root/scripts/pairing"
     mkdir -p "$outdir"
     local out="$outdir/${label}.conf.suggested"
@@ -1789,6 +1850,11 @@ do_draft_config() {
             echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
             echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
             echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "#"
+            echo "# '-k' to druga strona tego samego: przypiety klucz HOSTA peera,"
+            echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
+            echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
+            [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
             echo
             echo "# =========================================================="
             echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- tylko te maja 'zfs allow'"
@@ -1803,7 +1869,7 @@ do_draft_config() {
                 [ "$n" -gt 0 ] && echo "#  na nie, wiec jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src          = ${remote_user}@${PEER_HOST}:${ds}"
-                echo "#   flags        = -K ${job_keyfile}"
+                echo "#   flags        = -K ${job_keyfile}${kh_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
@@ -1831,6 +1897,11 @@ do_draft_config() {
             echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
             echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
             echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "#"
+            echo "# '-k' to druga strona tego samego: przypiety klucz HOSTA peera,"
+            echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
+            echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
+            [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
             echo
             echo "# =========================================================="
             echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- te datasety zadeklarowano"
@@ -1845,7 +1916,7 @@ do_draft_config() {
                 [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:$ds]"
                 echo "#   dst          = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
-                echo "#   flags        = -K ${job_keyfile}"
+                echo "#   flags        = -K ${job_keyfile}${kh_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then

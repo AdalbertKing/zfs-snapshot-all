@@ -83,7 +83,9 @@ wcześniej nie robił nikt:
    `~NAME/.ssh/pairing-<label>_ed25519` (0600, właściciel NAME).
    `/root/.ssh/pairing` zostaje 0700 roota — przechodzi tylko ten jeden klucz
    tej jednej relacji. `--draft-config` emituje `-K` wskazujące na kopię.
-2. Dla `role=pull` deleguje `ZFS_PERMS` na **lokalny korzeń relacji**
+2. Instaluje kopię **przypiętego klucza hosta** peera w
+   `~NAME/.ssh/pairing-<label>_known_hosts` (patrz niżej).
+3. Dla `role=pull` deleguje `ZFS_PERMS` na **lokalny korzeń relacji**
    (`<target>/<label>`). To lustrzane odbicie tego, co `--join` robi po
    drugiej stronie, i po prostu go brakowało: `--join` delegował stronę
    źródłową na peerze, a stronę odbiorczą tutaj nie delegował nikt. Jako root
@@ -97,6 +99,36 @@ Dzięki temu obietnica "linie crona nie wymagają zmiany" obowiązuje też dla
 konta delegowanego, nie tylko dla roota. Sprawdzone na żywo pve1↔pve2:
 to samo, niezmienione zadanie przechodzi przed rotacją, w jej trakcie i po
 `--revoke-old`.
+
+### Klucz hosta dociera do zadania (dodane 2026-07-29)
+
+`--pair` weryfikuje klucz hosta peera ręcznie: `ssh-keyscan`, wypisany odcisk,
+linia „CONFIRM this". Do 2026-07-29 ta cała ceremonia trafiała **wyłącznie do
+`/root/.ssh/known_hosts`**, a wygenerowane zadanie tego pliku nie otwierało:
+draft nie emitował `-k`, więc `snapget.sh`/`snapsend.sh` szły na domyślnym
+`accept-new` — czyli ufały temu, co odpowiedziało przy ich własnym pierwszym
+połączeniu. Dla `--local-user` konto zadania miało w dodatku swój własny,
+pusty `known_hosts`. Weryfikacja odbywała się i nie chroniła niczego.
+
+Ta sama klasa błędu co `-K` przed poprawką, więc i ta sama poprawka:
+
+- klucz hosta ląduje teraz **także** w pliku per-relacja
+  `/root/.ssh/pairing/<label>_known_hosts` — dokładnie jeden klucz, ten
+  sprawdzony przy parowaniu, zamiast wszystkiego, co `accept-new` uzbierał
+  przez lata w `known_hosts` konta,
+- `--local-user` dostaje jego kopię (0600, właściciel konta),
+- `--draft-config` emituje `-k <ten plik>` obok `-K`.
+
+`/root/.ssh/known_hosts` dalej jest zapisywany — czyta go własny `ssh`
+deploy.sh (`--revoke-old` łączy się z `StrictHostKeyChecking=yes`).
+
+Klucz hosta **nie rotuje** razem z kluczem parowania, więc `--rotate` go nie
+dotyka; `--revoke-old` odświeża kopię przy okazji promocji nowego klucza.
+
+Jeden świadomy wyjątek: jeśli pliku z przypiętym kluczem nie ma (parowanie
+sprzed tej zmiany), draft **nie emituje `-k`** i mówi o tym w logu i w samym
+pliku. `-k` wskazujące na nieistniejący plik zamienia `accept-new` w zadanie,
+które nie połączy się nigdy — to gorszy wynik niż to, co miało naprawić.
 
 ### Nazwa peera a DNS: `--allow-public-peer` (dodane 2026-07-29)
 
@@ -280,16 +312,11 @@ Trzy fazy, zero okna przestoju:
   ale nie ma ścieżki na pełną dekomisję — koniec współpracy z hostem na
   zawsze (konto, delegacja, manifest, klucz — wszystko do usunięcia). Nie
   rozwiązujemy teraz, ale ma nie zniknąć z listy.
-- **`--draft-config` nie filtruje kandydatów.** Robi płaskie
-  `zfs list -H -o name` na peerze — bez `-d1`, bez porównania z
-  `PEER_SAVED_DATASETS`. Na realnym pve2 to 81 pozycji, z czego uprawnione
-  bywają dwie; odkomentowanie którejkolwiek z pozostałych daje błąd dopiero
-  w nocy. Świadomie zostawione: draft jest z założenia do ręcznego przeglądu.
 - **`--draft-config` gubi `--port`.** Manifest ma `PEER_SAVED_PORT`, ale
-  emitowane `flags` zawierają tylko `-K`, nigdy `-p`. Niestandardowy port =
-  cicho niedziałający config.
-- **Przypięcie klucza hosta nie chroni zadania.** `--pair` przypina klucz do
-  `/root/.ssh/known_hosts`, a zadanie dla `--local-user` idzie z
-  `accept-new` na własnym `known_hosts` tego konta. Draft nie emituje `-k`.
-  Ta sama klasa co `--local-user` przed poprawką, ta sama poprawka by
-  zadziałała (kopia + `-k` w emitowanych flagach) — nie zrobione.
+  emitowane `flags` zawierają `-K`/`-k`, nigdy `-p`. Niestandardowy port =
+  cicho niedziałający config. Od czasu dodania `-k` ta dziura przestała być
+  cicha, a stała się głośna: `ssh-keyscan -p N` zapisuje wpis w postaci
+  `[host]:N`, więc zadanie łączące się (bez `-p`) na 22 nie znajdzie go
+  w przypiętym pliku i padnie na `StrictHostKeyChecking=yes`. Dla portu 22
+  bez zmian. Poprawka to dopisanie `-p ${PEER_SAVED_PORT}` do tego samego
+  ciągu flag — nie zrobione.
