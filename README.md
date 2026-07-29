@@ -39,15 +39,22 @@ No package to install beyond the scripts themselves and their runtime dependenci
 
 ## Components at a glance
 
-| Script | Role | Version |
-|---|---|---|
-| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) | v2.65 |
-| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) | v2.59 |
-| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age-, count-, or GFS-tower-based) and orphaned bookmarks | v1.28 |
-| [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot | v2.0 |
-| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config | v4.21 |
-| [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) | — |
-| [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account | — |
+| Script | Role |
+|---|---|
+| [`snapsend.sh`](snapsend.sh) | Create + push-replicate a dataset (source always local, target local or remote) |
+| [`snapget.sh`](snapget.sh) | Pull-replicate a dataset (target always local, source local or remote) |
+| [`delsnaps.sh`](delsnaps.sh) | Prune snapshots (age-, count-, or GFS-tower-based) and orphaned bookmarks |
+| [`check-snap-age.sh`](check-snap-age.sh) | Nagios-style staleness check for the newest matching snapshot |
+| [`gen-cron.sh`](gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config |
+| [`lib-zfs-snap.sh`](lib-zfs-snap.sh) | Shared helpers `source`d by snapsend.sh/snapget.sh (not standalone) |
+| [`deploy.sh`](deploy.sh) | Bootstraps a host end to end: dependencies, checkout, alerting, log rotation, smoke test, and optionally the delegated non-root account |
+
+**Versions deliberately are not listed here.** They were, and they drifted: at
+the time this was written the table said snapsend v2.65 / snapget v2.59 /
+gen-cron v4.21 while the scripts were v2.66 / v2.62 / v4.25 -- so the one place
+someone looks to check what they are running was the one place that was wrong.
+A number maintained by hand in two places has one honest steady state. Ask the
+executable instead; every one of them answers `-V`.
 
 Every executable answers `-V`/`--version`. Full changelog lives in `git log`, not in this file —
 this README describes current behavior, not history.
