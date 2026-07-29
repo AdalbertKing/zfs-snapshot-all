@@ -69,6 +69,55 @@ konta. Prostota ważniejsza niż to dodatkowe zawężenie na tym etapie.
 1:1 (ten zestaw powstał dla innego przypadku — jednego konta obsługującego
 obie strony lokalnie).
 
+### Konto lokalne: `--local-user` (dodane 2026-07-29)
+
+Powyższe dotyczy konta **na peerze**. Osobne, wcześniej przeoczone pytanie
+brzmi: *jakie konto na hoście inicjującym uruchomi wygenerowane zadanie?*
+`--as` na to nie odpowiada, a domyślna odpowiedź "root" była wpisana w kod
+milcząco — przez to, że klucz parowania leży w `/root/.ssh/pairing` (0700).
+
+`--local-user=NAME` odpowiada na nie wprost i robi dwie rzeczy, których
+wcześniej nie robił nikt:
+
+1. Instaluje **czytelną dla tego konta kopię** klucza parowania w
+   `~NAME/.ssh/pairing-<label>_ed25519` (0600, właściciel NAME).
+   `/root/.ssh/pairing` zostaje 0700 roota — przechodzi tylko ten jeden klucz
+   tej jednej relacji. `--draft-config` emituje `-K` wskazujące na kopię.
+2. Dla `role=pull` deleguje `ZFS_PERMS` na **lokalny korzeń relacji**
+   (`<target>/<label>`). To lustrzane odbicie tego, co `--join` robi po
+   drugiej stronie, i po prostu go brakowało: `--join` delegował stronę
+   źródłową na peerze, a stronę odbiorczą tutaj nie delegował nikt. Jako root
+   niewidoczne — pierwszy delegowany przebieg umierał na
+   `cannot receive: permission denied`.
+
+Rotacja: kopia **nie jest** ruszana przez `--rotate` (nowy klucz jest jeszcze
+niesprawdzony, cron ma dalej chodzić na starym), tylko przez `--revoke-old` —
+w jedynym momencie, gdy nowy klucz jest zarazem zweryfikowany i promowany.
+Dzięki temu obietnica "linie crona nie wymagają zmiany" obowiązuje też dla
+konta delegowanego, nie tylko dla roota. Sprawdzone na żywo pve1↔pve2:
+to samo, niezmienione zadanie przechodzi przed rotacją, w jej trakcie i po
+`--revoke-old`.
+
+### Nazwa peera a DNS: `--allow-public-peer` (dodane 2026-07-29)
+
+`--peer` trafia prosto do `ssh-keyscan`, którego całym zadaniem jest zaufać
+temu, co odpowie. Gdy nazwa jest zła, parowanie **się nie wywala — udaje się
+z kimś innym**: przypina cudzy klucz hosta, a następny `--draft-config`
+wysyła tam klucz parowania.
+
+To nie jest teoria. Na metropolis `pve2` z pve1 nie ma wpisu w `/etc/hosts`,
+więc resolver dokleja domenę wyszukiwania i `getent hosts pve2` odpowiada
+**czterema publicznymi adresami** niezwiązanego, prawdziwego `metropolis.net`.
+
+`--pair` odrzuca teraz dwa odciski tej awarii:
+- nazwa rozwiązująca się na **więcej niż jeden adres** (peer ma jeden;
+  przypadek z domeną wyszukiwania rutynowo ma kilka),
+- nazwa rozwiązująca się na **adres publiczny** — `--allow-public-peer`
+  pozwala świadomie wrócić do tego dla prawdziwego peera przez WAN.
+
+Literalny adres IP jest zwolniony z obu kontroli: żadne rozwiązywanie nazwy
+się nie odbyło, więc nie ma czemu pójść źle.
+
 ## Proces parowania
 
 ### Krok 1 — `--pair` na hoście inicjującym (tym co się łączy)
@@ -231,3 +280,16 @@ Trzy fazy, zero okna przestoju:
   ale nie ma ścieżki na pełną dekomisję — koniec współpracy z hostem na
   zawsze (konto, delegacja, manifest, klucz — wszystko do usunięcia). Nie
   rozwiązujemy teraz, ale ma nie zniknąć z listy.
+- **`--draft-config` nie filtruje kandydatów.** Robi płaskie
+  `zfs list -H -o name` na peerze — bez `-d1`, bez porównania z
+  `PEER_SAVED_DATASETS`. Na realnym pve2 to 81 pozycji, z czego uprawnione
+  bywają dwie; odkomentowanie którejkolwiek z pozostałych daje błąd dopiero
+  w nocy. Świadomie zostawione: draft jest z założenia do ręcznego przeglądu.
+- **`--draft-config` gubi `--port`.** Manifest ma `PEER_SAVED_PORT`, ale
+  emitowane `flags` zawierają tylko `-K`, nigdy `-p`. Niestandardowy port =
+  cicho niedziałający config.
+- **Przypięcie klucza hosta nie chroni zadania.** `--pair` przypina klucz do
+  `/root/.ssh/known_hosts`, a zadanie dla `--local-user` idzie z
+  `accept-new` na własnym `known_hosts` tego konta. Draft nie emituje `-k`.
+  Ta sama klasa co `--local-user` przed poprawką, ta sama poprawka by
+  zadziałała (kopia + `-k` w emitowanych flagach) — nie zrobione.
