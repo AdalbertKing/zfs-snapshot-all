@@ -297,12 +297,95 @@ pubkey_fingerprint() {
 # A member name containing a newline could split into two lines that LOOK like
 # the expected pair; that is caught after extraction instead, where the file
 # with the real (newline-bearing) name is not a regular file at either path.
+# Conservative bounds. A legitimate wsad is one or two kilobytes; nothing here
+# is a judgement call about what is "big enough", it is a refusal to let an
+# untrusted file decide how much disk root spends before anything has agreed the
+# file is even the right shape.
+PKG_MAX_COMPRESSED=65536
+PKG_MAX_MEMBER=8192
+
 assert_package_members() {
-    local pkg="$1" names
+    local pkg="$1"
+
+    local size; size=$(wc -c < "$pkg" 2>/dev/null) || die "could not size $pkg"
+    [ "$size" -le "$PKG_MAX_COMPRESSED" ] \
+        || die "$pkg is ${size} bytes, over the ${PKG_MAX_COMPRESSED}-byte limit for a wsad -- a real one is a couple of kilobytes. Refusing to decompress it."
+
+    local names
     names=$(tar -tzf "$pkg" 2>/dev/null) || die "could not read $pkg -- not a valid wsad (expected a gzipped tar)"
     local expected; expected=$(printf 'peer.conf\npubkey.pub\n')
     local got; got=$(printf '%s\n' "$names" | grep -v '^$' | sort)
     [ "$got" = "$expected" ] || die "$pkg does not contain exactly the two expected members. Found: $(printf '%s' "$names" | tr '\n' ' ')-- a wsad is peer.conf + pubkey.pub and nothing else. Refusing to unpack it."
+
+    # Entry TYPES, before extraction rather than after. Checking `-f` on the
+    # unpacked result was the earlier approach and it is too late by
+    # construction: a FIFO or device node has already been created by root at
+    # that point, and a hard link arrives as an ordinary regular file that no
+    # test on the result can tell apart. The verbose listing's first character
+    # is the type -- '-' regular, 'l' symlink, 'h' hard link, 'd' directory,
+    # 'p' FIFO, 'b'/'c' device.
+    local listing; listing=$(tar -tzvf "$pkg" 2>/dev/null) \
+        || die "could not list $pkg -- not a valid wsad"
+    local line type sz
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        type="${line:0:1}"
+        case "$type" in
+            -) ;;
+            l) die "a wsad member is a symlink -- only regular files are accepted" ;;
+            h) die "a wsad member is a hard link -- only regular files are accepted" ;;
+            d) die "a wsad member is a directory -- only regular files are accepted" ;;
+            p) die "a wsad member is a FIFO -- only regular files are accepted" ;;
+            b|c) die "a wsad member is a device node -- only regular files are accepted" ;;
+            *) die "a wsad member has an unexpected archive entry type '$type' -- only regular files are accepted" ;;
+        esac
+        # Declared size, so a decompression bomb is refused before it is
+        # expanded rather than after.
+        sz=$(printf '%s\n' "$line" | awk '{print $3}')
+        case "$sz" in
+            ''|*[!0-9]*) die "cannot read a member's declared size from the archive listing -- refusing to extract something this script cannot describe" ;;
+        esac
+        [ "$sz" -le "$PKG_MAX_MEMBER" ] \
+            || die "a wsad member declares ${sz} bytes, over the ${PKG_MAX_MEMBER}-byte limit -- peer.conf and pubkey.pub are a few hundred bytes each"
+    done <<< "$listing"
+}
+
+# Validate and extract ONE private copy, never the caller's path.
+#
+# The package used to be opened twice -- once by the preflight, once by the
+# extraction -- so if it sat in a directory another account can write, the bytes
+# that were checked need not be the bytes that got extracted as root. It also
+# meant --join-check could never be evidence about a later --join, since each
+# reopened the path independently. Copying first collapses both problems: from
+# the copy onward there is exactly one artifact, and its SHA-256 is printed so
+# the two commands can be compared by hand.
+prepare_package() {
+    local pkg="$1"
+    [ -r "$pkg" ] || die "cannot read wsad package: $pkg"
+    JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
+    chmod 700 "$JOIN_WORKDIR"
+    # GLOBAL, not local: the trap below runs at shell exit, by which time a
+    # function-local variable is out of scope -- under `set -u` the trap then
+    # dies on an unbound variable and removes nothing at all.
+    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
+
+    local copy="$JOIN_WORKDIR/wsad.tgz"
+    # install, not cp: mode and ownership are set as the file is created, so
+    # there is no window where it exists with the source's permissions.
+    install -m 600 "$pkg" "$copy" || die "could not take a private copy of $pkg"
+
+    PKG_SHA256=$(sha256sum "$copy" 2>/dev/null | cut -d' ' -f1)
+    assert_package_members "$copy"
+    tar --no-same-owner --no-same-permissions -C "$JOIN_WORKDIR" -xzf "$copy" \
+        || die "could not unpack $pkg -- not a valid wsad?"
+    local f
+    for f in peer.conf pubkey.pub; do
+        [ -L "$JOIN_WORKDIR/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
+        [ -f "$JOIN_WORKDIR/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
+    done
+    parse_peer_conf "$JOIN_WORKDIR/peer.conf"
+    validate_peer_conf
+    validate_pubkey_file "$JOIN_WORKDIR/pubkey.pub"
 }
 
 # --- peer.conf: parsed by allow-list, never executed ------------------------
@@ -312,12 +395,30 @@ declare -A PC=()
 # useradd argument, a ZFS dataset name, a path component or a manifest line, and
 # each of those has its own way of turning a surprising character into a
 # surprise.
+# A character allow-list is not a grammar. These values are handed to `zfs
+# list`, `zfs create` and `zfs allow`, where a leading '-' is an OPTION no
+# amount of quoting turns back into a name -- the same trap delsnaps.sh already
+# hit once and fixed with `--`, which had not propagated here. Dot segments are
+# refused for the same reason a path library refuses them: '.' and '..' are
+# navigation, not names, and this contract has no use for either.
 pc_is_dataset() {
-    case "$1" in
+    local v="$1" comp rest
+    case "$v" in
         ""|/*|*/) return 1 ;;
         *[!A-Za-z0-9_.:/-]*) return 1 ;;
-        *//*|..|../*|*/../*|*/..) return 1 ;;
+        *//*) return 1 ;;
+        -*) return 1 ;;   # first component would be read as an option
+        .*) return 1 ;;   # and a pool does not begin with a dot
     esac
+    rest="$v"
+    while : ; do
+        comp="${rest%%/*}"
+        case "$comp" in
+            ""|.|..) return 1 ;;
+        esac
+        [ "$rest" = "$comp" ] && break
+        rest="${rest#*/}"
+    done
     return 0
 }
 pc_is_account() {
@@ -431,29 +532,17 @@ validate_pubkey_file() {
 # nobody), and it is what makes the trust boundary testable without root.
 do_join_check() {
     [ -n "$JOIN_PACKAGE" ] || die "--join-check needs a package path"
-    [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
-    assert_package_members "$JOIN_PACKAGE"
-    JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
-    local workdir="$JOIN_WORKDIR"
-    chmod 700 "$workdir"
-    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
-    tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
-        || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
-    local f
-    for f in peer.conf pubkey.pub; do
-        [ -L "$workdir/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
-        [ -f "$workdir/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
-    done
-    parse_peer_conf "$workdir/peer.conf"
-    validate_peer_conf
-    validate_pubkey_file "$workdir/pubkey.pub"
+    prepare_package "$JOIN_PACKAGE"
     echo "package OK: $JOIN_PACKAGE"
+    printf '  %-26s %s
+' "sha256" "${PKG_SHA256:-?}"
     local k
-    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_ACCOUNT PEER_CONF_TARGET \
-             PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
-        printf '  %-26s %s\n' "$k" "${PC[$k]:-}"
+    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_ACCOUNT PEER_CONF_TARGET              PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
+        printf '  %-26s %s
+' "$k" "${PC[$k]:-}"
     done
-    printf '  %-26s %s\n' "pubkey" "$(pubkey_fingerprint "$workdir/pubkey.pub")"
+    printf '  %-26s %s
+' "pubkey" "$(pubkey_fingerprint "$JOIN_WORKDIR/pubkey.pub")"
     return 0
 }
 
@@ -465,6 +554,18 @@ do_join_check() {
 if [ "$JOIN_CHECK" -eq 1 ]; then
     do_join_check
     exit $?
+fi
+
+# --join's PREFLIGHT, hoisted here on purpose. do_join itself validated before
+# its own mutations, but it is dispatched only after Phases 1-7 -- package
+# installation, the checkout update, cron changes. So a hostile package still
+# provoked all of those before anything looked at it, which is not what "no
+# persistent change before validation" means. Validate first, keep the result,
+# and let do_join use it later instead of parsing a second, independent copy.
+if [ "$JOIN_MODE" -eq 1 ]; then
+    [ -n "$JOIN_PACKAGE" ] || die "--join needs a package path"
+    prepare_package "$JOIN_PACKAGE"
+    log "package preflight OK (sha256 ${PKG_SHA256:-?}) -- continuing with deployment phases"
 fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
@@ -1755,41 +1856,12 @@ EOF
 # wsad produced by --pair: never touches any account/relationship other than
 # the one this specific package describes.
 do_join() {
-    [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
-
-    # ---- everything from here to "validation complete" happens BEFORE the
-    # first persistent change. Nothing below creates an account, touches
-    # authorized_keys, delegates ZFS or writes a manifest until the whole
-    # package has been read and accepted. ----
-    assert_package_members "$JOIN_PACKAGE"
-
-    # GLOBAL, not local: the trap below runs at shell exit, by which time a
-    # function-local variable is out of scope -- under `set -u` the trap then
-    # dies on an unbound variable and removes nothing at all. Found by running
-    # --join-check for real, not by reading it: the suite's own assertions still
-    # passed while every rejected package leaked a temp dir.
-    JOIN_WORKDIR=$(mktemp -d) || die "mktemp -d failed"
+    # The package was validated and unpacked by prepare_package BEFORE the
+    # deployment phases ran -- see the preflight next to --join-check. Nothing
+    # is re-read or re-parsed here: a second independent parse of the same path
+    # is exactly the window prepare_package's private copy exists to close.
+    [ -n "${JOIN_WORKDIR:-}" ] && [ -f "$JOIN_WORKDIR/pubkey.pub" ]         || die "internal: do_join reached without a validated package"
     local workdir="$JOIN_WORKDIR"
-    chmod 700 "$workdir"
-    # A rejected package must leave nothing behind, including on every path
-    # below that die()s. EXIT, not RETURN: die() exits the shell, so a RETURN
-    # trap -- the obvious choice -- would fire on exactly the paths that do not
-    # need it and on none of the ones that do.
-    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
-    # --no-same-owner/--no-same-permissions: the archive does not get to decide
-    # who owns what it unpacks, nor to hand itself a setuid bit.
-    tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
-        || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
-
-    local f
-    for f in peer.conf pubkey.pub; do
-        [ -L "$workdir/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
-        [ -f "$workdir/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
-    done
-
-    parse_peer_conf "$workdir/peer.conf"
-    validate_peer_conf
-    validate_pubkey_file "$workdir/pubkey.pub"
 
     # Local aliases, now that every value has been checked. Named as before so
     # the rest of this function reads unchanged.
@@ -1864,10 +1936,10 @@ do_join() {
     local push_dest_root=""
     if [ "$PEER_CONF_ROLE" = "push" ]; then
         push_dest_root="$PEER_CONF_TARGET/${PEER_CONF_INITIATOR_LABEL:-$label}"
-        if zfs list -H -o name "$push_dest_root" >/dev/null 2>&1; then
+        if zfs list -H -o name -- "$push_dest_root" >/dev/null 2>&1; then
             log "target dataset $push_dest_root already exists"
         else
-            zfs create -p "$push_dest_root" && log "created target dataset $push_dest_root" \
+            zfs create -p -- "$push_dest_root" && log "created target dataset $push_dest_root" \
                 || die "zfs create -p $push_dest_root failed"
         fi
     fi
@@ -1885,16 +1957,16 @@ do_join() {
         if [ "$PEER_CONF_ROLE" = "pull" ]; then
             local perms="snapshot,destroy,send,hold,release,bookmark"
             for ds in $PEER_CONF_DATASETS; do
-                if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+                if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
                     warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $account $perms $ds)"
                     continue
                 fi
-                zfs allow -u "$account" "$perms" "$ds" || die "zfs allow failed for $ds"
+                zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
                 log "delegated ($perms) on $ds to $account"
             done
         else
             local perms="receive,create,mount,rollback,canmount"
-            zfs allow -u "$account" "$perms" "$push_dest_root" || die "zfs allow failed for $push_dest_root"
+            zfs allow -u "$account" "$perms" -- "$push_dest_root" || die "zfs allow failed for $push_dest_root"
             log "delegated ($perms) on $push_dest_root to $account (inherited by every dataset received under it)"
         fi
     fi
@@ -2599,7 +2671,7 @@ EOF
     # ZFS_PERMS is defined once in the config block at the top -- see the note
     # there about 'bookmark' and the 'delegation-verbs' contract.
     for ds in "${DATASETS[@]}"; do
-        if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+        if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
             warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"
             continue
         fi

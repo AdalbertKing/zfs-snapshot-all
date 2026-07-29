@@ -51,8 +51,15 @@ GOODKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPhkVkBbh0x3swx+VYH6OxhCRGRSjQ3PcZ+
 
 # case <name> <expected-substring-in-error> -- package is already at $D/wsad.tgz
 expect_reject() {
-    local name="$1" want="$2" out rc
+    local name="$1" want="$2" out rc before after leaked
+    before="$(tmp_names)"
     out="$(bash "$DEPLOY" --join-check="$D/wsad.tgz" 2>&1)"; rc=$?
+    after="$(tmp_names)"
+    leaked="$(comm -13 <(printf '%s
+' "$before") <(printf '%s
+' "$after") | tr '
+' ' ')"
+    leaked="${leaked% }"
     if [ "$rc" -eq 0 ]; then
         bad "$name" "expected rejection, got exit 0"; return
     fi
@@ -67,16 +74,38 @@ expect_reject() {
         bad "$name" "rejected, but the cleanup trap itself failed: $(printf '%s' "$out" | grep 'unbound variable' | head -1)"
         return
     fi
+    if [ -n "$leaked" ]; then
+        bad "$name" "rejected, but left behind: $leaked"; return
+    fi
     ok "$name"
 }
 
-# "Failure removes the temporary directory" is a claim, so it gets checked.
-# It was false when first written -- the trap referenced a function-local
-# variable and fired at shell exit, where that name no longer exists. Every
-# assertion above still passed while every rejected package leaked a directory,
-# which is exactly why this counts what is on disk instead.
-tmp_count() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -newer "$WORK" 2>/dev/null | wc -l; }
-TMP_BEFORE="$(tmp_count)"
+# "Failure removes the temporary directory" is a claim, so it gets checked --
+# per invocation, by exact name, in expect_reject above.
+#
+# Twice now this assertion has been weaker than it looked. First it did not
+# exist at all, and the trap referenced a function-local variable the EXIT
+# handler could not see, so every rejected package leaked while all 32
+# assertions passed. Then it counted `find -newer "$WORK"` at the end of the
+# run -- but each new_case creates a directory inside $WORK and moves its
+# mtime, so a leak from an early case is older than the final marker and drops
+# out of the count. It only caught the original bug because that one leaked in
+# every case, including the last. Exact names taken immediately before and
+# after each invocation answer the question directly and cannot drift.
+tmp_names() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' 2>/dev/null | sort; }
+
+# Not `command -v python3`: on Windows that resolves to a Microsoft Store stub
+# which is on PATH, exits non-zero and prints an ad. Ask for the module we need.
+find_python() {
+    local p
+    for p in python3 python; do
+        if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import tarfile' >/dev/null 2>&1; then
+            printf '%s' "$p"; return 0
+        fi
+    done
+    return 1
+}
+PY="$(find_python || true)"
 
 new_case() { D="$WORK/$1"; mkdir -p "$D"; good_conf > "$D/peer.conf"; printf '%s\n' "$GOODKEY" > "$D/pubkey.pub"; }
 
@@ -142,6 +171,72 @@ new_case member-missing
 tar -C "$D" -czf "$D/wsad.tgz" peer.conf
 expect_reject "archive/missing member" "exactly the two expected members"
 
+# Entry TYPES. The name check above cannot see these -- both members are named
+# correctly -- and a check on the unpacked RESULT is too late by construction:
+# a FIFO or device node has already been created by root, and a hard link
+# arrives as an ordinary regular file that nothing on disk can tell apart.
+new_case member-hardlink
+rm -f "$D/pubkey.pub"; ln "$D/peer.conf" "$D/pubkey.pub"
+tar -C "$D" -czf "$D/wsad.tgz" peer.conf pubkey.pub
+expect_reject "archive/hard-linked member" "hard link"
+
+new_case member-fifo
+rm -f "$D/peer.conf"
+if mkfifo "$D/peer.conf" 2>/dev/null; then
+    tar -C "$D" -czf "$D/wsad.tgz" peer.conf pubkey.pub
+    expect_reject "archive/FIFO member" "FIFO"
+else
+    echo "SKIP archive/FIFO member (this system will not create FIFOs)"
+fi
+
+# tar names a directory member with a trailing slash, so the NAME check refuses
+# it before the type check ever sees it. Asserting the message that actually
+# fires, not the one the code could also have produced: the type check keeps the
+# 'd' arm for a header crafted without that slash.
+new_case member-directory
+rm -f "$D/peer.conf"; mkdir -p "$D/peer.conf"
+tar -C "$D" -czf "$D/wsad.tgz" peer.conf pubkey.pub
+expect_reject "archive/directory member" "exactly the two expected members"
+
+# A device node needs root to create on disk, but not to put in a tar header --
+# python's tarfile writes the header directly, so the case runs unprivileged.
+new_case member-device
+if [ -n "$PY" ]; then
+    "$PY" - "$D" <<'PYEOF'
+import sys, tarfile, os
+d = sys.argv[1]
+with tarfile.open(os.path.join(d, "wsad.tgz"), "w:gz") as t:
+    t.add(os.path.join(d, "peer.conf"), arcname="peer.conf")
+    info = tarfile.TarInfo("pubkey.pub")
+    info.type, info.devmajor, info.devminor, info.mode = tarfile.CHRTYPE, 1, 3, 0o666
+    t.addfile(info)
+PYEOF
+    expect_reject "archive/device-node member" "device node"
+else
+    echo "SKIP archive/device-node member (no python to build the header)"
+fi
+
+# ---------------------------------------------------------------------------
+# Size bounds: two correctly named members can still be a decompression bomb.
+# ---------------------------------------------------------------------------
+new_case member-oversize
+if [ -n "$PY" ]; then
+    "$PY" - "$D" <<'PYEOF'
+import sys, tarfile, io, os
+d = sys.argv[1]
+with tarfile.open(os.path.join(d, "wsad.tgz"), "w:gz") as t:
+    t.add(os.path.join(d, "pubkey.pub"), arcname="pubkey.pub")
+    # Highly compressible, so the PACKAGE stays small and only the DECLARED
+    # size gives it away -- which is the point: refuse before expanding.
+    blob = b"A" * (4 * 1024 * 1024)
+    info = tarfile.TarInfo("peer.conf"); info.size = len(blob)
+    t.addfile(info, io.BytesIO(blob))
+PYEOF
+    expect_reject "archive/oversize member is refused before expanding" "over the"
+else
+    echo "SKIP archive/oversize member (no python to build the header)"
+fi
+
 # ---------------------------------------------------------------------------
 # peer.conf schema
 # ---------------------------------------------------------------------------
@@ -188,6 +283,25 @@ expect_reject "value/invalid dataset in list" "not a valid ZFS dataset name"
 new_case label-invalid
 good_conf | sed 's|^PEER_CONF_INITIATOR_LABEL=.*|PEER_CONF_INITIATOR_LABEL=../evil|' > "$D/peer.conf"; mkpkg "$D"
 expect_reject "value/invalid label" "not a valid label"
+
+# A character allow-list is not a grammar. These pass every character test and
+# are still wrong: 'zfs list -H -o name -o' reads the value as an OPTION, and
+# dot segments are navigation rather than names.
+new_case target-option-like
+good_conf | sed 's|^PEER_CONF_TARGET=.*|PEER_CONF_TARGET=-o|' > "$D/peer.conf"; mkpkg "$D"
+expect_reject "value/option-like target" "not a valid ZFS dataset name"
+
+new_case dataset-option-like
+good_conf | sed 's|^PEER_CONF_DATASETS=.*|PEER_CONF_DATASETS="tank/a -o"|' > "$D/peer.conf"; mkpkg "$D"
+expect_reject "value/option-like dataset in list" "not a valid ZFS dataset name"
+
+new_case target-leading-dot
+good_conf | sed 's|^PEER_CONF_TARGET=.*|PEER_CONF_TARGET=.pool/x|' > "$D/peer.conf"; mkpkg "$D"
+expect_reject "value/leading-dot pool" "not a valid ZFS dataset name"
+
+new_case target-dot-segment
+good_conf | sed 's|^PEER_CONF_TARGET=.*|PEER_CONF_TARGET=tank/./child|' > "$D/peer.conf"; mkpkg "$D"
+expect_reject "value/dot segment in target" "not a valid ZFS dataset name"
 
 new_case pull-no-datasets
 good_conf | sed 's|^PEER_CONF_DATASETS=.*|PEER_CONF_DATASETS=""|' > "$D/peer.conf"; mkpkg "$D"
@@ -238,12 +352,16 @@ check_val PEER_CONF_INITIATOR_LABEL  pve1
 # list, not the quotes.
 check_val PEER_CONF_DATASETS         "tank/a tank/b"
 
-TMP_AFTER="$(tmp_count)"
-if [ "$TMP_AFTER" -le "$TMP_BEFORE" ]; then
-    ok "cleanup/no temp directory left behind"
+# The accepted package must clean up too -- the success path has its own exit,
+# and "it worked" is not a reason to leave a directory behind.
+before="$(tmp_names)"
+bash "$DEPLOY" --join-check="$D/wsad.tgz" >/dev/null 2>&1
+after="$(tmp_names)"
+leaked="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')"
+if [ -z "${leaked// /}" ]; then
+    ok "good/leaves no temp directory either"
 else
-    bad "cleanup/no temp directory left behind" \
-        "$((TMP_AFTER - TMP_BEFORE)) directories leaked under ${TMPDIR:-/tmp} across the run"
+    bad "good/leaves no temp directory either" "left behind: $leaked"
 fi
 
 echo "--------------------------------------------"
