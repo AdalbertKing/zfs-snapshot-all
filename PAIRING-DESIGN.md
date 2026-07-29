@@ -130,6 +130,23 @@ sprzed tej zmiany), draft **nie emituje `-k`** i mówi o tym w logu i w samym
 pliku. `-k` wskazujące na nieistniejący plik zamienia `accept-new` w zadanie,
 które nie połączy się nigdy — to gorszy wynik niż to, co miało naprawić.
 
+### Port też trafia do zadania (dodane 2026-07-29)
+
+Manifest od początku miał `PEER_SAVED_PORT`, własne wywołania `ssh` w deploy.sh
+go używały — a jedyna rzecz, która trafia do crona, nie. Przy porcie ≠ 22
+`--draft-config` emituje teraz `-p <port>` obok `-K`/`-k`. Dla 22 nie emituje
+nic: `-p 22` w każdej sugerowanej linii to szum, a szum uczy ludzi nie czytać
+flag.
+
+Te dwie flagi są sprzężone. `ssh-keyscan -p N` zapisuje wpis jako `[host]:N`,
+więc zadanie bez `-p` nie tylko poszłoby na zły port — nie znalazłoby też
+przypiętego klucza i padło na `StrictHostKeyChecking=yes`.
+
+Przy okazji: `"22"` wygląda tak samo jak brak `--port`, więc ponowne `--pair`
+albo `--rotate` cicho cofało niestandardowy port do domyślnego (dokładnie ten
+dryf, przed którym manifest chroni już rolę/target/`--as`). Teraz podany
+`--port` wygrywa, a niepodany dziedziczy z manifestu.
+
 ### Nazwa peera a DNS: `--allow-public-peer` (dodane 2026-07-29)
 
 `--peer` trafia prosto do `ssh-keyscan`, którego całym zadaniem jest zaufać
@@ -312,11 +329,3 @@ Trzy fazy, zero okna przestoju:
   ale nie ma ścieżki na pełną dekomisję — koniec współpracy z hostem na
   zawsze (konto, delegacja, manifest, klucz — wszystko do usunięcia). Nie
   rozwiązujemy teraz, ale ma nie zniknąć z listy.
-- **`--draft-config` gubi `--port`.** Manifest ma `PEER_SAVED_PORT`, ale
-  emitowane `flags` zawierają `-K`/`-k`, nigdy `-p`. Niestandardowy port =
-  cicho niedziałający config. Od czasu dodania `-k` ta dziura przestała być
-  cicha, a stała się głośna: `ssh-keyscan -p N` zapisuje wpis w postaci
-  `[host]:N`, więc zadanie łączące się (bez `-p`) na 22 nie znajdzie go
-  w przypiętym pliku i padnie na `StrictHostKeyChecking=yes`. Dla portu 22
-  bez zmian. Poprawka to dopisanie `-p ${PEER_SAVED_PORT}` do tego samego
-  ciągu flag — nie zrobione.

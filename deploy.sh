@@ -94,6 +94,11 @@ PEER_DATASETS=""
 PEER_TARGET=""
 PEER_AS="delegated"
 PEER_PORT="22"
+# "22" is also what an omitted --port looks like, so a re-pair or --rotate had
+# no way to tell "the admin wants 22" from "the admin didn't say" and quietly
+# reset a non-standard port back to the default -- the same drift the manifest
+# already guards against for role/target/--as.
+PEER_PORT_GIVEN=0
 PEER_ROTATE=0
 PEER_REVOKE_OLD=0
 PEER_DRAFT_CONFIG=0
@@ -130,8 +135,8 @@ while [ "$#" -gt 0 ]; do
         --target)       PEER_TARGET="${2:-}"; shift 2 ;;
         --as=*)         PEER_AS="${1#*=}"; shift ;;
         --as)           PEER_AS="${2:-}"; shift 2 ;;
-        --port=*)       PEER_PORT="${1#*=}"; shift ;;
-        --port)         PEER_PORT="${2:-}"; shift 2 ;;
+        --port=*)       PEER_PORT="${1#*=}"; PEER_PORT_GIVEN=1; shift ;;
+        --port)         PEER_PORT="${2:-}"; PEER_PORT_GIVEN=1; shift 2 ;;
         --local-user=*) PEER_LOCAL_USER="${1#*=}"; shift ;;
         --local-user)   PEER_LOCAL_USER="${2:-}"; shift 2 ;;
         --allow-public-peer) PEER_ALLOW_PUBLIC=1; shift ;;
@@ -1349,6 +1354,7 @@ do_pair() {
         PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
         [ -n "$PEER_DATASETS" ] || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
         [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
+        [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
     else
         if [ -r "$mpath" ]; then
             # Re-pairing an existing relationship. Role/target/account-mode are
@@ -1366,9 +1372,11 @@ do_pair() {
             PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
             [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
-            # --local-user is operational, not identity-defining (which account
-            # runs cron here can legitimately change), so a given value wins.
+            # --local-user and --port are operational, not identity-defining
+            # (which account runs cron here, and which port sshd listens on,
+            # can legitimately change), so a given value wins.
             [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
+            [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
             log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the wsad"
             if [ -n "$requested_datasets" ] && [ "${PEER_SAVED_DATASETS:-}" != "$requested_datasets" ]; then
                 log "dataset list changed: '${PEER_SAVED_DATASETS:-}' -> '$requested_datasets'"
@@ -1811,6 +1819,15 @@ do_draft_config() {
     # only when the pinned file actually exists: a -k pointing at nothing turns
     # StrictHostKeyChecking=yes into a job that can never connect at all, which
     # is a worse outcome than the accept-new it replaces.
+    # The port the pairing was made on. Emitted only when it is not 22: a
+    # '-p 22' on every suggested line is noise, and noise is what trains people
+    # to stop reading the flags. Silently dropping it was the older bug -- the
+    # manifest knew the port, the ssh calls in THIS script used it, and the one
+    # thing that ends up in cron did not.
+    local job_port="${PEER_SAVED_PORT:-22}"
+    local port_flag=""
+    [ "$job_port" != "22" ] && port_flag=" -p ${job_port}"
+
     local job_knownhosts; job_knownhosts=$(local_knownhosts_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
     local kh_flag=""
     if [ -f "$job_knownhosts" ]; then
@@ -1855,6 +1872,12 @@ do_draft_config() {
             echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
             echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
             [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
+            if [ -n "$port_flag" ]; then
+                echo "#"
+                echo "# '-p ${job_port}': parowanie zrobiono na niestandardowym porcie."
+                echo "# Bez niego zadanie poszloby na 22 -- a przypiety klucz hosta jest"
+                echo "# zapisany jako '[host]:${job_port}', wiec i tak by go nie znalazlo."
+            fi
             echo
             echo "# =========================================================="
             echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- tylko te maja 'zfs allow'"
@@ -1869,7 +1892,7 @@ do_draft_config() {
                 [ "$n" -gt 0 ] && echo "#  na nie, wiec jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src          = ${remote_user}@${PEER_HOST}:${ds}"
-                echo "#   flags        = -K ${job_keyfile}${kh_flag}"
+                echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
@@ -1902,6 +1925,12 @@ do_draft_config() {
             echo "# ten sprawdzony recznie przy --pair. Bez niego zadanie wraca do"
             echo "# accept-new, czyli ufa temu, co odpowie przy pierwszym polaczeniu."
             [ -n "$kh_flag" ] || echo "# UWAGA: brak pliku $job_knownhosts -- '-k' pominiete, patrz log."
+            if [ -n "$port_flag" ]; then
+                echo "#"
+                echo "# '-p ${job_port}': parowanie zrobiono na niestandardowym porcie."
+                echo "# Bez niego zadanie poszloby na 22 -- a przypiety klucz hosta jest"
+                echo "# zapisany jako '[host]:${job_port}', wiec i tak by go nie znalazlo."
+            fi
             echo
             echo "# =========================================================="
             echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- te datasety zadeklarowano"
@@ -1916,7 +1945,7 @@ do_draft_config() {
                 [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:$ds]"
                 echo "#   dst          = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
-                echo "#   flags        = -K ${job_keyfile}${kh_flag}"
+                echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
