@@ -282,7 +282,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.61'
+VERSION='v2.62'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1408,6 +1408,29 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # SSH_OPTS is built either way but ssh is never actually invoked there.
 [ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
 
+# -K/-O go at the FRONT of the option list, so nothing appended above (base
+# StrictHostKeyChecking/UserKnownHostsFile/-p, -c) can out-rank them: OpenSSH
+# keeps the FIRST value it sees for a given key. Anything appended BELOW this
+# point (tune_ssh_enable's ControlMaster trio) is therefore also out-ranked,
+# which is the intended precedence -- an explicit -O ControlMaster=no must win.
+#
+# This block used to sit much further down, next to tune_ssh_enable. That was
+# fine while every remote call happened after it, but the -R expansion below
+# reads the REMOTE source over ssh (v2.61 moved it to the source side), and it
+# ran with an SSH_OPTS that had no -i in it yet. Symptom: "Permission denied
+# (publickey)" followed by "Source dataset not found on remote host", with a
+# perfectly good key passed in -K. Invisible whenever the running account's
+# DEFAULT ssh identity happens to be authorized on the peer -- i.e. invisible
+# to root on a trusted cluster, and to the remote suite, which authenticates
+# with each account's own key rather than a dedicated one. Found 2026-07-29 by
+# running a pairing-key job as a delegated account.
+if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
+    declare -a _front_ssh_opts=()
+    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
+    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
+    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
+fi
+
 ###############################################################################
 #BEGIN 5A2 [SINGLE-INSTANCE LOCK]
 ###############################################################################
@@ -1559,16 +1582,9 @@ fi
 tune_ssh_enable "$REMOTE_HOST"
 trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
-# -K/-O go at the FRONT of the option list, added last so nothing appended above
-# (base opts, -c, ControlMaster) can out-rank them -- OpenSSH keeps the FIRST
-# value it sees for a given key. See the identical block in snapsend.sh, where
-# this was verified live.
-if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
-    declare -a _front_ssh_opts=()
-    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
-    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
-    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
-fi
+# -K/-O were already prepended in section 5A above, before the -R expansion --
+# see the note there. snapsend.sh still does it at this point because its own
+# -R expansion reads the LOCAL source and needs no ssh at all.
 
 # Catch the container-parent mistake before any work starts -- see the same
 # block in snapsend.sh. One difference here, for the same reason snapget's -R
