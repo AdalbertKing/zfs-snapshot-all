@@ -3,13 +3,22 @@
 !.gitattributes
 !README.md
 !PAIRING-DESIGN.md
+!AGENTS.md
+!CLAUDE.md
+!docs/
+!docs/**
 !lib-zfs-snap.sh
 !snapsend.sh
 !snapget.sh
 !delsnaps.sh
 !gen-cron.sh
 !check-snap-age.sh
-!deploy_new_server.sh
-!deploy_backup_user.sh
+!deploy.sh
+# deploy_new_server.sh / deploy_backup_user.sh were merged into deploy.sh and no
+# longer exist; the entries are gone with them. deploy.sh itself was missing
+# here and only stayed tracked because .gitignore does not apply to files git
+# already knows about -- a fresh clone would have been fine, a fresh ADD would
+# not.
+!.gitattributes
 !test/
 !test/**
