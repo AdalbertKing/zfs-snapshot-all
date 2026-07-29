@@ -411,7 +411,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.67'
+VERSION='v2.68'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -587,8 +587,20 @@ get_sorted_snapshots() {
     
     local snaps
     if [ -n "$remote_host" ]; then
+        # Same reasoning as snapget.sh's copy of this function: the remote
+        # command ends in a pipe, so ssh returns awk's status and a nonzero rc
+        # here means ssh itself failed, not that the dataset has no snapshots.
+        # Callers array-collect the output and drop the status, so say it here.
         snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || return 1
+            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || {
+            local _rc=$?
+            if [ $_rc -eq 255 ]; then
+                log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while listing the snapshots of '$dataset' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT an empty dataset."
+            else
+                log 0 "Could not list the snapshots of '$dataset' on $remote_user@$remote_host (exit $_rc) -- treating this as a failure, not as an empty dataset."
+            fi
+            return 1
+        }
     else
         snaps=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null | awk -F '@' '{print $2}') || return 1
     fi
@@ -619,8 +631,15 @@ find_conflicting_snapshots() {
     if [ $RECURSIVE -eq 1 ]; then
         local tgt_children
         if [ -n "$remote_host" ]; then
-            tgt_children=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-                "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -v "^${tgt_dataset}$")
+            # The ssh status was discarded here (the pipe into grep swallowed
+            # it), so an unreachable target host produced an empty child list
+            # and this scan reported "no conflicts" -- a clean bill of health
+            # for a host it never reached. remote_list makes that case say so;
+            # the caller is a -n report, so stopping the walk is right.
+            tgt_children=$(remote_list "$remote_user" "$remote_host" \
+                "listing the children of target '$tgt_dataset'" \
+                "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null") || return 1
+            tgt_children=$(printf '%s' "$tgt_children" | grep -v "^${tgt_dataset}$")
         else
             tgt_children=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -v "^${tgt_dataset}$")
         fi
@@ -683,8 +702,16 @@ find_recursive_name_collisions() {
 
     local tgt_children
     if [ -n "$remote_host" ]; then
-        tgt_children=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -v "^${tgt_dataset}$")
+        # -F decides whether to force a FULL resend from what this finds, so an
+        # unreachable host must not come back as "no collisions". Returning 1
+        # leaves NAME_COLLISIONS untouched, which keeps the incremental path --
+        # the safe direction: the transfer that follows will fail on the same
+        # dead connection rather than destroy and refill a target on the
+        # strength of an answer nobody received.
+        tgt_children=$(remote_list "$remote_user" "$remote_host" \
+            "listing the children of target '$tgt_dataset' for the -F collision scan" \
+            "zfs list -H -o name -r '$tgt_dataset' 2>/dev/null") || return 1
+        tgt_children=$(printf '%s' "$tgt_children" | grep -v "^${tgt_dataset}$")
     else
         tgt_children=$(zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | grep -v "^${tgt_dataset}$")
     fi
@@ -767,11 +794,16 @@ find_common_snapshot() {
     # base -- "null", not an error. This is reachable under -w, where the leaf
     # is created by recv rather than pre-created, so the first send legitimately
     # runs against a target that is not there yet.
+    #
+    # target_exists is three-valued: 2 means the host could not be reached, and
+    # collapsing that into "null" here would announce a first send (full stream,
+    # no common base) purely because ssh was broken.
     local tgt_snaps
-    if ! target_exists "$tgt_dataset" "$remote_user" "$remote_host"; then
-        echo -n "null"
-        return 0
-    fi
+    target_exists "$tgt_dataset" "$remote_user" "$remote_host"
+    case $? in
+        1) echo -n "null"; return 0 ;;
+        2) return 1 ;;
+    esac
     tgt_snaps=($(get_sorted_snapshots "$tgt_dataset" "$remote_user" "$remote_host")) || return 1
 
     for ((i=${#src_snaps[@]}-1; i>=0; i--)); do
@@ -1207,8 +1239,16 @@ process_dataset() {
     # case: a target that does not exist simply has no snapshots. Every other
     # mode still pre-creates the target, so a failure there remains a real one
     # and is still reported.
-    local tgt_snaps
-    if [ $RAW_SEND -eq 1 ] && ! target_exists "$tgt_dataset" "$remote_user" "$remote_host"; then
+    # Three-valued again: rc 2 (host unreachable) must not be read as the
+    # first-send case, which would skip the snapshot listing entirely and send a
+    # full raw stream at a host we never reached.
+    local tgt_snaps tgt_state=0
+    if [ $RAW_SEND -eq 1 ]; then
+        target_exists "$tgt_dataset" "$remote_user" "$remote_host"
+        tgt_state=$?
+        [ $tgt_state -eq 2 ] && { abort_held_snapshot "$snapshot" "$tgt_dataset"; return 1; }
+    fi
+    if [ $RAW_SEND -eq 1 ] && [ $tgt_state -eq 1 ]; then
         log 2 "Target does not exist yet -- raw receive will create it"
         tgt_snaps=()
     else

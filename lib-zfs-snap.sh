@@ -384,21 +384,128 @@ get_snapshot_guids() {
     fi
 }
 
+###############################################################################
+# SSH FAILURE DISCRIMINATION -- "could not ask" vs "asked, and the answer is no"
+###############################################################################
+# A remote probe is one ssh call whose exit status carries two completely
+# different events, and every call site here used to collapse both into a single
+# "not found":
+#
+#   0      ssh connected, the check ran, the dataset IS there
+#   1      ssh connected, the check ran, the dataset is NOT there
+#   255    ssh never ran anything -- authentication failure, host key
+#          verification failure, host unreachable/refused, DNS failure
+#   other  ssh connected but the check itself could not run
+#          (127 = no `zfs` in this account's PATH, 126 = not executable)
+#
+# 255 is ssh's own reserved status and `zfs list` never returns it, so for a
+# probe whose remote command is a single `zfs list` it is an unambiguous
+# discriminator. That is the whole trick; the rest is phrasing.
+#
+# Why this is worth a shared helper instead of an inline `-eq 255`: the wrong
+# message has now cost real debugging time twice on the same day (2026-07-29).
+# First when -K was being dropped by snapget's -R expansion (17e6ce1) -- ssh
+# printed "Permission denied (publickey)" and snapget printed "Source dataset
+# not found on remote host" for a dataset that existed and a key that worked.
+# Then again, reproduced deliberately by pointing -k at a known_hosts file
+# holding a wrong host key: ssh printed "Host key verification failed" and
+# snapget still blamed the dataset. It is the same class as the delsnaps.sh bug
+# where an ssh failure read as "nothing to prune" -- that one was silent, this
+# one at least exited 1.
+#
+# An unreachable peer and a missing dataset call for opposite repairs (fix the
+# link vs. fix the config), so one message covering both is worse than none: it
+# sends the reader to the wrong half of the system.
+REMOTE_PROBE_RC=0     # raw exit status of the last probe_dataset/remote_list
+REMOTE_PROBE_ERR=""   # ssh's own local stderr from the last probe_dataset
+
+# probe_dataset DATASET [REMOTE_USER] [REMOTE_HOST] [ROLE]
+#   0  the dataset exists
+#   1  ssh worked (or the check was local) and the dataset genuinely is not there
+#   2  the question could not be answered -- the reason is already logged at
+#      level 0. A caller must NEVER treat this as 1.
+probe_dataset() {
+    local dataset="$1" remote_user="${2:-}" remote_host="${3:-}" role="${4:-dataset}"
+    REMOTE_PROBE_ERR=""
+    if [ -z "$remote_host" ]; then
+        zfs list -H "$dataset" >/dev/null 2>&1
+        REMOTE_PROBE_RC=$?
+        [ $REMOTE_PROBE_RC -eq 0 ] && return 0
+        return 1
+    fi
+    # The remote command discards its own output ON THE REMOTE SIDE, so the
+    # `2>&1` out here captures nothing but ssh's local diagnostics -- the one
+    # line that says why. Worth capturing rather than letting it drift to stderr
+    # unattached: in cron mail it would sit apart from the log line that draws a
+    # conclusion from it, which is exactly how this survived twice.
+    REMOTE_PROBE_ERR=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        "zfs list -H '$dataset' >/dev/null 2>&1" 2>&1)
+    REMOTE_PROBE_RC=$?
+    case $REMOTE_PROBE_RC in
+        0) return 0 ;;
+        1) return 1 ;;
+    esac
+    local why="${REMOTE_PROBE_ERR//$'\n'/ | }"
+    [ -n "$why" ] || why="(ssh printed nothing)"
+    if [ $REMOTE_PROBE_RC -eq 255 ]; then
+        log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while checking whether the $role '$dataset' exists -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT a missing dataset. ssh said: $why"
+    else
+        log 0 "Reached $remote_user@$remote_host over ssh, but the existence check for the $role '$dataset' could not run (exit $REMOTE_PROBE_RC -- e.g. no 'zfs' in this account's PATH). Treating this as UNKNOWN, not as a missing dataset. Output: $why"
+    fi
+    return 2
+}
+
+# remote_list REMOTE_USER REMOTE_HOST WHAT CMD -- the listing counterpart.
+# Echoes the remote command's stdout unchanged.
+#   0  the listing is COMPLETE and can be trusted, including when it is empty
+#      (that then genuinely means "nothing there")
+#   2  ssh could not deliver a listing -- reason logged at level 0, and the
+#      empty output must not be read as an answer
+#
+# rc 1 counts as a real (empty) answer, not as case 2: `zfs list` exits 1 for
+# "no such dataset", which for a listing IS the empty result, and every caller
+# below already passes `2>/dev/null` for exactly that case. 126/127/255 are
+# different -- there the command never produced a listing at all.
+#
+# Unlike probe_dataset this does not capture ssh's stderr: here stdout is the
+# payload, so ssh's own message is left to flow to this script's stderr as
+# before, and the log line points at it.
+remote_list() {
+    local remote_user="$1" remote_host="$2" what="$3" cmd="$4"
+    local out
+    out=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd")
+    REMOTE_PROBE_RC=$?
+    if [ $REMOTE_PROBE_RC -eq 0 ] || [ $REMOTE_PROBE_RC -eq 1 ]; then
+        [ -n "$out" ] && printf '%s\n' "$out"
+        return 0
+    fi
+    if [ $REMOTE_PROBE_RC -eq 255 ]; then
+        log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while $what -- a CONNECTION-level failure (authentication, host key, network or DNS); ssh's own reason is on stderr above. Treating the result as UNKNOWN, not as an empty list."
+    else
+        log 0 "Reached $remote_user@$remote_host over ssh, but $what failed on the remote side (exit $REMOTE_PROBE_RC). Treating the result as UNKNOWN, not as an empty list."
+    fi
+    return 2
+}
+
 # True when the dataset exists. Needed by the -w (raw send) path: raw streams
 # carry their own dataset properties, so the leaf target must be created by
 # `zfs recv` rather than pre-created by us -- which means "target missing" is a
 # normal first-send state there, not a failure, and has to be told apart from
 # a genuine lookup error.
+#
+# Three-valued since the ssh-discrimination fix, because "the target is not
+# there" and "I could not reach the host to look" lead to opposite actions and
+# this function's answer feeds a first-send-vs-incremental decision:
+#   0 exists, 1 genuinely absent, 2 could not determine (already logged).
+# Remote callers MUST handle 2 separately -- `if ! target_exists ...` alone
+# would read an unreachable host as a brand-new target and start a full send.
+# snapget.sh's own calls pass no remote args (its target is always local), so
+# they can never see 2.
 target_exists() {
     local dataset="$1"
     local remote_user="${2:-}"
     local remote_host="${3:-}"
-    if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name '$dataset' >/dev/null 2>&1"
-    else
-        zfs list -H -o name "$dataset" >/dev/null 2>&1
-    fi
+    probe_dataset "$dataset" "$remote_user" "$remote_host" "target dataset"
 }
 
 # Warn when a dataset is only a container for its children and neither -r nor
@@ -426,9 +533,15 @@ warn_if_unrecursed_children() {
 
     local children
     if [ -n "$remote_host" ]; then
-        children=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name -t filesystem,volume -r -d 1 '$dataset' 2>/dev/null" \
-            | grep -vxF "$dataset")
+        # An unreachable host used to land here as an empty listing, i.e. as
+        # "this dataset has no children" -- the silent half of the ssh-status
+        # class described above. remote_list says so instead; a warning we could
+        # not compute is simply not issued.
+        children=$(remote_list "$remote_user" "$remote_host" \
+            "listing the children of '$dataset'" \
+            "zfs list -H -o name -t filesystem,volume -r -d 1 '$dataset' 2>/dev/null") \
+            || return 0
+        children=$(printf '%s' "$children" | grep -vxF "$dataset")
     else
         children=$(zfs list -H -o name -t filesystem,volume -r -d 1 "$dataset" 2>/dev/null \
             | grep -vxF "$dataset")
@@ -477,9 +590,16 @@ ensure_target_ancestors() {
 
     if [ -n "$remote_host" ]; then
         ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd exit 0"
-    else
-        sh -c "$cmd exit 0"
+        local rc=$?
+        # A write, not a probe -- but on a push this is the FIRST remote call
+        # that can fail, so it is where the operator meets an unreachable peer.
+        # The caller reports "Failed to create the ancestor path", which is true
+        # and says nothing about why; 255 means we never got there at all, and
+        # no amount of fixing permissions or names on the peer will help.
+        [ $rc -eq 255 ] && log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while creating the ancestor path of '$target' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT a rejected create."
+        return $rc
     fi
+    sh -c "$cmd exit 0"
 }
 
 ###############################################################################

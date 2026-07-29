@@ -282,7 +282,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.63'
+VERSION='v2.64'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -447,8 +447,23 @@ get_sorted_snapshots() {
 
     local snaps
     if [ -n "$remote_host" ]; then
+        # The remote command ends in a pipe, so ssh hands back awk's status: a
+        # dataset that does not exist yields rc 0 and an empty list (awk had
+        # nothing to read), and a NONZERO rc here therefore means ssh itself
+        # failed. Callers of this function collect its output into an array and
+        # drop the status, so without this line an unreachable host looks
+        # exactly like a dataset with no snapshots. Control flow is unchanged --
+        # the point is that the run says which one it was.
         snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
-            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || return 1
+            "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || {
+            local _rc=$?
+            if [ $_rc -eq 255 ]; then
+                log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while listing the snapshots of '$dataset' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT an empty dataset."
+            else
+                log 0 "Could not list the snapshots of '$dataset' on $remote_user@$remote_host (exit $_rc) -- treating this as a failure, not as an empty dataset."
+            fi
+            return 1
+        }
     else
         snaps=$(zfs list -H -o name -t snapshot -s creation $depth_option "$dataset" 2>/dev/null | awk -F '@' '{print $2}') || return 1
     fi
@@ -484,23 +499,23 @@ find_conflicting_snapshots() {
             local child_name="${tgt_child##*/}"
             local src_child="${src_dataset}/${child_name}"
 
-            if [ -n "$remote_host" ]; then
-                if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs list -H '$src_child' >/dev/null 2>&1"; then
+            # "The source child is gone" makes every snapshot on the target
+            # child a conflict. An unreachable host must NOT produce that
+            # verdict: it would report a whole healthy target subtree as
+            # conflicting, and this list is what -n shows the operator before
+            # they reach for -f. So case 2 skips the child instead, having
+            # already logged that the answer is unknown.
+            probe_dataset "$src_child" "$remote_user" "$remote_host" "source child dataset"
+            case $? in
+                1)
                     local tgt_child_snaps=($(get_sorted_snapshots "$tgt_child"))
                     for snap in "${tgt_child_snaps[@]}"; do
                         CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
                     done
                     continue
-                fi
-            else
-                if ! zfs list -H "$src_child" &>/dev/null; then
-                    local tgt_child_snaps=($(get_sorted_snapshots "$tgt_child"))
-                    for snap in "${tgt_child_snaps[@]}"; do
-                        CONFLICT_SNAPSHOTS+=("${tgt_child}@${snap}")
-                    done
-                    continue
-                fi
-            fi
+                    ;;
+                2) continue ;;
+            esac
 
             local child_common
             child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host")
@@ -807,17 +822,22 @@ process_dataset() {
         return 0
     fi
 
-    if [ -n "$remote_host" ]; then
-        if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs list -H '$src_dataset' >/dev/null 2>&1"; then
-            log 0 "Source dataset not found on remote host: $src_dataset"
+    # 1 = the peer answered and the dataset is not there; 2 = we never got an
+    # answer (probe_dataset has already said why, in those words). Reporting a
+    # connection failure as a missing dataset is the bug this shape exists to
+    # prevent -- see the SSH FAILURE DISCRIMINATION block in lib-zfs-snap.sh.
+    probe_dataset "$src_dataset" "$remote_user" "$remote_host" "source dataset"
+    case $? in
+        1)
+            if [ -n "$remote_host" ]; then
+                log 0 "Source dataset not found on remote host: $src_dataset"
+            else
+                log 0 "Source dataset not found: $src_dataset"
+            fi
             return 1
-        fi
-    else
-        if ! zfs list -H "$src_dataset" &>/dev/null; then
-            log 0 "Source dataset not found: $src_dataset"
-            return 1
-        fi
-    fi
+            ;;
+        2) return 1 ;;
+    esac
 
     # Checked here, before anything is created, snapshotted or (under -f)
     # destroyed: a rawness mismatch can never succeed, so a doomed run must not
@@ -1522,12 +1542,23 @@ if [ $FLAT_RECURSE -eq 1 ]; then
     declare -a EXPANDED_DATASETS=()
     for ds in "${DATASETS[@]}"; do
         if [ -n "$REMOTE_HOST" ]; then
-            if ! ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" "zfs list -H '$ds' >/dev/null 2>&1"; then
-                log 0 "Source dataset not found on remote host: $ds"
-                exit 1
-            fi
-            children=$(ssh "${SSH_OPTS[@]}" "$REMOTE_USER@$REMOTE_HOST" \
-                "zfs list -H -o name -t filesystem,volume -r '$ds' 2>/dev/null")
+            # Both halves of this must tell a connection failure apart from a
+            # real answer, and for opposite reasons. The probe used to report
+            # ANY ssh failure as "Source dataset not found on remote host" --
+            # verified live on 2026-07-29 with a wrong host key in a -k file:
+            # ssh said "Host key verification failed" and this line still
+            # blamed the dataset. The listing was worse in a quieter way: its
+            # exit status was discarded entirely, so an unreachable host became
+            # an empty child list, i.e. a silently narrowed set of datasets to
+            # pull. See lib-zfs-snap.sh's SSH FAILURE DISCRIMINATION block.
+            probe_dataset "$ds" "$REMOTE_USER" "$REMOTE_HOST" "source dataset"
+            case $? in
+                1) log 0 "Source dataset not found on remote host: $ds"; exit 1 ;;
+                2) exit 1 ;;
+            esac
+            children=$(remote_list "$REMOTE_USER" "$REMOTE_HOST" \
+                "expanding -R over the descendants of '$ds'" \
+                "zfs list -H -o name -t filesystem,volume -r '$ds' 2>/dev/null") || exit 1
         else
             if ! zfs list -H "$ds" &>/dev/null; then
                 log 0 "Source dataset not found: $ds"

@@ -684,6 +684,80 @@ check "H10 snapget -R -S -X backup: 'swap/inner' still landed" "1" \
       "$(l_snaps "$H10TGT/$H10SRC/swap/inner")"
 
 # ============================================================================
+# I. ssh could not connect vs. the dataset is not there -- two causes, two
+#    messages. Needs a REAL peer: the point is that the same code path, over
+#    the same working link, gives DIFFERENT answers for the two causes. One
+#    machine can prove the connection half (test/snapsend/run.sh does) but not
+#    that a live connection still reports a genuinely missing dataset as
+#    missing.
+# ============================================================================
+echo "--- I. ssh failure vs. missing dataset"
+
+# I1/I2 reproduce the live 2026-07-29 finding exactly: a known_hosts file
+# holding a WRONG key for the peer, with StrictHostKeyChecking=yes (which is
+# what -k selects). ssh prints "Host key verification failed" and exits 255, and
+# snapget.sh used to answer "Source dataset not found on remote host: <name>"
+# for a dataset that was sitting right there.
+BADKH="$TMPD/bad_known_hosts"
+ssh-keygen -q -t ed25519 -N '' -f "$TMPD/fake_hostkey" >/dev/null 2>&1
+PEERHOST="${PEER#*@}"
+printf '%s %s\n' "$PEERHOST" "$(cut -d' ' -f1,2 < "$TMPD/fake_hostkey.pub")" > "$BADKH"
+
+ISRC="$RROOT/isrc"
+$SSH "$PEER" "zfs create -o canmount=noauto '$ISRC'" >/dev/null 2>&1
+$SSH "$PEER" "zfs snapshot '$ISRC@i_1'" >/dev/null 2>&1
+check "I0 the source really does exist on the peer" "yes" "$(r_exists "$ISRC")"
+
+# Presence, not a count: a single run legitimately meets the dead connection at
+# more than one probe (the container-parent warning looks first, process_dataset
+# looks again), and pinning an exact number would make this fail on a harmless
+# reordering rather than on the behaviour it is here to protect.
+outsays() { [ "$(outgrep "$1")" -gt 0 ] && echo yes || echo no; }
+
+get -k "$BADKH" -e -m i1_ "$PEER:$ISRC" "$LROOT/i1"
+check "I1 wrong host key, plain pull: exit 1" "1" "$RC"
+check "I1 wrong host key: ssh itself said the host key failed" "yes" \
+      "$(outsays 'host key verification failed')"
+check "I1 wrong host key: reported as a CONNECTION-level failure" "yes" \
+      "$(outsays 'CONNECTION-level failure')"
+check "I1 wrong host key: does NOT claim the dataset is missing" "no" \
+      "$(outsays 'source dataset not found')"
+check "I1 wrong host key: nothing was pulled" "no" "$(l_exists "$LROOT/i1/$ISRC")"
+
+get -k "$BADKH" -R -m i2_ "$PEER:$ISRC" "$LROOT/i2"
+check "I2 wrong host key, -R expansion: exit 1" "1" "$RC"
+check "I2 wrong host key, -R: reported as a CONNECTION-level failure" "yes" \
+      "$(outsays 'CONNECTION-level failure')"
+check "I2 wrong host key, -R: does NOT claim the dataset is missing" "no" \
+      "$(outsays 'source dataset not found')"
+
+# I3 is the half that only a working link can prove: same code, same peer, ssh
+# connects fine, and the dataset genuinely is not there. This one MUST say "not
+# found" -- a fix that renamed every failure into a connection problem would
+# pass I1/I2 and fail here.
+tick
+get -e -m i3_ "$PEER:$RROOT/no-such-source-dataset" "$LROOT/i3"
+check "I3 live connection, absent dataset: exit 1" "1" "$RC"
+check "I3 live connection, absent dataset: says not found" "yes" \
+      "$(outsays 'source dataset not found on remote host')"
+check "I3 live connection, absent dataset: says nothing about the connection" "no" \
+      "$(outsays 'CONNECTION-level failure')"
+
+# I4: the push direction. snapsend.sh's source is always local, so it never had
+# the wrong MESSAGE -- it had the silent version: target_exists() read an
+# unreachable peer as "the target does not exist yet", i.e. as a first send, and
+# went on to build a full stream for a host it had not reached.
+ISENDSRC="$LROOT/isend"
+mk_noauto "$ISENDSRC" >/dev/null 2>&1
+tick
+send -k "$BADKH" -m i4_ "$ISENDSRC" "$PEER:$RROOT/i4"
+check "I4 wrong host key, push: exit 1" "1" "$RC"
+check "I4 wrong host key, push: reported as a CONNECTION-level failure" "yes" \
+      "$(outsays 'CONNECTION-level failure')"
+check "I4 wrong host key, push: nothing landed on the peer" "no" \
+      "$(r_exists "$RROOT/i4/$ISENDSRC")"
+
+# ============================================================================
 # E. hygiene -- what the campaign must leave behind: nothing
 # ============================================================================
 echo "--- E. hygiene"

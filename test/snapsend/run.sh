@@ -1205,6 +1205,84 @@ check "pre-transfer failure: no hold is left on it" "" \
 check "pre-transfer failure: so the snapshot is destroyable" "0" \
       "$(zfs destroy "$SRCSNAP" >/dev/null 2>&1; echo $?)"
 
+# --- ssh failure vs. missing dataset: two causes, two messages ---------------
+# This suite is local-mode only (see the header) and stays that way. What is
+# under test here is not ssh, it is OUR READING of ssh's exit status: 255 is
+# ssh's own reserved code for a connection-level failure (auth, host key,
+# unreachable, DNS) and `zfs list` never returns it, so the two cases are
+# distinguishable -- and used not to be distinguished. Every remote probe in
+# snapget.sh reported "Source dataset not found on remote host", which sends the
+# reader to inspect a dataset that was there the whole time. That misdirection
+# cost real debugging time twice on 2026-07-29 (once through a dropped -K, once
+# reproduced deliberately with a wrong host key), and its lookalike in
+# delsnaps.sh read an ssh failure as "nothing to prune".
+#
+# Forced with no peer, no network and no stub: -O ProxyCommand=/bin/false makes
+# ssh fail at connect time with rc 255 in about 6ms, on any host, every time.
+# The dataset named below is a REAL local one, so "not found" would be wrong
+# twice over.
+BADCONN=(-O "ProxyCommand=/bin/false")
+PROBEDS="$SRCBASE/$POOL/pull"
+said()   { printf '%s\n' "$OUT" | grep -q "$1" && echo yes || echo no; }
+
+run_get_out "${BADCONN[@]}" -e -m "auto_" "root@127.0.0.1:$PROBEDS" "$LOCALPULL"
+check "ssh 255, plain pull: exit 1" "1" "$RC"
+check "ssh 255, plain pull: named as a connection failure" "yes" \
+      "$(said 'CONNECTION-level failure')"
+check "ssh 255, plain pull: does NOT blame the dataset" "no" \
+      "$(said 'Source dataset not found')"
+check "ssh 255, plain pull: ssh's own reason is quoted in the message" "yes" \
+      "$(said 'ssh said:')"
+
+run_get_out "${BADCONN[@]}" -R -m "auto_" "root@127.0.0.1:$PROBEDS" "$LOCALPULL"
+check "ssh 255, -R expansion: exit 1" "1" "$RC"
+check "ssh 255, -R expansion: named as a connection failure" "yes" \
+      "$(said 'CONNECTION-level failure')"
+check "ssh 255, -R expansion: does NOT blame the dataset" "no" \
+      "$(said 'Source dataset not found')"
+
+# The -R expansion makes TWO remote calls -- probe the named source, then list
+# its descendants -- and a broken connection can only ever reach the first: if
+# ssh is down, the probe fails and the listing never runs. So the listing half
+# needs a connection that works for the probe and dies for the listing, which is
+# the only thing this stub ssh exists for. It tests nothing about ssh; it puts
+# the script in front of a 255 that is otherwise unreachable from one machine.
+#
+# On the reviewed base the listing's exit status was discarded outright, so a
+# dead connection became an empty child list and the run blamed -X/-S ("filtered
+# out every dataset") for a run that passed neither -- the same misdirection one
+# layer down, and with more than one comma-separated source it silently narrows
+# what gets pulled instead of failing.
+mkdir -p "$TMPD/stubbin"
+cat > "$TMPD/stubbin/ssh" <<'STUBEOF'
+#!/bin/bash
+# The remote command is always the last argument.
+case "${!#}" in
+    *"-t filesystem,volume -r "*) exit 255 ;;   # the -R descendant listing
+    *)                            exit 0   ;;   # everything else: connected, fine
+esac
+STUBEOF
+chmod +x "$TMPD/stubbin/ssh"
+STUBPATH="$PATH"
+PATH="$TMPD/stubbin:$PATH"
+run_get_out -R -m "auto_" "root@127.0.0.1:$PROBEDS" "$LOCALPULL"
+PATH="$STUBPATH"
+check "ssh 255 on the -R listing: exit 1" "1" "$RC"
+check "ssh 255 on the -R listing: named as a connection failure" "yes" \
+      "$(said 'CONNECTION-level failure')"
+check "ssh 255 on the -R listing: does NOT blame -X/-S" "no" \
+      "$(said 'filtered out every dataset')"
+
+# The other half of the contract: a probe that DID get an answer must still say
+# "not found" and must not cry connection. Local mode is that answer -- ssh is
+# not involved at all, so a missing dataset is unambiguous.
+run_get_out -e -m "auto_" "$SRCBASE/$POOL/no-such-source" "$LOCALPULL"
+check "answered probe, missing local source: exit 1" "1" "$RC"
+check "answered probe, missing local source: says not found" "yes" \
+      "$(said 'Source dataset not found')"
+check "answered probe, missing local source: says nothing about ssh" "no" \
+      "$(said 'CONNECTION-level failure')"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"
