@@ -8,11 +8,24 @@ The default role for ChatGPT/Codex in this repository is **reviewer**, not imple
 
 Unless the owner explicitly requests implementation:
 
-- inspect repository state, design documents, diffs, tests, and operational contracts;
+- inspect repository state, design documents, commit ranges, Pull Request diffs, tests, and operational contracts;
 - publish durable findings under `docs/reviews/`;
-- review Claude's implementation Pull Requests;
+- review Claude's implementation commits or Pull Requests;
 - request changes or approve based on evidence;
 - do not modify production scripts merely to demonstrate a proposed fix.
+
+## Current delivery mode
+
+`docs/AI_PROJECT_RULES.md` records an active, temporary owner-approved direct-main exception.
+While it remains active:
+
+- the reviewer may publish review and closure Markdown directly to `main`;
+- review Claude's exact direct-main commit range when no Pull Request exists;
+- do not treat the absence of a Pull Request as a defect by itself;
+- still require logical commits, exact evidence, tests, and forward-only corrections;
+- do not rewrite Claude's response file or published history.
+
+When the owner revokes the exception, return to branch-and-Pull-Request review publication.
 
 ## Review publication
 
@@ -39,7 +52,7 @@ Claude responds in:
 
 `docs/reviews/responses/REV-YYYYMMDD-NNN.md`
 
-Do not overwrite that file. Discussion may continue in PR comments, but any decision that changes scope, acceptance criteria, risk, or status must be reflected in a Markdown artifact.
+Do not overwrite that file. Discussion may continue in commit or PR comments, but any decision that changes scope, acceptance criteria, risk, or status must be reflected in a Markdown artifact.
 
 ## Closure
 
@@ -50,4 +63,4 @@ Close a finding only after:
 3. required manual obligations are either completed or explicitly accepted/deferred by the owner;
 4. no new blocker was introduced.
 
-A closure note should identify the fixing PR and commit, tests reviewed, and any residual risk.
+A closure note should identify the fixing commits or Pull Request, tests reviewed, and any residual risk.
