@@ -1777,9 +1777,10 @@ do_draft_config() {
         {
             echo "# Kandydaci z hosta '$PEER_HOST' (rola: pull), wygenerowane przez --draft-config."
             echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
-            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
-            echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
-            echo "# ten generator ich nie zna i ich nie zgaduje."
+            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'use_template ='"
+            echo "# odwolujacym sie do JUZ ISTNIEJACEGO [template:] w Twoim configu --"
+            echo "# ten generator ich nie zna i ich nie zgaduje. To pole jest"
+            echo "# OBOWIAZKOWE: bez niego gen-cron.sh konczy 'has no use_template'."
             echo "#"
             echo "# 'src' to LITERALNA nazwa na peerze (dokladnie to co widac w zfs"
             echo "# list tam) -- lokalna sciezka ponizej musi konczyc sie tym samym"
@@ -1798,12 +1799,12 @@ do_draft_config() {
             while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
                 echo
+                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- 'zfs allow' dziedziczy"
+                [ "$n" -gt 0 ] && echo "#  na nie, wiec jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
-                echo "#   src   = ${remote_user}@${PEER_HOST}:${ds}"
-                echo "#   flags = -K ${job_keyfile}"
-                echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
-                [ "$n" -gt 0 ] && echo "#   -- ma $n datasetow potomnych; 'zfs allow' dziedziczy na nie,"
-                [ "$n" -gt 0 ] && echo "#      wiec jedno '-R' we flags obejmie caly podzbior"
+                echo "#   src          = ${remote_user}@${PEER_HOST}:${ds}"
+                echo "#   flags        = -K ${job_keyfile}"
+                echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
@@ -1822,9 +1823,10 @@ do_draft_config() {
         {
             echo "# Kandydaci LOKALNE (rola: push do '$PEER_HOST'), wygenerowane przez --draft-config."
             echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
-            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
-            echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
-            echo "# ten generator ich nie zna i ich nie zgaduje."
+            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'use_template ='"
+            echo "# odwolujacym sie do JUZ ISTNIEJACEGO [template:] w Twoim configu --"
+            echo "# ten generator ich nie zna i ich nie zgaduje. To pole jest"
+            echo "# OBOWIAZKOWE: bez niego gen-cron.sh konczy 'has no use_template'."
             echo "#"
             echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
             echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
@@ -1840,11 +1842,11 @@ do_draft_config() {
             while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
                 echo
+                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- jedno '-R' we flags obejmie caly podzbior)"
                 echo "# [dataset:$ds]"
-                echo "#   dst   = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
-                echo "#   flags = -K ${job_keyfile}"
-                echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
-                [ "$n" -gt 0 ] && echo "#   -- ma $n datasetow potomnych; jedno '-R' we flags obejmie caly podzbior"
+                echo "#   dst          = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
+                echo "#   flags        = -K ${job_keyfile}"
+                echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
             if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
