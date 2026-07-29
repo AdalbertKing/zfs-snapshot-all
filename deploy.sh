@@ -1738,6 +1738,27 @@ unpair_assert_no_cron_users() {
     die "refusing to unpair '$PEER_HOST' while the lines above still run. Remove the [dataset:] section from the gen-cron config and re-run gen-cron.sh --install first, then --unpair. (Removing only the crontab line leaves the config to put it back on the next generate.)"
 }
 
+# Revoking the grant this pairing made does NOT mean the account lost access.
+# `zfs allow` is inherited, so a broader grant on any ANCESTOR still covers the
+# per-peer root -- and unallowing somebody else's ancestor grant would be well
+# outside what --unpair was asked to do. So it is reported instead of touched.
+#
+# Found live, not by reading: on pve1 the target sat under hdd/backuptest_targets,
+# which already had a Local+Descendent grant for the same account from unrelated
+# work. --unpair logged "revoked", and the account could still snapshot the
+# dataset a second later. "Revoked" was true and misleading at the same time,
+# which is the worst kind of accurate log line.
+unpair_report_residual_access() {
+    local user="$1" dataset="$2"
+    local residual
+    residual=$(zfs allow "$dataset" 2>/dev/null | awk -v u="$user" '
+        /^---- Permissions on /    { ds = $4 }
+        $1 == "user" && $2 == u    { if (ds != "") print ds }' | sort -u) || return 0
+    [ -n "$residual" ] || return 0
+    warn "$user STILL has effective access to $dataset -- inherited from a grant on: $(printf '%s' "$residual" | tr '\n' ' ')"
+    warn "that grant predates this pairing and is not ours to remove; if isolation is the point, revoke it by hand: zfs unallow -u $user <ten dataset>"
+}
+
 # do_unpair -- end the relationship on THIS side and print exactly what to run
 # on the peer.
 #
@@ -1794,6 +1815,7 @@ do_unpair() {
             if zfs unallow -u "$local_user" "$ZFS_PERMS" "$dest_root" 2>/dev/null; then
                 log "revoked $local_user's delegation on $dest_root"
                 warn "any prune/monitor job for $dest_root running as $local_user will now fail -- re-grant with: zfs allow -u $local_user $ZFS_PERMS $dest_root"
+                unpair_report_residual_access "$local_user" "$dest_root"
             else
                 warn "could not revoke the delegation on $dest_root -- check it by hand: zfs allow $dest_root"
             fi
@@ -1819,6 +1841,9 @@ do_unpair() {
         for ds in ${PEER_SAVED_DATASETS:-}; do
             echo "  zfs unallow -u $remote_user $ds"
         done
+        echo "  # (sprawdz tez, czy konto nie ma dostepu z grantu na PRZODKU:"
+        echo "  #  'zfs allow <dataset>' pokazuje rowniez odziedziczone -- unallow"
+        echo "  #  na samym datasecie ich nie zdejmuje)"
         echo "  # 2. usun konto razem z jego authorized_keys"
         echo "  userdel -r $remote_user"
     else
