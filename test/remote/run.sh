@@ -561,6 +561,129 @@ else
 fi
 
 # ============================================================================
+# H. sync mode + recursion -- combinations G/B/D never separately exercised:
+#    -r, -R, -R -X, -R -S all under SYNC addressing (no base at all), and
+#    -R -S -X under BACKUP addressing as a real transfer (not just the
+#    "excludes everything" error case covered elsewhere). The recursion/
+#    filter machinery itself doesn't care whether a base was given -- it only
+#    affects the final target name -- but that was never actually exercised
+#    as these literal combined invocations before.
+# ============================================================================
+echo "--- H. sync mode + recursion combinations"
+
+# H1: snapsend -r sync
+H1SRC="$LROOT/h1src"
+mk_noauto "$H1SRC" >/dev/null 2>&1
+mk_noauto "$H1SRC/child" >/dev/null 2>&1
+tick
+send -m h1_ -r "$H1SRC" "$PEER"
+check "H1 snapsend -r sync: exit 0" "0" "$RC"
+check "H1 snapsend -r sync: landed at the identical path" "yes" "$(r_exists "$H1SRC")"
+check "H1 snapsend -r sync: child landed too" "yes" "$(r_exists "$H1SRC/child")"
+check "H1 snapsend -r sync: nothing under \$RROOT (proves no base)" "no" "$(r_exists "$RROOT/$H1SRC")"
+
+# H2: snapsend -R sync, no pattern
+H2SRC="$LROOT/h2src"
+mk_noauto "$H2SRC" >/dev/null 2>&1
+mk_noauto "$H2SRC/a" >/dev/null 2>&1
+mk_noauto "$H2SRC/b" >/dev/null 2>&1
+tick
+send -m h2_ -R "$H2SRC" "$PEER"
+check "H2 snapsend -R sync: exit 0" "0" "$RC"
+check "H2 snapsend -R sync: every dataset landed at the identical path" "3" \
+      "$($SSH "$PEER" "zfs list -H -o name -r '$H2SRC' 2>/dev/null" | wc -l)"
+
+# H3: snapsend -R -X sync
+H3SRC="$LROOT/h3src"
+mk_noauto "$H3SRC" >/dev/null 2>&1
+mk_noauto "$H3SRC/keep" >/dev/null 2>&1
+mk_noauto "$H3SRC/swap" >/dev/null 2>&1
+tick
+send -m h3_ -R -X 'swap$' "$H3SRC" "$PEER"
+check "H3 snapsend -R -X sync: exit 0" "0" "$RC"
+check "H3 snapsend -R -X sync: excluded child has no snapshot" "0" "$(r_snaps "$H3SRC/swap")"
+check "H3 snapsend -R -X sync: the kept child landed" "1" "$(r_snaps "$H3SRC/keep")"
+
+# H4: snapsend -R -S sync
+H4SRC="$LROOT/h4src"
+mk_noauto "$H4SRC" >/dev/null 2>&1
+mk_noauto "$H4SRC/a" >/dev/null 2>&1
+tick
+send -m h4_ -R -S "$H4SRC" "$PEER"
+check "H4 snapsend -R -S sync: exit 0" "0" "$RC"
+check "H4 snapsend -R -S sync: the parent itself was not snapshotted" "0" "$(r_snaps "$H4SRC")"
+check "H4 snapsend -R -S sync: the child was" "1" "$(r_snaps "$H4SRC/a")"
+
+# H5: snapsend -R -S -X BACKUP mode, a real transfer (not the empty-result
+# error case) -- -S drops the parent, -X drops 'swap' but NOT its own child,
+# both filters active on the same run, something still lands.
+H5SRC="$LROOT/h5src"
+mk_noauto "$H5SRC" >/dev/null 2>&1
+mk_noauto "$H5SRC/keep" >/dev/null 2>&1
+mk_noauto "$H5SRC/swap" >/dev/null 2>&1
+mk_noauto "$H5SRC/swap/inner" >/dev/null 2>&1
+tick
+send -m h5_ -R -S -X 'swap$' "$H5SRC" "$PEER:$RROOT/h5"
+check "H5 snapsend -R -S -X backup: exit 0" "0" "$RC"
+check "H5 snapsend -R -S -X backup: the parent was not snapshotted" "0" \
+      "$(r_snaps "$RROOT/h5/$H5SRC")"
+check "H5 snapsend -R -S -X backup: 'keep' landed" "1" "$(r_snaps "$RROOT/h5/$H5SRC/keep")"
+check "H5 snapsend -R -S -X backup: 'swap' itself was excluded" "0" "$(r_snaps "$RROOT/h5/$H5SRC/swap")"
+check "H5 snapsend -R -S -X backup: 'swap/inner' still landed (exclude isn't recursive)" "1" \
+      "$(r_snaps "$RROOT/h5/$H5SRC/swap/inner")"
+
+# H6: snapget -r sync
+H6SRC="$RROOT/h6src"
+seed_peer "$H6SRC" >/dev/null
+tick
+get -m h6_ -r "$PEER:$H6SRC"
+check "H6 snapget -r sync: exit 0" "0" "$RC"
+check "H6 snapget -r sync: landed locally at the identical path" "yes" "$(l_exists "$H6SRC")"
+check "H6 snapget -r sync: child landed too" "yes" "$(l_exists "$H6SRC/keep")"
+
+# H7: snapget -R sync, no pattern
+H7SRC="$RROOT/h7src"
+seed_peer "$H7SRC" >/dev/null
+tick
+get -m h7_ -R "$PEER:$H7SRC"
+check "H7 snapget -R sync: exit 0" "0" "$RC"
+check "H7 snapget -R sync: every dataset present locally" "4" \
+      "$(zfs list -H -o name -r "$H7SRC" 2>/dev/null | wc -l)"
+
+# H8: snapget -R -X sync
+H8SRC="$RROOT/h8src"
+seed_peer "$H8SRC" >/dev/null
+tick
+get -m h8_ -R -X 'swap$' "$PEER:$H8SRC"
+check "H8 snapget -R -X sync: exit 0" "0" "$RC"
+check "H8 snapget -R -X sync: excluded dataset has no snapshot" "0" "$(l_snaps "$H8SRC/swap")"
+check "H8 snapget -R -X sync: the kept child landed" "1" "$(l_snaps "$H8SRC/keep")"
+
+# H9: snapget -R -S sync
+H9SRC="$RROOT/h9src"
+seed_peer "$H9SRC" >/dev/null
+tick
+get -m h9_ -R -S "$PEER:$H9SRC"
+check "H9 snapget -R -S sync: exit 0" "0" "$RC"
+check "H9 snapget -R -S sync: the parent was not snapshotted on the source" "0" \
+      "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$H9SRC' 2>/dev/null | grep -c h9_")"
+check "H9 snapget -R -S sync: the child was pulled" "1" "$(l_snaps "$H9SRC/keep")"
+
+# H10: snapget -R -S -X BACKUP mode, a real transfer
+H10SRC="$RROOT/h10src"
+seed_peer "$H10SRC" >/dev/null
+H10TGT="$LROOT/h10tgt"
+tick
+get -m h10_ -R -S -X 'swap$' "$PEER:$H10SRC" "$H10TGT"
+check "H10 snapget -R -S -X backup: exit 0" "0" "$RC"
+check "H10 snapget -R -S -X backup: the parent was not snapshotted on the source" "0" \
+      "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d 1 '$H10SRC' 2>/dev/null | grep -c h10_")"
+check "H10 snapget -R -S -X backup: 'keep' landed" "1" "$(l_snaps "$H10TGT/$H10SRC/keep")"
+check "H10 snapget -R -S -X backup: 'swap' itself was excluded" "0" "$(l_snaps "$H10TGT/$H10SRC/swap")"
+check "H10 snapget -R -S -X backup: 'swap/inner' still landed" "1" \
+      "$(l_snaps "$H10TGT/$H10SRC/swap/inner")"
+
+# ============================================================================
 # E. hygiene -- what the campaign must leave behind: nothing
 # ============================================================================
 echo "--- E. hygiene"
