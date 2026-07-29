@@ -102,6 +102,7 @@ PEER_PORT_GIVEN=0
 PEER_ROTATE=0
 PEER_REVOKE_OLD=0
 PEER_DRAFT_CONFIG=0
+PEER_UNPAIR=0
 # The LOCAL account that will actually run the generated jobs. Independent of
 # --as, which names the account on the PEER: one is who we log in as there, the
 # other is who runs cron here. Empty means root runs the jobs.
@@ -143,6 +144,9 @@ while [ "$#" -gt 0 ]; do
         --rotate)       PEER_ROTATE=1; shift ;;
         --revoke-old)   PEER_REVOKE_OLD=1; shift ;;
         --draft-config) PEER_DRAFT_CONFIG=1; shift ;;
+        # Implies --pair so it reads as the opposite of it -- `--unpair --peer=X`
+        # rather than the `--pair --unpair` the other sub-modes would suggest.
+        --unpair)       PEER_UNPAIR=1; PAIR_MODE=1; shift ;;
         -h|--help)
             cat <<'USAGE'
 Usage: deploy.sh [options]
@@ -189,6 +193,11 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
     --draft-config           after --join has run on the peer: list its
                             datasets and write a reviewed-by-hand .suggested
                             file (never installs anything)
+    --unpair                end the relationship on THIS host (keys, pinned
+                            host key, manifest, local delegation) and print
+                            the commands to run on the peer. Never touches
+                            received data, and refuses while a cron line
+                            still uses the pairing key.
   --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
                           (run on the second host, once, from its console)
 USAGE
@@ -211,13 +220,22 @@ esac
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
 fi
+if [ "$PEER_UNPAIR" -eq 1 ]; then
+    [ -n "$PEER_HOST" ] || { echo "--unpair requires --peer=NAME" >&2; exit 2; }
+    # Every other sub-mode maintains a relationship; this one ends it. Combining
+    # them is always a mistake, and the one that would hurt is --unpair --rotate
+    # (generate a key, then delete it).
+    if [ "$PEER_ROTATE" -eq 1 ] || [ "$PEER_REVOKE_OLD" -eq 1 ] || [ "$PEER_DRAFT_CONFIG" -eq 1 ]; then
+        echo "--unpair cannot be combined with --rotate/--revoke-old/--draft-config" >&2; exit 2
+    fi
+fi
 # --local-user names an account on THIS host, so it can be checked before any
 # state is touched. Refusing here (rather than silently skipping the key copy
 # and the delegation) keeps a typo from producing a pairing that looks complete
 # and fails at 2am with "permission denied".
 if [ -n "$PEER_LOCAL_USER" ]; then
-    if [ "$PAIR_MODE" -eq 0 ]; then
-        echo "--local-user only applies to --pair" >&2; exit 2
+    if [ "$PAIR_MODE" -eq 0 ] || [ "$PEER_UNPAIR" -eq 1 ]; then
+        echo "--local-user only applies to --pair (on --unpair the account comes from the manifest)" >&2; exit 2
     fi
     if ! id "$PEER_LOCAL_USER" >/dev/null 2>&1; then
         echo "--local-user='$PEER_LOCAL_USER' does not exist on this host -- create it first: bash deploy.sh --backup-user=$PEER_LOCAL_USER" >&2
@@ -1335,6 +1353,10 @@ do_pair() {
     mkdir -p "$PEER_STATE_DIR" "$PEER_KEY_DIR"
     chmod 700 "$PEER_KEY_DIR"
 
+    if [ "$PEER_UNPAIR" -eq 1 ]; then
+        do_unpair "$label" "$mpath"
+        return
+    fi
     if [ "$PEER_REVOKE_OLD" -eq 1 ]; then
         do_revoke_old "$label" "$mpath"
         return
@@ -1691,6 +1713,135 @@ do_revoke_old() {
     printf "PEER_CURRENT_PUBKEY='%s'\n" "$new_current" >> "${mpath}.tmp"
     mv "${mpath}.tmp" "$mpath"
     log "rotation complete for '$PEER_HOST' -- $keyfile is now the only active key, cron lines referencing it need no change"
+}
+
+# Anything still running the pairing key is the one thing --unpair must not
+# walk past. Delete the key out from under a live cron line and the relationship
+# does not end cleanly -- it turns into a job that fails every night and mails
+# about it, which is strictly worse than the pairing it replaced. Checked before
+# any state is touched, and refused rather than warned: there is no version of
+# "continue anyway" here that leaves the host in a good state.
+unpair_assert_no_cron_users() {
+    local label="$1" local_user="$2"
+    local -a users=(root)
+    [ -n "$local_user" ] && users+=("$local_user")
+    local u found=0 hits
+    for u in "${users[@]}"; do
+        hits=$(crontab -l -u "$u" 2>/dev/null \
+            | grep -F -e "${label}_ed25519" -e "pairing-${label}_" -e "@${PEER_HOST}:") || true
+        [ -n "$hits" ] || continue
+        found=1
+        warn "crontab of '$u' still uses this pairing:"
+        printf '%s\n' "$hits" | while IFS= read -r line; do warn "    $line"; done
+    done
+    [ "$found" -eq 0 ] && return 0
+    die "refusing to unpair '$PEER_HOST' while the lines above still run. Remove the [dataset:] section from the gen-cron config and re-run gen-cron.sh --install first, then --unpair. (Removing only the crontab line leaves the config to put it back on the next generate.)"
+}
+
+# do_unpair -- end the relationship on THIS side and print exactly what to run
+# on the peer.
+#
+# Deliberately one-sided, unlike --revoke-old which does reach across. At
+# decommission time there is no reason to assume the ssh path still works --
+# that is often WHY someone is unpairing -- and creating/deleting an account on
+# somebody else's machine over a link that is being torn down is the wrong
+# default. The commands are printed with the exact key content so the admin can
+# run them from that host's own console and watch them happen.
+#
+# Never touches received DATA. A backup that outlives the relationship is the
+# normal case, not an accident; destroying it would make --unpair the most
+# dangerous flag in this script. Same reason /root/.ssh/known_hosts is left
+# alone: a pinned host key is our record of who they are, not a grant to them,
+# and it may well be relied on by something else on this host by now.
+do_unpair() {
+    local label="$1" mpath="$2"
+    [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' on this host -- nothing to unpair (looked for $mpath)"
+    # shellcheck disable=SC1090
+    . "$mpath"
+
+    local local_user="${PEER_SAVED_LOCAL_USER:-}"
+    unpair_assert_no_cron_users "$label" "$local_user"
+
+    local keyfile="$PEER_KEY_DIR/${label}_ed25519"
+    local rotating="${PEER_ROTATING:-no}"
+
+    # Mid-rotation the peer has TWO keys authorized, so the instructions below
+    # must remove both. Handled rather than refused: being unable to tear down
+    # until you first finish a rotation you no longer want is a silly place to
+    # be stuck.
+    [ "$rotating" = "yes" ] && warn "peer '$PEER_HOST' was mid-rotation -- the peer has TWO authorized keys and both are listed below"
+
+    rm -f "$keyfile" "${keyfile}.pub" "${keyfile}.new" "${keyfile}.new.pub" \
+          "$PEER_KEY_DIR/${label}_known_hosts"
+    log "removed the pairing keys and pinned host key for '$PEER_HOST'"
+
+    if [ -n "$local_user" ]; then
+        local home_dir; home_dir=$(getent passwd "$local_user" | cut -d: -f6)
+        if [ -n "$home_dir" ]; then
+            rm -f "$home_dir/.ssh/pairing-${label}_ed25519" \
+                  "$home_dir/.ssh/pairing-${label}_known_hosts"
+            log "removed $local_user's copies"
+        else
+            warn "account '$local_user' from the manifest no longer exists -- its copies (if any) were left alone"
+        fi
+    fi
+
+    # Only the delegation this pairing granted, only on the per-peer root, and
+    # only for pull -- for push the receive side was never delegated here.
+    if [ "${PEER_SAVED_ROLE:-pull}" = "pull" ] && [ -n "$local_user" ]; then
+        local dest_root="${PEER_SAVED_TARGET:-}/$label"
+        if [ -n "${PEER_SAVED_TARGET:-}" ] && zfs list -H -o name "$dest_root" >/dev/null 2>&1; then
+            if zfs unallow -u "$local_user" "$ZFS_PERMS" "$dest_root" 2>/dev/null; then
+                log "revoked $local_user's delegation on $dest_root"
+                warn "any prune/monitor job for $dest_root running as $local_user will now fail -- re-grant with: zfs allow -u $local_user $ZFS_PERMS $dest_root"
+            else
+                warn "could not revoke the delegation on $dest_root -- check it by hand: zfs allow $dest_root"
+            fi
+        fi
+        [ -n "${PEER_SAVED_TARGET:-}" ] && log "DATA LEFT IN PLACE: $dest_root (unpairing ends the relationship, not the backup)"
+    fi
+
+    rm -f "$mpath"
+    rm -f "/root/scripts/pairing/${label}.conf.suggested" \
+          "/root/scripts/pairing/"*"-to-${PEER_HOST}.tgz" \
+          "/root/scripts/pairing/"*"-to-${PEER_HOST}-rotate.tgz"
+    log "removed the manifest and any leftover wsad/draft for '$PEER_HOST'"
+
+    local remote_user="${PEER_SAVED_ACCOUNT:-root}"
+    echo
+    echo ">>> ===================================================================="
+    echo ">>> Strona lokalna posprzatana. Reszta jest na $PEER_HOST -- uruchom tam"
+    echo ">>> z konsoli (nie stad: to konto i te uprawnienia sa ich, nie nasze):"
+    echo ">>> ===================================================================="
+    if [ "${PEER_SAVED_AS:-delegated}" = "delegated" ]; then
+        echo "  # 1. cofnij delegacje ZFS (dataset ZOSTAJE, znika tylko dostep konta)"
+        local ds
+        for ds in ${PEER_SAVED_DATASETS:-}; do
+            echo "  zfs unallow -u $remote_user $ds"
+        done
+        echo "  # 2. usun konto razem z jego authorized_keys"
+        echo "  userdel -r $remote_user"
+    else
+        echo "  # konto to root (--as=root), wiec zostaje -- usun sam klucz:"
+        printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
+            "'${PEER_CURRENT_PUBKEY:-<brak w manifescie>}'"
+        if [ "$rotating" = "yes" ] && [ -n "${PEER_PREVIOUS_PUBKEY:-}" ]; then
+            printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
+                "'${PEER_PREVIOUS_PUBKEY}'"
+        fi
+    fi
+    # Sanitized the same way do_join sanitizes PEER_CONF_INITIATOR_LABEL, so the
+    # printed path is the one that is actually there.
+    local my_label; my_label=$(hostname -s 2>/dev/null || hostname)
+    my_label=$(printf '%s' "$my_label" | tr -c 'A-Za-z0-9._-' '-')
+    echo "  # 3. usun manifest stworzony tam przez --join"
+    echo "  rm -f $(peer_manifest_path "$my_label")"
+    echo ">>> ===================================================================="
+    echo ">>> Klucz hosta $PEER_HOST zostal w /root/.ssh/known_hosts -- to nasz"
+    echo ">>> zapis o tym, kim oni sa, nie uprawnienie dla nich. Jesli naprawde"
+    echo ">>> chcesz go usunac: ssh-keygen -f /root/.ssh/known_hosts -R $PEER_HOST"
+    echo ">>> (usunie WSZYSTKIE wpisy dla tego hosta, nie tylko przypiety tutaj)."
+    echo ">>> ===================================================================="
 }
 
 # do_draft_config -- best-effort, deliberately conservative. gen-cron.sh's INI
