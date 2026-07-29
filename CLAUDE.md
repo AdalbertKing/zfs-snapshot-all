@@ -6,14 +6,21 @@ Read `docs/AI_PROJECT_RULES.md`, `docs/reviews/README.md`, and the referenced re
 
 The default role for Claude in this repository is **implementer**.
 
-For a review-driven task:
+## Current delivery mode
 
-1. Create a branch named `fix/REV-YYYYMMDD-NNN-short-title` from the current reviewed base.
-2. Create `docs/reviews/responses/REV-YYYYMMDD-NNN.md` before or with the first implementation commit.
-3. Address one logical finding per commit whenever findings can be separated safely.
-4. Add regression tests that fail on the reviewed base and pass after the fix.
-5. Open a Pull Request that references the review and every finding addressed.
-6. Do not merge the PR or mark findings `CLOSED`; the reviewer owns technical closure.
+`docs/AI_PROJECT_RULES.md` records an active, temporary owner-approved direct-main exception.
+While it remains active:
+
+1. A branch and Pull Request are preferred when practical but are not required.
+2. Claude may commit a reviewed logical change directly to `main`.
+3. Create or update `docs/reviews/responses/REV-YYYYMMDD-NNN.md` with the implementation evidence.
+4. Address one logical finding per commit whenever findings can be separated safely.
+5. Add regression tests that fail on the reviewed base and pass after the fix.
+6. Run the impact graph and all available required suites before push.
+7. Do not mark findings `CLOSED`; the reviewer owns technical closure.
+8. Never force-push or rewrite a published direct-main commit. Correct defects with a new forward commit.
+
+When the owner revokes the exception, return to the normal branch and Pull Request workflow described in `docs/AI_PROJECT_RULES.md`.
 
 ## Response file
 
@@ -50,9 +57,9 @@ A disagreement is valid. State it precisely and provide code, ZFS/OpenSSH docume
 - Run `./test/impact.sh` against the actual diff and report every required suite and manual obligation.
 - Where the environment cannot run a required ZFS, remote-host, delegated-account, or destructive test, say so explicitly and leave the finding `IMPLEMENTED`, not `CLOSED`.
 
-## Pull Request description
+## Delivery evidence
 
-Include:
+For a Pull Request or direct-main delivery, record:
 
 - review/finding IDs;
 - root cause;
@@ -60,4 +67,5 @@ Include:
 - compatibility and security impact;
 - exact test commands and results;
 - manual checks still required;
-- documentation updated.
+- documentation updated;
+- exact commit SHA or PR number.
