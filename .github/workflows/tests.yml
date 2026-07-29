@@ -1,0 +1,93 @@
+# Dependency-free gate. REV-20260729-001 F5.
+#
+# Scope is deliberate: everything here needs bash and coreutils and nothing
+# else. The suites that need root, a real ZFS pool, mbuffer or a second host are
+# NOT run, and no green tick from this workflow should be read as saying they
+# were -- see the reminder job at the bottom, which exists to keep that visible
+# rather than tucked in a comment.
+#
+# This does not gate merges. Production here is administered from a phone and
+# work lands directly on main by owner decision, so this runs on push as well as
+# on pull requests: the point is to find out that something broke, not to stand
+# in the way. That trade-off is the F4/F5 discussion, not something this file
+# settles on its own.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck-syntax:
+    name: bash -n on every tracked shell script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every tracked *.sh
+        run: |
+          set -u
+          fail=0
+          # git ls-files, not find: only what is actually tracked, so a stray
+          # scratch file in a working copy can never fail somebody's CI.
+          while IFS= read -r f; do
+            if bash -n "$f"; then
+              echo "ok   $f"
+            else
+              echo "FAIL $f"; fail=1
+            fi
+          done < <(git ls-files '*.sh')
+          exit "$fail"
+
+  graph:
+    name: dependency graph matches the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # --verify is the anti-drift assertion: every tracked shell file must be
+      # declared in test/deps.conf, every declared suite must exist and be
+      # executable, contract membership must be symmetric. An unregistered new
+      # script fails here, which is one of F5's acceptance criteria.
+      - run: ./test/impact.sh --verify
+
+  suites:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Exactly the suites whose deps.conf entry says `needs = nothing`.
+        # Keep this list and that field in step.
+        suite: [gencron, impact, quiesce, tune, statekey, join]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run
+        run: |
+          case "${{ matrix.suite }}" in
+            gencron) ./test/run.sh ;;
+            *)       "./test/${{ matrix.suite }}/run.sh" ;;
+          esac
+
+  privileged-reminder:
+    name: what this workflow did NOT run
+    runs-on: ubuntu-latest
+    needs: [shellcheck-syntax, graph, suites]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: List the obligations no green tick here can satisfy
+        run: |
+          echo "This workflow runs only the suites that need nothing but bash."
+          echo "A green result does NOT cover:"
+          echo
+          ./test/impact.sh --all 2>/dev/null \
+            | sed -n '/SUITES TO RUN/,$p' \
+            | grep -E 'needs (root|a SECOND host)' || true
+          echo
+          echo "...nor the manual obligations (nonroot-account, force-full,"
+          echo "deploy-check-only, monitor-live). Those are run by hand on a"
+          echo "real host and recorded in the commit or the review response."
