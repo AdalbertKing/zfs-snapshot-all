@@ -1681,9 +1681,21 @@ draft_classify() {
     declare -g DRAFT_DEEPER=0
     local ds n
 
+    # Pure bash `case` matching throughout, deliberately: a dataset name is not
+    # a regex, and the per-peer paths this feature invents routinely contain
+    # dots (the label is derived from --peer, so 192.168.28.8 is a normal
+    # component). Feeding that to grep would make '.' match any character.
+    local -a present=() found=()
+    while IFS= read -r ds; do [ -n "$ds" ] && present+=("$ds"); done <<< "$full"
+
     for ds in $granted; do
-        if printf '%s\n' "$full" | grep -qxF "$ds"; then
-            n=$(printf '%s\n' "$full" | grep -c "^${ds}/")
+        n=0
+        local seen=0 p
+        for p in "${present[@]}"; do
+            [ "$p" = "$ds" ] && { seen=1; continue; }
+            case "$p" in "$ds"/*) n=$((n + 1)) ;; esac
+        done
+        if [ "$seen" -eq 1 ]; then
             DRAFT_ROOTS+=("$ds	$n")
         else
             DRAFT_MISSING+=("$ds")
@@ -1691,8 +1703,7 @@ draft_classify() {
     done
 
     local covered
-    while IFS= read -r ds; do
-        [ -n "$ds" ] || continue
+    for ds in "${present[@]}"; do
         covered=0
         for n in $granted; do
             [ "$ds" = "$n" ] && { covered=1; break; }
@@ -1706,7 +1717,7 @@ draft_classify() {
             */*/*) DRAFT_DEEPER=$((DRAFT_DEEPER + 1)) ;;
             *) DRAFT_UNCOVERED+=("$ds") ;;
         esac
-    done <<< "$full"
+    done
 }
 
 # The "not part of this pairing" section, shared by both roles. Never emitted
