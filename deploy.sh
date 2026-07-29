@@ -1370,14 +1370,57 @@ fi
 # ------------------------------------------------------------------------------
 log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # ------------------------------------------------------------------------------
-PULL_LINE="15 * * * * cd $REPO_DIR && git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
-if crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
-    log "auto-pull cron line already present, leaving it alone"
+# This host follows the moving `main` branch, hourly, and the backup jobs then
+# run whatever that pull brought in, as root. That is REV-20260729-001 F4, and
+# the owner has accepted it deliberately: the alternative -- pinning production
+# to a tag -- costs a manual step on every fix, and this fleet is administered
+# from a phone. Hand-copying scripts instead has already broken --ff-only here
+# once, permanently, on one host.
+#
+# What the finding asked for and is NOT waived: knowing which revision is live,
+# and being able to go back. The pull records the revision it is leaving BEFORE
+# it moves, so there is always a one-command rollback, and the audit below
+# reports the live revision and any drift.
+# Lives in the shared alert dir, which Phase 4 has already created.
+LAST_GOOD="$ALERT_SHARED_DIR/last-known-good"
+PULL_LINE="15 * * * * cd $REPO_DIR && git rev-parse HEAD > $LAST_GOOD 2>/dev/null; git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
+if crontab -l 2>/dev/null | grep -qF "$LAST_GOOD"; then
+    log "auto-pull cron line already current, leaving it alone"
+elif crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        warn "auto-pull cron line predates rollback recording -- re-run without --check-only to update it"
+    else
+        # Replace in place rather than appending: two pull lines would both run.
+        crontab -l 2>/dev/null | grep -vF "$REPO_DIR && git pull" | { cat; echo "$PULL_LINE"; } | crontab -
+        log "updated auto-pull cron line to record a rollback point first"
+    fi
 elif [ "$CHECK_ONLY" -eq 1 ]; then
     warn "auto-pull cron line MISSING -- this host would never pick up updates"
 else
     ( crontab -l 2>/dev/null; echo "$PULL_LINE" ) | crontab -
     log "added auto-pull cron line: $PULL_LINE"
+fi
+
+# ---- which revision is actually live here ----
+# F4's visibility half. Cheap, and it answers the question an operator actually
+# has in front of a host: is this the code I think it is?
+if [ -d "$REPO_DIR/.git" ]; then
+    _rev=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')
+    _subj=$(git -C "$REPO_DIR" log -1 --format=%s 2>/dev/null | cut -c1-60)
+    log "active revision: $_rev  $_subj"
+    if [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ]; then
+        warn "the checkout at $REPO_DIR has LOCAL MODIFICATIONS -- the next --ff-only pull will fail and this host will silently stop updating"
+    fi
+    _behind=$(git -C "$REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+    case "$_behind" in
+        0) ;;
+        *) log "$_behind commit(s) behind the last fetched origin/main -- the hourly pull will catch up" ;;
+    esac
+    if [ -r "$LAST_GOOD" ]; then
+        log "rollback point: $(cut -c1-8 < "$LAST_GOOD")  (git -C $REPO_DIR reset --hard \$(cat $LAST_GOOD))"
+    else
+        log "no rollback point recorded yet -- the next hourly pull writes one"
+    fi
 fi
 
 # ------------------------------------------------------------------------------
