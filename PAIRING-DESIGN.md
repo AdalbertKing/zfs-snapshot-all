@@ -147,6 +147,50 @@ albo `--rotate` cicho cofało niestandardowy port do domyślnego (dokładnie ten
 dryf, przed którym manifest chroni już rolę/target/`--as`). Teraz podany
 `--port` wygrywa, a niepodany dziedziczy z manifestu.
 
+### Dekomisja: `--unpair` (dodane 2026-07-29)
+
+Rotacja wymieniała klucz; nic nie kończyło relacji. Ręcznie trzeba było pamiętać
+o dwóch plikach klucza, przypiętym kluczu hosta, manifeście, delegacji lokalnej,
+dwóch kopiach pod kontem zadania i czterech rzeczach na peerze — a zapominana
+jest zwykle delegacja, czyli konto z prawem zapisu do datasetu, którego już nikt
+nie pilnuje.
+
+`--unpair --peer=NAME` sprząta **tylko stronę lokalną** i wypisuje komendy do
+uruchomienia na peerze. Jednostronnie, w przeciwieństwie do `--revoke-old`:
+w momencie dekomisji nie ma powodu zakładać, że kanał ssh jeszcze działa (często
+to jest właśnie powód dekomisji), a zakładanie i kasowanie kont na cudzej
+maszynie przez łącze, które właśnie rozbieramy, to zły domyślny wybór.
+
+Trzy rzeczy, których **nie** robi, każda celowo:
+
+- **Nie rusza danych.** Backup, który przeżywa relację, to przypadek normalny,
+  nie awaria. Kasowanie go zrobiłoby z `--unpair` najgroźniejszą flagę w tym
+  skrypcie.
+- **Nie rusza `/root/.ssh/known_hosts`.** Przypięty klucz hosta to nasz zapis
+  o tym, kim oni są, nie uprawnienie dla nich — i może już z niego korzystać coś
+  innego. Komenda usunięcia jest wypisana.
+- **Nie zdejmuje grantów z przodków** (patrz niżej).
+
+Odmawia, dopóki jakikolwiek crontab odwołuje się do parowania. Usunięcie klucza
+spod żywej linii crona nie kończy relacji — zamienia ją w zadanie, które pada co
+noc i o tym mailuje. Komunikat kieruje do configu `gen-cron.sh`, nie do crontaba,
+bo skasowanie samej linii crona pozwala następnemu `--install` wstawić ją z
+powrotem.
+
+Rotacja w toku jest obsłużona, nie odrzucona: peer ma wtedy dwa autoryzowane
+klucze i instrukcja wymienia oba.
+
+**Znalezione na żywo, nie z lektury:** `zfs allow` dziedziczy, więc cofnięcie
+grantu, który zrobiło parowanie, **nie znaczy, że konto straciło dostęp**. Na
+pve1 cel leżał pod `hdd/backuptest_targets`, który miał już grant
+`Local+Descendent` dla tego samego konta z niezwiązanej pracy. `--unpair`
+zalogował „revoked", a sekundę później to konto zrobiło snapshot tego datasetu.
+Linia logu była prawdziwa i myląca naraz — czyli najgorszy rodzaj poprawnego
+komunikatu, bo to na nim ktoś opiera decyzję, że izolacja zniknęła. Teraz jest
+to wykrywane i raportowane (z nazwą przodka), ale nie usuwane: cudzy grant nie
+jest nasz do zdejmowania. Ta sama pułapka dotyczy strony peera i jest wypisana
+w instrukcji.
+
 ### Nazwa peera a DNS: `--allow-public-peer` (dodane 2026-07-29)
 
 `--peer` trafia prosto do `ssh-keyscan`, którego całym zadaniem jest zaufać
@@ -325,7 +369,3 @@ Trzy fazy, zero okna przestoju:
 - Czy `--join` ma coś aktywnie zwracać na hosta inicjujący (np. potwierdzenie
   do automatycznej weryfikacji), czy wystarczy że admin widzi sukces na
   ekranie.
-- **Brak `--unpair` (trwałe zakończenie relacji).** Rotacja wymienia klucz,
-  ale nie ma ścieżki na pełną dekomisję — koniec współpracy z hostem na
-  zawsze (konto, delegacja, manifest, klucz — wszystko do usunięcia). Nie
-  rozwiązujemy teraz, ale ma nie zniknąć z listy.
