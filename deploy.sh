@@ -1659,6 +1659,75 @@ do_revoke_old() {
 #           'dst = user@host:base' with THIS host nested under the peer's
 #           target ($PEER_SAVED_TARGET/<this-host-label>/<name>), matching
 #           the same collision-safe convention from the other direction.
+# Splits a dataset listing against the list this pairing actually covers.
+#
+# Until 2026-07-29 the draft emitted one stanza per dataset the peer could
+# see -- and `zfs allow` scopes OPERATIONS, not `zfs list` visibility, so the
+# peer sees its whole tree. On real pve2 that was 81 identical-looking
+# stanzas of which two were usable; uncommenting any of the other 79 produced
+# a config that generates cleanly and fails at 2am with permission denied.
+#
+# Descendants are covered too (zfs allow is inherited), which is why the useful
+# unit to suggest is the granted ROOT plus how many descendants it has -- that
+# is exactly the -R decision -- rather than a stanza per descendant.
+#
+# Sets: DRAFT_ROOTS (name<TAB>descendant-count), DRAFT_MISSING (declared but
+# not present on that host), DRAFT_UNCOVERED (present but outside the pairing,
+# shallow ones only), DRAFT_DEEPER (how many uncovered ones were too deep to
+# be worth printing).
+draft_classify() {
+    local full="$1" granted="$2"
+    declare -ga DRAFT_ROOTS=() DRAFT_MISSING=() DRAFT_UNCOVERED=()
+    declare -g DRAFT_DEEPER=0
+    local ds n
+
+    for ds in $granted; do
+        if printf '%s\n' "$full" | grep -qxF "$ds"; then
+            n=$(printf '%s\n' "$full" | grep -c "^${ds}/")
+            DRAFT_ROOTS+=("$ds	$n")
+        else
+            DRAFT_MISSING+=("$ds")
+        fi
+    done
+
+    local covered
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        covered=0
+        for n in $granted; do
+            [ "$ds" = "$n" ] && { covered=1; break; }
+            case "$ds" in "$n"/*) covered=1; break ;; esac
+        done
+        [ "$covered" -eq 1 ] && continue
+        # Only the shallow ones get printed. The point of this section is "did
+        # you forget to include something", which a first-level view answers;
+        # a full dump would recreate the wall of noise this exists to remove.
+        case "$ds" in
+            */*/*) DRAFT_DEEPER=$((DRAFT_DEEPER + 1)) ;;
+            *) DRAFT_UNCOVERED+=("$ds") ;;
+        esac
+    done <<< "$full"
+}
+
+# The "not part of this pairing" section, shared by both roles. Never emitted
+# as stanzas -- these are informational, and the whole point is that they must
+# not look copy-pasteable.
+draft_emit_uncovered() {
+    local how_to_add="$1"
+    { [ "${#DRAFT_UNCOVERED[@]}" -gt 0 ] || [ "$DRAFT_DEEPER" -gt 0 ]; } || return 0
+    echo
+    echo "# =========================================================="
+    echo "# NIE OBJETE TA RELACJA -- do informacji, NIE kopiuj nizej."
+    echo "# =========================================================="
+    echo "# Ponizsze istnieja, ale nie sa czescia tego parowania."
+    echo "# $how_to_add"
+    echo "#"
+    local ds
+    for ds in "${DRAFT_UNCOVERED[@]}"; do echo "#   $ds"; done
+    [ "$DRAFT_DEEPER" -gt 0 ] && echo "#   ... oraz $DRAFT_DEEPER glebszych (pominiete, to widok pierwszego poziomu)"
+    return 0
+}
+
 do_draft_config() {
     local label="$1" mpath="$2"
     [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' yet -- run --pair (and --join on the peer) first"
@@ -1682,11 +1751,18 @@ do_draft_config() {
     mkdir -p "$outdir"
     local out="$outdir/${label}.conf.suggested"
 
+    local granted="${PEER_SAVED_DATASETS:-}"
+    if [ -z "$granted" ]; then
+        warn "manifest for '$PEER_HOST' has no dataset list -- every candidate will be listed unfiltered, as before 2026-07-29. Re-run --pair with --peer-datasets=\"...\" to get a filtered draft."
+    fi
+
     if [ "$role" = "pull" ]; then
         log "listing datasets on ${remote_user}@${PEER_HOST} via the pairing key (pull: peer holds the source)..."
         local list
         list=$(ssh -i "$keyfile" -p "${PEER_SAVED_PORT:-22}" -o BatchMode=yes "${remote_user}@${PEER_HOST}" \
             "zfs list -H -o name") || die "could not list datasets on $PEER_HOST -- has --join run there yet?"
+        [ -n "$granted" ] || granted="$list"
+        draft_classify "$list" "$granted"
         {
             echo "# Kandydaci z hosta '$PEER_HOST' (rola: pull), wygenerowane przez --draft-config."
             echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
@@ -1701,24 +1777,37 @@ do_draft_config() {
             echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
             echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
             echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
-            echo "#"
-            echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
-            echo "# cron-configs: '[dataset:<path>]', 'src = ...', 'flags = ...', 'tiers = ...'."
             echo
-            while IFS= read -r ds; do
+            echo "# =========================================================="
+            echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- tylko te maja 'zfs allow'"
+            echo "# dla konta ${remote_user} na peerze. Reszta drzewa jest tam WIDOCZNA"
+            echo "# (zfs allow ogranicza operacje, nie 'zfs list'), ale nieuzywalna."
+            echo "# =========================================================="
+            local ds n
+            while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
+                echo
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src   = ${remote_user}@${PEER_HOST}:${ds}"
                 echo "#   flags = -K ${job_keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+                [ "$n" -gt 0 ] && echo "#   -- ma $n datasetow potomnych; 'zfs allow' dziedziczy na nie,"
+                [ "$n" -gt 0 ] && echo "#      wiec jedno '-R' we flags obejmie caly podzbior"
+            done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
+            if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
-            done <<< "$list"
+                echo "# UWAGA: zadeklarowane w parowaniu, ale NIE ISTNIEJA na $PEER_HOST:"
+                for ds in "${DRAFT_MISSING[@]}"; do echo "#   $ds"; done
+            fi
+            draft_emit_uncovered "Zeby dolozyc: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <nowy>\", potem --join na peerze."
         } > "$out"
     else
         local my_label; my_label=$(hostname -s)
         log "listing LOCAL datasets (push: this host is the source, $PEER_HOST holds the target)..."
         local list
         list=$(zfs list -H -o name) || die "could not list local datasets"
+        [ -n "$granted" ] || granted="$list"
+        draft_classify "$list" "$granted"
         {
             echo "# Kandydaci LOKALNE (rola: push do '$PEER_HOST'), wygenerowane przez --draft-config."
             echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
@@ -1729,18 +1818,29 @@ do_draft_config() {
             echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
             echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
             echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
-            echo "#"
-            echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
-            echo "# cron-configs: '[dataset:<path>]', 'dst = ...', 'flags = ...', 'tiers = ...'."
             echo
-            while IFS= read -r ds; do
+            echo "# =========================================================="
+            echo "# OBJETE TA RELACJA (${#DRAFT_ROOTS[@]}) -- te datasety zadeklarowano"
+            echo "# przy parowaniu. Strona odbiorcza jest delegowana na peerze na jednym"
+            echo "# korzeniu, wiec wypchniecie czegokolwiek innego tez by przeszlo --"
+            echo "# ale wtedy config przestaje odpowiadac temu, co mowi manifest."
+            echo "# =========================================================="
+            local ds n
+            while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
+                echo
                 echo "# [dataset:$ds]"
                 echo "#   dst   = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
                 echo "#   flags = -K ${job_keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+                [ "$n" -gt 0 ] && echo "#   -- ma $n datasetow potomnych; jedno '-R' we flags obejmie caly podzbior"
+            done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
+            if [ "${#DRAFT_MISSING[@]}" -gt 0 ]; then
                 echo
-            done <<< "$list"
+                echo "# UWAGA: zadeklarowane w parowaniu, ale NIE ISTNIEJA na tym hoscie:"
+                for ds in "${DRAFT_MISSING[@]}"; do echo "#   $ds"; done
+            fi
+            draft_emit_uncovered "Zeby dolozyc: --pair --peer=$PEER_HOST --peer-datasets=\"$granted <nowy>\" (i --join na peerze)."
         } > "$out"
     fi
     log "draft napisany: $out -- przejrzyj recznie przed dotknieciem cron-configs"
