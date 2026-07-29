@@ -62,7 +62,7 @@ jobs:
       matrix:
         # Exactly the suites whose deps.conf entry says `needs = nothing`.
         # Keep this list and that field in step.
-        suite: [gencron, impact, quiesce, tune, statekey, join]
+        suite: [gencron, impact, quiesce, tune, statekey, join, selfupdate]
     steps:
       - uses: actions/checkout@v4
       - name: Run

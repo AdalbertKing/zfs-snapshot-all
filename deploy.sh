@@ -54,7 +54,9 @@ BACKUP_USER=""
 BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
 
 REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
-REPO_DIR="/root/scripts/zfs-snapshot-all"
+# Overridable so the self-update tests can drive a throwaway checkout instead
+# of the live one. Production never sets these.
+REPO_DIR="${REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 
 # The permission set a delegated account needs to run the scripts at all. ONE
 # definition, because it is delegated from two unrelated places -- Phase 8 (this
@@ -89,6 +91,9 @@ PAIR_MODE=0
 JOIN_MODE=0
 JOIN_PACKAGE=""
 JOIN_CHECK=0
+SELF_UPDATE=0
+ROLLBACK=0
+RESUME_UPDATES=0
 # Where an unpacked package lives while it is being checked. Global so the
 # EXIT trap can still see it; see do_join.
 JOIN_WORKDIR=""
@@ -130,6 +135,9 @@ while [ "$#" -gt 0 ]; do
         --pair)         PAIR_MODE=1; shift ;;
         --join=*)       JOIN_MODE=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join)         JOIN_MODE=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
+        --self-update)     SELF_UPDATE=1; shift ;;
+        --rollback)        ROLLBACK=1; shift ;;
+        --resume-updates)  RESUME_UPDATES=1; shift ;;
         --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -568,7 +576,114 @@ if [ "$JOIN_MODE" -eq 1 ]; then
     log "package preflight OK (sha256 ${PKG_SHA256:-?}) -- continuing with deployment phases"
 fi
 
+# ============================================================================
+# Self-update: the hourly pull, a rollback that STAYS rolled back, and an
+# explicit way to resume.
+#
+# REV-20260729-003 F1. The previous version was one cron line:
+#
+#     git rev-parse HEAD > last-known-good; git pull --ff-only origin main
+#
+# which recorded the CURRENT revision every hour whether anything changed or
+# not. So an hour after a bad update the recorded "rollback point" was the bad
+# revision itself, and a `git reset --hard` was undone by the next hourly pull
+# sixty minutes later. The file was also called last-known-good while nothing
+# established that anything was good.
+#
+# Renamed to what it is (the previous revision), written ONLY on a real change,
+# and rollback now leaves a hold that stops the next run from undoing it.
+# ============================================================================
+UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-$ALERT_SHARED_DIR}"
+PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
+UPDATE_HOLD_FILE="$UPDATE_STATE_DIR/update-hold"
+
+# The ultimate fallback if this script itself is what a bad update broke:
+#   git -C <repo> reset --hard <sha>   and remove the cron line by hand.
+# Everything below is convenience on top of that, which is why rollback stays
+# two plain git commands rather than anything clever.
+do_self_update() {
+    [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
+    mkdir -p "$UPDATE_STATE_DIR"
+
+    if [ -e "$UPDATE_HOLD_FILE" ]; then
+        log "updates are HELD ($(cat "$UPDATE_HOLD_FILE" 2>/dev/null)) -- not updating. Resume with: bash $REPO_DIR/deploy.sh --resume-updates"
+        return 0
+    fi
+
+    git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null         || { warn "fetch failed -- leaving $REPO_DIR on its current revision"; return 1; }
+
+    local current target
+    current=$(git -C "$REPO_DIR" rev-parse HEAD) || return 1
+    target=$(git -C "$REPO_DIR" rev-parse FETCH_HEAD) || return 1
+
+    # The whole point of the finding: a no-op run must not consume the rollback
+    # point. Nothing changed, so nothing is recorded.
+    if [ "$current" = "$target" ]; then
+        log "already at $(printf '%.8s' "$current") -- nothing to update"
+        return 0
+    fi
+
+    # Recorded BEFORE the new revision is activated, and restored if activating
+    # it fails, so a failed update never eats the rollback point either.
+    local prior=""
+    [ -r "$PREV_REV_FILE" ] && prior=$(cat "$PREV_REV_FILE")
+    printf '%s
+' "$current" > "$PREV_REV_FILE"
+    if ! git -C "$REPO_DIR" merge --ff-only "$target" >/dev/null 2>&1; then
+        if [ -n "$prior" ]; then printf '%s
+' "$prior" > "$PREV_REV_FILE"; else rm -f "$PREV_REV_FILE"; fi
+        warn "fast-forward to $(printf '%.8s' "$target") failed -- still on $(printf '%.8s' "$current"). Local modifications in $REPO_DIR are the usual cause: git -C $REPO_DIR status"
+        return 1
+    fi
+    log "updated $(printf '%.8s' "$current") -> $(printf '%.8s' "$target") (rollback point recorded)"
+    return 0
+}
+
+do_rollback() {
+    [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
+    [ -r "$PREV_REV_FILE" ] || die "no previous revision recorded at $PREV_REV_FILE -- nothing to roll back to. Pick a revision by hand: git -C $REPO_DIR log --oneline"
+    local target from
+    target=$(cat "$PREV_REV_FILE")
+    from=$(git -C "$REPO_DIR" rev-parse HEAD)
+    git -C "$REPO_DIR" cat-file -e "${target}^{commit}" 2>/dev/null         || die "recorded revision $target is not in $REPO_DIR -- resolve by hand"
+    git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1         || die "git reset --hard $target failed"
+    mkdir -p "$UPDATE_STATE_DIR"
+    printf 'rolled back from %s to %s on %s
+'         "$(printf '%.8s' "$from")" "$(printf '%.8s' "$target")" "$(date '+%Y-%m-%d %H:%M:%S')"         > "$UPDATE_HOLD_FILE"
+    log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
+    log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
+    log "When the fix is on main:  bash $REPO_DIR/deploy.sh --resume-updates"
+    return 0
+}
+
+do_resume_updates() {
+    if [ -e "$UPDATE_HOLD_FILE" ]; then
+        log "removing update hold ($(cat "$UPDATE_HOLD_FILE" 2>/dev/null))"
+        rm -f "$UPDATE_HOLD_FILE"
+    else
+        log "no update hold in place -- nothing to resume"
+    fi
+    do_self_update
+}
+
+# The update path, not a deployment. Dispatched BEFORE the root check and before
+# every phase (apt, cron, alerting): cron runs the first one hourly, and a
+# rollback has to work when the thing being rolled back is what broke.
+#
+# No id check here on purpose. What actually protects these is the filesystem --
+# $REPO_DIR is root-owned, so a non-root caller cannot reset it, and gets a plain
+# git error saying so. An id check instead would have made the whole path
+# untestable without root, and a test that needs root is a test whose own
+# mistakes edit a live host. (One caveat worth naming: the state dir is group
+# zfsalert and group-writable, so a member of that group can create the hold
+# file and stop updates. That account already runs the backups; it is not a new
+# privilege, but it is not nothing either.)
+if [ "$SELF_UPDATE" -eq 1 ]; then do_self_update; exit $?; fi
+if [ "$ROLLBACK" -eq 1 ]; then do_rollback; exit $?; fi
+if [ "$RESUME_UPDATES" -eq 1 ]; then do_resume_updates; exit $?; fi
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
+
 [ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
 
 # On Proxmox, apt-get update commonly fails on the pve-enterprise repo (401,
@@ -794,7 +909,7 @@ log "Phase 4: notify-fail.sh (alert reporting)"
 # service account able to write there could replace them. Hence a separate
 # group-writable directory that contains only data.
 ALERT_GROUP="zfsalert"
-ALERT_SHARED_DIR="/var/lib/zfs-snapshot-all"
+ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
     if [ -d "$ALERT_SHARED_DIR" ]; then
@@ -1378,32 +1493,33 @@ log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # once, permanently, on one host.
 #
 # What the finding asked for and is NOT waived: knowing which revision is live,
-# and being able to go back. The pull records the revision it is leaving BEFORE
-# it moves, so there is always a one-command rollback, and the audit below
-# reports the live revision and any drift.
-# Lives in the shared alert dir, which Phase 4 has already created.
-LAST_GOOD="$ALERT_SHARED_DIR/last-known-good"
-PULL_LINE="15 * * * * cd $REPO_DIR && git rev-parse HEAD > $LAST_GOOD 2>/dev/null; git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
-if crontab -l 2>/dev/null | grep -qF "$LAST_GOOD"; then
-    log "auto-pull cron line already current, leaving it alone"
-elif crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
+# and being able to go back and STAY back. Both live in --self-update /
+# --rollback / --resume-updates above; cron just calls the first one.
+PULL_LINE="15 * * * * $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
+# Matches every shape this line has ever had: the original bare `git pull`, the
+# rev-parse-then-pull version from 75bf956, and the current one. Removing them
+# all and appending once is what keeps a host from ending up with two update
+# jobs that both run.
+_pull_line_re="$REPO_DIR"
+if crontab -l 2>/dev/null | grep -qF -- "--self-update"; then
+    log "auto-update cron line already current, leaving it alone"
+elif crontab -l 2>/dev/null | grep -F -- "$_pull_line_re" | grep -q 'git pull'; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
-        warn "auto-pull cron line predates rollback recording -- re-run without --check-only to update it"
+        warn "auto-update cron line is the old bare-pull form -- re-run without --check-only to replace it (its rollback point is overwritten hourly, see REV-20260729-003)"
     else
-        # Replace rather than append-a-second: two pull lines would both run.
-        # The replacement lands at the END of the crontab, which is always
-        # AFTER gen-cron.sh's "# END zfs-backup-managed" marker -- so the next
-        # `gen-cron.sh --install`, which rewrites everything between the
-        # markers, cannot wipe it. Verified on all four hosts after the change.
-        crontab -l 2>/dev/null | grep -vF "$REPO_DIR && git pull" | { cat; echo "$PULL_LINE"; } | crontab -
-        log "updated auto-pull cron line to record a rollback point first"
+        crontab -l 2>/dev/null             | grep -vF -- "$_pull_line_re/deploy.sh --self-update"             | grep -v "$(printf '%s.*git pull' "$_pull_line_re")"             | { cat; echo "$PULL_LINE"; } | crontab -
+        log "replaced the auto-update cron line with --self-update"
     fi
 elif [ "$CHECK_ONLY" -eq 1 ]; then
-    warn "auto-pull cron line MISSING -- this host would never pick up updates"
+    warn "auto-update cron line MISSING -- this host would never pick up updates"
 else
     ( crontab -l 2>/dev/null; echo "$PULL_LINE" ) | crontab -
-    log "added auto-pull cron line: $PULL_LINE"
+    log "added auto-update cron line: $PULL_LINE"
 fi
+# The replacement lands at the END of the crontab, always AFTER gen-cron.sh's
+# "# END zfs-backup-managed" marker, so the next `gen-cron.sh --install` -- which
+# rewrites everything between the markers -- cannot wipe it. Verified on all
+# four hosts.
 
 # ---- which revision is actually live here ----
 # F4's visibility half. Cheap, and it answers the question an operator actually
@@ -1413,17 +1529,28 @@ if [ -d "$REPO_DIR/.git" ]; then
     _subj=$(git -C "$REPO_DIR" log -1 --format=%s 2>/dev/null | cut -c1-60)
     log "active revision: $_rev  $_subj"
     if [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ]; then
-        warn "the checkout at $REPO_DIR has LOCAL MODIFICATIONS -- the next --ff-only pull will fail and this host will silently stop updating"
+        warn "the checkout at $REPO_DIR has LOCAL MODIFICATIONS -- the next fast-forward will fail and this host will silently stop updating"
     fi
     _behind=$(git -C "$REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
     case "$_behind" in
         0) ;;
-        *) log "$_behind commit(s) behind the last fetched origin/main -- the hourly pull will catch up" ;;
+        *) log "$_behind commit(s) behind the last fetched origin/main -- the hourly update will catch up" ;;
     esac
-    if [ -r "$LAST_GOOD" ]; then
-        log "rollback point: $(cut -c1-8 < "$LAST_GOOD")  (git -C $REPO_DIR reset --hard \$(cat $LAST_GOOD))"
+    if [ -e "$UPDATE_HOLD_FILE" ]; then
+        warn "AUTOMATIC UPDATES ARE HELD: $(cat "$UPDATE_HOLD_FILE" 2>/dev/null)"
+        warn "this host will not move until: bash $REPO_DIR/deploy.sh --resume-updates"
+    fi
+    if [ -r "$PREV_REV_FILE" ]; then
+        log "rollback available to $(cut -c1-8 < "$PREV_REV_FILE")  (bash $REPO_DIR/deploy.sh --rollback)"
     else
-        log "no rollback point recorded yet -- the next hourly pull writes one"
+        log "no rollback point recorded yet -- the next real update records one"
+    fi
+    # Left over from 75bf956, which wrote this every hour whether anything
+    # changed or not. Superseded by previous-revision; removed so nobody trusts
+    # a name that never meant what it said.
+    if [ -e "$ALERT_SHARED_DIR/last-known-good" ] && [ "$CHECK_ONLY" -eq 0 ]; then
+        rm -f "$ALERT_SHARED_DIR/last-known-good"
+        log "removed the stale last-known-good file (its value was overwritten hourly, see REV-20260729-003)"
     fi
 fi
 
