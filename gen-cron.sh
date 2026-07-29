@@ -387,10 +387,22 @@ maybe_add_autotune() {
 #
 # Validated outside the command substitution that uses it -- see lint_autotune for
 # why that separation is not optional.
+#
+# A pull dataset's snapshot is created on the REMOTE host (snapget.sh ssh's over
+# and runs `zfs snapshot` there) -- quiescing the guest that owns it would mean
+# freezing across that same ssh hop and thawing reliably even if the connection
+# drops mid-run. snapsend.sh's quiesce_freeze/quiesce_thaw_all in lib-zfs-snap.sh
+# only ever shell out to local `qm`/`pct`, and snapget.sh's getopts has no -q at
+# all, so today this is simply rejected rather than silently generating a cron
+# line snapget.sh cannot parse (illegal option -- q).
 lint_quiesce() {
-    local want="$1" ctx="$2"
+    local want="$1" ctx="$2" direction="$3"
     case "$want" in
-        ""|no|agent|sync|auto) return 0 ;;
+        ""|no) return 0 ;;
+        agent|sync|auto)
+            [ "$direction" = "pull" ] && die "$ctx: quiesce='$want' on a pull dataset -- the snapshot is taken on the REMOTE host over ssh, and snapget.sh has no -q support to freeze a guest there. Quiesce only the push side of a pair, or drop 'quiesce' here."
+            return 0
+            ;;
         fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;
         *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto" ;;
     esac
@@ -800,7 +812,7 @@ build_dataset() {
             flags="$(maybe_add_autotune "$flags" "$remote_spec" "$autotune")"
             local quiesce
             quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
-            lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier"
+            lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
             label="$(resolve_field notify "$ds" "" "")" || label=""
