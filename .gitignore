@@ -19,6 +19,5 @@
 # here and only stayed tracked because .gitignore does not apply to files git
 # already knows about -- a fresh clone would have been fine, a fresh ADD would
 # not.
-!.gitattributes
 !test/
 !test/**
