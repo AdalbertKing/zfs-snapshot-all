@@ -1468,8 +1468,23 @@ do_revoke_old() {
 # do_draft_config -- best-effort, deliberately conservative. gen-cron.sh's INI
 # is template-based ([dataset:X] refers to a [template:tier] this script has
 # no way to know), so this does NOT fabricate schedule/retention/tiers -- it
-# only lists what exists on the peer plus the conventional target path, as
-# commented-out candidates for a human to turn into real [dataset:] sections.
+# only lists candidates plus the conventional path/addressing, as
+# commented-out stanzas for a human to turn into real [dataset:] sections.
+#
+# Role-aware since 2026-07-29 (was push-only before): snapget.sh v2.61+
+# addresses pull literally (arg1 = the real remote name, never a base), so
+# what to list and what field to emit both depend on PEER_SAVED_ROLE.
+#   pull -- the peer HOLDS the source. List ITS datasets (unchanged query),
+#           emit 'src = user@host:<literal-name>' with the LOCAL path
+#           per-peer-nested ($PEER_SAVED_TARGET/$label/<name>) so multiple
+#           peers can never collide under one local pool -- this exact shape
+#           was impossible before the addressing flip (see
+#           project_srcbase_path_composition_limit in memory).
+#   push -- the peer HOLDS the target. Listing the peer's datasets would
+#           suggest datasets we don't own; list LOCAL ones instead, emit
+#           'dst = user@host:base' with THIS host nested under the peer's
+#           target ($PEER_SAVED_TARGET/<this-host-label>/<name>), matching
+#           the same collision-safe convention from the other direction.
 do_draft_config() {
     local label="$1" mpath="$2"
     [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' yet -- run --pair (and --join on the peer) first"
@@ -1478,33 +1493,63 @@ do_draft_config() {
     local keyfile="$PEER_KEY_DIR/${label}_ed25519"
     [ -f "$keyfile" ] || die "expected keyfile $keyfile not found"
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"
-
-    log "listing datasets on ${remote_user}@${PEER_HOST} via the pairing key..."
-    local list
-    list=$(ssh -i "$keyfile" -p "${PEER_SAVED_PORT:-22}" -o BatchMode=yes "${remote_user}@${PEER_HOST}" \
-        "zfs list -H -o name") || die "could not list datasets on $PEER_HOST -- has --join run there yet?"
+    local role="${PEER_SAVED_ROLE:-pull}"
 
     local outdir="/root/scripts/pairing"
     mkdir -p "$outdir"
     local out="$outdir/${label}.conf.suggested"
-    {
-        echo "# Kandydaci z hosta '$PEER_HOST', wygenerowane przez --draft-config."
-        echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
-        echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
-        echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
-        echo "# ten generator ich nie zna i ich nie zgaduje."
-        echo "#"
-        echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
-        echo "# cron-configs: '[dataset:<path>]', 'dst = <target>', 'tiers = ...'."
-        echo
-        while IFS= read -r ds; do
-            [ -n "$ds" ] || continue
-            echo "# [dataset:$ds]"
-            echo "#   dst = ${PEER_SAVED_TARGET}/${label}/${ds}"
-            echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+
+    if [ "$role" = "pull" ]; then
+        log "listing datasets on ${remote_user}@${PEER_HOST} via the pairing key (pull: peer holds the source)..."
+        local list
+        list=$(ssh -i "$keyfile" -p "${PEER_SAVED_PORT:-22}" -o BatchMode=yes "${remote_user}@${PEER_HOST}" \
+            "zfs list -H -o name") || die "could not list datasets on $PEER_HOST -- has --join run there yet?"
+        {
+            echo "# Kandydaci z hosta '$PEER_HOST' (rola: pull), wygenerowane przez --draft-config."
+            echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
+            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
+            echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
+            echo "# ten generator ich nie zna i ich nie zgaduje."
+            echo "#"
+            echo "# 'src' to LITERALNA nazwa na peerze (dokladnie to co widac w zfs"
+            echo "# list tam) -- lokalna sciezka ponizej musi konczyc sie tym samym"
+            echo "# ciagiem, gen-cron.sh sam wyliczy lokalny base."
+            echo "#"
+            echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
+            echo "# cron-configs: '[dataset:<path>]', 'src = ...', 'tiers = ...'."
             echo
-        done <<< "$list"
-    } > "$out"
+            while IFS= read -r ds; do
+                [ -n "$ds" ] || continue
+                echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
+                echo "#   src   = ${remote_user}@${PEER_HOST}:${ds}"
+                echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+                echo
+            done <<< "$list"
+        } > "$out"
+    else
+        local my_label; my_label=$(hostname -s)
+        log "listing LOCAL datasets (push: this host is the source, $PEER_HOST holds the target)..."
+        local list
+        list=$(zfs list -H -o name) || die "could not list local datasets"
+        {
+            echo "# Kandydaci LOKALNE (rola: push do '$PEER_HOST'), wygenerowane przez --draft-config."
+            echo "# NIC z tego nie jest gotowa sekcja INI ani nie jest zainstalowane."
+            echo "# gen-cron.sh v4 wymaga [dataset:<path>] z polem 'tiers = <lista>'"
+            echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
+            echo "# ten generator ich nie zna i ich nie zgaduje."
+            echo "#"
+            echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
+            echo "# cron-configs: '[dataset:<path>]', 'dst = ...', 'tiers = ...'."
+            echo
+            while IFS= read -r ds; do
+                [ -n "$ds" ] || continue
+                echo "# [dataset:$ds]"
+                echo "#   dst   = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
+                echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
+                echo
+            done <<< "$list"
+        } > "$out"
+    fi
     log "draft napisany: $out -- przejrzyj recznie przed dotknieciem cron-configs"
 }
 
