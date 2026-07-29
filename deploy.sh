@@ -55,6 +55,19 @@ BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
 
 REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 REPO_DIR="/root/scripts/zfs-snapshot-all"
+
+# The permission set a delegated account needs to run the scripts at all. ONE
+# definition, because it is delegated from two unrelated places -- Phase 8 (this
+# host's own backup account) and --pair (a pull target's per-peer root). Two
+# hand-kept lists is exactly how the 'delegation-verbs' contract rots.
+#
+# 'bookmark' is easy to leave out and fails quietly: without it every send ends
+# "cannot create bookmark ... permission denied", logged as non-fatal, and the
+# transfer still succeeds -- so nothing alerts. What is lost is the
+# bookmark-backed incremental fallback: once the common-base SNAPSHOT is pruned
+# on the source, that pair can only recover with a full resend. Found live on
+# metropolis pve1, 2026-07-25.
+ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
 # ==============================================================================
 
 # PROBLEMS lets --check-only return a meaningful exit code for the WHOLE host,
@@ -84,6 +97,13 @@ PEER_PORT="22"
 PEER_ROTATE=0
 PEER_REVOKE_OLD=0
 PEER_DRAFT_CONFIG=0
+# The LOCAL account that will actually run the generated jobs. Independent of
+# --as, which names the account on the PEER: one is who we log in as there, the
+# other is who runs cron here. Empty means root runs the jobs.
+PEER_LOCAL_USER=""
+# Opt-in for a --peer name that resolves outside RFC1918. Off by default, see
+# assert_peer_address_sane.
+PEER_ALLOW_PUBLIC=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -112,6 +132,9 @@ while [ "$#" -gt 0 ]; do
         --as)           PEER_AS="${2:-}"; shift 2 ;;
         --port=*)       PEER_PORT="${1#*=}"; shift ;;
         --port)         PEER_PORT="${2:-}"; shift 2 ;;
+        --local-user=*) PEER_LOCAL_USER="${1#*=}"; shift ;;
+        --local-user)   PEER_LOCAL_USER="${2:-}"; shift 2 ;;
+        --allow-public-peer) PEER_ALLOW_PUBLIC=1; shift ;;
         --rotate)       PEER_ROTATE=1; shift ;;
         --revoke-old)   PEER_REVOKE_OLD=1; shift ;;
         --draft-config) PEER_DRAFT_CONFIG=1; shift ;;
@@ -144,7 +167,17 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             the peer. root: parity with today's clustered
                             hosts -- no isolation, use only when the hosts
                             already fully trust each other
+    --local-user=NAME       the account HERE that will run the generated jobs
+                            (e.g. zfsbackup). Installs a readable copy of the
+                            pairing key for it, and for --role=pull delegates
+                            the target root to it. Independent of --as, which
+                            is about the account on the PEER. Omit and the
+                            jobs are assumed to run as root.
     --port=N                ssh port (default 22)
+    --allow-public-peer     accept a --peer NAME that resolves outside RFC1918
+                            (refused by default -- see the note on search
+                            domains in PAIRING-DESIGN.md). Not needed when
+                            --peer is a literal IP address.
     --rotate                generate a new key alongside the existing one
     --revoke-old             finish a rotation: remove the old key on both ends
     --draft-config           after --join has run on the peer: list its
@@ -171,6 +204,19 @@ case "$PEER_AS" in
 esac
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
+fi
+# --local-user names an account on THIS host, so it can be checked before any
+# state is touched. Refusing here (rather than silently skipping the key copy
+# and the delegation) keeps a typo from producing a pairing that looks complete
+# and fails at 2am with "permission denied".
+if [ -n "$PEER_LOCAL_USER" ]; then
+    if [ "$PAIR_MODE" -eq 0 ]; then
+        echo "--local-user only applies to --pair" >&2; exit 2
+    fi
+    if ! id "$PEER_LOCAL_USER" >/dev/null 2>&1; then
+        echo "--local-user='$PEER_LOCAL_USER' does not exist on this host -- create it first: bash deploy.sh --backup-user=$PEER_LOCAL_USER" >&2
+        exit 2
+    fi
 fi
 if { [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ]; } && [ "$CHECK_ONLY" -eq 1 ]; then
     echo "--check-only cannot be combined with --pair/--join -- these mutate state by design (new keys, new accounts, new grants)" >&2
@@ -1135,6 +1181,95 @@ pubkey_fingerprint() {
     ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
 }
 
+# True for addresses that can only be on a private network: RFC1918, loopback,
+# link-local, CGNAT, and their IPv6 equivalents (ULA fc00::/7, fe80::/10, ::1).
+is_private_addr() {
+    case "$1" in
+        10.*|127.*|192.168.*|169.254.*) return 0 ;;
+        172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+        100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 0 ;;
+        ::1|fc*:*|fd*:*|fe8*:*|fe9*:*|fea*:*|feb*:*) return 0 ;;
+    esac
+    return 1
+}
+
+# --peer is fed straight to ssh-keyscan, whose whole job is to trust whatever
+# answers. If the name is wrong the pairing does not fail -- it succeeds against
+# somebody else, pinning a stranger's host key and then sending the pairing key
+# out to them on the next --draft-config.
+#
+# This is not hypothetical. On metropolis, `pve2` from pve1 has no /etc/hosts
+# entry, so the resolver appends the search domain and `getent hosts pve2`
+# answers with FOUR public addresses belonging to the real, unrelated
+# metropolis.net. Nothing in the flow noticed: the fingerprint was printed with
+# a "CONFIRM this" line and the script carried on.
+#
+# Two fingerprints of that failure, both refused:
+#   - more than one distinct address for one peer -- a real peer has one, a
+#     search-domain accident routinely has several
+#   - a public address, which no LAN pairing should ever produce
+# A literal IP is exempt: no resolution happened, so there is nothing to have
+# gone wrong, and a WAN pairing (which PAIRING-DESIGN.md allows) can always be
+# addressed that way -- or with --allow-public-peer, deliberately.
+assert_peer_address_sane() {
+    case "$PEER_HOST" in
+        *[!0-9.]*) ;;                     # not a bare IPv4 literal, keep checking
+        *) log "peer address $PEER_HOST is a literal IP -- no name resolution involved"; return 0 ;;
+    esac
+    case "$PEER_HOST" in
+        *:*) log "peer address $PEER_HOST is a literal IPv6 -- no name resolution involved"; return 0 ;;
+    esac
+
+    local addrs
+    addrs=$(getent ahosts "$PEER_HOST" 2>/dev/null | awk '{print $1}' | sort -u)
+    [ -n "$addrs" ] || die "--peer='$PEER_HOST' does not resolve on this host -- add it to /etc/hosts or pass the IP address directly"
+
+    local count; count=$(printf '%s\n' "$addrs" | wc -l)
+    if [ "$count" -gt 1 ]; then
+        die "--peer='$PEER_HOST' resolves to $count different addresses ($(printf '%s' "$addrs" | tr '\n' ' ')) -- a peer has one. This is the signature of a search domain answering for a name that has no local entry, and ssh-keyscan would happily pin whichever of them replies first. Add '$PEER_HOST' to /etc/hosts, or pass the IP address to --peer."
+    fi
+
+    log "peer $PEER_HOST resolves to $addrs"
+    if ! is_private_addr "$addrs"; then
+        [ "$PEER_ALLOW_PUBLIC" -eq 1 ] || die "--peer='$PEER_HOST' resolves to $addrs, which is a PUBLIC address. If that is genuinely your peer over a WAN, re-run with --allow-public-peer (or pass the IP directly); if it is not, you were one command away from pinning a stranger's host key."
+        warn "pairing with a PUBLIC address $addrs because --allow-public-peer was given -- verify the fingerprint below with extra care"
+    fi
+}
+
+# Hole the pairing feature had until 2026-07-29: the key lives in
+# /root/.ssh/pairing (0700, root), but for --role=pull the job that uses it is a
+# snapget.sh cron line, and the whole point of a delegated account is that this
+# line does NOT run as root. -K pointed at a file the running account could not
+# read, and nothing said so until the job failed.
+#
+# The copy is deliberate rather than a chmod: /root/.ssh/pairing stays 0700 and
+# root-owned, and only the ONE key for this relationship crosses over.
+install_local_pairing_key() {
+    local src_key="$1" label="$2" user="$3"
+    local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
+    [ -n "$home_dir" ] || die "cannot determine home directory for --local-user='$user'"
+    local group; group=$(id -gn "$user")
+    local dest="$home_dir/.ssh/pairing-${label}_ed25519"
+    mkdir -p "$home_dir/.ssh"
+    chown "$user:$group" "$home_dir/.ssh"
+    chmod 700 "$home_dir/.ssh"
+    install -o "$user" -g "$group" -m 600 "$src_key" "$dest" \
+        || die "could not install a readable copy of the pairing key at $dest"
+    log "installed a copy of the pairing key for $user: $dest"
+    printf '%s' "$dest"
+}
+
+# Where the GENERATED job should look for the key: the local-user copy when
+# there is one, otherwise root's original.
+local_keyfile_path() {
+    local label="$1" user="$2"
+    if [ -n "$user" ]; then
+        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
+        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_ed25519"; return 0; }
+    fi
+    printf '%s' "$PEER_KEY_DIR/${label}_ed25519"
+}
+
 # do_pair -- runs on the host that will connect (collector for pull, source
 # for push). Generates/reuses a key dedicated to THIS relationship, pins the
 # peer's host key, and produces the wsad for manual transfer.
@@ -1162,6 +1297,7 @@ do_pair() {
         PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
         PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
         [ -n "$PEER_DATASETS" ] || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+        [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
     else
         if [ -r "$mpath" ]; then
             # Re-pairing an existing relationship. Role/target/account-mode are
@@ -1179,6 +1315,9 @@ do_pair() {
             PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
             [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+            # --local-user is operational, not identity-defining (which account
+            # runs cron here can legitimately change), so a given value wins.
+            [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
             log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the wsad"
             if [ -n "$requested_datasets" ] && [ "${PEER_SAVED_DATASETS:-}" != "$requested_datasets" ]; then
                 log "dataset list changed: '${PEER_SAVED_DATASETS:-}' -> '$requested_datasets'"
@@ -1195,7 +1334,8 @@ do_pair() {
 
     # ---- host key pinning: ssh-keyscan needs no prior trust, so this adds
     # zero manual steps compared to today's accept-new (see PAIRING-DESIGN.md,
-    # decision B) ----
+    # decision B). It trusts whatever answers, so WHO answers is settled first. --
+    assert_peer_address_sane
     log "fetching host key for $PEER_HOST:$PEER_PORT via ssh-keyscan..."
     local scan; scan=$(ssh-keyscan -p "$PEER_PORT" -t ed25519 "$PEER_HOST" 2>/dev/null)
     [ -n "$scan" ] || die "ssh-keyscan got nothing back from $PEER_HOST:$PEER_PORT -- host unreachable, wrong port, or sshd not up yet"
@@ -1225,6 +1365,15 @@ do_pair() {
         log "generated keypair for '$PEER_HOST': $keyfile"
     fi
 
+    # ---- make the key usable by the account that will actually run the jobs.
+    # NOT during --rotate: mid-rotation the new key is unproven, and the running
+    # cron must keep using the old one until --revoke-old promotes it (which
+    # refreshes this copy). That is what makes rotation zero-downtime for a
+    # delegated account too, not just for root. ----
+    if [ -n "$PEER_LOCAL_USER" ] && [ "$PEER_ROTATE" -eq 0 ]; then
+        install_local_pairing_key "$keyfile" "$label" "$PEER_LOCAL_USER" >/dev/null
+    fi
+
     # ---- target dataset: created HERE only for pull (local to this host).
     # For push the target is remote -- there is no trust to the peer yet at
     # --pair time, so that creation happens during --join instead.
@@ -1239,6 +1388,20 @@ do_pair() {
         else
             zfs create -p "$dest_root" && log "created target dataset $dest_root" \
                 || die "zfs create -p $dest_root failed"
+        fi
+        # The mirror image of what --join does on the peer, and it was simply
+        # missing: --join delegates the SOURCE side over there, but nothing
+        # delegated the RECEIVE side over here. As root that is invisible -- the
+        # pairing looks finished and the first delegated snapget.sh run dies on
+        # 'cannot receive: permission denied'. zfs allow is inherited by
+        # descendants, so one grant on the per-peer root covers every dataset
+        # received under it, whatever the peer decides to send.
+        if [ -n "$PEER_LOCAL_USER" ]; then
+            zfs allow -u "$PEER_LOCAL_USER" "$ZFS_PERMS" "$dest_root" \
+                || die "zfs allow failed for $dest_root"
+            log "delegated ($ZFS_PERMS) on $dest_root to $PEER_LOCAL_USER"
+        else
+            log "no --local-user given -- $dest_root is delegated to nobody, the generated jobs will have to run as root"
         fi
     fi
 
@@ -1260,6 +1423,7 @@ PEER_SAVED_TARGET=$PEER_TARGET
 PEER_SAVED_AS=$PEER_AS
 PEER_SAVED_ACCOUNT=$proposed_account
 PEER_SAVED_PORT=$PEER_PORT
+PEER_SAVED_LOCAL_USER=$PEER_LOCAL_USER
 PEER_ROTATING=$rotating
 PEER_CURRENT_PUBKEY='$pub'
 PEER_PREVIOUS_PUBKEY='$prev_pub'
@@ -1452,6 +1616,13 @@ do_revoke_old() {
     rm -f "$keyfile" "${keyfile}.pub"
     mv "$newkey" "$keyfile"
     mv "${newkey}.pub" "${keyfile}.pub"
+    # The delegated account's copy still holds the key we just revoked. Refresh
+    # it HERE, at the one moment the new key is both proven and promoted --
+    # miss this and rotation quietly breaks every job running as that account
+    # while root's own path keeps working, which is the worst way to find out.
+    if [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
+        install_local_pairing_key "$keyfile" "$label" "$PEER_SAVED_LOCAL_USER" >/dev/null
+    fi
     local new_current; new_current=$(cat "${keyfile}.pub")
     sed -i -e 's/^PEER_ROTATING=.*/PEER_ROTATING=no/' \
            -e "s|^PEER_PREVIOUS_PUBKEY=.*|PEER_PREVIOUS_PUBKEY=''|" \
@@ -1495,6 +1666,15 @@ do_draft_config() {
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"
     local role="${PEER_SAVED_ROLE:-pull}"
 
+    # $keyfile above is root's, and this function's own ssh runs as root, so it
+    # keeps using it. The EMITTED -K is a different question: it belongs to
+    # whichever account will run the cron line, which for a delegated setup
+    # cannot read /root/.ssh/pairing at all.
+    local job_keyfile; job_keyfile=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
+    if [ -n "${PEER_SAVED_LOCAL_USER:-}" ] && [ ! -r "$job_keyfile" ]; then
+        warn "expected $job_keyfile for ${PEER_SAVED_LOCAL_USER} but it is not there -- re-run --pair with --local-user=${PEER_SAVED_LOCAL_USER} to reinstall it"
+    fi
+
     local outdir="/root/scripts/pairing"
     mkdir -p "$outdir"
     local out="$outdir/${label}.conf.suggested"
@@ -1526,7 +1706,7 @@ do_draft_config() {
                 [ -n "$ds" ] || continue
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src   = ${remote_user}@${PEER_HOST}:${ds}"
-                echo "#   flags = -K ${keyfile}"
+                echo "#   flags = -K ${job_keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
                 echo
             done <<< "$list"
@@ -1554,7 +1734,7 @@ do_draft_config() {
                 [ -n "$ds" ] || continue
                 echo "# [dataset:$ds]"
                 echo "#   dst   = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
-                echo "#   flags = -K ${keyfile}"
+                echo "#   flags = -K ${job_keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
                 echo
             done <<< "$list"
@@ -1772,13 +1952,8 @@ EOF
     # ------------------------------------------------------------------------------
     log "Phase 8g: ZFS delegation on ${DATASETS[*]}"
     # ------------------------------------------------------------------------------
-    # 'bookmark' is easy to leave out and fails quietly: without it every send
-    # ends "cannot create bookmark ... permission denied", logged as non-fatal,
-    # and the transfer still succeeds -- so nothing alerts. What is lost is the
-    # bookmark-backed incremental fallback: once the common-base SNAPSHOT is
-    # pruned on the source, that pair can only recover with a full resend.
-    # Found live on metropolis pve1, 2026-07-25.
-    ZFS_PERMS="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
+    # ZFS_PERMS is defined once in the config block at the top -- see the note
+    # there about 'bookmark' and the 'delegation-verbs' contract.
     for ds in "${DATASETS[@]}"; do
         if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
             warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"
