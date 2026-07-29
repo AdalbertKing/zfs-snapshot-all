@@ -5,19 +5,21 @@ Chat transcripts, local notes, and unpushed files are not project state.
 
 ## Roles
 
-- **Owner:** decides product direction, operational risk acceptance, and whether a change may be deployed.
+- **Owner:** decides product direction, operational risk acceptance, delivery mode, and whether a change may be deployed.
 - **Implementer (Claude by default):** analyzes accepted findings, changes code, adds tests, and supplies evidence.
-- **Reviewer (ChatGPT by default):** inspects design and diffs, publishes findings, verifies evidence, and decides whether a finding is closed. The reviewer does not implement fixes unless the owner explicitly asks.
+- **Reviewer (ChatGPT by default):** inspects design and diffs, publishes findings, verifies evidence, and decides whether a finding is closed. The reviewer does not implement production fixes unless the owner explicitly asks.
 
 The roles may be swapped for a specific task only when the owner says so explicitly.
 
 ## Git workflow
 
-1. Do not commit directly to `main`.
+Normal workflow:
+
+1. Use a branch and Pull Request rather than committing directly to `main`.
 2. One problem or review per branch and Pull Request.
 3. One commit must contain one logical change. Do not combine an implementation, unrelated cleanup, fixture refresh, and documentation rewrite in one commit.
 4. Do not merge your own implementation merely because its tests pass. The reviewer must inspect it.
-5. Use a stable release tag or pinned commit for production deployment. `main` is development state, not an automatic release channel.
+5. Production should normally use a stable release tag or pinned commit. `main` is ordinarily development state, not an automatic release channel.
 6. Never rewrite published history or force-push a shared branch without the owner's explicit instruction.
 
 Recommended branch names:
@@ -25,6 +27,29 @@ Recommended branch names:
 - review publication: `review/REV-YYYYMMDD-NNN-short-title`
 - implementation: `fix/REV-YYYYMMDD-NNN-short-title`
 - maintenance not originating from a review: `maintenance/short-title`
+
+### Temporary owner-approved direct-main mode
+
+Active from **2026-07-29 until the owner explicitly revokes it**.
+
+The owner has temporarily authorized Claude and ChatGPT to commit directly to `main` because:
+
+1. four live test servers pull `main` every hour;
+2. the owner operates Claude Code and ChatGPT remotely from a smartphone and cannot reliably perform the manual Git and Pull Request steps.
+
+During this exception:
+
+- a branch and Pull Request are preferred when practical but are not required;
+- `main` is the live integration channel and the owner accepts the associated moving-main risk;
+- every commit must still be one reviewable logical change;
+- relevant tests must be run before push when the environment permits;
+- GitHub Actions on push is post-delivery evidence, not a pre-merge gate;
+- review findings and implementer responses must still be written under `docs/reviews/`;
+- the implementer must not mark findings `CLOSED`; the reviewer still owns technical closure;
+- no force-push, history rewrite, silent fixture blessing, or weakening of safety checks is permitted;
+- any direct-main change that fails review must be corrected by a new forward commit, never by rewriting published history.
+
+This exception changes delivery mechanics only. It does not waive testing, evidence, review, or safety requirements.
 
 ## Review artifacts
 
@@ -41,7 +66,7 @@ Review states:
 - `OPEN` — published and awaiting response or implementation.
 - `ACCEPTED` — implementer agrees with the finding; not yet proven fixed.
 - `DISPUTED` — implementer disagrees and provides evidence.
-- `IMPLEMENTED` — code and tests are present in a PR; not yet accepted by reviewer.
+- `IMPLEMENTED` — code and tests are available for review; not yet accepted by the reviewer.
 - `CLOSED` — reviewer verified the acceptance criteria.
 - `DEFERRED` — owner explicitly accepted postponement and recorded the reason.
 - `REJECTED` — reviewer withdrew the finding or owner accepted the documented risk.
@@ -50,7 +75,7 @@ Only the reviewer marks a technical finding `CLOSED`. Only the owner accepts ope
 
 ## Required evidence
 
-Every implementation PR must state:
+Every implementation delivery, whether a Pull Request or direct-main commit, must state:
 
 - review and finding IDs addressed;
 - root cause;
@@ -82,4 +107,4 @@ Before declaring work complete:
 
 ## Documentation
 
-Documentation is part of the contract. Any change to flags, defaults, configuration fields, deployment behavior, delegated permissions, or operational safety must update the relevant documentation and tests in the same PR.
+Documentation is part of the contract. Any change to flags, defaults, configuration fields, deployment behavior, delegated permissions, or operational safety must update the relevant documentation and tests in the same delivery unit.
