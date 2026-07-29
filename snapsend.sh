@@ -411,7 +411,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.66'
+VERSION='v2.67'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -908,6 +908,9 @@ process_dataset() {
     # Remembers whether -f itself was passed, before -F below can flip the
     # shadow above -- used only to keep the "(-f)" log message honest.
     local user_requested_full=$FORCE_FULL_SEND
+    # One-time handover of state files written under the pre-v3 naming, before
+    # anything reads them. See adopt_legacy_state in lib-zfs-snap.sh.
+    adopt_legacy_state "$tgt_dataset" "$src_dataset"
     # Local shadow: -T's auto-check below may flip THIS dataset to
     # skip-intermediates without touching the global -- each dataset in a
     # multi-dataset invocation gets its own fresh copy of whatever the user
@@ -968,21 +971,21 @@ process_dataset() {
         resume_token=$(get_resume_token "$tgt_dataset" "$remote_user" "$remote_host")
         if [ -n "$resume_token" ]; then
             local attempts
-            attempts=$(read_resume_attempts "$tgt_dataset")
+            attempts=$(read_resume_attempts "$tgt_dataset" "$src_dataset")
             if [ "$attempts" -ge "$MAX_RESUME_ATTEMPTS" ]; then
                 log 1 "Resume failed $attempts times for $tgt_dataset - abandoning stuck state"
                 abandon_resume "$tgt_dataset" "$remote_user" "$remote_host"
-                reset_resume_attempts "$tgt_dataset"
+                reset_resume_attempts "$tgt_dataset" "$src_dataset"
                 # Giving up on this snapshot -- release whatever the original
                 # failed attempt held, so it can be pruned like normal again.
                 # A fresh $snapshot is about to be resolved below.
                 local stuck_snap
-                stuck_snap=$(read_inflight_snap "$tgt_dataset")
+                stuck_snap=$(read_inflight_snap "$tgt_dataset" "$src_dataset")
                 [ -n "$stuck_snap" ] && release_snapshot "$stuck_snap" "" ""
-                clear_inflight_snap "$tgt_dataset"
+                clear_inflight_snap "$tgt_dataset" "$src_dataset"
                 log 1 "Abandoned - falling through to normal transfer logic"
             else
-                increment_resume_attempts "$tgt_dataset"
+                increment_resume_attempts "$tgt_dataset" "$src_dataset"
                 log 1 "Found resume token for $tgt_dataset - resuming interrupted transfer (attempt $((attempts + 1))/$MAX_RESUME_ATTEMPTS)"
                 local resume_recv_flags="-F -s"
                 [ $UNMOUNT -eq 1 ] && resume_recv_flags="$resume_recv_flags -u"
@@ -992,14 +995,14 @@ process_dataset() {
                 log 4 "RAW RESUME SEND COMMAND: $resume_send_cmd"
                 log 4 "RAW RESUME RECV COMMAND: $resume_recv_cmd"
                 if transfer_data "$resume_send_cmd" "$resume_recv_cmd" "$remote_host" "$remote_user"; then
-                    reset_resume_attempts "$tgt_dataset"
+                    reset_resume_attempts "$tgt_dataset" "$src_dataset"
                     STATS_RESUMED="yes"
                     # Resumed stream landed -- release the hold placed on the
                     # original attempt (this run never recomputes $snapshot).
                     local resumed_snap
-                    resumed_snap=$(read_inflight_snap "$tgt_dataset")
+                    resumed_snap=$(read_inflight_snap "$tgt_dataset" "$src_dataset")
                     [ -n "$resumed_snap" ] && release_snapshot "$resumed_snap" "" ""
-                    clear_inflight_snap "$tgt_dataset"
+                    clear_inflight_snap "$tgt_dataset" "$src_dataset"
                     log 1 "Resumed transfer completed successfully"
                     return 0
                 else
@@ -1084,7 +1087,7 @@ process_dataset() {
     # so a stuck resume keeps its source snapshot until it either succeeds or
     # is abandoned.
     hold_snapshot "$snapshot" "" ""
-    record_inflight_snap "$tgt_dataset" "$snapshot"
+    record_inflight_snap "$tgt_dataset" "$src_dataset" "$snapshot"
 
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         log 2 "Creating target dataset: $tgt_dataset"
@@ -1227,7 +1230,7 @@ process_dataset() {
             if validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
                 log 1 "Snapshot already exists in target - skipping"
                 release_snapshot "$snapshot" "" ""
-                clear_inflight_snap "$tgt_dataset"
+                clear_inflight_snap "$tgt_dataset" "$src_dataset"
                 return 0
             else
                 log 1 "Snapshot exists but timestamps differ - forcing full send"
@@ -1334,7 +1337,7 @@ process_dataset() {
         # so release now instead of stranding it un-prunable forever.
         if [ -z "$(get_resume_token "$tgt_dataset" "$remote_user" "$remote_host")" ]; then
             release_snapshot "$snapshot" "" ""
-            clear_inflight_snap "$tgt_dataset"
+            clear_inflight_snap "$tgt_dataset" "$src_dataset"
         fi
         return 1
     }
@@ -1342,7 +1345,7 @@ process_dataset() {
     # Transfer landed -- this snapshot is no longer "in flight", safe to prune
     # on the next delsnaps.sh run like any other.
     release_snapshot "$snapshot" "" ""
-    clear_inflight_snap "$tgt_dataset"
+    clear_inflight_snap "$tgt_dataset" "$src_dataset"
 
     # Under -w the leaf was created by recv, not by us, so it never got
     # canmount=noauto at create time. Reapply it now: it is what keeps the

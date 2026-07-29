@@ -94,22 +94,55 @@ abandon_resume() {
 # /var/run the counter was unwritable for non-root, reads always saw 0, the
 # MAX_RESUME_ATTEMPTS guard never tripped, and a stuck resume was retried every
 # run forever. LOCKDIR is set before process_dataset runs.
+# The identity of ONE per-dataset job's state.
+#
+# Both state files used to be named after the target dataset with '/' turned
+# into '_', which is not injective: tank/a_b and tank/a/b both became tank_a_b,
+# and underscores in dataset names are ordinary (hdd/backuptest_targets collides
+# with hdd/backuptest/targets). The name also omitted IDENTIFIER, so two jobs
+# that -j exists precisely to keep apart shared one file.
+#
+# Sharing the resume counter is untidy. Sharing the IN-FLIGHT file is not: that
+# file records which snapshot currently holds `zfs hold`, and one job clearing
+# another's record means that hold is never released. A hold that outlives its
+# job blocks pruning, and on a pvesr-replicated dataset it wedges PVE
+# replication permanently -- see the hold/pvesr note in snapsend.sh.
+#
+# Same shape as the invocation lock, which had been doing this correctly all
+# along: NUL-delimited fields so no value can impersonate a boundary, through a
+# stable hash. Reported as F3 in docs/reviews/REV-20260729-001.md.
+job_state_key() {
+    local tgt="$1" src="${2:-}"
+    printf '%s\0%s\0%s\0%s' "$(basename "$0")" "${IDENTIFIER:-}" "$src" "$tgt" \
+        | md5sum | cut -d' ' -f1
+}
+
+# The pre-v3 name, kept only so the one-time handover below can find them.
+legacy_state_file() {
+    echo "${LOCKDIR:-/var/run}/$(basename "$0").$1.$(echo "$2" | tr '/' '_')"
+}
+
+# Resume-attempt counter is kept under LOCKDIR (same override as the lock), so a
+# non-root run (LOCKDIR=~/run) can actually write it -- on the old hardcoded
+# /var/run the counter was unwritable for non-root, reads always saw 0, the
+# MAX_RESUME_ATTEMPTS guard never tripped, and a stuck resume was retried every
+# run forever. LOCKDIR is set before process_dataset runs.
 resume_state_file() {
-    echo "${LOCKDIR:-/var/run}/$(basename "$0").resume-attempts.$(echo "$1" | tr '/' '_')"
+    echo "${LOCKDIR:-/var/run}/$(basename "$0").resume-attempts.$(job_state_key "$1" "${2:-}")"
 }
 
 read_resume_attempts() {
-    cat "$(resume_state_file "$1")" 2>/dev/null || echo 0
+    cat "$(resume_state_file "$1" "${2:-}")" 2>/dev/null || echo 0
 }
 
 increment_resume_attempts() {
     local f
-    f=$(resume_state_file "$1")
-    echo "$(($(read_resume_attempts "$1") + 1))" > "$f"
+    f=$(resume_state_file "$1" "${2:-}")
+    echo "$(($(read_resume_attempts "$1" "${2:-}") + 1))" > "$f"
 }
 
 reset_resume_attempts() {
-    rm -f "$(resume_state_file "$1")"
+    rm -f "$(resume_state_file "$1" "${2:-}")"
 }
 
 ###############################################################################
@@ -229,19 +262,55 @@ release_snapshot() {
 # snapshot name from a possibly-remote host; recording it once, right where
 # it is created, is simpler and avoids an extra round trip.
 inflight_snap_file() {
-    echo "${LOCKDIR:-/var/run}/$(basename "$0").inflight-snap.$(echo "$1" | tr '/' '_')"
+    echo "${LOCKDIR:-/var/run}/$(basename "$0").inflight-snap.$(job_state_key "$1" "${2:-}")"
 }
 
 record_inflight_snap() {
-    echo "$2" > "$(inflight_snap_file "$1")" 2>/dev/null || true
+    echo "$3" > "$(inflight_snap_file "$1" "${2:-}")" 2>/dev/null || true
 }
 
 read_inflight_snap() {
-    cat "$(inflight_snap_file "$1")" 2>/dev/null
+    cat "$(inflight_snap_file "$1" "${2:-}")" 2>/dev/null
 }
 
 clear_inflight_snap() {
-    rm -f "$(inflight_snap_file "$1")"
+    rm -f "$(inflight_snap_file "$1" "${2:-}")"
+}
+
+# One-time handover from the pre-v3 file names, run once per dataset before any
+# state is read. Called for its effect; safe to run when there is nothing to do.
+#
+# The in-flight file is ADOPTED rather than deleted, and only when its CONTENT
+# proves it belongs to this job: the recorded value is "<source-dataset>@<snap>",
+# so the source it names either matches ours or it does not. That is what makes
+# this safe where a rename could not be -- the old NAME is ambiguous by
+# construction (that is the bug), but the old CONTENT is not. A file that is not
+# ours is left where it is; the job it does belong to will claim it on its own
+# next run.
+#
+# Deleting them instead would have been the obvious move and the wrong one: the
+# recorded snapshot is what a later run releases the hold on, so dropping the
+# record leaks exactly the hold this whole fix is about.
+#
+# The resume COUNTER is not adopted. Its content is a bare number, so nothing in
+# it can say whose it is, and guessing is worse than starting over: the counter
+# only guards against retrying a stuck resume forever, so a one-time reset costs
+# at most one extra attempt cycle. The stale file is removed so it cannot
+# accumulate.
+adopt_legacy_state() {
+    local tgt="$1" src="${2:-}" legacy new recorded
+    legacy="$(legacy_state_file inflight-snap "$tgt")"
+    new="$(inflight_snap_file "$tgt" "$src")"
+    if [ -f "$legacy" ] && [ ! -f "$new" ]; then
+        recorded="$(cat "$legacy" 2>/dev/null)"
+        if [ -n "$recorded" ] && [ "${recorded%%@*}" = "$src" ]; then
+            mv "$legacy" "$new" 2>/dev/null \
+                && log 2 "adopted pre-v3 in-flight record for $src -> $tgt"
+        fi
+    fi
+    legacy="$(legacy_state_file resume-attempts "$tgt")"
+    [ -f "$legacy" ] && rm -f "$legacy"
+    return 0
 }
 
 ###############################################################################
