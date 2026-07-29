@@ -1515,13 +1515,18 @@ do_draft_config() {
             echo "# list tam) -- lokalna sciezka ponizej musi konczyc sie tym samym"
             echo "# ciagiem, gen-cron.sh sam wyliczy lokalny base."
             echo "#"
+            echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
+            echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
+            echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "#"
             echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
-            echo "# cron-configs: '[dataset:<path>]', 'src = ...', 'tiers = ...'."
+            echo "# cron-configs: '[dataset:<path>]', 'src = ...', 'flags = ...', 'tiers = ...'."
             echo
             while IFS= read -r ds; do
                 [ -n "$ds" ] || continue
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src   = ${remote_user}@${PEER_HOST}:${ds}"
+                echo "#   flags = -K ${keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
                 echo
             done <<< "$list"
@@ -1538,13 +1543,18 @@ do_draft_config() {
             echo "# odwolujacym sie do JUZ ISTNIEJACYCH [template:] w Twoim configu --"
             echo "# ten generator ich nie zna i ich nie zgaduje."
             echo "#"
+            echo "# Bez '-K' zadanie probowaloby uwierzytelnic sie domyslnym kluczem"
+            echo "# SSH tego konta zamiast dedykowanego klucza tej relacji -- konto"
+            echo "# ${remote_user} na peerze zna WYLACZNIE ten klucz."
+            echo "#"
             echo "# Dla kazdego kandydata ponizej dopisz recznie do wlasciwego pliku w"
-            echo "# cron-configs: '[dataset:<path>]', 'dst = ...', 'tiers = ...'."
+            echo "# cron-configs: '[dataset:<path>]', 'dst = ...', 'flags = ...', 'tiers = ...'."
             echo
             while IFS= read -r ds; do
                 [ -n "$ds" ] || continue
                 echo "# [dataset:$ds]"
                 echo "#   dst   = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
+                echo "#   flags = -K ${keyfile}"
                 echo "#   tiers = <WYBIERZ ISTNIEJACY TEMPLATE>"
                 echo
             done <<< "$list"
