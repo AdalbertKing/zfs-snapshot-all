@@ -1390,7 +1390,11 @@ elif crontab -l 2>/dev/null | grep -qF "$REPO_DIR && git pull"; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
         warn "auto-pull cron line predates rollback recording -- re-run without --check-only to update it"
     else
-        # Replace in place rather than appending: two pull lines would both run.
+        # Replace rather than append-a-second: two pull lines would both run.
+        # The replacement lands at the END of the crontab, which is always
+        # AFTER gen-cron.sh's "# END zfs-backup-managed" marker -- so the next
+        # `gen-cron.sh --install`, which rewrites everything between the
+        # markers, cannot wipe it. Verified on all four hosts after the change.
         crontab -l 2>/dev/null | grep -vF "$REPO_DIR && git pull" | { cat; echo "$PULL_LINE"; } | crontab -
         log "updated auto-pull cron line to record a rollback point first"
     fi
