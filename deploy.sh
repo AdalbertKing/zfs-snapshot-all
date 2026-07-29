@@ -1256,7 +1256,10 @@ install_local_pairing_key() {
     install -o "$user" -g "$group" -m 600 "$src_key" "$dest" \
         || die "could not install a readable copy of the pairing key at $dest"
     log "installed a copy of the pairing key for $user: $dest"
-    printf '%s' "$dest"
+    # Deliberately prints nothing but the log line: an earlier version also
+    # echoed $dest as a return value, which forced callers to redirect stdout
+    # and silently swallowed the log with it. Callers that need the path ask
+    # local_keyfile_path instead.
 }
 
 # Where the GENERATED job should look for the key: the local-user copy when
@@ -1371,7 +1374,7 @@ do_pair() {
     # refreshes this copy). That is what makes rotation zero-downtime for a
     # delegated account too, not just for root. ----
     if [ -n "$PEER_LOCAL_USER" ] && [ "$PEER_ROTATE" -eq 0 ]; then
-        install_local_pairing_key "$keyfile" "$label" "$PEER_LOCAL_USER" >/dev/null
+        install_local_pairing_key "$keyfile" "$label" "$PEER_LOCAL_USER"
     fi
 
     # ---- target dataset: created HERE only for pull (local to this host).
@@ -1621,7 +1624,7 @@ do_revoke_old() {
     # miss this and rotation quietly breaks every job running as that account
     # while root's own path keeps working, which is the worst way to find out.
     if [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
-        install_local_pairing_key "$keyfile" "$label" "$PEER_SAVED_LOCAL_USER" >/dev/null
+        install_local_pairing_key "$keyfile" "$label" "$PEER_SAVED_LOCAL_USER"
     fi
     local new_current; new_current=$(cat "${keyfile}.pub")
     sed -i -e 's/^PEER_ROTATING=.*/PEER_ROTATING=no/' \
