@@ -267,6 +267,11 @@ verify() {
         mode="$(git -C "$REPO" ls-files -s "$f" 2>/dev/null | awk '{print $1}')"
         if [ -n "$mode" ]; then
             [ "$mode" = "100755" ] || { echo "  [suite:$name] $f is tracked $mode, not 100755 -- it will not be executable on any host (git update-index --chmod=+x $f)"; rc=1; }
+        elif git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+            # In a repo but untracked: the filesystem bit says nothing about what
+            # will ship, and trusting it is how a suite reaches a host as 100644
+            # twice in one day. The check below only applies outside a checkout.
+            echo "  [suite:$name] $f is not staged yet -- its tracked mode cannot be verified. git add it and re-run --verify."; rc=1
         else
             [ -x "$REPO/$f" ] || { echo "  [suite:$name] cmd not executable: $1"; rc=1; }
         fi
