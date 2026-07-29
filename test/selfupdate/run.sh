@@ -186,6 +186,31 @@ for shape in "$line_old1" "$line_old2"; do
     fi
 done
 
+# --- 8. `set -u` canary for the whole top of the script ---------------------
+# Every case above passes ALERT_SHARED_DIR in the environment, so the code path
+# that computes the state directory from its DEFAULT was never executed -- and a
+# reference to a variable defined further down the file therefore shipped, making
+# every plain `deploy.sh` invocation die on "ALERT_SHARED_DIR: unbound
+# variable". bash -n cannot see it and no suite ran deploy.sh without overrides.
+#
+# So: run with only REPO_DIR set and assert nothing is unbound. The run itself is
+# expected to fail (the default state dir is not writable unprivileged); what is
+# asserted is HOW it fails.
+out="$(REPO_DIR="$CLONE" bash "$DEPLOY" --self-update 2>&1)"
+if printf '%s' "$out" | grep -q 'unbound variable'; then
+    bad "no unbound variable with defaults in play" "$(printf '%s' "$out" | grep 'unbound variable' | head -1)"
+else
+    ok "no unbound variable with defaults in play"
+fi
+# Same question for a plain run, which reaches further into the file than any
+# other case here does before it needs root.
+out="$(REPO_DIR="$CLONE" bash "$DEPLOY" --check-only 2>&1)"
+if printf '%s' "$out" | grep -q 'unbound variable'; then
+    bad "no unbound variable on a plain --check-only" "$(printf '%s' "$out" | grep 'unbound variable' | head -1)"
+else
+    ok "no unbound variable on a plain --check-only"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

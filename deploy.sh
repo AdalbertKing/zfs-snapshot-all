@@ -57,6 +57,12 @@ REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 # Overridable so the self-update tests can drive a throwaway checkout instead
 # of the live one. Production never sets these.
 REPO_DIR="${REPO_DIR:-/root/scripts/zfs-snapshot-all}"
+# Shared state that outlives one run: the alert queue, and the self-update
+# bookkeeping below. Defined HERE, in the config block, because the self-update
+# path is dispatched near the top of the file and referenced it before its old
+# mid-file definition ran -- which made every plain deploy.sh invocation die on
+# `ALERT_SHARED_DIR: unbound variable`.
+ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 
 # The permission set a delegated account needs to run the scripts at all. ONE
 # definition, because it is delegated from two unrelated places -- Phase 8 (this
@@ -909,7 +915,6 @@ log "Phase 4: notify-fail.sh (alert reporting)"
 # service account able to write there could replace them. Hence a separate
 # group-writable directory that contains only data.
 ALERT_GROUP="zfsalert"
-ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
     if [ -d "$ALERT_SHARED_DIR" ]; then
