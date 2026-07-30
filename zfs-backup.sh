@@ -28,10 +28,17 @@ set -uo pipefail
 #
 # Only the 'standard' profile is implemented -- values approved by the owner
 # 2026-07-30: hourly retain 24, daily retain 7, weekly retain 4, monthly
-# retain 12. Daily/weekly/monthly run at midnight with quiesce=agent (owner:
-# "z flush koherentne" -- application-consistent via the Proxmox guest
-# agent), matching this project's own established convention (see
-# jobs.11.11.v4.conf: hourly plain, daily/weekly/monthly/annual quiesced).
+# retain 12. Daily/weekly/monthly run at midnight ("srodek nocy, najlepiej o
+# 00:00"). The owner also asked for these to be "z flush koherentne"
+# (application-consistent via quiesce) -- NOT done: quiesce is a snapsend.sh
+# (push) feature that freezes the LOCAL guest before the local snapshot;
+# zfs-backup.sh is pull-only (snapget.sh), where the guest lives on the
+# REMOTE peer and there is no remote-quiesce mechanism at all (gen-cron.sh
+# rejects quiesce=agent on a pull dataset outright -- found live on pve0
+# during this session's verification, not a design guess). Getting real
+# application consistency for a pull-based client needs either a
+# remote-quiesce feature added to snapget.sh (real engine work, not done) or
+# switching that one client to push. Flagged, not silently dropped.
 # 'frequent'/'archive' profiles are declared but not implemented -- future
 # work, not silently approximated here.
 #
@@ -187,10 +194,10 @@ read_server_conf() {
 
 # The 'standard' profile's four templates, values approved by the owner
 # 2026-07-30: retain -H24/-D7/-W4/-M12. Daily/weekly/monthly send_schedule is
-# midnight (owner: "srodek nocy, najlepiej o 00:00") with quiesce=agent for an
-# application-consistent snapshot ("z flush koherentne") -- hourly stays
-# plain, matching this project's own established convention (jobs.11.11.v4.conf:
-# hourly plain, daily/weekly/monthly/annual quiesced). 'retain=', not 'keep=':
+# midnight (owner: "srodek nocy, najlepiej o 00:00"). No quiesce here -- see
+# the file header for why the owner's "z flush koherentne" request cannot be
+# met on a pull dataset with today's snapget.sh (gen-cron.sh rejects
+# quiesce=agent on a pull dataset outright; confirmed live). 'retain=', not 'keep=':
 # gen-cron.sh's 'keep=' auto-derives a -H/-D/... flag from TIER_LETTER, keyed
 # by the CANONICAL tier name (hourly/daily/...) -- these templates are named
 # standard_<tier> to avoid colliding with a host's own hand-maintained
@@ -215,7 +222,6 @@ STANDARD_TEMPLATE_standard_daily='
 	send_schedule  = 0 0 * * *
 	prefix         = automated_daily_
 	notify_word    = backup
-	quiesce        = agent
 	prune_schedule = 10 0 * * *
 	pattern        = automated_daily
 	retain         = -D7
@@ -227,7 +233,6 @@ STANDARD_TEMPLATE_standard_weekly='
 	send_schedule  = 0 0 * * 0
 	prefix         = automated_weekly_
 	notify_word    = backup
-	quiesce        = agent
 	prune_schedule = 20 0 * * 0
 	pattern        = automated_weekly
 	retain         = -W4
@@ -239,7 +244,6 @@ STANDARD_TEMPLATE_standard_monthly='
 	send_schedule  = 0 0 1 * *
 	prefix         = automated_monthly_
 	notify_word    = backup
-	quiesce        = agent
 	prune_schedule = 30 0 1 * *
 	pattern        = automated_monthly
 	retain         = -M12
@@ -571,7 +575,7 @@ cmd_activate_client() {
     echo "Zrodla:        $PEER_SAVED_DATASETS"
     echo "Cel:           $PEER_SAVED_TARGET/$label"
     echo "Tryb:          pull"
-    echo "Profil:        standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly at 00:00 z quiesce=agent)"
+    echo "Profil:        standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly o 00:00, bez quiesce -- niedostepne dla pull, patrz naglowek pliku)"
     echo "Test:          OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
     echo
 
