@@ -623,6 +623,28 @@ fi
 #        a file the incoming commits never touched, so the host would then run
 #        a mix of reviewed code and unreviewed local edits, as root. Checked
 #        explicitly now, before any state is touched.
+#
+# REV-20260730-001 (review of the above): the reviewer found that all of this
+# still lived inside $REPO_DIR/deploy.sh -- the exact tree `--rollback` resets
+# with `git reset --hard`. Rolling back from a post-fix revision to a pre-fix
+# one checked out the OLD deploy.sh, which knew nothing about the hold (or
+# looked for it at the old F1 location), so the very next hourly cron tick
+# undid the rollback within the hour. Reproduced live on all 4 hosts.
+#
+#  F1 -- fixed by moving the enforcement OUTSIDE the git tree: update-control.sh
+#        (repo root) is deployed by Phase 7 into $UPDATE_STATE_DIR, which is
+#        root-private and never touched by `git reset --hard $REPO_DIR`. Once
+#        deployed, the hourly cron line and the dispatch just below both exec
+#        that copy instead of running the logic built into whatever $REPO_DIR
+#        happens to be. The functions below remain ONLY as the bootstrap
+#        fallback for a host that has never successfully deployed the wrapper
+#        yet (first-ever run, or the wrapper was removed by hand).
+#  F2 -- several branches used to just `warn` when a hold write itself failed,
+#        leaving the hourly cron entry able to keep retrying. `emergency_disable`
+#        (defined once, here and in update-control.sh) escalates: try the hold
+#        file, then removing exec permission on the invoked script, then
+#        removing its own cron line -- so a write failure cannot silently leave
+#        automatic updates enabled.
 # ============================================================================
 UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}"
 PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
@@ -704,6 +726,25 @@ remove_state_file() {
     rm -f "$dst" 2>/dev/null
 }
 
+# REV-20260730-001 F2, bootstrap-fallback copy (see update-control.sh for the
+# primary one, used once the wrapper is deployed). No self-path chmod step
+# here on purpose: $0 in this fallback path is deploy.sh itself, which the
+# whole fleet also uses for the full deployment sequence, not just updates --
+# disabling it entirely would be a bigger hammer than the situation calls for.
+emergency_disable() {
+    local reason="$1"
+    if write_state_file "$UPDATE_HOLD_FILE" "$reason"; then
+        return 0
+    fi
+    warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
+    if crontab -l 2>/dev/null | grep -vF "$REPO_DIR/deploy.sh --self-update" | crontab - 2>/dev/null; then
+        warn "removed the hourly cron line invoking $REPO_DIR/deploy.sh --self-update as a last-resort circuit breaker -- re-add it by hand once $UPDATE_STATE_DIR is fixed"
+        return 0
+    fi
+    warn "CRITICAL: could not write a hold, could not remove the cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
+    return 1
+}
+
 # The ultimate fallback if this script itself is what a bad update broke:
 #   git -C <repo> reset --hard <sha>   and remove the cron line by hand.
 # Everything below is convenience on top of that, which is why rollback stays
@@ -774,7 +815,8 @@ do_self_update() {
         fi
         if [ "$_restore_ok" -eq 0 ]; then
             warn "fast-forward to $(printf '%.8s' "$target") failed AND the rollback pointer at $PREV_REV_FILE could not be restored -- state is uncertain, holding automatic updates"
-            write_state_file "$UPDATE_HOLD_FILE" "held automatically: rollback-pointer restore failed after a bad fast-forward on $(date '+%Y-%m-%d %H:%M:%S')"                 || warn "could not even record an automatic hold -- $UPDATE_STATE_DIR needs manual attention before the next hourly run"
+            emergency_disable "held automatically: rollback-pointer restore failed after a bad fast-forward on $(date '+%Y-%m-%d %H:%M:%S')" \
+                || warn "emergency circuit breaker also failed -- $UPDATE_STATE_DIR needs manual attention before the next hourly run"
         fi
         warn "fast-forward to $(printf '%.8s' "$target") failed -- still on $(printf '%.8s' "$current"). Local modifications in $REPO_DIR are the usual cause: git -C $REPO_DIR status"
         return 1
@@ -801,7 +843,8 @@ do_rollback() {
     write_state_file "$UPDATE_HOLD_FILE"         "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") started $(date '+%Y-%m-%d %H:%M:%S')"         || die "could not record an update hold at $UPDATE_HOLD_FILE -- refusing to roll back without one. Fix $UPDATE_STATE_DIR and retry."
 
     if ! git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1; then
-        write_state_file "$UPDATE_HOLD_FILE"             "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" 2>/dev/null
+        emergency_disable "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" \
+            || warn "emergency circuit breaker also failed after a failed reset -- $UPDATE_STATE_DIR needs manual attention immediately"
         die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR by hand"
     fi
 
@@ -837,7 +880,8 @@ do_resume_updates() {
     # rather than defaulting open.
     if [ "$rc" -ne 0 ] && [ "$had_hold" -eq 1 ]; then
         warn "the explicit update after --resume-updates failed -- restoring the hold rather than leaving automatic updates enabled"
-        write_state_file "$UPDATE_HOLD_FILE"             "restored after a failed --resume-updates on $(date '+%Y-%m-%d %H:%M:%S') -- previous hold was: $hold_content"             || warn "could not restore the hold at $UPDATE_HOLD_FILE either -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR by hand."
+        emergency_disable "restored after a failed --resume-updates on $(date '+%Y-%m-%d %H:%M:%S') -- previous hold was: $hold_content" \
+            || warn "emergency circuit breaker also failed after a failed resume -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR by hand."
     fi
     return "$rc"
 }
@@ -853,9 +897,26 @@ do_resume_updates() {
 # mistakes edit a live host. (The caveat this comment used to name -- the state
 # dir being group zfsalert and group-writable -- is REV-20260729-004 F1, fixed
 # above: $UPDATE_STATE_DIR is root-private now, separate from the alert dir.)
-if [ "$SELF_UPDATE" -eq 1 ]; then do_self_update; exit $?; fi
-if [ "$ROLLBACK" -eq 1 ]; then do_rollback; exit $?; fi
-if [ "$RESUME_UPDATES" -eq 1 ]; then do_resume_updates; exit $?; fi
+#
+# REV-20260730-001 F1: once Phase 7 has deployed update-control.sh outside
+# $REPO_DIR, prefer it unconditionally -- it is immune to whatever $REPO_DIR
+# was just rolled back to, which the functions above (still built INTO
+# $REPO_DIR/deploy.sh) are not. `exec` replaces this process entirely on
+# success; the functions above only ever run as the bootstrap fallback for a
+# host that has never deployed the wrapper yet.
+DEPLOYED_UPDATE_CONTROL="$UPDATE_STATE_DIR/update-control.sh"
+exec_deployed_update_control() {
+    [ -e "$DEPLOYED_UPDATE_CONTROL" ] || return 1
+    if [ -L "$DEPLOYED_UPDATE_CONTROL" ]; then
+        warn "$DEPLOYED_UPDATE_CONTROL is a symlink -- refusing to exec through it, falling back to the logic built into this checkout"
+        return 1
+    fi
+    [ -x "$DEPLOYED_UPDATE_CONTROL" ] || return 1
+    exec "$DEPLOYED_UPDATE_CONTROL" "$1"
+}
+if [ "$SELF_UPDATE" -eq 1 ]; then exec_deployed_update_control --self-update; do_self_update; exit $?; fi
+if [ "$ROLLBACK" -eq 1 ]; then exec_deployed_update_control --rollback; do_rollback; exit $?; fi
+if [ "$RESUME_UPDATES" -eq 1 ]; then exec_deployed_update_control --resume-updates; do_resume_updates; exit $?; fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
@@ -1713,16 +1774,53 @@ log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # What the finding asked for and is NOT waived: knowing which revision is live,
 # and being able to go back and STAY back. Both live in --self-update /
 # --rollback / --resume-updates above; cron just calls the first one.
-PULL_LINE="15 * * * * $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
+#
+# REV-20260730-001 F1: cron must invoke a copy of the update-control logic
+# that a rollback of $REPO_DIR cannot touch. Deploy update-control.sh (repo
+# root) into $UPDATE_STATE_DIR -- root-private, outside $REPO_DIR -- and point
+# the cron line at THAT copy once it exists. Never done under --check-only
+# (nothing is installed/modified in that mode).
+UPDATE_CONTROL_SRC="$REPO_DIR/update-control.sh"
+UPDATE_CONTROL_DEPLOYED=0
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    [ -x "$DEPLOYED_UPDATE_CONTROL" ] || warn "update-control.sh not yet deployed to $DEPLOYED_UPDATE_CONTROL -- re-run without --check-only so rollback stays enforced across a future version-boundary rollback (REV-20260730-001 F1)"
+elif [ -r "$UPDATE_CONTROL_SRC" ]; then
+    if ensure_update_state_dir; then
+        _uc_tmp=$(mktemp "$UPDATE_STATE_DIR/.tmp.XXXXXX" 2>/dev/null)
+        if [ -n "$_uc_tmp" ] \
+            && sed -e "s#__REPO_DIR__#$REPO_DIR#g" -e "s#__UPDATE_STATE_DIR__#$UPDATE_STATE_DIR#g" "$UPDATE_CONTROL_SRC" > "$_uc_tmp" 2>/dev/null \
+            && chmod 0700 "$_uc_tmp" \
+            && mv -f "$_uc_tmp" "$DEPLOYED_UPDATE_CONTROL" 2>/dev/null; then
+            UPDATE_CONTROL_DEPLOYED=1
+            log "deployed update-control.sh to $DEPLOYED_UPDATE_CONTROL"
+        else
+            rm -f "$_uc_tmp" 2>/dev/null
+            warn "could not deploy update-control.sh to $DEPLOYED_UPDATE_CONTROL -- automatic updates will keep using the bootstrap logic built into $REPO_DIR/deploy.sh, which a rollback CAN revert (REV-20260730-001 F1)"
+        fi
+    else
+        warn "could not deploy update-control.sh -- $UPDATE_STATE_DIR is not safe to use (see above)"
+    fi
+else
+    warn "$UPDATE_CONTROL_SRC not found in this checkout -- automatic updates will keep using the bootstrap logic built into deploy.sh (older revision checked out?)"
+fi
+[ -x "$DEPLOYED_UPDATE_CONTROL" ] && [ ! -L "$DEPLOYED_UPDATE_CONTROL" ] && UPDATE_CONTROL_DEPLOYED=1
+
+if [ "$UPDATE_CONTROL_DEPLOYED" -eq 1 ]; then
+    PULL_LINE="15 * * * * $DEPLOYED_UPDATE_CONTROL --self-update >>/root/scripts/git-pull.log 2>&1"
+else
+    PULL_LINE="15 * * * * $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
+fi
 # Matches every shape this line has ever had for THIS repo: the original bare
-# `git pull`, the rev-parse-then-pull version from 75bf956, and the current
-# one -- scoped to $REPO_DIR so it can never match an unrelated cron line that
+# `git pull`, the rev-parse-then-pull version from 75bf956, the deploy.sh-direct
+# version, and the current update-control.sh-wrapper version -- scoped to
+# $REPO_DIR/$UPDATE_STATE_DIR so it can never match an unrelated cron line that
 # merely happens to contain the substring "--self-update" (REV-20260729-004
 # F4: the previous version checked `grep -qF -- "--self-update"` globally,
-# with no $REPO_DIR anchor at all).
+# with no anchor at all).
 is_this_repo_updater_line() {
     case "$1" in
         *"$REPO_DIR/deploy.sh --self-update"*) return 0 ;;
+        *"$UPDATE_STATE_DIR/update-control.sh --self-update"*) return 0 ;;
         *"cd $REPO_DIR"*"git pull --ff-only origin main"*) return 0 ;;
     esac
     return 1

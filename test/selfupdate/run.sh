@@ -19,6 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEPLOY="${DEPLOY:-$REPO/deploy.sh}"
 [ -r "$DEPLOY" ] || { echo "cannot find deploy.sh at $DEPLOY" >&2; exit 1; }
+UPDATE_CONTROL="${UPDATE_CONTROL:-$REPO/update-control.sh}"
+[ -r "$UPDATE_CONTROL" ] || { echo "cannot find update-control.sh at $UPDATE_CONTROL" >&2; exit 1; }
+
+# Simulates exactly what deploy.sh's Phase 7 does: sed-template the two
+# placeholders and drop the result into the (throwaway) state dir, outside the
+# (throwaway) checkout -- so tests 16-19 below can prove the wrapper enforces
+# the hold/rollback/resume contract independent of whatever deploy.sh in the
+# checkout does or does not know about it (REV-20260730-001 F1).
+deploy_wrapper() {
+    local repo_dir="$1" state_dir="$2"
+    mkdir -p "$state_dir"
+    sed -e "s#__REPO_DIR__#$repo_dir#g" -e "s#__UPDATE_STATE_DIR__#$state_dir#g" \
+        "$UPDATE_CONTROL" > "$state_dir/update-control.sh"
+    chmod +x "$state_dir/update-control.sh"
+}
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -247,6 +262,7 @@ fi
 is_this_repo_updater_line() {
     case "$1" in
         *"$CLONE/deploy.sh --self-update"*) return 0 ;;
+        *"$STATE/update-control.sh --self-update"*) return 0 ;;
         *"cd $CLONE"*"git pull --ff-only origin main"*) return 0 ;;
     esac
     return 1
@@ -469,6 +485,66 @@ if [ "$CAN_IMMUTABLE" -eq 1 ]; then
 else
     skip "F2: a write failure on the state dir refuses to activate B" \
         "this environment cannot make a directory immutable (chattr +i not supported/available, e.g. Windows/MSYS or a non-ext filesystem) -- verify on a Linux host with ext2/3/4"
+fi
+
+# --- 16. REV-20260730-001 F1: a deployed wrapper enforces an existing hold --
+# even though $CLONE has no deploy.sh at all in these fixtures (this suite
+# never creates one there) -- the exact independence the finding requires: the
+# enforcement point must not depend on what is checked out in $REPO_DIR.
+pair=$(mk_scenario f1wrap); F1WRAP_ORIGIN=${pair%%|*}; F1WRAP_CLONE=${pair#*|}
+S16="$WORK/state-f1wrap"
+deploy_wrapper "$F1WRAP_CLONE" "$S16"
+printf 'held for test\n' > "$S16/update-hold"
+before_head="$(head_of "$F1WRAP_CLONE")"
+out="$(bash "$S16/update-control.sh" --self-update 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(head_of "$F1WRAP_CLONE")" = "$before_head" ] && printf '%s' "$out" | grep -qi 'HELD'; then
+    ok "F1: the deployed wrapper honors an existing hold with no deploy.sh present in the checkout"
+else
+    bad "F1: the deployed wrapper honors an existing hold with no deploy.sh present in the checkout" \
+        "rc=$rc head_before=$before_head head_after=$(head_of "$F1WRAP_CLONE") out_tail=$(printf '%s' "$out" | tail -1)"
+fi
+
+# --- 17. F1: resume via the wrapper advances the checkout, same independence -
+out="$(bash "$S16/update-control.sh" --resume-updates 2>&1)"; rc=$?
+Y_expected="$(git -C "$F1WRAP_ORIGIN" rev-parse main)"
+if [ "$rc" -eq 0 ] && [ ! -e "$S16/update-hold" ] && [ "$(head_of "$F1WRAP_CLONE")" = "$Y_expected" ]; then
+    ok "F1: --resume-updates via the deployed wrapper removes the hold and advances"
+else
+    bad "F1: --resume-updates via the deployed wrapper removes the hold and advances" \
+        "rc=$rc hold=$([ -e "$S16/update-hold" ] && echo present || echo gone) head=$(head_of "$F1WRAP_CLONE") wanted=$Y_expected"
+fi
+
+# --- 18. F1: rollback via the wrapper works the same way -- same independence
+out="$(bash "$S16/update-control.sh" --rollback 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$S16/update-hold" ] && [ "$(head_of "$F1WRAP_CLONE")" = "$before_head" ]; then
+    ok "F1: --rollback via the deployed wrapper moves the checkout back and re-holds"
+else
+    bad "F1: --rollback via the deployed wrapper moves the checkout back and re-holds" \
+        "rc=$rc hold=$([ -e "$S16/update-hold" ] && echo present || echo gone) head=$(head_of "$F1WRAP_CLONE") wanted=$before_head"
+fi
+
+# --- 19. F2: emergency_disable falls back to disabling the wrapper itself ---
+# when the hold file cannot be written at all. `source`d (guarded by the
+# BASH_SOURCE == $0 check in update-control.sh) so the function can be called
+# directly rather than needing to engineer a real mid-update write failure.
+if [ "$CAN_IMMUTABLE" -eq 1 ]; then
+    S19="$WORK/state-f2disable"; mkdir -p "$S19"
+    deploy_wrapper "$F1WRAP_CLONE" "$S19"
+    wrapper19="$S19/update-control.sh"
+    chattr +i "$S19" 2>/dev/null
+    out="$(REPO_DIR="$F1WRAP_CLONE" UPDATE_STATE_DIR="$S19" bash -c "source '$wrapper19'; emergency_disable 'test reason'" 2>&1)"; rc=$?
+    perm_after=$(stat -c '%a' "$wrapper19" 2>/dev/null)
+    chattr -i "$S19" 2>/dev/null
+    chmod 0755 "$wrapper19" 2>/dev/null
+    if [ "$rc" -eq 0 ] && [ "$perm_after" = "0" ]; then
+        ok "F2: emergency_disable falls back to disabling the wrapper when the hold write itself fails"
+    else
+        bad "F2: emergency_disable falls back to disabling the wrapper when the hold write itself fails" \
+            "rc=$rc wrapper_perm=$perm_after out_tail=$(printf '%s' "$out" | tail -1)"
+    fi
+else
+    skip "F2: emergency_disable falls back to disabling the wrapper" \
+        "this environment cannot make a directory immutable (chattr +i not supported/available) -- verify on a Linux host with ext2/3/4"
 fi
 
 echo "--------------------------------------------"
