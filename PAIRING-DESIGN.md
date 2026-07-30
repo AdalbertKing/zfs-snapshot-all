@@ -459,3 +459,9 @@ scenariusza z jednym, jednorazowym ręcznym transferem paczki init.
 - **Wariant B (sekcja wyżej) vs. proces parowania opisany w Częściach 1-4**:
   wybór między nimi (albo świadome utrzymanie obu jako opcji `--initiator=collector|source`)
   jest do podjęcia razem z resztą otwartych tematów, nie zdecydowany teraz.
+- **2026-07-30, dalsza dyskusja o uproszczonym UX wdrożenia** (`docs/discussions/DEPLOY-UX-*.md`,
+  `docs/discussions/DEPLOY-UX-IMPLEMENTER-NOTES.md`) argumentuje przeciwko Wariantowi B z tego
+  samego powodu, dla którego był tu wahaniem, nie decyzją: pve2 nie zna polityki pve1 (retencja,
+  harmonogram, limity), więc nie powinien budować finalnego configu. Implementer rekomenduje tam
+  oznaczenie Wariantu B jako superseded-by-discussion, nie skasowanie — patrz te pliki po
+  rozstrzygnięcie.
