@@ -223,7 +223,7 @@ active_endpoint_host_port() {
 # the same account; the raw per-level dump is shown only when verbose=1.
 check_inherited_grants() {
     local ds="$1" account="$2" host="$3" port="$4" keyfile="$5" alias_kh="$6" alias="$7" verbose="$8"
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null)
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
     local path="" seg out found_exact=0 ancestors=""
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
@@ -556,7 +556,17 @@ load_client_and_connection() {
     # happens to already have a stale/unrelated system known_hosts entry for
     # a peer's address breaks endpoint verification for a reason that has
     # nothing to do with this project's own pinning.
-    LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null"
+    #
+    # CheckHostIP=no: also found live in the same test -- even with the alias
+    # match succeeding, OpenSSH's CheckHostIP (on by default) separately
+    # records the numeric IP's key as a courtesy anti-spoofing measure,
+    # WRITING a second, hashed-hostname entry into our alias-keyed file as a
+    # side effect of a successful connection. Harmless (it only records a key
+    # already proven trusted via the alias), but it defeats the point of a
+    # file meant to contain exactly and only what this script generated --
+    # disabled since a single pinned alias entry is already this project's
+    # whole trust model; the extra IP-spoofing check adds nothing here.
+    LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
     [ "$port" != "22" ] && LOAD_FLAGS="$LOAD_FLAGS -p $port"
 }
 
