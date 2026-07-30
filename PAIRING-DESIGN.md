@@ -361,6 +361,93 @@ Trzy fazy, zero okna przestoju:
 | `gen-cron.sh` INI (w `cron-configs`) | cała polityka: harmonogram, `-r`/`-R`, `-G`, retencja |
 | ręczna Część 5 | linie cron per host, tak jak dziś |
 
+## Wariant B: inicjacja z pve1, pół-automatyczny zwrot paczki (propozycja, NIEZAIMPLEMENTOWANE)
+
+Status: **dyskusja projektowa, nie architektura zamknięta jak reszta dokumentu**. Zapisane
+żeby nie zgubić wniosków, do rozstrzygnięcia razem z resztą "Otwartych tematów" niżej.
+
+Alternatywa dla sekcji "Proces parowania" powyżej, rozważana pod kątem: (a) kto generuje klucz
+i dlaczego to musi zostać bez zmian, (b) jak zredukować ręczne kroki bez osłabienia modelu
+zaufania, (c) jak domknąć problem, że `--target` (dziś flaga na hoście inicjującym) wymusza
+znajomość ścieżki lokalnej w configu generowanym po drugiej stronie.
+
+### Sekwencja
+
+1. **pve1** (lokalnie, zero sieci): generuje dedykowany klucz dla tej pary jak dziś, ale pakuje
+   do małej paczki init **także `--target`** (np. `hdd/backups`), nie tylko pubkey. Transfer
+   ręczny (jak dziś — w tym miejscu nie istnieje żaden kanał do zautomatyzowania, patrz niżej).
+2. **pve2**: `join --peer=pve1 --datasets="..." <paczka_init>` — nadaje `zfs allow` na
+   wskazane datasety (jeden przebieg, nie osobny "tryb akceptacji": uruchomienie `join` ze
+   świadomie podanymi `--datasets` JEST punktem decyzji, rozbijanie go na dwa kroki nie dodaje
+   nic). Ponieważ `target` przyszedł już w kroku 1, `join` buduje config z **w pełni
+   rozwiązanymi ścieżkami** (`hdd/backups/pve2/rpool/data`) — zero placeholderów, zero
+   potrzeby wprowadzania templatingu do `gen-cron.sh` (którego nagłówek explicite deklaruje
+   "no magic: a target is always a path you wrote down"). `join` wypisuje też na **własną
+   konsolę pve2** fingerprint swojego klucza hosta, do ręcznego przeniesienia w kroku 3.
+3. **pve1** ściąga paczkę zwrotną (config + host key pve2) — patrz automatyzacja niżej — i robi
+   `snapget.sh -n` (dry-run) przed `gen-cron.sh --install`.
+
+### Dlaczego krok 1→2 nie może być zautomatyzowany
+
+W tym momencie nie istnieje żaden kanał między hostami — zero zaufania w obie strony.
+Automatyzacja transferu wymagałaby wprowadzenia nowego mechanizmu zaufania (współdzielony
+sekret, otwarty port, cokolwiek) w miejsce ręcznego przeniesienia — to nie jest przyspieszenie
+tego samego kroku, to inny model bezpieczeństwa. Zostaje ręczny z definicji problemu.
+
+### Krok 2→3: częściowa automatyzacja jest możliwa, ale fingerprint musi zostać ręczny
+
+Po zakończeniu kroku 2 pve2 ma już w `authorized_keys` pubkey pve1 dla tej relacji — pve1 (mając
+świeży klucz prywatny) **może się już połączyć**. Sam transfer bajtów paczki zwrotnej może więc
+być automatyczny:
+
+```bash
+ssh -o StrictHostKeyChecking=accept-new -i id_ed25519_pve2 zfsbackup-pve1@pve2 \
+    'cat /path/return-package.tgz' > return-package.tgz
+```
+
+**Ale** `accept-new` przy pierwszym połączeniu to ten sam TOFU, który już raz zawiódł na
+metropolis (DNS dokleja domenę wyszukiwania, `pve2` rozwiązuje się na cztery publiczne adresy
+`metropolis.net` zamiast jednego). Fingerprint hosta pve2 dołączony do TEJ SAMEJ automatycznie
+ściąganej paczki nic nie chroni — atakujący pośrodku podstawiłby swój klucz i swój "zgodny"
+fingerprint naraz. **Zasada: fingerprint musi dotrzeć kanałem niezależnym od tego, który
+weryfikuje.**
+
+Niezależny kanał już istnieje: admin uruchamiający `join` na pve2 w kroku 2 siedzi przy/jest
+połączony z pve2 jakąś inną, już zaufaną drogą (konsola, IPMI, istniejące SSH) — to jest kanał
+inny niż nowa relacja pve1↔pve2. `join` wypisuje na ten ekran fingerprint hosta pve2; admin
+przenosi tę jedną krótką linię (nie plik) do pve1, dowolnie (głos, czat, wklejka).
+
+Na pve1 **reużyj dokładnie mechanizm już zaimplementowany w `--pair`** (ssh-keyscan → wypisany
+fingerprint → linia "CONFIRM this", patrz Krok 1 procesu parowania wyżej) zamiast przechodzić
+prosto do `accept-new` + trwały zapis:
+
+```bash
+ssh-keyscan -p "$PORT" "$PEER" > /tmp/scan.$$
+fp=$(ssh-keygen -lf /tmp/scan.$$)
+echo "pve2 przedstawia: $fp"
+echo "Porownaj z odciskiem wypisanym na konsoli pve2 pod koniec join."
+read -rp "Zgadza sie? [tak/nie] " ans
+[ "$ans" = tak ] || die "fingerprint nie potwierdzony -- przerywam, nic nie pobrane"
+cat /tmp/scan.$$ >> "$PINNED_KNOWN_HOSTS"
+```
+
+Dopiero po przypięciu klucza pve1 robi automatyczne pobranie paczki zwrotnej.
+
+**Wariant nieinteraktywny (pod przyszłe GUI z listą par):** zamiast promptu `read`, flaga
+`--expect-fingerprint=SHA256:xxx` — GUI/admin wpisuje tam string przeczytany z konsoli pve2 (to
+samo źródło, ten sam niezależny kanał, tylko przez pole formularza zamiast terminala):
+
+```bash
+[ "$fp" = "$EXPECT_FINGERPRINT" ] || die "fingerprint mismatch: got $fp, expected $EXPECT_FINGERPRINT -- refusing, possible MITM"
+```
+
+### Odrzucone: CA/certyfikat klucza hosta
+
+Rozważane i odrzucone: pve2 podpisuje własny klucz hosta certyfikatem CA, pve1 ufa automatycznie.
+Eliminuje ręczny krok całkowicie, ale wymaga wcześniej ustanowionego zaufania do CA — czyli z
+powrotem problem kroku 1→2, tylko przesunięty o jeden poziom wyżej. Nie warto komplikować dla
+scenariusza z jednym, jednorazowym ręcznym transferem paczki init.
+
 ## Otwarte tematy (świadomie nierozstrzygnięte)
 
 - Pełna automatyzacja draft-configu (bez review) — do rozważenia później.
@@ -369,3 +456,6 @@ Trzy fazy, zero okna przestoju:
 - Czy `--join` ma coś aktywnie zwracać na hosta inicjujący (np. potwierdzenie
   do automatycznej weryfikacji), czy wystarczy że admin widzi sukces na
   ekranie.
+- **Wariant B (sekcja wyżej) vs. proces parowania opisany w Częściach 1-4**:
+  wybór między nimi (albo świadome utrzymanie obu jako opcji `--initiator=collector|source`)
+  jest do podjęcia razem z resztą otwartych tematów, nie zdecydowany teraz.
