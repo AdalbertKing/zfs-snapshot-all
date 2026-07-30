@@ -860,6 +860,23 @@ process_dataset() {
         local common_snapshot
         common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
         find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$common_snapshot"
+        # A machine-readable verdict for callers that must know whether the
+        # next real run would be incremental WITHOUT parsing prose
+        # (REV-20260730-005 F2). zfs-backup.sh's verify-endpoint used to infer
+        # it from the ABSENCE of the words "full send", which is a negative
+        # heuristic over a log message: a reworded log line, a new planner
+        # branch or any other rc=0 path with no such phrase would have been
+        # read as "incremental confirmed". This is the positive form of the
+        # same question, and it is the very fact the transfer itself branches
+        # on -- $common_snapshot is what decides `zfs send -I base` versus a
+        # full stream, so nothing can drift between the plan and the run.
+        # Always exactly one line per dataset, on stdout, prefixed so it can
+        # never be confused with logging (which goes to stderr).
+        if [ -n "$common_snapshot" ]; then
+            printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"
+        else
+            printf 'PLAN=FULL base=- src=%s tgt=%s\n' "$src_dataset" "$tgt_dataset"
+        fi
         return 0
     fi
 

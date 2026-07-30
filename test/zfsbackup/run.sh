@@ -250,6 +250,43 @@ if [ "$got" = "ENDPOINT_LAN_HOST" ]; then ok "endpoint_host_var(lan)"; else bad 
 got="$(endpoint_port_var vpn)"
 if [ "$got" = "ENDPOINT_VPN_PORT" ]; then ok "endpoint_port_var(vpn)"; else bad "endpoint_port_var(vpn)" "got=$got"; fi
 
+# --- 8b. REV-20260730-005 F1: endpoint input is stored in a file that is
+# later SOURCED AS ROOT, so anything that could carry shell syntax must be
+# refused before it is ever written. The reviewer named the exact cases; each
+# one below must exit non-zero, not be silently accepted or half-parsed.
+for badep in 'host;id' '$(id)' '`id`' 'a b' '' 'host&whoami' 'ho|st' 'host
+newline' '-leadingdash' 'trailingdash-' '.leadingdot' 'trailingdot.' 'host/../x'; do
+    if ( parse_endpoint_arg "$badep" ) >/dev/null 2>&1; then
+        bad "parse_endpoint_arg rejects unsafe host '$badep'" "ACCEPTED it"
+    else
+        ok "parse_endpoint_arg rejects unsafe host '$(printf '%q' "$badep")'"
+    fi
+done
+for badport in 0 65536 99999 abc '' '-1' '22x'; do
+    if ( parse_endpoint_arg "host:$badport" ) >/dev/null 2>&1; then
+        bad "parse_endpoint_arg rejects bad port '$badport'" "ACCEPTED it"
+    else
+        ok "parse_endpoint_arg rejects bad port '$badport'"
+    fi
+done
+for goodep in 'pve2' '192.168.11.11' 'pve1-vpn-test' 'a.b.c.d' 'host:1' 'host:65535'; do
+    if ( parse_endpoint_arg "$goodep" ) >/dev/null 2>&1; then
+        ok "parse_endpoint_arg accepts legitimate endpoint '$goodep'"
+    else
+        bad "parse_endpoint_arg accepts legitimate endpoint '$goodep'" "REJECTED it"
+    fi
+done
+
+# write_client_field must produce a line that survives being sourced back with
+# its value intact and nothing executed -- the second half of the F1 defence.
+inj='$(touch /tmp/zfsbackup-pwned-'"$$"')'
+line="$(write_client_field TESTVAL "$inj")"
+( eval "$line"; [ "$TESTVAL" = "$inj" ] ) \
+    && [ ! -e "/tmp/zfsbackup-pwned-$$" ] \
+    && ok "write_client_field survives a command-substitution payload (value intact, nothing executed)" \
+    || bad "write_client_field survives a command-substitution payload" "line=$line"
+rm -f "/tmp/zfsbackup-pwned-$$"
+
 out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn ENDPOINT_VPN_HOST=10.8.0.11 ENDPOINT_VPN_PORT=2222; active_endpoint_host_port" 2>&1)"
 if [ "$out" = "10.8.0.11 2222" ]; then
     ok "active_endpoint_host_port resolves the currently active endpoint's host/port"

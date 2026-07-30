@@ -197,13 +197,56 @@ endpoint_port_var() { echo "ENDPOINT_$(printf '%s' "$1" | tr '[:lower:]' '[:uppe
 # Splits "HOST[:PORT]" -> echoes "HOST PORT" (default port 22). IPv6 literals
 # in brackets are not handled here -- out of scope for this pass (LAN/VPN
 # endpoints in this project are IPv4 RFC1918/WireGuard addresses today).
+# REV-20260730-005 F1 (BLOCKER, and a real defect I introduced): these values
+# are written into the client conf, which every other command reads back with
+# `.` -- i.e. bash EXECUTES it, as root. Writing an unvalidated host meant a
+# value like `$(id)`, `a;reboot`, a newline or even a plain space would either
+# corrupt the state file or run as root on the next `status`/`seed`/
+# `verify-endpoint`. Two independent defences, because either alone is one
+# mistake away from the same hole:
+#
+#   1. VALIDATE here, to a charset that cannot express shell syntax at all --
+#      hostnames and IPv4 literals only ([A-Za-z0-9.-], no leading/trailing
+#      dot or dash), port a real 1-65535 integer.
+#   2. QUOTE on write (printf %q, see write_client_field), so even a value
+#      that somehow reached the file could not break out of its assignment.
+#
+# IPv6 literals are deliberately NOT accepted: they need brackets, which
+# collide with the HOST:PORT split below, and no endpoint in this project is
+# IPv6 today. Refusing them outright beats half-parsing them.
+endpoint_host_valid() {
+    case "$1" in
+        ""|.*|-*|*.|*-) return 1 ;;
+        *[!A-Za-z0-9.-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+endpoint_port_valid() {
+    case "$1" in
+        ""|*[!0-9]*) return 1 ;;
+        *) [ "$1" -ge 1 ] && [ "$1" -le 65535 ] ;;
+    esac
+}
+
+# Splits "HOST[:PORT]" -> echoes "HOST PORT" (default port 22), dying on
+# anything that is not a plain hostname/IPv4 and a real port number.
 parse_endpoint_arg() {
     local a="$1" host port=22
     case "$a" in
         *:*) host="${a%:*}"; port="${a##*:}" ;;
         *)   host="$a" ;;
     esac
+    endpoint_host_valid "$host" \
+        || die "invalid endpoint host '$host' -- expected a hostname or IPv4 literal (letters, digits, dot, dash only; no leading/trailing dot or dash). This value is stored in a file that is sourced as root, so anything that could carry shell syntax is refused outright."
+    endpoint_port_valid "$port" \
+        || die "invalid endpoint port '$port' -- expected an integer 1-65535"
     printf '%s %s' "$host" "$port"
+}
+
+# Every write into a client conf goes through this: the value is %q-quoted, so
+# a field can never become executable shell when the file is sourced back.
+write_client_field() {
+    printf '%s=%q\n' "$1" "$2"
 }
 
 # Reads ACTIVE_ENDPOINT plus its ENDPOINT_<X>_HOST/PORT from the already-
@@ -506,13 +549,14 @@ cmd_add_client() {
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
     {
         echo "# zfs-backup.sh client record -- managed by add-client/seed/set-endpoint/verify-endpoint/activate-client/remove-client"
-        echo "CLIENT_NAME=$name"
-        echo "PEER_HOST=$lan_host"
-        echo "STATE=pending_enroll"
-        echo "ACTIVE_ENDPOINT=lan"
-        echo "ENDPOINT_LAN_HOST=$lan_host"
-        echo "ENDPOINT_LAN_PORT=$lan_port"
-        printf 'CREATED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# Every value is %q-quoted on write: this file is sourced as root."
+        write_client_field CLIENT_NAME       "$name"
+        write_client_field PEER_HOST         "$lan_host"
+        write_client_field STATE             pending_enroll
+        write_client_field ACTIVE_ENDPOINT   lan
+        write_client_field ENDPOINT_LAN_HOST "$lan_host"
+        write_client_field ENDPOINT_LAN_PORT "$lan_port"
+        write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
@@ -654,34 +698,46 @@ cmd_set_endpoint() {
     local new_active="$ACTIVE_ENDPOINT"
     local out="$cpath.new"
     cp -p "$cpath" "$out" || die "could not copy $cpath"
+    # parse_endpoint_arg dies on anything that is not a plain hostname/IPv4 and
+    # a real port; write_client_field %q-quotes what survives (F1).
     if [ -n "$vpn" ]; then
         local h p; read -r h p <<< "$(parse_endpoint_arg "$vpn")"
         {
-            echo "ENDPOINT_VPN_HOST=$h"
-            echo "ENDPOINT_VPN_PORT=$p"
+            write_client_field ENDPOINT_VPN_HOST "$h"
+            write_client_field ENDPOINT_VPN_PORT "$p"
         } >> "$out"
         new_active="vpn"
     fi
     if [ -n "$lan" ]; then
         local h2 p2; read -r h2 p2 <<< "$(parse_endpoint_arg "$lan")"
         {
-            echo "ENDPOINT_LAN_HOST=$h2"
-            echo "ENDPOINT_LAN_PORT=$p2"
+            write_client_field ENDPOINT_LAN_HOST "$h2"
+            write_client_field ENDPOINT_LAN_PORT "$p2"
         } >> "$out"
     fi
-    # Switching the active endpoint means the OLD verification/activation no
-    # longer says anything about THIS endpoint -- require a fresh
-    # verify-endpoint before cron can be (re)installed against it. An already
-    # active client keeps its currently-installed cron line running against
-    # whatever endpoint it was generated for until activate-client is re-run.
-    echo "ACTIVE_ENDPOINT=$new_active" >> "$out"
-    if [ "${STATE:-}" != "seed_complete" ]; then
-        echo "STATE=seed_complete" >> "$out"
-        warn "endpoint changed -- state reset to seed_complete. Existing installed cron (if any) still uses the PREVIOUS endpoint until verify-endpoint + activate-client are re-run."
+    # Switching the active endpoint means the OLD verification no longer says
+    # anything about THIS endpoint -- require a fresh verify-endpoint before
+    # cron can be (re)installed against it.
+    #
+    # REV-20260730-005 F4: an ALREADY-ACTIVE client keeps its installed cron
+    # line running against the endpoint it was generated for, which used to be
+    # recorded only as "STATE=seed_complete" -- so `status` said seed_complete
+    # while backups were in fact still running fine over the old endpoint, and
+    # nothing anywhere named the divergence. Now the desired endpoint
+    # (ACTIVE_ENDPOINT) and the one the installed cron actually uses
+    # (INSTALLED_ENDPOINT, written by activate-client) are separate fields, and
+    # a pending change gets its own state rather than being flattened into an
+    # earlier one.
+    write_client_field ACTIVE_ENDPOINT "$new_active" >> "$out"
+    if [ "${STATE:-}" = "active" ]; then
+        write_client_field STATE endpoint_change_pending >> "$out"
+        warn "endpoint changed to '$new_active', but the INSTALLED cron still runs over '${INSTALLED_ENDPOINT:-?}'. Backups keep working over the old endpoint until: verify-endpoint $name, then activate-client $name."
+    elif [ "${STATE:-}" != "seed_complete" ]; then
+        write_client_field STATE seed_complete >> "$out"
     fi
     mv -f "$out" "$cpath"
     chmod 0600 "$cpath"
-    log "client '$name' active endpoint is now '$new_active'"
+    log "client '$name' desired endpoint is now '$new_active'"
 }
 
 # ------------------------------------------------------------------------------
@@ -697,43 +753,58 @@ cmd_verify_endpoint() {
     # shellcheck disable=SC1090
     . "$cpath"
     case "${STATE:-}" in
-        seed_complete|endpoint_verified) ;;
-        *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete (or endpoint_verified, to re-check)" ;;
+        seed_complete|endpoint_verified|endpoint_change_pending) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete, endpoint_change_pending, or endpoint_verified (to re-check)" ;;
     esac
 
     load_client_and_connection "$cpath"
     log "verifying endpoint '$ACTIVE_ENDPOINT' ($LOAD_HOST:$LOAD_PORT) for '$name'..."
 
-    local ds localpath failed=0 needs_full=0 out
+    # REV-20260730-005 F2: this used to conclude "incremental" from the ABSENCE
+    # of the words "full send" in snapget.sh's prose output -- a negative
+    # heuristic over a log message, which a reworded line or any new rc=0
+    # planner branch would silently have turned into a false "verified".
+    # snapget.sh -n now prints exactly one machine-readable verdict per dataset
+    # on STDOUT (logging goes to stderr): PLAN=INCREMENTAL / PLAN=FULL, derived
+    # from the same $common_snapshot the real transfer branches on. Anything
+    # that is not a recognised PLAN= line is treated as unknown and FAILS --
+    # fail-closed, per the review.
+    local ds localpath failed=0 needs_full=0 unknown=0 out plan
     for ds in $PEER_SAVED_DATASETS; do
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        # stdout only: stderr carries the human log, and mixing them back
+        # together is exactly what made the old text heuristic fragile.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath" 2>&1); local rc=$?
-        printf '%s\n' "$out" | sed 's/^/    /'
+        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath" 2>/dev/null); local rc=$?
         if [ "$rc" -ne 0 ]; then
-            warn "  FAILED: $ds"
+            warn "  FAILED (rc=$rc): $ds"
             failed=$((failed + 1))
             continue
         fi
-        if printf '%s' "$out" | grep -qi 'standard full send\|full send'; then
-            warn "  $ds would require a FULL transfer through this endpoint -- no common base found"
-            needs_full=$((needs_full + 1))
-        else
-            log "  OK (incremental): $ds"
-        fi
+        plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
+        case "$plan" in
+            PLAN=INCREMENTAL*) log "  OK (incremental): $ds  [${plan#PLAN=INCREMENTAL }]" ;;
+            PLAN=FULL*)
+                warn "  $ds would require a FULL transfer through this endpoint -- no common base"
+                needs_full=$((needs_full + 1)) ;;
+            *)
+                warn "  $ds: snapget.sh -n gave no PLAN= verdict (got: ${plan:-<none>}) -- treating as UNKNOWN, not as incremental"
+                unknown=$((unknown + 1)) ;;
+        esac
     done
     [ "$failed" -eq 0 ] || die "$failed dataset(s) failed connectivity/host-key verification through '$ACTIVE_ENDPOINT'"
+    [ "$unknown" -eq 0 ] || die "$unknown dataset(s) returned no machine-readable plan -- refusing to mark verified on an unknown result. Check that snapget.sh is v2.65+ on this host."
     if [ "$needs_full" -ne 0 ]; then
         die "$needs_full dataset(s) would need a full resend through '$ACTIVE_ENDPOINT' -- refusing to mark verified. If this endpoint genuinely has no common base (e.g. never seeded through it), seed again or investigate before proceeding."
     fi
 
     {
         cat "$cpath"
-        echo "STATE=endpoint_verified"
-        printf 'ENDPOINT_VERIFIED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        echo "ENDPOINT_VERIFIED_FOR=$ACTIVE_ENDPOINT"
+        write_client_field STATE                endpoint_verified
+        write_client_field ENDPOINT_VERIFIED_AT "$(date '+%Y-%m-%d %H:%M:%S')"
+        write_client_field ENDPOINT_VERIFIED_FOR "$ACTIVE_ENDPOINT"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
-    log "client '$name': endpoint '$ACTIVE_ENDPOINT' verified, incremental-only confirmed. Ready for activate-client."
+    log "client '$name': endpoint '$ACTIVE_ENDPOINT' verified, incremental-only confirmed for every dataset. Ready for activate-client."
 }
 
 # ------------------------------------------------------------------------------
@@ -857,14 +928,21 @@ cmd_activate_client() {
 
     {
         cat "$cpath"
-        echo "STATE=active"
-        printf 'ACTIVATED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        echo "MANAGED_DATASETS=\"${managed[*]}\""
-        echo "CRON_CONFIG=$cronfile"
+        write_client_field STATE            active
+        write_client_field ACTIVATED_AT     "$(date '+%Y-%m-%d %H:%M:%S')"
+        write_client_field MANAGED_DATASETS "${managed[*]}"
+        write_client_field CRON_CONFIG      "$cronfile"
+        # REV-20260730-005 F4: what the cron line ACTUALLY connects through,
+        # as opposed to ACTIVE_ENDPOINT which is what we want it to use. They
+        # are equal right now, by construction -- the job was just generated
+        # from this endpoint -- but set-endpoint can move the desired one
+        # without touching the installed job, and `status` has to be able to
+        # tell the operator which is which.
+        write_client_field INSTALLED_ENDPOINT "$ACTIVE_ENDPOINT"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
 
-    log "client '$name' active."
+    log "client '$name' active (cron runs over endpoint '$ACTIVE_ENDPOINT')."
 }
 
 # ------------------------------------------------------------------------------
@@ -890,18 +968,34 @@ cmd_status() {
     [ -r "$mpath" ] && { # shellcheck disable=SC1090
         . "$mpath"; }
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
-    echo "Klient:           $CLIENT_NAME"
-    echo "Stan:             ${STATE:-unknown}"
-    echo "Endpoint aktywny: ${ACTIVE_ENDPOINT:-?} ($host:$port)"
+    echo "Klient:            $CLIENT_NAME"
+    echo "Stan:              ${STATE:-unknown}"
+    echo "Endpoint docelowy: ${ACTIVE_ENDPOINT:-?} ($host:$port)"
     [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
     [ -n "${ENDPOINT_VPN_HOST:-}" ] && echo "  vpn:  ${ENDPOINT_VPN_HOST}:${ENDPOINT_VPN_PORT:-22}"
-    echo "Zrodla:           ${PEER_SAVED_DATASETS:-?}"
-    echo "Cel:              ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
-    echo "Utworzono:        ${CREATED_AT:-?}"
-    [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed ukonczony:   $SEED_COMPLETED_AT"
-    [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.: $ENDPOINT_VERIFIED_AT ($ENDPOINT_VERIFIED_FOR)"
-    [ -n "${ACTIVATED_AT:-}" ]         && echo "Aktywowano:       $ACTIVATED_AT"
-    [ -n "${REMOVED_AT:-}" ]           && echo "Usunieto:         $REMOVED_AT"
+    # REV-20260730-005 F4: name the divergence outright rather than leaving the
+    # operator to infer it from a state word. The dangerous reading this
+    # prevents is "status says seed_complete, so nothing is running" while the
+    # installed cron is in fact still backing up fine over the old endpoint --
+    # and its mirror image, assuming a freshly-set endpoint is already live.
+    if [ -n "${INSTALLED_ENDPOINT:-}" ]; then
+        echo "Cron dziala przez: $INSTALLED_ENDPOINT"
+        if [ "${INSTALLED_ENDPOINT:-}" != "${ACTIVE_ENDPOINT:-}" ]; then
+            echo "UWAGA:             backup nadal chodzi przez '${INSTALLED_ENDPOINT}'."
+            echo "                   '${ACTIVE_ENDPOINT}' jest zapisany, ale NIEzweryfikowany i NIEwdrozony."
+            echo "Nastepny krok:     $0 verify-endpoint $CLIENT_NAME, potem $0 activate-client $CLIENT_NAME"
+        fi
+    else
+        echo "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)"
+    fi
+    echo "Zrodla:            ${PEER_SAVED_DATASETS:-?}"
+    echo "Cel:               ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
+    echo "Spojnosc:          ${QUIESCE_MODE:-crash-consistent (bez quiesce)}"
+    echo "Utworzono:         ${CREATED_AT:-?}"
+    [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed ukonczony:    $SEED_COMPLETED_AT"
+    [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.:  $ENDPOINT_VERIFIED_AT (${ENDPOINT_VERIFIED_FOR:-?})"
+    [ -n "${ACTIVATED_AT:-}" ]         && echo "Aktywowano:        $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]           && echo "Usunieto:          $REMOVED_AT"
 }
 
 # ------------------------------------------------------------------------------
