@@ -864,6 +864,9 @@ cmd_status() {
     [ -r "$cpath" ] || die "no client '$name'"
     # shellcheck disable=SC1090
     . "$cpath"
+    local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
+    [ -r "$mpath" ] && { # shellcheck disable=SC1090
+        . "$mpath"; }
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
     echo "Klient:           $CLIENT_NAME"
     echo "Stan:             ${STATE:-unknown}"
