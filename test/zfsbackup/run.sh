@@ -257,6 +257,23 @@ else
     bad "active_endpoint_host_port resolves the currently active endpoint's host/port" "out=$out"
 fi
 
+# --- 9. real bug, live on pve0 (2026-07-30): unquoted date in a client conf -
+# `echo "CREATED_AT=$(date '+%Y-%m-%d %H:%M:%S')"` writes a date containing a
+# SPACE with no quotes around the value -- sourcing that line later splits it
+# into an assignment (CREATED_AT=2026-07-30) plus a second bare "command"
+# (20:32:38), which bash tries to execute and fails with "command not found".
+# Harmless functionally (source keeps going, no -e), but it is real, visible,
+# spurious error output on every single client-conf source -- confirmed live.
+# All date fields must be double-quoted in the file so sourcing is silent.
+CF9="$WORK/dates.conf"
+printf 'CREATED_AT="%s"\nACTIVATED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(date '+%Y-%m-%d %H:%M:%S')" > "$CF9"
+out="$(bash -c "set -u; . '$CF9'" 2>&1)"
+if [ -z "$out" ]; then
+    ok "a quoted date field sources with no stray 'command not found' output"
+else
+    bad "a quoted date field sources with no stray 'command not found' output" "out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

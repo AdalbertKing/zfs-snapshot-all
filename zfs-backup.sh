@@ -512,7 +512,7 @@ cmd_add_client() {
         echo "ACTIVE_ENDPOINT=lan"
         echo "ENDPOINT_LAN_HOST=$lan_host"
         echo "ENDPOINT_LAN_PORT=$lan_port"
-        echo "CREATED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'CREATED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
@@ -602,7 +602,7 @@ cmd_seed() {
     {
         cat "$cpath"
         echo "STATE=seed_complete"
-        echo "SEED_COMPLETED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'SEED_COMPLETED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     log "client '$name' seed complete. Next: relocate if needed, then set-endpoint/verify-endpoint, then activate-client."
 }
@@ -708,7 +708,7 @@ cmd_verify_endpoint() {
     {
         cat "$cpath"
         echo "STATE=endpoint_verified"
-        echo "ENDPOINT_VERIFIED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'ENDPOINT_VERIFIED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
         echo "ENDPOINT_VERIFIED_FOR=$ACTIVE_ENDPOINT"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     log "client '$name': endpoint '$ACTIVE_ENDPOINT' verified, incremental-only confirmed. Ready for activate-client."
@@ -836,7 +836,7 @@ cmd_activate_client() {
     {
         cat "$cpath"
         echo "STATE=active"
-        echo "ACTIVATED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'ACTIVATED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
         echo "MANAGED_DATASETS=\"${managed[*]}\""
         echo "CRON_CONFIG=$cronfile"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
@@ -964,7 +964,7 @@ cmd_remove_client() {
     {
         cat "$cpath"
         echo "STATE=removed"
-        echo "REMOVED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'REMOVED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     log "client '$name' removed locally. Run the peer-side commands deploy.sh --unpair printed above."
 }
