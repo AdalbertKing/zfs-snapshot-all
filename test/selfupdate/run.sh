@@ -561,6 +561,48 @@ else
         "this environment cannot make a directory immutable (chattr +i not supported/available) -- verify on a Linux host with ext2/3/4"
 fi
 
+# --- 20. F2 test debt (REV-20260730-002): an atomic-RENAME-only failure -----
+# distinct from a mktemp/write failure (case 15's `chattr +i` on the whole
+# directory blocks BOTH the temp-file create and the final rename, so it
+# cannot tell which one actually failed). `chattr +i` on the pre-existing
+# DESTINATION FILE, not the directory, isolates exactly the rename: the
+# directory stays writable, so mktemp and the write into the tempfile both
+# succeed, and only `mv -f tmp dst` fails -- confirmed live on pve0 first
+# (2026-07-30): `mv` reports "Operation not permitted" against an immutable
+# destination while a plain new file in the same directory writes fine.
+#
+# This directly tests `write_state_file()`, the shared primitive every
+# do_self_update/do_rollback/do_resume_updates state transition goes through,
+# rather than one specific caller -- the reviewer's own closure note accepted
+# this class of coverage ("code inspection shows these paths converge on the
+# tested primitives") as sufficient for the non-blocking P2 debt, while still
+# naming the primitive itself as untested in isolation from a directory-wide
+# failure. Proves two things atomically: the call reports failure, AND the
+# pre-existing content is completely undisturbed (the tempfile never replaces
+# it) -- a half-written destination would be worse than an honest failure.
+if [ "$CAN_IMMUTABLE" -eq 1 ]; then
+    S20="$WORK/state-f2rename"; mkdir -p "$S20"
+    wrapper20="$S20/update-control.sh"
+    sed -e "s#__REPO_DIR__#/nonexistent#g" -e "s#__UPDATE_STATE_DIR__#$S20#g" "$UPDATE_CONTROL" > "$wrapper20"
+    dst20="$S20/update-hold"
+    printf 'original content\n' > "$dst20"
+    chattr +i "$dst20" 2>/dev/null
+    out="$(REPO_DIR=/nonexistent UPDATE_STATE_DIR="$S20" bash -c "source '$wrapper20'; write_state_file '$dst20' 'new content'" 2>&1)"; rc=$?
+    chattr -i "$dst20" 2>/dev/null
+    content_after="$(cat "$dst20" 2>/dev/null)"
+    leftover_tmp="$(find "$S20" -maxdepth 1 -name '.tmp.*' 2>/dev/null | wc -l)"
+    if [ "$rc" -ne 0 ] && [ "$content_after" = "original content" ] && printf '%s' "$out" | grep -qi rename; then
+        ok "F2 test debt: an atomic-rename-only failure (dir writable, destination immutable) is refused and leaves the destination untouched"
+    else
+        bad "F2 test debt: an atomic-rename-only failure is refused and leaves the destination untouched" \
+            "rc=$rc content_after=$content_after leftover_tmp=$leftover_tmp out_tail=$(printf '%s' "$out" | tail -1)"
+    fi
+    rm -f "$S20"/.tmp.* 2>/dev/null
+else
+    skip "F2 test debt: an atomic-rename-only failure is refused" \
+        "this environment cannot make a file immutable (chattr +i not supported/available) -- verify on a Linux host with ext2/3/4"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
