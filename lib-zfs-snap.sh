@@ -1673,8 +1673,24 @@ trap 'thaw_all; rm -f "$frozen_file"' EXIT
 # with us, and every stream redirected so it never holds the ssh channel open.
 deadman_pid=""
 if command -v setsid >/dev/null 2>&1; then
+    # Polls in short steps instead of one long `sleep $deadman`, for a reason
+    # found in live testing (pve0->pve1, 2026-07-30): killing the setsid'd
+    # wrapper does NOT kill its `sleep` child, so every quiesced run left a
+    # stray `sleep 120` behind for the rest of the timeout. Harmless in
+    # itself -- the state file is gone by then, so it would have done nothing
+    # -- but it is litter, and a stale deadman outliving its run is exactly
+    # the kind of thing that becomes a real bug the day an mktemp name gets
+    # reused. The state file's EXISTENCE is the "this run is still going"
+    # signal: the EXIT trap removes it on every normal path, so the deadman
+    # notices within one poll and exits; if the run is SIGKILLed the trap
+    # never runs, the file stays, and the deadman thaws exactly as intended.
     setsid bash -c '
-        sleep "$1"
+        waited=0
+        while [ "$waited" -lt "$1" ]; do
+            [ -e "$2" ] || exit 0
+            sleep 5
+            waited=$((waited + 5))
+        done
         [ -s "$2" ] || exit 0
         while read -r gid; do
             [ -n "$gid" ] && qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1
