@@ -12,47 +12,68 @@ set -uo pipefail
 # avoid touching the just-verified self-update/rollback control plane
 # (REV-20260730-001/002).
 #
-# Commands (see also DEPLOY-UX-AGREED-POSITION.md for the full model):
+# Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
-#   zfs-backup.sh add-client NAME --peer=HOST --datasets="A B" [--target=..] [--port=N]
-#   zfs-backup.sh activate-client NAME [--yes]
+#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X]
+#   zfs-backup.sh seed NAME [--yes]
+#   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
+#   zfs-backup.sh verify-endpoint NAME
+#   zfs-backup.sh activate-client NAME [--yes] [--verbose]
 #   zfs-backup.sh status [NAME]
 #   zfs-backup.sh test NAME
 #   zfs-backup.sh remove-client NAME
 #
-# Two separate process points (agreed position §8): add-client (here) makes the
-# pairing package; the peer runs deploy.sh --join by hand, unchanged, backend;
-# activate-client (here) finishes the config, dry-runs, and installs on ONE
-# explicit confirmation. Nothing is installed to cron before that confirmation
-# (agreed position §10 -- no held/paused cron entry during seed either).
+# State machine (REV-20260730-004): pending_enroll -> seeding -> seed_complete
+# -> endpoint_verified -> active. Cron is installed ONLY from endpoint_verified
+# (or re-activating from active) -- never earlier, matching the agreed
+# position's "no held/paused cron entry during seed" (§10) generalized to
+# "no cron entry until the ACTIVE endpoint has been verified", not just LAN
+# vs VPN specifically. `verify-endpoint` can be re-run against whichever
+# endpoint (lan or vpn) is currently active, so a permanently-LAN-only client
+# and a LAN-seed-then-VPN client go through the identical gate.
+#
+# Stable relation identity (REV-20260730-004 F1): CLIENT_NAME is the address-
+# independent identity used for the HostKeyAlias and all display/summary text.
+# `label` (deploy.sh's own peer_label(), derived from the ORIGINAL --lan
+# address used at add-client/--pair time) still exists, but is used ONLY to
+# locate deploy.sh's own manifest/key files and the physical target dataset
+# path deploy.sh itself already created under that name -- neither can change
+# without deploy.sh re-pairing, and this file does not re-pair on an endpoint
+# switch. Switching the ACTIVE_ENDPOINT (lan->vpn or back) changes only which
+# address/port the generated job connects through; it does not touch
+# PEER_HOST, `label`, the target path, the pairing key, or the pinned host
+# key -- deploy.sh's --draft-config is therefore called only once, during
+# `seed` (always over the known-good LAN route), never again afterwards:
+# calling it with a DIFFERENT --peer= address would make deploy.sh treat it
+# as an entirely different, unpaired peer (peer_label() differs by address).
+# Later steps (verify-endpoint, activate-client, test) reuse the
+# already-fetched PEER_SAVED_DATASETS/TARGET from the manifest and connect
+# directly via whichever endpoint is currently active.
 #
 # Only the 'standard' profile is implemented -- values approved by the owner
 # 2026-07-30: hourly retain 24, daily retain 7, weekly retain 4, monthly
-# retain 12. Daily/weekly/monthly run at midnight ("srodek nocy, najlepiej o
-# 00:00"). The owner also asked for these to be "z flush koherentne"
-# (application-consistent via quiesce) -- NOT done: quiesce is a snapsend.sh
-# (push) feature that freezes the LOCAL guest before the local snapshot;
-# zfs-backup.sh is pull-only (snapget.sh), where the guest lives on the
-# REMOTE peer and there is no remote-quiesce mechanism at all (gen-cron.sh
-# rejects quiesce=agent on a pull dataset outright -- found live on pve0
-# during this session's verification, not a design guess). Getting real
-# application consistency for a pull-based client needs either a
-# remote-quiesce feature added to snapget.sh (real engine work, not done) or
-# switching that one client to push. Flagged, not silently dropped.
-# 'frequent'/'archive' profiles are declared but not implemented -- future
-# work, not silently approximated here.
+# retain 12, daily/weekly/monthly at midnight. No quiesce: gen-cron.sh
+# rejects quiesce=agent on a pull dataset outright (snapget.sh has no remote-
+# quiesce support -- the guest lives on the REMOTE peer). Per REV-20260730-004
+# §6, the activation summary now says so explicitly: snapshots from this
+# client are crash-consistent, not application-consistent, until either
+# snapget.sh gains a remote-quiesce feature or that client runs push instead.
+# 'frequent'/'archive' profiles are declared but not implemented.
 #
-# REV-20260730-003 (two independent review passes, same day) found this first
-# pass still missing several things a "generic competent admin" UX needs:
-# HostKeyAlias-based endpoint independence, fail-closed on a missing pinned
-# host key, transactional config edits (validate/dry-run BEFORE touching the
-# real file, atomic swap + rollback-on-install-failure only after
-# confirmation), a canonical-path (not basename) crontab-source check, and
-# visibility into inherited `zfs allow` grants. All addressed in this pass.
-# NOT yet addressed (reviewer explicitly said hold off until these): the
-# seed/VPN-endpoint state machine, an `enroll`-style command on the peer, and
-# human-readable `status` output -- these are real, larger product-UX work,
-# not safety fixes, and are left for a follow-up pass.
+# REV-20260730-003 (two review passes) and REV-20260730-004 (follow-up) found
+# and fixed, across this file's history: HostKeyAlias/fail-closed host key
+# (F1/F2), canonical-path crontab-source check (F5), transactional config
+# edits with atomic swap + rollback (F4/F6), zfs-allow visibility (F8),
+# per-template idempotent checks. REV-20260730-004 additionally required (and
+# this pass implements): decoupling identity from address (this file's F1
+# above), the seed/verify/active state machine, a categorized zfs-allow
+# check (not just a raw dump), explicit crash-consistent labeling, and a
+# crontab-level (not just config-file-level) backup/restore around
+# `gen-cron.sh --install`.
+#
+# NOT yet built: an `enroll`-style command on the peer (pve2 still runs
+# `deploy.sh --join` directly), human-readable `status` beyond a light
+# summary, frequent/archive profiles, remote-quiesce.
 # ------------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,22 +100,32 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
-  zfs-backup.sh add-client NAME --peer=HOST --datasets="A B" [--target=X] [--port=N]
-  zfs-backup.sh activate-client NAME [--yes]
+  zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X]
+  zfs-backup.sh seed NAME [--yes]
+  zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
+  zfs-backup.sh verify-endpoint NAME
+  zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
 
+State machine: pending_enroll -> seeding -> seed_complete -> endpoint_verified
+-> active. Cron is installed only from endpoint_verified (or re-activating an
+already-active client) -- never earlier.
+
 Run on the backup appliance (pve1). The peer (pve2) side is unchanged:
   ./deploy.sh --join=/path/to/package.tgz
 
-See docs/discussions/DEPLOY-UX-AGREED-POSITION.md for the model this follows.
+See docs/discussions/DEPLOY-UX-AGREED-POSITION.md and
+docs/reviews/responses/REV-20260730-004.md for the model this follows.
 EOF
 }
 
 # Identical to deploy.sh's own peer_label(): the key file name, manifest name
 # and account name are all built from this, and it must produce the SAME
-# string deploy.sh already used, or this script would look for the wrong files.
+# string deploy.sh already used, or this script would look for the wrong
+# files. Used ONLY to locate deploy.sh's own state -- never for anything this
+# script displays or builds itself (see the file header on stable identity).
 peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 
 client_name_valid() {
@@ -127,32 +158,25 @@ local_knownhosts_path() {
     printf '%s' "$PEER_KEY_DIR/${label}_known_hosts"
 }
 
-# REV-20260730-003 F1/F2 (both review passes): the generated job must use a
-# stable identity (HostKeyAlias) so a later LAN->VPN endpoint change is not,
-# from OpenSSH's point of view, a change of host at all -- and a missing
-# pinned host key must be a hard failure, never a silent fall-back to
-# accept-new. `-o HostKeyAlias=X` makes ssh look up known_hosts under the
-# alias X instead of the real hostname/IP, so the pinned-key FILE has to
-# carry an entry keyed by that alias -- deploy.sh's own pinned file is keyed
-# by the real host (ssh-keyscan's own output), so this derives a SECOND,
-# alias-keyed file from the same already-verified key material rather than
-# writing to deploy.sh's file at all (this file stays deploy.sh's, read-only
-# from here, per the agreed position's "no changes to deploy.sh's public
-# surface").
+# REV-20260730-004 F1: the alias is now built from CLIENT_NAME (the stable,
+# address-independent identity), not from `label` (deploy.sh's peer_label,
+# derived from whatever address --pair happened to use). Switching endpoints
+# never changes this.
 host_key_alias() { echo "zfs-client-$1"; }
 
 # Returns the alias-keyed known_hosts path on success, or a non-zero exit and
 # no output if there is no pinned key yet to derive it from -- callers must
-# treat that as fatal (F2), never as "fall back to accept-new".
+# treat that as fatal (F2), never as "fall back to accept-new". `label` here
+# is still deploy.sh's own (to find its pinned file); `alias` is the stable
+# CLIENT_NAME-based one this file writes.
 ensure_alias_known_hosts() {
-    local label="$1" user="$2" port="$3"
+    local label="$1" user="$2" port="$3" alias="$4"
     local src; src=$(local_knownhosts_path "$label" "$user")
     [ -f "$src" ] || return 1
     local keyline; keyline=$(grep -v '^#' "$src" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)
     [ -n "$keyline" ] || return 1
     local rest; rest=$(printf '%s' "$keyline" | cut -d' ' -f2-)
     [ -n "$rest" ] || return 1
-    local alias; alias=$(host_key_alias "$label")
     local dst="${src%_known_hosts}_alias_known_hosts"
     if [ "$port" != "22" ]; then
         printf '[%s]:%s %s\n' "$alias" "$port" "$rest" > "$dst" || return 1
@@ -163,25 +187,64 @@ ensure_alias_known_hosts() {
     printf '%s' "$dst"
 }
 
-# REV-20260730-003 F8 (review 1): show effective `zfs allow` at the target
-# dataset AND every ancestor, so an inherited grant from an unrelated earlier
-# relationship is visible before the admin confirms activation -- `zfs allow
-# <ds>` only ever shows what was granted AT that exact dataset, never what a
-# parent already grants (found live during --unpair work: a revoked grant did
-# not mean lost access, see PAIRING-DESIGN.md). This does not try to compute
-# "this relation's grant" vs "inherited" automatically -- it surfaces the raw
-# picture at every level and leaves the judgment to the admin, since telling
-# them apart programmatically needs more than this pass's scope.
-show_effective_grants() {
-    local ds="$1" account="$2" peer="$3" keyfile="$4" knownhosts="$5" alias="$6" port="$7"
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$knownhosts" -o StrictHostKeyChecking=yes)
-    local path="" seg
+# ---- endpoint model (REV-20260730-004 §2/§3) --------------------------------
+# Two fixed slots, lan and vpn, matching the reviewer's own minimal model --
+# not a fully generic named-endpoint system, since the actual required
+# scenario (LAN seed, then relocate to VPN) only ever needs these two.
+endpoint_host_var() { echo "ENDPOINT_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')_HOST"; }
+endpoint_port_var() { echo "ENDPOINT_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')_PORT"; }
+
+# Splits "HOST[:PORT]" -> echoes "HOST PORT" (default port 22). IPv6 literals
+# in brackets are not handled here -- out of scope for this pass (LAN/VPN
+# endpoints in this project are IPv4 RFC1918/WireGuard addresses today).
+parse_endpoint_arg() {
+    local a="$1" host port=22
+    case "$a" in
+        *:*) host="${a%:*}"; port="${a##*:}" ;;
+        *)   host="$a" ;;
+    esac
+    printf '%s %s' "$host" "$port"
+}
+
+# Reads ACTIVE_ENDPOINT plus its ENDPOINT_<X>_HOST/PORT from the already-
+# `.`-sourced client conf vars -- echoes "HOST PORT".
+active_endpoint_host_port() {
+    local hv pv
+    hv=$(endpoint_host_var "${ACTIVE_ENDPOINT:?}")
+    pv=$(endpoint_port_var "$ACTIVE_ENDPOINT")
+    printf '%s %s' "${!hv:?no $hv set for active endpoint '$ACTIVE_ENDPOINT'}" "${!pv:-22}"
+}
+
+# REV-20260730-004 F5: a categorized check, not just a raw `zfs allow` dump --
+# walks from the pool root down to the dataset, and separates "grant found
+# exactly here" from "grant found on an ancestor" (which `zfs allow <child>`
+# never shows on its own -- found live during --unpair work, see
+# PAIRING-DESIGN.md). Prints one clear warning line if any ancestor grants
+# the same account; the raw per-level dump is shown only when verbose=1.
+check_inherited_grants() {
+    local ds="$1" account="$2" host="$3" port="$4" keyfile="$5" alias_kh="$6" alias="$7" verbose="$8"
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes)
+    local path="" seg out found_exact=0 ancestors=""
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
         path="${path:+$path/}$seg"
-        echo "    zfs allow $path :"
-        ssh "${opts[@]}" "${account}@${peer}" "zfs allow '$path'" 2>&1 | sed 's/^/      /'
+        out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow '$path'" 2>&1)
+        if [ "$verbose" -eq 1 ]; then
+            echo "    zfs allow $path :"
+            printf '%s\n' "$out" | sed 's/^/      /'
+        fi
+        if printf '%s' "$out" | grep -qF "$account"; then
+            if [ "$path" = "$ds" ]; then
+                found_exact=1
+            else
+                ancestors="$ancestors $path"
+            fi
+        fi
     done
+    if [ -n "$ancestors" ]; then
+        warn "konto $account ma szerszy odziedziczony dostep z:$ancestors -- '$ds' NIE jest izolowany do tej relacji"
+    fi
+    [ "$found_exact" -eq 1 ] || warn "brak jawnego grantu dokladnie na '$ds' -- sprawdz recznie (zfs allow $ds na $host)"
 }
 
 read_server_conf() {
@@ -194,10 +257,7 @@ read_server_conf() {
 
 # The 'standard' profile's four templates, values approved by the owner
 # 2026-07-30: retain -H24/-D7/-W4/-M12. Daily/weekly/monthly send_schedule is
-# midnight (owner: "srodek nocy, najlepiej o 00:00"). No quiesce here -- see
-# the file header for why the owner's "z flush koherentne" request cannot be
-# met on a pull dataset with today's snapget.sh (gen-cron.sh rejects
-# quiesce=agent on a pull dataset outright; confirmed live). 'retain=', not 'keep=':
+# midnight. No quiesce -- see file header. 'retain=', not 'keep=':
 # gen-cron.sh's 'keep=' auto-derives a -H/-D/... flag from TIER_LETTER, keyed
 # by the CANONICAL tier name (hourly/daily/...) -- these templates are named
 # standard_<tier> to avoid colliding with a host's own hand-maintained
@@ -292,13 +352,10 @@ ensure_cron_config() {
 #
 # REV-20260730-003 F5 (both review passes): comparing `basename` alone is not
 # enough -- /etc/zfs/jobs.conf and /root/test/jobs.conf share a basename but
-# are not the same file, and that gap is exactly the class of bug this check
-# exists to close. A relative name in the crontab's own '# Source:' line is
-# also ambiguous on its own: gen-cron.sh's default `-c` resolution is relative
-# to ITS OWN directory, not to whatever directory happened to be the caller's
-# cwd, so a bare "jobs.pve0.v4.conf" is normalized against $SCRIPT_DIR (where
-# every config this script deals with actually lives), never against the
-# current working directory of whoever is running zfs-backup.sh right now.
+# are not the same file. A relative name in the crontab's own '# Source:'
+# line is normalized against $SCRIPT_DIR (where gen-cron.sh's own default `-c`
+# resolution actually looks), never against the caller's current working
+# directory.
 normalize_cron_source() {
     local p="$1"
     case "$p" in
@@ -317,34 +374,43 @@ assert_cron_config_matches_installed() {
     die "the crontab's managed block was generated from '$raw' (resolved: $existing), not '$file' (resolved: $want) -- installing from a different file would DELETE every job '$raw' describes. Re-run with the matching --config=, or merge the two files by hand first (see the real incident this check exists for: project memory, 2026-07-30)."
 }
 
-# REV-20260730-003 F4/F6 (both passes): atomically swaps a validated working
-# copy over the real config, installs, and rolls the real config back to
-# exactly what it was before if --install then fails -- the real file is
-# never left in a half-applied state, and never touched at all if anything
-# before this point failed.
+# REV-20260730-003 F4/F6, hardened per REV-20260730-004 F7: atomically swaps
+# a validated working copy over the real config, installs, and rolls back on
+# failure at BOTH layers -- the config FILE (as before) AND, independently,
+# the CRONTAB ITSELF, captured immediately before the swap. The reviewer's
+# point: "crontab was NOT changed" used to be an assumption about
+# gen-cron.sh's own atomicity, not something this wrapper actually proved or
+# guaranteed. Now it does not need to assume that: it holds its own snapshot
+# of `crontab -l` and restores it directly with `crontab <snapshot>` if
+# --install fails, independent of whatever state the config file ends up in.
 atomic_replace_and_install() {
     local realfile="$1" workfile="$2"
-    local backup=""
+    local backup="" crontab_backup
+    crontab_backup=$(mktemp) || { rm -f "$workfile"; die "mktemp failed for crontab backup"; }
+    crontab -l > "$crontab_backup" 2>/dev/null
     if [ -f "$realfile" ]; then
-        backup=$(mktemp "$(dirname "$realfile")/.zfsbackup-backup.XXXXXX") || { rm -f "$workfile"; die "mktemp backup failed for $realfile"; }
-        cp -p "$realfile" "$backup" || { rm -f "$workfile" "$backup"; die "could not back up $realfile before swap"; }
+        backup=$(mktemp "$(dirname "$realfile")/.zfsbackup-backup.XXXXXX") || { rm -f "$workfile" "$crontab_backup"; die "mktemp backup failed for $realfile"; }
+        cp -p "$realfile" "$backup" || { rm -f "$workfile" "$backup" "$crontab_backup"; die "could not back up $realfile before swap"; }
     fi
     if ! mv -f "$workfile" "$realfile"; then
-        rm -f "$workfile" "$backup" 2>/dev/null
+        rm -f "$workfile" "$backup" "$crontab_backup" 2>/dev/null
         die "could not atomically replace $realfile"
     fi
     if ! bash "$GENCRON" -c "$realfile" --install; then
-        warn "gen-cron.sh --install failed after updating $realfile -- restoring its previous content"
+        warn "gen-cron.sh --install failed after updating $realfile -- restoring both the config file and the crontab to their exact prior state"
         if [ -n "$backup" ]; then
-            mv -f "$backup" "$realfile" || die "CRITICAL: could not restore $realfile from $backup either -- fix by hand, and do not re-run --install until it is correct"
-            warn "$realfile restored -- crontab was NOT changed by this run"
+            mv -f "$backup" "$realfile" || warn "CRITICAL: could not restore $realfile from $backup -- fix by hand"
         else
             rm -f "$realfile"
-            warn "$realfile removed (it did not exist before this run) -- crontab was NOT changed"
         fi
-        die "gen-cron.sh --install failed -- see above; $realfile has been restored to its prior state"
+        if [ -s "$crontab_backup" ]; then
+            crontab "$crontab_backup" || warn "CRITICAL: could not restore the crontab from $crontab_backup either -- restore by hand: crontab $crontab_backup"
+        fi
+        rm -f "$crontab_backup"
+        die "gen-cron.sh --install failed -- see above; $realfile and the crontab have been restored to their prior state"
     fi
     [ -n "$backup" ] && rm -f "$backup"
+    rm -f "$crontab_backup"
 }
 
 # ------------------------------------------------------------------------------
@@ -380,11 +446,6 @@ cmd_setup_server() {
         if [ -n "$CRON_CONFIG" ]; then
             config="$CRON_CONFIG"
         else
-            # If this host already has a gen-cron.sh-managed crontab block,
-            # its own '# Source: <file>' line names the file actually in
-            # charge -- default to THAT, never to a brand-new file next to
-            # it, or the next --install silently deletes every existing job
-            # (see assert_cron_config_matches_installed).
             local existing
             existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
             if [ -n "$existing" ]; then
@@ -415,21 +476,20 @@ cmd_setup_server() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local peer="" datasets="" target="" port=""
+    local lan="" datasets="" target=""
     for a in "$@"; do
         case "$a" in
-            --peer=*)     peer="${a#*=}" ;;
+            --lan=*)      lan="${a#*=}" ;;
             --datasets=*) datasets="${a#*=}" ;;
             --target=*)   target="${a#*=}" ;;
-            --port=*)     port="${a#*=}" ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
-    [ -n "$peer" ]     || die "add-client requires --peer=HOST"
+    [ -n "$lan" ]      || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
     [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\""
 
     local cpath; cpath=$(client_conf_path "$name")
-    [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use activate-client or remove-client first"
+    [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
 
     read_server_conf
     if [ -z "$target" ]; then
@@ -437,32 +497,231 @@ cmd_add_client() {
         [ -n "$target" ] || die "no --target given and no default set -- run setup-server first, or pass --target=POOL/PATH"
     fi
 
-    local -a pair_args=(--pair --role=pull --peer="$peer" --peer-datasets="$datasets" --target="$target")
-    [ -n "$port" ] && pair_args+=(--port="$port")
+    local lan_host lan_port; read -r lan_host lan_port <<< "$(parse_endpoint_arg "$lan")"
+
+    local -a pair_args=(--pair --role=pull --peer="$lan_host" --peer-datasets="$datasets" --target="$target")
+    [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
     bash "$DEPLOY" "${pair_args[@]}" || die "deploy.sh --pair failed -- see above"
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
     {
-        echo "# zfs-backup.sh client record -- managed by add-client/activate-client/remove-client"
+        echo "# zfs-backup.sh client record -- managed by add-client/seed/set-endpoint/verify-endpoint/activate-client/remove-client"
         echo "CLIENT_NAME=$name"
-        echo "PEER_HOST=$peer"
+        echo "PEER_HOST=$lan_host"
         echo "STATE=pending_enroll"
+        echo "ACTIVE_ENDPOINT=lan"
+        echo "ENDPOINT_LAN_HOST=$lan_host"
+        echo "ENDPOINT_LAN_PORT=$lan_port"
         echo "CREATED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
     log "client '$name' created, state=pending_enroll"
-    log "next: copy the package above to $peer and run there:  ./deploy.sh --join=<package>"
-    log "then here:  $0 activate-client $name"
+    log "next: copy the package above to $lan_host and run there:  ./deploy.sh --join=<package>"
+    log "then here:  $0 seed $name"
+}
+
+# Shared setup for every command that connects to an already-paired peer:
+# sources the client conf + deploy.sh's peer manifest, derives the stable
+# alias, and resolves the CURRENTLY ACTIVE endpoint's host/port. Sets:
+# label, mpath (unused after sourcing), account, keyfile, alias, alias_kh,
+# host, port, flags.
+load_client_and_connection() {
+    local cpath="$1"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    local label; label=$(peer_label "$PEER_HOST")
+    LOAD_LABEL="$label"
+    local mpath; mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- run add-client first"
+    # shellcheck disable=SC1090
+    . "$mpath"
+
+    LOAD_ACCOUNT="${PEER_SAVED_ACCOUNT:-root}"
+    LOAD_KEYFILE=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
+    LOAD_ALIAS=$(host_key_alias "$CLIENT_NAME")
+    local host port; read -r host port <<< "$(active_endpoint_host_port)"
+    LOAD_HOST="$host"; LOAD_PORT="$port"
+    LOAD_ALIAS_KH=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port" "$LOAD_ALIAS") \
+        || die "no pinned host key found for '$PEER_HOST' -- refusing to proceed without one (accept-new is not acceptable here)"
+    LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS"
+    [ "$port" != "22" ] && LOAD_FLAGS="$LOAD_FLAGS -p $port"
+}
+
+# ------------------------------------------------------------------------------
+# seed: the ONLY step that runs deploy.sh --draft-config (always over the LAN
+# endpoint -- see file header) and the ONLY step that performs a REAL,
+# non-dry-run initial transfer. Installs nothing to cron.
+cmd_seed() {
+    local name="${1:-}"; shift || true
+    local yes=0
+    for a in "$@"; do case "$a" in --yes) yes=1 ;; *) die "seed: unknown option $a" ;; esac; done
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    case "${STATE:-}" in
+        pending_enroll|seeding) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- seed expects pending_enroll (or seeding, to retry)" ;;
+    esac
+
+    log "refreshing dataset list from $PEER_HOST over LAN (also confirms --join has run there)..."
+    bash "$DEPLOY" --pair --peer="$PEER_HOST" --draft-config \
+        || die "could not reach $PEER_HOST or list its datasets -- has --join run there yet?"
+
+    {
+        cat "$cpath"
+        echo "STATE=seeding"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+
+    load_client_and_connection "$cpath"
+    [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
+
+    if [ "$yes" -ne 1 ]; then
+        echo "Klient:  $name"
+        echo "Zrodla:  $PEER_SAVED_DATASETS"
+        echo "Cel:     $PEER_SAVED_TARGET/$LOAD_LABEL"
+        read -rp "Wykonac PELNY transfer teraz (rzeczywiste dane, bez -n)? [t/N] " ans
+        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- no transfer performed, state stays 'seeding'" ;; esac
+    fi
+
+    local ds localpath failed=0
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        log "seeding $ds -> $localpath (real transfer, may take a while)..."
+        # shellcheck disable=SC2086
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
+            log "  OK: $ds"
+        else
+            warn "  FAILED: $ds"
+            failed=$((failed + 1))
+        fi
+    done
+    [ "$failed" -eq 0 ] || die "$failed dataset(s) failed to seed -- state stays 'seeding', fix and re-run seed $name"
+
+    {
+        cat "$cpath"
+        echo "STATE=seed_complete"
+        echo "SEED_COMPLETED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+    log "client '$name' seed complete. Next: relocate if needed, then set-endpoint/verify-endpoint, then activate-client."
+}
+
+# ------------------------------------------------------------------------------
+cmd_set_endpoint() {
+    local name="${1:-}"; shift || true
+    local lan="" vpn=""
+    for a in "$@"; do
+        case "$a" in
+            --lan=*) lan="${a#*=}" ;;
+            --vpn=*) vpn="${a#*=}" ;;
+            *) die "set-endpoint: unknown option $a" ;;
+        esac
+    done
+    [ -n "$lan" ] || [ -n "$vpn" ] || die "set-endpoint requires --lan=HOST[:PORT] and/or --vpn=HOST[:PORT]"
+
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    case "${STATE:-}" in
+        seed_complete|endpoint_verified|active) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- set-endpoint needs seed_complete or later (seed must finish first)" ;;
+    esac
+
+    local new_active="$ACTIVE_ENDPOINT"
+    local out="$cpath.new"
+    cp -p "$cpath" "$out" || die "could not copy $cpath"
+    if [ -n "$vpn" ]; then
+        local h p; read -r h p <<< "$(parse_endpoint_arg "$vpn")"
+        {
+            echo "ENDPOINT_VPN_HOST=$h"
+            echo "ENDPOINT_VPN_PORT=$p"
+        } >> "$out"
+        new_active="vpn"
+    fi
+    if [ -n "$lan" ]; then
+        local h2 p2; read -r h2 p2 <<< "$(parse_endpoint_arg "$lan")"
+        {
+            echo "ENDPOINT_LAN_HOST=$h2"
+            echo "ENDPOINT_LAN_PORT=$p2"
+        } >> "$out"
+    fi
+    # Switching the active endpoint means the OLD verification/activation no
+    # longer says anything about THIS endpoint -- require a fresh
+    # verify-endpoint before cron can be (re)installed against it. An already
+    # active client keeps its currently-installed cron line running against
+    # whatever endpoint it was generated for until activate-client is re-run.
+    echo "ACTIVE_ENDPOINT=$new_active" >> "$out"
+    if [ "${STATE:-}" != "seed_complete" ]; then
+        echo "STATE=seed_complete" >> "$out"
+        warn "endpoint changed -- state reset to seed_complete. Existing installed cron (if any) still uses the PREVIOUS endpoint until verify-endpoint + activate-client are re-run."
+    fi
+    mv -f "$out" "$cpath"
+    chmod 0600 "$cpath"
+    log "client '$name' active endpoint is now '$new_active'"
+}
+
+# ------------------------------------------------------------------------------
+# REV-20260730-004 §3.6: must do SSH + host-key verification + snapget -n, and
+# confirm a full transfer is NOT required (i.e. an incremental base already
+# exists) -- not just "the command exited 0", which a first-ever send would
+# also do.
+cmd_verify_endpoint() {
+    local name="${1:-}"
+    [ -n "$name" ] || die "verify-endpoint requires a client name"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    case "${STATE:-}" in
+        seed_complete|endpoint_verified) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete (or endpoint_verified, to re-check)" ;;
+    esac
+
+    load_client_and_connection "$cpath"
+    log "verifying endpoint '$ACTIVE_ENDPOINT' ($LOAD_HOST:$LOAD_PORT) for '$name'..."
+
+    local ds localpath failed=0 needs_full=0 out
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        # shellcheck disable=SC2086
+        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath" 2>&1); local rc=$?
+        printf '%s\n' "$out" | sed 's/^/    /'
+        if [ "$rc" -ne 0 ]; then
+            warn "  FAILED: $ds"
+            failed=$((failed + 1))
+            continue
+        fi
+        if printf '%s' "$out" | grep -qi 'standard full send\|full send'; then
+            warn "  $ds would require a FULL transfer through this endpoint -- no common base found"
+            needs_full=$((needs_full + 1))
+        else
+            log "  OK (incremental): $ds"
+        fi
+    done
+    [ "$failed" -eq 0 ] || die "$failed dataset(s) failed connectivity/host-key verification through '$ACTIVE_ENDPOINT'"
+    if [ "$needs_full" -ne 0 ]; then
+        die "$needs_full dataset(s) would need a full resend through '$ACTIVE_ENDPOINT' -- refusing to mark verified. If this endpoint genuinely has no common base (e.g. never seeded through it), seed again or investigate before proceeding."
+    fi
+
+    {
+        cat "$cpath"
+        echo "STATE=endpoint_verified"
+        echo "ENDPOINT_VERIFIED_AT=$(date '+%Y-%m-%d %H:%M:%S')"
+        echo "ENDPOINT_VERIFIED_FOR=$ACTIVE_ENDPOINT"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+    log "client '$name': endpoint '$ACTIVE_ENDPOINT' verified, incremental-only confirmed. Ready for activate-client."
 }
 
 # ------------------------------------------------------------------------------
 cmd_activate_client() {
     local name="${1:-}"; shift || true
-    local yes=0
+    local yes=0 verbose=0
     for a in "$@"; do
         case "$a" in
             --yes) yes=1 ;;
+            --verbose) verbose=1 ;;
             *) die "activate-client: unknown option $a" ;;
         esac
     done
@@ -470,76 +729,58 @@ cmd_activate_client() {
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
     # shellcheck disable=SC1090
     . "$cpath"
-    [ "${STATE:-}" = "pending_enroll" ] || [ "${STATE:-}" = "active" ] \
-        || die "client '$name' is in state '${STATE:-unknown}' -- expected pending_enroll or active"
+    case "${STATE:-}" in
+        endpoint_verified|active) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- activate-client requires endpoint_verified (run seed, then verify-endpoint first). Fail-closed: no cron entry exists before this gate." ;;
+    esac
 
-    local label; label=$(peer_label "$PEER_HOST")
-    local mpath; mpath=$(peer_manifest_path "$label")
-    [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- run add-client first"
-    # shellcheck disable=SC1090
-    . "$mpath"
-
-    log "refreshing draft config from $PEER_HOST (also confirms --join has run there)..."
-    bash "$DEPLOY" --pair --peer="$PEER_HOST" --draft-config \
-        || die "could not reach $PEER_HOST or list its datasets -- has --join run there yet?"
+    load_client_and_connection "$cpath"
+    [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
 
     read_server_conf
     local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
 
-    local account="${PEER_SAVED_ACCOUNT:-root}"
-    local keyfile; keyfile=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
-    local port="${PEER_SAVED_PORT:-22}"
-
-    # REV-20260730-003 F1/F2 (both passes): a missing pinned host key is now
-    # fatal, never a silent accept-new fallback, and the job uses a stable
-    # HostKeyAlias instead of the literal peer address.
-    local alias; alias=$(host_key_alias "$label")
-    local alias_kh
-    alias_kh=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port") \
-        || die "no pinned host key found for '$PEER_HOST' -- refusing to activate without one (accept-new is not acceptable here). Re-run add-client, or verify --pair completed its host-key confirmation."
-    local flags="-K $keyfile -k $alias_kh -O HostKeyAlias=$alias"
-    [ "$port" != "22" ] && flags="$flags -p $port"
-
-    [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing, re-run add-client"
-
-    # REV-20260730-003 F4/F6 (both passes): everything below builds and
-    # validates a WORKING COPY of the config -- the real file is never
-    # touched until validation, dry-run, AND confirmation all succeed, and
-    # even then only via an atomic swap with rollback if --install then fails.
-    ensure_cron_config_dryrun_copy() {
-        local real="$1" work="$2"
-        if [ -f "$real" ]; then
-            cp -p "$real" "$work" || die "could not copy $real to a working copy"
-        else
-            : > "$work" || die "could not create working copy $work"
-        fi
-        ensure_cron_config "$work"
-    }
+    # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
+    # COPY of the config -- the real file is never touched until validation,
+    # dry-run, AND confirmation all succeed, and even then only via an atomic
+    # swap with rollback if --install then fails (atomic_replace_and_install,
+    # hardened per REV-20260730-004 F7 to also back up/restore the crontab
+    # itself, not just the config file).
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
         || die "mktemp failed next to $cronfile"
-    ensure_cron_config_dryrun_copy "$cronfile" "$workfile"
+    if [ -f "$cronfile" ]; then
+        cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile to a working copy"; }
+    else
+        : > "$workfile" || die "could not create working copy $workfile"
+    fi
+    ensure_cron_config "$workfile"
 
-    local ds localpath added=0 skipped=0
+    # Remove-then-add every managed dataset's section unconditionally (not
+    # skip-if-present): this is what makes re-running activate-client after
+    # an endpoint switch actually pick up the new host/port/alias in the
+    # generated job, instead of silently leaving the OLD connection details
+    # in an already-present section forever.
+    local ds localpath
     local -a managed=()
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$label/$ds"
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         managed+=("$localpath")
-        if grep -qF "[dataset:$localpath]" "$workfile" 2>/dev/null; then
-            warn "[dataset:$localpath] already present -- leaving it untouched"
-            skipped=$((skipped + 1))
-            continue
-        fi
+    done
+    if [ "${#managed[@]}" -gt 0 ]; then
+        remove_managed_sections "$workfile" "${managed[@]}"
+    fi
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         {
             echo
             echo "[dataset:$localpath]"
             echo "	use_template = standard_hourly,standard_daily,standard_weekly,standard_monthly"
-            echo "	src          = ${account}@${PEER_HOST}:${ds}"
-            echo "	flags        = $flags"
+            echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+            echo "	flags        = $LOAD_FLAGS"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || { rm -f "$workfile"; die "could not append [dataset:$localpath] to the working copy"; }
-        added=$((added + 1))
     done
-    log "cron config (working copy): $added dataset(s) added, $skipped already present"
+    log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$ACTIVE_ENDPOINT'"
 
     log "validating generated config (working copy only, nothing real touched yet)..."
     if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
@@ -550,9 +791,9 @@ cmd_activate_client() {
     log "dry-run test of each dataset (snapget.sh -n)..."
     local failed=0
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$label/$ds"
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $flags "${account}@${PEER_HOST}:${ds}" "$localpath"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
@@ -564,19 +805,21 @@ cmd_activate_client() {
         die "$failed dataset(s) failed the dry-run -- not installing, $cronfile was NOT touched. Fix and re-run activate-client."
     fi
 
-    log "effective zfs allow on $PEER_HOST (review for anything beyond this relation):"
+    log "zfs allow check on $LOAD_HOST (categorized -- see REV-20260730-004 F5):"
     for ds in $PEER_SAVED_DATASETS; do
-        show_effective_grants "$ds" "$account" "$PEER_HOST" "$keyfile" "$alias_kh" "$alias" "$port"
+        check_inherited_grants "$ds" "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" "$LOAD_KEYFILE" "$LOAD_ALIAS_KH" "$LOAD_ALIAS" "$verbose"
     done
 
     echo
-    echo "Klient:        $name"
-    echo "Peer:          $PEER_HOST"
-    echo "Zrodla:        $PEER_SAVED_DATASETS"
-    echo "Cel:           $PEER_SAVED_TARGET/$label"
-    echo "Tryb:          pull"
-    echo "Profil:        standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly o 00:00, bez quiesce -- niedostepne dla pull, patrz naglowek pliku)"
-    echo "Test:          OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
+    echo "Klient:              $name"
+    echo "Peer (LAN parowania): $PEER_HOST"
+    echo "Endpoint aktywny:    $ACTIVE_ENDPOINT ($LOAD_HOST:$LOAD_PORT)"
+    echo "Zrodla:              $PEER_SAVED_DATASETS"
+    echo "Cel:                 $PEER_SAVED_TARGET/$LOAD_LABEL"
+    echo "Tryb:                pull"
+    echo "Profil:              standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly o 00:00)"
+    echo "Spojnosc snapshotu:  crash-consistent (quiesce/Guest Agent freeze niedostepny w trybie pull)"
+    echo "Test:                OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
     echo
 
     if [ "$yes" -ne 1 ]; then
@@ -607,19 +850,33 @@ cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
         [ -d "$CLIENTS_DIR" ] || { log "no clients yet"; return 0; }
-        local f n
+        local f
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            ( CLIENT_NAME=""; PEER_HOST=""; STATE=""
+            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
               # shellcheck disable=SC1090
               . "$f"
-              printf '%-20s peer=%-20s state=%s\n' "$CLIENT_NAME" "$PEER_HOST" "$STATE" )
+              printf '%-20s state=%-18s endpoint=%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" )
         done
         return 0
     fi
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    cat "$cpath"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
+    echo "Klient:           $CLIENT_NAME"
+    echo "Stan:             ${STATE:-unknown}"
+    echo "Endpoint aktywny: ${ACTIVE_ENDPOINT:-?} ($host:$port)"
+    [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
+    [ -n "${ENDPOINT_VPN_HOST:-}" ] && echo "  vpn:  ${ENDPOINT_VPN_HOST}:${ENDPOINT_VPN_PORT:-22}"
+    echo "Zrodla:           ${PEER_SAVED_DATASETS:-?}"
+    echo "Cel:              ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
+    echo "Utworzono:        ${CREATED_AT:-?}"
+    [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed ukonczony:   $SEED_COMPLETED_AT"
+    [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.: $ENDPOINT_VERIFIED_AT ($ENDPOINT_VERIFIED_FOR)"
+    [ -n "${ACTIVATED_AT:-}" ]         && echo "Aktywowano:       $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]           && echo "Usunieto:         $REMOVED_AT"
 }
 
 # ------------------------------------------------------------------------------
@@ -630,25 +887,16 @@ cmd_test() {
     [ -r "$cpath" ] || die "no client '$name'"
     # shellcheck disable=SC1090
     . "$cpath"
-    [ "${STATE:-}" = "active" ] || die "client '$name' is not active (state=${STATE:-unknown})"
-    local label; label=$(peer_label "$PEER_HOST")
-    local mpath; mpath=$(peer_manifest_path "$label")
-    # shellcheck disable=SC1090
-    . "$mpath"
-    local account="${PEER_SAVED_ACCOUNT:-root}"
-    local keyfile; keyfile=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
-    local port="${PEER_SAVED_PORT:-22}"
-    local alias; alias=$(host_key_alias "$label")
-    local alias_kh
-    alias_kh=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port") \
-        || die "no pinned host key found for '$PEER_HOST' -- refusing to test without one (accept-new is not acceptable here)"
-    local flags="-K $keyfile -k $alias_kh -O HostKeyAlias=$alias"
-    [ "$port" != "22" ] && flags="$flags -p $port"
+    case "${STATE:-}" in
+        endpoint_verified|active) ;;
+        *) die "client '$name' is not ready to test (state=${STATE:-unknown})" ;;
+    esac
 
+    load_client_and_connection "$cpath"
     local ds failed=0
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $flags "${account}@${PEER_HOST}:${ds}" "$PEER_SAVED_TARGET/$label/$ds"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -656,19 +904,19 @@ cmd_test() {
         fi
     done
     [ "$failed" -eq 0 ] || die "$failed dataset(s) failed"
-    log "all datasets OK"
+    log "all datasets OK (endpoint: $ACTIVE_ENDPOINT)"
 }
 
 # ------------------------------------------------------------------------------
 # Removes exactly the [dataset:X] sections this client owns (tracked in
-# MANAGED_DATASETS at activation time), never anything else in the shared
-# host config file -- other clients' stanzas and hand-written sections must
-# survive untouched.
+# MANAGED_DATASETS at activation time, or passed explicitly), never anything
+# else in the shared host config file -- other clients' stanzas and
+# hand-written sections must survive untouched.
 remove_managed_sections() {
     local file="$1"; shift
     local -a targets=("$@")
     local tmp; tmp=$(mktemp) || die "mktemp failed"
-    local ds header skip=0 in_target=0
+    local ds header in_target=0
     local -a headers=()
     for ds in "${targets[@]}"; do headers+=("[dataset:$ds]"); done
     while IFS= read -r line; do
@@ -723,18 +971,20 @@ cmd_remove_client() {
 
 # ------------------------------------------------------------------------------
 # Guarded (same idiom as update-control.sh) so test/zfsbackup/run.sh can
-# `source` this file to reach the pure helper functions (client_name_valid,
-# peer_label, ensure_cron_config, remove_managed_sections, ...) without also
-# running the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
+# `source` this file to reach the pure helper functions without also running
+# the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
-        setup-server)    shift; cmd_setup_server "$@" ;;
-        add-client)      shift; cmd_add_client "$@" ;;
-        activate-client) shift; cmd_activate_client "$@" ;;
-        status)          shift; cmd_status "$@" ;;
-        test)            shift; cmd_test "$@" ;;
-        remove-client)   shift; cmd_remove_client "$@" ;;
-        -h|--help|"")    usage; exit 0 ;;
+        setup-server)     shift; cmd_setup_server "$@" ;;
+        add-client)       shift; cmd_add_client "$@" ;;
+        seed)             shift; cmd_seed "$@" ;;
+        set-endpoint)     shift; cmd_set_endpoint "$@" ;;
+        verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
+        activate-client)  shift; cmd_activate_client "$@" ;;
+        status)           shift; cmd_status "$@" ;;
+        test)             shift; cmd_test "$@" ;;
+        remove-client)    shift; cmd_remove_client "$@" ;;
+        -h|--help|"")     usage; exit 0 ;;
         *) echo "unknown command: $1 (try --help)" >&2; exit 2 ;;
     esac
 fi

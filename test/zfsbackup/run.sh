@@ -202,16 +202,21 @@ else
     bad "host_key_alias produces a stable, predictable alias" "got=$got"
 fi
 
+# REV-20260730-004 F1: ensure_alias_known_hosts now takes the alias as an
+# explicit 4th arg (derived by the caller from CLIENT_NAME, not from `label`)
+# -- the alias-keyed file must carry the STABLE alias, decoupled from
+# whatever `label` (deploy.sh's own peer_label, address-derived) happens to
+# be used to locate the source pinned-key file.
 KHDIR="$WORK/pairing"; mkdir -p "$KHDIR"
-printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/pve2_known_hosts"
-alias_out=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts pve2 '' 22")
+printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/192.168.11.11_known_hosts"
+alias_out=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts 192.168.11.11 '' 22 zfs-client-pve2")
 if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"; then
-    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts with the same key material"
+    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, not the address-derived label"
 else
-    bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts with the same key material" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
+    bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
 fi
 
-alias_out2=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts pve2 '' 2222")
+alias_out2=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts 192.168.11.11 '' 2222 zfs-client-pve2")
 if [ -f "$alias_out2" ] && grep -q '^\[zfs-client-pve2\]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out2"; then
     ok "ensure_alias_known_hosts (non-default port) uses bracket:port notation"
 else
@@ -219,11 +224,37 @@ else
 fi
 
 rc=0
-out="$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts nosuchclient '' 22" 2>&1)" || rc=$?
+out="$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts nosuchclient '' 22 zfs-client-nope" 2>&1)" || rc=$?
 if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
     ok "ensure_alias_known_hosts fails (no output) when there is no pinned key to derive from"
 else
     bad "ensure_alias_known_hosts fails (no output) when there is no pinned key to derive from" "rc=$rc out=$out"
+fi
+
+# --- 8. endpoint model (REV-20260730-004): parse_endpoint_arg / var names ---
+got="$(parse_endpoint_arg 192.168.11.11)"
+if [ "$got" = "192.168.11.11 22" ]; then
+    ok "parse_endpoint_arg defaults to port 22 when none given"
+else
+    bad "parse_endpoint_arg defaults to port 22 when none given" "got=$got"
+fi
+got="$(parse_endpoint_arg 10.8.0.11:2222)"
+if [ "$got" = "10.8.0.11 2222" ]; then
+    ok "parse_endpoint_arg splits HOST:PORT"
+else
+    bad "parse_endpoint_arg splits HOST:PORT" "got=$got"
+fi
+
+got="$(endpoint_host_var lan)"
+if [ "$got" = "ENDPOINT_LAN_HOST" ]; then ok "endpoint_host_var(lan)"; else bad "endpoint_host_var(lan)" "got=$got"; fi
+got="$(endpoint_port_var vpn)"
+if [ "$got" = "ENDPOINT_VPN_PORT" ]; then ok "endpoint_port_var(vpn)"; else bad "endpoint_port_var(vpn)" "got=$got"; fi
+
+out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn ENDPOINT_VPN_HOST=10.8.0.11 ENDPOINT_VPN_PORT=2222; active_endpoint_host_port" 2>&1)"
+if [ "$out" = "10.8.0.11 2222" ]; then
+    ok "active_endpoint_host_port resolves the currently active endpoint's host/port"
+else
+    bad "active_endpoint_host_port resolves the currently active endpoint's host/port" "out=$out"
 fi
 
 echo "--------------------------------------------"
