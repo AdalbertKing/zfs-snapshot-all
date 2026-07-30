@@ -598,10 +598,111 @@ fi
 #
 # Renamed to what it is (the previous revision), written ONLY on a real change,
 # and rollback now leaves a hold that stops the next run from undoing it.
+#
+# REV-20260729-004 F1/F2/F3 (verification of the above): the reviewer found
+# three problems with that first pass, all fixed here:
+#
+#  F1 -- the state dir defaulted to $ALERT_SHARED_DIR, which Phase 4 makes
+#        2775 root:zfsalert ON PURPOSE so a delegated backup account can queue
+#        alert data. Group-write on the DIRECTORY also let that account
+#        remove/replace previous-revision or update-hold -- i.e. undo an
+#        administrator's rollback, or swap a state file for a symlink before
+#        root next wrote it. A backup account has no business deciding what
+#        root's next `git reset --hard` targets. Moved to a root-private
+#        directory under /root (already 0700, same reasoning Phase 4 already
+#        uses to keep notify-fail's own scripts out of that account's reach),
+#        and every access now refuses a symlinked directory or state file
+#        instead of following it.
+#  F2 -- every state write used to be an unchecked `>` redirect under
+#        `set -uo pipefail` (not `set -e`): a write failure was silently
+#        ignored and the caller kept going as if it had succeeded. All state
+#        transitions below are checked, and a write that cannot be trusted
+#        stops the operation rather than reporting success on top of it.
+#  F3 -- `--self-update` ran `merge --ff-only` without ever asking whether the
+#        worktree was clean. `--ff-only` happily keeps a local modification in
+#        a file the incoming commits never touched, so the host would then run
+#        a mix of reviewed code and unreviewed local edits, as root. Checked
+#        explicitly now, before any state is touched.
 # ============================================================================
-UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-$ALERT_SHARED_DIR}"
+UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}"
 PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
 UPDATE_HOLD_FILE="$UPDATE_STATE_DIR/update-hold"
+
+# Fails closed: a symlinked or group/world-writable state directory is treated
+# as untrustworthy and stops the caller rather than being used anyway. Every
+# do_* function below calls this before touching $PREV_REV_FILE/$UPDATE_HOLD_FILE.
+ensure_update_state_dir() {
+    if [ -L "$UPDATE_STATE_DIR" ]; then
+        warn "$UPDATE_STATE_DIR is a symlink -- refusing to follow it. Remove it by hand and re-run: ls -la $UPDATE_STATE_DIR"
+        return 1
+    fi
+    if [ -e "$UPDATE_STATE_DIR" ] && [ ! -d "$UPDATE_STATE_DIR" ]; then
+        warn "$UPDATE_STATE_DIR exists and is not a directory -- refusing to use it."
+        return 1
+    fi
+    if [ ! -e "$UPDATE_STATE_DIR" ]; then
+        mkdir -m 0700 -p "$UPDATE_STATE_DIR" || { warn "mkdir -p $UPDATE_STATE_DIR failed"; return 1; }
+    fi
+    local _mode
+    _mode=$(stat -c '%a' "$UPDATE_STATE_DIR" 2>/dev/null) || { warn "cannot stat $UPDATE_STATE_DIR"; return 1; }
+    # Bitwise, not glob-on-the-last-digit: 0022 isolates group-write(0020) and
+    # other-write(0002) regardless of an extra setuid/setgid/sticky leading
+    # digit in $_mode (e.g. a stray 2775 must still be caught).
+    if [ $(( 0${_mode} & 0022 )) -ne 0 ]; then
+        warn "$UPDATE_STATE_DIR is group- or world-writable (mode $_mode) -- refusing to trust it as update-control state. Fix: chmod 0700 $UPDATE_STATE_DIR"
+        return 1
+    fi
+    return 0
+}
+
+# Atomic and symlink-hostile: `printf ... > "$dst"` opens $dst by name, which
+# FOLLOWS a symlink there and writes through it -- exactly the swap a
+# delegated account could set up (F1). `rename(2)`, which `mv` uses, replaces
+# the directory ENTRY instead, so writing into a private tmpfile first and
+# renaming it over $dst is safe even if $dst is currently a symlink: the
+# rename clobbers the link itself, never the link's target.
+write_state_file() {
+    local dst="$1" content="$2" tmp
+    if [ -L "$dst" ]; then
+        warn "$dst is a symlink -- refusing to write through it. Remove it by hand: ls -la $dst"
+        return 1
+    fi
+    tmp=$(mktemp "$UPDATE_STATE_DIR/.tmp.XXXXXX" 2>/dev/null) || { warn "mktemp in $UPDATE_STATE_DIR failed"; return 1; }
+    if ! printf '%s\n' "$content" > "$tmp" 2>/dev/null; then
+        warn "write to $tmp failed"; rm -f "$tmp"; return 1
+    fi
+    if ! mv -f "$tmp" "$dst" 2>/dev/null; then
+        warn "rename $tmp -> $dst failed"; rm -f "$tmp"; return 1
+    fi
+    return 0
+}
+
+# Companion read: refuses a symlinked source instead of following it (a plain
+# `cat` would happily print whatever the link points at).
+read_state_file() {
+    local src="$1"
+    if [ -L "$src" ]; then
+        warn "$src is a symlink -- refusing to read through it. Remove it by hand: ls -la $src"
+        return 1
+    fi
+    [ -f "$src" ] || return 1
+    cat "$src" 2>/dev/null
+}
+
+# `rm -f` on a symlink only ever removes the link entry, never its target --
+# so this is not a symlink-following hazard the way read/write are. It still
+# refuses, on purpose: a state file that has been swapped for a symlink is
+# evidence of tampering, and papering over it by silently removing the link
+# would hide that from the operator.
+remove_state_file() {
+    local dst="$1"
+    if [ -L "$dst" ]; then
+        warn "$dst is a symlink, not the state file this script wrote -- refusing to remove it automatically. Inspect and remove by hand: ls -la $dst"
+        return 1
+    fi
+    [ -e "$dst" ] || return 0
+    rm -f "$dst" 2>/dev/null
+}
 
 # The ultimate fallback if this script itself is what a bad update broke:
 #   git -C <repo> reset --hard <sha>   and remove the cron line by hand.
@@ -609,11 +710,19 @@ UPDATE_HOLD_FILE="$UPDATE_STATE_DIR/update-hold"
 # two plain git commands rather than anything clever.
 do_self_update() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
-    mkdir -p "$UPDATE_STATE_DIR"
+    ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
 
+    if [ -L "$UPDATE_HOLD_FILE" ]; then
+        warn "$UPDATE_HOLD_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+        return 1
+    fi
     if [ -e "$UPDATE_HOLD_FILE" ]; then
-        log "updates are HELD ($(cat "$UPDATE_HOLD_FILE" 2>/dev/null)) -- not updating. Resume with: bash $REPO_DIR/deploy.sh --resume-updates"
+        log "updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE")) -- not updating. Resume with: bash $REPO_DIR/deploy.sh --resume-updates"
         return 0
+    fi
+    if [ -L "$PREV_REV_FILE" ]; then
+        warn "$PREV_REV_FILE is a symlink -- treating update-control state as tampered with, refusing to update. Resolve by hand: ls -la $PREV_REV_FILE"
+        return 1
     fi
 
     git -C "$REPO_DIR" fetch --quiet origin main 2>/dev/null         || { warn "fetch failed -- leaving $REPO_DIR on its current revision"; return 1; }
@@ -622,22 +731,51 @@ do_self_update() {
     current=$(git -C "$REPO_DIR" rev-parse HEAD) || return 1
     target=$(git -C "$REPO_DIR" rev-parse FETCH_HEAD) || return 1
 
-    # The whole point of the finding: a no-op run must not consume the rollback
-    # point. Nothing changed, so nothing is recorded.
+    # F3: a dirty worktree must not be fast-forwarded. `--ff-only` succeeds
+    # even with an unrelated local edit in play, and the host then runs a mix
+    # of the reviewed target revision and whatever that local edit was.
+    local dirty
+    dirty=$(git -C "$REPO_DIR" status --porcelain 2>&1)
+
+    # The whole point of the F1 (REV-20260729-003) finding: a no-op run must
+    # not consume the rollback point. Nothing changed, so nothing is recorded
+    # -- and since nothing is recorded, a dirty tree here is worth a warning,
+    # not a failure (acceptance criterion: report, don't overwrite state).
     if [ "$current" = "$target" ]; then
+        [ -n "$dirty" ] && warn "$REPO_DIR has uncommitted changes -- nothing to update, but this is worth a look: git -C $REPO_DIR status"
         log "already at $(printf '%.8s' "$current") -- nothing to update"
         return 0
     fi
 
+    if [ -n "$dirty" ]; then
+        warn "$REPO_DIR is not clean -- refusing to update to $(printf '%.8s' "$target"). Running a mix of reviewed and unreviewed local code as root is exactly what this check exists to prevent. Resolve by hand: git -C $REPO_DIR status"
+        return 1
+    fi
+
     # Recorded BEFORE the new revision is activated, and restored if activating
-    # it fails, so a failed update never eats the rollback point either.
+    # it fails, so a failed update never eats the rollback point either. F2:
+    # if this durable record cannot be written, B is never activated -- a
+    # rollback point that might not exist is worse than not updating at all.
     local prior=""
-    [ -r "$PREV_REV_FILE" ] && prior=$(cat "$PREV_REV_FILE")
-    printf '%s
-' "$current" > "$PREV_REV_FILE"
+    if [ -e "$PREV_REV_FILE" ]; then
+        prior=$(read_state_file "$PREV_REV_FILE") || { warn "could not read $PREV_REV_FILE -- refusing to update with an unreadable rollback point"; return 1; }
+    fi
+    write_state_file "$PREV_REV_FILE" "$current"         || { warn "could not durably record $current at $PREV_REV_FILE -- refusing to activate $(printf '%.8s' "$target") without a working rollback point"; return 1; }
+
     if ! git -C "$REPO_DIR" merge --ff-only "$target" >/dev/null 2>&1; then
-        if [ -n "$prior" ]; then printf '%s
-' "$prior" > "$PREV_REV_FILE"; else rm -f "$PREV_REV_FILE"; fi
+        # Best-effort restoration of the pointer this function itself just
+        # overwrote. If THAT also fails, the state is genuinely uncertain --
+        # the safe response is an automatic hold, not silent hourly retries.
+        local _restore_ok=1
+        if [ -n "$prior" ]; then
+            write_state_file "$PREV_REV_FILE" "$prior" || _restore_ok=0
+        else
+            remove_state_file "$PREV_REV_FILE" || _restore_ok=0
+        fi
+        if [ "$_restore_ok" -eq 0 ]; then
+            warn "fast-forward to $(printf '%.8s' "$target") failed AND the rollback pointer at $PREV_REV_FILE could not be restored -- state is uncertain, holding automatic updates"
+            write_state_file "$UPDATE_HOLD_FILE" "held automatically: rollback-pointer restore failed after a bad fast-forward on $(date '+%Y-%m-%d %H:%M:%S')"                 || warn "could not even record an automatic hold -- $UPDATE_STATE_DIR needs manual attention before the next hourly run"
+        fi
         warn "fast-forward to $(printf '%.8s' "$target") failed -- still on $(printf '%.8s' "$current"). Local modifications in $REPO_DIR are the usual cause: git -C $REPO_DIR status"
         return 1
     fi
@@ -647,15 +785,28 @@ do_self_update() {
 
 do_rollback() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
-    [ -r "$PREV_REV_FILE" ] || die "no previous revision recorded at $PREV_REV_FILE -- nothing to roll back to. Pick a revision by hand: git -C $REPO_DIR log --oneline"
-    local target from
-    target=$(cat "$PREV_REV_FILE")
-    from=$(git -C "$REPO_DIR" rev-parse HEAD)
+    ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
+    local target
+    target=$(read_state_file "$PREV_REV_FILE") || die "no previous revision recorded at $PREV_REV_FILE (or it is not a plain file) -- nothing to roll back to. Pick a revision by hand: git -C $REPO_DIR log --oneline"
+    [ -n "$target" ] || die "$PREV_REV_FILE is empty -- nothing to roll back to"
+    local from
+    from=$(git -C "$REPO_DIR" rev-parse HEAD) || die "cannot resolve current HEAD in $REPO_DIR"
     git -C "$REPO_DIR" cat-file -e "${target}^{commit}" 2>/dev/null         || die "recorded revision $target is not in $REPO_DIR -- resolve by hand"
-    git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1         || die "git reset --hard $target failed"
-    mkdir -p "$UPDATE_STATE_DIR"
-    printf 'rolled back from %s to %s on %s
-'         "$(printf '%.8s' "$from")" "$(printf '%.8s' "$target")" "$(date '+%Y-%m-%d %H:%M:%S')"         > "$UPDATE_HOLD_FILE"
+
+    # F2: the hold is written BEFORE the reset, not after. If the reset then
+    # fails partway, the host must come up HELD -- not silently retry the same
+    # revision on the next hourly run because nothing ever recorded the
+    # attempt. This also satisfies "never report success without a hold": if
+    # this write fails, rollback aborts before touching the checkout at all.
+    write_state_file "$UPDATE_HOLD_FILE"         "rollback $(printf '%.8s' "$from") -> $(printf '%.8s' "$target") started $(date '+%Y-%m-%d %H:%M:%S')"         || die "could not record an update hold at $UPDATE_HOLD_FILE -- refusing to roll back without one. Fix $UPDATE_STATE_DIR and retry."
+
+    if ! git -C "$REPO_DIR" reset --hard "$target" >/dev/null 2>&1; then
+        write_state_file "$UPDATE_HOLD_FILE"             "rollback to $(printf '%.8s' "$target") FAILED at $(date '+%Y-%m-%d %H:%M:%S') -- checkout may be inconsistent, held for manual investigation" 2>/dev/null
+        die "git reset --hard $target failed -- automatic updates remain HELD, investigate $REPO_DIR by hand"
+    fi
+
+    write_state_file "$UPDATE_HOLD_FILE"         "rolled back from $(printf '%.8s' "$from") to $(printf '%.8s' "$target") on $(date '+%Y-%m-%d %H:%M:%S')"         || warn "rollback succeeded but could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
+
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
     log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
     log "When the fix is on main:  bash $REPO_DIR/deploy.sh --resume-updates"
@@ -663,13 +814,32 @@ do_rollback() {
 }
 
 do_resume_updates() {
+    ensure_update_state_dir || die "$UPDATE_STATE_DIR is not safe to use as update-control state -- see above"
+    if [ -L "$UPDATE_HOLD_FILE" ]; then
+        die "$UPDATE_HOLD_FILE is a symlink -- refusing to touch it. Resolve by hand: ls -la $UPDATE_HOLD_FILE"
+    fi
+
+    local had_hold=0 hold_content=""
     if [ -e "$UPDATE_HOLD_FILE" ]; then
-        log "removing update hold ($(cat "$UPDATE_HOLD_FILE" 2>/dev/null))"
-        rm -f "$UPDATE_HOLD_FILE"
+        had_hold=1
+        hold_content=$(read_state_file "$UPDATE_HOLD_FILE")
+        log "removing update hold ($hold_content)"
+        remove_state_file "$UPDATE_HOLD_FILE" || die "could not remove $UPDATE_HOLD_FILE -- hold left in place, refusing to update"
+        [ -e "$UPDATE_HOLD_FILE" ] && die "removal of $UPDATE_HOLD_FILE did not take effect -- hold left in place, refusing to update"
     else
         log "no update hold in place -- nothing to resume"
     fi
+
     do_self_update
+    local rc=$?
+    # F2: an explicit --resume-updates that turns around and fails must not
+    # leave the host silently eligible for hourly retries -- restore the hold
+    # rather than defaulting open.
+    if [ "$rc" -ne 0 ] && [ "$had_hold" -eq 1 ]; then
+        warn "the explicit update after --resume-updates failed -- restoring the hold rather than leaving automatic updates enabled"
+        write_state_file "$UPDATE_HOLD_FILE"             "restored after a failed --resume-updates on $(date '+%Y-%m-%d %H:%M:%S') -- previous hold was: $hold_content"             || warn "could not restore the hold at $UPDATE_HOLD_FILE either -- automatic updates may retry hourly. Investigate $UPDATE_STATE_DIR by hand."
+    fi
+    return "$rc"
 }
 
 # The update path, not a deployment. Dispatched BEFORE the root check and before
@@ -680,10 +850,9 @@ do_resume_updates() {
 # $REPO_DIR is root-owned, so a non-root caller cannot reset it, and gets a plain
 # git error saying so. An id check instead would have made the whole path
 # untestable without root, and a test that needs root is a test whose own
-# mistakes edit a live host. (One caveat worth naming: the state dir is group
-# zfsalert and group-writable, so a member of that group can create the hold
-# file and stop updates. That account already runs the backups; it is not a new
-# privilege, but it is not nothing either.)
+# mistakes edit a live host. (The caveat this comment used to name -- the state
+# dir being group zfsalert and group-writable -- is REV-20260729-004 F1, fixed
+# above: $UPDATE_STATE_DIR is root-private now, separate from the alert dir.)
 if [ "$SELF_UPDATE" -eq 1 ]; then do_self_update; exit $?; fi
 if [ "$ROLLBACK" -eq 1 ]; then do_rollback; exit $?; fi
 if [ "$RESUME_UPDATES" -eq 1 ]; then do_resume_updates; exit $?; fi
@@ -930,6 +1099,50 @@ else
     # writable by the other account no matter which one created it.
     chmod 2775 "$ALERT_SHARED_DIR" "$ALERT_SHARED_DIR/notify-state"
     log "shared alert dir $ALERT_SHARED_DIR (2775 root:$ALERT_GROUP)"
+fi
+
+# ------------------------------------------------------------------------------
+log "Phase 4b: update-control state (rollback bookkeeping, root-private)"
+# ------------------------------------------------------------------------------
+# Deliberately NOT inside $ALERT_SHARED_DIR (REV-20260729-004 F1): that
+# directory is 2775 root:$ALERT_GROUP on purpose so the delegated account above
+# can queue alert data, and group-write on the directory would also let it
+# remove or replace previous-revision/update-hold -- undoing an administrator's
+# rollback. This lives under /root instead, for the same reason notify-fail's
+# own scripts do (see the note at the top of Phase 4).
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -L "$UPDATE_STATE_DIR" ]; then
+        warn "  $UPDATE_STATE_DIR is a symlink -- --self-update/--rollback/--resume-updates would all refuse to run"
+    elif [ -d "$UPDATE_STATE_DIR" ]; then
+        _mode=$(stat -c '%a' "$UPDATE_STATE_DIR" 2>/dev/null)
+        log "  $UPDATE_STATE_DIR present ($(stat -c '%a %U:%G' "$UPDATE_STATE_DIR" 2>/dev/null))"
+        if [ -n "$_mode" ] && [ $(( 0${_mode} & 0022 )) -ne 0 ]; then
+            warn "  $UPDATE_STATE_DIR is group- or world-writable (mode $_mode) -- a delegated account could tamper with rollback state"
+        fi
+    else
+        log "  $UPDATE_STATE_DIR not created yet -- the first --self-update/--rollback creates it 0700 root:root"
+    fi
+else
+    # One-time migration: earlier deploys defaulted this to $ALERT_SHARED_DIR
+    # (F1). A host that already recorded a rollback point, or worse is
+    # currently HELD after a real --rollback, must not silently lose that just
+    # because this fix moved the default elsewhere -- that would either strand
+    # an operator's hold-removal instructions or (for previous-revision) quietly
+    # discard a working rollback point with no warning.
+    if [ "$ALERT_SHARED_DIR" != "$UPDATE_STATE_DIR" ]; then
+        for _f in previous-revision update-hold; do
+            _old="$ALERT_SHARED_DIR/$_f"
+            _new="$UPDATE_STATE_DIR/$_f"
+            if [ -f "$_old" ] && [ ! -L "$_old" ] && [ ! -e "$_new" ]; then
+                if ensure_update_state_dir && mv -n "$_old" "$_new" 2>/dev/null; then
+                    log "migrated $_old -> $_new (REV-20260729-004 F1: update-control state is no longer inside the group-writable alert dir)"
+                else
+                    warn "could not migrate $_old to $_new -- check by hand, a rollback point or hold may be stranded"
+                fi
+            fi
+        done
+    fi
+    ensure_update_state_dir         && log "update-control state dir $UPDATE_STATE_DIR ($(stat -c '%a %U:%G' "$UPDATE_STATE_DIR" 2>/dev/null))"         || warn "  could not prepare $UPDATE_STATE_DIR as a safe, root-private directory -- --self-update/--rollback/--resume-updates will all refuse to run until this is fixed by hand"
 fi
 
 ALERT_CONF="/etc/zfs-alert.conf"
@@ -1541,14 +1754,18 @@ if [ -d "$REPO_DIR/.git" ]; then
         0) ;;
         *) log "$_behind commit(s) behind the last fetched origin/main -- the hourly update will catch up" ;;
     esac
-    if [ -e "$UPDATE_HOLD_FILE" ]; then
-        warn "AUTOMATIC UPDATES ARE HELD: $(cat "$UPDATE_HOLD_FILE" 2>/dev/null)"
-        warn "this host will not move until: bash $REPO_DIR/deploy.sh --resume-updates"
-    fi
-    if [ -r "$PREV_REV_FILE" ]; then
-        log "rollback available to $(cut -c1-8 < "$PREV_REV_FILE")  (bash $REPO_DIR/deploy.sh --rollback)"
+    if [ -L "$UPDATE_HOLD_FILE" ] || [ -L "$PREV_REV_FILE" ]; then
+        warn "update-control state at $UPDATE_STATE_DIR contains a symlink where a plain file is expected -- --self-update/--rollback/--resume-updates will all refuse to run until this is resolved by hand: ls -la $UPDATE_STATE_DIR"
     else
-        log "no rollback point recorded yet -- the next real update records one"
+        if [ -e "$UPDATE_HOLD_FILE" ]; then
+            warn "AUTOMATIC UPDATES ARE HELD: $(read_state_file "$UPDATE_HOLD_FILE")"
+            warn "this host will not move until: bash $REPO_DIR/deploy.sh --resume-updates"
+        fi
+        if [ -f "$PREV_REV_FILE" ]; then
+            log "rollback available to $(read_state_file "$PREV_REV_FILE" | cut -c1-8)  (bash $REPO_DIR/deploy.sh --rollback)"
+        else
+            log "no rollback point recorded yet -- the next real update records one"
+        fi
     fi
     # Left over from 75bf956, which wrote this every hour whether anything
     # changed or not. Superseded by previous-revision; removed so nobody trusts

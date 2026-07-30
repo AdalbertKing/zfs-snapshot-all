@@ -22,9 +22,56 @@ DEPLOY="${DEPLOY:-$REPO/deploy.sh}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-PASS=0; FAIL=0
-ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
-bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
+PASS=0; FAIL=0; SKIP=0
+ok()   { echo "PASS $1"; PASS=$((PASS+1)); }
+bad()  { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
+skip() { echo "SKIP $1"; shift; [ $# -gt 0 ] && printf '  %s\n' "$@"; SKIP=$((SKIP+1)); }
+
+# Some of the REV-20260729-004 (F1/F2) cases below need REAL symlinks and REAL
+# POSIX permission-bit enforcement to mean anything. This dev box is Windows
+# git-bash/MSYS: `ln -s` silently copies the target instead of linking, and
+# `chmod` on the NTFS-backed filesystem does not change what stat reports.
+# Probe both up front and SKIP (not fake-pass) whatever cannot be exercised
+# for real here -- these must be re-run on a real Linux host (pve0/pve1, or
+# any host in the fleet) before the corresponding finding can be called
+# verified there too.
+CAN_SYMLINK=0
+_lp="$WORK/.symlink-probe"
+ln -s /nonexistent "$_lp" 2>/dev/null
+[ -L "$_lp" ] && CAN_SYMLINK=1
+rm -f "$_lp"
+
+CAN_CHMOD=0
+_cp="$WORK/.chmod-probe"; mkdir -p "$_cp"
+chmod 0700 "$_cp" 2>/dev/null
+[ "$(stat -c '%a' "$_cp" 2>/dev/null)" = "700" ] && CAN_CHMOD=1
+rmdir "$_cp" 2>/dev/null
+[ "$CAN_SYMLINK" -eq 1 ] || echo "NOTE: this environment cannot create real symlinks -- F1 symlink-rejection cases will SKIP" >&2
+[ "$CAN_CHMOD" -eq 1 ]  || echo "NOTE: this environment does not enforce real permission bits -- F1/F2 permission cases will SKIP" >&2
+
+# Builds a fresh throwaway bare origin + clone, isolated from the shared
+# CLONE/STATE narrative below, sitting at commit X with a real update (Y)
+# already pushed and waiting -- so a self-update is always available without
+# disturbing the numbered cases that share $CLONE/$PREV/$HOLD. Two tracked
+# files (main_file, other_file) so a test can dirty one without the other
+# being touched by the incoming commit -- the exact gap F3 named. Echoes
+# "<origin>|<clone>".
+mk_scenario() {
+    local tag="$1" o s c
+    o="$WORK/f-origin-$tag"; s="$WORK/f-seed-$tag"; c="$WORK/f-clone-$tag"
+    git init -q --bare "$o"
+    mkdir -p "$s"
+    ( cd "$s" && git init -q && git config user.email t@t && git config user.name t \
+        && git config core.autocrlf false \
+        && echo X > main_file && echo O > other_file \
+        && git add main_file other_file && git commit -qm X \
+        && git branch -M main && git remote add origin "$o" && git push -q origin main ) >/dev/null 2>&1
+    git -C "$o" symbolic-ref HEAD refs/heads/main
+    git -c core.autocrlf=false clone -q -b main "$o" "$c" >/dev/null 2>&1
+    ( cd "$c" && git config user.email t@t && git config user.name t )
+    ( cd "$s" && echo Y >> main_file && git add main_file && git commit -qm Y && git push -q origin main ) >/dev/null 2>&1
+    printf '%s|%s' "$o" "$c"
+}
 
 ORIGIN="$WORK/origin"
 CLONE="$WORK/clone"
@@ -109,23 +156,28 @@ else
         "head: $(head_of "$CLONE")" "wanted: $B_expected" "recorded: $(cat "$PREV" 2>/dev/null)"
 fi
 
-# --- 3. a failed fast-forward leaves the checkout and the pointer usable -----
+# --- 3. a dirty worktree leaves the checkout and the pointer usable ---------
+# Since REV-20260729-004 F3, this now gets caught by the explicit
+# `git status --porcelain` check BEFORE any merge is attempted (the case this
+# edits happens to touch the same file the incoming commit changes, but F3's
+# check does not care which file -- see cases 9/10 below for the two shapes
+# the OLD --ff-only-failure-only check missed entirely).
 advance C
-printf 'local edit\n' >> "$CLONE/file"      # makes --ff-only impossible
+printf 'local edit\n' >> "$CLONE/file"      # dirties the worktree
 before_head="$(head_of "$CLONE")"
 before_prev="$(cat "$PREV")"
 out="$(run --self-update)"; rc=$?
 if [ "$rc" -ne 0 ] && [ "$(head_of "$CLONE")" = "$before_head" ] \
    && [ "$(cat "$PREV")" = "$before_prev" ]; then
-    ok "failed update changes neither the checkout nor the rollback point"
+    ok "dirty worktree leaves neither the checkout nor the rollback point changed"
 else
-    bad "failed update changes neither the checkout nor the rollback point" \
+    bad "dirty worktree leaves neither the checkout nor the rollback point changed" \
         "rc=$rc head=$(head_of "$CLONE") prev=$(cat "$PREV")"
 fi
-if printf '%s' "$out" | grep -q 'Local modifications'; then
-    ok "failed update says WHY (local modifications)"
+if printf '%s' "$out" | grep -qi 'not clean'; then
+    ok "dirty worktree refusal says WHY (not clean)"
 else
-    bad "failed update says WHY (local modifications)" "got: $(printf '%s' "$out" | tail -1)"
+    bad "dirty worktree refusal says WHY (not clean)" "got: $(printf '%s' "$out" | tail -1)"
 fi
 git -C "$CLONE" checkout -q -- file        # clean up so the next case can run
 run --self-update >/dev/null               # now at C
@@ -211,6 +263,133 @@ else
     ok "no unbound variable on a plain --check-only"
 fi
 
+# --- 9. F3: an untracked file blocks --self-update --------------------------
+# The old code only ran `git status --porcelain` implicitly via --ff-only's
+# own refusal, which does NOT cover an untracked file with no path collision
+# against the incoming commit -- git happily fast-forwards past it.
+pair=$(mk_scenario f3a); F3A_CLONE=${pair#*|}
+S9="$WORK/state-f3a"; mkdir -p "$S9"
+before_head="$(head_of "$F3A_CLONE")"
+echo "untracked junk" > "$F3A_CLONE/untracked.txt"
+out="$(REPO_DIR="$F3A_CLONE" ALERT_SHARED_DIR="$S9" UPDATE_STATE_DIR="$S9" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ "$(head_of "$F3A_CLONE")" = "$before_head" ] && [ ! -e "$S9/previous-revision" ]; then
+    ok "F3: an untracked file blocks --self-update (real update available)"
+else
+    bad "F3: an untracked file blocks --self-update" \
+        "rc=$rc head_before=$before_head head_after=$(head_of "$F3A_CLONE") prev=$([ -e "$S9/previous-revision" ] && echo present || echo absent)"
+fi
+
+# --- 10. F3: a local edit in a file the incoming commit never touches -------
+# The exact gap the reviewer named: commit Y only changes main_file, so a
+# local edit in other_file does not collide with the fast-forward's own diff
+# and old `--ff-only` would apply it silently, leaving the edit in place.
+pair=$(mk_scenario f3b); F3B_CLONE=${pair#*|}
+S10="$WORK/state-f3b"; mkdir -p "$S10"
+before_head="$(head_of "$F3B_CLONE")"
+echo "unrelated local edit" >> "$F3B_CLONE/other_file"
+out="$(REPO_DIR="$F3B_CLONE" ALERT_SHARED_DIR="$S10" UPDATE_STATE_DIR="$S10" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ "$(head_of "$F3B_CLONE")" = "$before_head" ] && [ ! -e "$S10/previous-revision" ]; then
+    ok "F3: a local edit in a file the incoming commit never touches blocks --self-update"
+else
+    bad "F3: a local edit in a file the incoming commit never touches blocks --self-update" \
+        "rc=$rc head_before=$before_head head_after=$(head_of "$F3B_CLONE") prev=$([ -e "$S10/previous-revision" ] && echo present || echo absent)"
+fi
+
+# --- 11. F1: a symlinked UPDATE_STATE_DIR is refused, not followed ----------
+if [ "$CAN_SYMLINK" -eq 1 ]; then
+    pair=$(mk_scenario f1dir); F1DIR_CLONE=${pair#*|}
+    real_target="$WORK/f1dir-real-target"; mkdir -p "$real_target"
+    state_link="$WORK/f1dir-state-link"
+    ln -s "$real_target" "$state_link"
+    out="$(REPO_DIR="$F1DIR_CLONE" ALERT_SHARED_DIR="$state_link" UPDATE_STATE_DIR="$state_link" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ ! -e "$real_target/previous-revision" ] && printf '%s' "$out" | grep -qi symlink; then
+        ok "F1: a symlinked UPDATE_STATE_DIR is refused, not followed"
+    else
+        bad "F1: a symlinked UPDATE_STATE_DIR is refused, not followed" \
+            "rc=$rc out_tail=$(printf '%s' "$out" | tail -1)"
+    fi
+else
+    skip "F1: a symlinked UPDATE_STATE_DIR is refused" \
+        "this environment's ln -s does not create real symlinks (Windows/MSYS) -- verify on a Linux host"
+fi
+
+# --- 12. F1: a symlinked previous-revision is refused, target untouched -----
+if [ "$CAN_SYMLINK" -eq 1 ]; then
+    pair=$(mk_scenario f1prev); F1PREV_CLONE=${pair#*|}
+    S12="$WORK/state-f1prev"; mkdir -p "$S12"
+    victim="$WORK/f1prev-victim"; echo "do not touch" > "$victim"
+    ln -s "$victim" "$S12/previous-revision"
+    before_head="$(head_of "$F1PREV_CLONE")"
+    out="$(REPO_DIR="$F1PREV_CLONE" ALERT_SHARED_DIR="$S12" UPDATE_STATE_DIR="$S12" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ "$(head_of "$F1PREV_CLONE")" = "$before_head" ] && [ "$(cat "$victim")" = "do not touch" ]; then
+        ok "F1: a symlinked previous-revision is refused, victim file untouched"
+    else
+        bad "F1: a symlinked previous-revision is refused, victim file untouched" \
+            "rc=$rc victim=$(cat "$victim" 2>/dev/null) head_after=$(head_of "$F1PREV_CLONE")"
+    fi
+else
+    skip "F1: a symlinked previous-revision is refused" \
+        "this environment's ln -s does not create real symlinks (Windows/MSYS) -- verify on a Linux host"
+fi
+
+# --- 13. F1: a symlinked update-hold is refused, target untouched ----------
+if [ "$CAN_SYMLINK" -eq 1 ]; then
+    pair=$(mk_scenario f1hold); F1HOLD_CLONE=${pair#*|}
+    S13="$WORK/state-f1hold"; mkdir -p "$S13"
+    victim2="$WORK/f1hold-victim"; echo "do not touch either" > "$victim2"
+    ln -s "$victim2" "$S13/update-hold"
+    out="$(REPO_DIR="$F1HOLD_CLONE" ALERT_SHARED_DIR="$S13" UPDATE_STATE_DIR="$S13" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ "$(cat "$victim2")" = "do not touch either" ]; then
+        ok "F1: a symlinked update-hold is refused, victim file untouched"
+    else
+        bad "F1: a symlinked update-hold is refused, victim file untouched" \
+            "rc=$rc victim=$(cat "$victim2" 2>/dev/null)"
+    fi
+else
+    skip "F1: a symlinked update-hold is refused" \
+        "this environment's ln -s does not create real symlinks (Windows/MSYS) -- verify on a Linux host"
+fi
+
+# --- 14. F1: a group/world-writable UPDATE_STATE_DIR is refused ------------
+if [ "$CAN_CHMOD" -eq 1 ]; then
+    pair=$(mk_scenario f1perm); F1PERM_CLONE=${pair#*|}
+    S14="$WORK/state-f1perm"; mkdir -p "$S14"; chmod 0777 "$S14"
+    before_head="$(head_of "$F1PERM_CLONE")"
+    out="$(REPO_DIR="$F1PERM_CLONE" ALERT_SHARED_DIR="$S14" UPDATE_STATE_DIR="$S14" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+    chmod 0700 "$S14" 2>/dev/null
+    if [ "$rc" -ne 0 ] && [ "$(head_of "$F1PERM_CLONE")" = "$before_head" ] && printf '%s' "$out" | grep -qi writable; then
+        ok "F1: a group/world-writable UPDATE_STATE_DIR is refused"
+    else
+        bad "F1: a group/world-writable UPDATE_STATE_DIR is refused" \
+            "rc=$rc out_tail=$(printf '%s' "$out" | tail -1)"
+    fi
+else
+    skip "F1: a group/world-writable UPDATE_STATE_DIR is refused" \
+        "this environment's chmod does not enforce real POSIX mode bits (Windows/MSYS) -- verify on a Linux host"
+fi
+
+# --- 15. F2: a state-write failure refuses to activate B --------------------
+# 0500 passes the group/other-writable check (F1's own guard) but leaves even
+# the owner unable to create a file in the directory, forcing write_state_file's
+# mktemp to fail realistically -- the acceptance criterion is that B is never
+# activated without a durably recorded A.
+if [ "$CAN_CHMOD" -eq 1 ]; then
+    pair=$(mk_scenario f2write); F2_CLONE=${pair#*|}
+    S15="$WORK/state-f2write"; mkdir -p "$S15"; chmod 0500 "$S15"
+    before_head="$(head_of "$F2_CLONE")"
+    out="$(REPO_DIR="$F2_CLONE" ALERT_SHARED_DIR="$S15" UPDATE_STATE_DIR="$S15" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+    chmod 0700 "$S15" 2>/dev/null
+    if [ "$rc" -ne 0 ] && [ "$(head_of "$F2_CLONE")" = "$before_head" ]; then
+        ok "F2: a write failure on the state dir refuses to activate B (checkout unchanged)"
+    else
+        bad "F2: a write failure on the state dir refuses to activate B" \
+            "rc=$rc head_before=$before_head head_after=$(head_of "$F2_CLONE")"
+    fi
+else
+    skip "F2: a write failure on the state dir refuses to activate B" \
+        "this environment's chmod does not enforce real POSIX mode bits (Windows/MSYS) -- verify on a Linux host"
+fi
+
 echo "--------------------------------------------"
-echo "PASS=$PASS FAIL=$FAIL"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
