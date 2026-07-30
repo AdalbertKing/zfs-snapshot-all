@@ -223,7 +223,7 @@ active_endpoint_host_port() {
 # the same account; the raw per-level dump is shown only when verbose=1.
 check_inherited_grants() {
     local ds="$1" account="$2" host="$3" port="$4" keyfile="$5" alias_kh="$6" alias="$7" verbose="$8"
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes)
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null)
     local path="" seg out found_exact=0 ancestors=""
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
@@ -544,7 +544,19 @@ load_client_and_connection() {
     LOAD_HOST="$host"; LOAD_PORT="$port"
     LOAD_ALIAS_KH=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port" "$LOAD_ALIAS") \
         || die "no pinned host key found for '$PEER_HOST' -- refusing to proceed without one (accept-new is not acceptable here)"
-    LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS"
+    # GlobalKnownHostsFile=/dev/null: found live (2026-07-30, pve0, endpoint
+    # switched from IP to a hostname resolving to the SAME host) -- ssh
+    # consults /etc/ssh/ssh_known_hosts (the SYSTEM-WIDE file) in ADDITION to
+    # -o UserKnownHostsFile even when HostKeyAlias is set, keyed by the
+    # literal connected address, not the alias. pve0's system file already
+    # had an unrelated RSA entry for 192.168.11.11 (pre-existing, nothing to
+    # do with this project), which OpenSSH treated as an "Offending key"
+    # conflict against the real ED25519 key and aborted -- even though the
+    # alias-keyed file matched correctly. Without this, any host that
+    # happens to already have a stale/unrelated system known_hosts entry for
+    # a peer's address breaks endpoint verification for a reason that has
+    # nothing to do with this project's own pinning.
+    LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null"
     [ "$port" != "22" ] && LOAD_FLAGS="$LOAD_FLAGS -p $port"
 }
 
