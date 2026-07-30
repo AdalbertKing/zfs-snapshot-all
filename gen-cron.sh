@@ -414,18 +414,37 @@ maybe_add_autotune() {
 # why that separation is not optional.
 #
 # A pull dataset's snapshot is created on the REMOTE host (snapget.sh ssh's over
-# and runs `zfs snapshot` there) -- quiescing the guest that owns it would mean
-# freezing across that same ssh hop and thawing reliably even if the connection
-# drops mid-run. snapsend.sh's quiesce_freeze/quiesce_thaw_all in lib-zfs-snap.sh
-# only ever shell out to local `qm`/`pct`, and snapget.sh's getopts has no -q at
-# all, so today this is simply rejected rather than silently generating a cron
-# line snapget.sh cannot parse (illegal option -- q).
+# and runs `zfs snapshot` there), so quiescing it means freezing across that same
+# ssh hop and thawing reliably even if the connection drops mid-run. That used to
+# be rejected outright, because snapget.sh had no -q at all and generating the
+# flag anyway would only have produced a cron line it could not parse.
+#
+# snapget.sh v2.65 implements it (see the REMOTE QUIESCE section in
+# lib-zfs-snap.sh): the whole freeze/snapshot/thaw runs in ONE remote invocation
+# carrying its own EXIT trap and a detached deadman, which is what makes the thaw
+# survive a lost connection. So pull is allowed now -- with one caveat this
+# generator CAN check and one it cannot:
+#
+#   can  -- `sync` on a pull dataset is still refused below: the container
+#           fallback is a `pct exec` flush, and there is no reason to schedule
+#           one across an ssh hop when the same host could push instead.
+#   cannot -- whether the SOURCE account is privileged enough. `qm`/`pct` need
+#           root there (measured: a delegated account cannot even read
+#           /etc/pve/qemu-server/<id>.conf), and this generator has no way to
+#           know which account the job will authenticate as, let alone what it
+#           may run. snapget.sh checks it at RUN time and fails loudly rather
+#           than silently taking a crash-consistent snapshot -- which is the
+#           right place for it, but means a config can generate cleanly here and
+#           still need `--as=root` (or a sudo rule) on the peer to work.
 lint_quiesce() {
     local want="$1" ctx="$2" direction="$3"
     case "$want" in
         ""|no) return 0 ;;
-        agent|sync|auto)
-            [ "$direction" = "pull" ] && die "$ctx: quiesce='$want' on a pull dataset -- the snapshot is taken on the REMOTE host over ssh, and snapget.sh has no -q support to freeze a guest there. Quiesce only the push side of a pair, or drop 'quiesce' here."
+        agent|auto)
+            return 0
+            ;;
+        sync)
+            [ "$direction" = "pull" ] && die "$ctx: quiesce='sync' on a pull dataset -- sync is the CONTAINER fallback (a 'pct exec <id> -- sync' flush, not a freeze), and running it across an ssh hop buys nothing a push job on that host would not do better. Use quiesce=agent/auto for VMs, or run this dataset as a push job."
             return 0
             ;;
         fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;

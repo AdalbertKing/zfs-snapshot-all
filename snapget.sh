@@ -220,6 +220,39 @@ set -o pipefail
 #                    there (see transfer_data), so the ratio is measured on the
 #                    far side -- probing locally would measure the wrong
 #                    machine's disk and CPU.
+#   -q <MODE>        Quiesce the Proxmox guest that owns each SOURCE dataset
+#                    before snapshotting it: "no" (default), "agent"
+#                    (qemu-guest-agent freeze, VMs), "sync" (`pct exec <id> --
+#                    sync`, containers -- a FLUSH, not a freeze) or "auto".
+#                    Turns a crash-consistent backup into a filesystem- (and,
+#                    with an /etc/qemu/fsfreeze-hook, application-) consistent
+#                    one.
+#
+#                    THE GUEST IS ON THE FAR SIDE, so unlike snapsend.sh's -q
+#                    the entire freeze -> atomic snapshot -> thaw sequence runs
+#                    in ONE remote invocation, carrying its own EXIT trap and a
+#                    detached deadman timer. That shape is not an optimisation:
+#                    it is what makes the thaw survive a dropped connection, a
+#                    killed local job or a rebooted collector. A guest left
+#                    frozen is an outage, i.e. strictly worse than never having
+#                    quiesced. See the REMOTE QUIESCE section in
+#                    lib-zfs-snap.sh.
+#
+#                    NEEDS ROOT (or a sudo rule) ON THE SOURCE -- measured, not
+#                    assumed: `qm`/`pct` talk to the PVE cluster IPC, and a
+#                    delegated pull account cannot even read
+#                    /etc/pve/qemu-server/<id>.conf. With an unprivileged
+#                    account this FAILS LOUDLY rather than quietly taking the
+#                    crash-consistent snapshot the flag was meant to prevent.
+#                    Pair with --as=root, or grant the sudo rule.
+#
+#                    Ignored with -e (nothing is being created to quiesce) and
+#                    with -n. Rejected for a LOCAL source: that is snapsend.sh's
+#                    job, and this script has no local-freeze path.
+#   -Q <SECONDS>     How long the remote deadman waits before thawing
+#                    unconditionally (default 120, minimum 10). Only relevant
+#                    with -q. Raise it for a guest whose agent is unusually slow
+#                    to answer a freeze.
 #
 #                    Decides ONE thing on purpose: measured 2026-07-22,
 #                    compress-or-not is worth ~29%, the zstd level ~2%, and
@@ -282,7 +315,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.64'
+VERSION='v2.65'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -323,6 +356,21 @@ BWLIMIT=""
 BWLIMIT_FLAG=""
 PORT=22
 USE_EXISTING_SNAPSHOT=0
+# -q: quiesce the Proxmox guest that owns each SOURCE dataset before
+# snapshotting it. Unlike snapsend.sh's -q, the guest is on the REMOTE host
+# here, so the whole freeze/snapshot/thaw runs in one remote invocation --
+# see the REMOTE QUIESCE section in lib-zfs-snap.sh for why, and for the
+# measured privilege constraint (it needs root, or a sudo rule, on the source).
+QUIESCE=no
+# How long the remote deadman waits before thawing unconditionally. Generous
+# next to a snapshot (instantaneous) but far short of any real outage: a guest
+# frozen this long is already a problem, and thawing it is always the safer
+# side to err on. Overridable with -Q for a source whose agent is unusually
+# slow to respond.
+QUIESCE_DEADMAN=120
+# Set once the remote quiesce window has actually created the snapshots, so no
+# later code path creates a second, unquiesced copy. Mirrors snapsend.sh.
+QUIESCE_SNAPPED=0
 RECURSIVE=0
 FLAT_RECURSE=0
 # -X: extended regexes, matched against the full source-side dataset name; an
@@ -1239,11 +1287,13 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:" opt; do
+while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
+        q) QUIESCE="$OPTARG";;
+        Q) QUIESCE_DEADMAN="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
@@ -1353,6 +1403,15 @@ fi
 if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
     log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
+
+case "$QUIESCE" in
+    no|agent|sync|auto) ;;
+    *) echo "Error: -q '$QUIESCE' -- expected no, agent, sync or auto." >&2; exit 1 ;;
+esac
+case "$QUIESCE_DEADMAN" in
+    ''|*[!0-9]*) echo "Error: -Q '$QUIESCE_DEADMAN' -- expected a positive integer (seconds before the remote deadman thaws unconditionally)." >&2; exit 1 ;;
+    *) [ "$QUIESCE_DEADMAN" -ge 10 ] || { echo "Error: -Q '$QUIESCE_DEADMAN' -- must be at least 10 seconds; a deadman shorter than the freeze itself would thaw mid-window." >&2; exit 1; } ;;
+esac
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] REMOTE_DATASETS [LOCAL_BASE]" >&2; exit 1; }
 ###############################################################################
@@ -1650,6 +1709,56 @@ if [ $AUTOTUNE -eq 1 ] && [ -n "$REMOTE_HOST" ] && [ $DRY_RUN -ne 1 ]; then
         AUTOTUNE_ACTIVE=1
         COMPRESSION_BASE=$COMPRESSION
     fi
+fi
+
+# ---- remote quiesce window -------------------------------------------------
+# The pull twin of snapsend.sh's quiesce block. Same contract -- freeze, take
+# every snapshot in one atomic call per pool, thaw, and only then transfer --
+# except that all three happen on the SOURCE host inside a single ssh
+# invocation, because that is the only shape in which the thaw survives losing
+# the connection. See the REMOTE QUIESCE section in lib-zfs-snap.sh.
+#
+# Afterwards the normal loop runs with USE_EXISTING_SNAPSHOT=1: the snapshots
+# already exist, and -e picks the newest matching -m, which is the one just
+# made.
+if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
+    if [ -z "$REMOTE_HOST" ]; then
+        # A local source is snapsend.sh's job; snapget.sh has no local-freeze
+        # path and must not pretend the flag did something.
+        log 0 "Quiesce: -q needs a REMOTE source (the guest has to be frozen where it runs). For a local source use snapsend.sh -q."
+        exit 1
+    fi
+    quiesce_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
+    declare -a QSCOPE=() QSNAPS=()
+    for src_path in "${DATASETS[@]}"; do
+        # Under -r the guests live in the CHILDREN of the named parent, so the
+        # scope is expanded remotely; the snapshot list still names the parent,
+        # because `zfs snapshot -r parent@snap` covers the tree atomically by
+        # itself. Mirrors quiesce_scope()'s local reasoning.
+        if [ $RECURSIVE -eq 1 ]; then
+            while IFS= read -r _qds; do
+                [ -n "$_qds" ] && QSCOPE+=("$_qds")
+            done < <(remote_list "$REMOTE_USER" "$REMOTE_HOST" \
+                        "expanding '$src_path' to find the guests to quiesce" \
+                        "zfs list -H -o name -r '$src_path'")
+        else
+            QSCOPE+=("$src_path")
+        fi
+        QSNAPS+=("${src_path}@${MESSAGE}${quiesce_suffix}")
+    done
+    quiesce_rflag=""
+    [ $RECURSIVE -eq 1 ] && quiesce_rflag="-r"
+    log 1 "Quiesce: freezing on $REMOTE_HOST, then ${#QSNAPS[@]} atomic snapshot(s), then thawing -- all in one remote window"
+    quiesce_remote_run "$REMOTE_USER" "$REMOTE_HOST" "$QUIESCE" "$quiesce_rflag" "$QUIESCE_DEADMAN" \
+        "${QSCOPE[@]}" -- "${QSNAPS[@]}"
+    case $? in
+        0) USE_EXISTING_SNAPSHOT=1
+           QUIESCE_SNAPPED=1 ;;
+        *) # Same refusal as the local path: someone who asked for -q must
+           # never silently receive a crash-consistent snapshot instead.
+           log 0 "Quiesce: refusing to continue with unquiesced snapshots"
+           exit 1 ;;
+    esac
 fi
 
 declare -a FAILED_DATASETS=()

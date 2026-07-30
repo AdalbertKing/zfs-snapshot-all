@@ -1587,6 +1587,213 @@ quiesce_thaw_all() {
     QUIESCE_HANDLED=()
 }
 
+###############################################################################
+# REMOTE QUIESCE -- the pull (snapget.sh) half of -q
+###############################################################################
+# Everything above freezes guests on THIS host. snapget.sh pulls: the guest
+# lives on the REMOTE source, so the freeze, the snapshot and the thaw all have
+# to happen over there. That is not "the same code with ssh in front of it",
+# for two reasons that drove this whole design:
+#
+# 1. THE THAW MUST SURVIVE LOSING THE CONNECTION. Locally, an EXIT trap is
+#    enough: the process that froze is the process that thaws. Over ssh it is
+#    not -- a dropped link, a killed local job or a rebooted collector would
+#    leave a PRODUCTION GUEST FROZEN, which is an outage, and strictly worse
+#    than never having quiesced at all. So the freeze/snapshot/thaw sequence
+#    runs ENTIRELY INSIDE ONE remote invocation, which carries its own EXIT
+#    trap AND a setsid-detached deadman timer that thaws unconditionally if
+#    the main path never gets there. The deadman's output is fully redirected:
+#    a background process still holding the ssh channel's stdout would make
+#    every quiesced run hang until it expired.
+#
+# 2. IT ALSO MAKES THE FREEZE WINDOW SHORTER. A frozen guest blocks writes, so
+#    the window must contain only `zfs snapshot`. Doing it in one remote script
+#    keeps network latency out of the window entirely, instead of paying a
+#    round-trip per freeze, per snapshot and per thaw.
+#
+# PRIVILEGES -- measured, not assumed (pve1 192.168.11.11, 2026-07-30):
+# `qm`/`pct` need root. A delegated pull account (the `--as=delegated` default,
+# which is the whole point of the pairing model) cannot use them: it cannot
+# even READ /etc/pve/qemu-server/<id>.conf, which is 0640 root:www-data, and
+# `qm guest cmd` as a non-root user dies with "Unable to load access control
+# list" because it cannot reach the PVE cluster IPC. Verified with a real
+# throwaway account, not inferred from the mode bits.
+#
+# So remote quiesce needs the peer account to be root (`--pair --as=root`), or
+# a narrowly-scoped sudo rule for a fixed helper. This function does NOT
+# silently fall back to a crash-consistent snapshot when the privileges are
+# missing: it reports the specific reason and fails, because someone who asked
+# for -q and quietly got crash-consistent is exactly the outcome the local
+# quiesce path already refuses to produce.
+#
+# The remote script below is a CONSTANT. Every dataset/snapshot name reaches it
+# as a positional PARAMETER (printf %q on the way out), never interpolated into
+# the code it runs -- the project's "treat dataset and remote values as data,
+# never execute them" rule. It deliberately re-implements the guest-detection
+# logic above instead of sourcing this library: the peer may be on a different
+# revision of the repo, and for a delegated account /root/scripts is unreadable
+# anyway. Same reasoning as update-control.sh's duplicated state helpers.
+#
+# Exit codes: 0 ok, 3 insufficient privileges, 4 the atomic snapshot failed
+# (guests were thawed either way), 1 anything else.
+read -r -d '' ZFS_REMOTE_QUIESCE_SCRIPT <<'REMOTE_QUIESCE_EOF'
+set -u
+mode=$1; deadman=$2; rflag=$3; shift 3
+nscope=$1; shift
+scopes=(); i=0
+while [ "$i" -lt "$nscope" ]; do scopes+=("$1"); shift; i=$((i+1)); done
+nsnap=$1; shift
+snaps=(); i=0
+while [ "$i" -lt "$nsnap" ]; do snaps+=("$1"); shift; i=$((i+1)); done
+
+# Privilege probe FIRST, before anything is frozen: a run that cannot thaw
+# must never start freezing.
+if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
+    echo "QERR this account cannot run qm/pct on the source host (PVE cluster IPC needs root) -- remote quiesce requires --as=root or a sudo rule" >&2
+    exit 3
+fi
+
+frozen_file=$(mktemp) || { echo "QERR mktemp failed on the source host" >&2; exit 1; }
+thaw_all() {
+    [ -s "$frozen_file" ] || return 0
+    local id
+    while read -r id; do
+        [ -n "$id" ] || continue
+        if qm guest cmd "$id" fsfreeze-thaw >/dev/null 2>&1; then
+            echo "QLOG thawed VM $id"
+        else
+            echo "QERR FAILED TO THAW VM $id -- it is STILL FROZEN and needs a manual 'qm guest cmd $id fsfreeze-thaw' on the source host" >&2
+        fi
+    done < "$frozen_file"
+    : > "$frozen_file"
+}
+trap 'thaw_all; rm -f "$frozen_file"' EXIT
+
+# The deadman. setsid so a SIGHUP from a dying ssh session does not take it
+# with us, and every stream redirected so it never holds the ssh channel open.
+deadman_pid=""
+if command -v setsid >/dev/null 2>&1; then
+    setsid bash -c '
+        sleep "$1"
+        [ -s "$2" ] || exit 0
+        while read -r gid; do
+            [ -n "$gid" ] && qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1
+        done < "$2"
+        logger -t zfs-quiesce "DEADMAN: thawed guest(s) after ${1}s -- the controlling backup run vanished mid-window" 2>/dev/null
+    ' _ "$deadman" "$frozen_file" >/dev/null 2>&1 </dev/null &
+    deadman_pid=$!
+else
+    echo "QLOG setsid unavailable -- running without the deadman safety net" >&2
+fi
+
+guest_id() {
+    local leaf=${1##*/}
+    case "$leaf" in
+        vm-*-disk-*|subvol-*-disk-*)
+            leaf=${leaf#vm-}; leaf=${leaf#subvol-}
+            printf '%s' "${leaf%%-disk-*}" ;;
+        *) return 1 ;;
+    esac
+}
+handled=" "
+freeze_one() {
+    local ds="$1" id kind st
+    id=$(guest_id "$ds") || return 0
+    case "$handled" in *" $id "*) return 0 ;; esac
+    handled="$handled$id "
+    if [ -f "/etc/pve/qemu-server/${id}.conf" ]; then kind=qemu
+    elif [ -f "/etc/pve/lxc/${id}.conf" ]; then kind=lxc
+    else echo "QLOG no guest $id on the source host -- skipping"; return 0; fi
+    case "$kind" in
+        qemu) st=$(qm  status "$id" 2>/dev/null) ;;
+        lxc)  st=$(pct status "$id" 2>/dev/null) ;;
+    esac
+    case "$st" in *running*) ;; *) echo "QLOG guest $id is not running -- nothing to freeze"; return 0 ;; esac
+    case "$mode/$kind" in
+        agent/lxc) echo "QLOG guest $id is a container (no qemu-guest-agent) -- use quiesce=sync or auto"; return 0 ;;
+        sync/qemu) echo "QLOG guest $id is a VM -- sync is the container fallback, use quiesce=agent or auto"; return 0 ;;
+    esac
+    case "$kind" in
+        qemu)
+            case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
+                *frozen*) echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate" >&2; return 0 ;;
+            esac
+            if qm guest cmd "$id" fsfreeze-freeze >/dev/null 2>&1; then
+                printf '%s\n' "$id" >> "$frozen_file"
+                echo "QLOG froze VM $id via qemu-guest-agent"
+            else
+                echo "QERR VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" >&2
+            fi ;;
+        lxc)
+            if pct exec "$id" -- sync >/dev/null 2>&1; then
+                echo "QLOG flushed container $id (pct exec sync) -- a flush, not a freeze: ZFS has no FIFREEZE"
+            else
+                echo "QERR 'pct exec $id -- sync' failed" >&2
+            fi ;;
+    esac
+    return 0
+}
+
+for ds in "${scopes[@]}"; do freeze_one "$ds"; done
+
+# One atomic `zfs snapshot` per pool, exactly like the local path: a pool is
+# the widest unit ZFS will snapshot atomically, and every guest stays frozen
+# until the last group is done.
+pools=""
+for s in "${snaps[@]}"; do
+    p=${s%%/*}
+    case " $pools " in *" $p "*) ;; *) pools="$pools $p" ;; esac
+done
+rc=0
+for p in $pools; do
+    group=()
+    for s in "${snaps[@]}"; do [ "${s%%/*}" = "$p" ] && group+=("$s"); done
+    if [ -n "$rflag" ]; then
+        zfs snapshot "$rflag" "${group[@]}" || { rc=4; break; }
+    else
+        zfs snapshot "${group[@]}" || { rc=4; break; }
+    fi
+done
+
+thaw_all
+[ -n "$deadman_pid" ] && kill "$deadman_pid" 2>/dev/null
+[ "$rc" -eq 0 ] || echo "QERR the atomic snapshot failed on the source host -- refusing to fall back to unquiesced snapshots" >&2
+exit "$rc"
+REMOTE_QUIESCE_EOF
+
+# Runs the remote script. $1 user, $2 host, $3 mode, $4 recursive flag ("-r"
+# or ""), $5 deadman seconds, then the scope datasets, then "--", then the
+# snapshot names to create. Relays the remote's QLOG/QERR lines into this
+# run's own log so a frozen-guest failure is as visible as a local one.
+quiesce_remote_run() {
+    local user="$1" host="$2" mode="$3" rflag="$4" deadman="$5"; shift 5
+    local -a scopes=() snaps=()
+    local seen_sep=0 a
+    for a in "$@"; do
+        if [ "$a" = "--" ]; then seen_sep=1; continue; fi
+        if [ "$seen_sep" -eq 0 ]; then scopes+=("$a"); else snaps+=("$a"); fi
+    done
+    local args
+    args=$(printf '%q ' "$mode" "$deadman" "$rflag" "${#scopes[@]}" "${scopes[@]}" "${#snaps[@]}" "${snaps[@]}")
+    local out rc
+    out=$(printf '%s' "$ZFS_REMOTE_QUIESCE_SCRIPT" | ssh "${SSH_OPTS[@]}" "$user@$host" "bash -s -- $args" 2>&1); rc=$?
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            QLOG\ *) log 1 "Quiesce[$host]: ${line#QLOG }" ;;
+            QERR\ *) log 0 "Quiesce[$host]: ${line#QERR }" ;;
+            "")      ;;
+            *)       log 2 "Quiesce[$host]: $line" ;;
+        esac
+    done <<< "$out"
+    case "$rc" in
+        0) return 0 ;;
+        3) log 0 "Quiesce: the source account cannot freeze guests -- re-pair with --as=root, or grant a sudo rule for qm/pct on $host. Refusing to take a silently crash-consistent snapshot instead."; return 3 ;;
+        4) return 4 ;;
+        *) log 0 "Quiesce: the remote quiesce run failed on $host (exit $rc)"; return 1 ;;
+    esac
+}
+
 # Short, stable per-target suffix for bookmark names -- lets one source
 # dataset feed several targets without their bookmarks colliding or
 # overwriting each other. Optional $2 (-i/--identifier) folds a second,
