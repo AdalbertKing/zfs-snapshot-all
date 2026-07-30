@@ -142,6 +142,52 @@ else
     bad "remove_managed_sections handles multiple target sections in one call" "$(cat "$CF4")"
 fi
 
+# --- 6. assert_cron_config_matches_installed --------------------------------
+# REAL incident, live on pve0, 2026-07-30: activate-client installed from a
+# NEW config file while the host's crontab was already managed by a
+# DIFFERENT one (jobs.pve0.v4.conf) -- gen-cron.sh --install replaces the
+# WHOLE managed block, so this deleted every real production job until
+# `gen-cron.sh -c jobs.pve0.v4.conf --install` restored them by hand. This
+# function is the fix: refuse before --install if the crontab's own
+# '# Source: <file>' line names a different file. A fake `crontab` stub
+# ahead of PATH stands in for the real one -- no root/crontab needed.
+STUBDIR="$WORK/stubbin"; mkdir -p "$STUBDIR"
+cat > "$STUBDIR/crontab" <<'EOF'
+#!/bin/bash
+if [ "$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: jobs.pve0.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "# END zfs-backup-managed"
+fi
+EOF
+chmod +x "$STUBDIR/crontab"
+
+out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/scripts/zfs-snapshot-all/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "assert_cron_config_matches_installed: matching basename (even different dir) passes"
+else
+    bad "assert_cron_config_matches_installed: matching basename (even different dir) passes" "rc=$rc out=$out"
+fi
+
+out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/scripts/zfs-snapshot-all/jobs.pve0.conf'" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi "different file would DELETE"; then
+    ok "assert_cron_config_matches_installed: DIFFERENT source file refuses with a clear reason"
+else
+    bad "assert_cron_config_matches_installed: DIFFERENT source file refuses with a clear reason" "rc=$rc out=$out"
+fi
+
+cat > "$STUBDIR/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-l" ] && exit 1
+EOF
+chmod +x "$STUBDIR/crontab"
+out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/anything.conf'" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "assert_cron_config_matches_installed: no existing managed block at all passes (first-ever install)"
+else
+    bad "assert_cron_config_matches_installed: no existing managed block at all passes" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

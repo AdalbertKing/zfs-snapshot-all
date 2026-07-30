@@ -157,6 +157,32 @@ ensure_cron_config() {
     fi
 }
 
+# gen-cron.sh --install replaces the ENTIRE managed block (BEGIN/END markers)
+# in this user's crontab with whatever the given config generates -- there is
+# exactly ONE managed block per crontab, shared by every config anyone has
+# ever used on this host. Installing from a DIFFERENT file than whatever
+# produced the block already there silently deletes every job the real one
+# describes. Found live (2026-07-30, pve0): activate-client's own config file
+# was different from the host's existing jobs.pve0.v4.conf, and --install
+# wiped every real production cron line (vm-101, archive, hdd/lxc) until
+# `gen-cron.sh -c jobs.pve0.v4.conf --install` restored them by hand.
+#
+# gen-cron.sh emits a `# Source: <file>` line as part of the managed block
+# itself -- the one breadcrumb that says which file is authoritative for
+# whatever is currently installed. Refuse outright if it names a different
+# file than the one this run is about to use.
+assert_cron_config_matches_installed() {
+    local file="$1" existing
+    existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    [ -n "$existing" ] || return 0
+    # Compare basenames: gen-cron.sh's -c argument is often given relative
+    # (as this script does), so "jobs.pve0.v4.conf" and
+    # "/root/scripts/zfs-snapshot-all/jobs.pve0.v4.conf" must be treated as
+    # the same file, not a mismatch.
+    [ "$(basename "$existing")" = "$(basename "$file")" ] && return 0
+    die "the crontab's managed block was generated from '$existing', not '$file' -- installing from a different file would DELETE every job '$existing' describes. Re-run with the matching --config=, or merge the two files by hand first (see the real incident this check exists for: docs/reviews/responses/ or project memory, 2026-07-30)."
+}
+
 # ------------------------------------------------------------------------------
 cmd_setup_server() {
     local target="" config=""
@@ -186,7 +212,25 @@ cmd_setup_server() {
             esac
         fi
     fi
-    [ -z "$config" ] && config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    if [ -z "$config" ]; then
+        if [ -n "$CRON_CONFIG" ]; then
+            config="$CRON_CONFIG"
+        else
+            # If this host already has a gen-cron.sh-managed crontab block,
+            # its own '# Source: <file>' line names the file actually in
+            # charge -- default to THAT, never to a brand-new file next to
+            # it, or the next --install silently deletes every existing job
+            # (see assert_cron_config_matches_installed).
+            local existing
+            existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+            if [ -n "$existing" ]; then
+                config="$existing"
+                log "found an existing managed crontab block from '$existing' -- using it as the cron config (pass --config= to override)"
+            else
+                config="$SCRIPT_DIR/jobs.$(hostname -s).conf"
+            fi
+        fi
+    fi
 
     zfs create -p "$target" 2>/dev/null || zfs list "$target" >/dev/null 2>&1 || die "could not create or find target dataset $target"
 
@@ -343,6 +387,7 @@ cmd_activate_client() {
         case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing installed" ;; esac
     fi
 
+    assert_cron_config_matches_installed "$cronfile"
     bash "$GENCRON" -c "$cronfile" --install || die "gen-cron.sh --install failed"
 
     {
@@ -451,6 +496,7 @@ cmd_remove_client() {
         log "removing this client's [dataset:] sections from $CRON_CONFIG"
         # shellcheck disable=SC2086
         remove_managed_sections "$CRON_CONFIG" $MANAGED_DATASETS
+        assert_cron_config_matches_installed "$CRON_CONFIG"
         bash "$GENCRON" -c "$CRON_CONFIG" --install || die "gen-cron.sh --install failed while removing '$name' -- fix $CRON_CONFIG by hand"
     else
         warn "no managed dataset list on file (client was never activated?) -- skipping cron removal"
