@@ -126,7 +126,7 @@ STANDARD_TEMPLATES='
 	notify_word    = backup
 	prune_schedule = 21 * * * *
 	pattern        = automated_hourly
-	keep           = 24
+	retain         = -H24
 	monitor_warn   = 90m
 	monitor_crit   = 150m
 
@@ -136,7 +136,7 @@ STANDARD_TEMPLATES='
 	notify_word    = backup
 	prune_schedule = 40 0 * * *
 	pattern        = automated_daily
-	keep           = 14
+	retain         = -D14
 	monitor_warn   = 30h
 	monitor_crit   = 48h
 '
@@ -467,13 +467,19 @@ cmd_remove_client() {
 }
 
 # ------------------------------------------------------------------------------
-case "${1:-}" in
-    setup-server)    shift; cmd_setup_server "$@" ;;
-    add-client)      shift; cmd_add_client "$@" ;;
-    activate-client) shift; cmd_activate_client "$@" ;;
-    status)          shift; cmd_status "$@" ;;
-    test)            shift; cmd_test "$@" ;;
-    remove-client)   shift; cmd_remove_client "$@" ;;
-    -h|--help|"")    usage; exit 0 ;;
-    *) echo "unknown command: $1 (try --help)" >&2; exit 2 ;;
-esac
+# Guarded (same idiom as update-control.sh) so test/zfsbackup/run.sh can
+# `source` this file to reach the pure helper functions (client_name_valid,
+# peer_label, ensure_cron_config, remove_managed_sections, ...) without also
+# running the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    case "${1:-}" in
+        setup-server)    shift; cmd_setup_server "$@" ;;
+        add-client)      shift; cmd_add_client "$@" ;;
+        activate-client) shift; cmd_activate_client "$@" ;;
+        status)          shift; cmd_status "$@" ;;
+        test)            shift; cmd_test "$@" ;;
+        remove-client)   shift; cmd_remove_client "$@" ;;
+        -h|--help|"")    usage; exit 0 ;;
+        *) echo "unknown command: $1 (try --help)" >&2; exit 2 ;;
+    esac
+fi
