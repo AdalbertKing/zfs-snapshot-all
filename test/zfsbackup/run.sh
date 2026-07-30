@@ -162,18 +162,24 @@ fi
 EOF
 chmod +x "$STUBDIR/crontab"
 
-out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/scripts/zfs-snapshot-all/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
+# REV-20260730-003 F5 (both passes): basename-only comparison would wrongly
+# pass here (a DIFFERENT real file, e.g. /root/other/jobs.pve0.v4.conf, shares
+# a basename with the one actually installed) -- canonical-path resolution
+# must catch it. A relative name in the crontab's own '# Source:' line (the
+# real, common shape) resolves against $SCRIPT_DIR, so the SAME relative
+# name used as the target must pass.
+out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '$REPO/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then
-    ok "assert_cron_config_matches_installed: matching basename (even different dir) passes"
+    ok "assert_cron_config_matches_installed: same file, relative source resolved against \$SCRIPT_DIR, passes"
 else
-    bad "assert_cron_config_matches_installed: matching basename (even different dir) passes" "rc=$rc out=$out"
+    bad "assert_cron_config_matches_installed: same file, relative source resolved against \$SCRIPT_DIR, passes" "rc=$rc out=$out"
 fi
 
-out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/scripts/zfs-snapshot-all/jobs.pve0.conf'" 2>&1)"; rc=$?
+out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/other/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi "different file would DELETE"; then
-    ok "assert_cron_config_matches_installed: DIFFERENT source file refuses with a clear reason"
+    ok "assert_cron_config_matches_installed: DIFFERENT real file with the SAME basename still refuses"
 else
-    bad "assert_cron_config_matches_installed: DIFFERENT source file refuses with a clear reason" "rc=$rc out=$out"
+    bad "assert_cron_config_matches_installed: DIFFERENT real file with the SAME basename still refuses" "rc=$rc out=$out"
 fi
 
 cat > "$STUBDIR/crontab" <<'EOF'
@@ -186,6 +192,38 @@ if [ "$rc" -eq 0 ]; then
     ok "assert_cron_config_matches_installed: no existing managed block at all passes (first-ever install)"
 else
     bad "assert_cron_config_matches_installed: no existing managed block at all passes" "rc=$rc out=$out"
+fi
+
+# --- 7. host_key_alias / ensure_alias_known_hosts (REV-20260730-003 F1/F2) --
+got="$(host_key_alias pve2)"
+if [ "$got" = "zfs-client-pve2" ]; then
+    ok "host_key_alias produces a stable, predictable alias"
+else
+    bad "host_key_alias produces a stable, predictable alias" "got=$got"
+fi
+
+KHDIR="$WORK/pairing"; mkdir -p "$KHDIR"
+printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/pve2_known_hosts"
+alias_out=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts pve2 '' 22")
+if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"; then
+    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts with the same key material"
+else
+    bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts with the same key material" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
+fi
+
+alias_out2=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts pve2 '' 2222")
+if [ -f "$alias_out2" ] && grep -q '^\[zfs-client-pve2\]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out2"; then
+    ok "ensure_alias_known_hosts (non-default port) uses bracket:port notation"
+else
+    bad "ensure_alias_known_hosts (non-default port) uses bracket:port notation" "alias_out2=$alias_out2 content=$(cat "$alias_out2" 2>&1)"
+fi
+
+rc=0
+out="$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts nosuchclient '' 22" 2>&1)" || rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
+    ok "ensure_alias_known_hosts fails (no output) when there is no pinned key to derive from"
+else
+    bad "ensure_alias_known_hosts fails (no output) when there is no pinned key to derive from" "rc=$rc out=$out"
 fi
 
 echo "--------------------------------------------"

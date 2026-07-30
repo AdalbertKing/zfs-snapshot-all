@@ -26,10 +26,26 @@ set -uo pipefail
 # explicit confirmation. Nothing is installed to cron before that confirmation
 # (agreed position §10 -- no held/paused cron entry during seed either).
 #
-# Only the 'standard' profile is implemented (hourly keep=24, daily keep=14,
-# thresholds matching the values already proven in production on pve0's
-# rpool/data archive jobs). 'frequent'/'archive' profiles are declared but not
-# implemented -- future work, not silently approximated here.
+# Only the 'standard' profile is implemented -- values approved by the owner
+# 2026-07-30: hourly retain 24, daily retain 7, weekly retain 4, monthly
+# retain 12. Daily/weekly/monthly run at midnight with quiesce=agent (owner:
+# "z flush koherentne" -- application-consistent via the Proxmox guest
+# agent), matching this project's own established convention (see
+# jobs.11.11.v4.conf: hourly plain, daily/weekly/monthly/annual quiesced).
+# 'frequent'/'archive' profiles are declared but not implemented -- future
+# work, not silently approximated here.
+#
+# REV-20260730-003 (two independent review passes, same day) found this first
+# pass still missing several things a "generic competent admin" UX needs:
+# HostKeyAlias-based endpoint independence, fail-closed on a missing pinned
+# host key, transactional config edits (validate/dry-run BEFORE touching the
+# real file, atomic swap + rollback-on-install-failure only after
+# confirmation), a canonical-path (not basename) crontab-source check, and
+# visibility into inherited `zfs allow` grants. All addressed in this pass.
+# NOT yet addressed (reviewer explicitly said hold off until these): the
+# seed/VPN-endpoint state machine, an `enroll`-style command on the peer, and
+# human-readable `status` output -- these are real, larger product-UX work,
+# not safety fixes, and are left for a follow-up pass.
 # ------------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -104,6 +120,63 @@ local_knownhosts_path() {
     printf '%s' "$PEER_KEY_DIR/${label}_known_hosts"
 }
 
+# REV-20260730-003 F1/F2 (both review passes): the generated job must use a
+# stable identity (HostKeyAlias) so a later LAN->VPN endpoint change is not,
+# from OpenSSH's point of view, a change of host at all -- and a missing
+# pinned host key must be a hard failure, never a silent fall-back to
+# accept-new. `-o HostKeyAlias=X` makes ssh look up known_hosts under the
+# alias X instead of the real hostname/IP, so the pinned-key FILE has to
+# carry an entry keyed by that alias -- deploy.sh's own pinned file is keyed
+# by the real host (ssh-keyscan's own output), so this derives a SECOND,
+# alias-keyed file from the same already-verified key material rather than
+# writing to deploy.sh's file at all (this file stays deploy.sh's, read-only
+# from here, per the agreed position's "no changes to deploy.sh's public
+# surface").
+host_key_alias() { echo "zfs-client-$1"; }
+
+# Returns the alias-keyed known_hosts path on success, or a non-zero exit and
+# no output if there is no pinned key yet to derive it from -- callers must
+# treat that as fatal (F2), never as "fall back to accept-new".
+ensure_alias_known_hosts() {
+    local label="$1" user="$2" port="$3"
+    local src; src=$(local_knownhosts_path "$label" "$user")
+    [ -f "$src" ] || return 1
+    local keyline; keyline=$(grep -v '^#' "$src" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)
+    [ -n "$keyline" ] || return 1
+    local rest; rest=$(printf '%s' "$keyline" | cut -d' ' -f2-)
+    [ -n "$rest" ] || return 1
+    local alias; alias=$(host_key_alias "$label")
+    local dst="${src%_known_hosts}_alias_known_hosts"
+    if [ "$port" != "22" ]; then
+        printf '[%s]:%s %s\n' "$alias" "$port" "$rest" > "$dst" || return 1
+    else
+        printf '%s %s\n' "$alias" "$rest" > "$dst" || return 1
+    fi
+    chmod 0600 "$dst" 2>/dev/null
+    printf '%s' "$dst"
+}
+
+# REV-20260730-003 F8 (review 1): show effective `zfs allow` at the target
+# dataset AND every ancestor, so an inherited grant from an unrelated earlier
+# relationship is visible before the admin confirms activation -- `zfs allow
+# <ds>` only ever shows what was granted AT that exact dataset, never what a
+# parent already grants (found live during --unpair work: a revoked grant did
+# not mean lost access, see PAIRING-DESIGN.md). This does not try to compute
+# "this relation's grant" vs "inherited" automatically -- it surfaces the raw
+# picture at every level and leaves the judgment to the admin, since telling
+# them apart programmatically needs more than this pass's scope.
+show_effective_grants() {
+    local ds="$1" account="$2" peer="$3" keyfile="$4" knownhosts="$5" alias="$6" port="$7"
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$knownhosts" -o StrictHostKeyChecking=yes)
+    local path="" seg
+    IFS='/' read -ra _segs <<< "$ds"
+    for seg in "${_segs[@]}"; do
+        path="${path:+$path/}$seg"
+        echo "    zfs allow $path :"
+        ssh "${opts[@]}" "${account}@${peer}" "zfs allow '$path'" 2>&1 | sed 's/^/      /'
+    done
+}
+
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""
@@ -112,14 +185,21 @@ read_server_conf() {
     . "$SERVER_CONF"
 }
 
-# The two 'standard' profile templates. Both fields together (send_schedule +
-# prune_schedule/pattern/keep + monitor_warn/monitor_crit) in ONE template is
-# exactly what gen-cron.sh's [dataset:] section type supports natively
-# ("create+send/pull + inline self-prune (own path)") -- no [prune:] section
-# needed for the simple one-client-one-dataset case this profile targets.
-# Thresholds match the values already proven live on pve0's archive jobs
-# (90m/150m hourly, 30h/48h daily) rather than invented numbers.
-STANDARD_TEMPLATES='
+# The 'standard' profile's four templates, values approved by the owner
+# 2026-07-30: retain -H24/-D7/-W4/-M12. Daily/weekly/monthly send_schedule is
+# midnight (owner: "srodek nocy, najlepiej o 00:00") with quiesce=agent for an
+# application-consistent snapshot ("z flush koherentne") -- hourly stays
+# plain, matching this project's own established convention (jobs.11.11.v4.conf:
+# hourly plain, daily/weekly/monthly/annual quiesced). 'retain=', not 'keep=':
+# gen-cron.sh's 'keep=' auto-derives a -H/-D/... flag from TIER_LETTER, keyed
+# by the CANONICAL tier name (hourly/daily/...) -- these templates are named
+# standard_<tier> to avoid colliding with a host's own hand-maintained
+# hourly/daily/... templates in a DIFFERENT config file, so 'keep=' would fail
+# to resolve a letter for them (found live, REV-20260730-001 fix commit
+# 7ebfbf7). 'retain=' is the raw-flag escape hatch for exactly this case.
+STANDARD_TEMPLATE_NAMES="standard_hourly standard_daily standard_weekly standard_monthly"
+
+STANDARD_TEMPLATE_standard_hourly='
 [template:standard_hourly]
 	send_schedule  = 1 * * * *
 	prefix         = automated_hourly_
@@ -129,18 +209,48 @@ STANDARD_TEMPLATES='
 	retain         = -H24
 	monitor_warn   = 90m
 	monitor_crit   = 150m
-
+'
+STANDARD_TEMPLATE_standard_daily='
 [template:standard_daily]
-	send_schedule  = 12 0 * * *
+	send_schedule  = 0 0 * * *
 	prefix         = automated_daily_
 	notify_word    = backup
-	prune_schedule = 40 0 * * *
+	quiesce        = agent
+	prune_schedule = 10 0 * * *
 	pattern        = automated_daily
-	retain         = -D14
+	retain         = -D7
 	monitor_warn   = 30h
 	monitor_crit   = 48h
 '
+STANDARD_TEMPLATE_standard_weekly='
+[template:standard_weekly]
+	send_schedule  = 0 0 * * 0
+	prefix         = automated_weekly_
+	notify_word    = backup
+	quiesce        = agent
+	prune_schedule = 20 0 * * 0
+	pattern        = automated_weekly
+	retain         = -W4
+	monitor_warn   = 9d
+	monitor_crit   = 12d
+'
+STANDARD_TEMPLATE_standard_monthly='
+[template:standard_monthly]
+	send_schedule  = 0 0 1 * *
+	prefix         = automated_monthly_
+	notify_word    = backup
+	quiesce        = agent
+	prune_schedule = 30 0 1 * *
+	pattern        = automated_monthly
+	retain         = -M12
+'
 
+# REV-20260730-003 F8 (review 2): checks EACH template independently and
+# appends only what is actually missing -- a file with standard_hourly but
+# missing standard_daily/weekly/monthly (hand-edited, or from an older
+# version of this script) was previously considered "complete" because only
+# standard_hourly was ever checked, AND a single-blob append would have
+# duplicated whatever templates were already present.
 ensure_cron_config() {
     local file="$1"
     if [ ! -e "$file" ]; then
@@ -151,10 +261,14 @@ ensure_cron_config() {
         } > "$file" || die "could not create $file"
         log "created new cron config $file"
     fi
-    if ! grep -q '^\[template:standard_hourly\]' "$file" 2>/dev/null; then
-        printf '%s\n' "$STANDARD_TEMPLATES" >> "$file" || die "could not append standard templates to $file"
-        log "added [template:standard_hourly]/[template:standard_daily] to $file"
-    fi
+    local t varname added=""
+    for t in $STANDARD_TEMPLATE_NAMES; do
+        grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
+        varname="STANDARD_TEMPLATE_$t"
+        printf '%s\n' "${!varname}" >> "$file" || die "could not append [template:$t] to $file"
+        added="$added $t"
+    done
+    [ -n "$added" ] && log "added missing standard profile template(s) to $file:$added"
 }
 
 # gen-cron.sh --install replaces the ENTIRE managed block (BEGIN/END markers)
@@ -171,16 +285,62 @@ ensure_cron_config() {
 # itself -- the one breadcrumb that says which file is authoritative for
 # whatever is currently installed. Refuse outright if it names a different
 # file than the one this run is about to use.
+#
+# REV-20260730-003 F5 (both review passes): comparing `basename` alone is not
+# enough -- /etc/zfs/jobs.conf and /root/test/jobs.conf share a basename but
+# are not the same file, and that gap is exactly the class of bug this check
+# exists to close. A relative name in the crontab's own '# Source:' line is
+# also ambiguous on its own: gen-cron.sh's default `-c` resolution is relative
+# to ITS OWN directory, not to whatever directory happened to be the caller's
+# cwd, so a bare "jobs.pve0.v4.conf" is normalized against $SCRIPT_DIR (where
+# every config this script deals with actually lives), never against the
+# current working directory of whoever is running zfs-backup.sh right now.
+normalize_cron_source() {
+    local p="$1"
+    case "$p" in
+        /*) ;;
+        *) p="$SCRIPT_DIR/$p" ;;
+    esac
+    readlink -f "$p" 2>/dev/null || printf '%s' "$p"
+}
 assert_cron_config_matches_installed() {
-    local file="$1" existing
-    existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
-    [ -n "$existing" ] || return 0
-    # Compare basenames: gen-cron.sh's -c argument is often given relative
-    # (as this script does), so "jobs.pve0.v4.conf" and
-    # "/root/scripts/zfs-snapshot-all/jobs.pve0.v4.conf" must be treated as
-    # the same file, not a mismatch.
-    [ "$(basename "$existing")" = "$(basename "$file")" ] && return 0
-    die "the crontab's managed block was generated from '$existing', not '$file' -- installing from a different file would DELETE every job '$existing' describes. Re-run with the matching --config=, or merge the two files by hand first (see the real incident this check exists for: docs/reviews/responses/ or project memory, 2026-07-30)."
+    local file="$1" raw existing want
+    raw=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    [ -n "$raw" ] || return 0
+    existing=$(normalize_cron_source "$raw")
+    want=$(normalize_cron_source "$file")
+    [ "$existing" = "$want" ] && return 0
+    die "the crontab's managed block was generated from '$raw' (resolved: $existing), not '$file' (resolved: $want) -- installing from a different file would DELETE every job '$raw' describes. Re-run with the matching --config=, or merge the two files by hand first (see the real incident this check exists for: project memory, 2026-07-30)."
+}
+
+# REV-20260730-003 F4/F6 (both passes): atomically swaps a validated working
+# copy over the real config, installs, and rolls the real config back to
+# exactly what it was before if --install then fails -- the real file is
+# never left in a half-applied state, and never touched at all if anything
+# before this point failed.
+atomic_replace_and_install() {
+    local realfile="$1" workfile="$2"
+    local backup=""
+    if [ -f "$realfile" ]; then
+        backup=$(mktemp "$(dirname "$realfile")/.zfsbackup-backup.XXXXXX") || { rm -f "$workfile"; die "mktemp backup failed for $realfile"; }
+        cp -p "$realfile" "$backup" || { rm -f "$workfile" "$backup"; die "could not back up $realfile before swap"; }
+    fi
+    if ! mv -f "$workfile" "$realfile"; then
+        rm -f "$workfile" "$backup" 2>/dev/null
+        die "could not atomically replace $realfile"
+    fi
+    if ! bash "$GENCRON" -c "$realfile" --install; then
+        warn "gen-cron.sh --install failed after updating $realfile -- restoring its previous content"
+        if [ -n "$backup" ]; then
+            mv -f "$backup" "$realfile" || die "CRITICAL: could not restore $realfile from $backup either -- fix by hand, and do not re-run --install until it is correct"
+            warn "$realfile restored -- crontab was NOT changed by this run"
+        else
+            rm -f "$realfile"
+            warn "$realfile removed (it did not exist before this run) -- crontab was NOT changed"
+        fi
+        die "gen-cron.sh --install failed -- see above; $realfile has been restored to its prior state"
+    fi
+    [ -n "$backup" ] && rm -f "$backup"
 }
 
 # ------------------------------------------------------------------------------
@@ -224,8 +384,8 @@ cmd_setup_server() {
             local existing
             existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
             if [ -n "$existing" ]; then
-                config="$existing"
-                log "found an existing managed crontab block from '$existing' -- using it as the cron config (pass --config= to override)"
+                config=$(normalize_cron_source "$existing")
+                log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
             else
                 config="$SCRIPT_DIR/jobs.$(hostname -s).conf"
             fi
@@ -321,42 +481,67 @@ cmd_activate_client() {
 
     read_server_conf
     local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
-    ensure_cron_config "$cronfile"
 
     local account="${PEER_SAVED_ACCOUNT:-root}"
     local keyfile; keyfile=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
-    local knownhosts; knownhosts=$(local_knownhosts_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
     local port="${PEER_SAVED_PORT:-22}"
-    local flags="-K $keyfile"
-    [ -f "$knownhosts" ] && flags="$flags -k $knownhosts" || warn "no pinned host key at $knownhosts -- job would fall back to accept-new"
+
+    # REV-20260730-003 F1/F2 (both passes): a missing pinned host key is now
+    # fatal, never a silent accept-new fallback, and the job uses a stable
+    # HostKeyAlias instead of the literal peer address.
+    local alias; alias=$(host_key_alias "$label")
+    local alias_kh
+    alias_kh=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port") \
+        || die "no pinned host key found for '$PEER_HOST' -- refusing to activate without one (accept-new is not acceptable here). Re-run add-client, or verify --pair completed its host-key confirmation."
+    local flags="-K $keyfile -k $alias_kh -O HostKeyAlias=$alias"
     [ "$port" != "22" ] && flags="$flags -p $port"
 
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing, re-run add-client"
+
+    # REV-20260730-003 F4/F6 (both passes): everything below builds and
+    # validates a WORKING COPY of the config -- the real file is never
+    # touched until validation, dry-run, AND confirmation all succeed, and
+    # even then only via an atomic swap with rollback if --install then fails.
+    ensure_cron_config_dryrun_copy() {
+        local real="$1" work="$2"
+        if [ -f "$real" ]; then
+            cp -p "$real" "$work" || die "could not copy $real to a working copy"
+        else
+            : > "$work" || die "could not create working copy $work"
+        fi
+        ensure_cron_config "$work"
+    }
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "mktemp failed next to $cronfile"
+    ensure_cron_config_dryrun_copy "$cronfile" "$workfile"
 
     local ds localpath added=0 skipped=0
     local -a managed=()
     for ds in $PEER_SAVED_DATASETS; do
         localpath="$PEER_SAVED_TARGET/$label/$ds"
         managed+=("$localpath")
-        if grep -qF "[dataset:$localpath]" "$cronfile" 2>/dev/null; then
-            warn "[dataset:$localpath] already present in $cronfile -- leaving it untouched"
+        if grep -qF "[dataset:$localpath]" "$workfile" 2>/dev/null; then
+            warn "[dataset:$localpath] already present -- leaving it untouched"
             skipped=$((skipped + 1))
             continue
         fi
         {
             echo
             echo "[dataset:$localpath]"
-            echo "	use_template = standard_hourly,standard_daily"
+            echo "	use_template = standard_hourly,standard_daily,standard_weekly,standard_monthly"
             echo "	src          = ${account}@${PEER_HOST}:${ds}"
             echo "	flags        = $flags"
             echo "	notify       = ${name}-$(basename "$ds")"
-        } >> "$cronfile" || die "could not append [dataset:$localpath] to $cronfile"
+        } >> "$workfile" || { rm -f "$workfile"; die "could not append [dataset:$localpath] to the working copy"; }
         added=$((added + 1))
     done
-    log "cron config: $added dataset(s) added, $skipped already present -- $cronfile"
+    log "cron config (working copy): $added dataset(s) added, $skipped already present"
 
-    log "validating generated config (no install yet)..."
-    bash "$GENCRON" -c "$cronfile" >/dev/null || die "gen-cron.sh rejected $cronfile -- fix it by hand before retrying (see output above)"
+    log "validating generated config (working copy only, nothing real touched yet)..."
+    if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the generated config -- fix the underlying issue and re-run activate-client (see output above). $cronfile was NOT touched."
+    fi
 
     log "dry-run test of each dataset (snapget.sh -n)..."
     local failed=0
@@ -370,7 +555,15 @@ cmd_activate_client() {
             failed=$((failed + 1))
         fi
     done
-    [ "$failed" -eq 0 ] || die "$failed dataset(s) failed the dry-run -- not installing. Fix and re-run activate-client."
+    if [ "$failed" -ne 0 ]; then
+        rm -f "$workfile"
+        die "$failed dataset(s) failed the dry-run -- not installing, $cronfile was NOT touched. Fix and re-run activate-client."
+    fi
+
+    log "effective zfs allow on $PEER_HOST (review for anything beyond this relation):"
+    for ds in $PEER_SAVED_DATASETS; do
+        show_effective_grants "$ds" "$account" "$PEER_HOST" "$keyfile" "$alias_kh" "$alias" "$port"
+    done
 
     echo
     echo "Klient:        $name"
@@ -378,17 +571,20 @@ cmd_activate_client() {
     echo "Zrodla:        $PEER_SAVED_DATASETS"
     echo "Cel:           $PEER_SAVED_TARGET/$label"
     echo "Tryb:          pull"
-    echo "Profil:        standard (hourly keep=24, daily keep=14)"
+    echo "Profil:        standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly at 00:00 z quiesce=agent)"
     echo "Test:          OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
     echo
 
     if [ "$yes" -ne 1 ]; then
         read -rp "Aktywowac backup? [t/N] " ans
-        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing installed" ;; esac
+        case "$ans" in
+            t|T|tak|TAK) ;;
+            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
+        esac
     fi
 
     assert_cron_config_matches_installed "$cronfile"
-    bash "$GENCRON" -c "$cronfile" --install || die "gen-cron.sh --install failed"
+    atomic_replace_and_install "$cronfile" "$workfile"
 
     {
         cat "$cpath"
@@ -437,10 +633,12 @@ cmd_test() {
     . "$mpath"
     local account="${PEER_SAVED_ACCOUNT:-root}"
     local keyfile; keyfile=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
-    local knownhosts; knownhosts=$(local_knownhosts_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
     local port="${PEER_SAVED_PORT:-22}"
-    local flags="-K $keyfile"
-    [ -f "$knownhosts" ] && flags="$flags -k $knownhosts"
+    local alias; alias=$(host_key_alias "$label")
+    local alias_kh
+    alias_kh=$(ensure_alias_known_hosts "$label" "${PEER_SAVED_LOCAL_USER:-}" "$port") \
+        || die "no pinned host key found for '$PEER_HOST' -- refusing to test without one (accept-new is not acceptable here)"
+    local flags="-K $keyfile -k $alias_kh -O HostKeyAlias=$alias"
     [ "$port" != "22" ] && flags="$flags -p $port"
 
     local ds failed=0
@@ -493,11 +691,18 @@ cmd_remove_client() {
     [ "${STATE:-}" = "removed" ] && die "client '$name' is already removed"
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
-        log "removing this client's [dataset:] sections from $CRON_CONFIG"
-        # shellcheck disable=SC2086
-        remove_managed_sections "$CRON_CONFIG" $MANAGED_DATASETS
         assert_cron_config_matches_installed "$CRON_CONFIG"
-        bash "$GENCRON" -c "$CRON_CONFIG" --install || die "gen-cron.sh --install failed while removing '$name' -- fix $CRON_CONFIG by hand"
+        log "removing this client's [dataset:] sections from a working copy of $CRON_CONFIG"
+        local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
+            || die "mktemp failed next to $CRON_CONFIG"
+        cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
+        # shellcheck disable=SC2086
+        remove_managed_sections "$workfile" $MANAGED_DATASETS
+        if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+            rm -f "$workfile"
+            die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
+        fi
+        atomic_replace_and_install "$CRON_CONFIG" "$workfile"
     else
         warn "no managed dataset list on file (client was never activated?) -- skipping cron removal"
     fi
