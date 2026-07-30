@@ -527,6 +527,20 @@ fi
 # when the hold file cannot be written at all. `source`d (guarded by the
 # BASH_SOURCE == $0 check in update-control.sh) so the function can be called
 # directly rather than needing to engineer a real mid-update write failure.
+#
+# `bash -c 'commands'` (no arg0) leaves $0 as the literal string "bash",
+# different from BASH_SOURCE[0] (the wrapper's real path) -- which is exactly
+# what lets `source` skip the dispatch guard at the bottom of update-control.sh
+# instead of hitting its `die "usage: ..."` branch. `emergency_disable` itself
+# uses "$SELF" (= BASH_SOURCE[0], set once near the top of update-control.sh),
+# NOT "$0", for exactly this reason: an earlier version used "$0" here, and a
+# live run on pve0 (2026-07-30) caught the consequence for real -- with $0
+# left as the literal "bash", the crontab-removal fallback ran
+# `grep -vF "bash"` against the live crontab and silently dropped the
+# unrelated `SHELL=/bin/bash` header line (restored by hand immediately
+# after). BASH_SOURCE[0] is always bash's own resolved path to whatever file
+# is currently being read, sourced or executed alike, so it does not have
+# this ambiguity.
 if [ "$CAN_IMMUTABLE" -eq 1 ]; then
     S19="$WORK/state-f2disable"; mkdir -p "$S19"
     deploy_wrapper "$F1WRAP_CLONE" "$S19"

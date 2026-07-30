@@ -26,6 +26,18 @@
 # test/selfupdate/run.sh.
 set -uo pipefail
 
+# Not "$0": when test/selfupdate/run.sh `source`s this file from a differently
+# named test-harness script (to reach emergency_disable directly without
+# triggering the dispatch at the bottom), "$0" is the SOURCING script's own
+# name, not this file's path -- but BASH_SOURCE[0] is always bash's own
+# resolved path to whatever file is currently being read, sourced or executed
+# alike. Using "$0" here caused a live miss on pve0 (2026-07-30): a test
+# invocation shaped `bash -c 'source "$f"; ...'` left $0 as the literal string
+# "bash", so emergency_disable's crontab-fallback ran `grep -vF "bash"` for
+# real and silently dropped the unrelated `SHELL=/bin/bash` header line from
+# the live crontab (restored by hand immediately after).
+SELF="${BASH_SOURCE[0]}"
+
 REPO_DIR="${REPO_DIR:-__REPO_DIR__}"
 UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-__UPDATE_STATE_DIR__}"
 PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
@@ -108,15 +120,15 @@ emergency_disable() {
         return 0
     fi
     warn "could not write the update hold at $UPDATE_HOLD_FILE -- attempting an emergency circuit breaker instead"
-    if chmod 000 "$0" 2>/dev/null; then
-        warn "removed exec permission on $0 -- the hourly cron line will now fail closed instead of retrying. Fix $UPDATE_STATE_DIR by hand, then: chmod 0700 $0"
+    if chmod 000 "$SELF" 2>/dev/null; then
+        warn "removed exec permission on $SELF -- the hourly cron line will now fail closed instead of retrying. Fix $UPDATE_STATE_DIR by hand, then: chmod 0700 $SELF"
         return 0
     fi
-    if crontab -l 2>/dev/null | grep -vF "$0" | crontab - 2>/dev/null; then
-        warn "removed the hourly cron line invoking $0 as a last-resort circuit breaker -- re-add it by hand once $UPDATE_STATE_DIR is fixed"
+    if crontab -l 2>/dev/null | grep -vF "$SELF" | crontab - 2>/dev/null; then
+        warn "removed the hourly cron line invoking $SELF as a last-resort circuit breaker -- re-add it by hand once $UPDATE_STATE_DIR is fixed"
         return 0
     fi
-    warn "CRITICAL: could not write a hold, could not disable $0, could not remove its cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
+    warn "CRITICAL: could not write a hold, could not disable $SELF, could not remove its cron line -- $UPDATE_STATE_DIR needs immediate manual attention or this host will keep retrying hourly"
     return 1
 }
 
@@ -129,7 +141,7 @@ do_self_update() {
         return 1
     fi
     if [ -e "$UPDATE_HOLD_FILE" ]; then
-        log "updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE")) -- not updating. Resume with: $0 --resume-updates"
+        log "updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE")) -- not updating. Resume with: $SELF --resume-updates"
         return 0
     fi
     if [ -L "$PREV_REV_FILE" ]; then
@@ -218,7 +230,7 @@ do_rollback() {
 
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
     log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
-    log "When the fix is on main:  $0 --resume-updates"
+    log "When the fix is on main:  $SELF --resume-updates"
     return 0
 }
 
