@@ -46,8 +46,25 @@ _cp="$WORK/.chmod-probe"; mkdir -p "$_cp"
 chmod 0700 "$_cp" 2>/dev/null
 [ "$(stat -c '%a' "$_cp" 2>/dev/null)" = "700" ] && CAN_CHMOD=1
 rmdir "$_cp" 2>/dev/null
-[ "$CAN_SYMLINK" -eq 1 ] || echo "NOTE: this environment cannot create real symlinks -- F1 symlink-rejection cases will SKIP" >&2
-[ "$CAN_CHMOD" -eq 1 ]  || echo "NOTE: this environment does not enforce real permission bits -- F1/F2 permission cases will SKIP" >&2
+
+# NOT chmod-based: deploy.sh always runs as root, and root ignores DAC
+# permission bits entirely (confirmed live on pve0/pve1 2026-07-30 -- a
+# `chmod 0500` write-failure case reported a FALSE FAIL there because root
+# happily wrote into a directory it supposedly had no permission bits for).
+# `chattr +i` (the ext2/3/4 immutable attribute) is enforced at the VFS layer
+# regardless of DAC/capabilities, so it is the only portable way to make even
+# root's own write genuinely fail.
+CAN_IMMUTABLE=0
+_ip="$WORK/.immutable-probe"; mkdir -p "$_ip"
+if command -v chattr >/dev/null 2>&1 && chattr +i "$_ip" 2>/dev/null; then
+    touch "$_ip/probe-file" 2>/dev/null || CAN_IMMUTABLE=1
+    chattr -i "$_ip" 2>/dev/null
+fi
+rm -rf "$_ip" 2>/dev/null
+
+[ "$CAN_SYMLINK" -eq 1 ]   || echo "NOTE: this environment cannot create real symlinks -- F1 symlink-rejection cases will SKIP" >&2
+[ "$CAN_CHMOD" -eq 1 ]     || echo "NOTE: this environment does not enforce real permission bits -- F1's group/world-writable case will SKIP" >&2
+[ "$CAN_IMMUTABLE" -eq 1 ] || echo "NOTE: this environment cannot make a directory immutable (chattr +i) -- F2's write-failure case will SKIP" >&2
 
 # Builds a fresh throwaway bare origin + clone, isolated from the shared
 # CLONE/STATE narrative below, sitting at commit X with a real update (Y)
@@ -428,16 +445,21 @@ else
 fi
 
 # --- 15. F2: a state-write failure refuses to activate B --------------------
-# 0500 passes the group/other-writable check (F1's own guard) but leaves even
-# the owner unable to create a file in the directory, forcing write_state_file's
-# mktemp to fail realistically -- the acceptance criterion is that B is never
-# activated without a durably recorded A.
-if [ "$CAN_CHMOD" -eq 1 ]; then
+# `chattr +i`, not chmod: deploy.sh always runs as root, and root ignores its
+# own DAC permission bits, so a chmod-based "unwritable directory" is not
+# actually unwritable to the process under test (confirmed live on pve0/pve1,
+# 2026-07-30 -- this case false-FAILed there before the fix, because root
+# wrote into the "read-only" directory anyway). The immutable attribute is
+# enforced below the permission-bit layer and blocks root too, so it is the
+# only portable way to make write_state_file's mktemp genuinely fail -- the
+# acceptance criterion is that B is never activated without a durably
+# recorded A.
+if [ "$CAN_IMMUTABLE" -eq 1 ]; then
     pair=$(mk_scenario f2write); F2_CLONE=${pair#*|}
-    S15="$WORK/state-f2write"; mkdir -p "$S15"; chmod 0500 "$S15"
+    S15="$WORK/state-f2write"; mkdir -p "$S15"; chattr +i "$S15" 2>/dev/null
     before_head="$(head_of "$F2_CLONE")"
     out="$(REPO_DIR="$F2_CLONE" ALERT_SHARED_DIR="$S15" UPDATE_STATE_DIR="$S15" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
-    chmod 0700 "$S15" 2>/dev/null
+    chattr -i "$S15" 2>/dev/null
     if [ "$rc" -ne 0 ] && [ "$(head_of "$F2_CLONE")" = "$before_head" ]; then
         ok "F2: a write failure on the state dir refuses to activate B (checkout unchanged)"
     else
@@ -446,7 +468,7 @@ if [ "$CAN_CHMOD" -eq 1 ]; then
     fi
 else
     skip "F2: a write failure on the state dir refuses to activate B" \
-        "this environment's chmod does not enforce real POSIX mode bits (Windows/MSYS) -- verify on a Linux host"
+        "this environment cannot make a directory immutable (chattr +i not supported/available, e.g. Windows/MSYS or a non-ext filesystem) -- verify on a Linux host with ext2/3/4"
 fi
 
 echo "--------------------------------------------"
