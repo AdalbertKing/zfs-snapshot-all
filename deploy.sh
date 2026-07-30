@@ -1714,25 +1714,52 @@ log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # and being able to go back and STAY back. Both live in --self-update /
 # --rollback / --resume-updates above; cron just calls the first one.
 PULL_LINE="15 * * * * $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
-# Matches every shape this line has ever had: the original bare `git pull`, the
-# rev-parse-then-pull version from 75bf956, and the current one. Removing them
-# all and appending once is what keeps a host from ending up with two update
-# jobs that both run.
-_pull_line_re="$REPO_DIR"
-if crontab -l 2>/dev/null | grep -qF -- "--self-update"; then
-    log "auto-update cron line already current, leaving it alone"
-elif crontab -l 2>/dev/null | grep -F -- "$_pull_line_re" | grep -q 'git pull'; then
-    if [ "$CHECK_ONLY" -eq 1 ]; then
-        warn "auto-update cron line is the old bare-pull form -- re-run without --check-only to replace it (its rollback point is overwritten hourly, see REV-20260729-003)"
-    else
-        crontab -l 2>/dev/null             | grep -vF -- "$_pull_line_re/deploy.sh --self-update"             | grep -v "$(printf '%s.*git pull' "$_pull_line_re")"             | { cat; echo "$PULL_LINE"; } | crontab -
-        log "replaced the auto-update cron line with --self-update"
+# Matches every shape this line has ever had for THIS repo: the original bare
+# `git pull`, the rev-parse-then-pull version from 75bf956, and the current
+# one -- scoped to $REPO_DIR so it can never match an unrelated cron line that
+# merely happens to contain the substring "--self-update" (REV-20260729-004
+# F4: the previous version checked `grep -qF -- "--self-update"` globally,
+# with no $REPO_DIR anchor at all).
+is_this_repo_updater_line() {
+    case "$1" in
+        *"$REPO_DIR/deploy.sh --self-update"*) return 0 ;;
+        *"cd $REPO_DIR"*"git pull --ff-only origin main"*) return 0 ;;
+    esac
+    return 1
+}
+mapfile -t _existing_cron_lines < <(crontab -l 2>/dev/null)
+_match_count=0
+_exact_count=0
+for _l in "${_existing_cron_lines[@]:-}"; do
+    [ -n "$_l" ] || continue
+    if is_this_repo_updater_line "$_l"; then
+        _match_count=$((_match_count + 1))
+        [ "$_l" = "$PULL_LINE" ] && _exact_count=$((_exact_count + 1))
     fi
+done
+
+if [ "$_match_count" -eq 1 ] && [ "$_exact_count" -eq 1 ]; then
+    log "auto-update cron line already current, leaving it alone"
 elif [ "$CHECK_ONLY" -eq 1 ]; then
-    warn "auto-update cron line MISSING -- this host would never pick up updates"
+    if [ "$_match_count" -eq 0 ]; then
+        warn "auto-update cron line MISSING -- this host would never pick up updates"
+    else
+        warn "auto-update cron line needs normalization ($_match_count matching line(s) found, $_exact_count already exact) -- re-run without --check-only. Its rollback point is overwritten hourly if it is still the old bare-pull form, see REV-20260729-003."
+    fi
 else
-    ( crontab -l 2>/dev/null; echo "$PULL_LINE" ) | crontab -
-    log "added auto-update cron line: $PULL_LINE"
+    # Every matching line (old shapes, duplicates of the current shape, or a
+    # mix) is dropped and exactly one current line is appended -- normalizing
+    # to one, not leaving whichever shape happened to be checked first (F4:
+    # the previous version left an old duplicate in place forever whenever a
+    # current-shaped line already existed alongside it).
+    {
+        for _l in "${_existing_cron_lines[@]:-}"; do
+            [ -n "$_l" ] || continue
+            is_this_repo_updater_line "$_l" || printf '%s\n' "$_l"
+        done
+        echo "$PULL_LINE"
+    } | crontab -
+    log "normalized auto-update cron line(s) ($_match_count found) to one current line"
 fi
 # The replacement lands at the END of the crontab, always AFTER gen-cron.sh's
 # "# END zfs-backup-managed" marker, so the next `gen-cron.sh --install` -- which

@@ -219,24 +219,83 @@ else
         "hold=$([ -e "$HOLD" ] && echo present || echo gone) head=$(head_of "$CLONE") wanted=$C_head"
 fi
 
-# --- 7. repeated deployment leaves exactly one update cron line -------------
-# The crontab itself is not touched here (that needs a real host and is verified
-# live), but the matcher that decides whether to add, replace or leave alone is
-# pure text, so it can be checked directly against every shape the line has had.
+# --- 7. cron-line matcher: normalizes every known shape to ONE current line -
+# REV-20260729-004 F4: the old matcher checked `grep -qF -- "--self-update"`
+# GLOBALLY with no $REPO_DIR anchor, so (a) an unrelated line for a different
+# program/repo that merely contained that substring made the whole check pass
+# without looking at this repo at all, and (b) once a current-shaped line
+# existed anywhere, an old duplicate alongside it was left in place forever
+# (the first matching branch always won). This mirrors deploy.sh's
+# is_this_repo_updater_line() exactly -- keep both in sync if either changes.
+is_this_repo_updater_line() {
+    case "$1" in
+        *"$CLONE/deploy.sh --self-update"*) return 0 ;;
+        *"cd $CLONE"*"git pull --ff-only origin main"*) return 0 ;;
+    esac
+    return 1
+}
+normalize_counts() {
+    # Lines on stdin -> "match_count exact_count" against $line_new.
+    local m=0 e=0 l
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        if is_this_repo_updater_line "$l"; then
+            m=$((m + 1))
+            [ "$l" = "$line_new" ] && e=$((e + 1))
+        fi
+    done
+    echo "$m $e"
+}
+normalize_lines() {
+    # Lines on stdin -> every non-matching line, then exactly one $line_new --
+    # the same shape deploy.sh's Phase 7 pipes into `crontab -`.
+    local l
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        is_this_repo_updater_line "$l" || printf '%s\n' "$l"
+    done
+    echo "$line_new"
+}
+check_counts() {
+    local desc="$1" want_m="$2" want_e="$3"; shift 3
+    local got got_m got_e
+    got=$(printf '%s\n' "$@" | normalize_counts)
+    got_m=${got% *}; got_e=${got#* }
+    if [ "$got_m" = "$want_m" ] && [ "$got_e" = "$want_e" ]; then
+        ok "$desc"
+    else
+        bad "$desc" "got match=$got_m exact=$got_e, wanted match=$want_m exact=$want_e"
+    fi
+}
+check_normalizes_to_one() {
+    local desc="$1"; shift
+    local kept
+    kept=$(printf '%s\n' "$@" | normalize_lines | grep -c 'deploy\.sh --self-update\|git pull --ff-only origin main')
+    if [ "$kept" -eq 1 ]; then
+        ok "$desc"
+    else
+        bad "$desc" "$kept updater-shaped line(s) survived normalization"
+    fi
+}
+
 line_new="15 * * * * $CLONE/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
 line_old1="15 * * * * cd $CLONE && git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
 line_old2="15 * * * * cd $CLONE && git rev-parse HEAD > /var/lib/zfs-snapshot-all/last-known-good 2>/dev/null; git pull --ff-only origin main >>/root/scripts/git-pull.log 2>&1"
-for shape in "$line_old1" "$line_old2"; do
-    kept=$(printf '%s\n%s\n' "# unrelated" "$shape" \
-        | grep -vF -- "$CLONE/deploy.sh --self-update" \
-        | grep -v "$(printf '%s.*git pull' "$CLONE")" \
-        | { cat; echo "$line_new"; } | grep -c 'deploy.sh --self-update\|git pull')
-    if [ "$kept" -eq 1 ]; then
-        ok "old cron shape is replaced, not duplicated (${shape:0:28}...)"
-    else
-        bad "old cron shape is replaced, not duplicated" "$kept update lines survived"
-    fi
-done
+line_unrelated="15 * * * * /root/scripts/some-other-project/run.sh --self-update >>/root/scripts/other.log 2>&1"
+
+check_counts "no existing line -- nothing matches"                                    0 0
+check_counts "one current line -- already normalized"                                 1 1 "$line_new"
+check_counts "one old (bare git pull) line -- matches, not exact"                      1 0 "$line_old1"
+check_counts "one old (rev-parse-then-pull) line -- matches, not exact"                1 0 "$line_old2"
+check_counts "current + old together -- BOTH match (old is not left behind)"          2 1 "$line_new" "$line_old1"
+check_counts "two current lines -- both match, both exact (a duplicate is detected)"   2 2 "$line_new" "$line_new"
+check_counts "an unrelated --self-update line for another repo does not match"         0 0 "$line_unrelated"
+check_counts "unrelated line coexists with this repo's old line -- only ours matches"  1 0 "$line_unrelated" "$line_old1"
+
+check_normalizes_to_one "old (bare git pull) shape is replaced, not duplicated"          "$line_old1"
+check_normalizes_to_one "old (rev-parse-then-pull) shape is replaced, not duplicated"    "$line_old2"
+check_normalizes_to_one "current + old together normalize to exactly one line"          "$line_new" "$line_old1"
+check_normalizes_to_one "two current duplicates normalize to exactly one line"          "$line_new" "$line_new"
 
 # --- 8. `set -u` canary for the whole top of the script ---------------------
 # Every case above passes ALERT_SHARED_DIR in the environment, so the code path
