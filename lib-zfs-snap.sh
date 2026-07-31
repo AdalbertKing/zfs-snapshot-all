@@ -1717,25 +1717,69 @@ gq_thaw() {
 }
 
 frozen_file=$(mktemp) || { echo "QERR mktemp failed on the source host" >&2; exit 1; }
+
+# The exact command a human needs if everything automatic has failed. It differs
+# by route: a delegated account has no qm, so telling it to run one would be
+# useless advice at the worst possible moment.
+thaw_hint() {
+    if [ "$QVIA" = helper ]; then echo "sudo -n $QHELPER thaw $1"
+    else echo "qm guest cmd $1 fsfreeze-thaw"; fi
+}
+
+# REV-20260730-006 §4: this used to end with an unconditional `: > $frozen_file`,
+# which wiped the state EVEN WHEN THE THAW HAD FAILED. The deadman then saw an
+# empty file and did nothing -- the last automatic rescue path disappeared in
+# exactly the case it exists for. Only ids that were actually thawed are removed
+# now; the rest stay, so the deadman can keep retrying, and the run reports a
+# failure instead of a success.
 thaw_all() {
     [ -s "$frozen_file" ] || return 0
-    local id
+    local id rc=0 left
+    left=$(mktemp) || { echo "QERR mktemp failed while thawing -- leaving the frozen list untouched for the deadman" >&2; return 1; }
     while read -r id; do
         [ -n "$id" ] || continue
         if gq_thaw "$id"; then
             echo "QLOG thawed VM $id"
         else
-            echo "QERR FAILED TO THAW VM $id -- it is STILL FROZEN and needs a manual 'qm guest cmd $id fsfreeze-thaw' on the source host" >&2
+            printf '%s\n' "$id" >> "$left"
+            echo "QERR FAILED TO THAW VM $id -- it is STILL FROZEN. Manual fix on the source host: $(thaw_hint "$id")" >&2
+            rc=1
         fi
     done < "$frozen_file"
-    : > "$frozen_file"
+    cat "$left" > "$frozen_file" 2>/dev/null
+    rm -f "$left"
+    return "$rc"
 }
-trap 'thaw_all; rm -f "$frozen_file"' EXIT
+
+# Single exit path. Keeps the frozen list on disk whenever a guest is still
+# frozen -- that file IS the deadman's mandate, so removing it would be the same
+# bug as §4 in another place -- and only stops the deadman once nothing is left
+# frozen.
+on_exit() {
+    local ec=$?
+    thaw_all || ec=6
+    if [ -s "$frozen_file" ]; then
+        echo "QERR guest(s) still frozen; the deadman is left running to keep retrying: $(tr '\n' ' ' < "$frozen_file")" >&2
+    else
+        rm -f "$frozen_file"
+        [ -n "${deadman_pid:-}" ] && kill "$deadman_pid" 2>/dev/null
+    fi
+    exit "$ec"
+}
+trap on_exit EXIT
 
 # The deadman. setsid so a SIGHUP from a dying ssh session does not take it
 # with us, and every stream redirected so it never holds the ssh channel open.
 deadman_pid=""
-if command -v setsid >/dev/null 2>&1; then
+# REV-20260730-006 §3: this used to warn and carry on freezing when setsid was
+# missing. The whole design rests on the thaw surviving a lost connection, so a
+# run that cannot arm the deadman must not freeze anything at all -- a warning
+# is not a safety net.
+if ! command -v setsid >/dev/null 2>&1; then
+    echo "QERR setsid is not available on the source host, so the deadman cannot be detached -- refusing to freeze anything. Without it a dropped connection would leave a guest frozen indefinitely." >&2
+    exit 3
+fi
+if true; then
     # Polls in short steps instead of one long `sleep $deadman`, for a reason
     # found in live testing (pve0->pve1, 2026-07-30): killing the setsid'd
     # wrapper does NOT kill its `sleep` child, so every quiesced run left a
@@ -1755,22 +1799,42 @@ if command -v setsid >/dev/null 2>&1; then
             waited=$((waited + 5))
         done
         [ -s "$2" ] || exit 0
-        while read -r gid; do
-            [ -n "$gid" ] || continue
-            # The deadman must thaw the same way the run froze -- a delegated
-            # account has no qm, so a hardcoded qm here would mean the safety
-            # net silently does nothing for exactly the accounts that need it.
-            if [ "$3" = helper ]; then
-                sudo -n "$4" thaw "$gid" >/dev/null 2>&1
-            else
-                qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1
-            fi
-        done < "$2"
-        logger -t zfs-quiesce "DEADMAN: thawed guest(s) after ${1}s -- the controlling backup run vanished mid-window" 2>/dev/null
+        # REV-20260730-006 §4: retry, do not give up after one pass. A thaw can
+        # fail because the agent is momentarily busy; one attempt and silence
+        # would leave a production guest frozen for good.
+        attempt=0
+        while [ "$attempt" -lt 12 ] && [ -s "$2" ]; do
+            attempt=$((attempt + 1))
+            left=$(mktemp) || break
+            while read -r gid; do
+                [ -n "$gid" ] || continue
+                # Thaw the same way the run froze -- a delegated account has no
+                # qm, so a hardcoded qm here would mean the safety net silently
+                # does nothing for exactly the accounts that need it.
+                if [ "$3" = helper ]; then
+                    sudo -n "$4" thaw "$gid" >/dev/null 2>&1 || printf '%s\n' "$gid" >> "$left"
+                else
+                    qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1 || printf '%s\n' "$gid" >> "$left"
+                fi
+            done < "$2"
+            cat "$left" > "$2" 2>/dev/null; rm -f "$left"
+            [ -s "$2" ] || break
+            logger -t zfs-quiesce "DEADMAN: thaw attempt $attempt left guest(s) frozen: $(tr "\n" " " < "$2")" 2>/dev/null
+            sleep 5
+        done
+        if [ -s "$2" ]; then
+            logger -t zfs-quiesce "DEADMAN: GAVE UP after $attempt attempts -- guest(s) STILL FROZEN: $(tr "\n" " " < "$2") -- manual thaw required" 2>/dev/null
+        else
+            rm -f "$2"
+            logger -t zfs-quiesce "DEADMAN: thawed guest(s) after ${1}s -- the controlling backup run vanished mid-window" 2>/dev/null
+        fi
     ' _ "$deadman" "$frozen_file" "$QVIA" "$QHELPER" >/dev/null 2>&1 </dev/null &
     deadman_pid=$!
-else
-    echo "QLOG setsid unavailable -- running without the deadman safety net" >&2
+    # Armed, or we do not proceed: a pid that is already gone is not a safety net.
+    if [ -z "$deadman_pid" ] || ! kill -0 "$deadman_pid" 2>/dev/null; then
+        echo "QERR the deadman could not be started on the source host -- refusing to freeze anything" >&2
+        exit 3
+    fi
 fi
 
 guest_id() {
@@ -1795,38 +1859,58 @@ freeze_one() {
     kind=$(gq_field "$info" kind)
     running=$(gq_field "$info" running)
     frozen=$(gq_field "$info" frozen)
+    # Not a failure: there is nothing to quiesce. A dataset whose guest does not
+    # live here is a replica, and a stopped guest is not writing.
     case "$kind" in
         qemu|lxc) ;;
         *) echo "QLOG no guest $id on the source host -- skipping"; return 0 ;;
     esac
     [ "$running" = yes ] || { echo "QLOG guest $id is not running -- nothing to freeze"; return 0; }
+    # A failure: the operator named a mode this guest cannot honour, so the
+    # quiesce they asked for is not going to happen. `auto` cannot land here --
+    # it picks the method from the guest kind.
     case "$mode/$kind" in
-        agent/lxc) echo "QLOG guest $id is a container (no qemu-guest-agent) -- use quiesce=sync or auto"; return 0 ;;
-        sync/qemu) echo "QLOG guest $id is a VM -- sync is the container fallback, use quiesce=agent or auto"; return 0 ;;
+        agent/lxc) echo "QERR guest $id is a container and cannot be frozen by qemu-guest-agent -- use quiesce=sync or auto" >&2; return 1 ;;
+        sync/qemu) echo "QERR guest $id is a VM and 'sync' is the container fallback -- use quiesce=agent or auto" >&2; return 1 ;;
     esac
     case "$kind" in
         qemu)
             if [ "$frozen" = yes ]; then
-                echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate" >&2
-                return 0
+                echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate. Refusing to snapshot: this run did not establish the freeze and must not claim it did." >&2
+                return 1
             fi
             if gq_freeze "$id" qemu; then
                 printf '%s\n' "$id" >> "$frozen_file"
                 echo "QLOG froze VM $id via qemu-guest-agent"
             else
                 echo "QERR VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" >&2
+                return 1
             fi ;;
         lxc)
             if gq_freeze "$id" lxc; then
                 echo "QLOG flushed container $id (sync) -- a flush, not a freeze: ZFS has no FIFREEZE"
             else
                 echo "QERR flushing container $id failed" >&2
+                return 1
             fi ;;
     esac
     return 0
 }
 
-for ds in "${scopes[@]}"; do freeze_one "$ds"; done
+# REV-20260730-006 §2: the result of every preparation is COLLECTED. This loop
+# used to discard it, so a failed freeze printed QERR and the run went on to
+# snapshot anyway and exit 0 -- an operator who asked for application-consistent
+# got crash-consistent and was told it worked. If any discovered, running guest
+# in scope could not be quiesced, no snapshot is taken at all; the EXIT trap
+# still thaws whatever did get frozen.
+prep_failed=0
+for ds in "${scopes[@]}"; do
+    freeze_one "$ds" || prep_failed=$((prep_failed + 1))
+done
+if [ "$prep_failed" -gt 0 ]; then
+    echo "QERR $prep_failed guest(s) could not be quiesced -- NOT taking a snapshot, because it would be crash-consistent while reporting success" >&2
+    exit 5
+fi
 
 # One atomic `zfs snapshot` per pool, exactly like the local path: a pool is
 # the widest unit ZFS will snapshot atomically, and every guest stays frozen
@@ -1847,8 +1931,9 @@ for p in $pools; do
     fi
 done
 
-thaw_all
-[ -n "$deadman_pid" ] && kill "$deadman_pid" 2>/dev/null
+# Thawing, stopping the deadman and deciding whether the frozen list may be
+# removed all happen in on_exit -- ONE place, so every path out of this script
+# (including a failed snapshot or a `set -u` abort) goes through it.
 [ "$rc" -eq 0 ] || echo "QERR the atomic snapshot failed on the source host -- refusing to fall back to unquiesced snapshots" >&2
 exit "$rc"
 REMOTE_QUIESCE_EOF
@@ -1880,8 +1965,10 @@ quiesce_remote_run() {
     done <<< "$out"
     case "$rc" in
         0) return 0 ;;
-        3) log 0 "Quiesce: the source account cannot freeze guests on $host -- re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce. Refusing to take a silently crash-consistent snapshot instead."; return 3 ;;
+        3) log 0 "Quiesce: $host cannot run remote quiesce safely (see the reason above) -- nothing was frozen. Either re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce."; return 3 ;;
         4) return 4 ;;
+        5) log 0 "Quiesce: a guest on $host could not be quiesced, so NO snapshot was taken -- a crash-consistent snapshot reported as success is the outcome -q exists to prevent."; return 5 ;;
+        6) log 0 "Quiesce: a guest on $host is STILL FROZEN after the thaw failed. The deadman is retrying; if it gives up, thaw it by hand -- the exact command is in the lines above."; return 6 ;;
         *) log 0 "Quiesce: the remote quiesce run failed on $host (exit $rc)"; return 1 ;;
     esac
 }

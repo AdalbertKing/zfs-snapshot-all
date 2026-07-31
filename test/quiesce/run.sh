@@ -231,6 +231,144 @@ case "$out" in
     *) check "remote: the refusal names the fix" "y" "n ($out)" ;;
 esac
 
+# ---- REV-20260730-006 §5: the ERROR branches -------------------------------
+#
+# The happy path and the SIGKILL+deadman case were verified live, but every
+# branch below was fail-OPEN: a freeze that failed printed QERR, the run
+# snapshotted anyway and exited 0. An operator who asked for
+# application-consistent got crash-consistent and was told it worked. These are
+# deterministic, so they belong here rather than in a live run.
+#
+# Each case re-stubs qm/pct/setsid and asserts on the TRACE: what matters is not
+# only the exit code but whether `zfs snapshot` was reached at all.
+
+rq_reset() {   # rq_reset <qm-body>
+    : > "$RQ_D/trace"
+    printf '#!/bin/bash\necho "qm $*" >> "$TRACE"\n%s\n' "$1" > "$RQ_D/bin/qm"
+    printf '#!/bin/bash\nexit 0\n' > "$RQ_D/bin/setsid"
+    printf '#!/bin/sh\nexit 0\n' > "$RQ_D/helper"
+    chmod +x "$RQ_D/bin/qm" "$RQ_D/bin/setsid" "$RQ_D/helper"
+}
+rq_snapshotted() { grep -q '^zfs snapshot' "$RQ_D/trace" && echo yes || echo no; }
+
+# The sudo stub drives the guest's behaviour, since a delegated run reaches the
+# guest only through the helper. QSTATE/QFREEZE/QTHAW steer it per case.
+cat > "$RQ_D/bin/sudo" <<'EOF'
+#!/bin/bash
+echo "sudo $*" >> "$TRACE"
+[ "$1" = "-n" ] && shift
+shift
+case "${1:-}" in
+  status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
+          echo "id=$2 kind=${QKIND:-qemu} running=yes frozen=${QFROZEN:-no}"; exit 0 ;;
+  freeze) exit "${QFREEZE:-0}" ;;
+  thaw)   exit "${QTHAW:-0}" ;;
+esac
+exit 1
+EOF
+chmod +x "$RQ_D/bin/sudo"
+
+rq_run2() {   # rq_run2 <mode> -- env steers the stubs
+    TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
+        bash "$RQ_D/rq.sh" "${1:-agent}" 30 "" 1 rpool/data/vm-100-disk-0 \
+             1 rpool/data/vm-100-disk-0@t 2>&1
+}
+
+# 1. freeze fails -> no snapshot.
+rq_reset 'exit 0'
+out=$(QFREEZE=1 rq_run2); rc=$?
+check "err1: a failed freeze does not snapshot" "no" "$(rq_snapshotted)"
+check "err1: and the run fails (5)" "5" "$rc"
+
+# 2. the guest was already frozen -> no snapshot, and it is left alone.
+rq_reset 'exit 0'
+out=$(QFROZEN=yes rq_run2); rc=$?
+check "err2: an already-frozen guest does not snapshot" "no" "$(rq_snapshotted)"
+check "err2: and the run fails (5)" "5" "$rc"
+case "$out" in *"ALREADY frozen"*) check "err2: and says why" "y" "y" ;;
+   *) check "err2: and says why" "y" "n ($out)" ;; esac
+
+# 3. no setsid -> nothing is frozen at all. The deadman is the whole safety
+#    argument for freezing a production guest over a network.
+#    Making setsid absent has to work in two different worlds, and the obvious
+#    tricks fail in one each: emptying PATH takes mktemp with it (rc=127), and
+#    copying the coreutils binaries into a private dir gives unusable .exe
+#    stubs on MSYS. So: MSYS has no setsid at all, and removing our own stub is
+#    enough; on Linux it does exist, and a symlink-only PATH excludes it while
+#    keeping everything the script needs.
+rq_reset 'exit 0'
+rm -f "$RQ_D/bin/setsid"
+if command -v setsid >/dev/null 2>&1; then
+    MIN="$RQ_D/minbin"; mkdir -p "$MIN"
+    for t in id mktemp cat rm tr sleep grep logger bash; do
+        p=$(command -v "$t" 2>/dev/null) && ln -sf "$p" "$MIN/$t"
+    done
+    cp "$RQ_D/bin/sudo" "$RQ_D/bin/qm" "$RQ_D/bin/zfs" "$MIN/"
+    chmod +x "$MIN/sudo" "$MIN/qm" "$MIN/zfs"
+    RQ_PATH="$MIN"
+else
+    RQ_PATH="$RQ_D/bin:$PATH"
+fi
+out=$(TRACE="$RQ_D/trace" PATH="$RQ_PATH" bash "$RQ_D/rq.sh" agent 30 "" \
+          1 rpool/data/vm-100-disk-0 1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
+check "err3: without setsid the run refuses (3)" "3" "$rc"
+case "$out" in *"froze VM"*) check "err3: and freezes nothing" "y" "n ($out)" ;;
+   *) check "err3: and freezes nothing" "y" "y" ;; esac
+
+# 4. thaw fails -> the id STAYS in the deadman's file and the run is an error.
+#    Before the fix the file was wiped unconditionally, so the deadman saw
+#    nothing to do precisely when a guest was left frozen.
+rq_reset 'exit 0'
+out=$(QTHAW=1 rq_run2); rc=$?
+check "err4: a failed thaw fails the run (6)" "6" "$rc"
+case "$out" in *"STILL FROZEN"*) check "err4: and names the manual command" "y" "y" ;;
+   *) check "err4: and names the manual command" "y" "n ($out)" ;; esac
+case "$out" in *"deadman is left running"*) check "err4: and keeps the deadman armed" "y" "y" ;;
+   *) check "err4: and keeps the deadman armed" "y" "n" ;; esac
+
+# 5. the snapshot itself fails -> the trap still thaws.
+rq_reset 'exit 0'
+printf '#!/bin/bash\necho "zfs $*" >> "$TRACE"\nexit 1\n' > "$RQ_D/bin/zfs"
+chmod +x "$RQ_D/bin/zfs"
+out=$(rq_run2); rc=$?
+check "err5: a failed snapshot is reported (4)" "4" "$rc"
+case "$out" in *"thawed VM 100"*) check "err5: and the guest is thawed anyway" "y" "y" ;;
+   *) check "err5: and the guest is thawed anyway" "y" "n ($out)" ;; esac
+printf '#!/bin/bash\necho "zfs $*" >> "$TRACE"\nexit 0\n' > "$RQ_D/bin/zfs"
+chmod +x "$RQ_D/bin/zfs"
+
+# 6. a mode the guest cannot honour is a failure, not a note: the quiesce the
+#    operator asked for is not going to happen.
+rq_reset 'exit 0'
+out=$(QKIND=lxc rq_run2 agent); rc=$?
+check "err6: agent on a container does not snapshot" "no" "$(rq_snapshotted)"
+check "err6: and fails (5)" "5" "$rc"
+
+# 7. several guests, one freeze fails: no snapshot, and the one that WAS frozen
+#    must not be left that way.
+rq_reset 'exit 0'
+cat > "$RQ_D/bin/sudo" <<'EOF'
+#!/bin/bash
+echo "sudo $*" >> "$TRACE"
+[ "$1" = "-n" ] && shift
+shift
+case "${1:-}" in
+  status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
+          echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
+  freeze) [ "$2" = 101 ] && exit 1; exit 0 ;;   # the second guest refuses
+  thaw)   exit 0 ;;
+esac
+exit 1
+EOF
+chmod +x "$RQ_D/bin/sudo"
+out=$(TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 2 rpool/data/vm-100-disk-0 rpool/data/vm-101-disk-0 \
+           1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
+check "err7: a partial freeze does not snapshot" "no" "$(rq_snapshotted)"
+check "err7: and fails (5)" "5" "$rc"
+case "$out" in *"thawed VM 100"*) check "err7: and the guest that DID freeze is thawed" "y" "y" ;;
+   *) check "err7: and the guest that DID freeze is thawed" "y" "n ($out)" ;; esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
