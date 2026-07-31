@@ -311,6 +311,72 @@ else
     bad "a quoted date field sources with no stray 'command not found' output" "out=$out"
 fi
 
+# --- final-catchup gate (REV-20260730-005 F3 / REV-20260731-007 §7) ----------
+#
+# Switching a client from LAN to VPN is the relocation moment. Without a final
+# incremental over the link that still works, the first VPN transfer carries
+# everything since the SEED -- over the slow link, unattended. The gate makes
+# that a decision instead of an accident.
+#
+# Run in subshells: the refusal path calls die, which would take this suite with
+# it. CLIENTS_DIR is reassigned rather than parameterised because the file is
+# sourced, so the assignment is simply in scope.
+GATE="$WORK/clients"; mkdir -p "$GATE"
+mk_client() {   # mk_client <name> <extra lines...>
+    local n="$1"; shift
+    { echo "CLIENT_NAME=$n"
+      echo "STATE=active"
+      echo "PEER_HOST=10.0.0.9"
+      echo "ACTIVE_ENDPOINT=lan"
+      echo "INSTALLED_ENDPOINT=lan"
+      echo "ENDPOINT_LAN_HOST=10.0.0.9"
+      echo "ENDPOINT_LAN_PORT=22"
+      echo 'SEED_COMPLETED_AT="2026-07-01 00:00:00"'
+      for l in "$@"; do echo "$l"; done
+    } > "$GATE/$n.conf"
+}
+gate_run() {    # gate_run <name> <args...>  -> prints output, sets $?
+    ( CLIENTS_DIR="$GATE"; cmd_set_endpoint "$@" ) 2>&1
+}
+
+mk_client c1
+out=$(gate_run c1 --vpn=10.9.9.9); r=$?
+if [ "$r" != 0 ] && case "$out" in *"final-catchup c1"*) true ;; *) false ;; esac; then
+    ok "gate: switching to vpn without a catch-up is refused, and names the command"
+else
+    bad "gate: switching to vpn without a catch-up is refused, and names the command" "rc=$r out=$out"
+fi
+
+# A catch-up recorded against the endpoint being LEFT is what makes the switch
+# safe. Anything else -- including one recorded against the endpoint being
+# switched TO -- says nothing about this switch.
+mk_client c2 'FINAL_CATCHUP_ENDPOINT=lan' 'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+out=$(gate_run c2 --vpn=10.9.9.9); r=$?
+[ "$r" = 0 ] && ok "gate: a catch-up over the endpoint being left lets the switch through" \
+             || bad "gate: a catch-up over the endpoint being left lets the switch through" "rc=$r out=$out"
+
+mk_client c3 'FINAL_CATCHUP_ENDPOINT=vpn' 'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+out=$(gate_run c3 --vpn=10.9.9.9); r=$?
+[ "$r" != 0 ] && ok "gate: a catch-up over the WRONG endpoint does not count" \
+              || bad "gate: a catch-up over the WRONG endpoint does not count" "rc=$r"
+
+# The reviewer's case: the source is already unplugged, so there is nothing to
+# catch up over. Allowed, but it must warn -- and say what it will cost.
+mk_client c4
+out=$(gate_run c4 --vpn=10.9.9.9 --skip-final-catchup); r=$?
+if [ "$r" = 0 ] && case "$out" in *SKIPPING*) true ;; *) false ;; esac; then
+    ok "gate: --skip-final-catchup proceeds but warns"
+else
+    bad "gate: --skip-final-catchup proceeds but warns" "rc=$r out=$out"
+fi
+
+# Not every set-endpoint is a relocation. Correcting the LAN address of a
+# client that stays on LAN must not demand a catch-up.
+mk_client c5
+out=$(gate_run c5 --lan=10.0.0.10); r=$?
+[ "$r" = 0 ] && ok "gate: changing the LAN address only is not gated" \
+             || bad "gate: changing the LAN address only is not gated" "rc=$r out=$out"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

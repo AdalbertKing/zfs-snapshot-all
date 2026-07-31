@@ -102,7 +102,8 @@ Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X]
   zfs-backup.sh seed NAME [--yes]
-  zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
+  zfs-backup.sh final-catchup NAME [--yes]
+  zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT] [--skip-final-catchup]
   zfs-backup.sh verify-endpoint NAME
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh status [NAME]
@@ -674,13 +675,78 @@ cmd_seed() {
 }
 
 # ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# REV-20260730-005 F3 / REV-20260731-007 §7: one last incremental over the
+# endpoint that still works, immediately before the source is physically moved.
+#
+# Without it the common base is as old as the seed, so the first transfer over
+# the new link carries every change since then -- over a VPN, which is the slow
+# link, and at the moment nobody is watching. It also proves the incremental
+# path works over the OLD endpoint while the old endpoint is still there to be
+# proven on: if the base has gone, you find out while you can still fix it
+# cheaply.
+#
+# Deliberately a real transfer, not `-n`. A dry run says a plan exists; it does
+# not move the data, and moving the data is the entire point.
+cmd_final_catchup() {
+    local name="${1:-}"; shift || true
+    local yes=0
+    for a in "$@"; do case "$a" in --yes) yes=1 ;; *) die "final-catchup: unknown option $a" ;; esac; done
+    [ -n "$name" ] || die "final-catchup requires a client name"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    # shellcheck disable=SC1090
+    . "$cpath"
+    case "${STATE:-}" in
+        seed_complete|endpoint_verified|active|endpoint_change_pending) ;;
+        *) die "client '$name' is in state '${STATE:-unknown}' -- final-catchup needs a seeded client" ;;
+    esac
+
+    load_client_and_connection "$cpath"
+    [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list"
+
+    if [ "$yes" -ne 1 ]; then
+        echo "Klient:   $name"
+        echo "Endpoint: $ACTIVE_ENDPOINT ($LOAD_HOST:$LOAD_PORT)"
+        echo "Zrodla:   $PEER_SAVED_DATASETS"
+        read -rp "Wykonac koncowy transfer przyrostowy teraz? [t/N] " ans
+        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing transferred" ;; esac
+    fi
+
+    local ds localpath failed=0
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        log "final catch-up $ds -> $localpath over '$ACTIVE_ENDPOINT'..."
+        # shellcheck disable=SC2086
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
+            log "  OK: $ds"
+        else
+            warn "  FAILED: $ds"
+            failed=$((failed + 1))
+        fi
+    done
+    # Recorded ONLY on a complete success. A partial catch-up must not satisfy
+    # the gate in set-endpoint -- that would let the weakest dataset decide the
+    # whole relocation was safe.
+    [ "$failed" -eq 0 ] || die "$failed dataset(s) failed -- NOT recording a final catch-up. Fix and re-run: final-catchup $name"
+
+    {
+        cat "$cpath"
+        write_client_field FINAL_CATCHUP_ENDPOINT "$ACTIVE_ENDPOINT"
+        printf 'FINAL_CATCHUP_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+    chmod 0600 "$cpath"
+    log "client '$name': final catch-up over '$ACTIVE_ENDPOINT' complete. The source may now be disconnected and moved."
+}
+
 cmd_set_endpoint() {
     local name="${1:-}"; shift || true
-    local lan="" vpn=""
+    local lan="" vpn="" skip_catchup=0
     for a in "$@"; do
         case "$a" in
             --lan=*) lan="${a#*=}" ;;
             --vpn=*) vpn="${a#*=}" ;;
+            --skip-final-catchup) skip_catchup=1 ;;
             *) die "set-endpoint: unknown option $a" ;;
         esac
     done
@@ -694,6 +760,34 @@ cmd_set_endpoint() {
         seed_complete|endpoint_verified|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- set-endpoint needs seed_complete or later (seed must finish first)" ;;
     esac
+
+    # The gate (REV-20260731-007 §7). Switching to a DIFFERENT endpoint is the
+    # relocation moment, so the catch-up must already have happened over the
+    # endpoint being left -- while it still worked. A catch-up recorded against
+    # some OTHER endpoint says nothing about this switch, so the recorded name
+    # must match the one being left, not merely be present.
+    #
+    # Skippable, because the reviewer's case is real: sometimes the source is
+    # already unplugged and there is nothing left to catch up over. Then it is a
+    # deliberate, logged decision rather than an accident.
+    local leaving="${ACTIVE_ENDPOINT:-}"
+    local switching_to=""
+    [ -n "$vpn" ] && switching_to="vpn"
+    if [ -n "$switching_to" ] && [ "$switching_to" != "$leaving" ]; then
+        if [ "$skip_catchup" -eq 1 ]; then
+            warn "SKIPPING the final catch-up over '$leaving' at your request. The first transfer over '$switching_to' will carry everything since $( [ -n "${FINAL_CATCHUP_AT:-}" ] && echo "$FINAL_CATCHUP_AT" || echo "the seed (${SEED_COMPLETED_AT:-unknown})" ) -- over the slow link, unattended. Only correct if the source is already disconnected."
+        elif [ "${FINAL_CATCHUP_ENDPOINT:-}" != "$leaving" ]; then
+            die "refusing to switch '$name' from '$leaving' to '$switching_to': no final catch-up has been run over '$leaving'.
+  Run it BEFORE disconnecting the source, while the old link still works:
+      $0 final-catchup $name
+  It keeps the first transfer over the new link small and proves the incremental
+  base is intact while it is still cheap to fix.
+  If the source is ALREADY disconnected and there is nothing to catch up over,
+  say so explicitly: $0 set-endpoint $name --vpn=... --skip-final-catchup"
+        else
+            log "final catch-up over '$leaving' recorded at ${FINAL_CATCHUP_AT:-?} -- proceeding with the switch"
+        fi
+    fi
 
     local new_active="$ACTIVE_ENDPOINT"
     local out="$cpath.new"
@@ -1097,6 +1191,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         setup-server)     shift; cmd_setup_server "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
+        final-catchup)    shift; cmd_final_catchup "$@" ;;
         set-endpoint)     shift; cmd_set_endpoint "$@" ;;
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
