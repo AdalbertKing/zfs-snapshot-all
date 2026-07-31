@@ -636,12 +636,39 @@ install_quiesce_grant() {
     chmod 0644 "$tmp"
     mv -f "$tmp" "$allow" || { rm -f "$tmp"; warn "could not install $allow"; return 1; }
 
+    # sudo is NOT a given on a bare Proxmox host. Found live on pve1
+    # (2026-07-31): neither `sudo` nor `visudo` existed, so the check below
+    # returned 127 and the old code read "command not found" as "the rule is
+    # invalid" and refused -- a correct outcome reached for entirely the wrong
+    # reason, and with a message that would have sent someone hunting a syntax
+    # error that was not there. The helper is reached THROUGH sudo, so this is a
+    # hard dependency of --allow-quiesce, not a nicety.
+    local visudo_bin=""
+    _find_visudo() {
+        local c
+        for c in visudo /usr/sbin/visudo /sbin/visudo; do
+            if command -v "$c" >/dev/null 2>&1; then visudo_bin="$c"; return 0; fi
+        done
+        return 1
+    }
+    if ! _find_visudo; then
+        log "sudo is not installed on this host, and --allow-quiesce cannot work without it -- installing it now"
+        apt_install_with_fallback sudo \
+            || { warn "could not install the 'sudo' package -- remote quiesce will refuse for $account"; return 1; }
+        _find_visudo \
+            || { warn "still no visudo after installing sudo -- refusing to write an unvalidated rule into /etc/sudoers.d"; return 1; }
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        warn "visudo is present but the sudo binary is not -- the helper would be unreachable, refusing"
+        return 1
+    fi
+
     # Validated before it is installed: a syntactically broken file in
     # /etc/sudoers.d breaks sudo for EVERY user on the host, root included.
     local rule="/etc/sudoers.d/zfs-quiesce-$account"
     local stmp; stmp=$(mktemp) || { warn "mktemp failed for the sudoers rule"; return 1; }
     printf '%s ALL=(root) NOPASSWD: %s\n' "$account" "$dest" > "$stmp"
-    if visudo -cf "$stmp" >/dev/null 2>&1; then
+    if "$visudo_bin" -cf "$stmp" >/dev/null 2>&1; then
         install -o root -g root -m 0440 "$stmp" "$rule" \
             || { rm -f "$stmp"; warn "could not install $rule"; return 1; }
         rm -f "$stmp"
@@ -685,8 +712,12 @@ revoke_quiesce_grant() {
 
     # A leftover broken rule would break sudo for everyone, so confirm the
     # directory still parses after the removal rather than assuming it does.
-    if command -v visudo >/dev/null 2>&1 && ! visudo -c >/dev/null 2>&1; then
-        warn "/etc/sudoers no longer parses cleanly after removing $rule -- inspect it NOW with 'visudo -c'"
+    local vb=""
+    for c in visudo /usr/sbin/visudo /sbin/visudo; do
+        command -v "$c" >/dev/null 2>&1 && { vb="$c"; break; }
+    done
+    if [ -n "$vb" ] && ! "$vb" -c >/dev/null 2>&1; then
+        warn "/etc/sudoers no longer parses cleanly after removing $rule -- inspect it NOW with '$vb -c'"
     fi
 
     if [ -x /usr/local/sbin/zfs-quiesce-helper ]; then
