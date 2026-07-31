@@ -47,10 +47,37 @@
 #     DoSnapshotSet succeed with a broken writer skipped, which is exactly why
 #     the API offers GetWriterStatus for the backup application to check.
 #
-# So on Windows a dead SqlServerWriter produces a snapshot that reports success
-# and is NOT application-consistent, and no version of qemu will ever tell you.
-# That is not hypothetical: it is what happened on vsql2, for months, unseen.
-# This verb is the only way to see it from the host.
+# So on Windows, qemu will never tell you anything about writer state. This verb
+# is the only way to see it from the host.
+#
+# What writer state does NOT tell you -- measured on vsql2, 2026-07-31
+# ---------------------------------------------------------------------
+# An earlier version of this header claimed a `Failed` SqlServerWriter proves the
+# snapshot was not application-consistent. That claim was WRONG, and the measured
+# counter-example is worth keeping because it is easy to get wrong again:
+#
+#   A freeze-only requester -- which is exactly what qemu-ga is -- drives SQL
+#   Server through `BACKUP DATABASE` to a VDI device and then calls AbortBackup
+#   at thaw. SQL logs 3013/3271/4035 ("Processed 0 pages", Windows error 995 =
+#   ERROR_OPERATION_ABORTED) and the writer ends in [10] Failed / Timed out.
+#   That is the aftermath of a SUCCESSFUL freeze, not of a broken one.
+#
+# Verified end to end: on vsql2 the writer read [1] Stable immediately before a
+# manual `qm guest cmd 100 fsfreeze-freeze` + `fsfreeze-thaw`, and [10] Failed
+# immediately after, with the SAME writer instance id -- so nothing re-registered
+# or crashed; the successful freeze itself put it there. Application event 24583
+# then showed SQL being engaged at EVERY quiesce, nightly job included, both
+# before and after an unrelated registry repair that day.
+#
+# Consequence, and the reason this verb no longer renders a verdict: writer state
+# sampled AFTER a quiesce cannot distinguish a healthy quiesce from a broken one.
+# Sampled BEFORE one it is more informative, but this script cannot enforce when
+# it is called. So it reports the state machine and refuses to translate that
+# into a health claim. A caller that alerts on class=failed will alert after
+# every successful backup.
+#
+# Whether SQL's participation yields a RECOVERABLE image is a separate question
+# that only a restore test answers. It has not been done.
 #
 # Whitelist
 # ---------
@@ -249,32 +276,85 @@ case "$verb" in
         # One line per writer, plus a summary. Deciding what counts as bad is
         # left to the caller ON PURPOSE -- policy does not belong inside the
         # privileged surface, and a plain report keeps this verb read-only.
+        # Parsed WITHOUT matching any English label. vssadmin is localised: a
+        # Polish guest prints "Nazwa modulu zapisujacego:" / "Stan: [1] Stabilne"
+        # / "Ostatni blad:", and an earlier version of this parser -- which keyed
+        # on /^Writer name:/, /State:/, /Last error:/ -- silently produced
+        # total=0 there. vssadmin had run fine, so the empty-output guard above
+        # did not fire either: it reported "no writers" instead of "I could not
+        # read this". Measured on two live guests, 2026-07-31: VM 106 on pve1
+        # (Polish) and VM 106 on metropolis pve1 (English).
+        #
+        # What is stable across locales is the STRUCTURE and the NUMBERS:
+        #   - the writer name is the only single-quoted string in its block, and
+        #     the names themselves stay English even on a localised system;
+        #   - the state line always carries [N], and N is VSS_WRITER_STATE;
+        #   - the error line is the first non-blank line after the state line.
+        # \047 is a single quote -- written as an escape so this stays inside one
+        # single-quoted shell string.
         printf '%s\n' "$decoded" | awk '
-            /^Writer name:/      { if (name != "") emit(); name = $0; sub(/^Writer name: */, "", name); gsub(/^'"'"'|'"'"'$/, "", name) }
-            /State:/             { state = $0; sub(/^ *State: */, "", state) }
-            /Last error:/        { err = $0; sub(/^ *Last error: */, "", err) }
+            index($0, "\047") > 0 {
+                if (name != "") emit()
+                line = $0
+                sub(/^[^\047]*\047/, "", line)
+                sub(/\047[^\047]*$/, "", line)
+                name = line; state = ""; err = ""; num = -1; want_err = 0
+                next
+            }
+            match($0, /\[[0-9]+\]/) {
+                # Drop the label ahead of the first colon -- "State:" / "Stan:"
+                # alike -- so the value reads the same in any language.
+                state = $0; sub(/^[^:]*:[ \t]*/, "", state); sub(/[ \t]+$/, "", state)
+                num = substr($0, RSTART + 1, RLENGTH - 2) + 0
+                want_err = 1
+                next
+            }
+            want_err && $0 ~ /[^ \t]/ {
+                err = $0; sub(/^[^:]*:[ \t]*/, "", err); sub(/[ \t]+$/, "", err)
+                want_err = 0
+                next
+            }
             function emit(   cls) {
-                # VSS_WRITER_STATE: 1 is stable, 2-5 are waiting states that a
+                # VSS_WRITER_STATE: 1 is stable, 2-5 are the waiting states a
                 # writer passes through around a snapshot, 6 and up are the
-                # failures. Classifying by the TEXT vssadmin prints rather than
-                # by the number keeps this readable and survives the numbering.
+                # failure states. Classified by NUMBER because that is the part
+                # that does not change with the guest language.
                 #
-                # "Waiting for completion" must NOT read as a fault: it is the
-                # normal state right after a snapshot, and treating anything
-                # other than Stable as broken would alert after every SUCCESSFUL
-                # backup -- noise that gets alerting switched off, which is how
-                # the vsql2 failure stayed invisible in the first place.
-                if      (state ~ /Failed/) cls = "FAILED"
-                else if (state ~ /\[1\]/)  cls = "ok"
-                else                       cls = "in-progress"
+                # These names describe the state machine OF THE WRITER. They are
+                # (no apostrophes in here: this whole awk program lives inside a
+                # single-quoted shell string, and one would end it early)
+                # deliberately not health verdicts -- see the header: `failed`
+                # right after a quiesce is the normal aftermath of a freeze-only
+                # requester, and `transient` is normal mid-snapshot. Neither is
+                # evidence about the snapshot. Lowercase on purpose: the old
+                # SHOUTED "FAILED" invited exactly the alerting rule that would
+                # fire after every successful backup.
+                if      (num < 0)  cls = "unreadable"
+                else if (num == 1) cls = "stable"
+                else if (num <= 5) cls = "transient"
+                else               cls = "failed"
                 total++
-                if (cls == "FAILED") failed++; else if (cls == "in-progress") waiting++
+                if (cls == "failed") failed++
+                else if (cls == "transient") transient++
+                else if (cls == "stable") stable++
+                else unreadable++
                 printf "writer=%s state=%s error=%s class=%s\n", name, state, err, cls
-                name = ""; state = ""; err = ""
+                name = ""; state = ""; err = ""; num = -1
             }
             END {
                 if (name != "") emit()
-                printf "WRITERS total=%d failed=%d in_progress=%d\n", total, failed, waiting
+                # total=0 means the parse failed, not that the guest has no
+                # writers -- every Windows install has some. Say which it is.
+                if (total == 0) {
+                    print "WRITERS-UNREADABLE could not parse any writer from the guest reply"
+                    exit 0
+                }
+                printf "WRITERS total=%d stable=%d transient=%d failed=%d unreadable=%d\n", \
+                       total, stable, transient, failed, unreadable
+                # Shipped with the data, not buried in a man page, because the
+                # whole point of this change is that the numbers above read as a
+                # verdict when they are not one.
+                print "WRITERS-NOTE writer state is not a backup verdict; a freeze-only quiesce leaves writers failed"
             }'
         ;;
 
@@ -287,6 +367,11 @@ zfs-quiesce-helper -- narrow privileged surface for delegated backup accounts.
   zfs-quiesce-helper freeze <id>     VM: fsfreeze-freeze   container: sync
   zfs-quiesce-helper thaw   <id>     VM: fsfreeze-thaw     container: no-op
   zfs-quiesce-helper writers <id>    Windows guest: VSS writer states
+
+`writers` reports the writers' own state machine, NOT a health verdict. A
+freeze-only quiesce (which is what qemu-ga performs) normally leaves writers in
+a failed state, so class=failed sampled after a backup is expected and must not
+be alerted on. Measured on vsql2 2026-07-31; see the header of this script.
 
 Allowed guests are those whose disks live under the datasets listed in
 /etc/zfs-quiesce-allow/<account>, written by deploy.sh --join. There is no

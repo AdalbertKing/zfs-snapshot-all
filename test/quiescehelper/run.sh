@@ -146,11 +146,16 @@ r=$(QM_FAIL=1 SUDO_USER=backup-test bash "$HELPER" freeze 100 >/dev/null 2>&1; e
 #
 # qemu NEVER inspects individual VSS writer state (verified in qemu v7.2.0,
 # v8.2.0 and master: requester.cpp calls GatherWriterStatus but there is no
-# GetWriterStatus / VSS_WRITER_STATE anywhere in it). So a dead SqlServerWriter
-# yields a snapshot that reports success and is not application-consistent.
-# This verb is the only way to see it -- and its classification has to keep
-# "Waiting for completion" OUT of the failure count, or it would alert after
-# every successful backup and get switched off.
+# GetWriterStatus / VSS_WRITER_STATE anywhere in it), so this verb is the only
+# way to see writer state from the host.
+#
+# The fixture below is a REAL capture from vsql2, and it is the state left by a
+# SUCCESSFUL freeze -- measured 2026-07-31, writer [1] Stable immediately before
+# a manual fsfreeze-freeze/thaw and [10] Failed immediately after, same instance
+# id. An earlier version of this suite asserted that this same output means "a
+# failed writer", which taught the helper to shout FAILED after every healthy
+# backup. These cases now pin the opposite contract: report the state machine,
+# render no verdict, and say so in the output.
 cat > "$VSSOUT" <<'EOF'
 {
    "exitcode" : 0,
@@ -159,16 +164,69 @@ cat > "$VSSOUT" <<'EOF'
 EOF
 out=$(run writers 100)
 case "$out" in
-    *"writer=SqlServerWriter"*"class=FAILED"*) ok "writers flags a failed writer" ;;
-    *) bad "writers flags a failed writer" "$out" ;;
+    *"writer=SqlServerWriter"*"class=failed"*) ok "writers reports a failed writer state" ;;
+    *) bad "writers reports a failed writer state" "$out" ;;
+esac
+# The old label. If it ever comes back, so does the false alarm.
+case "$out" in
+    *FAILED*) bad "writers no longer SHOUTS a verdict" "$out" ;;
+    *)        ok "writers no longer SHOUTS a verdict" ;;
 esac
 case "$out" in
-    *"writer=System Writer"*"class=in-progress"*) ok "writers does NOT call a waiting writer failed" ;;
-    *) bad "writers does NOT call a waiting writer failed" "$out" ;;
+    *"writer=System Writer"*"class=transient"*) ok "a waiting writer is transient, not failed" ;;
+    *) bad "a waiting writer is transient, not failed" "$out" ;;
 esac
 case "$out" in
-    *"WRITERS total=3 failed=1 in_progress=1"*) ok "writers summary counts only real failures" ;;
-    *) bad "writers summary counts only real failures" "$out" ;;
+    *"WRITERS total=3 stable=1 transient=1 failed=1"*) ok "writers summary counts every class" ;;
+    *) bad "writers summary counts every class" "$out" ;;
+esac
+# The caveat travels WITH the data. Without it the counts read as a verdict,
+# which is the whole defect this block exists to prevent.
+case "$out" in
+    *"WRITERS-NOTE writer state is not a backup verdict"*) ok "the summary ships its own caveat" ;;
+    *) bad "the summary ships its own caveat" "$out" ;;
+esac
+
+# ---- writers: a LOCALISED guest -------------------------------------------
+#
+# vssadmin is translated. Captured live from VM 106 on pve1 (Polish Windows),
+# 2026-07-31, alongside an English capture from VM 106 on metropolis pve1 -- the
+# labels differ, the structure and the [N] state numbers do not. The parser that
+# keyed on "Writer name:" / "State:" / "Last error:" reported total=0 here while
+# vssadmin had actually succeeded. Labels are written in ASCII below; the parser
+# never looks at them, which is precisely the property under test.
+cat > "$VSSOUT" <<'EOF'
+{
+   "exitcode" : 0,
+   "out-data" : "Nazwa modulu zapisujacego: 'Task Scheduler Writer'\r\n   Identyfikator modulu zapisujacego: {d61d61c8-d73a-4eee-8cdd-f6f9786b7124}\r\n   Stan: [1] Stabilne\r\n   Ostatni blad: Nie ma bledow.\r\n\r\nNazwa modulu zapisujacego: 'SqlServerWriter'\r\n   Identyfikator modulu zapisujacego: {a65faa63-5ea8-4ebc-9dbd-a0c4db26912a}\r\n   Stan: [10] Nie powiodlo sie\r\n   Ostatni blad: Przekroczono limit czasu\r\n"
+}
+EOF
+out=$(run writers 100)
+case "$out" in
+    *"writer=Task Scheduler Writer"*"class=stable"*) ok "localised guest: stable writer is read" ;;
+    *) bad "localised guest: stable writer is read" "$out" ;;
+esac
+case "$out" in
+    *"writer=SqlServerWriter"*"class=failed"*) ok "localised guest: state number beats the label" ;;
+    *) bad "localised guest: state number beats the label" "$out" ;;
+esac
+case "$out" in
+    *"WRITERS total=2"*) ok "localised guest: both writers counted" ;;
+    *) bad "localised guest: both writers counted" "$out" ;;
+esac
+
+# An unparseable reply must say so, not report an empty but healthy-looking set.
+# "total=0" would read as "this guest has no writers", which no Windows does.
+cat > "$VSSOUT" <<'EOF'
+{
+   "exitcode" : 0,
+   "out-data" : "some future vssadmin that we cannot parse at all\r\n"
+}
+EOF
+out=$(run writers 100)
+case "$out" in
+    *WRITERS-UNREADABLE*) ok "an unparseable reply is called unreadable, not empty" ;;
+    *) bad "an unparseable reply is called unreadable, not empty" "$out" ;;
 esac
 
 # ---- the sudoers rule deploy.sh writes ------------------------------------
