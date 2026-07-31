@@ -159,6 +159,78 @@ QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
 quiesce_freeze hdd/data/vm-107-disk-0 sync
 check "wrong mode: a VM is not sync-quiesced" "0" "${#QUIESCE_FROZEN[@]}"
 
+# ---- the REMOTE script's privilege routing --------------------------------
+#
+# $ZFS_REMOTE_QUIESCE_SCRIPT runs on the SOURCE host, as whatever account the
+# pairing gave us. It picks its route once, up front: root uses qm/pct directly,
+# a delegated account goes through zfs-quiesce-helper over sudo. Getting that
+# wrong is not a cosmetic bug -- routing a delegated run at qm means the freeze
+# never happens, and if the DEADMAN were routed wrong a production guest would
+# stay frozen. Both are tested here with stubs; the real thing needs a PVE host
+# (manual:quiesce-helper-live).
+RQ_D="$TMPD/remote"; mkdir -p "$RQ_D/bin"
+printf '%s' "$ZFS_REMOTE_QUIESCE_SCRIPT" > "$RQ_D/rq.sh"
+# A real script body, not an empty file: the remote script gates on [ -x ], and
+# on MSYS an empty file is not considered executable -- which would make this
+# test pass for the wrong reason on Linux and fail for the wrong reason here.
+# It is never executed directly; the sudo stub answers for it.
+printf '#!/bin/sh\nexit 0\n' > "$RQ_D/helper"; chmod +x "$RQ_D/helper"
+sed -i "s#^QHELPER=/usr/local/sbin/zfs-quiesce-helper#QHELPER=$RQ_D/helper#" "$RQ_D/rq.sh"
+
+cat > "$RQ_D/bin/sudo" <<'EOF'
+#!/bin/bash
+echo "sudo $*" >> "$TRACE"
+[ "$1" = "-n" ] && shift
+shift   # the helper path
+case "${1:-}" in
+  status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
+          echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
+  freeze|thaw) exit 0 ;;
+esac
+exit 1
+EOF
+# qm must never be reached by a delegated run: it would fail anyway, but the
+# point is that the code did not even try the privileged path.
+printf '#!/bin/bash\necho "qm $*" >> "$TRACE"\nexit 1\n'  > "$RQ_D/bin/qm"
+printf '#!/bin/bash\necho "zfs $*" >> "$TRACE"\nexit 0\n' > "$RQ_D/bin/zfs"
+printf '#!/bin/bash\nexit 0\n'                            > "$RQ_D/bin/setsid"
+chmod +x "$RQ_D/bin/"*
+
+rq_run() {
+    TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
+        bash "$RQ_D/rq.sh" agent 30 "" 1 rpool/data/vm-100-disk-0 \
+             1 rpool/data/vm-100-disk-0@t 2>&1
+}
+
+: > "$RQ_D/trace"
+out=$(rq_run); rc=$?
+check "remote: a delegated run completes through the helper" "0" "$rc"
+case "$(cat "$RQ_D/trace")" in
+    *"helper freeze 100"*) check "remote: freeze goes through the helper" "y" "y" ;;
+    *) check "remote: freeze goes through the helper" "y" "n ($out)" ;;
+esac
+case "$(cat "$RQ_D/trace")" in
+    *"helper thaw 100"*) check "remote: thaw goes through the helper" "y" "y" ;;
+    *) check "remote: thaw goes through the helper" "y" "n" ;;
+esac
+if grep -q '^qm ' "$RQ_D/trace"; then
+    check "remote: a delegated run never calls qm" "y" "n ($(grep '^qm ' "$RQ_D/trace" | head -1))"
+else
+    check "remote: a delegated run never calls qm" "y" "y"
+fi
+
+# No helper and not root: must refuse with 3 (the privilege code), BEFORE
+# anything is frozen. Silently taking a crash-consistent snapshot instead is
+# the exact outcome -q exists to prevent.
+rm -f "$RQ_D/helper"   # gone entirely: not root, no helper
+: > "$RQ_D/trace"
+out=$(rq_run); rc=$?
+check "remote: refuses (3) when it can neither be root nor use the helper" "3" "$rc"
+case "$out" in
+    *"--allow-quiesce"*) check "remote: the refusal names the fix" "y" "y" ;;
+    *) check "remote: the refusal names the fix" "y" "n ($out)" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1619,8 +1619,13 @@ quiesce_thaw_all() {
 # list" because it cannot reach the PVE cluster IPC. Verified with a real
 # throwaway account, not inferred from the mode bits.
 #
-# So remote quiesce needs the peer account to be root (`--pair --as=root`), or
-# a narrowly-scoped sudo rule for a fixed helper. This function does NOT
+# So remote quiesce needs either root (`--pair --as=root`) or the narrow helper:
+# `deploy.sh --join <package> --allow-quiesce` on the SOURCE host installs
+# zfs-quiesce-helper plus a sudo rule for that one script, scoped to the guests
+# whose disks live under the datasets already delegated. Deliberately opt-in and
+# decided locally: whoever can freeze can cause an outage by never thawing, and
+# the thaw here is performed by a script the COLLECTOR streams. This function
+# picks the route once, up front (QVIA), and does NOT
 # silently fall back to a crash-consistent snapshot when the privileges are
 # missing: it reports the specific reason and fails, because someone who asked
 # for -q and quietly got crash-consistent is exactly the outcome the local
@@ -1646,12 +1651,70 @@ nsnap=$1; shift
 snaps=(); i=0
 while [ "$i" -lt "$nsnap" ]; do snaps+=("$1"); shift; i=$((i+1)); done
 
-# Privilege probe FIRST, before anything is frozen: a run that cannot thaw
-# must never start freezing.
-if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
-    echo "QERR this account cannot run qm/pct on the source host (PVE cluster IPC needs root) -- remote quiesce requires --as=root or a sudo rule" >&2
+# Two ways to reach a guest, decided ONCE here:
+#
+#   direct  -- we are root on the source: qm/pct straight up, as before.
+#   helper  -- we are a delegated account: everything goes through
+#              zfs-quiesce-helper, installed by `deploy.sh --join
+#              --allow-quiesce`. That script is the only thing this account may
+#              run as root, and it accepts guest ids, never commands.
+#
+# Privilege probe FIRST, before anything is frozen: a run that cannot thaw must
+# never start freezing. `sudo -n` so a missing rule fails immediately instead of
+# blocking on a password prompt that nothing will ever answer.
+QHELPER=/usr/local/sbin/zfs-quiesce-helper
+if [ "$(id -u)" = "0" ]; then
+    QVIA=direct
+    if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
+        echo "QERR running as root on the source host but neither qm nor pct works here -- is this a Proxmox host?" >&2
+        exit 3
+    fi
+elif [ -x "$QHELPER" ] && sudo -n "$QHELPER" status >/dev/null 2>&1; then
+    QVIA=helper
+else
+    echo "QERR this account cannot quiesce guests on the source host: it is not root, and $QHELPER is not usable through sudo. Re-pair with --as=root, or on the SOURCE host run: deploy.sh --join <package> --allow-quiesce" >&2
     exit 3
 fi
+
+# One line, one format, whichever way we got it:
+#   id=<n> kind=qemu|lxc|absent running=yes|no frozen=yes|no|unknown
+gq_status() {
+    if [ "$QVIA" = helper ]; then
+        sudo -n "$QHELPER" status "$1" 2>/dev/null
+        return
+    fi
+    local id="$1" kind st running=no frozen=unknown
+    if   [ -f "/etc/pve/qemu-server/$id.conf" ]; then kind=qemu
+    elif [ -f "/etc/pve/lxc/$id.conf" ];        then kind=lxc
+    else echo "id=$id kind=absent running=no frozen=unknown"; return; fi
+    case "$kind" in
+        qemu) st=$(qm  status "$id" 2>/dev/null) ;;
+        lxc)  st=$(pct status "$id" 2>/dev/null) ;;
+    esac
+    case "$st" in *running*) running=yes ;; esac
+    if [ "$kind" = qemu ] && [ "$running" = yes ]; then
+        case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
+            *frozen*) frozen=yes ;;
+            *thawed*) frozen=no  ;;
+        esac
+    fi
+    echo "id=$id kind=$kind running=$running frozen=$frozen"
+}
+gq_field() { # gq_field <status-line> <name>
+    local rest="${1#*$2=}"
+    printf '%s' "${rest%% *}"
+}
+gq_freeze() {
+    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" freeze "$1" >/dev/null 2>&1; return; fi
+    case "$2" in
+        qemu) qm guest cmd "$1" fsfreeze-freeze >/dev/null 2>&1 ;;
+        lxc)  pct exec "$1" -- sync >/dev/null 2>&1 ;;
+    esac
+}
+gq_thaw() {
+    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" thaw "$1" >/dev/null 2>&1; return; fi
+    qm guest cmd "$1" fsfreeze-thaw >/dev/null 2>&1
+}
 
 frozen_file=$(mktemp) || { echo "QERR mktemp failed on the source host" >&2; exit 1; }
 thaw_all() {
@@ -1659,7 +1722,7 @@ thaw_all() {
     local id
     while read -r id; do
         [ -n "$id" ] || continue
-        if qm guest cmd "$id" fsfreeze-thaw >/dev/null 2>&1; then
+        if gq_thaw "$id"; then
             echo "QLOG thawed VM $id"
         else
             echo "QERR FAILED TO THAW VM $id -- it is STILL FROZEN and needs a manual 'qm guest cmd $id fsfreeze-thaw' on the source host" >&2
@@ -1693,10 +1756,18 @@ if command -v setsid >/dev/null 2>&1; then
         done
         [ -s "$2" ] || exit 0
         while read -r gid; do
-            [ -n "$gid" ] && qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1
+            [ -n "$gid" ] || continue
+            # The deadman must thaw the same way the run froze -- a delegated
+            # account has no qm, so a hardcoded qm here would mean the safety
+            # net silently does nothing for exactly the accounts that need it.
+            if [ "$3" = helper ]; then
+                sudo -n "$4" thaw "$gid" >/dev/null 2>&1
+            else
+                qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1
+            fi
         done < "$2"
         logger -t zfs-quiesce "DEADMAN: thawed guest(s) after ${1}s -- the controlling backup run vanished mid-window" 2>/dev/null
-    ' _ "$deadman" "$frozen_file" >/dev/null 2>&1 </dev/null &
+    ' _ "$deadman" "$frozen_file" "$QVIA" "$QHELPER" >/dev/null 2>&1 </dev/null &
     deadman_pid=$!
 else
     echo "QLOG setsid unavailable -- running without the deadman safety net" >&2
@@ -1713,38 +1784,43 @@ guest_id() {
 }
 handled=" "
 freeze_one() {
-    local ds="$1" id kind st
+    local ds="$1" id info kind running frozen
     id=$(guest_id "$ds") || return 0
     case "$handled" in *" $id "*) return 0 ;; esac
     handled="$handled$id "
-    if [ -f "/etc/pve/qemu-server/${id}.conf" ]; then kind=qemu
-    elif [ -f "/etc/pve/lxc/${id}.conf" ]; then kind=lxc
-    else echo "QLOG no guest $id on the source host -- skipping"; return 0; fi
+    # One status call, whichever way we can reach the guest. Reading
+    # /etc/pve/*.conf directly is exactly what a delegated account cannot do
+    # (0640 root:www-data), which is why this goes through gq_status.
+    info=$(gq_status "$id")
+    kind=$(gq_field "$info" kind)
+    running=$(gq_field "$info" running)
+    frozen=$(gq_field "$info" frozen)
     case "$kind" in
-        qemu) st=$(qm  status "$id" 2>/dev/null) ;;
-        lxc)  st=$(pct status "$id" 2>/dev/null) ;;
+        qemu|lxc) ;;
+        *) echo "QLOG no guest $id on the source host -- skipping"; return 0 ;;
     esac
-    case "$st" in *running*) ;; *) echo "QLOG guest $id is not running -- nothing to freeze"; return 0 ;; esac
+    [ "$running" = yes ] || { echo "QLOG guest $id is not running -- nothing to freeze"; return 0; }
     case "$mode/$kind" in
         agent/lxc) echo "QLOG guest $id is a container (no qemu-guest-agent) -- use quiesce=sync or auto"; return 0 ;;
         sync/qemu) echo "QLOG guest $id is a VM -- sync is the container fallback, use quiesce=agent or auto"; return 0 ;;
     esac
     case "$kind" in
         qemu)
-            case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
-                *frozen*) echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate" >&2; return 0 ;;
-            esac
-            if qm guest cmd "$id" fsfreeze-freeze >/dev/null 2>&1; then
+            if [ "$frozen" = yes ]; then
+                echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate" >&2
+                return 0
+            fi
+            if gq_freeze "$id" qemu; then
                 printf '%s\n' "$id" >> "$frozen_file"
                 echo "QLOG froze VM $id via qemu-guest-agent"
             else
                 echo "QERR VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" >&2
             fi ;;
         lxc)
-            if pct exec "$id" -- sync >/dev/null 2>&1; then
-                echo "QLOG flushed container $id (pct exec sync) -- a flush, not a freeze: ZFS has no FIFREEZE"
+            if gq_freeze "$id" lxc; then
+                echo "QLOG flushed container $id (sync) -- a flush, not a freeze: ZFS has no FIFREEZE"
             else
-                echo "QERR 'pct exec $id -- sync' failed" >&2
+                echo "QERR flushing container $id failed" >&2
             fi ;;
     esac
     return 0
@@ -1804,7 +1880,7 @@ quiesce_remote_run() {
     done <<< "$out"
     case "$rc" in
         0) return 0 ;;
-        3) log 0 "Quiesce: the source account cannot freeze guests -- re-pair with --as=root, or grant a sudo rule for qm/pct on $host. Refusing to take a silently crash-consistent snapshot instead."; return 3 ;;
+        3) log 0 "Quiesce: the source account cannot freeze guests on $host -- re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce. Refusing to take a silently crash-consistent snapshot instead."; return 3 ;;
         4) return 4 ;;
         *) log 0 "Quiesce: the remote quiesce run failed on $host (exit $rc)"; return 1 ;;
     esac

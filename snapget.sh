@@ -238,13 +238,16 @@ set -o pipefail
 #                    quiesced. See the REMOTE QUIESCE section in
 #                    lib-zfs-snap.sh.
 #
-#                    NEEDS ROOT (or a sudo rule) ON THE SOURCE -- measured, not
-#                    assumed: `qm`/`pct` talk to the PVE cluster IPC, and a
-#                    delegated pull account cannot even read
-#                    /etc/pve/qemu-server/<id>.conf. With an unprivileged
-#                    account this FAILS LOUDLY rather than quietly taking the
-#                    crash-consistent snapshot the flag was meant to prevent.
-#                    Pair with --as=root, or grant the sudo rule.
+#                    NEEDS PRIVILEGE ON THE SOURCE -- measured, not assumed:
+#                    `qm`/`pct` talk to the PVE cluster IPC, and a delegated
+#                    pull account cannot even read
+#                    /etc/pve/qemu-server/<id>.conf. Two ways to satisfy it:
+#                    pair with --as=root, or -- keeping the delegated account
+#                    -- run `deploy.sh --join <package> --allow-quiesce` on the
+#                    SOURCE host, which installs zfs-quiesce-helper and a sudo
+#                    rule for that one script. With neither, this FAILS LOUDLY
+#                    rather than quietly taking the crash-consistent snapshot
+#                    the flag was meant to prevent.
 #
 #                    Ignored with -e (nothing is being created to quiesce) and
 #                    with -n. Rejected for a LOCAL source: that is snapsend.sh's
