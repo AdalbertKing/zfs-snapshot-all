@@ -1417,6 +1417,18 @@ auto_skip_intermediates() {
 # Quiescing asks the guest to flush and hold still first. Two mechanisms, because
 # Proxmox has two kinds of guest:
 #
+# WINDOWS GUESTS: THE FREEZE WINDOW IS HARD-LIMITED TO ~10 SECONDS. Measured on
+# a live win2008 guest (pve1 VM 106, 2026-07-31) while testing the deadman: hold
+# it longer and the guest agent answers
+#     couldn't hold writes: fsfreeze is limited up to 10 seconds
+# and the freeze lapses on its own. VSS imposes it, not qemu. This is fine for
+# what this code does -- `zfs snapshot` is effectively instantaneous -- but it
+# means nothing may be added between freeze and snapshot that could take
+# seconds: no network round trip, no `zfs list`, no retry loop. It is also why
+# the whole freeze/snapshot/thaw sequence runs in ONE remote invocation rather
+# than three, and why a test that deliberately holds a Windows guest frozen to
+# observe something else is testing an impossible state.
+#
 #   qemu (VM)  -- a real freeze. `qm guest cmd <id> fsfreeze-freeze` runs INSIDE the guest via
 #                 qemu-guest-agent, which also runs /etc/qemu/fsfreeze-hook --
 #                 that is where a database's own quiesce belongs (MySQL FLUSH
