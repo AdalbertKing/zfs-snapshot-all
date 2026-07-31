@@ -15,7 +15,7 @@
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **brak otwartych blockerów; jeden sporny finding czeka na werdykt recenzenta**
+- Status ogólny: **brak otwartych blockerów; grant przetestowany end-to-end na żywym hoście 2026-07-31; jeden sporny finding czeka na werdykt recenzenta**
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
@@ -57,11 +57,27 @@ Na pve0 i pve1 (192.168.11.x) został **wyłącznie pakiet `sudo`**, zainstalowa
 dokładnie stan opisany w REV-20260731-009 §5: pakiet zostaje, granta nie ma, i od
 `ad5e745` kod mówi o tym wprost przy każdej takiej awarii.
 
-**Konsekwencja, którą trzeba czytać wprost:** nowy kod nadawania grantu **nigdy
-nie przeszedł do końca na żywej maszynie**. Na żywo potwierdzone są odmowy,
-ścieżka zależności, audyt oraz to, że prawdziwy `visudo 1.9.5p2` przyjmuje
-generowaną regułę. Happy path — instalacja grantu end-to-end — jest dowiedziony
-wyłącznie w piaskownicy.
+**Instalacja end-to-end: WYKONANA 2026-07-31 na metropolis** (za zgodą
+właściciela). Pełny cykl `--pair` → przeniesienie paczki → `--join
+--allow-quiesce` → weryfikacja granicy → aktualizacja z szerszą listą →
+`--revoke-quiesce` → `--unpair` + teardown. Szczegóły i hashe w odpowiedzi na
+REV-20260731-012.
+
+Co to dało — rzeczy, których piaskownica nie umiała pokazać: prawdziwy `visudo`
+przyjął regułę; konto delegowane dosięgło helpera przez sudo; guest na `rpool/data`
+przeszedł, a guesty na puli `hdd` zostały odmówione; **`env_reset` udowodniony z
+kontrolą nośności** (ta sama zmienna działa, gdy dociera do helpera, i nie działa
+przez sudo); forma argumentowa nie pasuje do reguły i w ogóle nie startuje;
+ścieżka aktualizacji z REV-012 zostawiła regułę bajt w bajt tą samą i zero
+`.zqg-*`; po odwołaniu konto traci dostęp całkowicie; crontaby obu maszyn
+identyczne przed i po.
+
+Świadomie zostawione, wszystko zapowiedziane przez kod: pakiet `sudo`, binarka
+helpera (współdzielona) i pusty dataset testowy w `hdd/backuptest_targets/`.
+
+**Czego nadal nie ma:** żaden guest nie został zamrożony — wszystko powyżej to
+odczyty przez `status`. Ścieżki błędów `install`/`mv`/`visudo` i crash są nadal
+wyłącznie stubowane; na żywo przeszedł happy path.
 
 ## 2. Zaakceptowany rdzeń
 
@@ -245,7 +261,12 @@ czterech hostach w obu formach hosta.
   `kill -9` i OOM projekt jest kompletny; wobec zaniku zasilania opiera się na
   systemie plików (ZFS transakcyjny, ext4 zrzuca dane przed rename na istniejący
   plik). Świadomie bez `sync`. To jest ocena, nie dowód.
-- **Instalacja grantu end-to-end na żywym hoście** — patrz sekcja 1.
+- **Zamrożenie guesta na żywo** — instalacja grantu jest już przetestowana
+  end-to-end (sekcja 1), ale freeze/thaw na produkcyjnym guescie nadal nie.
+  VM 106 na metropolis pve1 to produkcyjny Windows `vbim2`; wymaga osobnej
+  decyzji.
+- **Ścieżki awarii i crash na żywym hoście** — na produkcji przeszedł happy
+  path; wymuszone błędy `install`/`mv` i SIGKILL zostają w piaskownicy.
 - **`-q` poza profilem `standard`** `zfs-backup.sh`, dopóki recenzent nie zamknie
   pozycji cyklu życia.
 - **P2 dług testowy kontrolera aktualizacji** z uzgodnienia 2026-07-30: brak
