@@ -182,6 +182,42 @@ else
     ok "deploy.sh's sudoers rule carries no SETENV"
 fi
 
+# ---- teardown (REV-20260731-007 §3.7) -------------------------------------
+#
+# A removed backup relationship must not leave privileged artifacts behind. The
+# per-account pieces go; the helper is shared by every peer on the host and is
+# kept, which is fine ONLY because it is stated out loud -- an operator should
+# not have to work out which artifacts are shared.
+TD="$WORK/teardown"
+mkdir -p "$TD/etc/zfs-quiesce-allow" "$TD/etc/sudoers.d"
+echo "rpool/data" > "$TD/etc/zfs-quiesce-allow/backup-test"
+echo "backup-test ALL=(root) NOPASSWD: /usr/local/sbin/zfs-quiesce-helper" \
+    > "$TD/etc/sudoers.d/zfs-quiesce-backup-test"
+sed -e "s#/etc/zfs-quiesce-allow#$TD/etc/zfs-quiesce-allow#g" \
+    -e "s#/etc/sudoers.d#$TD/etc/sudoers.d#g" "$REPO/deploy.sh" > "$TD/deploy.sh"
+
+out=$(bash "$TD/deploy.sh" --revoke-quiesce backup-test 2>&1); r=$?
+[ "$r" = 0 ] && ok "revoke: exits cleanly" || bad "revoke: exits cleanly" "rc=$r"
+[ -e "$TD/etc/zfs-quiesce-allow/backup-test" ] \
+    && bad "revoke: removes the whitelist" "still there" \
+    || ok "revoke: removes the whitelist"
+[ -e "$TD/etc/sudoers.d/zfs-quiesce-backup-test" ] \
+    && bad "revoke: removes the sudoers rule" "still there" \
+    || ok "revoke: removes the sudoers rule"
+
+# Revoking something that was never granted must be a clean no-op, not an error
+# -- teardown scripts run on hosts that may never have had the grant.
+out=$(bash "$TD/deploy.sh" --revoke-quiesce backup-test 2>&1); r=$?
+case "$out" in
+    *"nothing to revoke"*) [ "$r" = 0 ] && ok "revoke: a second run is a clean no-op" \
+                                        || bad "revoke: a second run is a clean no-op" "rc=$r" ;;
+    *) bad "revoke: a second run is a clean no-op" "$out" ;;
+esac
+
+r=$(bash "$TD/deploy.sh" --revoke-quiesce 'bad;name' >/dev/null 2>&1; echo $?)
+[ "$r" != 0 ] && ok "revoke: refuses a malformed account name" \
+              || bad "revoke: refuses a malformed account name" "rc=$r"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

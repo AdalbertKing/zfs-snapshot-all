@@ -312,8 +312,14 @@ fi
 out=$(TRACE="$RQ_D/trace" PATH="$RQ_PATH" bash "$RQ_D/rq.sh" agent 30 "" \
           1 rpool/data/vm-100-disk-0 1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
 check "err3: without setsid the run refuses (3)" "3" "$rc"
-case "$out" in *"froze VM"*) check "err3: and freezes nothing" "y" "n ($out)" ;;
-   *) check "err3: and freezes nothing" "y" "y" ;; esac
+# REV-20260731-007 §2 F2 asks specifically for proof that no freeze CALL
+# happens -- not merely that the log lacks the word. The trace is the evidence:
+# every helper invocation is recorded there by the sudo stub.
+if grep -qE 'freeze [0-9]+$' "$RQ_D/trace"; then
+    check "err3: and issues no freeze call at all" "y" "n ($(grep -E 'freeze' "$RQ_D/trace" | head -1))"
+else
+    check "err3: and issues no freeze call at all" "y" "y"
+fi
 
 # 4. thaw fails -> the id STAYS in the deadman's file and the run is an error.
 #    Before the fix the file was wiped unconditionally, so the deadman saw

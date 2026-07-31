@@ -104,6 +104,8 @@ JOIN_CHECK=0
 # belongs to the owner of the source host, not to the party asking for access.
 # Off by default; without it remote quiesce simply refuses, loudly.
 ALLOW_QUIESCE=0
+# Account whose quiesce grant --revoke-quiesce should remove (join-side teardown).
+REVOKE_QUIESCE_ACCOUNT=""
 SELF_UPDATE=0
 ROLLBACK=0
 RESUME_UPDATES=0
@@ -152,6 +154,8 @@ while [ "$#" -gt 0 ]; do
         --rollback)        ROLLBACK=1; shift ;;
         --resume-updates)  RESUME_UPDATES=1; shift ;;
         --allow-quiesce) ALLOW_QUIESCE=1; shift ;;
+        --revoke-quiesce=*) REVOKE_QUIESCE_ACCOUNT="${1#*=}"; shift ;;
+        --revoke-quiesce)   REVOKE_QUIESCE_ACCOUNT="${2:-}"; shift 2 ;;
         --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -228,6 +232,11 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             still uses the pairing key.
   --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
                           (run on the second host, once, from its console)
+  --revoke-quiesce=ACCOUNT
+                          remove ACCOUNT's guest-quiesce grant on THIS host
+                          (whitelist + sudoers rule). The helper itself is
+                          shared by every peer and is kept -- without a grant
+                          it refuses the account anyway.
     --allow-quiesce       additionally let the joining peer FREEZE guests on
                           this host (remote quiesce, snapget -q), limited to
                           guests whose disks live under the delegated datasets.
@@ -584,8 +593,123 @@ do_join_check() {
 # makes the trust boundary testable on any machine, instead of only on a host
 # where a mistake in the test would create a real account. It runs BEFORE the
 # root check for exactly that reason.
+# Grants a delegated PULL account the ability to quiesce guests on this host,
+# and nothing else -- see zfs-quiesce-helper.sh for why `sudo qm` is not an
+# acceptable substitute. Three pieces, all root-owned:
+#
+#   /usr/local/sbin/zfs-quiesce-helper   the only command the account may run
+#   /etc/zfs-quiesce-allow/<account>     the datasets whose guests it may touch
+#   /etc/sudoers.d/zfs-quiesce-<account> the rule, NOPASSWD, no SETENV
+#
+# The whitelist is written from the SAME dataset list the zfs allow grants above
+# are derived from, so the two cannot drift: an account may quiesce exactly the
+# guests whose disks it is already allowed to replicate.
+#
+# NO SETENV, deliberately. The helper lets $ZFS_QUIESCE_ALLOW_DIR override where
+# it reads the whitelist so the test suite can run without root; sudo's default
+# env_reset is what stops a delegated account using that to point the whitelist
+# at a file it controls. Adding SETENV here would hand over exactly that.
+install_quiesce_grant() {
+    local account="$1" datasets="$2"
+    local src="$REPO_DIR/zfs-quiesce-helper.sh"
+    local dest="/usr/local/sbin/zfs-quiesce-helper"
+
+    if [ ! -r "$src" ]; then
+        warn "--allow-quiesce given but $src is missing (older checkout?) -- remote quiesce will refuse for $account"
+        return 1
+    fi
+    install -o root -g root -m 0755 "$src" "$dest" \
+        || { warn "could not install $dest -- remote quiesce will refuse for $account"; return 1; }
+
+    install -o root -g root -m 0755 -d /etc/zfs-quiesce-allow \
+        || { warn "could not create /etc/zfs-quiesce-allow"; return 1; }
+
+    local allow="/etc/zfs-quiesce-allow/$account"
+    local tmp; tmp=$(mktemp "/etc/zfs-quiesce-allow/.tmp.XXXXXX") \
+        || { warn "could not write the quiesce whitelist for $account"; return 1; }
+    {
+        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
+        echo "# guests whose disks live under these datasets may be frozen by '$account'"
+        local ds
+        for ds in $datasets; do printf '%s\n' "$ds"; done
+    } > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$allow" || { rm -f "$tmp"; warn "could not install $allow"; return 1; }
+
+    # Validated before it is installed: a syntactically broken file in
+    # /etc/sudoers.d breaks sudo for EVERY user on the host, root included.
+    local rule="/etc/sudoers.d/zfs-quiesce-$account"
+    local stmp; stmp=$(mktemp) || { warn "mktemp failed for the sudoers rule"; return 1; }
+    printf '%s ALL=(root) NOPASSWD: %s\n' "$account" "$dest" > "$stmp"
+    if visudo -cf "$stmp" >/dev/null 2>&1; then
+        install -o root -g root -m 0440 "$stmp" "$rule" \
+            || { rm -f "$stmp"; warn "could not install $rule"; return 1; }
+        rm -f "$stmp"
+    else
+        rm -f "$stmp"
+        warn "the generated sudoers rule for $account did not pass 'visudo -c' -- NOT installing it, remote quiesce will refuse"
+        return 1
+    fi
+
+    log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
+    return 0
+}
+
+# The other half of install_quiesce_grant (REV-20260731-007 §3.7): a removed
+# backup relationship must not silently leave privileged artifacts behind, and
+# an admin should not have to know which of them are shared.
+#
+# Per-account (removed): the whitelist and the sudoers rule. Together they are
+# the whole grant -- without them the helper refuses this account with rc=4.
+# Shared (kept, and SAID so): /usr/local/sbin/zfs-quiesce-helper is one file for
+# every peer on this host. Removing it would silently break the other
+# relationships, so it stays and the operator is told it stays.
+revoke_quiesce_grant() {
+    local account="$1" removed=0
+    local allow="/etc/zfs-quiesce-allow/$account"
+    local rule="/etc/sudoers.d/zfs-quiesce-$account"
+
+    if [ -e "$allow" ]; then
+        rm -f "$allow" && { log "removed the quiesce whitelist $allow"; removed=1; } \
+            || warn "could not remove $allow -- $account may still be able to quiesce guests here"
+    fi
+    if [ -e "$rule" ]; then
+        rm -f "$rule" && { log "removed the sudoers rule $rule"; removed=1; } \
+            || warn "could not remove $rule -- $account may still reach the helper through sudo"
+    fi
+
+    if [ "$removed" -eq 0 ]; then
+        log "no quiesce grant found for '$account' on this host -- nothing to revoke"
+        return 0
+    fi
+
+    # A leftover broken rule would break sudo for everyone, so confirm the
+    # directory still parses after the removal rather than assuming it does.
+    if command -v visudo >/dev/null 2>&1 && ! visudo -c >/dev/null 2>&1; then
+        warn "/etc/sudoers no longer parses cleanly after removing $rule -- inspect it NOW with 'visudo -c'"
+    fi
+
+    if [ -x /usr/local/sbin/zfs-quiesce-helper ]; then
+        log "/usr/local/sbin/zfs-quiesce-helper stays: it is SHARED by every peer on this host, and removing it would break the others. Without a whitelist and a sudoers rule it refuses '$account' anyway."
+        if [ -d /etc/zfs-quiesce-allow ] && [ -z "$(ls -A /etc/zfs-quiesce-allow 2>/dev/null)" ]; then
+            log "no account on this host has a quiesce grant any more -- remove the helper by hand if you want it gone: rm -f /usr/local/sbin/zfs-quiesce-helper"
+        fi
+    fi
+    return 0
+}
+
 if [ "$JOIN_CHECK" -eq 1 ]; then
     do_join_check
+    exit $?
+fi
+
+# Stands alone on purpose: the grant lives on the SOURCE host, which is the
+# --join side, and that side has no pairing manifest describing the initiator.
+# So teardown cannot be inferred from one -- it is named explicitly.
+if [ -n "$REVOKE_QUIESCE_ACCOUNT" ]; then
+    pc_is_account "$REVOKE_QUIESCE_ACCOUNT" \
+        || die "--revoke-quiesce: '$REVOKE_QUIESCE_ACCOUNT' is not a valid account name"
+    revoke_quiesce_grant "$REVOKE_QUIESCE_ACCOUNT"
     exit $?
 fi
 
@@ -2139,68 +2263,6 @@ pin_host_key() {
 # how one of them silently stops being refreshed on rotation.
 #
 # The copy is deliberate rather than a chmod: /root/.ssh/pairing stays 0700 and
-# Grants a delegated PULL account the ability to quiesce guests on this host,
-# and nothing else -- see zfs-quiesce-helper.sh for why `sudo qm` is not an
-# acceptable substitute. Three pieces, all root-owned:
-#
-#   /usr/local/sbin/zfs-quiesce-helper   the only command the account may run
-#   /etc/zfs-quiesce-allow/<account>     the datasets whose guests it may touch
-#   /etc/sudoers.d/zfs-quiesce-<account> the rule, NOPASSWD, no SETENV
-#
-# The whitelist is written from the SAME dataset list the zfs allow grants above
-# are derived from, so the two cannot drift: an account may quiesce exactly the
-# guests whose disks it is already allowed to replicate.
-#
-# NO SETENV, deliberately. The helper lets $ZFS_QUIESCE_ALLOW_DIR override where
-# it reads the whitelist so the test suite can run without root; sudo's default
-# env_reset is what stops a delegated account using that to point the whitelist
-# at a file it controls. Adding SETENV here would hand over exactly that.
-install_quiesce_grant() {
-    local account="$1" datasets="$2"
-    local src="$REPO_DIR/zfs-quiesce-helper.sh"
-    local dest="/usr/local/sbin/zfs-quiesce-helper"
-
-    if [ ! -r "$src" ]; then
-        warn "--allow-quiesce given but $src is missing (older checkout?) -- remote quiesce will refuse for $account"
-        return 1
-    fi
-    install -o root -g root -m 0755 "$src" "$dest" \
-        || { warn "could not install $dest -- remote quiesce will refuse for $account"; return 1; }
-
-    install -o root -g root -m 0755 -d /etc/zfs-quiesce-allow \
-        || { warn "could not create /etc/zfs-quiesce-allow"; return 1; }
-
-    local allow="/etc/zfs-quiesce-allow/$account"
-    local tmp; tmp=$(mktemp "/etc/zfs-quiesce-allow/.tmp.XXXXXX") \
-        || { warn "could not write the quiesce whitelist for $account"; return 1; }
-    {
-        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
-        echo "# guests whose disks live under these datasets may be frozen by '$account'"
-        local ds
-        for ds in $datasets; do printf '%s\n' "$ds"; done
-    } > "$tmp"
-    chmod 0644 "$tmp"
-    mv -f "$tmp" "$allow" || { rm -f "$tmp"; warn "could not install $allow"; return 1; }
-
-    # Validated before it is installed: a syntactically broken file in
-    # /etc/sudoers.d breaks sudo for EVERY user on the host, root included.
-    local rule="/etc/sudoers.d/zfs-quiesce-$account"
-    local stmp; stmp=$(mktemp) || { warn "mktemp failed for the sudoers rule"; return 1; }
-    printf '%s ALL=(root) NOPASSWD: %s\n' "$account" "$dest" > "$stmp"
-    if visudo -cf "$stmp" >/dev/null 2>&1; then
-        install -o root -g root -m 0440 "$stmp" "$rule" \
-            || { rm -f "$stmp"; warn "could not install $rule"; return 1; }
-        rm -f "$stmp"
-    else
-        rm -f "$stmp"
-        warn "the generated sudoers rule for $account did not pass 'visudo -c' -- NOT installing it, remote quiesce will refuse"
-        return 1
-    fi
-
-    log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
-    return 0
-}
-
 # root-owned, and only the ONE key for this relationship crosses over.
 install_local_pairing_files() {
     local src_key="$1" src_kh="$2" label="$3" user="$4"

@@ -1735,7 +1735,7 @@ thaw_hint() {
 thaw_all() {
     [ -s "$frozen_file" ] || return 0
     local id rc=0 left
-    left=$(mktemp) || { echo "QERR mktemp failed while thawing -- leaving the frozen list untouched for the deadman" >&2; return 1; }
+    left=$(mktemp "${frozen_file}.XXXXXX") || { echo "QERR mktemp failed while thawing -- leaving the frozen list untouched for the deadman" >&2; return 1; }
     while read -r id; do
         [ -n "$id" ] || continue
         if gq_thaw "$id"; then
@@ -1746,8 +1746,14 @@ thaw_all() {
             rc=1
         fi
     done < "$frozen_file"
-    cat "$left" > "$frozen_file" 2>/dev/null
-    rm -f "$left"
+    # ATOMIC replacement (REV-20260731-007 §2 F3): the deadman may read this
+    # file at any moment. A truncate-then-write would give it a window in which
+    # the list looks empty, and "empty" is exactly the state that makes it stand
+    # down. mktemp put $left in the same directory, so rename cannot cross a
+    # filesystem; the copy fallback exists only in case it somehow does.
+    mv -f "$left" "$frozen_file" 2>/dev/null || {
+        cat "$left" > "$frozen_file" 2>/dev/null; rm -f "$left"
+    }
     return "$rc"
 }
 
@@ -1805,7 +1811,7 @@ if true; then
         attempt=0
         while [ "$attempt" -lt 12 ] && [ -s "$2" ]; do
             attempt=$((attempt + 1))
-            left=$(mktemp) || break
+            left=$(mktemp "$2.XXXXXX") || break
             while read -r gid; do
                 [ -n "$gid" ] || continue
                 # Thaw the same way the run froze -- a delegated account has no
@@ -1817,7 +1823,7 @@ if true; then
                     qm guest cmd "$gid" fsfreeze-thaw >/dev/null 2>&1 || printf '%s\n' "$gid" >> "$left"
                 fi
             done < "$2"
-            cat "$left" > "$2" 2>/dev/null; rm -f "$left"
+            mv -f "$left" "$2" 2>/dev/null || { cat "$left" > "$2" 2>/dev/null; rm -f "$left"; }
             [ -s "$2" ] || break
             logger -t zfs-quiesce "DEADMAN: thaw attempt $attempt left guest(s) frozen: $(tr "\n" " " < "$2")" 2>/dev/null
             sleep 5
