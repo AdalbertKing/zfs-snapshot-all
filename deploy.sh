@@ -641,7 +641,7 @@ install_quiesce_grant() {
     # privilege is what makes the next person guess.
     #
     # So: dependencies first, then everything staged in temporary files, then
-    # one short install phase, and on ANY failure the host goes back to the state
+    # one short commit phase, and on ANY failure the host goes back to the state
     # it was in before the run.
     #
     # "Before the run" is the part REV-20260731-009 §2 caught. The first version
@@ -650,7 +650,7 @@ install_quiesce_grant() {
     # Rerunning `--join --allow-quiesce` with a changed dataset list or a newer
     # helper OVERWRITES all three destinations, and a failure partway through
     # left a mix of old and new that nothing rolled back. So every destination
-    # that already exists is copied aside before the install phase, and the
+    # that already exists is copied aside before the commit phase, and the
     # rollback either puts that copy back or removes what this run created -- and
     # says which of the two it did.
     #
