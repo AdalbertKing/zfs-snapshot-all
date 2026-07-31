@@ -409,11 +409,19 @@ EOF
     chmod +x "$TX/bin/visudo" "$TX/bin/sudo"
 }
 
-tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc] [fail-mkdir]
+tx_run() {   # tx_run <visudo-rc> <stage-fails-on> [apt-rc] [fail-mkdir] [commit-fails-on] [crash-at]
     #   apt-rc 0 = sudo is already there   1 = the install of sudo fails
     #          2 = sudo is MISSING and apt supplies it (the only path that
     #              reaches the "package left behind" notice, §5)
     #   fail-mkdir 1 = break only the `install -d` for the whitelist directory
+    #   commit-fails-on = the rename that commits this destination fails
+    #   crash-at        = the process DIES at that rename, running no rollback
+    #
+    # Staging and committing are separate injection points on purpose. A
+    # staging failure happens before any destination has changed, so the
+    # interesting assertion is that nothing was touched; a commit failure
+    # happens after earlier destinations already changed, which is where
+    # restore-versus-remove is decided.
     # TX_KEEP=1 runs against whatever is already in the sandbox, which is how
     # the update cases start from an existing grant instead of a clean host.
     local vrc="$1" failon="$2" aptrc="${3:-0}"
@@ -436,6 +444,25 @@ tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc] [fail-mkdir]
     # Strips -o/-g: this box has no 'root' user, so real ownership flags fail for
     # reasons that have nothing to do with what is being tested. Fails only for
     # the named target, so each stage can be broken in isolation.
+    # The commit is a rename, so breaking a commit means breaking `mv` -- but
+    # only the rename that COMMITS. Matching on a `.zqg-new` source is what
+    # separates it from the rename that RESTORES a .zqg-bak during rollback,
+    # which must keep working or the test would be measuring the wrong failure.
+    cat > "$TX/bin/mv" <<EOF
+#!/bin/bash
+FAILMV='${5:-}'
+CRASHAT='${6:-}'
+for a in "\$@"; do
+    case "\$a" in
+        *.zqg-new)
+            [ -n "\$CRASHAT" ] && case "\$a" in *\$CRASHAT*) kill -9 \$PPID; exit 137 ;; esac
+            [ -n "\$FAILMV" ]  && case "\$a" in *\$FAILMV*)  exit 1 ;; esac
+            ;;
+    esac
+done
+exec /usr/bin/mv "\$@"
+EOF
+    chmod +x "$TX/bin/mv"
     cat > "$TX/bin/install" <<EOF
 #!/bin/bash
 FAILON='$failon'
@@ -508,7 +535,7 @@ r=$(tx_run 0 "zfs-quiesce-allow")
 
 # Rule install fails at the very last step -> the whitelist created moments
 # earlier must go too. This is the case the old code got wrong.
-r=$(tx_run 0 "sudoers.d")
+r=$(tx_run 0 "" 0 0 "sudoers.d")
 [ "$r" != "rc=0" ] && [ "$(tx_orphans)" = 0 ]     && ok "tx: a failed rule install rolls the whitelist back too"     || bad "tx: a failed rule install rolls the whitelist back too" "$r orphans=$(tx_orphans)"
 
 # And a retry after a failure must succeed cleanly rather than trip over
@@ -559,7 +586,7 @@ tx_tree() {   # every file in the sandbox, so "changed exactly these" is checkab
 #    by then, so a rollback that only removes new files would leave the new
 #    helper next to the old whitelist and the old rule.
 tx_seed; before=$(tx_hash3)
-r=$(TX_KEEP=1 tx_run 0 "zfs-quiesce-allow")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "zfs-quiesce-allow")
 if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ]; then
     ok "tx-update: a failed whitelist replace restores all three old files"
 else
@@ -570,7 +597,7 @@ fi
 
 # 2. Fail at the very last step, with helper AND whitelist already replaced.
 tx_seed; before=$(tx_hash3)
-r=$(TX_KEEP=1 tx_run 0 "sudoers.d")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "sudoers.d")
 if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ]; then
     ok "tx-update: a failed rule replace restores helper and whitelist too"
 else
@@ -638,7 +665,7 @@ printf '# other peer\nrpool/data\n' > "$TX/root/etc/zfs-quiesce-allow/other-peer
 printf 'other-peer ALL=(root) NOPASSWD: /usr/local/sbin/zfs-quiesce-helper\n' > "$TX/root/etc/sudoers.d/zfs-quiesce-other-peer"
 other_before=$(tx_h "$TX/root/etc/zfs-quiesce-allow/other-peer")
 before=$(tx_hash3)
-r=$(TX_KEEP=1 tx_run 0 "sudoers.d")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "sudoers.d")
 if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ] \
    && grep -q 'OLD helper' "$TX_HELPER" \
    && [ "$(tx_h "$TX/root/etc/zfs-quiesce-allow/other-peer")" = "$other_before" ]; then
@@ -702,7 +729,7 @@ fi
 # cheaper to forbid mechanically than to re-audit by eye every time the function
 # grows a step.
 tx_guard_scan() {   # prints every `return 1` in the install phase with no rollback near it
-    sed -n '/---- 4\. install ----/,/^}$/p' "$1" | awk '
+    sed -n '/---- 4\. commit ----/,/^}$/p' "$1" | awk '
         { buf[NR] = $0 }
         /return 1/ {
             found = 0
@@ -717,7 +744,7 @@ offenders=$(tx_guard_scan "$REPO/deploy.sh")
 # A guard that cannot fail proves nothing, so it is pointed at a deliberately
 # broken copy as well.
 cat > "$TX/guard-bad.sh" <<'EOF'
-    # ---- 4. install ----
+    # ---- 4. commit ----
     did_helper=1
     install "$src" "$dest" || { warn "boom"; return 1; }
 }
@@ -726,9 +753,94 @@ EOF
     && ok "tx-guard: the guard catches a rollback-less exit" \
     || bad "tx-guard: the guard catches a rollback-less exit" "the guard passed a file it should have failed"
 
+# ---- crash safety: the process DIES mid-commit -----------------------------
+#
+# Everything above tests a step that FAILS, which runs the rollback. None of it
+# says anything about a step that never returns -- kill -9, OOM, power loss --
+# where no rollback runs at all. That is what staging plus rename is for, and
+# the only way to test it is to actually kill the process between two renames.
+#
+# The mv stub kills its parent, which is the shell running the function, so no
+# trap, no rollback and no cleanup happen. Exactly like the real thing.
+
+# 1. Crash at the SECOND commit (the helper), with the whitelist already
+#    committed. Every destination must hold a whole file -- the old one or the
+#    new one, never a truncated one. That is the property in-place `install`
+#    could not give.
+tx_seed
+old_helper=$(tx_h "$TX_HELPER"); old_rule=$(tx_h "$TX_RULE")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-helper")
+if [ "$r" != "rc=0" ] \
+   && grep -q '^rpool/data$' "$TX_ALLOW" \
+   && [ "$(tx_h "$TX_HELPER")" = "$old_helper" ] && grep -q 'OLD helper' "$TX_HELPER" \
+   && [ "$(tx_h "$TX_RULE")" = "$old_rule" ]; then
+    ok "tx-crash: a crash mid-commit leaves whole files, never a partial one"
+else
+    bad "tx-crash: a crash mid-commit leaves whole files, never a partial one" "r=$r
+      helper $(tx_h "$TX_HELPER") vs old $old_helper"
+fi
+
+# The interrupted run's staging and backup files are still lying there -- that
+# is the evidence the next run reads.
+if [ -e "$TX_HELPER.zqg-new" ] && [ -e "$TX_ALLOW.zqg-bak" ]; then
+    ok "tx-crash: the interrupted run leaves its staged and preserved files"
+else
+    bad "tx-crash: the interrupted run leaves its staged and preserved files" \
+        "$(ls -A "$TX/root/usr/local/sbin" "$TX/root/etc/zfs-quiesce-allow" 2>&1)"
+fi
+
+# Nothing this transaction leaves in /etc/sudoers.d may be a file sudo will
+# read. sudoers.d ignores names containing a '.' -- which is why the staged and
+# preserved names carry one, and why pc_is_account forbids a dot in an account
+# name so the FINAL name can never be ignored the same way.
+offender=""
+for f in "$TX/root/etc/sudoers.d"/*; do
+    [ -e "$f" ] || continue
+    b="${f##*/}"
+    [ "$b" = "zfs-quiesce-backup-test" ] && continue
+    case "$b" in *.*) ;; *) offender="$offender $b" ;; esac
+done
+[ -z "$offender" ] && ok "tx-crash: every leftover in sudoers.d is a name sudo ignores" \
+                   || bad "tx-crash: every leftover in sudoers.d is a name sudo ignores" "$offender"
+
+# 2. Recovery is "run it again": the next run reports the interruption, sweeps
+#    the leftovers and finishes the job. No replay of a half-finished intent.
+r=$(TX_KEEP=1 tx_run 0 "")
+if [ "$r" = "rc=0" ] && cmp -s "$TX_HELPER" "$REPO/zfs-quiesce-helper.sh" \
+   && [ ! -e "$TX_HELPER.zqg-new" ] && [ ! -e "$TX_ALLOW.zqg-bak" ] \
+   && grep -q "was interrupted before it finished" "$TX/out.log"; then
+    ok "tx-crash: the next run reports the interruption and completes"
+else
+    bad "tx-crash: the next run reports the interruption and completes" "r=$r
+      $(cat "$TX/out.log")"
+fi
+
+# 3. The commit ORDER is the other half of crash safety. The whitelist is
+#    committed first because it is a restriction; the rule is committed last
+#    because it is the switch. A crash at the first commit must therefore leave
+#    both the helper and the rule exactly as they were.
+tx_seed
+old_helper=$(tx_h "$TX_HELPER"); old_rule=$(tx_h "$TX_RULE")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow")
+if [ "$(tx_h "$TX_HELPER")" = "$old_helper" ] && [ "$(tx_h "$TX_RULE")" = "$old_rule" ]; then
+    ok "tx-crash: the whitelist commits first, helper and rule untouched"
+else
+    bad "tx-crash: the whitelist commits first, helper and rule untouched" "r=$r"
+fi
+
+# 4. On a clean host, a crash before the last commit must leave NO grant: the
+#    rule is what grants, and it is the one thing that has not landed.
+r=$(tx_run 0 "" 0 0 "" "sudoers.d")
+if [ ! -e "$TX_RULE" ] && [ -e "$TX_ALLOW" ] && [ -e "$TX_HELPER" ]; then
+    ok "tx-crash: a crash before the last commit grants nothing"
+else
+    bad "tx-crash: a crash before the last commit grants nothing" \
+        "rule=$([ -e "$TX_RULE" ] && echo present || echo absent)"
+fi
+
 # §5: installing the sudo package is a host-level side effect that is left in
 # place on purpose. Saying nothing about it is what makes the outcome confusing.
-r=$(tx_run 0 "sudoers.d" 2)
+r=$(tx_run 0 "" 2 0 "sudoers.d")
 if [ "$r" != "rc=0" ] && grep -q "'sudo' package was installed by this run and has been left in place" "$TX/out.log"; then
     ok "tx: a failure after installing sudo says the package was left behind"
 else

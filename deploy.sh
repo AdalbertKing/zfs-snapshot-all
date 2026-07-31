@@ -609,6 +609,22 @@ do_join_check() {
 # it reads the whitelist so the test suite can run without root; sudo's default
 # env_reset is what stops a delegated account using that to point the whitelist
 # at a file it controls. Adding SETENV here would hand over exactly that.
+# Does any account still hold a whitelist here? Staged and preserved files
+# (.zqg-new / .zqg-bak) are not accounts, and counting them would make a run that
+# died mid-commit look like a peer whose grant must not be disturbed -- which is
+# exactly the wrong conclusion to reach while cleaning up after that run.
+# A dotfile cannot be an account either: pc_is_account requires [a-z_] first.
+quiesce_allow_dir_empty() {
+    local dir="$1" f
+    [ -d "$dir" ] || return 0
+    for f in "$dir"/*; do
+        [ -e "$f" ] || continue
+        case "$f" in *.zqg-new|*.zqg-bak) continue ;; esac
+        return 1
+    done
+    return 0
+}
+
 install_quiesce_grant() {
     local account="$1" datasets="$2"
     local src="$REPO_DIR/zfs-quiesce-helper.sh"
@@ -638,54 +654,112 @@ install_quiesce_grant() {
     # rollback either puts that copy back or removes what this run created -- and
     # says which of the two it did.
     #
-    # `did_*` is set BEFORE each install, not after: a failed `install` can still
-    # have truncated the destination it was part-way through writing, so what
-    # decides whether a destination needs restoring is "attempted", not
-    # "succeeded".
+    # `did_*` is set BEFORE each commit, not after: what decides whether a
+    # destination needs restoring is "attempted", not "succeeded".
+    #
+    # CRASH SAFETY (owner request, 2026-07-31; the design REV-20260731-009 §3
+    # named as the cleaner alternative). Everything above runs on the failure
+    # paths of this function, so it covers a step that FAILS and not a process
+    # that DIES -- `kill -9`, OOM, or the power going out ran no rollback at all
+    # and left whatever the half-finished `install` had written.
+    #
+    # Two properties fix that, and neither needs a recovery replay:
+    #
+    #   1. No destination is ever written in place. Each new file is staged in
+    #      ITS OWN destination directory as `<dest>.zqg-new` and then renamed
+    #      over the destination. rename(2) is atomic, so every possible instant
+    #      of a crash finds a destination holding EITHER the whole old file or
+    #      the whole new one -- never a truncated privileged binary or half a
+    #      sudoers rule. Staging beside the destination rather than in /tmp is
+    #      what makes it a rename instead of a cross-filesystem copy.
+    #
+    #   2. The commit order makes every intermediate state safe: whitelist,
+    #      then helper, then rule. The rule is last because it is the switch --
+    #      until it lands nothing is granted at all. The whitelist is first
+    #      because it is a RESTRICTION, so a crash between the two leaves the
+    #      narrower of the two lists in force, and because the helper fails
+    #      CLOSED on a whitelist it cannot parse. Widening privilege is the
+    #      failure direction worth designing against; refusing is not.
+    #
+    #      This does assume the whitelist format stays readable by the previous
+    #      helper. It is one dataset per line plus comments; if that ever gains
+    #      syntax, this ordering has to be revisited.
+    #
+    # `.zqg-new` and `.zqg-bak` both contain a dot, which matters more than it
+    # looks: sudoers.d IGNORES any file whose name contains a '.' or ends in
+    # '~'. That is what makes it safe to stage a sudoers rule inside
+    # /etc/sudoers.d itself -- sudo will not read it until it has been renamed
+    # onto its dotless final name. `pc_is_account` rejects every character
+    # outside [a-z0-9_-], so an account name can never smuggle a dot into the
+    # final name and make the real rule invisible the same way.
     local pre_helper=0 pre_allow=0 pre_rule=0 created_dir=0
     local did_helper=0 did_allow=0 did_rule=0
     local installed_sudo=0
-    local bk="" tmp_allow="" tmp_rule="" visudo_bin=""
+    local tmp_allow="" tmp_rule="" visudo_bin=""
 
-    # Restoring is atomic: the copy lands beside the destination and is renamed
-    # over it, so a rollback that is itself interrupted cannot leave a truncated
-    # privileged file behind. `cp -p` carries the owner and mode of the copy
-    # taken before the run, which is what makes the restore byte-for-byte.
-    _grant_restore() {   # <backup name> <destination>
-        local from="$bk/$1" to="$2" swap="$2.rollback.$$"
-        if cp -p "$from" "$swap" 2>/dev/null && mv -f "$swap" "$to" 2>/dev/null; then
-            return 0
-        fi
-        rm -f "$swap" 2>/dev/null
-        return 1
+    # The rollback copy is a HARD LINK, not a copy: it is the original inode, so
+    # it carries the content, owner, mode and every xattr by identity instead of
+    # by a copy that could quietly lose one. The rename that replaces the
+    # destination only swings the directory entry, so the link keeps pointing at
+    # the original bytes. `cp -p` is the fallback for filesystems that refuse it.
+    _grant_preserve() {   # <destination>; 1 = it did not exist, 2 = give up
+        [ -e "$1" ] || return 1
+        rm -f "$1.zqg-bak" 2>/dev/null
+        ln "$1" "$1.zqg-bak" 2>/dev/null && return 0
+        cp -p "$1" "$1.zqg-bak" 2>/dev/null && return 0
+        return 2
+    }
+    # Restoring is one rename, so the rollback is atomic per file too -- a
+    # rollback that is itself interrupted cannot leave a truncated file behind.
+    _grant_restore() {   # <destination>
+        [ -e "$1.zqg-bak" ] || return 1
+        mv -f "$1.zqg-bak" "$1" 2>/dev/null
+    }
+    # Staged and preserved files are the fingerprint of an interrupted run. They
+    # are swept rather than replayed: this function rewrites all three
+    # destinations anyway, so "run it again" IS the recovery, and replaying a
+    # half-finished intent would be guessing at which half was wanted.
+    _grant_sweep() {   # <"quiet"|"report">
+        local f found=""
+        for f in "$dest" "$allow" "$rule"; do
+            [ -e "$f.zqg-new" ] && { rm -f "$f.zqg-new" && found="$found $f.zqg-new"; }
+            [ -e "$f.zqg-bak" ] && { rm -f "$f.zqg-bak" && found="$found $f.zqg-bak"; }
+        done
+        [ -n "$found" ] && [ "$1" = report ] && \
+            warn "a previous grant run for $account was interrupted before it finished -- leftovers removed:$found. The destinations themselves are intact (each is either the old or the new file, never a partial one) and this run rebuilds all three."
+        return 0
     }
     _grant_rollback() {
         local restored="" removed="" lost=""
-        # Reverse install order. The rule goes first because it is the only one
+        # Reverse commit order. The rule goes first because it is the only one
         # of the three that grants anything: until it is gone, or back to its
         # previous content, the account can still reach the helper.
         if [ "$did_rule" -eq 1 ]; then
             if [ "$pre_rule" -eq 1 ]; then
-                _grant_restore rule "$rule" && restored="$restored $rule" || lost="$lost $rule"
+                _grant_restore "$rule" && restored="$restored $rule" || lost="$lost $rule"
             else
                 rm -f "$rule" && removed="$removed $rule"
             fi
         fi
         if [ "$did_allow" -eq 1 ]; then
             if [ "$pre_allow" -eq 1 ]; then
-                _grant_restore allow "$allow" && restored="$restored $allow" || lost="$lost $allow"
+                _grant_restore "$allow" && restored="$restored $allow" || lost="$lost $allow"
             else
                 rm -f "$allow" && removed="$removed $allow"
             fi
         fi
         [ "$created_dir" -eq 1 ] && rmdir "$allow_dir" 2>/dev/null
+        # The helper is judged LAST although it was committed second: whether a
+        # helper this run installed may be removed depends on whether any account
+        # still holds a whitelist, and this run's own whitelist has to be gone
+        # before that question can be answered honestly.
         if [ "$did_helper" -eq 1 ]; then
             if [ "$pre_helper" -eq 1 ]; then
                 # Shared by every peer on this host, so the previous copy has to
                 # come back even though this run's failure was about a single
                 # account: the other relationships never asked for an upgrade.
-                _grant_restore helper "$dest" && restored="$restored $dest" || lost="$lost $dest"
-            elif [ -z "$(ls -A "$allow_dir" 2>/dev/null)" ]; then
+                _grant_restore "$dest" && restored="$restored $dest" || lost="$lost $dest"
+            elif quiesce_allow_dir_empty "$allow_dir"; then
                 # Put there by THIS run, and nobody ended up with a grant --
                 # otherwise removing it would break relationships this run never
                 # touched.
@@ -713,7 +787,7 @@ install_quiesce_grant() {
 
         [ -n "$tmp_allow" ] && rm -f "$tmp_allow"
         [ -n "$tmp_rule" ]  && rm -f "$tmp_rule"
-        [ -n "$bk" ] && rm -rf "$bk"
+        _grant_sweep quiet
         return 0
     }
 
@@ -777,36 +851,11 @@ install_quiesce_grant() {
         return 1
     fi
 
-    # ---- 3. copy aside everything this run may replace ----
+    # ---- 3. the whitelist directory, then stage and preserve ----
     #
-    # Taken AFTER validation and BEFORE the first write, so a run that is going
-    # to be refused anyway never touches the host, and a run that gets as far as
-    # writing always has something to go back to.
-    bk=$(mktemp -d) || { _grant_rollback; warn "mktemp -d failed taking rollback copies for $account"; return 1; }
-    _grant_preserve() {   # <destination> <backup name>; 1 = did not exist, 2 = give up
-        [ -e "$1" ] || return 1
-        cp -p "$1" "$bk/$2" 2>/dev/null && return 0
-        _grant_rollback
-        warn "could not take a rollback copy of $1 -- nothing was replaced, the grant for $account is unchanged"
-        return 2
-    }
-    _grant_preserve "$dest"  helper; case $? in 0) pre_helper=1 ;; 2) return 1 ;; esac
-    _grant_preserve "$allow" allow;  case $? in 0) pre_allow=1  ;; 2) return 1 ;; esac
-    _grant_preserve "$rule"  rule;   case $? in 0) pre_rule=1   ;; 2) return 1 ;; esac
-
-    # ---- 4. install ----
-    #
-    # An update replaces all three destinations unconditionally rather than
-    # comparing content first: the helper has to be able to move forward with the
-    # repository, and a whitelist rewritten from the same dataset list it always
-    # was is a no-op in content even when the bytes are rewritten. What is bounded
-    # is the SET of files touched -- these three, and nothing else.
-    did_helper=1
-    if ! install -o root -g root -m 0755 "$src" "$dest"; then
-        _grant_rollback
-        warn "could not install $dest -- no quiesce grant was created for $account"
-        return 1
-    fi
+    # The directory has to exist before anything can be staged inside it. It is
+    # not part of the atomic commit and does not need to be: an empty directory
+    # grants nothing.
     if [ ! -d "$allow_dir" ]; then
         created_dir=1
         # created_dir is deliberately NOT reset to 0 on failure (REV-20260731-011).
@@ -821,18 +870,65 @@ install_quiesce_grant() {
             warn "could not create $allow_dir -- no quiesce grant was created for $account"; return 1
         }
     fi
-    did_allow=1
-    if ! install -o root -g root -m 0644 "$tmp_allow" "$allow"; then
+
+    # Anything left by a run that died mid-commit goes now, before this one
+    # stages over the same names.
+    _grant_sweep report
+
+    # Staged with their FINAL owner and mode, so the commit is a rename and
+    # nothing else -- no chown or chmod can fail after the first destination has
+    # already changed.
+    _grant_stage() {   # <source> <mode> <destination>
+        install -o root -g root -m "$2" "$1" "$3.zqg-new" && return 0
         _grant_rollback
-        warn "could not install $allow -- no quiesce grant was created for $account"; return 1
+        warn "could not stage $3.zqg-new -- nothing was replaced, the grant for $account is unchanged"
+        return 1
+    }
+    _grant_stage "$src"       0755 "$dest"  || return 1
+    _grant_stage "$tmp_allow" 0644 "$allow" || return 1
+    _grant_stage "$tmp_rule"  0440 "$rule"  || return 1
+
+    local d
+    for d in "$dest" "$allow" "$rule"; do
+        _grant_preserve "$d"
+        case $? in
+            0) case "$d" in "$dest") pre_helper=1 ;; "$allow") pre_allow=1 ;; "$rule") pre_rule=1 ;; esac ;;
+            2) _grant_rollback
+               warn "could not take a rollback copy of $d -- nothing was replaced, the grant for $account is unchanged"
+               return 1 ;;
+        esac
+    done
+
+    # ---- 4. commit ----
+    #
+    # Three renames and nothing else. Every failure that can be caused by disk
+    # space, permissions, a bad source or an invalid rule has already happened
+    # above, which is what shrinks the window a crash can land in to the gaps
+    # between these three lines -- and each gap is a state that is safe to be
+    # left in, by the ordering argued at the top of this function.
+    #
+    # An update replaces all three destinations unconditionally rather than
+    # comparing content first: the helper has to be able to move forward with the
+    # repository, and a whitelist rewritten from the same dataset list it always
+    # was is a no-op in content even when the bytes are rewritten. What is bounded
+    # is the SET of files touched -- these three, and nothing else.
+    did_allow=1
+    if ! mv -f "$allow.zqg-new" "$allow"; then
+        _grant_rollback
+        warn "could not commit $allow -- no quiesce grant was created for $account"; return 1
+    fi
+    did_helper=1
+    if ! mv -f "$dest.zqg-new" "$dest"; then
+        _grant_rollback
+        warn "could not commit $dest -- no quiesce grant was created for $account"; return 1
     fi
     did_rule=1
-    if ! install -o root -g root -m 0440 "$tmp_rule" "$rule"; then
+    if ! mv -f "$rule.zqg-new" "$rule"; then
         _grant_rollback
-        warn "could not install $rule -- no quiesce grant was created for $account"; return 1
+        warn "could not commit $rule -- no quiesce grant was created for $account"; return 1
     fi
     rm -f "$tmp_allow" "$tmp_rule"; tmp_allow=""; tmp_rule=""
-    rm -rf "$bk"; bk=""
+    _grant_sweep quiet
 
     if [ "$pre_rule" -eq 1 ] || [ "$pre_allow" -eq 1 ]; then
         log "updated the guest quiesce grant for $account (helper $dest, whitelist $allow, rule $rule)"
@@ -882,7 +978,7 @@ revoke_quiesce_grant() {
 
     if [ -x /usr/local/sbin/zfs-quiesce-helper ]; then
         log "/usr/local/sbin/zfs-quiesce-helper stays: it is SHARED by every peer on this host, and removing it would break the others. Without a whitelist and a sudoers rule it refuses '$account' anyway."
-        if [ -d /etc/zfs-quiesce-allow ] && [ -z "$(ls -A /etc/zfs-quiesce-allow 2>/dev/null)" ]; then
+        if [ -d /etc/zfs-quiesce-allow ] && quiesce_allow_dir_empty /etc/zfs-quiesce-allow; then
             log "no account on this host has a quiesce grant any more -- remove the helper by hand if you want it gone: rm -f /usr/local/sbin/zfs-quiesce-helper"
         fi
     fi
