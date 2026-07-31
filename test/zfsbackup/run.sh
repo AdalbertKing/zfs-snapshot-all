@@ -439,6 +439,89 @@ else
     bad "invalidation: moving the LAN endpoint drops the catch-up recorded for it" "rc=$r out=$out"
 fi
 
+# --- 8. show_activation_proposal --------------------------------------------
+#
+# activate-client used to print a SUMMARY and then ask for a yes/no. A yes to a
+# description is not consent to a change nobody displayed. These cases pin that
+# the change itself is shown, and specifically that BOTH diffs exist -- the
+# config diff and the cron diff answer different questions, and case 3 below is
+# the whole reason the second one is not redundant.
+PROP="$WORK/proposal"; mkdir -p "$PROP"
+prop_cfg() {   # prop_cfg <file> <hourly-schedule> [extra dataset]
+    cat > "$1" <<EOF
+[defaults]
+	host_label = testhost
+
+[template:standard_hourly]
+	send_schedule  = $2
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[dataset:tank/backups/peer1/rpool/data]
+	use_template = standard_hourly
+	src          = robot@10.0.0.1:rpool/data
+	notify       = peer1-data
+EOF
+    if [ -n "${3:-}" ]; then
+        cat >> "$1" <<EOF
+
+[dataset:tank/backups/peer1/$3]
+	use_template = standard_hourly
+	src          = robot@10.0.0.1:$3
+	notify       = peer1-extra
+EOF
+    fi
+}
+
+# 1. No config yet: the whole thing is new and must be shown as such.
+prop_cfg "$PROP/new.conf" "1 * * * *"
+out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/absent.conf" "$PROP/new.conf" 2>&1)
+if case "$out" in *"(nowy plik)"*) true ;; *) false ;; esac \
+   && case "$out" in *"snapget.sh"*) true ;; *) false ;; esac; then
+    ok "proposal: a first client shows the new file and the cron lines it creates"
+else
+    bad "proposal: a first client shows the new file and the cron lines it creates" "$out"
+fi
+
+# 2. Re-activating an unchanged client must say so on BOTH sides rather than
+#    printing an empty diff the reader has to interpret.
+prop_cfg "$PROP/same-a.conf" "1 * * * *"
+prop_cfg "$PROP/same-b.conf" "1 * * * *"
+out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/same-a.conf" "$PROP/same-b.conf" 2>&1)
+if [ "$(printf '%s' "$out" | grep -c 'bez zmian')" = 2 ]; then
+    ok "proposal: an unchanged re-activation says 'no change' on both diffs"
+else
+    bad "proposal: an unchanged re-activation says 'no change' on both diffs" "$out"
+fi
+
+# 3. THE case the second diff exists for: only the TEMPLATE changes. No
+#    [dataset:] section moves, so the config diff is two lines -- and every
+#    generated schedule changes underneath it.
+prop_cfg "$PROP/tmpl-a.conf" "1 * * * *"
+prop_cfg "$PROP/tmpl-b.conf" "*/5 * * * *"
+out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/tmpl-a.conf" "$PROP/tmpl-b.conf" 2>&1)
+cron_part="${out#*crontabie}"
+if case "$cron_part" in *"*/5 * * * *"*) true ;; *) false ;; esac \
+   && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
+    ok "proposal: a template-only edit still shows the changed cron lines"
+else
+    bad "proposal: a template-only edit still shows the changed cron lines" "$out"
+fi
+
+# 4. A dataset added to an existing client shows in both.
+prop_cfg "$PROP/add-a.conf" "1 * * * *"
+prop_cfg "$PROP/add-b.conf" "1 * * * *" "rpool/other"
+out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/add-a.conf" "$PROP/add-b.conf" 2>&1)
+if case "$out" in *"rpool/other"*) true ;; *) false ;; esac \
+   && [ "$(printf '%s' "$out" | grep -c 'bez zmian')" = 0 ]; then
+    ok "proposal: adding a dataset shows in the config and in the cron lines"
+else
+    bad "proposal: adding a dataset shows in the config and in the cron lines" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

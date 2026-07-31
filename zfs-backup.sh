@@ -433,6 +433,67 @@ assert_cron_config_matches_installed() {
 # guaranteed. Now it does not need to assume that: it holds its own snapshot
 # of `crontab -l` and restores it directly with `crontab <snapshot>` if
 # --install fails, independent of whatever state the config file ends up in.
+# Show the change itself, not a description of it.
+#
+# Everything activate-client prints above this is a SUMMARY. A yes/no answer to
+# a summary is not consent to a change nobody displayed, and this project
+# learned that the expensive way -- the standing rule here is that a regenerated
+# crontab gets diffed before it is installed, never trusted because the summary
+# read correctly.
+#
+# Two diffs, because they answer different questions:
+#
+#   config  -- what will be written to disk;
+#   cron    -- what will actually RUN, which is the one that surprises people.
+#              A template edit touches no [dataset:] section and still rewrites
+#              every schedule in the block, so the config diff alone can look
+#              tiny while the cron diff is enormous.
+#
+# gen-cron.sh without --install prints the block to stdout, so both sides of the
+# cron diff are rendered the same way and a difference is real rather than a
+# formatting artifact.
+show_activation_proposal() {   # <current config> <proposed config>
+    local cronfile="$1" workfile="$2" before after rc=0
+    before=$(mktemp) || return 1
+    after=$(mktemp)  || { rm -f "$before"; return 1; }
+    # gen-cron stamps the config's own path into a '# Source:' comment, and the
+    # proposed config is still a temp file at this point -- so that one line
+    # differs on every single run. Left in, it would show a change where there
+    # is none and, worse, make "(bez zmian)" unreachable: the operator would
+    # learn to skim a diff that always has something in it. The path is
+    # normalised on both sides, because after the swap it IS the same file.
+    # The `!` below tests the PIPELINE, which reports gen-cron's failure only
+    # because this file sets `pipefail` at the top. Verified: a config gen-cron
+    # rejects makes this function return 1 rather than showing an empty diff.
+    _strip_source() { sed 's|^# Source: .*|# Source: <config>|'; }
+    [ -f "$cronfile" ] && bash "$GENCRON" -c "$cronfile" 2>/dev/null | _strip_source > "$before"
+    if ! bash "$GENCRON" -c "$workfile" 2>/dev/null | _strip_source > "$after"; then
+        rm -f "$before" "$after"; return 1
+    fi
+
+    echo "--- proponowany config: $cronfile ---"
+    if [ -f "$cronfile" ]; then
+        if diff -q "$cronfile" "$workfile" >/dev/null 2>&1; then
+            echo "  (bez zmian)"
+        else
+            diff -u "$cronfile" "$workfile" | tail -n +3 | sed 's/^/  /'
+        fi
+    else
+        echo "  (nowy plik)"
+        sed 's/^/  + /' "$workfile"
+    fi
+    echo
+    echo "--- co sie zmieni w crontabie (to jest to, co naprawde pojdzie do crona) ---"
+    if diff -q "$before" "$after" >/dev/null 2>&1; then
+        echo "  (bez zmian -- linie crona beda identyczne jak teraz)"
+    else
+        diff -u "$before" "$after" | tail -n +3 | sed 's/^/  /'
+    fi
+    echo
+    rm -f "$before" "$after"
+    return $rc
+}
+
 atomic_replace_and_install() {
     local realfile="$1" workfile="$2"
     local backup="" crontab_backup
@@ -1054,9 +1115,16 @@ cmd_activate_client() {
     echo "Cel:                 $PEER_SAVED_TARGET/$LOAD_LABEL"
     echo "Tryb:                pull"
     echo "Profil:              standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly o 00:00)"
-    echo "Spojnosc snapshotu:  crash-consistent (quiesce/Guest Agent freeze niedostepny w trybie pull)"
+    echo "Spojnosc snapshotu:  crash-consistent -- quiesce NIE jest wlaczony w tym profilu."
+    echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"
+    echo "                      zfs-quiesce-helper, wymaga --allow-quiesce przy parowaniu)"
     echo "Test:                OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
     echo
+
+    show_activation_proposal "$cronfile" "$workfile" || {
+        rm -f "$workfile"
+        die "gen-cron.sh could not render the proposed config -- nothing was touched"
+    }
 
     if [ "$yes" -ne 1 ]; then
         read -rp "Aktywowac backup? [t/N] " ans
