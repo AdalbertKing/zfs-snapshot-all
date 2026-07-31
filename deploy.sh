@@ -613,36 +613,56 @@ install_quiesce_grant() {
     local account="$1" datasets="$2"
     local src="$REPO_DIR/zfs-quiesce-helper.sh"
     local dest="/usr/local/sbin/zfs-quiesce-helper"
+    local allow_dir="/etc/zfs-quiesce-allow"
+    local allow="$allow_dir/$account"
+    local rule="/etc/sudoers.d/zfs-quiesce-$account"
+
+    # TRANSACTIONAL (REV-20260731-008 F2). The old order installed the helper
+    # and the whitelist first and only then discovered that sudo was missing or
+    # the rule would not validate -- leaving a half-built privileged feature
+    # behind on every failure. Half-built is not dangerous here (without the
+    # sudoers rule nothing is granted) but it is ambiguous, and ambiguity around
+    # privilege is what makes the next person guess.
+    #
+    # So: dependencies first, then everything staged in temporary files, then
+    # one short install phase, and on ANY failure every artifact THIS RUN
+    # created is removed. Two end states only -- fully installed, or nothing new.
+    local created_helper=0 created_dir=0 created_allow=0 created_rule=0
+    local tmp_allow="" tmp_rule=""
+    _grant_rollback() {
+        local what=""
+        [ "$created_rule"   -eq 1 ] && { rm -f "$rule";  what="$what $rule"; }
+        [ "$created_allow"  -eq 1 ] && { rm -f "$allow"; what="$what $allow"; }
+        [ "$created_dir"    -eq 1 ] && rmdir "$allow_dir" 2>/dev/null
+        [ -n "$tmp_allow" ] && rm -f "$tmp_allow"
+        [ -n "$tmp_rule" ]  && rm -f "$tmp_rule"
+        if [ "$created_helper" -eq 1 ]; then
+            # Shared by every peer. Only remove it if THIS run put it there and
+            # nobody ended up with a grant -- otherwise removing it would break
+            # relationships this run never touched.
+            if [ -z "$(ls -A "$allow_dir" 2>/dev/null)" ]; then
+                rm -f "$dest"; what="$what $dest"
+            else
+                warn "$dest was installed by this run and is being left in place: another account still holds a grant. It is inert without a whitelist and a sudoers rule."
+            fi
+        fi
+        [ -n "$what" ] && warn "rolled back:$what"
+        return 0
+    }
 
     if [ ! -r "$src" ]; then
         warn "--allow-quiesce given but $src is missing (older checkout?) -- remote quiesce will refuse for $account"
         return 1
     fi
-    install -o root -g root -m 0755 "$src" "$dest" \
-        || { warn "could not install $dest -- remote quiesce will refuse for $account"; return 1; }
 
-    install -o root -g root -m 0755 -d /etc/zfs-quiesce-allow \
-        || { warn "could not create /etc/zfs-quiesce-allow"; return 1; }
-
-    local allow="/etc/zfs-quiesce-allow/$account"
-    local tmp; tmp=$(mktemp "/etc/zfs-quiesce-allow/.tmp.XXXXXX") \
-        || { warn "could not write the quiesce whitelist for $account"; return 1; }
-    {
-        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
-        echo "# guests whose disks live under these datasets may be frozen by '$account'"
-        local ds
-        for ds in $datasets; do printf '%s\n' "$ds"; done
-    } > "$tmp"
-    chmod 0644 "$tmp"
-    mv -f "$tmp" "$allow" || { rm -f "$tmp"; warn "could not install $allow"; return 1; }
-
-    # sudo is NOT a given on a bare Proxmox host. Found live on pve1
-    # (2026-07-31): neither `sudo` nor `visudo` existed, so the check below
-    # returned 127 and the old code read "command not found" as "the rule is
-    # invalid" and refused -- a correct outcome reached for entirely the wrong
-    # reason, and with a message that would have sent someone hunting a syntax
-    # error that was not there. The helper is reached THROUGH sudo, so this is a
-    # hard dependency of --allow-quiesce, not a nicety.
+    # ---- 1. dependencies, before anything is created ----
+    #
+    # sudo is NOT a given on a bare Proxmox host. Found live on pve1 and pve0
+    # (2026-07-31): neither `sudo` nor `visudo` existed, so `visudo -cf` returned
+    # 127 and the old code read "command not found" as "the rule is invalid" --
+    # a correct refusal reached for entirely the wrong reason, with a message
+    # that would have sent someone hunting a syntax error that was not there.
+    # The helper is reached THROUGH sudo, so this is a hard dependency.
     local visudo_bin=""
     _find_visudo() {
         local c
@@ -653,30 +673,66 @@ install_quiesce_grant() {
     }
     if ! _find_visudo; then
         log "sudo is not installed on this host, and --allow-quiesce cannot work without it -- installing it now"
-        apt_install_with_fallback sudo \
-            || { warn "could not install the 'sudo' package -- remote quiesce will refuse for $account"; return 1; }
-        _find_visudo \
-            || { warn "still no visudo after installing sudo -- refusing to write an unvalidated rule into /etc/sudoers.d"; return 1; }
+        if ! apt_install_with_fallback sudo; then
+            warn "could not install the 'sudo' package -- no quiesce grant was created for $account"
+            return 1
+        fi
+        _find_visudo || {
+            warn "still no visudo after installing sudo -- no quiesce grant was created for $account"
+            return 1
+        }
     fi
     if ! command -v sudo >/dev/null 2>&1; then
-        warn "visudo is present but the sudo binary is not -- the helper would be unreachable, refusing"
+        warn "visudo is present but the sudo binary is not -- the helper would be unreachable, no grant created for $account"
         return 1
     fi
 
-    # Validated before it is installed: a syntactically broken file in
-    # /etc/sudoers.d breaks sudo for EVERY user on the host, root included.
-    local rule="/etc/sudoers.d/zfs-quiesce-$account"
-    local stmp; stmp=$(mktemp) || { warn "mktemp failed for the sudoers rule"; return 1; }
-    printf '%s ALL=(root) NOPASSWD: %s\n' "$account" "$dest" > "$stmp"
-    if "$visudo_bin" -cf "$stmp" >/dev/null 2>&1; then
-        install -o root -g root -m 0440 "$stmp" "$rule" \
-            || { rm -f "$stmp"; warn "could not install $rule"; return 1; }
-        rm -f "$stmp"
-    else
-        rm -f "$stmp"
-        warn "the generated sudoers rule for $account did not pass 'visudo -c' -- NOT installing it, remote quiesce will refuse"
+    # ---- 2. stage everything, validate, install nothing yet ----
+    tmp_allow=$(mktemp) || { warn "mktemp failed staging the whitelist for $account"; return 1; }
+    {
+        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
+        echo "# guests whose disks live under these datasets may be frozen by '$account'"
+        local ds
+        for ds in $datasets; do printf '%s
+' "$ds"; done
+    } > "$tmp_allow" || { _grant_rollback; warn "could not stage the whitelist for $account"; return 1; }
+
+    tmp_rule=$(mktemp) || { _grant_rollback; warn "mktemp failed staging the sudoers rule"; return 1; }
+    printf '%s ALL=(root) NOPASSWD: %s
+' "$account" "$dest" > "$tmp_rule"
+    # Validated BEFORE it goes near /etc/sudoers.d: a syntactically broken file
+    # there breaks sudo for EVERY user on the host, root included.
+    if ! "$visudo_bin" -cf "$tmp_rule" >/dev/null 2>&1; then
+        _grant_rollback
+        warn "the generated sudoers rule for $account did not pass '$visudo_bin -c' -- nothing was installed"
         return 1
     fi
+
+    # ---- 3. install ----
+    if [ ! -e "$dest" ]; then created_helper=1; fi
+    if ! install -o root -g root -m 0755 "$src" "$dest"; then
+        created_helper=0; _grant_rollback
+        warn "could not install $dest -- no quiesce grant was created for $account"
+        return 1
+    fi
+    if [ ! -d "$allow_dir" ]; then
+        created_dir=1
+        install -o root -g root -m 0755 -d "$allow_dir" || {
+            created_dir=0; _grant_rollback
+            warn "could not create $allow_dir -- no quiesce grant was created for $account"; return 1
+        }
+    fi
+    [ -e "$allow" ] || created_allow=1
+    if ! install -o root -g root -m 0644 "$tmp_allow" "$allow"; then
+        created_allow=0; _grant_rollback
+        warn "could not install $allow -- no quiesce grant was created for $account"; return 1
+    fi
+    [ -e "$rule" ] || created_rule=1
+    if ! install -o root -g root -m 0440 "$tmp_rule" "$rule"; then
+        created_rule=0; _grant_rollback
+        warn "could not install $rule -- no quiesce grant was created for $account"; return 1
+    fi
+    rm -f "$tmp_allow" "$tmp_rule"; tmp_allow=""; tmp_rule=""
 
     log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
     return 0

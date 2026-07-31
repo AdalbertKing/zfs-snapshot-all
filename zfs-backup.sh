@@ -90,6 +90,12 @@ PEER_KEY_DIR="/root/.ssh/pairing"
 SERVER_CONF="/etc/zfs-snapshot-all/zfs-backup.conf"
 CLIENTS_DIR="/etc/zfs-snapshot-all/clients"
 
+# How recent a final catch-up must be to authorise an endpoint switch
+# (REV-20260731-008 F1). 30 minutes: long enough to run the catch-up, walk
+# to the rack and unplug the machine; short enough that "just before
+# relocation" is still true. --allow-stale-catchup overrides it, loudly.
+CATCHUP_MAX_AGE="${CATCHUP_MAX_AGE:-1800}"
+
 log()  { echo ">>> $*"; }
 warn() { echo "!!! $*" >&2; }
 die()  { echo "FATAL: $*" >&2; exit 1; }
@@ -730,9 +736,15 @@ cmd_final_catchup() {
     # whole relocation was safe.
     [ "$failed" -eq 0 ] || die "$failed dataset(s) failed -- NOT recording a final catch-up. Fix and re-run: final-catchup $name"
 
+    # REV-20260731-008 F1: the endpoint NAME alone proves almost nothing -- it
+    # survives a change of host or port, and it never goes stale. Record the
+    # exact transport that was just proven to work, and when.
     {
         cat "$cpath"
         write_client_field FINAL_CATCHUP_ENDPOINT "$ACTIVE_ENDPOINT"
+        write_client_field FINAL_CATCHUP_HOST "$LOAD_HOST"
+        write_client_field FINAL_CATCHUP_PORT "$LOAD_PORT"
+        printf 'FINAL_CATCHUP_EPOCH=%s\n' "$(date '+%s')"
         printf 'FINAL_CATCHUP_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
@@ -741,12 +753,13 @@ cmd_final_catchup() {
 
 cmd_set_endpoint() {
     local name="${1:-}"; shift || true
-    local lan="" vpn="" skip_catchup=0
+    local lan="" vpn="" skip_catchup=0 allow_stale=0
     for a in "$@"; do
         case "$a" in
             --lan=*) lan="${a#*=}" ;;
             --vpn=*) vpn="${a#*=}" ;;
             --skip-final-catchup) skip_catchup=1 ;;
+            --allow-stale-catchup) allow_stale=1 ;;
             *) die "set-endpoint: unknown option $a" ;;
         esac
     done
@@ -776,16 +789,42 @@ cmd_set_endpoint() {
     if [ -n "$switching_to" ] && [ "$switching_to" != "$leaving" ]; then
         if [ "$skip_catchup" -eq 1 ]; then
             warn "SKIPPING the final catch-up over '$leaving' at your request. The first transfer over '$switching_to' will carry everything since $( [ -n "${FINAL_CATCHUP_AT:-}" ] && echo "$FINAL_CATCHUP_AT" || echo "the seed (${SEED_COMPLETED_AT:-unknown})" ) -- over the slow link, unattended. Only correct if the source is already disconnected."
-        elif [ "${FINAL_CATCHUP_ENDPOINT:-}" != "$leaving" ]; then
-            die "refusing to switch '$name' from '$leaving' to '$switching_to': no final catch-up has been run over '$leaving'.
+        else
+            # REV-20260731-008 F1. The name alone was too weak a claim: it
+            # survived a change of host or port on that endpoint, and it never
+            # went stale. So the recorded catch-up must match the transport
+            # being LEFT exactly, and be recent -- otherwise "the last transfer
+            # happened just before relocation" is not what it proves.
+            local lh lp
+            lh=$(endpoint_host_var "$leaving"); lh="${!lh:-}"
+            lp=$(endpoint_port_var "$leaving"); lp="${!lp:-22}"
+            local why=""
+            if [ "${FINAL_CATCHUP_ENDPOINT:-}" != "$leaving" ]; then
+                why="no final catch-up has been run over '$leaving'"
+            elif [ "${FINAL_CATCHUP_HOST:-}" != "$lh" ] || [ "${FINAL_CATCHUP_PORT:-22}" != "$lp" ]; then
+                why="the recorded catch-up used ${FINAL_CATCHUP_HOST:-?}:${FINAL_CATCHUP_PORT:-?}, but '$leaving' now points at $lh:$lp -- it proves nothing about the transport actually being left"
+            else
+                local age=$(( $(date '+%s') - ${FINAL_CATCHUP_EPOCH:-0} ))
+                if [ "${FINAL_CATCHUP_EPOCH:-0}" -le 0 ]; then
+                    why="the recorded catch-up predates freshness tracking, so its age cannot be established"
+                elif [ "$age" -gt "$CATCHUP_MAX_AGE" ]; then
+                    if [ "$allow_stale" -eq 1 ]; then
+                        warn "the catch-up over '$leaving' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min) and you passed --allow-stale-catchup. Everything written since ${FINAL_CATCHUP_AT:-?} will cross the slow link on the first transfer."
+                    else
+                        why="the catch-up over '$leaving' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min). Writes since then would all cross the slow link"
+                    fi
+                fi
+            fi
+            if [ -n "$why" ]; then
+                die "refusing to switch '$name' from '$leaving' to '$switching_to': $why.
   Run it BEFORE disconnecting the source, while the old link still works:
       $0 final-catchup $name
   It keeps the first transfer over the new link small and proves the incremental
   base is intact while it is still cheap to fix.
   If the source is ALREADY disconnected and there is nothing to catch up over,
   say so explicitly: $0 set-endpoint $name --vpn=... --skip-final-catchup"
-        else
-            log "final catch-up over '$leaving' recorded at ${FINAL_CATCHUP_AT:-?} -- proceeding with the switch"
+            fi
+            log "final catch-up over '$leaving' ($lh:$lp) recorded at ${FINAL_CATCHUP_AT:-?} -- proceeding with the switch"
         fi
     fi
 
@@ -808,6 +847,16 @@ cmd_set_endpoint() {
             write_client_field ENDPOINT_LAN_HOST "$h2"
             write_client_field ENDPOINT_LAN_PORT "$p2"
         } >> "$out"
+        # Moving an endpoint invalidates any catch-up recorded against it: the
+        # transport it proved no longer exists (REV-20260731-008 F1).
+        if [ "${FINAL_CATCHUP_ENDPOINT:-}" = "lan" ]            && { [ "${FINAL_CATCHUP_HOST:-}" != "$h2" ] || [ "${FINAL_CATCHUP_PORT:-22}" != "$p2" ]; }; then
+            {
+                write_client_field FINAL_CATCHUP_ENDPOINT ""
+                printf 'FINAL_CATCHUP_EPOCH=0
+'
+            } >> "$out"
+            warn "the 'lan' endpoint moved to $h2:$p2, so the catch-up recorded against ${FINAL_CATCHUP_HOST:-?}:${FINAL_CATCHUP_PORT:-?} no longer applies -- it has been invalidated"
+        fi
     fi
     # Switching the active endpoint means the OLD verification no longer says
     # anything about THIS endpoint -- require a fresh verify-endpoint before

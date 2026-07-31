@@ -218,6 +218,108 @@ r=$(bash "$TD/deploy.sh" --revoke-quiesce 'bad;name' >/dev/null 2>&1; echo $?)
 [ "$r" != 0 ] && ok "revoke: refuses a malformed account name" \
               || bad "revoke: refuses a malformed account name" "rc=$r"
 
+# ---- transactional install (REV-20260731-008 F2) ---------------------------
+#
+# A failed `--join --allow-quiesce` must end in one of two states: fully
+# installed, or nothing new left behind. The old order installed the helper and
+# whitelist first and only then found out sudo was missing, leaving a
+# half-built privileged feature -- not dangerous (no rule means no grant) but
+# ambiguous, and ambiguity about privilege is what makes the next person guess.
+#
+# install_quiesce_grant is extracted and driven directly: deploy.sh cannot be
+# sourced (it would run the whole provisioning body), and the point here is to
+# fail at each stage in turn, which needs control over its dependencies.
+TX="$WORK/tx"; mkdir -p "$TX/bin"
+sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" > "$TX/fn.sh"
+[ -s "$TX/fn.sh" ] || bad "tx: could not extract install_quiesce_grant" "empty"
+
+tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc]
+    local vrc="$1" failon="$2" aptrc="${3:-0}"
+    rm -rf "$TX/root"; mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
+    # The dependency case has to be a genuine absence: with a visudo stub on
+    # PATH the install branch is never reached and the case would pass while
+    # testing nothing. (MSYS has neither sudo nor visudo of its own.)
+    rm -f "$TX/bin/visudo" "$TX/bin/sudo"
+    if [ "$aptrc" -eq 0 ]; then
+        printf '#!/bin/sh
+exit %s
+' "$vrc" > "$TX/bin/visudo"
+        printf '#!/bin/sh
+exit 0
+' > "$TX/bin/sudo"
+        chmod +x "$TX/bin/visudo" "$TX/bin/sudo"
+    fi
+    # `install` fails only for the named target, so each stage can be broken in
+    # isolation while the others behave normally.
+    # Strips -o/-g: this box has no 'root' user, so real ownership flags fail for
+    # reasons that have nothing to do with what is being tested. Fails only for
+    # the named target, so each stage can be broken in isolation.
+    cat > "$TX/bin/install" <<EOF
+#!/bin/bash
+FAILON='$failon'
+args=()
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -o|-g) shift 2 ;;
+        *) if [ -n "\$FAILON" ]; then case "\$1" in *\$FAILON*) exit 1 ;; esac; fi
+           args+=("\$1"); shift ;;
+    esac
+done
+exec /usr/bin/install "\${args[@]}"
+EOF
+    chmod +x "$TX/bin/install"
+    (
+        PATH="$TX/bin:$PATH"
+        REPO_DIR="$REPO"
+        log()  { echo ">>> $*"; }
+        warn() { echo "!!! $*" >&2; }
+        apt_install_with_fallback() { return "$aptrc"; }
+        # shellcheck disable=SC1090
+        . "$TX/fn.sh"
+        # Redirect the three absolute paths into the sandbox.
+        eval "$(declare -f install_quiesce_grant             | sed -e "s#/usr/local/sbin/zfs-quiesce-helper#$TX/root/usr/local/sbin/zfs-quiesce-helper#g"                   -e "s#/etc/zfs-quiesce-allow#$TX/root/etc/zfs-quiesce-allow#g"                   -e "s#/etc/sudoers.d#$TX/root/etc/sudoers.d#g")"
+        install_quiesce_grant backup-test "rpool/data" >/dev/null 2>&1
+        echo "rc=$?"
+    )
+}
+tx_orphans() {
+    local n=0
+    [ -e "$TX/root/etc/zfs-quiesce-allow/backup-test" ] && n=$((n+1))
+    [ -e "$TX/root/etc/sudoers.d/zfs-quiesce-backup-test" ] && n=$((n+1))
+    echo "$n"
+}
+
+# Happy path first, so a later "no orphans" result cannot be a silent no-op.
+r=$(tx_run 0 "")
+if [ "$r" = "rc=0" ] && [ -e "$TX/root/etc/sudoers.d/zfs-quiesce-backup-test" ]    && [ -e "$TX/root/etc/zfs-quiesce-allow/backup-test" ]; then
+    ok "tx: a clean run installs whitelist and rule"
+else
+    bad "tx: a clean run installs whitelist and rule" "$r"
+fi
+
+# Dependency stage: sudo cannot be installed -> nothing may be created at all.
+r=$(tx_run 0 "" 1)
+[ "$r" != "rc=0" ] && [ "$(tx_orphans)" = 0 ]     && ok "tx: a failed sudo install leaves no artifacts"     || bad "tx: a failed sudo install leaves no artifacts" "$r orphans=$(tx_orphans)"
+
+# visudo rejects the rule -> the whitelist must not survive either.
+r=$(tx_run 1 "")
+[ "$r" != "rc=0" ] && [ "$(tx_orphans)" = 0 ]     && ok "tx: a rejected sudoers rule leaves no whitelist behind"     || bad "tx: a rejected sudoers rule leaves no whitelist behind" "$r orphans=$(tx_orphans)"
+
+# Whitelist install fails -> no rule, no whitelist.
+r=$(tx_run 0 "zfs-quiesce-allow")
+[ "$r" != "rc=0" ] && [ "$(tx_orphans)" = 0 ]     && ok "tx: a failed whitelist install rolls back"     || bad "tx: a failed whitelist install rolls back" "$r orphans=$(tx_orphans)"
+
+# Rule install fails at the very last step -> the whitelist created moments
+# earlier must go too. This is the case the old code got wrong.
+r=$(tx_run 0 "sudoers.d")
+[ "$r" != "rc=0" ] && [ "$(tx_orphans)" = 0 ]     && ok "tx: a failed rule install rolls the whitelist back too"     || bad "tx: a failed rule install rolls the whitelist back too" "$r orphans=$(tx_orphans)"
+
+# And a retry after a failure must succeed cleanly rather than trip over
+# leftovers from the failed attempt.
+tx_run 1 "" >/dev/null
+r=$(tx_run 0 "")
+[ "$r" = "rc=0" ] && ok "tx: a retry after a failure succeeds cleanly"                   || bad "tx: a retry after a failure succeeds cleanly" "$r"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

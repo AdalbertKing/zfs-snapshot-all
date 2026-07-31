@@ -350,7 +350,9 @@ fi
 # A catch-up recorded against the endpoint being LEFT is what makes the switch
 # safe. Anything else -- including one recorded against the endpoint being
 # switched TO -- says nothing about this switch.
-mk_client c2 'FINAL_CATCHUP_ENDPOINT=lan' 'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+# The full record, not just the name: REV-20260731-008 F1 tightened this
+# contract deliberately, and a bare FINAL_CATCHUP_ENDPOINT no longer suffices.
+mk_client c2 'FINAL_CATCHUP_ENDPOINT=lan' 'FINAL_CATCHUP_HOST=10.0.0.9'              'FINAL_CATCHUP_PORT=22' "FINAL_CATCHUP_EPOCH=$(date '+%s')"              'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
 out=$(gate_run c2 --vpn=10.9.9.9); r=$?
 [ "$r" = 0 ] && ok "gate: a catch-up over the endpoint being left lets the switch through" \
              || bad "gate: a catch-up over the endpoint being left lets the switch through" "rc=$r out=$out"
@@ -376,6 +378,66 @@ mk_client c5
 out=$(gate_run c5 --lan=10.0.0.10); r=$?
 [ "$r" = 0 ] && ok "gate: changing the LAN address only is not gated" \
              || bad "gate: changing the LAN address only is not gated" "rc=$r out=$out"
+
+# --- catch-up freshness and identity (REV-20260731-008 F1) -------------------
+#
+# The endpoint NAME alone was too weak a claim: it survived a change of host or
+# port on that endpoint, and it never went stale. A catch-up run on Monday
+# authorised a Friday relocation, and a catch-up against one LAN address
+# authorised a switch away from a different one.
+
+NOW=$(date '+%s')
+mk_fresh() {   # mk_fresh <name> <age-seconds> [host] [port]
+    local n="$1" age="$2" h="${3:-10.0.0.9}" p="${4:-22}"
+    mk_client "$n"         "FINAL_CATCHUP_ENDPOINT=lan"         "FINAL_CATCHUP_HOST=$h"         "FINAL_CATCHUP_PORT=$p"         "FINAL_CATCHUP_EPOCH=$((NOW - age))"         'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+}
+
+mk_fresh f1 60
+out=$(gate_run f1 --vpn=10.9.9.9); r=$?
+[ "$r" = 0 ] && ok "fresh: a 1-minute-old catch-up against the exact endpoint passes"              || bad "fresh: a 1-minute-old catch-up against the exact endpoint passes" "rc=$r out=$out"
+
+mk_fresh f2 7200
+out=$(gate_run f2 --vpn=10.9.9.9); r=$?
+if [ "$r" != 0 ] && case "$out" in *"120 min old"*) true ;; *) false ;; esac; then
+    ok "stale: a 2-hour-old catch-up is refused, and the age is named"
+else
+    bad "stale: a 2-hour-old catch-up is refused, and the age is named" "rc=$r out=$out"
+fi
+
+# Same endpoint name, different machine behind it. The old record proves a
+# transport that is not the one being left.
+mk_fresh f3 60 10.0.0.77
+out=$(gate_run f3 --vpn=10.9.9.9); r=$?
+[ "$r" != 0 ] && ok "identity: a catch-up against a different HOST does not count"               || bad "identity: a catch-up against a different HOST does not count" "rc=$r"
+
+mk_fresh f4 60 10.0.0.9 2222
+out=$(gate_run f4 --vpn=10.9.9.9); r=$?
+[ "$r" != 0 ] && ok "identity: a catch-up against a different PORT does not count"               || bad "identity: a catch-up against a different PORT does not count" "rc=$r"
+
+# The override exists because relocation plans slip; it must not be silent.
+mk_fresh f5 7200
+out=$(gate_run f5 --vpn=10.9.9.9 --allow-stale-catchup); r=$?
+if [ "$r" = 0 ] && case "$out" in *"--allow-stale-catchup"*) true ;; *) false ;; esac; then
+    ok "override: --allow-stale-catchup proceeds but says what it costs"
+else
+    bad "override: --allow-stale-catchup proceeds but says what it costs" "rc=$r out=$out"
+fi
+
+# A record written before freshness tracking existed has no epoch, so its age
+# is unknowable -- treat that as unproven rather than as fresh.
+mk_client f6 "FINAL_CATCHUP_ENDPOINT=lan" "FINAL_CATCHUP_HOST=10.0.0.9" "FINAL_CATCHUP_PORT=22"
+out=$(gate_run f6 --vpn=10.9.9.9); r=$?
+[ "$r" != 0 ] && ok "legacy: a record with no epoch is not treated as fresh"               || bad "legacy: a record with no epoch is not treated as fresh" "rc=$r"
+
+# Moving the endpoint the catch-up was recorded against invalidates it, at the
+# moment of the move rather than silently later.
+mk_fresh f7 60
+out=$(gate_run f7 --lan=10.0.0.55); r=$?
+if [ "$r" = 0 ] && case "$out" in *"no longer applies"*) true ;; *) false ;; esac; then
+    ok "invalidation: moving the LAN endpoint drops the catch-up recorded for it"
+else
+    bad "invalidation: moving the LAN endpoint drops the catch-up recorded for it" "rc=$r out=$out"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
