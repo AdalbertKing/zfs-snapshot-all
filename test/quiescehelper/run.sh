@@ -455,11 +455,15 @@ CRASHAT='${6:-}'
 for a in "\$@"; do
     case "\$a" in
         *.zqg-new)
-            [ -n "\$CRASHAT" ] && case "\$a" in *\$CRASHAT*) kill -9 \$PPID; exit 137 ;; esac
-            [ -n "\$FAILMV" ]  && case "\$a" in *\$FAILMV*)  exit 1 ;; esac
+            [ -n "\$FAILMV" ] && case "\$a" in *\$FAILMV*) exit 1 ;; esac
             ;;
     esac
+    shift_last="\$a"
 done
+# CRASHAT matches the DESTINATION -- the last argument -- because the commit
+# order now begins by renaming the live rule ONTO its .zqg-bak name, and that
+# rename has no .zqg-new source to key on.
+[ -n "\$CRASHAT" ] && case "\$shift_last" in *\$CRASHAT*) kill -9 \$PPID; exit 137 ;; esac
 exec /usr/bin/mv "\$@"
 EOF
     chmod +x "$TX/bin/mv"
@@ -502,7 +506,7 @@ EOF
         . "$TX/fn.sh"
         # Redirect the three absolute paths into the sandbox.
         eval "$(declare -f install_quiesce_grant             | sed -e "s#/usr/local/sbin/zfs-quiesce-helper#$TX/root/usr/local/sbin/zfs-quiesce-helper#g"                   -e "s#/etc/zfs-quiesce-allow#$TX/root/etc/zfs-quiesce-allow#g"                   -e "s#/etc/sudoers.d#$TX/root/etc/sudoers.d#g")"
-        install_quiesce_grant backup-test "rpool/data" > "$TX/out.log" 2>&1
+        install_quiesce_grant backup-test "${TX_DATASETS:-rpool/data}" > "$TX/out.log" 2>&1
         echo "rc=$?"
     )
 }
@@ -769,15 +773,19 @@ EOF
 #    could not give.
 tx_seed
 old_helper=$(tx_h "$TX_HELPER"); old_rule=$(tx_h "$TX_RULE")
-r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-helper")
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "sbin/zfs-quiesce-helper" 2>/dev/null)
+# The rule is SUSPENDED by then, not unchanged -- that is the whole point of the
+# REV-012 ordering -- so what "whole file" means for it is that its preserved
+# copy is byte-identical to what was live before the run.
 if [ "$r" != "rc=0" ] \
    && grep -q '^rpool/data$' "$TX_ALLOW" \
    && [ "$(tx_h "$TX_HELPER")" = "$old_helper" ] && grep -q 'OLD helper' "$TX_HELPER" \
-   && [ "$(tx_h "$TX_RULE")" = "$old_rule" ]; then
+   && [ ! -e "$TX_RULE" ] && [ "$(tx_h "$TX_RULE.zqg-bak")" = "$old_rule" ]; then
     ok "tx-crash: a crash mid-commit leaves whole files, never a partial one"
 else
     bad "tx-crash: a crash mid-commit leaves whole files, never a partial one" "r=$r
-      helper $(tx_h "$TX_HELPER") vs old $old_helper"
+      helper $(tx_h "$TX_HELPER") vs old $old_helper
+      rule $(tx_h "$TX_RULE") bak $(tx_h "$TX_RULE.zqg-bak") vs old $old_rule"
 fi
 
 # The interrupted run's staging and backup files are still lying there -- that
@@ -815,27 +823,109 @@ else
       $(cat "$TX/out.log")"
 fi
 
-# 3. The commit ORDER is the other half of crash safety. The whitelist is
-#    committed first because it is a restriction; the rule is committed last
-#    because it is the switch. A crash at the first commit must therefore leave
-#    both the helper and the rule exactly as they were.
+# 3. The commit ORDER is the other half of crash safety, and REV-20260731-012
+#    corrected which order that is. On an update the live rule is switched OFF
+#    first, so a crash at the very next step finds the grant already inert and
+#    the helper still untouched. The earlier version of this case asserted the
+#    opposite -- rule unchanged, whitelist first -- which is exactly the widening
+#    window the review found.
 tx_seed
 old_helper=$(tx_h "$TX_HELPER"); old_rule=$(tx_h "$TX_RULE")
-r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow")
-if [ "$(tx_h "$TX_HELPER")" = "$old_helper" ] && [ "$(tx_h "$TX_RULE")" = "$old_rule" ]; then
-    ok "tx-crash: the whitelist commits first, helper and rule untouched"
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow" 2>/dev/null)
+if [ ! -e "$TX_RULE" ] && [ "$(tx_h "$TX_RULE.zqg-bak")" = "$old_rule" ] \
+   && [ "$(tx_h "$TX_HELPER")" = "$old_helper" ]; then
+    ok "tx-crash: the live rule is suspended first, helper still untouched"
 else
-    bad "tx-crash: the whitelist commits first, helper and rule untouched" "r=$r"
+    bad "tx-crash: the live rule is suspended first, helper still untouched" "r=$r
+      rule $(tx_h "$TX_RULE") bak $(tx_h "$TX_RULE.zqg-bak") vs old $old_rule"
 fi
 
 # 4. On a clean host, a crash before the last commit must leave NO grant: the
 #    rule is what grants, and it is the one thing that has not landed.
-r=$(tx_run 0 "" 0 0 "" "sudoers.d")
+r=$(tx_run 0 "" 0 0 "" "sudoers.d" 2>/dev/null)
 if [ ! -e "$TX_RULE" ] && [ -e "$TX_ALLOW" ] && [ -e "$TX_HELPER" ]; then
     ok "tx-crash: a crash before the last commit grants nothing"
 else
     bad "tx-crash: a crash before the last commit grants nothing" \
         "rule=$([ -e "$TX_RULE" ] && echo present || echo absent)"
+fi
+
+# ---- REV-20260731-012: an update must never widen an ACTIVE grant -----------
+#
+# The cases above measure files. This block measures the thing that actually
+# matters: the effective privilege boundary during an update of a grant that is
+# already live.
+#
+# The defect the review found: committing the whitelist first was justified by
+# calling it "a restriction", which is only true on a FIRST install. On an update
+# the final sudoers rule already exists and stays active through every rename, so
+# the moment a WIDER whitelist landed, the old rule and old helper could reach
+# the newly added guests -- and a crash there made that permanent.
+#
+# The boundary is open only when BOTH hold: an active (dotless, therefore
+# sudo-readable) rule exists, AND the whitelist names the new dataset. Until the
+# whole commit succeeds, that combination must not appear.
+tx_widened() {
+    [ -e "$TX_RULE" ] || return 1                 # no active rule: cannot reach the helper
+    grep -q '^rpool/data/vm-107-disk-0$' "$TX_ALLOW" 2>/dev/null
+}
+tx_seed_narrow() {   # a LIVE grant whose whitelist is narrower than the update's
+    rm -rf "$TX/root"
+    mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/etc/zfs-quiesce-allow" "$TX/root/usr/local/sbin"
+    printf '#!/bin/sh\n# OLD helper\nexit 0\n' > "$TX_HELPER"; chmod 0755 "$TX_HELPER"
+    printf '# managed\nrpool/data/vm-106-disk-0\n' > "$TX_ALLOW"; chmod 0644 "$TX_ALLOW"
+    printf 'backup-test ALL=(root) NOPASSWD: %s\n' "$TX_HELPER" > "$TX_RULE"; chmod 0440 "$TX_RULE"
+}
+# The update widens the list: 106 was already there, 107 is new.
+tx_wide='rpool/data/vm-106-disk-0 rpool/data/vm-107-disk-0'
+
+for point in "zqg-bak:suspending the old rule" \
+             "zfs-quiesce-allow:switching the whitelist" \
+             "sbin/zfs-quiesce-helper:switching the helper"; do
+    at="${point%%:*}"; what="${point#*:}"
+    tx_seed_narrow
+    TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "" 0 0 "" "$at" >/dev/null 2>&1
+    if tx_widened; then
+        bad "tx-widen: a crash while $what must not widen the grant" \
+            "active rule present AND the whitelist already names vm-107"
+    else
+        ok "tx-widen: a crash while $what must not widen the grant"
+    fi
+done
+
+# And the completed update must actually take effect -- otherwise "never widens"
+# would be satisfied by a function that does nothing at all.
+tx_seed_narrow
+r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "")
+if [ "$r" = "rc=0" ] && tx_widened; then
+    ok "tx-widen: a completed update does grant the new dataset"
+else
+    bad "tx-widen: a completed update does grant the new dataset" "r=$r"
+fi
+
+# The narrowing direction has to end safely too: removing a dataset must leave
+# the account unable to reach it once the update completes.
+tx_seed_narrow
+printf '# managed\nrpool/data/vm-106-disk-0\nrpool/data/vm-107-disk-0\n' > "$TX_ALLOW"
+r=$(TX_DATASETS="rpool/data/vm-106-disk-0" TX_KEEP=1 tx_run 0 "")
+if [ "$r" = "rc=0" ] && [ -e "$TX_RULE" ] && ! grep -q 'vm-107' "$TX_ALLOW"; then
+    ok "tx-widen: narrowing the list completes and drops the removed dataset"
+else
+    bad "tx-widen: narrowing the list completes and drops the removed dataset" "r=$r"
+fi
+
+# An interrupted update leaves the grant switched OFF, which is the fail-closed
+# state the review asked for -- and re-running must put it back, not leave the
+# host permanently without a grant because the only copy was swept away.
+tx_seed_narrow
+TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow" >/dev/null 2>&1
+suspended=0; [ ! -e "$TX_RULE" ] && [ -e "$TX_RULE.zqg-bak" ] && suspended=1
+r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "")
+if [ "$suspended" = 1 ] && [ "$r" = "rc=0" ] && tx_widened; then
+    ok "tx-widen: an interrupted update leaves it OFF, and a rerun restores it"
+else
+    bad "tx-widen: an interrupted update leaves it OFF, and a rerun restores it" \
+        "suspended=$suspended r=$r"
 fi
 
 # §5: installing the sudo package is a host-level side effect that is left in

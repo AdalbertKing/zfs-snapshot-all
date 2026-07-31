@@ -8,10 +8,10 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-07-31**
-- Zweryfikowano przeciw: `9ab1440` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `8eb7d4d` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `50fe6cf` (transakcja grantu)
+- Ostatnia zmiana zachowania produkcyjnego: kolejność commitu grantu (REV-012), commit niosący ten dokument
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
@@ -98,25 +98,52 @@ więc każda chwila crashu zastaje cały stary albo cały nowy plik. Staging obo
 celu, a nie w `/tmp`, jest tym, co czyni z tego rename zamiast kopii przez
 granicę systemu plików.
 
-**Kolejność commitu: whitelista → helper → reguła.** Reguła jest ostatnia, bo to
-przełącznik. Whitelista jest pierwsza, bo to ograniczenie — crash między nimi
-zostawia węższą listę, a poszerzenie uprawnień to kierunek, przeciw któremu
-projektujemy. Bezpieczne, bo helper jest fail-closed na whiteliście, której nie
-umie sparsować. **Założenie:** format whitelisty pozostaje czytelny dla
-poprzedniego helpera (jeden dataset na linię plus komentarze). Nowa składnia tam
-oznacza konieczność rewizji tej kolejności.
+**Kolejność commitu — najpierw wyłączenie aktywnego grantu:**
+
+```
+0. mv  <reguła>            <reguła>.zqg-bak     zawieszenie grantu (tylko update)
+1. mv  <whitelista>.zqg-new <whitelista>
+2. mv  <helper>.zqg-new     <helper>
+3. mv  <reguła>.zqg-new     <reguła>            uzbrojenie nową regułą
+```
+
+Każda przerwa daje stan o **mniejszych** uprawnieniach niż na starcie. Krok 0 jest
+pomijany przy pierwszej instalacji, więc świeży enroll nie ma przerwy w dostępie.
+
+Wcześniejsza wersja commitowała whitelistę jako pierwszą, uzasadniając to tym, że
+jest „ograniczeniem". To było błędne i wyłapał to REV-20260731-012: przy
+**aktualizacji** finalna reguła już istnieje i jest aktywna przez cały commit, więc
+szersza whitelista działa od momentu swojego rename — a crash utrwalał poszerzenie.
+
+Zawieszenie jest samo w sobie rename, na ignorowaną nazwę `.zqg-bak`, więc jest
+atomowe i **jest** krokiem zachowania kopii dla reguły. Dlatego reguła jako jedyna
+nie dostaje twardego dowiązania: `rename()` na dwie nazwy tego samego i-węzła jest
+wg POSIX no-opem, więc dowiązanie sprawiłoby, że reguła zostałaby żywa przez cały
+update — cichy powrót tego samego defektu, przy zielonym pakiecie testów.
+
+Koszt: okno w trakcie aktualizacji, w którym konto nie może zamrozić niczego.
+Świadomy wybór — nieudany job jest widoczny i ponawiany, po cichu poszerzony grant
+nie jest.
+
+**Przerwana aktualizacja** zostawia grant wyłączony, a kopia pod `.zqg-bak` jest
+wtedy jedyną. Sweep rozróżnia: cel istnieje → kopia zbędna, usuń; celu brak →
+przywróć i powiedz o tym. Czyli przerwanie jest fail-closed, a kolejne uruchomienie
+samo je leczy.
 
 **Rollback rozróżnia tworzenie od nadpisania.** `pre_*` mówi „istniał, więc
 przywróć", `did_*` mówi „próbowano zapisu, więc się tym zajmij" i jest ustawiane
-**przed** commitem. Kopia zapasowa to **twarde dowiązanie** do oryginalnego
-i-węzła, więc niesie treść, właściciela, tryb i xattry przez tożsamość, nie przez
-kopię, która mogłaby coś zgubić. Przywracanie to rename, więc rollback też jest
-atomowy. Komunikat rozróżnia „przywrócono poprzedni grant" od „usunięto to, co ten
-przebieg utworzył", a nieudane przywrócenie krzyczy zamiast udawać sukces.
+**przed** commitem. Dla helpera i whitelisty kopia zapasowa to **twarde
+dowiązanie** do oryginalnego i-węzła — niesie treść, właściciela, tryb i xattry
+przez tożsamość, nie przez kopię, która mogłaby coś zgubić. Dla reguły kopią jest
+sam rename zawieszający (powód wyżej). Przywracanie to w obu przypadkach rename,
+więc rollback też jest atomowy. Komunikat rozróżnia „przywrócono poprzedni grant"
+od „usunięto to, co ten przebieg utworzył", a nieudane przywrócenie krzyczy
+zamiast udawać sukces.
 
 **Recovery to „uruchom ponownie".** Pozostałości są zamiatane i raportowane, nigdy
 odtwarzane — funkcja i tak przepisuje wszystkie trzy cele, więc odtwarzanie połowy
-intencji byłoby zgadywaniem.
+intencji byłoby zgadywaniem. Jedyny wyjątek to opisane wyżej przywrócenie kopii,
+która została jedyną.
 
 **Detal nośny dla całości:** `/etc/sudoers.d` jest czytany przez sudo, a staging
 reguły w środku jest bezpieczny **wyłącznie** dlatego, że sudoers.d ignoruje każdą
@@ -159,7 +186,7 @@ Uruchomione lokalnie przy `9ab1440` (bez roota, bez ZFS, bez sieci):
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
 | `zfsbackup` | 72/72 | warstwa orkiestracji `zfs-backup.sh` |
-| `quiescehelper` | 81/81 | granica uprzywilejowana helpera + transakcja grantu |
+| `quiescehelper` | 87/87 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
 Wymagają roota, ZFS albo drugiego hosta — **nieuruchamiane przy tym commicie**,
@@ -188,6 +215,10 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na werdykt recenzenta
 
+- **REV-20260731-012 — kolejność commitu przy aktualizacji.** Finding przyjęty w
+  całości: uzasadnienie „whitelista jest ograniczeniem" było moje i było błędne.
+  Kolejność zmieniona na „najpierw wyłącz aktywną regułę", 6 nowych testów mierzy
+  efektywną granicę uprawnień, nie pliki.
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej

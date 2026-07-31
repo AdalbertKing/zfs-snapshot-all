@@ -673,17 +673,32 @@ install_quiesce_grant() {
     #      sudoers rule. Staging beside the destination rather than in /tmp is
     #      what makes it a rename instead of a cross-filesystem copy.
     #
-    #   2. The commit order makes every intermediate state safe: whitelist,
-    #      then helper, then rule. The rule is last because it is the switch --
-    #      until it lands nothing is granted at all. The whitelist is first
-    #      because it is a RESTRICTION, so a crash between the two leaves the
-    #      narrower of the two lists in force, and because the helper fails
-    #      CLOSED on a whitelist it cannot parse. Widening privilege is the
-    #      failure direction worth designing against; refusing is not.
+    #   2. The commit order makes every intermediate state fail CLOSED. The
+    #      active sudoers rule is TURNED OFF first, then the whitelist and the
+    #      helper are switched, and the new rule is installed last.
     #
-    #      This does assume the whitelist format stays readable by the previous
-    #      helper. It is one dataset per line plus comments; if that ever gains
-    #      syntax, this ordering has to be revisited.
+    #      An earlier version of this committed whitelist, helper, rule and
+    #      argued the whitelist could go first because it is a "restriction".
+    #      That was wrong, and REV-20260731-012 caught it. It is only true on a
+    #      FIRST install, where no rule exists yet and nothing is granted until
+    #      the last step. On an UPDATE the final rule is already there and stays
+    #      active through every rename, so the instant a wider whitelist lands --
+    #      a re-enrol that adds a dataset -- the old rule and old helper read it
+    #      and the account can freeze the new guests. A crash there leaves
+    #      privilege PERMANENTLY widened by a transaction that never finished.
+    #      "The narrower of the two lists stays in force" was simply false: what
+    #      is in force after that rename is the new list, whatever its width.
+    #
+    #      Disabling the rule first costs a short window in which the account
+    #      cannot quiesce at all. That is the right trade: a job that fails
+    #      during an update is visible and retried, a silently widened grant is
+    #      neither.
+    #
+    #      Turning it off is itself a rename -- onto the `.zqg-bak` name, which
+    #      sudoers.d ignores -- so the disable is atomic and IS the preservation
+    #      step for the rule. That is also why the rule is the one destination
+    #      that does not get a hard-linked backup: a rename onto its own hard
+    #      link is a no-op by POSIX, so the rule would have stayed live.
     #
     # `.zqg-new` and `.zqg-bak` both contain a dot, which matters more than it
     # looks: sudoers.d IGNORES any file whose name contains a '.' or ends in
@@ -720,13 +735,28 @@ install_quiesce_grant() {
     # destinations anyway, so "run it again" IS the recovery, and replaying a
     # half-finished intent would be guessing at which half was wanted.
     _grant_sweep() {   # <"quiet"|"report">
-        local f found=""
+        local f found="" back=""
         for f in "$dest" "$allow" "$rule"; do
             [ -e "$f.zqg-new" ] && { rm -f "$f.zqg-new" && found="$found $f.zqg-new"; }
-            [ -e "$f.zqg-bak" ] && { rm -f "$f.zqg-bak" && found="$found $f.zqg-bak"; }
+            if [ -e "$f.zqg-bak" ]; then
+                if [ -e "$f" ]; then
+                    # The destination is whole, so the backup is spare.
+                    rm -f "$f.zqg-bak" && found="$found $f.zqg-bak"
+                else
+                    # No destination and a backup: a run died between disabling
+                    # the old file and installing the new one, and this copy is
+                    # the ONLY one left. Deleting it would turn an interrupted
+                    # update into permanent data loss, so it goes back. For the
+                    # sudoers rule that also re-enables a grant that an
+                    # interrupted run had switched off.
+                    mv -f "$f.zqg-bak" "$f" 2>/dev/null && back="$back $f"
+                fi
+            fi
         done
-        [ -n "$found" ] && [ "$1" = report ] && \
-            warn "a previous grant run for $account was interrupted before it finished -- leftovers removed:$found. The destinations themselves are intact (each is either the old or the new file, never a partial one) and this run rebuilds all three."
+        if [ "$1" = report ]; then
+            [ -n "$found" ] && warn "a previous grant run for $account was interrupted before it finished -- leftovers removed:$found. The destinations themselves are intact (each is either the old or the new file, never a partial one) and this run rebuilds all three."
+            [ -n "$back" ]  && warn "a previous grant run for $account was interrupted mid-update and left these switched OFF -- restored to their pre-update state:$back"
+        fi
         return 0
     }
     _grant_rollback() {
@@ -888,30 +918,45 @@ install_quiesce_grant() {
     _grant_stage "$tmp_allow" 0644 "$allow" || return 1
     _grant_stage "$tmp_rule"  0440 "$rule"  || return 1
 
+    # The rule is deliberately absent from this loop: its preservation is the
+    # disabling rename in the commit phase below, and a hard link here would make
+    # that rename a POSIX no-op and leave the grant live.
     local d
-    for d in "$dest" "$allow" "$rule"; do
+    for d in "$dest" "$allow"; do
         _grant_preserve "$d"
         case $? in
-            0) case "$d" in "$dest") pre_helper=1 ;; "$allow") pre_allow=1 ;; "$rule") pre_rule=1 ;; esac ;;
+            0) case "$d" in "$dest") pre_helper=1 ;; "$allow") pre_allow=1 ;; esac ;;
             2) _grant_rollback
                warn "could not take a rollback copy of $d -- nothing was replaced, the grant for $account is unchanged"
                return 1 ;;
         esac
     done
+    [ -e "$rule" ] && pre_rule=1
 
     # ---- 4. commit ----
     #
-    # Three renames and nothing else. Every failure that can be caused by disk
-    # space, permissions, a bad source or an invalid rule has already happened
-    # above, which is what shrinks the window a crash can land in to the gaps
-    # between these three lines -- and each gap is a state that is safe to be
-    # left in, by the ordering argued at the top of this function.
+    # Renames and nothing else. Every failure that can be caused by disk space,
+    # permissions, a bad source or an invalid rule has already happened above,
+    # which is what shrinks the window a crash can land in to the gaps between
+    # these lines -- and every one of those gaps is a state with LESS privilege
+    # than the run started with, by the ordering argued at the top.
     #
     # An update replaces all three destinations unconditionally rather than
     # comparing content first: the helper has to be able to move forward with the
     # repository, and a whitelist rewritten from the same dataset list it always
     # was is a no-op in content even when the bytes are rewritten. What is bounded
     # is the SET of files touched -- these three, and nothing else.
+
+    # Step 0, update path only: switch the live grant OFF before anything it
+    # governs changes. On a first install there is no rule yet and this is
+    # skipped, which is why a fresh enrolment never sees the outage.
+    if [ "$pre_rule" -eq 1 ]; then
+        did_rule=1
+        if ! mv -f "$rule" "$rule.zqg-bak"; then
+            _grant_rollback
+            warn "could not suspend the existing rule $rule before updating it -- the grant for $account is unchanged"; return 1
+        fi
+    fi
     did_allow=1
     if ! mv -f "$allow.zqg-new" "$allow"; then
         _grant_rollback
