@@ -809,8 +809,15 @@ install_quiesce_grant() {
     fi
     if [ ! -d "$allow_dir" ]; then
         created_dir=1
+        # created_dir is deliberately NOT reset to 0 on failure (REV-20260731-011).
+        # `install -d` creates the directory and THEN applies owner and mode, so it
+        # can fail having already made it -- resetting the flag would leave that
+        # empty directory behind as the one residue of a run that reported
+        # creating nothing. Letting the rollback try is free: `rmdir` refuses a
+        # non-empty directory, and this branch only runs when the directory did
+        # not exist, so there is nothing of anyone else's in it to lose.
         install -o root -g root -m 0755 -d "$allow_dir" || {
-            created_dir=0; _grant_rollback
+            _grant_rollback
             warn "could not create $allow_dir -- no quiesce grant was created for $account"; return 1
         }
     fi

@@ -409,21 +409,28 @@ EOF
     chmod +x "$TX/bin/visudo" "$TX/bin/sudo"
 }
 
-tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc]
+tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc] [fail-mkdir]
     #   apt-rc 0 = sudo is already there   1 = the install of sudo fails
     #          2 = sudo is MISSING and apt supplies it (the only path that
     #              reaches the "package left behind" notice, §5)
+    #   fail-mkdir 1 = break only the `install -d` for the whitelist directory
     # TX_KEEP=1 runs against whatever is already in the sandbox, which is how
     # the update cases start from an existing grant instead of a clean host.
     local vrc="$1" failon="$2" aptrc="${3:-0}"
     [ "${TX_KEEP:-0}" -eq 1 ] || rm -rf "$TX/root"
     mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
     : > "$TX/visudo.log"
+    # Its own TMPDIR, so "the transaction left no staged file or rollback copy
+    # behind" is a thing the suite can actually assert rather than assume.
+    rm -rf "$TX/tmp"; mkdir -p "$TX/tmp"
     # The dependency case has to be a genuine absence: with a visudo stub on
     # PATH the install branch is never reached and the case would pass while
     # testing nothing. (MSYS has neither sudo nor visudo of its own.)
     rm -f "$TX/bin/visudo" "$TX/bin/sudo"
     [ "$aptrc" -eq 0 ] && tx_stub_sudo "$vrc"
+    # faildir breaks ONLY the `install -d` that creates the whitelist directory.
+    # A path substring cannot single that call out -- the directory path is also
+    # a prefix of the whitelist path -- so the stub matches on the -d flag.
     # `install` fails only for the named target, so each stage can be broken in
     # isolation while the others behave normally.
     # Strips -o/-g: this box has no 'root' user, so real ownership flags fail for
@@ -432,19 +439,31 @@ tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc]
     cat > "$TX/bin/install" <<EOF
 #!/bin/bash
 FAILON='$failon'
+FAILDIR='${4:-0}'
 args=()
+isdir=0
 while [ \$# -gt 0 ]; do
     case "\$1" in
         -o|-g) shift 2 ;;
+        -d) isdir=1; args+=("\$1"); shift ;;
         *) if [ -n "\$FAILON" ]; then case "\$1" in *\$FAILON*) exit 1 ;; esac; fi
            args+=("\$1"); shift ;;
     esac
 done
+if [ "\$FAILDIR" = 1 ] && [ "\$isdir" = 1 ]; then
+    # Faithful to coreutils: \`install -d\` MAKES the directory and only then
+    # applies owner and mode, so the realistic failure is one that has already
+    # created it. A stub that just exits would leave nothing to clean up and the
+    # test would pass without proving anything.
+    /usr/bin/install "\${args[@]}" >/dev/null 2>&1
+    exit 1
+fi
 exec /usr/bin/install "\${args[@]}"
 EOF
     chmod +x "$TX/bin/install"
     (
         PATH="$TX/bin:$PATH"
+        TMPDIR="$TX/tmp"; export TMPDIR
         REPO_DIR="$REPO"
         log()  { echo ">>> $*"; }
         warn() { echo "!!! $*" >&2; }
@@ -629,6 +648,83 @@ else
       before: $before
       after:  $(tx_hash3)"
 fi
+
+# ---- the mkdir failure path (REV-20260731-011 §2) --------------------------
+#
+# The review read this path as missing its rollback. It is not -- the call has
+# been there since the REV-008 transaction work and is simply not in the diff
+# under review -- but it had no fault injection of its own, which is what let the
+# question stand. It has one now.
+#
+# The literal case §3.1 asks for, "existing full grant, mkdir fails", cannot
+# happen: an account that already holds a grant has its whitelist INSIDE
+# $allow_dir, so the directory necessarily exists and `[ ! -d ]` never fires.
+# The reachable shape of the same concern is below: a host that already has the
+# shared helper but no whitelist directory -- a revoked last account whose empty
+# directory was then removed by hand.
+tx_seed_helper_only() {
+    rm -rf "$TX/root"
+    mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
+    printf '#!/bin/sh\n# OLD helper, still used by other peers\nexit 0\n' > "$TX_HELPER"
+    chmod 0755 "$TX_HELPER"
+}
+tx_seed_helper_only; before=$(tx_h "$TX_HELPER")
+r=$(TX_KEEP=1 tx_run 0 "" 0 1)
+if [ "$r" != "rc=0" ] && [ "$(tx_h "$TX_HELPER")" = "$before" ] && grep -q 'OLD helper' "$TX_HELPER"; then
+    ok "tx-mkdir: a failed whitelist directory restores the previous helper"
+else
+    bad "tx-mkdir: a failed whitelist directory restores the previous helper" "$r
+      before: $before  after: $(tx_h "$TX_HELPER")"
+fi
+
+# §3.2, clean host: nothing may survive -- not the helper this run installed
+# moments earlier, and not the directory a partially-successful `install -d`
+# may have created before failing on owner or mode.
+r=$(tx_run 0 "" 0 1)
+if [ "$r" != "rc=0" ] && [ ! -e "$TX_HELPER" ] && [ ! -e "$TX_ALLOW" ] && [ ! -e "$TX_RULE" ] \
+   && [ ! -d "$TX/root/etc/zfs-quiesce-allow" ]; then
+    ok "tx-mkdir: on a clean host a failed directory leaves nothing behind"
+else
+    bad "tx-mkdir: on a clean host a failed directory leaves nothing behind" "$r
+      helper=$([ -e "$TX_HELPER" ] && echo present || echo absent) dir=$([ -d "$TX/root/etc/zfs-quiesce-allow" ] && echo present || echo absent)"
+fi
+
+# Staged files and rollback copies are part of "nothing behind" too.
+if [ -z "$(ls -A "$TX/tmp" 2>/dev/null)" ]; then
+    ok "tx-mkdir: no staged file or rollback copy is left in TMPDIR"
+else
+    bad "tx-mkdir: no staged file or rollback copy is left in TMPDIR" "$(ls -A "$TX/tmp")"
+fi
+
+# §3, the structural guard. The point of this one is not today's code but the
+# next person's: once the install phase has begun, a failure exit that skips
+# _grant_rollback is the exact hole this review went looking for, and it is
+# cheaper to forbid mechanically than to re-audit by eye every time the function
+# grows a step.
+tx_guard_scan() {   # prints every `return 1` in the install phase with no rollback near it
+    sed -n '/---- 4\. install ----/,/^}$/p' "$1" | awk '
+        { buf[NR] = $0 }
+        /return 1/ {
+            found = 0
+            for (i = (NR > 4 ? NR - 4 : 1); i <= NR; i++) if (buf[i] ~ /_grant_rollback/) found = 1
+            if (!found) printf "line %d: %s\n", NR, $0
+        }'
+}
+offenders=$(tx_guard_scan "$REPO/deploy.sh")
+[ -z "$offenders" ] && ok "tx-guard: every install-phase failure exit goes through the rollback" \
+                    || bad "tx-guard: every install-phase failure exit goes through the rollback" "$offenders"
+
+# A guard that cannot fail proves nothing, so it is pointed at a deliberately
+# broken copy as well.
+cat > "$TX/guard-bad.sh" <<'EOF'
+    # ---- 4. install ----
+    did_helper=1
+    install "$src" "$dest" || { warn "boom"; return 1; }
+}
+EOF
+[ -n "$(tx_guard_scan "$TX/guard-bad.sh")" ] \
+    && ok "tx-guard: the guard catches a rollback-less exit" \
+    || bad "tx-guard: the guard catches a rollback-less exit" "the guard passed a file it should have failed"
 
 # §5: installing the sudo package is a host-level side effect that is left in
 # place on purpose. Saying nothing about it is what makes the outcome confusing.
