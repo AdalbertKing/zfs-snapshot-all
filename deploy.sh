@@ -97,6 +97,13 @@ PAIR_MODE=0
 JOIN_MODE=0
 JOIN_PACKAGE=""
 JOIN_CHECK=0
+# Whether this host lets the joining peer freeze its guests (remote quiesce).
+# Deliberately a LOCAL flag, not a field in the package: freezing a guest is
+# real power -- whoever can freeze can cause an outage by never thawing, and the
+# script that performs the thaw is streamed BY THE COLLECTOR. So the decision
+# belongs to the owner of the source host, not to the party asking for access.
+# Off by default; without it remote quiesce simply refuses, loudly.
+ALLOW_QUIESCE=0
 SELF_UPDATE=0
 ROLLBACK=0
 RESUME_UPDATES=0
@@ -144,6 +151,7 @@ while [ "$#" -gt 0 ]; do
         --self-update)     SELF_UPDATE=1; shift ;;
         --rollback)        ROLLBACK=1; shift ;;
         --resume-updates)  RESUME_UPDATES=1; shift ;;
+        --allow-quiesce) ALLOW_QUIESCE=1; shift ;;
         --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -220,6 +228,12 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             still uses the pairing key.
   --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
                           (run on the second host, once, from its console)
+    --allow-quiesce       additionally let the joining peer FREEZE guests on
+                          this host (remote quiesce, snapget -q), limited to
+                          guests whose disks live under the delegated datasets.
+                          Off by default: whoever can freeze can cause an
+                          outage by never thawing, so this host decides -- the
+                          package cannot ask for it.
 USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -237,6 +251,11 @@ case "$PEER_AS" in
     root|delegated) ;;
     *) echo "--as must be 'root' or 'delegated', got '$PEER_AS'" >&2; exit 2 ;;
 esac
+# Refused rather than ignored: silently accepting it would leave the operator
+# believing quiesce was granted when nothing was installed at all.
+if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$JOIN_MODE" -ne 1 ]; then
+    echo "--allow-quiesce only means anything together with --join (it grants the JOINING peer the right to freeze guests on this host)" >&2; exit 2
+fi
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
 fi
@@ -2120,6 +2139,68 @@ pin_host_key() {
 # how one of them silently stops being refreshed on rotation.
 #
 # The copy is deliberate rather than a chmod: /root/.ssh/pairing stays 0700 and
+# Grants a delegated PULL account the ability to quiesce guests on this host,
+# and nothing else -- see zfs-quiesce-helper.sh for why `sudo qm` is not an
+# acceptable substitute. Three pieces, all root-owned:
+#
+#   /usr/local/sbin/zfs-quiesce-helper   the only command the account may run
+#   /etc/zfs-quiesce-allow/<account>     the datasets whose guests it may touch
+#   /etc/sudoers.d/zfs-quiesce-<account> the rule, NOPASSWD, no SETENV
+#
+# The whitelist is written from the SAME dataset list the zfs allow grants above
+# are derived from, so the two cannot drift: an account may quiesce exactly the
+# guests whose disks it is already allowed to replicate.
+#
+# NO SETENV, deliberately. The helper lets $ZFS_QUIESCE_ALLOW_DIR override where
+# it reads the whitelist so the test suite can run without root; sudo's default
+# env_reset is what stops a delegated account using that to point the whitelist
+# at a file it controls. Adding SETENV here would hand over exactly that.
+install_quiesce_grant() {
+    local account="$1" datasets="$2"
+    local src="$REPO_DIR/zfs-quiesce-helper.sh"
+    local dest="/usr/local/sbin/zfs-quiesce-helper"
+
+    if [ ! -r "$src" ]; then
+        warn "--allow-quiesce given but $src is missing (older checkout?) -- remote quiesce will refuse for $account"
+        return 1
+    fi
+    install -o root -g root -m 0755 "$src" "$dest" \
+        || { warn "could not install $dest -- remote quiesce will refuse for $account"; return 1; }
+
+    install -o root -g root -m 0755 -d /etc/zfs-quiesce-allow \
+        || { warn "could not create /etc/zfs-quiesce-allow"; return 1; }
+
+    local allow="/etc/zfs-quiesce-allow/$account"
+    local tmp; tmp=$(mktemp "/etc/zfs-quiesce-allow/.tmp.XXXXXX") \
+        || { warn "could not write the quiesce whitelist for $account"; return 1; }
+    {
+        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
+        echo "# guests whose disks live under these datasets may be frozen by '$account'"
+        local ds
+        for ds in $datasets; do printf '%s\n' "$ds"; done
+    } > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$allow" || { rm -f "$tmp"; warn "could not install $allow"; return 1; }
+
+    # Validated before it is installed: a syntactically broken file in
+    # /etc/sudoers.d breaks sudo for EVERY user on the host, root included.
+    local rule="/etc/sudoers.d/zfs-quiesce-$account"
+    local stmp; stmp=$(mktemp) || { warn "mktemp failed for the sudoers rule"; return 1; }
+    printf '%s ALL=(root) NOPASSWD: %s\n' "$account" "$dest" > "$stmp"
+    if visudo -cf "$stmp" >/dev/null 2>&1; then
+        install -o root -g root -m 0440 "$stmp" "$rule" \
+            || { rm -f "$stmp"; warn "could not install $rule"; return 1; }
+        rm -f "$stmp"
+    else
+        rm -f "$stmp"
+        warn "the generated sudoers rule for $account did not pass 'visudo -c' -- NOT installing it, remote quiesce will refuse"
+        return 1
+    fi
+
+    log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
+    return 0
+}
+
 # root-owned, and only the ONE key for this relationship crosses over.
 install_local_pairing_files() {
     local src_key="$1" src_kh="$2" label="$3" user="$4"
@@ -2485,6 +2566,14 @@ do_join() {
                 zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
                 log "delegated ($perms) on $ds to $account"
             done
+            # Same dataset list, so the quiesce scope cannot drift from the
+            # replication scope. Opt-in only: this host decides whether the
+            # peer may freeze its guests, the package never asks for it.
+            if [ "$ALLOW_QUIESCE" -eq 1 ]; then
+                install_quiesce_grant "$account" "$PEER_CONF_DATASETS"
+            else
+                log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --join with --allow-quiesce if this peer should be able to freeze guests here."
+            fi
         else
             local perms="receive,create,mount,rollback,canmount"
             zfs allow -u "$account" "$perms" -- "$push_dest_root" || die "zfs allow failed for $push_dest_root"
