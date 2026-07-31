@@ -92,7 +92,14 @@ expect_reject() {
 # out of the count. It only caught the original bug because that one leaked in
 # every case, including the last. Exact names taken immediately before and
 # after each invocation answer the question directly and cannot drift.
-tmp_names() { find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' 2>/dev/null | sort; }
+# The leak check gets its OWN TMPDIR. Scanning the shared /tmp made this suite
+# fail when two copies of it ran at once: each run saw the other's live mktemp
+# directory and called it a leak. A false FAIL in a leak detector is worse than
+# no detector -- it teaches you to disbelieve the one assertion whose whole job
+# is to be believed. $JTMP is exported, so every deploy.sh invoked below inherits
+# it and its temporary directories land here and nowhere else.
+JTMP="$WORK/tmpscan"; mkdir -p "$JTMP"; export TMPDIR="$JTMP"
+tmp_names() { find "$JTMP" -maxdepth 1 -name 'tmp.*' 2>/dev/null | sort; }
 
 # Not `command -v python3`: on Windows that resolves to a Microsoft Store stub
 # which is on PATH, exits non-zero and prints an ad. Ask for the module we need.

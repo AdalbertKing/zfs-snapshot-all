@@ -1,135 +1,255 @@
-# PROJECT_STATUS — uzgodniony stan projektu
+# PROJECT_STATUS — faktyczny stan projektu
 
-- Data uzgodnienia: 2026-07-30
+> **To jest dokument ŻYWY, nie protokół z jednego dnia.**
+> Odświeżany przez implementera na końcu **każdego** etapu, zanim etap zostanie
+> zgłoszony jako zrobiony. Jeżeli data poniżej jest starsza niż ostatni commit
+> zmieniający zachowanie — dokument jest zepsuty i to jest defekt do zgłoszenia,
+> nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
+> `./test/impact.sh` jako obowiązek ręczny `project-status`.
+
+- Data odświeżenia: **2026-07-31**
+- Zweryfikowano przeciw: `9ab1440` **plus commit niosący ten dokument** —
+  dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
+  nie niedopatrzenie
+- Ostatnia zmiana zachowania produkcyjnego: `50fe6cf` (transakcja grantu)
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
-- Uzgodniony punkt bazowy `main`: `388a78e0eb66bfdae2eaef1a70f81ba7c2516059`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
-- Status ogólny: **GOTOWY DO DALSZEGO ROZWOJU — brak otwartych blockerów**
+- Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
+- Status ogólny: **brak otwartych blockerów; jeden sporny finding czeka na werdykt recenzenta**
 
-## 1. Stan produkcyjny
+## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Pakiet jest operacyjnie zaakceptowany na czterech żywych hostach testowych:
+Cztery żywe hosty, wszystkie pociągnięte do `9ab1440` i z czystym audytem
+`deploy.sh --check-only` (2026-07-31):
 
-- pve0 — 192.168.11.10
-- pve1 — 192.168.11.11
-- metropolis pve1 — 192.168.28.9
-- metropolis pve2 — 192.168.28.8
+| Host | Adres | Commit | Konto delegowane | `sudo` |
+|---|---|---|---|---|
+| pve0 | 192.168.11.10 | `9ab1440` | — | jest |
+| pve1 | 192.168.11.11 | `9ab1440` | — | jest |
+| metropolis pve1 | 192.168.28.9 | `9ab1440` | `zfsbackup` | brak |
+| metropolis pve2 | 192.168.28.8 | `9ab1440` | `zfsbackup` | brak |
 
-Ostatni zapisany test live po zmianach testowych:
-
-```text
-selfupdate: PASS=35 FAIL=0 SKIP=0 — na każdym z czterech hostów
-```
-
-Na koniec weryfikacji hosty były zgłoszone jako:
-
-- czysty checkout;
-- brak aktywnego `update-hold`;
-- dokładnie jedna aktualna linia automatycznej aktualizacji;
-- brak ubocznych zmian w crontabie.
-
-Commit `388a78e` dodaje tylko dokument odpowiedzi. Ostatnia późniejsza od akceptacji zmiana wykonywalna dotyczy wyłącznie testu `test/selfupdate/run.sh` (`b8c22b4`), nie zachowania produkcyjnego.
-
-## 2. Zaakceptowane funkcje pakietu
-
-Rdzeń jest przyjęty jako działający i nadający się do dalszego rozwijania:
-
-- tworzenie snapshotów ZFS;
-- replikacja push i pull, lokalnie i przez SSH;
-- replikacja zwykła, rekurencyjna i rozwijana per dataset;
-- dopasowanie baz incremental po nazwie, GUID i bookmarku;
-- wznawianie przerwanych transferów;
-- ochrona snapshotów w locie przez `zfs hold`;
-- kompresja, limit pasma i autotuning łącza;
-- quiesce VM/CT Proxmox;
-- retencja wiekowa, liczbowa i GFS;
-- usuwanie osieroconych bookmarków;
-- monitoring wieku snapshotów i stanu pul;
-- generowanie zadań z konfiguracji INI przez `gen-cron.sh`;
-- praca jako root oraz przez delegowane konta ZFS;
-- bootstrap/audyt hosta przez `deploy.sh`;
-- bezpieczne `--pair`, `--join`, rotacja, odwołanie klucza i `--unpair`;
-- zewnętrzny, trwały kontroler aktualizacji i rollbacku.
-
-Aktualne wersje głównych programów:
+Wersje programów w drzewie:
 
 | Program | Wersja |
 |---|---:|
 | `snapsend.sh` | `v2.68` |
-| `snapget.sh` | `v2.64` |
+| `snapget.sh` | `v2.65` |
 | `delsnaps.sh` | `v1.28` |
-| `check-snap-age.sh` | `v2.0` |
 | `gen-cron.sh` | `v4.25` |
+| `check-snap-age.sh` | `v2.0` |
 
-## 3. Aktualizacja i rollback
+`deploy.sh`, `zfs-backup.sh`, `zfs-quiesce-helper.sh`, `update-control.sh` i
+`check-pool-capacity.sh` nie mają własnej stałej `VERSION` — identyfikuje je
+commit.
 
-Blockery związane z trwałym rollbackiem są zamknięte.
+### Stan grantu quiesce na hostach: ZEROWY
 
-Kontroler:
+Na żadnym z czterech hostów nie ma dziś:
 
-```text
-/root/.zfs-snapshot-all-update-state/update-control.sh
+- `/usr/local/sbin/zfs-quiesce-helper`;
+- `/etc/zfs-quiesce-allow/`;
+- żadnej reguły `/etc/sudoers.d/zfs-quiesce-*`;
+- żadnych pozostałości `*.zqg-new` / `*.zqg-bak`.
+
+Na pve0 i pve1 (192.168.11.x) został **wyłącznie pakiet `sudo`**, zainstalowany
+2026-07-31 o 14:35 i 15:45 przez testowe przebiegi `--allow-quiesce`. To jest
+dokładnie stan opisany w REV-20260731-009 §5: pakiet zostaje, granta nie ma, i od
+`ad5e745` kod mówi o tym wprost przy każdej takiej awarii.
+
+**Konsekwencja, którą trzeba czytać wprost:** nowy kod nadawania grantu **nigdy
+nie przeszedł do końca na żywej maszynie**. Na żywo potwierdzone są odmowy,
+ścieżka zależności, audyt oraz to, że prawdziwy `visudo 1.9.5p2` przyjmuje
+generowaną regułę. Happy path — instalacja grantu end-to-end — jest dowiedziony
+wyłącznie w piaskownicy.
+
+## 2. Zaakceptowany rdzeń
+
+Bez zmian wobec uzgodnienia z 2026-07-30. Przyjęte jako działające: snapshoty
+ZFS; replikacja push i pull, lokalnie i przez SSH; tryb zwykły, rekurencyjny i
+rozwijany per dataset; dopasowanie baz incremental po nazwie, GUID i bookmarku;
+wznawianie transferów; `zfs hold` w locie; kompresja, limit pasma i autotuning;
+quiesce VM/CT; retencja wiekowa, liczbowa i GFS; usuwanie osieroconych
+bookmarków; monitoring wieku snapshotów i pul; generowanie zadań z INI;
+praca jako root i przez konta delegowane; bootstrap i audyt hosta; `--pair`,
+`--join`, rotacja, odwołanie klucza i `--unpair`; zewnętrzny kontroler
+aktualizacji i rollbacku.
+
+## 3. Transakcja nadania grantu quiesce — stan bieżący
+
+Ta sekcja istnieje, żeby nie trzeba było odtwarzać projektu z trzech
+chronologicznych odpowiedzi. **To jest opis kodu, który jest w drzewie teraz.**
+
+`install_quiesce_grant()` operuje na trzech plikach:
+
+```
+/usr/local/sbin/zfs-quiesce-helper      kod, WSPÓŁDZIELONY przez wszystkie peery
+/etc/zfs-quiesce-allow/<konto>          które guesty konto może zamrozić
+/etc/sudoers.d/zfs-quiesce-<konto>      sam grant; bez niego nic nie jest nadane
 ```
 
-jest instalowany poza checkoutem Git. Cofnięcie repozytorium nie cofa więc kodu egzekwującego hold. Cron wywołuje zewnętrzny kontroler bezpośrednio.
+Kolejność faz: zależności → generowanie i walidacja w `mktemp` → utworzenie
+katalogu whitelisty → **sweep** pozostałości po przerwanym przebiegu → staging →
+kopie zapasowe → **commit** → sprzątanie.
 
-`emergency_disable()` działa fail-closed: gdy nie można zapisać holda, próbuje wyłączyć sam wrapper, a następnie usunąć jego dokładną linię cron.
+**Nic nie jest zapisywane w miejscu.** Każdy plik ląduje jako `<cel>.zqg-new` we
+własnym katalogu docelowym i jest przemianowany na cel. `rename(2)` jest atomowy,
+więc każda chwila crashu zastaje cały stary albo cały nowy plik. Staging obok
+celu, a nie w `/tmp`, jest tym, co czyni z tego rename zamiast kopii przez
+granicę systemu plików.
 
-### Obowiązkowa zasada wydania
+**Kolejność commitu: whitelista → helper → reguła.** Reguła jest ostatnia, bo to
+przełącznik. Whitelista jest pierwsza, bo to ograniczenie — crash między nimi
+zostawia węższą listę, a poszerzenie uprawnień to kierunek, przeciw któremu
+projektujemy. Bezpieczne, bo helper jest fail-closed na whiteliście, której nie
+umie sparsować. **Założenie:** format whitelisty pozostaje czytelny dla
+poprzedniego helpera (jeden dataset na linię plus komentarze). Nowa składnia tam
+oznacza konieczność rewizji tej kolejności.
 
-Zmiana `update-control.sh` wymaga po pobraniu kodu wykonania na każdym hoście pełnego:
+**Rollback rozróżnia tworzenie od nadpisania.** `pre_*` mówi „istniał, więc
+przywróć", `did_*` mówi „próbowano zapisu, więc się tym zajmij" i jest ustawiane
+**przed** commitem. Kopia zapasowa to **twarde dowiązanie** do oryginalnego
+i-węzła, więc niesie treść, właściciela, tryb i xattry przez tożsamość, nie przez
+kopię, która mogłaby coś zgubić. Przywracanie to rename, więc rollback też jest
+atomowy. Komunikat rozróżnia „przywrócono poprzedni grant" od „usunięto to, co ten
+przebieg utworzył", a nieudane przywrócenie krzyczy zamiast udawać sukces.
 
-```sh
-bash /root/scripts/zfs-snapshot-all/deploy.sh
-```
+**Recovery to „uruchom ponownie".** Pozostałości są zamiatane i raportowane, nigdy
+odtwarzane — funkcja i tak przepisuje wszystkie trzy cele, więc odtwarzanie połowy
+intencji byłoby zgadywaniem.
 
-Sam godzinny self-update aktualizuje checkout, ale celowo nie nadpisuje kontrolera, który właśnie działa poza repozytorium.
+**Detal nośny dla całości:** `/etc/sudoers.d` jest czytany przez sudo, a staging
+reguły w środku jest bezpieczny **wyłącznie** dlatego, że sudoers.d ignoruje każdą
+nazwę zawierającą kropkę. Zweryfikowane na żywym `visudo 1.9.5p2` w izolowanym
+drzewie, z kontrolą negatywną. Ta sama reguła w drugą stronę: konto z kropką w
+nazwie dałoby finalną regułę niewidoczną dla sudo — `pc_is_account` tego zabrania.
+Ponowna weryfikacja przy każdej aktualizacji sudo jest zapisana w `deps.conf`.
 
-## 4. Otwarte ryzyko i dług testowy
+Pakiet `sudo` instaluje **wyłącznie** ta funkcja, czyli tylko przy
+`--allow-quiesce`. Zwykły deploy nie dotyka pakietu.
 
-Nie ma otwartego P0/P1 ani blockera wydania.
+## 4. `sqlfreeze` — co dowodzi, a czego nie
 
-Pozostaje zaakceptowany P2 test debt:
+`zfs-quiesce-helper sqlfreeze <id> [sekundy]` czyta zdarzenia SQL Server 3197
+(„I/O is frozen") i 3198 („I/O was resumed").
 
-- nie skonstruowano deterministycznego testu łączącego nieudaną aktualizację po `--resume-updates` z jednoczesną awarią ponownego zapisania holda;
-- nie każdy caller wspólnych prymitywów state/hold jest fault-injectowany jako osobny scenariusz.
+Odpowiada na: *czy SQL brał udział w co najmniej jednym freeze/resume w tym
+oknie*. **Nie** odpowiada na: *czy zrobił to ten konkretny backup* — zdarzenie nie
+niesie tożsamości requestera. Werdykt niesie to zastrzeżenie w swoim własnym
+wyjściu.
 
-Awaria samego atomowego `rename`, odseparowana od awarii `mktemp`/write, została już dodana jako case 20 i przeszła live `35/35` na wszystkich hostach.
+Liczenie jest **per instancja** (`MSSQLSERVER`, `MSSQL$<nazwa>`), nigdy per baza:
+nazwa bazy jest w tłumaczonym tekście komunikatu, a parsowanie tłumaczeń to błąd,
+który wcześniej wywrócił parser `writers`.
 
-Dług należy ponownie otworzyć dopiero przy materialnej zmianie któregokolwiek z:
+Nie jest wpięty w żaden automatyczny werdykt: ani w profil `standard`
+`zfs-backup.sh`, ani w żadną linię crona, i żadna ścieżka kodu nie czyta jego kodu
+wyjścia.
 
-- `write_state_file()`;
-- `remove_state_file()`;
-- `emergency_disable()`;
-- `do_self_update()`;
-- `do_rollback()`;
-- `do_resume_updates()`.
+## 5. Testy — stan bieżący
 
-## 5. Świadomie niezaimplementowane kierunki
+Uruchomione lokalnie przy `9ab1440` (bez roota, bez ZFS, bez sieci):
 
-Nie należy mylić dokumentu projektowego z gotowym kodem:
+| Pakiet | Wynik | Zakres |
+|---|---|---|
+| `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
+| `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
+| `quiesce` | 46/46 | księgowanie `-q`: własność guesta, deduplikacja |
+| `tune` | 48/48 | cache autotune `-A` |
+| `statekey` | 16/16 | klucz stanu i jego kolizje |
+| `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
+| `zfsbackup` | 72/72 | warstwa orkiestracji `zfs-backup.sh` |
+| `quiescehelper` | 81/81 | granica uprzywilejowana helpera + transakcja grantu |
+| `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
-- `PAIRING-DESIGN.md` — **Wariant B**, czyli inicjacja z pve1 i półautomatyczny zwrot paczki, pozostaje propozycją;
-- pełna automatyczna instalacja wygenerowanego draft-configu bez przeglądu administratora pozostaje odłożona;
-- decyzja, czy utrzymywać dwa warianty inicjatora parowania, nie została podjęta.
+Wymagają roota, ZFS albo drugiego hosta — **nieuruchamiane przy tym commicie**,
+bo to środowisko ich nie ma. Ostatnie wykonanie odnotowane w odpowiedziach na
+recenzje:
 
-Dotychczasowy, zaimplementowany proces parowania pozostaje obowiązującym zachowaniem.
+| Pakiet | Czego wymaga | Zakres |
+|---|---|---|
+| `snapsend` | root, zfs, mbuffer | silnik push/pull, semantyka flag |
+| `delsnaps` | root, zfs | retencja, prefiksy, GFS |
+| `scenarios` | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
+| `remote` | drugi host, ssh, zfs | kampania dwuhostowa, root i konto delegowane |
 
-## 6. Uzgodniony workflow dalszych prac
+Siedem pozycji `SKIP` w `selfupdate` to przypadki wymagające `chattr +i`, którego
+to środowisko nie obsługuje.
 
-1. Właściciel wskazuje następny problem lub etap funkcjonalny.
-2. Claude implementuje i testuje, obecnie bezpośrednio w `main` zgodnie z wyjątkiem właściciela.
-3. Każda materialna zmiana ma mieć osobny, czytelny commit i dowody testów.
-4. ChatGPT wykonuje niezależną recenzję kodu, testów i skutków operacyjnych.
-5. Zamkniętych ustaleń nie otwieramy ponownie bez nowego dowodu regresji albo zmiany założeń.
-6. Testy na żywych hostach muszą używać sandboxów/throwaway state i porównania before/after wszędzie, gdzie mogą dotknąć crona, uprawnień albo prawdziwych datasetów.
+Wszystkie pakiety wymienione w `test/deps.conf` muszą występować w tej tabeli;
+pilnuje tego `test/impact/run.sh`.
 
-## 7. Punkt startowy następnego etapu
+Zweryfikowane na żywo 2026-07-31: `sqlfreeze` na produkcyjnym vsql2 (VM 100),
+reguła kropki w `sudoers.d` (visudo 1.9.5p2, z kontrolą negatywną), akceptacja
+generowanej reguły sudoers przez prawdziwy `visudo`, `deploy.sh --check-only` na
+czterech hostach w obu formach hosta.
 
-Dalsze prace zaczynają się od `main` na `388a78e` lub nowszym potomku tego commita, przy założeniu:
+## 6. Otwarte — i u kogo leży
 
-- brak otwartych blockerów;
-- rdzeń backupu i retencji jest zaakceptowany;
-- kontroler rollbacku jest zaakceptowany;
-- jedyny znany dług ma rangę P2 i nie blokuje nowych funkcji;
-- `PAIRING-DESIGN.md` Wariant B nie jest jeszcze decyzją implementacyjną.
+### Czeka na werdykt recenzenta
+
+- **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
+  `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
+  dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
+  (`created_dir=0` zostawiał pusty katalog) i to naprawiłem w `5fec1f4`.
+- **Commity `50fe6cf`, `776ee42`, `9ab1440`** powstały po ostatniej recenzji
+  (`d0d8a89`) i nie były jeszcze recenzowane.
+
+### Czeka na decyzję właściciela
+
+- **Korelacja per przebieg dla SQL** (REV-010 §2): odczyt najwyższego
+  `EventRecordID` przed freeze i tylko nowych zdarzeń po thaw, wewnątrz jednej
+  operacji zdalnej `snapget -q`. To nowa powierzchnia uprzywilejowana.
+- **`--require-engaged` / `verify-sql-quiesce`** (REV-010 §3): tryb fail-closed,
+  ma wejść razem z pierwszym konsumentem, nie wcześniej.
+- **`PAIRING-DESIGN.md` Wariant B** — nadal propozycja, nie kod.
+- **Automatyczna instalacja draft-configu** bez przeglądu administratora —
+  odłożona.
+
+### Znane luki, nie planowane do zamknięcia teraz
+
+- **Test odtworzenia vsql2.** Jedyna rzecz, która dowodzi, że snapshot się
+  przywraca. Nie wykonany.
+- **Trwałość wobec zaniku zasilania.** `rename` jest atomowy, nie trwały. Wobec
+  `kill -9` i OOM projekt jest kompletny; wobec zaniku zasilania opiera się na
+  systemie plików (ZFS transakcyjny, ext4 zrzuca dane przed rename na istniejący
+  plik). Świadomie bez `sync`. To jest ocena, nie dowód.
+- **Instalacja grantu end-to-end na żywym hoście** — patrz sekcja 1.
+- **`-q` poza profilem `standard`** `zfs-backup.sh`, dopóki recenzent nie zamknie
+  pozycji cyklu życia.
+- **P2 dług testowy kontrolera aktualizacji** z uzgodnienia 2026-07-30: brak
+  deterministycznego testu łączącego nieudaną aktualizację po `--resume-updates`
+  z jednoczesną awarią ponownego zapisania holda; nie każdy caller prymitywów
+  state/hold ma osobny scenariusz fault-injection. Otwierać ponownie przy
+  materialnej zmianie `write_state_file()`, `remove_state_file()`,
+  `emergency_disable()`, `do_self_update()`, `do_rollback()`, `do_resume_updates()`.
+
+## 7. Aktualizacja i rollback
+
+Kontroler `/root/.zfs-snapshot-all-update-state/update-control.sh` jest
+instalowany **poza** checkoutem Git, więc cofnięcie repozytorium nie cofa kodu
+egzekwującego hold. Cron wywołuje go bezpośrednio. `emergency_disable()` jest
+fail-closed.
+
+**Obowiązkowa zasada wydania:** zmiana `update-control.sh` wymaga po pobraniu kodu
+pełnego `bash /root/scripts/zfs-snapshot-all/deploy.sh` na każdym hoście. Godzinny
+self-update aktualizuje checkout, ale celowo nie nadpisuje kontrolera, który
+właśnie działa.
+
+## 8. Uzgodniony workflow
+
+1. Właściciel wskazuje następny problem lub etap.
+2. Implementer implementuje i testuje, obecnie bezpośrednio w `main`.
+3. Każda materialna zmiana to osobny, czytelny commit z dowodami testów.
+4. Recenzent wykonuje niezależną recenzję kodu, testów i skutków operacyjnych.
+5. **Implementer odświeża ten dokument na końcu etapu**, przed zgłoszeniem go jako
+   zrobiony, żeby obie strony patrzyły na ten sam stan.
+6. Implementer nie zamyka findingów — zamknięcie techniczne należy do recenzenta.
+7. Zamkniętych ustaleń nie otwieramy bez nowego dowodu regresji albo zmiany
+   założeń.
+8. Testy na żywych hostach używają sandboxów i porównania before/after wszędzie,
+   gdzie mogą dotknąć crona, uprawnień albo prawdziwych datasetów.
+
+Poprzedni uzgodniony punkt bazowy `388a78e` (2026-07-30) pozostaje ważny jako
+zapis tego, co zostało wtedy wspólnie przyjęte. Ten dokument opisuje stan
+bieżący; historia decyzji żyje w `docs/reviews/` i `docs/reviews/responses/`.

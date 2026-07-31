@@ -57,6 +57,28 @@ A disagreement is valid. State it precisely and provide code, ZFS/OpenSSH docume
 - Run `./test/impact.sh` against the actual diff and report every required suite and manual obligation.
 - Where the environment cannot run a required ZFS, remote-host, delegated-account, or destructive test, say so explicitly and leave the finding `IMPLEMENTED`, not `CLOSED`.
 
+## Project status document
+
+`docs/PROJECT_STATUS.md` is the shared current-state document. The owner and the
+reviewer both read it, and the reviewer works from GitHub rather than from this
+session — so it is the only place either of them can find out what the tree does
+*today*.
+
+Refresh it at the end of **every** stage, before reporting the stage as done:
+
+- the `Stan na` commit and date;
+- the host, version and deployment tables;
+- the suite counts;
+- the open-items split: awaiting reviewer / awaiting owner / known gaps.
+
+Where a change replaces a design the document describes, **rewrite that section**
+rather than appending to it. Historical accuracy belongs in
+`docs/reviews/responses/`; current truth belongs in `PROJECT_STATUS.md`. A
+document that lags behind `main` is not untidy, it is a reviewer reading a design
+that no longer exists.
+
+`./test/impact.sh` raises this as the manual obligation `project-status`.
+
 ## Delivery evidence
 
 For a Pull Request or direct-main delivery, record:

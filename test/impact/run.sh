@@ -118,6 +118,21 @@ OUT="$("$IMPACT" --all 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
 check "--all lists every declared suite" "$(grep -c '^\[suite:' "$REPO/test/deps.conf")" \
       "$(echo "$OUT" | grep -cE '^  (sudo )?\./test/')"
 
+# docs/PROJECT_STATUS.md is the shared current-state document, and the reviewer
+# reads it from GitHub rather than from the session that wrote it. Whether its
+# prose is still TRUE is a judgement no test can make -- that is why
+# `project-status` is a manual obligation. But whether it still knows about every
+# suite is mechanical, and a suite the status doc has never heard of is a
+# reviewer being told the coverage is smaller than it is.
+# Matched as a TABLE ROW, not as a bare mention: `zfsbackup` is also the name of
+# the delegated account, so a loose grep found the suite in a sentence about
+# something else entirely and passed while the table was still empty.
+missing=""
+for s in $(grep '^\[suite:' "$REPO/test/deps.conf" | sed 's/\[suite://;s/\]//'); do
+    grep -q -- "^| \`$s\` |" "$REPO/docs/PROJECT_STATUS.md" || missing="$missing $s"
+done
+check "every declared suite appears in PROJECT_STATUS.md" "" "$missing"
+
 # --- summary -----------------------------------------------------------------
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
