@@ -15,7 +15,7 @@
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **brak otwartych blockerów; grant przetestowany end-to-end na żywym hoście 2026-07-31; jeden sporny finding czeka na werdykt recenzenta**
+- Status ogólny: **brak otwartych blockerów; REV-013 zamknięty przez recenzenta; transakcja grantu przyjęta jako infrastruktura dla OPCJONALNEGO remote quiesce**
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
@@ -266,22 +266,24 @@ czterech hostach w obu formach hosta.
 
 ## 6. Otwarte — i u kogo leży
 
+### Zamknięte przez recenzenta
+
+- **REV-20260731-013 — odzyskiwanie po crashu: ZAMKNIĘTE** (REV-014). Sweep
+  parkuje zaparkowaną regułę zamiast ją uzbrajać; recenzent uznał zachowanie za
+  poprawnie fail-closed i przyjął, że testy mierzą efektywną granicę, a nie
+  obecność plików.
+- **Poprawka `sqlfreeze` (warunkowa notka): PRZYJĘTA** tą samą recenzją.
+- **REV-20260731-012 — kolejność commitu: przyjęta** w REV-013.
+- **Transakcja grantu wraz z odzyskiwaniem po crashu** jest przez recenzenta
+  uznana za akceptowalną infrastrukturę dla **opcjonalnego** remote quiesce.
+
 ### Czeka na werdykt recenzenta
 
-- **REV-20260731-013 — odzyskiwanie po crashu.** Finding przyjęty: sweep
-  przywracał zaparkowaną regułę na już wgraną, szerszą whitelistę. Wybrany model
-  „dokończ transakcję przy wyłączonym grancie"; 10 nowych testów, 4 padają na
-  poprzednim sweepie.
-- **REV-20260731-012 — kolejność commitu przy aktualizacji.** Finding przyjęty w
-  całości: uzasadnienie „whitelista jest ograniczeniem" było moje i było błędne.
-  Kolejność zmieniona na „najpierw wyłącz aktywną regułę", 6 nowych testów mierzy
-  efektywną granicę uprawnień, nie pliki.
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
   (`created_dir=0` zostawiał pusty katalog) i to naprawiłem w `5fec1f4`.
-- **Commity `50fe6cf`, `776ee42`, `bda83b3`** powstały po ostatniej recenzji
-  (`d0d8a89`) i nie były jeszcze recenzowane.
+  Recenzent nie odniósł się do tego wprost w późniejszych recenzjach.
 
 ### Czeka na decyzję właściciela
 
@@ -290,6 +292,12 @@ czterech hostach w obu formach hosta.
   operacji zdalnej `snapget -q`. To nowa powierzchnia uprzywilejowana.
 - **`--require-engaged` / `verify-sql-quiesce`** (REV-010 §3): tryb fail-closed,
   ma wejść razem z pierwszym konsumentem, nie wcześniej.
+- **Uproszczenie UX wdrożenia — kryterium recenzenta, wciąż niespełnione**
+  (REV-014): zwykły administrator Linuksa/ZFS ma używać **jednego** wysokopoziomowego
+  przepływu enroll/remove, bez znajomości `pair`, `join`, wewnętrznych plików
+  grantu i flag backendu. Akceptacja transakcji grantu **nie** czyni remote
+  quiesce właściwym domyślnym ustawieniem uproszczonego wdrożenia. Powiązane z
+  `docs/discussions/DEPLOY-UX-AGREED-POSITION.md`.
 - **`PAIRING-DESIGN.md` Wariant B** — nadal propozycja, nie kod.
 - **Automatyczna instalacja draft-configu** bez przeglądu administratora —
   odłożona.
