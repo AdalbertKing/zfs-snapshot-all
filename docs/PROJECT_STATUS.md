@@ -297,7 +297,9 @@ czterech hostach w obu formach hosta.
 ### Znane luki, nie planowane do zamknięcia teraz
 
 - **Test odtworzenia vsql2.** Jedyna rzecz, która dowodzi, że snapshot się
-  przywraca. Nie wykonany.
+  przywraca — `engaged` z `sqlfreeze` mówi tylko, że SQL uczestniczył. Nie
+  wykonany; **właściciel wykonuje go ręcznie** (decyzja z 2026-07-31), więc nie
+  jest to pozycja zapomniana ani czekająca na implementera.
 - **Trwałość wobec zaniku zasilania.** `rename` jest atomowy, nie trwały. Wobec
   `kill -9` i OOM projekt jest kompletny; wobec zaniku zasilania opiera się na
   systemie plików (ZFS transakcyjny, ext4 zrzuca dane przed rename na istniejący
