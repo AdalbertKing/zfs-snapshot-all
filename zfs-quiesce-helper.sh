@@ -13,7 +13,7 @@
 # Handing the collector root on the source would undo the entire point of the
 # pairing model, and `sudo qm` is barely better -- `qm guest exec` runs ARBITRARY
 # CODE inside the guest, and `qm` can also destroy VMs. So the account gets a
-# sudo rule for THIS script and nothing else. The script accepts four verbs on
+# sudo rule for THIS script and nothing else. The script accepts five verbs on
 # guest IDs it has been explicitly told about:
 #
 #     status [<id>]   with no id: "am I usable" probe, prints OK
@@ -22,12 +22,17 @@
 #                     container: `pct exec -- sync` (a flush, not a freeze)
 #     thaw   <id>     VM: fsfreeze-thaw; container: nothing to undo
 #     writers <id>    Windows guest: VSS writer states (see below)
+#     sqlfreeze <id> [seconds]
+#                     Windows guest: did SQL Server actually freeze and resume
+#                     its I/O in the last <seconds> (see below)
 #
-# No verb takes a command from the caller. `writers` DOES use `qm guest exec`,
-# which is the very capability this script exists to fence off -- so note what
-# makes it safe: the command is a CONSTANT in this root-owned file, and the only
-# thing the caller influences is which whitelisted guest it runs in. If someone
-# later "generalises" this verb to accept a command, the fence is gone. Don't.
+# No verb takes a command from the caller. `writers` and `sqlfreeze` DO use
+# `qm guest exec`, which is the very capability this script exists to fence off
+# -- so note what makes them safe: the command is a CONSTANT in this root-owned
+# file. The single exception is sqlfreeze's look-back window, which is validated
+# to be digits only and bounded before it is interpolated, so it cannot become an
+# argument, a flag or a second statement. If someone later "generalises" either
+# verb to accept a command, the fence is gone. Don't.
 # The same rule governs any future hook trigger: the guest owns the code at a
 # FIXED path, the collector owns only the trigger, never a string off the wire.
 #
@@ -78,6 +83,24 @@
 #
 # Whether SQL's participation yields a RECOVERABLE image is a separate question
 # that only a restore test answers. It has not been done.
+#
+# What DOES prove the application quiesce happened -- `sqlfreeze`
+# ---------------------------------------------------------------
+# SQL Server logs, per database, on every snapshot-style backup:
+#
+#   3197  "I/O is frozen on database <db>."     -- flushed, holding writes
+#   3198  "I/O was resumed on database <db>."   -- released
+#
+# A balanced 3197/3198 pair per database in the window around a quiesce is the
+# documented, POSITIVE signal that the application-level freeze really happened.
+# Measured on vsql2 2026-07-31: both ids appear at every single quiesce -- the 2h
+# pvesr replication runs, the nightly snapsend job at 00:12, and a manual test at
+# 16:48 -- perfectly balanced (227/227 on MSSQLSERVER, 187/187 on MSSQL$SQL2019).
+#
+# This is why `sqlfreeze` exists and `writers` does not answer the question.
+# Matching is on the numeric event ids, never on message text: this estate runs
+# Polish Windows installs, where a text match finds nothing at all. That is not
+# hypothetical -- the vssadmin parser in `writers` had exactly that bug.
 #
 # Whitelist
 # ---------
@@ -184,6 +207,18 @@ guest_running() {
     case "$st" in *running*) return 0 ;; *) return 1 ;; esac
 }
 
+# `qm guest exec` answers in JSON; out-data carries the console text with escapes.
+# perl is a hard dependency of PVE itself, so it is always here.
+decode_out_data() {
+    perl -0777 -ne '
+        if (/"out-data"\s*:\s*"((?:[^"\\]|\\.)*)"/s) {
+            $s = $1;
+            $s =~ s/\\r//g; $s =~ s/\\n/\n/g;
+            $s =~ s/\\"/"/g; $s =~ s/\\\\/\\/g;
+            print $s;
+        }'
+}
+
 verb="${1:-}"
 shift || true
 
@@ -261,15 +296,7 @@ case "$verb" in
         raw=$(qm guest exec "$gid" --timeout 60 -- \
                   cmd.exe /c "vssadmin list writers" 2>/dev/null) \
             || fail "could not run the writer query in VM $gid (guest agent missing, or the guest is not Windows)"
-        # `qm guest exec` answers in JSON; out-data carries the console text with
-        # escapes. perl is a hard dependency of PVE itself, so it is always here.
-        decoded=$(printf '%s' "$raw" | perl -0777 -ne '
-            if (/"out-data"\s*:\s*"((?:[^"\\]|\\.)*)"/s) {
-                $s = $1;
-                $s =~ s/\\r//g; $s =~ s/\\n/\n/g;
-                $s =~ s/\\"/"/g; $s =~ s/\\\\/\\/g;
-                print $s;
-            }')
+        decoded=$(printf '%s' "$raw" | decode_out_data)
         if [ -z "$decoded" ]; then
             fail "VM $gid returned no writer list (not a Windows guest, or vssadmin needs elevation there)"
         fi
@@ -358,6 +385,87 @@ case "$verb" in
             }'
         ;;
 
+    sqlfreeze)
+        gid=$(require_id "${1:-}") || exit $?
+        # ${2-900}, not ${2:-900}: an ABSENT window means "use the default", but
+        # an EMPTY one almost always means the caller interpolated a variable
+        # that was not set. Defaulting that silently would answer a question
+        # about a window nobody chose. Same rule the config parser applies to
+        # blank fields.
+        window="${2-900}"
+        # The ONLY caller-influenced part of the command below. Digits only, and
+        # bounded -- so it cannot become an argument, a flag or a second
+        # statement. Everything else in that command is a constant in this
+        # root-owned file, which is what keeps this verb a fence and not a
+        # general-purpose `qm guest exec`.
+        case "$window" in
+            ''|*[!0-9]*) die "the look-back window must be a whole number of seconds" ;;
+        esac
+        [ "$window" -ge 1 ] && [ "$window" -le 86400 ] \
+            || die "the look-back window must be between 1 and 86400 seconds"
+        kind=$(guest_kind "$gid")
+        [ "$kind" = qemu ] || fail "guest $gid is not a VM"
+        guest_running "$gid" "$kind" || fail "VM $gid is not running"
+        # SQL Server logs 3197 "I/O is frozen on database X" when it flushes and
+        # holds writes for a snapshot, and 3198 "I/O was resumed on database X"
+        # when it releases. A balanced pair per database is the documented proof
+        # that the application-level quiesce actually happened -- unlike writer
+        # state, which says nothing (see the header).
+        #
+        # Matched on the numeric event ids, never on message text: this guest
+        # estate has Polish Windows installs, and a text match would silently
+        # find nothing there. Only double quotes inside -- the whole command is
+        # one single-quoted shell string.
+        # ONE physical line, deliberately. qemu-ga on Windows joins argv back
+        # into a command line, and a multi-line -Command argument arrives as
+        # nothing at all: "Cannot process the command because of a missing
+        # parameter. A command must follow -Command." Measured on vsql2, not
+        # guessed. Keep it one line even though it is long.
+        ps_cmd='$ProgressPreference="SilentlyContinue"; $e = Get-WinEvent -FilterHashtable @{LogName="Application";Id=@(3197,3198);StartTime=(Get-Date).AddSeconds(-'"$window"')} -ErrorAction SilentlyContinue; if (-not $e) { "SQLFREEZE-NONE"; exit 0 }; $e | Group-Object ProviderName | ForEach-Object { $f = @($_.Group | Where-Object {$_.Id -eq 3197}).Count; $r = @($_.Group | Where-Object {$_.Id -eq 3198}).Count; $l = ($_.Group | Sort-Object TimeCreated -Descending)[0].TimeCreated.ToString("yyyy-MM-ddTHH:mm:ss"); "SQLFREEZE-INSTANCE {0} {1} {2} {3}" -f $_.Name,$f,$r,$l }'
+        qexec_timeout=120
+        raw=$(qm guest exec "$gid" --timeout "$qexec_timeout" -- \
+                  powershell.exe -NoProfile -Command "$ps_cmd" 2>/dev/null) \
+            || fail "could not query the event log in VM $gid (guest agent missing, or the guest is not Windows)"
+        decoded=$(printf '%s' "$raw" | decode_out_data)
+        # An empty reply is NOT "no SQL here" -- that answer arrives as the
+        # SQLFREEZE-NONE sentinel and is handled below. Empty means no answer at
+        # all, and the two reasons are worth telling apart.
+        #
+        # When the guest is still working when the timeout expires, qm prints
+        # "timeout reached, returning pid" and answers with a bare {"pid": N} and
+        # NO out-data -- while exiting 0, so the check above does not fire.
+        # Measured on a Server 2008 guest here, where even `$PSVersionTable`
+        # exceeds two minutes: PowerShell startup itself is the slow part, so
+        # every PowerShell-based verb is unusable on such a guest.
+        if [ -z "$decoded" ]; then
+            case "$raw" in
+                *'"pid"'*) fail "VM $gid did not answer within ${qexec_timeout}s -- it is still running the query (qm returned only a pid). Old Windows guests can need longer than any sane timeout just to start PowerShell" ;;
+                *)         fail "no usable reply from VM $gid -- the guest may not be Windows, or PowerShell is unavailable there" ;;
+            esac
+        fi
+        printf '%s\n' "$decoded" | awk -v gid="$gid" -v win="$window" '
+            /^SQLFREEZE-INSTANCE/ {
+                inst++; frozen += $3; resumed += $4
+                if ($3 != $4) unbalanced++
+                if ($5 > last) last = $5
+                printf "instance=%s frozen=%s resumed=%s last=%s\n", $2, $3, $4, $5
+            }
+            END {
+                # No events is NOT a failure: plenty of guests have no SQL at
+                # all. It is simply the absence of evidence, and it says so.
+                if (inst == 0) {
+                    printf "SQLFREEZE guest=%s window=%ss verdict=no-freeze-seen\n", gid, win
+                } else if (unbalanced > 0) {
+                    printf "SQLFREEZE guest=%s window=%ss instances=%d frozen=%d resumed=%d verdict=unbalanced last=%s\n", \
+                           gid, win, inst, frozen, resumed, last
+                } else {
+                    printf "SQLFREEZE guest=%s window=%ss instances=%d frozen=%d resumed=%d verdict=engaged last=%s\n", \
+                           gid, win, inst, frozen, resumed, last
+                }
+                print "SQLFREEZE-NOTE engaged means SQL flushed and held I/O for a snapshot in this window; it does not prove the snapshot restores"
+            }'
+        ;;
+
     ''|-h|--help|help)
         cat >&2 <<'EOF'
 zfs-quiesce-helper -- narrow privileged surface for delegated backup accounts.
@@ -367,6 +475,9 @@ zfs-quiesce-helper -- narrow privileged surface for delegated backup accounts.
   zfs-quiesce-helper freeze <id>     VM: fsfreeze-freeze   container: sync
   zfs-quiesce-helper thaw   <id>     VM: fsfreeze-thaw     container: no-op
   zfs-quiesce-helper writers <id>    Windows guest: VSS writer states
+  zfs-quiesce-helper sqlfreeze <id> [seconds]
+                                     SQL Server: was I/O actually frozen and
+                                     resumed in the last <seconds> (default 900)
 
 `writers` reports the writers' own state machine, NOT a health verdict. A
 freeze-only quiesce (which is what qemu-ga performs) normally leaves writers in
@@ -379,7 +490,7 @@ verb that runs caller-supplied code in a guest.
 EOF
         exit 2 ;;
 
-    *)  die "unknown verb '$verb' (status, freeze, thaw, writers)" ;;
+    *)  die "unknown verb '$verb' (status, freeze, thaw, writers, sqlfreeze)" ;;
 esac
 
 exit 0

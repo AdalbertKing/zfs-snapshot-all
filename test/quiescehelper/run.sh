@@ -229,6 +229,94 @@ case "$out" in
     *) bad "an unparseable reply is called unreadable, not empty" "$out" ;;
 esac
 
+# ---- sqlfreeze: the signal that writer state could not give -----------------
+#
+# SQL Server logs 3197 "I/O is frozen on database X" and 3198 "I/O was resumed".
+# A balanced pair per database is the documented POSITIVE proof that the
+# application-level quiesce happened -- the thing `writers` cannot tell us.
+# Measured on vsql2 2026-07-31: balanced at every quiesce, including the nightly
+# job (227/227 on MSSQLSERVER, 187/187 on MSSQL$SQL2019).
+cat > "$VSSOUT" <<'EOF'
+{
+   "exitcode" : 0,
+   "out-data" : "SQLFREEZE-INSTANCE MSSQLSERVER 227 227 2026-07-31T16:48:21\r\nSQLFREEZE-INSTANCE MSSQL$SQL2019 187 187 2026-07-31T16:48:21\r\n"
+}
+EOF
+out=$(run sqlfreeze 100 3600)
+case "$out" in
+    *"frozen=414 resumed=414 verdict=engaged"*) ok "sqlfreeze: balanced pairs read as engaged" ;;
+    *) bad "sqlfreeze: balanced pairs read as engaged" "$out" ;;
+esac
+case "$out" in
+    *"SQLFREEZE-NOTE"*"does not prove the snapshot restores"*) ok "sqlfreeze ships its own caveat" ;;
+    *) bad "sqlfreeze ships its own caveat" "$out" ;;
+esac
+
+# Frozen without a matching resume is the one genuinely alarming shape: SQL held
+# its I/O and something never released it.
+cat > "$VSSOUT" <<'EOF'
+{
+   "exitcode" : 0,
+   "out-data" : "SQLFREEZE-INSTANCE MSSQLSERVER 227 0 2026-07-31T16:48:21\r\n"
+}
+EOF
+out=$(run sqlfreeze 100 3600)
+case "$out" in
+    *verdict=unbalanced*) ok "sqlfreeze: frozen without resumed is unbalanced" ;;
+    *) bad "sqlfreeze: frozen without resumed is unbalanced" "$out" ;;
+esac
+
+# No events is not a fault -- most guests have no SQL at all.
+cat > "$VSSOUT" <<'EOF'
+{
+   "exitcode" : 0,
+   "out-data" : "SQLFREEZE-NONE\r\n"
+}
+EOF
+out=$(run sqlfreeze 100 3600)
+case "$out" in
+    *verdict=no-freeze-seen*) ok "sqlfreeze: no events is reported, not failed" ;;
+    *) bad "sqlfreeze: no events is reported, not failed" "$out" ;;
+esac
+r=$(rc_of sqlfreeze 100 3600)
+[ "$r" = 0 ] && ok "sqlfreeze: no events still exits 0" \
+             || bad "sqlfreeze: no events still exits 0" "rc=$r, expected 0"
+
+# When the guest is still working at the timeout, qm exits 0 with only a pid and
+# no out-data. Reporting that as "nothing found" would be a false all-clear.
+# Measured on a Server 2008 guest where PowerShell alone exceeds two minutes.
+cat > "$VSSOUT" <<'EOF'
+{
+   "pid" : 4276
+}
+EOF
+out=$(run sqlfreeze 100 3600)
+r=$(rc_of sqlfreeze 100 3600)
+case "$out" in
+    *"did not answer within"*"only a pid"*) ok "sqlfreeze: a timed-out guest is not a clean result" ;;
+    *) bad "sqlfreeze: a timed-out guest is not a clean result" "$out" ;;
+esac
+[ "$r" = 3 ] && ok "sqlfreeze: a timed-out guest fails (3)" \
+             || bad "sqlfreeze: a timed-out guest fails (3)" "rc=$r, expected 3"
+
+# The window is the ONLY caller-influenced part of the command sent to the
+# guest. It must never be able to become anything but digits.
+for w in abc '3600; whoami' '-1' '' '99999'; do
+    r=$(rc_of sqlfreeze 100 "$w")
+    [ "$r" = 2 ] || bad "sqlfreeze rejects window '$w'" "rc=$r, expected 2"
+done
+ok "sqlfreeze rejects every non-numeric or out-of-range window"
+
+# And the whitelist still governs, exactly as for every other verb.
+: > "$TRACE"
+r=$(rc_of sqlfreeze 999 3600)
+[ "$r" = 2 ] && ok "sqlfreeze refuses a guest outside the delegated datasets" \
+             || bad "sqlfreeze refuses a guest outside the delegated datasets" "rc=$r, expected 2"
+case "$(cat "$TRACE")" in
+    *"guest exec 999"*) bad "a refused sqlfreeze never reaches the guest" "$(cat "$TRACE")" ;;
+    *) ok "a refused sqlfreeze never reaches the guest" ;;
+esac
+
 # ---- the sudoers rule deploy.sh writes ------------------------------------
 #
 # The env overrides this suite depends on are safe ONLY because sudo strips
