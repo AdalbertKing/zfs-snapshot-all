@@ -379,22 +379,34 @@ TX="$WORK/tx"; mkdir -p "$TX/bin"
 sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" > "$TX/fn.sh"
 [ -s "$TX/fn.sh" ] || bad "tx: could not extract install_quiesce_grant" "empty"
 
+tx_stub_sudo() {   # tx_stub_sudo <visudo-rc>
+    # The visudo stub logs what it was asked to validate. That log is the only
+    # way to prove the rollback re-checked the sudoers state it left behind
+    # (REV-20260731-009 §3) rather than assuming it was fine.
+    cat > "$TX/bin/visudo" <<EOF
+#!/bin/sh
+echo "\$@" >> "$TX/visudo.log"
+exit $1
+EOF
+    printf '#!/bin/sh\nexit 0\n' > "$TX/bin/sudo"
+    chmod +x "$TX/bin/visudo" "$TX/bin/sudo"
+}
+
 tx_run() {   # tx_run <visudo-rc> <install-fails-on> [apt-rc]
+    #   apt-rc 0 = sudo is already there   1 = the install of sudo fails
+    #          2 = sudo is MISSING and apt supplies it (the only path that
+    #              reaches the "package left behind" notice, §5)
+    # TX_KEEP=1 runs against whatever is already in the sandbox, which is how
+    # the update cases start from an existing grant instead of a clean host.
     local vrc="$1" failon="$2" aptrc="${3:-0}"
-    rm -rf "$TX/root"; mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
+    [ "${TX_KEEP:-0}" -eq 1 ] || rm -rf "$TX/root"
+    mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
+    : > "$TX/visudo.log"
     # The dependency case has to be a genuine absence: with a visudo stub on
     # PATH the install branch is never reached and the case would pass while
     # testing nothing. (MSYS has neither sudo nor visudo of its own.)
     rm -f "$TX/bin/visudo" "$TX/bin/sudo"
-    if [ "$aptrc" -eq 0 ]; then
-        printf '#!/bin/sh
-exit %s
-' "$vrc" > "$TX/bin/visudo"
-        printf '#!/bin/sh
-exit 0
-' > "$TX/bin/sudo"
-        chmod +x "$TX/bin/visudo" "$TX/bin/sudo"
-    fi
+    [ "$aptrc" -eq 0 ] && tx_stub_sudo "$vrc"
     # `install` fails only for the named target, so each stage can be broken in
     # isolation while the others behave normally.
     # Strips -o/-g: this box has no 'root' user, so real ownership flags fail for
@@ -419,12 +431,15 @@ EOF
         REPO_DIR="$REPO"
         log()  { echo ">>> $*"; }
         warn() { echo "!!! $*" >&2; }
-        apt_install_with_fallback() { return "$aptrc"; }
+        apt_install_with_fallback() {
+            if [ "$aptrc" -eq 2 ]; then tx_stub_sudo "$vrc"; return 0; fi
+            return "$aptrc"
+        }
         # shellcheck disable=SC1090
         . "$TX/fn.sh"
         # Redirect the three absolute paths into the sandbox.
         eval "$(declare -f install_quiesce_grant             | sed -e "s#/usr/local/sbin/zfs-quiesce-helper#$TX/root/usr/local/sbin/zfs-quiesce-helper#g"                   -e "s#/etc/zfs-quiesce-allow#$TX/root/etc/zfs-quiesce-allow#g"                   -e "s#/etc/sudoers.d#$TX/root/etc/sudoers.d#g")"
-        install_quiesce_grant backup-test "rpool/data" >/dev/null 2>&1
+        install_quiesce_grant backup-test "rpool/data" > "$TX/out.log" 2>&1
         echo "rc=$?"
     )
 }
@@ -465,6 +480,154 @@ r=$(tx_run 0 "sudoers.d")
 tx_run 1 "" >/dev/null
 r=$(tx_run 0 "")
 [ "$r" = "rc=0" ] && ok "tx: a retry after a failure succeeds cleanly"                   || bad "tx: a retry after a failure succeeds cleanly" "$r"
+
+# ---- update path: an account that ALREADY holds a grant (REV-20260731-009) --
+#
+# Everything above starts from a clean host, which is exactly the blind spot the
+# review found: rollback that only knows how to REMOVE is complete on a first
+# enrolment and half a transaction on a re-enrolment. Re-running
+# `--join --allow-quiesce` with a changed dataset list or a newer helper
+# overwrites all three destinations, and a failure after the first replacement
+# used to leave a mix of old and new that nothing put back.
+#
+# The seeded content is deliberately recognisable, so "unchanged" is proved by
+# content and not by a file merely existing.
+TX_ALLOW="$TX/root/etc/zfs-quiesce-allow/backup-test"
+TX_RULE="$TX/root/etc/sudoers.d/zfs-quiesce-backup-test"
+TX_HELPER="$TX/root/usr/local/sbin/zfs-quiesce-helper"
+
+tx_seed() {   # a host where backup-test already holds a complete, valid grant
+    rm -rf "$TX/root"
+    mkdir -p "$TX/root/etc/sudoers.d" "$TX/root/etc/zfs-quiesce-allow" "$TX/root/usr/local/sbin"
+    printf '#!/bin/sh\n# OLD helper, the version already on the host\nexit 0\n' > "$TX_HELPER"
+    chmod 0755 "$TX_HELPER"
+    printf '# managed by deploy.sh --join --allow-quiesce, do not edit by hand\nrpool/old-dataset\n' > "$TX_ALLOW"
+    chmod 0644 "$TX_ALLOW"
+    # The same text install_quiesce_grant would generate, sandbox path included:
+    # the rule does not depend on the dataset list, so an update must leave it
+    # byte-identical, and that is only a real assertion if it starts identical.
+    printf 'backup-test ALL=(root) NOPASSWD: %s\n' "$TX_HELPER" > "$TX_RULE"
+    chmod 0440 "$TX_RULE"
+}
+tx_h() {   # content hash of one path, or ABSENT
+    [ -e "$1" ] && md5sum < "$1" | cut -d' ' -f1 || echo ABSENT
+}
+tx_hash3() { printf 'helper=%s allow=%s rule=%s' "$(tx_h "$TX_HELPER")" "$(tx_h "$TX_ALLOW")" "$(tx_h "$TX_RULE")"; }
+tx_tree() {   # every file in the sandbox, so "changed exactly these" is checkable
+    find "$TX/root" -type f | sort | while IFS= read -r f; do
+        printf '%s %s\n' "$(md5sum < "$f" | cut -d' ' -f1)" "${f#"$TX/root"}"
+    done
+}
+
+# 1. Fail while replacing the whitelist: the helper has already been overwritten
+#    by then, so a rollback that only removes new files would leave the new
+#    helper next to the old whitelist and the old rule.
+tx_seed; before=$(tx_hash3)
+r=$(TX_KEEP=1 tx_run 0 "zfs-quiesce-allow")
+if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ]; then
+    ok "tx-update: a failed whitelist replace restores all three old files"
+else
+    bad "tx-update: a failed whitelist replace restores all three old files" "$r
+      before: $before
+      after:  $(tx_hash3)"
+fi
+
+# 2. Fail at the very last step, with helper AND whitelist already replaced.
+tx_seed; before=$(tx_hash3)
+r=$(TX_KEEP=1 tx_run 0 "sudoers.d")
+if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ]; then
+    ok "tx-update: a failed rule replace restores helper and whitelist too"
+else
+    bad "tx-update: a failed rule replace restores helper and whitelist too" "$r
+      before: $before
+      after:  $(tx_hash3)"
+fi
+
+# An administrator has to be able to tell a restored grant from a removed one --
+# the two leave the host in completely different states.
+if grep -q "restored:" "$TX/out.log" && ! grep -q "removed what this run created" "$TX/out.log"; then
+    ok "tx-update: the rollback says it RESTORED, not that it removed"
+else
+    bad "tx-update: the rollback says it RESTORED, not that it removed" "$(cat "$TX/out.log")"
+fi
+
+# §3: the restored sudoers state is re-validated, not assumed. The stub logs
+# every invocation, so a bare `-c` after the staged `-cf <tmp>` is the proof.
+if grep -qx -- "-c" "$TX/visudo.log"; then
+    ok "tx-update: sudoers is re-validated after a rollback"
+else
+    bad "tx-update: sudoers is re-validated after a rollback" "$(cat "$TX/visudo.log")"
+fi
+
+# 3. A successful update must change the three destinations and NOTHING else.
+tx_seed; before=$(tx_hash3); tree_before=$(tx_tree)
+r=$(TX_KEEP=1 tx_run 0 "")
+after=$(tx_hash3)
+if [ "$r" = "rc=0" ] && [ "$after" != "$before" ] \
+   && grep -q '^rpool/data$' "$TX_ALLOW" && ! grep -q 'old-dataset' "$TX_ALLOW" \
+   && cmp -s "$TX_HELPER" "$REPO/zfs-quiesce-helper.sh"; then
+    ok "tx-update: a successful update replaces helper and whitelist"
+else
+    bad "tx-update: a successful update replaces helper and whitelist" "$r
+      $(cat "$TX_ALLOW")"
+fi
+# The rule text does not depend on the dataset list, so an update leaves it
+# byte-identical -- and the diff below is what bounds the blast radius.
+changed=$(diff <(echo "$tree_before") <(tx_tree) | grep '^[<>]' | awk '{print $3}' | sort -u)
+expected=$(printf '/etc/zfs-quiesce-allow/backup-test\n/usr/local/sbin/zfs-quiesce-helper\n')
+if [ "$changed" = "$expected" ]; then
+    ok "tx-update: nothing outside the three destinations is touched"
+else
+    bad "tx-update: nothing outside the three destinations is touched" "changed: $changed"
+fi
+
+# 4. Re-running with identical content is a bounded replacement: the same three
+#    files, same content, no third state.
+before=$(tx_hash3); tree_before=$(tx_tree)
+r=$(TX_KEEP=1 tx_run 0 "")
+if [ "$r" = "rc=0" ] && [ "$(tx_hash3)" = "$before" ] && [ "$(tx_tree)" = "$tree_before" ]; then
+    ok "tx-update: an identical rerun changes no content anywhere"
+else
+    bad "tx-update: an identical rerun changes no content anywhere" "$r
+      before: $before
+      after:  $(tx_hash3)"
+fi
+
+# 5. The shared helper is the case that reaches past the account being enrolled:
+#    a second peer's grant must survive a failed update, and the helper those
+#    other peers are using must come back at its OLD version -- they never asked
+#    for an upgrade.
+tx_seed
+printf '# other peer\nrpool/data\n' > "$TX/root/etc/zfs-quiesce-allow/other-peer"
+printf 'other-peer ALL=(root) NOPASSWD: /usr/local/sbin/zfs-quiesce-helper\n' > "$TX/root/etc/sudoers.d/zfs-quiesce-other-peer"
+other_before=$(tx_h "$TX/root/etc/zfs-quiesce-allow/other-peer")
+before=$(tx_hash3)
+r=$(TX_KEEP=1 tx_run 0 "sudoers.d")
+if [ "$r" != "rc=0" ] && [ "$(tx_hash3)" = "$before" ] \
+   && grep -q 'OLD helper' "$TX_HELPER" \
+   && [ "$(tx_h "$TX/root/etc/zfs-quiesce-allow/other-peer")" = "$other_before" ]; then
+    ok "tx-update: a failed update restores the shared helper and spares other peers"
+else
+    bad "tx-update: a failed update restores the shared helper and spares other peers" "$r
+      before: $before
+      after:  $(tx_hash3)"
+fi
+
+# §5: installing the sudo package is a host-level side effect that is left in
+# place on purpose. Saying nothing about it is what makes the outcome confusing.
+r=$(tx_run 0 "sudoers.d" 2)
+if [ "$r" != "rc=0" ] && grep -q "'sudo' package was installed by this run and has been left in place" "$TX/out.log"; then
+    ok "tx: a failure after installing sudo says the package was left behind"
+else
+    bad "tx: a failure after installing sudo says the package was left behind" "$r
+      $(cat "$TX/out.log")"
+fi
+# ...and on a clean host that same failure REMOVES rather than restores.
+if grep -q "removed what this run created" "$TX/out.log" && ! grep -q "restored:" "$TX/out.log"; then
+    ok "tx: on a clean host the rollback says it REMOVED what it created"
+else
+    bad "tx: on a clean host the rollback says it REMOVED what it created" "$(cat "$TX/out.log")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -625,28 +625,95 @@ install_quiesce_grant() {
     # privilege is what makes the next person guess.
     #
     # So: dependencies first, then everything staged in temporary files, then
-    # one short install phase, and on ANY failure every artifact THIS RUN
-    # created is removed. Two end states only -- fully installed, or nothing new.
-    local created_helper=0 created_dir=0 created_allow=0 created_rule=0
-    local tmp_allow="" tmp_rule=""
+    # one short install phase, and on ANY failure the host goes back to the state
+    # it was in before the run.
+    #
+    # "Before the run" is the part REV-20260731-009 §2 caught. The first version
+    # tracked only CREATION -- it removed destinations that had not existed --
+    # which is the whole story on a clean host and half of it on re-enrolment.
+    # Rerunning `--join --allow-quiesce` with a changed dataset list or a newer
+    # helper OVERWRITES all three destinations, and a failure partway through
+    # left a mix of old and new that nothing rolled back. So every destination
+    # that already exists is copied aside before the install phase, and the
+    # rollback either puts that copy back or removes what this run created -- and
+    # says which of the two it did.
+    #
+    # `did_*` is set BEFORE each install, not after: a failed `install` can still
+    # have truncated the destination it was part-way through writing, so what
+    # decides whether a destination needs restoring is "attempted", not
+    # "succeeded".
+    local pre_helper=0 pre_allow=0 pre_rule=0 created_dir=0
+    local did_helper=0 did_allow=0 did_rule=0
+    local installed_sudo=0
+    local bk="" tmp_allow="" tmp_rule="" visudo_bin=""
+
+    # Restoring is atomic: the copy lands beside the destination and is renamed
+    # over it, so a rollback that is itself interrupted cannot leave a truncated
+    # privileged file behind. `cp -p` carries the owner and mode of the copy
+    # taken before the run, which is what makes the restore byte-for-byte.
+    _grant_restore() {   # <backup name> <destination>
+        local from="$bk/$1" to="$2" swap="$2.rollback.$$"
+        if cp -p "$from" "$swap" 2>/dev/null && mv -f "$swap" "$to" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$swap" 2>/dev/null
+        return 1
+    }
     _grant_rollback() {
-        local what=""
-        [ "$created_rule"   -eq 1 ] && { rm -f "$rule";  what="$what $rule"; }
-        [ "$created_allow"  -eq 1 ] && { rm -f "$allow"; what="$what $allow"; }
-        [ "$created_dir"    -eq 1 ] && rmdir "$allow_dir" 2>/dev/null
-        [ -n "$tmp_allow" ] && rm -f "$tmp_allow"
-        [ -n "$tmp_rule" ]  && rm -f "$tmp_rule"
-        if [ "$created_helper" -eq 1 ]; then
-            # Shared by every peer. Only remove it if THIS run put it there and
-            # nobody ended up with a grant -- otherwise removing it would break
-            # relationships this run never touched.
-            if [ -z "$(ls -A "$allow_dir" 2>/dev/null)" ]; then
-                rm -f "$dest"; what="$what $dest"
+        local restored="" removed="" lost=""
+        # Reverse install order. The rule goes first because it is the only one
+        # of the three that grants anything: until it is gone, or back to its
+        # previous content, the account can still reach the helper.
+        if [ "$did_rule" -eq 1 ]; then
+            if [ "$pre_rule" -eq 1 ]; then
+                _grant_restore rule "$rule" && restored="$restored $rule" || lost="$lost $rule"
+            else
+                rm -f "$rule" && removed="$removed $rule"
+            fi
+        fi
+        if [ "$did_allow" -eq 1 ]; then
+            if [ "$pre_allow" -eq 1 ]; then
+                _grant_restore allow "$allow" && restored="$restored $allow" || lost="$lost $allow"
+            else
+                rm -f "$allow" && removed="$removed $allow"
+            fi
+        fi
+        [ "$created_dir" -eq 1 ] && rmdir "$allow_dir" 2>/dev/null
+        if [ "$did_helper" -eq 1 ]; then
+            if [ "$pre_helper" -eq 1 ]; then
+                # Shared by every peer on this host, so the previous copy has to
+                # come back even though this run's failure was about a single
+                # account: the other relationships never asked for an upgrade.
+                _grant_restore helper "$dest" && restored="$restored $dest" || lost="$lost $dest"
+            elif [ -z "$(ls -A "$allow_dir" 2>/dev/null)" ]; then
+                # Put there by THIS run, and nobody ended up with a grant --
+                # otherwise removing it would break relationships this run never
+                # touched.
+                rm -f "$dest" && removed="$removed $dest"
             else
                 warn "$dest was installed by this run and is being left in place: another account still holds a grant. It is inert without a whitelist and a sudoers rule."
             fi
         fi
-        [ -n "$what" ] && warn "rolled back:$what"
+
+        [ -n "$restored" ] && warn "rolled back to the previous grant, restored:$restored"
+        [ -n "$removed" ]  && warn "rolled back, removed what this run created:$removed"
+        [ -n "$lost" ]     && warn "COULD NOT RESTORE:$lost -- this host is left holding content from a FAILED run. Put it right by hand before anything relies on the grant."
+        # A rule file that does not parse breaks sudo for every user on the host,
+        # root included, so the state the rollback left behind is checked rather
+        # than assumed.
+        if [ "$did_rule" -eq 1 ] && [ -n "$visudo_bin" ]; then
+            "$visudo_bin" -c >/dev/null 2>&1 \
+                || warn "/etc/sudoers no longer parses cleanly after the rollback -- inspect it NOW with '$visudo_bin -c'"
+        fi
+        # REV-20260731-009 §5: a package install is a host-level side effect that
+        # is deliberately NOT undone, because removing a package automatically is
+        # riskier than leaving a standard dependency behind. Leaving it unsaid is
+        # what makes the outcome confusing.
+        [ "$installed_sudo" -eq 1 ] && warn "the grant was not created. The 'sudo' package was installed by this run and has been left in place."
+
+        [ -n "$tmp_allow" ] && rm -f "$tmp_allow"
+        [ -n "$tmp_rule" ]  && rm -f "$tmp_rule"
+        [ -n "$bk" ] && rm -rf "$bk"
         return 0
     }
 
@@ -663,7 +730,6 @@ install_quiesce_grant() {
     # a correct refusal reached for entirely the wrong reason, with a message
     # that would have sent someone hunting a syntax error that was not there.
     # The helper is reached THROUGH sudo, so this is a hard dependency.
-    local visudo_bin=""
     _find_visudo() {
         local c
         for c in visudo /usr/sbin/visudo /sbin/visudo; do
@@ -677,12 +743,15 @@ install_quiesce_grant() {
             warn "could not install the 'sudo' package -- no quiesce grant was created for $account"
             return 1
         fi
+        installed_sudo=1
         _find_visudo || {
+            _grant_rollback
             warn "still no visudo after installing sudo -- no quiesce grant was created for $account"
             return 1
         }
     fi
     if ! command -v sudo >/dev/null 2>&1; then
+        _grant_rollback
         warn "visudo is present but the sudo binary is not -- the helper would be unreachable, no grant created for $account"
         return 1
     fi
@@ -708,10 +777,33 @@ install_quiesce_grant() {
         return 1
     fi
 
-    # ---- 3. install ----
-    if [ ! -e "$dest" ]; then created_helper=1; fi
+    # ---- 3. copy aside everything this run may replace ----
+    #
+    # Taken AFTER validation and BEFORE the first write, so a run that is going
+    # to be refused anyway never touches the host, and a run that gets as far as
+    # writing always has something to go back to.
+    bk=$(mktemp -d) || { _grant_rollback; warn "mktemp -d failed taking rollback copies for $account"; return 1; }
+    _grant_preserve() {   # <destination> <backup name>; 1 = did not exist, 2 = give up
+        [ -e "$1" ] || return 1
+        cp -p "$1" "$bk/$2" 2>/dev/null && return 0
+        _grant_rollback
+        warn "could not take a rollback copy of $1 -- nothing was replaced, the grant for $account is unchanged"
+        return 2
+    }
+    _grant_preserve "$dest"  helper; case $? in 0) pre_helper=1 ;; 2) return 1 ;; esac
+    _grant_preserve "$allow" allow;  case $? in 0) pre_allow=1  ;; 2) return 1 ;; esac
+    _grant_preserve "$rule"  rule;   case $? in 0) pre_rule=1   ;; 2) return 1 ;; esac
+
+    # ---- 4. install ----
+    #
+    # An update replaces all three destinations unconditionally rather than
+    # comparing content first: the helper has to be able to move forward with the
+    # repository, and a whitelist rewritten from the same dataset list it always
+    # was is a no-op in content even when the bytes are rewritten. What is bounded
+    # is the SET of files touched -- these three, and nothing else.
+    did_helper=1
     if ! install -o root -g root -m 0755 "$src" "$dest"; then
-        created_helper=0; _grant_rollback
+        _grant_rollback
         warn "could not install $dest -- no quiesce grant was created for $account"
         return 1
     fi
@@ -722,19 +814,24 @@ install_quiesce_grant() {
             warn "could not create $allow_dir -- no quiesce grant was created for $account"; return 1
         }
     fi
-    [ -e "$allow" ] || created_allow=1
+    did_allow=1
     if ! install -o root -g root -m 0644 "$tmp_allow" "$allow"; then
-        created_allow=0; _grant_rollback
+        _grant_rollback
         warn "could not install $allow -- no quiesce grant was created for $account"; return 1
     fi
-    [ -e "$rule" ] || created_rule=1
+    did_rule=1
     if ! install -o root -g root -m 0440 "$tmp_rule" "$rule"; then
-        created_rule=0; _grant_rollback
+        _grant_rollback
         warn "could not install $rule -- no quiesce grant was created for $account"; return 1
     fi
     rm -f "$tmp_allow" "$tmp_rule"; tmp_allow=""; tmp_rule=""
+    rm -rf "$bk"; bk=""
 
-    log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
+    if [ "$pre_rule" -eq 1 ] || [ "$pre_allow" -eq 1 ]; then
+        log "updated the guest quiesce grant for $account (helper $dest, whitelist $allow, rule $rule)"
+    else
+        log "granted guest quiesce to $account (helper $dest, whitelist $allow, rule $rule)"
+    fi
     return 0
 }
 
