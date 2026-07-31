@@ -84,23 +84,42 @@
 # Whether SQL's participation yields a RECOVERABLE image is a separate question
 # that only a restore test answers. It has not been done.
 #
-# What DOES prove the application quiesce happened -- `sqlfreeze`
-# ---------------------------------------------------------------
+# What `sqlfreeze` DOES answer, and what it does not
+# --------------------------------------------------
 # SQL Server logs, per database, on every snapshot-style backup:
 #
 #   3197  "I/O is frozen on database <db>."     -- flushed, holding writes
 #   3198  "I/O was resumed on database <db>."   -- released
 #
-# A balanced 3197/3198 pair per database in the window around a quiesce is the
-# documented, POSITIVE signal that the application-level freeze really happened.
-# Measured on vsql2 2026-07-31: both ids appear at every single quiesce -- the 2h
-# pvesr replication runs, the nightly snapsend job at 00:12, and a manual test at
-# 16:48 -- perfectly balanced (227/227 on MSSQLSERVER, 187/187 on MSSQL$SQL2019).
+# A balanced 3197/3198 pair is the documented, POSITIVE signal that an
+# application-level freeze really happened -- unlike writer state, which says
+# nothing. Measured on vsql2 2026-07-31: both ids appear at every quiesce -- the
+# 2h pvesr replication runs, the nightly snapsend job at 00:12, and a manual test
+# at 16:48 -- perfectly balanced (227/227 on MSSQLSERVER, 187/187 on
+# MSSQL$SQL2019).
 #
-# This is why `sqlfreeze` exists and `writers` does not answer the question.
+# THE LIMIT (REV-20260731-010 §2). `sqlfreeze` answers "did SQL participate in at
+# least one freeze/resume inside this window", NOT "did THIS backup run freeze
+# SQL". Nothing ties an event to a caller. On a host where pvesr, snapsend and a
+# human all quiesce the same guest, events from a neighbouring operation sitting
+# inside the window read as `engaged` even if the run being judged never reached
+# its snapshot. Correlating a specific run needs the freeze and the read to
+# happen inside ONE operation -- record the highest EventRecordID first, freeze,
+# snapshot, thaw, then read only what is newer -- which this verb does not do. It
+# is a diagnostic report, not a proof gate, and it is deliberately not wired into
+# any automatic verdict.
+#
+# GRANULARITY (REV-20260731-010 §4). Counting is per INSTANCE -- the event
+# provider, `MSSQLSERVER` or `MSSQL$<name>` -- not per database, and `engaged`
+# means at least one balanced pair was seen, not that every intended database was
+# frozen. That is a consequence of the locale rule below, not an oversight: the
+# database name lives in the message TEXT, which is translated, and parsing it is
+# exactly the bug that broke the `writers` parser. A database that is offline,
+# restoring or otherwise skipped logs nothing and is therefore invisible here, and
+# the verb has no notion of which instances it ought to have found.
+#
 # Matching is on the numeric event ids, never on message text: this estate runs
-# Polish Windows installs, where a text match finds nothing at all. That is not
-# hypothetical -- the vssadmin parser in `writers` had exactly that bug.
+# Polish Windows installs, where a text match finds nothing at all.
 #
 # Whitelist
 # ---------
@@ -408,9 +427,10 @@ case "$verb" in
         guest_running "$gid" "$kind" || fail "VM $gid is not running"
         # SQL Server logs 3197 "I/O is frozen on database X" when it flushes and
         # holds writes for a snapshot, and 3198 "I/O was resumed on database X"
-        # when it releases. A balanced pair per database is the documented proof
-        # that the application-level quiesce actually happened -- unlike writer
-        # state, which says nothing (see the header).
+        # when it releases. A balanced pair is the documented signal that an
+        # application-level quiesce happened -- unlike writer state, which says
+        # nothing. It is NOT tied to any particular run, and counting is per
+        # instance rather than per database; see the header for both limits.
         #
         # Matched on the numeric event ids, never on message text: this guest
         # estate has Polish Windows installs, and a text match would silently
@@ -462,7 +482,10 @@ case "$verb" in
                     printf "SQLFREEZE guest=%s window=%ss instances=%d frozen=%d resumed=%d verdict=engaged last=%s\n", \
                            gid, win, inst, frozen, resumed, last
                 }
-                print "SQLFREEZE-NOTE engaged means SQL flushed and held I/O for a snapshot in this window; it does not prove the snapshot restores"
+                # Two caveats, both of which someone reading a verdict line in
+                # isolation would otherwise supply wrongly from imagination.
+                print "SQLFREEZE-NOTE SQL participated in at least one VSS freeze/resume within the selected window. This is not correlated to a specific snapshot run."
+                print "SQLFREEZE-NOTE counted per instance, not per database; engaged does not prove the snapshot restores"
             }'
         ;;
 

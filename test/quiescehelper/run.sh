@@ -251,6 +251,23 @@ case "$out" in
     *"SQLFREEZE-NOTE"*"does not prove the snapshot restores"*) ok "sqlfreeze ships its own caveat" ;;
     *) bad "sqlfreeze ships its own caveat" "$out" ;;
 esac
+# REV-20260731-010 §2. A window is not a correlation: on a host where pvesr,
+# snapsend and a human all quiesce the same guest, a neighbouring operation's
+# events inside the window read as `engaged`. The verdict line must not be
+# quotable without that, so the caveat travels WITH it.
+case "$out" in
+    *"This is not correlated to a specific snapshot run."*)
+        ok "sqlfreeze says the window is not correlated to a run" ;;
+    *) bad "sqlfreeze says the window is not correlated to a run" "$out" ;;
+esac
+# §4: the counts are per instance, and the output must not let anyone read them
+# as per database -- the database name is in translated message text, which is
+# deliberately never parsed.
+case "$out" in
+    *"counted per instance, not per database"*)
+        ok "sqlfreeze states its granularity" ;;
+    *) bad "sqlfreeze states its granularity" "$out" ;;
+esac
 
 # Frozen without a matching resume is the one genuinely alarming shape: SQL held
 # its I/O and something never released it.
