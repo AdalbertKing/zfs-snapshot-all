@@ -8,10 +8,10 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-07-31**
-- Zweryfikowano przeciw: `c3d664c` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `bda83b3` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: kolejność commitu grantu (REV-012), commit niosący ten dokument
+- Ostatnia zmiana zachowania produkcyjnego: odzyskiwanie po crashu (REV-013), commit niosący ten dokument
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
@@ -19,15 +19,15 @@
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty, wszystkie pociągnięte do `c3d664c` i z czystym audytem
+Cztery żywe hosty, wszystkie pociągnięte do `bda83b3` i z czystym audytem
 `deploy.sh --check-only` (2026-07-31):
 
 | Host | Adres | Commit | Konto delegowane | `sudo` |
 |---|---|---|---|---|
-| pve0 | 192.168.11.10 | `c3d664c` | — | jest |
-| pve1 | 192.168.11.11 | `c3d664c` | — | jest |
-| metropolis pve1 | 192.168.28.9 | `c3d664c` | `zfsbackup` | brak |
-| metropolis pve2 | 192.168.28.8 | `c3d664c` | `zfsbackup` | brak |
+| pve0 | 192.168.11.10 | `bda83b3` | — | jest |
+| pve1 | 192.168.11.11 | `bda83b3` | — | jest |
+| metropolis pve1 | 192.168.28.9 | `bda83b3` | `zfsbackup` | brak |
+| metropolis pve2 | 192.168.28.8 | `bda83b3` | `zfsbackup` | brak |
 
 Wersje programów w drzewie:
 
@@ -228,7 +228,7 @@ testem.
 
 ## 5. Testy — stan bieżący
 
-Uruchomione lokalnie przy `c3d664c` (bez roota, bez ZFS, bez sieci):
+Uruchomione lokalnie przy `bda83b3` (bez roota, bez ZFS, bez sieci):
 
 | Pakiet | Wynik | Zakres |
 |---|---|---|
@@ -280,7 +280,7 @@ czterech hostach w obu formach hosta.
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
   (`created_dir=0` zostawiał pusty katalog) i to naprawiłem w `5fec1f4`.
-- **Commity `50fe6cf`, `776ee42`, `c3d664c`** powstały po ostatniej recenzji
+- **Commity `50fe6cf`, `776ee42`, `bda83b3`** powstały po ostatniej recenzji
   (`d0d8a89`) i nie były jeszcze recenzowane.
 
 ### Czeka na decyzję właściciela
