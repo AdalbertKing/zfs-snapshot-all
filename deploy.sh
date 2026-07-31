@@ -735,7 +735,7 @@ install_quiesce_grant() {
     # destinations anyway, so "run it again" IS the recovery, and replaying a
     # half-finished intent would be guessing at which half was wanted.
     _grant_sweep() {   # <"quiet"|"report">
-        local f found="" back=""
+        local f found="" parked=""
         for f in "$dest" "$allow" "$rule"; do
             [ -e "$f.zqg-new" ] && { rm -f "$f.zqg-new" && found="$found $f.zqg-new"; }
             if [ -e "$f.zqg-bak" ]; then
@@ -743,19 +743,31 @@ install_quiesce_grant() {
                     # The destination is whole, so the backup is spare.
                     rm -f "$f.zqg-bak" && found="$found $f.zqg-bak"
                 else
-                    # No destination and a backup: a run died between disabling
-                    # the old file and installing the new one, and this copy is
-                    # the ONLY one left. Deleting it would turn an interrupted
-                    # update into permanent data loss, so it goes back. For the
-                    # sudoers rule that also re-enables a grant that an
-                    # interrupted run had switched off.
-                    mv -f "$f.zqg-bak" "$f" 2>/dev/null && back="$back $f"
+                    # Destination gone, backup present: a run died between
+                    # suspending the old file and installing the new one.
+                    #
+                    # It is LEFT PARKED (REV-20260731-013). An earlier version
+                    # renamed it straight back, reasoning that it was the only
+                    # copy left and deleting it would lose the grant. Restoring
+                    # it is worse: by the time the rule is parked, this run's
+                    # predecessor has already committed the new -- possibly
+                    # WIDER -- whitelist and helper, so re-arming the old rule
+                    # activates it against them. That is the same privilege
+                    # widening REV-012 closed, moved out of the commit path and
+                    # into recovery, and it would persist if this run then
+                    # failed during staging.
+                    #
+                    # Nothing is lost by parking: the file is still there, under
+                    # a name sudoers.d ignores, and the commit below installs a
+                    # coherent rule as its LAST step. Interrupted therefore means
+                    # disabled, and it stays disabled until a run completes.
+                    parked="$parked $f.zqg-bak"
                 fi
             fi
         done
         if [ "$1" = report ]; then
-            [ -n "$found" ] && warn "a previous grant run for $account was interrupted before it finished -- leftovers removed:$found. The destinations themselves are intact (each is either the old or the new file, never a partial one) and this run rebuilds all three."
-            [ -n "$back" ]  && warn "a previous grant run for $account was interrupted mid-update and left these switched OFF -- restored to their pre-update state:$back"
+            [ -n "$found" ] && warn "a previous grant run for $account was interrupted before it finished -- stale staging removed:$found"
+            [ -n "$parked" ] && warn "a previous grant run for $account was interrupted mid-update: the grant is currently DISABLED and its previous content is parked at$parked. It stays disabled until a run completes -- re-arming it now would activate the old rule against the new whitelist. If this run fails, the account keeps no access at all."
         fi
         return 0
     }

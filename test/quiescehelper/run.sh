@@ -476,7 +476,7 @@ done
 # CRASHAT matches the DESTINATION -- the last argument -- because the commit
 # order now begins by renaming the live rule ONTO its .zqg-bak name, and that
 # rename has no .zqg-new source to key on.
-[ -n "\$CRASHAT" ] && case "\$shift_last" in *\$CRASHAT*) kill -9 \$PPID; exit 137 ;; esac
+[ -n "\$CRASHAT" ] && case "\$shift_last" in *\$CRASHAT) kill -9 \$PPID; exit 137 ;; esac
 exec /usr/bin/mv "\$@"
 EOF
     chmod +x "$TX/bin/mv"
@@ -844,7 +844,7 @@ fi
 #    window the review found.
 tx_seed
 old_helper=$(tx_h "$TX_HELPER"); old_rule=$(tx_h "$TX_RULE")
-r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow" 2>/dev/null)
+r=$(TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow/backup-test" 2>/dev/null)
 if [ ! -e "$TX_RULE" ] && [ "$(tx_h "$TX_RULE.zqg-bak")" = "$old_rule" ] \
    && [ "$(tx_h "$TX_HELPER")" = "$old_helper" ]; then
     ok "tx-crash: the live rule is suspended first, helper still untouched"
@@ -855,7 +855,7 @@ fi
 
 # 4. On a clean host, a crash before the last commit must leave NO grant: the
 #    rule is what grants, and it is the one thing that has not landed.
-r=$(tx_run 0 "" 0 0 "" "sudoers.d" 2>/dev/null)
+r=$(tx_run 0 "" 0 0 "" "sudoers.d/zfs-quiesce-backup-test" 2>/dev/null)
 if [ ! -e "$TX_RULE" ] && [ -e "$TX_ALLOW" ] && [ -e "$TX_HELPER" ]; then
     ok "tx-crash: a crash before the last commit grants nothing"
 else
@@ -893,7 +893,7 @@ tx_seed_narrow() {   # a LIVE grant whose whitelist is narrower than the update'
 tx_wide='rpool/data/vm-106-disk-0 rpool/data/vm-107-disk-0'
 
 for point in "zqg-bak:suspending the old rule" \
-             "zfs-quiesce-allow:switching the whitelist" \
+             "zfs-quiesce-allow/backup-test:switching the whitelist" \
              "sbin/zfs-quiesce-helper:switching the helper"; do
     at="${point%%:*}"; what="${point#*:}"
     tx_seed_narrow
@@ -931,7 +931,7 @@ fi
 # state the review asked for -- and re-running must put it back, not leave the
 # host permanently without a grant because the only copy was swept away.
 tx_seed_narrow
-TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow" >/dev/null 2>&1
+TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "" 0 0 "" "zfs-quiesce-allow/backup-test" >/dev/null 2>&1
 suspended=0; [ ! -e "$TX_RULE" ] && [ -e "$TX_RULE.zqg-bak" ] && suspended=1
 r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "")
 if [ "$suspended" = 1 ] && [ "$r" = "rc=0" ] && tx_widened; then
@@ -940,6 +940,75 @@ else
     bad "tx-widen: an interrupted update leaves it OFF, and a rerun restores it" \
         "suspended=$suspended r=$r"
 fi
+
+# ---- REV-20260731-013: recovery must not re-arm a mixed grant ---------------
+#
+# The sweep used to rename a parked .zqg-bak rule straight back whenever its
+# destination was missing, on the reasoning that it was the only copy left. That
+# moved the widening REV-012 closed out of the commit path and into recovery: by
+# the time the rule is parked, the PREVIOUS run has already committed the new
+# and possibly wider whitelist, so re-arming the old rule activates it against
+# that. And if the recovering run then failed during staging, the widened state
+# stayed active indefinitely.
+#
+# The contract now: interrupted means DISABLED, and it stays disabled until a
+# run completes. The parked copy is kept, never re-armed.
+tx_armed() { [ -e "$TX_RULE" ]; }          # an active, dotless -- therefore sudo-readable -- rule
+tx_parked() { [ ! -e "$TX_RULE" ] && [ -e "$TX_RULE.zqg-bak" ]; }
+
+for point in "sbin/zfs-quiesce-helper:po zatwierdzeniu whitelisty" \
+             "sudoers.d/zfs-quiesce-backup-test:po whiteliscie i helperze"; do
+    at="${point%%:*}"; what="${point#*:}"
+
+    tx_seed_narrow
+    TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "" 0 0 "" "$at" >/dev/null 2>&1
+    if tx_parked && ! tx_armed; then
+        ok "tx-recover: crash $what leaves the grant parked and disabled"
+    else
+        bad "tx-recover: crash $what leaves the grant parked and disabled" \
+            "rule=$([ -e "$TX_RULE" ] && echo obecna || echo brak) bak=$([ -e "$TX_RULE.zqg-bak" ] && echo jest || echo brak)"
+    fi
+
+    # A second enrolment that fails BEFORE commit step 0 -- here at validation,
+    # since visudo rejects the staged rule. Nothing may become active.
+    r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 1 "")
+    if [ "$r" != "rc=0" ] && ! tx_armed && ! tx_widened; then
+        ok "tx-recover: a failed rerun after crash $what activates nothing"
+    else
+        bad "tx-recover: a failed rerun after crash $what activates nothing" \
+            "r=$r armed=$(tx_armed && echo tak || echo nie) widened=$(tx_widened && echo tak || echo nie)"
+    fi
+
+    # A second enrolment that fails during STAGING, one step later than above.
+    r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "sudoers.d")
+    if [ "$r" != "rc=0" ] && ! tx_armed && ! tx_widened; then
+        ok "tx-recover: a rerun failing in staging after crash $what activates nothing"
+    else
+        bad "tx-recover: a rerun failing in staging after crash $what activates nothing" "r=$r"
+    fi
+
+    # Only a run that COMPLETES may arm the grant -- and then it must be the new
+    # one, not the parked old one.
+    r=$(TX_DATASETS="$tx_wide" TX_KEEP=1 tx_run 0 "")
+    if [ "$r" = "rc=0" ] && tx_armed && tx_widened && [ ! -e "$TX_RULE.zqg-bak" ]; then
+        ok "tx-recover: only a completed rerun re-arms, and with the new grant"
+    else
+        bad "tx-recover: only a completed rerun re-arms, and with the new grant" "r=$r"
+    fi
+done
+
+# The sweep must be unreachable from anything read-only. install_quiesce_grant is
+# the only caller, and --check-only refuses to combine with --join, so an audit
+# cannot reactivate a parked grant. Asserted structurally rather than by running
+# deploy.sh, which would provision a host.
+callers=$(grep -c '_grant_sweep' "$REPO/deploy.sh")
+inside=$(sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" | grep -c '_grant_sweep')
+[ "$callers" = "$inside" ] && ok "tx-recover: nothing outside install_quiesce_grant can sweep" \
+                           || bad "tx-recover: nothing outside install_quiesce_grant can sweep" \
+                                  "$callers wystąpień w pliku, $inside wewnątrz funkcji"
+grep -q 'cannot be combined with --pair/--join' "$REPO/deploy.sh" \
+    && ok "tx-recover: --check-only cannot reach the join path at all" \
+    || bad "tx-recover: --check-only cannot reach the join path at all" "brak odmowy w deploy.sh"
 
 # §5: installing the sudo package is a host-level side effect that is left in
 # place on purpose. Saying nothing about it is what makes the outcome confusing.

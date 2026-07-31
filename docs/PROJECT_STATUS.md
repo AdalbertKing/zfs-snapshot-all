@@ -162,10 +162,18 @@ Koszt: okno w trakcie aktualizacji, w którym konto nie może zamrozić niczego.
 Świadomy wybór — nieudany job jest widoczny i ponawiany, po cichu poszerzony grant
 nie jest.
 
-**Przerwana aktualizacja** zostawia grant wyłączony, a kopia pod `.zqg-bak` jest
-wtedy jedyną. Sweep rozróżnia: cel istnieje → kopia zbędna, usuń; celu brak →
-przywróć i powiedz o tym. Czyli przerwanie jest fail-closed, a kolejne uruchomienie
-samo je leczy.
+**Przerwana aktualizacja zostaje WYŁĄCZONA i taka pozostaje**, dopóki jakiś
+przebieg się nie dokończy. Sweep rozróżnia trzy przypadki: `.zqg-new` → usuń
+(martwy staging); `.zqg-bak` przy istniejącym celu → usuń (kopia zbędna);
+`.zqg-bak` **bez celu** → **zostaw zaparkowane**, nie uzbrajaj.
+
+Wcześniejsza wersja przywracała taką kopię z powrotem, w obawie o utratę jedynego
+egzemplarza. Wyłapał to REV-20260731-013: w momencie parkowania reguły poprzedni
+przebieg zdążył już wgrać nową, **szerszą** whitelistę — więc przywrócenie starej
+reguły uzbrajało ją przeciwko tej whiteliście. To samo poszerzenie, które zamknął
+REV-012, przeniesione z commitu do odzyskiwania. Nic nie ginie przez parkowanie:
+plik leży pod nazwą, którą sudoers.d ignoruje, a `pre_rule` liczone jest po
+sweepie, więc krok 0 się pomija i nowa reguła wchodzi jako ostatnia.
 
 **Rollback rozróżnia tworzenie od nadpisania.** `pre_*` mówi „istniał, więc
 przywróć", `did_*` mówi „próbowano zapisu, więc się tym zajmij" i jest ustawiane
@@ -231,7 +239,7 @@ Uruchomione lokalnie przy `c3d664c` (bez roota, bez ZFS, bez sieci):
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
 | `zfsbackup` | 72/72 | warstwa orkiestracji `zfs-backup.sh` |
-| `quiescehelper` | 87/87 | granica uprzywilejowana helpera + transakcja grantu |
+| `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
 Wymagają roota, ZFS albo drugiego hosta — **nieuruchamiane przy tym commicie**,
@@ -260,6 +268,10 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na werdykt recenzenta
 
+- **REV-20260731-013 — odzyskiwanie po crashu.** Finding przyjęty: sweep
+  przywracał zaparkowaną regułę na już wgraną, szerszą whitelistę. Wybrany model
+  „dokończ transakcję przy wyłączonym grancie"; 10 nowych testów, 4 padają na
+  poprzednim sweepie.
 - **REV-20260731-012 — kolejność commitu przy aktualizacji.** Finding przyjęty w
   całości: uzasadnienie „whitelista jest ograniczeniem" było moje i było błędne.
   Kolejność zmieniona na „najpierw wyłącz aktywną regułę", 6 nowych testów mierzy
