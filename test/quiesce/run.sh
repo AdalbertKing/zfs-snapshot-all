@@ -375,6 +375,29 @@ check "err7: and fails (5)" "5" "$rc"
 case "$out" in *"thawed VM 100"*) check "err7: and the guest that DID freeze is thawed" "y" "y" ;;
    *) check "err7: and the guest that DID freeze is thawed" "y" "n ($out)" ;; esac
 
+# ---- bare `return` in the remote script: a STATIC guard -------------------
+#
+# This one cannot be tested behaviourally on the dev box, and pretending
+# otherwise would be worse than not testing it.
+#
+# thaw_all runs from the EXIT trap. In a trap handler bash resolves a bare
+# `return` against the status the shell was exiting with, NOT against the last
+# command in the function -- so `sudo ... ; return` reported a FAILED thaw as
+# success, dropped the id from the recovery list, deleted the state file, killed
+# the deadman and exited 0, leaving a production guest frozen. Found live on
+# pve0 2026-07-31, after err4 below had been passing green for days.
+#
+# It passed because bash 5.1.4 (Debian 11 / PVE 7, i.e. every real host)
+# reproduces the behaviour and bash 5.3.9 (this dev box) does not. A behavioural
+# test here would go green on both the fixed and the broken code. So the guard
+# is textual: no bare `return` may exist in the embedded script at all.
+bare=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | grep -nE '(^[[:space:]]*return[[:space:]]*$|;[[:space:]]*return[[:space:]]*(;|$))' || true)
+if [ -z "$bare" ]; then
+    check "no bare 'return' in the remote script (trap-handler status trap)" "y" "y"
+else
+    check "no bare 'return' in the remote script (trap-handler status trap)" "y" "n: $(printf '%s' "$bare" | tr '\n' ' ')"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

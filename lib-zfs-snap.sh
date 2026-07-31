@@ -1688,17 +1688,32 @@ else
     exit 3
 fi
 
+# EVERY `return` below carries its status EXPLICITLY. `return` with no operand
+# is NOT equivalent here, and the difference is a silent data-loss bug rather
+# than a style point: thaw_all runs from the EXIT trap, and in a trap handler
+# bash resolves a bare `return` against the status the shell was exiting with,
+# not against the last command in the function. So `sudo ...; return` reported a
+# FAILED thaw as success -- the id was dropped from the recovery list, the state
+# file was deleted, the deadman was killed, and the run exited 0 with a
+# PRODUCTION GUEST LEFT FROZEN. Exactly the failure REV-20260730-006 F3 was
+# about, reintroduced through the refactor that fixed it.
+#
+# Measured 2026-07-31 on real hosts: bash 5.1.4 (Debian 11 / PVE 7) reproduces
+# it, bash 5.3.9 does not. The dev box runs 5.3, so no local suite could ever
+# have caught this -- only running it on the actual host did. test/quiesce
+# therefore guards it statically instead (no bare `return` in this script).
+#
 # One line, one format, whichever way we got it:
 #   id=<n> kind=qemu|lxc|absent running=yes|no frozen=yes|no|unknown
 gq_status() {
     if [ "$QVIA" = helper ]; then
         sudo -n "$QHELPER" status "$1" 2>/dev/null
-        return
+        return $?
     fi
     local id="$1" kind st running=no frozen=unknown
     if   [ -f "/etc/pve/qemu-server/$id.conf" ]; then kind=qemu
     elif [ -f "/etc/pve/lxc/$id.conf" ];        then kind=lxc
-    else echo "id=$id kind=absent running=no frozen=unknown"; return; fi
+    else echo "id=$id kind=absent running=no frozen=unknown"; return 0; fi
     case "$kind" in
         qemu) st=$(qm  status "$id" 2>/dev/null) ;;
         lxc)  st=$(pct status "$id" 2>/dev/null) ;;
@@ -1717,14 +1732,14 @@ gq_field() { # gq_field <status-line> <name>
     printf '%s' "${rest%% *}"
 }
 gq_freeze() {
-    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" freeze "$1" >/dev/null 2>&1; return; fi
+    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" freeze "$1" >/dev/null 2>&1; return $?; fi
     case "$2" in
         qemu) qm guest cmd "$1" fsfreeze-freeze >/dev/null 2>&1 ;;
         lxc)  pct exec "$1" -- sync >/dev/null 2>&1 ;;
     esac
 }
 gq_thaw() {
-    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" thaw "$1" >/dev/null 2>&1; return; fi
+    if [ "$QVIA" = helper ]; then sudo -n "$QHELPER" thaw "$1" >/dev/null 2>&1; return $?; fi
     qm guest cmd "$1" fsfreeze-thaw >/dev/null 2>&1
 }
 
