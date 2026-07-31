@@ -75,9 +75,30 @@ identyczne przed i po.
 Świadomie zostawione, wszystko zapowiedziane przez kod: pakiet `sudo`, binarka
 helpera (współdzielona) i pusty dataset testowy w `hdd/backuptest_targets/`.
 
-**Czego nadal nie ma:** żaden guest nie został zamrożony — wszystko powyżej to
-odczyty przez `status`. Ścieżki błędów `install`/`mv`/`visudo` i crash są nadal
-wyłącznie stubowane; na żywo przeszedł happy path.
+**Freeze/thaw na produkcyjnym guescie: WYKONANY 2026-07-31 21:27** na VM 106
+(`vbim2`, Windows, metropolis pve1), pełną ścieżką konto delegowane → sudo →
+helper:
+
+```
+przed:     thawed   21:27:19
+froze VM 106 via qemu-guest-agent   rc=0
+w trakcie: frozen   21:27:23      <- potwierdzone przez qm, nie deklaracją helpera
+thawed VM 106                       rc=0
+po:        thawed   21:27:25
+```
+
+Zamrożenie zajęło ~4 s (przygotowanie VSS), samo okno zamrożenia ~2 s. Po
+wszystkim guest `running`, agent odpowiada. Test szedł w **jednym** wywołaniu z
+trapem odmrażającym rootem, a termin replikacji `106-0` (co 3 h) był wcześniej
+odczekany — pvesr mrozi tego samego guesta i kolizja byłaby najgorszym możliwym
+momentem.
+
+Ten sam przebieg znalazł realny błąd w `sqlfreeze`, patrz sekcja 4.
+
+**Czego nadal nie ma:** ścieżki błędów `install`/`mv`/`visudo` oraz crash są
+wyłącznie stubowane — na produkcji przeszedł happy path. Nie wykonano też
+snapshotu w oknie zamrożenia, więc spójność samego obrazu nadal nie jest
+zmierzona.
 
 ## 2. Zaakceptowany rdzeń
 
@@ -188,6 +209,14 @@ który wcześniej wywrócił parser `writers`.
 Nie jest wpięty w żaden automatyczny werdykt: ani w profil `standard`
 `zfs-backup.sh`, ani w żadną linię crona, i żadna ścieżka kodu nie czyta jego kodu
 wyjścia.
+
+**Poprawka z 2026-07-31 wieczorem:** zastrzeżenie o korelacji było drukowane
+bezwarunkowo, więc przy `verdict=no-freeze-seen` pod werdyktem „nie widziano
+zamrożenia" stało zdanie „SQL uczestniczył w co najmniej jednym freeze/resume".
+Sprzeczność, i to w stronę zmyślania dowodu. Wyszło dopiero na żywym guescie bez
+SQL Servera — wszystkie fixture'y w testach miały zdarzenia, a asercja sprawdzała
+tylko, czy notka istnieje. Notka jest teraz warunkowa, a przypadek zapięty
+testem.
 
 ## 5. Testy — stan bieżący
 

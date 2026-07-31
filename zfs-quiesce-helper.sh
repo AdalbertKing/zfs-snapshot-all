@@ -482,9 +482,19 @@ case "$verb" in
                     printf "SQLFREEZE guest=%s window=%ss instances=%d frozen=%d resumed=%d verdict=engaged last=%s\n", \
                            gid, win, inst, frozen, resumed, last
                 }
-                # Two caveats, both of which someone reading a verdict line in
-                # isolation would otherwise supply wrongly from imagination.
-                print "SQLFREEZE-NOTE SQL participated in at least one VSS freeze/resume within the selected window. This is not correlated to a specific snapshot run."
+                # The caveats someone reading a verdict line in isolation would
+                # otherwise supply wrongly from imagination.
+                #
+                # The first one is CONDITIONAL, and it took a live run on a guest
+                # with no SQL Server at all to notice why. Printed
+                # unconditionally, it put "SQL participated in at least one VSS
+                # freeze/resume" directly underneath verdict=no-freeze-seen --
+                # a flat contradiction, and in the direction that invents
+                # evidence. It may only be said when something was in fact seen.
+                if (inst > 0)
+                    print "SQLFREEZE-NOTE SQL participated in at least one VSS freeze/resume within the selected window. This is not correlated to a specific snapshot run."
+                else
+                    print "SQLFREEZE-NOTE no 3197/3198 events in the window. Most guests run no SQL Server, so this is an absence of evidence, not a fault -- and it does NOT mean the guest was never frozen."
                 print "SQLFREEZE-NOTE counted per instance, not per database; engaged does not prove the snapshot restores"
             }'
         ;;

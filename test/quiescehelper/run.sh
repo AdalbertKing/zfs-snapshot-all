@@ -295,6 +295,19 @@ case "$out" in
     *verdict=no-freeze-seen*) ok "sqlfreeze: no events is reported, not failed" ;;
     *) bad "sqlfreeze: no events is reported, not failed" "$out" ;;
 esac
+# Found on a LIVE Windows guest that runs no SQL Server, 2026-07-31. The
+# correlation caveat was unconditional, so "SQL participated in at least one VSS
+# freeze/resume" printed directly under verdict=no-freeze-seen -- a flat
+# contradiction, and in the direction that invents evidence. Every fixture here
+# HAD events and the assertion above only checked the verdict, so the suite was
+# blind to it.
+case "$out" in
+    *"SQL participated in at least one"*)
+        bad "sqlfreeze: no-freeze-seen must not claim SQL participated" "$out" ;;
+    *"no 3197/3198 events in the window"*)
+        ok "sqlfreeze: no-freeze-seen must not claim SQL participated" ;;
+    *)  bad "sqlfreeze: no-freeze-seen must not claim SQL participated" "no note at all: $out" ;;
+esac
 r=$(rc_of sqlfreeze 100 3600)
 [ "$r" = 0 ] && ok "sqlfreeze: no events still exits 0" \
              || bad "sqlfreeze: no events still exits 0" "rc=$r, expected 0"
