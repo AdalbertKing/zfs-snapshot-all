@@ -965,6 +965,52 @@ fi
     && ok "argv: later flags are not merged or re-split" \
     || bad "argv: later flags are not merged or re-split" "$(cat "$AV/argv")"
 
+# --- 16. moving to a dedicated account must not duplicate root's jobs -------
+#
+# Found before the live pass, 2026-08-01. pve1's ROOT crontab runs a managed
+# block generated from jobs.pve1.v4.conf. Setting --local-user installs a block
+# built from that SAME config into the account's crontab, and leaves root's
+# where it is -- so every production job would run twice, same schedule, same
+# datasets. assert_cron_config_matches_installed cannot see it: it reads the
+# TARGET user's crontab, finds no managed block, and correctly reports no
+# conflict. The conflict is with a different user.
+DUP="$WORK/dupguard"; mkdir -p "$DUP/bin"
+cat > "$DUP/bin/crontab" <<EOF
+#!/bin/bash
+# -u <user> -l  -> the dedicated account: no managed block at all
+[ "\$1" = "-u" ] && exit 0
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $DUP/shared.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "1 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh a"
+    echo "2 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh b"
+    echo "# END zfs-backup-managed"
+fi
+exit 0
+EOF
+chmod +x "$DUP/bin/crontab"
+: > "$DUP/shared.conf"
+
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/shared.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"run TWICE"*) true ;; *) false ;; esac \
+   && case "$out" in *"2 job line"*) true ;; *) false ;; esac; then
+    ok "dup-guard: refuses to install for an account while root runs the same config, and counts the jobs"
+else
+    bad "dup-guard: refuses to install for an account while root runs the same config, and counts the jobs" "rc=$rc out=$out"
+fi
+
+# Staying as root is the normal case and must not be blocked by its own block.
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/shared.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "dup-guard: root installing over its own block is untouched" \
+                || bad "dup-guard: root installing over its own block is untouched" "rc=$rc out=$out"
+
+# A DIFFERENT config in root's crontab is not a duplication -- those are
+# separate job sets, and assert_cron_config_matches_installed owns that case.
+: > "$DUP/other.conf"
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/other.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "dup-guard: an unrelated config in root's crontab is not a conflict" \
+                || bad "dup-guard: an unrelated config in root's crontab is not a conflict" "rc=$rc out=$out"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

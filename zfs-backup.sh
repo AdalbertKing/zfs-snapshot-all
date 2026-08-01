@@ -496,6 +496,29 @@ normalize_cron_source() {
     esac
     readlink -f "$p" 2>/dev/null || printf '%s' "$p"
 }
+# Switching the collector to a dedicated account moves WHERE the managed block
+# is installed. It does not move the block that is already there.
+#
+# Found before running the live pass, 2026-08-01: pve1's root crontab holds a
+# managed block generated from jobs.pve1.v4.conf. Setting --local-user would
+# install a block built from that SAME config into the account's crontab, while
+# root's copy stays exactly where it is -- so every production job in it would
+# run twice, on the same schedule, against the same datasets.
+#
+# assert_cron_config_matches_installed cannot see this: it reads the TARGET
+# user's crontab, which has no managed block at all, finds no '# Source:' line,
+# and correctly reports no conflict. The conflict is with a DIFFERENT user.
+assert_no_foreign_managed_block() {   # <config file>
+    local file="$1" u; u=$(cron_target_user)
+    [ "$u" = root ] && return 0
+    local raw
+    raw=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    [ -n "$raw" ] || return 0
+    [ "$(normalize_cron_source "$raw")" = "$(normalize_cron_source "$file")" ] || return 0
+    local jobs; jobs=$(crontab -l 2>/dev/null | grep -cE '^[0-9*]')
+    die "root's crontab already runs a managed block generated from '$file' ($jobs job line(s)), and this run would install a block from the SAME config into '$u'. Every one of those jobs would then run TWICE, on the same schedule, against the same datasets. Moving a collector to a dedicated account is a migration, not a flag: decide what happens to root's block first (remove it deliberately, or keep root as the owner), then re-run. Nothing has been changed."
+}
+
 assert_cron_config_matches_installed() {
     local file="$1" raw existing want
     raw=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
@@ -1424,6 +1447,7 @@ cmd_activate_client() {
     fi
 
     assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
 
     {
@@ -1532,6 +1556,7 @@ cmd_migrate_profile() {
     fi
 
     assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
     log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
 }
@@ -1676,6 +1701,7 @@ cmd_remove_client() {
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
         assert_cron_config_matches_installed "$CRON_CONFIG"
+        assert_no_foreign_managed_block "$CRON_CONFIG"
         log "removing this client's [dataset:] sections from a working copy of $CRON_CONFIG"
         local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
             || die "mktemp failed next to $CRON_CONFIG"
