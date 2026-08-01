@@ -1939,6 +1939,68 @@ case "$out" in
     *)           bad "missing-config: ...and names cron2conf.sh as the way out" "$out" ;;
 esac
 
+# --- 29. a comma-separated section names SEVERAL datasets -------------------
+#
+# `[prune:a,b,c]` is one section naming three datasets and gen-cron.sh has
+# always accepted it. The capability probe treated the whole string as ONE
+# dataset name, handed it to `zfs allow`, got a failure, and reported every one
+# of those datasets missing -- printing the comma-joined blob where a dataset
+# name belongs.
+#
+# Found on metropolis pve2, 2026-08-01, whose config has two such sections. The
+# damage is not only the false alarm: a garbled entry sitting next to the real
+# ones destroys the operator's ability to read the true list at all.
+CD="$WORK/commadata"; mkdir -p "$CD"
+cat > "$CD/jobs.conf" <<'EOF'
+[dataset:tank/one]
+	use_template = t
+[prune:tank/two,tank/three]
+	use_template = t
+[prune:tank/four, tank/five]
+	use_template = t
+[prune-bookmarks:tank/six]
+	schedule = 0 4 * * *
+EOF
+got=$( bash -c "source '$ZFSBACKUP'; config_datasets '$CD/jobs.conf'" | tr '\n' ' ' )
+check_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want[$3] got[$2]"; }
+# sort -u, so the order is lexicographic: five before four.
+check_eq "commas: every dataset in a comma list is its own entry" \
+         "$got" "tank/five tank/four tank/one tank/three tank/two "
+
+# Whitespace after a comma is a human writing a list, not a dataset whose name
+# starts with a space -- and a leading space would make `zfs allow` treat the
+# name as an option. Asserted by counting entries that still contain a space,
+# which is the thing that would actually break, rather than by matching a
+# position in the joined string.
+dirty=$( bash -c "source '$ZFSBACKUP'; config_datasets '$CD/jobs.conf'" | grep -c '[[:space:]]' )
+check_eq "commas: no entry carries leftover whitespace" "$dirty" "0"
+
+# prune-bookmarks is deliberately NOT a source of delegation checks today (it
+# needs different verbs); pinning that so a future change is a decision rather
+# than an accident.
+case "$got" in
+    *tank/six*) bad "commas: prune-bookmarks is not silently folded in" "$got" ;;
+    *)          ok "commas: prune-bookmarks is not silently folded in" ;;
+esac
+
+# --- 30. the preflight must name a command that exists ----------------------
+#
+# The quiesce gap advised `deploy.sh --join <pakiet> --allow-quiesce`, which
+# grants a PAIRED PEER. Following it would have provisioned a peering
+# relationship the operator did not want and still produced no grant for the
+# host's own account. The local route landed in 3831509 and this message was
+# left pointing at the old one -- a fix is not delivered until the thing that
+# tells people about it agrees.
+qa=$(sed -n '/blok uzywa -q, a konto nie ma grantu quiesce/p' "$ZFSBACKUP")
+case "$qa" in
+    *"--backup-user="*"--allow-quiesce"*) ok "advice: the quiesce gap names the local grant command" ;;
+    *) bad "advice: the quiesce gap names the local grant command" "$qa" ;;
+esac
+case "$qa" in
+    *"--join"*) bad "advice: ...and no longer sends the operator to --join" "$qa" ;;
+    *)          ok "advice: ...and no longer sends the operator to --join" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

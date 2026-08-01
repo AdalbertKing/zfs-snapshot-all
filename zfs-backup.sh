@@ -1803,7 +1803,15 @@ set_host_block() {   # <crontab file> <lines file>
 
 # Datasets a config actually manages, from its own section headers.
 config_datasets() {   # <config file>
-    sed -n -E 's/^\[(dataset|prune):(.+)\]$/\2/p' "$1" | sort -u
+    # SPLIT ON COMMAS. `[prune:a,b,c]` is one section naming three datasets, and
+    # gen-cron.sh has always allowed it -- metropolis pve2 has two such sections.
+    # Without the split the whole string was handed to `zfs allow` as a single
+    # dataset name, which fails, so every one of those datasets was reported
+    # missing and the message printed the comma-joined blob as if it were a
+    # dataset. A false alarm that also destroys the operator's ability to read
+    # the true ones next to it.
+    sed -n -E 's/^\[(dataset|prune):(.+)\]$/\2/p' "$1" | tr ',' '\n' \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u
 }
 
 # zfs allow reports grants made on the dataset AND on its ancestors, so asking
@@ -1944,11 +1952,15 @@ cmd_migrate_to_account() {
         target_can_zfs "$acct" "$ds" || missing_zfs="$missing_zfs $ds"
     done < <(config_datasets "$cfg")
     if [ -z "$missing_zfs" ]; then _have "delegacja ZFS na wszystkich datasetach configu"
-    else _gap "brak delegacji ZFS (snapshot/destroy/hold/release/mount) na:$missing_zfs -- deploy.sh --backup-user=$acct z tymi datasetami"; fi
+    else _gap "brak delegacji ZFS (snapshot/destroy/hold/release/mount) na:$missing_zfs -- deploy.sh --backup-user=$acct --datasets=\"...\" z tymi datasetami"; fi
 
     if grep -qE '^[0-9*].* -q ' "$rootcron"; then
         if target_can_quiesce "$acct"; then _have "konto moze quiesce przez helpera"
-        else _gap "blok uzywa -q, a konto nie ma grantu quiesce -- deploy.sh --join <pakiet> --allow-quiesce (bez tego te linie beda konczyc sie kodem 3)"; fi
+        # Named the --join route until 2026-08-01, because until 3831509 that
+        # was the only route there was. It grants a PAIRED PEER, not this host's
+        # own account, so anyone following it would have provisioned a peering
+        # relationship they did not want and still had no grant.
+        else _gap "blok uzywa -q, a konto nie ma grantu quiesce -- deploy.sh --backup-user=$acct --datasets=\"...\" --allow-quiesce (bez tego te linie beda konczyc sie kodem 3)"; fi
     fi
 
     # Lines root runs that the account's render will not reproduce.
