@@ -235,8 +235,25 @@ funkcją co aktywacja, waliduje, pokazuje diff i pyta raz.
 
 **Limit pasma** `--bandwidth=N` jest per klient (bajty/s, `mbuffer -r`).
 
-Nie zrobione: konto dedykowane na kolektorze (`--local-user`, wybrane jako
-opcjonalne) i pełny test na żywo z realnym transferem.
+**Pełny cykl przetestowany na żywo 2026-08-01** (metropolis, pve1 jako kolektor
+jako root, pve2 jako źródło): `setup-server` → `add-client` → paczka → `--join` →
+`seed` (40 MB realnego transferu) → `verify-endpoint` → `activate-client` →
+uruchomienie wszystkich trzech wygenerowanych linii → `remove-client` → teardown.
+
+Wynik: 15 → 18 linii crona, **każda produkcyjna linia obecna co do znaku**, po
+teardownie crontab **identyczny** ze zrzutem sprzed testu, zero pozostałości na
+obu hostach. Drugi transfer był przyrostowy (cel nie urósł), drabina GFS zostawiła
+najnowszy snapshot i usunęła starszy z tego samego kubełka, monitor `rc=0`.
+
+Test znalazł **realny błąd**, którego żaden test lokalny nie mógł znaleźć: drugi
+argument `snapget.sh` to baza lokalna, a wrapper podawał ścieżkę końcową — seed
+lądował o poziom za głęboko, niewidoczny dla zadania crona (`base=null`, pełny
+transfer w kółko), a `verify-endpoint` meldował sukces, bo szukał w tym samym złym
+miejscu. Naprawione, zapięte testem parzystości z generatorem.
+
+Nie zrobione: konto dedykowane na kolektorze **nie zostało przetestowane na żywo**
+(kod jest, test przeszedł w kształcie rootowym); `migrate-profile` przetestowany
+tylko w częściach składowych.
 
 ## 4. `sqlfreeze` — co dowodzi, a czego nie
 
@@ -276,7 +293,7 @@ Uruchomione lokalnie przy `bda83b3` (bez roota, bez ZFS, bez sieci):
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | 91/91 | warstwa orkiestracji `zfs-backup.sh` |
+| `zfsbackup` | 100/100 | warstwa orkiestracji `zfs-backup.sh` |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
