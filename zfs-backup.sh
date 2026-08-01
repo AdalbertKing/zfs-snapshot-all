@@ -404,6 +404,29 @@ KEEP_TEMPLATE_keep_monthly='
 ensure_cron_config() {
     local file="$1"
     if [ ! -e "$file" ]; then
+        # Found live on pve2, 2026-08-01. That host's crontab held 14 production
+        # jobs whose '# Source:' named a config under a directory that had since
+        # been deleted. setup-server read the Source line, adopted that path as
+        # the cron config, and then CREATED it -- 38 lines of templates and not
+        # one job section.
+        #
+        # That turns a SAFE state into an armed one. A missing config is safe:
+        # gen-cron.sh -c refuses to run at all. A config that exists and
+        # describes no jobs is a loaded gun, because --install replaces the whole
+        # managed block with whatever it generates -- here, nothing -- and
+        # assert_cron_config_matches_installed waves it through, since the Source
+        # line does name this exact file. That guard compares identity; it has no
+        # opinion about content.
+        #
+        # So: never create the file the installed block claims to come from.
+        # Whoever meets this has a real config to find or rebuild, and telling
+        # them that is the only useful thing to do.
+        local claimed
+        claimed=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+        if [ -n "$claimed" ] && [ "$(normalize_cron_source "$claimed")" = "$(normalize_cron_source "$file")" ]; then
+            local jobs; jobs=$(crontab_for_target 2>/dev/null | grep -cE '^[0-9*]')
+            die "refusing to create $file: the installed crontab block says it was generated FROM that file, and it is missing. Creating it would produce a config describing no jobs at all, and the next --install would replace $jobs live cron line(s) with nothing. Find or rebuild the real config first (the installed block is still the record of what should be in it: crontab -l), then re-run. Nothing has been changed."
+        fi
         mkdir -p "$(dirname "$file")" || die "could not create $(dirname "$file")"
         {
             echo "[defaults]"

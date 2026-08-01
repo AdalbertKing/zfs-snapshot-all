@@ -825,6 +825,44 @@ else
     bad "local-user: digest_script=none drops the digest line, and only then" "none=$dg default=$withdg"
 fi
 
+# --- 13. never create the config the installed block claims to come from ----
+#
+# Found live on pve2, 2026-08-01. Its crontab held 14 production jobs whose
+# '# Source:' named a config in a directory that had since been deleted.
+# setup-server adopted that path and CREATED it: templates only, no job
+# sections. A missing config is SAFE (gen-cron -c refuses to run); a config that
+# exists and describes nothing is armed, because --install replaces the whole
+# managed block with whatever it generates. And
+# assert_cron_config_matches_installed passes it, since the Source line does
+# name that exact file -- it compares identity, not content.
+SRC="$WORK/srcguard"; mkdir -p "$SRC/bin"
+cat > "$SRC/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-l" ] || exit 0
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: $SRC/gone.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "1 * * * * /root/scripts/zfs-snapshot-all/snapget.sh something"
+echo "21 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh something"
+echo "# END zfs-backup-managed"
+EOF
+chmod +x "$SRC/bin/crontab"
+
+out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; ensure_cron_config '$SRC/gone.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$SRC/gone.conf" ]    && case "$out" in *"replace 2 live cron line"*) true ;; *) false ;; esac; then
+    ok "src-guard: refuses to create the config the installed block came from, and counts what is at stake"
+else
+    bad "src-guard: refuses to create the config the installed block came from, and counts what is at stake" "rc=$rc created=$([ -e "$SRC/gone.conf" ] && echo tak || echo nie) out=$out"
+fi
+
+# A DIFFERENT path is not the claimed one, so creating it stays allowed --
+# otherwise a host could never gain a second config at all.
+out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; ensure_cron_config '$SRC/other.conf'" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$SRC/other.conf" ]; then
+    ok "src-guard: an unrelated config path is still created normally"
+else
+    bad "src-guard: an unrelated config path is still created normally" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
