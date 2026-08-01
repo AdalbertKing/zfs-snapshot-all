@@ -522,6 +522,113 @@ else
     bad "proposal: adding a dataset shows in the config and in the cron lines" "$out"
 fi
 
+# --- 9. the GFS profile and its compatibility guard -------------------------
+#
+# Retention moved from a flat count per tier per dataset to ONE cascading
+# delsnaps.sh -G ladder per client. gen-cron.sh accepts gfs= only in a
+# [prune:] section, and a [dataset:] prunes exactly when its tiers resolve a
+# prune_schedule -- so the profile had to split into two template families.
+# The dangerous half of that change is what happens to a host written before
+# it, whose standard_* templates still carry prune_schedule: adding a ladder
+# there would prune the same snapshots twice on the same schedule.
+PROF="$WORK/profile"; mkdir -p "$PROF"
+
+ensure_cron_config "$PROF/fresh.conf" >/dev/null 2>&1
+if grep -q "^\[template:keep_hourly\]" "$PROF/fresh.conf" \
+   && grep -q "^\[template:standard_hourly\]" "$PROF/fresh.conf" \
+   && [ "${PROFILE_GFS:-}" = 1 ] \
+   && ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$PROF/fresh.conf" | grep -q prune_schedule; then
+    ok "profile: a fresh config gets both families, and standard_* no longer prunes"
+else
+    bad "profile: a fresh config gets both families, and standard_* no longer prunes" "$(cat "$PROF/fresh.conf")"
+fi
+
+# The guard. A pre-split config must be left alone: no keep_* injected, and the
+# flag that suppresses the ladder must be off.
+cat > "$PROF/legacy.conf" <<'EOF'
+[defaults]
+	host_label = oldhost
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+EOF
+ensure_cron_config "$PROF/legacy.conf" >/dev/null 2>&1
+if [ "${PROFILE_GFS:-}" = 0 ] && ! grep -q "^\[template:keep_" "$PROF/legacy.conf"; then
+    ok "profile: a pre-GFS config keeps flat retention and gets no keep_* templates"
+else
+    bad "profile: a pre-GFS config keeps flat retention and gets no keep_* templates" \
+        "PROFILE_GFS=${PROFILE_GFS:-unset}; $(grep -c '^\[template:keep_' "$PROF/legacy.conf") keep_* sections"
+fi
+
+# remove_managed_sections has to see [prune:] too, or a re-activation appends a
+# second ladder over the same scope on the same schedule.
+cat > "$PROF/rm.conf" <<'EOF'
+[defaults]
+	host_label = h
+
+[prune:tank/backups/peer1]
+	use_template = keep_hourly
+	gfs          = yes
+
+[dataset:tank/other]
+	use_template = standard_hourly
+EOF
+remove_managed_sections "$PROF/rm.conf" "tank/backups/peer1"
+if ! grep -q "^\[prune:tank/backups/peer1\]" "$PROF/rm.conf" && grep -q "^\[dataset:tank/other\]" "$PROF/rm.conf"; then
+    ok "profile: remove_managed_sections drops a [prune:] section and spares the rest"
+else
+    bad "profile: remove_managed_sections drops a [prune:] section and spares the rest" "$(cat "$PROF/rm.conf")"
+fi
+
+# End to end through the real generator: the whole point of the change is ONE
+# ladder line instead of a flat prune per tier.
+ensure_cron_config "$PROF/gen.conf" >/dev/null 2>&1
+cat >> "$PROF/gen.conf" <<'EOF'
+
+[dataset:tank/backups/peer1/rpool/data]
+	use_template = standard_hourly,standard_daily,standard_weekly,standard_monthly
+	src          = robot@10.0.0.1:rpool/data
+	notify       = peer1-data
+
+[prune:tank/backups/peer1]
+	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly
+	recursive    = yes
+	gfs          = yes
+	gfs_pattern  = automated_
+	notify       = peer1
+EOF
+gen_out=$(bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1)
+ladders=$(printf '%s\n' "$gen_out" | grep -c -- "delsnaps.sh -G")
+flat=$(printf '%s\n' "$gen_out" | grep "delsnaps.sh" | grep -vc -- "-G")
+if [ "$ladders" = 1 ] && [ "$flat" = 0 ]; then
+    ok "profile: renders exactly one GFS ladder and no flat per-tier prune"
+else
+    bad "profile: renders exactly one GFS ladder and no flat per-tier prune" \
+        "ladders=$ladders flat=$flat
+$gen_out"
+fi
+if printf '%s\n' "$gen_out" | grep -q -- '-G -R "tank/backups/peer1" "automated_" -H24 -D7 -W4 -M12'; then
+    ok "profile: the ladder carries every tier's count in order"
+else
+    bad "profile: the ladder carries every tier's count in order" "$(printf '%s\n' "$gen_out" | grep -- '-G')"
+fi
+
+# --- 10. --bandwidth validation ---------------------------------------------
+# mbuffer -r takes BYTES per second. A value that looks like a bit rate, or a
+# typo, has to be refused here rather than in a cron line at 01:00.
+bw_rc() { ( cmd_add_client "bwtest" --lan=10.0.0.1 --datasets="tank/x" --bandwidth="$1" ) >/dev/null 2>&1; echo $?; }
+bw_bad=0
+for v in "20Mb" "abc" "M20" "20MM" "" "20 M"; do
+    [ "$(bw_rc "$v")" = 0 ] && bw_bad=$((bw_bad+1))
+done
+[ "$bw_bad" = 0 ] && ok "bandwidth: every malformed rate is refused" \
+                  || bad "bandwidth: every malformed rate is refused" "$bw_bad wartosci przeszlo"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

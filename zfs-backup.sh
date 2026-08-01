@@ -14,7 +14,7 @@ set -uo pipefail
 #
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
-#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X]
+#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
@@ -106,7 +106,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
-  zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X]
+  zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT] [--skip-final-catchup]
@@ -321,42 +321,81 @@ STANDARD_TEMPLATE_standard_hourly='
 	send_schedule  = 1 * * * *
 	prefix         = automated_hourly_
 	notify_word    = backup
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -H24
-	monitor_warn   = 90m
-	monitor_crit   = 150m
 '
 STANDARD_TEMPLATE_standard_daily='
 [template:standard_daily]
 	send_schedule  = 0 0 * * *
 	prefix         = automated_daily_
 	notify_word    = backup
-	prune_schedule = 10 0 * * *
-	pattern        = automated_daily
-	retain         = -D7
-	monitor_warn   = 30h
-	monitor_crit   = 48h
 '
 STANDARD_TEMPLATE_standard_weekly='
 [template:standard_weekly]
 	send_schedule  = 0 0 * * 0
 	prefix         = automated_weekly_
 	notify_word    = backup
-	prune_schedule = 20 0 * * 0
-	pattern        = automated_weekly
-	retain         = -W4
-	monitor_warn   = 9d
-	monitor_crit   = 12d
 '
 STANDARD_TEMPLATE_standard_monthly='
 [template:standard_monthly]
 	send_schedule  = 0 0 1 * *
 	prefix         = automated_monthly_
 	notify_word    = backup
+'
+
+# ---- keep_* : retention and staleness, deliberately SEPARATE from standard_*
+#
+# gen-cron.sh accepts gfs= only in a [prune:] section, and a [dataset:] prunes
+# exactly when its tiers resolve a prune_schedule. So a single template family
+# cannot express "send here, keep by a GFS ladder over there": the dataset would
+# prune flat per tier AND the ladder would prune the same snapshots, on the same
+# schedule, and the two race.
+#
+# Hence two families. standard_* carries send_schedule/prefix and nothing else;
+# keep_* carries prune_schedule/pattern/retain plus the staleness thresholds.
+#
+# The monitors live HERE, not on standard_*, and that is forced rather than
+# chosen: in gen-cron.sh the [dataset:] monitor block is nested inside the
+# prune_schedule branch, so a dataset that does not prune is not monitored
+# either. Riding the [prune:] section makes each check recursive over the whole
+# client subtree -- one alert per tier per client instead of one per dataset.
+# That is a consolidation, not a loss: check-snap-age.sh -R names the offending
+# dataset in the output the alert carries.
+KEEP_TEMPLATE_NAMES="keep_hourly keep_daily keep_weekly keep_monthly"
+
+KEEP_TEMPLATE_keep_hourly='
+[template:keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+	notify_word    = prune
+	monitor_warn   = 90m
+	monitor_crit   = 150m
+'
+KEEP_TEMPLATE_keep_daily='
+[template:keep_daily]
+	prune_schedule = 10 0 * * *
+	pattern        = automated_daily
+	retain         = -D7
+	notify_word    = prune
+	monitor_warn   = 30h
+	monitor_crit   = 48h
+'
+KEEP_TEMPLATE_keep_weekly='
+[template:keep_weekly]
+	prune_schedule = 20 0 * * 0
+	pattern        = automated_weekly
+	retain         = -W4
+	notify_word    = prune
+	monitor_warn   = 9d
+	monitor_crit   = 12d
+'
+KEEP_TEMPLATE_keep_monthly='
+[template:keep_monthly]
 	prune_schedule = 30 0 1 * *
 	pattern        = automated_monthly
 	retain         = -M12
+	notify_word    = prune
+	monitor_warn   = 35d
+	monitor_crit   = 45d
 '
 
 # REV-20260730-003 F8 (review 2): checks EACH template independently and
@@ -375,6 +414,21 @@ ensure_cron_config() {
         } > "$file" || die "could not create $file"
         log "created new cron config $file"
     fi
+    # A config written before the profile split has prune_schedule INSIDE
+    # standard_*, so its [dataset:] sections prune themselves flat, per tier.
+    # Adding a GFS [prune:] section on top of that would prune the same
+    # snapshots twice on the same schedule -- the race gen-cron.sh's own docs
+    # warn about. Templates already present are never rewritten (that is what
+    # makes this function safe to re-run), so such a host keeps flat retention
+    # until someone migrates it deliberately.
+    PROFILE_GFS=1
+    if grep -q "^\[template:standard_hourly\]" "$file" 2>/dev/null; then
+        if sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$file" | grep -q "prune_schedule"; then
+            PROFILE_GFS=0
+            log "$file uses the pre-GFS profile (standard_* still carries prune_schedule) -- keeping flat per-tier retention for this host. Migration is a deliberate edit, not something activate-client will do behind your back."
+        fi
+    fi
+
     local t varname added=""
     for t in $STANDARD_TEMPLATE_NAMES; do
         grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
@@ -382,7 +436,15 @@ ensure_cron_config() {
         printf '%s\n' "${!varname}" >> "$file" || die "could not append [template:$t] to $file"
         added="$added $t"
     done
-    [ -n "$added" ] && log "added missing standard profile template(s) to $file:$added"
+    if [ "$PROFILE_GFS" -eq 1 ]; then
+        for t in $KEEP_TEMPLATE_NAMES; do
+            grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
+            varname="KEEP_TEMPLATE_$t"
+            printf '%s\n' "${!varname}" >> "$file" || die "could not append [template:$t] to $file"
+            added="$added $t"
+        done
+    fi
+    [ -n "$added" ] && log "added missing profile template(s) to $file:$added"
 }
 
 # gen-cron.sh --install replaces the ENTIRE managed block (BEGIN/END markers)
@@ -587,17 +649,28 @@ cmd_setup_server() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local lan="" datasets="" target=""
+    local lan="" datasets="" target="" bandwidth=""
     for a in "$@"; do
         case "$a" in
-            --lan=*)      lan="${a#*=}" ;;
-            --datasets=*) datasets="${a#*=}" ;;
-            --target=*)   target="${a#*=}" ;;
+            --lan=*)       lan="${a#*=}" ;;
+            --datasets=*)  datasets="${a#*=}" ;;
+            --target=*)    target="${a#*=}" ;;
+            --bandwidth=*) bandwidth="${a#*=}" ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
     [ -n "$lan" ]      || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
     [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\""
+    # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
+    # this to mbuffer -r, which is a byte rate. Validated here rather than at
+    # the far end of a generated cron line, where a typo becomes a nightly
+    # failure mail instead of an error you can see now.
+    if [ -n "$bandwidth" ]; then
+        case "$bandwidth" in
+            *[!0-9kKmMgG]* | "" | *[kKmMgG]*[kKmMgG]* | [kKmMgG]*)
+                die "add-client: --bandwidth='$bandwidth' is not a byte rate (digits, optionally followed by one of k/M/G -- e.g. 20M). It is BYTES per second, not bits." ;;
+        esac
+    fi
 
     local cpath; cpath=$(client_conf_path "$name")
     [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
@@ -624,6 +697,7 @@ cmd_add_client() {
         write_client_field ACTIVE_ENDPOINT   lan
         write_client_field ENDPOINT_LAN_HOST "$lan_host"
         write_client_field ENDPOINT_LAN_PORT "$lan_port"
+        write_client_field BANDWIDTH         "$bandwidth"
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
@@ -680,6 +754,11 @@ load_client_and_connection() {
     # whole trust model; the extra IP-spoofing check adds nothing here.
     LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
     [ "$port" != "22" ] && LOAD_FLAGS="$LOAD_FLAGS -p $port"
+    # -b caps the receive-side mbuffer. It rides in the same flags string as the
+    # ssh options because it is per-CLIENT, not per-host: the whole point is
+    # that a peer at the end of a slow VPN gets a ceiling while a LAN peer on
+    # the same collector does not.
+    [ -n "${BANDWIDTH:-}" ] && LOAD_FLAGS="$LOAD_FLAGS -b $BANDWIDTH"
 }
 
 # ------------------------------------------------------------------------------
@@ -1077,6 +1156,30 @@ cmd_activate_client() {
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || { rm -f "$workfile"; die "could not append [dataset:$localpath] to the working copy"; }
     done
+
+    # One GFS ladder for the whole client, instead of a flat count per tier per
+    # dataset. gfs_pattern is the ONE prefix that has to see every contributing
+    # tier's snapshots, which is why it is 'automated_' and not any single
+    # tier's own narrower 'pattern' -- the ladder buckets them by elapsed time
+    # across all four.
+    #
+    # Recursive over the client's subtree deliberately: every dataset of a
+    # client gets the same four tiers, so a recursive sweep cannot hit the
+    # "leaf has only some of these tiers" trap that forces per-leaf monitor
+    # carriers elsewhere in this estate.
+    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+        local prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
+        remove_managed_sections "$workfile" "$prune_scope"
+        {
+            echo
+            echo "[prune:$prune_scope]"
+            echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+            echo "	recursive    = yes"
+            echo "	gfs          = yes"
+            echo "	gfs_pattern  = automated_"
+            echo "	notify       = ${name}"
+        } >> "$workfile" || { rm -f "$workfile"; die "could not append [prune:$prune_scope] to the working copy"; }
+    fi
     log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$ACTIVE_ENDPOINT'"
 
     log "validating generated config (working copy only, nothing real touched yet)..."
@@ -1142,6 +1245,11 @@ cmd_activate_client() {
         write_client_field STATE            active
         write_client_field ACTIVATED_AT     "$(date '+%Y-%m-%d %H:%M:%S')"
         write_client_field MANAGED_DATASETS "${managed[*]}"
+        # Recorded rather than derived: remove-client only knows the dataset
+        # paths, and reconstructing their common parent by string surgery would
+        # be a guess. Empty on a pre-GFS host, which is exactly the signal
+        # remove-client needs to skip it.
+        write_client_field MANAGED_PRUNE_SCOPE "${prune_scope:-}"
         write_client_field CRON_CONFIG      "$cronfile"
         # REV-20260730-005 F4: what the cron line ACTUALLY connects through,
         # as opposed to ACTIVE_ENDPOINT which is what we want it to use. They
@@ -1248,7 +1356,13 @@ remove_managed_sections() {
     local tmp; tmp=$(mktemp) || die "mktemp failed"
     local ds header in_target=0
     local -a headers=()
-    for ds in "${targets[@]}"; do headers+=("[dataset:$ds]"); done
+    # Both section types for each path. The GFS profile gives a client one
+    # [prune:<target>/<label>] alongside its [dataset:] sections, and a function
+    # that only knew about [dataset:] would append a second prune section on
+    # every re-activation -- two ladders, same scope, same schedule, racing.
+    # Removing [prune:X] when X is a dataset path is a harmless no-op: the two
+    # never share a path, since the prune scope is the parent of the datasets.
+    for ds in "${targets[@]}"; do headers+=("[dataset:$ds]" "[prune:$ds]"); done
     while IFS= read -r line; do
         case "$line" in
             \[*\])
@@ -1279,7 +1393,7 @@ cmd_remove_client() {
             || die "mktemp failed next to $CRON_CONFIG"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
         # shellcheck disable=SC2086
-        remove_managed_sections "$workfile" $MANAGED_DATASETS
+        remove_managed_sections "$workfile" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
         if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
             rm -f "$workfile"
             die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
