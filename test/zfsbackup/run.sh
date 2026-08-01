@@ -1045,6 +1045,49 @@ out=$( PATH="$RD/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; assert_c
 [ "$rc" -eq 0 ] && ok "readable: root is not asked whether it can read its own config" \
                 || bad "readable: root is not asked whether it can read its own config" "rc=$rc out=$out"
 
+# --- 18. the dedicated account runs ITS OWN checkout ------------------------
+#
+# /root is 0700 on a Proxmox host, so a delegated account cannot read
+# /root/scripts/zfs-snapshot-all at all -- neither gen-cron.sh nor the
+# snapget.sh/delsnaps.sh the generated lines would name. deploy.sh
+# --backup-user provisions $HOME/zfs-snapshot-all for that reason. Found live on
+# metropolis pve1, 2026-08-01: the install failed AFTER the preview was
+# accepted, and only the crontab rollback kept it from being a mess.
+OWN="$WORK/owncheckout"; mkdir -p "$OWN/bin" "$OWN/home/zfs-snapshot-all"
+: > "$OWN/home/zfs-snapshot-all/gen-cron.sh"
+cat > "$OWN/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "acct:x:1001:1001::$OWN/home:/bin/bash"
+exit 0
+EOF
+cat > "$OWN/bin/runuser" <<EOF
+#!/bin/bash
+# test -r answers honestly; anything else records argv and succeeds
+if [ "\$4" = "test" ]; then [ -r "\$6" ]; exit \$?; fi
+: > "$OWN/argv"; for a in "\$@"; do printf '%s\n' "\$a" >> "$OWN/argv"; done
+exit 0
+EOF
+chmod +x "$OWN/bin/getent" "$OWN/bin/runuser"
+
+( LOCAL_USER="acct"; GENCRON="/root/scripts/zfs-snapshot-all/gen-cron.sh"; PATH="$OWN/bin:$PATH"
+  gencron_as_target -c /etc/x.conf --install ) >/dev/null 2>&1
+if grep -qxF "$OWN/home/zfs-snapshot-all/gen-cron.sh" "$OWN/argv" 2>/dev/null \
+   && ! grep -q "/root/scripts" "$OWN/argv" 2>/dev/null; then
+    ok "own-checkout: the account's own gen-cron.sh is run, never root's"
+else
+    bad "own-checkout: the account's own gen-cron.sh is run, never root's" "$(cat "$OWN/argv" 2>/dev/null)"
+fi
+
+# Missing checkout: refuse and say how to provision it, rather than failing
+# later inside gen-cron with a permissions error nobody can read.
+rm -f "$OWN/home/zfs-snapshot-all/gen-cron.sh"
+out=$( LOCAL_USER="acct"; GENCRON="/root/x.sh"; PATH="$OWN/bin:$PATH"; gencron_as_target -c /etc/x.conf 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"--backup-user=acct"*) true ;; *) false ;; esac; then
+    ok "own-checkout: a missing account checkout is refused with the command that fixes it"
+else
+    bad "own-checkout: a missing account checkout is refused with the command that fixes it" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

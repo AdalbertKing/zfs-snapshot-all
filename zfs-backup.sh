@@ -668,19 +668,31 @@ gencron_as_target() {   # <args...>
     local home; home=$(getent passwd "$u" | cut -d: -f6)
     [ -n "$home" ] || { warn "no home directory for '$u' -- cannot resolve its alert paths"; return 1; }
 
+    # The ACCOUNT'S OWN checkout, not root's. /root is 0700 on a Proxmox host,
+    # so a delegated account cannot read /root/scripts/zfs-snapshot-all at all
+    # -- not gen-cron.sh, and not the snapget.sh/delsnaps.sh the generated cron
+    # lines would name. deploy.sh --backup-user already provisions
+    # $HOME/zfs-snapshot-all for exactly this reason and the hourly pull keeps
+    # it current; running the account's copy also makes gen-cron bake the
+    # account's own paths into the lines it emits, since it derives REPO_DIR
+    # from where it lives.
+    #
+    # Found live on metropolis pve1, 2026-08-01: the install failed here, after
+    # the preview had been accepted, and only the crontab rollback kept it from
+    # being a mess.
+    local account_gencron="$home/zfs-snapshot-all/gen-cron.sh"
+    if ! runuser_test_r "$u" "$account_gencron"; then
+        warn "'$u' has no readable $account_gencron -- a delegated account cannot use root's copy (/root is 0700), so it needs its own checkout. Run: deploy.sh --backup-user=$u"
+        return 1
+    fi
+
     # argv is PASSED, never re-assembled into a shell string (REV-20260801-017
-    # F1). The previous version built `su -c "... bash '$GENCRON' $*"`, which
-    # hands the target account's shell a sentence to re-parse: a config path
-    # containing a space would arrive as two arguments, and a metacharacter as
-    # something else entirely. A high-level wrapper must not rest its
+    # F1). The previous version built `su -c "... $*"`, which hands the target
+    # account's shell a sentence to re-parse: a config path containing a space
+    # would arrive as two arguments. A high-level wrapper must not rest its
     # correctness -- let alone its safety -- on an undocumented "our paths never
     # contain spaces" assumption, and the preview would then have validated a
     # different file from the one installed.
-    #
-    # `runuser -- ` is the auditable form: everything after it is argv, and env
-    # carries the account's own alert paths. DIGEST_SCRIPT=none because
-    # deploy.sh deliberately does not give a delegated account alert-digest.sh
-    # -- one digest per host, or it sends two mails a day.
     local -a envv=(
         "NOTIFY_SCRIPT=$home/notify-fail.sh"
         "WARN_SCRIPT=$home/notify-warn.sh"
@@ -689,13 +701,23 @@ gencron_as_target() {   # <args...>
         "GEN_CRON_LOCKFILE=$home/.gen-cron.install.lock"
     )
     if command -v runuser >/dev/null 2>&1; then
-        runuser --user "$u" -- env "${envv[@]}" bash "$GENCRON" "$@"
+        runuser --user "$u" -- env "${envv[@]}" bash "$account_gencron" "$@"
     else
         # su has no argv-passing form, so every argument is quoted explicitly.
         # printf %q is the only thing standing between this and the defect
         # above; it is not an optimisation and must not be "simplified" away.
-        local cmd; cmd=$(printf '%q ' env "${envv[@]}" bash "$GENCRON" "$@")
+        local cmd; cmd=$(printf '%q ' env "${envv[@]}" bash "$account_gencron" "$@")
         su -s /bin/bash "$u" -c "$cmd"
+    fi
+}
+
+# `test -r` AS the account. Modes alone cannot answer it: group membership,
+# ACLs and every parent directory on the path all get a vote.
+runuser_test_r() {   # <user> <path>
+    if command -v runuser >/dev/null 2>&1; then
+        runuser --user "$1" -- test -r "$2"
+    else
+        su -s /bin/bash "$1" -c "$(printf '%q ' test -r "$2")"
     fi
 }
 
