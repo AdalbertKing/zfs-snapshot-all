@@ -791,7 +791,13 @@ show_activation_proposal() {   # <current config> <proposed config>
     # The `!` tests the PIPELINE, which reports gen-cron's failure only because
     # this file sets `pipefail` at the top. Verified: a config gen-cron rejects
     # makes this function return 1 rather than showing a plausible empty diff.
-    if ! bash "$GENCRON" -c "$workfile" 2>/dev/null | _strip_source > "$after"; then
+    # Rendered through gencron_as_target, exactly as the install will be. The
+    # first version called gen-cron directly, i.e. as ROOT -- so on a host with
+    # a dedicated collector account the preview showed root's paths and root's
+    # digest line while the install produced the account's. A preview that is
+    # not the install is worse than none: it is a promise made in the wrong
+    # environment (REV-20260801-015's own acceptance criterion).
+    if ! gencron_as_target -c "$workfile" 2>/dev/null | _strip_source > "$after"; then
         rm -f "$before" "$after"; return 1
     fi
 
@@ -832,6 +838,12 @@ atomic_replace_and_install() {
         backup=$(mktemp "$(dirname "$realfile")/.zfsbackup-backup.XXXXXX") || { rm -f "$workfile" "$crontab_backup"; die "mktemp backup failed for $realfile"; }
         cp -p "$realfile" "$backup" || { rm -f "$workfile" "$backup" "$crontab_backup"; die "could not back up $realfile before swap"; }
     fi
+    # The config the collector account reads must stay readable by it. mktemp
+    # made the working copy 0600 and the swap would carry that mode onto the
+    # real file -- found live on metropolis pve1: gen-cron, running as the
+    # account, got "Permission denied" on a config in a world-readable
+    # directory.
+    chmod 0644 "$workfile" 2>/dev/null || :
     if ! mv -f "$workfile" "$realfile"; then
         rm -f "$workfile" "$backup" "$crontab_backup" 2>/dev/null
         die "could not atomically replace $realfile"
@@ -1552,7 +1564,12 @@ cmd_migrate_profile() {
     fi
 
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX")         || die "mktemp failed next to $cronfile"
+    # mktemp makes 0600. The preview and the install both read this file AS the
+    # collector account, so it has to be readable by it -- and the mode has to
+    # be right BEFORE either of them runs, not after the swap.
+    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
 
     # Drop every legacy send template, then let ensure_cron_config put the new
     # families back. Removing them is what makes this a migration rather than an
@@ -1754,6 +1771,7 @@ cmd_remove_client() {
         local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
             || die "mktemp failed next to $CRON_CONFIG"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
+        chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086
         remove_managed_sections "$workfile" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
         if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
