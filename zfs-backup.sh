@@ -193,6 +193,23 @@ ensure_alias_known_hosts() {
         printf '%s %s\n' "$alias" "$rest" > "$dst" || return 1
     fi
     chmod 0600 "$dst" 2>/dev/null
+    # This file lives in the account's own ~/.ssh but is written HERE, by root.
+    # Without the chown it lands root:root 0600 -- and the account then cannot
+    # read the pinned host key for the peer it is meant to pull from. ssh
+    # answers "No ECDSA host key is known for <alias> ... Host key verification
+    # failed", which reads like a missing or wrong key rather than a permission
+    # problem on a file that is right there.
+    #
+    # Found live on metropolis pve1, 2026-08-01. deploy.sh --pair gets the other
+    # two files right (key and known_hosts are both account-owned); only this
+    # one, generated later by this wrapper, was left behind.
+    local _lu="${LOCAL_USER:-}" _lh=""
+    [ -n "$_lu" ] && _lh=$(getent passwd "$_lu" 2>/dev/null | cut -d: -f6)
+    if [ -n "$_lh" ]; then
+        case "$dst" in
+            "$_lh"/*) chown "$_lu":"$_lu" "$dst" 2>/dev/null ;;
+        esac
+    fi
     printf '%s' "$dst"
 }
 
