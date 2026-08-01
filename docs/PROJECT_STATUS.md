@@ -332,7 +332,7 @@ pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **142/142** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
+| `zfsbackup` | **152/152** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -373,6 +373,11 @@ czterech hostach w obu formach hosta.
 
 ### Otwarte u implementera
 
+- **REV-021 — zaimplementowane w `1edca10`, czeka na werdykt.** Instalacja nie
+  może skasować zadań, które cel już wykonuje (`assert_target_block_not_clobbered`),
+  a linie „porzucone" przez render konta trafiają do bloku ogólnohostowego
+  **tylko** jeśli są rozpoznane jako ogólnohostowe — reszta zatrzymuje migrację
+  z podaniem linii. Odpowiedź: `docs/reviews/responses/REV-20260801-021.md`.
 - **REV-018/-019/-020 — zaimplementowane w `1d5a8c4`, czekają na werdykt.**
   Bramka duplikacji porównuje teraz **tożsamość zadań**, nie ścieżkę configu
   (`job_identity()` zdejmuje katalog skryptu i log, zostawia harmonogram,
@@ -397,13 +402,25 @@ czterech hostach w obu formach hosta.
   własny błąd: faza 1 renderowała jako konto, zanim faza 2 przeniosła config,
   więc na jedynym kształcie hosta, dla którego to pisałem, kończyła się FATAL-em.
   Naprawione w `4662b8a`, trzy testy padają na bazie.
-- **Migracja produkcyjnego bloku metropolis pve1 na konto: nadal WSTRZYMANA.**
-  Fazy 2–5 (`prepare`/`preview`/`commit`/`verify`) **nigdy nie działały na
-  prawdziwej parze crontabów** — są sprawdzone wyłącznie na stubach. Nie da się
-  ich przetestować na żywo bez chwilowego podmienienia produkcyjnego bloku
-  roota, bo `gen-cron --install` zastępuje cały blok `BEGIN/END`; na żadnym z
-  czterech hostów root nie jest wolny od bloku. To wymaga decyzji właściciela o
-  oknie serwisowym, nie jest do zrobienia po cichu.
+- **Fazy 2–5 PRZETESTOWANE NA ŻYWO** w oknie serwisowym za zgodą właściciela,
+  metropolis pve1, 2026-08-01 17:07–17:09. Syntetyczny blok na datasecie
+  testowym, nie produkcyjne zadania. Przeszło: config **przeniesiony** do
+  `/etc/zfs-snapshot-all/`, blok kolektora zdjęty z roota, digest zachowany we
+  własnym bloku `# BEGIN zfs-backup-host`, blok konta zainstalowany ze ścieżkami
+  konta i finalną ścieżką configu w `# Source:`, wszystkie cztery linie konta
+  wykonane jako konto. Potem przebieg z wstrzykniętą awarią (crontab konta
+  ustawiony `chattr +i`): crontab roota odtworzony **bajt w bajt**, config
+  cofnięty. Po teardownie oba crontaby identyczne ze zrzutem sprzed testu,
+  dataset testowy usunięty, zero resztek.
+- **Znalezione przez ten przebieg i naprawione:** rollback twierdził „both
+  crontabs restored" linijkę po ostrzeżeniu, że crontaba konta nie odtworzył
+  (`d506361`) — nigdy nie był zapisany, więc nie było czego odtwarzać.
+- **Migracja produkcyjnego bloku metropolis pve1: nadal WSTRZYMANA**, ale już
+  tylko na dwóch brakujących zdolnościach, które wskazuje sam `--preflight`:
+  delegacja ZFS na `hdd/vm-disks` i grant quiesce. Obie do nadania przez
+  `deploy.sh`, obie to zmiana produkcyjna wymagająca decyzji.
+- **Nieprzetestowane na żywo:** konto, które JUŻ ma rozłączny blok zarządzany
+  (temat REV-021) — pokryte tylko testami na stubach.
 - ~~Test `remove-client` celujący w crontab skonfigurowanego konta~~ — **zrobione**
   (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
   na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
