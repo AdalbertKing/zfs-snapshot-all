@@ -1349,15 +1349,15 @@ exit 0
 EOF
 chmod +x "$CAP/bin/zfs"
 
-( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/full ) >/dev/null 2>&1
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/full "snapshot,destroy,hold,release,mount" ) >/dev/null 2>&1
 [ $? -eq 0 ] && ok "capabilities: a full delegation passes" \
              || bad "capabilities: a full delegation passes" "rejected a complete grant"
 
-( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/partial ) >/dev/null 2>&1
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/partial "snapshot,destroy,hold,release,mount" ) >/dev/null 2>&1
 [ $? -ne 0 ] && ok "capabilities: a delegation missing 'destroy' is refused" \
              || bad "capabilities: a delegation missing 'destroy' is refused" "accepted a partial grant"
 
-( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/none ) >/dev/null 2>&1
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/none "snapshot,destroy,hold,release,mount" ) >/dev/null 2>&1
 [ $? -ne 0 ] && ok "capabilities: no delegation at all is refused" \
              || bad "capabilities: no delegation at all is refused" "accepted an absent grant"
 
@@ -2102,6 +2102,172 @@ case "$env_block" in
     *'REPO_DIR=$home/zfs-snapshot-all'*) ok "runnable: gencron_as_target pins REPO_DIR to the account's checkout" ;;
     *) bad "runnable: gencron_as_target pins REPO_DIR to the account's checkout" "$env_block" ;;
 esac
+
+# --- 32. capabilities come from the JOBS, not from a section type -----------
+#
+# REV-20260801-026. The probe asked one fixed set -- snapshot,destroy,hold,
+# release,mount -- of every dataset a config mentioned. pve2 showed both ways
+# that is wrong:
+#
+#   TOO WEAK    a receive target needs receive/create/rollback/canmount and
+#               none of them were asked, so an account could pass preflight and
+#               fail at 04:00 on "cannot receive: permission denied";
+#   TOO STRONG  a `[prune:]` carrying `prune = no` is a MONITOR line. It
+#               destroys nothing and needs nothing, yet was reported as a gap,
+#               sending the operator to widen a grant for a job that only reads.
+#
+# So the requirement is derived from the rendered block -- the command lines
+# that will actually run.
+CAPB="$WORK/caps"; mkdir -p "$CAPB"
+cat > "$CAPB/block.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+37 * * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapsend.sh -m "h_" -v 3 "tank/a,tank/b" 2>"$e"; rc=$?
+0 4 * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapsend.sh -m "d_" -e -v 3 "tank/a" "tank/backups/here" 2>"$e"; rc=$?
+1 5 * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapget.sh -m "p_" "far:tank/x" "tank/pulled" 2>"$e"; rc=$?
+9 9 * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapsend.sh -m "r_" "tank/remote-src" "root@far:tank/b" 2>"$e"; rc=$?
+51 * * * * e=$(mktemp); /home/z/zfs-snapshot-all/delsnaps.sh -G -R "tank/backups" "automated_" -H24 2>"$e"; rc=$?
+30 4 * * * e=$(mktemp); /home/z/zfs-snapshot-all/delsnaps.sh -B -R "tank/bm" "tgt-" -d30 2>"$e"; rc=$?
+31 4 * * * e=$(mktemp); /home/z/zfs-snapshot-all/delsnaps.sh -B -R "root@far:tank/bm" "tgt-" -d30 2>"$e"; rc=$?
+*/15 * * * * d=$(/home/z/zfs-snapshot-all/check-snap-age.sh "tank/a" "automated_hourly" 90m 3h 2>&1); rc=$?
+# END zfs-backup-managed
+EOF
+caps=$( bash -c "source '$ZFSBACKUP'; block_capabilities '$CAPB/block.txt'" )
+capof() { printf '%s\n' "$caps" | awk -F'\t' -v d="$1" '$1==d{print $2}'; }
+
+# A LOCAL receive target -- the thing that was never asked about.
+check_eq "caps: a local receive target needs the receive-side verbs" \
+         "$(capof tank/backups/here)" "receive,create,mount,canmount,rollback"
+# snapget's arg2 is the LOCAL base (the pull-flip design), and it receives too.
+check_eq "caps: a pull job's local base needs the receive-side verbs" \
+         "$(capof tank/pulled)" "receive,create,mount,canmount,rollback"
+# A send needs bookmark, or the bookmark-backed continuation is silently lost.
+check_eq "caps: a sending source needs send and bookmark, not just snapshot" \
+         "$(capof tank/a)" "snapshot,hold,release,send,bookmark"
+# ...and a snapshot-only dataset must NOT be asked for send/bookmark it will
+# never use. Over-asking is how an operator gets told to widen a grant for
+# nothing.
+check_eq "caps: a snapshot-only dataset is not asked for send or bookmark" \
+         "$(capof tank/b)" "snapshot,hold,release"
+# Bookmark prune: F2. Excluding the section type was not fail-closed.
+check_eq "caps: a local bookmark prune needs bookmark and destroy" \
+         "$(capof tank/bm)" "bookmark,destroy"
+# ...but a REMOTE bookmark scope is not a local dataset at all: what it needs is
+# ssh and a grant on the far side, which this verb does not answer (F2, second
+# half).
+check_eq "caps: a remote bookmark scope produces no local requirement" \
+         "$(capof root@far:tank/bm)" ""
+# Same rule for a remote send destination and a remote pull source.
+check_eq "caps: a remote send destination produces no local requirement" \
+         "$(capof root@far:tank/b)" ""
+check_eq "caps: a remote pull source produces no local requirement" \
+         "$(capof far:tank/x)" ""
+# And the source of a remote send still needs its send-side verbs locally.
+check_eq "caps: the SOURCE of a remote send still needs send locally" \
+         "$(capof tank/remote-src)" "snapshot,hold,release,send,bookmark"
+# A monitor reads. It needs nothing, and must not appear at all.
+check_eq "caps: a read-only monitor contributes no requirement" \
+         "$(printf '%s\n' "$caps" | grep -c check-snap-age)" "0"
+
+# ---- and the preflight must REFUSE, naming the exact command ---------------
+CP="$WORK/capspre"; mkdir -p "$CP/bin" "$CP/home/zfs-snapshot-all"
+cat > "$CP/jobs.conf" <<'EOF'
+[template:t]
+	send_schedule = 1 * * * *
+[dataset:tank/a]
+	use_template = t
+EOF
+cat > "$CP/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$CP/home:/bin/bash"
+exit 0
+EOF
+cat > "$CP/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+cat > "$CP/bin/crontab" <<EOF
+#!/bin/bash
+echo "crontab \$*" >> "$CP/crontab-calls"
+[ "\$1" = "-u" ] && exit 0
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $CP/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "1 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"d_\" \"tank/a\" \"tank/backups/here\" 2>>/root/scripts/cron.log"
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "$CP/bin/getent" "$CP/bin/id" "$CP/bin/crontab"
+: > "$CP/home/zfs-snapshot-all/gen-cron.sh"
+cat > "$CP/rendered.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "d_" "tank/a" "tank/backups/here" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+
+# `zfs allow` answering with the OLD fixed five: enough for the old probe,
+# nowhere near enough to receive.
+mk_zfs() {   # <perms>
+    cat > "$CP/bin/zfs" <<EOF
+#!/bin/bash
+echo "	user zfsbackup $1"
+exit 0
+EOF
+    chmod +x "$CP/bin/zfs"
+}
+run_cp() {
+    : > "$CP/crontab-calls"
+    PATH="$CP/bin:$PATH" bash -c "
+        source '$ZFSBACKUP'
+        runuser_test_r() { return 0; }
+        runuser_test_x() { return 0; }
+        gencron_as_target() { cat '$CP/rendered.txt'; }
+        cmd_migrate_to_account zfsbackup --preflight" 2>&1
+}
+
+mk_zfs "snapshot,destroy,hold,release,mount"
+out=$(run_cp); rc=$?
+[ "$rc" -ne 0 ] && ok "caps-pre: an account that cannot RECEIVE fails preflight" \
+                || bad "caps-pre: an account that cannot RECEIVE fails preflight" "rc=$rc out=$out"
+case "$out" in
+    *"tank/backups/here (receive,create,mount,canmount,rollback)"*)
+        ok "caps-pre: ...and names the dataset with the verbs it is missing them for" ;;
+    *)  bad "caps-pre: ...and names the dataset with the verbs it is missing them for" "$out" ;;
+esac
+# F3: the exact command, not a placeholder to be rebuilt by hand.
+# Both gaps in one command, space separated, ready to paste.
+case "$out" in
+    *'--datasets="tank/a tank/backups/here"'*) ok "caps-pre: ...and prints the exact corrective command" ;;
+    *) bad "caps-pre: ...and prints the exact corrective command" "$out" ;;
+esac
+case "$out" in
+    *'--datasets="..."'*) bad "caps-pre: ...with no placeholder left in it" "$out" ;;
+    *)                    ok "caps-pre: ...with no placeholder left in it" ;;
+esac
+# F1's other half: a send source missing `bookmark` is a real gap too.
+case "$out" in
+    *"tank/a (snapshot,hold,release,send,bookmark)"*)
+        ok "caps-pre: a source without bookmark is reported, not silently accepted" ;;
+    *)  bad "caps-pre: a source without bookmark is reported, not silently accepted" "$out" ;;
+esac
+# Nothing may be touched by a preflight that refuses.
+inst=$(grep -c . "$CP/crontab-calls" 2>/dev/null || echo 0)
+case "$(cat "$CP/crontab-calls" 2>/dev/null)" in
+    *"crontab -u zfsbackup "[!-]*|*"crontab /"*)
+        bad "caps-pre: a refusing preflight installs nothing" "$(cat "$CP/crontab-calls")" ;;
+    *)  ok "caps-pre: a refusing preflight installs nothing" ;;
+esac
+[ -f "$CP/jobs.conf" ] && ok "caps-pre: ...and the config is still where it was" \
+                       || bad "caps-pre: ...and the config is still where it was" "config zniknal"
+
+# The full delegated set passes, so the refusal above is about the missing
+# verbs and not about the probe refusing everything.
+mk_zfs "snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
+out=$(run_cp); rc=$?
+[ "$rc" -eq 0 ] && ok "caps-pre: the documented delegated set passes" \
+                || bad "caps-pre: the documented delegated set passes" "rc=$rc out=$out"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -1866,15 +1866,143 @@ config_datasets() {   # <config file>
         | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u
 }
 
+# ------------------------------------------------------------------------------
+# WHAT THE JOBS ACTUALLY NEED (REV-20260801-026)
+#
+# The first version probed one fixed set -- snapshot,destroy,hold,release,mount --
+# against every dataset a config mentioned. That is neither necessary nor
+# sufficient, and pve2 showed both halves:
+#
+#   * NOT SUFFICIENT. A receive target needs receive/create/rollback/canmount,
+#     none of which were probed. An account with the five would pass preflight
+#     and then fail at 04:00 on `cannot receive: permission denied`.
+#   * NOT NECESSARY. A `[prune:]` carrying `prune = no` is a MONITOR line; it
+#     destroys nothing and needs no delegation at all. Those datasets were
+#     reported as gaps on pve2, sending the operator to widen a grant for a job
+#     that only reads.
+#
+# So the capabilities are derived from the RENDERED BLOCK -- the actual command
+# lines the account would run -- rather than from a section type. That is the
+# only description of the work that cannot drift from it, because it IS it.
+#
+# Remote scopes are identified exactly as snapsend.sh identifies them, and
+# deliberately produce NO local requirement: what they need is ssh and a grant
+# on the far side, which is a different question this verb does not answer.
+
+# Flags that consume the NEXT token. Everything else that starts with '-' is
+# boolean or glued (-R, -G, -B, -H24, -d30), and its following quoted token is a
+# positional argument, not a value. Getting this list wrong makes a dataset be
+# read as a flag value or vice versa -- so it is stated once, here, and pinned
+# by a test against what gen-cron.sh can emit.
+QCAP_VALUE_FLAGS=" -m -v -q -o -x -c -K -p -k -O -b -T -P -i -j "
+
+# Positional (non-flag, non-flag-value) quoted arguments of one command, in
+# order, one per line.
+job_positionals() {   # <command string>
+    printf '%s\n' "$1" | tr ' ' '\n' | awk -v vf="$QCAP_VALUE_FLAGS" '
+        function isval(t) { return index(vf, " " t " ") > 0 }
+        {
+            tok = $0
+            if (skip) { skip = 0; next }
+            if (tok ~ /^-/) { if (isval(tok)) skip = 1; next }
+            if (tok ~ /^".*"$/) { gsub(/^"|"$/, "", tok); print tok }
+        }'
+}
+
+# The convention snapsend.sh itself uses (see its REMOTE parsing): a ':' makes
+# it host:dataset, a bare '@' makes it sync-mode user@host. A local dataset name
+# may legally contain ':' in ZFS, but the tool's own remote syntax claims it
+# first, so this matches what the job will actually do rather than what ZFS
+# would permit.
+qcap_is_remote() {   # <arg>
+    case "$1" in *:*|*@*) return 0 ;; esac
+    return 1
+}
+
+qcap_add() {   # <dataset> <verbs csv>   -- appends to $QCAP_FILE
+    qcap_is_remote "$1" && return 0
+    [ -n "$1" ] || return 0
+    printf '%s\t%s\n' "$1" "$2" >> "$QCAP_FILE"
+}
+
+qcap_add_list() {   # <comma list> <verbs csv>
+    local d
+    # printf '%s\n', not '%s': without the trailing newline `while read` never
+    # runs its body for the LAST element, so a one-element list contributed
+    # nothing at all and a two-element list contributed one. Caught by feeding
+    # this a real rendered block and reading the table it produced, which is the
+    # only way it shows -- the missing rows look exactly like datasets that
+    # already have delegation.
+    printf '%s\n' "$1" | tr ',' '\n' | while IFS= read -r d; do
+        [ -n "$d" ] && qcap_add "$d" "$2"
+    done
+}
+
+# Reads a rendered block, writes "<dataset>\t<verbs csv>" to stdout, merged.
+block_capabilities() {   # <block file>
+    QCAP_FILE=$(mktemp) || return 1
+    local line cmd script pos p0 p1 n
+    while IFS= read -r line; do
+        case "$line" in [0-9]*|\**) ;; *) continue ;; esac
+        cmd=$(printf '%s\n' "$line" | sed -E 's/^([^ ]+ +){5}//')
+        # One cron line can carry several commands (the monitor idiom chains
+        # notify calls); each is examined on its own.
+        printf '%s\n' "$cmd" | tr ';' '\n' | while IFS= read -r one; do
+            case "$one" in
+                *snapsend.sh*)      script=snapsend ;;
+                *snapget.sh*)       script=snapget ;;
+                *delsnaps.sh*)      script=delsnaps ;;
+                *) continue ;;
+            esac
+            pos=$(job_positionals "$one")
+            p0=$(printf '%s\n' "$pos" | sed -n 1p)
+            p1=$(printf '%s\n' "$pos" | sed -n 2p)
+            case "$script" in
+                snapsend)
+                    # Sources. A send also writes a bookmark on the source, and
+                    # holds the snapshot it just made; without a destination it
+                    # is snapshot-only and needs neither send nor bookmark.
+                    if [ -n "$p1" ]; then
+                        qcap_add_list "$p0" "snapshot,hold,release,send,bookmark"
+                        qcap_add "$p1" "receive,create,mount,canmount,rollback"
+                    else
+                        qcap_add_list "$p0" "snapshot,hold,release"
+                    fi
+                    ;;
+                snapget)
+                    # Mirrored: arg1 is the literal remote source, arg2 the
+                    # LOCAL base that receives (see the pull-flip design).
+                    qcap_add "$p1" "receive,create,mount,canmount,rollback"
+                    ;;
+                delsnaps)
+                    case "$one" in
+                        *" -B "*) qcap_add_list "$p0" "bookmark,destroy" ;;
+                        *)        qcap_add_list "$p0" "destroy,hold,release" ;;
+                    esac
+                    ;;
+            esac
+        done
+    done < "$1"
+    # Merge the verbs of every mention of a dataset into one row.
+    sort -u "$QCAP_FILE" | awk -F'\t' '
+        { if ($1 != cur) { if (cur != "") print cur "\t" v; cur = $1; v = $2 }
+          else v = v "," $2 }
+        END { if (cur != "") print cur "\t" v }' \
+    | awk -F'\t' '{ n = split($2, a, ","); delete seen; out = ""
+                    for (i = 1; i <= n; i++) if (!(a[i] in seen)) { seen[a[i]] = 1; out = out (out == "" ? "" : ",") a[i] }
+                    print $1 "\t" out }'
+    rm -f "$QCAP_FILE"
+}
+
 # zfs allow reports grants made on the dataset AND on its ancestors, so asking
 # about the leaf is enough. Parsed rather than probed with a real snapshot: a
 # probe writes to production, and this runs before anything has been decided.
-target_can_zfs() {   # <account> <dataset>
-    local acct="$1" ds="$2" perms
+target_can_zfs() {   # <account> <dataset> <verbs csv>
+    local acct="$1" ds="$2" want="$3" perms
     perms=$(zfs allow "$ds" 2>/dev/null | grep -E "^[[:space:]]*user $acct " | head -1) || return 1
     [ -n "$perms" ] || return 1
     local v
-    for v in snapshot destroy hold release mount; do
+    for v in $(printf '%s' "$want" | tr ',' ' '); do
         case ",$perms," in *[,\ ]"$v"[,\ ]*) ;; *) return 1 ;; esac
     done
     return 0
@@ -1998,14 +2126,6 @@ cmd_migrate_to_account() {
         _todo "konto nie czyta configu -- faza prepare przeniesie: $cfg -> $target_cfg"
     fi
 
-    local ds missing_zfs=""
-    while IFS= read -r ds; do
-        [ -n "$ds" ] || continue
-        target_can_zfs "$acct" "$ds" || missing_zfs="$missing_zfs $ds"
-    done < <(config_datasets "$cfg")
-    if [ -z "$missing_zfs" ]; then _have "delegacja ZFS na wszystkich datasetach configu"
-    else _gap "brak delegacji ZFS (snapshot/destroy/hold/release/mount) na:$missing_zfs -- deploy.sh --backup-user=$acct --datasets=\"...\" z tymi datasetami"; fi
-
     if grep -qE '^[0-9*].* -q ' "$rootcron"; then
         if target_can_quiesce "$acct"; then _have "konto moze quiesce przez helpera"
         # Named the --join route until 2026-08-01, because until 3831509 that
@@ -2051,6 +2171,32 @@ cmd_migrate_to_account() {
     # been touched, and separately from the workload comparison below -- which
     # strips exactly these paths and is therefore blind to this by design.
     assert_block_runnable_by "$acct" "$newblock"
+
+    # ---- what the rendered jobs actually need, dataset by dataset -----------
+    #
+    # After the render, not before: the requirement is a property of the JOBS,
+    # and until they are rendered there are no jobs to ask about. Probing a
+    # section type instead was both too weak (a receive target needs
+    # receive/create/rollback and nothing asked) and too strong (a `prune = no`
+    # monitor carrier destroys nothing and needs nothing) -- REV-20260801-026.
+    local capds capverbs missing_zfs="" missing_list=""
+    local captab; captab=$(printf '	')
+    while IFS="$captab" read -r capds capverbs; do
+        [ -n "$capds" ] || continue
+        target_can_zfs "$acct" "$capds" "$capverbs"             || { missing_zfs="$missing_zfs
+  $capds ($capverbs)"; missing_list="$missing_list $capds"; }
+    done < <(block_capabilities "$newblock")
+    if [ -z "$missing_zfs" ]; then
+        _have "delegacja ZFS wystarczy dla kazdego zadania w bloku"
+    else
+        # The exact command, not a placeholder. The tool has just derived this
+        # list; making the operator rebuild it by hand is asking them to redo
+        # the work that was the point of running the preflight (F3).
+        _gap "brak delegacji ZFS dla zadan, ktore powstana:$missing_zfs
+
+  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${missing_list# }")\""
+    fi
+
     # The render carries the throwaway path in its '# Source:' line. Phase 4
     # installs from $target_cfg and would write that instead, so rewrite it now
     # -- a preview that differs from the install is worse than no preview
