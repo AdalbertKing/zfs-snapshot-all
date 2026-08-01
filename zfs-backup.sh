@@ -1159,6 +1159,15 @@ cmd_final_catchup() {
     [ -n "$name" ] || die "final-catchup requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
+    # Without this, LOCAL_USER is unset here and every crontab operation below
+    # silently targets ROOT -- on a collector with a dedicated account that
+    # means reading the wrong crontab, comparing against the wrong '# Source:',
+    # and, if the comparison had passed, rewriting the wrong user's jobs.
+    # Found live on metropolis pve1, 2026-08-01: teardown refused because it was
+    # looking at root's block while the client's lines were in the account's.
+    # assert_cron_config_matches_installed caught it, which is the third time
+    # today a guard turned a defect into a message instead of an incident.
+    read_server_conf
     # shellcheck disable=SC1090
     . "$cpath"
     case "${STATE:-}" in
