@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-07-31**
+- Data odświeżenia: **2026-08-01**
 - Zweryfikowano przeciw: `bda83b3` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
@@ -200,6 +200,44 @@ Ponowna weryfikacja przy każdej aktualizacji sudo jest zapisana w `deps.conf`.
 Pakiet `sudo` instaluje **wyłącznie** ta funkcja, czyli tylko przy
 `--allow-quiesce`. Zwykły deploy nie dotyka pakietu.
 
+## 3b. Profil wdrożeniowy (`zfs-backup.sh`) — stan bieżący
+
+Wysokopoziomowy przepływ ukrywa `pair`/`join`:
+
+```
+setup-server → add-client → seed → verify-endpoint → activate-client
+             → status / test / migrate-profile / remove-client
+```
+
+**Jedna kadencja wysyłki, jedna drabina.** Na klienta generuje się: jedna linia
+`snapget` per dataset (co godzinę o :01), jedna
+`delsnaps -G -R <cel>/<label> "automated_" -H24 -D7 -W4 -M12` (o :21) i **jeden**
+monitor na `automated_hourly`.
+
+Wcześniejsza wersja miała cztery kadencje wysyłki obok drabiny — REV-016 wykazał,
+że to łączy oba modele bez korzyści z żadnego: `-G` kubełkuje po **czasie** i nie
+patrzy na prefiks, więc wysyłki dzienna/tygodniowa/miesięczna nie definiowały
+żadnego tieru, tylko dokładały snapshoty i transfery, w dodatku startując o tej
+samej minucie.
+
+Progi monitora są **tylko** na najdrobniejszym tierze — monitor na
+`automated_daily` pilnowałby wzorca, którego nic nie tworzy, i stałby na CRITICAL
+w nieskończoność.
+
+**Akceptacja przed instalacją.** `activate-client` pokazuje dwa diffy: proponowany
+config oraz zmianę w cronie, gdzie lewa strona to **realnie zainstalowany blok**
+odczytany z `crontab -l`, a nie ponowny render configu. Nieczytelny crontab
+przerywa przed pytaniem — „nie dało się odczytać" to nie to samo co „jest pusty".
+
+**Migracja starego profilu** to akcja narzędzia (`migrate-profile`), nie ręczna
+edycja szablonów: usuwa stare szablony, przebudowuje aktywnych klientów tą samą
+funkcją co aktywacja, waliduje, pokazuje diff i pyta raz.
+
+**Limit pasma** `--bandwidth=N` jest per klient (bajty/s, `mbuffer -r`).
+
+Nie zrobione: konto dedykowane na kolektorze (`--local-user`, wybrane jako
+opcjonalne) i pełny test na żywo z realnym transferem.
+
 ## 4. `sqlfreeze` — co dowodzi, a czego nie
 
 `zfs-quiesce-helper sqlfreeze <id> [sekundy]` czyta zdarzenia SQL Server 3197
@@ -238,7 +276,7 @@ Uruchomione lokalnie przy `bda83b3` (bez roota, bez ZFS, bez sieci):
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | 72/72 | warstwa orkiestracji `zfs-backup.sh` |
+| `zfsbackup` | 91/91 | warstwa orkiestracji `zfs-backup.sh` |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
