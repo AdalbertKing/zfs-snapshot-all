@@ -1098,12 +1098,16 @@ else
     bad "local-quiesce: a re-run without the flag leaves an existing grant alone" "$phase8h"
 fi
 
-# Argument time cannot know whether Phase 8 will find an account -- an existing
-# one is detected, not named. Silence would read as success.
-noacct=$(sed -n '/no delegated account on this host and none requested/,/^elif/p' "$REPO/deploy.sh")
-printf '%s' "$noacct" | grep -q 'ALLOW_QUIESCE" -eq 1 \] && warn' \
-    && ok "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" \
-    || bad "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" "$noacct"
+# Who receives the grant is named, never detected. Detection is the right
+# default for MAINTENANCE -- a bare deploy.sh keeps whatever account a host
+# already has up to date -- and the wrong one for a privilege grant, where
+# "whichever account happened to be found" is not a decision anyone made.
+# The refusal itself is exercised against the real script in the REV-022
+# section below.
+grep -q 'ALLOW_QUIESCE" -eq 1 \] && \[ "\$JOIN_MODE" -ne 1 \] && \[ -z "\$BACKUP_USER" \]' "$REPO/deploy.sh" \
+    && ok "local-quiesce: the grant names its recipient rather than detecting one" \
+    || bad "local-quiesce: the grant names its recipient rather than detecting one" \
+           "brak wymogu --backup-user przy --allow-quiesce"
 
 # The whitelist header is read by whoever finds the file and wonders where it
 # came from. It may name the FLAG but not one of the two modes -- the local
@@ -1114,6 +1118,75 @@ else
     bad "local-quiesce: the whitelist header names the flag, not a mode that may not apply" \
         "$(grep -n 'managed by deploy.sh' "$REPO/deploy.sh")"
 fi
+
+# ---- REV-20260801-022 F1: an explicit grant must not exit 0 ----------------
+#
+# The first version of the local path leaned on Phase 8's account DETECTION and
+# only WARNED when it found nothing -- a privilege-provisioning command exiting
+# 0 having provisioned nothing. A human might read the warning; a wrapper reads
+# the exit code and goes on to migrate a block whose account still cannot freeze
+# anything.
+#
+# The fix is at argument time, because that is where it can be both enforced and
+# tested against the real script: --allow-quiesce must NAME its recipient.
+# Detection is right for maintenance and wrong for a grant.
+#
+# TRIPWIRE, and it is not optional. This check runs the real script with real
+# arguments, so the run must be incapable of reaching Phase 1 whatever the
+# verdict -- otherwise the very failure it is testing for ("validation let this
+# through") is a full deploy of the machine running the suite. Found the honest
+# way: the first version of this check, run against the pre-fix deploy.sh to
+# confirm it failed, started provisioning this workstation and had to be killed.
+#
+# `exit 99` goes in immediately after the argument-validation block, at the
+# first line that exists in every version of the file and belongs to the next
+# concern. So: 2 = refused (what the fix must do), 99 = validation passed it.
+RQ="$WORK/reqacct"; mkdir -p "$RQ/etc/zfs-quiesce-allow" "$RQ/etc/sudoers.d" "$RQ/sbin"
+sed -e "s#/etc/zfs-quiesce-allow#$RQ/etc/zfs-quiesce-allow#g" \
+    -e "s#/etc/sudoers.d#$RQ/etc/sudoers.d#g" \
+    -e "s#/usr/local/sbin/zfs-quiesce-helper#$RQ/sbin/zfs-quiesce-helper#g" \
+    -e "/^pubkey_fingerprint() {/i exit 99" \
+    "$REPO/deploy.sh" > "$RQ/deploy.sh"
+grep -qx 'exit 99' "$RQ/deploy.sh" \
+    && ok "req-acct: the sandbox copy cannot reach any phase that provisions" \
+    || bad "req-acct: the sandbox copy cannot reach any phase that provisions" "tripwire nie wszedl"
+
+out=$(bash "$RQ/deploy.sh" --allow-quiesce --datasets="rpool/data" 2>&1); r=$?
+if [ "$r" != 0 ] \
+   && case "$out" in *"--backup-user=NAME"*) true ;; *) false ;; esac \
+   && case "$out" in *"Nothing was installed"*) true ;; *) false ;; esac; then
+    ok "req-acct: --allow-quiesce without a named account exits non-zero and names the fix"
+else
+    bad "req-acct: --allow-quiesce without a named account exits non-zero and names the fix" "rc=$r out=$out"
+fi
+[ "$r" = 2 ] && ok "req-acct: ...with the argument-error exit code, not a generic failure" \
+             || bad "req-acct: ...with the argument-error exit code, not a generic failure" "rc=$r"
+
+# The refusal must be REFUSAL, not a partial install. Checked in the sandbox
+# roots the sed above redirected, so a real /etc is never involved.
+left=$(ls -A "$RQ/etc/zfs-quiesce-allow" "$RQ/etc/sudoers.d" "$RQ/sbin" 2>/dev/null | grep -v '^$' | grep -v ':$')
+[ -z "$left" ] && ok "req-acct: no whitelist, sudoers rule or helper is left behind" \
+               || bad "req-acct: no whitelist, sudoers rule or helper is left behind" "$left"
+
+# ...and the refusal is about the GRANT, not about deploy.sh needing an account:
+# a bare run with no account and no flag is a normal, supported fleet-wide
+# invocation and must stay exit 0. Asserted on the branch, since running the
+# whole script here would provision this machine.
+noacct=$(sed -n '/no delegated account on this host and none requested/,/^elif/p' "$REPO/deploy.sh")
+if printf '%s' "$noacct" | grep -q 'ALLOW_QUIESCE" -eq 1 \] && die' \
+   && ! printf '%s' "$noacct" | grep -q '^    die'; then
+    ok "req-acct: a bare deploy with no account still skips normally (only the flag dies)"
+else
+    bad "req-acct: a bare deploy with no account still skips normally (only the flag dies)" "$noacct"
+fi
+
+# Both no-account branches carry it. The argument check makes them unreachable
+# today; they are the invariant, not one way of enforcing it, and the next
+# person to loosen the argument rule should land on a refusal rather than on a
+# silent success.
+guards=$(grep -c 'ALLOW_QUIESCE" -eq 1 \] && die' "$REPO/deploy.sh")
+[ "$guards" = 2 ] && ok "req-acct: both no-account branches refuse, not just the detected one" \
+                  || bad "req-acct: both no-account branches refuse, not just the detected one" "znaleziono $guards"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

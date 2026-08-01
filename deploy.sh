@@ -294,6 +294,21 @@ fi
 if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$PAIR_MODE" -eq 1 ]; then
     echo "--allow-quiesce is not a --pair option -- the host that decides whether guests here may be frozen is the one running --join (for a peer) or a plain deploy.sh (for its own delegated account)" >&2; exit 2
 fi
+# REV-20260801-022 F1. The first version of the local path leaned on Phase 8's
+# account DETECTION and only warned when it found nothing -- a privilege
+# provisioning command that exits 0 having provisioned nothing. A human might
+# read the warning; a wrapper reads the exit code and goes on to migrate a block
+# whose account still cannot freeze anything.
+#
+# Making the grant name its recipient fixes that at argument time instead of at
+# runtime, and it is the better rule anyway: detection is the right default for
+# MAINTENANCE (keep whatever account this host already has up to date) and the
+# wrong one for a privilege grant, where "whichever account happened to be found"
+# is not a decision anyone made. BACKUP_USER is read, not the flag, so a host
+# that pins the account in the config block at the top still works.
+if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$JOIN_MODE" -ne 1 ] && [ -z "$BACKUP_USER" ]; then
+    echo "--allow-quiesce must name the account that receives the grant: --backup-user=NAME (with --datasets=\"...\" naming exactly the datasets whose guests it may freeze). An existing account is fine -- it is left alone. Nothing was installed." >&2; exit 2
+fi
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
 fi
@@ -3536,10 +3551,11 @@ fi
 
 if [ -z "$BACKUP_USER" ]; then
     log "no delegated account on this host and none requested -- skipping (pass --backup-user=NAME to create one)"
-    # Argument time could not know this: the account is detected, not named. An
-    # operator who asked for a grant and got silence would reasonably assume one
-    # was made.
-    [ "$ALLOW_QUIESCE" -eq 1 ] && warn "--allow-quiesce had nobody to grant to -- there is no delegated account on this host. Nothing was installed."
+    # Unreachable while the argument check above stands, and kept anyway: it is
+    # the invariant itself rather than one way of enforcing it. If --allow-quiesce
+    # is ever allowed to lean on detection again, this is what stops the run from
+    # reporting success having granted nothing (REV-20260801-022 F1).
+    [ "$ALLOW_QUIESCE" -eq 1 ] && die "--allow-quiesce was requested but there is no delegated account on this host to receive it. Name one with --backup-user=NAME (and --datasets=\"...\"), or drop --allow-quiesce. No grant, whitelist or sudoers rule was created."
 elif [ "$CHECK_ONLY" -eq 1 ]; then
     if id "$BACKUP_USER" >/dev/null 2>&1; then
         log "  account $BACKUP_USER exists"
@@ -3552,6 +3568,9 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
     fi
 elif [ "$CREATE_ACCOUNT" -eq 0 ] && ! id "$BACKUP_USER" >/dev/null 2>&1; then
     log "no delegated account to maintain -- skipping"
+    # Same invariant as above: a detected name that turns out not to be an
+    # account is still nobody to grant to (REV-20260801-022 F1).
+    [ "$ALLOW_QUIESCE" -eq 1 ] && die "--allow-quiesce was requested but '$BACKUP_USER' is not an account on this host. Name one with --backup-user=NAME (and --datasets=\"...\"), or drop --allow-quiesce. No grant, whitelist or sudoers rule was created."
 else
     USERNAME="$BACKUP_USER"
     HOMEDIR="/home/$USERNAME"
