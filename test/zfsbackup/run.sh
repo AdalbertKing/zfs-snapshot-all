@@ -919,6 +919,52 @@ esac
 leftover=$(grep -c 'SNAPGET" .*:\${ds}" "\$localpath"' "$ZFSBACKUP")
 [ "$leftover" = 0 ] && ok "snapget-base: no call site passes the final dataset path as the base"                     || bad "snapget-base: no call site passes the final dataset path as the base" "$leftover"
 
+# --- 15. gencron_as_target passes argv, never a shell sentence ---------------
+#
+# REV-20260801-017 F1. The old form built `su -c "... bash gen-cron.sh $*"`,
+# handing the target account's shell a sentence to re-parse. A config path with
+# a space arrived as two arguments; a metacharacter arrived as something else
+# entirely -- and the preview would then have validated a different file from
+# the one installed. The stub records its own argv with a separator, so
+# "one argument" is checkable rather than assumed.
+AV="$WORK/argv"; mkdir -p "$AV/bin"
+cat > "$AV/bin/runuser" <<EOF
+#!/bin/bash
+: > "$AV/argv"
+for a in "\$@"; do printf '%s\n' "\$a" >> "$AV/argv"; done
+exit 0
+EOF
+chmod +x "$AV/bin/runuser"
+cat > "$AV/bin/getent" <<'EOF'
+#!/bin/bash
+[ "$1" = passwd ] && echo "zfsbackup:x:1001:1001::/home/zfsbackup:/bin/bash"
+exit 0
+EOF
+chmod +x "$AV/bin/getent"
+
+# A path with a space AND a quote -- both legal in a filename, both fatal to a
+# re-parsed shell string.
+nasty="$WORK/con fig's.conf"
+: > "$nasty"
+( LOCAL_USER="zfsbackup"; GENCRON="$REPO/gen-cron.sh"; PATH="$AV/bin:$PATH"
+  gencron_as_target -c "$nasty" --install ) >/dev/null 2>&1
+
+if [ "$(grep -cxF "$nasty" "$AV/argv")" = 1 ]; then
+    ok "argv: the config path arrives as exactly one argument, spaces and quotes intact"
+else
+    bad "argv: the config path arrives as exactly one argument, spaces and quotes intact" "$(cat "$AV/argv")"
+fi
+# The account's own alert paths must ride along, and the digest must be off.
+if grep -qxF "DIGEST_SCRIPT=none" "$AV/argv" && grep -qxF "NOTIFY_SCRIPT=/home/zfsbackup/notify-fail.sh" "$AV/argv"; then
+    ok "argv: the account's alert paths are passed, with the digest disabled"
+else
+    bad "argv: the account's alert paths are passed, with the digest disabled" "$(cat "$AV/argv")"
+fi
+# And nothing may have been split: --install stays its own argument.
+[ "$(grep -cxF -- "--install" "$AV/argv")" = 1 ] \
+    && ok "argv: later flags are not merged or re-split" \
+    || bad "argv: later flags are not merged or re-split" "$(cat "$AV/argv")"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -621,7 +621,36 @@ gencron_as_target() {   # <args...>
     fi
     local home; home=$(getent passwd "$u" | cut -d: -f6)
     [ -n "$home" ] || { warn "no home directory for '$u' -- cannot resolve its alert paths"; return 1; }
-    su -s /bin/bash - "$u" -c "NOTIFY_SCRIPT='$home/notify-fail.sh' WARN_SCRIPT='$home/notify-warn.sh' DIGEST_SCRIPT=none CRON_LOG='$home/cron.log' GEN_CRON_LOCKFILE='$home/.gen-cron.install.lock' bash '$GENCRON' $*"
+
+    # argv is PASSED, never re-assembled into a shell string (REV-20260801-017
+    # F1). The previous version built `su -c "... bash '$GENCRON' $*"`, which
+    # hands the target account's shell a sentence to re-parse: a config path
+    # containing a space would arrive as two arguments, and a metacharacter as
+    # something else entirely. A high-level wrapper must not rest its
+    # correctness -- let alone its safety -- on an undocumented "our paths never
+    # contain spaces" assumption, and the preview would then have validated a
+    # different file from the one installed.
+    #
+    # `runuser -- ` is the auditable form: everything after it is argv, and env
+    # carries the account's own alert paths. DIGEST_SCRIPT=none because
+    # deploy.sh deliberately does not give a delegated account alert-digest.sh
+    # -- one digest per host, or it sends two mails a day.
+    local -a envv=(
+        "NOTIFY_SCRIPT=$home/notify-fail.sh"
+        "WARN_SCRIPT=$home/notify-warn.sh"
+        "DIGEST_SCRIPT=none"
+        "CRON_LOG=$home/cron.log"
+        "GEN_CRON_LOCKFILE=$home/.gen-cron.install.lock"
+    )
+    if command -v runuser >/dev/null 2>&1; then
+        runuser --user "$u" -- env "${envv[@]}" bash "$GENCRON" "$@"
+    else
+        # su has no argv-passing form, so every argument is quoted explicitly.
+        # printf %q is the only thing standing between this and the defect
+        # above; it is not an optimisation and must not be "simplified" away.
+        local cmd; cmd=$(printf '%q ' env "${envv[@]}" bash "$GENCRON" "$@")
+        su -s /bin/bash "$u" -c "$cmd"
+    fi
 }
 
 # Show the change itself, not a description of it.
