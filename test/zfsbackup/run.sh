@@ -769,6 +769,62 @@ fi
 ensure_cron_config "$MIG/legacy.conf" >/dev/null 2>&1
 [ "${PROFILE_GFS:-}" = 0 ] && ok "migrate: an unmigrated host still reads as legacy"                            || bad "migrate: an unmigrated host still reads as legacy" "PROFILE_GFS=${PROFILE_GFS:-unset}"
 
+# --- 12. the dedicated collector account (--local-user) ---------------------
+#
+# Three things move together when the collector runs its jobs as a dedicated
+# account, and getting one wrong is silent: which crontab the block lands in,
+# whose alert/log paths the generated lines name, and who gen-cron.sh runs as.
+# The stub records what was asked for so each can be checked.
+LU="$WORK/localuser"; mkdir -p "$LU/bin"
+cat > "$LU/bin/crontab" <<EOF
+#!/bin/bash
+echo "crontab \$*" >> "$LU/calls"
+[ "\$1" = "-u" ] && exit 0
+[ "\$1" = "-l" ] && exit 0
+exit 0
+EOF
+chmod +x "$LU/bin/crontab"
+lu_calls() { : > "$LU/calls"; }
+
+# root (the default, and --local-user=root): plain `crontab -l`, no -u.
+lu_calls
+( LOCAL_USER=""; PATH="$LU/bin:$PATH"; crontab_for_target >/dev/null 2>&1 )
+if grep -qx "crontab -l" "$LU/calls" && ! grep -q -- "-u" "$LU/calls"; then
+    ok "local-user: with no dedicated account the block stays in root's crontab"
+else
+    bad "local-user: with no dedicated account the block stays in root's crontab" "$(cat "$LU/calls")"
+fi
+
+# a dedicated account: every read has to be -u <account>, or the preview would
+# compare against the WRONG crontab and the install would land in another.
+lu_calls
+( LOCAL_USER="zfsbackup"; PATH="$LU/bin:$PATH"; crontab_for_target >/dev/null 2>&1 )
+if grep -qx "crontab -u zfsbackup -l" "$LU/calls"; then
+    ok "local-user: a dedicated account's own crontab is the one read"
+else
+    bad "local-user: a dedicated account's own crontab is the one read" "$(cat "$LU/calls")"
+fi
+
+lu_calls
+( LOCAL_USER="zfsbackup"; PATH="$LU/bin:$PATH"; _restore_target_crontab /tmp/whatever >/dev/null 2>&1 )
+if grep -qx "crontab -u zfsbackup /tmp/whatever" "$LU/calls"; then
+    ok "local-user: a rollback restores the dedicated account's crontab, not root's"
+else
+    bad "local-user: a rollback restores the dedicated account's crontab, not root's" "$(cat "$LU/calls")"
+fi
+
+# The digest must NOT be duplicated into the account's block: deploy.sh gives it
+# notify-fail/notify-warn but deliberately not alert-digest.sh, so root stays the
+# only sender of the daily mail. gen-cron's digest_script=none is that opt-out,
+# and this asserts the generator honours it.
+dg=$(DIGEST_SCRIPT=none bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1 | grep -c "alert-digest")
+withdg=$(bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1 | grep -c "alert-digest")
+if [ "$dg" = 0 ] && [ "$withdg" = 1 ]; then
+    ok "local-user: digest_script=none drops the digest line, and only then"
+else
+    bad "local-user: digest_script=none drops the digest line, and only then" "none=$dg default=$withdg"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

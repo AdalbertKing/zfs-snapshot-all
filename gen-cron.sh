@@ -33,6 +33,10 @@ set -o pipefail
 #       notify_script = /home/zfsbackup/notify-fail.sh     # default: /root/scripts/notify-fail.sh
 #       warn_script   = /home/zfsbackup/notify-warn.sh     # default: /root/scripts/notify-warn.sh
 #       digest_script = /home/zfsbackup/alert-digest.sh    # default: /root/scripts/alert-digest.sh
+#                       'none' emits NO digest line. There is one digest per
+#                       host by design; a delegated account's block opts out
+#                       this way, since deploy.sh gives such an account its own
+#                       notify-fail/notify-warn but deliberately not the digest.
 #       cron_log      = /home/zfsbackup/cron.log           # default: /root/scripts/cron.log
 #
 #   Unknown field names are REJECTED, in every section type. Until 2026-07-29
@@ -677,6 +681,12 @@ _path_setting() {
     [ -n "$val" ] || die "[defaults] has '$field' but it is blank -- give it an absolute path, or remove the line to keep the default"
     case "$val" in
         /*) ;;
+        # 'none' is the one non-path value, and only for digest_script: it means
+        # "emit no digest line at all". Accepted here so the config field and the
+        # DIGEST_SCRIPT environment variable behave identically -- a setting that
+        # works one way and is rejected the other is a trap for whoever meets the
+        # rejecting half first.
+        none) [ "$field" = digest_script ] || die "[defaults] $field='none' is only meaningful for digest_script" ;;
         *) die "[defaults] $field='$val' must be an absolute path -- a relative one resolves against cron's working directory, not yours" ;;
     esac
     # Checked even when the environment is about to out-rank it. Validating only
@@ -1579,7 +1589,14 @@ generate_block() {
         echo ""
     fi
     for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
-    if [ "${#MONITOR_LINES[@]}" -gt 0 ]; then
+    # digest_script = none: emit no digest line at all. There is exactly ONE
+    # digest per host by design -- two would mean two mails a day -- and a
+    # delegated account's crontab is the case that needs to opt out: deploy.sh
+    # gives such an account its own notify-fail/notify-warn but deliberately
+    # does NOT copy alert-digest.sh to it, precisely so root stays the only
+    # sender. Without this switch that account's block would schedule a digest
+    # script that is not there.
+    if [ "${#MONITOR_LINES[@]}" -gt 0 ] && [ "$DIGEST_SCRIPT" != "none" ]; then
         echo ""
         # Redirected like every other generated line: the digest is silent on
         # the happy path, but it reports a failed mail delivery on stderr, and

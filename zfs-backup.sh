@@ -13,7 +13,7 @@ set -uo pipefail
 # (REV-20260730-001/002).
 #
 # Commands:
-#   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
+#   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
 #   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
@@ -106,7 +106,7 @@ usage() {
 zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
-  zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE]
+  zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
@@ -302,6 +302,7 @@ check_inherited_grants() {
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""
+    LOCAL_USER=""
     [ -r "$SERVER_CONF" ] || return 0
     # shellcheck disable=SC1090
     . "$SERVER_CONF"
@@ -474,7 +475,7 @@ normalize_cron_source() {
 }
 assert_cron_config_matches_installed() {
     local file="$1" raw existing want
-    raw=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    raw=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
     [ -n "$raw" ] || return 0
     existing=$(normalize_cron_source "$raw")
     want=$(normalize_cron_source "$file")
@@ -546,6 +547,42 @@ emit_client_sections() {   # <workfile> <client name>
     return 0
 }
 
+# Which crontab, and whose paths.
+#
+# When the collector runs its jobs as a dedicated account, three things move
+# together and getting one of them wrong is silent: the crontab the block is
+# installed into, the alert/log paths the generated lines reference, and the
+# identity gen-cron.sh itself runs as. They are kept in one place here so they
+# cannot drift apart.
+#
+# The digest is deliberately NOT duplicated to the account: deploy.sh gives it
+# notify-fail.sh and notify-warn.sh but not alert-digest.sh, precisely so root
+# stays the only sender of the daily mail. digest_script=none is how that block
+# opts out.
+cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
+
+# `crontab -l` for whoever owns the jobs. Root can read another account's
+# crontab with -u; as that account itself, -u is refused, so it is only added
+# when it is actually needed.
+crontab_for_target() {   # -> the target user's crontab on stdout
+    local u; u=$(cron_target_user)
+    if [ "$u" = root ] || [ "$u" = "$(id -un)" ]; then crontab -l; else crontab -u "$u" -l; fi
+}
+
+# Run gen-cron.sh as the account that owns the jobs, with ITS paths. Running it
+# as root and redirecting would install into root's crontab instead -- gen-cron
+# writes to "this user's" crontab by design.
+gencron_as_target() {   # <args...>
+    local u; u=$(cron_target_user)
+    if [ "$u" = root ]; then
+        bash "$GENCRON" "$@"
+        return $?
+    fi
+    local home; home=$(getent passwd "$u" | cut -d: -f6)
+    [ -n "$home" ] || { warn "no home directory for '$u' -- cannot resolve its alert paths"; return 1; }
+    su -s /bin/bash - "$u" -c "NOTIFY_SCRIPT='$home/notify-fail.sh' WARN_SCRIPT='$home/notify-warn.sh' DIGEST_SCRIPT=none CRON_LOG='$home/cron.log' GEN_CRON_LOCKFILE='$home/.gen-cron.install.lock' bash '$GENCRON' $*"
+}
+
 # Show the change itself, not a description of it.
 #
 # Everything activate-client prints above this is a SUMMARY. A yes/no answer to
@@ -601,7 +638,7 @@ show_activation_proposal() {   # <current config> <proposed config>
     # translated "no crontab" makes this refuse rather than invent an answer.
     local cron_err cron_raw cron_rc
     cron_err=$(mktemp) || { rm -f "$before" "$after"; return 1; }
-    cron_raw=$(crontab -l 2>"$cron_err"); cron_rc=$?
+    cron_raw=$(crontab_for_target 2>"$cron_err"); cron_rc=$?
     if [ "$cron_rc" -ne 0 ] && ! grep -qi "no crontab" "$cron_err"; then
         warn "could not read the live crontab (rc=$cron_rc): $(tr -d '\n' < "$cron_err")"
         warn "refusing to preview against a crontab that could not be read -- an unreadable crontab is not an empty one, and nothing has been installed."
@@ -643,11 +680,16 @@ show_activation_proposal() {   # <current config> <proposed config>
     return $rc
 }
 
+_restore_target_crontab() {   # <file>
+    local u; u=$(cron_target_user)
+    if [ "$u" = root ] || [ "$u" = "$(id -un)" ]; then crontab "$1"; else crontab -u "$u" "$1"; fi
+}
+
 atomic_replace_and_install() {
     local realfile="$1" workfile="$2"
     local backup="" crontab_backup
     crontab_backup=$(mktemp) || { rm -f "$workfile"; die "mktemp failed for crontab backup"; }
-    crontab -l > "$crontab_backup" 2>/dev/null
+    crontab_for_target > "$crontab_backup" 2>/dev/null
     if [ -f "$realfile" ]; then
         backup=$(mktemp "$(dirname "$realfile")/.zfsbackup-backup.XXXXXX") || { rm -f "$workfile" "$crontab_backup"; die "mktemp backup failed for $realfile"; }
         cp -p "$realfile" "$backup" || { rm -f "$workfile" "$backup" "$crontab_backup"; die "could not back up $realfile before swap"; }
@@ -656,7 +698,7 @@ atomic_replace_and_install() {
         rm -f "$workfile" "$backup" "$crontab_backup" 2>/dev/null
         die "could not atomically replace $realfile"
     fi
-    if ! bash "$GENCRON" -c "$realfile" --install; then
+    if ! gencron_as_target -c "$realfile" --install; then
         warn "gen-cron.sh --install failed after updating $realfile -- restoring both the config file and the crontab to their exact prior state"
         if [ -n "$backup" ]; then
             mv -f "$backup" "$realfile" || warn "CRITICAL: could not restore $realfile from $backup -- fix by hand"
@@ -664,7 +706,7 @@ atomic_replace_and_install() {
             rm -f "$realfile"
         fi
         if [ -s "$crontab_backup" ]; then
-            crontab "$crontab_backup" || warn "CRITICAL: could not restore the crontab from $crontab_backup either -- restore by hand: crontab $crontab_backup"
+            _restore_target_crontab "$crontab_backup" || warn "CRITICAL: could not restore the crontab from $crontab_backup either -- restore by hand as $(cron_target_user): crontab $crontab_backup"
         fi
         rm -f "$crontab_backup"
         die "gen-cron.sh --install failed -- see above; $realfile and the crontab have been restored to their prior state"
@@ -675,16 +717,32 @@ atomic_replace_and_install() {
 
 # ------------------------------------------------------------------------------
 cmd_setup_server() {
-    local target="" config=""
+    local target="" config="" local_user=""
     for a in "$@"; do
         case "$a" in
-            --target=*) target="${a#*=}" ;;
-            --config=*) config="${a#*=}" ;;
+            --target=*)     target="${a#*=}" ;;
+            --config=*)     config="${a#*=}" ;;
+            --local-user=*) local_user="${a#*=}" ;;
             *) die "setup-server: unknown option $a" ;;
         esac
     done
+    # Opt-in, by owner decision: an existing collector keeps running its jobs as
+    # root until someone asks otherwise. `--local-user=root` is accepted and
+    # means the same as omitting it, so the flag can be written down in a runbook
+    # without it changing behaviour.
+    [ "$local_user" = root ] && local_user=""
+    if [ -n "$local_user" ]; then
+        case "$local_user" in
+            *[!a-z0-9_-]* | "" | [!a-z_]*)
+                die "setup-server: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit)" ;;
+        esac
+    fi
 
-    bash "$DEPLOY" || die "deploy.sh bootstrap failed -- fix that before continuing"
+    if [ -n "$local_user" ]; then
+        bash "$DEPLOY" --backup-user="$local_user" || die "deploy.sh bootstrap failed -- fix that before continuing"
+    else
+        bash "$DEPLOY" || die "deploy.sh bootstrap failed -- fix that before continuing"
+    fi
 
     read_server_conf
     if [ -z "$target" ]; then
@@ -707,7 +765,7 @@ cmd_setup_server() {
             config="$CRON_CONFIG"
         else
             local existing
-            existing=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+            existing=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
             if [ -n "$existing" ]; then
                 config=$(normalize_cron_source "$existing")
                 log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
@@ -724,6 +782,7 @@ cmd_setup_server() {
         echo "# zfs-backup.sh server config -- edit by hand if needed, or re-run setup-server"
         echo "DEFAULT_TARGET=$target"
         echo "CRON_CONFIG=$config"
+        echo "LOCAL_USER=$local_user"
     } > "$SERVER_CONF" || die "could not write $SERVER_CONF"
     chmod 0644 "$SERVER_CONF"
 
@@ -772,6 +831,10 @@ cmd_add_client() {
 
     local -a pair_args=(--pair --role=pull --peer="$lan_host" --peer-datasets="$datasets" --target="$target")
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
+    # Without this the pairing key and the pinned host key are readable only by
+    # root, and the target root is delegated to nobody -- so the cron jobs this
+    # client will run as $LOCAL_USER could not open their own key.
+    [ -n "${LOCAL_USER:-}" ] && pair_args+=(--local-user="$LOCAL_USER")
     bash "$DEPLOY" "${pair_args[@]}" || die "deploy.sh --pair failed -- see above"
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
