@@ -2001,12 +2001,35 @@ cmd_migrate_to_account() {
     fi
 
     # ---- phase 2/4: prepare, then commit -------------------------------------
+    # Which side has actually been written. Without this the rollback tries to
+    # restore a crontab nothing ever touched, and when THAT fails -- which it
+    # does when the failure being rolled back was "this crontab is not
+    # writable" -- it reports a scary "NOT restored" for a file that was never
+    # in danger. Found by the live rollback test on metropolis pve1,
+    # 2026-08-01: the run printed "'zfsbackup' crontab NOT restored" and then
+    # "both crontabs restored" two lines later. Root's WAS restored byte for
+    # byte; the account's had never changed. Both sentences were defensible and
+    # together they were useless.
+    local did_root=0 did_acct=0
+    MTA_ROLLBACK_OK=1
     _mta_rollback() {
-        warn "rolling back: restoring both crontabs exactly as they were"
-        crontab "$rootcron"           || warn "  ROOT CRONTAB NOT RESTORED -- restore by hand from $rootcron"
-        crontab -u "$acct" "$acctcron" || warn "  '$acct' crontab NOT restored -- restore by hand from $acctcron"
+        MTA_ROLLBACK_OK=1
+        warn "rolling back"
+        if [ "$did_root" -eq 1 ]; then
+            if crontab "$rootcron"; then warn "  root's crontab restored"
+            else warn "  ROOT CRONTAB NOT RESTORED -- restore by hand from $rootcron"; MTA_ROLLBACK_OK=0; fi
+        else
+            warn "  root's crontab was never written"
+        fi
+        if [ "$did_acct" -eq 1 ]; then
+            if crontab -u "$acct" "$acctcron"; then warn "  '$acct' crontab restored"
+            else warn "  '$acct' CRONTAB NOT RESTORED -- restore by hand from $acctcron"; MTA_ROLLBACK_OK=0; fi
+        else
+            warn "  '$acct' crontab was never written"
+        fi
         if [ "$needs_move" -eq 1 ] && [ -f "$target_cfg" ] && [ ! -f "$cfg" ]; then
-            mv -f "$target_cfg" "$cfg" && log "  config moved back to $cfg"
+            if mv -f "$target_cfg" "$cfg"; then warn "  config moved back to $cfg"
+            else warn "  CONFIG LEFT AT $target_cfg -- move it back by hand"; MTA_ROLLBACK_OK=0; fi
         fi
     }
 
@@ -2021,12 +2044,17 @@ cmd_migrate_to_account() {
         [ "$needs_move" -eq 1 ] && mv -f "$target_cfg" "$cfg"
         LOCAL_USER=""; die "could not write root's crontab -- nothing else was attempted and root still runs its block"
     fi
+    did_root=1
     log "root's collector block removed; host-level lines kept in their own block"
 
     if ! gencron_as_target -c "$target_cfg" --install; then
         _mta_rollback; LOCAL_USER=""
-        die "installing the block as '$acct' failed -- both crontabs restored, root runs its jobs again"
+        if [ "$MTA_ROLLBACK_OK" -eq 1 ]; then
+            die "installing the block as '$acct' failed. Rolled back completely -- root runs its jobs again and nothing was left half-moved."
+        fi
+        die "installing the block as '$acct' failed AND the rollback did not complete (see the lines above). This host is in a mixed state and needs a human NOW."
     fi
+    did_acct=1
 
     # ---- phase 5: verify as the actual owners --------------------------------
     local vr va; vr=$(mktemp); va=$(mktemp)
@@ -2037,11 +2065,13 @@ cmd_migrate_to_account() {
     na=$(grep -c '^# BEGIN zfs-backup-managed' "$va" || :)
     if [ "$nr" != 0 ] || [ "$na" != 1 ]; then
         rm -f "$vr" "$va"; _mta_rollback; LOCAL_USER=""
-        die "after the switch the blocks are not where they should be (root=$nr, $acct=$na) -- both crontabs restored"
+        [ "$MTA_ROLLBACK_OK" -eq 1 ]             && die "after the switch the blocks are not where they should be (root=$nr, $acct=$na). Rolled back completely."
+        die "after the switch the blocks are not where they should be (root=$nr, $acct=$na) AND the rollback did not complete (see above). This host needs a human NOW."
     fi
     if [ -s "$hostlines" ] && ! grep -qF "$HOST_BEGIN" "$vr"; then
         rm -f "$vr" "$va"; _mta_rollback; LOCAL_USER=""
-        die "the host-level block did not survive the switch -- both crontabs restored"
+        [ "$MTA_ROLLBACK_OK" -eq 1 ]             && die "the host-level block did not survive the switch. Rolled back completely."
+        die "the host-level block did not survive the switch AND the rollback did not complete (see above). This host needs a human NOW."
     fi
     rm -f "$vr" "$va"
 

@@ -1584,6 +1584,130 @@ else
     bad "preflight: the preview names the config's FINAL path, not the throwaway" "$out2"
 fi
 
+
+# --- 25. the rollback reports what it actually did --------------------------
+#
+# Found by the live rollback test on metropolis pve1, 2026-08-01. The account's
+# crontab was made unwritable to force a failure; the run correctly restored
+# root's crontab byte for byte, and then said:
+#
+#     !!!   'zfsbackup' crontab NOT restored -- restore by hand from /tmp/...
+#     FATAL: ... -- both crontabs restored, root runs its jobs again
+#
+# Both sentences were defensible on their own and together they were useless.
+# The account's crontab had never been written, so there was nothing to
+# restore -- but the rollback tried anyway, failed for the same reason the
+# install had failed, and raised an alarm about a file that was never in danger.
+# Meanwhile the FATAL asserted a clean rollback instead of reporting one.
+RB="$WORK/rollback"; mkdir -p "$RB/bin" "$RB/home/zfs-snapshot-all"
+cat > "$RB/jobs.conf" <<'EOF'
+[template:t]
+	send_schedule = 1 * * * *
+[dataset:tank/a]
+	use_template = t
+EOF
+cat > "$RB/rendered.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "x_" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$RB/bin/crontab" <<EOF
+#!/bin/bash
+if [ "\$1" = "-u" ]; then
+    [ "\$3" = "-l" ] && exit 0
+    exit 0
+fi
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"x_\" \"tank/a\" 2>>/root/scripts/cron.log"
+    echo "0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log"
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+exit 0    # writing root's crontab succeeds
+EOF
+cat > "$RB/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$RB/home:/bin/bash"
+exit 0
+EOF
+cat > "$RB/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+cat > "$RB/bin/zfs" <<'EOF'
+#!/bin/bash
+echo "---- Permissions on tank ----"
+echo "	user zfsbackup bookmark,canmount,create,destroy,hold,mount,receive,release,rollback,send,snapshot"
+exit 0
+EOF
+chmod +x "$RB/bin/crontab" "$RB/bin/getent" "$RB/bin/id" "$RB/bin/zfs"
+: > "$RB/home/zfs-snapshot-all/gen-cron.sh"
+
+# The account CAN read the config here, so no config move happens and the test
+# stays entirely inside the crontab logic. The render succeeds; the --install
+# fails, which is the shape the live test produced.
+out=$( PATH="$RB/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    gencron_as_target() {
+        for a in \"\$@\"; do [ \"\$a\" = --install ] && return 1; done
+        cat '$RB/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+
+if [ "$rc" -ne 0 ] && case "$out" in *"Rolled back completely"*) true ;; *) false ;; esac; then
+    ok "rollback: a complete rollback is reported as complete"
+else
+    bad "rollback: a complete rollback is reported as complete" "rc=$rc out=$out"
+fi
+
+# The crontab that was never written must be described as such, not raised as a
+# failed restore.
+if case "$out" in *"'zfsbackup' crontab was never written"*) true ;; *) false ;; esac \
+   && case "$out" in *"NOT RESTORED"*) false ;; *) true ;; esac; then
+    ok "rollback: a crontab that was never written is not reported as unrestored"
+else
+    bad "rollback: a crontab that was never written is not reported as unrestored" "$out"
+fi
+
+# Root's WAS written, so its restore must be stated -- silence here would leave
+# the operator unable to tell a restored crontab from an untouched one.
+case "$out" in
+    *"root's crontab restored"*) ok "rollback: the side that was written reports its restore" ;;
+    *) bad "rollback: the side that was written reports its restore" "$out" ;;
+esac
+
+# And the opposite direction: when the rollback itself fails, the message must
+# say so instead of claiming success. Root's crontab write now fails on restore.
+cat > "$RB/bin/crontab" <<EOF
+#!/bin/bash
+if [ "\$1" = "-u" ]; then exit 0; fi
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"x_\" \"tank/a\" 2>>/root/scripts/cron.log"
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+[ -n "\${MTA_FAIL_RESTORE:-}" ] && exit 1
+exit 0
+EOF
+chmod +x "$RB/bin/crontab"
+out=$( PATH="$RB/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    gencron_as_target() {
+        for a in \"\$@\"; do [ \"\$a\" = --install ] && { export MTA_FAIL_RESTORE=1; return 1; }; done
+        cat '$RB/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --yes" 2>&1 ) || :
+if case "$out" in *"needs a human NOW"*) true ;; *) false ;; esac; then
+    ok "rollback: a rollback that did NOT complete says so instead of claiming success"
+else
+    bad "rollback: a rollback that did NOT complete says so instead of claiming success" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
