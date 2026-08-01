@@ -904,7 +904,10 @@ install_quiesce_grant() {
     # ---- 2. stage everything, validate, install nothing yet ----
     tmp_allow=$(mktemp) || { warn "mktemp failed staging the whitelist for $account"; return 1; }
     {
-        echo "# managed by deploy.sh --join --allow-quiesce, do not edit by hand"
+        # Names the FLAG, not a mode: two paths write this file now (--join for
+        # a peer, a plain run for this host's own account) and a header that
+        # names the wrong one sends the reader to the wrong command.
+        echo "# managed by deploy.sh --allow-quiesce, do not edit by hand"
         echo "# guests whose disks live under these datasets may be frozen by '$account'"
         local ds
         for ds in $datasets; do printf '%s

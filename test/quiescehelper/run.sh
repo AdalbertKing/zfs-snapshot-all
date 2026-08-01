@@ -1105,6 +1105,16 @@ printf '%s' "$noacct" | grep -q 'ALLOW_QUIESCE" -eq 1 \] && warn' \
     && ok "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" \
     || bad "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" "$noacct"
 
+# The whitelist header is read by whoever finds the file and wonders where it
+# came from. It may name the FLAG but not one of the two modes -- the local
+# grant on pve1 was written with a header telling the reader to run --join.
+if grep -q '^        echo "# managed by deploy.sh --allow-quiesce' "$REPO/deploy.sh"; then
+    ok "local-quiesce: the whitelist header names the flag, not a mode that may not apply"
+else
+    bad "local-quiesce: the whitelist header names the flag, not a mode that may not apply" \
+        "$(grep -n 'managed by deploy.sh' "$REPO/deploy.sh")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
