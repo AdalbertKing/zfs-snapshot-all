@@ -1481,6 +1481,109 @@ else
     bad "read_server_conf: resets before sourcing, so where it is called matters" "$rsc"
 fi
 
+
+# --- 24. preflight can render before phase 2 has moved anything -------------
+#
+# Found by the FIRST live preflight, metropolis pve1, 2026-08-01. Phase 1 has to
+# render the block as the account, but on the normal host that render depends on
+# phase 2's work: the config still sits under /root, which the account cannot
+# read. The check reported every other gap correctly and then aborted with
+# "gen-cron.sh could not render the block" -- so the one host it was written for
+# was the one host it could not finish on.
+#
+# Phase 1 now renders from a throwaway readable copy, exactly as the hand
+# procedure did. The real config is still MOVED and never copied, which is the
+# property REV-20260801-018 turns on.
+PF="$WORK/preflight"; mkdir -p "$PF/bin" "$PF/home/zfs-snapshot-all"
+cat > "$PF/jobs.conf" <<'EOF'
+[template:t]
+	send_schedule = 1 * * * *
+[dataset:tank/a]
+	use_template = t
+EOF
+cat > "$PF/rendered.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+# Source: /throwaway/tmpdir/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "automated_hourly_" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$PF/bin/crontab" <<EOF
+#!/bin/bash
+if [ "\$1" = "-u" ]; then exit 0; fi
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: $PF/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"automated_hourly_\" \"tank/a\" 2>>/root/scripts/cron.log"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+cat > "$PF/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$PF/home:/bin/bash"
+exit 0
+EOF
+cat > "$PF/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+cat > "$PF/bin/zfs" <<'EOF'
+#!/bin/bash
+echo "---- Permissions on tank ----"
+echo "Local+Descendent permissions:"
+echo "	user zfsbackup bookmark,canmount,create,destroy,hold,mount,receive,release,rollback,send,snapshot"
+exit 0
+EOF
+chmod +x "$PF/bin/crontab" "$PF/bin/getent" "$PF/bin/id" "$PF/bin/zfs"
+: > "$PF/home/zfs-snapshot-all/gen-cron.sh"
+
+# runuser_test_r: the account CAN read its checkout and CANNOT read the config
+# -- the real shape on a Proxmox host, where /root is 0700.
+out=$( PATH="$PF/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { case \"\$2\" in *jobs.conf) return 1 ;; *) return 0 ;; esac; }
+    gencron_as_target() {
+        # Honest stub: gen-cron runs AS the account, so rendering the ORIGINAL
+        # config -- the one under /root that the account cannot open -- must
+        # fail. Only the staged readable copy may succeed. Stubbing this as
+        # 'always works' is what let the first version of this test pass
+        # against the very bug it was written for.
+        local c=''; while [ \$# -gt 0 ]; do [ \"\$1\" = -c ] && c=\"\$2\"; shift; done
+        [ \"\$c\" = '$PF/jobs.conf' ] && return 1
+        cat '$PF/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
+
+if [ "$rc" -eq 0 ] && case "$out" in *"preflight czysty"*) true ;; *) false ;; esac; then
+    ok "preflight: finishes even though the account cannot read the config yet"
+else
+    bad "preflight: finishes even though the account cannot read the config yet" "rc=$rc out=$out"
+fi
+
+# The move must be announced as something the run will do, not as a gap the
+# operator has to close -- otherwise a clean host reports itself blocked.
+case "$out" in
+    *"[ plan ]"*"jobs.conf"*) ok "preflight: the config move is planned work, not a blocking gap" ;;
+    *) bad "preflight: the config move is planned work, not a blocking gap" "$out" ;;
+esac
+
+# And the render must never be mistaken for a licence to copy: /etc/... is where
+# the config ENDS UP, and the preview has to say so rather than naming the
+# throwaway the render was read from (REV-20260801-015 section 1 -- a preview
+# that differs from the install is worse than no preview).
+out2=$( PATH="$PF/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { case \"\$2\" in *jobs.conf) return 1 ;; *) return 0 ;; esac; }
+    gencron_as_target() {
+        local c=''; while [ \$# -gt 0 ]; do [ \"\$1\" = -c ] && c=\"\$2\"; shift; done
+        [ \"\$c\" = '$PF/jobs.conf' ] && return 1
+        cat '$PF/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --yes" 2>&1 ) || :
+if case "$out2" in *"/etc/zfs-snapshot-all/jobs.conf --"*) true ;; *) false ;; esac \
+   && case "$out2" in *"/throwaway/tmpdir"*) false ;; *) true ;; esac; then
+    ok "preflight: the preview names the config's FINAL path, not the throwaway"
+else
+    bad "preflight: the preview names the config's FINAL path, not the throwaway" "$out2"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

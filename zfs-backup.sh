@@ -1845,7 +1845,7 @@ cmd_migrate_to_account() {
     # becoming "this tool will proceed without it".
     local gaps=0
     _gap()  { printf '  [ BRAK ] %s\n' "$1"; gaps=$((gaps+1)); }
-    _todo() { printf '  [ zrobi ] %s\n' "$1"; }
+    _todo() { printf '  [ plan ] %s\n' "$1"; }
     _have() { printf '  [  ok  ] %s\n' "$1"; }
     echo "== preflight: root -> $acct =="
 
@@ -1912,11 +1912,44 @@ cmd_migrate_to_account() {
     fi
 
     # Lines root runs that the account's render will not reproduce.
+    #
+    # The render has to happen in phase 1, but on the normal host it depends on
+    # phase 2's work: the config is still under /root, which the account cannot
+    # read, so gen-cron run AS the account cannot open it. Found by the first
+    # live preflight on metropolis pve1 (2026-08-01), where this aborted the
+    # whole check after correctly reporting every other gap.
+    #
+    # So phase 1 renders from a THROWAWAY readable copy in its own temp
+    # directory, exactly as the hand procedure did. This copy is never
+    # installed, never named in a '# Source:' that survives, and is deleted
+    # before phase 2 runs -- the real config is still MOVED, never copied,
+    # which is the property REV-20260801-018 turns on.
     LOCAL_USER="$acct"
-    local newblock; newblock=$(mktemp) || die "mktemp failed"
-    if ! gencron_as_target -c "$cfg" > "$newblock" 2>/dev/null || [ ! -s "$newblock" ]; then
-        LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock"
+    local newblock renderfrom rendertmp=""
+    newblock=$(mktemp) || die "mktemp failed"
+    renderfrom="$cfg"
+    if [ "$needs_move" -eq 1 ]; then
+        rendertmp=$(mktemp -d) || die "mktemp -d failed"
+        chmod 0755 "$rendertmp"
+        cp "$cfg" "$rendertmp/$(basename "$cfg")" && chmod 0644 "$rendertmp/$(basename "$cfg")" \
+            || { LOCAL_USER=""; rm -rf "$rendertmp"; rm -f "$rootcron" "$acctcron" "$newblock"
+                 die "could not stage a readable copy of $cfg for the preview -- nothing has been changed."; }
+        renderfrom="$rendertmp/$(basename "$cfg")"
+    fi
+    if ! gencron_as_target -c "$renderfrom" > "$newblock" 2>/dev/null || [ ! -s "$newblock" ]; then
+        LOCAL_USER=""; [ -n "$rendertmp" ] && rm -rf "$rendertmp"
+        rm -f "$rootcron" "$acctcron" "$newblock"
         die "gen-cron.sh could not render the block as '$acct' -- so what the account would actually run is unknown. Nothing has been changed."
+    fi
+    [ -n "$rendertmp" ] && { rm -rf "$rendertmp"; rendertmp=""; }
+    # The render carries the throwaway path in its '# Source:' line. Phase 4
+    # installs from $target_cfg and would write that instead, so rewrite it now
+    # -- a preview that differs from the install is worse than no preview
+    # (REV-20260801-015 §1), even when the difference is "only" a comment.
+    if [ "$needs_move" -eq 1 ]; then
+        local fixsrc; fixsrc=$(mktemp) || die "mktemp failed"
+        sed "s|^# Source: .* -- |# Source: $target_cfg -- |" "$newblock" > "$fixsrc" \
+            && mv -f "$fixsrc" "$newblock"
     fi
     local theirs mine dropped hostlines
     theirs=$(managed_block_fingerprint < "$rootcron")
