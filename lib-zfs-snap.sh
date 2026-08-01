@@ -1897,7 +1897,7 @@ quiesce_thaw_all() {
 # (guests were thawed either way), 1 anything else.
 read -r -d '' ZFS_REMOTE_QUIESCE_SCRIPT <<'REMOTE_QUIESCE_EOF'
 set -u
-mode=$1; deadman=$2; rflag=$3; shift 3
+mode=$1; deadman=$2; rflag=$3; qwindow=$4; shift 4
 nscope=$1; shift
 scopes=(); i=0
 while [ "$i" -lt "$nscope" ]; do scopes+=("$1"); shift; i=$((i+1)); done
@@ -2122,7 +2122,15 @@ guest_id() {
     esac
 }
 handled=" "
-freeze_one() {
+pending_vms=" "
+# PASS 1. Everything slow, and nothing that freezes a VM.
+#
+# The local path learned this on 2026-08-01 (REV-20260801-024) and this copy
+# did not. A container flush measured SIXTEEN SECONDS on metropolis pve1, and
+# doing it after a VM freeze puts the snapshot outside the ~10 s window VSS is
+# willing to hold. Running freeze/snapshot/thaw in ONE invocation kept network
+# latency out of the window -- it never kept `pct exec <id> -- sync` out of it.
+prep_one() {
     local ds="$1" id info kind running frozen
     id=$(guest_id "$ds") || return 0
     case "$handled" in *" $id "*) return 0 ;; esac
@@ -2154,13 +2162,16 @@ freeze_one() {
                 echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate. Refusing to snapshot: this run did not establish the freeze and must not claim it did." >&2
                 return 1
             fi
-            if gq_freeze "$id" qemu; then
-                printf '%s\n' "$id" >> "$frozen_file"
-                echo "QLOG froze VM $id via qemu-guest-agent"
-            else
-                echo "QERR VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" >&2
+            # REV-20260801-023 ported: on a RUNNING qemu guest an unreadable
+            # fsfreeze-status means the agent is not answering, so whether a
+            # freeze would take is unknown. Freezing anyway and hoping is how
+            # -q quietly becomes best-effort.
+            if [ "$frozen" != no ]; then
+                echo "QERR could not read fsfreeze-status for running VM $id (agent missing, disabled or busy), so whether a freeze would take is unknown -- refusing rather than snapshotting on a maybe" >&2
                 return 1
-            fi ;;
+            fi
+            pending_vms="$pending_vms$id "
+            echo "QLOG VM $id will be frozen just before the snapshot" ;;
         lxc)
             if gq_freeze "$id" lxc; then
                 echo "QLOG flushed container $id (sync) -- a flush, not a freeze: ZFS has no FIFREEZE"
@@ -2180,11 +2191,48 @@ freeze_one() {
 # still thaws whatever did get frozen.
 prep_failed=0
 for ds in "${scopes[@]}"; do
-    freeze_one "$ds" || prep_failed=$((prep_failed + 1))
+    prep_one "$ds" || prep_failed=$((prep_failed + 1))
 done
 if [ "$prep_failed" -gt 0 ]; then
     echo "QERR $prep_failed guest(s) could not be quiesced -- NOT taking a snapshot, because it would be crash-consistent while reporting success" >&2
     exit 5
+fi
+
+# PASS 2. Freeze the VMs, with nothing left to do but the snapshot.
+freeze_epoch=0
+for id in $pending_vms; do
+    if gq_freeze "$id" qemu; then
+        # The clock starts when a guest is actually FROZEN, not when we start
+        # asking: fsfreeze-freeze on a Windows guest takes ~4 s to return and
+        # the guest is not frozen during it (measured on pve1, 2026-08-01).
+        [ "$freeze_epoch" -eq 0 ] && freeze_epoch=$(date +%s)
+        echo "$id" >> "$frozen_file"
+        echo "QLOG froze VM $id via qemu-guest-agent"
+    else
+        echo "QERR VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" >&2
+        exit 5
+    fi
+done
+
+# PASS 3, and the whole point: is the promise still true NOW? A successful
+# fsfreeze-freeze proves nothing by the time zfs snapshot runs -- VSS releases
+# a Windows freeze after about 10 s on its own and says nothing to anyone.
+if [ -s "$frozen_file" ]; then
+    while read -r id; do
+        [ -n "$id" ] || continue
+        info=$(gq_status "$id")
+        if [ "$(gq_field "$info" frozen)" != yes ]; then
+            echo "QERR VM $id is no longer frozen at the moment of the snapshot (fsfreeze-status: $(gq_field "$info" frozen)) -- this snapshot would be crash-consistent while claiming otherwise" >&2
+            exit 5
+        fi
+    done < "$frozen_file"
+    elapsed=0
+    [ "$freeze_epoch" -gt 0 ] && elapsed=$(( $(date +%s) - freeze_epoch ))
+    if [ "$elapsed" -gt "$qwindow" ]; then
+        echo "QERR the freeze window is ${elapsed}s, over the ${qwindow}s budget, and a Windows guest drops a VSS freeze at about 10s regardless of what fsfreeze-status says -- refusing rather than snapshotting on a freeze that may already be gone" >&2
+        exit 5
+    fi
+    echo "QLOG freeze window ${elapsed}s (budget ${qwindow}s), $(grep -c . "$frozen_file") VM(s) confirmed still frozen at the snapshot"
 fi
 
 # One atomic `zfs snapshot` per pool, exactly like the local path: a pool is
@@ -2219,6 +2267,9 @@ REMOTE_QUIESCE_EOF
 # run's own log so a frozen-guest failure is as visible as a local one.
 quiesce_remote_run() {
     local user="$1" host="$2" mode="$3" rflag="$4" deadman="$5"; shift 5
+    # Same budget the local path uses, carried to the far side: the window
+    # is a property of the guest being frozen, not of who asked.
+    local qwindow="${QUIESCE_MAX_WINDOW:-5}"
     local -a scopes=() snaps=()
     local seen_sep=0 a
     for a in "$@"; do
@@ -2226,7 +2277,7 @@ quiesce_remote_run() {
         if [ "$seen_sep" -eq 0 ]; then scopes+=("$a"); else snaps+=("$a"); fi
     done
     local args
-    args=$(printf '%q ' "$mode" "$deadman" "$rflag" "${#scopes[@]}" "${scopes[@]}" "${#snaps[@]}" "${snaps[@]}")
+    args=$(printf '%q ' "$mode" "$deadman" "$rflag" "$qwindow" "${#scopes[@]}" "${scopes[@]}" "${#snaps[@]}" "${snaps[@]}")
     local out rc
     out=$(printf '%s' "$ZFS_REMOTE_QUIESCE_SCRIPT" | ssh "${SSH_OPTS[@]}" "$user@$host" "bash -s -- $args" 2>&1); rc=$?
     local line

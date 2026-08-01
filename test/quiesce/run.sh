@@ -668,11 +668,20 @@ cat > "$RQ_D/bin/sudo" <<'EOF'
 #!/bin/bash
 echo "sudo $*" >> "$TRACE"
 [ "$1" = "-n" ] && shift
-shift   # the helper path
+shift
+st="${QSTATE:-/tmp/qstate}.${2:-x}"
 case "${1:-}" in
   status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
-          echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
-  freeze|thaw) exit 0 ;;
+          k="${QKIND:-qemu}"; [ "$2" = 200 ] && k=lxc
+          f="${QFROZEN:-}"
+          if [ -z "$f" ]; then f=no; [ -e "$st" ] && f=yes; fi
+          [ -n "${QTHAWS_ITSELF:-}" ] && f=no
+          echo "id=$2 kind=$k running=yes frozen=$f"; exit 0 ;;
+  freeze) [ "$2" = "${QFREEZE_FAIL_ID:-}" ] && exit 1
+          [ "$2" = 200 ] && sleep "${QSLOW_FLUSH:-0}"
+          [ "$2" != 200 ] && sleep "${QSLOW_FREEZE:-0}"
+          [ "${QFREEZE:-0}" = 0 ] && : > "$st"; exit "${QFREEZE:-0}" ;;
+  thaw)   [ "${QTHAW:-0}" = 0 ] && rm -f "$st"; exit "${QTHAW:-0}" ;;
 esac
 exit 1
 EOF
@@ -684,8 +693,8 @@ printf '#!/bin/bash\nexit 0\n'                            > "$RQ_D/bin/setsid"
 chmod +x "$RQ_D/bin/"*
 
 rq_run() {
-    TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
-        bash "$RQ_D/rq.sh" agent 30 "" 1 rpool/data/vm-100-disk-0 \
+    TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_D/bin:$PATH" \
+        bash "$RQ_D/rq.sh" agent 30 "" 30 1 rpool/data/vm-100-disk-0 \
              1 rpool/data/vm-100-disk-0@t 2>&1
 }
 
@@ -730,6 +739,11 @@ esac
 # only the exit code but whether `zfs snapshot` was reached at all.
 
 rq_reset() {   # rq_reset <qm-body>
+    # The stub keeps per-guest freeze state on disk since the boundary
+    # re-check landed, so it must be wiped between cases -- otherwise case
+    # N+1 opens with a guest case N left frozen and refuses with
+    # "ALREADY frozen" instead of testing itself.
+    rm -f "$RQ_D"/qs.*
     : > "$RQ_D/trace"
     printf '#!/bin/bash\necho "qm $*" >> "$TRACE"\n%s\n' "$1" > "$RQ_D/bin/qm"
     printf '#!/bin/bash\nexit 0\n' > "$RQ_D/bin/setsid"
@@ -745,19 +759,27 @@ cat > "$RQ_D/bin/sudo" <<'EOF'
 echo "sudo $*" >> "$TRACE"
 [ "$1" = "-n" ] && shift
 shift
+st="${QSTATE:-/tmp/qstate}.${2:-x}"
 case "${1:-}" in
   status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
-          echo "id=$2 kind=${QKIND:-qemu} running=yes frozen=${QFROZEN:-no}"; exit 0 ;;
-  freeze) exit "${QFREEZE:-0}" ;;
-  thaw)   exit "${QTHAW:-0}" ;;
+          k="${QKIND:-qemu}"; [ "$2" = 200 ] && k=lxc
+          f="${QFROZEN:-}"
+          if [ -z "$f" ]; then f=no; [ -e "$st" ] && f=yes; fi
+          [ -n "${QTHAWS_ITSELF:-}" ] && f=no
+          echo "id=$2 kind=$k running=yes frozen=$f"; exit 0 ;;
+  freeze) [ "$2" = "${QFREEZE_FAIL_ID:-}" ] && exit 1
+          [ "$2" = 200 ] && sleep "${QSLOW_FLUSH:-0}"
+          [ "$2" != 200 ] && sleep "${QSLOW_FREEZE:-0}"
+          [ "${QFREEZE:-0}" = 0 ] && : > "$st"; exit "${QFREEZE:-0}" ;;
+  thaw)   [ "${QTHAW:-0}" = 0 ] && rm -f "$st"; exit "${QTHAW:-0}" ;;
 esac
 exit 1
 EOF
 chmod +x "$RQ_D/bin/sudo"
 
 rq_run2() {   # rq_run2 <mode> -- env steers the stubs
-    TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
-        bash "$RQ_D/rq.sh" "${1:-agent}" 30 "" 1 rpool/data/vm-100-disk-0 \
+    TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_D/bin:$PATH" \
+        bash "$RQ_D/rq.sh" "${1:-agent}" 30 "" 30 1 rpool/data/vm-100-disk-0 \
              1 rpool/data/vm-100-disk-0@t 2>&1
 }
 
@@ -796,7 +818,7 @@ if command -v setsid >/dev/null 2>&1; then
 else
     RQ_PATH="$RQ_D/bin:$PATH"
 fi
-out=$(TRACE="$RQ_D/trace" PATH="$RQ_PATH" bash "$RQ_D/rq.sh" agent 30 "" \
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_PATH" bash "$RQ_D/rq.sh" agent 30 "" 30 \
           1 rpool/data/vm-100-disk-0 1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
 check "err3: without setsid the run refuses (3)" "3" "$rc"
 # REV-20260731-007 §2 F2 asks specifically for proof that no freeze CALL
@@ -845,17 +867,25 @@ cat > "$RQ_D/bin/sudo" <<'EOF'
 echo "sudo $*" >> "$TRACE"
 [ "$1" = "-n" ] && shift
 shift
+st="${QSTATE:-/tmp/qstate}.${2:-x}"
 case "${1:-}" in
   status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
-          echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
-  freeze) [ "$2" = 101 ] && exit 1; exit 0 ;;   # the second guest refuses
-  thaw)   exit 0 ;;
+          k="${QKIND:-qemu}"; [ "$2" = 200 ] && k=lxc
+          f="${QFROZEN:-}"
+          if [ -z "$f" ]; then f=no; [ -e "$st" ] && f=yes; fi
+          [ -n "${QTHAWS_ITSELF:-}" ] && f=no
+          echo "id=$2 kind=$k running=yes frozen=$f"; exit 0 ;;
+  freeze) [ "$2" = "${QFREEZE_FAIL_ID:-}" ] && exit 1
+          [ "$2" = 200 ] && sleep "${QSLOW_FLUSH:-0}"
+          [ "$2" != 200 ] && sleep "${QSLOW_FREEZE:-0}"
+          [ "${QFREEZE:-0}" = 0 ] && : > "$st"; exit "${QFREEZE:-0}" ;;
+  thaw)   [ "${QTHAW:-0}" = 0 ] && rm -f "$st"; exit "${QTHAW:-0}" ;;
 esac
 exit 1
 EOF
 chmod +x "$RQ_D/bin/sudo"
-out=$(TRACE="$RQ_D/trace" PATH="$RQ_D/bin:$PATH" \
-      bash "$RQ_D/rq.sh" agent 30 "" 2 rpool/data/vm-100-disk-0 rpool/data/vm-101-disk-0 \
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" QFREEZE_FAIL_ID=101 PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 30 2 rpool/data/vm-100-disk-0 rpool/data/vm-101-disk-0 \
            1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
 check "err7: a partial freeze does not snapshot" "no" "$(rq_snapshotted)"
 check "err7: and fails (5)" "5" "$rc"
@@ -883,6 +913,87 @@ if [ -z "$bare" ]; then
     check "no bare 'return' in the remote script (trap-handler status trap)" "y" "y"
 else
     check "no bare 'return' in the remote script (trap-handler status trap)" "y" "n: $(printf '%s' "$bare" | tr '\n' ' ')"
+fi
+
+# ---- the remote path gets the same contract (2026-08-02) -------------------
+#
+# The local path got ordering, a boundary re-check and a deadline in
+# REV-20260801-024. This copy did not, and PROJECT_STATUS carried that as a
+# named open item: the specific 18-second shape cannot occur here, because
+# freeze/snapshot/thaw run in ONE invocation -- but `pct exec <id> -- sync` is
+# just as slow over here, and a mixed scope orders exactly as badly.
+#
+# ONE stub for the whole section, because the previous version of this block
+# defined a second one for the ordering case and the four cases after it
+# silently kept using that -- passing or failing for reasons unrelated to what
+# they claimed to test.
+
+# 1. ORDER. A container in the same scope must be flushed BEFORE the VM is
+# frozen. Asserted on the ORDER OF THE TRACE, with the flush made slow, not on
+# the shape of the source.
+rq_reset 'exit 0'
+TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" QSLOW_FLUSH=2 PATH="$RQ_D/bin:$PATH" \
+    bash "$RQ_D/rq.sh" auto 30 "" 30 2 rpool/data/vm-100-disk-0 rpool/data/subvol-200-disk-0 \
+         1 rpool/data@t >/dev/null 2>&1
+order=$(grep -oE 'helper (freeze|thaw) [0-9]+' "$RQ_D/trace" | head -2 | tr '\n' '|')
+check "remote-window: the container is flushed BEFORE the VM is frozen" \
+      "helper freeze 200|helper freeze 100|" "$order"
+
+# 2. RE-CHECK. The guest lets go between the freeze and the snapshot -- the
+# production failure -- and no snapshot may follow.
+rq_reset 'exit 0'
+out=$(QTHAWS_ITSELF=1 rq_run2); rc=$?
+check "remote-window: a guest that thawed itself before the snapshot is caught" "5" "$rc"
+check "remote-window: ...and no snapshot was taken" "no" "$(rq_snapshotted)"
+case "$out" in *"no longer frozen at the moment of the snapshot"*)
+    check "remote-window: ...and the message says so" "y" "y" ;;
+  *) check "remote-window: ...and the message says so" "y" "n ($out)" ;; esac
+
+# 3. DEADLINE. Everything reports frozen and the clock still says the window is
+# gone -- the case the re-check cannot see, because an agent will happily answer
+# "frozen" about a freeze it can no longer honour. A slow freeze plus a 1s
+# budget forces it.
+rq_reset 'exit 0'
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" QSLOW_FREEZE=3 PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 1 2 rpool/data/vm-100-disk-0 rpool/data/vm-101-disk-0 \
+           1 rpool/data@t 2>&1); rc=$?
+case "$out" in *"over the 1s budget"*) check "remote-window: an over-budget window refuses" "y" "y" ;;
+  *) check "remote-window: an over-budget window refuses" "y" "n ($out)" ;; esac
+check "remote-window: ...and takes no snapshot" "no" "$(rq_snapshotted)"
+
+# ...and the clock starts at the FIRST successful freeze, not when we start
+# asking: a slow freeze call is VSS preparing, during which the guest is not
+# frozen yet. Charging it to the window put a healthy production job one second
+# from failing on 2026-08-01.
+rq_reset 'exit 0'
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" QSLOW_FREEZE=2 PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 1 1 rpool/data/vm-100-disk-0 \
+           1 rpool/data/vm-100-disk-0@t 2>&1); rc=$?
+check "remote-window: a slow freeze CALL is not charged to the window" "0" "$rc"
+
+# 4. The success path logs the measured duration, so the number is an assertion
+# rather than something to be inferred from timestamps -- which is how this
+# whole family of defects had to be found in the first place.
+rq_reset 'exit 0'
+out=$(rq_run2); rc=$?
+check "remote-window: a freeze still in force and inside budget passes" "0" "$rc"
+case "$out" in *"freeze window "*"budget"*"confirmed still frozen"*)
+    check "remote-window: ...and the duration is logged" "y" "y" ;;
+  *) check "remote-window: ...and the duration is logged" "y" "n ($out)" ;; esac
+
+# 5. An unreadable fsfreeze-status on a RUNNING qemu guest is a refusal here
+# too, not a freeze-and-hope (REV-20260801-023's rule, ported).
+rq_reset 'exit 0'
+out=$(QFROZEN=unknown rq_run2); rc=$?
+check "remote-window: an unreadable fsfreeze-status refuses" "5" "$rc"
+check "remote-window: ...and takes no snapshot" "no" "$(rq_snapshotted)"
+
+# 6. The budget travels with the run rather than being hardcoded on the far
+# side, so one host's slow guest does not force a fleet-wide default.
+if grep -q 'local qwindow="${QUIESCE_MAX_WINDOW:-5}"' "$REPO/lib-zfs-snap.sh"; then
+    check "remote-window: the budget is passed from the caller" "y" "y"
+else
+    check "remote-window: the budget is passed from the caller" "y" "n"
 fi
 
 echo "--------------------------------------------"
