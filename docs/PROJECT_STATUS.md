@@ -332,7 +332,7 @@ pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **139/139** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
+| `zfsbackup` | **142/142** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -388,12 +388,22 @@ czterech hostach w obu formach hosta.
   uprzywilejowaną powierzchnię `deploy.sh`, co stoi w sprzeczności z
   `docs/discussions/DEPLOY-UX-AGREED-POSITION.md`. To decyzja właściciela i
   recenzenta, nie moja do cichego przekroczenia.
-- **Migracja produkcyjnego bloku metropolis pve1 na konto: nadal WSTRZYMANA —
-  ale powód się zmienił.** Nie jest nim już bramka. Jest nim to, że
-  `migrate-to-account` **nigdy nie działał na prawdziwej parze crontabów**:
-  wszystko powyżej jest sprawdzone na stubach `crontab`/`getent`/`runuser`/`zfs`.
-  REV-017 F2 postawił dokładnie ten zarzut wobec `--local-user`, a przebieg na
-  żywo znalazł potem pięć defektów, których pakiet nie widział.
+- **Faza 1 (`--preflight`) PRZETESTOWANA NA ŻYWO** na metropolis pve1
+  (2026-08-01, `4662b8a`), tylko odczyt, oba crontaby bajt w bajt bez zmian po
+  przebiegu. Wynik zgodny co do joty z ręczną analizą: config do przeniesienia,
+  brak delegacji ZFS na dokładnie czterech datasetach pod `hdd/vm-disks`, brak
+  grantu quiesce przy bloku używającym `-q`, i **1 linia ogólnohostowa** (digest)
+  wyliczona, nie wpisana na sztywno. Pierwszy przebieg na żywo od razu znalazł
+  własny błąd: faza 1 renderowała jako konto, zanim faza 2 przeniosła config,
+  więc na jedynym kształcie hosta, dla którego to pisałem, kończyła się FATAL-em.
+  Naprawione w `4662b8a`, trzy testy padają na bazie.
+- **Migracja produkcyjnego bloku metropolis pve1 na konto: nadal WSTRZYMANA.**
+  Fazy 2–5 (`prepare`/`preview`/`commit`/`verify`) **nigdy nie działały na
+  prawdziwej parze crontabów** — są sprawdzone wyłącznie na stubach. Nie da się
+  ich przetestować na żywo bez chwilowego podmienienia produkcyjnego bloku
+  roota, bo `gen-cron --install` zastępuje cały blok `BEGIN/END`; na żadnym z
+  czterech hostów root nie jest wolny od bloku. To wymaga decyzji właściciela o
+  oknie serwisowym, nie jest do zrobienia po cichu.
 - ~~Test `remove-client` celujący w crontab skonfigurowanego konta~~ — **zrobione**
   (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
   na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
