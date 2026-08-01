@@ -7,27 +7,37 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-01**
-- Zweryfikowano przeciw: `bda83b3` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-01** (druga tego dnia — po przebiegu B i po
+  preflightcie migracji na metropolis pve1)
+- Zweryfikowano przeciw: `ca75e30` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: odzyskiwanie po crashu (REV-013), commit niosący ten dokument
+- Ostatnia zmiana zachowania produkcyjnego: parytet logrotate konta (`$HOME/cron.log`), commit niosący ten dokument
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **brak otwartych blockerów; REV-013 zamknięty przez recenzenta; transakcja grantu przyjęta jako infrastruktura dla OPCJONALNEGO remote quiesce**
+- Status ogólny: **jeden otwarty blocker — REV-20260801-019 (CHANGES REQUIRED):
+  bramka duplikacji przy migracji root → konto nadal rozstrzyga tożsamość
+  obciążenia po ścieżce configu, nie po zadaniach. Migracja produkcyjnego bloku
+  na metropolis pve1 jest z tego powodu WSTRZYMANA.**
+
+> **Uwaga proceduralna do samego siebie.** Ten dokument został ostatnio
+> odświeżony przy `bda83b3`, a przebieg B domknąłem dziesięcioma commitami
+> (`0c08f54`…`39e610f`), nie dotykając go. Etap zgłosiłem jako zamknięty
+> zapisem do pamięci zamiast odświeżenia tego pliku — czyli dokładnie tym
+> defektem, przed którym ostrzega nagłówek. Odnotowane, żeby nie zniknęło.
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty, wszystkie pociągnięte do `bda83b3` i z czystym audytem
-`deploy.sh --check-only` (2026-07-31):
+Cztery żywe hosty, wszystkie pociągnięte do `ca75e30` (zweryfikowane bezpośrednio
+2026-08-01) i z czystym audytem `deploy.sh --check-only` (2026-07-31):
 
-| Host | Adres | Commit | Konto delegowane | `sudo` |
-|---|---|---|---|---|
-| pve0 | 192.168.11.10 | `bda83b3` | — | jest |
-| pve1 | 192.168.11.11 | `bda83b3` | — | jest |
-| metropolis pve1 | 192.168.28.9 | `bda83b3` | `zfsbackup` | brak |
-| metropolis pve2 | 192.168.28.8 | `bda83b3` | `zfsbackup` | brak |
+| Host | Adres | Commit | Konto delegowane | `sudo` | helper quiesce |
+|---|---|---|---|---|---|
+| pve0 | 192.168.11.10 | `ca75e30` | — | jest | brak |
+| pve1 | 192.168.11.11 | `ca75e30` | — | jest | brak |
+| metropolis pve1 | 192.168.28.9 | `ca75e30` | `zfsbackup` | **jest** | **jest** |
+| metropolis pve2 | 192.168.28.8 | `ca75e30` | `zfsbackup` | brak | brak |
 
 Wersje programów w drzewie:
 
@@ -43,19 +53,32 @@ Wersje programów w drzewie:
 `check-pool-capacity.sh` nie mają własnej stałej `VERSION` — identyfikuje je
 commit.
 
-### Stan grantu quiesce na hostach: ZEROWY
+### Stan grantu quiesce na hostach: NADANIA ZEROWE, ale nie wszędzie czysto
 
-Na żadnym z czterech hostów nie ma dziś:
+Zweryfikowane bezpośrednio na wszystkich czterech hostach 2026-08-01. **Na
+żadnym nie ma dziś nadanego grantu**:
 
-- `/usr/local/sbin/zfs-quiesce-helper`;
-- `/etc/zfs-quiesce-allow/`;
-- żadnej reguły `/etc/sudoers.d/zfs-quiesce-*`;
+- zero reguł `/etc/sudoers.d/*quiesce*`;
+- `/etc/zfs-quiesce-allow/` pusty tam, gdzie w ogóle istnieje;
 - żadnych pozostałości `*.zqg-new` / `*.zqg-bak`.
 
-Na pve0 i pve1 (192.168.11.x) został **wyłącznie pakiet `sudo`**, zainstalowany
-2026-07-31 o 14:35 i 15:45 przez testowe przebiegi `--allow-quiesce`. To jest
-dokładnie stan opisany w REV-20260731-009 §5: pakiet zostaje, granta nie ma, i od
-`ad5e745` kod mówi o tym wprost przy każdej takiej awarii.
+Pozostałości po testach z 2026-07-31 **są** i trzeba je czytać jako stan, nie
+jako zero:
+
+| Host | Co zostało | Skąd |
+|---|---|---|
+| pve0, pve1 (192.168.11.x) | pakiet `sudo` | przebiegi `--allow-quiesce` 14:35 i 15:45 |
+| metropolis pve1 | pakiet `sudo` **oraz `/usr/local/sbin/zfs-quiesce-helper`** | pełny cykl end-to-end zakończony `--revoke-quiesce` |
+
+To jest dokładnie stan opisany w REV-20260731-009 §5: pakiet zostaje, granta nie
+ma, i od `ad5e745` kod mówi o tym wprost przy każdej takiej awarii. `--revoke`
+zdejmuje **regułę** — to ona jest przełącznikiem — a binarkę helpera zostawia;
+bez reguły jest ona martwym plikiem. Potwierdzone na żywo:
+`runuser --user zfsbackup -- sudo -n /usr/local/sbin/zfs-quiesce-helper status 106`
+→ `sudo: a password is required`.
+
+Poprzednia wersja tej sekcji twierdziła, że helpera nie ma na żadnym hoście i że
+metropolis pve1 nie ma `sudo`. Oba zdania były nieprawdziwe od 2026-07-31.
 
 **Instalacja end-to-end: WYKONANA 2026-07-31 na metropolis** (za zgodą
 właściciela). Pełny cykl `--pair` → przeniesienie paczki → `--join
@@ -283,7 +306,9 @@ testem.
 
 ## 5. Testy — stan bieżący
 
-Uruchomione lokalnie przy `bda83b3` (bez roota, bez ZFS, bez sieci):
+Uruchomione lokalnie przy `ca75e30` (bez roota, bez ZFS, bez sieci). Cztery
+pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
+`zfsbackup`, `quiescehelper`, `join`) przebiegnięte ponownie przy tym commicie:
 
 | Pakiet | Wynik | Zakres |
 |---|---|---|
@@ -293,7 +318,7 @@ Uruchomione lokalnie przy `bda83b3` (bez roota, bez ZFS, bez sieci):
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | 100/100 | warstwa orkiestracji `zfs-backup.sh` |
+| `zfsbackup` | **118/118** | warstwa orkiestracji `zfs-backup.sh` (+18: przebieg B i parytet logrotate) |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -332,6 +357,23 @@ czterech hostach w obu formach hosta.
 - **Transakcja grantu wraz z odzyskiwaniem po crashu** jest przez recenzenta
   uznana za akceptowalną infrastrukturę dla **opcjonalnego** remote quiesce.
 
+### Otwarte u implementera
+
+- **REV-20260801-019 — bramka duplikacji nadal kluczuje po ścieżce configu:
+  CHANGES REQUIRED, niepodjęte.** `assert_no_foreign_managed_block()` porównuje
+  znormalizowaną ścieżkę z `# Source:`, a nie same zadania. Migracja root → konto
+  z natury tę ścieżkę zmienia (konto nie czyta configu spod `/root`), więc
+  **kopia** configu w nowym miejscu przechodzi bramkę i pozwala zainstalować
+  drugi, równoległy blok przy żywym bloku roota. Recenzent żąda jednego
+  transakcyjnego czasownika migracji z jednym łącznym podglądem i rollbackiem.
+  Nie zaczęte — recenzja przyszła w trakcie innego przebiegu.
+- **Migracja produkcyjnego bloku metropolis pve1 na konto: WSTRZYMANA**
+  do zamknięcia REV-019. Preflight wykonany i opisany w
+  `docs/MIGRATION-ROOT-TO-ACCOUNT.md`; nic na hoście nie zmienione.
+- **Test `remove-client` celujący w crontab skonfigurowanego konta** i dowód,
+  że `final-catchup` nie zmienił zachowania (dodatkowa uwaga REV-019, po tym jak
+  ta sama poprawka wylądowała najpierw w niewłaściwej funkcji).
+
 ### Czeka na werdykt recenzenta
 
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
@@ -342,6 +384,19 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na decyzję właściciela
 
+- **metropolis pve2 nie ma pliku configu swojego crona.** 14 produkcyjnych linii
+  w crontabie roota wskazuje `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`
+  — katalog nie istnieje. Zadania chodzą (cronowi to obojętne), ale **niczego nie
+  da się zregenerować**, a `gen-cron.sh -c` odmawia startu. Jedynym zapisem
+  tego, co ma tam być, jest zainstalowany blok. Do czasu odbudowy pve2 nie może
+  być kolektorem `zfs-backup.sh`. Guard z `c6c98c2` zabrania narzędziu utworzyć
+  ten plik — pusty config plus `--install` skasowałby 14 linii. Decyzja: odbudować
+  z `crontab -l` czy migrować z pełnym diffem.
+- **VM 102 (`neth`) na metropolis pve1 nie ma żadnego zadania snapshotowego.**
+  Dysk `hdd/vm-disks/vm-102-disk-0`, replikowany przez pvesr na pve2 co trzy
+  godziny — czyli pokrycie DR bez retencji. Goście 100, 101, 106 i 107 na tym
+  samym hoście mają jedno i drugie. Może być świadome; odnotowane, bo znalezione
+  przy preflightcie migracji, a nie zgłoszone przez nic innego.
 - **Korelacja per przebieg dla SQL** (REV-010 §2): odczyt najwyższego
   `EventRecordID` przed freeze i tylko nowych zdarzeń po thaw, wewnątrz jednej
   operacji zdalnej `snapget -q`. To nowa powierzchnia uprzywilejowana.
