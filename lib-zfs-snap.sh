@@ -1594,9 +1594,20 @@ quiesce_do_thaw() {   # <id>
     return $?
 }
 
-# Freezes whatever owns $1, if anything, and remembers it. Returns 0 even when it
-# does nothing: a dataset with no guest, a stopped guest or an unreachable agent
-# are all reasons to take an ordinary snapshot, not to fail a backup.
+# Freezes whatever owns $1, if anything, and remembers it.
+#
+# Returns 0 when there is genuinely NOTHING TO QUIESCE -- a dataset that owns no
+# guest, a guest that does not exist on this node, a guest that is switched off.
+# In each of those the snapshot is as consistent as it can possibly be, and
+# failing the backup would be failing it for succeeding.
+#
+# Everything else REFUSES (exit 3). REV-20260801-023: an unreachable agent, a
+# guest already frozen by someone else, a freeze that did not take -- these are
+# not "reasons to take an ordinary snapshot". They are the run failing to deliver
+# the consistency class that `-q` asked for, and a caller who asked for -q and
+# silently received crash-consistent is exactly the outcome this whole path
+# exists to prevent. -q is not best-effort; if a best-effort policy is ever
+# wanted it has to be a separately named mode that does not claim consistency.
 quiesce_freeze() {
     local ds="$1" mode="$2" id line kind running frozen
     [ "$mode" = "no" ] && return 0
@@ -1627,32 +1638,42 @@ quiesce_freeze() {
     [ "$kind" = absent ] && { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
     [ "$running" = yes ] || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
 
-    # An explicit mode that does not fit this guest is a config mistake worth
-    # saying out loud, but still not worth failing a backup over.
+    # An explicit mode that does not fit this guest quiesces NOTHING, so under -q
+    # it is a refusal like any other. Beyond the letter of REV-20260801-023,
+    # which is about running QEMU guests -- but it is the same rule, and leaving
+    # two known silent downgrades behind while fixing four would be pointless.
     case "$mode/$kind" in
-        agent/lxc)  log 1 "Quiesce: guest $id is a container, which has no qemu-guest-agent -- use quiesce=sync or auto"; return 0 ;;
-        sync/qemu)  log 1 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here -- use quiesce=agent or auto"; return 0 ;;
+        agent/lxc)  log 0 "Quiesce: guest $id is a container, which has no qemu-guest-agent, so 'quiesce=agent' would freeze nothing at all. Refusing rather than taking a snapshot that is not what was asked for -- use quiesce=sync or auto."; exit 3 ;;
+        sync/qemu)  log 0 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here, so 'quiesce=sync' would freeze nothing at all. Refusing rather than taking a snapshot that is not what was asked for -- use quiesce=agent or auto."; exit 3 ;;
     esac
 
     case "$kind" in
         qemu)
-            # Already frozen (a previous run died between freeze and thaw) is
-            # reported rather than re-frozen: freezing twice needs two thaws.
-            [ "$frozen" = yes ] && { log 0 "Quiesce: guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate"; return 0; }
+            # A freeze this run does not own is not this run's quiesce. We cannot
+            # prove where its application boundary is, and we deliberately will
+            # not thaw it -- so there is nothing here to report as success.
+            case "$frozen" in
+                yes) log 0 "Quiesce: guest $id was ALREADY frozen before this run started. This run does not own that freeze, cannot say what application state it captured, and will not thaw someone else's. Refusing. Investigate the guest -- most likely a previous run died between freeze and thaw -- and thaw it with 'qm guest cmd $id fsfreeze-thaw' once you know why."; exit 3 ;;
+                unknown) log 0 "Quiesce: could not read fsfreeze-status for running VM $id (agent missing, disabled or busy), so whether a freeze would take is unknown. Refusing rather than taking a snapshot that may be crash-consistent while the log calls it quiesced."; exit 3 ;;
+            esac
             if quiesce_do_freeze "$id" qemu; then
                 QUIESCE_FROZEN+=("qemu:$id")
                 log 1 "Quiesce: froze VM $id via qemu-guest-agent"
             else
-                log 1 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy) -- snapshot will be crash-consistent"
+                log 0 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy). Refusing -- -q asked for a frozen snapshot and this would not be one."
+                exit 3
             fi
             ;;
         lxc)
             # A flush, not a freeze -- nothing is registered for thawing because
-            # nothing is held.
+            # nothing is held. Weaker than a freeze by design (see the block
+            # comment above), but it is what -q promises for a container, and a
+            # flush that did not happen is still a promise not kept.
             if quiesce_do_freeze "$id" lxc; then
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
-                log 1 "Quiesce: 'pct exec $id -- sync' failed -- snapshot will be crash-consistent"
+                log 0 "Quiesce: 'pct exec $id -- sync' failed, so the container's dirty pages were never pushed into ZFS. Refusing rather than reporting a quiesced backup that had no quiesce."
+                exit 3
             fi
             ;;
     esac
@@ -1682,22 +1703,43 @@ quiesce_scope() {
 # second call is harmless -- the EXIT trap fires even after an explicit thaw.
 # Every failure is shouted at log level 0: a guest that will not thaw is the one
 # outcome here that is worse than no quiescing at all.
+# Set when a thaw did not take. The caller must fail the run on it
+# (REV-20260801-023): a guest left frozen is an outage, and an outage the job
+# reported as a successful backup is an outage nobody goes looking for.
+QUIESCE_THAW_FAILED=0
+
 quiesce_thaw_all() {
-    local i entry
+    local i entry gid left=()
     for (( i=${#QUIESCE_FROZEN[@]}-1; i>=0; i-- )); do
         entry="${QUIESCE_FROZEN[$i]}"
         case "$entry" in
             qemu:*)
-                if quiesce_do_thaw "${entry#qemu:}"; then
-                    log 1 "Quiesce: thawed VM ${entry#qemu:}"
-                else
-                    log 0 "Quiesce: FAILED TO THAW VM ${entry#qemu:} -- that guest is still frozen and needs manual 'qm guest cmd ${entry#qemu:} fsfreeze-thaw'"
+                gid="${entry#qemu:}"
+                if quiesce_do_thaw "$gid"; then
+                    log 1 "Quiesce: thawed VM $gid"
+                    continue
                 fi
+                # One retry before giving up. The common cause of a first failure
+                # is an agent still busy with the freeze, and the cost of asking
+                # twice is nothing next to leaving a guest frozen.
+                if quiesce_do_thaw "$gid"; then
+                    log 0 "Quiesce: thawed VM $gid on the second attempt -- the first thaw failed, which is worth knowing"
+                    continue
+                fi
+                QUIESCE_THAW_FAILED=1
+                # KEPT, not dropped: this is the recovery state. The EXIT trap
+                # calls this function again after an explicit mid-run call, so
+                # keeping the id here IS the retry, and an emptied list would be
+                # this run forgetting the one thing it must not forget.
+                left+=("$entry")
+                log 0 "Quiesce: FAILED TO THAW VM $gid -- that guest is still frozen and needs manual 'qm guest cmd $gid fsfreeze-thaw'"
                 ;;
         esac
     done
-    QUIESCE_FROZEN=()
+    QUIESCE_FROZEN=("${left[@]}")
     QUIESCE_HANDLED=()
+    [ "$QUIESCE_THAW_FAILED" -eq 1 ] && return 1
+    return 0
 }
 
 ###############################################################################

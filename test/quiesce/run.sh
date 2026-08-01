@@ -150,13 +150,13 @@ check "no guest: nothing frozen" "0" "${#QUIESCE_FROZEN[@]}"
 quiesce_freeze hdd/data/vm-107-disk-0 no
 check "mode 'no': nothing frozen even for a real guest" "0" "${#QUIESCE_FROZEN[@]}"
 
-# Wrong mode for the guest type (sync on a VM): says so and freezes nothing. Note
-# the guest IS marked handled first -- dedup happens as soon as the owner is
-# known. That is harmless because -q is one CLI flag for the whole run, so no
-# second dataset can arrive with a mode that would have fitted.
+# Wrong mode for the guest type (sync on a VM) freezes nothing at all, so since
+# REV-20260801-023 it REFUSES rather than proceeding -- see the section on that
+# below. Driven in a subshell because the refusal is an exit, not a return.
 QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
-quiesce_freeze hdd/data/vm-107-disk-0 sync
-check "wrong mode: a VM is not sync-quiesced" "0" "${#QUIESCE_FROZEN[@]}"
+( quiesce_freeze hdd/data/vm-107-disk-0 sync >/dev/null 2>&1 )
+check "wrong mode: a VM is not sync-quiesced -- and the run refuses" "3" "$?"
+check "wrong mode: nothing was frozen" "0" "${#QUIESCE_FROZEN[@]}"
 
 # ---- the LOCAL path's privilege routing (2026-08-01) -----------------------
 #
@@ -300,6 +300,153 @@ esac
 
 QUIESCE_PVE_DIR="$FAKE_PVE"
 QUIESCE_VIA=""
+
+# ---- REV-20260801-023: -q is not best-effort -------------------------------
+#
+# The routing fix above stopped the local path calling a running guest stopped.
+# It left five branches that still DEGRADED: already-frozen, unreadable
+# fsfreeze-status, a freeze that did not take, a container flush that failed,
+# and a mode that fits no guest of that kind. Each one logged something and let
+# the snapshot proceed, so a job that delivered crash-consistent data still
+# exited 0 and still called itself quiesced.
+#
+# The rule is now binary: -q either delivered the consistency class it promised
+# for this run, or the run failed. "Nothing to quiesce" -- no guest, no such
+# guest, guest switched off -- stays a success, because there the snapshot is
+# already as consistent as it can be.
+RJ="$TMPD/refuse"; mkdir -p "$RJ/bin" "$RJ/pve/qemu-server" "$RJ/pve/lxc"
+: > "$RJ/pve/qemu-server/106.conf"
+: > "$RJ/pve/lxc/101.conf"
+
+# The review's own reproduction: a delegated account, helper says the guest is
+# running and ALREADY frozen.
+mk_helper() {   # <status line> [freeze-rc]
+    cat > "$RJ/bin/helper" <<STUB
+#!/bin/sh
+case "\$1" in
+  status) [ -z "\${2:-}" ] && exit 0; echo "$1"; exit 0 ;;
+  freeze) echo "freeze \$2" >> "\$HELPER_TRACE"; exit ${2:-0} ;;
+  thaw)   echo "thaw \$2"   >> "\$HELPER_TRACE"; exit 0 ;;
+esac
+exit 2
+STUB
+    chmod +x "$RJ/bin/helper"
+}
+# A zfs that RECORDS being called, so "no snapshot was taken" is proven rather
+# than assumed.
+cat > "$RJ/bin/zfs" <<'STUB'
+#!/bin/sh
+echo "zfs $*" >> "$ZFS_TRACE"
+exit 0
+STUB
+# The helper is reached as `sudo -n <helper> ...`, so without this every call
+# fails because sudo is missing and every assertion below passes for entirely
+# the wrong reason -- which is what happened the first time these were written.
+cat > "$RJ/bin/sudo" <<'STUB'
+#!/bin/sh
+[ "$1" = "-n" ] && shift
+exec "$@"
+STUB
+chmod +x "$RJ/bin/zfs" "$RJ/bin/sudo"
+export HELPER_TRACE="$RJ/htrace" ZFS_TRACE="$RJ/ztrace"
+
+run_refuse() {   # <status line> [freeze-rc] -> prints "rc|<helper trace>|<zfs trace>"
+    mk_helper "$1" "${2:-0}"
+    : > "$HELPER_TRACE"; : > "$ZFS_TRACE"
+    local out rc
+    out=$( PATH="$RJ/bin:$PATH"
+           QUIESCE_PVE_DIR="$RJ/pve"; QUIESCE_VIA=helper; QUIESCE_HELPER="$RJ/bin/helper"
+           QUIESCE_HANDLED=(); QUIESCE_FROZEN=(); QUIESCE_THAW_FAILED=0
+           quiesce_freeze "${3:-hdd/data/vm-106-disk-0}" "${4:-auto}" 2>&1 ); rc=$?
+    printf '%s|%s|%s|%s' "$rc" "$(tr '\n' ',' < "$HELPER_TRACE")" "$(tr '\n' ',' < "$ZFS_TRACE")" "$out"
+}
+
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=yes")
+check "refuse: an already-frozen guest fails the run" "3" "${r%%|*}"
+case "$r" in
+    *"ALREADY frozen before this run started"*)
+        check "refuse: ...and says the freeze is not this run's" "0" "0" ;;
+    *)  check "refuse: ...and says the freeze is not this run's" "0" "1 ($r)" ;;
+esac
+# Requirement 5 of the review: no thaw is attempted, because this run never
+# acquired the freeze. Proven from the helper trace, not from the log text.
+check "refuse: ...and does NOT thaw a freeze it does not own" "" "$(sed -n 's/^[0-9]*|\([^|]*\)|.*/\1/p' <<<"$r")"
+# Requirements 1 and 2: nothing reached zfs, so no snapshot and no send.
+check "refuse: ...and no zfs command ran at all" "" "$(sed -n 's/^[0-9]*|[^|]*|\([^|]*\)|.*/\1/p' <<<"$r")"
+
+# The reviewer's second case, and the one the old comment blessed by name: a
+# running VM whose agent will not answer. "Unreachable agent" was listed as a
+# reason to take an ordinary snapshot. Under an explicit -q it is not.
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=unknown")
+check "refuse: an unreadable fsfreeze-status fails the run" "3" "${r%%|*}"
+case "$r" in
+    *"could not read fsfreeze-status"*) check "refuse: ...and names the agent, not the guest" "0" "0" ;;
+    *)                                  check "refuse: ...and names the agent, not the guest" "0" "1 ($r)" ;;
+esac
+
+# A freeze that was attempted and did not take.
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=no" 1)
+check "refuse: a freeze that did not take fails the run" "3" "${r%%|*}"
+check "refuse: ...after actually trying it" "freeze 106," "$(sed -n 's/^[0-9]*|\([^|]*\)|.*/\1/p' <<<"$r")"
+
+# Containers cannot be frozen at all -- the promise is a FLUSH, and a flush that
+# failed is still a promise not kept.
+r=$(run_refuse "id=101 kind=lxc running=yes frozen=unknown" 1 "hdd/lxc/subvol-101-disk-0")
+check "refuse: a container flush that failed fails the run" "3" "${r%%|*}"
+
+# ...and the same guest with a working flush is an ordinary success, so the rule
+# above is not just "everything fails now".
+r=$(run_refuse "id=101 kind=lxc running=yes frozen=unknown" 0 "hdd/lxc/subvol-101-disk-0")
+check "refuse: a container flush that worked is still a success" "0" "${r%%|*}"
+
+# An explicit mode that fits no guest of that kind quiesces NOTHING. Beyond the
+# letter of the review, same rule.
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=no" 0 "hdd/data/vm-106-disk-0" sync)
+check "refuse: quiesce=sync on a VM fails instead of freezing nothing" "3" "${r%%|*}"
+r=$(run_refuse "id=101 kind=lxc running=yes frozen=unknown" 0 "hdd/lxc/subvol-101-disk-0" agent)
+check "refuse: quiesce=agent on a container fails instead of freezing nothing" "3" "${r%%|*}"
+
+# NOTHING TO QUIESCE stays a success. This is the half that must not regress:
+# failing a backup because the guest is switched off would be worse than the bug
+# being fixed.
+r=$(run_refuse "id=106 kind=qemu running=no frozen=unknown")
+check "refuse: a switched-off guest is still an ordinary success" "0" "${r%%|*}"
+r=$(run_refuse "id=106 kind=absent running=no frozen=unknown")
+check "refuse: a guest that is not on this node is still an ordinary success" "0" "${r%%|*}"
+
+# ---- a failed thaw must fail the run --------------------------------------
+#
+# A guest left frozen is an outage. An outage the job reported as a clean backup
+# is an outage nobody goes looking for.
+cat > "$RJ/bin/helper-nothaw" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -z "${2:-}" ] && exit 0; echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
+  freeze) exit 0 ;;
+  thaw)   echo "thaw $2" >> "$HELPER_TRACE"; exit 1 ;;
+esac
+exit 2
+STUB
+chmod +x "$RJ/bin/helper-nothaw"
+: > "$HELPER_TRACE"
+res=$( PATH="$RJ/bin:$PATH"
+       QUIESCE_PVE_DIR="$RJ/pve"; QUIESCE_VIA=helper; QUIESCE_HELPER="$RJ/bin/helper-nothaw"
+       QUIESCE_HANDLED=(); QUIESCE_FROZEN=(); QUIESCE_THAW_FAILED=0
+       quiesce_freeze hdd/data/vm-106-disk-0 auto >/dev/null 2>&1
+       quiesce_thaw_all >/dev/null 2>&1; rc=$?
+       echo "$rc ${#QUIESCE_FROZEN[@]} $QUIESCE_THAW_FAILED" )
+check "thaw-fail: quiesce_thaw_all reports the failure to its caller" "1" "$(echo "$res" | cut -d' ' -f1)"
+check "thaw-fail: the guest STAYS on the recovery list, it is not forgotten" "1" "$(echo "$res" | cut -d' ' -f2)"
+check "thaw-fail: and the flag is set for the caller to act on" "1" "$(echo "$res" | cut -d' ' -f3)"
+# Retried once before giving up: the usual cause of a first failure is an agent
+# still busy with the freeze it just performed.
+check "thaw-fail: the thaw was retried before being called a failure" "2" \
+      "$(grep -c 'thaw 106' "$HELPER_TRACE")"
+
+# snapsend.sh must turn that into a non-zero exit rather than logging it.
+grep -q 'if ! quiesce_thaw_all; then' "$REPO/snapsend.sh" \
+    && ok_thaw=1 || ok_thaw=0
+check "thaw-fail: snapsend fails the run on it instead of logging and continuing" "1" "$ok_thaw"
 
 # ---- the REMOTE script's privilege routing --------------------------------
 #

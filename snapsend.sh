@@ -1886,7 +1886,11 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # Wired before the first freeze, so an interrupt between freeze and thaw
     # still thaws. The autotune trap is replaced rather than added to, because
     # bash allows one EXIT trap -- both actions live in this one.
-    trap 'quiesce_thaw_all; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+    # `|| :` so a failed thaw cannot stop the trap before tune_ssh_close: the
+    # failure is already recorded in QUIESCE_THAW_FAILED and shouted at level 0,
+    # and losing the ssh master socket on top of it helps nobody. On the normal
+    # path the explicit call below has already run and turned that into exit 3.
+    trap 'quiesce_thaw_all || :; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
     # Decide HOW guests are reached -- and refuse here if they cannot be reached
     # at all -- before a single snapshot is taken. Up front on purpose: the
@@ -1944,10 +1948,17 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # configured retention pattern like any other, and destroying them would
         # be throwing away good backups because a DIFFERENT pool failed.
         log 0 "Quiesce: the atomic snapshot failed -- refusing to fall back to unquiesced per-dataset snapshots"
-        quiesce_thaw_all
+        quiesce_thaw_all || :
         exit 1
     fi
-    quiesce_thaw_all
+    # A guest left frozen is an outage. Reporting it in the log and exiting 0
+    # makes it an outage nobody goes looking for, so it fails the run
+    # (REV-20260801-023). The snapshots already taken are valid and are kept --
+    # they were made inside the freeze window; what failed is the release.
+    if ! quiesce_thaw_all; then
+        log 0 "Quiesce: at least one guest could not be thawed (named above) -- failing the run so this is not reported as a clean backup"
+        exit 3
+    fi
 fi
 
 declare -a FAILED_DATASETS=()
