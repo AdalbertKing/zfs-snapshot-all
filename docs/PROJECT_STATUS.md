@@ -10,12 +10,12 @@
 - Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
   nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
   produkcyjnego bloku tego hosta z roota na konto delegowane**)
-- Zweryfikowano przeciw: `55d33a2` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `244ec0d` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `55d33a2` — lokalny quiesce
-  przestaje czytać „nie mogłem zapytać” jako „nie działa” i odmawia zamiast
-  po cichu robić snapshot bez freeze'u
+- Ostatnia zmiana zachowania produkcyjnego: `244ec0d` — `-q` przestaje być
+  „best effort”. Kontrakt jest binarny: albo quiesce dostarczył klasę spójności,
+  którą obiecał na ten przebieg, albo przebieg kończy się niezerowo
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
@@ -376,7 +376,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | **57/57** | księgowanie `-q`: własność guesta, deduplikacja, **oraz trasa uprzywilejowana lokalnej ścieżki (+10)** |
+| `quiesce` | **77/77** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) **oraz odmowa zamiast degradacji (+14, REV-023)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
@@ -385,7 +385,8 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
-pve1 przy `55d33a2`**, bo `snapsend.sh` zmienił się razem z biblioteką:
+pve1 przy `244ec0d`** (i wcześniej przy `55d33a2`), bo `snapsend.sh` zmienił się
+razem z biblioteką:
 
 | Pakiet | Wynik | Czego wymaga | Zakres |
 |---|---|---|---|
@@ -505,6 +506,15 @@ czterech hostach w obu formach hosta.
   bez zamrożenia, kończąc zerem. Naprawione przez nauczenie lokalnej ścieżki
   trasy przez helper (którą ścieżka zdalna miała od 2026-07-31) i przez
   odmowę zamiast degradacji.
+- **REV-20260801-023** (`244ec0d`) — recenzent zauważył, że naprawiłem sondę i
+  stanąłem: zostało **pięć** gałęzi, które nadal degradowały (guest już
+  zamrożony, nieczytelny `fsfreeze-status`, freeze który nie wszedł, nieudany
+  flush kontenera, tryb niepasujący do rodzaju guesta). Wszystkie odmawiają
+  kodem 3 przed snapshotem. Nieudany thaw też kończy przebieg niezerowo i
+  **zatrzymuje** guesta na liście odzysku zamiast go zapomnieć. Odpowiedź w
+  `docs/reviews/responses/REV-20260801-023.md`. Piąta gałąź (tryb niepasujący)
+  wykracza poza literę recenzji — zaznaczone tam wprost do ewentualnego
+  odrzucenia.
 
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
