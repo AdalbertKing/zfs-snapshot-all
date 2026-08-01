@@ -7,19 +7,23 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-01** (druga tego dnia — po przebiegu B i po
-  preflightcie migracji na metropolis pve1)
+- Data odświeżenia: **2026-08-01** (czwarta tego dnia — po przebiegu B, po
+  preflightcie migracji na metropolis pve1, po dodaniu `cron2conf.sh`, i po
+  implementacji REV-018/-019/-020)
 - Zweryfikowano przeciw: `ca75e30` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: parytet logrotate konta (`$HOME/cron.log`), commit niosący ten dokument
+- Ostatnia zmiana zachowania produkcyjnego: parytet logrotate konta (`$HOME/cron.log`), `ca75e30` — `cron2conf.sh` jest narzędziem deweloperskim/odzyskiwania, nie zmienia zachowania żadnego żywego hosta
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **jeden otwarty blocker — REV-20260801-019 (CHANGES REQUIRED):
-  bramka duplikacji przy migracji root → konto nadal rozstrzyga tożsamość
-  obciążenia po ścieżce configu, nie po zadaniach. Migracja produkcyjnego bloku
-  na metropolis pve1 jest z tego powodu WSTRZYMANA.**
+- Status ogólny: **REV-018/-019/-020 zaimplementowane w `1d5a8c4`, czekają na
+  werdykt recenzenta. Migracja produkcyjnego bloku na metropolis pve1 pozostaje
+  WSTRZYMANA — nie z powodu bramki, tylko dlatego, że nowy czasownik
+  `migrate-to-account` nigdy nie działał na prawdziwej parze crontabów.
+  Jedna rzecz świadomie niezrobiona: faza `prepare` nie nadaje `zfs allow` ani
+  grantu quiesce (REV-020 F1) — to przekroczenie granicy `zfs-backup.sh` /
+  `deploy.sh` i wymaga decyzji.**
 
 > **Uwaga proceduralna do samego siebie.** Ten dokument został ostatnio
 > odświeżony przy `bda83b3`, a przebieg B domknąłem dziesięcioma commitami
@@ -48,10 +52,19 @@ Wersje programów w drzewie:
 | `delsnaps.sh` | `v1.28` |
 | `gen-cron.sh` | `v4.25` |
 | `check-snap-age.sh` | `v2.0` |
+| `cron2conf.sh` | `v1.0` |
 
 `deploy.sh`, `zfs-backup.sh`, `zfs-quiesce-helper.sh`, `update-control.sh` i
 `check-pool-capacity.sh` nie mają własnej stałej `VERSION` — identyfikuje je
 commit.
+
+`cron2conf.sh` (nowy, 2026-08-01) jest odwrotnością `gen-cron.sh`: czyta już
+zainstalowany blok `# BEGIN/END zfs-backup-managed` z crontaba i odtwarza
+config, z którego `gen-cron.sh` wygeneruje ten sam blok z powrotem — na
+wypadek zgubienia/niescommitowania pliku źródłowego, jak w przypadku pve2
+niżej. Nie ma jeszcze wpisu w `deploy.sh` (nie jest kopiowany na hosty) —
+uruchamiany dziś ręcznie z checkoutu deweloperskiego, tak jak został
+zweryfikowany na pve1 i pve2.
 
 ### Stan grantu quiesce na hostach: NADANIA ZEROWE, ale nie wszędzie czysto
 
@@ -314,11 +327,12 @@ pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
 |---|---|---|
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
+| `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | 46/46 | księgowanie `-q`: własność guesta, deduplikacja |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **118/118** | warstwa orkiestracji `zfs-backup.sh` (+18: przebieg B i parytet logrotate) |
+| `zfsbackup` | **134/134** | warstwa orkiestracji `zfs-backup.sh` (+34: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy) |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -359,20 +373,30 @@ czterech hostach w obu formach hosta.
 
 ### Otwarte u implementera
 
-- **REV-20260801-019 — bramka duplikacji nadal kluczuje po ścieżce configu:
-  CHANGES REQUIRED, niepodjęte.** `assert_no_foreign_managed_block()` porównuje
-  znormalizowaną ścieżkę z `# Source:`, a nie same zadania. Migracja root → konto
-  z natury tę ścieżkę zmienia (konto nie czyta configu spod `/root`), więc
-  **kopia** configu w nowym miejscu przechodzi bramkę i pozwala zainstalować
-  drugi, równoległy blok przy żywym bloku roota. Recenzent żąda jednego
-  transakcyjnego czasownika migracji z jednym łącznym podglądem i rollbackiem.
-  Nie zaczęte — recenzja przyszła w trakcie innego przebiegu.
-- **Migracja produkcyjnego bloku metropolis pve1 na konto: WSTRZYMANA**
-  do zamknięcia REV-019. Preflight wykonany i opisany w
-  `docs/MIGRATION-ROOT-TO-ACCOUNT.md`; nic na hoście nie zmienione.
+- **REV-018/-019/-020 — zaimplementowane w `1d5a8c4`, czekają na werdykt.**
+  Bramka duplikacji porównuje teraz **tożsamość zadań**, nie ścieżkę configu
+  (`job_identity()` zdejmuje katalog skryptu i log, zostawia harmonogram,
+  datasety, wzorzec, retencję, quiesce i progi). Doszedł czasownik
+  `zfs-backup.sh migrate-to-account <konto> [--preflight] [--yes]` z pięcioma
+  fazami REV-020 F3, a linie ogólnohostowe (digest) dostały własny blok
+  `# BEGIN zfs-backup-host` w crontabie roota zamiast być luźną linią, której
+  nikt nie jest właścicielem. Odpowiedzi: `docs/reviews/responses/REV-20260801-018.md`,
+  `-019.md`, `-020.md`.
+- **Świadomie NIEzrobione z REV-020 F1:** faza `prepare` przenosi config, ale
+  **nie nadaje** `zfs allow` ani grantu quiesce — wypisuje dokładną komendę
+  `deploy.sh` i odmawia. Nadawanie ich stąd oznacza, że `zfs-backup.sh` przejmuje
+  uprzywilejowaną powierzchnię `deploy.sh`, co stoi w sprzeczności z
+  `docs/discussions/DEPLOY-UX-AGREED-POSITION.md`. To decyzja właściciela i
+  recenzenta, nie moja do cichego przekroczenia.
+- **Migracja produkcyjnego bloku metropolis pve1 na konto: nadal WSTRZYMANA —
+  ale powód się zmienił.** Nie jest nim już bramka. Jest nim to, że
+  `migrate-to-account` **nigdy nie działał na prawdziwej parze crontabów**:
+  wszystko powyżej jest sprawdzone na stubach `crontab`/`getent`/`runuser`/`zfs`.
+  REV-017 F2 postawił dokładnie ten zarzut wobec `--local-user`, a przebieg na
+  żywo znalazł potem pięć defektów, których pakiet nie widział.
 - **Test `remove-client` celujący w crontab skonfigurowanego konta** i dowód,
   że `final-catchup` nie zmienił zachowania (dodatkowa uwaga REV-019, po tym jak
-  ta sama poprawka wylądowała najpierw w niewłaściwej funkcji).
+  ta sama poprawka wylądowała najpierw w niewłaściwej funkcji). Nienapisany.
 
 ### Czeka na werdykt recenzenta
 
@@ -384,14 +408,29 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na decyzję właściciela
 
-- **metropolis pve2 nie ma pliku configu swojego crona.** 14 produkcyjnych linii
-  w crontabie roota wskazuje `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`
-  — katalog nie istnieje. Zadania chodzą (cronowi to obojętne), ale **niczego nie
-  da się zregenerować**, a `gen-cron.sh -c` odmawia startu. Jedynym zapisem
-  tego, co ma tam być, jest zainstalowany blok. Do czasu odbudowy pve2 nie może
-  być kolektorem `zfs-backup.sh`. Guard z `c6c98c2` zabrania narzędziu utworzyć
-  ten plik — pusty config plus `--install` skasowałby 14 linii. Decyzja: odbudować
-  z `crontab -l` czy migrować z pełnym diffem.
+- **metropolis pve2 nie ma pliku configu swojego crona — narzędzie do odbudowy
+  już istnieje, ale odbudowa NA pve2 jeszcze się nie wydarzyła.** 14 produkcyjnych
+  linii w crontabie roota wskazuje `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`
+  — katalog nie istnieje. Zadania chodzą (cronowi to obojętne), ale przed
+  `cron2conf.sh` (2026-08-01) niczego nie dało się zregenerować, a `gen-cron.sh -c`
+  odmawiał startu. `cron2conf.sh` czyta zainstalowany blok wprost z crontaba i
+  odtwarza config, który `gen-cron.sh` renderuje z powrotem identycznie —
+  zweryfikowane na ŻYWYM crontabie pve2 (odczyt, bez zapisu): odtworzony config
+  wyrenderował 12/12 linii bajt w bajt, w tej samej kolejności, co crontab
+  źródłowy. Guard z `c6c98c2` nadal zabrania narzędziu utworzyć ten plik samemu
+  — pusty config plus `--install` skasowałby 14 linii — więc odtworzony plik
+  trzeba jeszcze świadomie zainstalować na pve2. Otwarte decyzje właściciela:
+  gdzie ma wylądować (`/root/scripts/zfs-snapshot-all/` jak dziś, czy poza
+  checkoutem gita jak `jobs.pve1.v4.conf` — patrz następny punkt) i czy najpierw
+  zrobić na sucho drugi niezależny przebieg `crontab -l` → ręczna odbudowa jako
+  kontrola krzyżowa, zanim plik z `cron2conf.sh` zostanie uznany za jedyne źródło
+  prawdy.
+- **`jobs.pve1.v4.conf` (i ogólnie każdy config generowany przez `gen-cron.sh`)
+  leży wewnątrz checkoutu gita, nietrackowany i ignorowany.** Jedno
+  `git clean -xdf` w `zfs-snapshot-all/` na dowolnym hoście kasuje jedyny zapis
+  15 zadań produkcyjnych — dokładnie stan, w jakim jest dziś pve2. Znalezione
+  przy budowie `cron2conf.sh`. Nieprzeniesione: to ta sama decyzja co punkt
+  wyżej (docelowa ścieżka configu poza checkoutem), więc czeka na nią razem.
 - **VM 102 (`neth`) na metropolis pve1 nie ma żadnego zadania snapshotowego.**
   Dysk `hdd/vm-disks/vm-102-disk-0`, replikowany przez pvesr na pve2 co trzy
   godziny — czyli pokrycie DR bez retencji. Goście 100, 101, 106 i 107 na tym

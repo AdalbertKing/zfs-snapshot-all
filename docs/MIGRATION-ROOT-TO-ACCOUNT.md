@@ -1,9 +1,28 @@
 # Migracja zarządzanego bloku cron z roota na konto dedykowane
 
-Stan: **procedura**, spisana 2026-08-01 na podstawie suchego przebiegu na
-metropolis pve1. Nic z tego dokumentu nie zostało jeszcze wykonane na
-produkcyjnym bloku — rozdziały 2 i 3 zapisują to, co preflight **zmierzył** na
-żywym hoście.
+Stan: **dowód inżynierski, nie instrukcja obsługi** (REV-20260801-020 F1).
+Spisany 2026-08-01 na podstawie suchego przebiegu na metropolis pve1;
+rozdziały 2 i 3 zapisują to, co preflight **zmierzył** na żywym hoście.
+
+> **Operacyjną odpowiedzią jest jedna komenda, nie ten dokument.**
+>
+> ```
+> zfs-backup.sh migrate-to-account <konto> --preflight    # tylko odczyt
+> zfs-backup.sh migrate-to-account <konto>                # jedna transakcja
+> ```
+>
+> Robi ona wewnętrznie wszystko, co niżej rozpisane jest ręcznie: znajduje
+> właściciela i żywy blok, wykrywa config z linii `# Source:`, sprawdza checkout
+> konta, delegację ZFS na **wszystkich** datasetach z configu, grant quiesce
+> (o ile blok używa `-q`), pokazuje jeden łączny podgląd i wykonuje jedno
+> przełączenie z rollbackiem obu crontabów.
+>
+> Ten dokument zostaje, bo tłumaczy **dlaczego** — i bo pokazuje, co dokładnie
+> zmierzono na produkcyjnym hoście. Administrator nie powinien go potrzebować.
+>
+> Zastrzeżenie: `migrate-to-account` **nie działał jeszcze na prawdziwej parze
+> crontabów**. Do czasu przebiegu na żywo obowiązuje ta sama wstrzymana decyzja
+> co dotąd.
 
 ## 1. Czym to jest i dlaczego to nie jest edycja crontaba
 
@@ -142,9 +161,25 @@ zastępuje.
 Brak dziennego podsumowania nikogo nie alarmuje. To jedyna luka z tej listy,
 która jest **cicha**.
 
-**Naprawa:** usuwając blok u roota, dopisać digest do crontaba roota jako
-zwykłą, niezarządzaną linię — obok tego, co i tak już żyje poza blokiem (na
-pve1 `check-pool-capacity.sh`).
+**Naprawa — poprawiona po REV-20260801-020 F2.** Pierwsza wersja tego dokumentu
+kazała dopisać digest do crontaba roota jako zwykłą, niezarządzaną linię.
+Recenzent słusznie to odrzucił: dzieli jedno wdrożenie między to, co należy do
+narzędzia, i to, co człowiek ma pamiętać w nieskończoność. Druga migracja
+zduplikowałaby taką linię, `remove-client` nie wie, czy jest jego, a żaden
+podgląd nie pokaże całej zmiany.
+
+Linie ogólnohostowe dostają **własny blok narzędzia** w crontabie roota:
+
+```
+# BEGIN zfs-backup-host (host-level jobs kept by zfs-backup.sh -- do not hand-edit)
+0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log
+# END zfs-backup-host
+```
+
+Przepisywany w całości i idempotentnie, kasowany gdy zbiór jest pusty (żeby
+migracja odwrotna mogła oddać te linie z powrotem), obecny w podglądzie i w
+rollbacku. Zbiór nie jest listą wpisaną na sztywno — to każda linia z bloku
+roota, której render konta nie odtwarza.
 
 ### 3.5 Logrotate konta nie obejmował logu, do którego pisze cron konta
 
@@ -231,17 +266,19 @@ instalacji dla konta, dopóki root nosi blok — świadomie, żeby podwójne
 uruchamianie tych samych zadań pod dwiema tożsamościami było decyzją, a nie
 wypadkiem.
 
-> **Uwaga — ta bramka jest dziś słabsza, niż brzmi (REV-20260801-019, OTWARTE).**
-> `assert_no_foreign_managed_block` rozstrzyga tożsamość obciążenia porównując
-> **znormalizowaną ścieżkę configu** z linii `# Source:`, a nie same zadania.
-> Krok 2 tej procedury celowo tę ścieżkę zmienia, więc akurat w tej kolejności
-> obie strony widzą ten sam plik i bramka działa. Ale wystarczy **skopiować**
-> config w nowe miejsce zamiast go przenieść — najbardziej naturalny odruch,
-> i dokładnie to, co robi render C w preflightcie — a bramka przepuści
-> instalację drugiego, równoległego bloku przy żywym bloku roota. Do czasu
-> zamknięcia REV-019 nie polegaj na niej: **zweryfikuj oba crontaby ręcznie**
-> po Kroku 6 i traktuj Krok 2 (przeniesienie, nie kopia) jako obowiązkowy, a nie
-> porządkowy.
+> **Historia tej bramki** (REV-20260801-018/-019, naprawione w `1d5a8c4`).
+> Do tego commitu `assert_no_foreign_managed_block` rozstrzygał tożsamość
+> obciążenia po **znormalizowanej ścieżce configu** z linii `# Source:`.
+> Krok 2 tę ścieżkę celowo zmienia, więc w tej kolejności bramka działała
+> przypadkiem — ale wystarczyło **skopiować** config zamiast przenieść, czyli
+> najbardziej naturalny odruch i dokładnie to, co robi render C w preflightcie,
+> żeby przepuściła drugi, równoległy blok przy żywym bloku roota.
+>
+> Dziś porównywana jest **tożsamość zadań**: oba bloki są sprowadzane do linii
+> zadań ze zdjętym katalogiem skryptu i logiem, a każde przecięcie to odmowa z
+> wypisaniem kolidujących linii. Rozłączne zadania nadal wolno — dwa kolektory
+> na jednym hoście to prawdziwe wdrożenie, nie wypadek. Krok 2 pozostaje
+> przeniesieniem, nie kopią, i to jest teraz zapisane w kodzie.
 
 **Bramka:** crontab roota równy zrzutowi minus zarządzany blok plus dopisane
 linie; crontab konta równy renderowi C.
@@ -263,23 +300,25 @@ sekwencji, zachodzi nie wcześniej niż w Kroku 5, a jej zakres został w Bramce
 udowodniony jako identyczny z rootowym. Cała reszta to przeniesienie pliku i
 odtworzenie crontaba.
 
-## 6. Co z tego musi trafić do kodu
+## 6. Co z tego trafiło do kodu
 
-Wszystkie pięć luk znalazłem ręcznie. To jest argument za komendą:
+Wszystkie pięć luk znalazłem ręcznie. To był argument za komendą — i komenda
+powstała (`1d5a8c4`).
 
-1. **`zfs-backup.sh preflight <config> --local-user <konto>`** — wykonuje
-   render trójstronny, obie bramki, sondę delegacji, sondę quiesce i kontrolę
-   czytelności, po czym wypisuje tabelę zdolności. Tylko odczyt. Dziś migracja
-   zależy od tego, czy operator pamięta o wszystkich pięciu.
-2. **Oznaczyć linie ogólnohostowe w generowanym bloku.** `gen-cron.sh` wie, że
-   digest nie należy do kolektora; blok powinien to mówić, żeby migracja mogła
-   zaraportować „te linie zostaną porzucone" zamiast je porzucić.
-3. **Delegować z configu, nie z linii poleceń.** `--backup-user` bierze datasety
-   jako argumenty; migracja powinna wyliczyć zbiór z configu, żeby nie dało się
-   pominąć żadnego — tak jak pominięto `hdd/vm-disks`.
-4. **Odrzucić config, który leży w checkoucie gita będąc nietrackowanym lub
-   ignorowanym**, i wskazać `/etc/zfs-snapshot-all/` jako właściwe miejsce.
-5. Zrobione: parytet logrotate konta (3.5).
+| # | postulat | stan |
+|---|---|---|
+| 1 | jedna komenda robiąca preflight i całą migrację | **zrobione** — `migrate-to-account`, pięć faz REV-020 F3 |
+| 2 | linie ogólnohostowe jako stan narzędzia | **zrobione** — blok `# BEGIN zfs-backup-host` (3.4) |
+| 3 | delegacja liczona z configu, nie z linii poleceń | **zrobione** — `config_datasets()` czyta nagłówki sekcji |
+| 4 | odrzucić config nietrackowany wewnątrz checkoutu gita | **niezrobione** |
+| 5 | parytet logrotate konta | **zrobione** — `9b25842` |
+
+Świadomie niezrobione, poza tabelą: faza `prepare` **przenosi config**, ale
+**nie nadaje** `zfs allow` ani grantu quiesce (REV-020 F1). Wypisuje dokładną
+komendę `deploy.sh` dla każdego z nich i odmawia. Nadawanie ich stąd oznacza, że
+`zfs-backup.sh` przejmuje uprzywilejowaną powierzchnię `deploy.sh` — co jest
+sprzeczne z `docs/discussions/DEPLOY-UX-AGREED-POSITION.md` i jest decyzją
+właściciela i recenzenta, nie moją do cichego przekroczenia.
 
 ## 7. Obserwacja dla właściciela, poza tą procedurą
 
