@@ -1869,6 +1869,76 @@ else
     bad "orphans: an unrecognised dropped job stops the migration and is named" "rc=$rc out=$out"
 fi
 
+# --- 28. the missing-config refusal must say how much depends on it ---------
+#
+# The pve2 shape: 14 live job lines whose `# Source:` names a file that is not
+# there. Regenerating is impossible and inventing an empty config would delete
+# the block, so the verb refuses -- and the NUMBER is the whole point of the
+# refusal, because it is what tells the operator how much is riding on a file
+# nobody has.
+#
+# Measured on metropolis pve2, 2026-08-01: the message read "while  cron line(s)
+# depend on it" and printed `grep: /tmp/tmp.XXXX: No such file or directory` on
+# stderr. The crontab copy had been removed one line ABOVE the die whose message
+# greps it -- the same shape as the orphan-count bug in section 27's neighbour,
+# and the second time this exact mistake reached a host.
+MC="$WORK/missingcfg"; mkdir -p "$MC/bin" "$MC/home/zfs-snapshot-all"
+cat > "$MC/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && exit 0
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $MC/gone/jobs.pve2.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+        echo "\$i * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"a_\" \"tank/\$i\" 2>>/root/scripts/cron.log"
+    done
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+exit 0
+EOF
+cat > "$MC/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$MC/home:/bin/bash"
+exit 0
+EOF
+cat > "$MC/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+chmod +x "$MC/bin/crontab" "$MC/bin/getent" "$MC/bin/id"
+: > "$MC/home/zfs-snapshot-all/gen-cron.sh"
+
+out=$( PATH="$MC/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
+
+[ "$rc" -ne 0 ] && ok "missing-config: the verb refuses rather than inventing a config" \
+                || bad "missing-config: the verb refuses rather than inventing a config" "rc=$rc out=$out"
+
+case "$out" in
+    *"while 14 cron line(s) depend on it"*)
+        ok "missing-config: ...and says how many live lines depend on the file" ;;
+    *)  bad "missing-config: ...and says how many live lines depend on the file" "$out" ;;
+esac
+
+# The count came from a file that must still exist when the message is built.
+# Asserting on the absence of the error is what would have caught this on pve2.
+case "$out" in
+    *"No such file or directory"*)
+        bad "missing-config: ...without greping a file it already deleted" "$out" ;;
+    *)  ok "missing-config: ...without greping a file it already deleted" ;;
+esac
+
+# And it points at the tool that can rebuild it, rather than leaving the
+# operator to work out that such a tool exists.
+case "$out" in
+    *cron2conf*) ok "missing-config: ...and names cron2conf.sh as the way out" ;;
+    *)           bad "missing-config: ...and names cron2conf.sh as the way out" "$out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

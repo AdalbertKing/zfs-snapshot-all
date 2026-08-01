@@ -1917,8 +1917,15 @@ cmd_migrate_to_account() {
     # and inventing an empty config would delete the live block (see c6c98c2).
     if [ -f "$cfg" ]; then _have "config istnieje ($cfg)"
     else
+        # Counted BEFORE the cleanup, not inside the message. Measured on
+        # metropolis pve2, 2026-08-01: the message read "while  cron line(s)
+        # depend on it" and printed a grep error, because $rootcron had already
+        # been removed one line above. The number is the whole point of this
+        # refusal -- it is what tells the operator how much is riding on a file
+        # that is not there.
+        local ndep; ndep=$(grep -cE '^[0-9*]' "$rootcron")
         rm -f "$rootcron" "$acctcron"
-        die "root's block names '$raw' as its source and that file does not exist, while $(grep -cE '^[0-9*]' "$rootcron") cron line(s) depend on it. Rebuild the config from 'crontab -l' first -- this verb will not invent one."
+        die "root's block names '$raw' as its source and that file does not exist, while $ndep cron line(s) depend on it. Rebuild the config from 'crontab -l' first (cron2conf.sh does this) -- this verb will not invent one."
     fi
 
     local target_cfg="$cfg" needs_move=0
