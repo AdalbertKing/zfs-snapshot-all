@@ -476,50 +476,80 @@ EOF
     fi
 }
 
-# 1. No config yet: the whole thing is new and must be shown as such.
+# A crontab stub: the left side of the cron diff now comes from the LIVE
+# crontab, so every case here has to say what is installed. CRONTAB_FIXTURE
+# names the file the stub replays for `crontab -l`.
+PSTUB="$WORK/propbin"; mkdir -p "$PSTUB"
+cat > "$PSTUB/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-l" ] || exit 0
+[ -n "${CRONTAB_FIXTURE:-}" ] && [ -f "$CRONTAB_FIXTURE" ] && cat "$CRONTAB_FIXTURE"
+exit 0
+EOF
+chmod +x "$PSTUB/crontab"
+prop_run() {   # prop_run <installed-fixture|-> <current cfg> <proposed cfg>
+    local fx="$1"; shift
+    CRONTAB_FIXTURE="$fx" PATH="$PSTUB:$PATH" GENCRON="$REPO/gen-cron.sh"         show_activation_proposal "$1" "$2" 2>&1
+}
+: > "$PROP/empty.cron"
+
+# 1. Nothing installed yet: everything is new on both sides.
 prop_cfg "$PROP/new.conf" "1 * * * *"
-out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/absent.conf" "$PROP/new.conf" 2>&1)
-if case "$out" in *"(nowy plik)"*) true ;; *) false ;; esac \
-   && case "$out" in *"snapget.sh"*) true ;; *) false ;; esac; then
+out=$(prop_run "$PROP/empty.cron" "$PROP/absent.conf" "$PROP/new.conf")
+if case "$out" in *"(nowy plik)"*) true ;; *) false ;; esac    && case "$out" in *"snapget.sh"*) true ;; *) false ;; esac; then
     ok "proposal: a first client shows the new file and the cron lines it creates"
 else
     bad "proposal: a first client shows the new file and the cron lines it creates" "$out"
 fi
 
-# 2. Re-activating an unchanged client must say so on BOTH sides rather than
-#    printing an empty diff the reader has to interpret.
+# 2. The installed block is already exactly what the proposal renders.
 prop_cfg "$PROP/same-a.conf" "1 * * * *"
 prop_cfg "$PROP/same-b.conf" "1 * * * *"
-out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/same-a.conf" "$PROP/same-b.conf" 2>&1)
+bash "$REPO/gen-cron.sh" -c "$PROP/same-a.conf" > "$PROP/installed.cron" 2>/dev/null
+out=$(prop_run "$PROP/installed.cron" "$PROP/same-a.conf" "$PROP/same-b.conf")
 if [ "$(printf '%s' "$out" | grep -c 'bez zmian')" = 2 ]; then
     ok "proposal: an unchanged re-activation says 'no change' on both diffs"
 else
     bad "proposal: an unchanged re-activation says 'no change' on both diffs" "$out"
 fi
 
-# 3. THE case the second diff exists for: only the TEMPLATE changes. No
-#    [dataset:] section moves, so the config diff is two lines -- and every
-#    generated schedule changes underneath it.
+# 3. REV-20260801-015 §1, the case the old preview could not see: the config is
+#    unchanged, but the LIVE crontab drifted. Rendering the config twice said
+#    "no change" while --install would have rewritten the schedule.
+prop_cfg "$PROP/drift.conf" "1 * * * *"
+prop_cfg "$PROP/drift-installed.conf" "44 * * * *"
+bash "$REPO/gen-cron.sh" -c "$PROP/drift-installed.conf" > "$PROP/drifted.cron" 2>/dev/null
+out=$(prop_run "$PROP/drifted.cron" "$PROP/drift.conf" "$PROP/drift.conf")
+cron_part="${out#*crontabie}"
+if case "$cron_part" in *"-44 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"+1 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
+    ok "proposal: drift between config and live crontab is shown, not hidden"
+else
+    bad "proposal: drift between config and live crontab is shown, not hidden" "$out"
+fi
+
+# 4. A template-only edit moves no [dataset:] section and still rewrites every
+#    schedule -- the reason the cron diff is not redundant with the config diff.
 prop_cfg "$PROP/tmpl-a.conf" "1 * * * *"
 prop_cfg "$PROP/tmpl-b.conf" "*/5 * * * *"
-out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/tmpl-a.conf" "$PROP/tmpl-b.conf" 2>&1)
+bash "$REPO/gen-cron.sh" -c "$PROP/tmpl-a.conf" > "$PROP/tmpl.cron" 2>/dev/null
+out=$(prop_run "$PROP/tmpl.cron" "$PROP/tmpl-a.conf" "$PROP/tmpl-b.conf")
 cron_part="${out#*crontabie}"
-if case "$cron_part" in *"*/5 * * * *"*) true ;; *) false ;; esac \
-   && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
+if case "$cron_part" in *"*/5 * * * *"*) true ;; *) false ;; esac    && case "$cron_part" in *"bez zmian"*) false ;; *) true ;; esac; then
     ok "proposal: a template-only edit still shows the changed cron lines"
 else
     bad "proposal: a template-only edit still shows the changed cron lines" "$out"
 fi
 
-# 4. A dataset added to an existing client shows in both.
-prop_cfg "$PROP/add-a.conf" "1 * * * *"
-prop_cfg "$PROP/add-b.conf" "1 * * * *" "rpool/other"
-out=$(GENCRON="$REPO/gen-cron.sh" show_activation_proposal "$PROP/add-a.conf" "$PROP/add-b.conf" 2>&1)
-if case "$out" in *"rpool/other"*) true ;; *) false ;; esac \
-   && [ "$(printf '%s' "$out" | grep -c 'bez zmian')" = 0 ]; then
-    ok "proposal: adding a dataset shows in the config and in the cron lines"
+# 5. A proposed config gen-cron rejects must abort the preview, not show a
+#    plausible empty diff (REV-20260801-015 §2).
+printf '[dataset:tank/x]
+	use_template = nieistniejacy
+' > "$PROP/broken.conf"
+prop_run "$PROP/empty.cron" "$PROP/absent.conf" "$PROP/broken.conf" >/dev/null 2>&1
+if [ "$?" -ne 0 ]; then
+    ok "proposal: an unrenderable proposal fails closed"
 else
-    bad "proposal: adding a dataset shows in the config and in the cron lines" "$out"
+    bad "proposal: an unrenderable proposal fails closed" "zwrocilo 0"
 fi
 
 # --- 9. the GFS profile and its compatibility guard -------------------------

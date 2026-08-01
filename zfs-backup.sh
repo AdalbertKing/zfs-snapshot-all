@@ -524,11 +524,27 @@ show_activation_proposal() {   # <current config> <proposed config>
     # is none and, worse, make "(bez zmian)" unreachable: the operator would
     # learn to skim a diff that always has something in it. The path is
     # normalised on both sides, because after the swap it IS the same file.
-    # The `!` below tests the PIPELINE, which reports gen-cron's failure only
-    # because this file sets `pipefail` at the top. Verified: a config gen-cron
-    # rejects makes this function return 1 rather than showing an empty diff.
     _strip_source() { sed 's|^# Source: .*|# Source: <config>|'; }
-    [ -f "$cronfile" ] && bash "$GENCRON" -c "$cronfile" 2>/dev/null | _strip_source > "$before"
+
+    # LEFT SIDE IS THE LIVE CRONTAB, not a second rendering of the config
+    # (REV-20260801-015 §1). Rendering the current config again would only show
+    # what the config says SHOULD be installed, so every kind of drift -- a hand
+    # edit, an interrupted deployment, a block installed from a different
+    # config, a stale managed block -- was invisible, and the preview could
+    # promise "no change" while --install went on to rewrite the live crontab.
+    # Consent has to be against the state that will actually be modified.
+    #
+    # gen-cron replaces exactly the BEGIN/END managed block and leaves every
+    # other cron line alone, so that block is both what to compare and the whole
+    # of what the install can touch. An absent crontab or absent block yields an
+    # empty left side, which is correct: everything is new.
+    crontab -l 2>/dev/null \
+        | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+        | _strip_source > "$before"
+
+    # The `!` tests the PIPELINE, which reports gen-cron's failure only because
+    # this file sets `pipefail` at the top. Verified: a config gen-cron rejects
+    # makes this function return 1 rather than showing a plausible empty diff.
     if ! bash "$GENCRON" -c "$workfile" 2>/dev/null | _strip_source > "$after"; then
         rm -f "$before" "$after"; return 1
     fi
@@ -545,9 +561,9 @@ show_activation_proposal() {   # <current config> <proposed config>
         sed 's/^/  + /' "$workfile"
     fi
     echo
-    echo "--- co sie zmieni w crontabie (to jest to, co naprawde pojdzie do crona) ---"
+    echo "--- co sie zmieni w crontabie (lewa strona = to, co JEST teraz zainstalowane) ---"
     if diff -q "$before" "$after" >/dev/null 2>&1; then
-        echo "  (bez zmian -- linie crona beda identyczne jak teraz)"
+        echo "  (bez zmian -- zainstalowany blok jest juz dokladnie taki)"
     else
         diff -u "$before" "$after" | tail -n +3 | sed 's/^/  /'
     fi
