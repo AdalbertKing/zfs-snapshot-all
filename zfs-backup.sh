@@ -519,6 +519,29 @@ assert_no_foreign_managed_block() {   # <config file>
     die "root's crontab already runs a managed block generated from '$file' ($jobs job line(s)), and this run would install a block from the SAME config into '$u'. Every one of those jobs would then run TWICE, on the same schedule, against the same datasets. Moving a collector to a dedicated account is a migration, not a flag: decide what happens to root's block first (remove it deliberately, or keep root as the owner), then re-run. Nothing has been changed."
 }
 
+# gen-cron.sh runs AS the dedicated account, so that account has to be able to
+# READ the config. The default location is $SCRIPT_DIR/jobs.<host>.conf, which
+# on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
+# metropolis pve1, 2026-08-01: the account could not open the file at all, so
+# --local-user with the default path would have failed at install time, after
+# the preview had already been shown and accepted.
+#
+# Checked as the account itself rather than by reasoning about modes: group
+# membership, ACLs and every parent directory on the path all get a vote, and
+# `test -r` run as that user is the only thing that knows all of them.
+assert_config_readable_by_target() {   # <config file>
+    local file="$1" u; u=$(cron_target_user)
+    [ "$u" = root ] && return 0
+    local ok=1
+    if command -v runuser >/dev/null 2>&1; then
+        runuser --user "$u" -- test -r "$file" && ok=0
+    else
+        su -s /bin/bash "$u" -c "$(printf '%q ' test -r "$file")" && ok=0
+    fi
+    [ "$ok" -eq 0 ] && return 0
+    die "'$u' cannot read $file, and gen-cron.sh runs AS that account -- the install would fail after you had already approved the preview. Put the config somewhere the account can reach (/etc/zfs-snapshot-all/ is root-owned and world-readable, and is where this tool keeps its other state) and pass it with --config=."
+}
+
 assert_cron_config_matches_installed() {
     local file="$1" raw existing want
     raw=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
@@ -880,6 +903,7 @@ cmd_setup_server() {
     chmod 0644 "$SERVER_CONF"
 
     ensure_cron_config "$config"
+    assert_config_readable_by_target "$config"
 
     log "server ready: target=$target, cron config=$config"
 }
@@ -1448,6 +1472,7 @@ cmd_activate_client() {
 
     assert_cron_config_matches_installed "$cronfile"
     assert_no_foreign_managed_block "$cronfile"
+    assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
 
     {
@@ -1557,6 +1582,7 @@ cmd_migrate_profile() {
 
     assert_cron_config_matches_installed "$cronfile"
     assert_no_foreign_managed_block "$cronfile"
+    assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
     log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
 }

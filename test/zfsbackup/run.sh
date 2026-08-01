@@ -1011,6 +1011,40 @@ out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'
 [ "$rc" -eq 0 ] && ok "dup-guard: an unrelated config in root's crontab is not a conflict" \
                 || bad "dup-guard: an unrelated config in root's crontab is not a conflict" "rc=$rc out=$out"
 
+# --- 17. the dedicated account must be able to READ the config --------------
+#
+# gen-cron.sh runs AS that account. The default config path is
+# $SCRIPT_DIR/jobs.<host>.conf, i.e. /root/scripts/... on a Proxmox host, and
+# /root is 0700 -- found on metropolis pve1, 2026-08-01. The install would have
+# failed AFTER the preview was shown and accepted, which is the worst moment.
+RD="$WORK/readable"; mkdir -p "$RD/bin"
+# The stub answers for `runuser --user <u> -- test -r <file>`: readable only if
+# the path is under $RD/ok.
+cat > "$RD/bin/runuser" <<EOF
+#!/bin/bash
+f="\${!#}"
+case "\$f" in "$RD/ok/"*) exit 0 ;; *) exit 1 ;; esac
+EOF
+chmod +x "$RD/bin/runuser"
+mkdir -p "$RD/ok"; : > "$RD/ok/reachable.conf"; : > "$RD/unreachable.conf"
+
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/unreachable.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"cannot read"*) true ;; *) false ;; esac \
+   && case "$out" in *"/etc/zfs-snapshot-all/"*) true ;; *) false ;; esac; then
+    ok "readable: an unreadable config is refused, and a working location is named"
+else
+    bad "readable: an unreadable config is refused, and a working location is named" "rc=$rc out=$out"
+fi
+
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/ok/reachable.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "readable: a config the account can open passes" \
+                || bad "readable: a config the account can open passes" "rc=$rc out=$out"
+
+# As root the question does not arise, and the check must not invent one.
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/unreachable.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "readable: root is not asked whether it can read its own config" \
+                || bad "readable: root is not asked whether it can read its own config" "rc=$rc out=$out"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
