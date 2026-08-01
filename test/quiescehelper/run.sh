@@ -1026,6 +1026,85 @@ else
     bad "tx: on a clean host the rollback says it REMOVED what it created" "$(cat "$TX/out.log")"
 fi
 
+# ---- --allow-quiesce on a LOCAL account (2026-08-01) -----------------------
+#
+# Until now the only route to a quiesce grant was `--join --allow-quiesce`,
+# which grants a JOINING PEER. There was no route at all for this host's own
+# delegated account -- so a managed block carrying `quiesce = auto` could be
+# run by root and by nobody else, and `migrate-to-account` on metropolis pve1
+# refused to move it with no command able to unblock the refusal.
+#
+# The grant itself is the same function, already covered above. What is new is
+# the WIRING, and the two argument-time refusals that replaced the old
+# join-only one.
+
+# Both of these exit during argument validation, before deploy.sh touches
+# anything -- the same reason the --revoke-quiesce checks above can run the
+# real script.
+out=$(bash "$REPO/deploy.sh" --allow-quiesce --check-only 2>&1); r=$?
+if [ "$r" = 2 ] && case "$out" in *"--check-only"*) true ;; *) false ;; esac; then
+    ok "local-quiesce: --allow-quiesce --check-only is refused (an audit installs nothing)"
+else
+    bad "local-quiesce: --allow-quiesce --check-only is refused (an audit installs nothing)" "rc=$r out=$out"
+fi
+
+out=$(bash "$REPO/deploy.sh" --allow-quiesce --pair --peer=192.0.2.1 2>&1); r=$?
+if [ "$r" = 2 ] && case "$out" in *"not a --pair option"*) true ;; *) false ;; esac; then
+    ok "local-quiesce: --allow-quiesce --pair is refused (the initiator grants nothing)"
+else
+    bad "local-quiesce: --allow-quiesce --pair is refused (the initiator grants nothing)" "rc=$r out=$out"
+fi
+
+# The refusal that used to make the local path impossible must be gone. Kept as
+# a named check rather than deleted quietly: it was correct behaviour for a
+# script that had only one grant path, and someone reading the diff should see
+# that its removal was deliberate.
+grep -q 'only means anything together with --join' "$REPO/deploy.sh" \
+    && bad "local-quiesce: the join-only refusal is gone" "deploy.sh still refuses --allow-quiesce outside --join" \
+    || ok "local-quiesce: the join-only refusal is gone"
+
+# NO DRIFT. The whitelist decides which guests may be frozen; the zfs allow
+# loop decides which datasets may be replicated. They must come from ONE list,
+# or "may freeze" quietly outgrows "may replicate" -- on pve1 the difference
+# between the four vm-disks in the config and their parent is a fifth guest
+# nothing backs up. Asserted on the variable, so giving quiesce its own list
+# later fails here instead of in production.
+phase8h=$(sed -n '/log "Phase 8h: guest quiesce grant"/,/^    echo$/p' "$REPO/deploy.sh")
+if printf '%s' "$phase8h" | grep -q 'install_quiesce_grant "\$USERNAME" "\$BACKUP_USER_DATASETS"' \
+   && grep -q 'DATASETS=(\$BACKUP_USER_DATASETS)' "$REPO/deploy.sh"; then
+    ok "local-quiesce: the whitelist and the zfs allow scope come from one variable"
+else
+    bad "local-quiesce: the whitelist and the zfs allow scope come from one variable" \
+        "Phase 8h: $(printf '%s' "$phase8h" | grep -c install_quiesce_grant) wywolan"
+fi
+
+# A plain `bash deploy.sh` maintains every host in the fleet. It must never
+# grant privilege nobody asked for, so every call site stays behind the flag.
+sites=$(grep -c 'install_quiesce_grant "' "$REPO/deploy.sh")
+guarded=$(grep -B4 'install_quiesce_grant "' "$REPO/deploy.sh" | grep -c 'ALLOW_QUIESCE" -eq 1')
+if [ "$sites" = 2 ] && [ "$guarded" = 2 ]; then
+    ok "local-quiesce: both call sites are behind --allow-quiesce (a bare re-run grants nothing)"
+else
+    bad "local-quiesce: both call sites are behind --allow-quiesce (a bare re-run grants nothing)" \
+        "wywolan=$sites strzezonych=$guarded"
+fi
+
+# ...and must not REVOKE one either. A re-run without the flag on a host that
+# already has a grant says so and leaves it alone; removing one is
+# --revoke-quiesce, a separate deliberate act.
+if printf '%s' "$phase8h" | grep -q 'already granted to \$USERNAME (left untouched'; then
+    ok "local-quiesce: a re-run without the flag leaves an existing grant alone"
+else
+    bad "local-quiesce: a re-run without the flag leaves an existing grant alone" "$phase8h"
+fi
+
+# Argument time cannot know whether Phase 8 will find an account -- an existing
+# one is detected, not named. Silence would read as success.
+noacct=$(sed -n '/no delegated account on this host and none requested/,/^elif/p' "$REPO/deploy.sh")
+printf '%s' "$noacct" | grep -q 'ALLOW_QUIESCE" -eq 1 \] && warn' \
+    && ok "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" \
+    || bad "local-quiesce: --allow-quiesce with no account warns instead of doing nothing quietly" "$noacct"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

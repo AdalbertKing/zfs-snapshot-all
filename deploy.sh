@@ -190,6 +190,13 @@ Usage: deploy.sh [options]
                           Omit it and an EXISTING account is still detected and
                           maintained; only creation needs to be asked for.
   --datasets="A B"        datasets to delegate to that account
+  --allow-quiesce         additionally let that account FREEZE the guests whose
+                          disks live under those datasets (local quiesce -- what
+                          a managed block using 'quiesce = auto' needs once it
+                          runs as the account instead of root). Off by default,
+                          never revoked by a plain re-run; --revoke-quiesce
+                          removes it. The whitelist is the --datasets list, so
+                          naming a PARENT makes every guest under it freezable.
   --email=ADDR            where alerts are mailed
 Defaults are the config block at the top of this script -- edit them there to
 make them permanent for a host.
@@ -262,8 +269,30 @@ case "$PEER_AS" in
 esac
 # Refused rather than ignored: silently accepting it would leave the operator
 # believing quiesce was granted when nothing was installed at all.
-if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$JOIN_MODE" -ne 1 ]; then
-    echo "--allow-quiesce only means anything together with --join (it grants the JOINING peer the right to freeze guests on this host)" >&2; exit 2
+#
+# TWO paths grant this, and they are different relationships:
+#
+#   --join       the JOINING PEER may freeze guests on this host (remote
+#                quiesce, snapget -q from the other end)
+#   Phase 8      THIS host's own delegated account may freeze guests on this
+#                host (local quiesce -- snapsend -q in a managed block that
+#                the account owns rather than root)
+#
+# The second did not exist, and its absence was found the only way these things
+# ever are: `migrate-to-account` on metropolis pve1 (2026-08-01) refused to move
+# a block carrying `quiesce = auto` because the account had no grant, and there
+# was no command that could give it one. deploy.sh owns the privileged surface,
+# so the route belongs here rather than in the migration verb.
+#
+# Phase 8's applicability cannot be decided at argument time: an existing
+# account is DETECTED at run time, not named. So the only refusals here are the
+# combinations that can never install anything, and Phase 8 warns if there
+# turned out to be nobody to grant to.
+if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$CHECK_ONLY" -eq 1 ]; then
+    echo "--allow-quiesce cannot be combined with --check-only -- an audit installs nothing, so there would be no grant to make" >&2; exit 2
+fi
+if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$PAIR_MODE" -eq 1 ]; then
+    echo "--allow-quiesce is not a --pair option -- the host that decides whether guests here may be frozen is the one running --join (for a peer) or a plain deploy.sh (for its own delegated account)" >&2; exit 2
 fi
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
@@ -3504,6 +3533,10 @@ fi
 
 if [ -z "$BACKUP_USER" ]; then
     log "no delegated account on this host and none requested -- skipping (pass --backup-user=NAME to create one)"
+    # Argument time could not know this: the account is detected, not named. An
+    # operator who asked for a grant and got silence would reasonably assume one
+    # was made.
+    [ "$ALLOW_QUIESCE" -eq 1 ] && warn "--allow-quiesce had nobody to grant to -- there is no delegated account on this host. Nothing was installed."
 elif [ "$CHECK_ONLY" -eq 1 ]; then
     if id "$BACKUP_USER" >/dev/null 2>&1; then
         log "  account $BACKUP_USER exists"
@@ -3704,6 +3737,34 @@ EOF
         log "delegated on $ds:"
         zfs allow "$ds" | grep "$USERNAME" || true
     done
+
+    # ------------------------------------------------------------------------------
+    log "Phase 8h: guest quiesce grant"
+    # ------------------------------------------------------------------------------
+    # The local counterpart of `--join --allow-quiesce`. A managed block that
+    # carries `quiesce = auto` needs one capability that no `zfs allow` can
+    # provide: freezing the guest whose disk is being snapshotted. Root has it
+    # implicitly, a delegated account has it only through the helper -- so a
+    # block moving from root to an account loses it silently unless it is
+    # granted first, and lib-zfs-snap.sh then refuses (exit 3) every night.
+    #
+    # SAME dataset list as Phase 8g above, deliberately: the whitelist decides
+    # which guests may be frozen, and deriving it from the replication scope is
+    # what keeps "may freeze" from outgrowing "may replicate". Passing a PARENT
+    # here is therefore a real widening -- every guest with a disk anywhere
+    # under it becomes freezable -- which is why --datasets should name what the
+    # config names.
+    #
+    # Opt-in, and never revoked implicitly: a bare re-run of deploy.sh leaves an
+    # existing grant exactly as it found it. Removing one is --revoke-quiesce,
+    # a separate deliberate act.
+    if [ "$ALLOW_QUIESCE" -eq 1 ]; then
+        install_quiesce_grant "$USERNAME" "$BACKUP_USER_DATASETS"
+    elif [ -f "/etc/zfs-quiesce-allow/$USERNAME" ]; then
+        log "guest quiesce already granted to $USERNAME (left untouched; --revoke-quiesce=$USERNAME removes it)"
+    else
+        log "guest quiesce NOT granted to $USERNAME -- a managed block using 'quiesce = auto' would fail with exit 3 as this account. Re-run with --allow-quiesce if it should be able to freeze guests here."
+    fi
 
     echo
     log "===================================================================="
