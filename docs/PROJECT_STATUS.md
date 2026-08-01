@@ -416,7 +416,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **197/197** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
+| `zfsbackup` | **206/206** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
 | `quiescehelper` | **112/112** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -573,6 +573,15 @@ czterech hostach w obu formach hosta.
   Recenzent nie odniósł się do tego wprost w późniejszych recenzjach.
 
 ### Czeka na decyzję właściciela
+
+- ~~Jeden przepływ zamiast trzech poleceń~~ — **ROZSTRZYGNIĘTE 2026-08-02:
+  opcja (b).** Uprzywilejowany grant zostaje osobną, świadomą komendą;
+  `migrate-to-account` wypisuje **jeden uporządkowany blok naprawczy** zamiast
+  składać go za operatora, i sprawdza zdolności **ponownie tuż przed zapisem
+  crontabów**. Opcję (c) — żeby wrapper sam wołał `deploy.sh` — odrzucono:
+  jego najgorszy dzisiejszy błąd przepisuje crontab (odwracalne), po (c)
+  poszerzałby grant (nikt nie zauważy). Granica `zfs-backup.sh`/`deploy.sh`
+  z REV-020 F1 zostaje tam, gdzie była.
 
 - **Ścieżka zdalna (`snapget -q`) nie ma ani ponownego odczytu na granicy, ani
   terminu.** `ZFS_REMOTE_QUIESCE_SCRIPT` ma własną kopię logiki quiesce'u i
