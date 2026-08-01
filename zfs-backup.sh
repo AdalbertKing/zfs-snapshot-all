@@ -2169,7 +2169,11 @@ capability_survey() {   # <account> <block file>  -> 0 if the account can run it
 # working grant on any host where one guest was missing and others were not.
 capability_remediation() {   # <account>
     local acct="$1" q=""
-    [ "$CAP_QN" -gt 0 ] && q=" --allow-quiesce"
+    # --add-quiesce, not --allow-quiesce: the latter REWRITES the whitelist from
+    # the given list, and this list describes ONE config. A host can also carry
+    # grants from another config, an older deployment or a peer relationship,
+    # and none of those are visible from here (REV-20260802-028).
+    [ "$CAP_QN" -gt 0 ] && q=" --add-quiesce"
     printf '\n  Do wykonania, w tej kolejnosci:\n\n'
     printf '    # 1. zdolnosci. PELNA lista datasetow, nie tylko brakujace --\n'
     printf '    #    whitelist quiesce jest PRZEPISYWANA z tej listy, wiec podanie\n'

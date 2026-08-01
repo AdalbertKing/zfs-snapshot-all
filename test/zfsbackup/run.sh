@@ -2483,7 +2483,7 @@ esac
 # THE point of this section: the printed command names BOTH datasets, although
 # only one is a gap.
 case "$out" in
-    *'--datasets="tank/vm-100-disk-0 tank/vm-102-disk-0" --allow-quiesce'*)
+    *'--datasets="tank/vm-100-disk-0 tank/vm-102-disk-0" --add-quiesce'*)
         ok "remedy: the command names the FULL set, not just the gap" ;;
     *)  bad "remedy: the command names the FULL set, not just the gap" "$out" ;;
 esac

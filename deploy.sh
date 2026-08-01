@@ -104,6 +104,14 @@ JOIN_CHECK=0
 # belongs to the owner of the source host, not to the party asking for access.
 # Off by default; without it remote quiesce simply refuses, loudly.
 ALLOW_QUIESCE=0
+# REV-20260802-028. --allow-quiesce REPLACES the whitelist, and that is right
+# for enrolment: re-running --join with a narrower dataset list is supposed to
+# drop what was removed, and the suite pins it. It is wrong for a REMEDIATION,
+# where the caller knows only the datasets one config needs and the file may
+# also carry grants from another config, an older deployment or a manual job.
+# --add-quiesce is the merge-only, idempotent variant: same provisioning, union
+# instead of overwrite.
+QUIESCE_MERGE=0
 # Account whose quiesce grant --revoke-quiesce should remove (join-side teardown).
 REVOKE_QUIESCE_ACCOUNT=""
 SELF_UPDATE=0
@@ -154,6 +162,7 @@ while [ "$#" -gt 0 ]; do
         --rollback)        ROLLBACK=1; shift ;;
         --resume-updates)  RESUME_UPDATES=1; shift ;;
         --allow-quiesce) ALLOW_QUIESCE=1; shift ;;
+        --add-quiesce)   ALLOW_QUIESCE=1; QUIESCE_MERGE=1; shift ;;
         --revoke-quiesce=*) REVOKE_QUIESCE_ACCOUNT="${1#*=}"; shift ;;
         --revoke-quiesce)   REVOKE_QUIESCE_ACCOUNT="${2:-}"; shift 2 ;;
         --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
@@ -918,16 +927,31 @@ install_quiesce_grant() {
 
     # ---- 2. stage everything, validate, install nothing yet ----
     tmp_allow=$(mktemp) || { warn "mktemp failed staging the whitelist for $account"; return 1; }
+
+    # MERGE mode reads what is already granted and keeps it. FAIL CLOSED if it
+    # cannot: absence from the caller's list is not evidence of obsolescence,
+    # and neither is an unreadable file (REV-20260802-028).
+    local merged; merged=$(mktemp) || { warn "mktemp failed merging the whitelist for $account"; return 1; }
+    if [ "${QUIESCE_MERGE:-0}" -eq 1 ] && [ -e "$allow" ]; then
+        if [ ! -r "$allow" ]; then
+            rm -f "$merged"
+            warn "the existing whitelist $allow cannot be read, so a merge cannot preserve it -- refusing to touch the grant for $account"
+            return 1
+        fi
+        grep -vE '^[[:space:]]*(#|$)' "$allow" >> "$merged" 2>/dev/null || :
+    fi
+    local ds
+    for ds in $datasets; do echo "$ds" >> "$merged"; done
+
     {
         # Names the FLAG, not a mode: two paths write this file now (--join for
         # a peer, a plain run for this host's own account) and a header that
         # names the wrong one sends the reader to the wrong command.
         echo "# managed by deploy.sh --allow-quiesce, do not edit by hand"
         echo "# guests whose disks live under these datasets may be frozen by '$account'"
-        local ds
-        for ds in $datasets; do printf '%s
-' "$ds"; done
-    } > "$tmp_allow" || { _grant_rollback; warn "could not stage the whitelist for $account"; return 1; }
+        sort -u "$merged"
+    } > "$tmp_allow" || { rm -f "$merged"; _grant_rollback; warn "could not stage the whitelist for $account"; return 1; }
+    rm -f "$merged"
 
     tmp_rule=$(mktemp) || { _grant_rollback; warn "mktemp failed staging the sudoers rule"; return 1; }
     printf '%s ALL=(root) NOPASSWD: %s

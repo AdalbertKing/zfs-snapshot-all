@@ -21,6 +21,7 @@ HELPER="$REPO/zfs-quiesce-helper.sh"
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "PASS $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL $1"; echo "     $2"; }
+check_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want[$3] got[$2]"; }
 
 WORK=$(mktemp -d) || exit 1
 trap 'rm -rf "$WORK"' EXIT
@@ -1187,6 +1188,96 @@ fi
 guards=$(grep -c 'ALLOW_QUIESCE" -eq 1 \] && die' "$REPO/deploy.sh")
 [ "$guards" = 2 ] && ok "req-acct: both no-account branches refuse, not just the detected one" \
                   || bad "req-acct: both no-account branches refuse, not just the detected one" "znaleziono $guards"
+
+# ---- --add-quiesce is merge-only (REV-20260802-028) ------------------------
+#
+# `--allow-quiesce` REWRITES /etc/zfs-quiesce-allow/<account> from the list it
+# is given, and for ENROLMENT that is right: re-running --join with a narrower
+# dataset list is supposed to drop what was removed, and tx-widen above pins
+# exactly that.
+#
+# It is wrong for a REMEDIATION. The migration preflight derives its list from
+# ONE config; the same account's whitelist can also carry grants from another
+# config, an older deployment or a manual job. A generated command that quietly
+# revokes them -- while presenting itself as the safe fix -- is worse than no
+# generated command at all.
+#
+# Driven through tx_run, i.e. the REAL install path with its real staging,
+# validation and commit, because the review asked for that rather than an
+# inspection of printed text.
+MQ_ALLOW="$TX/root/etc/zfs-quiesce-allow/backup-test"
+mq_seed() {   # <existing lines...>   -- a host that already has grants
+    rm -rf "$TX/root"
+    mkdir -p "$TX/root/etc/zfs-quiesce-allow" "$TX/root/etc/sudoers.d" "$TX/root/usr/local/sbin"
+    if [ "$#" -gt 0 ]; then
+        { echo "# managed by deploy.sh --allow-quiesce, do not edit by hand"
+          printf '%s\n' "$@"; } > "$MQ_ALLOW"
+    fi
+}
+mq_list() { grep -vE '^[[:space:]]*(#|$)' "$MQ_ALLOW" 2>/dev/null | tr '\n' ' '; }
+
+# The review's exact case: one unrelated grant, a proposed block of two, one of
+# which is missing. All three must remain.
+mq_seed "tank/vm-900-disk-0"
+TX_KEEP=1 QUIESCE_MERGE=1 TX_DATASETS="tank/vm-100-disk-0 tank/vm-102-disk-0" tx_run 0 "" >/dev/null
+check_eq "merge-q: an unrelated existing grant survives the remediation" \
+         "$(mq_list)" "tank/vm-100-disk-0 tank/vm-102-disk-0 tank/vm-900-disk-0 "
+
+# ...and the replacing mode still replaces, or --join could no longer narrow a
+# re-enrolment. The two behaviours have to coexist, which is why this is a new
+# flag rather than a change of meaning.
+mq_seed "tank/vm-900-disk-0"
+TX_KEEP=1 TX_DATASETS="tank/vm-100-disk-0 tank/vm-102-disk-0" tx_run 0 "" >/dev/null
+check_eq "merge-q: --allow-quiesce still REPLACES, so re-enrolment can narrow" \
+         "$(mq_list)" "tank/vm-100-disk-0 tank/vm-102-disk-0 "
+
+# Idempotent, and no duplicate when an entry is in both lists.
+mq_seed "tank/vm-100-disk-0"
+TX_KEEP=1 QUIESCE_MERGE=1 TX_DATASETS="tank/vm-100-disk-0 tank/vm-102-disk-0" tx_run 0 "" >/dev/null
+first=$(mq_list)
+check_eq "merge-q: an entry present in both lists is not duplicated" \
+         "$first" "tank/vm-100-disk-0 tank/vm-102-disk-0 "
+TX_KEEP=1 QUIESCE_MERGE=1 TX_DATASETS="tank/vm-100-disk-0 tank/vm-102-disk-0" tx_run 0 "" >/dev/null
+check_eq "merge-q: a second identical merge is a no-op" "$(mq_list)" "$first"
+
+# On a host with no whitelist yet, a merge is simply the given list.
+mq_seed
+TX_KEEP=1 QUIESCE_MERGE=1 TX_DATASETS="tank/vm-100-disk-0" tx_run 0 "" >/dev/null
+check_eq "merge-q: with nothing to merge, the list is the list" \
+         "$(mq_list)" "tank/vm-100-disk-0 "
+
+# FAIL CLOSED: an existing whitelist that cannot be READ must stop the grant
+# rather than be treated as empty -- "not readable" is not "obsolete".
+# Skipped where the filesystem ignores 0000 for the owner; a check that passes
+# because the mode did not stick is worse than no check.
+mq_seed "tank/vm-900-disk-0"
+chmod 0000 "$MQ_ALLOW" 2>/dev/null
+if [ -r "$MQ_ALLOW" ]; then
+    echo "SKIP merge-q: this filesystem ignores 0000 for the owner -- verify on Linux"
+else
+    TX_KEEP=1 QUIESCE_MERGE=1 TX_DATASETS="tank/vm-100-disk-0" tx_run 0 "" >/dev/null
+    if grep -q "cannot be read" "$TX/out.log"; then
+        ok "merge-q: an unreadable whitelist refuses instead of overwriting"
+    else
+        bad "merge-q: an unreadable whitelist refuses instead of overwriting" "$(cat "$TX/out.log")"
+    fi
+    chmod 0644 "$MQ_ALLOW" 2>/dev/null
+    case "$(mq_list)" in
+        *vm-900*) ok "merge-q: ...and the original list is untouched" ;;
+        *)        bad "merge-q: ...and the original list is untouched" "$(mq_list)" ;;
+    esac
+fi
+
+# The flag exists and is wired to the merge, not to a second replace.
+grep -q -- '--add-quiesce)   ALLOW_QUIESCE=1; QUIESCE_MERGE=1; shift ;;' "$REPO/deploy.sh" \
+    && ok "merge-q: --add-quiesce provisions like --allow-quiesce but merges" \
+    || bad "merge-q: --add-quiesce provisions like --allow-quiesce but merges" "brak flagi"
+
+# And the remediation prints the additive one -- the whole point is that the
+# generated command is safe to paste without knowing which of the two it is.
+grep -q 'q=" --add-quiesce"' "$REPO/zfs-backup.sh" \
+    && ok "merge-q: the remediation block prints --add-quiesce" \
+    || bad "merge-q: the remediation block prints --add-quiesce" "nadal --allow-quiesce"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
