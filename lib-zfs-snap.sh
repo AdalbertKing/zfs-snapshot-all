@@ -1483,34 +1483,125 @@ quiesce_guest_id() {
     esac
 }
 
-# "qemu", "lxc", or nothing. Read from /etc/pve, which is the cluster filesystem
-# and therefore authoritative on this node.
-quiesce_guest_kind() {
+# ---- how guests are reached, decided ONCE ----------------------------------
+#
+# Two routes, exactly as the remote half below already had:
+#
+#   direct  -- root on this host: qm/pct straight up.
+#   helper  -- a delegated account: everything through zfs-quiesce-helper, the
+#              one command that account may run as root, installed by
+#              `deploy.sh --backup-user=NAME --allow-quiesce`.
+#
+# The local path had only the first, and DEGRADED instead of failing when it was
+# unavailable. Found on metropolis pve1, 2026-08-01, minutes after the managed
+# block moved from root to the account: `qm status` as a non-root user dies with
+# "Unable to load access control list" (exit 21), the old probe read that empty
+# output as "not running", and every guest was logged as stopped. The snapshots
+# were taken unfrozen, the job exited 0, and nothing alerted. Three running
+# guests, a config asking for `quiesce = auto`, and a backup that quietly stopped
+# being what it claimed to be -- the exact failure the comment above the remote
+# path already claimed this path refused to produce.
+#
+# `-f /etc/pve/.../<id>.conf` is why it got that far: the directory is
+# world-searchable, so guest DETECTION kept working for an account that cannot
+# read a single byte of the file or reach the cluster IPC at all.
+QUIESCE_HELPER="${QUIESCE_HELPER:-/usr/local/sbin/zfs-quiesce-helper}"
+# Overridable so the suite can drive the real code against a fake /etc/pve
+# instead of stubbing the function that reads it -- a stub cannot regress.
+# Deliberately NOT a privilege boundary: it is on the caller's side of sudo, and
+# a guest still has to pass the helper's own whitelist before anything freezes.
+QUIESCE_PVE_DIR="${QUIESCE_PVE_DIR:-/etc/pve}"
+QUIESCE_VIA=""
+
+# Called before the first freeze. REFUSES rather than degrading: a caller that
+# asked for -q and silently got a crash-consistent snapshot is worse off than one
+# whose job failed loudly, because only the second one finds out.
+quiesce_init() {   # <mode>
+    [ "$1" = "no" ] && return 0
+    [ -n "$QUIESCE_VIA" ] && return 0
+    if [ "$(id -u)" = "0" ]; then
+        if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
+            log 0 "Quiesce: running as root but neither qm nor pct works here -- is this a Proxmox host? Refusing to take a snapshot that would silently be crash-consistent."
+            exit 3
+        fi
+        QUIESCE_VIA=direct
+        return 0
+    fi
+    if [ -x "$QUIESCE_HELPER" ] && sudo -n "$QUIESCE_HELPER" status >/dev/null 2>&1; then
+        QUIESCE_VIA=helper
+        log 2 "Quiesce: reaching guests through $QUIESCE_HELPER (this account is not root)"
+        return 0
+    fi
+    log 0 "Quiesce: this account is not root and cannot use $QUIESCE_HELPER through sudo, so it cannot freeze anything. Refusing rather than taking an unquiesced snapshot. Grant it with: deploy.sh --backup-user=$(id -un) --datasets=\"...\" --allow-quiesce"
+    exit 3
+}
+
+# ONE line for both routes, the same shape the helper speaks and the remote
+# script parses:
+#   id=<n> kind=qemu|lxc|absent running=yes|no frozen=yes|no|unknown
+#
+# Returns non-zero when the state could NOT be determined, which is a different
+# answer from "no" and must never again be collapsed into one. Measured on pve1:
+# `qm status` exits 0 for a stopped guest and 21 when it cannot reach the
+# cluster, so the two are distinguishable -- the old code just discarded it.
+quiesce_guest_status() {   # <id>
     local id="$1"
-    [ -f "/etc/pve/qemu-server/${id}.conf" ] && { printf 'qemu'; return 0; }
-    [ -f "/etc/pve/lxc/${id}.conf" ]        && { printf 'lxc';  return 0; }
+    if [ "$QUIESCE_VIA" = helper ]; then
+        sudo -n "$QUIESCE_HELPER" status "$id" 2>/dev/null || return 1
+        return 0
+    fi
+    local kind st running=no frozen=unknown
+    if   [ -f "$QUIESCE_PVE_DIR/qemu-server/${id}.conf" ]; then kind=qemu
+    elif [ -f "$QUIESCE_PVE_DIR/lxc/${id}.conf" ];         then kind=lxc
+    else printf 'id=%s kind=absent running=no frozen=unknown\n' "$id"; return 0; fi
+    case "$kind" in
+        qemu) st=$(qm  status "$id" 2>/dev/null) || return 1 ;;
+        lxc)  st=$(pct status "$id" 2>/dev/null) || return 1 ;;
+    esac
+    case "$st" in *running*) running=yes ;; esac
+    if [ "$kind" = qemu ] && [ "$running" = yes ]; then
+        case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
+            *frozen*) frozen=yes ;;
+            *thawed*) frozen=no  ;;
+        esac
+    fi
+    printf 'id=%s kind=%s running=%s frozen=%s\n' "$id" "$kind" "$running" "$frozen"
+}
+
+quiesce_field() {   # <status line> <name>
+    local rest="${1#*$2=}"
+    printf '%s' "${rest%% *}"
+}
+
+quiesce_do_freeze() {   # <id> <kind>
+    if [ "$QUIESCE_VIA" = helper ]; then
+        sudo -n "$QUIESCE_HELPER" freeze "$1" >/dev/null 2>&1
+        return $?
+    fi
+    case "$2" in
+        qemu) qm guest cmd "$1" fsfreeze-freeze >/dev/null 2>&1; return $? ;;
+        lxc)  pct exec "$1" -- sync >/dev/null 2>&1; return $? ;;
+    esac
     return 1
 }
 
-quiesce_guest_running() {
-    local id="$1" kind="$2" st=""
-    case "$kind" in
-        qemu) st=$(qm  status "$id" 2>/dev/null) ;;
-        lxc)  st=$(pct status "$id" 2>/dev/null) ;;
-    esac
-    case "$st" in *running*) return 0 ;; esac
-    return 1
+quiesce_do_thaw() {   # <id>
+    if [ "$QUIESCE_VIA" = helper ]; then
+        sudo -n "$QUIESCE_HELPER" thaw "$1" >/dev/null 2>&1
+        return $?
+    fi
+    qm guest cmd "$1" fsfreeze-thaw >/dev/null 2>&1
+    return $?
 }
 
 # Freezes whatever owns $1, if anything, and remembers it. Returns 0 even when it
 # does nothing: a dataset with no guest, a stopped guest or an unreachable agent
 # are all reasons to take an ordinary snapshot, not to fail a backup.
 quiesce_freeze() {
-    local ds="$1" mode="$2" id kind mnt
+    local ds="$1" mode="$2" id line kind running frozen
     [ "$mode" = "no" ] && return 0
 
     id=$(quiesce_guest_id "$ds") || { log 3 "Quiesce: '$ds' is not a Proxmox guest disk -- nothing to freeze"; return 0; }
-    kind=$(quiesce_guest_kind "$id") || { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
     # Check AND mark here, as soon as the owning guest is known -- before the
     # running check, not after. The decision being deduplicated is "what do we do
     # about guest N", and that is settled once however it turns out. Marking only
@@ -1522,7 +1613,19 @@ quiesce_freeze() {
     esac
     QUIESCE_HANDLED+=("$id")
 
-    quiesce_guest_running "$id" "$kind" || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
+    # quiesce_init already proved the route works, so a guest whose state cannot
+    # be read now is a specific refusal -- most likely one that is outside this
+    # account's quiesce whitelist -- and not a reason to snapshot it unfrozen.
+    if ! line=$(quiesce_guest_status "$id"); then
+        log 0 "Quiesce: could not determine the state of guest $id via ${QUIESCE_VIA:-direct}. If this account is delegated, that guest is probably outside its quiesce whitelist -- add its dataset to deploy.sh --datasets. Refusing rather than taking an unquiesced snapshot."
+        exit 3
+    fi
+    kind=$(quiesce_field "$line" kind)
+    running=$(quiesce_field "$line" running)
+    frozen=$(quiesce_field "$line" frozen)
+
+    [ "$kind" = absent ] && { log 2 "Quiesce: no guest $id on this node -- skipping"; return 0; }
+    [ "$running" = yes ] || { log 3 "Quiesce: guest $id is not running -- nothing to freeze"; return 0; }
 
     # An explicit mode that does not fit this guest is a config mistake worth
     # saying out loud, but still not worth failing a backup over.
@@ -1535,10 +1638,8 @@ quiesce_freeze() {
         qemu)
             # Already frozen (a previous run died between freeze and thaw) is
             # reported rather than re-frozen: freezing twice needs two thaws.
-            case "$(qm guest cmd "$id" fsfreeze-status 2>/dev/null)" in
-                *frozen*) log 0 "Quiesce: guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate"; return 0 ;;
-            esac
-            if qm guest cmd "$id" fsfreeze-freeze >/dev/null 2>&1; then
+            [ "$frozen" = yes ] && { log 0 "Quiesce: guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate"; return 0; }
+            if quiesce_do_freeze "$id" qemu; then
                 QUIESCE_FROZEN+=("qemu:$id")
                 log 1 "Quiesce: froze VM $id via qemu-guest-agent"
             else
@@ -1548,7 +1649,7 @@ quiesce_freeze() {
         lxc)
             # A flush, not a freeze -- nothing is registered for thawing because
             # nothing is held.
-            if pct exec "$id" -- sync >/dev/null 2>&1; then
+            if quiesce_do_freeze "$id" lxc; then
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
                 log 1 "Quiesce: 'pct exec $id -- sync' failed -- snapshot will be crash-consistent"
@@ -1587,7 +1688,7 @@ quiesce_thaw_all() {
         entry="${QUIESCE_FROZEN[$i]}"
         case "$entry" in
             qemu:*)
-                if qm guest cmd "${entry#qemu:}" fsfreeze-thaw >/dev/null 2>&1; then
+                if quiesce_do_thaw "${entry#qemu:}"; then
                     log 1 "Quiesce: thawed VM ${entry#qemu:}"
                 else
                     log 0 "Quiesce: FAILED TO THAW VM ${entry#qemu:} -- that guest is still frozen and needs manual 'qm guest cmd ${entry#qemu:} fsfreeze-thaw'"

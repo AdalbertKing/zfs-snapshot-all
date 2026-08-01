@@ -59,7 +59,8 @@ quiesce_guest_id hdd/backups/pve1 >/dev/null
 check "id: a backup store owns no guest" "1" "$?"
 # A RECEIVED copy has the same leaf name as the original. It must still parse --
 # the guard against acting on it is that the guest does not exist on this node,
-# checked separately by quiesce_guest_kind, not that the name is unrecognised.
+# which quiesce_guest_status reports as kind=absent, not that the name is
+# unrecognised.
 check "id: a replica leaf parses like the original" "100" \
       "$(quiesce_guest_id hdd/backups/pve1/rpool/data/vm-100-disk-0)"
 quiesce_guest_id hdd/mssql >/dev/null
@@ -121,15 +122,13 @@ case "$1" in status) echo "status: running" ;; esac
 STUB
 chmod +x "$TMPD/bin/qm" "$TMPD/bin/pct"
 
-# quiesce_guest_kind reads /etc/pve, so point it at a fake tree.
+# Guest detection reads /etc/pve, so point the REAL code at a fake tree rather
+# than stubbing the function that does the reading -- a stubbed seam cannot
+# regress, and this one did (see the 'privilege' section below).
 FAKE_PVE="$TMPD/pve"
 mkdir -p "$FAKE_PVE/qemu-server" "$FAKE_PVE/lxc"
 : > "$FAKE_PVE/qemu-server/107.conf"
-quiesce_guest_kind() {
-    [ -f "$FAKE_PVE/qemu-server/${1}.conf" ] && { printf 'qemu'; return 0; }
-    [ -f "$FAKE_PVE/lxc/${1}.conf" ] && { printf 'lxc'; return 0; }
-    return 1
-}
+QUIESCE_PVE_DIR="$FAKE_PVE"
 
 QUIESCE_HANDLED=()
 QUIESCE_FROZEN=()
@@ -158,6 +157,149 @@ check "mode 'no': nothing frozen even for a real guest" "0" "${#QUIESCE_FROZEN[@
 QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
 quiesce_freeze hdd/data/vm-107-disk-0 sync
 check "wrong mode: a VM is not sync-quiesced" "0" "${#QUIESCE_FROZEN[@]}"
+
+# ---- the LOCAL path's privilege routing (2026-08-01) -----------------------
+#
+# Found live on metropolis pve1, minutes after the managed block moved from root
+# to the delegated account. `qm status` as a non-root user does not print
+# "stopped" -- it dies with "Unable to load access control list" and exit 21.
+# The old probe threw stderr away and matched the empty output against
+# *running*, so THREE RUNNING GUESTS were logged as "not running -- nothing to
+# freeze", the snapshots were taken unfrozen, and snapsend exited 0.
+#
+# Nothing alerted, because from every angle the job had succeeded. A backup that
+# quietly stops being application-consistent is the failure mode this project
+# keeps finding, and it is always the same shape: a probe that cannot tell "no"
+# from "I could not ask".
+QP="$TMPD/priv"; mkdir -p "$QP/bin" "$QP/pve/qemu-server" "$QP/pve/lxc"
+: > "$QP/pve/qemu-server/107.conf"
+: > "$QP/pve/lxc/108.conf"
+
+# `qm` that behaves like a real one reached by an account with no cluster
+# access: exit 21, nothing on stdout.
+cat > "$QP/bin/qm-denied" <<'STUB'
+#!/bin/sh
+echo "ipcc_send_rec[1] failed: Is a directory" >&2
+echo "Unable to load access control list: Is a directory" >&2
+exit 21
+STUB
+# ...and one that answers properly for a STOPPED guest: exit 0, "stopped".
+cat > "$QP/bin/qm-stopped" <<'STUB'
+#!/bin/sh
+case "$1" in status) echo "status: stopped"; exit 0 ;; esac
+exit 0
+STUB
+chmod +x "$QP/bin/qm-denied" "$QP/bin/qm-stopped"
+
+QUIESCE_PVE_DIR="$QP/pve"
+QUIESCE_VIA=direct
+
+( PATH="$QP:$PATH"; cp "$QP/bin/qm-denied" "$QP/qm"; quiesce_guest_status 107 >/dev/null 2>&1 )
+check "priv: a guest whose state cannot be READ is not reported as stopped" "1" "$?"
+
+( PATH="$QP:$PATH"; cp "$QP/bin/qm-stopped" "$QP/qm"; quiesce_guest_status 107 2>/dev/null | grep -q 'running=no' )
+check "priv: a guest that really IS stopped still reads running=no" "0" "$?"
+
+# The consequence, which is the part that mattered: quiesce_freeze must REFUSE,
+# not skip. Exit 3 is the same code the remote path uses for "cannot quiesce",
+# and the cron lines alert on any non-zero.
+cp "$QP/bin/qm-denied" "$QP/qm"
+out=$( PATH="$QP:$PATH"; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+       quiesce_freeze hdd/data/vm-107-disk-0 auto 2>&1 ); rc=$?
+check "priv: an unreadable guest state fails the run instead of skipping the freeze" "3" "$rc"
+case "$out" in
+    *"could not determine the state of guest 107"*)
+        check "priv: ...and says which guest, not just that something failed" "0" "0" ;;
+    *)  check "priv: ...and says which guest, not just that something failed" "0" "1 ($out)" ;;
+esac
+
+# A stopped guest must stay an ordinary skip. The fix is about "could not ask",
+# and turning every stopped VM into a failed backup would be a worse bug than
+# the one being fixed.
+cp "$QP/bin/qm-stopped" "$QP/qm"
+( PATH="$QP:$PATH"; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+  quiesce_freeze hdd/data/vm-107-disk-0 auto >/dev/null 2>&1 )
+check "priv: a genuinely stopped guest is still just skipped" "0" "$?"
+
+# ---- quiesce_init: the route is decided once, and refuses ------------------
+#
+# The local path had no notion of a delegated account at all -- that existed
+# only in the remote script. So an account that could not reach a hypervisor
+# never found out, per guest, forever.
+cat > "$QP/bin/id" <<'STUB'
+#!/bin/sh
+[ "$1" = "-u" ] && { echo 1001; exit 0; }
+[ "$1" = "-un" ] && { echo zfsbackup; exit 0; }
+echo zfsbackup
+STUB
+cat > "$QP/bin/helper-ok" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -n "${2:-}" ] && echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
+  freeze|thaw) echo "$1 $2" >> "$HELPER_TRACE"; exit 0 ;;
+esac
+exit 2
+STUB
+cat > "$QP/bin/sudo" <<'STUB'
+#!/bin/sh
+# `sudo -n <cmd> ...` -- drop the flag and run it, which is what a working
+# NOPASSWD rule amounts to for this test.
+[ "$1" = "-n" ] && shift
+exec "$@"
+STUB
+chmod +x "$QP/bin/id" "$QP/bin/helper-ok" "$QP/bin/sudo"
+
+# No usable helper -> refuse, and name the command that fixes it.
+out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=""; QUIESCE_HELPER="$QP/nonexistent"
+       quiesce_init auto 2>&1 ); rc=$?
+check "init: a non-root caller with no helper refuses instead of degrading" "3" "$rc"
+case "$out" in
+    *"--allow-quiesce"*) check "init: ...and names the deploy.sh grant" "0" "0" ;;
+    *)                   check "init: ...and names the deploy.sh grant" "0" "1 ($out)" ;;
+esac
+
+# A usable helper -> route through it.
+via=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=""; QUIESCE_HELPER="$QP/bin/helper-ok"
+       quiesce_init auto >/dev/null 2>&1; echo "$QUIESCE_VIA" )
+check "init: a non-root caller WITH a helper routes through it" "helper" "$via"
+
+# And on that route qm is never touched: the freeze and the thaw both go to the
+# helper. Proven by tracing the helper, with a qm on PATH that would exit 21 if
+# anything reached it.
+cp "$QP/bin/qm-denied" "$QP/qm"
+export HELPER_TRACE="$QP/trace"; : > "$HELPER_TRACE"
+rc=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=helper; QUIESCE_HELPER="$QP/bin/helper-ok"
+      QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+      quiesce_freeze hdd/data/vm-107-disk-0 auto >/dev/null 2>&1
+      quiesce_thaw_all >/dev/null 2>&1
+      echo "$?" )
+check "init: on the helper route the freeze and thaw both reach the helper" \
+      "freeze 107|thaw 107" "$(tr '\n' '|' < "$HELPER_TRACE" | sed 's/|$//')"
+
+# A guest the helper REFUSES (outside this account's whitelist) is the pve1
+# guest-102 case: its disk sits under a delegated parent, the config could name
+# it, and the grant does not cover it. That must fail the run, not produce an
+# unfrozen snapshot of it.
+cat > "$QP/bin/helper-refuses" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -z "${2:-}" ] && exit 0
+          echo "guest $2 is not on the quiesce whitelist" >&2; exit 2 ;;
+esac
+exit 2
+STUB
+chmod +x "$QP/bin/helper-refuses"
+out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=helper; QUIESCE_HELPER="$QP/bin/helper-refuses"
+       QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+       quiesce_freeze hdd/data/vm-102-disk-0 auto 2>&1 ); rc=$?
+check "init: a guest outside the account's whitelist fails the run" "3" "$rc"
+case "$out" in
+    *"whitelist"*) check "init: ...and points at the whitelist, not at the guest being down" "0" "0" ;;
+    *)             check "init: ...and points at the whitelist, not at the guest being down" "0" "1 ($out)" ;;
+esac
+
+QUIESCE_PVE_DIR="$FAKE_PVE"
+QUIESCE_VIA=""
 
 # ---- the REMOTE script's privilege routing --------------------------------
 #

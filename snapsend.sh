@@ -1888,6 +1888,13 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # bash allows one EXIT trap -- both actions live in this one.
     trap 'quiesce_thaw_all; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 
+    # Decide HOW guests are reached -- and refuse here if they cannot be reached
+    # at all -- before a single snapshot is taken. Up front on purpose: the
+    # answer is the same for every dataset, and discovering it per guest is how
+    # "cannot ask" came to be logged as "not running" once per disk while the
+    # run reported success.
+    quiesce_init "$QUIESCE"
+
     quiesce_snap_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
     # pool -> space-separated snapshot names. A space-joined string is safe as a
     # list here because ZFS dataset names cannot contain whitespace, and bash has
