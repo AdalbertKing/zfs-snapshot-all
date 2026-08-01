@@ -1455,7 +1455,7 @@ auto_skip_intermediates() {
 # atomic `zfs snapshot` call, thaw, and only then transfer.
 #
 # THAW IS GUARANTEED, not best-effort. A guest left frozen is an outage, so
-# quiesce_freeze registers what it froze and quiesce_thaw_all is wired to an EXIT
+# quiesce_freeze_pending registers what it froze and quiesce_thaw_all is wired to an EXIT
 # trap by the caller -- it runs on success, on failure, and on Ctrl-C.
 
 # What is currently frozen, so the thaw is exact rather than a guess. Only VMs
@@ -1468,6 +1468,10 @@ declare -a QUIESCE_FROZEN=()
 # the snapshot. Without this the second disk of a running VM hit the
 # "already frozen" branch and shouted about it at log level 0.
 declare -a QUIESCE_HANDLED=()
+# VMs that quiesce_prepare decided to freeze but deliberately did NOT freeze yet.
+# They are frozen by quiesce_freeze_pending, immediately before the snapshot --
+# see the freeze-window block below for why the two are separated.
+declare -a QUIESCE_PENDING_VMS=()
 
 # Proxmox names guest disks vm-<id>-disk-N (VM) and subvol-<id>-disk-N (CT).
 # That convention IS the dataset-to-guest mapping -- there is no property to ask.
@@ -1608,7 +1612,11 @@ quiesce_do_thaw() {   # <id>
 # silently received crash-consistent is exactly the outcome this whole path
 # exists to prevent. -q is not best-effort; if a best-effort policy is ever
 # wanted it has to be a separately named mode that does not claim consistency.
-quiesce_freeze() {
+# Pass 1: everything SLOW, and nothing that freezes a VM. Flushes containers,
+# refuses on anything that means -q cannot be delivered, and records which VMs
+# quiesce_freeze_pending should freeze later. Named `prepare` rather than
+# `freeze` since REV-20260801-024 because that is now the whole distinction.
+quiesce_prepare() {
     local ds="$1" mode="$2" id line kind running frozen
     [ "$mode" = "no" ] && return 0
 
@@ -1656,19 +1664,19 @@ quiesce_freeze() {
                 yes) log 0 "Quiesce: guest $id was ALREADY frozen before this run started. This run does not own that freeze, cannot say what application state it captured, and will not thaw someone else's. Refusing. Investigate the guest -- most likely a previous run died between freeze and thaw -- and thaw it with 'qm guest cmd $id fsfreeze-thaw' once you know why."; exit 3 ;;
                 unknown) log 0 "Quiesce: could not read fsfreeze-status for running VM $id (agent missing, disabled or busy), so whether a freeze would take is unknown. Refusing rather than taking a snapshot that may be crash-consistent while the log calls it quiesced."; exit 3 ;;
             esac
-            if quiesce_do_freeze "$id" qemu; then
-                QUIESCE_FROZEN+=("qemu:$id")
-                log 1 "Quiesce: froze VM $id via qemu-guest-agent"
-            else
-                log 0 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy). Refusing -- -q asked for a frozen snapshot and this would not be one."
-                exit 3
-            fi
+            # NOT frozen here. Deferred to quiesce_freeze_pending, which runs
+            # immediately before the snapshot -- see the window note below.
+            QUIESCE_PENDING_VMS+=("$id")
+            log 2 "Quiesce: VM $id will be frozen just before the snapshot"
             ;;
         lxc)
             # A flush, not a freeze -- nothing is registered for thawing because
             # nothing is held. Weaker than a freeze by design (see the block
             # comment above), but it is what -q promises for a container, and a
             # flush that did not happen is still a promise not kept.
+            #
+            # Done HERE, in the slow pass, precisely because it is the slow part:
+            # measured 16 s for one container on metropolis pve1.
             if quiesce_do_freeze "$id" lxc; then
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
@@ -1677,6 +1685,88 @@ quiesce_freeze() {
             fi
             ;;
     esac
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# THE FREEZE WINDOW IS A DEADLINE, NOT A SEQUENCE (REV-20260801-024)
+#
+# Measured on metropolis pve1, 2026-08-01: VM 106 (ostype win10) frozen at
+# 18:21:21, snapshot at 18:21:39 -- EIGHTEEN SECONDS, of which 16 were one
+# `pct exec 101 -- sync`. VSS hard-limits a Windows freeze to ~10 s and releases
+# it on its own; the guest agent says so out loud ("couldn't hold writes:
+# fsfreeze is limited up to 10 seconds"). So the snapshot was almost certainly
+# taken after the guest had already thawed itself, and every check in the code
+# reported success, because the freeze DID take -- it just was not still in
+# force when it mattered.
+#
+# A successful fsfreeze-freeze is therefore not evidence of anything by the time
+# `zfs snapshot` runs. Three things follow, and all three are needed:
+#
+#   1. ORDER. Everything slow and non-freezing happens first (quiesce_prepare
+#      above flushes containers and merely REMEMBERS which VMs to freeze). VMs
+#      are frozen only immediately before the snapshot.
+#   2. RE-CHECK. Every VM is asked again, right before `zfs snapshot`, whether
+#      it is still frozen. Not frozen, or unreadable, aborts before the snapshot.
+#   3. DEADLINE. The elapsed time from the first freeze is measured and logged,
+#      and exceeding the budget is a FAILURE, not a warning -- a proxy for the
+#      cases the re-check cannot see, and the only guard for a guest whose agent
+#      cheerfully reports "frozen" it can no longer honour.
+#
+# The budget is deliberately well under the ~10 s VSS limit, and deliberately
+# tunable: a host with several slow-to-freeze Windows guests in ONE job can
+# exceed it legitimately, and the right answer there is a smaller job or a
+# considered override, not a silently longer window.
+QUIESCE_MAX_WINDOW="${QUIESCE_MAX_WINDOW:-5}"
+QUIESCE_FREEZE_EPOCH=0
+
+# Pass 2. Freezes every VM quiesce_prepare deferred. Refusals leave whatever is
+# already frozen to the caller's EXIT trap, which is why the trap is installed
+# before any of this runs.
+quiesce_freeze_pending() {
+    local id
+    [ "${#QUIESCE_PENDING_VMS[@]}" -eq 0 ] && return 0
+    QUIESCE_FREEZE_EPOCH=$(date +%s)
+    for id in "${QUIESCE_PENDING_VMS[@]}"; do
+        if quiesce_do_freeze "$id" qemu; then
+            QUIESCE_FROZEN+=("qemu:$id")
+            log 1 "Quiesce: froze VM $id via qemu-guest-agent"
+        else
+            log 0 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy). Refusing -- -q asked for a frozen snapshot and this would not be one."
+            exit 3
+        fi
+    done
+    QUIESCE_PENDING_VMS=()
+    return 0
+}
+
+# Pass 3, and the whole point of the exercise: is the promise still true NOW?
+# Returns non-zero and says why; the caller must not snapshot on a failure.
+quiesce_still_frozen() {
+    local entry gid line frozen elapsed=0
+    [ "${#QUIESCE_FROZEN[@]}" -eq 0 ] && return 0
+
+    for entry in "${QUIESCE_FROZEN[@]}"; do
+        case "$entry" in qemu:*) gid="${entry#qemu:}" ;; *) continue ;; esac
+        if ! line=$(quiesce_guest_status "$gid"); then
+            log 0 "Quiesce: could not re-read the state of VM $gid immediately before the snapshot, so whether it is still frozen is unknown. Refusing."
+            return 1
+        fi
+        frozen=$(quiesce_field "$line" frozen)
+        if [ "$frozen" != yes ]; then
+            log 0 "Quiesce: VM $gid is no longer frozen (fsfreeze-status: $frozen) at the moment of the snapshot. A Windows guest releases a VSS freeze after about 10 seconds on its own, so this snapshot would be crash-consistent while claiming otherwise. Refusing."
+            return 1
+        fi
+    done
+
+    # After the per-guest checks, not before: the checks themselves cost time,
+    # and the number that matters is the one at the snapshot boundary.
+    [ "$QUIESCE_FREEZE_EPOCH" -gt 0 ] && elapsed=$(( $(date +%s) - QUIESCE_FREEZE_EPOCH ))
+    if [ "$elapsed" -gt "$QUIESCE_MAX_WINDOW" ]; then
+        log 0 "Quiesce: the freeze window is ${elapsed}s, over the ${QUIESCE_MAX_WINDOW}s budget, and a Windows guest drops a VSS freeze at about 10s regardless of what fsfreeze-status says. Refusing rather than snapshotting on a freeze that may already be gone. Raise QUIESCE_MAX_WINDOW only if you know the guests involved can hold it."
+        return 1
+    fi
+    log 1 "Quiesce: freeze window ${elapsed}s (budget ${QUIESCE_MAX_WINDOW}s), ${#QUIESCE_FROZEN[@]} VM(s) confirmed still frozen at the snapshot"
     return 0
 }
 
@@ -1738,6 +1828,8 @@ quiesce_thaw_all() {
     done
     QUIESCE_FROZEN=("${left[@]}")
     QUIESCE_HANDLED=()
+    QUIESCE_PENDING_VMS=()
+    QUIESCE_FREEZE_EPOCH=0
     [ "$QUIESCE_THAW_FAILED" -eq 1 ] && return 1
     return 0
 }

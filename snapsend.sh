@@ -1910,7 +1910,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # see quiesce_scope. The snapshot list still names the parent, because
         # `zfs snapshot -r parent@snap` covers the tree atomically by itself.
         while IFS= read -r quiesce_ds; do
-            [ -n "$quiesce_ds" ] && quiesce_freeze "$quiesce_ds" "$QUIESCE"
+            [ -n "$quiesce_ds" ] && quiesce_prepare "$quiesce_ds" "$QUIESCE"
         done < <(quiesce_scope "$dataset" "$RECURSIVE")
         quiesce_pool="${dataset%%/*}"
         QUIESCE_SNAPS_BY_POOL[$quiesce_pool]+=" ${dataset}@${MESSAGE}${quiesce_snap_suffix}"
@@ -1919,6 +1919,21 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
 
     quiesce_recursive_flag=""
     [ $RECURSIVE -eq 1 ] && quiesce_recursive_flag="-r"
+    # NOW the VMs are frozen -- after every container flush, after every list has
+    # been built, with nothing left to do but the snapshot itself. REV-20260801-024:
+    # the old code froze them during the loop above and then spent up to 16
+    # seconds flushing containers, by which time Windows had released the freeze
+    # on its own and nothing noticed.
+    quiesce_freeze_pending
+
+    # And the promise is re-checked at the boundary, because a freeze that
+    # succeeded is not a freeze that is still in force.
+    if ! quiesce_still_frozen; then
+        log 0 "Quiesce: refusing to take the snapshot -- the freeze it was supposed to happen inside is not there (reason above)"
+        quiesce_thaw_all || :
+        exit 3
+    fi
+
     log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
     quiesce_snap_failed=0
     for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
