@@ -1390,7 +1390,7 @@ echo root
 EOF
 chmod +x "$MIG/bin/crontab" "$MIG/bin/getent" "$MIG/bin/id"
 mkdir -p "$MIG/home/zfs-snapshot-all"; : > "$MIG/home/zfs-snapshot-all/gen-cron.sh"
-out=$( PATH="$MIG/bin:$PATH" bash -c "source '$ZFSBACKUP'; runuser_test_r() { return 0; }; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+out=$( PATH="$MIG/bin:$PATH" bash -c "source '$ZFSBACKUP'; runuser_test_r() { return 0; }; runuser_test_x() { return 0; }; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"ALREADY has a managed block"*) true ;; *) false ;; esac; then
     ok "migrate-to-account: refuses an account that already runs a managed block"
 else
@@ -1544,6 +1544,7 @@ chmod +x "$PF/bin/crontab" "$PF/bin/getent" "$PF/bin/id" "$PF/bin/zfs"
 out=$( PATH="$PF/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { case \"\$2\" in *jobs.conf) return 1 ;; *) return 0 ;; esac; }
+    runuser_test_x() { return 0; }
     gencron_as_target() {
         # Honest stub: gen-cron runs AS the account, so rendering the ORIGINAL
         # config -- the one under /root that the account cannot open -- must
@@ -1575,6 +1576,7 @@ esac
 out2=$( PATH="$PF/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { case \"\$2\" in *jobs.conf) return 1 ;; *) return 0 ;; esac; }
+    runuser_test_x() { return 0; }
     gencron_as_target() {
         local c=''; while [ \$# -gt 0 ]; do [ \"\$1\" = -c ] && c=\"\$2\"; shift; done
         [ \"\$c\" = '$PF/jobs.conf' ] && return 1
@@ -1655,6 +1657,7 @@ chmod +x "$RB/bin/crontab" "$RB/bin/getent" "$RB/bin/id" "$RB/bin/zfs"
 out=$( PATH="$RB/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
     gencron_as_target() {
         for a in \"\$@\"; do [ \"\$a\" = --install ] && return 1; done
         cat '$RB/rendered.txt'; }
@@ -1701,6 +1704,7 @@ chmod +x "$RB/bin/crontab"
 out=$( PATH="$RB/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
     gencron_as_target() {
         for a in \"\$@\"; do [ \"\$a\" = --install ] && { export MTA_FAIL_RESTORE=1; return 1; }; done
         cat '$RB/rendered.txt'; }
@@ -1846,6 +1850,7 @@ _or_crontab '0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log'
 out=$( PATH="$OR/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
     gencron_as_target() { cat '$OR/rendered.txt'; }
     cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && case "$out" in *"linie ogolnohostowe do zachowania: 1"*) true ;; *) false ;; esac; then
@@ -1860,6 +1865,7 @@ _or_crontab '3 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "z_" "tank/
 out=$( PATH="$OR/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
     gencron_as_target() { cat '$OR/rendered.txt'; }
     cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"belong to nobody"*) true ;; *) false ;; esac \
@@ -1913,6 +1919,7 @@ chmod +x "$MC/bin/crontab" "$MC/bin/getent" "$MC/bin/id"
 out=$( PATH="$MC/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
     cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
 
 [ "$rc" -ne 0 ] && ok "missing-config: the verb refuses rather than inventing a config" \
@@ -1999,6 +2006,101 @@ esac
 case "$qa" in
     *"--join"*) bad "advice: ...and no longer sends the operator to --join" "$qa" ;;
     *)          ok "advice: ...and no longer sends the operator to --join" ;;
+esac
+
+# --- 31. the account must be able to RUN the block it is given --------------
+#
+# metropolis pve2, 2026-08-01, and the most expensive defect of the day. Its
+# config was rebuilt by cron2conf.sh from the live crontab, so it faithfully
+# carried root's paths as an EXPLICIT `[defaults] repo_dir`. gen-cron.sh
+# normally DERIVES the repo directory from where it lives -- the account's own
+# checkout -- but an explicit config field beats the derivation, so the account
+# got a block naming /root/scripts/zfs-snapshot-all/*.sh. /root is 0700. Every
+# line died with exit 126 and the host had no working backup job at all.
+#
+# The migration could not see it BY CONSTRUCTION: job_identity() strips the
+# script directory on purpose, because that is the part that legitimately
+# changes when ownership moves. So the workload comparison said "identical",
+# correctly, about a block that could not execute. Two different questions.
+#
+# It is also why the per-line check said rc=0: the generated cron idiom ends in
+# `rm -f "$e"`, so the LINE succeeds whatever the job did.
+RB="$WORK/runnable"; mkdir -p "$RB/bin" "$RB/root-only" "$RB/home/zfs-snapshot-all"
+for s in snapsend delsnaps check-snap-age; do
+    printf '#!/bin/sh\nexit 0\n' > "$RB/home/zfs-snapshot-all/$s.sh"
+    chmod +x "$RB/home/zfs-snapshot-all/$s.sh"
+    printf '#!/bin/sh\nexit 0\n' > "$RB/root-only/$s.sh"
+done
+# Not executable by anyone but the owner -- stands in for a script under /root.
+chmod 0700 "$RB/root-only"/*.sh
+
+cat > "$RB/good.block" <<EOF
+# BEGIN zfs-backup-managed
+7 * * * * $RB/home/zfs-snapshot-all/snapsend.sh -m "a_" "tank/a" 2>>/home/x/cron.log
+9 * * * * $RB/home/zfs-snapshot-all/delsnaps.sh "tank/a" "a" -H24 2>>/home/x/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$RB/bad.block" <<EOF
+# BEGIN zfs-backup-managed
+7 * * * * $RB/home/zfs-snapshot-all/snapsend.sh -m "a_" "tank/a" 2>>/home/x/cron.log
+9 * * * * $RB/root-only/delsnaps.sh "tank/a" "a" -H24 2>>/home/x/cron.log
+# END zfs-backup-managed
+EOF
+
+# runuser_test_x is the seam: stub it to answer for a hypothetical account
+# rather than needing a second real user on the box.
+out=$( bash -c "
+    source '$ZFSBACKUP'
+    # Path-based, not mode-based: chmod 0700 does not survive on every
+    # filesystem this suite runs on, and a probe that quietly answers 'yes'
+    # everywhere would make both cases below pass for the wrong reason.
+    runuser_test_x() { case \"\$2\" in */root-only/*) return 1 ;; *) return 0 ;; esac; }
+    assert_block_runnable_by zfsbackup '$RB/good.block'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "runnable: a block naming the account's own scripts passes" \
+                || bad "runnable: a block naming the account's own scripts passes" "rc=$rc out=$out"
+
+out=$( bash -c "
+    source '$ZFSBACKUP'
+    # Path-based, not mode-based: chmod 0700 does not survive on every
+    # filesystem this suite runs on, and a probe that quietly answers 'yes'
+    # everywhere would make both cases below pass for the wrong reason.
+    runuser_test_x() { case \"\$2\" in */root-only/*) return 1 ;; *) return 0 ;; esac; }
+    assert_block_runnable_by zfsbackup '$RB/bad.block'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"cannot execute"*) true ;; *) false ;; esac; then
+    ok "runnable: a block naming a script the account cannot execute is refused"
+else
+    bad "runnable: a block naming a script the account cannot execute is refused" "rc=$rc out=$out"
+fi
+case "$out" in
+    *"$RB/root-only/delsnaps.sh"*) ok "runnable: ...and the refusal names the exact script" ;;
+    *) bad "runnable: ...and the refusal names the exact script" "$out" ;;
+esac
+# The reachable one in the same block must NOT be listed -- an operator reading
+# a list of "broken" paths that includes working ones cannot act on it.
+case "$out" in
+    *"$RB/home/zfs-snapshot-all/snapsend.sh"*)
+        bad "runnable: ...and does not also name the scripts that are fine" "$out" ;;
+    *)  ok "runnable: ...and does not also name the scripts that are fine" ;;
+esac
+# The likely cause is named, because the operator has to know what to change.
+case "$out" in
+    *repo_dir*) ok "runnable: ...and points at the config field that usually causes it" ;;
+    *)          bad "runnable: ...and points at the config field that usually causes it" "$out" ;;
+esac
+
+# The migration must ASK the question, not just have a function able to answer
+# it. Asserted on the call site, which is what was actually missing.
+grep -q 'assert_block_runnable_by "\$acct" "\$newblock"' "$ZFSBACKUP" \
+    && ok "runnable: migrate-to-account asks it before touching anything" \
+    || bad "runnable: migrate-to-account asks it before touching anything" "brak wywolania"
+
+# And the rendering side pins REPO_DIR, so the account's block names the
+# account's checkout whatever the config says. Belt and braces on purpose: the
+# check above catches it, this stops it happening.
+env_block=$(sed -n '/local -a envv=(/,/^    )/p' "$ZFSBACKUP")
+case "$env_block" in
+    *'REPO_DIR=$home/zfs-snapshot-all'*) ok "runnable: gencron_as_target pins REPO_DIR to the account's checkout" ;;
+    *) bad "runnable: gencron_as_target pins REPO_DIR to the account's checkout" "$env_block" ;;
 esac
 
 echo "--------------------------------------------"

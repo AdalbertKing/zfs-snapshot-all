@@ -817,7 +817,16 @@ gencron_as_target() {   # <args...>
     # correctness -- let alone its safety -- on an undocumented "our paths never
     # contain spaces" assumption, and the preview would then have validated a
     # different file from the one installed.
+    # REPO_DIR is pinned for the same reason as the other four, and its absence
+    # here is what broke metropolis pve2 (2026-08-01). gen-cron.sh normally
+    # DERIVES it from where it lives -- the account's own checkout, which is
+    # right -- but a config carrying an explicit `[defaults] repo_dir` beats the
+    # derivation, and a config rebuilt from root's crontab carries root's path
+    # by definition. Environment beats config in gen-cron.sh, so pinning it here
+    # makes the account's block name the account's scripts whatever the config
+    # says.
     local -a envv=(
+        "REPO_DIR=$home/zfs-snapshot-all"
         "NOTIFY_SCRIPT=$home/notify-fail.sh"
         "WARN_SCRIPT=$home/notify-warn.sh"
         "DIGEST_SCRIPT=none"
@@ -843,6 +852,49 @@ runuser_test_r() {   # <user> <path>
     else
         su -s /bin/bash "$1" -c "$(printf '%q ' test -r "$2")"
     fi
+}
+
+runuser_test_x() {   # <user> <path>
+    if command -v runuser >/dev/null 2>&1; then
+        runuser --user "$1" -- test -x "$2"
+    else
+        su -s /bin/bash "$1" -c "$(printf '%q ' test -x "$2")"
+    fi
+}
+
+# Every script the proposed block would RUN must be reachable by the account
+# that will run it.
+#
+# Nothing checked this until 2026-08-01, and metropolis pve2 is what it costs.
+# Its config -- rebuilt by cron2conf.sh from the live crontab, and therefore
+# faithfully carrying root's paths as EXPLICIT `[defaults] repo_dir` -- rendered
+# an account block naming /root/scripts/zfs-snapshot-all/*.sh. /root is 0700, so
+# every one of those lines died with exit 126, and the host had no working
+# backup job at all until it was noticed.
+#
+# The migration could not see it by construction: job_identity() STRIPS the
+# script directory, on purpose, because that is the part that legitimately
+# changes when ownership moves. So the workload comparison said "identical" --
+# correctly -- about a block that could not execute. Two different questions,
+# and only one of them was being asked.
+#
+# It is also the reason the per-line check reported rc=0: the generated cron
+# idiom ends in `rm -f "$e"`, so the LINE succeeds whatever the job did. Only
+# the monitors alerted, and only because they carry their own rc test.
+assert_block_runnable_by() {   # <account> <block file>
+    local acct="$1" blk="$2" p unreachable=""
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        runuser_test_x "$acct" "$p" || unreachable="$unreachable
+  $p"
+    done < <(grep -oE '/[^ "]*/(snapsend|snapget|delsnaps|check-snap-age|notify-fail|notify-warn|alert-digest)\.sh' "$blk" | sort -u)
+    [ -z "$unreachable" ] && return 0
+    die "the block that would be installed for '$acct' names scripts that '$acct' cannot execute:$unreachable
+
+/root is 0700 on a Proxmox host, so an account cannot use root's checkout -- it
+needs its own, and the generated lines must point at it. The usual cause is a
+'[defaults] repo_dir' in the config pinning root's path; remove it and let the
+path follow whoever runs the block. Nothing has been changed."
 }
 
 # Show the change itself, not a description of it.
@@ -1994,6 +2046,11 @@ cmd_migrate_to_account() {
         die "gen-cron.sh could not render the block as '$acct' -- so what the account would actually run is unknown. Nothing has been changed."
     fi
     [ -n "$rendertmp" ] && { rm -rf "$rendertmp"; rendertmp=""; }
+
+    # Can the account RUN what it would be given? Asked here, while nothing has
+    # been touched, and separately from the workload comparison below -- which
+    # strips exactly these paths and is therefore blind to this by design.
+    assert_block_runnable_by "$acct" "$newblock"
     # The render carries the throwaway path in its '# Source:' line. Phase 4
     # installs from $target_cfg and would write that instead, so rewrite it now
     # -- a preview that differs from the install is worse than no preview
