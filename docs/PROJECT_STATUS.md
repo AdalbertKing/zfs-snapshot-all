@@ -10,7 +10,7 @@
 - Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
   nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
   produkcyjnego bloku tego hosta z roota na konto delegowane**)
-- Zweryfikowano przeciw: `5ff1b0b` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `a69fdd5` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
 - Ostatnia zmiana zachowania produkcyjnego: `5ff1b0b` — preflight wyprowadza
@@ -416,7 +416,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **186/186** | warstwa orkiestracji `zfs-backup.sh` (+34 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia wyprowadzane z zadań) |
+| `zfsbackup` | **197/197** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
 | `quiescehelper` | **112/112** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -551,6 +551,13 @@ czterech hostach w obu formach hosta.
   `docs/reviews/responses/REV-20260801-023.md`. Piąta gałąź (tryb niepasujący)
   wykracza poza literę recenzji — zaznaczone tam wprost do ewentualnego
   odrzucenia.
+- **REV-20260801-026** (`5ff1b0b`) — uprawnienia ZFS wyprowadzane z wyrenderowanych
+  zadań, nie z typu sekcji; komunikat naprawczy z dokładną listą datasetów.
+  Odpowiedź w `docs/reviews/responses/REV-20260801-026.md`.
+- **REV-20260801-027** — to samo o jeden poziom wyżej: quiesce sprawdzany
+  **per zadanie** przez prawdziwego helpera, jako konto, zamiast jednego
+  hostowego „czy konto dosięga helpera". Zweryfikowane na żywo na wszystkich
+  czterech hostach. Odpowiedź w `docs/reviews/responses/REV-20260801-027.md`.
 - **REV-20260801-024** (`be1cfe7` + `d8bb52a`) — okno zamrożenia jako termin, nie
   kolejność. Wszystkie pięć wymaganych zachowań, zmierzone na żywo: 18 s → 1 s.
   Odpowiedź w `docs/reviews/responses/REV-20260801-024.md`. Do zważenia przez
