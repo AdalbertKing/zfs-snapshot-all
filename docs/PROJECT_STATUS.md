@@ -10,10 +10,12 @@
 - Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
   nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
   produkcyjnego bloku tego hosta z roota na konto delegowane**)
-- Zweryfikowano przeciw: `d8bb52a` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `5ff1b0b` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `d8bb52a` — okno zamrożenia jest
+- Ostatnia zmiana zachowania produkcyjnego: `5ff1b0b` — preflight wyprowadza
+  wymagane uprawnienia z **zadań, które powstaną**, a nie z typu sekcji; wcześniej
+  `d8bb52a` — okno zamrożenia jest
   **terminem, nie kolejnością**: VM-y mrożone dopiero tuż przed snapshotem, stan
   każdej sprawdzany ponownie na granicy, przekroczenie budżetu to błąd. Wcześniej
   tego samego dnia `244ec0d`: `-q` przestaje być „best effort” — albo quiesce
@@ -38,9 +40,9 @@
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty. **metropolis pve1 jest na `d8bb52a`** (pociągnięty
-bezpośrednio 2026-08-01, oba checkouty — root i konto). Pozostałe trzy dociąga
-godzinowy `--self-update`; `deploy.sh --check-only` czysty na metropolis pve1
+Cztery żywe hosty, wszystkie na `5ff1b0b` lub nowszym (godzinowy
+`--self-update`; metropolis pve1 i pve2 pociągane bezpośrednio 2026-08-01, oba
+checkouty — root i konto). `deploy.sh --check-only` czysty na metropolis pve1
 2026-08-01, na pozostałych 2026-07-31.
 
 | Host | Adres | Konto delegowane | `sudo` | grant quiesce | kto uruchamia blok |
@@ -48,13 +50,20 @@ godzinowy `--self-update`; `deploy.sh --check-only` czysty na metropolis pve1
 | pve0 | 192.168.11.10 | — | jest | brak | root |
 | pve1 | 192.168.11.11 | — | jest | brak | root |
 | metropolis pve1 | 192.168.28.9 | `zfsbackup` | **jest** | **NADANY** | **`zfsbackup`** |
-| metropolis pve2 | 192.168.28.8 | `zfsbackup` | brak | brak | root |
+| metropolis pve2 | 192.168.28.8 | `zfsbackup` | **jest** | **NADANY** | **`zfsbackup`** |
 
-metropolis pve1 jest pierwszym i jedynym hostem, na którym blok zarządzany nie
-należy do roota. W crontabie roota zostały tam trzy linie: `check-pool-capacity.sh`,
-`update-control.sh --self-update` oraz `alert-digest.sh` w bloku
-`# BEGIN zfs-backup-host`. Config mieszka w `/etc/zfs-snapshot-all/jobs.pve1.v4.conf`
-(0644) — **przeniesiony**, nie skopiowany.
+**Oba hosty metropolis mają już blok na koncie delegowanym** — pve1 od 18:10,
+pve2 od 21:44 tego samego dnia. Na obu w crontabie roota zostały trzy linie:
+`check-pool-capacity.sh`, `update-control.sh --self-update` oraz
+`alert-digest.sh` w bloku `# BEGIN zfs-backup-host`. Configi mieszkają w
+`/etc/zfs-snapshot-all/` (0644) — **przeniesione**, nie skopiowane. Klaster
+192.168.11.x (pve0, pve1) nadal w całości na roocie i nie ma tam nawet konta
+delegowanego.
+
+pve2 doszedł tam okrężną drogą: jego config **nie istniał** (patrz niżej),
+więc najpierw trzeba go było odtworzyć z żywego crontaba `cron2conf.sh`.
+Round-trip wyszedł bajt w bajt: 12 wyrenderowanych linii identycznych z
+zainstalowanymi, w tej samej kolejności.
 
 Wersje programów w drzewie:
 
@@ -79,11 +88,15 @@ niżej. Nie ma jeszcze wpisu w `deploy.sh` (nie jest kopiowany na hosty) —
 uruchamiany dziś ręcznie z checkoutu deweloperskiego, tak jak został
 zweryfikowany na pve1 i pve2.
 
-### Stan grantu quiesce na hostach: JEDNO NADANIE, produkcyjne
+### Stan grantu quiesce na hostach: DWA NADANIA, produkcyjne
 
-**metropolis pve1, od 2026-08-01 17:54** — pierwszy trwały grant quiesce w
-całej flocie, i pierwszy nadany *lokalnemu* kontu tego hosta, a nie sparowanemu
-peerowi:
+**metropolis pve1 od 17:54, metropolis pve2 od 21:43** — pierwsze trwałe granty
+quiesce w całej flocie, i pierwsze nadane *lokalnym* kontom tych hostów, a nie
+sparowanym peerom. Na pve2 `deploy.sh` doinstalował przy okazji brakujący pakiet
+`sudo`, jak zapowiada. Poniżej pve1; pve2 ma ten sam kształt, z whitelistą
+`rpool/data rpool/ROOT/pve-1 hdd/vm-disks hdd/backups` i jedynym lokalnym
+gościem 103 (reszta dysków pod tymi ścieżkami to repliki, których konfiguracje
+żyją na pve1 — helper zgłasza je jako `kind=absent`, więc są niezamrażalne):
 
 | Element | Wartość |
 |---|---|
@@ -104,7 +117,7 @@ wyłącznie razem z `--join`, czyli tylko dla peera. Zdolność, o którą prefl
 migracji się potykał, nie miała żadnego polecenia, które by ją nadawało
 (`3831509`, doprecyzowane przez REV-022 w `32d6ed1`).
 
-Na pozostałych trzech hostach grantu nadal nie ma: zero reguł
+Na pve0 i pve1 (192.168.11.x) grantu nadal nie ma: zero reguł
 `/etc/sudoers.d/*quiesce*`, `/etc/zfs-quiesce-allow/` pusty tam, gdzie istnieje,
 zero pozostałości `*.zqg-new` / `*.zqg-bak`.
 
@@ -403,7 +416,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | 152/152 | warstwa orkiestracji `zfs-backup.sh` |
+| `zfsbackup` | **186/186** | warstwa orkiestracji `zfs-backup.sh` (+34 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia wyprowadzane z zadań) |
 | `quiescehelper` | **112/112** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -573,23 +586,15 @@ czterech hostach w obu formach hosta.
   ustalenia, czy `migrate-to-account` ma wypisywać jeden gotowy blok poleceń
   naprawczych i sprawdzać zdolności ponownie tuż przed commitem, czy iść dalej
   w stronę orkiestracji.
-- **metropolis pve2 nie ma pliku configu swojego crona — narzędzie do odbudowy
-  już istnieje, ale odbudowa NA pve2 jeszcze się nie wydarzyła.** 14 produkcyjnych
-  linii w crontabie roota wskazuje `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`
-  — katalog nie istnieje. Zadania chodzą (cronowi to obojętne), ale przed
-  `cron2conf.sh` (2026-08-01) niczego nie dało się zregenerować, a `gen-cron.sh -c`
-  odmawiał startu. `cron2conf.sh` czyta zainstalowany blok wprost z crontaba i
-  odtwarza config, który `gen-cron.sh` renderuje z powrotem identycznie —
-  zweryfikowane na ŻYWYM crontabie pve2 (odczyt, bez zapisu): odtworzony config
-  wyrenderował 12/12 linii bajt w bajt, w tej samej kolejności, co crontab
-  źródłowy. Guard z `c6c98c2` nadal zabrania narzędziu utworzyć ten plik samemu
-  — pusty config plus `--install` skasowałby 14 linii — więc odtworzony plik
-  trzeba jeszcze świadomie zainstalować na pve2. Otwarte decyzje właściciela:
-  gdzie ma wylądować (`/root/scripts/zfs-snapshot-all/` jak dziś, czy poza
-  checkoutem gita jak `jobs.pve1.v4.conf` — patrz następny punkt) i czy najpierw
-  zrobić na sucho drugi niezależny przebieg `crontab -l` → ręczna odbudowa jako
-  kontrola krzyżowa, zanim plik z `cron2conf.sh` zostanie uznany za jedyne źródło
-  prawdy.
+- ~~metropolis pve2 nie ma pliku configu swojego crona~~ — **ZAŁATWIONE
+  2026-08-01 21:32.** 14 produkcyjnych linii wskazywało
+  `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`, a tego katalogu nie było.
+  `cron2conf.sh` odtworzył config z żywego crontaba, round-trip przez
+  `gen-cron.sh` dał 12/12 linii bajt w bajt w tej samej kolejności, i dopiero
+  wtedy plik został zainstalowany w `/etc/zfs-snapshot-all/jobs.pve2.v4.conf`.
+  Crontab przed/po różnił się wyłącznie linią `# Source:` — liczba linii zadań
+  bez zmian, 14 = 14. Guard z `c6c98c2` nie był naruszony: narzędzie nadal nie
+  tworzy tego pliku samo, zrobił to człowiek po obejrzeniu diffa.
 - **Config wewnątrz checkoutu gita — na metropolis pve1 ZAŁATWIONE, na
   pozostałych hostach nie.** `jobs.pve1.v4.conf` leżał w `zfs-snapshot-all/`,
   nietrackowany i ignorowany, gdzie jedno `git clean -xdf` kasowało jedyny zapis
