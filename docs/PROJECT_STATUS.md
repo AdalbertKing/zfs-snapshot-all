@@ -7,41 +7,52 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-01** (czwarta tego dnia — po przebiegu B, po
-  preflightcie migracji na metropolis pve1, po dodaniu `cron2conf.sh`, i po
-  implementacji REV-018/-019/-020)
-- Zweryfikowano przeciw: `ca75e30` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
+  nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
+  produkcyjnego bloku tego hosta z roota na konto delegowane**)
+- Zweryfikowano przeciw: `55d33a2` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: parytet logrotate konta (`$HOME/cron.log`), `ca75e30` — `cron2conf.sh` jest narzędziem deweloperskim/odzyskiwania, nie zmienia zachowania żadnego żywego hosta
+- Ostatnia zmiana zachowania produkcyjnego: `55d33a2` — lokalny quiesce
+  przestaje czytać „nie mogłem zapytać” jako „nie działa” i odmawia zamiast
+  po cichu robić snapshot bez freeze'u
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **REV-018/-019/-020 zaimplementowane w `1d5a8c4`, czekają na
-  werdykt recenzenta. Migracja produkcyjnego bloku na metropolis pve1 pozostaje
-  WSTRZYMANA — nie z powodu bramki, tylko dlatego, że nowy czasownik
-  `migrate-to-account` nigdy nie działał na prawdziwej parze crontabów.
-  Jedna rzecz świadomie niezrobiona: faza `prepare` nie nadaje `zfs allow` ani
-  grantu quiesce (REV-020 F1) — to przekroczenie granicy `zfs-backup.sh` /
-  `deploy.sh` i wymaga decyzji.**
+- Status ogólny: **Migracja metropolis pve1 root → `zfsbackup` WYKONANA
+  2026-08-01 18:10, 15 linii zadań → 12 na koncie + digest we własnym bloku
+  roota. Wszystkie 12 linii uruchomione ręcznie jako konto: rc=0. Przy okazji
+  znaleziony i naprawiony realny defekt fail-open w lokalnym quiescie
+  (`55d33a2`) — pierwszy przebieg jako konto zrobił pięć snapshotów bez
+  zamrożenia i zakończył się kodem 0.**
 
-> **Uwaga proceduralna do samego siebie.** Ten dokument został ostatnio
-> odświeżony przy `bda83b3`, a przebieg B domknąłem dziesięcioma commitami
-> (`0c08f54`…`39e610f`), nie dotykając go. Etap zgłosiłem jako zamknięty
-> zapisem do pamięci zamiast odświeżenia tego pliku — czyli dokładnie tym
-> defektem, przed którym ostrzega nagłówek. Odnotowane, żeby nie zniknęło.
+> **Jak ten defekt został znaleziony — warto, żeby nie zniknęło.** Nie przez
+> kod błędu i nie przez alert: migracja zakończyła się sukcesem, job zwrócił 0,
+> a dziennik napisał „guest 106 is not running”, podczas gdy `qm status` w tej
+> samej sekundzie mówił `running`. Weryfikacja polegała na przeczytaniu, co
+> quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
+> na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
+> że są zamrożone.
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty, wszystkie pociągnięte do `ca75e30` (zweryfikowane bezpośrednio
-2026-08-01) i z czystym audytem `deploy.sh --check-only` (2026-07-31):
+Cztery żywe hosty. **metropolis pve1 jest na `55d33a2`** (pociągnięty
+bezpośrednio 2026-08-01, oba checkouty — root i konto). Pozostałe trzy dociąga
+godzinowy `--self-update`; `deploy.sh --check-only` czysty na metropolis pve1
+2026-08-01, na pozostałych 2026-07-31.
 
-| Host | Adres | Commit | Konto delegowane | `sudo` | helper quiesce |
+| Host | Adres | Konto delegowane | `sudo` | grant quiesce | kto uruchamia blok |
 |---|---|---|---|---|---|
-| pve0 | 192.168.11.10 | `ca75e30` | — | jest | brak |
-| pve1 | 192.168.11.11 | `ca75e30` | — | jest | brak |
-| metropolis pve1 | 192.168.28.9 | `ca75e30` | `zfsbackup` | **jest** | **jest** |
-| metropolis pve2 | 192.168.28.8 | `ca75e30` | `zfsbackup` | brak | brak |
+| pve0 | 192.168.11.10 | — | jest | brak | root |
+| pve1 | 192.168.11.11 | — | jest | brak | root |
+| metropolis pve1 | 192.168.28.9 | `zfsbackup` | **jest** | **NADANY** | **`zfsbackup`** |
+| metropolis pve2 | 192.168.28.8 | `zfsbackup` | brak | brak | root |
+
+metropolis pve1 jest pierwszym i jedynym hostem, na którym blok zarządzany nie
+należy do roota. W crontabie roota zostały tam trzy linie: `check-pool-capacity.sh`,
+`update-control.sh --self-update` oraz `alert-digest.sh` w bloku
+`# BEGIN zfs-backup-host`. Config mieszka w `/etc/zfs-snapshot-all/jobs.pve1.v4.conf`
+(0644) — **przeniesiony**, nie skopiowany.
 
 Wersje programów w drzewie:
 
@@ -66,14 +77,34 @@ niżej. Nie ma jeszcze wpisu w `deploy.sh` (nie jest kopiowany na hosty) —
 uruchamiany dziś ręcznie z checkoutu deweloperskiego, tak jak został
 zweryfikowany na pve1 i pve2.
 
-### Stan grantu quiesce na hostach: NADANIA ZEROWE, ale nie wszędzie czysto
+### Stan grantu quiesce na hostach: JEDNO NADANIE, produkcyjne
 
-Zweryfikowane bezpośrednio na wszystkich czterech hostach 2026-08-01. **Na
-żadnym nie ma dziś nadanego grantu**:
+**metropolis pve1, od 2026-08-01 17:54** — pierwszy trwały grant quiesce w
+całej flocie, i pierwszy nadany *lokalnemu* kontu tego hosta, a nie sparowanemu
+peerowi:
 
-- zero reguł `/etc/sudoers.d/*quiesce*`;
-- `/etc/zfs-quiesce-allow/` pusty tam, gdzie w ogóle istnieje;
-- żadnych pozostałości `*.zqg-new` / `*.zqg-bak`.
+| Element | Wartość |
+|---|---|
+| konto | `zfsbackup` |
+| reguła | `/etc/sudoers.d/zfs-quiesce-zfsbackup` (0440 root:root) |
+| whitelista | `/etc/zfs-quiesce-allow/zfsbackup` — sześć datasetów **dokładnie tych, które nazywa config** |
+| polecenie | `deploy.sh --backup-user=zfsbackup --datasets="…" --allow-quiesce` |
+
+Zweryfikowane **jako konto**, nie jako root: `sudo -n zfs-quiesce-helper status`
+→ `OK account=zfsbackup`; guesty 100, 101, 106 i 107 (te, których dyski config
+backupuje) przechodzą z kodem 0; guest **102 odmówiony kodem 2** — jego dysk leży
+pod `hdd/vm-disks`, ale nie jest w configu. To jest cała racja bytu wyprowadzania
+whitelisty z listy datasetów zamiast z puli: gdyby `--datasets` nazwało rodzica,
+konto mogłoby zamrozić maszynę, której nie ma powodu dotykać.
+
+Ta droga nadania **nie istniała** do 2026-08-01 — `--allow-quiesce` działało
+wyłącznie razem z `--join`, czyli tylko dla peera. Zdolność, o którą preflight
+migracji się potykał, nie miała żadnego polecenia, które by ją nadawało
+(`3831509`, doprecyzowane przez REV-022 w `32d6ed1`).
+
+Na pozostałych trzech hostach grantu nadal nie ma: zero reguł
+`/etc/sudoers.d/*quiesce*`, `/etc/zfs-quiesce-allow/` pusty tam, gdzie istnieje,
+zero pozostałości `*.zqg-new` / `*.zqg-bak`.
 
 Pozostałości po testach z 2026-07-31 **są** i trzeba je czytać jako stan, nie
 jako zero:
@@ -132,9 +163,25 @@ momentem.
 Ten sam przebieg znalazł realny błąd w `sqlfreeze`, patrz sekcja 4.
 
 **Czego nadal nie ma:** ścieżki błędów `install`/`mv`/`visudo` oraz crash są
-wyłącznie stubowane — na produkcji przeszedł happy path. Nie wykonano też
-snapshotu w oknie zamrożenia, więc spójność samego obrazu nadal nie jest
-zmierzona.
+wyłącznie stubowane — na produkcji przeszedł happy path.
+
+**Snapshot w oknie zamrożenia: WYKONANY 2026-08-01 18:21**, przez konto
+delegowane, na wszystkich pięciu datasetach naraz (`froze VM 106 via
+qemu-guest-agent` → dwa atomowe `zfs snapshot`, po jednym na pulę → `thawed VM
+106`, guest `thawed` przed i po). Czyli to, czego brakowało powyżej, jest
+zrobione — ale przebieg odsłonił **inny** problem, opisany niżej.
+
+> **Okno zamrożenia jest za długie i nikt tego nie zauważał.** Zmierzone w tym
+> samym przebiegu: VM 106 zamrożony 18:21:21, snapshot 18:21:39, odmrożenie
+> 18:21:40 — **~18 sekund**. Między jednym a drugim leci `pct exec 101 -- sync`,
+> który sam zajął 16 s. VM 106 to `ostype: win10`, a komentarz w
+> `lib-zfs-snap.sh` mówi wprost, że VSS trzyma freeze **maksymalnie ~10 s** i
+> potem sam go zwalnia. Czyli snapshot najprawdopodobniej powstał już po
+> wygaśnięciu zamrożenia, a log twierdzi, że guest był zamrożony.
+> To jest defekt **niezależny od migracji** — root miał dokładnie tę samą
+> kolejność — i nie jest naprawiony. Prawdopodobny kształt poprawki: flush
+> kontenerów najpierw, freeze VM-ów bezpośrednio przed snapshotem, plus
+> ponowne sprawdzenie `fsfreeze-status` tuż przed `zfs snapshot`.
 
 ## 2. Zaakceptowany rdzeń
 
@@ -319,33 +366,33 @@ testem.
 
 ## 5. Testy — stan bieżący
 
-Uruchomione lokalnie przy `ca75e30` (bez roota, bez ZFS, bez sieci). Cztery
-pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
-`zfsbackup`, `quiescehelper`, `join`) przebiegnięte ponownie przy tym commicie:
+Uruchomione lokalnie przy `55d33a2` (bez roota, bez ZFS, bez sieci). Pakiety
+wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
+`selfupdate` dla `deploy.sh`; `quiesce`, `statekey`, `tune` dla
+`lib-zfs-snap.sh`) przebiegnięte ponownie przy tym commicie:
 
 | Pakiet | Wynik | Zakres |
 |---|---|---|
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | 46/46 | księgowanie `-q`: własność guesta, deduplikacja |
+| `quiesce` | **57/57** | księgowanie `-q`: własność guesta, deduplikacja, **oraz trasa uprzywilejowana lokalnej ścieżki (+10)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **152/152** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
-| `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
+| `zfsbackup` | 152/152 | warstwa orkiestracji `zfs-backup.sh` |
+| `quiescehelper` | **112/112** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
-Wymagają roota, ZFS albo drugiego hosta — **nieuruchamiane przy tym commicie**,
-bo to środowisko ich nie ma. Ostatnie wykonanie odnotowane w odpowiedziach na
-recenzje:
+Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
+pve1 przy `55d33a2`**, bo `snapsend.sh` zmienił się razem z biblioteką:
 
-| Pakiet | Czego wymaga | Zakres |
-|---|---|---|
-| `snapsend` | root, zfs, mbuffer | silnik push/pull, semantyka flag |
-| `delsnaps` | root, zfs | retencja, prefiksy, GFS |
-| `scenarios` | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
-| `remote` | drugi host, ssh, zfs | kampania dwuhostowa, root i konto delegowane |
+| Pakiet | Wynik | Czego wymaga | Zakres |
+|---|---|---|---|
+| `snapsend` | **202/202** | root, zfs, mbuffer | silnik push/pull, semantyka flag |
+| `scenarios` | **34/34** | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
+| `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa pve1 → pve2, root i konto delegowane |
+| `delsnaps` | — | root, zfs | retencja, prefiksy, GFS — poza grafem dla tej zmiany |
 
 Siedem pozycji `SKIP` w `selfupdate` to przypadki wymagające `chattr +i`, którego
 to środowisko nie obsługuje.
@@ -387,12 +434,18 @@ czterech hostach w obu formach hosta.
   `# BEGIN zfs-backup-host` w crontabie roota zamiast być luźną linią, której
   nikt nie jest właścicielem. Odpowiedzi: `docs/reviews/responses/REV-20260801-018.md`,
   `-019.md`, `-020.md`.
-- **Świadomie NIEzrobione z REV-020 F1:** faza `prepare` przenosi config, ale
-  **nie nadaje** `zfs allow` ani grantu quiesce — wypisuje dokładną komendę
-  `deploy.sh` i odmawia. Nadawanie ich stąd oznacza, że `zfs-backup.sh` przejmuje
-  uprzywilejowaną powierzchnię `deploy.sh`, co stoi w sprzeczności z
-  `docs/discussions/DEPLOY-UX-AGREED-POSITION.md`. To decyzja właściciela i
-  recenzenta, nie moja do cichego przekroczenia.
+- **Świadomie NIEzrobione z REV-020 F1, i recenzent to potwierdził:** faza
+  `prepare` przenosi config, ale **nie nadaje** `zfs allow` ani grantu quiesce —
+  wypisuje dokładną komendę `deploy.sh` i odmawia. REV-022 („Accepted progress",
+  pkt 3) nazywa tę granicę właściwą: uprzywilejowany grant zostaje w `deploy.sh`,
+  nie wchodzi do `migrate-to-account`. Brakowało natomiast samego polecenia dla
+  konta lokalnego — patrz punkt niżej.
+- **Brakująca droga nadania: DODANA** (`3831509`, doprecyzowana przez REV-022 w
+  `32d6ed1`). `--allow-quiesce` działało wyłącznie z `--join`, czyli tylko dla
+  peera; własne konto delegowane hosta nie miało żadnego polecenia, które
+  nadałoby mu quiesce. Teraz jest to Faza 8h zwykłego przebiegu `deploy.sh`,
+  z whitelistą wyprowadzoną z tej samej listy `--datasets`, co grant `zfs allow`
+  — jedna zmienna, więc „może zamrozić" nie może przerosnąć „może replikować".
 - **Faza 1 (`--preflight`) PRZETESTOWANA NA ŻYWO** na metropolis pve1
   (2026-08-01, `4662b8a`), tylko odczyt, oba crontaby bajt w bajt bez zmian po
   przebiegu. Wynik zgodny co do joty z ręczną analizą: config do przeniesienia,
@@ -415,10 +468,20 @@ czterech hostach w obu formach hosta.
 - **Znalezione przez ten przebieg i naprawione:** rollback twierdził „both
   crontabs restored" linijkę po ostrzeżeniu, że crontaba konta nie odtworzył
   (`d506361`) — nigdy nie był zapisany, więc nie było czego odtwarzać.
-- **Migracja produkcyjnego bloku metropolis pve1: nadal WSTRZYMANA**, ale już
-  tylko na dwóch brakujących zdolnościach, które wskazuje sam `--preflight`:
-  delegacja ZFS na `hdd/vm-disks` i grant quiesce. Obie do nadania przez
-  `deploy.sh`, obie to zmiana produkcyjna wymagająca decyzji.
+- **Migracja produkcyjnego bloku metropolis pve1: WYKONANA 2026-08-01 18:10:47–18:10:49**,
+  na polecenie właściciela, po nadaniu obu brakujących zdolności. Nie na
+  syntetyku — na 15 żywych liniach zadań. Wynik: root 15 → 3 linie
+  (`check-pool-capacity`, `--self-update`, digest w bloku `zfs-backup-host`),
+  konto 1 → 13 (`git pull` + 12 zadań), config przeniesiony do `/etc/`.
+  Wszystkie 12 linii konta uruchomione ręcznie **jako konto**: sendy i prune'y
+  rc=0, monitory rc=0 na własnych progach, kolejka alertów pusta. Kopie obu
+  crontabów i configu zdjęte przed operacją (host + scratchpad).
+- **Co ten przebieg znalazł, a czego nie znalazł żaden test ani okno serwisowe:**
+  lokalny quiesce jako konto delegowane zgłaszał trzy DZIAŁAJĄCE guesty jako
+  „not running", robił snapshoty bez zamrożenia i kończył się zerem. Naprawione
+  w `55d33a2`, po naprawie ten sam job faktycznie mrozi VM 106 i odmraża ją.
+  Zobacz też okno zamrożenia w sekcji 3 — to drugi, jeszcze nienaprawiony wniosek
+  z tego samego przebiegu.
 - **Nieprzetestowane na żywo:** konto, które JUŻ ma rozłączny blok zarządzany
   (temat REV-021) — pokryte tylko testami na stubach.
 - ~~Test `remove-client` celujący w crontab skonfigurowanego konta~~ — **zrobione**
@@ -428,6 +491,21 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na werdykt recenzenta
 
+- **REV-20260801-021** (`1edca10`, `99ba1f5`) — instalacja nie może skasować
+  zadań, które cel już wykonuje; tylko rozpoznane linie ogólnohostowe zostają
+  w crontabie roota. Odpowiedź w `docs/reviews/responses/REV-20260801-021.md`.
+- **REV-20260801-022 F1** (`32d6ed1`) — `--allow-quiesce` musi nazwać konto,
+  które dostaje grant, i odmówić zamiast kończyć się zerem. Odmowa przeniesiona
+  na czas argumentów, czyli mocniej niż wymagała recenzja. Odpowiedź w
+  `docs/reviews/responses/REV-20260801-022.md`. **Nota produktowa recenzji
+  (jeden przepływ zamiast trzech poleceń) przyjęta i NIEZROBIONA** — patrz
+  „Czeka na decyzję właściciela".
+- **`55d33a2` — nie z recenzji, ale wymaga tego samego spojrzenia.** Lokalny
+  quiesce czytał „nie mogłem zapytać" jako „guest nie działa" i robił snapshoty
+  bez zamrożenia, kończąc zerem. Naprawione przez nauczenie lokalnej ścieżki
+  trasy przez helper (którą ścieżka zdalna miała od 2026-07-31) i przez
+  odmowę zamiast degradacji.
+
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
@@ -436,6 +514,24 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na decyzję właściciela
 
+- **Okno zamrożenia przekracza limit VSS (~18 s przy limicie ~10 s).** Opisane
+  w sekcji 3. Defekt niezależny od migracji, niezmierzone dotąd, bo nikt nie
+  czytał znaczników czasu quiesce'u obok siebie. Nie naprawiony — poprawka
+  zmienia kolejność zamrażania i zasługuje na własny przebieg, a nie na doczepkę
+  do naprawy fail-open.
+- **Czy migrować pozostałe hosty.** metropolis pve1 jest jedynym hostem z
+  blokiem na koncie. Reszta wymaga tych samych dwóch zdolności (`zfs allow`
+  na datasetach configu, grant quiesce tam, gdzie config używa `quiesce`), a
+  pve2 dodatkowo nie ma dziś sudo. Preflight (`zfs-backup.sh
+  migrate-to-account <konto> --preflight`) jest bezpieczny do uruchomienia na
+  każdym z nich — nic nie zmienia i wypisze brakujące zdolności po nazwie.
+- **Jeden przepływ zamiast trzech poleceń** (nota produktowa REV-022): dziś
+  preflight nazywa osobne wywołania `deploy.sh` dla delegacji ZFS i dla
+  quiesce'u, po czym administrator wraca do `migrate-to-account`. Recenzent
+  akceptuje to jako granicę implementacyjną, ale nie jako docelowy UX. Do
+  ustalenia, czy `migrate-to-account` ma wypisywać jeden gotowy blok poleceń
+  naprawczych i sprawdzać zdolności ponownie tuż przed commitem, czy iść dalej
+  w stronę orkiestracji.
 - **metropolis pve2 nie ma pliku configu swojego crona — narzędzie do odbudowy
   już istnieje, ale odbudowa NA pve2 jeszcze się nie wydarzyła.** 14 produkcyjnych
   linii w crontabie roota wskazuje `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`
@@ -453,12 +549,16 @@ czterech hostach w obu formach hosta.
   zrobić na sucho drugi niezależny przebieg `crontab -l` → ręczna odbudowa jako
   kontrola krzyżowa, zanim plik z `cron2conf.sh` zostanie uznany za jedyne źródło
   prawdy.
-- **`jobs.pve1.v4.conf` (i ogólnie każdy config generowany przez `gen-cron.sh`)
-  leży wewnątrz checkoutu gita, nietrackowany i ignorowany.** Jedno
-  `git clean -xdf` w `zfs-snapshot-all/` na dowolnym hoście kasuje jedyny zapis
-  15 zadań produkcyjnych — dokładnie stan, w jakim jest dziś pve2. Znalezione
-  przy budowie `cron2conf.sh`. Nieprzeniesione: to ta sama decyzja co punkt
-  wyżej (docelowa ścieżka configu poza checkoutem), więc czeka na nią razem.
+- **Config wewnątrz checkoutu gita — na metropolis pve1 ZAŁATWIONE, na
+  pozostałych hostach nie.** `jobs.pve1.v4.conf` leżał w `zfs-snapshot-all/`,
+  nietrackowany i ignorowany, gdzie jedno `git clean -xdf` kasowało jedyny zapis
+  15 produkcyjnych zadań. Migracja z 2026-08-01 **przeniosła** go do
+  `/etc/zfs-snapshot-all/jobs.pve1.v4.conf` (0644) — nie skopiowała, więc nie ma
+  dwóch ścieżek opisujących jedną pracę. To rozstrzyga też pytanie „dokąd" z
+  punktu wyżej: `/etc/zfs-snapshot-all/` jest odpowiedzią, którą wybrał kod i
+  która przeszła na produkcji. Dla pve0, pve1 (192.168.11.x) i pve2 config nadal
+  siedzi w checkoucie — tam blok należy do roota, więc migracja go nie ruszy i
+  potrzebne jest osobne przeniesienie.
 - **VM 102 (`neth`) na metropolis pve1 nie ma żadnego zadania snapshotowego.**
   Dysk `hdd/vm-disks/vm-102-disk-0`, replikowany przez pvesr na pve2 co trzy
   godziny — czyli pokrycie DR bez retencji. Goście 100, 101, 106 i 107 na tym
