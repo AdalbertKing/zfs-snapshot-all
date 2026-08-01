@@ -3647,7 +3647,7 @@ else
         [ -r "$ALERT_CONF" ] || warn "$ALERT_CONF missing -- this account will fall back to built-in defaults (daily)"
 
     LOGROTATE_CONF="/etc/logrotate.d/zfs-snapshot-all-$USERNAME"
-    LOGROTATE_MARKER="# zfs-snapshot-all $USERNAME logrotate v1"
+    LOGROTATE_MARKER="# zfs-snapshot-all $USERNAME logrotate v2"
     if [ -e "$LOGROTATE_CONF" ] && grep -qF "$LOGROTATE_MARKER" "$LOGROTATE_CONF" 2>/dev/null; then
         log "$LOGROTATE_CONF already current, leaving it alone"
     else
@@ -3656,8 +3656,17 @@ else
         # -- which owns the directory but not that file -- could no longer append.
         # Its cron would stop logging silently, since the redirect is >> in the
         # background with nobody reading the error.
+        #
+        # cron.log is listed here as of v2. It was missing while this account only
+        # ever ran git-pull and receive-side work; once a managed cron block can be
+        # installed FOR the account (zfs-backup.sh --local-user, or a migration of
+        # root's block), every job line redirects into $HOMEDIR/cron.log and that
+        # file grew without bound. Measured on a real host: root's equivalent is
+        # ~250 KB/day, 2.3 MB by the monthly rotation. Nothing alerts on a large
+        # log, so this fails silently until the filesystem is full.
         cat > "$LOGROTATE_CONF" <<EOF
 $LOGROTATE_MARKER -- managed by deploy.sh, re-run it to update.
+$HOMEDIR/cron.log
 $HOMEDIR/git-pull.log
 $HOMEDIR/zfs-snapshot-stats.log
 {

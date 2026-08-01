@@ -1120,6 +1120,47 @@ mode_after=$(stat -c %a "$MODE/cfg.conf")
 [ "$mode_before" = "$mode_after" ] && ok "mode: whatever the mode was, a rewrite keeps it" \
                  || bad "mode: whatever the mode was, a rewrite keeps it" "przed=$mode_before po=$mode_after"
 
+# --- 20. the account's logrotate must cover what the account's cron writes ---
+#
+# contract:account-paths. Every generated job line redirects into $CRON_LOG,
+# which for a non-root target is $HOME/cron.log. deploy.sh's account stanza
+# listed only git-pull.log and zfs-snapshot-stats.log -- correct while the
+# account only ever ran git-pull and receive-side work, wrong the moment a
+# managed cron block can be installed FOR the account. Found on metropolis
+# pve1, 2026-08-01, while planning the migration of root's block: root's
+# equivalent log was 250 KB after one day. An unrotated log alerts nobody; it
+# just fills the filesystem months later.
+# NOT named DEPLOY: zfs-backup.sh sets that itself, and this suite sources it,
+# so an env override would be silently clobbered by the code under test.
+DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
+acct_stanza=$(sed -n '/^\$LOGROTATE_MARKER -- managed by deploy.sh/,/^}/p' "$DEPLOY_SRC" \
+              | grep -A6 'HOMEDIR/')
+if printf '%s' "$acct_stanza" | grep -q 'HOMEDIR/cron\.log'; then
+    ok "logrotate: the account stanza rotates \$HOME/cron.log"
+else
+    bad "logrotate: the account stanza rotates \$HOME/cron.log" "$acct_stanza"
+fi
+
+# Root's stanza and the account's must rotate the same THREE logical files.
+# They differ only in location and ownership; a file appearing in one and not
+# the other is the drift this contract exists to catch.
+for log in cron.log git-pull.log zfs-snapshot-stats.log; do
+    r=$(grep -c "^/root/scripts/$log\$" "$DEPLOY_SRC")
+    a=$(grep -c "^\\\$HOMEDIR/$log\$" "$DEPLOY_SRC")
+    [ "$r" -ge 1 ] && [ "$a" -ge 1 ] \
+        && ok "logrotate: $log is rotated for both root and the account" \
+        || bad "logrotate: $log is rotated for both root and the account" "root=$r konto=$a"
+done
+
+# A changed stanza that keeps its marker is invisible: deploy.sh reports
+# "already current" and no existing host ever gets the fix. Pin the bump.
+if grep -q 'LOGROTATE_MARKER="# zfs-snapshot-all \$USERNAME logrotate v2"' "$DEPLOY_SRC"; then
+    ok "logrotate: the account stanza marker was bumped past v1"
+else
+    bad "logrotate: the account stanza marker was bumped past v1" \
+        "$(grep -n 'USERNAME logrotate' "$DEPLOY_SRC")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
