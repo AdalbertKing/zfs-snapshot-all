@@ -967,49 +967,138 @@ fi
 
 # --- 16. moving to a dedicated account must not duplicate root's jobs -------
 #
-# Found before the live pass, 2026-08-01. pve1's ROOT crontab runs a managed
-# block generated from jobs.pve1.v4.conf. Setting --local-user installs a block
-# built from that SAME config into the account's crontab, and leaves root's
-# where it is -- so every production job would run twice, same schedule, same
-# datasets. assert_cron_config_matches_installed cannot see it: it reads the
-# TARGET user's crontab, finds no managed block, and correctly reports no
-# conflict. The conflict is with a different user.
+# REV-20260801-018/-019. The first version of this guard compared the
+# normalized '# Source:' PATH, and the reviewer's objection is that a real
+# migration always changes that path: a delegated account cannot read a config
+# under /root (0700), so the documented move puts it in /etc/zfs-snapshot-all/.
+# Copy rather than move -- the more natural reflex -- and two paths then
+# describe one workload, the guard says "unrelated", and every send/prune/
+# monitor runs twice.
+#
+# So the property under test is now workload overlap, not pathname equality.
+# gencron_as_target is stubbed: what is under test is the comparison, not
+# gen-cron.
 DUP="$WORK/dupguard"; mkdir -p "$DUP/bin"
-cat > "$DUP/bin/crontab" <<EOF
+_dup_crontab_from() {   # <file holding root's crontab>
+    cat > "$DUP/bin/crontab" <<EOF
 #!/bin/bash
-# -u <user> -l  -> the dedicated account: no managed block at all
 [ "\$1" = "-u" ] && exit 0
-if [ "\$1" = "-l" ]; then
-    echo "# BEGIN zfs-backup-managed"
-    echo "# Source: $DUP/shared.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
-    echo "1 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh a"
-    echo "2 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh b"
-    echo "# END zfs-backup-managed"
-fi
+[ "\$1" = "-l" ] && cat "$1"
 exit 0
 EOF
-chmod +x "$DUP/bin/crontab"
-: > "$DUP/shared.conf"
+    chmod +x "$DUP/bin/crontab"
+}
 
-out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/shared.conf'" 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"run TWICE"*) true ;; *) false ;; esac \
-   && case "$out" in *"2 job line"*) true ;; *) false ;; esac; then
-    ok "dup-guard: refuses to install for an account while root runs the same config, and counts the jobs"
+# The reviewer's exact regression case: different config paths, same jobs.
+cat > "$DUP/root.cron" <<'EOF'
+# BEGIN zfs-backup-managed
+# Source: /root/scripts/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "automated_hourly_" "tank/a" 2>>/root/scripts/cron.log
+9 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh "tank/a" "automated_hourly" -H24 2>>/root/scripts/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$DUP/proposal.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+# Source: /etc/zfs-snapshot-all/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "automated_hourly_" "tank/a" 2>>/home/zfsbackup/cron.log
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "tank/a" "automated_hourly" -H24 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+_dup_crontab_from "$DUP/root.cron"
+: > "$DUP/etc-jobs.conf"
+
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/proposal.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"2 job line(s) overlap"*) true ;; *) false ;; esac \
+   && case "$out" in *"migrate-to-account"*) true ;; *) false ;; esac; then
+    ok "dup-guard: a DIFFERENT config path with the same jobs is still refused"
 else
-    bad "dup-guard: refuses to install for an account while root runs the same config, and counts the jobs" "rc=$rc out=$out"
+    bad "dup-guard: a DIFFERENT config path with the same jobs is still refused" "rc=$rc out=$out"
 fi
 
+# ...and the refusal must NAME the overlapping lines. An operator who cannot see
+# which jobs collide cannot decide anything about them.
+case "$out" in
+    *"snapsend.sh"*"tank/a"*) ok "dup-guard: the overlapping job lines are printed" ;;
+    *) bad "dup-guard: the overlapping job lines are printed" "$out" ;;
+esac
+
+# Two collectors on one host with genuinely disjoint jobs is a real deployment,
+# not an accident, and must stay possible.
+cat > "$DUP/disjoint.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "automated_hourly_" "tank/OTHER" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/disjoint.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "dup-guard: disjoint jobs under a different path are allowed" \
+                || bad "dup-guard: disjoint jobs under a different path are allowed" "rc=$rc out=$out"
+
+# The same path with the same jobs was always caught and must stay caught.
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/proposal.txt'; }; assert_no_foreign_managed_block '/root/scripts/jobs.conf'" 2>&1 ); rc=$?
+[ "$rc" -ne 0 ] && ok "dup-guard: the same config path with the same jobs is still refused" \
+                || bad "dup-guard: the same config path with the same jobs is still refused" "rc=$rc out=$out"
+
 # Staying as root is the normal case and must not be blocked by its own block.
-out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/shared.conf'" 2>&1 ); rc=$?
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/proposal.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
 [ "$rc" -eq 0 ] && ok "dup-guard: root installing over its own block is untouched" \
                 || bad "dup-guard: root installing over its own block is untouched" "rc=$rc out=$out"
 
-# A DIFFERENT config in root's crontab is not a duplication -- those are
-# separate job sets, and assert_cron_config_matches_installed owns that case.
-: > "$DUP/other.conf"
-out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_no_foreign_managed_block '$DUP/other.conf'" 2>&1 ); rc=$?
-[ "$rc" -eq 0 ] && ok "dup-guard: an unrelated config in root's crontab is not a conflict" \
-                || bad "dup-guard: an unrelated config in root's crontab is not a conflict" "rc=$rc out=$out"
+# A proposal that cannot be rendered leaves overlap UNKNOWN. Fail closed rather
+# than read an empty render as "nothing overlaps" (REV-20260801-019 point 5).
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { return 1; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"could not be rendered"*) true ;; *) false ;; esac; then
+    ok "dup-guard: an unrenderable proposal fails closed"
+else
+    bad "dup-guard: an unrenderable proposal fails closed" "rc=$rc out=$out"
+fi
+
+# An unreadable root crontab is not an empty one -- same rule as the preview.
+cat > "$DUP/bin/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && exit 0
+echo "crontab: cannot open spool: Permission denied" >&2
+exit 1
+EOF
+chmod +x "$DUP/bin/crontab"
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/proposal.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"unreadable crontab is not an empty one"*) true ;; *) false ;; esac; then
+    ok "dup-guard: an unreadable root crontab fails closed"
+else
+    bad "dup-guard: an unreadable root crontab fails closed" "rc=$rc out=$out"
+fi
+
+# "no crontab for X" is the one benign failure and must NOT abort.
+cat > "$DUP/bin/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && exit 0
+echo "no crontab for root" >&2
+exit 1
+EOF
+chmod +x "$DUP/bin/crontab"
+out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/proposal.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "dup-guard: 'no crontab' is benign, not a refusal" \
+                || bad "dup-guard: 'no crontab' is benign, not a refusal" "rc=$rc out=$out"
+
+# job_identity must strip exactly WHO runs a line and nothing that decides WHAT
+# it does. Retention flags in particular have to survive: if two different
+# ladders fingerprinted the same, a real difference would read as a duplicate.
+ja=$(printf '%s\n' '9 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H24 2>>/root/scripts/cron.log' \
+     | bash -c "source '$ZFSBACKUP'; job_identity")
+jb=$(printf '%s\n' '9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H24 2>>/home/zfsbackup/cron.log' \
+     | bash -c "source '$ZFSBACKUP'; job_identity")
+jc=$(printf '%s\n' '9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H48 2>>/home/zfsbackup/cron.log' \
+     | bash -c "source '$ZFSBACKUP'; job_identity")
+[ "$ja" = "$jb" ] && ok "job-identity: the same job under two owners fingerprints identically" \
+                  || bad "job-identity: the same job under two owners fingerprints identically" "a=$ja b=$jb"
+[ "$ja" != "$jc" ] && ok "job-identity: a different retention flag is a different job" \
+                   || bad "job-identity: a different retention flag is a different job" "a=$ja c=$jc"
 
 # --- 17. the dedicated account must be able to READ the config --------------
 #
@@ -1159,6 +1248,150 @@ if grep -q 'LOGROTATE_MARKER="# zfs-snapshot-all \$USERNAME logrotate v2"' "$DEP
 else
     bad "logrotate: the account stanza marker was bumped past v1" \
         "$(grep -n 'USERNAME logrotate' "$DEPLOY_SRC")"
+fi
+
+
+# --- 21. host-level jobs are tool-owned state, not a remembered exception ----
+#
+# REV-20260801-020 F2. The digest is deliberately one-per-host and is never
+# provisioned to a delegated account, so when the collector block moves those
+# lines have nowhere to go. The first attempt parked them in root's crontab as
+# ordinary unmanaged lines; the reviewer's objection is that this splits one
+# deployment between tool-owned and human-remembered state -- a second
+# migration would duplicate them, and no preview could show the whole change.
+HB="$WORK/hostblock"; mkdir -p "$HB"
+cat > "$HB/cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+1 * * * * something
+# END zfs-backup-managed
+EOF
+printf '0 7 * * * /root/scripts/alert-digest.sh\n' > "$HB/lines"
+
+( source "$ZFSBACKUP"; set_host_block "$HB/cron" "$HB/lines" ) >/dev/null 2>&1
+n=$(grep -c 'BEGIN zfs-backup-host' "$HB/cron")
+if [ "$n" -eq 1 ] && grep -q 'alert-digest.sh' "$HB/cron" && grep -q 'check-pool-capacity' "$HB/cron"; then
+    ok "host-block: inserted once, and the unmanaged lines around it are untouched"
+else
+    bad "host-block: inserted once, and the unmanaged lines around it are untouched" "$(cat "$HB/cron")"
+fi
+
+# Idempotent: running it again must REPLACE the block, not stack a second one.
+# A migration that ran twice is exactly how the reviewer expected duplicates.
+( source "$ZFSBACKUP"; set_host_block "$HB/cron" "$HB/lines" ) >/dev/null 2>&1
+( source "$ZFSBACKUP"; set_host_block "$HB/cron" "$HB/lines" ) >/dev/null 2>&1
+n=$(grep -c 'BEGIN zfs-backup-host' "$HB/cron"); d=$(grep -c 'alert-digest.sh' "$HB/cron")
+if [ "$n" -eq 1 ] && [ "$d" -eq 1 ]; then
+    ok "host-block: repeated writes replace the block instead of accumulating"
+else
+    bad "host-block: repeated writes replace the block instead of accumulating" "bloki=$n digest=$d"
+fi
+
+# An empty line set REMOVES the block. Without this a reverse migration could
+# never give the lines back to the collector block.
+: > "$HB/empty"
+( source "$ZFSBACKUP"; set_host_block "$HB/cron" "$HB/empty" ) >/dev/null 2>&1
+if ! grep -q 'zfs-backup-host' "$HB/cron" && grep -q 'check-pool-capacity' "$HB/cron"; then
+    ok "host-block: an empty set removes the block and leaves the rest alone"
+else
+    bad "host-block: an empty set removes the block and leaves the rest alone" "$(cat "$HB/cron")"
+fi
+
+# The markers carry '(', ')' and '--'. A sed address would silently fail to
+# match those rather than error, so the removal is done with awk and a literal
+# string compare -- pin that it really matches.
+grep -q '(' <<<"$( source "$ZFSBACKUP"; printf '%s' "$HOST_BEGIN" )" \
+    && ok "host-block: the marker really does contain regex metacharacters" \
+    || bad "host-block: the marker really does contain regex metacharacters" "marker has no parens"
+
+# --- 22. the migration discovers capabilities instead of documenting them ----
+#
+# REV-20260801-020 F1/F3: a competent Linux/ZFS administrator should not have to
+# know pair/join order, repository layout or which lines belong outside the
+# managed block. The verb has to find those things itself.
+CAP="$WORK/caps"; mkdir -p "$CAP/bin"
+cat > "$CAP/jobs.conf" <<'EOF'
+[template:t]
+	send_schedule = 1 * * * *
+[dataset:tank/a]
+	use_template = t
+[dataset:hdd/vm-disks/vm-100-disk-0]
+	use_template = t
+[prune:tank/a]
+	retain = -H24
+EOF
+got=$( source "$ZFSBACKUP"; config_datasets "$CAP/jobs.conf" | tr '\n' ' ' )
+case "$got" in
+    *"tank/a"*"hdd/vm-disks/vm-100-disk-0"*|*"hdd/vm-disks/vm-100-disk-0"*"tank/a"*)
+        ok "capabilities: the dataset set is read from the config, not from the operator" ;;
+    *)  bad "capabilities: the dataset set is read from the config, not from the operator" "got=$got" ;;
+esac
+
+# zfs allow reports ancestor grants when asked about a leaf, so parsing the
+# leaf's output is enough. A grant that is missing even one verb is not a grant:
+# 'bookmark' was absent for weeks once and disabled a whole fallback silently.
+cat > "$CAP/bin/zfs" <<'EOF'
+#!/bin/bash
+# $1 = allow, $2 = dataset
+case "$2" in
+  tank/full)    echo "---- Permissions on tank ----"
+                echo "Local+Descendent permissions:"
+                echo "	user zfsbackup bookmark,canmount,create,destroy,hold,mount,receive,release,rollback,send,snapshot" ;;
+  tank/partial) echo "---- Permissions on tank ----"
+                echo "Local+Descendent permissions:"
+                echo "	user zfsbackup create,mount,send,snapshot" ;;
+  *)            : ;;
+esac
+exit 0
+EOF
+chmod +x "$CAP/bin/zfs"
+
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/full ) >/dev/null 2>&1
+[ $? -eq 0 ] && ok "capabilities: a full delegation passes" \
+             || bad "capabilities: a full delegation passes" "rejected a complete grant"
+
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/partial ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok "capabilities: a delegation missing 'destroy' is refused" \
+             || bad "capabilities: a delegation missing 'destroy' is refused" "accepted a partial grant"
+
+( PATH="$CAP/bin:$PATH"; source "$ZFSBACKUP"; target_can_zfs zfsbackup tank/none ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok "capabilities: no delegation at all is refused" \
+             || bad "capabilities: no delegation at all is refused" "accepted an absent grant"
+
+# Migrating onto an account that ALREADY runs a managed block would replace jobs
+# that are live under that account -- refuse before anything is rendered.
+MIG="$WORK/migonto"; mkdir -p "$MIG/bin"
+cat > "$MIG/bin/crontab" <<'EOF'
+#!/bin/bash
+if [ "$1" = "-u" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "5 * * * * already-here"
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: /root/scripts/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "1 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh x"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+cat > "$MIG/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$MIG/home:/bin/bash"
+exit 0
+EOF
+cat > "$MIG/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+chmod +x "$MIG/bin/crontab" "$MIG/bin/getent" "$MIG/bin/id"
+mkdir -p "$MIG/home/zfs-snapshot-all"; : > "$MIG/home/zfs-snapshot-all/gen-cron.sh"
+out=$( PATH="$MIG/bin:$PATH" bash -c "source '$ZFSBACKUP'; runuser_test_r() { return 0; }; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"ALREADY has a managed block"*) true ;; *) false ;; esac; then
+    ok "migrate-to-account: refuses an account that already runs a managed block"
+else
+    bad "migrate-to-account: refuses an account that already runs a managed block" "rc=$rc out=$out"
 fi
 
 echo "--------------------------------------------"

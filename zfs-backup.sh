@@ -20,6 +20,7 @@ set -uo pipefail
 #   zfs-backup.sh verify-endpoint NAME
 #   zfs-backup.sh activate-client NAME [--yes] [--verbose]
 #   zfs-backup.sh migrate-profile [--yes]
+#   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
 #   zfs-backup.sh status [NAME]
 #   zfs-backup.sh test NAME
 #   zfs-backup.sh remove-client NAME
@@ -114,6 +115,7 @@ Usage:
   zfs-backup.sh verify-endpoint NAME
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh migrate-profile [--yes]
+  zfs-backup.sh migrate-to-account ACCOUNT [--yes]
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
@@ -525,15 +527,89 @@ normalize_cron_source() {
 # assert_cron_config_matches_installed cannot see this: it reads the TARGET
 # user's crontab, which has no managed block at all, finds no '# Source:' line,
 # and correctly reports no conflict. The conflict is with a DIFFERENT user.
-assert_no_foreign_managed_block() {   # <config file>
+# REV-20260801-018/-019: the first version of this guard asked whether root's
+# block came from the SAME CONFIG PATH, and that is the one question a real
+# migration always answers "no" to. A delegated account cannot read a config
+# under /root (0700), so the documented shape of this migration MOVES the file
+# to /etc/zfs-snapshot-all/ -- and an operator who COPIES it instead, which is
+# the more natural reflex, then has two paths describing one workload. The
+# guard returned success, the account's block was installed alongside root's,
+# and every send/prune/monitor ran twice.
+#
+# Path equality was never the property worth testing. What matters is whether
+# the two blocks DO the same thing, so that is what is compared: each block is
+# reduced to its job lines with the identity-dependent parts stripped out, and
+# any intersection at all is a refusal. Two collectors on one host are still
+# allowed when their jobs are genuinely disjoint -- that is a real deployment,
+# not an accident.
+#
+# What gets stripped is exactly what an ownership change is ALLOWED to alter:
+# the directory a script is called from, and the log a line redirects into.
+# Everything that decides what the job DOES -- schedule, datasets, pattern,
+# retention flags, quiesce, thresholds -- is left alone and must match for a
+# line to count as overlapping.
+#
+# ONE definition of "the same job", used by the guard, by the migration verb's
+# dropped-line detection and by the tests. Duplicating this sed was the obvious
+# way to write it and the obvious way for the three to drift apart.
+job_identity() {   # cron job lines on stdin -> identity-stripped lines on stdout
+    sed -E \
+        -e 's#/[^ ;)"]*/(snapsend|snapget|delsnaps|check-snap-age|notify-fail|notify-warn|alert-digest)\.sh#\1.sh#g' \
+        -e 's#/[^ ;)"]*/cron\.log#cron.log#g'
+}
+managed_block_fingerprint() {   # crontab text on stdin -> sorted job identities
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+    | grep -E '^[0-9*]' \
+    | job_identity \
+    | sort -u
+}
+
+# "Could not read it" is not "there is nothing there" -- same rule as the
+# preview (REV-20260801-016 F1), and REV-20260801-019 point 5 asks for it here
+# too. A crontab this cannot read must abort the run, not read as empty and let
+# an overlap check pass by default.
+#
+# Writes to a FILE the caller names rather than to stdout, and that is not a
+# style choice. `die` is an exit, and an exit inside `$(...)` or inside a
+# pipeline element leaves only the subshell -- the caller carries on with an
+# empty string, which for an overlap check reads as "nothing overlaps". The
+# first version of this returned its answer on stdout, and the fail-closed test
+# for an unreadable crontab caught it failing OPEN: exactly the direction this
+# helper exists to prevent.
+crontab_of_or_die() {   # <user> <outfile>
+    local who="$1" out="$2" err rc txt
+    err=$(mktemp) || die "mktemp failed"
+    if [ "$who" = root ] || [ "$who" = "$(id -un)" ]; then txt=$(crontab -l 2>"$err"); rc=$?
+    else txt=$(crontab -u "$who" -l 2>"$err"); rc=$?; fi
+    if [ "$rc" -ne 0 ] && ! grep -qi "no crontab" "$err"; then
+        local msg; msg=$(tr -d '\n' < "$err"); rm -f "$err"
+        die "could not read ${who}'s crontab (rc=$rc): $msg -- an unreadable crontab is not an empty one, and this check exists to stop two identities running the same jobs. Nothing has been changed."
+    fi
+    rm -f "$err"
+    printf '%s\n' "$txt" > "$out"
+}
+
+assert_no_foreign_managed_block() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     [ "$u" = root ] && return 0
-    local raw
-    raw=$(crontab -l 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
-    [ -n "$raw" ] || return 0
-    [ "$(normalize_cron_source "$raw")" = "$(normalize_cron_source "$file")" ] || return 0
-    local jobs; jobs=$(crontab -l 2>/dev/null | grep -cE '^[0-9*]')
-    die "root's crontab already runs a managed block generated from '$file' ($jobs job line(s)), and this run would install a block from the SAME config into '$u'. Every one of those jobs would then run TWICE, on the same schedule, against the same datasets. Moving a collector to a dedicated account is a migration, not a flag: decide what happens to root's block first (remove it deliberately, or keep root as the owner), then re-run. Nothing has been changed."
+
+    local rootcron; rootcron=$(mktemp) || die "mktemp failed"
+    crontab_of_or_die root "$rootcron"
+    local theirs; theirs=$(managed_block_fingerprint < "$rootcron"); rm -f "$rootcron"
+    [ -n "$theirs" ] || return 0
+
+    # Rendered the same way the install renders it, so the comparison is
+    # against what would actually land in the account's crontab.
+    local mine; mine=$(gencron_as_target -c "$file" 2>/dev/null | managed_block_fingerprint)
+    [ -n "$mine" ] || die "root already runs a managed block, and the block this run would install into '$u' could not be rendered -- so whether they overlap is unknown. Refusing rather than guessing; nothing has been changed."
+
+    local overlap; overlap=$(comm -12 <(printf '%s\n' "$theirs") <(printf '%s\n' "$mine"))
+    [ -n "$overlap" ] || return 0
+
+    local n; n=$(printf '%s\n' "$overlap" | grep -c .)
+    warn "these job(s) already run from root's crontab and would run again as '$u':"
+    printf '%s\n' "$overlap" | sed 's/^/    /' >&2
+    die "$n job line(s) overlap between root's managed block and the block this run would install into '$u' -- identical work, same schedule, same datasets, twice. The config PATHS differ, which is normal for this migration and is why that is not what was compared. Use 'zfs-backup.sh migrate-to-account $u' to move ownership in one transaction (root's block out, the account's block in, rollback if either half fails). Nothing has been changed."
 }
 
 # gen-cron.sh runs AS the dedicated account, so that account has to be able to
@@ -1526,7 +1602,7 @@ cmd_activate_client() {
     fi
 
     assert_cron_config_matches_installed "$cronfile"
-    assert_no_foreign_managed_block "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
 
@@ -1641,10 +1717,305 @@ cmd_migrate_profile() {
     fi
 
     assert_cron_config_matches_installed "$cronfile"
-    assert_no_foreign_managed_block "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
     log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
+}
+
+# ------------------------------------------------------------------------------
+# Host-level jobs: a SECOND tool-owned block in root's crontab.
+#
+# REV-20260801-020 F2. Some generated lines are host-level rather than
+# collector-level -- alert-digest.sh above all, which is deliberately one per
+# host and is never provisioned to a delegated account. When the collector block
+# moves to an account those lines have nowhere to go. The first version of this
+# migration parked them in root's crontab as ordinary unmanaged lines, and the
+# reviewer's objection is exact: that splits one deployment between something
+# the tool owns and something a human has to remember forever. A later
+# migration would duplicate them, remove-client could not tell whether they
+# belonged to it, and no preview could honestly show the whole change.
+#
+# So they get their own marked block, owned by this tool, rewritten wholesale
+# and idempotently -- the same contract gen-cron.sh has with its own block, and
+# for the same reason.
+HOST_BEGIN='# BEGIN zfs-backup-host (host-level jobs kept by zfs-backup.sh -- do not hand-edit)'
+HOST_END='# END zfs-backup-host'
+
+# Replace (or insert, or delete) the host block inside a crontab held in a file.
+# Empty <lines file> removes the block, which is what makes repeated migrations
+# converge instead of accumulating.
+set_host_block() {   # <crontab file> <lines file>
+    local cron="$1" lines="$2" tmp
+    tmp=$(mktemp) || die "mktemp failed"
+    # awk with a literal $0 == marker, not sed: the markers carry '(', ')' and
+    # '--', and a sed address would quietly fail to match rather than error --
+    # leaving the old block in place while the new one was appended.
+    awk -v b="$HOST_BEGIN" -v e="$HOST_END" '
+        $0==b { skip=1; next }
+        $0==e { skip=0; next }
+        skip==0 { print }' "$cron" > "$tmp"
+    if [ -s "$lines" ]; then
+        printf '%s\n' "$HOST_BEGIN" >> "$tmp"
+        cat "$lines" >> "$tmp"
+        printf '%s\n' "$HOST_END" >> "$tmp"
+    fi
+    mv -f "$tmp" "$cron"
+}
+
+# ------------------------------------------------------------------------------
+# Capability probes. Read-only, and each one answers for the ACCOUNT, not for
+# root -- the whole class of defect this migration kept hitting is root proving
+# something about itself and the account failing at it later.
+
+# Datasets a config actually manages, from its own section headers.
+config_datasets() {   # <config file>
+    sed -n -E 's/^\[(dataset|prune):(.+)\]$/\2/p' "$1" | sort -u
+}
+
+# zfs allow reports grants made on the dataset AND on its ancestors, so asking
+# about the leaf is enough. Parsed rather than probed with a real snapshot: a
+# probe writes to production, and this runs before anything has been decided.
+target_can_zfs() {   # <account> <dataset>
+    local acct="$1" ds="$2" perms
+    perms=$(zfs allow "$ds" 2>/dev/null | grep -E "^[[:space:]]*user $acct " | head -1) || return 1
+    [ -n "$perms" ] || return 1
+    local v
+    for v in snapshot destroy hold release mount; do
+        case ",$perms," in *[,\ ]"$v"[,\ ]*) ;; *) return 1 ;; esac
+    done
+    return 0
+}
+
+# The same probe lib-zfs-snap.sh performs before it freezes anything, asked
+# early instead of at 00:11 in a cron job.
+target_can_quiesce() {   # <account>
+    local acct="$1"
+    [ -x /usr/local/sbin/zfs-quiesce-helper ] || return 1
+    runuser --user "$acct" -- sudo -n /usr/local/sbin/zfs-quiesce-helper status >/dev/null 2>&1
+}
+
+# ------------------------------------------------------------------------------
+# migrate-to-account: move an existing collector from root to a delegated
+# account, as ONE transaction.
+#
+# REV-20260801-018/-019 required the transactional verb; REV-20260801-020 F1
+# required that it also DISCOVER and CHECK the capabilities instead of leaving
+# them to a runbook, and F3 required distinct phases. The phases below are the
+# reviewer's, in the reviewer's order:
+#
+#   1 preflight  read-only: A/B/C equivalence, config, checkout, zfs allow,
+#                quiesce, host-level lines. Available on its own via --preflight.
+#   2 prepare    create only what is missing, touching NEITHER crontab.
+#   3 preview    one combined proposal: root's block out, host block kept,
+#                account's block in.
+#   4 commit     one switch, with no interval in which both job sets are live.
+#   5 verify     read both crontabs back AS THEIR OWNERS; roll both back on any
+#                surprise.
+#
+# ORDER within phase 4: root's block comes OUT before the account's goes IN.
+# The reviewer's REV-019 sketch had it the other way round. Installing first
+# leaves BOTH blocks live for the width of one step, and these jobs include
+# prunes -- two delsnaps runs racing over one dataset set is the outcome worth
+# designing against. Removing first can only lose a tick. REV-019 point 4 asks
+# for an end state of one or the other and never both; this order also never
+# passes THROUGH both.
+#
+# The config is MOVED, never copied. A copy is precisely how two paths come to
+# describe one workload, which is the defect REV-018 opened.
+cmd_migrate_to_account() {
+    local acct="" yes=0 preflight_only=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)     yes=1 ;;
+            --preflight)  preflight_only=1 ;;
+            -*)           die "migrate-to-account: unknown option $a" ;;
+            *)            [ -z "$acct" ] && acct="$a" || die "migrate-to-account: one account, not two" ;;
+        esac
+    done
+    [ -n "$acct" ] || die "usage: zfs-backup.sh migrate-to-account <account> [--preflight] [--yes]"
+    [ "$(id -u)" = 0 ] || die "this rewrites root's crontab and '$acct's -- run it as root"
+    [ "$acct" = root ] && die "'root' is where the jobs already are"
+    getent passwd "$acct" >/dev/null 2>&1 || die "no such account '$acct'"
+
+    # ---- phase 1: preflight, read-only ---------------------------------------
+    # A GAP is something only the operator can provide, and it blocks. A TODO is
+    # something phase 2 will do itself, so it is reported but does not block --
+    # keeping the two apart is what stops "this tool can fix it" from silently
+    # becoming "this tool will proceed without it".
+    local gaps=0
+    _gap()  { printf '  [ BRAK ] %s\n' "$1"; gaps=$((gaps+1)); }
+    _todo() { printf '  [ zrobi ] %s\n' "$1"; }
+    _have() { printf '  [  ok  ] %s\n' "$1"; }
+    echo "== preflight: root -> $acct =="
+
+    local home; home=$(getent passwd "$acct" | cut -d: -f6)
+    if [ -n "$home" ] && [ -d "$home" ]; then _have "konto ma katalog domowy ($home)"
+    else _gap "konto nie ma katalogu domowego -- deploy.sh --backup-user=$acct"; fi
+
+    if runuser_test_r "$acct" "$home/zfs-snapshot-all/gen-cron.sh"; then
+        _have "konto ma wlasny checkout ($home/zfs-snapshot-all)"
+    else
+        _gap "konto nie ma czytelnego checkoutu -- deploy.sh --backup-user=$acct (nie moze uzyc kopii roota, /root jest 0700)"
+    fi
+
+    local rootcron acctcron
+    rootcron=$(mktemp) || die "mktemp failed"
+    acctcron=$(mktemp) || die "mktemp failed"
+    crontab_of_or_die root    "$rootcron"
+    crontab_of_or_die "$acct" "$acctcron"
+
+    if grep -q '^# BEGIN zfs-backup-managed' "$rootcron"; then
+        _have "root ma blok zarzadzany ($(grep -cE '^[0-9*]' "$rootcron") linii zadan lacznie)"
+    else
+        rm -f "$rootcron" "$acctcron"
+        die "root has no managed block -- there is nothing to migrate. If the jobs already run on an account, this is done."
+    fi
+    if grep -q '^# BEGIN zfs-backup-managed' "$acctcron"; then
+        rm -f "$rootcron" "$acctcron"
+        die "'$acct' ALREADY has a managed block. Migrating on top of it would replace jobs that are already running as that account -- reconcile the two by hand first. Nothing has been changed."
+    fi
+
+    local raw cfg
+    raw=$(grep -m1 '^# Source: ' "$rootcron" | sed -E 's/^# Source: (.*) -- .*/\1/')
+    [ -n "$raw" ] || { rm -f "$rootcron" "$acctcron"; die "root's managed block has no '# Source:' line, so the config behind it is unknown. Rebuild one from 'crontab -l' before ownership can move."; }
+    cfg=$(normalize_cron_source "$raw")
+    # The pve2 shape: jobs running, source file gone. Regenerating is impossible,
+    # and inventing an empty config would delete the live block (see c6c98c2).
+    if [ -f "$cfg" ]; then _have "config istnieje ($cfg)"
+    else
+        rm -f "$rootcron" "$acctcron"
+        die "root's block names '$raw' as its source and that file does not exist, while $(grep -cE '^[0-9*]' "$rootcron") cron line(s) depend on it. Rebuild the config from 'crontab -l' first -- this verb will not invent one."
+    fi
+
+    local target_cfg="$cfg" needs_move=0
+    if runuser_test_r "$acct" "$cfg"; then
+        _have "konto czyta config"
+    else
+        target_cfg="/etc/zfs-snapshot-all/$(basename "$cfg")"
+        [ -e "$target_cfg" ] && { rm -f "$rootcron" "$acctcron"; die "'$acct' cannot read $cfg so it must move to $target_cfg -- but that file already exists. Reconcile them by hand; this verb will not overwrite a config it did not write."; }
+        needs_move=1
+        _todo "konto nie czyta configu -- faza prepare przeniesie: $cfg -> $target_cfg"
+    fi
+
+    local ds missing_zfs=""
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        target_can_zfs "$acct" "$ds" || missing_zfs="$missing_zfs $ds"
+    done < <(config_datasets "$cfg")
+    if [ -z "$missing_zfs" ]; then _have "delegacja ZFS na wszystkich datasetach configu"
+    else _gap "brak delegacji ZFS (snapshot/destroy/hold/release/mount) na:$missing_zfs -- deploy.sh --backup-user=$acct z tymi datasetami"; fi
+
+    if grep -qE '^[0-9*].* -q ' "$rootcron"; then
+        if target_can_quiesce "$acct"; then _have "konto moze quiesce przez helpera"
+        else _gap "blok uzywa -q, a konto nie ma grantu quiesce -- deploy.sh --join <pakiet> --allow-quiesce (bez tego te linie beda konczyc sie kodem 3)"; fi
+    fi
+
+    # Lines root runs that the account's render will not reproduce.
+    LOCAL_USER="$acct"
+    local newblock; newblock=$(mktemp) || die "mktemp failed"
+    if ! gencron_as_target -c "$cfg" > "$newblock" 2>/dev/null || [ ! -s "$newblock" ]; then
+        LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock"
+        die "gen-cron.sh could not render the block as '$acct' -- so what the account would actually run is unknown. Nothing has been changed."
+    fi
+    local theirs mine dropped hostlines
+    theirs=$(managed_block_fingerprint < "$rootcron")
+    mine=$(managed_block_fingerprint < "$newblock")
+    dropped=$(comm -23 <(printf '%s\n' "$theirs") <(printf '%s\n' "$mine"))
+    hostlines=$(mktemp) || die "mktemp failed"
+    if [ -n "$dropped" ]; then
+        sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$rootcron" \
+        | grep -E '^[0-9*]' \
+        | while IFS= read -r orig; do
+              fp=$(printf '%s\n' "$orig" | job_identity)
+              printf '%s\n' "$dropped" | grep -qxF -- "$fp" && printf '%s\n' "$orig"
+          done > "$hostlines"
+        _have "linie ogolnohostowe do zachowania: $(grep -cE '^[0-9*]' "$hostlines") (trafia do wlasnego bloku roota, nie luzem)"
+    fi
+
+    echo
+    if [ "$preflight_only" -eq 1 ]; then
+        LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines"
+        [ "$gaps" -eq 0 ] && { log "preflight czysty -- migracja moze isc"; return 0; }
+        die "preflight: $gaps brakujacych zdolnosci (wyzej). Nic nie zmieniono."
+    fi
+    if [ "$gaps" -gt 0 ]; then
+        LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines"
+        die "preflight found capabilities this account does not have (listed above). Provision them first -- every one of them fails closed at run time, which means failing cron jobs and no backups, not silent damage. Nothing has been changed."
+    fi
+
+    # ---- phase 3: one combined preview ---------------------------------------
+    local rootnew; rootnew=$(mktemp) || die "mktemp failed"
+    awk '/^# BEGIN zfs-backup-managed/{s=1} s==0{print} /^# END zfs-backup-managed/{s=0}' "$rootcron" > "$rootnew"
+    set_host_block "$rootnew" "$hostlines"
+
+    echo "=== root: $(grep -cE '^[0-9*]' "$rootcron") linii zadan -> $(grep -cE '^[0-9*]' "$rootnew") ==="
+    diff -u --label "root (teraz)" --label "root (po)" "$rootcron" "$rootnew" || :
+    echo
+    echo "=== $acct: $(grep -cE '^[0-9*]' "$acctcron") linii zadan -> $(grep -cE '^[0-9*]' "$newblock") ==="
+    diff -u --label "$acct (teraz)" --label "$acct (po)" /dev/null "$newblock" || :
+    echo
+    [ "$needs_move" -eq 1 ] && echo "config:  $cfg  ->  $target_cfg   (PRZENIESIONY, nie kopiowany)"
+    echo
+
+    if [ "$yes" -ne 1 ]; then
+        read -rp "Przeniesc wlascicielstwo zadan root -> $acct? [t/N] " ans
+        case "$ans" in
+            t|T|tak|TAK) ;;
+            *) LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines" "$rootnew"
+               die "not confirmed -- neither crontab was touched and the config was not moved" ;;
+        esac
+    fi
+
+    # ---- phase 2/4: prepare, then commit -------------------------------------
+    _mta_rollback() {
+        warn "rolling back: restoring both crontabs exactly as they were"
+        crontab "$rootcron"           || warn "  ROOT CRONTAB NOT RESTORED -- restore by hand from $rootcron"
+        crontab -u "$acct" "$acctcron" || warn "  '$acct' crontab NOT restored -- restore by hand from $acctcron"
+        if [ "$needs_move" -eq 1 ] && [ -f "$target_cfg" ] && [ ! -f "$cfg" ]; then
+            mv -f "$target_cfg" "$cfg" && log "  config moved back to $cfg"
+        fi
+    }
+
+    if [ "$needs_move" -eq 1 ]; then
+        install -d -m 0755 /etc/zfs-snapshot-all || { LOCAL_USER=""; die "could not create /etc/zfs-snapshot-all -- nothing changed"; }
+        mv -f "$cfg" "$target_cfg" || { LOCAL_USER=""; die "could not move $cfg to $target_cfg -- nothing changed"; }
+        chmod 0644 "$target_cfg" || :
+        log "config moved to $target_cfg (0644, readable by '$acct')"
+    fi
+
+    if ! crontab "$rootnew"; then
+        [ "$needs_move" -eq 1 ] && mv -f "$target_cfg" "$cfg"
+        LOCAL_USER=""; die "could not write root's crontab -- nothing else was attempted and root still runs its block"
+    fi
+    log "root's collector block removed; host-level lines kept in their own block"
+
+    if ! gencron_as_target -c "$target_cfg" --install; then
+        _mta_rollback; LOCAL_USER=""
+        die "installing the block as '$acct' failed -- both crontabs restored, root runs its jobs again"
+    fi
+
+    # ---- phase 5: verify as the actual owners --------------------------------
+    local vr va; vr=$(mktemp); va=$(mktemp)
+    crontab_of_or_die root    "$vr"
+    crontab_of_or_die "$acct" "$va"
+    local nr na
+    nr=$(grep -c '^# BEGIN zfs-backup-managed' "$vr" || :)
+    na=$(grep -c '^# BEGIN zfs-backup-managed' "$va" || :)
+    if [ "$nr" != 0 ] || [ "$na" != 1 ]; then
+        rm -f "$vr" "$va"; _mta_rollback; LOCAL_USER=""
+        die "after the switch the blocks are not where they should be (root=$nr, $acct=$na) -- both crontabs restored"
+    fi
+    if [ -s "$hostlines" ] && ! grep -qF "$HOST_BEGIN" "$vr"; then
+        rm -f "$vr" "$va"; _mta_rollback; LOCAL_USER=""
+        die "the host-level block did not survive the switch -- both crontabs restored"
+    fi
+    rm -f "$vr" "$va"
+
+    log "ownership migrated: root -> $acct. Config: $target_cfg"
+    log "crontab backups kept for now: $rootcron (root), $acctcron ($acct) -- hold them until one tick has run clean"
+    rm -f "$newblock" "$hostlines" "$rootnew"
+    LOCAL_USER=""
 }
 
 # Remove one [template:<name>] section, whole. Used only by migrate-profile:
@@ -1854,6 +2225,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
+        migrate-to-account) shift; cmd_migrate_to_account "$@" ;;
         status)           shift; cmd_status "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
