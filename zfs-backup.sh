@@ -570,6 +570,24 @@ emit_client_sections() {   # <workfile> <client name>
     return 0
 }
 
+# snapget.sh's SECOND argument is the local BASE, not the final dataset: it
+# appends the source's own dataset path underneath it (the pull addressing flip,
+# snapget v2.61 -- arg1 is the literal remote host:name, arg2 mirrors snapsend's
+# target base). gen-cron.sh gets this right, deriving the base by stripping the
+# source path off a [dataset:] section. This wrapper did not, and passed the
+# FINAL path as the base -- so seed, verify-endpoint and test all wrote and read
+# one level too deep.
+#
+# Found on live hosts 2026-08-01: seed landed 40MB at
+#   .../uxtest/<label>/hdd/backuptest_targets/uxsrc/hdd/backuptest_targets/uxsrc
+# while the generated cron job targeted
+#   .../uxtest/<label>/hdd/backuptest_targets/uxsrc
+# so the seeded copy was invisible to the job that was supposed to continue it:
+# PLAN=INCREMENTAL base=null, i.e. a full transfer on every run, forever, with
+# verify-endpoint reporting "incremental confirmed" because it looked in the
+# same wrong place as the seed.
+snapget_local_base() { printf '%s' "$PEER_SAVED_TARGET/$LOAD_LABEL"; }
+
 # Which crontab, and whose paths.
 #
 # When the collector runs its jobs as a dedicated account, three things move
@@ -976,7 +994,7 @@ cmd_seed() {
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         log "seeding $ds -> $localpath (real transfer, may take a while)..."
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -1037,7 +1055,7 @@ cmd_final_catchup() {
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         log "final catch-up $ds -> $localpath over '$ACTIVE_ENDPOINT'..."
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -1231,7 +1249,7 @@ cmd_verify_endpoint() {
         # stdout only: stderr carries the human log, and mixing them back
         # together is exactly what made the old text heuristic fragile.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath" 2>/dev/null); local rc=$?
+        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL" 2>/dev/null); local rc=$?
         if [ "$rc" -ne 0 ]; then
             warn "  FAILED (rc=$rc): $ds"
             failed=$((failed + 1))
@@ -1326,7 +1344,7 @@ cmd_activate_client() {
     for ds in $PEER_SAVED_DATASETS; do
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$localpath"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
@@ -1575,7 +1593,7 @@ cmd_test() {
     local ds failed=0
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"

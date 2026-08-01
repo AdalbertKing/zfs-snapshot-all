@@ -863,6 +863,62 @@ else
     bad "src-guard: an unrelated config path is still created normally" "rc=$rc out=$out"
 fi
 
+# --- 14. snapget local-base parity with gen-cron -----------------------------
+#
+# snapget.sh's second argument is the local BASE and it appends the source's own
+# dataset path underneath. gen-cron.sh derives that base by stripping the source
+# path off a [dataset:] section; this wrapper passed the FINAL path instead, so
+# seed/verify-endpoint/test wrote and read one level too deep.
+#
+# Found live 2026-08-01: seed put 40MB at
+#   .../uxtest/<label>/hdd/backuptest_targets/uxsrc/hdd/backuptest_targets/uxsrc
+# while the generated job targeted .../uxtest/<label>/hdd/backuptest_targets/uxsrc
+# -- PLAN=INCREMENTAL base=null, a full transfer every run, with verify-endpoint
+# reporting success because it looked in the same wrong place.
+#
+# Asserted as PARITY against the real generator rather than as a literal string:
+# the two sides have to agree, and which convention they agree on is gen-cron's
+# to define.
+PEER_SAVED_TARGET="hdd/backuptest_targets/uxtest"
+LOAD_LABEL="192.168.28.8"
+pb_ds="hdd/backuptest_targets/uxsrc"
+wrapper_base=$(snapget_local_base)
+
+cat > "$WORK/parity.conf" <<EOF
+[defaults]
+	host_label = h
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+
+[dataset:$PEER_SAVED_TARGET/$LOAD_LABEL/$pb_ds]
+	use_template = standard_hourly
+	src          = robot@10.0.0.1:$pb_ds
+	notify       = p
+EOF
+# The last quoted argument of the emitted snapget line IS the local base.
+" "~" | cut -c1-200)"
+# One sed, no `grep -m1`: an early-exiting grep in a pipeline under `pipefail`
+# (inherited from the sourced zfs-backup.sh) sends gen-cron a SIGPIPE and the
+# substitution comes back empty -- which reads exactly like "the generator
+# emitted nothing" and cost a debugging round to tell apart.
+gencron_base=$(bash "$REPO/gen-cron.sh" -c "$WORK/parity.conf" 2>/dev/null | awk '/snapget/{sub(/ 2>.*/,""); n=split($0,a,"\""); print a[n-1]; exit}')
+if [ -n "$gencron_base" ] && [ "$wrapper_base" = "$gencron_base" ]; then
+    ok "snapget-base: the wrapper and gen-cron agree on the local base"
+else
+    bad "snapget-base: the wrapper and gen-cron agree on the local base"         "wrapper='$wrapper_base' gen-cron='$gencron_base'"
+fi
+# And the base must NOT carry the dataset suffix, which is the shape of the bug.
+case "$wrapper_base" in
+    *"$pb_ds") bad "snapget-base: the base must not repeat the source dataset path" "$wrapper_base" ;;
+    *)         ok "snapget-base: the base must not repeat the source dataset path" ;;
+esac
+# No call site may pass the final path again.
+leftover=$(grep -c 'SNAPGET" .*:\${ds}" "\$localpath"' "$ZFSBACKUP")
+[ "$leftover" = 0 ] && ok "snapget-base: no call site passes the final dataset path as the base"                     || bad "snapget-base: no call site passes the final dataset path as the base" "$leftover"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
