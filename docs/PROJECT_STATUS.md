@@ -332,7 +332,7 @@ pakiety wskazane przez `./test/impact.sh` dla tej zmiany (`selfupdate`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **134/134** | warstwa orkiestracji `zfs-backup.sh` (+34: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy) |
+| `zfsbackup` | **139/139** | warstwa orkiestracji `zfs-backup.sh` (+39: przebieg B, parytet logrotate, tozsamosc zadan, blok ogolnohostowy, cel crontaba w remove-client) |
 | `quiescehelper` | 98/98 | granica uprzywilejowana helpera + transakcja grantu |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -394,9 +394,10 @@ czterech hostach w obu formach hosta.
   wszystko powyżej jest sprawdzone na stubach `crontab`/`getent`/`runuser`/`zfs`.
   REV-017 F2 postawił dokładnie ten zarzut wobec `--local-user`, a przebieg na
   żywo znalazł potem pięć defektów, których pakiet nie widział.
-- **Test `remove-client` celujący w crontab skonfigurowanego konta** i dowód,
-  że `final-catchup` nie zmienił zachowania (dodatkowa uwaga REV-019, po tym jak
-  ta sama poprawka wylądowała najpierw w niewłaściwej funkcji). Nienapisany.
+- ~~Test `remove-client` celujący w crontab skonfigurowanego konta~~ — **zrobione**
+  (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
+  na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
+  niewłaściwej funkcji, i przechodzą dziś.
 
 ### Czeka na werdykt recenzenta
 

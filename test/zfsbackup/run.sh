@@ -1394,6 +1394,93 @@ else
     bad "migrate-to-account: refuses an account that already runs a managed block" "rc=$rc out=$out"
 fi
 
+
+# --- 23. remove-client acts on the CONFIGURED account's crontab -------------
+#
+# REV-20260801-019, additional note. The fix for this landed twice: 9af0003 put
+# read_server_conf into cmd_final_catchup, 39e610f moved it to
+# cmd_remove_client where it was meant to go. Text-pattern patching modified the
+# wrong occurrence and nothing caught it, so the reviewer asked for a test that
+# pins BOTH halves -- remove-client targeting the right crontab, and
+# final-catchup being left alone.
+#
+# Why it matters: without LOCAL_USER, every crontab operation in remove-client
+# silently targets ROOT. On a collector with a dedicated account that means
+# reading the wrong crontab and comparing against the wrong '# Source:'.
+RC="$WORK/removeclient"; mkdir -p "$RC/bin" "$RC/clients"
+cat > "$RC/bin/crontab" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$RC/calls"
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: /somewhere/else.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "1 * * * * x"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+chmod +x "$RC/bin/crontab"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=zfsbackup\n' "$RC" > "$RC/server.conf"
+: > "$RC/jobs.conf"
+printf 'STATE=active\nMANAGED_DATASETS="tank/a"\nCRON_CONFIG=%s/jobs.conf\n' "$RC" > "$RC/clients/c1.conf"
+: > "$RC/calls"
+
+out=$( PATH="$RC/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$RC/server.conf'; CLIENTS_DIR='$RC/clients'
+    cmd_remove_client c1" 2>&1 ); rc=$?
+
+# It must have stopped at the config-vs-installed mismatch -- that is the guard
+# that fired live on 2026-08-01 and exposed the missing read_server_conf.
+if [ "$rc" -ne 0 ] && case "$out" in *"would DELETE every job"*) true ;; *) false ;; esac; then
+    ok "remove-client: a config that does not match the installed block still stops it"
+else
+    bad "remove-client: a config that does not match the installed block still stops it" "rc=$rc out=$out"
+fi
+
+# The point of the test: which crontab it asked. Every call must name the
+# account; a bare '-l' here would be root's.
+if grep -q -- '-u zfsbackup -l' "$RC/calls" && ! grep -qx -- '-l' "$RC/calls"; then
+    ok "remove-client: the configured account's crontab is the one consulted"
+else
+    bad "remove-client: the configured account's crontab is the one consulted" "$(cat "$RC/calls")"
+fi
+
+# With no LOCAL_USER in the server config the same run must target root, and
+# must not invent an account from somewhere else.
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$RC" > "$RC/server.conf"
+: > "$RC/calls"
+out=$( PATH="$RC/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$RC/server.conf'; CLIENTS_DIR='$RC/clients'
+    cmd_remove_client c1" 2>&1 ) || :
+if grep -qx -- '-l' "$RC/calls" && ! grep -q -- '-u ' "$RC/calls"; then
+    ok "remove-client: with no dedicated account it targets root, as before"
+else
+    bad "remove-client: with no dedicated account it targets root, as before" "$(cat "$RC/calls")"
+fi
+
+# The other half of the same review note: final-catchup must NOT have gained a
+# read_server_conf. It resolves the account from the peer manifest
+# (PEER_SAVED_LOCAL_USER), and read_server_conf RESETS LOCAL_USER and
+# CRON_CONFIG before sourcing the server file -- so calling it there would
+# discard what the client record said. That is precisely the edit 9af0003 made
+# by accident.
+fc_body=$(awk '/^cmd_final_catchup\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+if [ -n "$fc_body" ] && ! printf '%s\n' "$fc_body" | grep -q 'read_server_conf'; then
+    ok "final-catchup: still resolves the client itself, with no read_server_conf"
+else
+    bad "final-catchup: still resolves the client itself, with no read_server_conf" \
+        "$(printf '%s\n' "$fc_body" | grep -n 'read_server_conf')"
+fi
+
+# And the guard behind that reasoning: read_server_conf really does clear the
+# two variables before sourcing, so "it would be harmless there" is false.
+rsc=$(awk '/^read_server_conf\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+if printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""' && printf '%s\n' "$rsc" | grep -q 'CRON_CONFIG=""'; then
+    ok "read_server_conf: resets before sourcing, so where it is called matters"
+else
+    bad "read_server_conf: resets before sourcing, so where it is called matters" "$rsc"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
