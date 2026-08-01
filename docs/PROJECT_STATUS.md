@@ -10,12 +10,14 @@
 - Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
   nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
   produkcyjnego bloku tego hosta z roota na konto delegowane**)
-- Zweryfikowano przeciw: `244ec0d` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `d8bb52a` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `244ec0d` — `-q` przestaje być
-  „best effort”. Kontrakt jest binarny: albo quiesce dostarczył klasę spójności,
-  którą obiecał na ten przebieg, albo przebieg kończy się niezerowo
+- Ostatnia zmiana zachowania produkcyjnego: `d8bb52a` — okno zamrożenia jest
+  **terminem, nie kolejnością**: VM-y mrożone dopiero tuż przed snapshotem, stan
+  każdej sprawdzany ponownie na granicy, przekroczenie budżetu to błąd. Wcześniej
+  tego samego dnia `244ec0d`: `-q` przestaje być „best effort” — albo quiesce
+  dostarczył obiecaną klasę spójności, albo przebieg kończy się niezerowo
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
@@ -36,7 +38,7 @@
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty. **metropolis pve1 jest na `55d33a2`** (pociągnięty
+Cztery żywe hosty. **metropolis pve1 jest na `d8bb52a`** (pociągnięty
 bezpośrednio 2026-08-01, oba checkouty — root i konto). Pozostałe trzy dociąga
 godzinowy `--self-update`; `deploy.sh --check-only` czysty na metropolis pve1
 2026-08-01, na pozostałych 2026-07-31.
@@ -171,17 +173,38 @@ qemu-guest-agent` → dwa atomowe `zfs snapshot`, po jednym na pulę → `thawed
 106`, guest `thawed` przed i po). Czyli to, czego brakowało powyżej, jest
 zrobione — ale przebieg odsłonił **inny** problem, opisany niżej.
 
-> **Okno zamrożenia jest za długie i nikt tego nie zauważał.** Zmierzone w tym
-> samym przebiegu: VM 106 zamrożony 18:21:21, snapshot 18:21:39, odmrożenie
-> 18:21:40 — **~18 sekund**. Między jednym a drugim leci `pct exec 101 -- sync`,
-> który sam zajął 16 s. VM 106 to `ostype: win10`, a komentarz w
-> `lib-zfs-snap.sh` mówi wprost, że VSS trzyma freeze **maksymalnie ~10 s** i
-> potem sam go zwalnia. Czyli snapshot najprawdopodobniej powstał już po
-> wygaśnięciu zamrożenia, a log twierdzi, że guest był zamrożony.
-> To jest defekt **niezależny od migracji** — root miał dokładnie tę samą
-> kolejność — i nie jest naprawiony. Prawdopodobny kształt poprawki: flush
-> kontenerów najpierw, freeze VM-ów bezpośrednio przed snapshotem, plus
-> ponowne sprawdzenie `fsfreeze-status` tuż przed `zfs snapshot`.
+**Okno zamrożenia: NAPRAWIONE** (REV-20260801-024, `be1cfe7` + `d8bb52a`).
+
+Defekt: VM 106 zamrożony 18:21:21, snapshot 18:21:39 — **~18 s**, z czego 16 s to
+`pct exec 101 -- sync` lecący **po** zamrożeniu. VM 106 to `ostype: win10`, a VSS
+zwalnia freeze po ~10 s samo z siebie. Czyli snapshot powstawał poza oknem, które
+deklarował, i wszystkie kontrole to akceptowały — bo freeze *się udał*, tylko już
+nie obowiązywał. Niezależne od migracji: root miał tę samą kolejność.
+
+Poprawka ma trzy części i wszystkie trzy są potrzebne:
+
+| | co | gdzie |
+|---|---|---|
+| kolejność | `quiesce_prepare` (wolne: flush kontenerów, decyzje, odmowy — **zero freeze'ów**) i osobne `quiesce_freeze_pending` tuż przed snapshotem | `lib-zfs-snap.sh` |
+| ponowny odczyt | `quiesce_still_frozen` pyta każdą VM jeszcze raz **bezpośrednio przed** `zfs snapshot`; nie-zamrożona albo nieodczytywalna przerywa | `lib-zfs-snap.sh` |
+| termin | `QUIESCE_MAX_WINDOW` (5 s, przy limicie VSS ~10 s), mierzony i **logowany**, przekroczenie = błąd, nie ostrzeżenie | `lib-zfs-snap.sh` |
+
+Zmierzone na żywo po poprawce: **okno 1 s** (było 18), przy kontenerach
+flushowanych 51 s — czyli dłużej niż wcześniej, i to jest właśnie sedno: ten czas
+nie dotyka już okna.
+
+> **Pierwsza wersja poprawki miała własny błąd i znalazł go dopiero pomiar.**
+> `be1cfe7` startował zegar przed **wywołaniem** freeze'u, a `fsfreeze-freeze` na
+> Windows wraca po ~4 s (VSS się przygotowuje — guest nie jest wtedy zamrożony).
+> Produkcyjny przebieg wypisał `freeze window 5s (budget 5s)` — przeszedł
+> zerowym marginesem. `d8bb52a` startuje zegar przy **pierwszym udanym**
+> zamrożeniu. Znowu: wykryte przez przeczytanie liczby, nie przez test.
+
+**Nieobjęte:** ścieżka zdalna (`snapget -q`) ma własną kopię tej logiki w
+`ZFS_REMOTE_QUIESCE_SCRIPT`. Ten konkretny kształt (16 s flushu w środku okna)
+nie może tam wystąpić, bo freeze/snapshot/thaw idą w jednym wywołaniu — ale nie
+ma tam ani ponownego odczytu na granicy, ani terminu. Ta sama rodzina, świadomie
+poza tym commitem.
 
 ## 2. Zaakceptowany rdzeń
 
@@ -376,7 +399,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | **77/77** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) **oraz odmowa zamiast degradacji (+14, REV-023)** |
+| `quiesce` | **95/95** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
@@ -385,7 +408,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
-pve1 przy `244ec0d`** (i wcześniej przy `55d33a2`), bo `snapsend.sh` zmienił się
+pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
 razem z biblioteką:
 
 | Pakiet | Wynik | Czego wymaga | Zakres |
@@ -515,6 +538,13 @@ czterech hostach w obu formach hosta.
   `docs/reviews/responses/REV-20260801-023.md`. Piąta gałąź (tryb niepasujący)
   wykracza poza literę recenzji — zaznaczone tam wprost do ewentualnego
   odrzucenia.
+- **REV-20260801-024** (`be1cfe7` + `d8bb52a`) — okno zamrożenia jako termin, nie
+  kolejność. Wszystkie pięć wymaganych zachowań, zmierzone na żywo: 18 s → 1 s.
+  Odpowiedź w `docs/reviews/responses/REV-20260801-024.md`. Do zważenia przez
+  recenzenta: budżet 5 s oznacza, że host z kilkoma wolno mrożącymi się gośćmi
+  Windows w **jednym** zadaniu legalnie go przekroczy i to zadanie padnie —
+  kierunek fail-closed, ale zmiana zachowania dla konfiguracji, której nikt
+  jeszcze nie próbował.
 
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
@@ -524,11 +554,12 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na decyzję właściciela
 
-- **Okno zamrożenia przekracza limit VSS (~18 s przy limicie ~10 s).** Opisane
-  w sekcji 3. Defekt niezależny od migracji, niezmierzone dotąd, bo nikt nie
-  czytał znaczników czasu quiesce'u obok siebie. Nie naprawiony — poprawka
-  zmienia kolejność zamrażania i zasługuje na własny przebieg, a nie na doczepkę
-  do naprawy fail-open.
+- **Ścieżka zdalna (`snapget -q`) nie ma ani ponownego odczytu na granicy, ani
+  terminu.** `ZFS_REMOTE_QUIESCE_SCRIPT` ma własną kopię logiki quiesce'u i
+  celowo nie została ruszona przez REV-024. Konkretny kształt defektu (długi
+  flush w środku okna) nie może tam wystąpić, bo freeze/snapshot/thaw idą w
+  jednym wywołaniu — ale to ta sama rodzina i dwie połowy zaczną się rozjeżdżać.
+  Do decyzji, czy dociągać teraz, czy przy najbliższej zmianie tej ścieżki.
 - **Czy migrować pozostałe hosty.** metropolis pve1 jest jedynym hostem z
   blokiem na koncie. Reszta wymaga tych samych dwóch zdolności (`zfs allow`
   na datasetach configu, grant quiesce tam, gdzie config używa `quiesce`), a
