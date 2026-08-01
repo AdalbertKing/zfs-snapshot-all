@@ -19,6 +19,7 @@ set -uo pipefail
 #   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
 #   zfs-backup.sh activate-client NAME [--yes] [--verbose]
+#   zfs-backup.sh migrate-profile [--yes]
 #   zfs-backup.sh status [NAME]
 #   zfs-backup.sh test NAME
 #   zfs-backup.sh remove-client NAME
@@ -112,6 +113,7 @@ Usage:
   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT] [--skip-final-catchup]
   zfs-backup.sh verify-endpoint NAME
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
+  zfs-backup.sh migrate-profile [--yes]
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
@@ -314,7 +316,7 @@ read_server_conf() {
 # hourly/daily/... templates in a DIFFERENT config file, so 'keep=' would fail
 # to resolve a letter for them (found live, REV-20260730-001 fix commit
 # 7ebfbf7). 'retain=' is the raw-flag escape hatch for exactly this case.
-STANDARD_TEMPLATE_NAMES="standard_hourly standard_daily standard_weekly standard_monthly"
+STANDARD_TEMPLATE_NAMES="standard_hourly"
 
 STANDARD_TEMPLATE_standard_hourly='
 [template:standard_hourly]
@@ -322,25 +324,25 @@ STANDARD_TEMPLATE_standard_hourly='
 	prefix         = automated_hourly_
 	notify_word    = backup
 '
-STANDARD_TEMPLATE_standard_daily='
-[template:standard_daily]
-	send_schedule  = 0 0 * * *
-	prefix         = automated_daily_
-	notify_word    = backup
-'
-STANDARD_TEMPLATE_standard_weekly='
-[template:standard_weekly]
-	send_schedule  = 0 0 * * 0
-	prefix         = automated_weekly_
-	notify_word    = backup
-'
-STANDARD_TEMPLATE_standard_monthly='
-[template:standard_monthly]
-	send_schedule  = 0 0 1 * *
-	prefix         = automated_monthly_
-	notify_word    = backup
-'
 
+# ---- ONE send cadence, ONE ladder (REV-20260801-016 F2)
+#
+# An earlier version of this profile kept four named send tiers -- hourly,
+# daily, weekly, monthly -- alongside the GFS ladder. That combined both models
+# and gave the benefit of neither. `delsnaps.sh -G` buckets snapshots purely by
+# CREATION TIME and never looks at the prefix, so the daily/weekly/monthly sends
+# defined no retention tier at all: they only made extra snapshots and extra
+# transfers, and they all fired at 00:00 against the same source and target
+# while the hourly job followed a minute later.
+#
+# So there is one send cadence. The ladder turns those hourly snapshots into
+# 24 hourly / 7 daily / 4 weekly / 12 monthly buckets, which is what GFS is for.
+#
+# Every keep_* tier therefore matches 'automated_hourly' -- the only prefix that
+# now exists -- and only the finest tier carries monitor thresholds. Giving
+# keep_daily a monitor on 'automated_daily' would watch a pattern nothing ever
+# creates and sit at CRITICAL forever.
+#
 # ---- keep_* : retention and staleness, deliberately SEPARATE from standard_*
 #
 # gen-cron.sh accepts gfs= only in a [prune:] section, and a [dataset:] prunes
@@ -372,30 +374,24 @@ KEEP_TEMPLATE_keep_hourly='
 '
 KEEP_TEMPLATE_keep_daily='
 [template:keep_daily]
-	prune_schedule = 10 0 * * *
-	pattern        = automated_daily
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
 	retain         = -D7
 	notify_word    = prune
-	monitor_warn   = 30h
-	monitor_crit   = 48h
 '
 KEEP_TEMPLATE_keep_weekly='
 [template:keep_weekly]
-	prune_schedule = 20 0 * * 0
-	pattern        = automated_weekly
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
 	retain         = -W4
 	notify_word    = prune
-	monitor_warn   = 9d
-	monitor_crit   = 12d
 '
 KEEP_TEMPLATE_keep_monthly='
 [template:keep_monthly]
-	prune_schedule = 30 0 1 * *
-	pattern        = automated_monthly
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
 	retain         = -M12
 	notify_word    = prune
-	monitor_warn   = 35d
-	monitor_crit   = 45d
 '
 
 # REV-20260730-003 F8 (review 2): checks EACH template independently and
@@ -495,6 +491,61 @@ assert_cron_config_matches_installed() {
 # guaranteed. Now it does not need to assume that: it holds its own snapshot
 # of `crontab -l` and restores it directly with `crontab <snapshot>` if
 # --install fails, independent of whatever state the config file ends up in.
+# Write one client's whole shape into a config working copy: a [dataset:]
+# section per replicated dataset, plus the single [prune:] ladder that covers
+# them. Extracted so activate-client and migrate-profile cannot drift -- a
+# migration that produced a slightly different section than an activation would
+# be the worst kind of bug here, since the difference only shows up as a cron
+# line nobody compared.
+#
+# Requires load_client_and_connection() to have run. Sets `managed` (the local
+# paths) and `prune_scope` in the CALLER's scope, which both callers then record
+# in the client conf.
+emit_client_sections() {   # <workfile> <client name>
+    local workfile="$1" name="$2" ds localpath
+    managed=()
+    for ds in $PEER_SAVED_DATASETS; do
+        managed+=("$PEER_SAVED_TARGET/$LOAD_LABEL/$ds")
+    done
+    # Remove-then-add unconditionally, never skip-if-present: that is what makes
+    # a re-run after an endpoint switch actually pick up the new host/port/alias
+    # instead of leaving the old connection details in place forever.
+    [ "${#managed[@]}" -gt 0 ] && remove_managed_sections "$workfile" "${managed[@]}"
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        {
+            echo
+            echo "[dataset:$localpath]"
+            echo "	use_template = standard_hourly"
+            echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+            echo "	flags        = $LOAD_FLAGS"
+            echo "	notify       = ${name}-$(basename "$ds")"
+        } >> "$workfile" || return 1
+    done
+
+    # One ladder for the whole client. gfs_pattern is 'automated_' rather than
+    # any tier's own narrower pattern, because the ladder has to see every
+    # snapshot it is bucketing. Recursive over the client's subtree is safe
+    # here: every dataset of a client carries the same single send tier, so a
+    # recursive sweep cannot hit the "this leaf only has some of these tiers"
+    # trap that forces per-leaf monitor carriers elsewhere in this estate.
+    prune_scope=""
+    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+        prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
+        remove_managed_sections "$workfile" "$prune_scope"
+        {
+            echo
+            echo "[prune:$prune_scope]"
+            echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+            echo "	recursive    = yes"
+            echo "	gfs          = yes"
+            echo "	gfs_pattern  = automated_"
+            echo "	notify       = ${name}"
+        } >> "$workfile" || return 1
+    fi
+    return 0
+}
+
 # Show the change itself, not a description of it.
 #
 # Everything activate-client prints above this is a SUMMARY. A yes/no answer to
@@ -538,7 +589,27 @@ show_activation_proposal() {   # <current config> <proposed config>
     # other cron line alone, so that block is both what to compare and the whole
     # of what the install can touch. An absent crontab or absent block yields an
     # empty left side, which is correct: everything is new.
-    crontab -l 2>/dev/null \
+    # "Could not read it" is NOT "there is nothing there" (REV-20260801-016 F1).
+    # A permission error, a broken spool or a missing crontab binary would
+    # otherwise render as an empty left side, i.e. as "all of this is new" --
+    # and the operator is being asked to approve an exact live change, so a
+    # guess in the reassuring direction is the wrong one.
+    #
+    # The one benign failure is a user who simply has no crontab yet: cron
+    # exits non-zero and says so on stderr. That message is matched loosely and
+    # everything else aborts, which puts the locale risk on the safe side -- a
+    # translated "no crontab" makes this refuse rather than invent an answer.
+    local cron_err cron_raw cron_rc
+    cron_err=$(mktemp) || { rm -f "$before" "$after"; return 1; }
+    cron_raw=$(crontab -l 2>"$cron_err"); cron_rc=$?
+    if [ "$cron_rc" -ne 0 ] && ! grep -qi "no crontab" "$cron_err"; then
+        warn "could not read the live crontab (rc=$cron_rc): $(tr -d '\n' < "$cron_err")"
+        warn "refusing to preview against a crontab that could not be read -- an unreadable crontab is not an empty one, and nothing has been installed."
+        rm -f "$before" "$after" "$cron_err"
+        return 1
+    fi
+    rm -f "$cron_err"
+    printf '%s\n' "$cron_raw" \
         | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
         | _strip_source > "$before"
 
@@ -1154,48 +1225,8 @@ cmd_activate_client() {
     # in an already-present section forever.
     local ds localpath
     local -a managed=()
-    for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
-        managed+=("$localpath")
-    done
-    if [ "${#managed[@]}" -gt 0 ]; then
-        remove_managed_sections "$workfile" "${managed[@]}"
-    fi
-    for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
-        {
-            echo
-            echo "[dataset:$localpath]"
-            echo "	use_template = standard_hourly,standard_daily,standard_weekly,standard_monthly"
-            echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-            echo "	flags        = $LOAD_FLAGS"
-            echo "	notify       = ${name}-$(basename "$ds")"
-        } >> "$workfile" || { rm -f "$workfile"; die "could not append [dataset:$localpath] to the working copy"; }
-    done
+    emit_client_sections "$workfile" "$name" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
 
-    # One GFS ladder for the whole client, instead of a flat count per tier per
-    # dataset. gfs_pattern is the ONE prefix that has to see every contributing
-    # tier's snapshots, which is why it is 'automated_' and not any single
-    # tier's own narrower 'pattern' -- the ladder buckets them by elapsed time
-    # across all four.
-    #
-    # Recursive over the client's subtree deliberately: every dataset of a
-    # client gets the same four tiers, so a recursive sweep cannot hit the
-    # "leaf has only some of these tiers" trap that forces per-leaf monitor
-    # carriers elsewhere in this estate.
-    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
-        local prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
-        remove_managed_sections "$workfile" "$prune_scope"
-        {
-            echo
-            echo "[prune:$prune_scope]"
-            echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
-            echo "	recursive    = yes"
-            echo "	gfs          = yes"
-            echo "	gfs_pattern  = automated_"
-            echo "	notify       = ${name}"
-        } >> "$workfile" || { rm -f "$workfile"; die "could not append [prune:$prune_scope] to the working copy"; }
-    fi
     log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$ACTIVE_ENDPOINT'"
 
     log "validating generated config (working copy only, nothing real touched yet)..."
@@ -1233,7 +1264,13 @@ cmd_activate_client() {
     echo "Zrodla:              $PEER_SAVED_DATASETS"
     echo "Cel:                 $PEER_SAVED_TARGET/$LOAD_LABEL"
     echo "Tryb:                pull"
-    echo "Profil:              standard (retain hourly=-H24, daily=-D7, weekly=-W4, monthly=-M12; daily/weekly/monthly o 00:00)"
+    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+        echo "Profil:              standard GFS -- jedna wysylka co godzine (:01), jedna"
+        echo "                     kaskadowa drabina retencji (:21): -H24 -D7 -W4 -M12"
+    else
+        echo "Profil:              legacy (plaska retencja per tier -- ten host ma config"
+        echo "                     sprzed podzialu profilu)"
+    fi
     echo "Spojnosc snapshotu:  crash-consistent -- quiesce NIE jest wlaczony w tym profilu."
     echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"
     echo "                      zfs-quiesce-helper, wymaga --allow-quiesce przy parowaniu)"
@@ -1281,6 +1318,108 @@ cmd_activate_client() {
 }
 
 # ------------------------------------------------------------------------------
+# migrate-profile: take a host off the pre-GFS profile, in one decision.
+#
+# REV-20260801-016 F3. Leaving a legacy host alone is safe, but telling its
+# administrator that migration is "a deliberate edit" pushes the internal
+# standard_*/keep_* split onto exactly the person this workflow exists to spare.
+# The tool generates the new configuration itself, validates it, shows the exact
+# config and cron diff, and asks once.
+#
+# It rebuilds every ACTIVE client through emit_client_sections(), the same
+# function activate-client uses, so a migrated host lands on byte-identical
+# sections rather than on a second implementation of the same shape.
+cmd_migrate_profile() {
+    local yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes) yes=1 ;;
+            *) die "migrate-profile: unknown option $a" ;;
+        esac
+    done
+
+    read_server_conf
+    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
+
+    if ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule"; then
+        log "$cronfile is already on the standard GFS profile -- nothing to migrate."
+        return 0
+    fi
+
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX")         || die "mktemp failed next to $cronfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+
+    # Drop every legacy send template, then let ensure_cron_config put the new
+    # families back. Removing them is what makes this a migration rather than an
+    # append: the old standard_daily/weekly/monthly sections would otherwise sit
+    # there defining schedules nothing references.
+    local t
+    for t in standard_hourly standard_daily standard_weekly standard_monthly; do
+        remove_template_section "$workfile" "$t"
+    done
+    PROFILE_GFS=1
+    ensure_cron_config "$workfile"
+
+    local f name migrated=0
+    local -a managed=(); local prune_scope=""
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        ( : ) # no-op: keep shellcheck quiet about the subshell-free sourcing below
+        # shellcheck disable=SC1090
+        . "$f"
+        [ "${STATE:-}" = active ] || { log "skipping client '${CLIENT_NAME:-$f}' (state=${STATE:-unknown}) -- only active clients have cron sections to rewrite"; continue; }
+        name="$CLIENT_NAME"
+        load_client_and_connection "$f"
+        emit_client_sections "$workfile" "$name" || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
+        migrated=$((migrated + 1))
+    done
+    [ "$migrated" -gt 0 ] || log "no active clients -- migrating the templates only"
+
+    log "validating the migrated config (working copy only, nothing real touched yet)..."
+    if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the migrated config -- $cronfile was NOT touched (see output above)"
+    fi
+
+    show_activation_proposal "$cronfile" "$workfile" || {
+        rm -f "$workfile"
+        die "could not render the migration preview -- nothing was touched"
+    }
+
+    echo "Migracja: plaska retencja per tier  ->  standardowa polityka GFS"
+    echo "Klientow do przepisania: $migrated"
+    echo
+    if [ "$yes" -ne 1 ]; then
+        read -rp "Zmigrowac ten host na standardowa polityke GFS? [t/N] " ans
+        case "$ans" in
+            t|T|y|Y) ;;
+            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
+        esac
+    fi
+
+    assert_cron_config_matches_installed "$cronfile"
+    atomic_replace_and_install "$cronfile" "$workfile"
+    log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
+}
+
+# Remove one [template:<name>] section, whole. Used only by migrate-profile:
+# ensure_cron_config deliberately never rewrites a template that is present, so
+# the legacy ones have to go before the new ones can be put back.
+remove_template_section() {   # <file> <template name>
+    local file="$1" tname="$2" tmp
+    tmp=$(mktemp) || die "mktemp failed"
+    local in_target=0
+    while IFS= read -r line; do
+        case "$line" in
+            \[*\]) [ "$line" = "[template:$tname]" ] && in_target=1 || in_target=0 ;;
+        esac
+        [ "$in_target" -eq 1 ] || printf '%s
+' "$line" >> "$tmp"
+    done < "$file"
+    mv -f "$tmp" "$file" || die "could not update $file"
+}
+
 cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
@@ -1442,6 +1581,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         set-endpoint)     shift; cmd_set_endpoint "$@" ;;
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
+        migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         status)           shift; cmd_status "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;

@@ -70,10 +70,13 @@ fi
 # --- 4. ensure_cron_config: creates, templates, and is idempotent -----------
 CF="$WORK/jobs.test.conf"
 ensure_cron_config "$CF"
-if [ -f "$CF" ] && grep -q '^\[defaults\]' "$CF" && grep -q '^\[template:standard_hourly\]' "$CF" && grep -q '^\[template:standard_daily\]' "$CF"; then
-    ok "ensure_cron_config creates [defaults] + both standard templates"
+# ONE send cadence since REV-20260801-016 F2, so standard_daily must NOT be
+# created -- a second send tier would add snapshots and transfers that the GFS
+# ladder, which buckets by time and ignores prefixes, gives no retention meaning.
+if [ -f "$CF" ] && grep -q '^\[defaults\]' "$CF" && grep -q '^\[template:standard_hourly\]' "$CF"    && ! grep -q '^\[template:standard_daily\]' "$CF" && grep -q '^\[template:keep_monthly\]' "$CF"; then
+    ok "ensure_cron_config creates [defaults], one send tier, and the keep ladder"
 else
-    bad "ensure_cron_config creates [defaults] + both standard templates" "$(cat "$CF" 2>/dev/null)"
+    bad "ensure_cron_config creates [defaults], one send tier, and the keep ladder" "$(cat "$CF" 2>/dev/null)"
 fi
 
 before_lines=$(wc -l < "$CF")
@@ -483,13 +486,26 @@ PSTUB="$WORK/propbin"; mkdir -p "$PSTUB"
 cat > "$PSTUB/crontab" <<'EOF'
 #!/bin/bash
 [ "$1" = "-l" ] || exit 0
+# CRONTAB_MODE lets a case pick which reality the stub presents:
+#   (unset) -- replay CRONTAB_FIXTURE
+#   none    -- this user has no crontab (benign: cron exits 1 and says so)
+#   broken  -- a real read failure (permissions, spool, missing binary)
+case "${CRONTAB_MODE:-}" in
+    none)   echo "no crontab for tester" >&2; exit 1 ;;
+    broken) echo "/var/spool/cron/crontabs/tester: Permission denied" >&2; exit 1 ;;
+esac
 [ -n "${CRONTAB_FIXTURE:-}" ] && [ -f "$CRONTAB_FIXTURE" ] && cat "$CRONTAB_FIXTURE"
 exit 0
 EOF
 chmod +x "$PSTUB/crontab"
-prop_run() {   # prop_run <installed-fixture|-> <current cfg> <proposed cfg>
+prop_run() {   # prop_run <installed-fixture> <current cfg> <proposed cfg>
     local fx="$1"; shift
     CRONTAB_FIXTURE="$fx" PATH="$PSTUB:$PATH" GENCRON="$REPO/gen-cron.sh"         show_activation_proposal "$1" "$2" 2>&1
+}
+prop_rc() {    # prop_rc <mode> <current cfg> <proposed cfg> -> exit status only
+    local mode="$1"; shift
+    ( CRONTAB_MODE="$mode" PATH="$PSTUB:$PATH" GENCRON="$REPO/gen-cron.sh"         show_activation_proposal "$1" "$2" ) >/dev/null 2>&1
+    echo $?
 }
 : > "$PROP/empty.cron"
 
@@ -550,6 +566,22 @@ if [ "$?" -ne 0 ]; then
     ok "proposal: an unrenderable proposal fails closed"
 else
     bad "proposal: an unrenderable proposal fails closed" "zwrocilo 0"
+fi
+
+# 6. REV-20260801-016 F1: a crontab that cannot be READ is not an empty one.
+#    "no crontab for <user>" is the one benign failure; anything else has to
+#    abort before the prompt, because the operator is approving an exact live
+#    change and a guess in the reassuring direction is the wrong guess.
+prop_cfg "$PROP/rd.conf" "1 * * * *"
+if [ "$(prop_rc none "$PROP/absent.conf" "$PROP/rd.conf")" = 0 ]; then
+    ok "proposal: a user with no crontab is a normal empty left side"
+else
+    bad "proposal: a user with no crontab is a normal empty left side" "odmowilo"
+fi
+if [ "$(prop_rc broken "$PROP/absent.conf" "$PROP/rd.conf")" != 0 ]; then
+    ok "proposal: an unreadable crontab aborts instead of reading as empty"
+else
+    bad "proposal: an unreadable crontab aborts instead of reading as empty" "zwrocilo 0"
 fi
 
 # --- 9. the GFS profile and its compatibility guard -------------------------
@@ -621,7 +653,7 @@ ensure_cron_config "$PROF/gen.conf" >/dev/null 2>&1
 cat >> "$PROF/gen.conf" <<'EOF'
 
 [dataset:tank/backups/peer1/rpool/data]
-	use_template = standard_hourly,standard_daily,standard_weekly,standard_monthly
+	use_template = standard_hourly
 	src          = robot@10.0.0.1:rpool/data
 	notify       = peer1-data
 
@@ -648,6 +680,30 @@ else
     bad "profile: the ladder carries every tier's count in order" "$(printf '%s\n' "$gen_out" | grep -- '-G')"
 fi
 
+# REV-20260801-016 F2 required assertions for the single-cadence option.
+sends=$(printf '%s\n' "$gen_out" | grep -c "snapget.sh")
+if [ "$sends" = 1 ]; then
+    ok "profile: exactly one send job per dataset"
+else
+    bad "profile: exactly one send job per dataset" "$sends"
+fi
+# No two sends for the same dataset may share a minute -- with one cadence that
+# is structural, and the assertion is what keeps a future second tier from
+# quietly reintroducing the 00:00 pile-up.
+dupmin=$(printf '%s\n' "$gen_out" | grep "snapget.sh" | awk '{print $1,$2,$3,$4,$5}' | sort | uniq -d | wc -l)
+[ "$dupmin" = 0 ] && ok "profile: no two send jobs share a schedule slot" \
+                  || bad "profile: no two send jobs share a schedule slot" "$dupmin kolizji"
+# Exactly one staleness check: only the finest tier carries thresholds, because
+# a monitor on 'automated_daily' would watch a prefix nothing creates and sit at
+# CRITICAL forever.
+mons=$(printf '%s\n' "$gen_out" | grep -c "check-snap-age.sh")
+if [ "$mons" = 1 ] && printf '%s\n' "$gen_out" | grep -q 'check-snap-age.sh -R "tank/backups/peer1" "automated_hourly"'; then
+    ok "profile: exactly one monitor, on the prefix that actually exists"
+else
+    bad "profile: exactly one monitor, on the prefix that actually exists" \
+        "$mons monitorow: $(printf '%s\n' "$gen_out" | grep -o 'check-snap-age.sh[^)]*' | cut -c1-70)"
+fi
+
 # --- 10. --bandwidth validation ---------------------------------------------
 # mbuffer -r takes BYTES per second. A value that looks like a bit rate, or a
 # typo, has to be refused here rather than in a cron line at 01:00.
@@ -658,6 +714,60 @@ for v in "20Mb" "abc" "M20" "20MM" "" "20 M"; do
 done
 [ "$bw_bad" = 0 ] && ok "bandwidth: every malformed rate is refused" \
                   || bad "bandwidth: every malformed rate is refused" "$bw_bad wartosci przeszlo"
+
+# --- 11. remove_template_section / migrate-profile building blocks ----------
+#
+# REV-20260801-016 F3: migration is an action of the tool, not template surgery
+# by the administrator. ensure_cron_config deliberately never rewrites a
+# template that is present, so the legacy ones have to be removed before the new
+# families can go back -- that removal is the piece worth pinning.
+MIG="$WORK/migrate"; mkdir -p "$MIG"
+cat > "$MIG/legacy.conf" <<'EOF'
+[defaults]
+	host_label = oldhost
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[template:standard_daily]
+	send_schedule  = 0 0 * * *
+	prefix         = automated_daily_
+	prune_schedule = 10 0 * * *
+	pattern        = automated_daily
+	retain         = -D7
+
+[dataset:tank/backups/peer1/rpool/data]
+	use_template = standard_hourly,standard_daily
+	notify       = peer1-data
+EOF
+cp "$MIG/legacy.conf" "$MIG/work.conf"
+remove_template_section "$MIG/work.conf" standard_hourly
+remove_template_section "$MIG/work.conf" standard_daily
+if ! grep -q '^\[template:standard_' "$MIG/work.conf"    && grep -q '^\[dataset:tank/backups/peer1/rpool/data\]' "$MIG/work.conf"    && grep -q '^\[defaults\]' "$MIG/work.conf"; then
+    ok "migrate: remove_template_section drops the legacy templates and nothing else"
+else
+    bad "migrate: remove_template_section drops the legacy templates and nothing else" "$(cat "$MIG/work.conf")"
+fi
+
+# After removal, ensure_cron_config must recognise the file as NON-legacy and
+# put the new families in -- that is the whole migration in two steps.
+PROFILE_GFS=1
+ensure_cron_config "$MIG/work.conf" >/dev/null 2>&1
+if [ "${PROFILE_GFS:-}" = 1 ] && grep -q '^\[template:keep_monthly\]' "$MIG/work.conf"    && ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$MIG/work.conf" | grep -q prune_schedule; then
+    ok "migrate: the rebuilt config is on the GFS profile"
+else
+    bad "migrate: the rebuilt config is on the GFS profile" "PROFILE_GFS=${PROFILE_GFS:-unset}"
+fi
+
+# And the untouched legacy file must still read as legacy, so a host that never
+# ran the migration keeps flat retention.
+ensure_cron_config "$MIG/legacy.conf" >/dev/null 2>&1
+[ "${PROFILE_GFS:-}" = 0 ] && ok "migrate: an unmigrated host still reads as legacy"                            || bad "migrate: an unmigrated host still reads as legacy" "PROFILE_GFS=${PROFILE_GFS:-unset}"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
