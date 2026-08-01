@@ -2106,6 +2106,83 @@ qscope_covered() {   # <account> <dataset> -> 0 covered/not-applicable, 1 blocki
 
 
 # ------------------------------------------------------------------------------
+# ONE SURVEY, ASKED TWICE (owner decision 2026-08-02, option "b")
+#
+# Everything the account needs for the block it is about to be given, computed
+# in one place so it can be asked at two moments: in the preflight, where it
+# produces the remediation block, and again immediately before the crontabs are
+# written, where it is the last chance to notice that the world changed since.
+#
+# The re-check is not paranoia about the world. It is about the GAP: the
+# operator reads a command, runs it in another window, and comes back. What they
+# actually ran is not knowable from here -- a narrower dataset list, a different
+# account, a typo. Checking once, at the start, validates a state that no longer
+# has to be the state at commit time.
+CAP_ALL=""            # the FULL intended dataset set, not just what is missing
+CAP_MISSING_ZFS=""; CAP_MISSING_ZFS_N=0
+CAP_MISSING_Q="";   CAP_MISSING_Q_N=0
+CAP_QN=0; CAP_HELPER=1; CAP_REMOTE_Q=0
+
+capability_survey() {   # <account> <block file>  -> 0 if the account can run it all
+    local acct="$1" blk="$2" d v tmp tab
+    CAP_ALL=""; CAP_MISSING_ZFS=""; CAP_MISSING_ZFS_N=0
+    CAP_MISSING_Q=""; CAP_MISSING_Q_N=0; CAP_QN=0; CAP_HELPER=1; CAP_REMOTE_Q=0
+    tmp=$(mktemp) || return 1
+    tab=$(printf '\t')
+
+    while IFS="$tab" read -r d v; do
+        [ -n "$d" ] || continue
+        printf '%s\n' "$d" >> "$tmp"
+        target_can_zfs "$acct" "$d" "$v" || {
+            CAP_MISSING_ZFS="$CAP_MISSING_ZFS
+  $d ($v)"
+            CAP_MISSING_ZFS_N=$((CAP_MISSING_ZFS_N + 1)); }
+    done < <(block_capabilities "$blk")
+
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        CAP_QN=$((CAP_QN + 1))
+        printf '%s\n' "$d" >> "$tmp"
+        qscope_covered "$acct" "$d" || {
+            CAP_MISSING_Q="$CAP_MISSING_Q
+  $d (guest $(qscope_guest_id "$d" || echo '?'))"
+            CAP_MISSING_Q_N=$((CAP_MISSING_Q_N + 1)); }
+    done < <(block_quiesce_scope "$blk")
+
+    [ "$CAP_QN" -gt 0 ] && { target_can_quiesce "$acct" || CAP_HELPER=0; }
+    block_has_remote_quiesce "$blk" && CAP_REMOTE_Q=1
+
+    CAP_ALL=$(sort -u "$tmp" | tr '\n' ' '); CAP_ALL="${CAP_ALL% }"
+    rm -f "$tmp"
+
+    [ "$CAP_MISSING_ZFS_N" -eq 0 ] && [ "$CAP_MISSING_Q_N" -eq 0 ] && [ "$CAP_HELPER" -eq 1 ]
+}
+
+# The remediation block: ONE ordered, copy-pasteable answer to "what now".
+#
+# It names the FULL dataset set, never just the missing ones, and that is a
+# correctness requirement rather than a convenience. install_quiesce_grant
+# REWRITES /etc/zfs-quiesce-allow/<account> from whatever --datasets it is given,
+# so a command listing only the gaps would silently REVOKE quiesce for every
+# guest that already had it. The first version of this message (2026-08-01,
+# REV-027) printed exactly that list, and following it would have narrowed a
+# working grant on any host where one guest was missing and others were not.
+capability_remediation() {   # <account>
+    local acct="$1" q=""
+    [ "$CAP_QN" -gt 0 ] && q=" --allow-quiesce"
+    printf '\n  Do wykonania, w tej kolejnosci:\n\n'
+    printf '    # 1. zdolnosci. PELNA lista datasetow, nie tylko brakujace --\n'
+    printf '    #    whitelist quiesce jest PRZEPISYWANA z tej listy, wiec podanie\n'
+    printf '    #    samych brakow odebraloby dostep goscom, ktorzy go dzis maja.\n'
+    printf '    deploy.sh --backup-user=%s --datasets="%s"%s\n' "$acct" "$CAP_ALL" "$q"
+    printf '\n    # 2. dopiero teraz przelaczenie wlascicielstwa\n'
+    printf '    zfs-backup.sh migrate-to-account %s --yes\n\n' "$acct"
+    printf '  Krok 2 sprawdza te zdolnosci PONOWNIE, tuz przed zapisem crontabow,\n'
+    printf '  wiec jesli krok 1 zostanie uruchomiony z inna lista niz powyzsza --\n'
+    printf '  migracja odmowi zamiast przeniesc blok, ktorego konto nie uciagnie.\n'
+}
+
+# ------------------------------------------------------------------------------
 # migrate-to-account: move an existing collector from root to a delegated
 # account, as ONE transaction.
 #
@@ -2252,63 +2329,32 @@ cmd_migrate_to_account() {
     # strips exactly these paths and is therefore blind to this by design.
     assert_block_runnable_by "$acct" "$newblock"
 
-    # ---- what the rendered jobs actually need, dataset by dataset -----------
+    # ---- what the rendered jobs actually need ------------------------------
     #
     # After the render, not before: the requirement is a property of the JOBS,
-    # and until they are rendered there are no jobs to ask about. Probing a
-    # section type instead was both too weak (a receive target needs
-    # receive/create/rollback and nothing asked) and too strong (a `prune = no`
-    # monitor carrier destroys nothing and needs nothing) -- REV-20260801-026.
-    local capds capverbs missing_zfs="" missing_list=""
-    local captab; captab=$(printf '	')
-    while IFS="$captab" read -r capds capverbs; do
-        [ -n "$capds" ] || continue
-        target_can_zfs "$acct" "$capds" "$capverbs"             || { missing_zfs="$missing_zfs
-  $capds ($capverbs)"; missing_list="$missing_list $capds"; }
-    done < <(block_capabilities "$newblock")
-    if [ -z "$missing_zfs" ]; then
+    # and until they are rendered there are no jobs to ask about.
+    capability_survey "$acct" "$newblock" || :
+
+    if [ "$CAP_MISSING_ZFS_N" -eq 0 ]; then
         _have "delegacja ZFS wystarczy dla kazdego zadania w bloku"
     else
-        # The exact command, not a placeholder. The tool has just derived this
-        # list; making the operator rebuild it by hand is asking them to redo
-        # the work that was the point of running the preflight (F3).
-        _gap "brak delegacji ZFS dla zadan, ktore powstana:$missing_zfs
-
-  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${missing_list# }")\""
+        _gap "brak delegacji ZFS dla zadan, ktore powstana:$CAP_MISSING_ZFS"
     fi
 
-    # ---- quiesce, per rendered job ----------------------------------------
-    #
-    # REV-20260801-027. "the account can invoke the helper" is not "the
-    # whitelist covers every guest the -q jobs will touch". A partial grant used
-    # to pass here and be discovered by cron, after the migration, on the first
-    # uncovered VM.
-    local qds qmissing="" qmissing_list="" qn=0
-    while IFS= read -r qds; do
-        [ -n "$qds" ] || continue
-        qn=$((qn+1))
-        qscope_covered "$acct" "$qds"             || { qmissing="$qmissing
-  $qds (guest $(qscope_guest_id "$qds" || echo '?'))"; qmissing_list="$qmissing_list $qds"; }
-    done < <(block_quiesce_scope "$newblock")
-
-    if [ "$qn" -gt 0 ]; then
-        if ! target_can_quiesce "$acct"; then
-            _gap "blok prosi o quiesce na $qn datasetach, a konto w ogole nie dosiega helpera (brak $QUIESCE_HELPER_PATH albo reguly sudo) -- te linie beda konczyc sie kodem 3:
-
-  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${qmissing_list# }")\" --allow-quiesce"
-        elif [ -n "$qmissing" ]; then
-            _gap "konto dosiega helpera, ale whitelist NIE POKRYWA tych zrodel z -q:$qmissing
-
-  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${qmissing_list# }")\" --allow-quiesce"
+    if [ "$CAP_QN" -gt 0 ]; then
+        if [ "$CAP_HELPER" -eq 0 ]; then
+            _gap "blok prosi o quiesce na $CAP_QN datasetach, a konto w ogole nie dosiega helpera (brak $QUIESCE_HELPER_PATH albo reguly sudo) -- te linie beda konczyc sie kodem 3"
+        elif [ "$CAP_MISSING_Q_N" -gt 0 ]; then
+            _gap "konto dosiega helpera, ale whitelist NIE POKRYWA tych zrodel z -q:$CAP_MISSING_Q"
         else
-            _have "quiesce pokryty dla wszystkich $qn zrodel, ktore o niego prosza"
+            _have "quiesce pokryty dla wszystkich $CAP_QN zrodel, ktore o niego prosza"
         fi
     fi
 
     # Remote quiesce is granted on the SOURCE host, by whoever runs --join
     # there. Nothing readable from here proves it, so it is stated rather than
     # passed silently (REV-20260801-027 point 4).
-    if block_has_remote_quiesce "$newblock"; then
+    if [ "$CAP_REMOTE_Q" -eq 1 ]; then
         _todo "blok uzywa quiesce ZDALNEGO (snapget -q) -- grant zyje na hoscie ZRODLOWYM i nie da sie go stad sprawdzic; potwierdza go 'deploy.sh --join <pakiet> --allow-quiesce' wykonany tam"
     fi
 
@@ -2366,9 +2412,11 @@ cmd_migrate_to_account() {
     if [ "$preflight_only" -eq 1 ]; then
         LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines"
         [ "$gaps" -eq 0 ] && { log "preflight czysty -- migracja moze isc"; return 0; }
+        capability_remediation "$acct"
         die "preflight: $gaps brakujacych zdolnosci (wyzej). Nic nie zmieniono."
     fi
     if [ "$gaps" -gt 0 ]; then
+        capability_remediation "$acct"
         LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines"
         die "preflight found capabilities this account does not have (listed above). Provision them first -- every one of them fails closed at run time, which means failing cron jobs and no backups, not silent damage. Nothing has been changed."
     fi
@@ -2445,6 +2493,25 @@ cmd_migrate_to_account() {
         mv -f "$cfg" "$target_cfg" || { LOCAL_USER=""; die "could not move $cfg to $target_cfg -- nothing changed"; }
         chmod 0644 "$target_cfg" || :
         log "config moved to $target_cfg (0644, readable by '$acct')"
+    fi
+
+    # ---- last look before anything is written ------------------------------
+    #
+    # The owner chose option (b) on 2026-08-02: the privileged grant stays a
+    # separate, deliberate command, and this verb re-checks instead of running
+    # it. Which makes this re-check the load-bearing half of that choice -- the
+    # operator went away, ran something in another window, and came back. What
+    # they actually ran is not knowable from here. Phase 1 validated a state
+    # that no longer has to be the state now.
+    #
+    # Cheap: the block is already rendered, so this is the same two loops again.
+    if ! capability_survey "$acct" "$newblock"; then
+        [ "$needs_move" -eq 1 ] && [ -f "$target_cfg" ] && mv -f "$target_cfg" "$cfg"
+        LOCAL_USER=""
+        printf '%s
+' "$CAP_MISSING_ZFS$CAP_MISSING_Q" >&2
+        capability_remediation "$acct" >&2
+        die "the capabilities checked in the preflight are NOT all there now, so the block would move to an account that cannot run it (listed above). Neither crontab was written; the config is back where it was."
     fi
 
     if ! crontab "$rootnew"; then

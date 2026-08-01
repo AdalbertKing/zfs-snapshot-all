@@ -2001,17 +2001,21 @@ esac
 # Since REV-20260801-027 there are TWO quiesce gaps -- helper unreachable, and
 # helper reachable but whitelist too narrow -- and BOTH have to name the local
 # route with the derived list.
-qa=$(sed -n '/_gap "blok prosi o quiesce/,/allow-quiesce/p;/_gap "konto dosiega helpera/,/allow-quiesce/p' "$ZFSBACKUP")
-n=$(printf '%s
-' "$qa" | grep -c -- '--backup-user=$acct')
-[ "$n" = 2 ] && ok "advice: both quiesce gaps name the local grant command"              || bad "advice: both quiesce gaps name the local grant command" "znaleziono $n: $qa"
-case "$qa" in
-    *"--join"*) bad "advice: ...and neither sends the operator to --join" "$qa" ;;
-    *)          ok "advice: ...and neither sends the operator to --join" ;;
+# Since the owner picked option (b) (2026-08-02) the corrective command lives in
+# ONE remediation block rather than being repeated inside each gap. What matters
+# is which list it names -- see section 34.
+rem=$(sed -n '/^capability_remediation()/,/^}/p' "$ZFSBACKUP")
+case "$rem" in
+    *'--backup-user=%s --datasets="%s"'*) ok "advice: the remediation block names the local grant command" ;;
+    *) bad "advice: the remediation block names the local grant command" "$rem" ;;
 esac
-case "$qa" in
-    *'--datasets=\"...\"'*) bad "advice: ...and neither leaves a placeholder" "$qa" ;;
-    *)                       ok "advice: ...and neither leaves a placeholder" ;;
+case "$rem" in
+    *"--join"*) bad "advice: ...and does not send the operator to --join" "$rem" ;;
+    *)          ok "advice: ...and does not send the operator to --join" ;;
+esac
+case "$rem" in
+    *'--datasets="..."'*) bad "advice: ...and leaves no placeholder" "$rem" ;;
+    *)                    ok "advice: ...and leaves no placeholder" ;;
 esac
 
 # --- 31. the account must be able to RUN the block it is given --------------
@@ -2419,6 +2423,132 @@ for n in hdd/data/vm-107-disk-2 hdd/lxc/subvol-102-disk-0 rpool/data/nested/vm-1
 done
 [ "$drift" -eq 0 ] && ok "qscope: the copied guest-id mapping still agrees with lib-zfs-snap.sh" \
                    || bad "qscope: the copied guest-id mapping still agrees with lib-zfs-snap.sh" "patrz wyzej"
+
+# --- 34. one remediation block, and a second look before committing ---------
+#
+# Owner decision 2026-08-02, option (b): the privileged grant stays a separate,
+# deliberate command -- the migration prints ONE ordered block instead of
+# assembling it for the operator, and re-checks the capabilities immediately
+# before writing the crontabs.
+#
+# The list the block names is a CORRECTNESS question, not an ergonomic one.
+# install_quiesce_grant REWRITES /etc/zfs-quiesce-allow/<account> from whatever
+# --datasets it is handed, so a command listing only the GAPS would silently
+# revoke quiesce for every guest that already had it. The first version of that
+# message (REV-027, the same evening) printed exactly the gaps -- following it
+# on a host where one guest was uncovered and three were fine would have taken
+# the three away.
+RM="$WORK/remedy"; mkdir -p "$RM"
+cat > "$RM/block.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+11 0 * * * /home/z/zfs-snapshot-all/snapsend.sh -m "d_" -q auto "tank/vm-100-disk-0,tank/vm-102-disk-0" 2>>/dev/null
+51 * * * * /home/z/zfs-snapshot-all/delsnaps.sh "tank/vm-100-disk-0" "d" -D7 2>>/dev/null
+# END zfs-backup-managed
+EOF
+cat > "$RM/helper" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -z "${2:-}" ] && { echo "OK"; exit 0; }
+          [ "$2" = 100 ] && { echo "id=100 kind=qemu running=yes frozen=no"; exit 0; }
+          echo "guest $2 is not on the quiesce whitelist" >&2; exit 2 ;;
+esac
+exit 2
+STUB
+chmod +x "$RM/helper"
+
+# zfs allow: everything granted, so the ONLY gap is the quiesce whitelist. That
+# isolates the question -- does the block name the gap, or the whole set?
+cat > "$RM/zfs" <<'STUB'
+#!/bin/sh
+echo "	user zfsbackup snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
+exit 0
+STUB
+chmod +x "$RM/zfs"
+
+out=$( PATH="$RM:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    QUIESCE_HELPER_PATH='$RM/helper'
+    runuser() { shift 2; shift; \"\$@\"; }
+    sudo() { shift; \"\$@\"; }
+    capability_survey zfsbackup '$RM/block.txt' || :
+    echo \"MISSING_Q=\$CAP_MISSING_Q_N\"
+    echo \"ALL=\$CAP_ALL\"
+    capability_remediation zfsbackup" 2>&1 )
+
+case "$out" in
+    *"MISSING_Q=1"*) ok "remedy: exactly one guest is missing from the whitelist" ;;
+    *) bad "remedy: exactly one guest is missing from the whitelist" "$out" ;;
+esac
+
+# THE point of this section: the printed command names BOTH datasets, although
+# only one is a gap.
+case "$out" in
+    *'--datasets="tank/vm-100-disk-0 tank/vm-102-disk-0" --allow-quiesce'*)
+        ok "remedy: the command names the FULL set, not just the gap" ;;
+    *)  bad "remedy: the command names the FULL set, not just the gap" "$out" ;;
+esac
+# ...and says why, because an operator who trims it back to the gap undoes the
+# very thing the full list is protecting.
+case "$out" in
+    *PRZEPISYWANA*) ok "remedy: ...and says why trimming it would revoke a working grant" ;;
+    *) bad "remedy: ...and says why trimming it would revoke a working grant" "$out" ;;
+esac
+# One block, two steps, in order.
+case "$out" in
+    *"# 1."*"deploy.sh"*"# 2."*"migrate-to-account"*)
+        ok "remedy: it is one ordered block -- grant, then migrate" ;;
+    *)  bad "remedy: it is one ordered block -- grant, then migrate" "$out" ;;
+esac
+
+# A clean survey emits no gaps at all, so the block is only ever printed when
+# there is something to do.
+out2=$( PATH="$RM:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    QUIESCE_HELPER_PATH='$RM/helper'
+    runuser() { shift 2; shift; \"\$@\"; }
+    sudo() { shift; \"\$@\"; }
+    cat > '$RM/h2' <<'S2'
+#!/bin/sh
+case \"\$1\" in status) [ -z \"\${2:-}\" ] && { echo OK; exit 0; }; echo \"id=\$2 kind=qemu running=yes frozen=no\"; exit 0 ;; esac
+exit 2
+S2
+    chmod +x '$RM/h2'; QUIESCE_HELPER_PATH='$RM/h2'
+    capability_survey zfsbackup '$RM/block.txt' && echo CLEAN" 2>&1 )
+case "$out2" in
+    *CLEAN*) ok "remedy: a fully granted account surveys clean" ;;
+    *) bad "remedy: a fully granted account surveys clean" "$out2" ;;
+esac
+
+# ---- the second look -------------------------------------------------------
+#
+# This is the load-bearing half of option (b). The operator leaves, runs the
+# grant in another window, and comes back; what they actually ran is not
+# knowable from here -- a narrower list, a different account, a typo. Phase 1
+# validated a state that no longer has to be the state at commit time.
+sur=$(grep -c 'capability_survey "\$acct" "\$newblock"' "$ZFSBACKUP")
+[ "$sur" -ge 2 ] && ok "second-look: the survey is asked twice, not once" \
+                 || bad "second-look: the survey is asked twice, not once" "wywolan: $sur"
+
+# It must sit BEFORE the first crontab write, or it is not a guard.
+lsur=$(grep -n 'if ! capability_survey "\$acct" "\$newblock"; then' "$ZFSBACKUP" | cut -d: -f1)
+lcron=$(grep -n 'if ! crontab "\$rootnew"; then' "$ZFSBACKUP" | cut -d: -f1)
+if [ -n "$lsur" ] && [ -n "$lcron" ] && [ "$lsur" -lt "$lcron" ]; then
+    ok "second-look: it runs before the first crontab is written"
+else
+    bad "second-look: it runs before the first crontab is written" "survey=$lsur crontab=$lcron"
+fi
+
+# And a failure there must put the config back -- phase 2 has already moved it
+# by that point, so leaving it moved would strand the host between two states.
+back=$(sed -n '/if ! capability_survey "\$acct" "\$newblock"; then/,/^    fi/p' "$ZFSBACKUP")
+case "$back" in
+    *'mv -f "$target_cfg" "$cfg"'*) ok "second-look: a refusal there moves the config back" ;;
+    *) bad "second-look: a refusal there moves the config back" "$back" ;;
+esac
+case "$back" in
+    *capability_remediation*) ok "second-look: ...and reprints what to do about it" ;;
+    *) bad "second-look: ...and reprints what to do about it" "$back" ;;
+esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
