@@ -1430,6 +1430,10 @@ cmd_activate_client() {
     else
         : > "$workfile" || die "could not create working copy $workfile"
     fi
+    # mktemp makes it 0600, and `cp -p` would carry the original's mode over.
+    # Both the PREVIEW and the install read this file as the collector account,
+    # so it has to be readable before either runs -- not after the swap.
+    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
     ensure_cron_config "$workfile"
 
     # Remove-then-add every managed dataset's section unconditionally (not
