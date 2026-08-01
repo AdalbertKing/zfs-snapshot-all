@@ -589,19 +589,26 @@ czterech hostach w obu formach hosta.
   flush w środku okna) nie może tam wystąpić, bo freeze/snapshot/thaw idą w
   jednym wywołaniu — ale to ta sama rodzina i dwie połowy zaczną się rozjeżdżać.
   Do decyzji, czy dociągać teraz, czy przy najbliższej zmianie tej ścieżki.
-- **Czy migrować pozostałe hosty.** metropolis pve1 jest jedynym hostem z
-  blokiem na koncie. Reszta wymaga tych samych dwóch zdolności (`zfs allow`
-  na datasetach configu, grant quiesce tam, gdzie config używa `quiesce`), a
-  pve2 dodatkowo nie ma dziś sudo. Preflight (`zfs-backup.sh
-  migrate-to-account <konto> --preflight`) jest bezpieczny do uruchomienia na
-  każdym z nich — nic nie zmienia i wypisze brakujące zdolności po nazwie.
-- **Jeden przepływ zamiast trzech poleceń** (nota produktowa REV-022): dziś
-  preflight nazywa osobne wywołania `deploy.sh` dla delegacji ZFS i dla
-  quiesce'u, po czym administrator wraca do `migrate-to-account`. Recenzent
-  akceptuje to jako granicę implementacyjną, ale nie jako docelowy UX. Do
-  ustalenia, czy `migrate-to-account` ma wypisywać jeden gotowy blok poleceń
-  naprawczych i sprawdzać zdolności ponownie tuż przed commitem, czy iść dalej
-  w stronę orkiestracji.
+- ~~Czy migrować pozostałe hosty~~ — **ZROBIONE 2026-08-01/02: wszystkie
+  cztery.** pve2 21:44, pve1 192.168.11.11 23:02, pve0 23:05. Każdy host ma
+  własne konto delegowane, grant quiesce i config w `/etc/zfs-snapshot-all/`.
+  Pierwszy nocny przebieg pod cronem przeszedł na wszystkich, z potwierdzeniem
+  zamrożenia na granicy snapshotu (okna 1–4 s przy budżecie 5 s).
+- ~~pve2: `[prune-bookmarks:rpool]` szerszy niż delegacja~~ — **ZAŁATWIONE
+  2026-08-02, zawężeniem zakresu, nie poszerzeniem grantu.** Pod `rpool` na
+  pve2 są dokładnie dwa poddrzewa (`rpool/ROOT/pve-1`, `rpool/data`) i oba są
+  już delegowane; sam `rpool` nigdy nie trzyma bookmarków, bo bookmark powstaje
+  wyłącznie na datasecie **wysyłanym**. Alternatywą było nadanie kontu pełnego
+  jedenastoczasownikowego zestawu na `rpool`, czyli `destroy` nad całą pulą
+  root, dla jednego prune'a. Zweryfikowane: zmieniony wyłącznie zakres w jednej
+  linii crona, prune jako konto rc=0, liczba bookmarków bez zmian (4+3), survey
+  zdolności czysty. Config w `zfs-cron-configs` `6cf289b`.
+- **Dysk w pve1 (192.168.11.11).** Lustro `rpool` na jednym NVMe od
+  2026-04-16, host z vsql2, jedyna pula na maszynie. Największa otwarta rzecz
+  w projekcie i jedyna, której nie da się rozwiązać kodem.
+- **`qemu-guest-agent` w VM 102 (`neth`) na metropolis pve1.** Nie działa
+  wewnątrz gościa mimo `agent: 1`, więc maszyna dostała `quiesce = no`.
+  Zainstalowanie agenta pozwala zdjąć tę jedną linijkę z configu.
 - ~~metropolis pve2 nie ma pliku configu swojego crona~~ — **ZAŁATWIONE
   2026-08-01 21:32.** 14 produkcyjnych linii wskazywało
   `# Source: /root/gfs-install-tmp/jobs.pve2.v4.conf`, a tego katalogu nie było.
@@ -611,21 +618,18 @@ czterech hostach w obu formach hosta.
   Crontab przed/po różnił się wyłącznie linią `# Source:` — liczba linii zadań
   bez zmian, 14 = 14. Guard z `c6c98c2` nie był naruszony: narzędzie nadal nie
   tworzy tego pliku samo, zrobił to człowiek po obejrzeniu diffa.
-- **Config wewnątrz checkoutu gita — na metropolis pve1 ZAŁATWIONE, na
-  pozostałych hostach nie.** `jobs.pve1.v4.conf` leżał w `zfs-snapshot-all/`,
-  nietrackowany i ignorowany, gdzie jedno `git clean -xdf` kasowało jedyny zapis
-  15 produkcyjnych zadań. Migracja z 2026-08-01 **przeniosła** go do
-  `/etc/zfs-snapshot-all/jobs.pve1.v4.conf` (0644) — nie skopiowała, więc nie ma
-  dwóch ścieżek opisujących jedną pracę. To rozstrzyga też pytanie „dokąd" z
-  punktu wyżej: `/etc/zfs-snapshot-all/` jest odpowiedzią, którą wybrał kod i
-  która przeszła na produkcji. Dla pve0, pve1 (192.168.11.x) i pve2 config nadal
-  siedzi w checkoucie — tam blok należy do roota, więc migracja go nie ruszy i
-  potrzebne jest osobne przeniesienie.
-- **VM 102 (`neth`) na metropolis pve1 nie ma żadnego zadania snapshotowego.**
-  Dysk `hdd/vm-disks/vm-102-disk-0`, replikowany przez pvesr na pve2 co trzy
-  godziny — czyli pokrycie DR bez retencji. Goście 100, 101, 106 i 107 na tym
-  samym hoście mają jedno i drugie. Może być świadome; odnotowane, bo znalezione
-  przy preflightcie migracji, a nie zgłoszone przez nic innego.
+- ~~Config wewnątrz checkoutu gita~~ — **ZAŁATWIONE NA WSZYSTKICH CZTERECH
+  HOSTACH 2026-08-01/02.** Configi leżały w `zfs-snapshot-all/`, nietrackowane
+  i ignorowane, gdzie jedno `git clean -xdf` kasowało jedyny zapis zadań
+  produkcyjnych. Każda migracja **przeniosła** swój config do
+  `/etc/zfs-snapshot-all/` — nie skopiowała, więc nie ma dwóch ścieżek
+  opisujących jedną pracę. Kopie są też w prywatnym `zfs-cron-configs`.
+- ~~VM 102 (`neth`) na metropolis pve1 nie ma żadnego zadania snapshotowego~~ —
+  **ZAŁATWIONE 2026-08-01 23:23.** Miała wyłącznie replikację pvesr `sun 01:00`
+  i zero snapshotów retencyjnych: jedna kopia na pve2, nadpisywana co niedzielę,
+  najgorszy punkt odtworzenia siedem dni, zero historii. Dostała te same cztery
+  szablony co sąsiedzi (24/7/4/6), ale z `quiesce = no` — patrz punkt o agencie
+  wyżej.
 - **Korelacja per przebieg dla SQL** (REV-010 §2): odczyt najwyższego
   `EventRecordID` przed freeze i tylko nowych zdarzeń po thaw, wewnątrz jednej
   operacji zdalnej `snapget -q`. To nowa powierzchnia uprzywilejowana.
