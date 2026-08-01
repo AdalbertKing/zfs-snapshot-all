@@ -1726,9 +1726,16 @@ QUIESCE_FREEZE_EPOCH=0
 quiesce_freeze_pending() {
     local id
     [ "${#QUIESCE_PENDING_VMS[@]}" -eq 0 ] && return 0
-    QUIESCE_FREEZE_EPOCH=$(date +%s)
     for id in "${QUIESCE_PENDING_VMS[@]}"; do
         if quiesce_do_freeze "$id" qemu; then
+            # The clock starts when the FIRST guest is actually frozen, not when
+            # we start asking. Measured on pve1: `fsfreeze-freeze` on a Windows
+            # guest takes ~4 s to return, all of it VSS preparing to freeze --
+            # the guest is not frozen during it, and VSS's own ~10 s timer does
+            # not start until the freeze engages. Counting that preparation
+            # against the budget put a perfectly healthy production job at
+            # "window 5s (budget 5s)", one second from failing for no reason.
+            [ "$QUIESCE_FREEZE_EPOCH" -eq 0 ] && QUIESCE_FREEZE_EPOCH=$(date +%s)
             QUIESCE_FROZEN+=("qemu:$id")
             log 1 "Quiesce: froze VM $id via qemu-guest-agent"
         else

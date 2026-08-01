@@ -576,6 +576,32 @@ case "$res" in
     *)                      check "window: ...and reports the measured duration and the budget" "0" "1 ($res)" ;;
 esac
 
+# 4b. The clock starts when a guest is actually FROZEN, not when we start
+# asking. `fsfreeze-freeze` on a Windows guest takes ~4 s to return, all of it
+# VSS preparing -- the guest is not frozen during it, and counting it put a
+# healthy production job at "window 5s (budget 5s)", one second from failing.
+# Found by reading the number on a live run, not by a test.
+cat > "$WD/bin/helper-slowfreeze" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -z "${2:-}" ] && exit 0; cat "$WIN_STATUS" | sed "s/^id=[0-9]*/id=$2/"; exit 0 ;;
+  freeze) sleep 3; exit 0 ;;
+  thaw)   exit 0 ;;
+esac
+exit 2
+STUB
+chmod +x "$WD/bin/helper-slowfreeze"
+res=$( PATH="$WD/bin:$PATH"; QUIESCE_PVE_DIR="$WD/pve"; QUIESCE_VIA=helper
+       QUIESCE_HELPER="$WD/bin/helper-slowfreeze"
+       QUIESCE_HANDLED=(); QUIESCE_FROZEN=(); QUIESCE_PENDING_VMS=(); QUIESCE_FREEZE_EPOCH=0
+       QUIESCE_MAX_WINDOW=2
+       echo "id=106 kind=qemu running=yes frozen=no" > "$WIN_STATUS"
+       quiesce_prepare hdd/data/vm-106-disk-0 auto >/dev/null 2>&1
+       quiesce_freeze_pending >/dev/null 2>&1
+       echo "id=106 kind=qemu running=yes frozen=yes" > "$WIN_STATUS"
+       quiesce_still_frozen >/dev/null 2>&1; echo "$?" )
+check "window: a slow freeze CALL is not charged to the window it precedes" "0" "$res"
+
 # 5. The success path: still frozen, inside budget, and the duration is LOGGED
 # rather than left to be inferred from timestamps -- which is how this defect
 # had to be found in the first place.
