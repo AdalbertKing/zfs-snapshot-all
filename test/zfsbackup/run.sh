@@ -1088,6 +1088,38 @@ else
     bad "own-checkout: a missing account checkout is refused with the command that fixes it" "rc=$rc out=$out"
 fi
 
+# --- 19. rewrites must not silently re-mode the config ----------------------
+#
+# The rewrite idiom is `tmp=$(mktemp); ...; mv -f "$tmp" "$file"`, and mktemp
+# creates 0600. Every section removal therefore re-moded the config to
+# root-only. On a collector with a dedicated account that is fatal and nearly
+# invisible: gen-cron runs AS the account and reports "Permission denied" on a
+# config in a world-readable directory, several steps after whatever last
+# rewrote it. Found on metropolis pve1, 2026-08-01, after chmod'ing the file by
+# hand twice and watching it go back to 600 both times.
+MODE="$WORK/mode"; mkdir -p "$MODE"
+printf '[dataset:a/b]\n\tnotify = x\n[dataset:keep/me]\n\tnotify = y\n' > "$MODE/cfg.conf"
+chmod 0644 "$MODE/cfg.conf"
+remove_managed_sections "$MODE/cfg.conf" "a/b"
+got=$(stat -c %a "$MODE/cfg.conf")
+if [ "$got" = 644 ] && grep -q 'keep/me' "$MODE/cfg.conf" && ! grep -q 'dataset:a/b' "$MODE/cfg.conf"; then
+    ok "mode: removing a section keeps the config readable and removes the right one"
+else
+    bad "mode: removing a section keeps the config readable and removes the right one" "mode=$got"
+fi
+# A deliberately tight mode must survive too -- this PRESERVES, it does not
+# impose a policy of its own. Asserted as "unchanged" rather than as a literal:
+# MSYS cannot represent 0600 at all (chmod 600 reads back as 644), so a literal
+# would be testing the filesystem. The same limitation means the ORIGINAL defect
+# is invisible on Windows -- there every file is already 644 and the mktemp
+# rewrite loses nothing. On Linux, where the live obligations run, it bites.
+chmod 0600 "$MODE/cfg.conf"
+mode_before=$(stat -c %a "$MODE/cfg.conf")
+remove_managed_sections "$MODE/cfg.conf" "keep/me"
+mode_after=$(stat -c %a "$MODE/cfg.conf")
+[ "$mode_before" = "$mode_after" ] && ok "mode: whatever the mode was, a rewrite keeps it" \
+                 || bad "mode: whatever the mode was, a rewrite keeps it" "przed=$mode_before po=$mode_after"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

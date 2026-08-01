@@ -1644,7 +1644,7 @@ remove_template_section() {   # <file> <template name>
         [ "$in_target" -eq 1 ] || printf '%s
 ' "$line" >> "$tmp"
     done < "$file"
-    mv -f "$tmp" "$file" || die "could not update $file"
+    mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
 cmd_status() {
@@ -1732,6 +1732,23 @@ cmd_test() {
 # MANAGED_DATASETS at activation time, or passed explicitly), never anything
 # else in the shared host config file -- other clients' stanzas and
 # hand-written sections must survive untouched.
+# Replace a file's contents while KEEPING its mode.
+#
+# The rewrite idiom here is `tmp=$(mktemp); ...; mv -f "$tmp" "$file"`, and
+# mktemp creates 0600 -- so every such rewrite silently re-moded the config to
+# root-only. On a collector with a dedicated account that is fatal and almost
+# invisible: gen-cron runs AS the account and gets "Permission denied" on a
+# config in a world-readable directory, several steps after whatever last
+# rewrote it. Found on metropolis pve1, 2026-08-01, after chmod'ing the file by
+# hand twice and watching it go back.
+mv_preserving_mode() {   # <tmp> <destination>
+    local tmp="$1" dest="$2" mode=""
+    [ -e "$dest" ] && mode=$(stat -c %a "$dest" 2>/dev/null)
+    mv -f "$tmp" "$dest" || return 1
+    [ -n "$mode" ] && chmod "$mode" "$dest" 2>/dev/null
+    return 0
+}
+
 remove_managed_sections() {
     local file="$1"; shift
     local -a targets=("$@")
@@ -1756,7 +1773,7 @@ remove_managed_sections() {
         esac
         [ "$in_target" -eq 1 ] || printf '%s\n' "$line" >> "$tmp"
     done < "$file"
-    mv -f "$tmp" "$file" || die "could not update $file"
+    mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
 cmd_remove_client() {
