@@ -1998,14 +1998,20 @@ esac
 # host's own account. The local route landed in 3831509 and this message was
 # left pointing at the old one -- a fix is not delivered until the thing that
 # tells people about it agrees.
-qa=$(sed -n '/blok uzywa -q, a konto nie ma grantu quiesce/p' "$ZFSBACKUP")
+# Since REV-20260801-027 there are TWO quiesce gaps -- helper unreachable, and
+# helper reachable but whitelist too narrow -- and BOTH have to name the local
+# route with the derived list.
+qa=$(sed -n '/_gap "blok prosi o quiesce/,/allow-quiesce/p;/_gap "konto dosiega helpera/,/allow-quiesce/p' "$ZFSBACKUP")
+n=$(printf '%s
+' "$qa" | grep -c -- '--backup-user=$acct')
+[ "$n" = 2 ] && ok "advice: both quiesce gaps name the local grant command"              || bad "advice: both quiesce gaps name the local grant command" "znaleziono $n: $qa"
 case "$qa" in
-    *"--backup-user="*"--allow-quiesce"*) ok "advice: the quiesce gap names the local grant command" ;;
-    *) bad "advice: the quiesce gap names the local grant command" "$qa" ;;
+    *"--join"*) bad "advice: ...and neither sends the operator to --join" "$qa" ;;
+    *)          ok "advice: ...and neither sends the operator to --join" ;;
 esac
 case "$qa" in
-    *"--join"*) bad "advice: ...and no longer sends the operator to --join" "$qa" ;;
-    *)          ok "advice: ...and no longer sends the operator to --join" ;;
+    *'--datasets=\"...\"'*) bad "advice: ...and neither leaves a placeholder" "$qa" ;;
+    *)                       ok "advice: ...and neither leaves a placeholder" ;;
 esac
 
 # --- 31. the account must be able to RUN the block it is given --------------
@@ -2268,6 +2274,151 @@ mk_zfs "snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmoun
 out=$(run_cp); rc=$?
 [ "$rc" -eq 0 ] && ok "caps-pre: the documented delegated set passes" \
                 || bad "caps-pre: the documented delegated set passes" "rc=$rc out=$out"
+
+# --- 33. quiesce is checked per JOB, against the real helper -----------------
+#
+# REV-20260801-027. `target_can_quiesce` proves the account can INVOKE the
+# helper. That is not "the whitelist covers every guest the -q jobs will touch",
+# and treating the first as evidence of the second let a partial grant pass
+# preflight -- to be discovered by cron, after the migration, on the first
+# uncovered VM.
+#
+# Note what is NOT stubbed here: the helper query itself. The review asked for
+# the real scope parser and the real helper boundary, so the stub is a HELPER
+# (a script answering like the real one, per guest), not a function returning
+# one blanket verdict.
+QS="$WORK/qscope"; mkdir -p "$QS/bin"
+cat > "$QS/block.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+11 0 * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapsend.sh -m "d_" -v 3 -q auto "tank/vm-100-disk-0,tank/vm-102-disk-0" 2>"$e"; rc=$?
+37 * * * * e=$(mktemp); /home/z/zfs-snapshot-all/snapsend.sh -m "h_" -v 3 "tank/vm-100-disk-0" 2>"$e"; rc=$?
+51 * * * * e=$(mktemp); /home/z/zfs-snapshot-all/delsnaps.sh "tank/vm-100-disk-0" "d" -D7 2>"$e"; rc=$?
+EOF
+echo '# END zfs-backup-managed' >> "$QS/block.txt"
+
+# Only guest 100 is on this whitelist. 102 is refused exactly as the real
+# helper refuses -- exit 2, message on stderr, nothing on stdout.
+cat > "$QS/bin/helper" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status)
+    [ -z "${2:-}" ] && { echo "OK account=test"; exit 0; }
+    case "$2" in
+      100) echo "id=100 kind=qemu running=yes frozen=no"; exit 0 ;;
+      104) echo "id=104 kind=qemu running=no frozen=unknown"; exit 0 ;;
+      105) echo "id=105 kind=absent running=no frozen=unknown"; exit 0 ;;
+    esac
+    echo "zfs-quiesce-helper: guest $2 is not on the quiesce whitelist" >&2; exit 2 ;;
+esac
+exit 2
+STUB
+chmod +x "$QS/bin/helper"
+
+qs_run() {   # <helper path> -> the scope check, with runuser/sudo collapsed away
+    bash -c "
+        source '$ZFSBACKUP'
+        QUIESCE_HELPER_PATH='$1'
+        runuser() { shift 2; shift; \"\$@\"; }     # runuser --user X -- cmd...
+        sudo() { shift; \"\$@\"; }                  # sudo -n cmd...
+        for d in \$(block_quiesce_scope '$QS/block.txt'); do
+            if qscope_covered test \"\$d\"; then echo \"ok \$d\"; else echo \"BRAK \$d\"; fi
+        done" 2>&1
+}
+
+scope=$( bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/block.txt'" | tr '\n' ' ' )
+check_eq "qscope: only the -q job's sources are in scope" \
+         "$scope" "tank/vm-100-disk-0 tank/vm-102-disk-0 "
+
+out=$(qs_run "$QS/bin/helper")
+case "$out" in
+    *"ok tank/vm-100-disk-0"*) ok "qscope: the guest the whitelist covers passes" ;;
+    *) bad "qscope: the guest the whitelist covers passes" "$out" ;;
+esac
+case "$out" in
+    *"BRAK tank/vm-102-disk-0"*) ok "qscope: the guest it does NOT cover is a gap" ;;
+    *) bad "qscope: the guest it does NOT cover is a gap" "$out" ;;
+esac
+
+# The review's acceptance case: a grant covering both must pass, so the refusal
+# above is about coverage and not about the probe refusing everything.
+cat > "$QS/bin/helper-both" <<'STUB'
+#!/bin/sh
+case "$1" in
+  status) [ -z "${2:-}" ] && { echo "OK account=test"; exit 0; }
+          echo "id=$2 kind=qemu running=yes frozen=no"; exit 0 ;;
+esac
+exit 2
+STUB
+chmod +x "$QS/bin/helper-both"
+out=$(qs_run "$QS/bin/helper-both")
+case "$out" in
+    *BRAK*) bad "qscope: a grant covering both sources passes" "$out" ;;
+    *)      ok "qscope: a grant covering both sources passes" ;;
+esac
+
+# "Nothing to quiesce" must stay acceptable, or every stopped VM becomes a
+# blocked migration -- the too-strong half of REV-026, in a new place.
+one=$( bash -c "
+    source '$ZFSBACKUP'
+    QUIESCE_HELPER_PATH='$QS/bin/helper'
+    runuser() { shift 2; shift; \"\$@\"; }
+    sudo() { shift; \"\$@\"; }
+    for d in tank/vm-104-disk-0 tank/vm-105-disk-0 tank/not-a-guest; do
+        if qscope_covered test \"\$d\"; then echo \"ok \$d\"; else echo \"BRAK \$d\"; fi
+    done" 2>&1 | grep -c '^ok ' )
+check_eq "qscope: stopped, absent and non-guest datasets are all acceptable" "$one" "3"
+
+# A job WITHOUT -q contributes nothing, and neither does a prune or a monitor.
+case "$scope" in
+    *delsnaps*) bad "qscope: a prune is not a quiesce source" "$scope" ;;
+    *)          ok "qscope: a prune is not a quiesce source" ;;
+esac
+
+# Under -r/-R the guests live in the CHILDREN; the named parent matches no guest
+# at all, so a pool-wide job would otherwise look like it quiesces nothing.
+cat > "$QS/rec.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+11 0 * * * /home/z/zfs-snapshot-all/snapsend.sh -m "d_" -r -q auto "tank/data" 2>>/dev/null
+# END zfs-backup-managed
+EOF
+cat > "$QS/bin/zfs" <<'STUB'
+#!/bin/sh
+for a in "$@"; do last=$a; done
+echo "$last"
+echo "$last/vm-108-disk-0"
+STUB
+chmod +x "$QS/bin/zfs"
+rscope=$( PATH="$QS/bin:$PATH" bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/rec.txt'" | tr '\n' ' ' )
+case "$rscope" in
+    *vm-108-disk-0*) ok "qscope: -r expands to the children, where the guests are" ;;
+    *) bad "qscope: -r expands to the children, where the guests are" "$rscope" ;;
+esac
+
+# Remote quiesce is granted on the SOURCE host. It must be reported, not passed
+# silently and not failed locally (point 4).
+cat > "$QS/rem.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+5 * * * * /home/z/zfs-snapshot-all/snapget.sh -m "p_" -q auto "far:tank/x" "tank/pulled" 2>>/dev/null
+# END zfs-backup-managed
+EOF
+bash -c "source '$ZFSBACKUP'; block_has_remote_quiesce '$QS/rem.txt'" \
+    && ok "qscope: a remote -q job is recognised as remote" \
+    || bad "qscope: a remote -q job is recognised as remote" "nie rozpoznane"
+remscope=$( bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/rem.txt'" )
+check_eq "qscope: ...and contributes no LOCAL dataset to check" "$remscope" ""
+
+# The guest-id mapping is COPIED from lib-zfs-snap.sh rather than sourced, so it
+# can drift. Pinned against the original on the shapes that matter.
+LIBQ="$REPO/lib-zfs-snap.sh"
+drift=0
+for n in hdd/data/vm-107-disk-2 hdd/lxc/subvol-102-disk-0 rpool/data/nested/vm-100-disk-0 \
+         vm-101-disk-0 rpool/data/vm-12345-disk-0 rpool/data hdd/mssql hdd/data/vm-107-disk; do
+    a=$( bash -c "source '$ZFSBACKUP'; qscope_guest_id '$n' || echo NONE" )
+    b=$( bash -c "VERBOSE=0; SSH_OPTS=(); source '$LIBQ' 2>/dev/null; quiesce_guest_id '$n' || echo NONE" )
+    [ "$a" = "$b" ] || { drift=1; echo "     drift: $n -> [$a] vs [$b]"; }
+done
+[ "$drift" -eq 0 ] && ok "qscope: the copied guest-id mapping still agrees with lib-zfs-snap.sh" \
+                   || bad "qscope: the copied guest-id mapping still agrees with lib-zfs-snap.sh" "patrz wyzej"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -2010,11 +2010,100 @@ target_can_zfs() {   # <account> <dataset> <verbs csv>
 
 # The same probe lib-zfs-snap.sh performs before it freezes anything, asked
 # early instead of at 00:11 in a cron job.
+# Overridable so the suite can drive the real code against a stub helper. In
+# production nothing sets it.
+QUIESCE_HELPER_PATH="${QUIESCE_HELPER_PATH:-/usr/local/sbin/zfs-quiesce-helper}"
+
 target_can_quiesce() {   # <account>
     local acct="$1"
-    [ -x /usr/local/sbin/zfs-quiesce-helper ] || return 1
-    runuser --user "$acct" -- sudo -n /usr/local/sbin/zfs-quiesce-helper status >/dev/null 2>&1
+    [ -x "$QUIESCE_HELPER_PATH" ] || return 1
+    runuser --user "$acct" -- sudo -n "$QUIESCE_HELPER_PATH" status >/dev/null 2>&1
 }
+# ------------------------------------------------------------------------------
+# QUIESCE SCOPE, PER RENDERED JOB (REV-20260801-027)
+#
+# `target_can_quiesce` above proves the account can INVOKE the helper. That is a
+# different statement from "the whitelist covers every guest the -q jobs will
+# touch", and treating the first as evidence of the second is the same defect
+# REV-026 fixed for `zfs allow`: the mechanism is present, the capabilities are
+# not, and the first uncovered guest is discovered by cron after the migration.
+#
+# I had already hit this by hand on metropolis pve1 that morning -- walking
+# guests 100/101/106/107 through the helper one at a time and finding 102
+# refused. Doing it with fingers instead of putting it in the tool is exactly
+# how a check fails to exist.
+#
+# The Proxmox naming convention IS the dataset-to-guest mapping; there is no
+# property to ask. Replicated from lib-zfs-snap.sh's quiesce_guest_id rather
+# than sourced, because sourcing the library into this wrapper would drag in its
+# whole runtime; test/zfsbackup section 33 pins the two against each other so
+# the copy cannot drift.
+qscope_guest_id() {   # <dataset> -> guest id, or 1
+    local leaf="${1##*/}"
+    case "$leaf" in
+        vm-*-disk-*|subvol-*-disk-*)
+            leaf="${leaf#vm-}"; leaf="${leaf#subvol-}"
+            printf '%s' "${leaf%%-disk-*}"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# Datasets whose RENDERED job asks to be quiesced. Recursion is expanded exactly
+# as the runtime expands it (quiesce_scope): under -r/-R the guests live in the
+# CHILDREN and the named parent matches no guest at all, so a job covering a
+# whole pool would otherwise look like it quiesces nothing.
+block_quiesce_scope() {   # <block file>  -> local push-side datasets, one per line
+    local line cmd pos p0 d rec
+    while IFS= read -r line; do
+        case "$line" in [0-9]*|\**) ;; *) continue ;; esac
+        cmd=$(printf '%s\n' "$line" | sed -E 's/^([^ ]+ +){5}//')
+        printf '%s\n' "$cmd" | tr ';' '\n' | while IFS= read -r one; do
+            case "$one" in *snapsend.sh*) ;; *) continue ;; esac
+            case "$one" in *" -q "*) ;; *) continue ;; esac
+            rec=0
+            case "$one" in *" -r "*|*" -R "*) rec=1 ;; esac
+            pos=$(job_positionals "$one")
+            p0=$(printf '%s\n' "$pos" | sed -n 1p)
+            printf '%s\n' "$p0" | tr ',' '\n' | while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                qcap_is_remote "$d" && continue
+                if [ "$rec" -eq 1 ]; then
+                    zfs list -H -o name -r -- "$d" 2>/dev/null || printf '%s\n' "$d"
+                else
+                    printf '%s\n' "$d"
+                fi
+            done
+        done
+    done < "$1" | sort -u
+}
+
+# Remote quiesce (snapget -q) asks the SOURCE host to freeze, through a grant
+# that lives over there. Nothing this verb can read proves it, so it is reported
+# rather than silently passed or silently failed (REV-20260801-027 point 4).
+block_has_remote_quiesce() {   # <block file>
+    grep -qE '^[0-9*].*snapget\.sh.* -q ' "$1"
+}
+
+# Can the account actually quiesce this dataset's guest? Answered THROUGH THE
+# HELPER, as the account -- the same boundary the job will hit at 00:11, not a
+# reimplementation of it.
+#
+#   no guest / not on this node / stopped  -> fine, nothing to quiesce
+#   running and answered                   -> covered
+#   refused, unreadable, helper unusable   -> blocking
+qscope_covered() {   # <account> <dataset> -> 0 covered/not-applicable, 1 blocking
+    local acct="$1" ds="$2" id line
+    id=$(qscope_guest_id "$ds") || return 0
+    line=$(runuser --user "$acct" -- sudo -n "$QUIESCE_HELPER_PATH" status "$id" 2>/dev/null) || return 1
+    case "$line" in
+        *"kind=absent"*) return 0 ;;
+        *"running=no"*)  return 0 ;;
+        *"running=yes"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 
 # ------------------------------------------------------------------------------
 # migrate-to-account: move an existing collector from root to a delegated
@@ -2126,15 +2215,6 @@ cmd_migrate_to_account() {
         _todo "konto nie czyta configu -- faza prepare przeniesie: $cfg -> $target_cfg"
     fi
 
-    if grep -qE '^[0-9*].* -q ' "$rootcron"; then
-        if target_can_quiesce "$acct"; then _have "konto moze quiesce przez helpera"
-        # Named the --join route until 2026-08-01, because until 3831509 that
-        # was the only route there was. It grants a PAIRED PEER, not this host's
-        # own account, so anyone following it would have provisioned a peering
-        # relationship they did not want and still had no grant.
-        else _gap "blok uzywa -q, a konto nie ma grantu quiesce -- deploy.sh --backup-user=$acct --datasets=\"...\" --allow-quiesce (bez tego te linie beda konczyc sie kodem 3)"; fi
-    fi
-
     # Lines root runs that the account's render will not reproduce.
     #
     # The render has to happen in phase 1, but on the normal host it depends on
@@ -2195,6 +2275,41 @@ cmd_migrate_to_account() {
         _gap "brak delegacji ZFS dla zadan, ktore powstana:$missing_zfs
 
   deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${missing_list# }")\""
+    fi
+
+    # ---- quiesce, per rendered job ----------------------------------------
+    #
+    # REV-20260801-027. "the account can invoke the helper" is not "the
+    # whitelist covers every guest the -q jobs will touch". A partial grant used
+    # to pass here and be discovered by cron, after the migration, on the first
+    # uncovered VM.
+    local qds qmissing="" qmissing_list="" qn=0
+    while IFS= read -r qds; do
+        [ -n "$qds" ] || continue
+        qn=$((qn+1))
+        qscope_covered "$acct" "$qds"             || { qmissing="$qmissing
+  $qds (guest $(qscope_guest_id "$qds" || echo '?'))"; qmissing_list="$qmissing_list $qds"; }
+    done < <(block_quiesce_scope "$newblock")
+
+    if [ "$qn" -gt 0 ]; then
+        if ! target_can_quiesce "$acct"; then
+            _gap "blok prosi o quiesce na $qn datasetach, a konto w ogole nie dosiega helpera (brak $QUIESCE_HELPER_PATH albo reguly sudo) -- te linie beda konczyc sie kodem 3:
+
+  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${qmissing_list# }")\" --allow-quiesce"
+        elif [ -n "$qmissing" ]; then
+            _gap "konto dosiega helpera, ale whitelist NIE POKRYWA tych zrodel z -q:$qmissing
+
+  deploy.sh --backup-user=$acct --datasets=\"$(printf '%s' "${qmissing_list# }")\" --allow-quiesce"
+        else
+            _have "quiesce pokryty dla wszystkich $qn zrodel, ktore o niego prosza"
+        fi
+    fi
+
+    # Remote quiesce is granted on the SOURCE host, by whoever runs --join
+    # there. Nothing readable from here proves it, so it is stated rather than
+    # passed silently (REV-20260801-027 point 4).
+    if block_has_remote_quiesce "$newblock"; then
+        _todo "blok uzywa quiesce ZDALNEGO (snapget -q) -- grant zyje na hoscie ZRODLOWYM i nie da sie go stad sprawdzic; potwierdza go 'deploy.sh --join <pakiet> --allow-quiesce' wykonany tam"
     fi
 
     # The render carries the throwaway path in its '# Source:' line. Phase 4
