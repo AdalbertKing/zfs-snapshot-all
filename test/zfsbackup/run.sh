@@ -1030,10 +1030,13 @@ cat > "$DUP/disjoint.txt" <<'EOF'
 7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "automated_hourly_" "tank/OTHER" 2>>/home/zfsbackup/cron.log
 # END zfs-backup-managed
 EOF
+# NARROWED per REV-20260801-021: this guard answering "not a duplicate" does NOT
+# authorise the install. Whether the install would DELETE what the target runs is
+# a different question -- assert_target_block_not_clobbered, section 26.
 out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
        "source '$ZFSBACKUP'; gencron_as_target() { cat '$DUP/disjoint.txt'; }; assert_no_foreign_managed_block '$DUP/etc-jobs.conf'" 2>&1 ); rc=$?
-[ "$rc" -eq 0 ] && ok "dup-guard: disjoint jobs under a different path are allowed" \
-                || bad "dup-guard: disjoint jobs under a different path are allowed" "rc=$rc out=$out"
+[ "$rc" -eq 0 ] && ok "dup-guard: disjoint jobs are not a DUPLICATE (says nothing about clobbering)" \
+                || bad "dup-guard: disjoint jobs are not a DUPLICATE (says nothing about clobbering)" "rc=$rc out=$out"
 
 # The same path with the same jobs was always caught and must stay caught.
 out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
@@ -1706,6 +1709,164 @@ if case "$out" in *"needs a human NOW"*) true ;; *) false ;; esac; then
     ok "rollback: a rollback that did NOT complete says so instead of claiming success"
 else
     bad "rollback: a rollback that did NOT complete says so instead of claiming success" "$out"
+fi
+
+
+# --- 26. an install must not delete jobs the target runs today --------------
+#
+# REV-20260801-021 F1, and the reviewer's own reproduction shape. The overlap
+# guard allows a target running DISJOINT jobs, which is correct for that guard
+# in isolation -- two collectors on one host is a real deployment. It is not
+# sufficient on its own, because gen-cron.sh --install REPLACES the target's
+# single managed block and the proposal is rendered only from the config being
+# installed. So the disjoint block is not merged; it is deleted. Silently,
+# right after the overlap guard said the two workloads were unrelated.
+#
+#   root managed block:       jobs for tank/a
+#   zfsbackup managed block:  disjoint jobs for tank/b
+#   install as zfsbackup:     tank/b stops running, nothing says so
+CL="$WORK/clobber"; mkdir -p "$CL/bin"
+cat > "$CL/target.cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "b_" "tank/b" 2>>/home/zfsbackup/cron.log
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "tank/b" "b" -H24 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CL/proposal.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "a_" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CL/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && { cat "$CL/target.cron"; exit 0; }
+cat "$CL/target.cron"
+exit 0
+EOF
+chmod +x "$CL/bin/crontab"
+: > "$CL/new.conf"
+
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
+   && case "$out" in *"tank/b"*) true ;; *) false ;; esac; then
+    ok "clobber: disjoint jobs already running in the target are not silently replaced"
+else
+    bad "clobber: disjoint jobs already running in the target are not silently replaced" "rc=$rc out=$out"
+fi
+
+# Re-installing the SAME jobs is an idempotent retry, not a deletion, and must
+# stay possible -- otherwise no config could ever be re-installed.
+cp "$CL/target.cron" "$CL/same.cron"
+cat > "$CL/proposal-same.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "b_" "tank/b" 2>>/home/zfsbackup/cron.log
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "tank/b" "b" -H24 2>>/home/zfsbackup/cron.log
+0 7 * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "c_" "tank/c" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-same.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "clobber: a proposal that keeps every current job (and adds one) is allowed" \
+                || bad "clobber: a proposal that keeps every current job (and adds one) is allowed" "rc=$rc out=$out"
+
+# Unknown proposal means unknown deletions -- fail closed, same rule as the
+# overlap guard.
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { return 1; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"could not be rendered"*) true ;; *) false ;; esac; then
+    ok "clobber: an unrenderable proposal fails closed"
+else
+    bad "clobber: an unrenderable proposal fails closed" "rc=$rc out=$out"
+fi
+
+# A target with no managed block at all has nothing to lose.
+printf '0 8 * * * /root/scripts/check-pool-capacity.sh\n' > "$CL/target.cron"
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "clobber: a target with no managed block passes" \
+                || bad "clobber: a target with no managed block passes" "rc=$rc out=$out"
+
+# --- 27. only RECOGNISED host-level lines may be kept behind ----------------
+#
+# REV-20260801-021, separate observation. "the account's render does not
+# reproduce it" is not the same as "it is host-level". Keeping every dropped
+# line means an unrecognised send or prune gets quietly parked in root's
+# crontab -- ownership split in half with nobody deciding it, which is what the
+# host block was introduced to prevent.
+OR="$WORK/orphan"; mkdir -p "$OR/bin" "$OR/home/zfs-snapshot-all"
+cat > "$OR/jobs.conf" <<'EOF'
+[template:t]
+	send_schedule = 1 * * * *
+[dataset:tank/a]
+	use_template = t
+EOF
+cat > "$OR/rendered.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "a_" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+_or_crontab() {   # <extra root job line>
+    cat > "$OR/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && exit 0
+if [ "\$1" = "-l" ]; then
+    echo "# BEGIN zfs-backup-managed"
+    echo "# Source: $OR/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"a_\" \"tank/a\" 2>>/root/scripts/cron.log"
+    echo "$1"
+    echo "# END zfs-backup-managed"
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "$OR/bin/crontab"
+}
+cat > "$OR/bin/getent" <<EOF
+#!/bin/bash
+[ "\$1" = passwd ] && echo "zfsbackup:x:1001:1001::$OR/home:/bin/bash"
+exit 0
+EOF
+cat > "$OR/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+cat > "$OR/bin/zfs" <<'EOF'
+#!/bin/bash
+echo "	user zfsbackup bookmark,canmount,create,destroy,hold,mount,receive,release,rollback,send,snapshot"
+exit 0
+EOF
+chmod +x "$OR/bin/getent" "$OR/bin/id" "$OR/bin/zfs"
+: > "$OR/home/zfs-snapshot-all/gen-cron.sh"
+
+# The digest is the one recognised host-level job: kept, and the run proceeds.
+_or_crontab '0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log'
+out=$( PATH="$OR/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    gencron_as_target() { cat '$OR/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"linie ogolnohostowe do zachowania: 1"*) true ;; *) false ;; esac; then
+    ok "orphans: the digest is recognised as host-level and kept"
+else
+    bad "orphans: the digest is recognised as host-level and kept" "rc=$rc out=$out"
+fi
+
+# A dropped SEND line is not host-level. It must stop the migration by name
+# rather than be filed away in root's crontab.
+_or_crontab '3 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "z_" "tank/zzz" 2>>/root/scripts/cron.log'
+out=$( PATH="$OR/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    gencron_as_target() { cat '$OR/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --preflight" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"belong to nobody"*) true ;; *) false ;; esac \
+   && case "$out" in *"tank/zzz"*) true ;; *) false ;; esac; then
+    ok "orphans: an unrecognised dropped job stops the migration and is named"
+else
+    bad "orphans: an unrecognised dropped job stops the migration and is named" "rc=$rc out=$out"
 fi
 
 echo "--------------------------------------------"

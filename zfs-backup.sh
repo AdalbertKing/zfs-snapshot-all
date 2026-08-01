@@ -589,6 +589,37 @@ crontab_of_or_die() {   # <user> <outfile>
     printf '%s\n' "$txt" > "$out"
 }
 
+# REV-20260801-021 F1. The overlap guard below deliberately allows a target that
+# runs DISJOINT jobs -- two collectors on one host is a real deployment. On its
+# own that is fine; combined with the commit path it was not. `gen-cron.sh
+# --install` owns and REPLACES the target's single managed block, and the
+# proposal is rendered only from the config being installed, so an existing
+# disjoint block is not merged into it -- it is deleted. Silently, because the
+# overlap guard had just said the two workloads were unrelated.
+#
+# The property that matters is narrower than "does the target have a block":
+# the install must not REMOVE job lines the target is running today. Anything
+# the proposal reproduces is fine, by definition -- that is what installing it
+# means.
+assert_target_block_not_clobbered() {   # <config whose render is about to be installed>
+    local file="$1" u; u=$(cron_target_user)
+    local tcron; tcron=$(mktemp) || die "mktemp failed"
+    crontab_of_or_die "$u" "$tcron"
+    local current; current=$(managed_block_fingerprint < "$tcron"); rm -f "$tcron"
+    [ -n "$current" ] || return 0
+
+    local proposed; proposed=$(gencron_as_target -c "$file" 2>/dev/null | managed_block_fingerprint)
+    [ -n "$proposed" ] || die "'$u' already runs a managed block and the block this run would install could not be rendered -- so whether the install would delete any of them is unknown. Refusing rather than guessing; nothing has been changed."
+
+    local lost; lost=$(comm -23 <(printf '%s\n' "$current") <(printf '%s\n' "$proposed"))
+    [ -n "$lost" ] || return 0
+
+    local n; n=$(printf '%s\n' "$lost" | grep -c .)
+    warn "'$u' runs these job(s) today, and the block about to be installed does not contain them:"
+    printf '%s\n' "$lost" | sed 's/^/    /' >&2
+    die "$n job line(s) would be DELETED from '$u' by this install. gen-cron.sh replaces the whole managed block, so anything the new config does not describe simply stops running -- and a backup that stops running does not alert. Merge the two configs into one and install that, or move the other workload out of this account first. Nothing has been changed."
+}
+
 assert_no_foreign_managed_block() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     [ "$u" = root ] && return 0
@@ -1603,6 +1634,7 @@ cmd_activate_client() {
 
     assert_cron_config_matches_installed "$cronfile"
     assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
 
@@ -1718,6 +1750,7 @@ cmd_migrate_profile() {
 
     assert_cron_config_matches_installed "$cronfile"
     assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
     log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
@@ -1956,15 +1989,41 @@ cmd_migrate_to_account() {
     mine=$(managed_block_fingerprint < "$newblock")
     dropped=$(comm -23 <(printf '%s\n' "$theirs") <(printf '%s\n' "$mine"))
     hostlines=$(mktemp) || die "mktemp failed"
+    local orphans; orphans=$(mktemp) || die "mktemp failed"
     if [ -n "$dropped" ]; then
+        # REV-20260801-021, separate observation: "the account's render does not
+        # reproduce it" is NOT the same as "it is host-level". The first version
+        # kept every dropped line, which means an unrecognised send or prune
+        # would be quietly parked in root's crontab -- ownership split in half
+        # without anyone deciding it, which is the very thing the host block was
+        # introduced to stop.
+        #
+        # Only lines this tool RECOGNISES as host-level are carried. Today that
+        # is the digest, which is one-per-host by construction. Anything else
+        # dropped is a defect in the migration, not a line to file away, and it
+        # stops the run by name.
         sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$rootcron" \
         | grep -E '^[0-9*]' \
         | while IFS= read -r orig; do
               fp=$(printf '%s\n' "$orig" | job_identity)
-              printf '%s\n' "$dropped" | grep -qxF -- "$fp" && printf '%s\n' "$orig"
-          done > "$hostlines"
-        _have "linie ogolnohostowe do zachowania: $(grep -cE '^[0-9*]' "$hostlines") (trafia do wlasnego bloku roota, nie luzem)"
+              printf '%s\n' "$dropped" | grep -qxF -- "$fp" || continue
+              case "$fp" in
+                  *alert-digest.sh*) printf '%s\n' "$orig" >> "$hostlines" ;;
+                  *)                 printf '%s\n' "$orig" >> "$orphans" ;;
+              esac
+          done
+        if [ -s "$orphans" ]; then
+            local norph; norph=$(grep -cE '^[0-9*]' "$orphans")
+            warn "root runs these job(s) and the block rendered for '$acct' does not reproduce them, yet they are not host-level either:"
+            sed 's/^/    /' "$orphans" >&2
+            LOCAL_USER=""; rm -f "$rootcron" "$acctcron" "$newblock" "$hostlines" "$orphans"
+            die "$norph job line(s) would belong to nobody after this migration. Leaving them in root's crontab would split one deployment between the tool and a human memory; dropping them would stop a backup silently. Fix the config so the account's render covers them, or move them out of the managed block deliberately, then re-run. Nothing has been changed."
+        fi
+        if [ -s "$hostlines" ]; then
+            _have "linie ogolnohostowe do zachowania: $(grep -cE '^[0-9*]' "$hostlines") (trafia do wlasnego bloku roota, nie luzem)"
+        fi
     fi
+    rm -f "$orphans"
 
     echo
     if [ "$preflight_only" -eq 1 ]; then
@@ -1985,8 +2044,19 @@ cmd_migrate_to_account() {
     echo "=== root: $(grep -cE '^[0-9*]' "$rootcron") linii zadan -> $(grep -cE '^[0-9*]' "$rootnew") ==="
     diff -u --label "root (teraz)" --label "root (po)" "$rootcron" "$rootnew" || :
     echo
-    echo "=== $acct: $(grep -cE '^[0-9*]' "$acctcron") linii zadan -> $(grep -cE '^[0-9*]' "$newblock") ==="
-    diff -u --label "$acct (teraz)" --label "$acct (po)" /dev/null "$newblock" || :
+    # REV-20260801-021: the account side used to diff /dev/null against the
+    # proposed block, which shows what will be ADDED and can never show what
+    # would be REMOVED. Build the exact post-install crontab instead --
+    # unmanaged lines preserved, any existing managed block replaced -- and diff
+    # the real one against that. The verb refuses an existing managed block
+    # anyway, so today the removal half is always empty; a preview that can only
+    # be right by luck is not a preview.
+    local acctnew; acctnew=$(mktemp) || die "mktemp failed"
+    awk '/^# BEGIN zfs-backup-managed/{s=1} s==0{print} /^# END zfs-backup-managed/{s=0}' "$acctcron" > "$acctnew"
+    cat "$newblock" >> "$acctnew"
+    echo "=== $acct: $(grep -cE '^[0-9*]' "$acctcron") linii zadan -> $(grep -cE '^[0-9*]' "$acctnew") ==="
+    diff -u --label "$acct (teraz)" --label "$acct (po)" "$acctcron" "$acctnew" || :
+    rm -f "$acctnew"
     echo
     [ "$needs_move" -eq 1 ] && echo "config:  $cfg  ->  $target_cfg   (PRZENIESIONY, nie kopiowany)"
     echo
