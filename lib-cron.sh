@@ -66,6 +66,27 @@ cron_block_name_valid() {   # <name>
     esac
 }
 
+# Which crontab(1) form addresses <user>: the bare one, or `-u <user>`.
+#
+# "root" counts as self even when the caller is not root, and that is a
+# deliberate carry-over from the code this file replaces, not an oversight:
+#
+#   * in every real invocation the program IS root by the time it touches a
+#     crontab -- installing root's own block, or the account's with -u. The two
+#     rules cannot differ there;
+#   * the suites run as an ordinary user and emulate root, which is what lets
+#     them cover the root paths on any machine without being root. Under a
+#     strict rule they would silently read an empty crontab through a stub that
+#     only knows `-l`, and twelve assertions would pass for the wrong reason.
+#
+# The footgun this leaves -- a non-root process asking for root's crontab and
+# getting its own -- is unreachable here: the only caller that names root is the
+# one installing root's block, which requires being root anyway. Changing the
+# semantics silently during a refactor would have been the worse choice.
+cron_is_self() {   # <user>
+    [ "$1" = "$(id -un)" ] || [ "$1" = root ]
+}
+
 # Read <user>'s crontab into <outfile>, or fail loudly.
 #
 # "No crontab for user" is EMPTY. Anything else is UNKNOWN, and an unknown
@@ -75,7 +96,7 @@ cron_block_name_valid() {   # <name>
 cron_read() {   # <user> <outfile>  -> 0 ok, 1 unreadable
     local who="$1" out="$2" err rc txt
     err=$(mktemp) || return 1
-    if [ "$who" = "$(id -un)" ] || { [ "$(id -u)" = 0 ] && [ "$who" = root ]; }; then
+    if cron_is_self "$who"; then
         txt=$(crontab -l 2>"$err"); rc=$?
     else
         txt=$(crontab -u "$who" -l 2>"$err"); rc=$?
@@ -99,7 +120,7 @@ cron_read() {   # <user> <outfile>  -> 0 ok, 1 unreadable
 # honest confirmation is to look.
 cron_write() {   # <user> <infile>  -> 0 ok, 1 failed
     local who="$1" in="$2" back rc
-    if [ "$who" = "$(id -un)" ] || { [ "$(id -u)" = 0 ] && [ "$who" = root ]; }; then
+    if cron_is_self "$who"; then
         crontab "$in" 2>/dev/null; rc=$?
     else
         crontab -u "$who" "$in" 2>/dev/null; rc=$?

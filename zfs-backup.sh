@@ -82,6 +82,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
+LIBCRON="$SCRIPT_DIR/lib-cron.sh"
+
+# The single crontab writer. Sourced, not reimplemented: this script used to
+# hold its own reader, its own writer and its own block renderer, which is how
+# three programs ended up with six ways of editing the same file. Missing is
+# fatal rather than degraded -- a fallback would be a fourth implementation.
+[ -r "$LIBCRON" ] || { echo "cannot read $LIBCRON -- the checkout is incomplete" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$LIBCRON"
 
 # Mirrors deploy.sh's own peer-pairing state locations exactly (see
 # PAIRING-DESIGN.md) -- this file reads what --pair/--join already write, it
@@ -577,16 +586,12 @@ managed_block_fingerprint() {   # crontab text on stdin -> sorted job identities
 # for an unreadable crontab caught it failing OPEN: exactly the direction this
 # helper exists to prevent.
 crontab_of_or_die() {   # <user> <outfile>
-    local who="$1" out="$2" err rc txt
-    err=$(mktemp) || die "mktemp failed"
-    if [ "$who" = root ] || [ "$who" = "$(id -un)" ]; then txt=$(crontab -l 2>"$err"); rc=$?
-    else txt=$(crontab -u "$who" -l 2>"$err"); rc=$?; fi
-    if [ "$rc" -ne 0 ] && ! grep -qi "no crontab" "$err"; then
-        local msg; msg=$(tr -d '\n' < "$err"); rm -f "$err"
-        die "could not read ${who}'s crontab (rc=$rc): $msg -- an unreadable crontab is not an empty one, and this check exists to stop two identities running the same jobs. Nothing has been changed."
-    fi
-    rm -f "$err"
-    printf '%s\n' "$txt" > "$out"
+    # The reading half lives in lib-cron.sh now, so "an unreadable crontab is
+    # not an empty one" has ONE definition instead of one per program. Only the
+    # die() belongs here: the library reports, the caller decides how loudly to
+    # stop.
+    cron_read "$1" "$2" \
+        || die "$CRON_ERR -- this check exists to stop two identities running the same jobs. Nothing has been changed."
 }
 
 # REV-20260801-021 F1. The overlap guard below deliberately allows a target that
@@ -776,8 +781,10 @@ cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
 # crontab with -u; as that account itself, -u is refused, so it is only added
 # when it is actually needed.
 crontab_for_target() {   # -> the target user's crontab on stdout
-    local u; u=$(cron_target_user)
-    if [ "$u" = root ] || [ "$u" = "$(id -un)" ]; then crontab -l; else crontab -u "$u" -l; fi
+    local u tmp; u=$(cron_target_user)
+    tmp=$(mktemp) || return 1
+    if ! cron_read "$u" "$tmp"; then rm -f "$tmp"; return 1; fi
+    cat "$tmp"; rm -f "$tmp"
 }
 
 # Run gen-cron.sh as the account that owns the jobs, with ITS paths. Running it
@@ -1001,8 +1008,11 @@ show_activation_proposal() {   # <current config> <proposed config>
 }
 
 _restore_target_crontab() {   # <file>
-    local u; u=$(cron_target_user)
-    if [ "$u" = root ] || [ "$u" = "$(id -un)" ]; then crontab "$1"; else crontab -u "$u" "$1"; fi
+    # cron_write, not a bare `crontab "$1"`: a restore that claims success
+    # without looking is the worst lie this code can tell, because it is told on
+    # the path where something has ALREADY gone wrong. The library writes and
+    # then reads back.
+    cron_write "$(cron_target_user)" "$1"
 }
 
 atomic_replace_and_install() {
@@ -1824,27 +1834,28 @@ cmd_migrate_profile() {
 # So they get their own marked block, owned by this tool, rewritten wholesale
 # and idempotently -- the same contract gen-cron.sh has with its own block, and
 # for the same reason.
-HOST_BEGIN='# BEGIN zfs-backup-host (host-level jobs kept by zfs-backup.sh -- do not hand-edit)'
-HOST_END='# END zfs-backup-host'
+HOST_NAME='zfs-backup-host'
+HOST_TAIL='(host-level jobs kept by zfs-backup.sh -- do not hand-edit)'
+HOST_BEGIN="# BEGIN $HOST_NAME $HOST_TAIL"
+HOST_END="# END $HOST_NAME"
 
 # Replace (or insert, or delete) the host block inside a crontab held in a file.
 # Empty <lines file> removes the block, which is what makes repeated migrations
 # converge instead of accumulating.
 set_host_block() {   # <crontab file> <lines file>
-    local cron="$1" lines="$2" tmp
+    local cron="$1" lines="$2" tmp body="-"
     tmp=$(mktemp) || die "mktemp failed"
-    # awk with a literal $0 == marker, not sed: the markers carry '(', ')' and
-    # '--', and a sed address would quietly fail to match rather than error --
-    # leaving the old block in place while the new one was appended.
-    awk -v b="$HOST_BEGIN" -v e="$HOST_END" '
-        $0==b { skip=1; next }
-        $0==e { skip=0; next }
-        skip==0 { print }' "$cron" > "$tmp"
-    if [ -s "$lines" ]; then
-        printf '%s\n' "$HOST_BEGIN" >> "$tmp"
-        cat "$lines" >> "$tmp"
-        printf '%s\n' "$HOST_END" >> "$tmp"
-    fi
+    # Rendered by lib-cron.sh so that "replace exactly this block, keep
+    # everything else byte for byte" has ONE definition in the project.
+    #
+    # The awk this replaces was correct, and that was the point: a second
+    # correct implementation is still a second thing to keep correct, and the
+    # two would drift the first time one of them learned something. It also
+    # matched the markers literally, so it could not have adopted a block whose
+    # BEGIN tail an older version had written differently.
+    [ -s "$lines" ] && body="$lines"
+    cron_block_render "$cron" "$HOST_NAME" "$body" "$tmp" "$HOST_TAIL" \
+        || die "${CRON_ERR:-could not render the $HOST_NAME block} -- nothing has been changed"
     mv -f "$tmp" "$cron"
 }
 

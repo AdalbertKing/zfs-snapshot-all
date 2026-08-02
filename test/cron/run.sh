@@ -234,6 +234,27 @@ check "H2 ...the tail is kept" "1" \
 check "H3 ...the loose lines are still there (adoption is a separate decision)" "2" \
       "$(grep -cE '^(0 8|15) ' "$(tab)")"
 
+# ---- I. how a user is addressed --------------------------------------------
+#
+# Load-bearing, and I nearly changed it silently while unifying the writers: the
+# refactor's first version addressed root with `crontab -u root`, which is more
+# literal and made twelve zfsbackup assertions pass for the wrong reason -- the
+# suites emulate root as an ordinary user through a stub that only knows `-l`,
+# so the strict form read an empty crontab and every diff said "no change".
+#
+# Pinned here so the next person to find `cron_is_self` odd reads why before
+#changing it.
+check "I1 my own name is self" "0" "$(cron_is_self "$ME"; echo $?)"
+check "I2 root counts as self (see the comment on cron_is_self)" "0"       "$(cron_is_self root; echo $?)"
+check "I3 anyone else does not" "1" "$(cron_is_self somebodyelse; echo $?)"
+# ...and the addressing actually reaches the stub in that form.
+none
+cron_block_install "$ME" zfs-backup-host "$(body '1 * * * * self')" >/dev/null
+check "I4 a self write lands in this user's crontab" "1"       "$(grep -c 'self' "$TMPD/tabs/$ME")"
+cron_block_install someotheruser zfs-backup-host "$(body '1 * * * * other')" >/dev/null
+check "I5 another user's write goes to THEIR crontab, not mine" "1"       "$(grep -c 'other' "$TMPD/tabs/someotheruser" 2>/dev/null || echo 0)"
+check "I6 ...and did not touch mine" "0"       "$(grep -c 'other' "$TMPD/tabs/$ME")"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

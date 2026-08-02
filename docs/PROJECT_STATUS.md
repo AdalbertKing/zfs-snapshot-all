@@ -431,7 +431,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 |---|---|---|
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
-| `cron` | **43/43** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
+| `cron` | **49/49** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
@@ -629,10 +629,14 @@ czterech hostach w obu formach hosta.
   blok `zfs-backup-host`, warstwa zadań blok `zfs-backup-managed`, a prymityw
   przyjmuje nazwę bloku jako argument, więc „nie mogę tknąć cudzych linii"
   przestaje być regułą do zapamiętania i staje się własnością jedynego wejścia.
-  **Plasterek 1 gotowy (`0a14a66`): `lib-cron.sh` + `test/cron` 43/43, żaden
-  pisarz jeszcze nie przełączony** — zachowanie produkcyjne bez zmian.
-  Kolejność: `zfs-backup.sh` (żaden host go nie używa produkcyjnie) →
-  `gen-cron.sh` → linie hosta w `deploy.sh` wraz z adopcją luźnych linii.
+  **Plasterek 1 (`0a14a66`): `lib-cron.sh` + `test/cron`, żaden pisarz jeszcze
+  nie przełączony. Plasterek 2: `zfs-backup.sh` przełączony** — jeden czytelnik
+  (`cron_read`), jeden pisarz z odczytem zwrotnym (`cron_write`, czyli
+  przywracanie crontaba przestaje móc kłamać) i jeden renderer bloku
+  (`cron_block_render` zamiast lokalnego `awk`). Zachowanie bez zmian poza
+  dodaną weryfikacją; `zfsbackup` 207/207, `cron` 49/49.
+  Kolejność dalej: `gen-cron.sh` → linie hosta w `deploy.sh` wraz z adopcją
+  luźnych linii.
   Robione **przed** enrollmentem, żeby nowe ścieżki instalacji crona nie
   powstawały w starym modelu.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
