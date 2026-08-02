@@ -1935,9 +1935,8 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # blocked first one can eat the whole window. Checking once certified a
         # boundary that the second pool never had.
         if ! quiesce_still_frozen "pool '$quiesce_pool'"; then
-            log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above). Pools already snapshotted inside the window keep their snapshots; they were taken while the freeze held."
-            quiesce_thaw_all || :
-            exit 3
+            log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above)"
+            quiesce_abandon_set "$quiesce_recursive_flag" 3
         fi
         # Unquoted on purpose: the value is the space-separated list built above,
         # and each name has to reach zfs as its own argument.
@@ -1947,6 +1946,10 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
             quiesce_snap_failed=1
             break
         fi
+        # Recorded only after zfs says it made them, so the ledger can never
+        # name something that does not exist.
+        # shellcheck disable=SC2206
+        QUIESCE_CREATED+=(${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]})
     done
 
     if [ $quiesce_snap_failed -eq 0 ]; then
@@ -1955,18 +1958,12 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # process_dataset deliberately ignores that one -- see the comment there.
         QUIESCE_SNAPPED=1
     else
-        # The guests are thawed by the trap either way. Failing here rather than
-        # falling through matters: silently continuing would take unquiesced
-        # snapshots one at a time and report success, which is the one outcome
-        # someone who asked for -q must never get without being told.
-        #
-        # Any pool that already succeeded keeps its snapshots: they were taken
-        # inside the freeze window and are perfectly valid, they match the
-        # configured retention pattern like any other, and destroying them would
-        # be throwing away good backups because a DIFFERENT pool failed.
+        # Failing here rather than falling through matters: silently continuing
+        # would take unquiesced snapshots one at a time and report success,
+        # which is the one outcome someone who asked for -q must never get
+        # without being told.
         log 0 "Quiesce: the atomic snapshot failed -- refusing to fall back to unquiesced per-dataset snapshots"
-        quiesce_thaw_all || :
-        exit 1
+        quiesce_abandon_set "$quiesce_recursive_flag" 1
     fi
     # A guest left frozen is an outage. Reporting it in the log and exiting 0
     # makes it an outage nobody goes looking for, so it fails the run

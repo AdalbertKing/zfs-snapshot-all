@@ -1080,10 +1080,127 @@ if [ -n "$before" ] && [ -n "$after" ] && [ "$before" -lt "$after" ]; then
 else
     check "twopool-local: ...and before that pool's zfs snapshot" "0" "1"
 fi
+# The thaw moved into quiesce_abandon_set, which is the ONE exit for "this set
+# will never be completed" -- so the assertion follows it there rather than
+# looking for the call it used to make inline.
 case "$loop" in
-    *quiesce_thaw_all*) check "twopool-local: its refusal path still thaws" "0" "0" ;;
-    *) check "twopool-local: its refusal path still thaws" "0" "1" ;;
+    *quiesce_abandon_set*) check "twopool-local: its refusal path goes through the abandon exit" "0" "0" ;;
+    *) check "twopool-local: its refusal path goes through the abandon exit" "0" "1" ;;
 esac
+ab=$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")
+case "$ab" in
+    *quiesce_thaw_all*) check "twopool-local: ...and that exit still thaws" "0" "0" ;;
+    *) check "twopool-local: ...and that exit still thaws" "0" "1" ;;
+esac
+
+# ---- an incomplete set is removed, not explained (REV-20260802-030) --------
+#
+# REV-029 made the boundary per-pool. That left this shape explicit: pool A is
+# snapshotted inside a valid freeze, the boundary then fails, pool B is refused
+# -- and pool A's snapshot survives. I argued that was safe because A was taken
+# while the freeze held. That proves the consistency of A. It says nothing about
+# leaving an incomplete SET in the namespace everything downstream reads:
+#
+#   * snapsend/snapget -e take src_snaps[-1], the NEWEST matching the prefix
+#     (snapsend.sh, USE_EXISTING_SNAPSHOT branch). A later tier job would ship
+#     pool A at T and pool B at T-1 as though both were the current tier;
+#   * check-snap-age.sh compares the newest snapshot per dataset against a
+#     threshold, so ONE missed interval on pool B sits inside the warn window
+#     and nothing anywhere says "this set is partial";
+#   * count-based retention gives the orphan a slot in pool A's ladder that has
+#     no counterpart in B's.
+#
+# So the set is destroyed. Everything below drives the REAL remote script.
+CL="$RQ_D"
+
+# 1+2. Two pools, the deadline fails between them: pool B is never touched...
+rq_reset 'exit 0'
+cat > "$CL/bin/zfs" <<'EOF'
+#!/bin/bash
+echo "zfs $*" >> "$TRACE"
+case "$*" in
+  *snapshot*tanka/*) sleep 3 ;;
+  *destroy*) [ -n "${QNODESTROY:-}" ] && exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$CL/bin/zfs"
+out=$(TRACE="$CL/trace" QSTATE="$CL/qs" PATH="$CL/bin:$PATH" \
+      bash "$CL/rq.sh" agent 30 "" 1 1 rpool/data/vm-100-disk-0 \
+           2 tanka/x@t tankb/y@t 2>&1); rc=$?
+check "cleanup: pool two is never snapshotted" "0" "$(grep -c 'snapshot.*tankb/y@t' "$CL/trace")"
+
+# 3. ...and pool A's snapshot, created by THIS invocation, is removed again.
+check "cleanup: the snapshot this run created is destroyed" "1" \
+      "$(grep -c 'zfs destroy.*tanka/x@t' "$CL/trace")"
+check "cleanup: and the run reports nothing committed" "5" "$rc"
+case "$out" in *"nothing committed"*) check "cleanup: ...in those words" "y" "y" ;;
+  *) check "cleanup: ...in those words" "y" "n ($out)" ;; esac
+
+# Nothing that this run did not create may be touched. The ledger is written
+# from what zfs confirmed, never derived, so the only destroy issued is for the
+# one snapshot it made.
+check "cleanup: exactly one destroy was issued, for exactly that snapshot" "1" \
+      "$(grep -c '^zfs destroy' "$CL/trace")"
+
+# 4. Cleanup itself fails -> a DISTINCT hard failure that names the survivor.
+rq_reset 'exit 0'
+out=$(TRACE="$CL/trace" QSTATE="$CL/qs" QNODESTROY=1 PATH="$CL/bin:$PATH" \
+      bash "$CL/rq.sh" agent 30 "" 1 1 rpool/data/vm-100-disk-0 \
+           2 tanka/x@t tankb/y@t 2>&1); rc=$?
+check "cleanup: an unremovable survivor is a distinct exit code" "7" "$rc"
+case "$out" in *"ROLLBACK INCOMPLETE"*) check "cleanup: ...announced as such" "y" "y" ;;
+  *) check "cleanup: ...announced as such" "y" "n ($out)" ;; esac
+case "$out" in *"tanka/x@t"*) check "cleanup: ...naming the exact snapshot that remains" "y" "y" ;;
+  *) check "cleanup: ...naming the exact snapshot that remains" "y" "n ($out)" ;; esac
+case "$out" in *"zfs destroy"*) check "cleanup: ...and the command to remove it" "y" "y" ;;
+  *) check "cleanup: ...and the command to remove it" "y" "n" ;; esac
+# The thaw must survive the worst path of all.
+case "$(cat "$CL/trace")" in *"helper thaw 100"*)
+    check "cleanup: the guest is thawed even when the rollback failed" "y" "y" ;;
+  *) check "cleanup: the guest is thawed even when the rollback failed" "y" "n" ;; esac
+
+# 5. A following NORMAL run is not influenced by the failed one: it creates and
+# uses a complete set of its own. The failed run destroyed its snapshot, so the
+# next run's ledger and namespace start clean.
+rq_reset 'exit 0'
+out=$(TRACE="$CL/trace" QSTATE="$CL/qs" PATH="$CL/bin:$PATH" \
+      bash "$CL/rq.sh" agent 30 "" 30 1 rpool/data/vm-100-disk-0 \
+           2 tanka/x2@t tankb/y2@t 2>&1); rc=$?
+check "cleanup: the next run completes" "0" "$rc"
+check "cleanup: ...snapshotting BOTH pools" "2" \
+      "$(grep -c 'zfs snapshot' "$CL/trace")"
+check "cleanup: ...and destroying nothing" "0" "$(grep -c '^zfs destroy' "$CL/trace")"
+
+# A run that fails BEFORE creating anything says so rather than reporting a
+# rollback it never had to do.
+rq_reset 'exit 0'
+out=$(QTHAWS_ITSELF=1 rq_run2); rc=$?
+case "$out" in *"had created no snapshot yet"*)
+    check "cleanup: a failure before the first pool says nothing was created" "y" "y" ;;
+  *) check "cleanup: a failure before the first pool says nothing was created" "y" "n ($out)" ;; esac
+
+# LOCAL path: same contract, pinned where it lives.
+ab=$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")
+case "$ab" in
+    *quiesce_destroy_created*) check "cleanup-local: the abandon exit destroys what the run created" "0" "0" ;;
+    *) check "cleanup-local: the abandon exit destroys what the run created" "0" "1" ;;
+esac
+case "$ab" in
+    *"rc=7"*) check "cleanup-local: an incomplete rollback has its own exit code" "0" "0" ;;
+    *) check "cleanup-local: an incomplete rollback has its own exit code" "0" "1" ;;
+esac
+# The ledger is appended only AFTER zfs confirms the snapshot, so it can never
+# name something that does not exist -- which is what makes "never delete a
+# pre-existing snapshot" true by construction rather than by care.
+loop=$(sed -n '/for quiesce_pool in "\${!QUIESCE_SNAPS_BY_POOL\[@\]}"; do/,/^    done$/p' "$REPO/snapsend.sh")
+snapline=$(printf '%s\n' "$loop" | grep -n 'zfs snapshot' | head -1 | cut -d: -f1)
+ledgerline=$(printf '%s\n' "$loop" | grep -n 'QUIESCE_CREATED+=' | head -1 | cut -d: -f1)
+if [ -n "$snapline" ] && [ -n "$ledgerline" ] && [ "$snapline" -lt "$ledgerline" ]; then
+    check "cleanup-local: the ledger records only what zfs confirmed" "0" "0"
+else
+    check "cleanup-local: the ledger records only what zfs confirmed" "0" "1"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -1800,6 +1800,76 @@ quiesce_scope() {
 # second call is harmless -- the EXIT trap fires even after an explicit thaw.
 # Every failure is shouted at log level 0: a guest that will not thaw is the one
 # outcome here that is worse than no quiescing at all.
+# Snapshots THIS invocation created inside the freeze window, in creation order.
+#
+# REV-20260802-030. A multi-pool job is N separate `zfs snapshot` commands and
+# the boundary can fail between them, so the run can end having created pool A's
+# snapshot and refused pool B's. Keeping A was defensible for A -- it was taken
+# while the freeze held -- and wrong for the SET, which is what everything
+# downstream actually reads:
+#
+#   * snapsend -e picks src_snaps[-1], the NEWEST matching the prefix. A later
+#     tier job would ship pool A at time T and pool B at T-1 as though both were
+#     the current tier, silently;
+#   * check-snap-age.sh compares the newest snapshot per dataset against a
+#     threshold, so ONE missed interval on pool B stays inside the warn window
+#     and nothing says "this set is partial";
+#   * count-based retention gives the orphan a slot in pool A's ladder that has
+#     no counterpart anywhere.
+#
+# So the set is removed rather than explained. The alternative -- marking
+# incomplete sets and teaching every send, base-selection, prune and monitor
+# path to ignore them -- is a great deal of machinery for a state that should
+# not outlive the run that made it.
+declare -a QUIESCE_CREATED=()
+
+# Destroys exactly what this run created, and nothing else: names are recorded
+# as they are created, never derived, so a pre-existing snapshot can never be
+# matched by accident. Returns non-zero if any survivor could not be removed,
+# leaving those in QUIESCE_CREATED for the caller to name.
+quiesce_destroy_created() {   # <recursive flag, "" or -r>
+    local rflag="$1" s left=() rc=0
+    [ "${#QUIESCE_CREATED[@]}" -eq 0 ] && return 0
+    for s in "${QUIESCE_CREATED[@]}"; do
+        # shellcheck disable=SC2086
+        if zfs destroy $rflag "$s" 2>/dev/null; then
+            log 1 "Quiesce: removed $s -- it belonged to a set that was never completed"
+        else
+            left+=("$s"); rc=1
+        fi
+    done
+    QUIESCE_CREATED=("${left[@]}")
+    return "$rc"
+}
+
+# The one exit for "this set will never be completed". ONE outcome reaches the
+# operator, which is the whole point of REV-20260802-030's UX criterion:
+#
+#   nothing committed, rollback complete   -> the caller's own code (3 for a
+#                                             failed boundary, 1 for a failed
+#                                             `zfs snapshot`), so WHY is not
+#                                             lost when the state is stated
+#   rollback INCOMPLETE, these remain      -> exit 7, named individually, and it
+#                                             outranks the reason because the
+#                                             state now needs a human
+#
+# Thaw happens either way and last: a guest left frozen is an outage, and it
+# must not depend on whether the cleanup worked.
+quiesce_abandon_set() {   # <recursive flag> <exit code when the rollback is clean>
+    local rflag="$1" rc="${2:-3}" s
+    if quiesce_destroy_created "$rflag"; then
+        log 0 "Quiesce: nothing committed -- every snapshot this run created has been removed"
+    else
+        rc=7
+        log 0 "Quiesce: ROLLBACK INCOMPLETE. These snapshots were created by this run and could NOT be removed; they are part of a set that was never completed, and something downstream will treat them as ordinary snapshots until they are dealt with:"
+        for s in "${QUIESCE_CREATED[@]}"; do
+            log 0 "Quiesce:   $s   (remove with: zfs destroy $rflag $s)"
+        done
+    fi
+    quiesce_thaw_all || :
+    exit "$rc"
+}
+
 # Set when a thaw did not take. The caller must fail the run on it
 # (REV-20260801-023): a guest left frozen is an outage, and an outage the job
 # reported as a successful backup is an outage nobody goes looking for.
@@ -2039,6 +2109,7 @@ on_exit() {
         rm -f "$frozen_file"
         [ -n "${deadman_pid:-}" ] && kill "$deadman_pid" 2>/dev/null
     fi
+    rm -f "$created_file"
     exit "$ec"
 }
 trap on_exit EXIT
@@ -2241,6 +2312,42 @@ boundary_ok() {   # <what>
     return 0
 }
 
+# REV-20260802-030. A multi-pool job is N commands and the boundary can fail
+# between them, so this run can end having created pool A and refused pool B.
+# Keeping A was defensible for A and wrong for the SET: snapsend/snapget -e
+# take the newest matching snapshot, so a later tier job would ship one pool at
+# T and the other at T-1 as though both were current. The set is removed rather
+# than explained.
+created_file=$(mktemp) || { echo "QERR mktemp failed for the created-snapshot ledger" >&2; exit 1; }
+destroy_one() {   # <snapshot>
+    if [ -n "$rflag" ]; then zfs destroy "$rflag" "$1" 2>/dev/null; else zfs destroy "$1" 2>/dev/null; fi
+}
+abandon_set() {   # <why> <exit code when the rollback is clean>
+    local why="$1" s left rc="${2:-5}"
+    if [ -s "$created_file" ]; then
+        left=$(mktemp) || left=""
+        while read -r s; do
+            [ -n "$s" ] || continue
+            if destroy_one "$s"; then
+                echo "QLOG removed $s -- it belonged to a set that was never completed"
+            else
+                [ -n "$left" ] && echo "$s" >> "$left"
+            fi
+        done < "$created_file"
+        if [ -n "$left" ] && [ -s "$left" ]; then
+            rc=7
+            echo "QERR ROLLBACK INCOMPLETE after $why. These snapshots were created by this run and could NOT be removed:" >&2
+            while read -r s; do echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2; done < "$left"
+        else
+            echo "QLOG nothing committed -- every snapshot this run created has been removed"
+        fi
+        [ -n "$left" ] && rm -f "$left"
+    else
+        echo "QLOG nothing committed -- this run had created no snapshot yet"
+    fi
+    exit "$rc"
+}
+
 # One atomic `zfs snapshot` per pool, exactly like the local path: a pool is
 # the widest unit ZFS will snapshot atomically, and every guest stays frozen
 # until the last group is done.
@@ -2251,14 +2358,15 @@ for s in "${snaps[@]}"; do
 done
 rc=0
 for p in $pools; do
-    if ! boundary_ok "the snapshot of pool $p"; then rc=5; break; fi
+    if ! boundary_ok "the snapshot of pool $p"; then abandon_set "the boundary check before pool $p" 5; fi
     group=()
     for s in "${snaps[@]}"; do [ "${s%%/*}" = "$p" ] && group+=("$s"); done
     if [ -n "$rflag" ]; then
-        zfs snapshot "$rflag" "${group[@]}" || { rc=4; break; }
+        zfs snapshot "$rflag" "${group[@]}" || abandon_set "the snapshot of pool $p" 4
     else
-        zfs snapshot "${group[@]}" || { rc=4; break; }
+        zfs snapshot "${group[@]}" || abandon_set "the snapshot of pool $p" 4
     fi
+    for s in "${group[@]}"; do echo "$s" >> "$created_file"; done
 done
 
 # Thawing, stopping the deadman and deciding whether the frozen list may be
@@ -2307,6 +2415,7 @@ quiesce_remote_run() {
         3) log 0 "Quiesce: $host cannot run remote quiesce safely (see the reason above) -- nothing was frozen. Either re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce."; return 3 ;;
         4) return 4 ;;
         5) log 0 "Quiesce: a guest on $host could not be quiesced, so NO snapshot was taken -- a crash-consistent snapshot reported as success is the outcome -q exists to prevent."; return 5 ;;
+        7) log 0 "Quiesce: $host could not remove the snapshots of an incomplete set (named above) -- they are still there and something downstream will treat them as ordinary snapshots until they are dealt with."; return 7 ;;
         6) log 0 "Quiesce: a guest on $host is STILL FROZEN after the thaw failed. The deadman is retrying; if it gives up, thaw it by hand -- the exact command is in the lines above."; return 6 ;;
         *) log 0 "Quiesce: the remote quiesce run failed on $host (exit $rc)"; return 1 ;;
     esac
