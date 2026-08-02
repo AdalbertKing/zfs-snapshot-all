@@ -635,8 +635,18 @@ czterech hostach w obu formach hosta.
   przywracanie crontaba przestaje móc kłamać) i jeden renderer bloku
   (`cron_block_render` zamiast lokalnego `awk`). Zachowanie bez zmian poza
   dodaną weryfikacją; `zfsbackup` 207/207, `cron` 49/49.
-  Kolejność dalej: `gen-cron.sh` → linie hosta w `deploy.sh` wraz z adopcją
-  luźnych linii.
+  **Plasterek 3: `gen-cron.sh --install` przełączony** — zostaje w nim tylko
+  jego własna polityka (flock oraz odmowa instalacji obok luźnych linii
+  `snapsend`/`delsnaps`/`check-snap-age`, gdy bloku jeszcze nie ma). Sprawdzone
+  na żywo na metropolis pve1: render **starego i nowego kodu na produkcyjnym
+  configu jest identyczny** przy tym samym `REPO_DIR`, `scenarios` 34/34 na
+  hoście, `gencron` 56/56, `cron2conf` 10/10, `zfsbackup` 207/207.
+  Zmiana zachowania warta odnotowania: dopasowanie markera było **dosłownym
+  porównaniem** z `MARKER_BEGIN`, więc blok z innym ogonem nie zostałby
+  rozpoznany i dopisałby się **drugi**; biblioteka dopasowuje po nazwie, więc
+  taki blok jest adoptowany.
+  Zostało: linie hosta w `deploy.sh` wraz z adopcją luźnych linii — jedyny
+  plasterek dotykający żywego crontaba roota.
   Robione **przed** enrollmentem, żeby nowe ścieżki instalacji crona nie
   powstawały w starym modelu.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
