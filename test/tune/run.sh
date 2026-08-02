@@ -233,7 +233,16 @@ esac
 STUB
 chmod +x "$TMPD/bin/zfs"
 PATH="$TMPD/bin:$PATH"
-TUNE_SAMPLE_MB=1   # keep the suite fast; the arithmetic does not care
+# 1 MB flaked twice in CI (runs 139/5ff1b0b, 156/a34f4a9): on a fast, idle
+# runner the transfer can finish inside the clock's rounding granularity, and
+# tune_probe_stream's own rt<=0/ct<=0 guard -- which exists to refuse dividing
+# by a zero duration -- then rejects a real measurement as unmeasurable.
+# Reproduced locally by stubbing `date` to return a fixed timestamp: the same
+# two checks fail the same way. 8 MB keeps the suite fast while giving real
+# I/O (plus, for the compressible case, a real gzip fork) enough work that the
+# duration cannot round to zero; the arithmetic still does not care about the
+# exact value.
+TUNE_SAMPLE_MB=8
 
 # COMPRESS_PIPE=cat is a compressor that compresses nothing: ratio must come out
 # at exactly 1, which is the arithmetic identity the rate maths is built on.
