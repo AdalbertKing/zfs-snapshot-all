@@ -412,7 +412,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | **137/137** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
+| `quiesce` | **145/145** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
@@ -587,13 +587,15 @@ czterech hostach w obu formach hosta.
   **DOCIĄGNIĘTA 2026-08-02** (`7564f8e`): kolejność, ponowny odczyt na granicy,
   termin i odmowa przy nieczytelnym `fsfreeze-status`. Thaw był tam gwarantowany
   od początku (trap EXIT + deadman).
-- **DŁUG: `snapsend`, `scenarios`, `remote` nieuruchomione** dla `7564f8e`,
-  `c7ce8da`, `90a06c8` i `9fbf1df`. Wymagają roota, ZFS i drugiego hosta, a VPN do obu
-  klastrów jest zerwany. Łagodzi to fakt, że **żaden blok we flocie nie używa
-  dziś quiesce'u zdalnego** — wszystkie cztery robią wyłącznie lokalne snapshoty
-  — więc niezweryfikowany kod nie leży na ścieżce, którą cron wykonuje. To jest
-  łagodzenie, nie substytut. Pierwsza rzecz do zrobienia po powrocie łączności.
-- ~~Czy migrować pozostałe hosty~~ — **ZROBIONE 2026-08-01/02: wszystkie
+- ~~DŁUG: `snapsend`, `scenarios`, `remote` nieuruchomione~~ — **SPŁACONY
+  2026-08-02 12:00–12:45.** `remote` 145/145 **dwukrotnie** — jako root i jako
+  konto delegowane (to drugie z `--local-parent rpool/data`, bo domyślny scratch
+  `rpool` jest pisany pod roota, a konto ma delegację tylko niżej). `snapsend`
+  202/202, `scenarios` 34/34 na metropolis pve1.
+- ~~Ścieżka zdalna bez ponownego odczytu i terminu~~ — **DOCIĄGNIĘTA**
+  (`7564f8e`), a granica objęła **każdą pulę** (`c7ce8da`, REV-029), niekompletny
+  zestaw jest **usuwany** (`9fbf1df`, REV-030), a raport wycofania nie może już
+  zawieść fail-open (`3d4c13f`, REV-031).- ~~Czy migrować pozostałe hosty~~ — **ZROBIONE 2026-08-01/02: wszystkie
   cztery.** pve2 21:44, pve1 192.168.11.11 23:02, pve0 23:05. Każdy host ma
   własne konto delegowane, grant quiesce i config w `/etc/zfs-snapshot-all/`.
   Pierwszy nocny przebieg pod cronem przeszedł na wszystkich, z potwierdzeniem
