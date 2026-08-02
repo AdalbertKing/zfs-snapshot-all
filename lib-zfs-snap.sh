@@ -2109,7 +2109,6 @@ on_exit() {
         rm -f "$frozen_file"
         [ -n "${deadman_pid:-}" ] && kill "$deadman_pid" 2>/dev/null
     fi
-    rm -f "$created_file"
     exit "$ec"
 }
 trap on_exit EXIT
@@ -2318,9 +2317,40 @@ boundary_ok() {   # <what>
 # take the newest matching snapshot, so a later tier job would ship one pool at
 # T and the other at T-1 as though both were current. The set is removed rather
 # than explained.
-created_file=$(mktemp) || { echo "QERR mktemp failed for the created-snapshot ledger" >&2; exit 1; }
+# The ledger of what THIS invocation created. An array, not a file.
+#
+# It was a file until REV-20260802-032, and the review is about the cost of
+# that: an append can fail, `zfs snapshot` is atomic per POOL, so by the time
+# one does, the whole group exists and earlier pools may exist too. Handling
+# that meant a second inventory for what the first could not hold, two places
+# for the rollback to read, and a rule that a snapshot must appear in exactly
+# one of them or be destroyed twice.
+#
+# None of it is necessary. Nothing outside this shell ever read the file -- not
+# the deadman, not on_exit, not a subshell -- so the storage that could fail
+# bought nothing. One array, appended to only AFTER `zfs snapshot` returns
+# success, cannot fail to record and cannot under-report; a planned name is not
+# evidence that a snapshot exists, so the cleanup never destroys on a guess.
+# The local path has always worked this way. Now both are the same shape.
+created=()
 destroy_one() {   # <snapshot>
     if [ -n "$rflag" ]; then zfs destroy "$rflag" "$1" 2>/dev/null; else zfs destroy "$1" 2>/dev/null; fi
+}
+# One snapshot's worth of rollback. Shared by both inventories so they cannot
+# drift, and it touches ab_* directly rather than returning a status: it must
+# run in THIS shell, never a subshell, or the flags it sets would be lost.
+abandon_one() {   # <snapshot> <why>
+    ab_any=1
+    if destroy_one "$1"; then
+        echo "QLOG removed $1 -- it belonged to a set that was never completed"
+    else
+        if [ "$ab_header" -eq 0 ]; then
+            echo "QERR ROLLBACK INCOMPLETE after $2. These snapshots were created by this run and could NOT be removed:" >&2
+            ab_header=1
+        fi
+        echo "QERR   $1   (remove by hand: zfs destroy $rflag $1)" >&2
+        ab_failed=1
+    fi
 }
 abandon_set() {   # <why> <exit code when the rollback is clean>
     # NO second temporary file (REV-20260802-031). The previous version staged
@@ -2332,28 +2362,19 @@ abandon_set() {   # <why> <exit code when the rollback is clean>
     #
     # Each survivor is therefore printed the moment it is known, and a flag --
     # which cannot fail to be set -- decides the exit code.
-    local why="$1" s rc="${2:-5}" failed=0 header=0
-    if [ -s "$created_file" ]; then
-        while read -r s; do
-            [ -n "$s" ] || continue
-            if destroy_one "$s"; then
-                echo "QLOG removed $s -- it belonged to a set that was never completed"
-            else
-                if [ "$header" -eq 0 ]; then
-                    echo "QERR ROLLBACK INCOMPLETE after $why. These snapshots were created by this run and could NOT be removed:" >&2
-                    header=1
-                fi
-                echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2
-                failed=1
-            fi
-        done < "$created_file"
-        if [ "$failed" -eq 1 ]; then
-            rc=7
-        else
-            echo "QLOG nothing committed -- every snapshot this run created has been removed"
-        fi
-    else
+    local why="$1" s rc="${2:-5}"
+    ab_failed=0; ab_header=0; ab_any=0
+    if [ "${#created[@]}" -gt 0 ]; then
+        for s in "${created[@]}"; do
+            abandon_one "$s" "$why"
+        done
+    fi
+    if [ "$ab_any" -eq 0 ]; then
         echo "QLOG nothing committed -- this run had created no snapshot yet"
+    elif [ "$ab_failed" -eq 1 ]; then
+        rc=7
+    else
+        echo "QLOG nothing committed -- every snapshot this run created has been removed"
     fi
     exit "$rc"
 }
@@ -2376,16 +2397,11 @@ for p in $pools; do
     else
         zfs snapshot "${group[@]}" || abandon_set "the snapshot of pool $p" 4
     fi
-    # A ledger this run cannot write is a snapshot this run cannot promise to
-    # remove, so it is reported and refused immediately rather than at the end
-    # (REV-20260802-031, second half).
-    for s in "${group[@]}"; do
-        if ! echo "$s" >> "$created_file"; then
-            echo "QERR could not record $s in the created-snapshot ledger, so this run cannot guarantee to remove it. ROLLBACK INCOMPLETE:" >&2
-            echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2
-            exit 7
-        fi
-    done
+    # Recorded only now, with the whole group at once: `zfs snapshot` is atomic
+    # per pool, so its success is the evidence that every member exists, and an
+    # array append cannot fail the way the old ledger file could
+    # (REV-20260802-031, REV-20260802-032).
+    created+=("${group[@]}")
 done
 
 # Thawing, stopping the deadman and deciding whether the frozen list may be
@@ -2394,8 +2410,11 @@ done
 case "$rc" in
     0) ;;
     4) echo "QERR the atomic snapshot failed on the source host -- refusing to fall back to unquiesced snapshots" >&2 ;;
-    # 5 already said which pool and why. Pools snapshotted before it keep their
-    # snapshots: they were taken while the freeze demonstrably held.
+    # 5 already said which pool and why, and abandon_set exits from
+    # inside the loop -- so that code never arrives here. Pools snapshotted
+    # before the failure do NOT keep their snapshots (REV-20260802-030): they
+    # were consistent individually and part of an incomplete set collectively,
+    # and the set is what everything downstream reads.
     *) echo "QERR stopped before completing every pool -- no unquiesced snapshot was taken" >&2 ;;
 esac
 exit "$rc"

@@ -1222,7 +1222,10 @@ fi
 # assertion measured that instead of what it claimed to. Recorded because a too-
 # broad injection passes or fails for the wrong reason just as silently as a
 # too-narrow one.
-ab=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | sed -n '/^abandon_set() {/,/^}$/p')
+# Both halves of the rollback: the per-snapshot work moved into abandon_one
+# (REV-20260802-032) so the file inventory and the in-memory one cannot drift,
+# and a guard that reads only one of the two would go quietly blind.
+ab=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | sed -n '/^abandon_one() {/,/^}$/p;/^abandon_set() {/,/^}$/p')
 # CODE only. The first version of this check matched the word `mktemp` in the
 # comment explaining why there is no mktemp -- a guard that breaks the moment
 # someone documents the thing it guards is worse than no guard.
@@ -1239,48 +1242,139 @@ case "$ab" in
 esac
 # "nothing committed" must be reachable only when the flag says so.
 nc=$(printf '%s\n' "$ab" | grep -n 'nothing committed -- every snapshot' | cut -d: -f1)
-fl=$(printf '%s\n' "$ab" | grep -n 'if \[ "\$failed" -eq 1 \]' | cut -d: -f1)
+fl=$(printf '%s\n' "$ab" | grep -n 'elif \[ "\$ab_failed" -eq 1 \]' | cut -d: -f1)
 if [ -n "$nc" ] && [ -n "$fl" ] && [ "$fl" -lt "$nc" ]; then
     check "failopen: the clean-rollback message sits behind the failure flag" "0" "0"
 else
     check "failopen: the clean-rollback message sits behind the failure flag" "0" "1"
 fi
 
-# The other half of the review, and this one IS injectable: a ledger WRITE that
-# fails is the same class -- a snapshot exists that the run cannot promise to
-# remove. The stub hands back a DIRECTORY for the ledger, so the append fails
-# while everything else, thaw included, keeps working.
+# ---- the rollback must account for the WHOLE set (REV-20260802-032) --------
+#
+# REV-031's second half was implemented as: on a failed ledger append, print
+# THAT snapshot and exit 7 on the spot. REV-032 named exactly what that misses.
+# `zfs snapshot` is atomic per POOL, so when an append fails the whole group
+# already exists and earlier pools may exist too. The alarm listed one name out
+# of a set, called itself ROLLBACK INCOMPLETE without attempting any rollback,
+# and left the rest as ordinary snapshots for the next -e job to consume.
+#
+# The fix is not a second inventory for what the first could not hold. The
+# ledger is now an ARRAY, like the local path has always used, so the storage
+# that could fail is gone: there is one inventory, an append to it cannot fail,
+# and nothing outside this shell ever needed a file. What is left to prove is
+# that the ONE inventory is complete -- across pools, across group members --
+# and that is what this section drives, through the real remote script.
+#
+# Trying to inject the old failure taught this section its shape: a stub that
+# replaced the ledger file with a directory between pools also DESTROYED pool
+# one's record, so the run could no longer name a snapshot it had really made.
+# That is not an artefact of the stub. It is what a file-backed ledger is worth
+# once writing to it stops working.
 rq_reset 'exit 0'
-printf '#!/bin/bash\necho "zfs $*" >> "$TRACE"\nexit 0\n' > "$CL/bin/zfs"
-cat > "$CL/bin/mktemp" <<'EOF'
+cat > "$CL/bin/zfs" <<'EOF'
 #!/bin/bash
-# The created-snapshot ledger is the SECOND allocation in this script -- the
-# first is frozen_file, and sabotaging that one instead only made thaw_all do
-# nothing while everything else succeeded. It is sabotaged into something that
-# exists but cannot be appended to; every other mktemp behaves normally.
-n="${MKTEMP_STATE:-/tmp/mkstate}"
-c=$(cat "$n" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$n"
-if [ "$c" = 2 ] && [ -n "${MKTEMP_DIR_LEDGER:-}" ]; then
-    d=$(/usr/bin/mktemp -d); echo "$d"; exit 0
-fi
-exec /usr/bin/mktemp "$@"
+echo "zfs $*" >> "$TRACE"
+case "$*" in
+  *snapshot*tankc/*) exit 1 ;;   # the third pool fails, after two succeeded
+  *destroy*)
+    # QNODESTROY is a LIST, so a survivor can be chosen per snapshot instead of
+    # all-or-nothing -- otherwise "every survivor is named" and "the removed
+    # ones are not" cannot be told apart.
+    for n in ${QNODESTROY:-}; do
+        case "$*" in *"$n"*) exit 1 ;; esac
+    done ;;
+esac
+exit 0
 EOF
-chmod +x "$CL/bin/zfs" "$CL/bin/mktemp"
-rm -f "$CL/mkstate"
-out=$(TRACE="$CL/trace" QSTATE="$CL/qs" MKTEMP_STATE="$CL/mkstate" MKTEMP_DIR_LEDGER=1 \
-      PATH="$CL/bin:$PATH" \
+chmod +x "$CL/bin/zfs"
+lg_run() {   # <QNODESTROY list>
+    rm -f "$CL/trace"
+    QNODESTROY="$1" TRACE="$CL/trace" QSTATE="$CL/qs" PATH="$CL/bin:$PATH" \
       bash "$CL/rq.sh" agent 30 "" 30 1 rpool/data/vm-100-disk-0 \
-           1 tanka/x@t 2>&1); rc=$?
-check "failopen: an unwritable ledger exits 7, not 0" "7" "$rc"
-case "$out" in *"could not record"*)
-    check "failopen: ...and says the ledger could not be written" "y" "y" ;;
-  *) check "failopen: ...and says the ledger could not be written" "y" "n ($out)" ;; esac
-case "$out" in *"tanka/x@t"*)
-    check "failopen: ...naming the snapshot it cannot promise to remove" "y" "y" ;;
-  *) check "failopen: ...naming the snapshot it cannot promise to remove" "y" "n ($out)" ;; esac
+           4 tanka/x@t tankb/y@t tankb/z@t tankc/w@t 2>&1
+}
+
+# A pool is one atomic call, so both of pool two's snapshots exist together --
+# which is why the set, not the name, is the unit the rollback has to handle.
+out=$(lg_run ""); rc=$?
+check "ledger: a pool group is created in ONE atomic call" "1" \
+      "$(grep -c 'zfs snapshot tankb/y@t tankb/z@t' "$CL/trace")"
+check "ledger: the run stops at the pool that failed" "4" "$rc"
+
+# Every member of the completed group goes, not just the first...
+check "ledger: the whole group of the last completed pool is destroyed" "1" \
+      "$(grep -c 'zfs destroy tankb/y@t' "$CL/trace")"
+check "ledger: ...including its second member" "1" \
+      "$(grep -c 'zfs destroy tankb/z@t' "$CL/trace")"
+# ...and so does the pool completed before it.
+check "ledger: ...and the snapshot from the EARLIER pool" "1" \
+      "$(grep -c 'zfs destroy tanka/x@t' "$CL/trace")"
+# Exactly three: nothing ordinary is left behind, and nothing is destroyed
+# twice -- a double destroy would fail the second time and be reported as a
+# survivor that is in fact already gone.
+check "ledger: exactly three destroys, none repeated" "3" \
+      "$(grep -c '^zfs destroy' "$CL/trace")"
+# The pool that never got made is not invented as something to remove.
+check "ledger: the pool that failed is never destroyed" "0" \
+      "$(grep -c 'destroy tankc/w@t' "$CL/trace")"
+case "$out" in *"nothing committed -- every snapshot"*)
+    check "ledger: a complete rollback says nothing was committed" "y" "y" ;;
+  *) check "ledger: a complete rollback says nothing was committed" "y" "n ($out)" ;; esac
+case "$out" in *"ROLLBACK INCOMPLETE"*)
+    check "ledger: ...and is NOT announced as incomplete" "y" "n ($out)" ;;
+  *) check "ledger: ...and is NOT announced as incomplete" "y" "y" ;; esac
 case "$(cat "$CL/trace")" in *"helper thaw 100"*)
-    check "failopen: ...and the guest is still thawed" "y" "y" ;;
-  *) check "failopen: ...and the guest is still thawed" "y" "n" ;; esac
+    check "ledger: the guest is thawed" "y" "y" ;;
+  *) check "ledger: the guest is thawed" "y" "n" ;; esac
+
+# Now make the rollback itself fail -- one snapshot from the earlier pool and
+# one from the middle of the last group, so a report that can only see part of
+# the set is caught.
+out=$(lg_run "tanka/x@t tankb/z@t"); rc=$?
+check "ledger: an unremovable survivor is exit 7" "7" "$rc"
+case "$out" in *"tanka/x@t"*)
+    check "ledger: ...the survivor from the earlier pool is named" "y" "y" ;;
+  *) check "ledger: ...the survivor from the earlier pool is named" "y" "n ($out)" ;; esac
+case "$out" in *"tankb/z@t"*)
+    check "ledger: ...the survivor from the last group is named too" "y" "y" ;;
+  *) check "ledger: ...the survivor from the last group is named too" "y" "n ($out)" ;; esac
+case "$out" in *"remove by hand: zfs destroy"*)
+    check "ledger: ...each with the exact removal command" "y" "y" ;;
+  *) check "ledger: ...each with the exact removal command" "y" "n ($out)" ;; esac
+# Over-reporting is its own defect: it sends an operator hunting for a snapshot
+# that does not exist, and the next real alarm gets read as noise.
+case "$out" in *"removed tankb/y@t"*)
+    check "ledger: ...and the one that WAS removed is not listed as a survivor" "y" "y" ;;
+  *) check "ledger: ...and the one that WAS removed is not listed as a survivor" "y" "n ($out)" ;; esac
+case "$(cat "$CL/trace")" in *"helper thaw 100"*)
+    check "ledger: the guest is thawed even when the rollback failed" "y" "y" ;;
+  *) check "ledger: the guest is thawed even when the rollback failed" "y" "n" ;; esac
+
+# STRUCTURE. The failure class REV-031 and REV-032 are both about is gone
+# rather than handled, so what has to be pinned is its absence.
+#
+# Temporary files still exist in this script, and must: the frozen list is read
+# by the DEADMAN, another process entirely, so it has to be on disk. The
+# created-snapshot inventory never was, which is why it does not.
+stray=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | grep -vE '^[[:space:]]*#' \
+        | grep 'mktemp' | grep -cvE 'frozen_file|left=')
+check "ledger: every temporary file left belongs to the frozen list" "0" "$stray"
+check "ledger: nothing backs the created-snapshot inventory with a file" "0" \
+      "$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | grep -c 'created_file')"
+# One inventory, walked in one place, so there is no second home a survivor
+# could hide in.
+nrd=$(printf '%s\n' "$ab" | grep -c 'for s in "\${created\[@\]}"')
+check "ledger: the rollback walks exactly one inventory" "1" "$nrd"
+# Recorded only after zfs confirms: a planned name is not evidence that a
+# snapshot exists, and cleanup that cannot tell the difference destroys on a
+# guess. Same rule as the local path, asserted the same way.
+snapl=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | grep -n 'zfs snapshot "\${group\[@\]}"' | head -1 | cut -d: -f1)
+addl=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | grep -n 'created+=' | head -1 | cut -d: -f1)
+if [ -n "$snapl" ] && [ -n "$addl" ] && [ "$snapl" -lt "$addl" ]; then
+    check "ledger: the inventory records only what zfs confirmed" "0" "0"
+else
+    check "ledger: the inventory records only what zfs confirmed" "0" "1"
+fi
 
 # The local path has no such mode -- QUIESCE_CREATED is a bash array and an
 # append cannot fail -- which is why this section is remote-only. Pinned so the
