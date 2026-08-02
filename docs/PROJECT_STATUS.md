@@ -619,6 +619,22 @@ czterech hostach w obu formach hosta.
   bo stary defekt wymagał trybu awarii, którego już nie ma. Reprodukcja defektu
   jest w odpowiedzi zamiast w suicie.
 
+- **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
+  enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
+  zakresu i odróżniać endpoint od trasy. Recenzja wprost zabrania
+  implementowania czegokolwiek przed odpowiedzią. Odpowiedź w
+  `docs/reviews/responses/REV-20260802-033.md`: **wszystkie pięć findingów
+  ACCEPTED**, F3 i F5 z naddatkiem.
+  Poprzedziła ją rozmowa właściciel ↔ implementer — dziesięć uzgodnień spisanych
+  w `docs/discussions/ENROLMENT-AGREED-2026-08-02.md`, m.in. edycja pliku na
+  pve2, granty osobną komendą, zawężenie odbierające tylko własne granty, sync
+  odrzucany między węzłami tego samego klastra, jeden aktualny endpoint zamiast
+  slotów `lan`/`vpn`, oraz online bez żadnej nowej usługi.
+  **Do zważenia przez recenzenta:** inwentaryzacja pokazuje, że szew z F1 jest
+  mniejszy, niż zakłada recenzja — format paczki **już dziś** toleruje brak
+  zakresu (`PEER_CONF_DATASETS` nie jest kluczem wymaganym, pętla grantów nie
+  robi nic na pustej liście, `--draft-config` radzi sobie z pustym manifestem).
+  Nowy jest wyłącznie drugi akt: finalizacja nadająca granty z edytowanego pliku.
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
