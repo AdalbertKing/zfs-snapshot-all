@@ -341,3 +341,81 @@ cron_block_diff() {   # <user> <name> <bodyfile|->  -> prints a diff, 0 if ident
     rm -f "$cur" "$new"
     return 1
 }
+
+# Make sure ONE line exists inside <name>'s block, and adopt any loose copy of
+# it that is living outside the block.
+#
+# This is the shape deploy.sh's four hand-rolled sites had -- "if the crontab
+# already mentions this script, leave it alone, otherwise append it" -- with the
+# two things that were missing from it:
+#
+#   * the line goes INSIDE a managed block, so a later teardown or migration can
+#     tell whose it is. Two of deploy.sh's lines were loose in root's crontab,
+#     indistinguishable from something a human typed, and therefore impossible
+#     to remove, move or audit without guessing;
+#   * a loose copy is MOVED rather than left to run twice. Appending the managed
+#     copy next to an unmanaged one would double the schedule, which is exactly
+#     the failure gen-cron.sh refuses to risk with its own conflict check.
+#
+# <match> is a FIXED STRING (grep -F), and it decides both questions: which
+# existing line is "this line", and which loose line gets adopted. Callers pass
+# the same identifying substring they used to grep for before -- the script's
+# path -- so adoption cannot reach further than the old detection did.
+#
+# Everything else in the crontab, inside the block or outside it, is untouched.
+# <also> (optional, newline-separated fixed strings) names OTHER shapes of the
+# same job -- older spellings this program has emitted over time. They are
+# dropped wherever they are found, inside the block or loose, so normalising an
+# obsolete line is the same operation as installing the current one. deploy.sh
+# needs it: its updater line has had three shapes, and leaving one of them next
+# to the current one would run the update twice an hour.
+cron_block_ensure_line() {   # <user> <name> <match> <line> [begin_tail] [also]
+    local who="$1" name="$2" match="$3" line="$4" tail="${5:-}" also="${6:-}"
+    CRON_ERR=""; CRON_ADOPTED=0
+    cron_block_name_valid "$name" || { CRON_ERR="invalid block name '$name'"; return 1; }
+    [ -n "$match" ] || { CRON_ERR="cron_block_ensure_line needs a non-empty match string"; return 1; }
+
+    local cur body new
+    cur=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
+    body=$(mktemp) || { rm -f "$cur"; CRON_ERR="mktemp failed"; return 1; }
+    new=$(mktemp) || { rm -f "$cur" "$body"; CRON_ERR="mktemp failed"; return 1; }
+    if ! cron_read "$who" "$cur"; then rm -f "$cur" "$body" "$new"; return 1; fi
+    if ! cron_block_locate "$cur" "$name"; then rm -f "$cur" "$body" "$new"; return 1; fi
+
+    # Every spelling this job has ever had, as fixed strings.
+    local matches; matches=$(mktemp) || { rm -f "$cur" "$body" "$new"; CRON_ERR="mktemp failed"; return 1; }
+    printf '%s\n' "$match" > "$matches"
+    [ -n "$also" ] && printf '%s\n' "$also" | grep -v '^$' >> "$matches"
+
+    # The block's body, minus every previous version of this line.
+    if [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B+1)) ]; then
+        sed -n "$((CRON_B+1)),$((CRON_E-1))p" "$cur" | grep -vFf "$matches" > "$body" || :
+    fi
+    printf '%s\n' "$line" >> "$body"
+
+    # Render the block first, then drop loose copies from the result -- doing it
+    # in this order means the line we just placed is inside the block and cannot
+    # be matched as "loose" by the same pattern.
+    local staged; staged=$(mktemp) || { rm -f "$cur" "$body" "$new"; CRON_ERR="mktemp failed"; return 1; }
+    if ! cron_block_render "$cur" "$name" "$body" "$staged" "$tail"; then
+        rm -f "$cur" "$body" "$new" "$staged"; return 1
+    fi
+    if ! cron_block_locate "$staged" "$name"; then rm -f "$cur" "$body" "$new" "$staged"; return 1; fi
+    awk -v b="$CRON_B" -v e="$CRON_E" -v mf="$matches" '
+        BEGIN { while ((getline ln < mf) > 0) if (ln != "") pat[++n] = ln }
+        NR>=b && NR<=e { print; next }
+        { for (i=1; i<=n; i++) if (index($0, pat[i]) > 0) next; print }' "$staged" > "$new"
+    CRON_ADOPTED=$(( $(grep -cFf "$matches" "$staged") - $(grep -cFf "$matches" "$new") ))
+    rm -f "$staged" "$body" "$matches"
+
+    if cmp -s "$cur" "$new"; then rm -f "$cur" "$new"; CRON_CHANGED=0; return 0; fi
+    if ! cron_write "$who" "$new"; then
+        cron_restore_after_failure "$who" "$cur" "$CRON_ERR"; local rc=$?
+        rm -f "$new"
+        [ "$rc" -eq 2 ] || rm -f "$cur"
+        return "$rc"
+    fi
+    rm -f "$cur" "$new"
+    CRON_CHANGED=1
+    return 0
+}
