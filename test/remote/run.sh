@@ -225,6 +225,27 @@ echo "=== scratch: $LROOT (here) / $RROOT (there)"
 stale_scratch() {   # <parent>
     zfs list -H -o name -d1 -r "$1" 2>/dev/null | grep -E "/xcamp[0-9]+$" | grep -v "/$TAG$"
 }
+# Both parents must EXIST before a single case runs.
+#
+# The defaults are metropolis-shaped -- `hdd/backuptest_targets` is a dataset
+# that happens to exist on pve1/pve2 and on no other host. Run this against the
+# 192.168.11.x cluster without --peer-parent and every local section passes
+# while all thirty-odd ssh cases fail, which reads exactly like a broken
+# remote path (measured 2026-08-02). The peer parent is the one thing this
+# suite cannot create for itself: it belongs to the far host's layout.
+zfs list -H "$LPARENT" >/dev/null 2>&1 || {
+    echo "the local scratch parent '$LPARENT' does not exist on $(hostname)." >&2
+    echo "Pass --local-parent <existing dataset>; the default is 'rpool'." >&2
+    exit 2
+}
+$SSH "$PEER" "zfs list -H '$RPARENT'" >/dev/null 2>&1 || {
+    echo "the peer scratch parent '$RPARENT' does not exist on $PEER (or the link is down)." >&2
+    echo "Pass --peer-parent <existing dataset>. The default '$RPARENT' is the" >&2
+    echo "metropolis layout; the 192.168.11.x hosts use 'rpool'." >&2
+    echo "Without this check every ssh case fails and it looks like a code defect." >&2
+    exit 2
+}
+
 stale=$( { stale_scratch "$LPARENT"; stale_scratch "$RPARENT"; } | sort -u )
 if [ -n "$stale" ]; then
     echo "!!! scratch left by EARLIER runs is still here -- this suite should clean up after itself:"
