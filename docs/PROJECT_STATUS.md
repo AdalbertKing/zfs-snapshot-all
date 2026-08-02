@@ -412,7 +412,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | **119/119** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
+| `quiesce` | **137/137** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
@@ -588,7 +588,7 @@ czterech hostach w obu formach hosta.
   termin i odmowa przy nieczytelnym `fsfreeze-status`. Thaw był tam gwarantowany
   od początku (trap EXIT + deadman).
 - **DŁUG: `snapsend`, `scenarios`, `remote` nieuruchomione** dla `7564f8e`,
-  `c7ce8da` i `90a06c8`. Wymagają roota, ZFS i drugiego hosta, a VPN do obu
+  `c7ce8da`, `90a06c8` i `9fbf1df`. Wymagają roota, ZFS i drugiego hosta, a VPN do obu
   klastrów jest zerwany. Łagodzi to fakt, że **żaden blok we flocie nie używa
   dziś quiesce'u zdalnego** — wszystkie cztery robią wyłącznie lokalne snapshoty
   — więc niezweryfikowany kod nie leży na ścieżce, którą cron wykonuje. To jest
