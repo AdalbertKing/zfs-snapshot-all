@@ -374,3 +374,84 @@ REV-033 F4 twierdzi, że komunikaty nazywają złą maszynę. **Potwierdzone w
 kodzie**, nie ma czego bronić — `cmd_final_catchup` mówi dziś *„immediately
 before the **source** is physically moved"* i *„The **source** may now be
 disconnected and moved"*, podczas gdy przenoszony jest **kolektor**.
+
+---
+
+## U10. Dostarczenie paczki online + opcjonalny zdalny `--join` i edytor przez `ssh -t`
+
+### Warunek, który to rozstrzygnął
+
+Admin uruchamiający `add-client` na pve1 **ma dostęp SSH do pve2** (odpowiedź
+właściciela). To jest ten sam człowiek, który za chwilę poszedłby tam uruchomić
+`--join`.
+
+### Dostarczenie paczki — bez nowego prymitywu zaufania
+
+Paczka jedzie **poświadczeniami admina**. Narzędzie nie zdobywa dostępu, którego
+człowiek by nie miał.
+
+Niuans, który to poprawia: klucz hosta pve2 jest **już przypięty** — `--pair`
+pobrał go `ssh-keyscan`-em chwilę wcześniej i wypisał fingerprint do weryfikacji.
+Dostarczenie jedzie po **naszym** przypięciu:
+
+```
+scp -o UserKnownHostsFile=<nasz pin> -o StrictHostKeyChecking=yes ...
+```
+
+Żadnego pytania „czy ufasz", żadnego osłabienia, ten sam klucz, którego użyje
+potem relacja. Zaufanie nie jest słabsze niż samo parowanie — jest **tym samym**
+zaufaniem.
+
+Powrót pliku zakresu jedzie kluczem relacji (T2). Bilans całości: **żadnej
+usługi, żadnego demona, żadnego tokenu, żadnej nowej zależności.** Ręczne
+przeniesienie zostaje jako droga awaryjna.
+
+O samej paczce warto powiedzieć wprost: nie jest tajemnicą. Niesie klucz
+**publiczny** kolektora, rolę, target, nazwę konta i etykietę — zero sekretów.
+Chroniona jest więc **integralność**, nie poufność: znaczenie ma, żeby na pve2
+trafiła paczka od właściwego pve1. `--join` waliduje strukturę bezwzględnie
+(stały zbiór kluczy, plik jako dane, nigdy `source`), ale „czy to ten kolektor"
+jest i zostaje decyzją ludzką.
+
+### Zdalny `--join` i edytor przez `ssh -t` — pod jedną jawną flagą
+
+Pierwszy odruch implementera był przeciw. Był **odruchem z nieaktualnego stanu**:
+w dzisiejszym kodzie `--join` nadaje granty, więc zdalne uruchomienie oddawałoby
+uprawnienia przez kolektor. Ale **U2 to rozbroiło** — po niej `--join` zakłada
+konto, przyjmuje klucz i kończy z **zerem uprawnień ZFS** (T1). Zasada „każdy
+host oddaje uprawnienia u siebie" przeżywa zdalny `--join` bez zadraśnięcia,
+bo chronionym aktem jest **grant**, a grant zostaje lokalny.
+
+Decyzja właściciela: **obie rzeczy**, pod jedną jawną flagą (nazwa otwarta,
+roboczo `--join-remotely`):
+
+- zdalne uruchomienie `--join` na pve2;
+- otwarcie edytora pliku zakresu przez `ssh -t`, czyli `vi` biegnie na pve2, ale
+  w terminalu admina siedzącego przy pve1.
+
+Nie przenosimy władzy — przenosimy klawiaturę. Każdy uprzywilejowany akt nadal
+wykonuje się **lokalnie na pve2**, w sesji autoryzowanej przez człowieka.
+
+Trzy warunki, bez których ta opcja nie wchodzi:
+
+1. **Finalizacja zostaje lokalna. Zawsze.** Nie ma flagi, która to przełącza.
+   Konto może założyć kolektor; uprawnienia nadaje człowiek na źródle.
+2. Idzie po **naszym przypiętym kluczu hosta**, tak jak dostarczenie paczki.
+   Żadnego `accept-new`, żadnego wyjątku.
+3. Manifest na pve2 zapisuje, że wpis powstał **zdalnie** — z jakiego kolektora
+   i czyją sesją. Za pół roku „skąd się tu wzięło to konto" musi mieć odpowiedź
+   w pliku, nie w czyjejś pamięci.
+
+Flaga **jest** deklaracją zaufania do sieci. Nie próbujemy tego wykrywać: „sieć
+zaufana" nie jest własnością mierzalną i każdy test byłby udawaniem.
+
+Domyślnie flagi nie ma — domyślną drogą zostaje dostarczenie paczki plus
+wypisanie dokładnej komendy do uruchomienia na pve2.
+
+---
+
+## Stan dyskusji
+
+Pięć obszarów REV-20260802-033 przegadanych, dziesięć uzgodnień spisanych.
+Następny artefakt: `docs/reviews/responses/REV-20260802-033.md` — odpowiedź
+dokumentacyjna, bez zmian w kodzie produkcyjnym, zgodnie z żądaniem recenzji.
