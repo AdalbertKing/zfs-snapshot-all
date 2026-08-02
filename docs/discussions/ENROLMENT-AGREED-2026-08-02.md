@@ -194,3 +194,100 @@ Generowana linia prune kolektora niesie zatem:
 ```
 
 `__migration__` nie jest wymieniany, więc zostaje przy wbudowanym `all`.
+
+---
+
+## U7. Tryb sync: cel istniejący — kryterium to **rozjazd**, nie wiek
+
+Pierwsza propozycja („odmawiaj każdego istniejącego celu") była za ostra i
+właściciel ją przewrócił jednym pytaniem: *a jeśli cel jest starszy niż źródło,
+widzisz przeciwwskazania do incremental send?*
+
+Nie ma przeciwwskazań. „Starszy" i „rozjechany" to dwie różne rzeczy, mylone bo
+zwykle chodzą razem:
+
+- czubek celu istnieje na źródle i **nic** do celu nie pisało → `zfs send -I`
+  wchodzi czysto, rollback nie jest potrzebny, `-F` jest pustą operacją;
+- czubek celu istnieje na źródle, ale po nim **coś zapisano** → odbiór wymaga
+  cofnięcia, a `-F` wykona je bez pytania.
+
+**Dla żywego datasetu „cel jest starszy" nigdy nie jest prawdą w tym sensie,
+który się liczy.** Jego snapshoty są starsze, ale żywy czubek jest zawsze nowszy
+od własnego ostatniego snapshotu. Przyrostowy odbiór do żywego datasetu
+**zawsze** oznacza odrzucenie różnicy — z definicji, nie przy pechu.
+
+Uzgodniona tabela preflightu (sync **poza** klastrem):
+
+| Warunek | Wynik |
+|---|---|
+| cel nie istnieje | odbierz |
+| czubek celu jest na źródle (po **GUID**) i `written@czubek = 0` | odbierz przyrostowo, **bez `-F`** |
+| `written@czubek > 0` | odmowa, z liczbą („cel ma 3,2 GB zapisów po wspólnym snapshocie") |
+| brak wspólnego snapshotu po GUID | odmowa — pełny resend jest decyzją człowieka |
+| cel jest dyskiem żywego guesta | **odmowa bezwarunkowa**, niezależnie od powyższych |
+
+Detektor jest tani i jednoznaczny: `zfs get -H -o value written@<czubek> <cel>`.
+Porównanie po **GUID**, nie po nazwie — ta sama nazwa po obu stronach nie znaczy
+tego samego snapshotu (źródło mogło zostać odtworzone albo cofnięte; mechanikę
+mamy już w `snapsend -F`).
+
+Osobno: `-F` przestaje być domyślne przy pierwszym odbiorze do ścieżki, której ta
+relacja nie utworzyła. Zostaje przy kontynuacji własnej kopii, gdzie rollback
+dotyczy danych, które ta relacja sama przyniosła.
+
+### Dowód, dla którego to nie jest teoria
+
+Stan zmierzony 2026-08-02 ok. 16:05 na klastrze 192.168.11.x:
+
+```
+pve1 (192.168.11.11) — ZYWY vsql2, VM 100, 247 GB
+  rpool/data/vm-100-disk-0@automated_hourly_2026-08-02_16-01-01   16:01  <- tylko tu
+  rpool/data/vm-100-disk-0@__replicate_100-0_1785679201__          16:00
+pve0 (192.168.11.10) — replika pvesr, ta sama nazwa, te same 247 GB
+  rpool/data/vm-100-disk-0@__replicate_100-0_1785679201__          16:00  <- najnowszy tu
+```
+
+`snapget.sh -r pve0:rpool/data/vm-100-disk-0` (sync, bez drugiego argumentu)
+celuje w **dysk żywego vsql2**. Strażnik samo-synchronizacji nie zadziała (dwa
+różne hosty), pula istnieje, wspólna baza **istnieje** (16:00) — a `snapget.sh`
+odbiera domyślnie z `zfs recv -F`, czyli cofnąłby bazę danych do 16:00 i skasował
+snapshot z 16:01.
+
+Dziś ratuje przed tym prawdopodobnie **ZFS**, nie nasz kod: rollback zvolu
+otwartego przez działającą maszynę zwykle kończy się `dataset is busy`. To nie
+jest własność bezpieczeństwa — znika, gdy maszyna jest akurat wyłączona, gdy
+celem jest subvol kontenera zamiast zvolu, albo gdy guest stoi na drugim węźle.
+
+## U8. Sync między węzłami **tego samego klastra**: odmowa przy enrollmencie
+
+Pytanie właściciela: *czy ryzyko istnieje, gdyby to odpalić na pve1 i pve2 w
+klastrze, po migracji VM na drugi host?*
+
+Tak — i migracja zamienia pomyłkę w pułapkę, bo **odwraca, która strona jest
+żywa, nie dotykając naszej konfiguracji**. Po przeniesieniu guesta na pve2 nasz
+sync pve2 → pve1 zaczyna pisać do datasetu, do którego pisze też **pvesr**: dwa
+niezależne systemy replikacji, jeden cel, każdy kasuje snapshoty potrzebne
+drugiemu. Odpowiedzią pvesr na nieoczekiwany stan jest pełny resync albo
+zaklinowanie.
+
+Ale klaster sam podaje odpowiedź. Własność guesta jest zapisana w **ścieżce** na
+współdzielonym `/etc/pve` i **przenosi się razem z maszyną**:
+
+```
+/etc/pve/nodes/pve0/qemu-server/  ->  101.conf 103.conf 104.conf 107.conf
+/etc/pve/nodes/pve1/qemu-server/  ->  100.conf 106.conf
+```
+
+(widok z pve1 na 192.168.11.x — widzi też cudze). Nasz helper quiesce już dziś na
+tym stoi: replikę zgłasza jako `kind=absent`, bo jej config leży na drugim węźle.
+Członkostwo w klastrze jest równie tanie: nazwa peera występuje w `/etc/pve/nodes/`.
+
+**Decyzja: jeśli peer jest członkiem tego samego klastra, tryb sync jest
+odrzucany na wejściu** — nie przy odbiorze — z komunikatem wskazującym tryb
+backup. Powód nie jest „bywa niebezpieczny": **pvesr już to robi i robi lepiej**
+(zna właściciela, przełącza kierunek przy migracji, integruje się z HA). Bylibyśmy
+drugim pisarzem do cudzego celu.
+
+Tryb **backup** wewnątrz klastra zostaje w pełni dozwolony i jest bezpieczny:
+pisze do własnej przestrzeni nazw pod targetem, gdzie pvesr nigdy nie zagląda.
+Dokładnie to robi dziś metropolia.
