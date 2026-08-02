@@ -234,9 +234,13 @@ STUB
 chmod +x "$TMPD/bin/zfs"
 PATH="$TMPD/bin:$PATH"
 # 1 MB flaked twice in CI (runs 139/5ff1b0b, 156/a34f4a9): on a fast, idle
-# runner the transfer can finish inside the clock's rounding granularity, and
-# tune_probe_stream's own rt<=0/ct<=0 guard -- which exists to refuse dividing
-# by a zero duration -- then rejects a real measurement as unmeasurable.
+# runner the transfer can finish inside the granularity the duration is rounded
+# to, and tune_probe_stream's own rt<=0/ct<=0 guard -- which exists to refuse
+# dividing by a zero duration -- then rejects a real measurement as
+# unmeasurable. The granularity is not the clock's: `date +%s.%N` has real
+# nanoseconds on a Linux runner, but tune_probe_stream rounds the difference
+# with awk `printf "%.4f"`, so anything under 100 us IS zero by the time the
+# guard sees it -- and the `zfs` here is a stub, so there is no disk to wait on.
 # Reproduced locally by stubbing `date` to return a fixed timestamp: the same
 # two checks fail the same way. 8 MB keeps the suite fast while giving real
 # I/O (plus, for the compressible case, a real gzip fork) enough work that the
