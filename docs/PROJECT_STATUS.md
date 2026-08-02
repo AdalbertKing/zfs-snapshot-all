@@ -53,18 +53,28 @@ checkouty — root i konto). `deploy.sh --check-only` czysty na metropolis pve1
 
 | Host | Adres | Konto delegowane | `sudo` | grant quiesce | kto uruchamia blok |
 |---|---|---|---|---|---|
-| pve0 | 192.168.11.10 | — | jest | brak | root |
-| pve1 | 192.168.11.11 | — | jest | brak | root |
-| metropolis pve1 | 192.168.28.9 | `zfsbackup` | **jest** | **NADANY** | **`zfsbackup`** |
-| metropolis pve2 | 192.168.28.8 | `zfsbackup` | **jest** | **NADANY** | **`zfsbackup`** |
+| pve0 | 192.168.11.10 | `zfsbackup` | jest | **NADANY** | **`zfsbackup`** |
+| pve1 | 192.168.11.11 | `zfsbackup` | jest | **NADANY** | **`zfsbackup`** |
+| metropolis pve1 | 192.168.28.9 | `zfsbackup` | jest | **NADANY** | **`zfsbackup`** |
+| metropolis pve2 | 192.168.28.8 | `zfsbackup` | jest | **NADANY** | **`zfsbackup`** |
 
-**Oba hosty metropolis mają już blok na koncie delegowanym** — pve1 od 18:10,
-pve2 od 21:44 tego samego dnia. Na obu w crontabie roota zostały trzy linie:
-`check-pool-capacity.sh`, `update-control.sh --self-update` oraz
-`alert-digest.sh` w bloku `# BEGIN zfs-backup-host`. Configi mieszkają w
-`/etc/zfs-snapshot-all/` (0644) — **przeniesione**, nie skopiowane. Klaster
-192.168.11.x (pve0, pve1) nadal w całości na roocie i nie ma tam nawet konta
-delegowanego.
+**Wszystkie cztery hosty mają blok na koncie delegowanym.** Metropolis pve1 od
+2026-08-01 18:10, pve2 21:44, pve1 (11.11) 23:02, pve0 23:05. W crontabie roota
+zostały wszędzie trzy linie ogólnohostowe: `check-pool-capacity.sh`,
+`update-control.sh --self-update` i `alert-digest.sh`. Configi mieszkają w
+`/etc/zfs-snapshot-all/` — **przeniesione**, nie skopiowane.
+
+Stan potwierdzony na żywo 2026-08-02 na wszystkich czterech: `sudo -n
+zfs-quiesce-helper status` jako konto → `OK account=zfsbackup`, whitelista
+niepusta, helper na miejscu, zero zadań backupowych w crontabie roota.
+Liczba linii zadań na koncie: pve0 28, pve1 (11.11) 8, metropolis pve1 12,
+metropolis pve2 14.
+
+> Ta tabela do 2026-08-02 twierdziła, że klaster 192.168.11.x „nadal w całości
+> na roocie i nie ma tam nawet konta delegowanego". Było to nieprawdą od
+> 2026-08-01 wieczorem — migracja objęła wszystkie cztery hosty tej samej nocy,
+> a dokument został odświeżony tylko w sekcjach o recenzjach. Dokładnie ten typ
+> rozjazdu, o którym mówi nagłówek.
 
 pve2 doszedł tam okrężną drogą: jego config **nie istniał** (patrz niżej),
 więc najpierw trzeba go było odtworzyć z żywego crontaba `cron2conf.sh`.
@@ -123,9 +133,13 @@ wyłącznie razem z `--join`, czyli tylko dla peera. Zdolność, o którą prefl
 migracji się potykał, nie miała żadnego polecenia, które by ją nadawało
 (`3831509`, doprecyzowane przez REV-022 w `32d6ed1`).
 
-Na pve0 i pve1 (192.168.11.x) grantu nadal nie ma: zero reguł
-`/etc/sudoers.d/*quiesce*`, `/etc/zfs-quiesce-allow/` pusty tam, gdzie istnieje,
-zero pozostałości `*.zqg-new` / `*.zqg-bak`.
+Na pve0 i pve1 (192.168.11.x) grant **jest** od migracji 2026-08-01 wieczorem —
+reguła `sudoers.d`, whitelista i helper na obu. Whitelisty różnią się zakresem,
+bo wyprowadza je config danego hosta: pve0 pięć datasetów
+(`rpool/data`, `hdd/data/vm-101-disk-0`, `hdd/lxc/subvol-102-disk-0`,
+`hdd/lxc/subvol-102-disk-1`, `hdd/backups/pve1`), pve1 (11.11) jeden
+(`rpool/data`). Zdanie o „zero reguł" w tym miejscu opisywało stan sprzed
+migracji i było nieaktualne od tamtego wieczora.
 
 Pozostałości po testach z 2026-07-31 **są** i trzeba je czytać jako stan, nie
 jako zero:
@@ -434,7 +448,7 @@ razem z biblioteką:
 |---|---|---|---|
 | `snapsend` | **202/202** | root, zfs, mbuffer | silnik push/pull, semantyka flag |
 | `scenarios` | **34/34** | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
-| `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa pve1 → pve2, root i konto delegowane |
+| `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa; metropolis pve1 → pve2 (root **i** konto), 192.168.11.x pve0 → pve1 (root, `--peer-parent rpool`) |
 | `delsnaps` | — | root, zfs | retencja, prefiksy, GFS — poza grafem dla tej zmiany |
 
 Siedem pozycji `SKIP` w `selfupdate` to przypadki wymagające `chattr +i`, którego
@@ -631,6 +645,20 @@ czterech hostach w obu formach hosta.
   konto delegowane (to drugie z `--local-parent rpool/data`, bo domyślny scratch
   `rpool` jest pisany pod roota, a konto ma delegację tylko niżej). `snapsend`
   202/202, `scenarios` 34/34 na metropolis pve1.
+- ~~Klaster 192.168.11.x bez kampanii `remote`~~ — **ZROBIONE 2026-08-02**, po
+  sprawdzeniu replikacji i za zgodą właściciela. `remote` 145/145 pve0 → pve1
+  (11.11), z `--peer-parent rpool`. Replikacja pvesr zweryfikowana przed
+  uruchomieniem: zadania 100-0 i 106-0 co 2 h, FailCount 0, ostatni sync 14:00,
+  a na pve0 wszystkie trzy repliki niosą snapshot `__replicate_*` z tej samej
+  godziny — czyli obie maszyny z 11.11 dają się podnieść z hosta zapasowego.
+  **Osobno do wiedzy: zadanie 101-0 (pve0 → pve1) jest WYŁĄCZONE od
+  2023-10-26**, FailCount 6, ostatni sync sprzed prawie trzech lat. To druga
+  strona relacji i nie dotyczy zabezpieczenia 11.11, ale VM 101 na pve0 nie ma
+  repliki na sąsiedzie — tylko snapshoty retencyjne u siebie.
+- **Luka parzystości, świadoma:** na 11.x kampania jako **konto delegowane**
+  nie została uruchomiona, bo między tamtejszymi kontami nie ma zaufania ssh
+  (`Host key verification failed`). Ustanowienie go to trwała zmiana konfiguracji
+  produkcji, a tamtejsze konta nie mają żadnych zadań zdalnych — czeka na decyzję.
 - ~~Ścieżka zdalna bez ponownego odczytu i terminu~~ — **DOCIĄGNIĘTA**
   (`7564f8e`), a granica objęła **każdą pulę** (`c7ce8da`, REV-029), niekompletny
   zestaw jest **usuwany** (`9fbf1df`, REV-030), a raport wycofania nie może już
