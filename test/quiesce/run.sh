@@ -1202,6 +1202,94 @@ else
     check "cleanup-local: the ledger records only what zfs confirmed" "0" "1"
 fi
 
+# ---- the rollback report itself must not fail open (REV-20260802-031) ------
+#
+# The first version of abandon_set staged survivors in a SECOND temporary file.
+# If that mktemp failed while a `zfs destroy` also failed, the survivor could
+# not be recorded -- so the function printed "nothing committed" and returned
+# the clean-rollback code while an ordinary-looking snapshot from an incomplete
+# set was still there for the next -e job to pick up.
+#
+# The review asks for an injected failure of that mktemp. There is nothing left
+# to inject: the file is GONE. Each survivor is printed the moment it is known
+# and a flag -- which cannot fail to be set -- decides the exit code, so the
+# failure mode is absent by construction rather than handled. That is asserted
+# structurally, and the BEHAVIOUR it used to break is already covered by the
+# cleanup section above (a failing destroy exits 7, names the survivor, thaws).
+#
+# A first attempt at the injection made mktemp fail globally, which also broke
+# thaw_all's own mktemp -- the run exited 6 with the guest still frozen, and the
+# assertion measured that instead of what it claimed to. Recorded because a too-
+# broad injection passes or fails for the wrong reason just as silently as a
+# too-narrow one.
+ab=$(printf '%s\n' "$ZFS_REMOTE_QUIESCE_SCRIPT" | sed -n '/^abandon_set() {/,/^}$/p')
+# CODE only. The first version of this check matched the word `mktemp` in the
+# comment explaining why there is no mktemp -- a guard that breaks the moment
+# someone documents the thing it guards is worse than no guard.
+abcode=$(printf "%s" "$ab" | grep -vE "^[[:space:]]*#")
+case "$abcode" in
+    *mktemp*) check "failopen: abandon_set allocates no temporary file at all" "0" "1" ;;
+    *)        check "failopen: abandon_set allocates no temporary file at all" "0" "0" ;;
+esac
+# The survivor is printed from the loop, so there is no window in which it is
+# known but unrecorded.
+case "$ab" in
+    *'ROLLBACK INCOMPLETE'*) check "failopen: ...and reports each survivor as it is found" "0" "0" ;;
+    *) check "failopen: ...and reports each survivor as it is found" "0" "1" ;;
+esac
+# "nothing committed" must be reachable only when the flag says so.
+nc=$(printf '%s\n' "$ab" | grep -n 'nothing committed -- every snapshot' | cut -d: -f1)
+fl=$(printf '%s\n' "$ab" | grep -n 'if \[ "\$failed" -eq 1 \]' | cut -d: -f1)
+if [ -n "$nc" ] && [ -n "$fl" ] && [ "$fl" -lt "$nc" ]; then
+    check "failopen: the clean-rollback message sits behind the failure flag" "0" "0"
+else
+    check "failopen: the clean-rollback message sits behind the failure flag" "0" "1"
+fi
+
+# The other half of the review, and this one IS injectable: a ledger WRITE that
+# fails is the same class -- a snapshot exists that the run cannot promise to
+# remove. The stub hands back a DIRECTORY for the ledger, so the append fails
+# while everything else, thaw included, keeps working.
+rq_reset 'exit 0'
+printf '#!/bin/bash\necho "zfs $*" >> "$TRACE"\nexit 0\n' > "$CL/bin/zfs"
+cat > "$CL/bin/mktemp" <<'EOF'
+#!/bin/bash
+# The created-snapshot ledger is the SECOND allocation in this script -- the
+# first is frozen_file, and sabotaging that one instead only made thaw_all do
+# nothing while everything else succeeded. It is sabotaged into something that
+# exists but cannot be appended to; every other mktemp behaves normally.
+n="${MKTEMP_STATE:-/tmp/mkstate}"
+c=$(cat "$n" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$n"
+if [ "$c" = 2 ] && [ -n "${MKTEMP_DIR_LEDGER:-}" ]; then
+    d=$(/usr/bin/mktemp -d); echo "$d"; exit 0
+fi
+exec /usr/bin/mktemp "$@"
+EOF
+chmod +x "$CL/bin/zfs" "$CL/bin/mktemp"
+rm -f "$CL/mkstate"
+out=$(TRACE="$CL/trace" QSTATE="$CL/qs" MKTEMP_STATE="$CL/mkstate" MKTEMP_DIR_LEDGER=1 \
+      PATH="$CL/bin:$PATH" \
+      bash "$CL/rq.sh" agent 30 "" 30 1 rpool/data/vm-100-disk-0 \
+           1 tanka/x@t 2>&1); rc=$?
+check "failopen: an unwritable ledger exits 7, not 0" "7" "$rc"
+case "$out" in *"could not record"*)
+    check "failopen: ...and says the ledger could not be written" "y" "y" ;;
+  *) check "failopen: ...and says the ledger could not be written" "y" "n ($out)" ;; esac
+case "$out" in *"tanka/x@t"*)
+    check "failopen: ...naming the snapshot it cannot promise to remove" "y" "y" ;;
+  *) check "failopen: ...naming the snapshot it cannot promise to remove" "y" "n ($out)" ;; esac
+case "$(cat "$CL/trace")" in *"helper thaw 100"*)
+    check "failopen: ...and the guest is still thawed" "y" "y" ;;
+  *) check "failopen: ...and the guest is still thawed" "y" "n" ;; esac
+
+# The local path has no such mode -- QUIESCE_CREATED is a bash array and an
+# append cannot fail -- which is why this section is remote-only. Pinned so the
+# asymmetry stays a decision rather than becoming an oversight.
+case "$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")" in
+    *mktemp*) check "failopen: the local abandon path allocates nothing either" "0" "1" ;;
+    *)        check "failopen: the local abandon path allocates nothing either" "0" "0" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

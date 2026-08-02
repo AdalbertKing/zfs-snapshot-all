@@ -2323,25 +2323,35 @@ destroy_one() {   # <snapshot>
     if [ -n "$rflag" ]; then zfs destroy "$rflag" "$1" 2>/dev/null; else zfs destroy "$1" 2>/dev/null; fi
 }
 abandon_set() {   # <why> <exit code when the rollback is clean>
-    local why="$1" s left rc="${2:-5}"
+    # NO second temporary file (REV-20260802-031). The previous version staged
+    # survivors in one, and if that mktemp failed while a destroy also failed,
+    # the survivor could not be recorded -- so the function printed "nothing
+    # committed" and returned the clean code while an ordinary-looking snapshot
+    # from an incomplete set was still there for the next -e job to pick up.
+    # A reporting path that can fail open is not a contract.
+    #
+    # Each survivor is therefore printed the moment it is known, and a flag --
+    # which cannot fail to be set -- decides the exit code.
+    local why="$1" s rc="${2:-5}" failed=0 header=0
     if [ -s "$created_file" ]; then
-        left=$(mktemp) || left=""
         while read -r s; do
             [ -n "$s" ] || continue
             if destroy_one "$s"; then
                 echo "QLOG removed $s -- it belonged to a set that was never completed"
             else
-                [ -n "$left" ] && echo "$s" >> "$left"
+                if [ "$header" -eq 0 ]; then
+                    echo "QERR ROLLBACK INCOMPLETE after $why. These snapshots were created by this run and could NOT be removed:" >&2
+                    header=1
+                fi
+                echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2
+                failed=1
             fi
         done < "$created_file"
-        if [ -n "$left" ] && [ -s "$left" ]; then
+        if [ "$failed" -eq 1 ]; then
             rc=7
-            echo "QERR ROLLBACK INCOMPLETE after $why. These snapshots were created by this run and could NOT be removed:" >&2
-            while read -r s; do echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2; done < "$left"
         else
             echo "QLOG nothing committed -- every snapshot this run created has been removed"
         fi
-        [ -n "$left" ] && rm -f "$left"
     else
         echo "QLOG nothing committed -- this run had created no snapshot yet"
     fi
@@ -2366,7 +2376,16 @@ for p in $pools; do
     else
         zfs snapshot "${group[@]}" || abandon_set "the snapshot of pool $p" 4
     fi
-    for s in "${group[@]}"; do echo "$s" >> "$created_file"; done
+    # A ledger this run cannot write is a snapshot this run cannot promise to
+    # remove, so it is reported and refused immediately rather than at the end
+    # (REV-20260802-031, second half).
+    for s in "${group[@]}"; do
+        if ! echo "$s" >> "$created_file"; then
+            echo "QERR could not record $s in the created-snapshot ledger, so this run cannot guarantee to remove it. ROLLBACK INCOMPLETE:" >&2
+            echo "QERR   $s   (remove by hand: zfs destroy $rflag $s)" >&2
+            exit 7
+        fi
+    done
 done
 
 # Thawing, stopping the deadman and deciding whether the frozen list may be
