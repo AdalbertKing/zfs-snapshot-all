@@ -17,6 +17,21 @@
 
 set -u
 
+# ...and it must NOT be run as root. Most of this suite drives the remote
+# quiesce script, which picks its route from `id -u`: root goes straight to
+# qm/pct, anyone else goes through sudo and the helper. Every stub here models
+# the delegated route, so a root run reports ~42 failures that say nothing
+# about the code -- measured on 2026-08-02 against an unmodified main, after
+# running it on a host the obvious way. A suite whose wrong invocation looks
+# exactly like a broken tree is worse than one that refuses.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "This suite models a DELEGATED account and must not run as root:" >&2
+    echo "the remote quiesce script would take the direct qm/pct route and" >&2
+    echo "every helper assertion would fail for the wrong reason." >&2
+    echo "Run it as an ordinary user, e.g.:  su - zfsbackup -c 'cd $PWD && ./test/quiesce/run.sh'" >&2
+    exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIB="${LIB:-$REPO/lib-zfs-snap.sh}"
