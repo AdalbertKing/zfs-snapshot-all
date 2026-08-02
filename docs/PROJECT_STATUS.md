@@ -431,7 +431,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 |---|---|---|
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
-| `cron` | **49/49** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
+| `cron` | **75/75** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
@@ -645,8 +645,28 @@ czterech hostach w obu formach hosta.
   porównaniem** z `MARKER_BEGIN`, więc blok z innym ogonem nie zostałby
   rozpoznany i dopisałby się **drugi**; biblioteka dopasowuje po nazwie, więc
   taki blok jest adoptowany.
-  Zostało: linie hosta w `deploy.sh` wraz z adopcją luźnych linii — jedyny
-  plasterek dotykający żywego crontaba roota.
+  **Plasterek 4 ZROBIONY I WDROŻONY na wszystkich czterech hostach
+  2026-08-02 ~21:00.** `deploy.sh` przeszedł na prymityw, a dwie luźne linie
+  (`check-pool-capacity.sh`, `update-control.sh --self-update`) oraz linia
+  auto-pull konta zostały **przeniesione do bloku `zfs-backup-host`**, z
+  zachowaniem treści i harmonogramów. Po wdrożeniu na każdym z czterech hostów:
+  **zero luźnych linii zadań** poza blokami, liczba zadań bez zmian
+  (root 3→3 wszędzie; konta 16→16, 12→12, 28→28, 8→8), crontaby zarchiwizowane
+  przed operacją.
+
+  Dwie rzeczy warte zapamiętania z tego plasterka. **Adopcja nie przepisuje
+  treści** — kto przestawił capacity na 06:00, zachowuje 06:00; zmienia się
+  wyłącznie miejsce, bo `deploy.sh` obiecuje „already present, leaving it
+  alone". Wyjątkiem jest linia aktualizatora, która jest **normalizowana**, bo
+  sensem jest sprowadzenie trzech historycznych pisowni do jednej. Oraz:
+  warunek „już aktualna, zostaw" patrzył wyłącznie na **treść**, więc na każdym
+  istniejącym hoście linia aktualizatora byłaby uznana za gotową i nigdy nie
+  trafiłaby do bloku — złapane dopiero podglądem na żywym crontabie, nie w
+  testach.
+
+  **Model docelowy osiągnięty:** jeden pisarz (`lib-cron.sh`), dwóch
+  zlecających (`deploy.sh` → `zfs-backup-host`, warstwa zadań →
+  `zfs-backup-managed`), zero linii poza blokami.
   Robione **przed** enrollmentem, żeby nowe ścieżki instalacji crona nie
   powstawały w starym modelu.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
