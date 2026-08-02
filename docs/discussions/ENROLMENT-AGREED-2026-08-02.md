@@ -144,7 +144,7 @@ eksperckim — `snapsend -X` nikomu nie jest odbierany.
 Walidacja: wykluczenie musi leżeć **pod** którymś z włączonych korzeni, inaczej
 odmowa. Literówka wychodzi przy finalizacji, nie po pierwszym backupie.
 
-## U6. Prefiksy zastrzeżone na kopiach kolektora: `__replicate_:2`
+## U6. Prefiksy zastrzeżone na kopiach kolektora: `__replicate_:2`, `vzdump:2`
 
 Pytanie właściciela: skąd pve1 ma wiedzieć, że na pve2 są snapshoty `__replicate_`,
 skoro ich nie widzi. Odpowiedź w dwóch częściach.
@@ -173,3 +173,24 @@ decyzja pve1 o **własnych kopiach** i nie wymaga wiedzy o pve2.
 pve2 widzi rodziny snapshotów, które u niego występują, więc wypisuje je obok
 `zfs list`. Zero kosztu, żadnej drugiej reprezentacji, a znika efekt „skąd mam
 wiedzieć, co tam jest".
+
+### U6a. `vzdump` też dostaje `:2`; `__migration__` zostaje `all`
+
+Ta sama logika co wyżej i ten sam brak właściciela: `vzdump` na źródle jest
+przejściowy — vzdump zakłada snapshot i sam go kasuje — ale jego **kopia** na
+kolektorze zostaje na zawsze, bo tam vzdump nigdy nie biegnie. Przy regularnych
+kopiach Proxmoksem to jest najszybciej rosnąca rodzina ze wszystkich trzech.
+
+`__migration__` zostaje na `all`: powstaje tylko przy migracji guesta między
+węzłami, więc nie rośnie, a `all` jest ostrożniejszym domyślnym.
+
+Ochrona liczy się **per dataset, per prefiks** — `:2` to dwa snapshoty na
+dataset, nie dwa na pulę.
+
+Generowana linia prune kolektora niesie zatem:
+
+```
+-P "__replicate_:2" -P "vzdump:2"
+```
+
+`__migration__` nie jest wymieniany, więc zostaje przy wbudowanym `all`.
