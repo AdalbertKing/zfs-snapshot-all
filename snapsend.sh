@@ -1926,17 +1926,19 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # on its own and nothing noticed.
     quiesce_freeze_pending
 
-    # And the promise is re-checked at the boundary, because a freeze that
-    # succeeded is not a freeze that is still in force.
-    if ! quiesce_still_frozen; then
-        log 0 "Quiesce: refusing to take the snapshot -- the freeze it was supposed to happen inside is not there (reason above)"
-        quiesce_thaw_all || :
-        exit 3
-    fi
-
     log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
     quiesce_snap_failed=0
     for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
+        # BEFORE EVERY POOL, not once before the loop (REV-20260802-029).
+        # ZFS is atomic within a pool and there is no way to be atomic across
+        # them, so a multi-pool job is N separate commands -- and a slow or
+        # blocked first one can eat the whole window. Checking once certified a
+        # boundary that the second pool never had.
+        if ! quiesce_still_frozen "pool '$quiesce_pool'"; then
+            log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above). Pools already snapshotted inside the window keep their snapshots; they were taken while the freeze held."
+            quiesce_thaw_all || :
+            exit 3
+        fi
         # Unquoted on purpose: the value is the space-separated list built above,
         # and each name has to reach zfs as its own argument.
         # shellcheck disable=SC2086

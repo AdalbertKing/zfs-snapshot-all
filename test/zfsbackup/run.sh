@@ -2489,9 +2489,17 @@ case "$out" in
 esac
 # ...and says why, because an operator who trims it back to the gap undoes the
 # very thing the full list is protecting.
+# The text has to match the primitive it prints. It said "PRZEPISYWANA"
+# (rewritten) after --add-quiesce made the command additive -- true of the flag
+# it no longer names, and exactly the sentence that would make an operator
+# think unrelated grants are at risk (REV-20260802-029, separate defect).
 case "$out" in
-    *PRZEPISYWANA*) ok "remedy: ...and says why trimming it would revoke a working grant" ;;
-    *) bad "remedy: ...and says why trimming it would revoke a working grant" "$out" ;;
+    *ZACHOWUJE*) ok "remedy: ...and says the command PRESERVES existing entries" ;;
+    *) bad "remedy: ...and says the command PRESERVES existing entries" "$out" ;;
+esac
+case "$out" in
+    *PRZEPISYWANA*) bad "remedy: ...and no longer claims the list is overwritten" "$out" ;;
+    *) ok "remedy: ...and no longer claims the list is overwritten" ;;
 esac
 # One block, two steps, in order.
 case "$out" in

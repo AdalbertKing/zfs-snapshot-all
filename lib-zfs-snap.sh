@@ -1749,8 +1749,8 @@ quiesce_freeze_pending() {
 
 # Pass 3, and the whole point of the exercise: is the promise still true NOW?
 # Returns non-zero and says why; the caller must not snapshot on a failure.
-quiesce_still_frozen() {
-    local entry gid line frozen elapsed=0
+quiesce_still_frozen() {   # [context label]
+    local what="${1:-}" entry gid line frozen elapsed=0
     [ "${#QUIESCE_FROZEN[@]}" -eq 0 ] && return 0
 
     for entry in "${QUIESCE_FROZEN[@]}"; do
@@ -1773,7 +1773,7 @@ quiesce_still_frozen() {
         log 0 "Quiesce: the freeze window is ${elapsed}s, over the ${QUIESCE_MAX_WINDOW}s budget, and a Windows guest drops a VSS freeze at about 10s regardless of what fsfreeze-status says. Refusing rather than snapshotting on a freeze that may already be gone. Raise QUIESCE_MAX_WINDOW only if you know the guests involved can hold it."
         return 1
     fi
-    log 1 "Quiesce: freeze window ${elapsed}s (budget ${QUIESCE_MAX_WINDOW}s), ${#QUIESCE_FROZEN[@]} VM(s) confirmed still frozen at the snapshot"
+    log 1 "Quiesce: freeze window ${elapsed}s (budget ${QUIESCE_MAX_WINDOW}s), ${#QUIESCE_FROZEN[@]} VM(s) confirmed still frozen${what:+ before $what}"
     return 0
 }
 
@@ -2217,23 +2217,29 @@ done
 # PASS 3, and the whole point: is the promise still true NOW? A successful
 # fsfreeze-freeze proves nothing by the time zfs snapshot runs -- VSS releases
 # a Windows freeze after about 10 s on its own and says nothing to anyone.
-if [ -s "$frozen_file" ]; then
+#
+# A FUNCTION, because it has to run before EVERY pool (REV-20260802-029). ZFS
+# is atomic within a pool and cannot be atomic across pools, so a multi-pool
+# job is N separate commands and a slow first one can eat the whole window.
+boundary_ok() {   # <what>
+    local what="$1" id info elapsed=0
+    [ -s "$frozen_file" ] || return 0
     while read -r id; do
         [ -n "$id" ] || continue
         info=$(gq_status "$id")
         if [ "$(gq_field "$info" frozen)" != yes ]; then
-            echo "QERR VM $id is no longer frozen at the moment of the snapshot (fsfreeze-status: $(gq_field "$info" frozen)) -- this snapshot would be crash-consistent while claiming otherwise" >&2
-            exit 5
+            echo "QERR VM $id is no longer frozen before $what (fsfreeze-status: $(gq_field "$info" frozen)) -- that snapshot would be crash-consistent while claiming otherwise" >&2
+            return 1
         fi
     done < "$frozen_file"
-    elapsed=0
     [ "$freeze_epoch" -gt 0 ] && elapsed=$(( $(date +%s) - freeze_epoch ))
     if [ "$elapsed" -gt "$qwindow" ]; then
-        echo "QERR the freeze window is ${elapsed}s, over the ${qwindow}s budget, and a Windows guest drops a VSS freeze at about 10s regardless of what fsfreeze-status says -- refusing rather than snapshotting on a freeze that may already be gone" >&2
-        exit 5
+        echo "QERR the freeze window is ${elapsed}s before $what, over the ${qwindow}s budget, and a Windows guest drops a VSS freeze at about 10s regardless of what fsfreeze-status says -- refusing" >&2
+        return 1
     fi
-    echo "QLOG freeze window ${elapsed}s (budget ${qwindow}s), $(grep -c . "$frozen_file") VM(s) confirmed still frozen at the snapshot"
-fi
+    echo "QLOG freeze window ${elapsed}s (budget ${qwindow}s), $(grep -c . "$frozen_file") VM(s) confirmed still frozen before $what"
+    return 0
+}
 
 # One atomic `zfs snapshot` per pool, exactly like the local path: a pool is
 # the widest unit ZFS will snapshot atomically, and every guest stays frozen
@@ -2245,6 +2251,7 @@ for s in "${snaps[@]}"; do
 done
 rc=0
 for p in $pools; do
+    if ! boundary_ok "the snapshot of pool $p"; then rc=5; break; fi
     group=()
     for s in "${snaps[@]}"; do [ "${s%%/*}" = "$p" ] && group+=("$s"); done
     if [ -n "$rflag" ]; then
@@ -2257,7 +2264,13 @@ done
 # Thawing, stopping the deadman and deciding whether the frozen list may be
 # removed all happen in on_exit -- ONE place, so every path out of this script
 # (including a failed snapshot or a `set -u` abort) goes through it.
-[ "$rc" -eq 0 ] || echo "QERR the atomic snapshot failed on the source host -- refusing to fall back to unquiesced snapshots" >&2
+case "$rc" in
+    0) ;;
+    4) echo "QERR the atomic snapshot failed on the source host -- refusing to fall back to unquiesced snapshots" >&2 ;;
+    # 5 already said which pool and why. Pools snapshotted before it keep their
+    # snapshots: they were taken while the freeze demonstrably held.
+    *) echo "QERR stopped before completing every pool -- no unquiesced snapshot was taken" >&2 ;;
+esac
 exit "$rc"
 REMOTE_QUIESCE_EOF
 

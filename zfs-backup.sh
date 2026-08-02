@@ -2175,9 +2175,18 @@ capability_remediation() {   # <account>
     # and none of those are visible from here (REV-20260802-028).
     [ "$CAP_QN" -gt 0 ] && q=" --add-quiesce"
     printf '\n  Do wykonania, w tej kolejnosci:\n\n'
-    printf '    # 1. zdolnosci. PELNA lista datasetow, nie tylko brakujace --\n'
-    printf '    #    whitelist quiesce jest PRZEPISYWANA z tej listy, wiec podanie\n'
-    printf '    #    samych brakow odebraloby dostep goscom, ktorzy go dzis maja.\n'
+    printf '    # 1. zdolnosci. PELNA lista datasetow, ktorych potrzebuja zadania
+'
+    printf '    #    z tego bloku -- nie tylko brakujace.
+'
+    printf '    #    --add-quiesce DOKLADA je do whitelisty quiesce i ZACHOWUJE
+'
+    printf '    #    wpisy, ktore juz tam sa -- takze te z innych configow, ze
+'
+    printf '    #    starszego wdrozenia albo z relacji peer. Nie myl z
+'
+    printf '    #    --allow-quiesce, ktore te liste NADPISUJE.
+'
     printf '    deploy.sh --backup-user=%s --datasets="%s"%s\n' "$acct" "$CAP_ALL" "$q"
     printf '\n    # 2. dopiero teraz przelaczenie wlascicielstwa\n'
     printf '    zfs-backup.sh migrate-to-account %s --yes\n\n' "$acct"

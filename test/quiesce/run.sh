@@ -642,9 +642,20 @@ if [ "$#" -ge 3 ] && [ "$1" -lt "$2" ] && [ "$2" -lt "$3" ]; then
 else
     check "window: snapsend freezes, re-checks, THEN snapshots -- in that order" "0" "1 (linie: $sn)"
 fi
-grep -q 'if ! quiesce_still_frozen; then' "$REPO/snapsend.sh" \
-    && check "window: snapsend refuses the snapshot when the re-check fails" "0" "0" \
-    || check "window: snapsend refuses the snapshot when the re-check fails" "0" "1"
+# REV-20260802-029: before EVERY pool, not once before the loop. ZFS cannot be
+# atomic across pools, so a multi-pool job is N commands and a slow first one
+# can eat the whole window -- the single check certified a boundary the second
+# pool never had.
+if grep -q 'if ! quiesce_still_frozen "pool ' "$REPO/snapsend.sh"; then
+    check "window: snapsend re-checks before EVERY pool" "0" "0"
+else
+    check "window: snapsend re-checks before EVERY pool" "0" "1"
+fi
+if grep -q '^    if ! quiesce_still_frozen; then' "$REPO/snapsend.sh"; then
+    check "window: ...and the single pre-loop check is gone" "0" "1"
+else
+    check "window: ...and the single pre-loop check is gone" "0" "0"
+fi
 
 # ---- the REMOTE script's privilege routing --------------------------------
 #
@@ -945,7 +956,7 @@ rq_reset 'exit 0'
 out=$(QTHAWS_ITSELF=1 rq_run2); rc=$?
 check "remote-window: a guest that thawed itself before the snapshot is caught" "5" "$rc"
 check "remote-window: ...and no snapshot was taken" "no" "$(rq_snapshotted)"
-case "$out" in *"no longer frozen at the moment of the snapshot"*)
+case "$out" in *"no longer frozen before the snapshot of pool"*)
     check "remote-window: ...and the message says so" "y" "y" ;;
   *) check "remote-window: ...and the message says so" "y" "n ($out)" ;; esac
 
@@ -995,6 +1006,84 @@ if grep -q 'local qwindow="${QUIESCE_MAX_WINDOW:-5}"' "$REPO/lib-zfs-snap.sh"; t
 else
     check "remote-window: the budget is passed from the caller" "y" "n"
 fi
+
+# ---- the boundary belongs to EVERY pool, not to the run (REV-20260802-029) --
+#
+# ZFS is atomic within a pool and cannot be atomic across pools, so a job that
+# spans two pools is two separate `zfs snapshot` commands. Checking the freeze
+# once, before the loop, certified a boundary that only the FIRST command
+# actually had: a slow or blocked first snapshot can consume the whole window,
+# and the second pool is then taken outside a freeze nobody re-checked.
+#
+# This was REV-20260801-025 F1. It stayed open while F2 (the remote path) was
+# done, and no response to REV-025 was ever written -- the reviewer had to raise
+# it a second time. Recorded here because a finding that is silently carried is
+# indistinguishable, from the outside, from one that was never read.
+
+# REMOTE path. The zfs stub sleeps on the FIRST pool's snapshot, which is what
+# makes the second pool's check fail on the deadline rather than on the guest.
+rq_reset 'exit 0'
+cat > "$RQ_D/bin/zfs" <<'EOF'
+#!/bin/bash
+echo "zfs $*" >> "$TRACE"
+# Only the snapshot of the first pool is slow. `sleep` here stands in for a pool
+# that is busy, resilvering, or simply large.
+case "$*" in *tanka/*) sleep 3 ;; esac
+exit 0
+EOF
+chmod +x "$RQ_D/bin/zfs"
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 1 1 rpool/data/vm-100-disk-0 \
+           2 tanka/x@t tankb/y@t 2>&1); rc=$?
+check "twopool-remote: the run refuses rather than snapshotting pool two" "5" "$rc"
+check "twopool-remote: pool one WAS snapshotted (inside the window)" "1" \
+      "$(grep -c 'zfs snapshot .*tanka/x@t' "$RQ_D/trace")"
+check "twopool-remote: pool two was NEVER snapshotted" "0" \
+      "$(grep -c 'tankb/y@t' "$RQ_D/trace")"
+case "$out" in *"before the snapshot of pool tankb"*)
+    check "twopool-remote: ...and the refusal names the pool it stopped at" "y" "y" ;;
+  *) check "twopool-remote: ...and the refusal names the pool it stopped at" "y" "n ($out)" ;; esac
+# Guaranteed thaw survives the refusal -- that is the one thing a mid-loop exit
+# must not lose.
+case "$(cat "$RQ_D/trace")" in *"helper thaw 100"*)
+    check "twopool-remote: the guest is thawed on the refusal path" "y" "y" ;;
+  *) check "twopool-remote: the guest is thawed on the refusal path" "y" "n" ;; esac
+
+# ...and with a budget that the slow pool does not exhaust, BOTH pools are
+# snapshotted -- so the refusal above is about the deadline, not about there
+# being two pools.
+rq_reset 'exit 0'
+out=$(TRACE="$RQ_D/trace" QSTATE="$RQ_D/qs" PATH="$RQ_D/bin:$PATH" \
+      bash "$RQ_D/rq.sh" agent 30 "" 30 1 rpool/data/vm-100-disk-0 \
+           2 tanka/x@t tankb/y@t 2>&1); rc=$?
+check "twopool-remote: inside budget, both pools are snapshotted" "0" "$rc"
+check "twopool-remote: ...pool two included" "1" \
+      "$(grep -c 'tankb/y@t' "$RQ_D/trace")"
+# The window is reported per pool, so the number grows visibly instead of being
+# quoted once for a run that took much longer.
+check "twopool-remote: the window is reported for each pool" "2" \
+      "$(printf '%s\n' "$out" | grep -c 'confirmed still frozen before the snapshot of pool')"
+
+# LOCAL path: the same invariant, asserted where it lives. snapsend.sh cannot be
+# driven end to end without root and ZFS, so this pins the structure -- the
+# check inside the loop, and the thaw on its refusal path.
+loop=$(sed -n '/for quiesce_pool in "\${!QUIESCE_SNAPS_BY_POOL\[@\]}"; do/,/^    done$/p' "$REPO/snapsend.sh")
+case "$loop" in
+    *'quiesce_still_frozen "pool '*) check "twopool-local: the check is INSIDE the per-pool loop" "0" "0" ;;
+    *) check "twopool-local: the check is INSIDE the per-pool loop" "0" "1" ;;
+esac
+# ...and it must come before the zfs snapshot of that pool, not after it.
+before=$(printf '%s\n' "$loop" | grep -n 'quiesce_still_frozen' | head -1 | cut -d: -f1)
+after=$(printf '%s\n' "$loop" | grep -n 'zfs snapshot' | head -1 | cut -d: -f1)
+if [ -n "$before" ] && [ -n "$after" ] && [ "$before" -lt "$after" ]; then
+    check "twopool-local: ...and before that pool's zfs snapshot" "0" "0"
+else
+    check "twopool-local: ...and before that pool's zfs snapshot" "0" "1"
+fi
+case "$loop" in
+    *quiesce_thaw_all*) check "twopool-local: its refusal path still thaws" "0" "0" ;;
+    *) check "twopool-local: its refusal path still thaws" "0" "1" ;;
+esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
