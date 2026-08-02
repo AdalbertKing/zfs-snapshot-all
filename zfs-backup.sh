@@ -1843,18 +1843,27 @@ HOST_END="# END $HOST_NAME"
 # Empty <lines file> removes the block, which is what makes repeated migrations
 # converge instead of accumulating.
 set_host_block() {   # <crontab file> <lines file>
-    local cron="$1" lines="$2" tmp body="-"
+    local cron="$1" lines="$2" tmp
     tmp=$(mktemp) || die "mktemp failed"
-    # Rendered by lib-cron.sh so that "replace exactly this block, keep
-    # everything else byte for byte" has ONE definition in the project.
+    # MERGE, not replace -- REV-20260802-034 F1.
     #
-    # The awk this replaces was correct, and that was the point: a second
-    # correct implementation is still a second thing to keep correct, and the
-    # two would drift the first time one of them learned something. It also
-    # matched the markers literally, so it could not have adopted a block whose
-    # BEGIN tail an older version had written differently.
-    [ -s "$lines" ] && body="$lines"
-    cron_block_render "$cron" "$HOST_NAME" "$body" "$tmp" "$HOST_TAIL" \
+    # This handed `lines` to cron_block_render as the COMPLETE new body, which
+    # was right while this script was the block's only requester. Since
+    # 2026-08-02 deploy.sh puts the root updater, the capacity check and the
+    # account's auto-pull line in the same block, while `lines` here holds only
+    # what this migration rescued out of the managed block (today: the digest).
+    # Replacing from that partial inventory deleted the other three -- silently,
+    # while reporting a healthy migration.
+    #
+    # So the rule a shared block needs: a requester adds its own lines and never
+    # speaks for the rest of the body. An empty `lines` means this migration has
+    # nothing to add, NOT that the block should go.
+    #
+    # Rendering still comes from lib-cron.sh, so "keep everything else byte for
+    # byte" has one definition. The awk this originally replaced was correct,
+    # and that was the point: a second correct implementation is still a second
+    # thing to keep correct.
+    cron_block_merge_render "$cron" "$HOST_NAME" "$lines" "$tmp" "$HOST_TAIL" \
         || die "${CRON_ERR:-could not render the $HOST_NAME block} -- nothing has been changed"
     mv -f "$tmp" "$cron"
 }

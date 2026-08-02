@@ -153,10 +153,73 @@ cron_write() {   # <user> <infile>  -> 0 ok, 1 failed
 # process that exits immediately, so the caller would refuse with an empty
 # reason. Same class of bug as a `die` inside $( ) -- the refusal survives, the
 # explanation does not, and the operator is left with a silent failure.
+# Validate the WHOLE managed-marker structure, not just the target block's.
+#
+# REV-20260802-034 F4: counting only the requested name accepts this --
+#
+#     # BEGIN block-A
+#     # BEGIN block-B
+#     ...
+#     # END block-B
+#     # END block-A
+#
+# -- as a well-formed block-A, and replacing A then deletes the complete B.
+# Interleaved markers are worse: they leave an orphan behind. The ownership
+# guarantee this library exists for holds only over a non-overlapping layout,
+# so the layout is checked before every mutation rather than assumed.
+#
+# Refused, never repaired: a damaged crontab is a thing for a human to look at,
+# and every automatic repair here would be a guess about whose lines are whose.
+cron_markers_valid() {   # <file>  -> 0 ok, 1 malformed
+    local file="$1" open="" ln name seen=""
+    local n=0
+    while IFS= read -r ln; do
+        n=$((n+1))
+        case "$ln" in
+            '# BEGIN '*)
+                name=${ln#'# BEGIN '}; name=${name%% *}
+                cron_block_name_valid "$name" || continue   # not one of ours
+                if [ -n "$open" ]; then
+                    CRON_ERR="line $n: '# BEGIN $name' opens while '$open' is still open -- managed blocks may not nest or overlap, and replacing the outer one would delete the inner. Repair the crontab by hand; nothing has been changed"
+                    return 1
+                fi
+                case " $seen " in
+                    *" $name "*)
+                        CRON_ERR="line $n: '$name' has more than one block -- a managed block appears exactly once, and choosing between them would silently orphan the other"
+                        return 1 ;;
+                esac
+                seen="$seen $name"
+                open="$name"
+                ;;
+            '# END '*)
+                name=${ln#'# END '}; name=${name%% *}
+                cron_block_name_valid "$name" || continue
+                if [ -z "$open" ]; then
+                    CRON_ERR="line $n: '# END $name' with no open block -- an orphan marker leaves the extent of every later write a guess"
+                    return 1
+                fi
+                if [ "$open" != "$name" ]; then
+                    CRON_ERR="line $n: '# END $name' closes while '$open' is open -- interleaved markers. Repair by hand; nothing has been changed"
+                    return 1
+                fi
+                open=""
+                ;;
+        esac
+    done < "$file"
+    if [ -n "$open" ]; then
+        CRON_ERR="'# BEGIN $open' is never closed -- the block's extent is unknown, so a write would be a guess about where other lines begin"
+        return 1
+    fi
+    return 0
+}
+
 cron_block_locate() {   # <file> <name>  -> 0 ok (CRON_B/CRON_E set), 1 malformed
     local file="$1" name="$2"
     local b e
     CRON_B=0; CRON_E=0
+    # The global layout first: a target-local check cannot see a foreign block
+    # nested inside this one (F4).
+    cron_markers_valid "$file" || return 1
     b=$(grep -nE "$(cron_block_begin_re "$name")" "$file" | cut -d: -f1)
     e=$(grep -nE "$(cron_block_end_re "$name")" "$file" | cut -d: -f1)
     local nb ne
@@ -443,4 +506,44 @@ cron_block_adopt_line() {   # <user> <name> <match> <default line> [begin_tail]
     rm -f "$cur"
     [ -n "$found" ] && line="$found"
     cron_block_ensure_line "$who" "$name" "$match" "$line" "$tail"
+}
+
+# Render <name>'s block with <linesfile> ADDED to whatever it already holds.
+#
+# The difference from cron_block_render is ownership. A block with more than one
+# requester must never be rewritten from one requester's partial inventory:
+# REV-20260802-034 F1 found exactly that -- zfs-backup.sh's migration rebuilt
+# the shared host block from the single line it had rescued from the managed
+# block, and after deploy.sh started putting the updater and capacity lines
+# there, a migration would have deleted both. Silently, while reporting a
+# healthy migration.
+#
+# So a requester that owns SOME lines of a shared block adds them and leaves the
+# rest alone. Lines already present verbatim are not duplicated, which is what
+# makes repeating a migration converge instead of accumulating.
+cron_block_merge_render() {   # <curfile> <name> <linesfile> <outfile> [begin_tail]
+    local cur="$1" name="$2" lines="$3" out="$4" tail="${5:-}"
+    local body ln
+    body=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
+    if ! cron_block_locate "$cur" "$name"; then rm -f "$body"; return 1; fi
+    if [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B+1)) ]; then
+        sed -n "$((CRON_B+1)),$((CRON_E-1))p" "$cur" > "$body"
+    fi
+    if [ -s "$lines" ]; then
+        while IFS= read -r ln; do
+            [ -n "$ln" ] || continue
+            grep -qxF -- "$ln" "$body" || printf '%s\n' "$ln" >> "$body"
+        done < "$lines"
+    fi
+    # An empty result is an empty BLOCK, not a removed one: "this requester has
+    # nothing to add" and "this block should not exist" are different sentences,
+    # and only the second may take somebody else's lines with it.
+    if [ ! -s "$body" ] && [ "$CRON_B" -eq 0 ]; then
+        rm -f "$body"
+        cp "$cur" "$out" || { CRON_ERR="could not copy the crontab"; return 1; }
+        return 0
+    fi
+    cron_block_render "$cur" "$name" "$body" "$out" "$tail"; local rc=$?
+    rm -f "$body"
+    return $rc
 }

@@ -1290,14 +1290,50 @@ else
     bad "host-block: repeated writes replace the block instead of accumulating" "bloki=$n digest=$d"
 fi
 
-# An empty line set REMOVES the block. Without this a reverse migration could
-# never give the lines back to the collector block.
+# CONTRACT CHANGED, REV-20260802-034 F1. An empty line set used to REMOVE the
+# block, which was right while this script owned it alone. It no longer does:
+# deploy.sh puts the updater, the capacity check and the account auto-pull in
+# the same block, and "this migration rescued nothing" must not be allowed to
+# mean "that block should go".
 : > "$HB/empty"
+cp "$HB/cron" "$HB/cron.before"
 ( source "$ZFSBACKUP"; set_host_block "$HB/cron" "$HB/empty" ) >/dev/null 2>&1
-if ! grep -q 'zfs-backup-host' "$HB/cron" && grep -q 'check-pool-capacity' "$HB/cron"; then
-    ok "host-block: an empty set removes the block and leaves the rest alone"
+if cmp -s "$HB/cron.before" "$HB/cron"; then
+    ok "host-block: an empty contribution leaves the block exactly as it was"
 else
-    bad "host-block: an empty set removes the block and leaves the rest alone" "$(cat "$HB/cron")"
+    bad "host-block: an empty contribution leaves the block exactly as it was" "$(diff "$HB/cron.before" "$HB/cron")"
+fi
+
+# THE DEPLOYED SHAPE, which the old fixture did not model: the reviewer's point
+# was that leaving check-pool-capacity LOOSE made wholesale replacement look
+# harmless. Since 2026-08-02 the host block really contains three lines that
+# belong to deploy.sh, and the migration arrives carrying only the digest.
+cat > "$HB/real" <<'EOF'
+# BEGIN zfs-backup-host (host-level jobs kept by zfs-backup.sh -- do not hand-edit)
+15 * * * * /root/.zfs-snapshot-all-update-state/update-control.sh --self-update >>/root/scripts/git-pull.log 2>&1
+0 8 * * * /root/scripts/check-pool-capacity.sh 2>>/root/scripts/cron.log
+# END zfs-backup-host
+# BEGIN zfs-backup-managed
+1 * * * * something
+# END zfs-backup-managed
+EOF
+( source "$ZFSBACKUP"; set_host_block "$HB/real" "$HB/lines" ) >/dev/null 2>&1
+u=$(grep -c 'update-control.sh --self-update' "$HB/real")
+c=$(grep -c 'check-pool-capacity' "$HB/real")
+d=$(grep -c 'alert-digest' "$HB/real")
+j=$(sed -n '/^# BEGIN zfs-backup-host/,/^# END zfs-backup-host/p' "$HB/real" | grep -cE '^[0-9*]')
+if [ "$u" = 1 ] && [ "$c" = 1 ] && [ "$d" = 1 ] && [ "$j" = 3 ]; then
+    ok "host-block: a migration carrying one line does not evict deploy.sh's two"
+else
+    bad "host-block: a migration carrying one line does not evict deploy.sh's two"         "updater=$u capacity=$c digest=$d w bloku=$j"
+fi
+# ...and doing it twice converges.
+cp "$HB/real" "$HB/real.once"
+( source "$ZFSBACKUP"; set_host_block "$HB/real" "$HB/lines" ) >/dev/null 2>&1
+if cmp -s "$HB/real.once" "$HB/real"; then
+    ok "host-block: repeating that migration is idempotent"
+else
+    bad "host-block: repeating that migration is idempotent" "$(diff "$HB/real.once" "$HB/real")"
 fi
 
 # The markers carry '(', ')' and '--'. A sed address would silently fail to
