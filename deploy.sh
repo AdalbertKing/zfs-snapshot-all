@@ -68,6 +68,16 @@ else
     echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-cron.sh -- this checkout is incomplete; a fallback would be a fourth way of editing crontabs, which is the thing being removed" >&2
     exit 1
 fi
+# pc_is_dataset/account/label/port live in lib-scope.sh now. They validate the
+# pairing package here and the scope file there, and the rules must be one
+# thing: both are untrusted structured data arriving from another host.
+if [ -r "$_DEPLOY_DIR/lib-scope.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_DEPLOY_DIR/lib-scope.sh"
+else
+    echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-scope.sh -- this checkout is incomplete; it carries the validators this script applies to every package it opens" >&2
+    exit 1
+fi
 
 # Every cron line deploy.sh owns lives in ONE named block. Two of them used to
 # sit loose in root's crontab, indistinguishable from a human's -- see the
@@ -517,46 +527,10 @@ declare -A PC=()
 # hit once and fixed with `--`, which had not propagated here. Dot segments are
 # refused for the same reason a path library refuses them: '.' and '..' are
 # navigation, not names, and this contract has no use for either.
-pc_is_dataset() {
-    local v="$1" comp rest
-    case "$v" in
-        ""|/*|*/) return 1 ;;
-        *[!A-Za-z0-9_.:/-]*) return 1 ;;
-        *//*) return 1 ;;
-        -*) return 1 ;;   # first component would be read as an option
-        .*) return 1 ;;   # and a pool does not begin with a dot
-    esac
-    rest="$v"
-    while : ; do
-        comp="${rest%%/*}"
-        case "$comp" in
-            ""|.|..) return 1 ;;
-        esac
-        [ "$rest" = "$comp" ] && break
-        rest="${rest#*/}"
-    done
-    return 0
-}
-pc_is_account() {
-    case "$1" in
-        ""|*[!a-z0-9_-]*|[!a-z_]*) return 1 ;;
-    esac
-    [ "${#1}" -le 32 ] || return 1
-    return 0
-}
-pc_is_label() {
-    case "$1" in
-        ""|.|..|*[!A-Za-z0-9._-]*) return 1 ;;
-    esac
-    [ "${#1}" -le 64 ] || return 1
-    return 0
-}
-pc_is_port() {
-    case "$1" in
-        ""|*[!0-9]*) return 1 ;;
-    esac
-    [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
-}
+# pc_is_dataset / pc_is_account / pc_is_label / pc_is_port moved to lib-scope.sh
+# (sourced at the top of this file): the scope file needs exactly these rules,
+# and a second correct implementation is still a second thing to keep correct.
+
 
 parse_peer_conf() {
     local file="$1" line key val n=0

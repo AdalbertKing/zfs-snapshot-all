@@ -376,7 +376,10 @@ sed -e "s#/etc/zfs-quiesce-allow#$TD/etc/zfs-quiesce-allow#g" \
 # it -- deliberately, because a fallback would be a fourth way of editing a
 # crontab. A sandbox that copies only deploy.sh is therefore not a smaller
 # deploy.sh, it is a broken one.
-cp "$REPO/lib-cron.sh" "$TD/lib-cron.sh"
+# Every library deploy.sh sources, not a named list: this sandbox broke twice
+# in one evening -- once for lib-cron.sh, once for lib-scope.sh -- and the third
+# library would have broken it again.
+cp "$REPO"/lib-*.sh "$TD/"
 
 out=$(bash "$TD/deploy.sh" --revoke-quiesce backup-test 2>&1); r=$?
 [ "$r" = 0 ] && ok "revoke: exits cleanly" || bad "revoke: exits cleanly" "rc=$r"
@@ -1153,7 +1156,7 @@ sed -e "s#/etc/zfs-quiesce-allow#$RQ/etc/zfs-quiesce-allow#g" \
     -e "s#/usr/local/sbin/zfs-quiesce-helper#$RQ/sbin/zfs-quiesce-helper#g" \
     -e "/^pubkey_fingerprint() {/i exit 99" \
     "$REPO/deploy.sh" > "$RQ/deploy.sh"
-cp "$REPO/lib-cron.sh" "$RQ/lib-cron.sh"   # see the note in the teardown sandbox
+cp "$REPO"/lib-*.sh "$RQ/"   # see the note in the teardown sandbox
 grep -qx 'exit 99' "$RQ/deploy.sh" \
     && ok "req-acct: the sandbox copy cannot reach any phase that provisions" \
     || bad "req-acct: the sandbox copy cannot reach any phase that provisions" "tripwire nie wszedl"
