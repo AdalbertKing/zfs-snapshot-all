@@ -104,3 +104,72 @@ paczki**. Poprawione tam na miejscu.
 Znaczenie dla F5: „online" nie jest nową zdolnością — sieć jest wymagana już
 dziś. Otwarte pytanie jest węższe: **czym uwierzytelnić dostarczenie paczki**,
 skoro w tę stronę nie ma jeszcze żadnych poświadczeń.
+
+---
+
+## U4. Plik niesie **sam zakres**; polityka zostaje na pve1
+
+W pliku: które datasety, czy z rodzicem, czy z dziećmi, co wykluczyć. Poza
+plikiem: harmonogram, retencja, `use_template`, ścieżki kluczy, target — to jest
+polityka **kolektora**.
+
+Powód: config `gen-cron.sh` niesie drabinę GFS i szablony crona. Gdyby poszedł na
+pve2, admin źródła musiałby wybierać retencję, żeby oddać dwa datasety — czyli
+dokładna odwrotność celu. To jest zresztą dzisiejsza ściana: draft wymaga
+ręcznego `use_template = <WYBIERZ ISTNIEJACY>`.
+
+To **nie łamie** wymogu REV-033 F2 (jedna reprezentacja). Plik zakresu jest
+jedyną reprezentacją **wyboru**; config crona na pve1 jest z niego
+**wygenerowany**, jak binarka z kodu. Drugą reprezentacją byłaby druga lista
+datasetów, którą ktoś może edytować niezależnie — takiej nie będzie.
+
+## U5. Wykluczenia: **jawne ścieżki z głębokością**, nie regex
+
+```ini
+[dataset:rpool/data]
+include_parent   = no
+include_children = yes
+exclude      = rpool/data/vm-999-disk-0   # sam ten dataset
+exclude_tree = rpool/data/scratch          # ten i wszystko pod nim
+```
+
+Dwa słowa zamiast wzorca, bo różnica „ten" kontra „ten i poddrzewo" **jest** tą
+głębokością i nie ma powodu wyrażać jej regexem.
+
+Dzisiejsze `-X` to **nieukotwiony** regex: `-X 'lxc'` wyrzuca `hdd/lxc` z całym
+poddrzewem, ale też `rpool/data/mylxcbackup`. Dla nas to działa, bo wiemy co
+piszemy; dla admina edytującego plik w `vi` to mina. Regex zostaje w trybie
+eksperckim — `snapsend -X` nikomu nie jest odbierany.
+
+Walidacja: wykluczenie musi leżeć **pod** którymś z włączonych korzeni, inaczej
+odmowa. Literówka wychodzi przy finalizacji, nie po pierwszym backupie.
+
+## U6. Prefiksy zastrzeżone na kopiach kolektora: `__replicate_:2`
+
+Pytanie właściciela: skąd pve1 ma wiedzieć, że na pve2 są snapshoty `__replicate_`,
+skoro ich nie widzi. Odpowiedź w dwóch częściach.
+
+**Nie musi ich widzieć.** Chronią dwie niezależne warstwy: linia prune dostaje
+**wzorzec** (`automated_`) i rozważa wyłącznie pasujące snapshoty — także pod
+`-G`; a `delsnaps.sh` ma wbudowaną tablicę `__replicate_/__migration__/vzdump =
+all`, która jest wiedzą o Proxmoksie, nie o konkretnym hoście.
+
+**I nie jest ślepy.** Po `--join` pve1 może wylistować snapshoty na pve2 kluczem
+parowania — `zfs allow` ogranicza operacje, nie listowanie. Ten sam mechanizm,
+którym `--draft-config` już dziś enumeruje datasety peera.
+
+**Realne ryzyko jest odwrotne.** Domyślna wysyłka to `zfs send -I`, ze
+snapshotami pośrednimi — więc `__replicate_*` z pve2 **lądują na pve1**, gdzie
+ochrona `all` czyni je nieśmiertelnymi, a żadna replikacja ich nie używa.
+`delsnaps.sh` mówi to wprost w komentarzu: *„Absolute protection made that
+garbage immortal"* — i po to powstało `-P`.
+
+**Decyzja właściciela: `-P "__replicate_:2"`** w generowanej linii prune
+kolektora (rozważane `:1` i `:0`; wybrane `:2` jako bezpieczniejsze). To jest
+decyzja pve1 o **własnych kopiach** i nie wymaga wiedzy o pve2.
+
+### T5. Spis prefiksów jako komentarz w pliku
+
+pve2 widzi rodziny snapshotów, które u niego występują, więc wypisuje je obok
+`zfs list`. Zero kosztu, żadnej drugiej reprezentacji, a znika efekt „skąd mam
+wiedzieć, co tam jest".
