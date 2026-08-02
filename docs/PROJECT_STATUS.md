@@ -432,13 +432,13 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
-| `cron` | **75/75** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
+| `cron` | **97/97** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **207/207** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
+| `zfsbackup` | **209/209** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -670,6 +670,19 @@ czterech hostach w obu formach hosta.
   `zfs-backup-managed`), zero linii poza blokami.
   Robione **przed** enrollmentem, żeby nowe ścieżki instalacji crona nie
   powstawały w starym modelu.
+- **REV-20260802-034** — recenzja **refaktoru crontabowego**, cztery findingi
+  P1, **wszystkie przyjęte, żadnego sporu**. Dwa są skutkiem moich wczorajszych
+  decyzji. **F1** (`cecfeaf`): `set_host_block` przepisywał **współdzielony**
+  blok z własnego, częściowego spisu — po tym, jak `deploy.sh` dołożył tam
+  updater i capacity, kolejna migracja skasowałaby oba, cicho, meldując
+  zdrową migrację. Recenzent trafnie nazwał też mój test: zostawiał capacity
+  **luzem** poza blokiem, więc podmiana całości wyglądała nieszkodliwie.
+  **F4** (`cecfeaf`): walidacja markerów była lokalna dla nazwy, więc cudzy blok
+  zagnieżdżony w docelowym przechodził i ginął w całości. **F2** (brak
+  wspólnego zamka) i **F3** (`migrate-to-account` nadal woła `crontab`
+  bezpośrednio) przyjęte, w kolejnym plasterku — model zamków i pełny spis
+  bezpośrednich zapisów jest w odpowiedzi.
+  Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
   zakresu i odróżniać endpoint od trasy. Recenzja wprost zabrania
