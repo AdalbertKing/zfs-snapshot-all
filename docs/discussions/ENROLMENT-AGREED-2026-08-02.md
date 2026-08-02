@@ -184,6 +184,10 @@ kopiach Proxmoksem to jest najszybciej rosnąca rodzina ze wszystkich trzech.
 `__migration__` zostaje na `all`: powstaje tylko przy migracji guesta między
 węzłami, więc nie rośnie, a `all` jest ostrożniejszym domyślnym.
 
+> **ZMIENIONE później tego samego dnia (U11, pkt 2): właściciel zrównał
+> wszystkie trzy do `:2`.** Ten akapit zostaje jako zapis rozważanej
+> alternatywy, nie jako obowiązujący stan.
+
 Ochrona liczy się **per dataset, per prefiks** — `:2` to dwa snapshoty na
 dataset, nie dwa na pulę.
 
@@ -502,3 +506,49 @@ przenosi się do `deploy.sh`, gdzie jest reszta materiału relacji.
 Czyli „nie każdy deploy jest parowaniem", ale **każda operacja na parze jest
 deployem**. To jest materialny argument w dyskusji o rozdzieleniu warstw, a nie
 tylko odczucie estetyczne.
+
+---
+
+## U11. Config zadań dostaje **własność per sekcja**, razem z enrollmentem
+
+Pytanie właściciela po refaktorze crontaba: *a ilu jest pisarzy do configa?*
+
+Trzech maszynowych plus człowiek: `zfs-backup.sh` (tworzy, dokłada sekcje per
+klient, `migrate-profile`, `remove-client`), `cron2conf.sh` (`-o`), oraz
+operator — który tutaj jest pisarzem **pełnoprawnym**, inaczej niż przy
+crontabie. `deploy.sh` configu zadań nie dotyka. REV-033 dokłada czwartego:
+plik zakresu edytowany na pve2.
+
+Dlatego „jeden pisarz" jest tu **złą odpowiedzią** — znaczyłoby odebranie
+człowiekowi edytora. Uzgodniony cel to **własność per sekcja**:
+
+- sekcje generowane niosą marker mówiący, kto i dla którego klienta je
+  utworzył, więc `remove-client` usuwa **swoje**, a nigdy ręcznie napisaną
+  sekcję nazywającą przypadkiem ten sam dataset. Dziś `remove_managed_sections`
+  dopasowuje **po nazwie datasetu** — ten sam kształt „brak właściciela znaczy
+  zgadywanie", który miały luźne linie w crontabie;
+- plus **skrót pliku** uzgodniony już jako T3, żeby config nie mógł się
+  rozjechać z tym, co zainstalowane i nadane.
+
+**Kiedy: razem z enrollmentem, nie osobno.** To REV-033 dokłada czwartego
+pisarza i to jest powód, żeby o tym zdecydować — dokładnie tak, jak crontab był
+powodem zrobienia tamtego refaktoru przed enrollmentem, a nie po nim.
+
+Dziś nie jest to pilne i warto to powiedzieć wprost: config jest chroniony
+lepiej, niż crontab był przed 2026-08-02 — `ensure_cron_config` odmawia
+utworzenia pliku, o którym crontab twierdzi, że z niego powstał;
+`assert_cron_config_matches_installed` odmawia instalacji z innego pliku;
+`atomic_replace_and_install` odtwarza plik **i** crontab; każda instalacja
+pokazuje dwa diffy; a całość jest wersjonowana w prywatnym `zfs-cron-configs`.
+
+## Trzy pytania z odpowiedzi na REV-033 — rozstrzygnięte
+
+1. **Nazwa flagi: `--drive-peer`.** Odrzucone `--trusted-network` i pochodne:
+   nazywają cechę, której nikt nie umie sprawdzić, i czytają się jak
+   zapewnienie. `--drive-peer` nazywa, co się stanie — ten host wykona kroki na
+   tamtym.
+2. **Prefiksy zastrzeżone: wszystkie trzy na `:2`** — `__replicate_`,
+   `__migration__`, `vzdump` (zmiana wobec U6a, gdzie `__migration__` zostawał
+   na `all`).
+3. **Istniejący klienci migrują się tylko na jawne `--force`.** Metropolia
+   działa dalej bez zmian.
