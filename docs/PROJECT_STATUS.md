@@ -7,28 +7,29 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-01** (piąta tego dnia — po REV-021, po REV-022, po
-  nadaniu obu brakujących zdolności na metropolis pve1 i po **wykonanej migracji
-  produkcyjnego bloku tego hosta z roota na konto delegowane**)
-- Zweryfikowano przeciw: `a69fdd5` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-02** (po REV-028…031, po **migracji wszystkich
+  czterech hostów** na konta delegowane i po spłaceniu długu suit, który powstał
+  na czas zerwanego VPN-u)
+- Zweryfikowano przeciw: `3d4c13f` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `5ff1b0b` — preflight wyprowadza
-  wymagane uprawnienia z **zadań, które powstaną**, a nie z typu sekcji; wcześniej
-  `d8bb52a` — okno zamrożenia jest
-  **terminem, nie kolejnością**: VM-y mrożone dopiero tuż przed snapshotem, stan
-  każdej sprawdzany ponownie na granicy, przekroczenie budżetu to błąd. Wcześniej
-  tego samego dnia `244ec0d`: `-q` przestaje być „best effort” — albo quiesce
-  dostarczył obiecaną klasę spójności, albo przebieg kończy się niezerowo
+- Ostatnia zmiana zachowania produkcyjnego: `3d4c13f` — raport wycofania
+  niekompletnego zestawu quiesce nie może **zawieść fail-open** (REV-031);
+  wcześniej `9fbf1df` — niekompletny zestaw jest **usuwany, nie tłumaczony**
+  (REV-030); `c7ce8da` — granica zamrożenia należy do **każdej puli**, nie do
+  przebiegu (REV-029); `90a06c8` — `--add-quiesce`, grant **wyłącznie
+  dokładający** (REV-028); `7564f8e` — ścieżka zdalna dostaje ten sam kontrakt
+  co lokalna
 - Repozytorium: `AdalbertKing/zfs-snapshot-all`
 - Tryb pracy: tymczasowo bezpośrednio do `main`, decyzją właściciela
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
-- Status ogólny: **Migracja metropolis pve1 root → `zfsbackup` WYKONANA
-  2026-08-01 18:10, 15 linii zadań → 12 na koncie + digest we własnym bloku
-  roota. Wszystkie 12 linii uruchomione ręcznie jako konto: rc=0. Przy okazji
-  znaleziony i naprawiony realny defekt fail-open w lokalnym quiescie
-  (`55d33a2`) — pierwszy przebieg jako konto zrobił pięć snapshotów bez
-  zamrożenia i zakończył się kodem 0.**
+- Status ogólny: **Cała flota (4 hosty) pracuje z kont delegowanych, każdy host
+  ma własny config w `/etc/zfs-snapshot-all/`. Kolejka recenzji pusta, dług suit
+  zerowy — wszystkie odpowiedzi na REV-021…031 są w
+  `docs/reviews/responses/`.** Migracja zaczęła się 2026-08-01 18:10 na
+  metropolis pve1 i przy okazji **wykryła realny defekt fail-open w lokalnym
+  quiescie** (`55d33a2`) — pierwszy przebieg jako konto zrobił pięć snapshotów
+  bez zamrożenia i zakończył się kodem 0.
 
 > **Jak ten defekt został znaleziony — warto, żeby nie zniknęło.** Nie przez
 > kod błędu i nie przez alert: migracja zakończyła się sukcesem, job zwrócił 0,
@@ -565,6 +566,27 @@ czterech hostach w obu formach hosta.
   Windows w **jednym** zadaniu legalnie go przekroczy i to zadanie padnie —
   kierunek fail-closed, ale zmiana zachowania dla konfiguracji, której nikt
   jeszcze nie próbował.
+- **REV-20260801-025** (`7564f8e` + `c7ce8da`) — granica quiesce'u ma objąć
+  **każdą pulę** i **ścieżkę zdalną**. Odpowiedź w
+  `docs/reviews/responses/REV-20260801-025.md`, **napisana z opóźnieniem i tak
+  właśnie opisana**: F1 zostało bez pliku odpowiedzi, więc recenzent nie miał
+  jak odróżnić „niesione" od „nieprzeczytane" i zapytał drugi raz jako REV-029.
+- **REV-20260802-028** (`90a06c8`) — `--add-quiesce`: grant wyłącznie
+  dokładający, idempotentny, fail-closed przy nieczytelnej whiteliście;
+  `--allow-quiesce` nadal nadpisuje, bo dla **zapisu** to jest poprawne.
+  Odpowiedź w `docs/reviews/responses/REV-20260802-028.md`.
+- **REV-20260802-029** (`c7ce8da`) — powtórka REV-025 F1: granica sprawdzana
+  przed **każdą** pulą, na obu ścieżkach. Odpowiedź w
+  `docs/reviews/responses/REV-20260802-029.md`.
+- **REV-20260802-030** (`9fbf1df`) — niekompletny zestaw quiesce jest
+  **usuwany**, nie tłumaczony: rejestr tego, co przebieg utworzył, trzy wyjścia
+  (komplet / nic nie zatwierdzono / **ROLLBACK INCOMPLETE**, kod 7, z nazwą
+  każdego ocalałego snapshotu). Odpowiedź w
+  `docs/reviews/responses/REV-20260802-030.md`.
+- **REV-20260802-031** (`3d4c13f`) — sam raport wycofania nie może zawieść
+  fail-open. Drugi plik tymczasowy **usunięty**, nie obsłużony; nieudany zapis
+  rejestru kończy się kodem 7 z nazwą snapshotu. Odpowiedź w
+  `docs/reviews/responses/REV-20260802-031.md`.
 
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
@@ -595,7 +617,8 @@ czterech hostach w obu formach hosta.
 - ~~Ścieżka zdalna bez ponownego odczytu i terminu~~ — **DOCIĄGNIĘTA**
   (`7564f8e`), a granica objęła **każdą pulę** (`c7ce8da`, REV-029), niekompletny
   zestaw jest **usuwany** (`9fbf1df`, REV-030), a raport wycofania nie może już
-  zawieść fail-open (`3d4c13f`, REV-031).- ~~Czy migrować pozostałe hosty~~ — **ZROBIONE 2026-08-01/02: wszystkie
+  zawieść fail-open (`3d4c13f`, REV-031).
+- ~~Czy migrować pozostałe hosty~~ — **ZROBIONE 2026-08-01/02: wszystkie
   cztery.** pve2 21:44, pve1 192.168.11.11 23:02, pve0 23:05. Każdy host ma
   własne konto delegowane, grant quiesce i config w `/etc/zfs-snapshot-all/`.
   Pierwszy nocny przebieg pod cronem przeszedł na wszystkich, z potwierdzeniem
