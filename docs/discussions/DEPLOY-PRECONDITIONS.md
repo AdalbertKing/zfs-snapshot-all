@@ -120,10 +120,21 @@ active`. **Cron instaluje się dopiero od `endpoint_verified`** — nigdy wcześ
 Zadanie, które trafia do crona przed dowodem, że łącze działa, alarmuje o
 własnym wdrożeniu.
 
-**[JEST]** Pairing jest **offline**: `--pair` nikogo nie odpytuje, produkuje
-paczkę. Pierwszy realny kontakt z peerem to `seed`. Konsekwencja, którą trzeba
-nazwać wprost: **błędny adres albo brak `--join` po drugiej stronie wychodzi
-dopiero na `seed`**, nie na `add-client`.
+**[JEST — POPRAWIONE 2026-08-02]** Pairing **nie jest offline**. Pierwsza wersja
+tego akapitu twierdziła, że `--pair` nikogo nie odpytuje; sprawdzenie kodu
+pokazuje coś innego: `--pair` uruchamia `ssh-keyscan -t ed25519` na peerze,
+przypina odebrany klucz hosta i **kończy się błędem, jeśli host jest
+nieosiągalny** (`ssh-keyscan got nothing back ... host unreachable, wrong port,
+or sshd not up yet`). Odmawia też, gdy nazwa rozwiązuje się na więcej niż jeden
+adres — podpis wyszukiwarki domen odpowiadającej za nieistniejącą nazwę.
+
+Offline jest wyłącznie **przenoszenie paczki**, bo w tę stronę nie ma jeszcze
+żadnych poświadczeń. Ma to znaczenie dla REV-033 F5: „online" nie jest nową
+zdolnością, sieć jest wymagana już dziś. Nowe jest tylko pytanie, czym
+uwierzytelnić dostarczenie paczki.
+
+Uwierzytelnianie kluczem wychodzi dopiero przy `seed` — więc brak `--join` po
+drugiej stronie nadal wychodzi tam, nie na `add-client`.
 
 ### 2.4. Dostarczanie kodu
 
