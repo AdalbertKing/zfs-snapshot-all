@@ -7,15 +7,17 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-02** (po REV-028…031, po **migracji wszystkich
-  czterech hostów** na konta delegowane i po spłaceniu długu suit, który powstał
-  na czas zerwanego VPN-u)
-- Zweryfikowano przeciw: `3d4c13f` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-02** (druga tego dnia — po REV-032, po
+  **migracji wszystkich czterech hostów** na konta delegowane i po spłaceniu
+  długu suit, który powstał na czas zerwanego VPN-u)
+- Zweryfikowano przeciw: `52ec5e6` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `3d4c13f` — raport wycofania
-  niekompletnego zestawu quiesce nie może **zawieść fail-open** (REV-031);
-  wcześniej `9fbf1df` — niekompletny zestaw jest **usuwany, nie tłumaczony**
+- Ostatnia zmiana zachowania produkcyjnego: `700d045` — rejestr tego, co
+  przebieg utworzył, przestaje być **plikiem**: jedna tablica, dopisanie do
+  której nie może zawieść, więc nie ma już klasy błędu „snapshot istnieje, ale
+  przebieg nie umie go nazwać" (REV-032); wcześniej `3d4c13f` — raport wycofania
+  nie może **zawieść fail-open** (REV-031); `9fbf1df` — niekompletny zestaw jest **usuwany, nie tłumaczony**
   (REV-030); `c7ce8da` — granica zamrożenia należy do **każdej puli**, nie do
   przebiegu (REV-029); `90a06c8` — `--add-quiesce`, grant **wyłącznie
   dokładający** (REV-028); `7564f8e` — ścieżka zdalna dostaje ten sam kontrakt
@@ -25,8 +27,11 @@
 - Poprzedni **uzgodniony** punkt bazowy: `388a78e` z 2026-07-30 (sekcja 8)
 - Status ogólny: **Cała flota (4 hosty) pracuje z kont delegowanych, każdy host
   ma własny config w `/etc/zfs-snapshot-all/`. Kolejka recenzji pusta, dług suit
-  zerowy — wszystkie odpowiedzi na REV-021…031 są w
-  `docs/reviews/responses/`.** Migracja zaczęła się 2026-08-01 18:10 na
+  zerowy — wszystkie odpowiedzi na REV-021…032 są w
+  `docs/reviews/responses/`.** REV-032 przeszedł pełen komplet suit **przed**
+  wejściem na `main` (gałąź `rev-032`, klon na metropolis pve1): `quiesce`
+  161/161 jako konto, `snapsend` 202/202, `scenarios` 34/34, `remote` 145/145
+  jako root i 145/145 jako konto. Migracja zaczęła się 2026-08-01 18:10 na
   metropolis pve1 i przy okazji **wykryła realny defekt fail-open w lokalnym
   quiescie** (`55d33a2`) — pierwszy przebieg jako konto zrobił pięć snapshotów
   bez zamrożenia i zakończył się kodem 0.
@@ -413,7 +418,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
-| `quiesce` | **145/145** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
+| `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
@@ -587,6 +592,18 @@ czterech hostach w obu formach hosta.
   fail-open. Drugi plik tymczasowy **usunięty**, nie obsłużony; nieudany zapis
   rejestru kończy się kodem 7 z nazwą snapshotu. Odpowiedź w
   `docs/reviews/responses/REV-20260802-031.md`.
+- **REV-20260802-032** (`700d045`, `52ec5e6`) — nieudany zapis rejestru musiał
+  rozliczyć **cały** zestaw, nie tylko nazwę, która akurat nie weszła. Rozwiązane
+  **inaczej niż sugerowała recenzja**: nie drugim rejestrem na to, czego pierwszy
+  nie pomieścił, tylko usunięciem pliku — rejestr jest tablicą, jak od zawsze na
+  ścieżce lokalnej, więc klasa błędu znika zamiast być obsługiwana. Powód
+  odstępstwa jest zmierzony i opisany w odpowiedzi: każda przenośna próba
+  zepsucia pliku *między pulami* kasowała też **zapis wcześniejszej puli**.
+  Odpowiedź w `docs/reviews/responses/REV-20260802-032.md`. **Do zważenia przez
+  recenzenta:** pięć nowych asercji, które padają na `HEAD~`, to asercje
+  strukturalne — część behawioralna przypina kontrakt, ale nie rozróżnia wersji,
+  bo stary defekt wymagał trybu awarii, którego już nie ma. Reprodukcja defektu
+  jest w odpowiedzi zamiast w suicie.
 
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
