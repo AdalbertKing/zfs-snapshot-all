@@ -56,6 +56,27 @@ BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
 REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 # Overridable so the self-update tests can drive a throwaway checkout instead
 # of the live one. Production never sets these.
+# The single crontab writer, taken from BESIDE this script rather than from
+# $REPO_DIR: REPO_DIR is where the repo is being deployed TO, and on a first run
+# it may not exist yet, while this file is by definition next to the one being
+# executed.
+_DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$_DEPLOY_DIR/lib-cron.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_DEPLOY_DIR/lib-cron.sh"
+else
+    echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-cron.sh -- this checkout is incomplete; a fallback would be a fourth way of editing crontabs, which is the thing being removed" >&2
+    exit 1
+fi
+
+# Every cron line deploy.sh owns lives in ONE named block. Two of them used to
+# sit loose in root's crontab, indistinguishable from a human's -- see the
+# header of lib-cron.sh. The name and tail match what zfs-backup.sh already
+# writes, because it is the same block: host-level jobs, one owner for the
+# mechanism, several requesters for the content.
+CRON_HOST_BLOCK='zfs-backup-host'
+CRON_HOST_TAIL='(host-level jobs kept by zfs-backup.sh -- do not hand-edit)'
+
 REPO_DIR="${REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 # Shared state that outlives one run: the alert queue, and the self-update
 # bookkeeping below. Defined HERE, in the config block, because the self-update
@@ -2404,18 +2425,23 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
     fi
 else
     # Every matching line (old shapes, duplicates of the current shape, or a
-    # mix) is dropped and exactly one current line is appended -- normalizing
+    # mix) is dropped and exactly one current line is installed -- normalizing
     # to one, not leaving whichever shape happened to be checked first (F4:
     # the previous version left an old duplicate in place forever whenever a
     # current-shaped line already existed alongside it).
-    {
-        for _l in "${_existing_cron_lines[@]:-}"; do
-            [ -n "$_l" ] || continue
-            is_this_repo_updater_line "$_l" || printf '%s\n' "$_l"
-        done
-        echo "$PULL_LINE"
-    } | crontab -
-    log "normalized auto-update cron line(s) ($_match_count found) to one current line"
+    #
+    # ensure, not adopt: unlike the capacity line, the point here IS to rewrite.
+    # The three historical spellings are listed so they are dropped wherever
+    # they sit -- loose or already inside the block.
+    _updater_shapes="$REPO_DIR/deploy.sh --self-update
+cd $REPO_DIR && git pull --ff-only origin main"
+    if cron_block_ensure_line root "$CRON_HOST_BLOCK" \
+           "$UPDATE_STATE_DIR/update-control.sh --self-update" \
+           "$PULL_LINE" "$CRON_HOST_TAIL" "$_updater_shapes"; then
+        log "normalized auto-update cron line(s) ($_match_count found) to one current line in the '$CRON_HOST_BLOCK' block"
+    else
+        warn "could not install the auto-update cron line: $CRON_ERR -- this host would stop picking up updates"
+    fi
 fi
 # The replacement lands at the END of the crontab, always AFTER gen-cron.sh's
 # "# END zfs-backup-managed" marker, so the next `gen-cron.sh --install` -- which
@@ -2543,13 +2569,28 @@ EOF
 fi
 
 CAPACITY_LINE="0 8 * * * $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
-if crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
-    log "capacity-check cron line already present, leaving it alone"
-elif [ "$CHECK_ONLY" -eq 1 ]; then
-    warn "capacity-check cron line MISSING -- no early warning before a pool fills up"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if ! crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
+        warn "capacity-check cron line MISSING -- no early warning before a pool fills up"
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$CAPACITY_SCRIPT"; then
+        warn "capacity-check cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
+    else
+        log "capacity-check cron line already in the '$CRON_HOST_BLOCK' block"
+    fi
 else
-    ( crontab -l 2>/dev/null; echo "$CAPACITY_LINE" ) | crontab -
-    log "added capacity-check cron line: $CAPACITY_LINE"
+    # adopt, not ensure: an operator who moved this to 06:00 keeps 06:00. Only
+    # the line's LOCATION is this run's business.
+    if cron_block_adopt_line root "$CRON_HOST_BLOCK" "$CAPACITY_SCRIPT" "$CAPACITY_LINE" "$CRON_HOST_TAIL"; then
+        if [ "${CRON_CHANGED:-0}" -eq 0 ]; then
+            log "capacity-check cron line already in the '$CRON_HOST_BLOCK' block, leaving it alone"
+        elif [ "${CRON_ADOPTED:-0}" -gt 0 ]; then
+            log "moved the capacity-check cron line into the '$CRON_HOST_BLOCK' block (schedule unchanged)"
+        else
+            log "added capacity-check cron line: $CAPACITY_LINE"
+        fi
+    else
+        warn "could not install the capacity-check cron line: $CRON_ERR"
+    fi
 fi
 
 echo
@@ -3680,12 +3721,21 @@ else
     log "Phase 8e: auto-pull cron line (this account's own crontab)"
     # ------------------------------------------------------------------------------
     PULL_LINE="15 * * * * cd $ACCOUNT_REPO_DIR && git pull --ff-only origin main >>$HOMEDIR/git-pull.log 2>&1"
-    if su "$USERNAME" -c "crontab -l 2>/dev/null" | grep -qF "$ACCOUNT_REPO_DIR && git pull"; then
-        log "auto-pull cron line already present, leaving it alone"
+    # Into the account's own host block, and adopted rather than rewritten: this
+    # line was loose here too, and the account's crontab is the one that also
+    # carries a gen-cron managed block -- two neighbours that must never be able
+    # to overwrite one another.
+    if cron_block_adopt_line "$USERNAME" "$CRON_HOST_BLOCK" \
+           "$ACCOUNT_REPO_DIR && git pull" "$PULL_LINE" "$CRON_HOST_TAIL"; then
+        if [ "${CRON_CHANGED:-0}" -eq 0 ]; then
+            log "auto-pull cron line already in $USERNAME's '$CRON_HOST_BLOCK' block, leaving it alone"
+        elif [ "${CRON_ADOPTED:-0}" -gt 0 ]; then
+            log "moved $USERNAME's auto-pull cron line into the '$CRON_HOST_BLOCK' block (schedule unchanged)"
+        else
+            log "added auto-pull cron line to $USERNAME's crontab"
+        fi
     else
-        su "$USERNAME" -c "(crontab -l 2>/dev/null; echo '$PULL_LINE') | crontab -" \
-            || warn "could not install auto-pull cron line -- add it manually"
-        log "added auto-pull cron line to $USERNAME's crontab"
+        warn "could not install auto-pull cron line for $USERNAME: $CRON_ERR -- add it manually"
     fi
 
     # ------------------------------------------------------------------------------

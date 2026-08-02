@@ -372,6 +372,11 @@ echo "backup-test ALL=(root) NOPASSWD: /usr/local/sbin/zfs-quiesce-helper" \
     > "$TD/etc/sudoers.d/zfs-quiesce-backup-test"
 sed -e "s#/etc/zfs-quiesce-allow#$TD/etc/zfs-quiesce-allow#g" \
     -e "s#/etc/sudoers.d#$TD/etc/sudoers.d#g" "$REPO/deploy.sh" > "$TD/deploy.sh"
+# deploy.sh sources lib-cron.sh from beside itself and refuses to start without
+# it -- deliberately, because a fallback would be a fourth way of editing a
+# crontab. A sandbox that copies only deploy.sh is therefore not a smaller
+# deploy.sh, it is a broken one.
+cp "$REPO/lib-cron.sh" "$TD/lib-cron.sh"
 
 out=$(bash "$TD/deploy.sh" --revoke-quiesce backup-test 2>&1); r=$?
 [ "$r" = 0 ] && ok "revoke: exits cleanly" || bad "revoke: exits cleanly" "rc=$r"
@@ -1148,6 +1153,7 @@ sed -e "s#/etc/zfs-quiesce-allow#$RQ/etc/zfs-quiesce-allow#g" \
     -e "s#/usr/local/sbin/zfs-quiesce-helper#$RQ/sbin/zfs-quiesce-helper#g" \
     -e "/^pubkey_fingerprint() {/i exit 99" \
     "$REPO/deploy.sh" > "$RQ/deploy.sh"
+cp "$REPO/lib-cron.sh" "$RQ/lib-cron.sh"   # see the note in the teardown sandbox
 grep -qx 'exit 99' "$RQ/deploy.sh" \
     && ok "req-acct: the sandbox copy cannot reach any phase that provisions" \
     || bad "req-acct: the sandbox copy cannot reach any phase that provisions" "tripwire nie wszedl"

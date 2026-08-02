@@ -419,3 +419,28 @@ cron_block_ensure_line() {   # <user> <name> <match> <line> [begin_tail] [also]
     CRON_CHANGED=1
     return 0
 }
+
+# Like cron_block_ensure_line, but KEEPS an existing line's exact text.
+#
+# The difference matters and is not cosmetic. deploy.sh's capacity and auto-pull
+# sites say "already present, leaving it alone" -- which is a promise that a
+# schedule someone tuned by hand survives a re-run of the provisioner. Moving
+# such a line into the managed block must not silently rewrite it back to the
+# default, or the first thing this unification would do on a live host is undo
+# an operator's edit.
+#
+# So: if any line matches, the FIRST one's text is what lands in the block;
+# only when nothing matches is <default line> used. The updater line is the
+# deliberate exception and uses cron_block_ensure_line, because normalising
+# three historical spellings to one is the whole point there.
+cron_block_adopt_line() {   # <user> <name> <match> <default line> [begin_tail]
+    local who="$1" name="$2" match="$3" line="$4" tail="${5:-}"
+    CRON_ERR=""
+    local cur found
+    cur=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
+    if ! cron_read "$who" "$cur"; then rm -f "$cur"; return 1; fi
+    found=$(grep -m1 -F -- "$match" "$cur" || true)
+    rm -f "$cur"
+    [ -n "$found" ] && line="$found"
+    cron_block_ensure_line "$who" "$name" "$match" "$line" "$tail"
+}

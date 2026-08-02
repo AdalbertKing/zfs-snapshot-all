@@ -318,6 +318,23 @@ check "L3 ...the current one" "1" "$(grep -c 'update-control.sh --self-update' "
 check "L4 ...inside the block" "1"       "$(sed -n '/^# BEGIN zfs-backup-host/,/^# END zfs-backup-host/p' "$(tab)" | grep -c 'update-control')"
 check "L5 the human's line is untouched" "1" "$(grep -c keepme "$(tab)")"
 
+# ---- M. adopt keeps a hand-tuned line's text --------------------------------
+#
+# "already present, leaving it alone" is a promise deploy.sh makes today, and
+# moving a line into the block must not quietly break it. An operator who
+# changed 08:00 to 06:00 keeps 06:00; only the line's LOCATION changes.
+seed '0 6 * * * /root/scripts/check-pool-capacity.sh 2>>/root/scripts/cron.log'
+cron_block_adopt_line "$ME" zfs-backup-host '/root/scripts/check-pool-capacity.sh'     '0 8 * * * /root/scripts/check-pool-capacity.sh 2>>/root/scripts/cron.log' '(host)'
+check "M1 the hand-tuned schedule survives adoption" "1" "$(grep -c '^0 6 ' "$(tab)")"
+check "M2 ...and the default did NOT overwrite it" "0" "$(grep -c '^0 8 ' "$(tab)")"
+check "M3 ...but it now lives in the block" "1"       "$(sed -n '/^# BEGIN zfs-backup-host/,/^# END zfs-backup-host/p' "$(tab)" | grep -c 'check-pool-capacity')"
+check "M4 ...and only once" "1" "$(grep -c 'check-pool-capacity' "$(tab)")"
+
+# With nothing to adopt, the default is what gets installed.
+none
+cron_block_adopt_line "$ME" zfs-backup-host '/root/scripts/check-pool-capacity.sh'     '0 8 * * * /root/scripts/check-pool-capacity.sh 2>>/root/scripts/cron.log' '(host)'
+check "M5 with nothing present, the default is used" "1" "$(grep -c '^0 8 ' "$(tab)")"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
