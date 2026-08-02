@@ -103,6 +103,16 @@ cleanup() {
         zfs release zfssnapall_inflight "$s" 2>/dev/null
     done
     zfs destroy -R "$LROOT" 2>/dev/null
+    # Section H pulls in SYNC mode, which lands the peer's tree at the
+    # IDENTICAL path on THIS host -- so $RROOT exists locally too, and nothing
+    # here used to remove it. Every run since 2026-07-29 left one behind:
+    # six trees on metropolis pve1 by 2026-08-02, in the same pool that holds
+    # production backups. The peer side was always cleaned; it was the mirror
+    # of the peer path on the initiator that had no owner.
+    for s in $(zfs list -H -o name -t snapshot -r "$RROOT" 2>/dev/null); do
+        zfs release zfssnapall_inflight "$s" 2>/dev/null
+    done
+    zfs destroy -R "$RROOT" 2>/dev/null
     $SSH "$PEER" "for s in \$(zfs list -H -o name -t snapshot -r '$RROOT' 2>/dev/null); do zfs release zfssnapall_inflight \$s 2>/dev/null; done; zfs destroy -R '$RROOT' 2>/dev/null" 2>/dev/null
     # Sync mode (section G) lands at the IDENTICAL path, not under $RROOT --
     # its peer-side footprint lives under $LROOT instead, so that needs its
@@ -205,6 +215,23 @@ tick() { sleep 1; }
 
 echo "=== two-host campaign: $(hostname) -> $PEER"
 echo "=== scratch: $LROOT (here) / $RROOT (there)"
+
+# Leftovers from EARLIER runs, named at the start.
+#
+# The teardown gap above went unnoticed from 2026-07-29 to 2026-08-02 because
+# nothing ever looked. A suite whose own section E is titled "hygiene" should
+# not be the thing quietly filling a pool, and the cheapest guard is to say so
+# on the next run rather than to trust the fix forever.
+stale_scratch() {   # <parent>
+    zfs list -H -o name -d1 -r "$1" 2>/dev/null | grep -E "/xcamp[0-9]+$" | grep -v "/$TAG$"
+}
+stale=$( { stale_scratch "$LPARENT"; stale_scratch "$RPARENT"; } | sort -u )
+if [ -n "$stale" ]; then
+    echo "!!! scratch left by EARLIER runs is still here -- this suite should clean up after itself:"
+    printf "        %s
+" $stale
+    echo "    (remove with: zfs destroy -R <name>)"
+fi
 
 SRC="$LROOT/src"
 seed_local "$SRC" || { echo "could not seed the local source tree" >&2; exit 1; }
