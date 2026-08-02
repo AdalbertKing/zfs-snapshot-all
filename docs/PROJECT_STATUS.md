@@ -448,7 +448,7 @@ razem z biblioteką:
 |---|---|---|---|
 | `snapsend` | **202/202** | root, zfs, mbuffer | silnik push/pull, semantyka flag |
 | `scenarios` | **34/34** | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
-| `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa; metropolis pve1 → pve2 (root **i** konto), 192.168.11.x pve0 → pve1 (root, `--peer-parent rpool`) |
+| `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa, **oba klastry, root i konto**: metropolis pve1 → pve2; 192.168.11.x pve0 → pve1 (root `--peer-parent rpool`, konto `rpool/data` po obu stronach) |
 | `delsnaps` | — | root, zfs | retencja, prefiksy, GFS — poza grafem dla tej zmiany |
 
 Siedem pozycji `SKIP` w `selfupdate` to przypadki wymagające `chattr +i`, którego
@@ -655,10 +655,19 @@ czterech hostach w obu formach hosta.
   2023-10-26**, FailCount 6, ostatni sync sprzed prawie trzech lat. To druga
   strona relacji i nie dotyczy zabezpieczenia 11.11, ale VM 101 na pve0 nie ma
   repliki na sąsiedzie — tylko snapshoty retencyjne u siebie.
-- **Luka parzystości, świadoma:** na 11.x kampania jako **konto delegowane**
-  nie została uruchomiona, bo między tamtejszymi kontami nie ma zaufania ssh
-  (`Host key verification failed`). Ustanowienie go to trwała zmiana konfiguracji
-  produkcji, a tamtejsze konta nie mają żadnych zadań zdalnych — czeka na decyzję.
+- ~~Luka parzystości: kampania na 11.x tylko jako root~~ — **ZAMKNIĘTA
+  2026-08-02, decyzją właściciela.** Między kontami `zfsbackup` na pve0 i pve1
+  (11.11) nie było zaufania ssh; oba miały już parę kluczy ed25519 z
+  `deploy.sh`, brakowało wyłącznie `authorized_keys` i `known_hosts`.
+  Ustanowione **dwukierunkowo**, w kształcie identycznym z metropolis (zwykły
+  wpis, bez `command=`), a klucz hosta pobrany z `/etc/ssh/ssh_host_ed25519_key.pub`
+  sąsiada **przez zaufany kanał roota**, nie `ssh-keyscan` — żadnego ślepego
+  TOFU. `remote` **145/145** jako konto, `--local-parent rpool/data
+  --peer-parent rpool/data` (oba hosty delegują kontu dokładnie ten dataset,
+  z tym samym zestawem 11 czasowników co metropolis).
+  **Cztery hosty mają teraz ten sam stan:** blok na koncie delegowanym, grant
+  quiesce, config w `/etc/zfs-snapshot-all/`, zaufanie ssh między kontami pary
+  i kampania `remote` przechodząca jako root **i** jako konto.
 - ~~Ścieżka zdalna bez ponownego odczytu i terminu~~ — **DOCIĄGNIĘTA**
   (`7564f8e`), a granica objęła **każdą pulę** (`c7ce8da`, REV-029), niekompletny
   zestaw jest **usuwany** (`9fbf1df`, REV-030), a raport wycofania nie może już
