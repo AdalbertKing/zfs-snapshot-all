@@ -455,3 +455,50 @@ wypisanie dokładnej komendy do uruchomienia na pve2.
 Pięć obszarów REV-20260802-033 przegadanych, dziesięć uzgodnień spisanych.
 Następny artefakt: `docs/reviews/responses/REV-20260802-033.md` — odpowiedź
 dokumentacyjna, bez zmian w kodzie produkcyjnym, zgodnie z żądaniem recenzji.
+
+---
+
+## Sprzątanie 2026-08-02 i dwie rzeczy, które przy nim wyszły
+
+Po testach z 30 lipca / 1 sierpnia zostały na produkcji dwa osady. Usunięte, z
+kopią zapasową przed każdym usunięciem.
+
+**metropolis pve1** — manifest peera `192.168.28.8.conf` po relacji, której na
+pve2 już nie było (konta `zfsbackup-pve1` brak, datasetu `uxsrcB` brak).
+Sprzątnięte narzędziem projektu, nie `rm`-em: `deploy.sh --unpair
+--peer=192.168.28.8`. Zdjęło klucz relacji, przypięty klucz hosta, kopie konta,
+manifest i resztki paczki/draftu. **Nie ruszyło `/root/.ssh/known_hosts`** i
+powiedziało dlaczego: *„to nasz zapis o tym, kim oni są, nie uprawnienie dla
+nich"*. Rekord klienta `clients/pve2.conf` zostawiony — kończy się
+`STATE=removed` i jest historią, nie żywym klientem.
+
+**pve0** — `zfs-backup.conf` z testowego `setup-server` z 30 lipca, wskazujący
+`CRON_CONFIG=/root/scripts/zfs-snapshot-all/jobs.pve0.v4.conf`, czyli **ścieżkę
+sprzed migracji**, spod której config został przeniesiony do
+`/etc/zfs-snapshot-all/`. Bezczynne (strażniki `assert_cron_config_matches_installed`
+i `ensure_cron_config` by odmówiły), ale plik kłamał. Usunięty; `clients/` i
+`peers/` były i są puste.
+
+Po sprzątaniu: cztery hosty, zero żywych rekordów klienta, produkcyjne bloki
+nietknięte (pve1 15 linii, pve2 11, pve0 27, pve1/11.11 7), dostęp ssh roota i
+konta do pve2 potwierdzony po operacji.
+
+### Luka: teardown nie zna pliku, który tworzy wrapper
+
+`do_unpair` w `deploy.sh` usuwa `pairing-<label>_ed25519` i
+`pairing-<label>_known_hosts`, ale **nie** `pairing-<label>_alias_known_hosts` —
+bo ten plik tworzy `ensure_alias_known_hosts` w `zfs-backup.sh`, a `deploy.sh` o
+nim nie wie. Został po dzisiejszym `--unpair` i zdjąłem go ręcznie.
+
+To jest dokładnie ten kształt problemu, o który pytał właściciel: **dwa skrypty,
+jedna relacja, jeden z nich sprząta tylko swoją połowę.** Do naprawy przy
+implementacji — albo `do_unpair` uczy się o pliku aliasu, albo tworzenie aliasu
+przenosi się do `deploy.sh`, gdzie jest reszta materiału relacji.
+
+### Obserwacja do dyskusji o warstwach
+
+`deploy.sh --unpair` wykonuje **najpierw cały przebieg prowizjonujący** — fazy 1,
+2, 5, 6, 6a, łącznie z `git pull` repozytorium — a dopiero potem zrywa relację.
+Czyli „nie każdy deploy jest parowaniem", ale **każda operacja na parze jest
+deployem**. To jest materialny argument w dyskusji o rozdzieleniu warstw, a nie
+tylko odczucie estetyczne.
