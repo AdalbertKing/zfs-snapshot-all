@@ -291,3 +291,86 @@ drugim pisarzem do cudzego celu.
 Tryb **backup** wewnątrz klastra zostaje w pełni dozwolony i jest bezpieczny:
 pisze do własnej przestrzeni nazw pod targetem, gdzie pvesr nigdy nie zagląda.
 Dokładnie to robi dziś metropolia.
+
+---
+
+## U9. Endpoint: **jeden aktualny + lista kandydatów**, zamiast slotów `lan`/`vpn`
+
+Właściciel wyliczył warianty: kolektor (A) zostaje w LAN, (B) startuje w WAN i
+tam zostaje, (C) jest wynoszony z LAN do WAN — a pve2 widzi wtedy pod (a)
+publicznym IP z przekierowaniem portu na routerze, (b) zupełnie innym VPN-em
+(Tailscale i podobne), (c) tym samym adresem, bo OpenVPN go routuje. Sam pve1
+jest przy tym widziany z różnych adresów źródłowych.
+
+### Co nie zmienia się w żadnym z tych wariantów
+
+**Klucz hosta pve2.** Ta sama maszyna, ten sam klucz — niezależnie od drogi.
+
+I to jest już dziś wykorzystane poprawnie. Generowane zadania niosą:
+
+```
+-K <klucz relacji> -k <alias_known_hosts> -O HostKeyAlias=<alias>
+-O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no  [-p <port>]
+```
+
+Przypięcie jest **kluczowane aliasem, nie adresem**, więc zmiana adresu ani portu
+go nie unieważnia. Tożsamość relacji to klucz hosta pod stałym aliasem; adres
+jest tylko sposobem dojścia.
+
+### Macierz sprowadza się do jednego pytania
+
+Czy zmienia się `host:port`, którego używa ssh:
+
+| Wariant | `host:port` | Działanie |
+|---|---|---|
+| A — pve1 zostaje w LAN | bez zmian | nic, nigdy |
+| B — pve1 startuje w WAN i zostaje | ustalony raz przy enrollmencie | nic później |
+| C-c — wyniesiony, OpenVPN routuje ten sam adres | **bez zmian** | **tylko weryfikacja** |
+| C-a — wyniesiony, publiczne IP + przekierowanie portu | nowy host i port | jedna zmiana pola |
+| C-b — wyniesiony, Tailscale/inny VPN | nowa nazwa/IP | jedna zmiana pola |
+
+W C-a i C-b relacja przeżywa nietknięta: klucz relacji, klucz hosta, alias,
+target, bookmarki i tożsamość zadań zostają.
+
+### Odwrotny kierunek: pve1 widziany z różnych adresów
+
+`authorized_keys` na peerze to zwykły wpis, **bez `from=`** — uwierzytelnianie
+kluczem nie interesuje się adresem źródłowym. Ugryźć mogą rzeczy spoza naszego
+kodu: firewall na pve2 ograniczający ssh do LAN, `sshd` `AllowUsers`/`Match
+Address`, fail2ban, a w C-a dodatkowo router decydujący, co odpowiada na
+przekierowanym porcie. Wszystkie objawiają się jako „nie mogę się połączyć", a
+nie „brak uprawnień" — i to rozróżnienie już umiemy robić (exit 255).
+
+**Przypięty klucz hosta zarabia tu na siebie po raz drugi.** W C-a endpoint
+wskazuje na **router**, nie na maszynę. Jeśli przekierowanie kiedykolwiek trafi w
+inny host, klucz się nie zgodzi i zadanie **padnie, zamiast zrobić backup nie tej
+maszyny**. Dlatego `accept-new` w tej ścieżce zostaje zakazane.
+
+### Uzgodniony model
+
+Jeden **aktualny endpoint** + opcjonalna **lista znanych adresów**. Przeniesienie
+przebiega zawsze tak samo, niezależnie od wariantu:
+
+```
+sprawdź aktualny endpoint
+  -> osiągalny, fingerprint się zgadza, dry-run mówi INCREMENTAL
+       -> nie zmieniaj niczego
+  -> nieosiągalny
+       -> wypróbuj pozostałe znane adresy
+       -> dopiero gdy żaden nie działa: poproś o nowy, przypnij do TEGO SAMEGO
+          aliasu, zweryfikuj przed aktywacją
+```
+
+C-c nie kosztuje wtedy nic (nikt nie wpisuje adresu, który się nie zmienił),
+C-a i C-b to jedno pole, A i B nie robią nic nigdy.
+
+Pola `ENDPOINT_LAN_*` / `ENDPOINT_VPN_*` zostają jako **wewnętrzna zgodność** dla
+istniejących rekordów klientów (żeby aktualizacja nie wywróciła metropolii), ale
+znikają z interfejsu.
+
+### Potwierdzenie zarzutu recenzenta o rolach
+
+REV-033 F4 twierdzi, że komunikaty nazywają złą maszynę. **Potwierdzone w
+kodzie**, nie ma czego bronić — `cmd_final_catchup` mówi dziś *„immediately
+before the **source** is physically moved"* i *„The **source** may now be
+disconnected and moved"*, podczas gdy przenoszony jest **kolektor**.
