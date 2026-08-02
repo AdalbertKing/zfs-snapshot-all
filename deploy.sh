@@ -2415,11 +2415,24 @@ for _l in "${_existing_cron_lines[@]:-}"; do
     fi
 done
 
-if [ "$_match_count" -eq 1 ] && [ "$_exact_count" -eq 1 ]; then
-    log "auto-update cron line already current, leaving it alone"
+# "Already current" now means current AND in the block. Without the second half
+# the line on every existing host -- correct in content, loose in position --
+# would take the leave-it-alone branch forever and never be adopted, which is
+# the entire point of this slice.
+_in_block=0
+if crontab -l 2>/dev/null \
+   | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" \
+   | grep -qxF "$PULL_LINE"; then
+    _in_block=1
+fi
+
+if [ "$_match_count" -eq 1 ] && [ "$_exact_count" -eq 1 ] && [ "$_in_block" -eq 1 ]; then
+    log "auto-update cron line already current, in the '$CRON_HOST_BLOCK' block, leaving it alone"
 elif [ "$CHECK_ONLY" -eq 1 ]; then
     if [ "$_match_count" -eq 0 ]; then
         warn "auto-update cron line MISSING -- this host would never pick up updates"
+    elif [ "$_match_count" -eq 1 ] && [ "$_exact_count" -eq 1 ]; then
+        warn "auto-update cron line is present and current but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block"
     else
         warn "auto-update cron line needs normalization ($_match_count matching line(s) found, $_exact_count already exact) -- re-run without --check-only. Its rollback point is overwritten hourly if it is still the old bare-pull form, see REV-20260729-003."
     fi
