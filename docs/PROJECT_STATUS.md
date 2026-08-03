@@ -787,11 +787,19 @@ czterech hostach w obu formach hosta.
   czego ta rodzina testów nie stubowała). **Naprawione tego samego dnia:**
   skan jest teraz nadpisywalny przez `PAUSE_ACCOUNT_SCAN_GLOB` (ten sam wzorzec
   co `CRON_LOCK_DIR`/`PAUSE_STATE_DIR`/`CRONTAB_DIR`), suita wskazuje ścieżkę
-  bez dopasowań — `pause` **74/74** ponownie. Prawdziwy cykl
-  `--pause`/`--resume` na żywym crontabie **nie wykonany** — klasyfikator
-  bezpieczeństwa odmówił (słusznie: to akcja zatrzymująca prawdziwe backupy,
-  wymaga obecności właściciela, nie bezobsługowego zadania). `sudo
-  ./test/scenarios/run.sh` (wymaga roota i puli ZFS) — nie uruchomiony.
+  bez dopasowań — `pause` **74/74** ponownie. **Prawdziwy cykl
+  `--pause`/`--resume` wykonany tego samego dnia**, z właścicielem obecnym
+  w sesji, na metropolis pve2: oba konta (root + zfsbackup) zapauzowane,
+  obce (już wyłączone) linie w crontabie roota nietknięte (F4 na żywo),
+  `--resume` odzyskał oba konta bajt-w-bajt identycznie do stanu
+  sprzed pauzy. Bonus: F5 zadziałał na żywo bez planowania — `--resume`
+  najpierw odpala pełny przebieg `deploy.sh` (fazy 1-7), a DOPIERO POTEM
+  swój dispatch resume; dwa zwykłe zapisy w tym przebiegu (linia
+  auto-update, linia capacity) trafiły na wciąż zapauzowany blok i zostały
+  poprawnie odrzucone, zanim resume je przywrócił chwilę później —
+  dokładnie scenariusz „forced interleaving" z recenzji, tyle że w jednym
+  wywołaniu zamiast dwóch procesów. `sudo ./test/scenarios/run.sh` (wymaga
+  roota i puli ZFS) — nie uruchomiony.
   Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
