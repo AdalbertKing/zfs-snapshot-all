@@ -9,13 +9,18 @@
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
   plasterku 2, po REV-035 i po ad hoc `--pause`/`--resume` poza kolejką
-  recenzji)
-- Zweryfikowano przeciw: `54de481` **plus commit niosący ten dokument** —
+  recenzji, w tym przeróbka na tryb blokowy)
+- Zweryfikowano przeciw: `f6f4ce3` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `54de481` — `deploy.sh
-  --pause`/`--resume`, zatrzymanie i przywrócenie całego crontaba hosta
-  (root + konto) na okno serwisowe, zbudowane na zamku `lib-cron.sh`;
+- Ostatnia zmiana zachowania produkcyjnego: `f6f4ce3` — `deploy.sh
+  --pause`/`--resume` domyślnie zatrzymuje TYLKO bloki tego pakietu
+  (zakomentowanie ciała bloku w miejscu, markery `lib-cron.sh`), zamiast
+  całego crontaba; `--fullcron` przywraca dawne zamiatanie całego crontaba
+  dla usera, gdy operator naprawdę chce zatrzymać wszystko; `--resume` sam
+  rozpoznaje tryb, w którym dany user został zapauzowany; wcześniej
+  `54de481` — pierwsza wersja `--pause`/`--resume` (tylko tryb pełnego
+  crontaba), zbudowana na zamku `lib-cron.sh`;
   wcześniej `9e977f6` — `CRON_LOCK_DIR` to teraz jeden stały katalog bez
   fallbacku zależnego od wywołującego (REV-035); wcześniej `4190d83` —
   `--join` (peer pull) nie nadaje już żadnych uprawnień
@@ -455,7 +460,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `zfsbackup` | **211/211** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **54/54** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2) |
-| `pause` | **23/23** | `deploy.sh --pause`/`--resume` — zatrzymanie i przywrócenie CAŁEGO crontaba hosta (root + konto) na okno serwisowe (wymiana dysku, migracja VM); zbudowane na zamku/odczycie zwrotnym `lib-cron.sh`; ręczna edycja w oknie pauzy nigdy nie jest cicho nadpisana |
+| `pause` | **49/49** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej. `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem. `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
 pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
