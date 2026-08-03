@@ -808,7 +808,11 @@ czterech hostach w obu formach hosta.
   prymitywu: `cmd_migrate_to_account` sprawdza oba crontaby
   (`cron_fullcron_paused` + `cron_block_paused` dla `zfs-backup-managed`
   i `zfs-backup-host`) na starcie preflight, przed jakąkolwiek pracą.
-  `zfsbackup` **214/214** (+3, sekcja 35).
+  `zfsbackup` **214/214** (+3, sekcja 35). **Luka zgodności placeholdera
+  sprzed `bc84746`** sprawdzona na żywo na wszystkich 4 hostach — żaden nie
+  ma i nigdy nie miał `/root/.zfs-snapshot-all-pause-state` (funkcja nigdy
+  nie była użyta produkcyjnie przed tą sesją) — shim migracyjny świadomie
+  odrzucony jako złożoność dla przypadku, który nigdy się nie zdarzył.
   Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
