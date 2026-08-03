@@ -7,17 +7,21 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-02** (druga tego dnia — po REV-032, po
-  **migracji wszystkich czterech hostów** na konta delegowane i po spłaceniu
-  długu suit, który powstał na czas zerwanego VPN-u)
-- Zweryfikowano przeciw: `52ec5e6` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-03** (po zamknięciu REV-20260802-034 w całości —
+  F1–F4 wszystkie ACCEPTED/IMPLEMENTED, zmergowane do `main`)
+- Zweryfikowano przeciw: `db2f7fe` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `700d045` — rejestr tego, co
-  przebieg utworzył, przestaje być **plikiem**: jedna tablica, dopisanie do
-  której nie może zawieść, więc nie ma już klasy błędu „snapshot istnieje, ale
-  przebieg nie umie go nazwać" (REV-032); wcześniej `3d4c13f` — raport wycofania
-  nie może **zawieść fail-open** (REV-031); `9fbf1df` — niekompletny zestaw jest **usuwany, nie tłumaczony**
+- Ostatnia zmiana zachowania produkcyjnego: `41afa2f` — goły `exec ... 2>/dev/null`
+  w `cron_lock_acquire`/`_release` trwale kasował stderr procesu zamiast
+  gasić błąd jednej próby (REV-034, złapane przy zamykaniu F3); wcześniej
+  `4f1c174` — `cron_replace_all` spina `migrate-to-account` na wspólnym
+  pisarzu (REV-034 F3); `cecfeaf` — wspólny blok scalany zamiast
+  nadpisywany, układ markerów sprawdzany globalnie (REV-034 F1, F4);
+  `224cc83` — zamek per-użytkownik zamyka wyścig (REV-034 F2); wcześniej
+  `700d045` — rejestr tego, co przebieg utworzył, przestaje być **plikiem**
+  (REV-032); `3d4c13f` — raport wycofania nie może **zawieść fail-open**
+  (REV-031); `9fbf1df` — niekompletny zestaw jest **usuwany, nie tłumaczony**
   (REV-030); `c7ce8da` — granica zamrożenia należy do **każdej puli**, nie do
   przebiegu (REV-029); `90a06c8` — `--add-quiesce`, grant **wyłącznie
   dokładający** (REV-028); `7564f8e` — ścieżka zdalna dostaje ten sam kontrakt
@@ -712,7 +716,12 @@ czterech hostach w obu formach hosta.
   Testy: `test/cron` **120/120** (+9 T), `test/zfsbackup` **211/211**
   (sekcja 25 zielona), plus cały graf wpływu — także `sudo
   test/scenarios/run.sh` **34/34** na metropolis pve1 (root, prawdziwy
-  `flock`). Gałąź `cron-f3`, do zmergowania.
+  `flock`). **ZAMKNIĘTE i zmergowane do `main` (`db2f7fe`)**, gałąź `cron-f3`
+  skasowana lokalnie i na origin. Wszystkie cztery findingi (F1, F2, F3, F4)
+  ACCEPTED/IMPLEMENTED. Jedyna otwarta luka: żaden żywy host nie ma dziś
+  oczekującej migracji, więc `cron_replace_all` nie był jeszcze wywołany na
+  prawdziwym produkcyjnym bloku — wszystkie cztery hosty migrowały się na
+  kodzie sprzed F3.
   Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
