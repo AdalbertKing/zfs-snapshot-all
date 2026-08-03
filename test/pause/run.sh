@@ -85,6 +85,29 @@ EOF
 chmod +x "$TMPD/bin/flock"
 fi
 
+# ---- mktemp shim: inert unless MKTEMP_FAIL_AFTER_FILE points at a counter
+# file, in which case it decrements that counter on every call and fails once
+# it reaches zero. This is how F2's "abort leaves nothing committed" claim
+# gets proven rather than just asserted: force a resource failure partway
+# through a multi-block operation and show the live crontab never changed.
+REAL_MKTEMP="$(command -v mktemp)"
+{
+    printf '#!/bin/bash\nREAL_MKTEMP=%q\n' "$REAL_MKTEMP"
+    cat <<'EOF'
+cf="${MKTEMP_FAIL_AFTER_FILE:-}"
+if [ -n "$cf" ] && [ -f "$cf" ]; then
+    remaining=$(cat "$cf" 2>/dev/null || echo -1)
+    if [ "$remaining" -le 0 ]; then
+        echo "mktemp: simulated failure (test)" >&2
+        exit 1
+    fi
+    echo $((remaining - 1)) > "$cf"
+fi
+exec "$REAL_MKTEMP" "$@"
+EOF
+} > "$TMPD/bin/mktemp"
+chmod +x "$TMPD/bin/mktemp"
+
 mkdir -p "$TMPD/locks"
 export PATH="$TMPD/bin:$PATH"
 export CRONTAB_DIR="$TMPD/tabs"
@@ -332,6 +355,150 @@ out=$(do_resume 2>&1); rc=$?
 check "N3 do_resume (default) resumes the account's block" "1" \
       "$(grep -c '^41 \* \* \* \* acct-block-job$' "$(tab "acct-user")")"
 BACKUP_USER=""
+
+# ---- O. REV-20260803-036 F1: an uncreatable pause-state directory refuses
+# cleanly, before the crontab is ever touched, and leaves no state artifact. -
+seed "$ME" '# O before' '50 * * * * o-job'
+before_O=$(cat "$(tab "$ME")")
+blocker="$TMPD/o-blocker-file"
+: > "$blocker"
+SAVED_PSD="$PAUSE_STATE_DIR"
+PAUSE_STATE_DIR="$blocker/cannot-create-under-a-file"
+out=$(do_pause_one "$ME" 2>&1); rc=$?
+check "O1 an uncreatable state dir refuses the pause" "1" "$rc"
+case "$out" in *"pause-state directory"*) ok "O2 ...named as the state-dir problem" ;;
+  *) bad "O2 ...named as the state-dir problem" "$out" ;; esac
+check "O3 the crontab is completely untouched" "0" \
+      "$(printf '%s\n' "$before_O" | cmp -s - "$(tab "$ME")"; echo $?)"
+PAUSE_STATE_DIR="$SAVED_PSD"
+
+# ---- P. F1: if the crontab write itself fails AFTER the resume state was
+# already durably committed, that state is rolled back -- never left behind
+# falsely claiming the user is paused. ---------------------------------------
+seed "$ME" '# P before' '51 * * * * p-job'
+CRONTAB_MODE=liar
+out=$(do_pause_one "$ME" 2>&1); rc=$?
+CRONTAB_MODE=ok
+check "P1 a write that fails read-back is refused" "1" "$rc"
+check "P2 no resume-state file is left behind" "1" "$([ -e "$(pause_state_path "$ME")" ]; echo $?)"
+check "P3 no placeholder-state file is left behind" "1" "$([ -e "$(pause_placeholder_path "$ME")" ]; echo $?)"
+
+# ---- Q. F3: --resume refuses when the placeholder line is still present but
+# something has been APPENDED after it. A substring grep would have accepted
+# this and silently discarded the appended line; the byte-exact compare must
+# not. ------------------------------------------------------------------------
+seed "$ME" '# Q before' '52 * * * * q-job'
+do_pause_one "$ME" >/dev/null 2>&1
+ph_text=$(cat "$(tab "$ME")")
+printf '%s\n%s\n' "$ph_text" '5 * * * * emergency-job-added-during-the-window' > "$(tab "$ME")"
+out=$(do_resume_one "$ME" 2>&1); rc=$?
+check "Q1 resume refuses a placeholder with an appended line" "1" "$rc"
+case "$out" in *"byte-for-byte"*) ok "Q2 ...named as an exact-shape mismatch" ;;
+  *) bad "Q2 ...named as an exact-shape mismatch" "$out" ;; esac
+check "Q3 the appended emergency line survives" "1" \
+      "$(grep -c 'emergency-job-added-during-the-window' "$(tab "$ME")")"
+check "Q4 the saved pre-pause state is still there" "0" "$([ -e "$(pause_state_path "$ME")" ]; echo $?)"
+rm -f "$(pause_state_path "$ME")" "$(pause_placeholder_path "$ME")"
+
+# ---- R. F4: a foreign block that merely matches the marker GRAMMAR (not
+# this package's registry) is never touched by default --pause. -------------
+{ printf '# BEGIN certbot (managed by some other tool)\n'
+  printf '30 2 * * * /usr/bin/certbot renew --quiet\n'
+  printf '# END certbot\n'
+  printf '# BEGIN zfs-backup-managed (generated -- do not hand-edit)\n'
+  printf '55 * * * * r-job\n'
+  printf '# END zfs-backup-managed\n'
+} > "$TMPD/tabs/$ME"
+before_R_certbot=$(sed -n '/^# BEGIN certbot/,/^# END certbot/p' "$TMPD/tabs/$ME")
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "R1 do_pause_blocks_one succeeds" "0" "$rc"
+check "R2 the foreign certbot block is byte-identical" "0" \
+      "$(printf '%s\n' "$before_R_certbot" | cmp -s - <(sed -n '/^# BEGIN certbot/,/^# END certbot/p' "$(tab "$ME")"); echo $?)"
+check "R3 the certbot job line is NOT commented out" "1" \
+      "$(grep -c '^30 2 \* \* \* /usr/bin/certbot renew --quiet$' "$(tab "$ME")")"
+check "R4 our own block WAS paused" "1" "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "$ME")")"
+do_resume_blocks_one "$ME" >/dev/null 2>&1
+
+# ---- S. F5: once a block is paused, an ORDINARY writer (the same
+# cron_block_ensure_line gen-cron.sh/deploy.sh's other call sites use) is
+# refused, not able to silently reconstruct an active block behind the
+# pause's back. ---------------------------------------------------------------
+seed_block "$ME" zfs-backup-managed '60 * * * * s-job'
+do_pause_blocks_one "$ME" >/dev/null 2>&1
+paused_snapshot_S=$(cat "$(tab "$ME")")
+# NOT `out=$(...)`: that runs in a subshell, and CRON_ERR is a plain global --
+# an assignment made inside a command substitution's subshell never reaches
+# the parent shell, so checking $CRON_ERR afterward would silently see
+# whatever it held before this call (same class of bug as `die` inside a
+# $( ) losing its own diagnostic). Call it directly instead.
+CRON_ERR=""
+cron_block_ensure_line "$ME" zfs-backup-managed "s-job" "61 * * * * s-job-REACTIVATED" >/dev/null 2>&1; rc=$?
+check "S1 an ordinary ensure_line write is refused while paused" "1" "$rc"
+check "S2 CRON_ERR names the pause" "1" "$(printf '%s' "$CRON_ERR" | grep -c 'currently paused')"
+check "S3 the crontab is untouched -- still in its paused shape" "0" \
+      "$(printf '%s\n' "$paused_snapshot_S" | cmp -s - "$(tab "$ME")"; echo $?)"
+do_resume_blocks_one "$ME" >/dev/null 2>&1
+
+# ---- T. F5: a --fullcron-paused crontab (no blocks at all, just the
+# placeholder) also refuses an ordinary block INSTALL -- appending a new
+# active block next to the placeholder must not be possible either. ---------
+seed "$ME" '# T before' '62 * * * * t-job'
+do_pause_one "$ME" >/dev/null 2>&1
+placeholder_snapshot_T=$(cat "$(tab "$ME")")
+newbody_T=$(mktemp)
+printf '63 * * * * t-job-REACTIVATED\n' > "$newbody_T"
+out=$(cron_block_install "$ME" zfs-backup-managed "$newbody_T" 2>&1); rc=$?
+rm -f "$newbody_T"
+check "T1 an ordinary block install is refused against a fullcron-paused crontab" "1" "$rc"
+check "T2 the crontab is still exactly the fullcron placeholder" "0" \
+      "$(printf '%s\n' "$placeholder_snapshot_T" | cmp -s - "$(tab "$ME")"; echo $?)"
+do_resume_one "$ME" >/dev/null 2>&1
+
+# ---- U. F2 (mixed): one block already paused, the other not -- the doable
+# one still gets paused. Not a transaction abort: an already-paused block is
+# a legitimate skip, not a failure. -------------------------------------------
+{ printf '# BEGIN zfs-backup-host (host jobs)\n'
+  printf '%s at 2020-01-01 00:00:00 UTC -- run: deploy.sh --resume\n' "$PAUSE_BLOCK_MARKER"
+  printf '%s70 * * * * already-paused-job\n' "$PAUSE_LINE_PREFIX"
+  printf '# END zfs-backup-host\n'
+  printf '# BEGIN zfs-backup-managed (generated)\n'
+  printf '71 * * * * u-job\n'
+  printf '# END zfs-backup-managed\n'
+} > "$TMPD/tabs/$ME"
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "U1 the operation succeeds overall" "0" "$rc"
+check "U2 the already-paused block's OWN header is untouched (old timestamp)" "1" \
+      "$(grep -c '2020-01-01 00:00:00 UTC' "$(tab "$ME")")"
+check "U3 the not-yet-paused block IS now paused (2 headers total)" "2" \
+      "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "$ME")")"
+do_resume_blocks_one "$ME" >/dev/null 2>&1
+
+# ---- V. F2: a forced failure processing the SECOND block aborts the WHOLE
+# operation -- the crontab is left completely untouched, not partially
+# paused. Proven by forcing mktemp to fail exactly where block 2's own
+# processing would begin: block 1's full pipeline (cron_read's own internal
+# mktemp for its stderr file, then body/newbody/staged) is 5 calls; the 6th
+# call is the first one block 2 makes. If a future refactor changes that
+# count, this either still fails before the single commit (V1-V3 still hold,
+# just for a less precisely targeted reason) or stops failing at all, which
+# V1 catches directly. -------------------------------------------------------
+{ printf '# BEGIN zfs-backup-host (host jobs)\n'
+  printf '80 * * * * v-host-job\n'
+  printf '# END zfs-backup-host\n'
+  printf '# BEGIN zfs-backup-managed (generated)\n'
+  printf '81 * * * * v-managed-job\n'
+  printf '# END zfs-backup-managed\n'
+} > "$TMPD/tabs/$ME"
+before_V=$(cat "$TMPD/tabs/$ME")
+echo 5 > "$TMPD/mktemp-fail-after"
+export MKTEMP_FAIL_AFTER_FILE="$TMPD/mktemp-fail-after"
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+unset MKTEMP_FAIL_AFTER_FILE
+rm -f "$TMPD/mktemp-fail-after"
+check "V1 the operation reports failure" "1" "$rc"
+check "V2 the crontab is completely untouched (both blocks still active)" "0" \
+      "$(printf '%s\n' "$before_V" | cmp -s - "$(tab "$ME")"; echo $?)"
+check "V3 no pause header appears anywhere" "0" "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "$ME")")"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
