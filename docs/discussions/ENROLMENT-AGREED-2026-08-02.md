@@ -552,3 +552,94 @@ pokazuje dwa diffy; a całość jest wersjonowana w prywatnym `zfs-cron-configs`
    na `all`).
 3. **Istniejący klienci migrują się tylko na jawne `--force`.** Metropolia
    działa dalej bez zmian.
+
+---
+
+## Wdrożenie 2026-08-03: mechanika dwóch serwerów — format pliku + działanie po SSH (plasterek 6)
+
+Do tego wróciliśmy dziś przy budowie plasterka 6: jak DOKŁADNIE pve1
+(kolektor) i pve2 (źródło) się ze sobą rozmawiają, żeby U1-U4/T1-T5 z góry
+przestały być tylko uzgodnieniem i stały się działającym mechanizmem. Poniżej
+stan **jak zaimplementowany**, nie projekt.
+
+### Format pliku (pve2, źródło)
+
+Dwa pliki, oba world-readable, w katalogu stanu parowania (`peer_scope_path`/
+`peer_scope_granted_hash_path`, ten sam katalog co manifest parowania):
+
+```
+<label>.scope           # sam plik zakresu -- gramatyka niżej
+<label>.scope.sha256    # T3: sha256 DOKŁADNIE tego pliku, z chwili ostatniego --commit-scope
+```
+
+Gramatyka `<label>.scope` (właścicielem jest `lib-scope.sh`, U4/U5):
+
+```
+[dataset:<pool/ścieżka>]
+	include_parent   = yes | no
+	include_children = yes | no
+	exclude          = <pool/ścieżka>   # powtarzalne
+	exclude_tree     = <pool/ścieżka>   # powtarzalne
+```
+
+Plik niesie WYŁĄCZNIE wybór datasetów (U4) — harmonogram, retencja, target
+zostają po stronie kolektora. `--draft-scope` generuje go z prawdziwego
+`zfs list` (aktywne datasety domyślnie: jeden poziom pod każdą pulą, poza
+systemowymi), dopisuje pełny inwentarz PLUS spis rodzin snapshotów (T5) jako
+komentarz — nic z tego nie jest odczytywane programowo, to wyłącznie pomoc
+dla admina edytującego plik. `--commit-scope` czyta go, nadaje `zfs allow`
+dokładnie na to, co plik wybiera, i **dopiero wtedy** zapisuje
+`<label>.scope.sha256` — sidecar to dowód, z czego realnie nadano, nie co
+akurat leży w pliku.
+
+### Działanie po SSH (pve1, kolektor) — `resolve_mode_datasets()`
+
+Wywoływane raz, wewnątrz `load_client_and_connection` (czyli automatycznie
+przy `seed`/`verify-endpoint`/`activate-client`/`migrate-profile` — żadna z
+tych komend nie wie, że coś się zmieniło). Dla klienta z `--mode=` (zamiast
+`--datasets=`):
+
+1. `ssh` (ten sam przypięty klucz/host-key co reszta relacji) pobiera oba
+   pliki: `cat -- '<label>.scope'` i `cat -- '<label>.scope.sha256'`. Brak
+   pierwszego → komunikat „czy `--draft-scope` już tam było?"; brak drugiego
+   → „czy `--commit-scope` już tam było?" (T1: `zfs list` nie jest ograniczone
+   przez `zfs allow`, więc SAM fetch działa niezależnie od kolejności obu
+   komend na pve2 — ale sidecar #2 istnieje dopiero po `--commit-scope`).
+2. `sha256sum` pobranego pliku porównywane z sidecarem. Niezgodność → twarda
+   odmowa, nazywająca wprost „edytowano po ostatnim `--commit-scope`, uruchom
+   je ponownie" (T3) — nigdy cichej generacji zadań dla zakresu, którego nikt
+   faktycznie nie nadał.
+3. Plik czytany przez `lib-scope.sh` (`scope_read`) — **prawdziwa krawędź
+   źródłowa**, `zfs-backup.sh` teraz `source`-uje `lib-scope.sh` wprost, nie
+   duplikuje gramatyki.
+4. Dla każdego `[dataset:]` z pliku: `ssh ... "zfs list -H -o name -r -- '<root>'"`
+   po tym samym kanale, wynik filtrowany przez `scope_includes` (ta sama
+   funkcja, ten sam wybór parent/children/exclude co przy nadawaniu na pve2).
+5. Wynik ląduje w `PEER_SAVED_DATASETS` — **dokładnie w tej samej postaci**,
+   jakby ktoś podał `--peer-datasets="..."` ręcznie. Żaden dalszy konsument
+   (seed, activate-client, `emit_client_sections`, migrate-profile) nie wie i
+   nie musi wiedzieć, skąd ta lista przyszła.
+
+Efekt końcowy zgodny ze scenariuszem odniesienia z góry tego dokumentu:
+`activate-client` pokazuje diff, pyta raz, instaluje GOTOWY config z domyślną
+polityką (`PROFILE_GFS`) — nie kandydatów do ręcznego składania.
+
+### Dwie rzeczy dopięte przy okazji tej samej pracy
+
+**U11 (znacznik własności sekcji), konkretny kształt:** pierwsza linia treści
+każdej wygenerowanej sekcji `[dataset:]`/`[prune:]` to
+`# managed-by: zfs-backup.sh client=<nazwa>`. `remove_managed_sections` usuwa
+sekcję, gdy ten znacznik się zgadza, ALBO gdy ścieżka była już wcześniej
+zapisana we własnym `MANAGED_DATASETS` wywołującego (stan sprzed znacznika —
+tak istniejący klient przeżywa wdrożenie bez ręcznej migracji, znacznik
+dochodzi przy najbliższym przepisaniu). Bez żadnego z tych dwóch — odmowa, nie
+cicha kasacja.
+
+**U6 (prefiksy zastrzeżone), konkretne miejsce:** `keep = 2` dla
+`__replicate_`/`vzdump`/`__migration__` dopisywane przez `ensure_cron_config`
+(raz na cały config, nie per klient — `[excluded:]` to mechanizm globalny w
+`gen-cron.sh`), wyłącznie DOKŁADAJĄC brakujący próg.
+
+Kod: `9f08af6`. Testy: `test/zfsbackup/run.sh` **230/230**. Odpowiedź dla
+recenzenta z tym samym opisem: addendum "Slice 6" w
+`docs/reviews/responses/REV-20260802-033.md`.
