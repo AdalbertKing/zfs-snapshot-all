@@ -3428,9 +3428,19 @@ pause_placeholder_path() { printf '%s/%s.placeholder' "$PAUSE_STATE_DIR" "$1"; }
 # The same scan Phase 8 uses below to find an already-provisioned delegated
 # account when none is named -- so --pause does not require remembering
 # --backup-user for an account this run did not just create.
+#
+# The glob is overridable (default unchanged) so test/pause/run.sh can point
+# it at a throwaway path with no matches instead of scanning this machine's
+# REAL /home -- found 2026-08-03 running that suite directly on all four
+# production hosts: every one of them has a real zfsbackup account, so
+# section G's "no account found" scenario silently stopped being exercised
+# there (a test-isolation gap, not a functional defect -- confirmed by a
+# crontab -l diff that the suite's own crontab(1) stub was still the only
+# thing touched).
+PAUSE_ACCOUNT_SCAN_GLOB="${PAUSE_ACCOUNT_SCAN_GLOB:-/home/*/zfs-snapshot-all}"
 detect_delegated_account() {
     local cand owner
-    for cand in /home/*/zfs-snapshot-all; do
+    for cand in $PAUSE_ACCOUNT_SCAN_GLOB; do
         [ -d "$cand" ] || continue
         owner=$(stat -c %U "$(dirname "$cand")" 2>/dev/null) || continue
         id "$owner" >/dev/null 2>&1 && { printf '%s' "$owner"; return 0; }

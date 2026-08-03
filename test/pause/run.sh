@@ -113,6 +113,15 @@ export PATH="$TMPD/bin:$PATH"
 export CRONTAB_DIR="$TMPD/tabs"
 export CRON_LOCK_DIR="$TMPD/locks"
 export PAUSE_STATE_DIR="$TMPD/pause-state"
+# detect_delegated_account() scans this glob for a real, already-provisioned
+# account. Left at deploy.sh's own default, section G's "no account
+# found/given" case scans this machine's REAL /home -- which finds nothing
+# on a clean box but finds a real account on every one of this project's own
+# production hosts, silently turning that scenario into an untested no-op
+# there (found running this suite directly on all four hosts, 2026-08-03).
+# Pointed at a path that can never match, so the scenario is deterministic
+# regardless of what host this suite happens to run on.
+export PAUSE_ACCOUNT_SCAN_GLOB="$TMPD/no-such-home/*/zfs-snapshot-all"
 export CRONTAB_MODE=ok
 ME="$(id -un)"
 
