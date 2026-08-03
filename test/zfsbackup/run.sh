@@ -3312,6 +3312,39 @@ else
     bad "add-client without --join-remotely: deploy.sh --pair is not passed the flag" "rc=$rc2 args=$(cat "$JR/args.out" 2>/dev/null)"
 fi
 
+# --- 41. role-naming corrections (REV-20260802-033 slice 10) --------------
+#
+# U9 confirmed in code that the machine relocated in these three messages
+# is the collector (this host), never "the source" -- but two of the three
+# still said "the source" for the OTHER party (the peer SSH connects to),
+# right next to a correct "this collector" a few words earlier. That is
+# the same failure mode in a subtler shape: a reader who just parsed
+# "the collector relocates" then hits "the source" again has no textual
+# signal it now means the far end, not the same machine renamed back.
+# Pinned as source greps (like 38a) because exercising these end to end
+# needs a live seed/final-catchup/verify-endpoint cycle -- see file header.
+
+if grep -q 'If SSH now reaches the peer at a DIFFERENT host or port' "$ZFSBACKUP" \
+   && ! grep -q 'If SSH now reaches the source at a DIFFERENT host or port' "$ZFSBACKUP"; then
+    ok "seed hint: the far end is named 'the peer', not 'the source'"
+else
+    bad "seed hint: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
+fi
+
+if grep -q "If the peer is still reachable at the SAME host:port" "$ZFSBACKUP" \
+   && ! grep -q "If the source is still reachable at the SAME host:port" "$ZFSBACKUP"; then
+    ok "final-catchup hint: the far end is named 'the peer', not 'the source'"
+else
+    bad "final-catchup hint: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
+fi
+
+if grep -q "If the peer has a genuinely new address" "$ZFSBACKUP" \
+   && ! grep -q "If the source has a genuinely new address" "$ZFSBACKUP"; then
+    ok "verify-endpoint failure: the far end is named 'the peer', not 'the source'"
+else
+    bad "verify-endpoint failure: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1626,8 +1626,13 @@ cmd_seed() {
     # a fixed two-step sequence, which is exactly the failure mode F4 warns
     # about -- an administrator inventing or repeating an address that never
     # changed. "the collector relocates", not "the source" (U9): confirmed in
-    # code that this scenario is the collector being physically moved.
-    log "client '$name' seed complete. Next: if this collector relocates, run final-catchup first over the still-working link. If SSH now reaches the source at a DIFFERENT host or port afterward, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
+    # code that this scenario is the collector being physically moved. The
+    # OTHER party in this sentence -- the machine SSH connects to -- is the
+    # peer, not "the source": that word is reserved for the machine that
+    # moves, and this message already used it once for the collector two
+    # sentences earlier, so reusing it here for the peer would say "moved"
+    # about the wrong end again in a subtler way (slice 10, REV-20260802-033).
+    log "client '$name' seed complete. Next: if this collector relocates, run final-catchup first over the still-working link. If SSH now reaches the peer at a DIFFERENT host or port afterward, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
 }
 
 # ------------------------------------------------------------------------------
@@ -1711,7 +1716,7 @@ cmd_final_catchup() {
         printf 'FINAL_CATCHUP_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
-    log "client '$name': final catch-up over '$(endpoint_display)' complete. This collector may now be relocated. If the source is still reachable at the SAME host:port afterward (e.g. a routed VPN), no set-endpoint call is needed at all -- just re-run: $0 verify-endpoint $name"
+    log "client '$name': final catch-up over '$(endpoint_display)' complete. This collector may now be relocated. If the peer is still reachable at the SAME host:port afterward (e.g. a routed VPN), no set-endpoint call is needed at all -- just re-run: $0 verify-endpoint $name"
 }
 
 cmd_set_endpoint() {
@@ -1967,7 +1972,7 @@ cmd_verify_endpoint() {
     if [ -z "$chosen" ]; then
         die "none of the known endpoints answered for '$name' (tried: ${candidates[*]}):
 $tried_report
-If the source has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"
+If the peer has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"
     fi
 
     if [ "$chosen" != "$current" ]; then
