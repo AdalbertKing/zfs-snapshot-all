@@ -432,13 +432,13 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
-| `cron` | **111/111** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14) |
+| `cron` | **120/120** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14), całościowy zapis `cron_replace_all` z odczytem zwrotnym (REV-034 F3, +9) |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **209/209** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań) |
+| `zfsbackup` | **211/211** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
 
@@ -688,8 +688,31 @@ czterech hostach w obu formach hosta.
   `$user` w drugim polu odwoływał się do niczego pod `set -u`, a diagnoza szła
   w `/dev/null` linijkę niżej — suita padała bez żadnego komunikatu. Naprawione
   rozbiciem na dwie instrukcje.
-  **F3** (`migrate-to-account` nadal woła `crontab` bezpośrednio) — kolejny
-  plasterek; potrzebny `cron_replace_all` jako brakujący prymityw.
+  **F3 ZROBIONE** (`4f1c174`+`41afa2f`): `cron_replace_all`/`_impl` —
+  zamek + walidacja markerów (F4) + `cron_write` z odczytem zwrotnym — i
+  wszystkie trzy bezpośrednie wywołania `crontab` w `migrate-to-account`
+  (forward, rollback-root, rollback-konto) przełączone na niego. Poprawiony
+  własny błąd projektowy z odpowiedzi F2: transakcja migracji NIE trzyma
+  obu zamków naraz — `gencron_as_target` odpala `gen-cron.sh` jako **osobny
+  proces**, który sam bierze zamek konta; trzymanie go w rodzicu
+  zakleszczyłoby się o własne dziecko. Zamiast tego: sekwencja osobno
+  zamykanych operacji, porządkowana istniejącym `did_root`/`did_acct`.
+  Po drodze złapany drugi błąd tej samej rodziny co F2: `exec {fd}>path
+  2>/dev/null` i `eval "exec $fd>&-" 2>/dev/null` w `cron_lock_acquire`/
+  `_release` — goły `exec` bez komendy stosuje WSZYSTKIE swoje przekierowania
+  trwale do bieżącej powłoki, więc `2>/dev/null` nie gasił błędu tej jednej
+  próby, tylko trwale kasował stderr całego procesu od tej linii w dół.
+  Efekt: `test/zfsbackup/run.sh` sekcja 25 traciła cały tekst rollbacku
+  (`warn`/`die`, oba na stderr) z przechwyconego `$(...2>&1)`, mimo że logika
+  rollbacku liczyła się poprawnie (potwierdzone osobnym kanałem debug) —
+  potwierdzone też na żywym Linuksie (`BASH_XTRACEFD` odizolowany od
+  zepsutego fd 2 odzyskał cały ślad). Naprawione: `: >"$path" 2>/dev/null`
+  (prawdziwa komenda, przekierowanie faktycznie zakresowe) jako sprawdzenie
+  zapisywalności przed trwałym `exec`, zamknięcia bez `2>/dev/null` w ogóle.
+  Testy: `test/cron` **120/120** (+9 T), `test/zfsbackup` **211/211**
+  (sekcja 25 zielona), plus cały graf wpływu — także `sudo
+  test/scenarios/run.sh` **34/34** na metropolis pve1 (root, prawdziwy
+  `flock`). Gałąź `cron-f3`, do zmergowania.
   Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
