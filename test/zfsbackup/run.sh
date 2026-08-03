@@ -89,6 +89,38 @@ else
     bad "ensure_cron_config is idempotent" "before=$before_lines after=$after_lines hourly_count=$hourly_count"
 fi
 
+# ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: a floor of 2
+# protected NEWEST snapshots for every reserved prefix this estate's own
+# scripts write, so the collector's own prune sweep can never age one out.
+if grep -qF '[excluded:__replicate_]' "$CF" && grep -qF '[excluded:vzdump]' "$CF" && grep -qF '[excluded:__migration__]' "$CF" \
+   && [ "$(sed -n '/^\[excluded:__replicate_\]/,/^\[/p' "$CF" | grep -c 'keep = 2')" = 1 ] \
+   && [ "$(sed -n '/^\[excluded:vzdump\]/,/^\[/p' "$CF" | grep -c 'keep = 2')" = 1 ] \
+   && [ "$(sed -n '/^\[excluded:__migration__\]/,/^\[/p' "$CF" | grep -c 'keep = 2')" = 1 ]; then
+    ok "ensure_cron_config adds a keep=2 floor for all three reserved prefixes"
+else
+    bad "ensure_cron_config adds a keep=2 floor for all three reserved prefixes" "$(cat "$CF")"
+fi
+
+before_lines=$(wc -l < "$CF")
+ensure_cron_config "$CF"
+after_lines=$(wc -l < "$CF")
+excl_count=$(grep -c '^\[excluded:' "$CF")
+if [ "$before_lines" = "$after_lines" ] && [ "$excl_count" = 3 ]; then
+    ok "ensure_cron_config's reserved-prefix floor is idempotent (no duplicate [excluded:] sections)"
+else
+    bad "ensure_cron_config's reserved-prefix floor is idempotent" "before=$before_lines after=$after_lines excl_count=$excl_count"
+fi
+
+# An operator who already protects a prefix more strongly is never narrowed.
+CF_EXCL="$WORK/jobs.excl.conf"
+printf '[defaults]\n\thost_label = x\n\n[excluded:vzdump]\n\tkeep = 10\n' > "$CF_EXCL"
+ensure_cron_config "$CF_EXCL" >/dev/null 2>&1
+if [ "$(grep -c 'keep = 10' "$CF_EXCL")" = 1 ] && grep -qF '[excluded:__replicate_]' "$CF_EXCL" && grep -qF '[excluded:__migration__]' "$CF_EXCL"; then
+    ok "ensure_cron_config only ADDS a missing floor, never narrows an operator's stronger keep"
+else
+    bad "ensure_cron_config only ADDS a missing floor, never narrows an operator's stronger keep" "$(cat "$CF_EXCL")"
+fi
+
 # A file that already exists (hand-written) must never be touched/recreated --
 # only the templates get appended if genuinely missing.
 CF2="$WORK/jobs.existing.conf"
@@ -102,6 +134,12 @@ else
 fi
 
 # --- 5. remove_managed_sections: removes ONLY the named sections ------------
+# REV-20260802-033 U11: header text is no longer sufficient on its own -- a
+# section is only removed if its first content line is the ownership marker
+# emit_client_sections writes ("# managed-by: zfs-backup.sh client=<name>"),
+# or the path was already recorded in the caller's own MANAGED_DATASETS
+# (the legacy/back-compat path, tested separately below). These fixtures
+# carry the marker, matching what emit_client_sections actually generates.
 CF3="$WORK/jobs.remove.conf"
 cat > "$CF3" <<'EOF'
 [defaults]
@@ -111,14 +149,16 @@ cat > "$CF3" <<'EOF'
 	send_schedule = 1 * * * *
 
 [dataset:hdd/backups/pve2/rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
 	use_template = standard_hourly
 	notify       = pve2-data
 
 [dataset:hdd/backups/pve3/rpool/data]
+	# managed-by: zfs-backup.sh client=pve3
 	use_template = standard_hourly
 	notify       = pve3-data
 EOF
-remove_managed_sections "$CF3" "hdd/backups/pve2/rpool/data"
+remove_managed_sections "$CF3" "pve2" "hdd/backups/pve2/rpool/data"
 if ! grep -qF '[dataset:hdd/backups/pve2/rpool/data]' "$CF3" \
    && grep -qF '[dataset:hdd/backups/pve3/rpool/data]' "$CF3" \
    && grep -qF '[template:standard_hourly]' "$CF3" \
@@ -132,17 +172,69 @@ fi
 CF4="$WORK/jobs.remove2.conf"
 cat > "$CF4" <<'EOF'
 [dataset:a/b]
+	# managed-by: zfs-backup.sh client=x
 	notify = a
 [dataset:a/c]
+	# managed-by: zfs-backup.sh client=x
 	notify = b
 [dataset:keep/me]
 	notify = c
 EOF
-remove_managed_sections "$CF4" "a/b" "a/c"
+remove_managed_sections "$CF4" "x" "a/b" "a/c"
 if ! grep -qF '[dataset:a/b]' "$CF4" && ! grep -qF '[dataset:a/c]' "$CF4" && grep -qF '[dataset:keep/me]' "$CF4"; then
     ok "remove_managed_sections handles multiple target sections in one call"
 else
     bad "remove_managed_sections handles multiple target sections in one call" "$(cat "$CF4")"
+fi
+
+# --- 5b. remove_managed_sections: U11 ownership marker enforcement ----------
+# A header match with NO marker and no prior MANAGED_DATASETS record looks
+# hand-written -- refuse rather than silently delete it.
+CF5="$WORK/jobs.foreign.conf"
+cat > "$CF5" <<'EOF'
+[dataset:tank/handwritten]
+	use_template = custom
+	notify       = someone
+EOF
+out=$( PATH="$PATH" bash -c "source '$ZFSBACKUP'; remove_managed_sections '$CF5' newclient tank/handwritten" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"looks hand-written"*) true ;; *) false ;; esac \
+   && grep -qF '[dataset:tank/handwritten]' "$CF5"; then
+    ok "remove_managed_sections refuses a header match with no marker and no prior record"
+else
+    bad "remove_managed_sections refuses a header match with no marker and no prior record" "rc=$rc out=$out file=$(cat "$CF5")"
+fi
+
+# The back-compat path: a section that predates the marker (no marker line
+# at all) is still removed if the CALLER already recorded this exact path in
+# its own MANAGED_DATASETS -- this is what keeps every client activated
+# before U11 shipped working unchanged on its very next rewrite.
+CF6="$WORK/jobs.legacy.conf"
+cat > "$CF6" <<'EOF'
+[dataset:tank/legacy/pve2/data]
+	use_template = standard_hourly
+	notify       = pve2-data
+EOF
+out=$( bash -c "source '$ZFSBACKUP'; MANAGED_DATASETS='tank/legacy/pve2/data'; remove_managed_sections '$CF6' pve2 tank/legacy/pve2/data" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -qF '[dataset:tank/legacy/pve2/data]' "$CF6"; then
+    ok "remove_managed_sections removes a marker-less section already recorded in MANAGED_DATASETS (legacy client)"
+else
+    bad "remove_managed_sections removes a marker-less section already recorded in MANAGED_DATASETS (legacy client)" "rc=$rc out=$out file=$(cat "$CF6" 2>/dev/null)"
+fi
+
+# A marker naming a DIFFERENT client is a real collision signal, not absence
+# of a marker -- must also refuse (path-uniqueness makes this unlikely in
+# practice, but a manual edit could still produce it).
+CF7="$WORK/jobs.wrongowner.conf"
+cat > "$CF7" <<'EOF'
+[dataset:tank/shared]
+	# managed-by: zfs-backup.sh client=otherclient
+	notify = x
+EOF
+out=$( bash -c "source '$ZFSBACKUP'; remove_managed_sections '$CF7' thisclient tank/shared" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"looks hand-written"*) true ;; *) false ;; esac; then
+    ok "remove_managed_sections refuses a header match whose marker names a different client"
+else
+    bad "remove_managed_sections refuses a header match whose marker names a different client" "rc=$rc out=$out"
 fi
 
 # --- 6. assert_cron_config_matches_installed --------------------------------
@@ -634,13 +726,14 @@ cat > "$PROF/rm.conf" <<'EOF'
 	host_label = h
 
 [prune:tank/backups/peer1]
+	# managed-by: zfs-backup.sh client=peer1
 	use_template = keep_hourly
 	gfs          = yes
 
 [dataset:tank/other]
 	use_template = standard_hourly
 EOF
-remove_managed_sections "$PROF/rm.conf" "tank/backups/peer1"
+remove_managed_sections "$PROF/rm.conf" "peer1" "tank/backups/peer1"
 if ! grep -q "^\[prune:tank/backups/peer1\]" "$PROF/rm.conf" && grep -q "^\[dataset:tank/other\]" "$PROF/rm.conf"; then
     ok "profile: remove_managed_sections drops a [prune:] section and spares the rest"
 else
@@ -674,7 +767,10 @@ else
         "ladders=$ladders flat=$flat
 $gen_out"
 fi
-if printf '%s\n' "$gen_out" | grep -q -- '-G -R "tank/backups/peer1" "automated_" -H24 -D7 -W4 -M12'; then
+# -P "...:2" x3: ensure_cron_config's reserved-prefix floor (U6, tested in
+# section 4) applies globally, so it rides on this ladder line too, between
+# the recursion flag and the scope.
+if printf '%s\n' "$gen_out" | grep -q -- '-G -R -P "__replicate_:2" -P "vzdump:2" -P "__migration__:2" "tank/backups/peer1" "automated_" -H24 -D7 -W4 -M12'; then
     ok "profile: the ladder carries every tier's count in order"
 else
     bad "profile: the ladder carries every tier's count in order" "$(printf '%s\n' "$gen_out" | grep -- '-G')"
@@ -1190,9 +1286,9 @@ fi
 # rewrote it. Found on metropolis pve1, 2026-08-01, after chmod'ing the file by
 # hand twice and watching it go back to 600 both times.
 MODE="$WORK/mode"; mkdir -p "$MODE"
-printf '[dataset:a/b]\n\tnotify = x\n[dataset:keep/me]\n\tnotify = y\n' > "$MODE/cfg.conf"
+printf '[dataset:a/b]\n\t# managed-by: zfs-backup.sh client=modetest\n\tnotify = x\n[dataset:keep/me]\n\t# managed-by: zfs-backup.sh client=modetest2\n\tnotify = y\n' > "$MODE/cfg.conf"
 chmod 0644 "$MODE/cfg.conf"
-remove_managed_sections "$MODE/cfg.conf" "a/b"
+remove_managed_sections "$MODE/cfg.conf" "modetest" "a/b"
 got=$(stat -c %a "$MODE/cfg.conf")
 if [ "$got" = 644 ] && grep -q 'keep/me' "$MODE/cfg.conf" && ! grep -q 'dataset:a/b' "$MODE/cfg.conf"; then
     ok "mode: removing a section keeps the config readable and removes the right one"
@@ -1207,7 +1303,7 @@ fi
 # rewrite loses nothing. On Linux, where the live obligations run, it bites.
 chmod 0600 "$MODE/cfg.conf"
 mode_before=$(stat -c %a "$MODE/cfg.conf")
-remove_managed_sections "$MODE/cfg.conf" "keep/me"
+remove_managed_sections "$MODE/cfg.conf" "modetest2" "keep/me"
 mode_after=$(stat -c %a "$MODE/cfg.conf")
 [ "$mode_before" = "$mode_after" ] && ok "mode: whatever the mode was, a rewrite keeps it" \
                  || bad "mode: whatever the mode was, a rewrite keeps it" "przed=$mode_before po=$mode_after"
@@ -2768,6 +2864,151 @@ case "$out" in
     *"currently paused"*) bad "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" "$out" ;;
     *) ok "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" ;;
 esac
+
+# --- 36. resolve_mode_datasets (REV-20260802-033 slice 6) -------------------
+#
+# Fetches a MODE-based client's committed scope file + T3 hash sidecar over
+# ssh, verifies the hash, reads the scope (lib-scope.sh), and walks each root
+# via a remote `zfs list -r`, filtering through scope_includes -- all fully
+# stubbable by faking `ssh` itself, since every remote call this function
+# makes goes through it.
+MDS="$WORK/modedatasets"; mkdir -p "$MDS/bin"
+
+mds_ssh_stub() {   # <scope-body> <zfslist-body>
+    cat > "$MDS/bin/ssh" <<EOF
+#!/bin/bash
+cmd="\${@: -1}"
+case "\$cmd" in
+    *cat*.scope.sha256*) cat '$MDS/hash' ;;
+    *cat*.scope*)        cat '$MDS/scope' ;;
+    *zfs\ list*)          cat '$MDS/zfslist' ;;
+    *) exit 1 ;;
+esac
+EOF
+    chmod +x "$MDS/bin/ssh"
+}
+
+mds_env='LOAD_LABEL=testlabel LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_ACCOUNT=zfsbackup LOAD_HOST=peer.example'
+
+cat > "$MDS/scope" <<'EOF'
+[dataset:tank/data]
+	include_parent = no
+	include_children = yes
+EOF
+sha256sum "$MDS/scope" | awk '{print $1}' > "$MDS/hash"
+printf 'tank/data\ntank/data/child1\ntank/data/child2\n' > "$MDS/zfslist"
+mds_ssh_stub
+
+out=$( PATH="$MDS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    $mds_env
+    PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''
+    resolve_mode_datasets
+    echo \"RESULT=[\$PEER_SAVED_DATASETS]\"
+" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"RESULT=[tank/data/child1 tank/data/child2]"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: fetches, verifies the hash, and resolves the real leaf list"
+else
+    bad "resolve_mode_datasets: fetches, verifies the hash, and resolves the real leaf list" "rc=$rc out=$out"
+fi
+
+# A no-op for a legacy (--peer-datasets) client: PEER_SAVED_DATASETS is
+# already non-empty, so no ssh call should even happen.
+out=$( PATH="$MDS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    $mds_env
+    PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='tank/already'
+    resolve_mode_datasets
+    echo \"RESULT=[\$PEER_SAVED_DATASETS]\"
+" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"RESULT=[tank/already]"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: a no-op when PEER_SAVED_DATASETS is already set"
+else
+    bad "resolve_mode_datasets: a no-op when PEER_SAVED_DATASETS is already set" "rc=$rc out=$out"
+fi
+
+# A no-op for a dataset-list client entirely (PEER_SAVED_MODE unset).
+out=$( PATH="$MDS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    $mds_env
+    PEER_SAVED_DATASETS='tank/x'
+    resolve_mode_datasets
+    echo \"RESULT=[\$PEER_SAVED_DATASETS]\"
+" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"RESULT=[tank/x]"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: a no-op when PEER_SAVED_MODE is unset (legacy client)"
+else
+    bad "resolve_mode_datasets: a no-op when PEER_SAVED_MODE is unset (legacy client)" "rc=$rc out=$out"
+fi
+
+# T3: a scope file that does not match its own hash sidecar (edited since
+# the last --commit-scope, or committed differently) must refuse, not
+# silently generate jobs for a scope nobody actually granted from.
+printf 'notthehash\n' > "$MDS/hash"
+out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"does not match the hash"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: refuses on a scope/hash mismatch (T3)"
+else
+    bad "resolve_mode_datasets: refuses on a scope/hash mismatch (T3)" "rc=$rc out=$out"
+fi
+sha256sum "$MDS/scope" | awk '{print $1}' > "$MDS/hash"   # restore for the next cases
+
+# No hash sidecar at all: --draft-scope ran but --commit-scope never did.
+mds_ssh_nohash() {
+    cat > "$MDS/bin/ssh" <<EOF
+#!/bin/bash
+cmd="\${@: -1}"
+case "\$cmd" in
+    *cat*.scope.sha256*) exit 1 ;;
+    *cat*.scope*)        cat '$MDS/scope' ;;
+    *zfs\ list*)          cat '$MDS/zfslist' ;;
+    *) exit 1 ;;
+esac
+EOF
+    chmod +x "$MDS/bin/ssh"
+}
+mds_ssh_nohash
+out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"has --commit-scope run"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: refuses when --commit-scope has not run yet on the peer"
+else
+    bad "resolve_mode_datasets: refuses when --commit-scope has not run yet on the peer" "rc=$rc out=$out"
+fi
+mds_ssh_stub   # restore for the next case
+
+# No scope file at all: --draft-scope has not run yet.
+mds_ssh_noscope() {
+    cat > "$MDS/bin/ssh" <<EOF
+#!/bin/bash
+exit 1
+EOF
+    chmod +x "$MDS/bin/ssh"
+}
+mds_ssh_noscope
+out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"has --draft-scope run"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: refuses when --draft-scope has not run yet on the peer"
+else
+    bad "resolve_mode_datasets: refuses when --draft-scope has not run yet on the peer" "rc=$rc out=$out"
+fi
+
+# --- 37. add-client --mode= validation (REV-20260802-033 slice 6) -----------
+# Only the local (pre-network) refusal paths are testable here -- an ACCEPTED
+# --mode= still goes on to call deploy.sh --pair for real, same reason the
+# existing --bandwidth cases above only test rejection.
+mode_rc() { ( cmd_add_client "modeclient" --lan=10.0.0.1 "$@" ) >/dev/null 2>&1; echo $?; }
+[ "$(mode_rc --mode=bogus)" != 0 ] \
+    && ok "add-client: --mode must be backup or sync" \
+    || bad "add-client: --mode must be backup or sync" "accepted a bogus mode"
+[ "$(mode_rc --mode=backup --datasets="tank/x")" != 0 ] \
+    && ok "add-client: --mode and --datasets are refused together" \
+    || bad "add-client: --mode and --datasets are refused together" "accepted both"
+[ "$(mode_rc --mode=sync --target=tank/y)" != 0 ] \
+    && ok "add-client: --mode=sync refuses an explicit --target" \
+    || bad "add-client: --mode=sync refuses an explicit --target" "accepted both"
+[ "$(mode_rc)" != 0 ] \
+    && ok "add-client: neither --datasets nor --mode is refused" \
+    || bad "add-client: neither --datasets nor --mode is refused" "accepted neither"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

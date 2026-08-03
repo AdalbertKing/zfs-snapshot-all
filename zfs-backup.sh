@@ -14,7 +14,7 @@ set -uo pipefail
 #
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
+#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
@@ -83,6 +83,7 @@ DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
 LIBCRON="$SCRIPT_DIR/lib-cron.sh"
+LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
 
 # The single crontab writer. Sourced, not reimplemented: this script used to
 # hold its own reader, its own writer and its own block renderer, which is how
@@ -91,6 +92,14 @@ LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 [ -r "$LIBCRON" ] || { echo "cannot read $LIBCRON -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBCRON"
+
+# The scope file's grammar and reader (REV-20260802-033 slice 1), sourced for
+# the same reason: slice 6 needs scope_read/scope_includes to interpret a
+# scope file fetched from a mode-based peer, and a second implementation of
+# that grammar is exactly the second representation REV-033 F2 forbids.
+[ -r "$LIBSCOPE" ] || { echo "cannot read $LIBSCOPE -- the checkout is incomplete" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$LIBSCOPE"
 
 # Mirrors deploy.sh's own peer-pairing state locations exactly (see
 # PAIRING-DESIGN.md) -- this file reads what --pair/--join already write, it
@@ -117,7 +126,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh add-client NAME --lan=HOST[:PORT] --datasets="A B" [--target=X] [--bandwidth=N]
+  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT] [--skip-final-catchup]
@@ -156,6 +165,12 @@ client_name_valid() {
 }
 client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
 peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
+# Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
+# exactly (REV-20260802-033 slices 4/T3) -- same reason as peer_manifest_path
+# above: this reads what --draft-scope/--commit-scope already wrote on the
+# PEER, it never invents a parallel path convention.
+peer_scope_path() { echo "$PEER_STATE_DIR/$1.scope"; }
+peer_scope_granted_hash_path() { echo "$PEER_STATE_DIR/$1.scope.sha256"; }
 
 # Same question deploy.sh's local_keyfile_path/local_knownhosts_path answer:
 # where the GENERATED job should look for the key/pinned host key. Kept in
@@ -493,6 +508,31 @@ ensure_cron_config() {
         done
     fi
     [ -n "$added" ] && log "added missing profile template(s) to $file:$added"
+
+    # ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: every reserved
+    # prefix this estate's own scripts write ("__replicate_" from pvesr,
+    # "vzdump" from Proxmox backup jobs, "__migration__" from zfs send -w
+    # migrations) gets a floor of 2 protected NEWEST snapshots, so the
+    # collector's own generated prune sweep can never age one out into
+    # delsnaps.sh's all-pattern garbage collection.
+    #
+    # [excluded:] is a CONFIG-WIDE mechanism -- gen-cron.sh pastes its
+    # PROTECT_FLAGS fragment onto every emitted prune line in the whole file,
+    # not just one client's -- so it is ensured ONCE here, not per-client in
+    # emit_client_sections, which would die with "duplicate section" the
+    # moment a second client activated. Only ADDS a missing floor: an
+    # operator who already set a stronger keep for one of these is never
+    # overridden or narrowed.
+    local prefix
+    for prefix in "__replicate_" "vzdump" "__migration__"; do
+        grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
+        {
+            echo
+            echo "[excluded:$prefix]"
+            echo "	keep = 2"
+        } >> "$file" || die "could not append [excluded:$prefix] to $file"
+        log "added missing reserved-prefix protection [excluded:$prefix] (keep=2) to $file"
+    done
 }
 
 # gen-cron.sh --install replaces the ENTIRE managed block (BEGIN/END markers)
@@ -702,6 +742,12 @@ assert_cron_config_matches_installed() {
 # in the client conf.
 emit_client_sections() {   # <workfile> <client name>
     local workfile="$1" name="$2" ds localpath
+    # REV-20260802-033 U11: this comment, as the section's first content
+    # line, is what lets remove_managed_sections tell a section IT wrote from
+    # a hand-written one that coincidentally shares the same header text --
+    # header text alone was never proof of authorship, only of path. See the
+    # marker check in remove_managed_sections for what happens on a mismatch.
+    local marker="# managed-by: zfs-backup.sh client=$name"
     managed=()
     for ds in $PEER_SAVED_DATASETS; do
         managed+=("$PEER_SAVED_TARGET/$LOAD_LABEL/$ds")
@@ -709,12 +755,13 @@ emit_client_sections() {   # <workfile> <client name>
     # Remove-then-add unconditionally, never skip-if-present: that is what makes
     # a re-run after an endpoint switch actually pick up the new host/port/alias
     # instead of leaving the old connection details in place forever.
-    [ "${#managed[@]}" -gt 0 ] && remove_managed_sections "$workfile" "${managed[@]}"
+    [ "${#managed[@]}" -gt 0 ] && remove_managed_sections "$workfile" "$name" "${managed[@]}"
     for ds in $PEER_SAVED_DATASETS; do
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
         {
             echo
             echo "[dataset:$localpath]"
+            echo "	$marker"
             echo "	use_template = standard_hourly"
             echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
             echo "	flags        = $LOAD_FLAGS"
@@ -731,10 +778,11 @@ emit_client_sections() {   # <workfile> <client name>
     prune_scope=""
     if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
         prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
-        remove_managed_sections "$workfile" "$prune_scope"
+        remove_managed_sections "$workfile" "$name" "$prune_scope"
         {
             echo
             echo "[prune:$prune_scope]"
+            echo "	$marker"
             echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
             echo "	recursive    = yes"
             echo "	gfs          = yes"
@@ -1132,18 +1180,36 @@ cmd_setup_server() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local lan="" datasets="" target="" bandwidth=""
+    local lan="" datasets="" target="" bandwidth="" mode=""
     for a in "$@"; do
         case "$a" in
             --lan=*)       lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
+            --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
-    [ -n "$lan" ]      || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
-    [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\""
+    [ -n "$lan" ] || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
+    # REV-20260802-033 slice 6: --mode is the alternative to --datasets --
+    # dataset selection deferred to the source's own scope file
+    # (--draft-scope/--commit-scope on the peer) instead of named here.
+    if [ -n "$mode" ]; then
+        [ -z "$datasets" ] \
+            || die "add-client: --mode and --datasets are alternative ways of choosing what to back up -- pass exactly one"
+        case "$mode" in
+            backup|sync) ;;
+            *) die "add-client: --mode must be 'backup' or 'sync', got '$mode'" ;;
+        esac
+        # sync reproduces the source's own paths at the same paths on the
+        # collector -- a --target here would be a second, conflicting answer
+        # to "where does this go".
+        [ "$mode" = sync ] && [ -n "$target" ] \
+            && die "add-client: --mode=sync reproduces source paths at the same paths on the collector -- do not also pass --target"
+    else
+        [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\" (or --mode=backup|sync, to let the source choose)"
+    fi
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -1159,14 +1225,22 @@ cmd_add_client() {
     [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
 
     read_server_conf
-    if [ -z "$target" ]; then
-        target="$DEFAULT_TARGET"
-        [ -n "$target" ] || die "no --target given and no default set -- run setup-server first, or pass --target=POOL/PATH"
+    if [ "$mode" != sync ]; then
+        if [ -z "$target" ]; then
+            target="$DEFAULT_TARGET"
+            [ -n "$target" ] || die "no --target given and no default set -- run setup-server first, or pass --target=POOL/PATH"
+        fi
     fi
 
     local lan_host lan_port; read -r lan_host lan_port <<< "$(parse_endpoint_arg "$lan")"
 
-    local -a pair_args=(--pair --role=pull --peer="$lan_host" --peer-datasets="$datasets" --target="$target")
+    local -a pair_args=(--pair --role=pull --peer="$lan_host")
+    if [ -n "$mode" ]; then
+        pair_args+=(--mode="$mode")
+    else
+        pair_args+=(--peer-datasets="$datasets")
+    fi
+    [ -n "$target" ] && pair_args+=(--target="$target")
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
@@ -1192,6 +1266,82 @@ cmd_add_client() {
     log "client '$name' created, state=pending_enroll"
     log "next: copy the package above to $lan_host and run there:  ./deploy.sh --join=<package>"
     log "then here:  $0 seed $name"
+}
+
+# REV-20260802-033 slice 6 (fetch/digest/generate): for a MODE-based client
+# (PEER_SAVED_MODE set, PEER_SAVED_DATASETS empty because dataset selection
+# was deferred to the peer -- slices 4/5), resolves the real leaf dataset
+# list by fetching the peer's COMMITTED scope file and walking its actual
+# tree, then sets PEER_SAVED_DATASETS as if it had always been in the
+# manifest. This is the ONLY seam: every existing dataset-list consumer
+# (seed, final-catchup, activate-client, emit_client_sections, migrate-
+# profile, test) needs no change at all, because by the time any of them
+# run, the list is populated exactly the way a legacy --peer-datasets
+# client already provides it.
+#
+# T1 (ENROLMENT-AGREED-2026-08-02): `zfs list` is not restricted by `zfs
+# allow`, so this walk succeeds even before --commit-scope has granted
+# anything -- it enumerates what commit-scope is about to grant (or already
+# has; either order works).
+#
+# T3: the fetched scope file must match the sha256 sidecar --commit-scope
+# recorded when it last granted -- proof this is exactly what was granted
+# from, not a source-side edit made since. A mismatch refuses outright
+# rather than silently generating jobs for a scope nobody actually committed.
+#
+# Called from load_client_and_connection, which every caller above already
+# invokes first -- not a new step operators need to remember.
+resolve_mode_datasets() {
+    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
+    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+
+    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+    local sfile_remote hfile_remote
+    sfile_remote=$(peer_scope_path "$LOAD_LABEL")
+    hfile_remote=$(peer_scope_granted_hash_path "$LOAD_LABEL")
+
+    local scope_tmp hash_tmp
+    scope_tmp=$(mktemp) || die "mktemp failed"
+    hash_tmp=$(mktemp) || { rm -f "$scope_tmp"; die "mktemp failed"; }
+    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$scope_tmp" 2>/dev/null \
+       || [ ! -s "$scope_tmp" ]; then
+        rm -f "$scope_tmp" "$hash_tmp"
+        die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- has --draft-scope run there yet?"
+    fi
+    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
+       || [ ! -s "$hash_tmp" ]; then
+        rm -f "$scope_tmp" "$hash_tmp"
+        die "could not fetch the granted-scope hash from $LOAD_HOST ($hfile_remote) -- has --commit-scope run there yet? (--draft-scope alone grants nothing)"
+    fi
+
+    local want_hash got_hash
+    want_hash=$(tr -d ' \t\r\n' < "$hash_tmp")
+    got_hash=$(sha256sum -- "$scope_tmp" 2>/dev/null | awk '{print $1}')
+    rm -f "$hash_tmp"
+    if [ -z "$got_hash" ] || [ "$want_hash" != "$got_hash" ]; then
+        rm -f "$scope_tmp"
+        die "the scope file on $LOAD_HOST does not match the hash --commit-scope last recorded there -- it was edited since the last commit (or committed differently) and never re-committed. Run --commit-scope on $LOAD_HOST first, then retry."
+    fi
+
+    scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
+    rm -f "$scope_tmp"
+
+    local -a resolved=()
+    local root ds
+    for root in "${SCOPE_ROOTS[@]}"; do
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            scope_includes "$ds" || continue
+            case " ${resolved[*]:-} " in *" $ds "*) continue ;; esac
+            resolved+=("$ds")
+        done < <(ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -o name -r -- '$root'" 2>/dev/null)
+    done
+    [ "${#resolved[@]}" -gt 0 ] \
+        || die "the scope file on $LOAD_HOST selects nothing that currently exists there -- nothing to back up"
+
+    PEER_SAVED_DATASETS="${resolved[*]}"
 }
 
 # Shared setup for every command that connects to an already-paired peer:
@@ -1246,6 +1396,11 @@ load_client_and_connection() {
     # that a peer at the end of a slow VPN gets a ceiling while a LAN peer on
     # the same collector does not.
     [ -n "${BANDWIDTH:-}" ] && LOAD_FLAGS="$LOAD_FLAGS -b $BANDWIDTH"
+
+    # Slice 6: a no-op for a legacy (--peer-datasets) client -- PEER_SAVED_DATASETS
+    # is already non-empty from the manifest sourced above. Only a mode-based
+    # client (PEER_SAVED_MODE set, list deferred to the peer) triggers the fetch.
+    resolve_mode_datasets
 }
 
 # ------------------------------------------------------------------------------
@@ -1265,9 +1420,24 @@ cmd_seed() {
         *) die "client '$name' is in state '${STATE:-unknown}' -- seed expects pending_enroll (or seeding, to retry)" ;;
     esac
 
-    log "refreshing dataset list from $PEER_HOST over LAN (also confirms --join has run there)..."
-    bash "$DEPLOY" --pair --peer="$PEER_HOST" --draft-config \
-        || die "could not reach $PEER_HOST or list its datasets -- has --join run there yet?"
+    # Slice 6: --draft-config is dataset-list-specific (it lists EVERY dataset
+    # on the peer as an unfiltered candidate when PEER_SAVED_DATASETS is
+    # empty, which is always true for a mode-based client) -- skip it there.
+    # load_client_and_connection below calls resolve_mode_datasets, which
+    # fetches the peer's committed scope file over the same LAN link and so
+    # is this client's equivalent connectivity-and-readiness check.
+    local label; label=$(peer_label "$PEER_HOST")
+    local mpath; mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- has --join run there yet?"
+    local peer_mode; peer_mode=$( . "$mpath"; echo "${PEER_SAVED_MODE:-}" )
+
+    if [ -n "$peer_mode" ]; then
+        log "mode-based client ($peer_mode) -- dataset list comes from the peer's committed scope file, not --draft-config"
+    else
+        log "refreshing dataset list from $PEER_HOST over LAN (also confirms --join has run there)..."
+        bash "$DEPLOY" --pair --peer="$PEER_HOST" --draft-config \
+            || die "could not reach $PEER_HOST or list its datasets -- has --join run there yet?"
+    fi
 
     {
         cat "$cpath"
@@ -2744,30 +2914,98 @@ mv_preserving_mode() {   # <tmp> <destination>
     return 0
 }
 
-remove_managed_sections() {
-    local file="$1"; shift
+# REV-20260802-033 U11: header text alone used to be treated as proof of
+# ownership -- match [dataset:X]/[prune:X] by path, delete unconditionally.
+# But a header is only proof of PATH, not of who wrote the section: an
+# operator could have hand-written a section at the exact path a client
+# later comes to manage (to pin a custom template, say), and the old logic
+# would silently delete it on the client's very first activate-client.
+#
+# emit_client_sections now writes a marker comment as each section's first
+# content line ("# managed-by: zfs-backup.sh client=<name>"). A header match
+# is accepted as this function's own prior output -- and dropped, same as
+# before -- if EITHER the marker is present, OR the path was already listed
+# in this client's OWN previously-recorded MANAGED_DATASETS/
+# MANAGED_PRUNE_SCOPE (set by `. "$cpath"`/`. "$f"` in every caller before
+# this runs). That second test is what keeps every client activated before
+# this marker existed working unchanged on its very next rewrite -- their
+# sections predate the marker and this call adds it going forward -- while a
+# header match on a path this client has never managed before, with no
+# marker, is refused: it looks hand-written, not generated, and deleting it
+# silently would be worse than stopping here.
+remove_managed_sections() {   # <file> <client name> <target-path>...
+    local file="$1" name="$2"; shift 2
     local -a targets=("$@")
     local tmp; tmp=$(mktemp) || die "mktemp failed"
-    local ds header in_target=0
-    local -a headers=()
+    local marker="# managed-by: zfs-backup.sh client=$name"
+    local ds header i in_candidate=0 first_line=0 owned=0 trimmed candidate_ds=""
+    local -a headers=() header_ds=() section_buf=()
     # Both section types for each path. The GFS profile gives a client one
     # [prune:<target>/<label>] alongside its [dataset:] sections, and a function
     # that only knew about [dataset:] would append a second prune section on
     # every re-activation -- two ladders, same scope, same schedule, racing.
     # Removing [prune:X] when X is a dataset path is a harmless no-op: the two
     # never share a path, since the prune scope is the parent of the datasets.
-    for ds in "${targets[@]}"; do headers+=("[dataset:$ds]" "[prune:$ds]"); done
-    while IFS= read -r line; do
+    for ds in "${targets[@]}"; do
+        headers+=("[dataset:$ds]" "[prune:$ds]")
+        header_ds+=("$ds" "$ds")
+    done
+
+    is_previously_managed() {   # <path>
+        local p="$1" x
+        for x in ${MANAGED_DATASETS:-}; do [ "$x" = "$p" ] && return 0; done
+        [ -n "${MANAGED_PRUNE_SCOPE:-}" ] && [ "$p" = "$MANAGED_PRUNE_SCOPE" ] && return 0
+        return 1
+    }
+
+    flush_section() {
+        if [ "$owned" -eq 1 ]; then
+            : # this is emit_client_sections' own prior output -- drop it
+        else
+            local l
+            for l in "${section_buf[@]}"; do printf '%s\n' "$l" >> "$tmp"; done
+        fi
+        section_buf=()
+    }
+
+    while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
             \[*\])
-                in_target=0
-                for header in "${headers[@]}"; do
-                    [ "$line" = "$header" ] && in_target=1
+                flush_section
+                in_candidate=0
+                candidate_ds=""
+                owned=0
+                for i in "${!headers[@]}"; do
+                    if [ "$line" = "${headers[$i]}" ]; then
+                        in_candidate=1
+                        candidate_ds="${header_ds[$i]}"
+                        break
+                    fi
                 done
+                if [ "$in_candidate" -eq 1 ] && is_previously_managed "$candidate_ds"; then
+                    owned=1
+                    first_line=0
+                else
+                    first_line=1
+                fi
+                section_buf+=("$line")
+                continue
                 ;;
         esac
-        [ "$in_target" -eq 1 ] || printf '%s\n' "$line" >> "$tmp"
+        if [ "$in_candidate" -eq 1 ] && [ "$first_line" -eq 1 ]; then
+            first_line=0
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            if [ "$trimmed" = "$marker" ]; then
+                owned=1
+            else
+                rm -f "$tmp"
+                die "$file has a [dataset:]/[prune:] section at a path client '$name' manages, but its first line is not '$marker' and this path was never previously recorded as managed by '$name' -- this looks hand-written, not something activate-client generated. Resolve the naming collision by hand (rename or remove the hand-written section) before re-running."
+            fi
+        fi
+        section_buf+=("$line")
     done < "$file"
+    flush_section
+
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
@@ -2798,7 +3036,7 @@ cmd_remove_client() {
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
         chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086
-        remove_managed_sections "$workfile" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
+        remove_managed_sections "$workfile" "$name" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
         if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
             rm -f "$workfile"
             die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
