@@ -125,9 +125,21 @@ cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
         return 1
     fi
     path=$(cron_lock_path "$user")
-    exec {fd}>"$path" 2>/dev/null || { CRON_ERR="could not open the lock file $path"; return 1; }
+    # A bare `exec` with no command applies ALL of its redirections to the
+    # current shell PERMANENTLY, not just to this statement -- so a trailing
+    # `2>/dev/null` here doesn't scope to the exec attempt, it silently and
+    # permanently nukes the whole process's stderr from this point on (found
+    # by a rollback's warn/die output vanishing from a caller's captured
+    # `$(... 2>&1)` even though the rollback itself ran correctly). Validate
+    # writability with a real command first -- its redirect IS scoped to that
+    # command alone -- then do the persistent exec with no redirect to leak.
+    if ! : >"$path" 2>/dev/null; then
+        CRON_ERR="could not open the lock file $path"
+        return 1
+    fi
+    exec {fd}>"$path"
     if ! flock -w "$CRON_LOCK_TIMEOUT" "$fd"; then
-        eval "exec $fd>&-" 2>/dev/null
+        eval "exec $fd>&-"
         CRON_ERR="could not acquire the crontab lock for '$user' within ${CRON_LOCK_TIMEOUT}s -- another writer is holding it. Refusing to write rather than racing it"
         return 1
     fi
@@ -146,7 +158,11 @@ cron_lock_release() {   # <user>
     local fd="${CRON_LOCK_FD[$user]:-}"
     [ -n "$fd" ] || return 0
     flock -u "$fd" 2>/dev/null
-    eval "exec $fd>&-" 2>/dev/null
+    # See cron_lock_acquire: a bare `exec ... 2>/dev/null` would permanently
+    # redirect this process's real stderr to /dev/null, not just silence a
+    # close error. $fd is a valid, currently-open descriptor here, so the
+    # close does not need a redirect to guard.
+    eval "exec $fd>&-"
     unset "CRON_LOCK_FD[$user]"
 }
 
