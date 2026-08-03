@@ -3579,7 +3579,7 @@ EOF
                -P "$PEER_PORT" "$pkg" "root@$PEER_HOST:/root/" \
            && ssh -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
                   -p "$PEER_PORT" "root@$PEER_HOST" \
-                  "cd /root && ./deploy.sh --join=/root/$(basename "$pkg")"; then
+                  "cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"; then
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
             if [ -n "$PEER_MODE" ]; then
@@ -3602,12 +3602,14 @@ EOF
                 0)
                     log "Zakres zredagowany zdalnie i zweryfikowany (--commit-scope-check OK, ssh -t)."
                     log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
-                    log "  ./deploy.sh --commit-scope=$my_label"
+                    log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR && ./deploy.sh --commit-scope=$my_label"
                     ;;
                 2)
                     log "Draft NIE powiodl sie (patrz blad wyzej) -- zaden plik zakresu nie powstal."
                     log "Join juz wykonany, NIE powtarzaj go. Recznie na $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR"
                     log "  ./deploy.sh --draft-scope=$my_label"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
@@ -3617,6 +3619,7 @@ EOF
                     log "Plik mogl juz powstac (jesli draft sie udal): $remote_scope"
                     log "Recznie na $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
@@ -3624,11 +3627,14 @@ EOF
                     log "Zakres zredagowany, ale NIE przeszedl --commit-scope-check (patrz blad wyzej)."
                     log "Popraw recznie na $PEER_HOST:"
                     log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
                     ;;
                 *)
                     log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+                    log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR"
                     log "  ./deploy.sh --draft-scope=$my_label   # jesli jeszcze nie istnieje"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
@@ -3641,7 +3647,7 @@ EOF
         log "Przenies go recznie na $PEER_HOST i uruchom tam z konsoli:"
         log "  scp $pkg root@$PEER_HOST:/root/"
         log "  ssh root@$PEER_HOST"
-        log "  ./deploy.sh --join=/root/$(basename "$pkg")"
+        log "  cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"
     fi
     if [ "$PEER_ROTATE" -eq 1 ]; then
         log "Po --join tam: zweryfikuj dry-runem z NOWYM kluczem ($active_keyfile -n),"

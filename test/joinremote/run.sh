@@ -206,6 +206,27 @@ else
         "one or more expected strings missing from $DEPLOY_SRC"
 fi
 
+# ---------------------------------------------------------------------------
+# 7. Structural pin: found live, Gate B of REV-20260804-037's own campaign --
+#    the automated --join-remotely ssh command, and every manual fallback
+#    instruction printed alongside it, said "ssh root@$PEER_HOST" followed
+#    by a bare "./deploy.sh ...". root's login shell on a freshly-ssh'd-into
+#    peer does not start inside $REPO_DIR (/root/scripts/zfs-snapshot-all by
+#    default, deploy.sh's own REPO_DIR global) -- only an operator who
+#    already knew to cd there first ever had these instructions actually
+#    work. First caught when --join-remotely ran the automated version
+#    literally: "bash: line 1: ./deploy.sh: No such file or directory".
+# ---------------------------------------------------------------------------
+repo_cd_count=$(grep -c 'cd \$REPO_DIR' "$DEPLOY_SRC")
+if grep -qF 'cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")' "$DEPLOY_SRC" \
+   && ! grep -qF 'cd /root && ./deploy.sh --join=' "$DEPLOY_SRC" \
+   && [ "$repo_cd_count" -ge 6 ]; then
+    ok "do_pair: every peer-side ./deploy.sh invocation (automated and the 6 printed instruction blocks) is reached via \$REPO_DIR, not a bare ssh login shell"
+else
+    bad "do_pair: every peer-side ./deploy.sh invocation (automated and the 6 printed instruction blocks) is reached via \$REPO_DIR, not a bare ssh login shell" \
+        "the old 'cd /root && ./deploy.sh --join=' shape is still present, or fewer than 6 'cd \$REPO_DIR' lines found (got $repo_cd_count)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
