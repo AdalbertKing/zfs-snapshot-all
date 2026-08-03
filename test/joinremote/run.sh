@@ -55,6 +55,12 @@ cd "$FAKE" && bash -c "\$cmd"
 EOF
     chmod +x "$FAKE/bin/ssh"
     export PATH="$FAKE/bin:$PATH"
+    # remote_scope_stage's generated script does "cd $REPO_DIR" before any
+    # ./deploy.sh call (REV-20260804-037, found live right after the F1 fix
+    # itself: the fix's own script had the identical bare-ssh-shell defect
+    # this repo's do_pair() manual instructions already had elsewhere).
+    # $FAKE stands in for the peer's real /root/scripts/zfs-snapshot-all.
+    export REPO_DIR="$FAKE"
 }
 
 # stub_deploy <draft-behavior> <check-behavior> -- a fake ./deploy.sh in the
@@ -99,7 +105,8 @@ EOF
 
 RESTORE_PATH="$PATH"
 RESTORE_EDITOR="${EDITOR:-}"
-restore_env() { export PATH="$RESTORE_PATH"; export EDITOR="$RESTORE_EDITOR"; }
+RESTORE_REPO_DIR="${REPO_DIR:-}"
+restore_env() { export PATH="$RESTORE_PATH"; export EDITOR="$RESTORE_EDITOR"; export REPO_DIR="$RESTORE_REPO_DIR"; }
 
 # ---------------------------------------------------------------------------
 # 1. Forced draft failure does not invoke the editor and does not create a

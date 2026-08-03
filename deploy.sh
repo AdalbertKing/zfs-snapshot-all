@@ -910,6 +910,7 @@ remote_scope_stage() {
     local remote_script
     remote_script=$(cat <<EOF2
 set -u
+cd $REPO_DIR || { echo "cannot cd into $REPO_DIR on this peer -- is deploy.sh deployed at its usual path?" >&2; exit 1; }
 SCOPE="$scope"
 if [ -e "\$SCOPE" ]; then
     echo "existing scope file found at \$SCOPE -- opening it directly, no draft"
