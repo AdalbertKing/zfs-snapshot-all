@@ -191,8 +191,9 @@ CRONTAB_MODE=ok
 check "E1 a write that fails read-back is refused" "1" "$rc"
 check "E2 no saved-state file is created on a failed pause" "1" "$([ -e "$(pause_state_path "$ME")" ]; echo $?)"
 
-# ---- F. do_pause/do_resume: BOTH root's crontab and the named delegated
-# account's, one failure never stopping the other. -----------------------
+# ---- F. do_pause/do_resume under --fullcron: BOTH root's crontab and the
+# named delegated account's, one failure never stopping the other. ----------
+FULLCRON_MODE=1
 seed "$ME" '# root' '7 * * * * root-job'
 seed "acct-user" '# acct' '8 * * * * acct-job'
 BACKUP_USER="acct-user"
@@ -202,22 +203,135 @@ BACKUP_USER="acct-user"
 # crontab this stub has never seeded; that is fine, it proves the loop
 # processes BOTH names, not that "root" here is a privileged account.
 out=$(do_pause 2>&1); rc=$?
-check "F1 do_pause pauses the named account" "0" "$([ -e "$(pause_state_path "acct-user")" ]; echo $?)"
+check "F1 do_pause (--fullcron) pauses the named account" "0" "$([ -e "$(pause_state_path "acct-user")" ]; echo $?)"
 check "F2 ...and its crontab now holds only the placeholder" "1" "$(grep -c "$PAUSE_MARKER" "$(tab "acct-user")")"
 out=$(do_resume 2>&1); rc=$?
 check "F3 do_resume restores the named account" "0" \
       "$(printf '%s\n' '# acct' '8 * * * * acct-job' | cmp -s - "$(tab "acct-user")"; echo $?)"
 [ -e "$(pause_state_path root)" ] && rm -f "$(pause_state_path root)"
 [ -e "$(pause_state_path "acct-user")" ] && rm -f "$(pause_state_path "acct-user")"
+FULLCRON_MODE=0
 
 # ---- G. no delegated account named or found: warns, still pauses root -----
 BACKUP_USER=""
 seed "$ME" '# root only' '9 * * * * root-job2'
+FULLCRON_MODE=1
 out=$(do_pause 2>&1)
 case "$out" in *"only root's crontab will be paused"*) ok "G1 no account found/given: warns plainly" ;;
   *) bad "G1 no account found/given: warns plainly" "$out" ;; esac
 do_resume >/dev/null 2>&1
 rm -f "$(pause_state_path root)" 2>/dev/null
+FULLCRON_MODE=0
+
+# ---- H. block mode (the new default): a plain round trip on one managed
+# block, with a foreign line outside it left completely alone. ---------------
+block_text() {   # <name> <line>...  -- prints the crontab text to stdout
+    local name="$1"; shift
+    printf '# a human line above the block\n'
+    printf '# BEGIN %s (generated -- do not hand-edit)\n' "$name"
+    printf '%s\n' "$@"
+    printf '# END %s\n' "$name"
+    printf '# a human line below the block\n'
+}
+seed_block() { local user="$1" name="$2"; shift 2; block_text "$name" "$@" > "$TMPD/tabs/$user"; }   # <user> <name> <line>...
+seed_block "$ME" zfs-backup-managed '10 * * * * snap-job-a' '11 * * * * snap-job-b'
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "H1 do_pause_blocks_one succeeds" "0" "$rc"
+check "H2 the human line above the block survives untouched" "1" \
+      "$(grep -c '^# a human line above the block$' "$(tab "$ME")")"
+check "H3 the human line below the block survives untouched" "1" \
+      "$(grep -c '^# a human line below the block$' "$(tab "$ME")")"
+check "H4 both job lines are now commented, prefixed, findable" "2" \
+      "$(grep -cE "^${PAUSE_LINE_PREFIX}[0-9]+ \* \* \* \* snap-job" "$(tab "$ME")")"
+check "H5 the raw active job lines are gone" "0" \
+      "$(grep -cE '^[0-9]+ \* \* \* \* snap-job' "$(tab "$ME")")"
+check "H6 the block still has its BEGIN/END markers" "0" \
+      "$(cron_block_locate "$(tab "$ME")" zfs-backup-managed; echo $?)"
+out=$(do_resume_blocks_one "$ME" 2>&1); rc=$?
+check "H7 do_resume_blocks_one succeeds" "0" "$rc"
+check "H8 the crontab is restored byte for byte" "0" \
+      "$(block_text zfs-backup-managed '10 * * * * snap-job-a' '11 * * * * snap-job-b' | cmp -s - "$(tab "$ME")"; echo $?)"
+
+# ---- I. a second block-mode pause on an already-paused block is refused ----
+seed_block "$ME" zfs-backup-managed '12 * * * * snap-job-c'
+do_pause_blocks_one "$ME" >/dev/null 2>&1
+before=$(cat "$(tab "$ME")")
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "I1 a second pause on the same block reports failure" "1" "$rc"
+case "$out" in *"already paused"*) ok "I2 ...named as already paused" ;;
+  *) bad "I2 ...named as already paused" "$out" ;; esac
+check "I3 the crontab is unchanged by the refused second pause" "0" \
+      "$(printf '%s\n' "$before" | cmp -s - "$(tab "$ME")"; echo $?)"
+do_resume_blocks_one "$ME" >/dev/null 2>&1
+
+# ---- J. a line added INSIDE the block during the pause window is kept on
+# resume, not silently dropped -- block mode never discards, only strips its
+# own prefix off lines it recognises as its own. -----------------------------
+seed_block "$ME" zfs-backup-managed '13 * * * * snap-job-d'
+do_pause_blocks_one "$ME" >/dev/null 2>&1
+# hand-edit: insert a line with no pause prefix, inside the still-paused
+# block, right before its END marker -- rebuilt line by line rather than
+# sed -i (not portable across the sed variants this suite might run under).
+_edited=$(mktemp)
+while IFS= read -r _l; do
+    [ "$_l" = "# END zfs-backup-managed" ] && printf "# an operator's own line, added mid-window\n" >> "$_edited"
+    printf '%s\n' "$_l" >> "$_edited"
+done < "$(tab "$ME")"
+mv "$_edited" "$(tab "$ME")"
+out=$(do_resume_blocks_one "$ME" 2>&1); rc=$?
+check "J1 resume still succeeds with a foreign line present" "0" "$rc"
+case "$out" in *"kept 1 line"*"not ours"*) ok "J2 ...and reports the kept line" ;;
+  *) bad "J2 ...and reports the kept line" "$out" ;; esac
+check "J3 the operator's line survives in the resumed block" "1" \
+      "$(grep -c "operator's own line" "$(tab "$ME")")"
+check "J4 the real job line is also restored, unprefixed" "1" \
+      "$(grep -c '^13 \* \* \* \* snap-job-d$' "$(tab "$ME")")"
+
+# ---- K. two managed blocks in the same crontab: both paused and resumed,
+# independently, in one call. -------------------------------------------------
+{ printf '# BEGIN zfs-backup-host (host jobs -- do not hand-edit)\n'
+  printf '15 * * * * /root/scripts/update-control.sh --self-update\n'
+  printf '# END zfs-backup-host\n'
+  printf '# BEGIN zfs-backup-managed (generated -- do not hand-edit)\n'
+  printf '20 * * * * snap-job-e\n'
+  printf '# END zfs-backup-managed\n'
+} > "$TMPD/tabs/$ME"
+before=$(cat "$TMPD/tabs/$ME")
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "K1 do_pause_blocks_one succeeds on two blocks" "0" "$rc"
+check "K2 both blocks now show the paused header" "2" "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "$ME")")"
+out=$(do_resume_blocks_one "$ME" 2>&1); rc=$?
+check "K3 do_resume_blocks_one succeeds on two blocks" "0" "$rc"
+check "K4 the crontab is restored exactly" "0" "$(printf '%s\n' "$before" | cmp -s - "$(tab "$ME")"; echo $?)"
+
+# ---- L. an empty managed block is a no-op, not an error --------------------
+{ printf '# BEGIN zfs-backup-managed (generated -- do not hand-edit)\n'
+  printf '# END zfs-backup-managed\n'
+} > "$TMPD/tabs/$ME"
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "L1 an empty block reports nothing paused" "1" "$rc"
+case "$out" in *"empty"*) ok "L2 ...named as empty, not a generic failure" ;;
+  *) bad "L2 ...named as empty, not a generic failure" "$out" ;; esac
+
+# ---- M. no managed blocks at all: refused, points at --fullcron -----------
+seed "$ME" '# nothing but a human job' '30 * * * * whatever'
+out=$(do_pause_blocks_one "$ME" 2>&1); rc=$?
+check "M1 no managed blocks: reports failure" "1" "$rc"
+case "$out" in *"no managed blocks"*"--fullcron"*) ok "M2 ...and suggests --fullcron" ;;
+  *) bad "M2 ...and suggests --fullcron" "$out" ;; esac
+
+# ---- N. do_pause()'s default (no --fullcron) drives block mode for BOTH
+# root and the named account, each with its own managed block. ---------------
+seed_block "$ME" zfs-backup-host '40 * * * * root-block-job'
+seed_block "acct-user" zfs-backup-managed '41 * * * * acct-block-job'
+BACKUP_USER="acct-user"
+out=$(do_pause 2>&1); rc=$?
+check "N1 do_pause (default) leaves no --fullcron saved state" "1" "$([ -e "$(pause_state_path "acct-user")" ]; echo $?)"
+check "N2 ...but the account's block is paused" "1" "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "acct-user")")"
+out=$(do_resume 2>&1); rc=$?
+check "N3 do_resume (default) resumes the account's block" "1" \
+      "$(grep -c '^41 \* \* \* \* acct-block-job$' "$(tab "acct-user")")"
+BACKUP_USER=""
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

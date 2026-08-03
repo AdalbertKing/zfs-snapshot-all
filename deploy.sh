@@ -146,6 +146,11 @@ COMMIT_SCOPE_LABEL=""
 # other writer -- this is one more requester, not a bypass.
 PAUSE_MODE=0
 RESUME_MODE=0
+# Default --pause/--resume touch only OUR managed blocks (comment out the
+# body, leave everything else in the crontab running). --fullcron opts into
+# the old, blunter behaviour: replace the WHOLE crontab with one placeholder
+# line. See do_pause_blocks_one/do_pause_one below for why both still exist.
+FULLCRON_MODE=0
 # Whether this host lets the joining peer freeze its guests (remote quiesce).
 # Deliberately a LOCAL flag, not a field in the package: freezing a guest is
 # real power -- whoever can freeze can cause an outage by never thawing, and the
@@ -222,6 +227,7 @@ while [ "$#" -gt 0 ]; do
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --pause)        PAUSE_MODE=1; shift ;;
         --resume)       RESUME_MODE=1; shift ;;
+        --fullcron)     FULLCRON_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
         --peer=*)       PEER_HOST="${1#*=}"; shift ;;
@@ -331,16 +337,26 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           outage by never thawing, so this host decides -- the
                           package cannot ask for it.
 
-Maintenance window -- stop and later restore EVERY crontab this host manages
+Maintenance window -- stop and later restore what this host's crontabs run
 (root's, and the delegated account's if one exists or --backup-user names
 one). For hardware work or a live migration off this host, where an hour of
 untouched cron would hand pvesr foreign snapshots to contend with:
-  --pause                 save both crontabs, then blank them (replaced with
-                          one comment saying why). Refuses if already paused.
-  --resume                restore exactly what --pause saved, and only if the
-                          crontab still looks like --pause's own placeholder
-                          (a manual edit made during the window is never
-                          silently discarded -- resolve it by hand instead).
+  --pause                 comment out the body of every managed block this
+                          package owns (zfs-backup-host, zfs-backup-managed)
+                          in both crontabs. Anything else in those crontabs
+                          -- a human's own cron lines -- keeps running.
+                          Refuses a block that already looks paused.
+  --pause --fullcron      the blunter old behaviour: save the WHOLE crontab,
+                          then replace it with one placeholder line. Use this
+                          only when you want NOTHING at all left running for
+                          that user, managed or not.
+  --resume                undo whichever of the above is found: restores any
+                          --fullcron placeholder exactly as saved, and
+                          un-comments any paused managed block. Refuses a
+                          --fullcron placeholder that looks hand-edited
+                          (resolve it by hand instead of silently discarding
+                          it); a paused block instead keeps any line added
+                          during the window that doesn't look like its own.
 USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -429,6 +445,9 @@ if [ "$PAUSE_MODE" -eq 1 ] || [ "$RESUME_MODE" -eq 1 ]; then
     if [ "$CHECK_ONLY" -eq 1 ]; then
         echo "--check-only cannot be combined with --pause/--resume -- an audit changes nothing, so there would be nothing to pause or resume" >&2; exit 2
     fi
+fi
+if [ "$FULLCRON_MODE" -eq 1 ] && [ "$PAUSE_MODE" -ne 1 ]; then
+    echo "--fullcron only modifies --pause -- --resume auto-detects which of the two modes it finds and undoes that one, so --fullcron has nothing to select there" >&2; exit 2
 fi
 if [ "$PEER_UNPAIR" -eq 1 ]; then
     [ -n "$PEER_HOST" ] || { echo "--unpair requires --peer=NAME" >&2; exit 2; }
@@ -3341,12 +3360,41 @@ do_commit_scope() {
 #
 # Goes through lib-cron.sh's own lock and read-back -- one more requester,
 # not a bypass, so it cannot land between a concurrent gen-cron.sh/deploy.sh
-# write. The saved state is a plain copy of the crontab exactly as it was,
-# not a synthetic reconstruction, so --resume cannot drift from what a human
-# would have restored by hand.
+# write.
+#
+# TWO shapes, because "stop the crontab" turned out to mean two different
+# things depending on what else lives in it:
+#
+#   default (block mode)  -- do_pause_blocks_one/do_resume_blocks_one. Only
+#     the body of blocks THIS PACKAGE owns (lib-cron.sh's `# BEGIN name` /
+#     `# END name` markers -- currently zfs-backup-host, zfs-backup-managed)
+#     is commented out, in place, inside the live crontab. A human's own
+#     cron lines in the same crontab are never touched, so this is the safe
+#     default when the box also runs things we do not own.
+#   --fullcron (whole-crontab mode) -- do_pause_one/do_resume_one, unchanged
+#     from the first version of this feature. Saves the ENTIRE crontab to
+#     $PAUSE_STATE_DIR and replaces it with one placeholder line. Useful when
+#     the operator wants NOTHING running for that user, managed or not, but
+#     it is destructive to anything unmanaged living in the same crontab for
+#     the duration of the window -- hence opt-in, not the default.
+#
+# The saved state for --fullcron is a plain copy of the crontab exactly as it
+# was, not a synthetic reconstruction, so --resume cannot drift from what a
+# human would have restored by hand. Block mode needs no such external copy:
+# the paused body IS the resume state, sitting right there in the crontab,
+# between its own markers.
 # ==============================================================================
 PAUSE_STATE_DIR="${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}"
 PAUSE_MARKER="# zfs-snapshot-all: PAUSED"
+# Block mode's in-place markers. The header is detected by prefix only (the
+# timestamp after it varies), and is not itself a `# BEGIN`/`# END` line, so
+# cron_body_valid never rejects it. The per-line prefix has no space after
+# the `#` on purpose: prepending it to ANY existing line -- blank, already a
+# `#comment`, or a live cron line -- always yields one valid comment line,
+# and stripping the exact same prefix back off is the entire resume logic.
+# No cron syntax is ever parsed either way.
+PAUSE_BLOCK_MARKER="# ZSA-PAUSED"
+PAUSE_LINE_PREFIX="#ZSA-PAUSED#"
 
 pause_state_path() { printf '%s/%s.saved' "$PAUSE_STATE_DIR" "$1"; }   # <user>
 
@@ -3379,6 +3427,8 @@ pause_targets() {
     fi
 }
 
+# --fullcron variant: replaces the WHOLE crontab, see do_pause_blocks_one
+# above for the default that touches only our own managed blocks.
 do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
     local user="$1" state; state=$(pause_state_path "$user")
     if [ -e "$state" ]; then
@@ -3405,15 +3455,96 @@ do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
     return 0
 }
 
+# Every `# BEGIN name` this package's own writer put in the crontab. Not a
+# fixed list of block names: any name lib-cron.sh's marker grammar accepts is
+# one of ours by construction (it is the only thing that ever writes one),
+# so a future block needs no matching update here.
+cron_block_names_present() {   # <file>
+    grep -oE '^# BEGIN [A-Za-z0-9._-]+' "$1" | awk '{print $3}' | sort -u
+}
+
+# Pause every non-empty, not-already-paused managed block in <user>'s
+# crontab, in place. -> 0 at least one block paused, 1 nothing paused/error
+#
+# Each block is re-read from the live crontab before it is located, because
+# cron_block_install_impl (below) just rewrote the previous block and every
+# marker line number after it moved by however many lines that block's body
+# changed by -- reusing stale offsets would locate the WRONG extent for the
+# next name.
+do_pause_blocks_one() {   # <user>
+    local user="$1"
+    cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
+    local cur; cur=$(mktemp) || { warn "$user: mktemp failed"; cron_lock_release "$user"; return 1; }
+    if ! cron_read "$user" "$cur"; then
+        warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    if ! cron_markers_valid "$cur"; then
+        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to pause, resolve by hand"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    local names; names=$(cron_block_names_present "$cur")
+    if [ -z "$names" ]; then
+        rm -f "$cur"; cron_lock_release "$user"
+        warn "$user: no managed blocks found -- nothing to pause (use --fullcron if this crontab has unmanaged jobs you also want stopped)"
+        return 1
+    fi
+    local name rc=1 first body newbody
+    for name in $names; do
+        if ! cron_block_locate "$cur" "$name"; then
+            warn "$user/$name: $CRON_ERR"; continue
+        fi
+        if [ "$CRON_B" -eq 0 ] || [ "$CRON_E" -le $((CRON_B + 1)) ]; then
+            log "$user/$name: block is empty, nothing to pause"
+            continue
+        fi
+        first=$(sed -n "$((CRON_B + 1))p" "$cur")
+        case "$first" in
+            "$PAUSE_BLOCK_MARKER"*)
+                warn "$user/$name: already paused -- run --resume first if you want to re-pause cleanly"
+                continue ;;
+        esac
+        body=$(mktemp) || { warn "$user/$name: mktemp failed"; continue; }
+        newbody=$(mktemp) || { rm -f "$body"; warn "$user/$name: mktemp failed"; continue; }
+        sed -n "$((CRON_B + 1)),$((CRON_E - 1))p" "$cur" > "$body"
+        {
+            printf '%s by deploy.sh --pause at %s -- run: deploy.sh --resume\n' \
+                "$PAUSE_BLOCK_MARKER" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+            while IFS= read -r l; do printf '%s%s\n' "$PAUSE_LINE_PREFIX" "$l"; done < "$body"
+        } > "$newbody"
+        if cron_block_install_impl "$user" "$name" "$newbody" ""; then
+            log "$user/$name: paused ($(wc -l < "$body" | tr -d ' ') line(s) commented out)"
+            rc=0
+        else
+            warn "$user/$name: could not pause: $CRON_ERR"
+        fi
+        rm -f "$body" "$newbody"
+        # cron_block_install_impl just wrote the live crontab -- re-read before
+        # the next name's cron_block_locate, or its offsets are stale.
+        if ! cron_read "$user" "$cur"; then
+            warn "$user: could not re-read crontab after pausing $name: $CRON_ERR"
+            break
+        fi
+    done
+    rm -f "$cur"
+    cron_lock_release "$user"
+    return "$rc"
+}
+
 do_pause() {
     local user rc=0
     while IFS= read -r user; do
         [ -n "$user" ] || continue
-        do_pause_one "$user" || rc=1
+        if [ "$FULLCRON_MODE" -eq 1 ]; then
+            do_pause_one "$user" || rc=1
+        else
+            do_pause_blocks_one "$user" || rc=1
+        fi
     done < <(pause_targets)
     return "$rc"
 }
 
+# --fullcron variant: restores the WHOLE crontab from PAUSE_STATE_DIR, see
+# do_resume_blocks_one below for the default that undoes a block-mode pause.
 do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
     local user="$1" state; state=$(pause_state_path "$user")
     [ -e "$state" ] || { warn "$user: nothing paused (no saved state at $state)"; return 1; }
@@ -3441,18 +3572,98 @@ do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
     return 0
 }
 
+# Undo do_pause_blocks_one in <user>'s crontab: every block whose body still
+# starts with $PAUSE_BLOCK_MARKER gets that header line dropped and the
+# per-line prefix stripped back off. A block that does not start with the
+# marker is left completely alone -- it was never paused, or --fullcron
+# replaced the whole crontab instead (in which case there are no `# BEGIN`
+# lines here at all and this is a silent no-op, which is correct: do_resume
+# below already tries the --fullcron restore for this user separately).
+#
+# A pass-through line during the loop (something inside the paused block that
+# does NOT carry the prefix) means it was added by hand during the window --
+# kept as-is rather than dropped, and reported, so a maintenance edit made
+# while backups were off never silently vanishes on resume.
+# -> 0 at least one block resumed, 1 nothing to resume/error
+do_resume_blocks_one() {   # <user>
+    local user="$1"
+    cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
+    local cur; cur=$(mktemp) || { warn "$user: mktemp failed"; cron_lock_release "$user"; return 1; }
+    if ! cron_read "$user" "$cur"; then
+        warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    if ! cron_markers_valid "$cur"; then
+        warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to resume, resolve by hand"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    local names; names=$(cron_block_names_present "$cur")
+    local name rc=1 first newbody kept=0
+    for name in $names; do
+        if ! cron_block_locate "$cur" "$name"; then
+            warn "$user/$name: $CRON_ERR"; continue
+        fi
+        [ "$CRON_B" -gt 0 ] || continue
+        [ "$CRON_E" -gt $((CRON_B + 1)) ] || continue
+        first=$(sed -n "$((CRON_B + 1))p" "$cur")
+        case "$first" in
+            "$PAUSE_BLOCK_MARKER"*) : ;;
+            *) continue ;;   # not paused by us -- leave it alone
+        esac
+        newbody=$(mktemp) || { warn "$user/$name: mktemp failed"; continue; }
+        kept=0
+        while IFS= read -r l; do
+            case "$l" in
+                "$PAUSE_LINE_PREFIX"*) printf '%s\n' "${l#"$PAUSE_LINE_PREFIX"}" ;;
+                *) printf '%s\n' "$l"; kept=$((kept + 1)) ;;
+            esac
+        done < <(sed -n "$((CRON_B + 2)),$((CRON_E - 1))p" "$cur") > "$newbody"
+        if cron_block_install_impl "$user" "$name" "$newbody" ""; then
+            log "$user/$name: resumed"
+            [ "$kept" -eq 0 ] || warn "$user/$name: kept $kept line(s) that were not ours -- looks like a manual edit made during the pause window"
+            rc=0
+        else
+            warn "$user/$name: could not resume: $CRON_ERR -- the paused block is left in place, nothing lost"
+        fi
+        rm -f "$newbody"
+        if ! cron_read "$user" "$cur"; then
+            warn "$user: could not re-read crontab after resuming $name: $CRON_ERR"
+            break
+        fi
+    done
+    rm -f "$cur"
+    cron_lock_release "$user"
+    return "$rc"
+}
+
 do_resume() {
-    local f user rc=0 any=0
+    local f user rc=0 any=0 seen state
+    while IFS= read -r user; do
+        [ -n "$user" ] || continue
+        state=$(pause_state_path "$user")
+        if [ -e "$state" ]; then
+            any=1
+            do_resume_one "$user" || rc=1
+        fi
+        if do_resume_blocks_one "$user"; then
+            any=1
+        fi
+    done < <(pause_targets)
+    # A --fullcron pause survives even if --backup-user/detection would name a
+    # different account by the time --resume runs (or the account is gone) --
+    # its saved-state file is the only record of who was paused, so any file
+    # pause_targets did not already cover above still gets a chance here.
     if [ -d "$PAUSE_STATE_DIR" ]; then
+        seen=$(pause_targets)
         for f in "$PAUSE_STATE_DIR"/*.saved; do
             [ -e "$f" ] || continue
-            any=1
             user=$(basename "$f" .saved)
+            printf '%s\n' "$seen" | grep -qxF "$user" && continue
+            any=1
             do_resume_one "$user" || rc=1
         done
     fi
     if [ "$any" -eq 0 ]; then
-        warn "nothing paused -- no saved state in $PAUSE_STATE_DIR"
+        warn "nothing paused -- no saved --fullcron state and no paused blocks found"
         return 1
     fi
     return "$rc"
