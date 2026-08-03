@@ -1252,34 +1252,50 @@ process_dataset() {
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         fi
-        # The snapshot this receive would resume from: the common one if a
-        # real name/GUID match was found, else the target's own current head
-        # if a bookmark rescued the incremental (same snapshot the bookmark
-        # search matched by GUID) -- either way, the point after which
-        # anything written to the target is about to be silently rolled back
-        # by -F.
-        local recv_base=""
-        if [[ "$common_snapshot" != "null" ]]; then
-            recv_base="$common_snapshot"
-        elif [ -n "$bookmark_base" ] && [ ${#tgt_snaps[@]} -gt 0 ]; then
-            recv_base="${tgt_snaps[-1]}"
-        fi
-        if [ -z "$recv_base" ]; then
-            log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
-            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
-            return 1
-        fi
-        local written; written=$(zfs get -H -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
-        if [ "$written" != "0" ]; then
-            if [ -z "$written" ]; then
-                log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
-            else
-                log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
+        # REV-20260804-037/038 campaign: found live -- target_exists() alone
+        # was treated as "has history that -F might silently roll back", but
+        # the non-raw path above ALWAYS pre-creates $tgt_dataset (canmount=
+        # noauto, empty, zero snapshots) specifically so a non-root receive
+        # has somewhere to write into. That pre-created leaf made
+        # target_exists() true on every first-ever seed, which then found no
+        # recv_base (nothing to be common WITH yet) and refused outright --
+        # the tool's own preparation step defeating its next one. Only a
+        # target with actual snapshots has real history worth protecting;
+        # guest_disk_is_live above already covers the other danger this
+        # guard exists for (a live, unsnaphotted guest disk occupying the
+        # same path in sync mode) regardless of snapshot count.
+        if [ ${#tgt_snaps[@]} -eq 0 ]; then
+            recv_force_flag=""
+        else
+            # The snapshot this receive would resume from: the common one if a
+            # real name/GUID match was found, else the target's own current head
+            # if a bookmark rescued the incremental (same snapshot the bookmark
+            # search matched by GUID) -- either way, the point after which
+            # anything written to the target is about to be silently rolled back
+            # by -F.
+            local recv_base=""
+            if [[ "$common_snapshot" != "null" ]]; then
+                recv_base="$common_snapshot"
+            elif [ -n "$bookmark_base" ] && [ ${#tgt_snaps[@]} -gt 0 ]; then
+                recv_base="${tgt_snaps[-1]}"
             fi
-            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
-            return 1
+            if [ -z "$recv_base" ]; then
+                log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
+                abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+                return 1
+            fi
+            local written; written=$(zfs get -H -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
+            if [ "$written" != "0" ]; then
+                if [ -z "$written" ]; then
+                    log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
+                else
+                    log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
+                fi
+                abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+                return 1
+            fi
+            recv_force_flag=""
         fi
-        recv_force_flag=""
     elif [ $FORCE_FULL_SEND -ne 1 ]; then
         # target does not exist yet: nothing to roll back, -F would be a
         # harmless no-op here -- dropped anyway so this run never carries a
