@@ -781,11 +781,13 @@ czterech hostach w obu formach hosta.
   fast-forward na każdym, crontab roota i konta na pve0 bajt-w-bajt
   identyczny przed/po (guard nie odpala się na zwykłym, niezapauzowanym
   crontabie). `test/pause/run.sh` (suita ze stubem, nie dotyka prawdziwego
-  `crontab(1)`) na wszystkich 4: **73/74** wszędzie — jeden powtarzalny,
-  zdiagnozowany fałszywy fail (sekcja G zakłada brak konta delegowanego,
-  a każdy z tych hostów je ma; `detect_delegated_account()` skanuje
-  prawdziwy `/home/*`, czego ta rodzina testów nie stubuje) — zgłoszone jako
-  osobne zadanie, nie naprawione w tym passie. Prawdziwy cykl
+  `crontab(1)`) na wszystkich 4: **73/74** wszędzie — jeden powtarzalny
+  fałszywy fail (sekcja G zakładała brak konta delegowanego, a każdy z tych
+  hostów je ma; `detect_delegated_account()` skanowała prawdziwy `/home/*`,
+  czego ta rodzina testów nie stubowała). **Naprawione tego samego dnia:**
+  skan jest teraz nadpisywalny przez `PAUSE_ACCOUNT_SCAN_GLOB` (ten sam wzorzec
+  co `CRON_LOCK_DIR`/`PAUSE_STATE_DIR`/`CRONTAB_DIR`), suita wskazuje ścieżkę
+  bez dopasowań — `pause` **74/74** ponownie. Prawdziwy cykl
   `--pause`/`--resume` na żywym crontabie **nie wykonany** — klasyfikator
   bezpieczeństwa odmówił (słusznie: to akcja zatrzymująca prawdziwe backupy,
   wymaga obecności właściciela, nie bezobsługowego zadania). `sudo
