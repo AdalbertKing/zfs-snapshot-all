@@ -128,6 +128,12 @@ PAIR_MODE=0
 JOIN_MODE=0
 JOIN_PACKAGE=""
 JOIN_CHECK=0
+# REV-20260802-033 slice 2: --join no longer grants (see do_join). Grants for a
+# pull peer are a separate, deliberate act against the scope file the operator
+# edited on this host -- see lib-scope.sh's header and peer_scope_path below.
+COMMIT_SCOPE_MODE=0
+COMMIT_SCOPE_CHECK=0
+COMMIT_SCOPE_LABEL=""
 # Whether this host lets the joining peer freeze its guests (remote quiesce).
 # Deliberately a LOCAL flag, not a field in the package: freezing a guest is
 # real power -- whoever can freeze can cause an outage by never thawing, and the
@@ -198,6 +204,10 @@ while [ "$#" -gt 0 ]; do
         --revoke-quiesce)   REVOKE_QUIESCE_ACCOUNT="${2:-}"; shift 2 ;;
         --join-check=*) JOIN_CHECK=1; JOIN_PACKAGE="${1#*=}"; shift ;;
         --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
+        --commit-scope=*)       COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
+        --commit-scope)         COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
+        --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
+        --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
         --peer=*)       PEER_HOST="${1#*=}"; shift ;;
@@ -278,7 +288,23 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             received data, and refuses while a cron line
                             still uses the pairing key.
   --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
-                          (run on the second host, once, from its console)
+                          (run on the second host, once, from its console).
+                          Creates the account and installs the key with ZERO
+                          zfs permissions -- see --commit-scope below.
+  --commit-scope=LABEL    grant a pull peer's account exactly what
+                          /etc/zfs-snapshot-all/peers/LABEL.scope selects
+                          (LABEL is the initiator label --join printed).
+                          Edit that file by hand first -- see lib-scope.sh's
+                          header for the grammar. Re-running after an edit
+                          re-grants the new set; nothing already granted by
+                          another relationship or by hand is ever touched.
+    --allow-quiesce       also let that peer FREEZE guests whose disks live
+                          under the granted datasets (remote quiesce). Off by
+                          default, same reasoning as --join's own
+                          --allow-quiesce below.
+  --commit-scope-check=LABEL
+                          validate LABEL.scope without granting anything:
+                          manifest exists, role is pull, scope file parses.
   --revoke-quiesce=ACCOUNT
                           remove ACCOUNT's guest-quiesce grant on THIS host
                           (whitelist + sudoers rule). The helper itself is
@@ -346,11 +372,27 @@ fi
 # wrong one for a privilege grant, where "whichever account happened to be found"
 # is not a decision anyone made. BACKUP_USER is read, not the flag, so a host
 # that pins the account in the config block at the top still works.
-if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$JOIN_MODE" -ne 1 ] && [ -z "$BACKUP_USER" ]; then
+if [ "$ALLOW_QUIESCE" -eq 1 ] && [ "$JOIN_MODE" -ne 1 ] && [ "$COMMIT_SCOPE_MODE" -ne 1 ] && [ -z "$BACKUP_USER" ]; then
     echo "--allow-quiesce must name the account that receives the grant: --backup-user=NAME (with --datasets=\"...\" naming exactly the datasets whose guests it may freeze). An existing account is fine -- it is left alone. Nothing was installed." >&2; exit 2
 fi
 if [ "$PAIR_MODE" -eq 1 ] && [ "$JOIN_MODE" -eq 1 ]; then
     echo "--pair and --join are mutually exclusive" >&2; exit 2
+fi
+# REV-20260802-033 slice 2: --commit-scope grants from the scope file the
+# operator edited after --join (see do_join, do_commit_scope). It is its own
+# standalone act, same shape as --revoke-quiesce -- not a --pair/--join
+# sub-option.
+if [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
+    if [ "$COMMIT_SCOPE_MODE" -eq 1 ] && [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
+        echo "--commit-scope and --commit-scope-check are mutually exclusive -- pick one" >&2; exit 2
+    fi
+    if [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ]; then
+        echo "--commit-scope/--commit-scope-check cannot be combined with --pair/--join -- run --join first, edit the scope file, then commit it separately" >&2; exit 2
+    fi
+    [ -n "$COMMIT_SCOPE_LABEL" ] || { echo "--commit-scope/--commit-scope-check needs a label (the peer's initiator label, same one --join printed)" >&2; exit 2; }
+fi
+if [ "$COMMIT_SCOPE_MODE" -eq 1 ] && [ "$CHECK_ONLY" -eq 1 ]; then
+    echo "--check-only cannot be combined with --commit-scope -- an audit installs nothing, so there would be no grant to make (use --commit-scope-check to validate without granting)" >&2; exit 2
 fi
 if [ "$PEER_UNPAIR" -eq 1 ]; then
     [ -n "$PEER_HOST" ] || { echo "--unpair requires --peer=NAME" >&2; exit 2; }
@@ -615,6 +657,40 @@ validate_pubkey_file() {
         || die "pubkey.pub is not a public key OpenSSH can read"
 }
 
+# PEER_STATE_DIR/PEER_KEY_DIR and their path helpers. Hoisted here (rather than
+# down with the rest of --pair/--join, PAIRING-DESIGN.md's section) because
+# do_commit_scope_check needs peer_manifest_path/peer_scope_path and its
+# --commit-scope-check dispatch runs before the root check, same reasoning as
+# do_join_check just below.
+#
+# Overridable so a root-free suite can point commit-scope's preflight (manifest
+# lookup, scope file read) at a throwaway directory instead of the real,
+# root-owned one -- same technique as ZFS_QUIESCE_ALLOW_DIR elsewhere in this
+# file. The default is unchanged for every real invocation.
+PEER_STATE_DIR="${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}"
+PEER_KEY_DIR="/root/.ssh/pairing"
+
+# A filesystem/account-name-safe label derived from --peer. A hostname can
+# contain characters that are fine in DNS but not in a Unix username or a bare
+# filename, so this is the ONE place that gets sanitised -- the manifest path,
+# the key file name and the proposed account name are all built from it.
+peer_label() {
+    printf '%s' "$PEER_HOST" | tr -c 'A-Za-z0-9._-' '-'
+}
+
+peer_manifest_path() {
+    echo "$PEER_STATE_DIR/$1.conf"
+}
+
+# REV-20260802-033 (U1/U2): the scope file lives beside the manifest, keyed by
+# the same label, on the SAME host as the manifest -- this host is the source
+# in a pull relationship, so it is the one that both edits the file and grants
+# from it. Not part of the wsad package: it is authored here, by hand, after
+# --join, never shipped.
+peer_scope_path() {
+    echo "$PEER_STATE_DIR/$1.scope"
+}
+
 # do_join_check -- everything --join does to a package before it is willing to
 # believe it, and then nothing. Prints the normalised values so a legitimate
 # package can be inspected, and exits non-zero on the first thing it does not
@@ -633,6 +709,41 @@ do_join_check() {
     done
     printf '  %-26s %s
 ' "pubkey" "$(pubkey_fingerprint "$JOIN_WORKDIR/pubkey.pub")"
+    return 0
+}
+
+# do_commit_scope_check -- everything --commit-scope validates before it is
+# willing to touch ZFS, and then nothing: manifest exists, describes a
+# delegated PULL peer (the only shape a scope file applies to -- see
+# lib-scope.sh's header), and the scope file itself parses. No root, no `zfs`
+# command run here, same shape and same reason as do_join_check: this is what
+# makes the file-format half of --commit-scope testable without root or a
+# real pool. The dataset-walk-and-grant half genuinely needs both and is not
+# reachable from here -- see do_commit_scope.
+#
+# Leaves SCOPE_ROOTS/etc (from lib-scope.sh's scope_read) and three globals
+# populated for do_commit_scope to continue from, so the manifest is read
+# exactly once.
+COMMIT_SCOPE_MPATH=""; COMMIT_SCOPE_SFILE=""; COMMIT_SCOPE_ACCOUNT=""
+do_commit_scope_check() {
+    local label="$1" mpath sfile
+    [ -n "$label" ] || die "internal: do_commit_scope_check needs a label"
+    mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no pairing manifest for '$label' at $mpath -- run --join first"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ "${PEER_JOIN_AS:-}" != root ] \
+        || die "'$label' joined with --as=root -- root already has full authority on this host, there is nothing to grant"
+    [ "${PEER_JOIN_ROLE:-}" = pull ] \
+        || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- a scope commit only grants the PULL side (this host as the data source); a push peer's account is granted receive access directly at --join time, on the target root named in its own manifest"
+    [ -n "${PEER_JOIN_ACCOUNT:-}" ] || die "internal: manifest for '$label' has no account recorded"
+    sfile=$(peer_scope_path "$label")
+    [ -r "$sfile" ] \
+        || die "no scope file for '$label' at $sfile -- create it by hand first (see lib-scope.sh's header for the grammar), then re-run --commit-scope"
+    scope_read "$sfile" || die "scope file $sfile: $SCOPE_ERR"
+    COMMIT_SCOPE_MPATH="$mpath"
+    COMMIT_SCOPE_SFILE="$sfile"
+    COMMIT_SCOPE_ACCOUNT="$PEER_JOIN_ACCOUNT"
     return 0
 }
 
@@ -1111,6 +1222,20 @@ revoke_quiesce_grant() {
 if [ "$JOIN_CHECK" -eq 1 ]; then
     do_join_check
     exit $?
+fi
+
+# Same reasoning as JOIN_CHECK above: the file-format half of --commit-scope
+# needs no root and no `zfs`, so it runs before the root check and is what
+# test/scope drives for the refusal paths.
+if [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
+    do_commit_scope_check "$COMMIT_SCOPE_LABEL"
+    echo "scope file OK: $COMMIT_SCOPE_SFILE"
+    printf '  %-12s %s\n' "account" "$COMMIT_SCOPE_ACCOUNT"
+    for scope_root_shown in "${SCOPE_ROOTS[@]}"; do
+        printf '  %-12s %s (parent=%s children=%s)\n' "root" "$scope_root_shown" \
+            "${SCOPE_PARENT[$scope_root_shown]}" "${SCOPE_CHILDREN[$scope_root_shown]}"
+    done
+    exit 0
 fi
 
 # Stands alone on purpose: the grant lives on the SOURCE host, which is the
@@ -2607,21 +2732,11 @@ fi
 # BACKUP_USER account below (a different, unrelated delegation) and never
 # adds cron lines -- that stays manual, same as everything else in Part 5.
 # ------------------------------------------------------------------------------
-PEER_STATE_DIR="/etc/zfs-snapshot-all/peers"
-PEER_KEY_DIR="/root/.ssh/pairing"
-
-# A filesystem/account-name-safe label derived from --peer. A hostname can
-# contain characters that are fine in DNS but not in a Unix username or a bare
-# filename, so this is the ONE place that gets sanitised -- the manifest path,
-# the key file name and the proposed account name are all built from it.
-peer_label() {
-    printf '%s' "$PEER_HOST" | tr -c 'A-Za-z0-9._-' '-'
-}
-
-peer_manifest_path() {
-    echo "$PEER_STATE_DIR/$1.conf"
-}
-
+# PEER_STATE_DIR/PEER_KEY_DIR and the path helpers built from them moved to
+# just above do_join_check -- do_commit_scope_check needs peer_manifest_path
+# and peer_scope_path, and its dispatch runs before the root check, which is
+# well before this section is reached in a normal top-to-bottom read of the
+# script's own execution order.
 
 # True for addresses that can only be on a private network: RFC1918, loopback,
 # link-local, CGNAT, and their IPv6 equivalents (ULA fc00::/7, fe80::/10, ::1).
@@ -3051,34 +3166,19 @@ do_join() {
         fi
     fi
 
-    # ---- zfs allow: the permission set AND the scope depend on the ROLE, not
-    # one blanket list. pull: this host is the SOURCE, delegate exactly the
-    # listed datasets (they exist here) with sending permissions. push: this
-    # host is the TARGET, delegate the per-relationship destination ROOT
-    # (push_dest_root) with receiving permissions -- zfs allow is inherited to
-    # descendants, so this covers every dataset 'zfs receive' creates under it
-    # without needing (or being able) to know the source's dataset names in
-    # advance. Bookmarks only make sense on the send side. Skipped entirely
-    # for --as=root, which already has full authority. ----
+    # ---- zfs allow. REV-20260802-033 slice 2 (U1/U2): for a PULL peer this
+    # host is the SOURCE, and the choice of what to delegate now belongs to a
+    # separate, deliberate act against a scope file the operator edits HERE --
+    # see do_commit_scope. --join creates the account and installs the key and
+    # stops there: zero zfs permissions, so a package alone (even a hostile
+    # one) can never cause a grant. push is unchanged -- this host is the
+    # TARGET in that role, delegating its own destination ROOT is not a
+    # dataset-selection choice the scope file has any say over, so it still
+    # happens right here. Skipped entirely for --as=root, which already has
+    # full authority. ----
     if [ "$PEER_CONF_AS" != "root" ]; then
         if [ "$PEER_CONF_ROLE" = "pull" ]; then
-            local perms="snapshot,destroy,send,hold,release,bookmark"
-            for ds in $PEER_CONF_DATASETS; do
-                if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
-                    warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $account $perms $ds)"
-                    continue
-                fi
-                zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
-                log "delegated ($perms) on $ds to $account"
-            done
-            # Same dataset list, so the quiesce scope cannot drift from the
-            # replication scope. Opt-in only: this host decides whether the
-            # peer may freeze its guests, the package never asks for it.
-            if [ "$ALLOW_QUIESCE" -eq 1 ]; then
-                install_quiesce_grant "$account" "$PEER_CONF_DATASETS"
-            else
-                log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --join with --allow-quiesce if this peer should be able to freeze guests here."
-            fi
+            log "no zfs permissions granted yet -- run: ./deploy.sh --commit-scope=$label (after editing $(peer_scope_path "$label"); see lib-scope.sh's header)"
         else
             local perms="receive,create,mount,rollback,canmount"
             zfs allow -u "$account" "$perms" -- "$push_dest_root" || die "zfs allow failed for $push_dest_root"
@@ -3089,9 +3189,14 @@ do_join() {
     # Quoted, and written from values the grammar checks already accepted. This
     # file is read back with `.` by later runs, so it is the second sink for
     # anything the package could smuggle -- belt and braces on purpose.
+    # PEER_JOIN_DATASETS survives for now as the package's OWN record of what
+    # it asked for (slice 5 makes it optional) -- it is no longer what
+    # anything grants from. PEER_JOIN_AS lets do_commit_scope tell a root peer
+    # apart from a delegated one without re-deriving it from the account name.
     cat > "$mpath" <<EOF
 # peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
 PEER_JOIN_ROLE="$PEER_CONF_ROLE"
+PEER_JOIN_AS="$PEER_CONF_AS"
 PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
 PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
@@ -3102,8 +3207,72 @@ EOF
     echo
     log "===================================================================="
     log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
+    if [ "$PEER_CONF_AS" != "root" ] && [ "$PEER_CONF_ROLE" = "pull" ]; then
+        log "Brak grantow ZFS -- utworz $(peer_scope_path "$label"), edytuj, potem: ./deploy.sh --commit-scope=$label"
+    fi
     log "Zadne linie crona NIE zostaly dodane -- to pozostaje reczne, jak w Czesci 5."
     log "===================================================================="
+}
+
+# do_commit_scope -- the deliberate, separate act (U2) that grants a PULL
+# peer's account exactly what the scope file at peer_scope_path selects.
+# Runs do_commit_scope_check itself first for its manifest/role/as/parse
+# preflight (the same function --commit-scope-check calls standalone, root-free,
+# for the validate-only path), which leaves the result in
+# COMMIT_SCOPE_MPATH/SFILE/ACCOUNT and SCOPE_ROOTS/etc for the rest of this to use.
+#
+# Permissions are granted per DATASET, never by granting the root and relying
+# on zfs allow's inheritance to cover the rest: inheritance has no matching
+# "deny", so an exclude_tree under an included root could not be honoured that
+# way. Walking each root's actual descendants and testing scope_includes
+# against them keeps exclusion simple at the cost of nothing new appearing
+# until the next commit -- the same tradeoff every explicit dataset list in
+# this project already makes.
+do_commit_scope() {
+    local label="$1"
+    do_commit_scope_check "$label"
+    local mpath="$COMMIT_SCOPE_MPATH" sfile="$COMMIT_SCOPE_SFILE" account="$COMMIT_SCOPE_ACCOUNT"
+
+    local -a granted=()
+    local root ds
+    for root in "${SCOPE_ROOTS[@]}"; do
+        if ! zfs list -H -o name -- "$root" >/dev/null 2>&1; then
+            warn "scope root $root does not exist on this host -- skipping"
+            continue
+        fi
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            scope_includes "$ds" || continue
+            case " ${granted[*]:-} " in *" $ds "*) continue ;; esac
+            granted+=("$ds")
+        done < <(zfs list -H -o name -r -- "$root")
+    done
+    [ "${#granted[@]}" -gt 0 ] \
+        || die "scope file $sfile selects nothing that exists on this host -- nothing to grant"
+
+    local perms="snapshot,destroy,send,hold,release,bookmark"
+    for ds in "${granted[@]}"; do
+        zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
+        log "delegated ($perms) on $ds to $account"
+    done
+
+    # Same list, so the quiesce scope cannot drift from the replication scope
+    # -- identical reasoning to the pre-slice-2 code this replaces.
+    if [ "$ALLOW_QUIESCE" -eq 1 ]; then
+        install_quiesce_grant "$account" "${granted[*]}"
+    else
+        log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."
+    fi
+
+    # Recorded for a future narrower commit (slice 3): what THIS relationship
+    # granted, and nothing else, is the only thing a later revoke is allowed
+    # to take back.
+    grep -v '^PEER_JOIN_GRANTED_DATASETS=' "$mpath" > "${mpath}.tmp"
+    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "${granted[*]}" >> "${mpath}.tmp"
+    mv "${mpath}.tmp" "$mpath"
+    chmod 0600 "$mpath"
+
+    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account"
 }
 
 # do_revoke_old -- the ONLY step in this whole feature that removes something.
@@ -3580,6 +3749,10 @@ if [ "$PAIR_MODE" -eq 1 ]; then
 fi
 if [ "$JOIN_MODE" -eq 1 ]; then
     do_join
+    exit 0
+fi
+if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
+    do_commit_scope "$COMMIT_SCOPE_LABEL"
     exit 0
 fi
 

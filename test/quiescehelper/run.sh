@@ -1112,8 +1112,10 @@ fi
 # already has up to date -- and the wrong one for a privilege grant, where
 # "whichever account happened to be found" is not a decision anyone made.
 # The refusal itself is exercised against the real script in the REV-022
-# section below.
-grep -q 'ALLOW_QUIESCE" -eq 1 \] && \[ "\$JOIN_MODE" -ne 1 \] && \[ -z "\$BACKUP_USER" \]' "$REPO/deploy.sh" \
+# section below. --commit-scope (REV-033 slice 2) is a third path that also
+# names its recipient -- via the manifest's account, not --backup-user -- so
+# it is exempted from this same requirement alongside --join.
+grep -q 'ALLOW_QUIESCE" -eq 1 \] && \[ "\$JOIN_MODE" -ne 1 \] && \[ "\$COMMIT_SCOPE_MODE" -ne 1 \] && \[ -z "\$BACKUP_USER" \]' "$REPO/deploy.sh" \
     && ok "local-quiesce: the grant names its recipient rather than detecting one" \
     || bad "local-quiesce: the grant names its recipient rather than detecting one" \
            "brak wymogu --backup-user przy --allow-quiesce"

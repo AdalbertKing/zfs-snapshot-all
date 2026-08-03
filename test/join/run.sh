@@ -371,6 +371,124 @@ else
     bad "good/leaves no temp directory either" "left behind: $leaked"
 fi
 
+
+# ---------------------------------------------------------------------------
+# --commit-scope / --commit-scope-check (REV-20260802-033 slice 2).
+#
+# --join no longer grants anything for a pull peer; the grant is a separate,
+# deliberate act against a scope file the operator edits on this host. The
+# preflight half (manifest lookup, role/as checks, scope file parse) needs no
+# root and no `zfs` -- do_commit_scope_check is exactly do_join_check's shape
+# for this second command -- so it is what gets exercised here, via
+# --commit-scope-check. The actual grant loop (do_commit_scope) walks real
+# `zfs list` output and calls real `zfs allow`; that half needs a live host
+# and is not covered by this suite (see docs/reviews/responses/REV-20260802-033.md).
+#
+# PEER_STATE_DIR is overridable for exactly this: it points the manifest/scope
+# lookup at a throwaway directory instead of the real, root-owned
+# /etc/zfs-snapshot-all/peers.
+# ---------------------------------------------------------------------------
+CS="$WORK/cs"; mkdir -p "$CS/peers"
+export PEER_STATE_DIR="$CS/peers"
+
+cs_good_manifest() {
+    cat <<EOF
+PEER_JOIN_ROLE="pull"
+PEER_JOIN_AS="delegated"
+PEER_JOIN_DATASETS="tank/a tank/b"
+PEER_JOIN_TARGET="tank/backups"
+PEER_JOIN_ACCOUNT="zfsbackup-pve1"
+PEER_JOIN_FINGERPRINT="abc123"
+EOF
+}
+cs_good_scope() {
+    cat <<'EOF'
+[dataset:tank/a]
+include_parent   = yes
+include_children = yes
+EOF
+}
+
+# case <name> <label> <want-substring-in-stderr>
+cs_expect_reject() {
+    local name="$1" label="$2" want="$3" out rc
+    out="$(bash "$DEPLOY" --commit-scope-check="$label" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+        bad "$name" "expected rejection, got exit 0" "$out"; return
+    fi
+    if ! printf '%s' "$out" | grep -qF -- "$want"; then
+        bad "$name" "wanted error containing: $want" "got: $(printf '%s' "$out" | tail -2)"; return
+    fi
+    ok "$name"
+}
+
+cs_expect_reject "commit-scope/no manifest" nosuchpeer "run --join first"
+
+cs_good_manifest | sed 's/PEER_JOIN_AS="delegated"/PEER_JOIN_AS="root"/' > "$CS/peers/asroot.conf"
+cs_expect_reject "commit-scope/as=root has nothing to grant" asroot "already has full authority"
+
+cs_good_manifest | sed 's/PEER_JOIN_ROLE="pull"/PEER_JOIN_ROLE="push"/' > "$CS/peers/pushrole.conf"
+cs_expect_reject "commit-scope/push role refused" pushrole "a scope commit only grants the PULL side"
+
+cs_good_manifest > "$CS/peers/noscope.conf"
+cs_expect_reject "commit-scope/missing scope file" noscope "create it by hand first"
+
+cs_good_manifest > "$CS/peers/badscope.conf"
+printf '[dataset:tank/a]\nunknown_key = yes\n' > "$CS/peers/badscope.scope"
+cs_expect_reject "commit-scope/malformed scope file surfaces SCOPE_ERR" badscope "unknown key 'unknown_key'"
+
+out="$(bash "$DEPLOY" --commit-scope-check= 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "needs a label"; then
+    ok "commit-scope/blank label refused at argument time"
+else
+    bad "commit-scope/blank label refused at argument time" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --commit-scope=x --commit-scope-check=x 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "mutually exclusive"; then
+    ok "commit-scope/--commit-scope and --commit-scope-check refuse together"
+else
+    bad "commit-scope/--commit-scope and --commit-scope-check refuse together" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --commit-scope=x --check-only 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF -- "--check-only cannot be combined with --commit-scope"; then
+    ok "commit-scope/--check-only refused"
+else
+    bad "commit-scope/--check-only refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --commit-scope=x --join=/nonexistent 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF -- "cannot be combined with --pair/--join"; then
+    ok "commit-scope/--join refused"
+else
+    bad "commit-scope/--join refused" "rc=$rc" "$out"
+fi
+
+# The positive case: a real manifest + a real, valid scope file is accepted,
+# and the account/roots it read back are the ones just written -- proving
+# this isn't "reject everything" scoring a clean sheet.
+cs_good_manifest > "$CS/peers/good.conf"
+cs_good_scope > "$CS/peers/good.scope"
+out="$(bash "$DEPLOY" --commit-scope-check=good 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+    bad "commit-scope/good accepted" "a legitimate manifest+scope was rejected" "$(printf '%s' "$out" | tail -3)"
+else
+    ok "commit-scope/good accepted"
+fi
+if printf '%s' "$out" | grep -qF "account      zfsbackup-pve1"; then
+    ok "commit-scope/good reports the manifest's account"
+else
+    bad "commit-scope/good reports the manifest's account" "$out"
+fi
+if printf '%s' "$out" | grep -qF "root         tank/a (parent=yes children=yes)"; then
+    ok "commit-scope/good reports the scope file's root"
+else
+    bad "commit-scope/good reports the scope file's root" "$out"
+fi
+
+unset PEER_STATE_DIR
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
