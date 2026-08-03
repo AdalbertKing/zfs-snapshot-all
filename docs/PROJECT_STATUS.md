@@ -8,14 +8,30 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterkach 1-3, po REV-035, po REV-036 w całości + wszystkie follow-upy,
+  plasterkach 1-4, po REV-035, po REV-036 w całości + wszystkie follow-upy,
   i po ad hoc `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na
   tryb blokowy)
-- Zweryfikowano przeciw: `b7e0478` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `279303b` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 3**
-  (`b7e0478`) — `do_commit_scope` teraz też ODBIERA: zbiór do odwołania to
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 4**
+  (`279303b`) — `deploy.sh --draft-scope=LABEL` generuje plik zakresu
+  z prawdziwego inwentarza ZFS peera: jeden `[dataset:X]` na niesystemowy
+  dataset jeden poziom pod każdą pulą (`include_parent=no`,
+  `include_children=yes`), plus pełny inwentarz jako komentarz. Cenzus
+  systemowy (`ROOT`, `swap`) dopasowywany WYŁĄCZNIE po ostatnim segmencie
+  ścieżki, nigdy jako prefiks/podłańcuch — przykładowe korzenie z F2
+  (`data`/`olds`/`LXC`) nie mogą zostać złapane przez sprytniejszą
+  heurystykę. Odmawia, gdy plik zakresu już istnieje (chroni edycję w toku)
+  albo manifest nie opisuje delegowanego peera pull. Zweryfikowane na żywo
+  na metropolis pve2 (3 prawdziwe pule, w tym głęboko zagnieżdżona struktura
+  backup-of-backup) — 9 aktywnych datasetów trafionych poprawnie, wszystkie
+  3 korzenie puli + `rpool/ROOT` poprawnie wykluczone, pełny inwentarz
+  (30 datasetów) zgadza się z ręcznym `zfs list -r`. `join` **64/64** (+10),
+  nowa suita `draftscope` **22/22**. Odpowiedź: addendum "Slice 4" w
+  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  **REV-20260802-033 plasterek 3** (`b7e0478`) — `do_commit_scope` teraz też
+  ODBIERA: zbiór do odwołania to
   (poprzedni zbiór z manifestu) MINUS (obecny zbiór ze scope file) — nigdy
   wyprowadzone z tego, co `zfs allow` pokazuje dla konta teraz, co jest tym,
   co sprawia że cudzy grant na tym samym datasecie przeżywa zawężenie: nigdy
@@ -492,8 +508,9 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
 | `zfsbackup` | **214/214** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
-| `join` | **54/54** (bez zmiany liczby — plasterek 3 zweryfikowany na żywo, nie stubem) | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
+| `join` | **64/64** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
+| `draftscope` | **22/22** | `deploy.sh --draft-scope` (REV-033 plasterek 4): generuje plik zakresu z prawdziwego inwentarza ZFS peera — domyślnie aktywne datasety jeden poziom pod każdą pulą, poza znanymi systemowymi (`ROOT`, `swap`) i samym korzeniem puli, plus pełny inwentarz jako komentarz. Przeciw stubowanemu `zpool`/`zfs` (ekstrakcja funkcji jak `test/pause`) — właściwy grant/`zfs allow` zostaje bez zmian nietestowany stubem (ta sama zasada co plasterek 2/3). Drugi draft dla tej samej etykiety odmawia zamiast nadpisać; host z samymi systemowymi datasetami odmawia zamiast zapisać pusty plik |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
 pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
