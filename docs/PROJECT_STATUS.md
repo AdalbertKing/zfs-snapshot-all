@@ -7,12 +7,17 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-03** (po zamknięciu REV-20260802-034 w całości —
-  F1–F4 wszystkie ACCEPTED/IMPLEMENTED, zmergowane do `main`)
-- Zweryfikowano przeciw: `db2f7fe` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-03** (po REV-034 w całości i po REV-033
+  plasterku 2 — `--join` przestaje nadawać, `--commit-scope` nadaje z pliku
+  zakresu)
+- Zweryfikowano przeciw: `4190d83` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `41afa2f` — goły `exec ... 2>/dev/null`
+- Ostatnia zmiana zachowania produkcyjnego: `4190d83` — `--join` (peer pull)
+  nie nadaje już żadnych uprawnień ZFS; nowa komenda `--commit-scope` nadaje
+  dokładnie to, co wybiera plik zakresu (REV-033 plasterek 2); wcześniej
+  `ff712df` — gramatyka i czytnik pliku zakresu, `lib-scope.sh` (REV-033
+  plasterek 1); wcześniej `41afa2f` — goły `exec ... 2>/dev/null`
   w `cron_lock_acquire`/`_release` trwale kasował stderr procesu zamiast
   gasić błąd jednej próby (REV-034, złapane przy zamykaniu F3); wcześniej
   `4f1c174` — `cron_replace_all` spina `migrate-to-account` na wspólnym
@@ -444,7 +449,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
 | `zfsbackup` | **211/211** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
-| `join` | 42/42 | walidacja paczki `--join`, granica zaufania |
+| `join` | **54/54** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2) |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
 pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
@@ -739,6 +744,28 @@ czterech hostach w obu formach hosta.
   zakresu (`PEER_CONF_DATASETS` nie jest kluczem wymaganym, pętla grantów nie
   robi nic na pustej liście, `--draft-config` radzi sobie z pustym manifestem).
   Nowy jest wyłącznie drugi akt: finalizacja nadająca granty z edytowanego pliku.
+
+  **Plasterek 1 ZROBIONY** (`ff712df`): `lib-scope.sh` — gramatyka, czytnik
+  (`scope_read`) i decyzja `scope_includes`, plus cztery walidatory `pc_is_*`
+  przeniesione z `deploy.sh`. `scope` **34/34**.
+  **Plasterek 2 ZROBIONY** (`4190d83`): `--join` przestaje nadawać dla peera
+  pull — konto i klucz bez żadnych uprawnień ZFS. Nowa, osobna komenda
+  `--commit-scope=<label>` czyta plik zakresu, przechodzi realnymi
+  potomkami każdego korzenia (`zfs list -r`, nie dziedziczeniem `zfs allow`,
+  bo dziedziczenie nie ma odpowiednika „odmowy" dla `exclude_tree`) i nadaje
+  dokładnie to, co `scope_includes` wybiera; `--allow-quiesce` przeniesione
+  tu razem z nadaniem. `--commit-scope-check=<label>` to sama walidacja
+  formatu (manifest, rola, `as`, parsowanie) bez `zfs` i bez roota — ten sam
+  kształt co `do_join_check`, i z tego samego powodu: to czyni połowę
+  formatową testowalną wszędzie. Peer root i push — bez zmian.
+  Testy: `join` **54/54** (+12), `quiescehelper` **119/119** (jedna asercja
+  dopasowana do nowej klauzuli), `zfsbackup` 211/211, `selfupdate` 28/28.
+  **Nie sprawdzone tutaj:** sam przebieg `zfs list`/`zfs allow` na realnej
+  puli — wymaga żywego hosta ze świeżym `--join`/`--commit-scope`, żaden
+  istniejący peer nie jest w stanie sprzed tego plasterka. Zgłoszone jako
+  zobowiązanie ręczne, tym samym kształtem co ryzyko F3 w REV-034.
+  Odpowiedź: `docs/reviews/responses/REV-20260802-033.md` (addendum
+  2026-08-03).
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
   dowód przez `git show 7dc4a98:deploy.sh`. Zgodziłem się warstwę niżej
