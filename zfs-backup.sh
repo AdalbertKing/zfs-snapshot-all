@@ -110,6 +110,11 @@ PEER_KEY_DIR="/root/.ssh/pairing"
 SERVER_CONF="/etc/zfs-snapshot-all/zfs-backup.conf"
 CLIENTS_DIR="/etc/zfs-snapshot-all/clients"
 
+# Shared cluster filesystem, world-searchable. A plain global (not read from
+# the environment) like the others above -- overridden the same way in tests,
+# by reassigning it in the subshell that calls the command under test.
+PVE_NODES_DIR="/etc/pve/nodes"
+
 # How recent a final catch-up must be to authorise an endpoint switch
 # (REV-20260731-008 F1). 30 minutes: long enough to run the catch-up, walk
 # to the rack and unplug the machine; short enough that "just before
@@ -748,16 +753,19 @@ emit_client_sections() {   # <workfile> <client name>
     # header text alone was never proof of authorship, only of path. See the
     # marker check in remove_managed_sections for what happens on a mismatch.
     local marker="# managed-by: zfs-backup.sh client=$name"
+    local sync_mode=0
+    [ "${PEER_SAVED_MODE:-}" = sync ] && sync_mode=1
+
     managed=()
     for ds in $PEER_SAVED_DATASETS; do
-        managed+=("$PEER_SAVED_TARGET/$LOAD_LABEL/$ds")
+        managed+=("$(client_local_path "$ds")")
     done
     # Remove-then-add unconditionally, never skip-if-present: that is what makes
     # a re-run after an endpoint switch actually pick up the new host/port/alias
     # instead of leaving the old connection details in place forever.
     [ "${#managed[@]}" -gt 0 ] && remove_managed_sections "$workfile" "$name" "${managed[@]}"
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        localpath=$(client_local_path "$ds")
         {
             echo
             echo "[dataset:$localpath]"
@@ -769,26 +777,57 @@ emit_client_sections() {   # <workfile> <client name>
         } >> "$workfile" || return 1
     done
 
-    # One ladder for the whole client. gfs_pattern is 'automated_' rather than
-    # any tier's own narrower pattern, because the ladder has to see every
-    # snapshot it is bucketing. Recursive over the client's subtree is safe
-    # here: every dataset of a client carries the same single send tier, so a
-    # recursive sweep cannot hit the "this leaf only has some of these tiers"
-    # trap that forces per-leaf monitor carriers elsewhere in this estate.
     prune_scope=""
     if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
-        prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
-        remove_managed_sections "$workfile" "$name" "$prune_scope"
-        {
-            echo
-            echo "[prune:$prune_scope]"
-            echo "	$marker"
-            echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
-            echo "	recursive    = yes"
-            echo "	gfs          = yes"
-            echo "	gfs_pattern  = automated_"
-            echo "	notify       = ${name}"
-        } >> "$workfile" || return 1
+        if [ "$sync_mode" -eq 1 ]; then
+            # REV-20260802-033 slice 8 / U7 required sync mapping: sync has no
+            # single parent this client owns to sweep recursively -- each
+            # dataset lands at its OWN top-level path, scattered across
+            # whatever pools the source scope named. One [prune:] per dataset
+            # instead, at exactly the paths already removed above via
+            # `managed` -- no separate remove_managed_sections call needed,
+            # those ARE the same paths. recursive=no: each entry is already
+            # the exact leaf this client's own [dataset:] section writes to,
+            # so there is nothing under it for a recursive sweep to find that
+            # is not ALSO its own separately listed entry here -- recursive
+            # would be the leaf-under-a-recursive-parent race this project
+            # already fixed once for delsnaps (prune scope race).
+            local -a scopes=()
+            for ds in $PEER_SAVED_DATASETS; do
+                scopes+=("$ds")
+                {
+                    echo
+                    echo "[prune:$ds]"
+                    echo "	$marker"
+                    echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+                    echo "	recursive    = no"
+                    echo "	gfs          = yes"
+                    echo "	gfs_pattern  = automated_"
+                    echo "	notify       = ${name}-$(basename "$ds")"
+                } >> "$workfile" || return 1
+            done
+            prune_scope="${scopes[*]}"
+        else
+            # One ladder for the whole client. gfs_pattern is 'automated_'
+            # rather than any tier's own narrower pattern, because the ladder
+            # has to see every snapshot it is bucketing. Recursive over the
+            # client's subtree is safe here: every dataset of a client
+            # carries the same single send tier, so a recursive sweep cannot
+            # hit the "this leaf only has some of these tiers" trap that
+            # forces per-leaf monitor carriers elsewhere in this estate.
+            prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
+            remove_managed_sections "$workfile" "$name" "$prune_scope"
+            {
+                echo
+                echo "[prune:$prune_scope]"
+                echo "	$marker"
+                echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+                echo "	recursive    = yes"
+                echo "	gfs          = yes"
+                echo "	gfs_pattern  = automated_"
+                echo "	notify       = ${name}"
+            } >> "$workfile" || return 1
+        fi
     fi
     return 0
 }
@@ -809,7 +848,22 @@ emit_client_sections() {   # <workfile> <client name>
 # PLAN=INCREMENTAL base=null, i.e. a full transfer on every run, forever, with
 # verify-endpoint reporting "incremental confirmed" because it looked in the
 # same wrong place as the seed.
-snapget_local_base() { printf '%s' "$PEER_SAVED_TARGET/$LOAD_LABEL"; }
+# REV-20260802-033 slice 8 / ENROLMENT-AGREED-2026-08-02 U7 "required sync
+# mapping": backup keeps the namespaced base above; sync carries NO base at
+# all -- the local name is IDENTICAL to the remote one (this is snapget.sh's
+# own documented convention for an omitted LOCAL_BASE, "sync: identical local
+# name" -- not a new mechanism, just the first caller to actually select it).
+# Every command below (seed, final-catchup, verify-endpoint, activate-client,
+# test, emit_client_sections) goes through these two rather than branching on
+# PEER_SAVED_MODE itself, so the mapping is decided in exactly one place.
+snapget_local_base() {
+    [ "${PEER_SAVED_MODE:-}" = sync ] && { printf ''; return 0; }
+    printf '%s' "$PEER_SAVED_TARGET/$LOAD_LABEL"
+}
+client_local_path() {   # <source dataset> -> where it lands locally
+    local ds="$1" base; base=$(snapget_local_base)
+    if [ -n "$base" ]; then printf '%s/%s' "$base" "$ds"; else printf '%s' "$ds"; fi
+}
 
 # Which crontab, and whose paths.
 #
@@ -1234,6 +1288,37 @@ cmd_add_client() {
 
     local lan_host lan_port; read -r lan_host lan_port <<< "$(parse_endpoint_arg "$lan")"
 
+    # REV-20260802-033 slice 8 / U8: sync writes to the SAME path a live
+    # guest might occupy; inside a shared PVE cluster that path can ALSO be
+    # pvesr's own replication target after the guest migrates there -- two
+    # independent replicators racing for one destination. The cluster
+    # already answers this for free: node ownership is visible under
+    # /etc/pve/nodes/ (shared cluster filesystem, world-searchable), keyed
+    # by node NAME. Refused here, at enrolment, not at receive time.
+    #
+    # Matches this fleet's own hostname==PVE-node-name convention. A peer
+    # reachable only by an IP whose PVE node name differs from --lan= is a
+    # real, acknowledged gap of this specific check -- named in the slice 8
+    # response rather than hidden, and not the only guard against the
+    # underlying scenario: guest_disk_is_live in snapget.sh catches a live
+    # guest's disk directly, per dataset, on every run, regardless of
+    # whether this enrolment-time name match fires.
+    if [ "$mode" = sync ]; then
+        local -a cluster_candidates=("$lan_host")
+        case "$lan_host" in
+            [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+                local resolved; resolved=$(getent hosts "$lan_host" 2>/dev/null | awk '{print $2}' | head -1)
+                [ -n "$resolved" ] && cluster_candidates+=("${resolved%%.*}")
+                ;;
+        esac
+        local cand
+        for cand in "${cluster_candidates[@]}"; do
+            if [ -d "$PVE_NODES_DIR/$cand" ]; then
+                die "add-client: --mode=sync refused -- '$lan_host' (node '$cand') looks like a member of the SAME PVE cluster as this host. pvesr already replicates within a cluster and would fight this tool for the same destination after a guest migration (U8, ENROLMENT-AGREED-2026-08-02.md). Use --mode=backup instead -- it writes to this client's own namespace, where pvesr never looks."
+            fi
+        done
+    fi
+
     local -a pair_args=(--pair --role=pull --peer="$lan_host")
     if [ -n "$mode" ]; then
         pair_args+=(--mode="$mode")
@@ -1447,20 +1532,25 @@ cmd_seed() {
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
 
+    local base; base=$(snapget_local_base)
     if [ "$yes" -ne 1 ]; then
         echo "Klient:  $name"
         echo "Zrodla:  $PEER_SAVED_DATASETS"
-        echo "Cel:     $PEER_SAVED_TARGET/$LOAD_LABEL"
+        if [ -n "$base" ]; then
+            echo "Cel:     $base"
+        else
+            echo "Cel:     (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
+        fi
         read -rp "Wykonac PELNY transfer teraz (rzeczywiste dane, bez -n)? [t/N] " ans
         case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- no transfer performed, state stays 'seeding'" ;; esac
     fi
 
     local ds localpath failed=0
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        localpath=$(client_local_path "$ds")
         log "seeding $ds -> $localpath (real transfer, may take a while)..."
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -1525,12 +1615,13 @@ cmd_final_catchup() {
         case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing transferred" ;; esac
     fi
 
+    local base; base=$(snapget_local_base)
     local ds localpath failed=0
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        localpath=$(client_local_path "$ds")
         log "final catch-up $ds -> $localpath over '$ACTIVE_ENDPOINT'..."
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
+        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -1727,13 +1818,14 @@ cmd_verify_endpoint() {
     # printed only on this dataset's failure, so the operator sees WHY a
     # relocation's re-verify failed instead of just an rc number.
     local errtmp; errtmp=$(mktemp) || die "mktemp failed"
+    local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        localpath=$(client_local_path "$ds")
         # stdout carries the machine-readable PLAN= verdict; stderr carries the
         # human log, captured separately (never mixed into $out, which is what
         # made the old text heuristic fragile) but no longer discarded.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL" 2>"$errtmp"); local rc=$?
+        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base" 2>"$errtmp"); local rc=$?
         if [ "$rc" -ne 0 ]; then
             warn "  FAILED (rc=$rc): $ds"
             if [ -s "$errtmp" ]; then
@@ -1833,10 +1925,11 @@ cmd_activate_client() {
 
     log "dry-run test of each dataset (snapget.sh -n)..."
     local failed=0
+    local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
-        localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
+        localpath=$(client_local_path "$ds")
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
@@ -1858,7 +1951,11 @@ cmd_activate_client() {
     echo "Peer (LAN parowania): $PEER_HOST"
     echo "Endpoint aktywny:    $ACTIVE_ENDPOINT ($LOAD_HOST:$LOAD_PORT)"
     echo "Zrodla:              $PEER_SAVED_DATASETS"
-    echo "Cel:                 $PEER_SAVED_TARGET/$LOAD_LABEL"
+    if [ -n "$base" ]; then
+        echo "Cel:                 $base"
+    else
+        echo "Cel:                 (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
+    fi
     echo "Tryb:                pull"
     if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
         echo "Profil:              standard GFS -- jedna wysylka co godzine (:01), jedna"
@@ -2901,9 +2998,10 @@ cmd_test() {
 
     load_client_and_connection "$cpath"
     local ds failed=0
+    local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL"; then
+        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -2976,7 +3074,12 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
     is_previously_managed() {   # <path>
         local p="$1" x
         for x in ${MANAGED_DATASETS:-}; do [ "$x" = "$p" ] && return 0; done
-        [ -n "${MANAGED_PRUNE_SCOPE:-}" ] && [ "$p" = "$MANAGED_PRUNE_SCOPE" ] && return 0
+        # REV-20260802-033 slice 8: sync mode records ONE prune scope PER
+        # dataset here (no shared parent to sweep recursively), so this can no
+        # longer be a single exact-match value -- word-split it exactly like
+        # MANAGED_DATASETS above. Still correct for backup mode's one-entry
+        # case, which is just a list of length one.
+        for x in ${MANAGED_PRUNE_SCOPE:-}; do [ "$x" = "$p" ] && return 0; done
         return 1
     }
 

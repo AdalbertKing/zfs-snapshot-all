@@ -3074,6 +3074,94 @@ else
     bad "verify-endpoint: a connectivity failure's stderr diagnostic reaches the operator (F4)" "rc=$rc out=$out"
 fi
 
+# --- 39. sync mode: path mapping + cluster-membership refusal (slice 8) -----
+#
+# REV-20260802-033 F3 "required sync mapping": sync reproduces the source's
+# own path exactly, with no per-client namespace -- snapget_local_base/
+# client_local_path are the one place that decision is made; emit_client_sections
+# and every interactive command read it from there rather than re-deciding.
+
+# 39a. snapget_local_base / client_local_path
+out=$( ( PEER_SAVED_MODE=sync PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=pve2
+         echo "base=[$(snapget_local_base)]"
+         echo "path=[$(client_local_path tank/data/ds1)]" ) )
+if case "$out" in *"base=[]"*"path=[tank/data/ds1]"*) true ;; *) false ;; esac; then
+    ok "sync: local base is empty, local path equals the source path exactly"
+else
+    bad "sync: local base is empty, local path equals the source path exactly" "$out"
+fi
+out=$( ( PEER_SAVED_MODE=backup PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=pve2
+         echo "base=[$(snapget_local_base)]"
+         echo "path=[$(client_local_path tank/data/ds1)]" ) )
+if case "$out" in *"base=[hdd/backups/pve2]"*"path=[hdd/backups/pve2/tank/data/ds1]"*) true ;; *) false ;; esac; then
+    ok "backup: local base and local path are unchanged (namespaced under target/label)"
+else
+    bad "backup: local base and local path are unchanged (namespaced under target/label)" "$out"
+fi
+
+# 39b. emit_client_sections in sync mode: one [dataset:] and one [prune:] per
+# source dataset, header equal to the source path (no shared base to strip),
+# recursive=no on each prune (no shared recursive parent exists to sweep --
+# see the prune-scope-race comment in emit_client_sections itself).
+EC1="$WORK/emit_sync.conf"
+: > "$EC1"
+out=$( ( PEER_SAVED_MODE=sync PEER_SAVED_TARGET="" LOAD_LABEL=pve9 \
+         LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.9.9.9 LOAD_FLAGS="-K /dev/null" \
+         PEER_SAVED_DATASETS="rpool/data/vm-100-disk-0 hdd/LXC/103" PROFILE_GFS=1
+         emit_client_sections "$EC1" synctest
+         echo "managed=[${managed[*]}]"
+         echo "prune_scope=[$prune_scope]" ) 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -qF '[dataset:rpool/data/vm-100-disk-0]' "$EC1" \
+   && grep -qF '[dataset:hdd/LXC/103]' "$EC1" \
+   && grep -qF '[prune:rpool/data/vm-100-disk-0]' "$EC1" \
+   && grep -qF '[prune:hdd/LXC/103]' "$EC1" \
+   && grep -qF 'recursive    = no' "$EC1" \
+   && ! grep -qF 'recursive    = yes' "$EC1" \
+   && case "$out" in *"managed=[rpool/data/vm-100-disk-0 hdd/LXC/103]"*) true ;; *) false ;; esac \
+   && case "$out" in *"prune_scope=[rpool/data/vm-100-disk-0 hdd/LXC/103]"*) true ;; *) false ;; esac; then
+    ok "emit_client_sections (sync): per-dataset [dataset:]/[prune:] at the bare source path, recursive=no"
+else
+    bad "emit_client_sections (sync): per-dataset [dataset:]/[prune:] at the bare source path, recursive=no" "rc=$rc out=$out file=$(cat "$EC1")"
+fi
+
+# 39c. is_previously_managed must treat a multi-entry MANAGED_PRUNE_SCOPE
+# (one path per dataset, as sync now records) as a LIST, not one exact-match
+# string -- a single-entry backup-mode value still has to keep working.
+CF7="$WORK/jobs.syncprune.conf"
+cat > "$CF7" <<'EOF'
+[dataset:rpool/data/vm-100-disk-0]
+	notify = a
+[dataset:hdd/LXC/103]
+	notify = b
+EOF
+out=$( bash -c "source '$ZFSBACKUP'; MANAGED_PRUNE_SCOPE='rpool/data/vm-100-disk-0 hdd/LXC/103'; remove_managed_sections '$CF7' synctest rpool/data/vm-100-disk-0 hdd/LXC/103" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -qF '[dataset:rpool/data/vm-100-disk-0]' "$CF7" && ! grep -qF '[dataset:hdd/LXC/103]' "$CF7"; then
+    ok "is_previously_managed: a multi-entry MANAGED_PRUNE_SCOPE is read as a list (sync back-compat)"
+else
+    bad "is_previously_managed: a multi-entry MANAGED_PRUNE_SCOPE is read as a list (sync back-compat)" "rc=$rc out=$out file=$(cat "$CF7" 2>/dev/null)"
+fi
+
+# 39d. add-client --mode=sync refuses at enrolment when the peer looks like a
+# member of the SAME PVE cluster (U8) -- checked via PVE_NODES_DIR, overridden
+# here instead of the real /etc/pve/nodes so this needs no real cluster.
+U8="$WORK/u8nodes"; mkdir -p "$U8/pve2"
+out=$( ( PVE_NODES_DIR="$U8"; cmd_add_client u8client --lan=pve2 --mode=sync ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"SAME PVE cluster"*) true ;; *) false ;; esac; then
+    ok "add-client --mode=sync refuses a peer that looks like a same-cluster node (U8)"
+else
+    bad "add-client --mode=sync refuses a peer that looks like a same-cluster node (U8)" "rc=$rc out=$out"
+fi
+# A peer with no matching node directory is not refused BY THIS CHECK -- it
+# still goes on to call deploy.sh --pair for real (same reason section 37
+# only tests refusal paths), so success here just means U8 did not fire.
+out=$( ( PVE_NODES_DIR="$U8"; cmd_add_client u8client2 --lan=notacluster.example --mode=sync ) 2>&1 ); rc=$?
+if case "$out" in *"SAME PVE cluster"*) false ;; *) true ;; esac; then
+    ok "add-client --mode=sync does not refuse a peer with no matching node directory"
+else
+    bad "add-client --mode=sync does not refuse a peer with no matching node directory" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

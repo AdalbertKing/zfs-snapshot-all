@@ -830,6 +830,40 @@ transfer_data() {
 ###############################################################################
 #BEGIN 4 [MAIN PROCESSING]
 ###############################################################################
+# REV-20260802-033 slice 8 / ENROLMENT-AGREED-2026-08-02 U7-U8: "target is a
+# live guest's disk" is checked separately from, and BEFORE, the written@
+# divergence test below -- a live guest keeps writing, so a written@=0 read
+# taken a moment earlier proves nothing about the instant `zfs recv -F`
+# actually runs (the measured pve0/pve1 vsql2 case in that document is
+# exactly this race, currently caught only by ZFS's own "dataset is busy" on
+# an open zvol, which is not a safety property -- it disappears the moment
+# the guest is stopped, the target is a container subvol instead of a zvol,
+# or the guest lives on another cluster node).
+#
+# Reuses quiesce_guest_id/quiesce_guest_status (lib-zfs-snap.sh) exactly as
+# the quiesce path does -- same dataset-name convention, same local-node-only
+# reach (a guest whose config lives on another cluster node reads as
+# kind=absent here, same as it does for quiesce; cluster-membership of the
+# PEER is a separate, enrolment-time check in the wrapper, not this one).
+# Deliberately fail-closed: if QUIESCE_VIA was never initialised (no -q on
+# this run) and this account is not root, `qm`/`pct status` fails with a
+# permission error and quiesce_guest_status returns non-zero -- treated here
+# as "cannot prove it is safe", not as "must be stopped".
+guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwise
+    local ds="$1" id status running
+    id=$(quiesce_guest_id "$ds") || return 1
+    if ! status=$(quiesce_guest_status "$id"); then
+        log 0 "Refusing '$ds': it names guest $id, but this account could not determine whether that guest is running (no root, and no quiesce-helper access). Not assuming it is safe. Grant with: deploy.sh --backup-user=\$(id -un) --allow-quiesce, or run as root."
+        return 0
+    fi
+    running=$(quiesce_field "$status" running)
+    if [ "$running" = yes ]; then
+        log 0 "Refusing '$ds': it is the disk of guest $id, which is currently RUNNING. An incremental receive here would discard whatever it has written since the last snapshot this pull knows about -- always true for a live dataset, not just on a bad day (see U7 in ENROLMENT-AGREED-2026-08-02.md)."
+        return 0
+    fi
+    return 1
+}
+
 process_dataset() {
     local src_dataset="$1"
     local tgt_dataset="$2"
@@ -1203,6 +1237,56 @@ process_dataset() {
         bookmark_base=$(find_bookmark_base "$src_dataset" "$tgt_head_guid" "$remote_user" "$remote_host")
     fi
 
+    # REV-20260802-033 slice 8 / U7: -F used to be unconditional below,
+    # regardless of whether this run created "$tgt_dataset" or found it
+    # already there. Fine for continuing this tool's OWN copy -- nothing
+    # else ever writes into a path this pull created -- but sync mode
+    # addresses the source's own path directly, so "already there" can mean
+    # a pre-existing, independently-live dataset. Skipped entirely when
+    # FORCE_FULL_SEND is already 1: that branch already destroyed and
+    # recreated the target above, an explicit human decision (-f), and -F on
+    # a freshly emptied target is a no-op.
+    local recv_force_flag="-F"
+    if [ $FORCE_FULL_SEND -ne 1 ] && target_exists "$tgt_dataset"; then
+        if guest_disk_is_live "$tgt_dataset"; then
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
+        fi
+        # The snapshot this receive would resume from: the common one if a
+        # real name/GUID match was found, else the target's own current head
+        # if a bookmark rescued the incremental (same snapshot the bookmark
+        # search matched by GUID) -- either way, the point after which
+        # anything written to the target is about to be silently rolled back
+        # by -F.
+        local recv_base=""
+        if [[ "$common_snapshot" != "null" ]]; then
+            recv_base="$common_snapshot"
+        elif [ -n "$bookmark_base" ] && [ ${#tgt_snaps[@]} -gt 0 ]; then
+            recv_base="${tgt_snaps[-1]}"
+        fi
+        if [ -z "$recv_base" ]; then
+            log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
+        fi
+        local written; written=$(zfs get -H -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
+        if [ "$written" != "0" ]; then
+            if [ -z "$written" ]; then
+                log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
+            else
+                log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
+            fi
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
+            return 1
+        fi
+        recv_force_flag=""
+    elif [ $FORCE_FULL_SEND -ne 1 ]; then
+        # target does not exist yet: nothing to roll back, -F would be a
+        # harmless no-op here -- dropped anyway so this run never carries a
+        # flag it does not need.
+        recv_force_flag=""
+    fi
+
     if [[ "$common_snapshot" != "null" ]]; then
         log 1 "Found valid common snapshot: ${src_dataset}@${common_snapshot}"
         # -T: mirrors snapsend.sh exactly, source may be remote here so both
@@ -1237,7 +1321,9 @@ process_dataset() {
     # -s makes ZFS SAVE partial receive state on interruption (and expose a
     # receive_resume_token) instead of rolling it back -- this is the
     # precondition for the resumable-transfer logic above to ever fire.
-    local recv_flags="-F -s"
+    # $recv_force_flag (computed above) is "-F" only when continuing this
+    # pull's own prior work on an unwritten target, or after an explicit -f.
+    local recv_flags="$recv_force_flag -s"
     [ $UNMOUNT -eq 1 ] && recv_flags="$recv_flags -u"
     [ -n "$RECV_EXCLUDE_FLAGS" ] && recv_flags="$recv_flags$RECV_EXCLUDE_FLAGS"
     local recv_cmd="zfs recv $recv_flags $tgt_dataset"
