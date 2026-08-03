@@ -8,14 +8,29 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterkach 1-4, po REV-035, po REV-036 w całości + wszystkie follow-upy,
+  plasterkach 1-5, po REV-035, po REV-036 w całości + wszystkie follow-upy,
   i po ad hoc `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na
   tryb blokowy)
-- Zweryfikowano przeciw: `279303b` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `d839c91` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 4**
-  (`279303b`) — `deploy.sh --draft-scope=LABEL` generuje plik zakresu
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 5**
+  (`d839c91`) — `--pair --role=pull` przyjmuje teraz `--mode=backup|sync`
+  jako alternatywę dla `--peer-datasets`: pakiet niesie `PEER_CONF_MODE`
+  zamiast listy datasetów, wybór odsunięty na peera (`--draft-scope`/
+  `--commit-scope`, plasterek 4). Wzajemnie wykluczające się z
+  `--peer-datasets`. `--mode=sync` odmawia `--target` (F3: sync odtwarza
+  ścieżki źródła jeden do jednego, brak osobnego korzenia docelowego);
+  `--mode=backup` przyjmuje `--target` albo zostawia puste (domyślny cel
+  "serwera" to `DEFAULT_TARGET` samego wrappera `zfs-backup.sh`, nie coś co
+  `deploy.sh` wymyśla). Prawdziwa granica zaufania (`validate_peer_conf`,
+  paczka przekracza hosty) sprawdzona: pakiet BEZ klucza `PEER_CONF_MODE`
+  w ogóle (dokładny kształt każdej paczki sprzed tego commitu) waliduje się
+  identycznie jak wcześniej — zgodność wsteczna potwierdzona osobnym
+  testem, nie wywnioskowana z diffu. `join` **77/77** (+13).
+  Odpowiedź: addendum "Slice 5" w
+  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  **REV-20260802-033 plasterek 4** (`279303b`) — `deploy.sh --draft-scope=LABEL` generuje plik zakresu
   z prawdziwego inwentarza ZFS peera: jeden `[dataset:X]` na niesystemowy
   dataset jeden poziom pod każdą pulą (`include_parent=no`,
   `include_children=yes`), plus pełny inwentarz jako komentarz. Cenzus
@@ -508,7 +523,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
 | `zfsbackup` | **214/214** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
-| `join` | **64/64** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
+| `join` | **77/77** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
 | `draftscope` | **22/22** | `deploy.sh --draft-scope` (REV-033 plasterek 4): generuje plik zakresu z prawdziwego inwentarza ZFS peera — domyślnie aktywne datasety jeden poziom pod każdą pulą, poza znanymi systemowymi (`ROOT`, `swap`) i samym korzeniem puli, plus pełny inwentarz jako komentarz. Przeciw stubowanemu `zpool`/`zfs` (ekstrakcja funkcji jak `test/pause`) — właściwy grant/`zfs allow` zostaje bez zmian nietestowany stubem (ta sama zasada co plasterek 2/3). Drugi draft dla tej samej etykiety odmawia zamiast nadpisać; host z samymi systemowymi datasetami odmawia zamiast zapisać pusty plik |
 
