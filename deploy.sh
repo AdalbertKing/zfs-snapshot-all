@@ -984,6 +984,14 @@ do_draft_scope() {
         done
     } > "$tmp"
 
+    # World-readable (matches this project's existing convention for
+    # /etc/zfs-snapshot-all/'s other config files -- see
+    # assert_config_readable_by_target's own comment on the parent
+    # directory). Set on $tmp, before the rename, so $sfile never exists at
+    # its final path with mktemp's default 600: the collector's delegated
+    # account needs to read this file over ssh later (slice 6's fetch step)
+    # and does not run as root or as whoever ran --draft-scope.
+    chmod 0644 "$tmp" 2>/dev/null
     if ! mv -f "$tmp" "$sfile"; then
         rm -f "$tmp"
         die "could not write $sfile"

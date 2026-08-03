@@ -142,6 +142,20 @@ check "A16 label appears in the commit-scope hint" "1" \
 # anything if some future caller ever got this wrong and sourced it.
 check "A17 no BEGIN/END cron markers leak into the scope file" "0" \
       "$(grep -cE '^# (BEGIN|END) ' "$sfile")"
+# World-readable: a future collector-side fetch (slice 6) reads this file
+# over ssh as the delegated account, not as root and not as whoever ran
+# --draft-scope. /etc/zfs-snapshot-all/peers/ is 755 on a real host (world
+# executable+readable, verified live on pve2), so the FILE's own mode is
+# what actually gates this -- mktemp's default 600 would otherwise make the
+# file unreadable to anyone else despite the readable directory.
+stat_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+_probe="$TMPD/permprobe"; : > "$_probe"; chmod 600 "$_probe"
+if [ "$(stat_mode "$_probe")" != "600" ]; then
+    echo "SKIP A18 the scope file is world-readable (0644) -- this filesystem does not track file mode bits, verify on a real Linux host"
+else
+    check "A18 the scope file is world-readable (0644)" "644" "$(stat_mode "$sfile")"
+fi
+rm -f "$_probe"
 
 # ---- B. a second draft against the same label refuses (do_draft_scope_check
 # already covers this via --draft-scope-check in test/join/run.sh; asserted
