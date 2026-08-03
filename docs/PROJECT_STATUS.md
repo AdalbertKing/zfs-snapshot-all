@@ -776,12 +776,21 @@ czterech hostach w obu formach hosta.
   programów, które piszą crontaba. `pause` **74/74** (+25 nowych testów,
   sekcje O–V), pełen graf `./test/impact.sh`: **665/665** bez błędów
   (`cron` 123, `run.sh` 56, `join` 54, `quiescehelper` 119, `selfupdate`
-  28, `zfsbackup` 211). **Nie sprawdzone tutaj:** żywy host (funkcja jest
-  eksperymentalna, nigdy nie użyta produkcyjnie — ryzyko niskie, ale
-  zalecana jedna weryfikacja `deploy.sh --self-update` + diff crontaba na
-  żywym hoście przy najbliższej okazji); `sudo ./test/scenarios/run.sh`
-  (wymaga roota i puli ZFS). Odpowiedź:
-  `docs/reviews/responses/REV-20260803-036.md`.
+  28, `zfsbackup` 211). **Żywe hosty:** `deploy.sh --self-update` uruchomiony
+  na wszystkich 4 (pve0, pve1, metropolis pve1, metropolis pve2) — czysty
+  fast-forward na każdym, crontab roota i konta na pve0 bajt-w-bajt
+  identyczny przed/po (guard nie odpala się na zwykłym, niezapauzowanym
+  crontabie). `test/pause/run.sh` (suita ze stubem, nie dotyka prawdziwego
+  `crontab(1)`) na wszystkich 4: **73/74** wszędzie — jeden powtarzalny,
+  zdiagnozowany fałszywy fail (sekcja G zakłada brak konta delegowanego,
+  a każdy z tych hostów je ma; `detect_delegated_account()` skanuje
+  prawdziwy `/home/*`, czego ta rodzina testów nie stubuje) — zgłoszone jako
+  osobne zadanie, nie naprawione w tym passie. Prawdziwy cykl
+  `--pause`/`--resume` na żywym crontabie **nie wykonany** — klasyfikator
+  bezpieczeństwa odmówił (słusznie: to akcja zatrzymująca prawdziwe backupy,
+  wymaga obecności właściciela, nie bezobsługowego zadania). `sudo
+  ./test/scenarios/run.sh` (wymaga roota i puli ZFS) — nie uruchomiony.
+  Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
   `CRON_LOCK_DIR` = `/run` jeśli zapisywalny, inaczej `$TMPDIR`/`/tmp` — root
