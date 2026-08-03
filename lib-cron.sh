@@ -132,6 +132,69 @@ declare -gA CRON_LOCK_FD=()
 
 cron_lock_path() { printf '%s/lib-cron.%s.lock' "$CRON_LOCK_DIR" "$1"; }   # <user>
 
+# ---- pause markers (deploy.sh --pause/--resume) -----------------------------
+# REV-20260803-036 F5: defined HERE, not in deploy.sh, because every ordinary
+# writer in this file -- not just deploy.sh -- must recognise and refuse to
+# silently undo a pause. A convention only deploy.sh understood was exactly
+# the gap: gen-cron.sh --install, or an ensure/adopt-line call, could
+# reconstruct an active block seconds after --pause reported success, because
+# the shared lock only orders writes -- it does not enforce an invariant
+# after the lock is released.
+#
+# Recognised STRUCTURALLY, never by substring search (F3's mistake): an
+# unrelated comment that happens to mention the fullcron marker, or a hand
+# line that merely contains the block marker text, must never be mistaken for
+# the actual paused shape.
+CRON_PAUSE_MARKER="# zfs-snapshot-all: PAUSED"
+CRON_PAUSE_BLOCK_MARKER="# ZSA-PAUSED"
+CRON_PAUSE_LINE_PREFIX="#ZSA-PAUSED#"
+
+# Is the WHOLE crontab exactly deploy.sh --pause --fullcron's placeholder --
+# one line, starting with the fullcron marker? -> 0 paused, 1 not.
+cron_fullcron_paused() {   # <curfile>
+    local cur="$1" n
+    n=$(wc -l < "$cur" 2>/dev/null | tr -d ' ')
+    [ "$n" = "1" ] || return 1
+    grep -qE "^${CRON_PAUSE_MARKER}( |\$)" "$cur" 2>/dev/null
+}
+
+# Is <name>'s block, as it stands in <curfile>, in the paused shape left by
+# deploy.sh --pause's default block mode (its first body line is the paused
+# header)? -> 0 paused, 1 not paused or absent.
+cron_block_paused() {   # <curfile> <name>
+    local cur="$1" name="$2" first
+    cron_block_locate "$cur" "$name" || return 1
+    [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B + 1)) ] || return 1
+    first=$(sed -n "$((CRON_B + 1))p" "$cur")
+    case "$first" in
+        "$CRON_PAUSE_BLOCK_MARKER"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The F5 enforcement point: every ORDINARY (not pause-aware) writer calls this
+# before rendering a change, and refuses rather than silently making a paused
+# block -- or a fully-paused crontab -- active again. deploy.sh's own
+# pause/resume code renders the whole new crontab itself and commits it
+# through cron_replace_all_impl directly, which does NOT call this guard --
+# that path is the one thing allowed to change a paused shape. Every other
+# caller of cron_block_install/cron_block_ensure_line/cron_block_adopt_line
+# (gen-cron.sh --install, zfs-backup.sh's host-block lines, deploy.sh's own
+# updater/capacity lines) goes through it automatically, with no change
+# required at the call site.
+cron_paused_guard() {   # <curfile> <name>  -> 0 ok to write, 1 refused (CRON_ERR set)
+    local cur="$1" name="$2"
+    if cron_fullcron_paused "$cur"; then
+        CRON_ERR="'$name': the crontab is currently paused as a whole (deploy.sh --pause --fullcron) -- run deploy.sh --resume before any ordinary write"
+        return 1
+    fi
+    if cron_block_paused "$cur" "$name"; then
+        CRON_ERR="'$name': this block is currently paused (deploy.sh --pause) -- run deploy.sh --resume before any ordinary write"
+        return 1
+    fi
+    return 0
+}
+
 # Non-blocking with a bounded wait, then a clear diagnostic and NO write --
 # never a silent, unbounded hang, and never a write that skipped the queue.
 cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
@@ -454,6 +517,7 @@ cron_block_install_impl() {
     cur=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
     new=$(mktemp) || { rm -f "$cur"; CRON_ERR="mktemp failed"; return 1; }
     if ! cron_read "$who" "$cur"; then rm -f "$cur" "$new"; return 1; fi
+    if ! cron_paused_guard "$cur" "$name"; then rm -f "$cur" "$new"; return 1; fi
     if ! cron_block_render "$cur" "$name" "$body" "$new" "$tail"; then rm -f "$cur" "$new"; return 1; fi
     if cmp -s "$cur" "$new"; then
         rm -f "$cur" "$new"
@@ -516,6 +580,7 @@ cron_block_remove_impl() {
     cur=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
     new=$(mktemp) || { rm -f "$cur"; CRON_ERR="mktemp failed"; return 1; }
     if ! cron_read "$who" "$cur"; then rm -f "$cur" "$new"; return 1; fi
+    if ! cron_paused_guard "$cur" "$name"; then rm -f "$cur" "$new"; return 1; fi
     if ! cron_block_render "$cur" "$name" "-" "$new" ""; then rm -f "$cur" "$new"; return 1; fi
     if cmp -s "$cur" "$new"; then rm -f "$cur" "$new"; CRON_CHANGED=0; return 0; fi
     if ! cron_write "$who" "$new"; then
@@ -591,6 +656,7 @@ cron_block_ensure_line_impl() {
     body=$(mktemp) || { rm -f "$cur"; CRON_ERR="mktemp failed"; return 1; }
     new=$(mktemp) || { rm -f "$cur" "$body"; CRON_ERR="mktemp failed"; return 1; }
     if ! cron_read "$who" "$cur"; then rm -f "$cur" "$body" "$new"; return 1; fi
+    if ! cron_paused_guard "$cur" "$name"; then rm -f "$cur" "$body" "$new"; return 1; fi
     if ! cron_block_locate "$cur" "$name"; then rm -f "$cur" "$body" "$new"; return 1; fi
 
     # Every spelling this job has ever had, as fixed strings.

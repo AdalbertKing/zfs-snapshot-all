@@ -3385,7 +3385,11 @@ do_commit_scope() {
 # between its own markers.
 # ==============================================================================
 PAUSE_STATE_DIR="${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}"
-PAUSE_MARKER="# zfs-snapshot-all: PAUSED"
+# Marker text is now canonically defined in lib-cron.sh (CRON_PAUSE_*), so
+# every ordinary crontab writer -- not just deploy.sh -- can recognise a
+# paused shape and refuse to silently undo it (REV-20260803-036 F5). Aliased
+# here under this file's existing names so nothing below needs to change.
+#
 # Block mode's in-place markers. The header is detected by prefix only (the
 # timestamp after it varies), and is not itself a `# BEGIN`/`# END` line, so
 # cron_body_valid never rejects it. The per-line prefix has no space after
@@ -3393,10 +3397,33 @@ PAUSE_MARKER="# zfs-snapshot-all: PAUSED"
 # `#comment`, or a live cron line -- always yields one valid comment line,
 # and stripping the exact same prefix back off is the entire resume logic.
 # No cron syntax is ever parsed either way.
-PAUSE_BLOCK_MARKER="# ZSA-PAUSED"
-PAUSE_LINE_PREFIX="#ZSA-PAUSED#"
+PAUSE_MARKER="$CRON_PAUSE_MARKER"
+PAUSE_BLOCK_MARKER="$CRON_PAUSE_BLOCK_MARKER"
+PAUSE_LINE_PREFIX="$CRON_PAUSE_LINE_PREFIX"
+
+# REV-20260803-036 F4: the ONLY block names --pause's default block mode will
+# ever touch, regardless of what lib-cron.sh's marker grammar would otherwise
+# accept elsewhere in the crontab. A syntactically valid `# BEGIN name` /
+# `# END name` pair is not proof this package wrote it -- a human, an Ansible
+# role, certbot, or another local tool can use the exact same shape. Add a
+# name here, and ONLY here, the day a future block should become pauseable;
+# nothing else may widen this list.
+PAUSE_KNOWN_BLOCKS="zfs-backup-host zfs-backup-managed"
+
+# Filter a newline-separated list of block names down to the ones --pause is
+# actually allowed to touch (F4). Anything else -- a foreign block that merely
+# matches lib-cron.sh's marker grammar -- passes through untouched.
+pause_known_names() {   # <names, one per line, via $1>
+    local n want
+    for n in $1; do
+        for want in $PAUSE_KNOWN_BLOCKS; do
+            [ "$n" = "$want" ] && { printf '%s\n' "$n"; break; }
+        done
+    done
+}
 
 pause_state_path() { printf '%s/%s.saved' "$PAUSE_STATE_DIR" "$1"; }   # <user>
+pause_placeholder_path() { printf '%s/%s.placeholder' "$PAUSE_STATE_DIR" "$1"; }   # <user>
 
 # The same scan Phase 8 uses below to find an already-provisioned delegated
 # account when none is named -- so --pause does not require remembering
@@ -3429,8 +3456,22 @@ pause_targets() {
 
 # --fullcron variant: replaces the WHOLE crontab, see do_pause_blocks_one
 # above for the default that touches only our own managed blocks.
+#
+# REV-20260803-036 F1: the resume copy must be DURABLE before the live
+# crontab is touched, never the other way round. The old order wrote the
+# placeholder first and only afterward tried to save the original -- an
+# unchecked mkdir/mv failure, or a process death in between, blanked the
+# crontab with no way back. Here the pre-pause crontab (and the exact
+# placeholder text, F3) are written to a temp file INSIDE $PAUSE_STATE_DIR,
+# fsync'd, and atomically renamed into place FIRST; only once that has
+# succeeded does the live crontab get replaced. A failure at any step before
+# the crontab write leaves the crontab byte-identical and returns non-zero. A
+# failure of the crontab write itself rolls the just-committed state back off
+# disk, so a failed pause never reports (or leaves behind) a claim that the
+# user is paused.
 do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
     local user="$1" state; state=$(pause_state_path "$user")
+    local ph_state; ph_state=$(pause_placeholder_path "$user")
     if [ -e "$state" ]; then
         warn "$user: already paused (saved $(stat -c '%y' "$state" 2>/dev/null | cut -d. -f1)) -- run --resume first if you want to re-pause cleanly"
         return 1
@@ -3440,37 +3481,90 @@ do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
     if ! cron_read "$user" "$cur"; then
         warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
-    local placeholder; placeholder=$(mktemp) || { warn "$user: mktemp failed"; rm -f "$cur"; cron_lock_release "$user"; return 1; }
-    printf '%s by deploy.sh --pause at %s -- run: deploy.sh --resume\n' \
-        "$PAUSE_MARKER" "$(date '+%Y-%m-%d %H:%M:%S %Z')" > "$placeholder"
-    if ! cron_write "$user" "$placeholder"; then
-        warn "$user: $CRON_ERR -- original crontab left untouched"
-        rm -f "$cur" "$placeholder"; cron_lock_release "$user"; return 1
+
+    mkdir -p "$PAUSE_STATE_DIR" 2>/dev/null
+    chmod 700 "$PAUSE_STATE_DIR" 2>/dev/null
+    if [ ! -d "$PAUSE_STATE_DIR" ] || [ ! -w "$PAUSE_STATE_DIR" ]; then
+        warn "$user: could not create or write to the pause-state directory $PAUSE_STATE_DIR -- crontab left untouched"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
-    mkdir -p "$PAUSE_STATE_DIR"; chmod 700 "$PAUSE_STATE_DIR"
-    mv "$cur" "$state"
-    rm -f "$placeholder"
+    if [ -L "$state" ] || [ -L "$ph_state" ]; then
+        warn "$user: $state or $ph_state is a symlink -- refusing to write through it, crontab left untouched"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+
+    local placeholder_text
+    placeholder_text=$(printf '%s by deploy.sh --pause at %s -- run: deploy.sh --resume' \
+        "$PAUSE_MARKER" "$(date '+%Y-%m-%d %H:%M:%S %Z')")
+    local tmp_state tmp_ph
+    tmp_state=$(mktemp "$PAUSE_STATE_DIR/.${user}.saved.XXXXXX" 2>/dev/null) || {
+        warn "$user: mktemp in $PAUSE_STATE_DIR failed -- crontab left untouched"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    }
+    tmp_ph=$(mktemp "$PAUSE_STATE_DIR/.${user}.placeholder.XXXXXX" 2>/dev/null) || {
+        warn "$user: mktemp in $PAUSE_STATE_DIR failed -- crontab left untouched"
+        rm -f "$cur" "$tmp_state"; cron_lock_release "$user"; return 1
+    }
+    cp "$cur" "$tmp_state" 2>/dev/null
+    printf '%s\n' "$placeholder_text" > "$tmp_ph"
+    chmod 600 "$tmp_state" "$tmp_ph" 2>/dev/null
+    # Best-effort durability: per-file fsync where coreutils supports it (8.24+),
+    # falling back to a full sync(2) otherwise. Neither is load-bearing for
+    # correctness -- the atomic rename below is -- but a crash right after
+    # the rename should not lose data still sitting in the page cache.
+    sync "$tmp_state" 2>/dev/null || sync
+    sync "$tmp_ph" 2>/dev/null || sync
+    if ! cmp -s "$cur" "$tmp_state"; then
+        warn "$user: could not durably save the pre-pause crontab -- crontab left untouched"
+        rm -f "$cur" "$tmp_state" "$tmp_ph"; cron_lock_release "$user"; return 1
+    fi
+    if ! mv -f "$tmp_state" "$state" || ! mv -f "$tmp_ph" "$ph_state"; then
+        warn "$user: could not commit the saved pause state -- crontab left untouched"
+        rm -f "$cur" "$tmp_state" "$tmp_ph" "$state" "$ph_state"; cron_lock_release "$user"; return 1
+    fi
+    sync "$PAUSE_STATE_DIR" 2>/dev/null || sync
+
+    local placeholder; placeholder=$(mktemp) || {
+        warn "$user: mktemp failed -- rolling back the just-saved pause state, nothing paused"
+        rm -f "$state" "$ph_state" "$cur"; cron_lock_release "$user"; return 1
+    }
+    printf '%s\n' "$placeholder_text" > "$placeholder"
+    if ! cron_write "$user" "$placeholder"; then
+        warn "$user: $CRON_ERR -- rolling back the just-saved pause state; nothing is marked paused. If the crontab now holds partial content from the failed write, check it by hand"
+        rm -f "$state" "$ph_state" "$cur" "$placeholder"; cron_lock_release "$user"; return 1
+    fi
+    rm -f "$cur" "$placeholder"
     cron_lock_release "$user"
     log "$user: crontab paused, saved to $state"
     return 0
 }
 
-# Every `# BEGIN name` this package's own writer put in the crontab. Not a
-# fixed list of block names: any name lib-cron.sh's marker grammar accepts is
-# one of ours by construction (it is the only thing that ever writes one),
-# so a future block needs no matching update here.
+# Every `# BEGIN name` structurally present in the crontab -- NOT proof of
+# ownership. REV-20260803-036 F4: a human, an Ansible role, certbot, or any
+# other local tool can legally use the exact same `# BEGIN name`/`# END name`
+# shape lib-cron.sh's grammar accepts; "syntactically looks like a block" is
+# not evidence this package wrote it. Callers that need to know which of
+# these names --pause may actually touch must filter this output through
+# pause_known_names().
 cron_block_names_present() {   # <file>
     grep -oE '^# BEGIN [A-Za-z0-9._-]+' "$1" | awk '{print $3}' | sort -u
 }
 
 # Pause every non-empty, not-already-paused managed block in <user>'s
-# crontab, in place. -> 0 at least one block paused, 1 nothing paused/error
+# crontab -- in ONE crontab write. -> 0 at least one block paused, 1 nothing
+# paused/error
 #
-# Each block is re-read from the live crontab before it is located, because
-# cron_block_install_impl (below) just rewrote the previous block and every
-# marker line number after it moved by however many lines that block's body
-# changed by -- reusing stale offsets would locate the WRONG extent for the
-# next name.
+# REV-20260803-036 F2: the old version called cron_block_install_impl once
+# PER BLOCK, so a later block's failure returned non-zero after an earlier
+# block had already been committed live -- a partial pause reporting success
+# is worse than no pause at all, because the operator believes the whole
+# workload stopped. Here every block's new shape is RENDERED locally
+# (cron_block_render, which never touches the live crontab) into one scratch
+# file, and the live crontab is replaced exactly once, at the end, through
+# cron_replace_all_impl. Any failure before that point -- a malformed block,
+# a mktemp failure, a render failure -- aborts with the live crontab still
+# completely untouched. There is no partial-success state to roll back
+# because nothing was written until the single commit.
 do_pause_blocks_one() {   # <user>
     local user="$1"
     cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
@@ -3482,16 +3576,16 @@ do_pause_blocks_one() {   # <user>
         warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to pause, resolve by hand"
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
-    local names; names=$(cron_block_names_present "$cur")
+    local names; names=$(pause_known_names "$(cron_block_names_present "$cur")")
     if [ -z "$names" ]; then
         rm -f "$cur"; cron_lock_release "$user"
         warn "$user: no managed blocks found -- nothing to pause (use --fullcron if this crontab has unmanaged jobs you also want stopped)"
         return 1
     fi
-    local name rc=1 first body newbody
+    local name count=0 first body newbody staged
     for name in $names; do
         if ! cron_block_locate "$cur" "$name"; then
-            warn "$user/$name: $CRON_ERR"; continue
+            warn "$user/$name: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
         fi
         if [ "$CRON_B" -eq 0 ] || [ "$CRON_E" -le $((CRON_B + 1)) ]; then
             log "$user/$name: block is empty, nothing to pause"
@@ -3503,31 +3597,40 @@ do_pause_blocks_one() {   # <user>
                 warn "$user/$name: already paused -- run --resume first if you want to re-pause cleanly"
                 continue ;;
         esac
-        body=$(mktemp) || { warn "$user/$name: mktemp failed"; continue; }
-        newbody=$(mktemp) || { rm -f "$body"; warn "$user/$name: mktemp failed"; continue; }
+        body=$(mktemp) || { warn "$user/$name: mktemp failed"; rm -f "$cur"; cron_lock_release "$user"; return 1; }
         sed -n "$((CRON_B + 1)),$((CRON_E - 1))p" "$cur" > "$body"
+        newbody=$(mktemp) || { rm -f "$body" "$cur"; warn "$user/$name: mktemp failed"; cron_lock_release "$user"; return 1; }
         {
             printf '%s by deploy.sh --pause at %s -- run: deploy.sh --resume\n' \
                 "$PAUSE_BLOCK_MARKER" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
             while IFS= read -r l; do printf '%s%s\n' "$PAUSE_LINE_PREFIX" "$l"; done < "$body"
         } > "$newbody"
-        if cron_block_install_impl "$user" "$name" "$newbody" ""; then
-            log "$user/$name: paused ($(wc -l < "$body" | tr -d ' ') line(s) commented out)"
-            rc=0
-        else
-            warn "$user/$name: could not pause: $CRON_ERR"
+        # No cron_body_valid check needed here (unlike the resume side below):
+        # every line is either the fixed header or carries $PAUSE_LINE_PREFIX,
+        # neither of which can ever match '^# (BEGIN|END) '.
+        staged=$(mktemp) || { rm -f "$body" "$newbody" "$cur"; warn "$user/$name: mktemp failed"; cron_lock_release "$user"; return 1; }
+        if ! cron_block_render "$cur" "$name" "$newbody" "$staged" ""; then
+            warn "$user/$name: could not stage pause: $CRON_ERR"
+            rm -f "$body" "$newbody" "$staged" "$cur"; cron_lock_release "$user"; return 1
         fi
-        rm -f "$body" "$newbody"
-        # cron_block_install_impl just wrote the live crontab -- re-read before
-        # the next name's cron_block_locate, or its offsets are stale.
-        if ! cron_read "$user" "$cur"; then
-            warn "$user: could not re-read crontab after pausing $name: $CRON_ERR"
-            break
-        fi
+        log "$user/$name: staged for pause ($(wc -l < "$body" | tr -d ' ') line(s) to comment out)"
+        rm -f "$body" "$newbody" "$cur"
+        cur="$staged"
+        count=$((count + 1))
     done
+    if [ "$count" -eq 0 ]; then
+        rm -f "$cur"; cron_lock_release "$user"
+        warn "$user: nothing to pause (every managed block is already paused or empty)"
+        return 1
+    fi
+    if ! cron_replace_all_impl "$user" "$cur"; then
+        warn "$user: could not commit the pause: $CRON_ERR"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
     rm -f "$cur"
     cron_lock_release "$user"
-    return "$rc"
+    log "$user: paused ($count block(s))"
+    return 0
 }
 
 do_pause() {
@@ -3545,16 +3648,23 @@ do_pause() {
 
 # --fullcron variant: restores the WHOLE crontab from PAUSE_STATE_DIR, see
 # do_resume_blocks_one below for the default that undoes a block-mode pause.
+# REV-20260803-036 F3: `grep -qF "$PAUSE_MARKER"` only proved the marker text
+# occurred SOMEWHERE in the crontab -- a placeholder with an emergency job
+# appended during the window still contained it, and the old code then
+# silently discarded that line by installing the saved pre-pause crontab over
+# it. The check is now byte-exact against the placeholder text saved
+# alongside the state at pause time (F1's ph_state), not a substring search.
 do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
     local user="$1" state; state=$(pause_state_path "$user")
+    local ph_state; ph_state=$(pause_placeholder_path "$user")
     [ -e "$state" ] || { warn "$user: nothing paused (no saved state at $state)"; return 1; }
     cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
     local cur; cur=$(mktemp) || { warn "$user: mktemp failed"; cron_lock_release "$user"; return 1; }
     if ! cron_read "$user" "$cur"; then
         warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
-    if ! grep -qF "$PAUSE_MARKER" "$cur"; then
-        warn "$user: the current crontab does not look like --pause's own placeholder -- refusing to overwrite what may be a manual edit made during the maintenance window. The saved pre-pause state is still at $state; compare by hand, then either restore it yourself or remove it once you are sure it is no longer needed."
+    if [ ! -e "$ph_state" ] || ! cmp -s "$cur" "$ph_state"; then
+        warn "$user: the current crontab is not byte-for-byte the exact placeholder --pause wrote -- refusing to overwrite what may be a manual edit made during the maintenance window. The saved pre-pause state is still at $state; compare by hand, then either restore it yourself or remove it once you are sure it is no longer needed."
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
     if ! cron_markers_valid "$state"; then
@@ -3567,7 +3677,7 @@ do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
     fi
     rm -f "$cur"
     cron_lock_release "$user"
-    rm -f "$state"
+    rm -f "$state" "$ph_state"
     log "$user: crontab resumed from the saved pre-pause state"
     return 0
 }
@@ -3584,6 +3694,11 @@ do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
 # does NOT carry the prefix) means it was added by hand during the window --
 # kept as-is rather than dropped, and reported, so a maintenance edit made
 # while backups were off never silently vanishes on resume.
+#
+# REV-20260803-036 F2: same single-commit rebuild as do_pause_blocks_one --
+# every block is rendered locally and the live crontab is replaced exactly
+# once, through cron_replace_all_impl, so a later block's failure can never
+# leave an earlier one resumed and the live crontab in a mixed state.
 # -> 0 at least one block resumed, 1 nothing to resume/error
 do_resume_blocks_one() {   # <user>
     local user="$1"
@@ -3596,11 +3711,11 @@ do_resume_blocks_one() {   # <user>
         warn "$user: crontab markers are malformed ($CRON_ERR) -- refusing to resume, resolve by hand"
         rm -f "$cur"; cron_lock_release "$user"; return 1
     fi
-    local names; names=$(cron_block_names_present "$cur")
-    local name rc=1 first newbody kept=0
+    local names; names=$(pause_known_names "$(cron_block_names_present "$cur")")
+    local name count=0 first newbody staged kept
     for name in $names; do
         if ! cron_block_locate "$cur" "$name"; then
-            warn "$user/$name: $CRON_ERR"; continue
+            warn "$user/$name: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
         fi
         [ "$CRON_B" -gt 0 ] || continue
         [ "$CRON_E" -gt $((CRON_B + 1)) ] || continue
@@ -3609,7 +3724,7 @@ do_resume_blocks_one() {   # <user>
             "$PAUSE_BLOCK_MARKER"*) : ;;
             *) continue ;;   # not paused by us -- leave it alone
         esac
-        newbody=$(mktemp) || { warn "$user/$name: mktemp failed"; continue; }
+        newbody=$(mktemp) || { warn "$user/$name: mktemp failed"; rm -f "$cur"; cron_lock_release "$user"; return 1; }
         kept=0
         while IFS= read -r l; do
             case "$l" in
@@ -3617,22 +3732,39 @@ do_resume_blocks_one() {   # <user>
                 *) printf '%s\n' "$l"; kept=$((kept + 1)) ;;
             esac
         done < <(sed -n "$((CRON_B + 2)),$((CRON_E - 1))p" "$cur") > "$newbody"
-        if cron_block_install_impl "$user" "$name" "$newbody" ""; then
-            log "$user/$name: resumed"
-            [ "$kept" -eq 0 ] || warn "$user/$name: kept $kept line(s) that were not ours -- looks like a manual edit made during the pause window"
-            rc=0
-        else
-            warn "$user/$name: could not resume: $CRON_ERR -- the paused block is left in place, nothing lost"
+        # A "kept" line came from an operator's hand-edit during the pause
+        # window (see above), not from our own prefixing -- it could in
+        # principle be its own '# BEGIN'/'# END' line. cron_block_render does
+        # not check that (only cron_block_install_impl normally does), so it
+        # is checked explicitly here rather than risk staging a body that
+        # makes the NEXT block's marker layout ambiguous.
+        if ! cron_body_valid "$newbody"; then
+            warn "$user/$name: could not stage resume: $CRON_ERR -- the paused block is left in place, nothing lost"
+            rm -f "$newbody" "$cur"; cron_lock_release "$user"; return 1
         fi
-        rm -f "$newbody"
-        if ! cron_read "$user" "$cur"; then
-            warn "$user: could not re-read crontab after resuming $name: $CRON_ERR"
-            break
+        staged=$(mktemp) || { rm -f "$newbody" "$cur"; warn "$user/$name: mktemp failed"; cron_lock_release "$user"; return 1; }
+        if ! cron_block_render "$cur" "$name" "$newbody" "$staged" ""; then
+            warn "$user/$name: could not stage resume: $CRON_ERR -- the paused block is left in place, nothing lost"
+            rm -f "$newbody" "$staged" "$cur"; cron_lock_release "$user"; return 1
         fi
+        [ "$kept" -eq 0 ] || warn "$user/$name: kept $kept line(s) that were not ours -- looks like a manual edit made during the pause window"
+        log "$user/$name: staged for resume"
+        rm -f "$newbody" "$cur"
+        cur="$staged"
+        count=$((count + 1))
     done
+    if [ "$count" -eq 0 ]; then
+        rm -f "$cur"; cron_lock_release "$user"
+        return 1
+    fi
+    if ! cron_replace_all_impl "$user" "$cur"; then
+        warn "$user: could not commit the resume: $CRON_ERR -- the paused block(s) are left in place, nothing lost"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
     rm -f "$cur"
     cron_lock_release "$user"
-    return "$rc"
+    log "$user: resumed ($count block(s))"
+    return 0
 }
 
 do_resume() {
