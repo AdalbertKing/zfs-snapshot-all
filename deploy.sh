@@ -887,6 +887,56 @@ peer_scope_path() {
     echo "$PEER_STATE_DIR/$1.scope"
 }
 
+# remote_scope_stage <label> <host> <port> <scope-path> -- REV-20260804-037
+# F1: the draft/edit/check substage of --join-remotely's scope editor,
+# extracted to its own function so it is independently testable (sed-range,
+# same technique test/draftscope already uses for do_draft_scope) with a
+# stubbed ssh -- this is ordinary shell control flow over an already-pinned
+# link, not the zfs allow/unallow trust semantics this project deliberately
+# leaves to live verification only.
+#
+# Runs over ssh -t on the peer: drafts the scope ONLY if it does not exist
+# yet, opens $VISUAL/$EDITOR/vi on it, and on a clean editor exit runs the
+# NON-GRANTING --commit-scope-check as proof the file the editor produced
+# actually parses -- before this function's caller may call the scope
+# "edited and ready". Exit codes:
+#   0  scope exists (or was freshly drafted), edited, and passes the check
+#   2  --draft-scope failed -- stopped before the editor, no file created
+#   3  the editor itself exited non-zero
+#   4  --commit-scope-check failed on the file the editor produced
+#   *  ssh/transport failure (host unreachable, session killed, etc.)
+remote_scope_stage() {
+    local label="$1" host="$2" port="$3" scope="$4"
+    local remote_script
+    remote_script=$(cat <<EOF2
+set -u
+SCOPE="$scope"
+if [ -e "\$SCOPE" ]; then
+    echo "existing scope file found at \$SCOPE -- opening it directly, no draft"
+else
+    if ! ./deploy.sh --draft-scope=$label; then
+        echo "draft-scope failed for label '$label' (see error above) -- stopping before the editor; no scope file was created" >&2
+        exit 2
+    fi
+fi
+\${VISUAL:-\${EDITOR:-vi}} "\$SCOPE"
+ec=\$?
+if [ "\$ec" -ne 0 ]; then
+    echo "editor exited \$ec -- not treating the scope as edited" >&2
+    exit 3
+fi
+if ! ./deploy.sh --commit-scope-check=$label; then
+    echo "scope at \$SCOPE failed --commit-scope-check after editing (see error above) -- fix it by hand before committing" >&2
+    exit 4
+fi
+echo "scope for '$label' is valid and ready for local --commit-scope=$label"
+exit 0
+EOF2
+)
+    ssh -t -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+        -p "$port" "root@$host" "$remote_script"
+}
+
 # ENROLMENT-AGREED-2026-08-02 T3: the sha256 of the scope file --commit-scope
 # most recently granted from, as a sidecar next to it -- not a second
 # manifest (there is nothing here a parser could disagree about, just a
@@ -3505,7 +3555,24 @@ EOF
     # On any failure this WARNS and falls through to the manual instructions
     # -- "manual transfer remains as the emergency path" (U10) means exactly
     # that a failed automated attempt must not strand the operator.
-    local remote_ok=0
+    # REV-20260804-037 F1: the old remote command joined draft and editor with
+    # a bare ';' (editor opened even after a failed draft) and discarded the
+    # draft's stderr (2>/dev/null) -- the one diagnostic that explains why. A
+    # failed draft plus an editor opened as root on a NONEXISTENT path can
+    # itself create an empty/partial scope file, which then blocks a clean
+    # re-draft (the generator refuses to overwrite an existing file). Worse,
+    # $remote_ok was set right after --join and never revisited, so a failed
+    # editor only warned while the final summary still called the scope
+    # "edited" -- true state was join_ok, not join_ok-and-scope_ok.
+    #
+    # Fixed by staging the four substeps explicitly (draft only if the scope
+    # is absent; stop before the editor if the draft failed; run the editor;
+    # then the NON-GRANTING --commit-scope-check as proof the file the editor
+    # produced actually parses) and reporting via distinct exit codes, so the
+    # final summary can name the exact stage reached instead of collapsing
+    # everything but a scp/ssh transport failure into one bucket.
+    local remote_ok=0 scope_rc=-1
+    local remote_scope; remote_scope=$(peer_scope_path "$my_label")
     if [ "$PEER_JOIN_REMOTELY" -eq 1 ]; then
         log "--join-remotely: delivering the wsad and running --join on $PEER_HOST over the pin just established..."
         if scp -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
@@ -3516,11 +3583,10 @@ EOF
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
             if [ -n "$PEER_MODE" ]; then
-                log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first if it does not exist yet, same as 'crontab -e')..."
-                ssh -t -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
-                    -p "$PEER_PORT" "root@$PEER_HOST" \
-                    "./deploy.sh --draft-scope=$my_label 2>/dev/null; \${VISUAL:-\${EDITOR:-vi}} $(peer_scope_path "$my_label")" \
-                    || warn "the remote editor session on $PEER_HOST ended non-zero -- check by hand: $(peer_scope_path "$my_label")"
+                log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first only if it does not exist yet, same as 'crontab -e')..."
+                remote_scope_stage "$my_label" "$PEER_HOST" "$PEER_PORT" "$remote_scope"
+                scope_rc=$?
+                [ "$scope_rc" -ne 0 ] && warn "the remote scope stage on $PEER_HOST did not finish cleanly (see above) -- see the exact recovery step below"
             fi
         else
             warn "--join-remotely could not complete automatically (see any ssh/scp error above) -- falling back to the manual steps below."
@@ -3532,8 +3598,42 @@ EOF
     if [ "$remote_ok" -eq 1 ]; then
         log "Wsad dostarczony i --join wykonany zdalnie na $PEER_HOST (--join-remotely)."
         if [ -n "$PEER_MODE" ]; then
-            log "Zakres zredagowany zdalnie (ssh -t). Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
-            log "  ./deploy.sh --commit-scope=$my_label"
+            case "$scope_rc" in
+                0)
+                    log "Zakres zredagowany zdalnie i zweryfikowany (--commit-scope-check OK, ssh -t)."
+                    log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+                    log "  ./deploy.sh --commit-scope=$my_label"
+                    ;;
+                2)
+                    log "Draft NIE powiodl sie (patrz blad wyzej) -- zaden plik zakresu nie powstal."
+                    log "Join juz wykonany, NIE powtarzaj go. Recznie na $PEER_HOST:"
+                    log "  ssh root@$PEER_HOST"
+                    log "  ./deploy.sh --draft-scope=$my_label"
+                    log "  \${EDITOR:-vi} $remote_scope"
+                    log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+                3)
+                    log "Sesja edytora na $PEER_HOST zakonczyla sie niezerowo -- zakres NIE jest gotowy."
+                    log "Plik mogl juz powstac (jesli draft sie udal): $remote_scope"
+                    log "Recznie na $PEER_HOST:"
+                    log "  ssh root@$PEER_HOST"
+                    log "  \${EDITOR:-vi} $remote_scope"
+                    log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+                4)
+                    log "Zakres zredagowany, ale NIE przeszedl --commit-scope-check (patrz blad wyzej)."
+                    log "Popraw recznie na $PEER_HOST:"
+                    log "  ssh root@$PEER_HOST"
+                    log "  \${EDITOR:-vi} $remote_scope"
+                    log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+                *)
+                    log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+                    log "  ./deploy.sh --draft-scope=$my_label   # jesli jeszcze nie istnieje"
+                    log "  \${EDITOR:-vi} $remote_scope"
+                    log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+            esac
             log "(finalizacja/grant NIGDY nie jedzie zdalnie -- U10, warunek 1)"
         fi
     else
@@ -3564,10 +3664,11 @@ do_join() {
     # Local aliases, now that every value has been checked. Named as before so
     # the rest of this function reads unchanged.
     local PEER_CONF_ROLE="${PC[PEER_CONF_ROLE]}"
-    local PEER_CONF_TARGET="${PC[PEER_CONF_TARGET]}"
+    local PEER_CONF_TARGET="${PC[PEER_CONF_TARGET]:-}"
     local PEER_CONF_ACCOUNT="${PC[PEER_CONF_ACCOUNT]}"
     local PEER_CONF_AS="${PC[PEER_CONF_AS]}"
     local PEER_CONF_DATASETS="${PC[PEER_CONF_DATASETS]:-}"
+    local PEER_CONF_MODE="${PC[PEER_CONF_MODE]:-}"
     local PEER_CONF_INITIATOR_LABEL="${PC[PEER_CONF_INITIATOR_LABEL]}"
     local PEER_CONF_REMOTE_JOIN="${PC[PEER_CONF_REMOTE_JOIN]:-}"
 
