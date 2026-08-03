@@ -134,6 +134,13 @@ JOIN_CHECK=0
 COMMIT_SCOPE_MODE=0
 COMMIT_SCOPE_CHECK=0
 COMMIT_SCOPE_LABEL=""
+# REV-20260802-033 slice 4: generates the scope file --commit-scope reads,
+# from this host's own real ZFS inventory (F1/F2 -- source scope is selected
+# on the SOURCE host, discovered from it, never guessed by the collector
+# operator or hand-typed from memory).
+DRAFT_SCOPE_MODE=0
+DRAFT_SCOPE_CHECK=0
+DRAFT_SCOPE_LABEL=""
 
 # ---- --pause/--resume: stop (and later restore) every crontab this host
 # manages, for a maintenance window (disk swap, live migration off this host)
@@ -223,6 +230,10 @@ while [ "$#" -gt 0 ]; do
         --join-check)   JOIN_CHECK=1; JOIN_PACKAGE="${2:-}"; shift 2 ;;
         --commit-scope=*)       COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope)         COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
+        --draft-scope=*)        DRAFT_SCOPE_MODE=1; DRAFT_SCOPE_LABEL="${1#*=}"; shift ;;
+        --draft-scope)          DRAFT_SCOPE_MODE=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
+        --draft-scope-check=*)  DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${1#*=}"; shift ;;
+        --draft-scope-check)    DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --pause)        PAUSE_MODE=1; shift ;;
@@ -311,13 +322,28 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           (run on the second host, once, from its console).
                           Creates the account and installs the key with ZERO
                           zfs permissions -- see --commit-scope below.
+  --draft-scope=LABEL     generate /etc/zfs-snapshot-all/peers/LABEL.scope
+                          from THIS host's real ZFS inventory: an active
+                          section (non-system datasets one level below each
+                          pool) plus the complete inventory, commented, to
+                          edit from. Refuses if the file already exists --
+                          edit or remove it by hand first. Run this BEFORE
+                          --commit-scope; discovery happens here, on the
+                          source, never guessed by the collector operator.
+  --draft-scope-check=LABEL
+                          validate LABEL without writing anything: manifest
+                          exists, role is pull, and no scope file exists yet.
   --commit-scope=LABEL    grant a pull peer's account exactly what
                           /etc/zfs-snapshot-all/peers/LABEL.scope selects
                           (LABEL is the initiator label --join printed).
                           Edit that file by hand first -- see lib-scope.sh's
                           header for the grammar. Re-running after an edit
-                          re-grants the new set; nothing already granted by
-                          another relationship or by hand is ever touched.
+                          re-grants the new set AND revokes what THIS
+                          relationship granted before but the new set no
+                          longer selects (bounded by the manifest -- a grant
+                          from another relationship or by hand is never
+                          touched, and a dataset with an in-flight transfer
+                          hold is left granted until the next commit).
     --allow-quiesce       also let that peer FREEZE guests whose disks live
                           under the granted datasets (remote quiesce). Off by
                           default, same reasoning as --join's own
@@ -435,12 +461,31 @@ fi
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ] && [ "$CHECK_ONLY" -eq 1 ]; then
     echo "--check-only cannot be combined with --commit-scope -- an audit installs nothing, so there would be no grant to make (use --commit-scope-check to validate without granting)" >&2; exit 2
 fi
+# Slice 4: --draft-scope discovers and writes; --commit-scope/-check read and
+# grant/validate. Two different acts against the same file at two different
+# times -- combining them in one invocation would either grant from a file
+# that does not exist yet or overwrite one an operator is mid-edit on.
+if [ "$DRAFT_SCOPE_MODE" -eq 1 ] || [ "$DRAFT_SCOPE_CHECK" -eq 1 ]; then
+    if [ "$DRAFT_SCOPE_MODE" -eq 1 ] && [ "$DRAFT_SCOPE_CHECK" -eq 1 ]; then
+        echo "--draft-scope and --draft-scope-check are mutually exclusive -- pick one" >&2; exit 2
+    fi
+    if [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
+        echo "--draft-scope/--draft-scope-check cannot be combined with --commit-scope/--commit-scope-check -- draft first, edit, then commit separately" >&2; exit 2
+    fi
+    if [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ]; then
+        echo "--draft-scope/--draft-scope-check cannot be combined with --pair/--join -- run --join first, then draft the scope file separately" >&2; exit 2
+    fi
+    [ -n "$DRAFT_SCOPE_LABEL" ] || { echo "--draft-scope/--draft-scope-check needs a label (the peer's initiator label, same one --join printed)" >&2; exit 2; }
+fi
+if [ "$DRAFT_SCOPE_MODE" -eq 1 ] && [ "$CHECK_ONLY" -eq 1 ]; then
+    echo "--check-only cannot be combined with --draft-scope -- an audit writes nothing, so there would be no file to draft (use --draft-scope-check to validate without writing)" >&2; exit 2
+fi
 if [ "$PAUSE_MODE" -eq 1 ] && [ "$RESUME_MODE" -eq 1 ]; then
     echo "--pause and --resume are mutually exclusive -- pick one" >&2; exit 2
 fi
 if [ "$PAUSE_MODE" -eq 1 ] || [ "$RESUME_MODE" -eq 1 ]; then
-    if [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
-        echo "--pause/--resume cannot be combined with --pair/--join/--commit-scope -- run them separately" >&2; exit 2
+    if [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ] || [ "$DRAFT_SCOPE_MODE" -eq 1 ] || [ "$DRAFT_SCOPE_CHECK" -eq 1 ]; then
+        echo "--pause/--resume cannot be combined with --pair/--join/--commit-scope/--draft-scope -- run them separately" >&2; exit 2
     fi
     if [ "$CHECK_ONLY" -eq 1 ]; then
         echo "--check-only cannot be combined with --pause/--resume -- an audit changes nothing, so there would be nothing to pause or resume" >&2; exit 2
@@ -744,6 +789,134 @@ peer_manifest_path() {
 # --join, never shipped.
 peer_scope_path() {
     echo "$PEER_STATE_DIR/$1.scope"
+}
+
+# REV-20260802-033 slice 4: names Proxmox's own installer-created system
+# datasets, checked against a depth-1 dataset's LAST path component only --
+# never a prefix/substring match, so a real workload named e.g. "rootfs" or
+# "swap-backups" is never mistaken for the boot environment or swap zvol.
+# Deliberately short and explicit rather than a clever heuristic: F2's
+# example roots (rpool/data, rpool/olds, hdd/LXC) are ordinary names this
+# census must NOT catch, and the failure mode of catching one is silent data
+# loss from a backup relationship that never existed. Add a name here, and
+# only here, if a future Proxmox default needs excluding by default -- the
+# full inventory below still lists it either way, so nothing is ever hidden,
+# only left inactive until an operator opts in by hand.
+DRAFT_SCOPE_SYSTEM_NAMES="ROOT swap"
+
+draft_scope_is_system() {   # <depth-1 dataset name>
+    local base="${1##*/}" n
+    for n in $DRAFT_SCOPE_SYSTEM_NAMES; do
+        [ "$base" = "$n" ] && return 0
+    done
+    return 1
+}
+
+# do_draft_scope_check -- everything --draft-scope validates before it is
+# willing to write anything: manifest exists, describes a delegated PULL peer
+# (same shape as do_commit_scope_check -- a scope file only ever applies
+# there), and the target file does not already exist. The last one is not a
+# technicality: overwriting a file an operator may already be mid-edit on
+# would be exactly the kind of silent clobber this project refuses elsewhere.
+DRAFT_SCOPE_SFILE=""; DRAFT_SCOPE_ACCOUNT=""
+do_draft_scope_check() {
+    local label="$1" mpath sfile
+    [ -n "$label" ] || die "internal: do_draft_scope_check needs a label"
+    mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no pairing manifest for '$label' at $mpath -- run --join first"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ "${PEER_JOIN_AS:-}" != root ] \
+        || die "'$label' joined with --as=root -- root already has full authority on this host, there is nothing to scope"
+    [ "${PEER_JOIN_ROLE:-}" = pull ] \
+        || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- a scope file only applies to the PULL side (this host as the data source)"
+    [ -n "${PEER_JOIN_ACCOUNT:-}" ] || die "internal: manifest for '$label' has no account recorded"
+    sfile=$(peer_scope_path "$label")
+    if [ -e "$sfile" ]; then
+        die "$sfile already exists -- refusing to overwrite it (an operator may be mid-edit). Edit it directly, or remove it by hand first if you really want a fresh draft."
+    fi
+    DRAFT_SCOPE_SFILE="$sfile"
+    DRAFT_SCOPE_ACCOUNT="$PEER_JOIN_ACCOUNT"
+    return 0
+}
+
+# do_draft_scope -- F1/F2's "discovery happens on the source" requirement.
+# Inventories every real pool on THIS host and writes an editable
+# lib-scope.sh file: an ACTIVE section (one [dataset:] per non-system dataset
+# one level below each pool, include_parent=no/include_children=yes -- F2
+# owner decision #6/#7) plus the complete inventory as comments, so an
+# operator can select one explicit leaf instead of an entire branch (F2
+# acceptance criterion). Never executes anything from the result -- this
+# writes lib-scope.sh's own grammar, the same file --commit-scope later reads
+# as pure data.
+do_draft_scope() {
+    local label="$1"
+    do_draft_scope_check "$label"
+    local sfile="$DRAFT_SCOPE_SFILE" account="$DRAFT_SCOPE_ACCOUNT"
+
+    local -a pools=()
+    while IFS= read -r p; do [ -n "$p" ] && pools+=("$p"); done \
+        < <(zpool list -H -o name 2>/dev/null | sort)
+    [ "${#pools[@]}" -gt 0 ] || die "no ZFS pools found on this host -- nothing to draft"
+
+    local -a active=()
+    local pool ds
+    for pool in "${pools[@]}"; do
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            [ "$ds" = "$pool" ] && continue
+            draft_scope_is_system "$ds" && continue
+            active+=("$ds")
+        done < <(zfs list -H -o name -r -d 1 -- "$pool" 2>/dev/null | sort)
+    done
+    [ "${#active[@]}" -gt 0 ] \
+        || die "every dataset found is a pool root or a known system dataset (${DRAFT_SCOPE_SYSTEM_NAMES}) -- nothing to activate by default. Edit $sfile's inventory section by hand once it exists, or check this host's pool layout."
+
+    local tmp; tmp=$(mktemp) || die "mktemp failed"
+    {
+        printf '# Scope file for peer '"'"'%s'"'"' -- generated by deploy.sh --draft-scope.\n' "$label"
+        printf '# Account: %s\n' "$account"
+        printf '# Generated: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo "#"
+        echo "# Edit the ACTIVE section below (add/remove/replace [dataset:] stanzas --"
+        echo "# copy an entry from the inventory further down for one explicit leaf"
+        echo "# instead of a whole branch), then run:"
+        printf '#   deploy.sh --commit-scope=%s\n' "$label"
+        echo "#"
+        echo "# Grammar (lib-scope.sh):"
+        echo "#   [dataset:<pool/path>]"
+        echo "#       include_parent   = yes | no"
+        echo "#       include_children = yes | no"
+        echo "#       exclude          = <pool/path>   (repeatable)"
+        echo "#       exclude_tree     = <pool/path>   (repeatable)"
+        echo "#"
+        echo "# This file is transferred and read as DATA -- never executed. Malformed"
+        echo "# or ambiguous input fails --commit-scope closed; nothing here runs a shell."
+        echo
+        for ds in "${active[@]}"; do
+            printf '[dataset:%s]\n' "$ds"
+            echo "include_parent = no"
+            echo "include_children = yes"
+            echo
+        done
+        echo "# =========================================================="
+        echo "# Full inventory -- informational. Copy/uncomment/edit a line above as a"
+        echo "# [dataset:] stanza to select one explicit leaf, a single VM disk, or"
+        echo "# another branch instead of the defaults above."
+        echo "# Source: zfs list -H -o name,type,used,refer,mountpoint -r"
+        echo "# =========================================================="
+        for pool in "${pools[@]}"; do
+            zfs list -H -o name,type,used,refer,mountpoint -r -- "$pool" 2>/dev/null \
+                | sort | while IFS= read -r line; do printf '# %s\n' "$line"; done
+        done
+    } > "$tmp"
+
+    if ! mv -f "$tmp" "$sfile"; then
+        rm -f "$tmp"
+        die "could not write $sfile"
+    fi
+    log "drafted $sfile: ${#active[@]} active dataset(s) from ${#pools[@]} pool(s)"
+    log "edit it, then run: deploy.sh --commit-scope=$label"
 }
 
 # do_join_check -- everything --join does to a package before it is willing to
@@ -1290,6 +1463,16 @@ if [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
         printf '  %-12s %s (parent=%s children=%s)\n' "root" "$scope_root_shown" \
             "${SCOPE_PARENT[$scope_root_shown]}" "${SCOPE_CHILDREN[$scope_root_shown]}"
     done
+    exit 0
+fi
+
+# Same reasoning: the manifest/path half of --draft-scope needs no root and
+# no `zfs`, so a malformed manifest or an already-existing scope file is
+# refused before any inventory work is even attempted.
+if [ "$DRAFT_SCOPE_CHECK" -eq 1 ]; then
+    do_draft_scope_check "$DRAFT_SCOPE_LABEL"
+    echo "draft-scope OK: would write $DRAFT_SCOPE_SFILE"
+    printf '  %-12s %s\n' "account" "$DRAFT_SCOPE_ACCOUNT"
     exit 0
 fi
 
@@ -4352,6 +4535,10 @@ if [ "$PAIR_MODE" -eq 1 ]; then
 fi
 if [ "$JOIN_MODE" -eq 1 ]; then
     do_join
+    exit 0
+fi
+if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
+    do_draft_scope "$DRAFT_SCOPE_LABEL"
     exit 0
 fi
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then

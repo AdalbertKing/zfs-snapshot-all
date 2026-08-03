@@ -487,6 +487,76 @@ else
     bad "commit-scope/good reports the scope file's root" "$out"
 fi
 
+# --draft-scope / --draft-scope-check (REV-20260802-033 slice 4).
+#
+# Same shape as commit-scope-check above: the manifest/path half needs no
+# root and no `zfs`, so it is what gets exercised here. The actual inventory
+# walk (do_draft_scope) calls real `zpool list`/`zfs list` and is covered by
+# a separate golden-file suite with stubbed binaries, not this one.
+ds_expect_reject() {
+    local name="$1" label="$2" want="$3" out rc
+    out="$(bash "$DEPLOY" --draft-scope-check="$label" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+        bad "$name" "expected rejection, got exit 0" "$out"; return
+    fi
+    if ! printf '%s' "$out" | grep -qF -- "$want"; then
+        bad "$name" "wanted error containing: $want" "got: $(printf '%s' "$out" | tail -2)"; return
+    fi
+    ok "$name"
+}
+
+ds_expect_reject "draft-scope/no manifest" nosuchpeer "run --join first"
+ds_expect_reject "draft-scope/as=root has nothing to scope" asroot "already has full authority"
+ds_expect_reject "draft-scope/push role refused" pushrole "only applies to the PULL side"
+
+# Reuses good.conf from the commit-scope section above, which already has a
+# good.scope sitting next to it -- exactly the "already exists" case.
+ds_expect_reject "draft-scope/scope file already exists" good "already exists -- refusing to overwrite"
+
+out="$(bash "$DEPLOY" --draft-scope-check= 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "needs a label"; then
+    ok "draft-scope/blank label refused at argument time"
+else
+    bad "draft-scope/blank label refused at argument time" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --draft-scope=x --draft-scope-check=x 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "mutually exclusive"; then
+    ok "draft-scope/--draft-scope and --draft-scope-check refuse together"
+else
+    bad "draft-scope/--draft-scope and --draft-scope-check refuse together" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --draft-scope=x --commit-scope=x 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "cannot be combined with --commit-scope"; then
+    ok "draft-scope/--commit-scope refused"
+else
+    bad "draft-scope/--commit-scope refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --draft-scope=x --join=/nonexistent 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "cannot be combined with --pair/--join"; then
+    ok "draft-scope/--join refused"
+else
+    bad "draft-scope/--join refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --draft-scope=x --check-only 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF -- "--check-only cannot be combined with --draft-scope"; then
+    ok "draft-scope/--check-only refused"
+else
+    bad "draft-scope/--check-only refused" "rc=$rc" "$out"
+fi
+
+# The positive case: a manifest with no scope file yet is accepted.
+cs_good_manifest > "$CS/peers/freshdraft.conf"
+out="$(bash "$DEPLOY" --draft-scope-check=freshdraft 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "account      zfsbackup-pve1"; then
+    ok "draft-scope/fresh manifest with no scope file yet is accepted"
+else
+    bad "draft-scope/fresh manifest with no scope file yet is accepted" "rc=$rc" "$out"
+fi
+
 unset PEER_STATE_DIR
 
 echo "--------------------------------------------"
