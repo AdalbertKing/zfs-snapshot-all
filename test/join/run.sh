@@ -371,6 +371,100 @@ else
     bad "good/leaves no temp directory either" "left behind: $leaked"
 fi
 
+# ---------------------------------------------------------------------------
+# --mode / PEER_CONF_MODE (REV-20260802-033 slice 5, F1): the alternative to
+# a named PEER_CONF_DATASETS list for a pull relationship, so the collector
+# operator never has to know the source's ZFS layout up front. All of this
+# is validate_peer_conf, exercised the same way as every other package case
+# above -- via --join-check, no root, no network.
+# ---------------------------------------------------------------------------
+expect_accept() {   # <name> <path-to-wsad>
+    local name="$1" pkg="$2" out rc
+    out="$(bash "$DEPLOY" --join-check="$pkg" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ]; then ok "$name"
+    else bad "$name" "expected acceptance, got rc=$rc" "$(printf '%s' "$out" | tail -3)"; fi
+}
+
+new_case mode-backup-minimal
+{ good_conf | grep -vE '^PEER_CONF_(DATASETS|TARGET)='; echo 'PEER_CONF_MODE=backup'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "mode/backup with no target and no datasets is accepted" "$D/wsad.tgz"
+
+new_case mode-sync-minimal
+{ good_conf | grep -vE '^PEER_CONF_(DATASETS|TARGET)='; echo 'PEER_CONF_MODE=sync'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "mode/sync with no target and no datasets is accepted" "$D/wsad.tgz"
+
+new_case mode-sync-with-target
+{ good_conf | grep -vE '^PEER_CONF_DATASETS='; echo 'PEER_CONF_MODE=sync'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/sync with a target is refused" "must not carry a target"
+
+new_case mode-and-datasets-together
+{ good_conf; echo 'PEER_CONF_MODE=backup'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/mode and datasets together are refused" "must use exactly one, never both"
+
+new_case mode-on-push
+{ good_conf | grep -vE '^PEER_CONF_(ROLE|DATASETS|TARGET)='; printf 'PEER_CONF_ROLE=push\nPEER_CONF_TARGET=tank/backups\nPEER_CONF_MODE=backup\n'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/mode on a push relationship is refused" "mode only applies to a pull relationship"
+
+new_case mode-bogus
+{ good_conf | grep -vE '^PEER_CONF_(DATASETS|TARGET)='; echo 'PEER_CONF_MODE=weekly'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/an unrecognised mode value is refused" "must be 'backup' or 'sync'"
+
+new_case mode-pull-neither-datasets-nor-mode
+{ good_conf | grep -vE '^PEER_CONF_DATASETS='; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/pull with neither datasets nor mode is refused" "no datasets and no mode"
+
+new_case mode-push-still-needs-target
+{ good_conf | grep -vE '^PEER_CONF_(ROLE|DATASETS|TARGET)='; printf 'PEER_CONF_ROLE=push\nPEER_CONF_DATASETS="tank/a"\n'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "mode/push with no target is still refused (unchanged by this slice)" "missing PEER_CONF_TARGET"
+
+# A package with no PEER_CONF_MODE key at all -- simulating a genuinely OLD
+# wsad produced before this slice existed -- must still be accepted exactly
+# as before: the parser leaves the field unset, validate_peer_conf treats
+# that identically to an explicitly empty one.
+new_case mode-absent-key-legacy-package
+good_conf > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "mode/a package with no PEER_CONF_MODE key at all still validates" "$D/wsad.tgz"
+
+# --pair's own CLI-argument validation (deploy.sh's global argument section,
+# runs before any dispatch -- same reasoning as --role/--as being checked
+# there today, and testable the same way: no --pair, no network, no root
+# needed to reach an exit-2 argument error).
+out="$(bash "$DEPLOY" --mode=weekly 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "must be 'backup' or 'sync'"; then
+    ok "mode/CLI: an unrecognised --mode value is refused"
+else
+    bad "mode/CLI: an unrecognised --mode value is refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --mode=backup --role=push 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "only applies to --role=pull"; then
+    ok "mode/CLI: --mode with --role=push is refused"
+else
+    bad "mode/CLI: --mode with --role=push is refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --mode=backup --peer-datasets="tank/a" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "mutually exclusive"; then
+    ok "mode/CLI: --mode and --peer-datasets together are refused"
+else
+    bad "mode/CLI: --mode and --peer-datasets together are refused" "rc=$rc" "$out"
+fi
+
+out="$(bash "$DEPLOY" --mode=sync --target=tank/backups 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "cannot be combined with --target"; then
+    ok "mode/CLI: --mode=sync with --target is refused"
+else
+    bad "mode/CLI: --mode=sync with --target is refused" "rc=$rc" "$out"
+fi
 
 # ---------------------------------------------------------------------------
 # --commit-scope / --commit-scope-check (REV-20260802-033 slice 2).

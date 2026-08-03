@@ -185,6 +185,11 @@ PEER_ROLE="pull"
 PEER_HOST=""
 PEER_DATASETS=""
 PEER_TARGET=""
+# REV-20260802-033 slice 5 (F1): the alternative to --peer-datasets for a
+# pull relationship -- the collector operator names a MODE instead of a
+# source dataset list they cannot be expected to know yet. Empty means
+# "not given" (the existing expert --peer-datasets path).
+PEER_MODE=""
 PEER_AS="delegated"
 PEER_PORT="22"
 # "22" is also what an omitted --port looks like, so a re-pair or --rotate had
@@ -245,6 +250,8 @@ while [ "$#" -gt 0 ]; do
         --peer)         PEER_HOST="${2:-}"; shift 2 ;;
         --peer-datasets=*) PEER_DATASETS="${1#*=}"; shift ;;
         --peer-datasets)   PEER_DATASETS="${2:-}"; shift 2 ;;
+        --mode=*)       PEER_MODE="${1#*=}"; shift ;;
+        --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
         --target)       PEER_TARGET="${2:-}"; shift 2 ;;
         --as=*)         PEER_AS="${1#*=}"; shift ;;
@@ -289,7 +296,21 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
     --role=pull|push        pull (default): this host pulls via snapget.sh.
                             push: this host pushes via snapsend.sh.
     --peer=HOST             the other host's hostname/IP
-    --peer-datasets="A B"   datasets involved in this relationship
+    --peer-datasets="A B"   expert path: datasets involved in this
+                            relationship, named here directly. For
+                            --role=pull this means the SOURCE's own datasets
+                            -- an operator who does not know that layout
+                            should use --mode instead (mutually exclusive).
+    --mode=backup|sync      --role=pull only: defer dataset selection to
+                            the peer (F1) instead of naming datasets here.
+                            backup: --target may still be given, or omitted
+                            to inherit the collector's own default (resolved
+                            by the wrapper, not this command). sync: no
+                            --target -- the peer reproduces its own paths
+                            here verbatim (F3), so there is no target root
+                            to name. Either way, the peer runs
+                            --draft-scope/--commit-scope after --join to
+                            choose and grant what it actually has.
     --target=DATASET        where snapshots land -- local dataset for pull,
                             remote dataset (on the peer) for push
     --as=root|delegated     delegated (default): isolated per-peer account on
@@ -396,6 +417,26 @@ case "$PEER_ROLE" in
     pull|push) ;;
     *) echo "--role must be 'pull' or 'push', got '$PEER_ROLE'" >&2; exit 2 ;;
 esac
+# REV-20260802-033 slice 5 (F1): --mode is the alternative to
+# --peer-datasets for a pull relationship -- named datasets is the expert
+# path (the operator already knows the source's ZFS layout), --mode is the
+# high-level one (discovery happens later, on the peer, via --draft-scope/
+# --commit-scope -- slice 4). The two describe mutually exclusive ways of
+# reaching the same field in the package, so combining them is refused
+# rather than silently preferring one.
+if [ -n "$PEER_MODE" ]; then
+    case "$PEER_MODE" in
+        backup|sync) ;;
+        *) echo "--mode must be 'backup' or 'sync', got '$PEER_MODE'" >&2; exit 2 ;;
+    esac
+    [ "$PEER_ROLE" = "pull" ] \
+        || { echo "--mode only applies to --role=pull -- a push peer's operator already names its own datasets with --peer-datasets" >&2; exit 2; }
+    [ -z "$PEER_DATASETS" ] \
+        || { echo "--mode and --peer-datasets are mutually exclusive -- --mode defers dataset selection to the peer (--draft-scope/--commit-scope); --peer-datasets names it here directly. Pick one" >&2; exit 2; }
+    if [ "$PEER_MODE" = "sync" ] && [ -n "$PEER_TARGET" ]; then
+        echo "--mode=sync cannot be combined with --target -- sync reproduces source paths at the SAME paths on this host, so there is no separate target root to name (F3)" >&2; exit 2
+    fi
+fi
 case "$PEER_AS" in
     root|delegated) ;;
     *) echo "--as must be 'root' or 'delegated', got '$PEER_AS'" >&2; exit 2 ;;
@@ -687,7 +728,7 @@ parse_peer_conf() {
         val="${line#*=}"
         case "$key" in
             PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
-            PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL) ;;
+            PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL) ;;
             *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
         esac
         [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
@@ -706,8 +747,8 @@ parse_peer_conf() {
 }
 
 validate_peer_conf() {
-    local k ds
-    for k in PEER_CONF_ROLE PEER_CONF_TARGET PEER_CONF_ACCOUNT PEER_CONF_AS \
+    local k ds mode
+    for k in PEER_CONF_ROLE PEER_CONF_ACCOUNT PEER_CONF_AS \
              PEER_CONF_INITIATOR_LABEL; do
         [ -n "${PC[$k]:-}" ] || die "peer.conf is missing $k (or it is empty) -- not a valid wsad"
     done
@@ -719,8 +760,40 @@ validate_peer_conf() {
         root|delegated) ;;
         *) die "peer.conf PEER_CONF_AS='${PC[PEER_CONF_AS]}' -- must be 'root' or 'delegated'" ;;
     esac
-    pc_is_dataset "${PC[PEER_CONF_TARGET]}" \
-        || die "peer.conf PEER_CONF_TARGET='${PC[PEER_CONF_TARGET]}' is not a valid ZFS dataset name"
+
+    # REV-20260802-033 slice 5 (F1): PEER_CONF_MODE is the alternative to a
+    # named dataset list for a pull relationship -- validated before the
+    # target/dataset rules below, since it decides what those rules require.
+    # A package that predates this slice has no such key at all
+    # (parse_peer_conf leaves PC[PEER_CONF_MODE] unset), so mode="" and every
+    # rule below falls through to the exact behaviour this replaces.
+    mode="${PC[PEER_CONF_MODE]:-}"
+    if [ -n "$mode" ]; then
+        case "$mode" in
+            backup|sync) ;;
+            *) die "peer.conf PEER_CONF_MODE='$mode' -- must be 'backup' or 'sync'" ;;
+        esac
+        [ "${PC[PEER_CONF_ROLE]}" = "pull" ] \
+            || die "peer.conf PEER_CONF_MODE='$mode' with PEER_CONF_ROLE='${PC[PEER_CONF_ROLE]}' -- mode only applies to a pull relationship"
+        [ -z "${PC[PEER_CONF_DATASETS]:-}" ] \
+            || die "peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS -- these are alternative ways of choosing what to back up, and a package must use exactly one, never both"
+        if [ "$mode" = "sync" ] && [ -n "${PC[PEER_CONF_TARGET]:-}" ]; then
+            die "peer.conf PEER_CONF_MODE='sync' but PEER_CONF_TARGET='${PC[PEER_CONF_TARGET]}' is set -- sync reproduces source paths at the same paths on the collector, so a package must not carry a target for it"
+        fi
+    fi
+
+    # Target is required unless mode already decided its shape: sync forbids
+    # it above, backup leaves it to the collector's own default (resolved
+    # before --pair ever runs, per F1) -- this is the one field whose
+    # requirement genuinely depends on mode, everything else below is
+    # unchanged from before this slice.
+    if [ -z "$mode" ]; then
+        [ -n "${PC[PEER_CONF_TARGET]:-}" ] || die "peer.conf is missing PEER_CONF_TARGET (or it is empty) -- not a valid wsad"
+    fi
+    if [ -n "${PC[PEER_CONF_TARGET]:-}" ]; then
+        pc_is_dataset "${PC[PEER_CONF_TARGET]}" \
+            || die "peer.conf PEER_CONF_TARGET='${PC[PEER_CONF_TARGET]}' is not a valid ZFS dataset name"
+    fi
     pc_is_account "${PC[PEER_CONF_ACCOUNT]}" \
         || die "peer.conf PEER_CONF_ACCOUNT='${PC[PEER_CONF_ACCOUNT]}' is not a valid account name (this string is passed to useradd)"
     pc_is_label "${PC[PEER_CONF_INITIATOR_LABEL]}" \
@@ -732,8 +805,8 @@ validate_peer_conf() {
     for ds in ${PC[PEER_CONF_DATASETS]:-}; do
         pc_is_dataset "$ds" || die "peer.conf PEER_CONF_DATASETS contains '$ds', which is not a valid ZFS dataset name"
     done
-    if [ "${PC[PEER_CONF_ROLE]}" = "pull" ] && [ -z "${PC[PEER_CONF_DATASETS]:-}" ]; then
-        die "peer.conf declares role=pull but lists no datasets -- there would be nothing to delegate"
+    if [ "${PC[PEER_CONF_ROLE]}" = "pull" ] && [ -z "${PC[PEER_CONF_DATASETS]:-}" ] && [ -z "$mode" ]; then
+        die "peer.conf declares role=pull but lists no datasets and no mode -- there would be nothing to delegate (either --peer-datasets=\"...\" or --mode=backup|sync is required)"
     fi
 }
 
@@ -931,7 +1004,7 @@ do_join_check() {
     printf '  %-26s %s
 ' "sha256" "${PKG_SHA256:-?}"
     local k
-    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_ACCOUNT PEER_CONF_TARGET              PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
+    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_MODE PEER_CONF_ACCOUNT PEER_CONF_TARGET              PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
         printf '  %-26s %s
 ' "$k" "${PC[$k]:-}"
     done
@@ -3165,25 +3238,27 @@ do_pair() {
         PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
         PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
         PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
+        PEER_MODE="${PEER_SAVED_MODE:-$PEER_MODE}"
         [ -n "$PEER_DATASETS" ] || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
         [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
         [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
     else
         if [ -r "$mpath" ]; then
-            # Re-pairing an existing relationship. Role/target/account-mode are
-            # identity-defining for this relationship and must NOT silently
-            # drift back to CLI defaults just because this invocation didn't
-            # repeat them -- --role/--as default to "pull"/"delegated" whether
-            # or not the admin typed them, so there is no way to tell "typed
-            # the default" from "didn't type it at all". The saved manifest
-            # always wins for these three; only the dataset list is allowed to
-            # change here (additively, see below).
+            # Re-pairing an existing relationship. Role/target/account-mode/
+            # peer-mode are identity-defining for this relationship and must
+            # NOT silently drift back to CLI defaults just because this
+            # invocation didn't repeat them -- --role/--as default to
+            # "pull"/"delegated" whether or not the admin typed them, so
+            # there is no way to tell "typed the default" from "didn't type
+            # it at all". The saved manifest always wins for these four; only
+            # the dataset list is allowed to change here (additively, below).
             local requested_datasets="$PEER_DATASETS"
             # shellcheck disable=SC1090
             . "$mpath"
             PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
             PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
+            PEER_MODE="${PEER_SAVED_MODE:-$PEER_MODE}"
             [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
             # --local-user and --port are operational, not identity-defining
             # (which account runs cron here, and which port sshd listens on,
@@ -3196,8 +3271,18 @@ do_pair() {
                 log "(additive only on the --join side -- nothing already granted is ever revoked automatically)"
             fi
         else
-            [ -n "$PEER_DATASETS" ] || die "--pair requires --peer-datasets=\"...\""
-            [ -n "$PEER_TARGET" ] || die "--pair requires --target=DATASET"
+            if [ -n "$PEER_MODE" ]; then
+                # F1: the whole point is that the collector operator does not
+                # have to name the source's datasets. --target is likewise not
+                # required here for mode=backup -- "inherits the server
+                # default target" (F1) is the wrapper's job (zfs-backup.sh's
+                # own DEFAULT_TARGET), resolved before it ever calls
+                # deploy.sh; --mode=sync already refused a --target above.
+                :
+            else
+                [ -n "$PEER_DATASETS" ] || die "--pair requires --peer-datasets=\"...\" (or --mode=backup|sync for a high-level relationship that defers dataset selection to the peer)"
+                [ -n "$PEER_TARGET" ] || die "--pair requires --target=DATASET"
+            fi
         fi
     fi
 
@@ -3290,6 +3375,7 @@ PEER_SAVED_ROLE=$PEER_ROLE
 PEER_SAVED_DATASETS="$PEER_DATASETS"
 PEER_SAVED_TARGET=$PEER_TARGET
 PEER_SAVED_AS=$PEER_AS
+PEER_SAVED_MODE=$PEER_MODE
 PEER_SAVED_ACCOUNT=$proposed_account
 PEER_SAVED_PORT=$PEER_PORT
 PEER_SAVED_LOCAL_USER=$PEER_LOCAL_USER
@@ -3307,6 +3393,7 @@ PEER_CONF_ROLE=$PEER_ROLE
 PEER_CONF_DATASETS="$PEER_DATASETS"
 PEER_CONF_TARGET=$PEER_TARGET
 PEER_CONF_AS=$PEER_AS
+PEER_CONF_MODE=$PEER_MODE
 PEER_CONF_ACCOUNT=$proposed_account
 PEER_CONF_PORT=$PEER_PORT
 PEER_CONF_INITIATOR_LABEL=$my_label
@@ -3455,6 +3542,7 @@ do_join() {
 # peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
 PEER_JOIN_ROLE="$PEER_CONF_ROLE"
 PEER_JOIN_AS="$PEER_CONF_AS"
+PEER_JOIN_MODE="$PEER_CONF_MODE"
 PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
 PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
@@ -3466,6 +3554,9 @@ EOF
     log "===================================================================="
     log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
     if [ "$PEER_CONF_AS" != "root" ] && [ "$PEER_CONF_ROLE" = "pull" ]; then
+        if [ -n "$PEER_CONF_MODE" ]; then
+            log "Tryb '$PEER_CONF_MODE' -- brak listy datasetow w paczce (F1: wybor po stronie zrodla)."
+        fi
         log "Brak grantow ZFS -- utworz $(peer_scope_path "$label"), edytuj, potem: ./deploy.sh --commit-scope=$label"
     fi
     log "Zadne linie crona NIE zostaly dodane -- to pozostaje reczne, jak w Czesci 5."
