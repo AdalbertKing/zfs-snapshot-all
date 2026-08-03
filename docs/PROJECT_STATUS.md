@@ -798,8 +798,9 @@ czterech hostach w obu formach hosta.
   auto-update, linia capacity) trafiły na wciąż zapauzowany blok i zostały
   poprawnie odrzucone, zanim resume je przywrócił chwilę później —
   dokładnie scenariusz „forced interleaving" z recenzji, tyle że w jednym
-  wywołaniu zamiast dwóch procesów. `sudo ./test/scenarios/run.sh` (wymaga
-  roota i puli ZFS) — nie uruchomiony.
+  wywołaniu zamiast dwóch procesów. `sudo ./test/scenarios/run.sh`
+  uruchomiony tego samego dnia na pve2 — **34/34**, scratch dataset
+  posprzątany przez własny EXIT trap suity.
   Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
