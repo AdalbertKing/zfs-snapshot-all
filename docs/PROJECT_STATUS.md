@@ -813,6 +813,12 @@ czterech hostach w obu formach hosta.
   ma i nigdy nie miał `/root/.zfs-snapshot-all-pause-state` (funkcja nigdy
   nie była użyta produkcyjnie przed tą sesją) — shim migracyjny świadomie
   odrzucony jako złożoność dla przypadku, który nigdy się nie zdarzył.
+  **Atomowa pauza całej floty (root+konto razem) świadomie odrzucona**:
+  nigdy nie wymagana przez recenzję (kryteria F2 są sformułowane per-user),
+  dziś nigdy nie cicha (każda tożsamość zgłasza swój błąd po imieniu), a
+  jedyny osiągalny stan mieszany po przebudowie F2 to "jedna strona
+  zapauzowana, druga nie" — nie częściowa korupcja. `cron_lock_acquire_multi`
+  zostaje nieużywany, gdyby przyszły incydent zmienił ten osąd.
   Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
