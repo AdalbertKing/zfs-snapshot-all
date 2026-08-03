@@ -8,19 +8,35 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterku 2, po REV-035 i po ad hoc `--pause`/`--resume` poza kolejką
-  recenzji, w tym przeróbka na tryb blokowy)
+  plasterku 2, po REV-035, po REV-036 w całości, i po ad hoc
+  `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na tryb blokowy)
 - Zweryfikowano przeciw: `f6f4ce3` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `f6f4ce3` — `deploy.sh
-  --pause`/`--resume` domyślnie zatrzymuje TYLKO bloki tego pakietu
-  (zakomentowanie ciała bloku w miejscu, markery `lib-cron.sh`), zamiast
-  całego crontaba; `--fullcron` przywraca dawne zamiatanie całego crontaba
-  dla usera, gdy operator naprawdę chce zatrzymać wszystko; `--resume` sam
-  rozpoznaje tryb, w którym dany user został zapauzowany; wcześniej
-  `54de481` — pierwsza wersja `--pause`/`--resume` (tylko tryb pełnego
-  crontaba), zbudowana na zamku `lib-cron.sh`;
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260803-036** —
+  `--pause`/`--resume` z durable-transaction hardeningiem: zapis stanu
+  `--fullcron` jest teraz durable PRZED zamianą crontaba (kolejność
+  odwrócona, atomowy rename, rollback stanu przy nieudanym zapisie
+  crontaba — F1); dokładny bajtowy placeholder zapisany obok stanu i
+  porównywany bajt-po-bajcie przy `--resume` zamiast `grep` po podłańcuchu
+  (F3); tryb blokowy renderuje wszystkie bloki lokalnie i commituje JEDNYM
+  zapisem przez `cron_replace_all_impl`, więc częściowa pauza/resume nie
+  jest już możliwa (F2); jawny rejestr `PAUSE_KNOWN_BLOCKS` — blok
+  wyglądający syntaktycznie jak nasz (np. cudzy `certbot`) nigdy nie jest
+  dotykany (F4); `lib-cron.sh` sam rozpoznaje zapauzowany kształt
+  (`cron_paused_guard`) i odmawia KAŻDEMU zwykłemu pisarzowi
+  (`cron_block_install`/`ensure_line`/`adopt_line`, czyli też
+  `gen-cron.sh --install`) nadpisania go, więc pauza przeżywa zwykły zapis
+  wykonany po jej zakończeniu, nie tylko zapis współbieżny (F5). `pause`
+  **74/74** (+25). Odpowiedź:
+  `docs/reviews/responses/REV-20260803-036.md`. Wcześniej `f6f4ce3` —
+  `deploy.sh --pause`/`--resume` domyślnie zatrzymuje TYLKO bloki tego
+  pakietu (zakomentowanie ciała bloku w miejscu, markery `lib-cron.sh`),
+  zamiast całego crontaba; `--fullcron` przywraca dawne zamiatanie całego
+  crontaba dla usera, gdy operator naprawdę chce zatrzymać wszystko;
+  `--resume` sam rozpoznaje tryb, w którym dany user został zapauzowany;
+  wcześniej `54de481` — pierwsza wersja `--pause`/`--resume` (tylko tryb
+  pełnego crontaba), zbudowana na zamku `lib-cron.sh`;
   wcześniej `9e977f6` — `CRON_LOCK_DIR` to teraz jeden stały katalog bez
   fallbacku zależnego od wywołującego (REV-035); wcześniej `4190d83` —
   `--join` (peer pull) nie nadaje już żadnych uprawnień
@@ -460,7 +476,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `zfsbackup` | **211/211** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **54/54** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2) |
-| `pause` | **49/49** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej. `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem. `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona |
+| `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
 pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
@@ -739,6 +755,33 @@ czterech hostach w obu formach hosta.
   prawdziwym produkcyjnym bloku — wszystkie cztery hosty migrowały się na
   kodzie sprzed F3.
   Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
+- **REV-20260803-036** — **CHANGES REQUIRED, ZROBIONE** (ten commit): pauza
+  była tekstowym konwenansem, nie transakcją. Pięć findingów P1, wszystkie
+  ACCEPTED/IMPLEMENTED: `--fullcron` zamieniał crontab PRZED durable
+  zapisem stanu resume (F1, kolejność odwrócona + atomowy rename + rollback
+  stanu przy nieudanym zapisie crontaba); tryb blokowy commitował blok po
+  bloku, więc częściowy sukces zwracał `rc=0` (F2, teraz jeden render
+  lokalny + jeden zapis przez `cron_replace_all_impl`); `--resume` sprawdzał
+  obecność markera przez `grep`, nie dokładny kształt, więc placeholder z
+  dopisaną linią cichо gubił tę linię (F3, teraz bajt-po-bajcie przeciw
+  zapisanemu placeholderowi); `cron_block_names_present` traktowało KAŻDY
+  syntaktycznie poprawny `# BEGIN name` jako nasz (F4, teraz jawny rejestr
+  `PAUSE_KNOWN_BLOCKS`); i najważniejsze — pauza nie była egzekwowana przez
+  wspólnego pisarza, więc zwykły `gen-cron.sh --install` (albo
+  `cron_block_ensure_line`/`adopt_line`) mógł po cichu odtworzyć aktywny
+  blok zaraz po tym, jak `--pause` zgłosiło sukces (F5, teraz
+  `cron_paused_guard` w `lib-cron.sh` odmawia KAŻDEMU zwykłemu pisarzowi).
+  Markery pauzy przeniesione z `deploy.sh` do `lib-cron.sh` jako
+  `CRON_PAUSE_*` — jeden kanoniczny właściciel dla wszystkich trzech
+  programów, które piszą crontaba. `pause` **74/74** (+25 nowych testów,
+  sekcje O–V), pełen graf `./test/impact.sh`: **665/665** bez błędów
+  (`cron` 123, `run.sh` 56, `join` 54, `quiescehelper` 119, `selfupdate`
+  28, `zfsbackup` 211). **Nie sprawdzone tutaj:** żywy host (funkcja jest
+  eksperymentalna, nigdy nie użyta produkcyjnie — ryzyko niskie, ale
+  zalecana jedna weryfikacja `deploy.sh --self-update` + diff crontaba na
+  żywym hoście przy najbliższej okazji); `sudo ./test/scenarios/run.sh`
+  (wymaga roota i puli ZFS). Odpowiedź:
+  `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
   `CRON_LOCK_DIR` = `/run` jeśli zapisywalny, inaczej `$TMPDIR`/`/tmp` — root
