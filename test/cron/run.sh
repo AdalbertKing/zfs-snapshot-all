@@ -637,6 +637,53 @@ check "S4 a multi-lock that cannot complete: refused" "1" "$rc"
 h1=$([ -n "${CRON_LOCK_FD[aaa-user]:-}" ] && echo 1 || echo 0)
 check "S5 ...and the one it DID get is released, not leaked" "0" "$h1"
 
+# ---- T. cron_replace_all: the whole-crontab primitive for F3 ---------------
+#
+# migrate-to-account's intermediate states are not one named block -- "root's
+# whole crontab minus its collector block" and "the account's whole crontab
+# restored to what it was" -- so it needs a primitive that replaces
+# everything, still through the shared lock and the shared read-back, and
+# still refusing a target whose markers are malformed (F4): installing an
+# already-broken layout would make the FIRST ordinary block write after it
+# guess where somebody else's lines start.
+seed '# old content' '1 * * * * old-job'
+printf '%s\n' '# new content' '2 * * * * new-job' > "$TMPD/replace-in"
+cron_replace_all "$ME" "$TMPD/replace-in"
+check "T1 rc" "0" "$?"
+check "T2 the crontab is exactly the given file" "0" \
+      "$(diff -q "$TMPD/replace-in" "$(tab)" >/dev/null; echo $?)"
+
+# Read-back still catches a lying crontab(1) -- this primitive is not a
+# shortcut around the write/read-back path, it is the same path.
+CRONTAB_MODE=liar
+printf '%s\n' '3 * * * * liar-job' > "$TMPD/replace-in2"
+cron_replace_all "$ME" "$TMPD/replace-in2"
+rc=$?
+CRONTAB_MODE=ok
+check "T3 a write that stores something else is a failure" "1" "$rc"
+case "$CRON_ERR" in *"reading it back gave something else"*) ok "T4 ...named exactly" ;;
+  *) bad "T4 ...named exactly" "$CRON_ERR" ;; esac
+
+# F4's guarantee extends here: a target crontab with malformed markers is
+# refused rather than installed, because the NEXT ordinary block write would
+# inherit a layout it cannot safely reason about.
+printf '%s\n' '# BEGIN zfs-backup-host' 'a' '# BEGIN zfs-backup-managed' 'b' '# END zfs-backup-managed' > "$TMPD/replace-bad"
+before=$(cat "$(tab)")
+cron_replace_all "$ME" "$TMPD/replace-bad"
+check "T5 a target with malformed markers is refused" "1" "$?"
+case "$CRON_ERR" in *"nest or overlap"*) ok "T6 ...named as a marker problem" ;;
+  *) bad "T6 ...named as a marker problem" "$CRON_ERR" ;; esac
+check "T7 ...and nothing was written" "0" \
+      "$(diff -q <(printf '%s\n' "$before") "$(tab)" >/dev/null; echo $?)"
+
+# An unreadable source file is refused before anything is touched.
+before=$(cat "$(tab)")
+cron_replace_all "$ME" "$TMPD/does-not-exist"
+check "T8 an unreadable source file is refused" "1" "$?"
+check "T9 ...and the crontab is untouched" "0" \
+      "$(diff -q <(printf '%s\n' "$before") "$(tab)" >/dev/null; echo $?)"
+
+echo "--------------------------------------------"
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

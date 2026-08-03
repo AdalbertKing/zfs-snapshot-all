@@ -1640,7 +1640,42 @@ fi
 # restore -- but the rollback tried anyway, failed for the same reason the
 # install had failed, and raised an alarm about a file that was never in danger.
 # Meanwhile the FATAL asserted a clean rollback instead of reporting one.
-RB="$WORK/rollback"; mkdir -p "$RB/bin" "$RB/home/zfs-snapshot-all"
+RB="$WORK/rollback"; mkdir -p "$RB/bin" "$RB/home/zfs-snapshot-all" "$RB/locks"
+# REV-20260802-034 F2/F3: migrate-to-account's crontab writes now go through
+# lib-cron.sh's per-user lock (exec {fd}>lockfile; flock -w timeout). Production
+# hosts have real flock -- deploy.sh already refuses to run without it -- but
+# this dev machine's git-bash does not carry the binary, so these bash -c
+# sandboxes need the same portable stand-in test/cron/run.sh already built:
+# mutex on the lock file's path (resolved through /proc/self/fd) via `mkdir`,
+# which is atomic on every filesystem this suite runs on. Not a
+# reimplementation of flock(2) -- just enough to prove the lock is taken and
+# released around these calls.
+if ! command -v flock >/dev/null 2>&1; then
+cat > "$RB/bin/flock" <<'EOF'
+#!/bin/bash
+mode="" timeout="" fd=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -w) timeout="$2"; shift 2 ;;
+        -u) mode="unlock"; shift ;;
+        -n) mode="${mode:-nonblock}"; shift ;;
+        -x|-s) shift ;;
+        *) fd="$1"; shift ;;
+    esac
+done
+path=$(readlink /proc/self/fd/"$fd" 2>/dev/null) || exit 1
+lockdir="${path}.lockdir"
+if [ "$mode" = unlock ]; then rmdir "$lockdir" 2>/dev/null; exit 0; fi
+if [ -z "$timeout" ]; then mkdir "$lockdir" 2>/dev/null && exit 0; exit 1; fi
+deadline=$(( $(date +%s%N) + timeout * 1000000000 ))
+while :; do
+    mkdir "$lockdir" 2>/dev/null && exit 0
+    [ "$(date +%s%N)" -ge "$deadline" ] && exit 1
+    sleep 0.05
+done
+EOF
+chmod +x "$RB/bin/flock"
+fi
 cat > "$RB/jobs.conf" <<'EOF'
 [template:t]
 	send_schedule = 1 * * * *
@@ -1652,6 +1687,20 @@ cat > "$RB/rendered.txt" <<'EOF'
 7 * * * * /home/zfsbackup/zfs-snapshot-all/snapsend.sh -m "x_" "tank/a" 2>>/home/zfsbackup/cron.log
 # END zfs-backup-managed
 EOF
+# STATEFUL, not a fixed echo: cron_replace_all's write goes through
+# lib-cron.sh's cron_write, which reads back after writing to catch a lying
+# crontab(1) -- a stub that always echoes the same seeded text regardless of
+# what was written would make every write look like a lie. root's crontab
+# lives in a file and reflects whatever was last installed into it; the
+# account side stays a fixed empty answer, since gencron_as_target is stubbed
+# below to fail before it would ever touch the account's real crontab.
+cat > "$RB/root.cron" <<EOF
+# BEGIN zfs-backup-managed
+# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "x_" "tank/a" 2>>/root/scripts/cron.log
+0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log
+# END zfs-backup-managed
+EOF
 cat > "$RB/bin/crontab" <<EOF
 #!/bin/bash
 if [ "\$1" = "-u" ]; then
@@ -1659,14 +1708,11 @@ if [ "\$1" = "-u" ]; then
     exit 0
 fi
 if [ "\$1" = "-l" ]; then
-    echo "# BEGIN zfs-backup-managed"
-    echo "# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
-    echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"x_\" \"tank/a\" 2>>/root/scripts/cron.log"
-    echo "0 7 * * * /root/scripts/alert-digest.sh 2>>/root/scripts/cron.log"
-    echo "# END zfs-backup-managed"
+    cat "$RB/root.cron"
     exit 0
 fi
-exit 0    # writing root's crontab succeeds
+cat "\$1" > "$RB/root.cron"
+exit 0
 EOF
 cat > "$RB/bin/getent" <<EOF
 #!/bin/bash
@@ -1690,7 +1736,7 @@ chmod +x "$RB/bin/crontab" "$RB/bin/getent" "$RB/bin/id" "$RB/bin/zfs"
 # The account CAN read the config here, so no config move happens and the test
 # stays entirely inside the crontab logic. The render succeeds; the --install
 # fails, which is the shape the live test produced.
-out=$( PATH="$RB/bin:$PATH" bash -c "
+out=$( PATH="$RB/bin:$PATH" CRON_LOCK_DIR="$RB/locks" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
     runuser_test_x() { return 0; }
@@ -1723,21 +1769,30 @@ esac
 
 # And the opposite direction: when the rollback itself fails, the message must
 # say so instead of claiming success. Root's crontab write now fails on restore.
+# Same statefulness, and the rollback RESTORE (crontab "$rootcron", root's
+# ORIGINAL content from before the forward write) must fail this time -- the
+# scenario is "the rollback itself cannot complete". A write that fails must
+# not silently update root.cron, or the read-back a later call performs would
+# see the failed write's content instead of proving nothing changed.
+cat > "$RB/root.cron" <<EOF
+# BEGIN zfs-backup-managed
+# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "x_" "tank/a" 2>>/root/scripts/cron.log
+# END zfs-backup-managed
+EOF
 cat > "$RB/bin/crontab" <<EOF
 #!/bin/bash
 if [ "\$1" = "-u" ]; then exit 0; fi
 if [ "\$1" = "-l" ]; then
-    echo "# BEGIN zfs-backup-managed"
-    echo "# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
-    echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"x_\" \"tank/a\" 2>>/root/scripts/cron.log"
-    echo "# END zfs-backup-managed"
+    cat "$RB/root.cron"
     exit 0
 fi
-[ -n "\${MTA_FAIL_RESTORE:-}" ] && exit 1
+if [ -n "\${MTA_FAIL_RESTORE:-}" ]; then exit 1; fi
+cat "\$1" > "$RB/root.cron"
 exit 0
 EOF
 chmod +x "$RB/bin/crontab"
-out=$( PATH="$RB/bin:$PATH" bash -c "
+out=$( PATH="$RB/bin:$PATH" CRON_LOCK_DIR="$RB/locks" bash -c "
     source '$ZFSBACKUP'
     runuser_test_r() { return 0; }
     runuser_test_x() { return 0; }
@@ -1751,6 +1806,47 @@ else
     bad "rollback: a rollback that did NOT complete says so instead of claiming success" "$out"
 fi
 
+# ---- 25b. F3: root's own crontab write goes through the shared, verified path
+#
+# REV-20260802-034 F3. Before this, migrate-to-account wrote root's crontab
+# with a bare `crontab "$rootnew"` -- rc=0 was taken as success, full stop. If
+# crontab(1) silently stored something OTHER than what it was given (a
+# truncated write, a spool quirk), the migration would proceed believing root's
+# block was removed when it might not have been. cron_replace_all's read-back
+# now catches exactly that, on the very first mutation of the transaction.
+cat > "$RB/root.cron" <<EOF
+# BEGIN zfs-backup-managed
+# Source: $RB/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m "x_" "tank/a" 2>>/root/scripts/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$RB/bin/crontab" <<EOF
+#!/bin/bash
+if [ "\$1" = "-u" ]; then exit 0; fi
+if [ "\$1" = "-l" ]; then cat "$RB/root.cron"; exit 0; fi
+cat "\$1" > "$RB/root.cron"
+echo "# tampered by crontab(1)" >> "$RB/root.cron"
+exit 0
+EOF
+chmod +x "$RB/bin/crontab"
+out=$( PATH="$RB/bin:$PATH" CRON_LOCK_DIR="$RB/locks" bash -c "
+    source '$ZFSBACKUP'
+    runuser_test_r() { return 0; }
+    runuser_test_x() { return 0; }
+    gencron_as_target() { cat '$RB/rendered.txt'; }
+    cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"could not write root's crontab"*) true ;; *) false ;; esac \
+   && case "$out" in *"reading it back gave something else"*) true ;; *) false ;; esac; then
+    ok "F3: a root crontab write that reads back wrong is refused, not accepted on rc=0"
+else
+    bad "F3: a root crontab write that reads back wrong is refused, not accepted on rc=0" "rc=$rc out=$out"
+fi
+# Nothing else was attempted: the account was never touched, no config move
+# survives, because this is the FIRST mutation of the transaction.
+case "$out" in
+    *"nothing else was attempted"*) ok "F3: ...and nothing else in the transaction was attempted" ;;
+    *) bad "F3: ...and nothing else in the transaction was attempted" "$out" ;;
+esac
 
 # --- 26. an install must not delete jobs the target runs today --------------
 #
@@ -2575,7 +2671,7 @@ sur=$(grep -c 'capability_survey "\$acct" "\$newblock"' "$ZFSBACKUP")
 
 # It must sit BEFORE the first crontab write, or it is not a guard.
 lsur=$(grep -n 'if ! capability_survey "\$acct" "\$newblock"; then' "$ZFSBACKUP" | cut -d: -f1)
-lcron=$(grep -n 'if ! crontab "\$rootnew"; then' "$ZFSBACKUP" | cut -d: -f1)
+lcron=$(grep -n 'if ! cron_replace_all root "\$rootnew"; then' "$ZFSBACKUP" | cut -d: -f1)
 if [ -n "$lsur" ] && [ -n "$lcron" ] && [ "$lsur" -lt "$lcron" ]; then
     ok "second-look: it runs before the first crontab is written"
 else

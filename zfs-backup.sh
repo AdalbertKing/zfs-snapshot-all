@@ -2504,14 +2504,14 @@ cmd_migrate_to_account() {
         MTA_ROLLBACK_OK=1
         warn "rolling back"
         if [ "$did_root" -eq 1 ]; then
-            if crontab "$rootcron"; then warn "  root's crontab restored"
-            else warn "  ROOT CRONTAB NOT RESTORED -- restore by hand from $rootcron"; MTA_ROLLBACK_OK=0; fi
+            if cron_replace_all root "$rootcron"; then warn "  root's crontab restored"
+            else warn "  ROOT CRONTAB NOT RESTORED ($CRON_ERR) -- restore by hand from $rootcron"; MTA_ROLLBACK_OK=0; fi
         else
             warn "  root's crontab was never written"
         fi
         if [ "$did_acct" -eq 1 ]; then
-            if crontab -u "$acct" "$acctcron"; then warn "  '$acct' crontab restored"
-            else warn "  '$acct' CRONTAB NOT RESTORED -- restore by hand from $acctcron"; MTA_ROLLBACK_OK=0; fi
+            if cron_replace_all "$acct" "$acctcron"; then warn "  '$acct' crontab restored"
+            else warn "  '$acct' CRONTAB NOT RESTORED ($CRON_ERR) -- restore by hand from $acctcron"; MTA_ROLLBACK_OK=0; fi
         else
             warn "  '$acct' crontab was never written"
         fi
@@ -2547,9 +2547,24 @@ cmd_migrate_to_account() {
         die "the capabilities checked in the preflight are NOT all there now, so the block would move to an account that cannot run it (listed above). Neither crontab was written; the config is back where it was."
     fi
 
-    if ! crontab "$rootnew"; then
+    # REV-20260802-034 F3: through the shared writer, not a bare `crontab`.
+    #
+    # This is NOT wrapped in a lock spanning the whole transaction (root's
+    # write, then the account's install, then verify) even though both touch
+    # crontabs the same run cares about -- that design was sketched in the
+    # F2 response and is wrong. gencron_as_target below spawns gen-cron.sh as
+    # a SEPARATE PROCESS, and since REV-034 F2 it acquires the account's OWN
+    # lock to install its block. Holding that same lock here, in the PARENT,
+    # while WAITING for the child to finish would be a self-inflicted
+    # deadlock: the child blocks on a lock the parent holds, and the parent
+    # is blocked on the child. Each mutation is therefore its own locked,
+    # verified operation -- root's replace here, the account's install via
+    # gen-cron.sh's already-locked path, and a rollback restore of either
+    # side through cron_replace_all again -- sequenced by did_root/did_acct
+    # exactly as before, not by a lock held across the gap between them.
+    if ! cron_replace_all root "$rootnew"; then
         [ "$needs_move" -eq 1 ] && mv -f "$target_cfg" "$cfg"
-        LOCAL_USER=""; die "could not write root's crontab -- nothing else was attempted and root still runs its block"
+        LOCAL_USER=""; die "could not write root's crontab ($CRON_ERR) -- nothing else was attempted and root still runs its block"
     fi
     did_root=1
     log "root's collector block removed; host-level lines kept in their own block"
