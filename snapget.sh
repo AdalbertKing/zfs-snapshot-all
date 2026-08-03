@@ -1294,7 +1294,14 @@ process_dataset() {
                 abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
                 return 1
             fi
-            local written; written=$(zfs get -H -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
+            # REV-20260804-037/038 campaign: found live -- `zfs get` without
+            # -p human-formats size properties ("0B", "1.5K"), but this
+            # compares against the plain string "0". A genuinely undiverged
+            # target ("0B") therefore never matched "0" and was refused
+            # anyway -- the exact false-positive shape of the bug this whole
+            # gate exists to avoid, just triggered by string formatting
+            # instead of a real divergence. -p forces raw, parsable bytes.
+            local written; written=$(zfs get -Hp -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
             if [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
                     log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
