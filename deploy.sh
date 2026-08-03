@@ -1830,6 +1830,15 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     else
         warn "  $ALERT_SHARED_DIR missing -- alert queue would fall back to a root-only path"
     fi
+    # REV-20260803-035: lib-cron.sh's lock directory needs the identical
+    # treatment and for the identical reason -- root and the delegated account
+    # both write managed crontabs, and a lock only two identities can each
+    # reach is not a lock.
+    if [ -d "$CRON_LOCK_DIR" ]; then
+        log "  $CRON_LOCK_DIR present ($(stat -c '%a %U:%G' "$CRON_LOCK_DIR"))"
+    else
+        warn "  $CRON_LOCK_DIR missing -- lib-cron.sh would refuse every crontab write until this is created"
+    fi
 else
     getent group "$ALERT_GROUP" >/dev/null || { groupadd --system "$ALERT_GROUP" && log "created group $ALERT_GROUP"; }
     mkdir -p "$ALERT_SHARED_DIR/notify-state"
@@ -1838,6 +1847,17 @@ else
     # writable by the other account no matter which one created it.
     chmod 2775 "$ALERT_SHARED_DIR" "$ALERT_SHARED_DIR/notify-state"
     log "shared alert dir $ALERT_SHARED_DIR (2775 root:$ALERT_GROUP)"
+
+    # REV-20260803-035: one fixed, persistent, root:zfsalert lock directory --
+    # NOT /run (tmpfs, and a writability-based fallback is exactly the bug
+    # this replaces). Root and the delegated account (added to $ALERT_GROUP
+    # by Phase 8 below) both resolve and can write to this exact path, so a
+    # lock keyed by target user is finally a lock shared by whoever might
+    # write that user's crontab, not one namespace per caller.
+    mkdir -p "$CRON_LOCK_DIR"
+    chgrp "$ALERT_GROUP" "$CRON_LOCK_DIR"
+    chmod 2775 "$CRON_LOCK_DIR"
+    log "shared cron lock dir $CRON_LOCK_DIR (2775 root:$ALERT_GROUP)"
 fi
 
 # ------------------------------------------------------------------------------
@@ -3785,7 +3805,7 @@ elif [ "$CHECK_ONLY" -eq 1 ]; then
     if id "$BACKUP_USER" >/dev/null 2>&1; then
         log "  account $BACKUP_USER exists"
         id -nG "$BACKUP_USER" | tr ' ' '
-' | grep -qx "zfsalert" || warn "  $BACKUP_USER not in group zfsalert -- it could not queue alerts"
+' | grep -qx "zfsalert" || warn "  $BACKUP_USER not in group zfsalert -- it could not queue alerts, and lib-cron.sh would refuse to lock its own crontab (REV-20260803-035)"
         [ -x "/home/$BACKUP_USER/notify-fail.sh" ] || warn "  /home/$BACKUP_USER/notify-fail.sh missing -- that account cannot report findings"
         [ -f "/etc/logrotate.d/zfs-snapshot-all-$BACKUP_USER" ] || warn "  no logrotate stanza for $BACKUP_USER"
     else

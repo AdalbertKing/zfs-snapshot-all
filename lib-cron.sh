@@ -109,8 +109,24 @@ cron_is_self() {   # <user>
 # has an internal *_impl that does the real work UNLOCKED, and only the
 # outermost public call opens the lock: cron_block_adopt_line's wrapper calls
 # cron_block_ensure_line_impl directly, never the locked cron_block_ensure_line.
-CRON_LOCK_DIR="${CRON_LOCK_DIR:-/run}"
-[ -d "$CRON_LOCK_DIR" ] && [ -w "$CRON_LOCK_DIR" ] || CRON_LOCK_DIR="${TMPDIR:-/tmp}"
+# REV-20260803-035. This used to be `${CRON_LOCK_DIR:-/run}`, then fall back to
+# $TMPDIR/tmp if /run was not WRITABLE -- which sounds like a reasonable
+# default until two different identities write the SAME target user's
+# crontab: root can create files under /run, a delegated account normally
+# cannot, so root locked /run/lib-cron.<user>.lock while the account's own
+# gen-cron.sh locked /tmp/lib-cron.<user>.lock. Two different lock objects
+# guarding one crontab is not a lock, and it silently reopened the exact F2
+# race this file exists to close -- caught because F2's own contention tests
+# (section P below) pass CRON_LOCK_DIR identically to both sides of the test,
+# so they could not see two real identities diverge.
+#
+# The fix is one fixed, persistent, deploy-managed directory and NO caller-local
+# fallback of any kind: every identity that can legitimately write a managed
+# crontab (root, and the delegated account deploy.sh's Phase 4/8 put in group
+# zfsalert) can create files here, via the same 2775 root:zfsalert treatment
+# already used for ALERT_SHARED_DIR -- see deploy.sh's Phase 4. If it is ever
+# missing or unwritable, that is refused, not silently redirected elsewhere.
+CRON_LOCK_DIR="${CRON_LOCK_DIR:-/var/lib/zfs-snapshot-all/locks}"
 CRON_LOCK_TIMEOUT="${CRON_LOCK_TIMEOUT:-10}"
 declare -gA CRON_LOCK_FD=()
 
@@ -124,7 +140,18 @@ cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
         CRON_ERR="the crontab lock for '$user' is already held by this process -- that is a bug in the caller, not lock contention"
         return 1
     fi
+    if [ ! -d "$CRON_LOCK_DIR" ] || [ ! -w "$CRON_LOCK_DIR" ]; then
+        CRON_ERR="the shared lock directory $CRON_LOCK_DIR is missing or not writable by $(id -un 2>/dev/null || echo '?') -- refusing to write rather than silently choosing a different lock namespace another writer would not share. Run deploy.sh to (re)create it (2775 root:zfsalert)."
+        return 1
+    fi
     path=$(cron_lock_path "$user")
+    # A predictable path in a directory writable by more than one identity is
+    # exactly where a symlink could be pre-planted to redirect the write below
+    # at whatever it points to. Refuse rather than open through one.
+    if [ -L "$path" ]; then
+        CRON_ERR="$path is a symlink -- refusing to lock through it"
+        return 1
+    fi
     # A bare `exec` with no command applies ALL of its redirections to the
     # current shell PERMANENTLY, not just to this statement -- so a trailing
     # `2>/dev/null` here doesn't scope to the exec attempt, it silently and

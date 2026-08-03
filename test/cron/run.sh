@@ -683,6 +683,100 @@ check "T8 an unreadable source file is refused" "1" "$?"
 check "T9 ...and the crontab is untouched" "0" \
       "$(diff -q <(printf '%s\n' "$before") "$(tab)" >/dev/null; echo $?)"
 
+# ---- U. the lock path is a pure function of the target user, never of the
+# caller's identity or environment (REV-20260803-035) --------------------------
+#
+# F2's own contention tests above (P/Q/R/S) all pass CRON_LOCK_DIR identically
+# to both sides of the test, so none of them could have caught this: the OLD
+# default was `${CRON_LOCK_DIR:-/run}`, falling back to $TMPDIR/tmp if /run
+# was not WRITABLE. Root can create files under /run; a delegated account
+# normally cannot -- so in production root locked
+# /run/lib-cron.<user>.lock while the account's own gen-cron.sh, writing the
+# SAME user's crontab, locked /tmp/lib-cron.<user>.lock. Two different lock
+# objects guarding one crontab is not a lock; it silently reopened the exact
+# F2 race this file exists to close.
+#
+# The fix removes the fallback entirely: one fixed, deploy-managed directory
+# (2775 root:zfsalert, same treatment as ALERT_SHARED_DIR), and a caller that
+# cannot use it refuses rather than choosing a different namespace nobody
+# else would share.
+
+# U1: the old writability-based auto-switch is gone from the source, not just
+# bypassed by whatever CRON_LOCK_DIR a test happens to export.
+if grep -qE '\[ -d "\$CRON_LOCK_DIR" \] && \[ -w "\$CRON_LOCK_DIR" \] \|\|' "$REPO/lib-cron.sh"; then
+    bad "U1 no caller-local writability fallback left in the lock directory" "the old auto-switch pattern is still present in lib-cron.sh"
+else
+    ok "U1 no caller-local writability fallback left in the lock directory"
+fi
+
+# U2: with CRON_LOCK_DIR left unset (the real default, a fixed absolute path),
+# two callers that differ in every other way a real root-vs-account split
+# would differ -- TMPDIR, HOME -- resolve the IDENTICAL lock path for the
+# same target user. This is what the old code got wrong: the path depended on
+# who was asking. cron_lock_path is a pure string function, so this is safe
+# to check without touching the real filesystem.
+out1=$(env -u CRON_LOCK_DIR TMPDIR="$TMPD/caller-one-tmp" HOME="$TMPD/caller-one-home" \
+    bash -c "source '$REPO/lib-cron.sh'; cron_lock_path zfsbackup")
+out2=$(env -u CRON_LOCK_DIR TMPDIR="$TMPD/caller-two-tmp" HOME="$TMPD/caller-two-home" \
+    bash -c "source '$REPO/lib-cron.sh'; cron_lock_path zfsbackup")
+check "U2 two callers with different TMPDIR/HOME resolve the SAME lock path" "$out1" "$out2"
+case "$out1" in
+    /var/lib/zfs-snapshot-all/locks/*) ok "U2b ...and it is the fixed, deploy-managed path, not a per-caller guess" ;;
+    *) bad "U2b ...and it is the fixed, deploy-managed path, not a per-caller guess" "$out1" ;;
+esac
+
+# U3: a canonical directory that exists but is not writable refuses --
+# fails closed -- rather than silently falling back to $TMPDIR or /tmp. If
+# the fallback ever came back, this is the assertion that would catch it: a
+# lock acquired here would land in $TMPDIR instead of failing.
+UNWRITABLE_LOCKS="$TMPD/unwritable-locks"
+mkdir -p "$UNWRITABLE_LOCKS"
+chmod 555 "$UNWRITABLE_LOCKS" 2>/dev/null || true
+if [ -w "$UNWRITABLE_LOCKS" ]; then
+    echo "SKIP U3 this filesystem ignores 0555 for the owner -- verify on Linux"
+else
+    fallback_tmpdir="$TMPD/would-be-fallback"; mkdir -p "$fallback_tmpdir"
+    out=$(CRON_LOCK_DIR="$UNWRITABLE_LOCKS" TMPDIR="$fallback_tmpdir" bash -c "
+        source '$REPO/lib-cron.sh'
+        cron_lock_acquire someuser
+        echo \"rc=\$? err=\$CRON_ERR\"
+    ")
+    case "$out" in rc=1*) ok "U3 an unwritable canonical directory refuses (fails closed)" ;;
+      *) bad "U3 an unwritable canonical directory refuses (fails closed)" "$out" ;; esac
+    case "$out" in *"missing or not writable"*) ok "U3b ...with a diagnostic naming the real problem" ;;
+      *) bad "U3b ...with a diagnostic naming the real problem" "$out" ;; esac
+    if [ -z "$(find "$fallback_tmpdir" -type f 2>/dev/null)" ]; then
+        ok "U3c ...and nothing was created in \$TMPDIR as a silent fallback"
+    else
+        bad "U3c ...and nothing was created in \$TMPDIR as a silent fallback" "$(find "$fallback_tmpdir" -type f)"
+    fi
+fi
+chmod 755 "$UNWRITABLE_LOCKS" 2>/dev/null || true
+
+# U4: a symlink pre-planted at the exact, predictable lock path is refused,
+# not followed -- the directory is shared by more than one identity, so an
+# unlocked target here is the classic /tmp-style attack surface.
+SYMLINK_LOCKS="$TMPD/symlink-locks"; mkdir -p "$SYMLINK_LOCKS"
+SYMLINK_TARGET="$TMPD/should-not-be-touched"
+: > "$SYMLINK_TARGET"
+ln -sf "$SYMLINK_TARGET" "$SYMLINK_LOCKS/lib-cron.symuser.lock" 2>/dev/null
+if [ ! -L "$SYMLINK_LOCKS/lib-cron.symuser.lock" ]; then
+    echo "SKIP U5 this environment cannot create a real symlink without elevation (Windows/MSYS without Developer Mode) -- verify on Linux"
+    echo "SKIP U5b (same reason)"
+    echo "SKIP U5c (same reason)"
+else
+    out=$(CRON_LOCK_DIR="$SYMLINK_LOCKS" bash -c "
+        source '$REPO/lib-cron.sh'
+        cron_lock_acquire symuser
+        echo \"rc=\$? err=\$CRON_ERR\"
+    ")
+    case "$out" in rc=1*) ok "U5 a symlink at the lock path is refused" ;;
+      *) bad "U5 a symlink at the lock path is refused" "$out" ;; esac
+    case "$out" in *"symlink"*) ok "U5b ...named as a symlink, not a generic failure" ;;
+      *) bad "U5b ...named as a symlink, not a generic failure" "$out" ;; esac
+    check "U5c ...and the symlink's target is untouched" "" "$(cat "$SYMLINK_TARGET")"
+fi
+
 echo "--------------------------------------------"
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
