@@ -120,6 +120,17 @@ source "$LIBSCOPE"
 PEER_STATE_DIR="/etc/zfs-snapshot-all/peers"
 PEER_KEY_DIR="/root/.ssh/pairing"
 
+# REV-20260804-037: how the PEER names files ABOUT this collector -- the
+# scope file/hash sidecar deploy.sh's do_pair/do_join write under
+# peer_scope_path() on the peer live at <label>.scope, where <label> is
+# unconditionally the collector's own `hostname -s` at pairing time
+# (deploy.sh's `my_label`, never overridden or passed in). Distinct from
+# $LOAD_LABEL (peer_label($PEER_HOST), the PEER's address as THIS side
+# names its OWN local files about the relationship) -- confusing the two
+# is exactly the bug this global exists to make impossible to reintroduce.
+# Plain global, overridden the same way as the others (test fixtures).
+COLLECTOR_LABEL="$(hostname -s 2>/dev/null || hostname)"
+
 SERVER_CONF="/etc/zfs-snapshot-all/zfs-backup.conf"
 CLIENTS_DIR="/etc/zfs-snapshot-all/clients"
 
@@ -1436,9 +1447,12 @@ resolve_mode_datasets() {
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
         -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+    # REV-20260804-037: NOT $LOAD_LABEL (see $COLLECTOR_LABEL's own comment
+    # at its declaration for why these two are different labels, and why
+    # using the wrong one here was invisible to every prior local test).
     local sfile_remote hfile_remote
-    sfile_remote=$(peer_scope_path "$LOAD_LABEL")
-    hfile_remote=$(peer_scope_granted_hash_path "$LOAD_LABEL")
+    sfile_remote=$(peer_scope_path "$COLLECTOR_LABEL")
+    hfile_remote=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
 
     local scope_tmp hash_tmp
     scope_tmp=$(mktemp) || die "mktemp failed"

@@ -2908,13 +2908,27 @@ esac
 # makes goes through it.
 MDS="$WORK/modedatasets"; mkdir -p "$MDS/bin"
 
+# REV-20260804-037: found live -- the fetch used to key off $LOAD_LABEL
+# (peer_label($PEER_HOST), how THIS side names its OWN local files about
+# the relationship) instead of $COLLECTOR_LABEL (this collector's own
+# hostname, the label the PEER actually named its committed scope file
+# under -- deploy.sh's do_pair/do_join `my_label`). LOAD_LABEL and
+# COLLECTOR_LABEL are deliberately given DIFFERENT values below and the
+# stub is strict about which one appears in the fetch path -- a loose
+# glob (matching any "cat ...scope*") would have passed against the
+# reviewed bug too, which is exactly why the bug went uncaught here until
+# a real second host disagreed about its own hostname.
 mds_ssh_stub() {   # <scope-body> <zfslist-body>
     cat > "$MDS/bin/ssh" <<EOF
 #!/bin/bash
 cmd="\${@: -1}"
 case "\$cmd" in
-    *cat*.scope.sha256*) cat '$MDS/hash' ;;
-    *cat*.scope*)        cat '$MDS/scope' ;;
+    *cat*mycollector.scope.sha256*) cat '$MDS/hash' ;;
+    *cat*mycollector.scope*)        cat '$MDS/scope' ;;
+    *cat*.scope*)
+        echo "stub: fetch used the wrong label (expected mycollector.*, got: \$cmd)" >&2
+        exit 1
+        ;;
     *zfs\ list*)          cat '$MDS/zfslist' ;;
     *) exit 1 ;;
 esac
@@ -2922,7 +2936,7 @@ EOF
     chmod +x "$MDS/bin/ssh"
 }
 
-mds_env='LOAD_LABEL=testlabel LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_ACCOUNT=zfsbackup LOAD_HOST=peer.example'
+mds_env='LOAD_LABEL=testlabel COLLECTOR_LABEL=mycollector LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_ACCOUNT=zfsbackup LOAD_HOST=peer.example'
 
 cat > "$MDS/scope" <<'EOF'
 [dataset:tank/data]
