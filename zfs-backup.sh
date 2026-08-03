@@ -16,7 +16,7 @@ set -uo pipefail
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
 #   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
 #   zfs-backup.sh seed NAME [--yes]
-#   zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT]
+#   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
 #   zfs-backup.sh activate-client NAME [--yes] [--verbose]
 #   zfs-backup.sh migrate-profile [--yes]
@@ -29,10 +29,23 @@ set -uo pipefail
 # -> endpoint_verified -> active. Cron is installed ONLY from endpoint_verified
 # (or re-activating from active) -- never earlier, matching the agreed
 # position's "no held/paused cron entry during seed" (§10) generalized to
-# "no cron entry until the ACTIVE endpoint has been verified", not just LAN
-# vs VPN specifically. `verify-endpoint` can be re-run against whichever
-# endpoint (lan or vpn) is currently active, so a permanently-LAN-only client
-# and a LAN-seed-then-VPN client go through the identical gate.
+# "no cron entry until the ACTIVE endpoint has been verified". `verify-
+# endpoint` can be re-run against whichever endpoint is currently active, so
+# every client (however many addresses it has ever used) goes through the
+# identical gate.
+#
+# Endpoint model (REV-20260802-033 U9, superseding the REV-20260730-004
+# fixed lan/vpn slots): ONE current endpoint (ACTIVE_ENDPOINT, a literal
+# "host:port") plus an optional list of other addresses that have worked for
+# this client before (ENDPOINT_KNOWN). A routed VPN that preserves the
+# original host:port needs no `set-endpoint` call at all -- re-running
+# `verify-endpoint` is the whole story. When the current address stops
+# answering, `verify-endpoint` tries each known candidate before asking the
+# operator for a genuinely new one; a candidate that answers is promoted to
+# ACTIVE_ENDPOINT automatically. `ENDPOINT_LAN_*`/`ENDPOINT_VPN_*`/an
+# `ACTIVE_ENDPOINT` value of literally "lan"/"vpn" are kept ONLY as read
+# compatibility for client records written before this -- `active_endpoint_
+# host_port()` resolves either shape; nothing new writes the old one.
 #
 # Stable relation identity (REV-20260730-004 F1): CLIENT_NAME is the address-
 # independent identity used for the HostKeyAlias and all display/summary text.
@@ -41,8 +54,8 @@ set -uo pipefail
 # locate deploy.sh's own manifest/key files and the physical target dataset
 # path deploy.sh itself already created under that name -- neither can change
 # without deploy.sh re-pairing, and this file does not re-pair on an endpoint
-# switch. Switching the ACTIVE_ENDPOINT (lan->vpn or back) changes only which
-# address/port the generated job connects through; it does not touch
+# switch. Switching ACTIVE_ENDPOINT changes only which address/port the
+# generated job connects through; it does not touch
 # PEER_HOST, `label`, the target path, the pairing key, or the pinned host
 # key -- deploy.sh's --draft-config is therefore called only once, during
 # `seed` (always over the known-good LAN route), never again afterwards:
@@ -134,7 +147,7 @@ Usage:
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
-  zfs-backup.sh set-endpoint NAME --vpn=HOST[:PORT] | --lan=HOST[:PORT] [--skip-final-catchup]
+  zfs-backup.sh set-endpoint NAME --host=HOST[:PORT] [--skip-final-catchup] [--allow-stale-catchup]
   zfs-backup.sh verify-endpoint NAME
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh migrate-profile [--yes]
@@ -244,10 +257,13 @@ ensure_alias_known_hosts() {
     printf '%s' "$dst"
 }
 
-# ---- endpoint model (REV-20260730-004 §2/§3) --------------------------------
-# Two fixed slots, lan and vpn, matching the reviewer's own minimal model --
-# not a fully generic named-endpoint system, since the actual required
-# scenario (LAN seed, then relocate to VPN) only ever needs these two.
+# ---- endpoint model (REV-20260802-033 U9, superseding REV-20260730-004 §2/§3) -
+# The original two fixed slots (lan/vpn) are kept ONLY as a read-compat shape
+# for client records written before this -- endpoint_host_var/endpoint_port_var
+# exist solely to resolve THAT shape (see active_endpoint_host_port below).
+# Nothing new ever writes ENDPOINT_LAN_*/ENDPOINT_VPN_* or an ACTIVE_ENDPOINT
+# of literally "lan"/"vpn" again; a new or migrated record's ACTIVE_ENDPOINT
+# is the literal "host:port" string, directly.
 endpoint_host_var() { echo "ENDPOINT_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')_HOST"; }
 endpoint_port_var() { echo "ENDPOINT_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')_PORT"; }
 
@@ -306,13 +322,40 @@ write_client_field() {
     printf '%s=%q\n' "$1" "$2"
 }
 
-# Reads ACTIVE_ENDPOINT plus its ENDPOINT_<X>_HOST/PORT from the already-
-# `.`-sourced client conf vars -- echoes "HOST PORT".
+# Reads ACTIVE_ENDPOINT from the already-`.`-sourced client conf vars --
+# echoes "HOST PORT". Handles both record shapes (U9):
+#
+#   new:    ACTIVE_ENDPOINT is the literal "host:port" itself. A hostname can
+#           never contain ':' (endpoint_host_valid's charset forbids it), so
+#           "contains a colon" is an unambiguous discriminator against the
+#           legacy shape below -- no separate version field needed.
+#   legacy: ACTIVE_ENDPOINT is "lan" or "vpn", resolved through
+#           ENDPOINT_<SLOT>_HOST/PORT exactly as before. Kept working
+#           untouched; nothing new ever writes this shape again.
 active_endpoint_host_port() {
-    local hv pv
-    hv=$(endpoint_host_var "${ACTIVE_ENDPOINT:?}")
-    pv=$(endpoint_port_var "$ACTIVE_ENDPOINT")
-    printf '%s %s' "${!hv:?no $hv set for active endpoint '$ACTIVE_ENDPOINT'}" "${!pv:-22}"
+    case "${ACTIVE_ENDPOINT:?no ACTIVE_ENDPOINT set}" in
+        *:*)
+            printf '%s %s' "${ACTIVE_ENDPOINT%:*}" "${ACTIVE_ENDPOINT##*:}"
+            ;;
+        *)
+            local hv pv
+            hv=$(endpoint_host_var "$ACTIVE_ENDPOINT")
+            pv=$(endpoint_port_var "$ACTIVE_ENDPOINT")
+            printf '%s %s' "${!hv:?no $hv set for active endpoint '$ACTIVE_ENDPOINT'}" "${!pv:-22}"
+            ;;
+    esac
+}
+
+# Human display for the current endpoint: bare "host:port" for a new-shape
+# record (nothing extra to add), "slot (host:port)" for a legacy one where
+# the slot name is itself extra information. Reads ACTIVE_ENDPOINT/LOAD_HOST/
+# LOAD_PORT from the caller's scope.
+endpoint_display() {
+    if [ "${ACTIVE_ENDPOINT:-}" = "${LOAD_HOST:-}:${LOAD_PORT:-}" ]; then
+        printf '%s' "${ACTIVE_ENDPOINT:-?}"
+    else
+        printf '%s (%s:%s)' "${ACTIVE_ENDPOINT:-?}" "${LOAD_HOST:-?}" "${LOAD_PORT:-?}"
+    fi
 }
 
 # REV-20260730-004 F5: a categorized check, not just a raw `zfs allow` dump --
@@ -1340,9 +1383,9 @@ cmd_add_client() {
         write_client_field CLIENT_NAME       "$name"
         write_client_field PEER_HOST         "$lan_host"
         write_client_field STATE             pending_enroll
-        write_client_field ACTIVE_ENDPOINT   lan
-        write_client_field ENDPOINT_LAN_HOST "$lan_host"
-        write_client_field ENDPOINT_LAN_PORT "$lan_port"
+        # REV-20260802-033 U9: the literal address IS the endpoint now, no
+        # named-slot indirection -- see active_endpoint_host_port.
+        write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
@@ -1569,17 +1612,21 @@ cmd_seed() {
     # actually changes (a new host or port). A routed site-to-site VPN that
     # preserves the original host:port needs no endpoint mutation at all: just
     # re-run verify-endpoint against the endpoint already on record. Saying
-    # Saying "then set-endpoint" followed by "verify-endpoint" here used to
-    # read as a fixed two-step sequence, which is exactly the failure mode F4
-    # warns about -- an administrator inventing or repeating an address that
-    # never changed.
-    log "client '$name' seed complete. Next: if the source relocates, run final-catchup first over the still-working link. If SSH now reaches it at a DIFFERENT host or port, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
+    # "then set-endpoint" followed by "verify-endpoint" here used to read as
+    # a fixed two-step sequence, which is exactly the failure mode F4 warns
+    # about -- an administrator inventing or repeating an address that never
+    # changed. "the collector relocates", not "the source" (U9): confirmed in
+    # code that this scenario is the collector being physically moved.
+    log "client '$name' seed complete. Next: if this collector relocates, run final-catchup first over the still-working link. If SSH now reaches the source at a DIFFERENT host or port afterward, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
 }
 
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
 # REV-20260730-005 F3 / REV-20260731-007 §7: one last incremental over the
-# endpoint that still works, immediately before the source is physically moved.
+# endpoint that still works, immediately before THIS COLLECTOR is physically
+# moved (REV-20260802-033 U9 confirmed in code that this message used to name
+# the wrong machine -- "the source" -- when the one actually being relocated,
+# in this project's own scenario, is the collector running this command).
 #
 # Without it the common base is as old as the seed, so the first transfer over
 # the new link carries every change since then -- over a VPN, which is the slow
@@ -1609,7 +1656,7 @@ cmd_final_catchup() {
 
     if [ "$yes" -ne 1 ]; then
         echo "Klient:   $name"
-        echo "Endpoint: $ACTIVE_ENDPOINT ($LOAD_HOST:$LOAD_PORT)"
+        echo "Endpoint: $(endpoint_display)"
         echo "Zrodla:   $PEER_SAVED_DATASETS"
         read -rp "Wykonac koncowy transfer przyrostowy teraz? [t/N] " ans
         case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing transferred" ;; esac
@@ -1619,7 +1666,7 @@ cmd_final_catchup() {
     local ds localpath failed=0
     for ds in $PEER_SAVED_DATASETS; do
         localpath=$(client_local_path "$ds")
-        log "final catch-up $ds -> $localpath over '$ACTIVE_ENDPOINT'..."
+        log "final catch-up $ds -> $localpath over '$(endpoint_display)'..."
         # shellcheck disable=SC2086
         if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
@@ -1636,31 +1683,39 @@ cmd_final_catchup() {
     # REV-20260731-008 F1: the endpoint NAME alone proves almost nothing -- it
     # survives a change of host or port, and it never goes stale. Record the
     # exact transport that was just proven to work, and when.
+    #
+    # REV-20260802-033 U9: FINAL_CATCHUP_ENDPOINT is now always the literal
+    # "$LOAD_HOST:$LOAD_PORT" (never "$ACTIVE_ENDPOINT" directly), so
+    # set-endpoint's gate can compare it by simple string equality regardless
+    # of whether THIS client's record is legacy-shaped (ACTIVE_ENDPOINT still
+    # "lan"/"vpn") or already migrated. A legacy client's most recent
+    # pre-upgrade catch-up (recorded as "lan"/"vpn") will read as unmatched
+    # once -- fail-closed, asks for a fresh one instead of trusting a record
+    # in a format this comparison no longer parses.
     {
         cat "$cpath"
-        write_client_field FINAL_CATCHUP_ENDPOINT "$ACTIVE_ENDPOINT"
+        write_client_field FINAL_CATCHUP_ENDPOINT "$LOAD_HOST:$LOAD_PORT"
         write_client_field FINAL_CATCHUP_HOST "$LOAD_HOST"
         write_client_field FINAL_CATCHUP_PORT "$LOAD_PORT"
         printf 'FINAL_CATCHUP_EPOCH=%s\n' "$(date '+%s')"
         printf 'FINAL_CATCHUP_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
-    log "client '$name': final catch-up over '$ACTIVE_ENDPOINT' complete. The source may now be disconnected and moved."
+    log "client '$name': final catch-up over '$(endpoint_display)' complete. This collector may now be relocated. If the source is still reachable at the SAME host:port afterward (e.g. a routed VPN), no set-endpoint call is needed at all -- just re-run: $0 verify-endpoint $name"
 }
 
 cmd_set_endpoint() {
     local name="${1:-}"; shift || true
-    local lan="" vpn="" skip_catchup=0 allow_stale=0
+    local host="" skip_catchup=0 allow_stale=0
     for a in "$@"; do
         case "$a" in
-            --lan=*) lan="${a#*=}" ;;
-            --vpn=*) vpn="${a#*=}" ;;
+            --host=*) host="${a#*=}" ;;
             --skip-final-catchup) skip_catchup=1 ;;
             --allow-stale-catchup) allow_stale=1 ;;
             *) die "set-endpoint: unknown option $a" ;;
         esac
     done
-    [ -n "$lan" ] || [ -n "$vpn" ] || die "set-endpoint requires --lan=HOST[:PORT] and/or --vpn=HOST[:PORT]"
+    [ -n "$host" ] || die "set-endpoint requires --host=HOST[:PORT]"
 
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
@@ -1671,113 +1726,184 @@ cmd_set_endpoint() {
         *) die "client '$name' is in state '${STATE:-unknown}' -- set-endpoint needs seed_complete or later (seed must finish first)" ;;
     esac
 
-    # The gate (REV-20260731-007 §7). Switching to a DIFFERENT endpoint is the
-    # relocation moment, so the catch-up must already have happened over the
-    # endpoint being left -- while it still worked. A catch-up recorded against
-    # some OTHER endpoint says nothing about this switch, so the recorded name
-    # must match the one being left, not merely be present.
+    # parse_endpoint_arg dies on anything that is not a plain hostname/IPv4 and
+    # a real port; write_client_field %q-quotes what survives (F1).
+    local new_host new_port; read -r new_host new_port <<< "$(parse_endpoint_arg "$host")"
+    local new_endpoint="$new_host:$new_port"
+    local leaving_host leaving_port; read -r leaving_host leaving_port <<< "$(active_endpoint_host_port)"
+    local leaving_endpoint="$leaving_host:$leaving_port"
+
+    # REV-20260802-033 U9: the routed-VPN case needs no set-endpoint call at
+    # all, by construction -- if the address given IS already current, there
+    # is nothing to gate or write. This is what makes "set-endpoint is
+    # optional, not a standard step" true structurally, not just by habit.
+    if [ "$new_endpoint" = "$leaving_endpoint" ]; then
+        log "client '$name': '$new_endpoint' is already the current endpoint -- nothing to change. (A routed VPN that preserves the same host:port needs no set-endpoint call at all; run verify-endpoint directly.)"
+        return 0
+    fi
+
+    # The gate (REV-20260731-007 §7). A DIFFERENT endpoint is the relocation
+    # moment, so the catch-up must already have happened over the endpoint
+    # being left -- while it still worked. A catch-up recorded against some
+    # OTHER address says nothing about this switch.
     #
-    # Skippable, because the reviewer's case is real: sometimes the source is
-    # already unplugged and there is nothing left to catch up over. Then it is a
-    # deliberate, logged decision rather than an accident.
-    local leaving="${ACTIVE_ENDPOINT:-}"
-    local switching_to=""
-    [ -n "$vpn" ] && switching_to="vpn"
-    if [ -n "$switching_to" ] && [ "$switching_to" != "$leaving" ]; then
-        if [ "$skip_catchup" -eq 1 ]; then
-            warn "SKIPPING the final catch-up over '$leaving' at your request. The first transfer over '$switching_to' will carry everything since $( [ -n "${FINAL_CATCHUP_AT:-}" ] && echo "$FINAL_CATCHUP_AT" || echo "the seed (${SEED_COMPLETED_AT:-unknown})" ) -- over the slow link, unattended. Only correct if the source is already disconnected."
+    # REV-20260802-033 U9 simplification: FINAL_CATCHUP_ENDPOINT is now
+    # always the literal address it was recorded against (cmd_final_catchup),
+    # the same domain as $leaving_endpoint here -- so a single string compare
+    # replaces the old three-way name+host+port cross-check.
+    #
+    # Skippable, because the reviewer's case is real: sometimes the collector
+    # is already unplugged and there is nothing left to catch up over. Then it
+    # is a deliberate, logged decision rather than an accident.
+    if [ "$skip_catchup" -eq 1 ]; then
+        warn "SKIPPING the final catch-up over '$leaving_endpoint' at your request. The first transfer over '$new_endpoint' will carry everything since $( [ -n "${FINAL_CATCHUP_AT:-}" ] && echo "$FINAL_CATCHUP_AT" || echo "the seed (${SEED_COMPLETED_AT:-unknown})" ) -- over the slow link, unattended. Only correct if the collector is already disconnected from '$leaving_endpoint'."
+    else
+        local why=""
+        if [ "${FINAL_CATCHUP_ENDPOINT:-}" != "$leaving_endpoint" ]; then
+            why="no final catch-up has been run over '$leaving_endpoint'"
         else
-            # REV-20260731-008 F1. The name alone was too weak a claim: it
-            # survived a change of host or port on that endpoint, and it never
-            # went stale. So the recorded catch-up must match the transport
-            # being LEFT exactly, and be recent -- otherwise "the last transfer
-            # happened just before relocation" is not what it proves.
-            local lh lp
-            lh=$(endpoint_host_var "$leaving"); lh="${!lh:-}"
-            lp=$(endpoint_port_var "$leaving"); lp="${!lp:-22}"
-            local why=""
-            if [ "${FINAL_CATCHUP_ENDPOINT:-}" != "$leaving" ]; then
-                why="no final catch-up has been run over '$leaving'"
-            elif [ "${FINAL_CATCHUP_HOST:-}" != "$lh" ] || [ "${FINAL_CATCHUP_PORT:-22}" != "$lp" ]; then
-                why="the recorded catch-up used ${FINAL_CATCHUP_HOST:-?}:${FINAL_CATCHUP_PORT:-?}, but '$leaving' now points at $lh:$lp -- it proves nothing about the transport actually being left"
-            else
-                local age=$(( $(date '+%s') - ${FINAL_CATCHUP_EPOCH:-0} ))
-                if [ "${FINAL_CATCHUP_EPOCH:-0}" -le 0 ]; then
-                    why="the recorded catch-up predates freshness tracking, so its age cannot be established"
-                elif [ "$age" -gt "$CATCHUP_MAX_AGE" ]; then
-                    if [ "$allow_stale" -eq 1 ]; then
-                        warn "the catch-up over '$leaving' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min) and you passed --allow-stale-catchup. Everything written since ${FINAL_CATCHUP_AT:-?} will cross the slow link on the first transfer."
-                    else
-                        why="the catch-up over '$leaving' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min). Writes since then would all cross the slow link"
-                    fi
+            local age=$(( $(date '+%s') - ${FINAL_CATCHUP_EPOCH:-0} ))
+            if [ "${FINAL_CATCHUP_EPOCH:-0}" -le 0 ]; then
+                why="the recorded catch-up predates freshness tracking, so its age cannot be established"
+            elif [ "$age" -gt "$CATCHUP_MAX_AGE" ]; then
+                if [ "$allow_stale" -eq 1 ]; then
+                    warn "the catch-up over '$leaving_endpoint' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min) and you passed --allow-stale-catchup. Everything written since ${FINAL_CATCHUP_AT:-?} will cross the slow link on the first transfer."
+                else
+                    why="the catch-up over '$leaving_endpoint' is $((age / 60)) min old (limit $((CATCHUP_MAX_AGE / 60)) min). Writes since then would all cross the slow link"
                 fi
             fi
-            if [ -n "$why" ]; then
-                die "refusing to switch '$name' from '$leaving' to '$switching_to': $why.
-  Run it BEFORE disconnecting the source, while the old link still works:
+        fi
+        if [ -n "$why" ]; then
+            die "refusing to switch '$name' from '$leaving_endpoint' to '$new_endpoint': $why.
+  Run it BEFORE disconnecting, while the old link still works:
       $0 final-catchup $name
   It keeps the first transfer over the new link small and proves the incremental
   base is intact while it is still cheap to fix.
-  If the source is ALREADY disconnected and there is nothing to catch up over,
-  say so explicitly: $0 set-endpoint $name --vpn=... --skip-final-catchup"
-            fi
-            log "final catch-up over '$leaving' ($lh:$lp) recorded at ${FINAL_CATCHUP_AT:-?} -- proceeding with the switch"
+  If the collector is ALREADY disconnected and there is nothing to catch up over,
+  say so explicitly: $0 set-endpoint $name --host=$new_host:$new_port --skip-final-catchup"
         fi
+        log "final catch-up over '$leaving_endpoint' recorded at ${FINAL_CATCHUP_AT:-?} -- proceeding with the switch"
     fi
 
-    local new_active="$ACTIVE_ENDPOINT"
+    # ENDPOINT_KNOWN (U9): the address being left is remembered as a fallback
+    # candidate for a future verify-endpoint, and the one being switched TO is
+    # dropped from that list if it was already on it (it is current now, not
+    # "known-other"). A legacy record's dormant second slot (whichever of
+    # ENDPOINT_LAN_*/ENDPOINT_VPN_* is NOT the one ACTIVE_ENDPOINT names) is
+    # folded in on this, its first switch since the upgrade -- otherwise that
+    # address would simply be lost rather than becoming a known candidate.
+    local -a kept=()
+    local k
+    for k in ${ENDPOINT_KNOWN:-}; do
+        [ "$k" = "$new_endpoint" ] && continue
+        [ "$k" = "$leaving_endpoint" ] && continue
+        kept+=("$k")
+    done
+    kept+=("$leaving_endpoint")
+    case "${ACTIVE_ENDPOINT:-}" in
+        lan|vpn)
+            local other=vpn; [ "$ACTIVE_ENDPOINT" = vpn ] && other=lan
+            local ov; ov=$(endpoint_host_var "$other"); ov="${!ov:-}"
+            if [ -n "$ov" ]; then
+                local op; op=$(endpoint_port_var "$other"); op="${!op:-22}"
+                local other_endpoint="$ov:$op"
+                case " ${kept[*]} " in *" $other_endpoint "*) ;; *) [ "$other_endpoint" != "$new_endpoint" ] && kept+=("$other_endpoint") ;; esac
+            fi
+            ;;
+    esac
+
     local out="$cpath.new"
     cp -p "$cpath" "$out" || die "could not copy $cpath"
-    # parse_endpoint_arg dies on anything that is not a plain hostname/IPv4 and
-    # a real port; write_client_field %q-quotes what survives (F1).
-    if [ -n "$vpn" ]; then
-        local h p; read -r h p <<< "$(parse_endpoint_arg "$vpn")"
-        {
-            write_client_field ENDPOINT_VPN_HOST "$h"
-            write_client_field ENDPOINT_VPN_PORT "$p"
-        } >> "$out"
-        new_active="vpn"
-    fi
-    if [ -n "$lan" ]; then
-        local h2 p2; read -r h2 p2 <<< "$(parse_endpoint_arg "$lan")"
-        {
-            write_client_field ENDPOINT_LAN_HOST "$h2"
-            write_client_field ENDPOINT_LAN_PORT "$p2"
-        } >> "$out"
-        # Moving an endpoint invalidates any catch-up recorded against it: the
-        # transport it proved no longer exists (REV-20260731-008 F1).
-        if [ "${FINAL_CATCHUP_ENDPOINT:-}" = "lan" ]            && { [ "${FINAL_CATCHUP_HOST:-}" != "$h2" ] || [ "${FINAL_CATCHUP_PORT:-22}" != "$p2" ]; }; then
-            {
-                write_client_field FINAL_CATCHUP_ENDPOINT ""
-                printf 'FINAL_CATCHUP_EPOCH=0
-'
-            } >> "$out"
-            warn "the 'lan' endpoint moved to $h2:$p2, so the catch-up recorded against ${FINAL_CATCHUP_HOST:-?}:${FINAL_CATCHUP_PORT:-?} no longer applies -- it has been invalidated"
+    {
+        write_client_field ACTIVE_ENDPOINT "$new_endpoint"
+        write_client_field ENDPOINT_KNOWN "${kept[*]}"
+        # Switching the active endpoint means the OLD verification no longer
+        # says anything about THIS endpoint -- require a fresh verify-endpoint
+        # before cron can be (re)installed against it.
+        #
+        # REV-20260730-005 F4: an ALREADY-ACTIVE client keeps its installed
+        # cron line running against the endpoint it was generated for, which
+        # used to be recorded only as "STATE=seed_complete" -- so `status`
+        # said seed_complete while backups were in fact still running fine
+        # over the old endpoint, and nothing anywhere named the divergence.
+        # The desired endpoint (ACTIVE_ENDPOINT) and the one the installed
+        # cron actually uses (INSTALLED_ENDPOINT, written by activate-client)
+        # are separate fields, and a pending change gets its own state rather
+        # than being flattened into an earlier one.
+        if [ "${STATE:-}" = "active" ]; then
+            write_client_field STATE endpoint_change_pending
+        elif [ "${STATE:-}" != "seed_complete" ]; then
+            write_client_field STATE seed_complete
         fi
-    fi
-    # Switching the active endpoint means the OLD verification no longer says
-    # anything about THIS endpoint -- require a fresh verify-endpoint before
-    # cron can be (re)installed against it.
-    #
-    # REV-20260730-005 F4: an ALREADY-ACTIVE client keeps its installed cron
-    # line running against the endpoint it was generated for, which used to be
-    # recorded only as "STATE=seed_complete" -- so `status` said seed_complete
-    # while backups were in fact still running fine over the old endpoint, and
-    # nothing anywhere named the divergence. Now the desired endpoint
-    # (ACTIVE_ENDPOINT) and the one the installed cron actually uses
-    # (INSTALLED_ENDPOINT, written by activate-client) are separate fields, and
-    # a pending change gets its own state rather than being flattened into an
-    # earlier one.
-    write_client_field ACTIVE_ENDPOINT "$new_active" >> "$out"
-    if [ "${STATE:-}" = "active" ]; then
-        write_client_field STATE endpoint_change_pending >> "$out"
-        warn "endpoint changed to '$new_active', but the INSTALLED cron still runs over '${INSTALLED_ENDPOINT:-?}'. Backups keep working over the old endpoint until: verify-endpoint $name, then activate-client $name."
-    elif [ "${STATE:-}" != "seed_complete" ]; then
-        write_client_field STATE seed_complete >> "$out"
-    fi
+    } >> "$out"
     mv -f "$out" "$cpath"
     chmod 0600 "$cpath"
-    log "client '$name' desired endpoint is now '$new_active'"
+    if [ "${STATE:-}" = "active" ]; then
+        warn "endpoint changed to '$new_endpoint', but the INSTALLED cron still runs over '${INSTALLED_ENDPOINT:-?}'. Backups keep working over the old endpoint until: verify-endpoint $name, then activate-client $name."
+    fi
+    log "client '$name' desired endpoint is now '$new_endpoint' ('$leaving_endpoint' kept as a known candidate)"
+}
+
+# REV-20260730-005 F2: this used to conclude "incremental" from the ABSENCE
+# of the words "full send" in snapget.sh's prose output -- a negative
+# heuristic over a log message, which a reworded line or any new rc=0
+# planner branch would silently have turned into a false "verified".
+# snapget.sh -n now prints exactly one machine-readable verdict per dataset
+# on STDOUT (logging goes to stderr): PLAN=INCREMENTAL / PLAN=FULL, derived
+# from the same $common_snapshot the real transfer branches on. Anything
+# that is not a recognised PLAN= line is treated as unknown and FAILS --
+# fail-closed, per the review.
+#
+# REV-20260802-033 U9: extracted from cmd_verify_endpoint so it can be run
+# against ANY candidate host:port, not just the one already on record --
+# verify-endpoint below calls this once per candidate until one comes back
+# clean. Sets $PROBE_DETAIL to a human-readable report of whatever went
+# wrong (empty on success). Re-derives the alias known_hosts file itself
+# (ensure_alias_known_hosts, keyed by port) rather than reusing the outer
+# LOAD_ALIAS_KH/LOAD_FLAGS, because a fallback candidate can use a different
+# port than the one those were built for.
+probe_snapget_endpoint() {   # <host> <port>
+    local phost="$1" pport="$2"
+    PROBE_DETAIL=""
+    local pkh; pkh=$(ensure_alias_known_hosts "$LOAD_LABEL" "${PEER_SAVED_LOCAL_USER:-}" "$pport" "$LOAD_ALIAS") || {
+        PROBE_DETAIL="  no pinned host key for port $pport (never verified there before)"
+        return 1
+    }
+    local pflags="-K $LOAD_KEYFILE -k $pkh -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+    [ "$pport" != "22" ] && pflags="$pflags -p $pport"
+    [ -n "${BANDWIDTH:-}" ] && pflags="$pflags -b $BANDWIDTH"
+
+    local base; base=$(snapget_local_base)
+    local ds out plan errtmp failed=0 unknown=0 needs_full=0
+    errtmp=$(mktemp) || die "mktemp failed"
+    for ds in $PEER_SAVED_DATASETS; do
+        # stdout carries the machine-readable PLAN= verdict; stderr carries
+        # the human log, captured separately (never mixed into $out, which is
+        # what made the old text heuristic fragile) but not discarded either
+        # -- REV-20260802-033 F4, the source-IP/firewall diagnostic lives here.
+        # shellcheck disable=SC2086
+        out=$(bash "$SNAPGET" -n $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
+        if [ "$rc" -ne 0 ]; then
+            failed=$((failed + 1))
+            PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'
+            if [ -s "$errtmp" ]; then
+                while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < "$errtmp"
+            fi
+            continue
+        fi
+        plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
+        case "$plan" in
+            PLAN=INCREMENTAL*) ;;
+            PLAN=FULL*)
+                needs_full=$((needs_full + 1))
+                PROBE_DETAIL="${PROBE_DETAIL}  $ds would need a FULL transfer -- no common base"$'\n' ;;
+            *)
+                unknown=$((unknown + 1))
+                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n' ;;
+        esac
+    done
+    rm -f "$errtmp"
+    [ "$failed" -eq 0 ] && [ "$unknown" -eq 0 ] && [ "$needs_full" -eq 0 ]
 }
 
 # ------------------------------------------------------------------------------
@@ -1785,6 +1911,14 @@ cmd_set_endpoint() {
 # confirm a full transfer is NOT required (i.e. an incremental base already
 # exists) -- not just "the command exited 0", which a first-ever send would
 # also do.
+#
+# REV-20260802-033 U9: tries the CURRENT endpoint first; if it does not come
+# back clean, tries each address in ENDPOINT_KNOWN in turn -- addresses that
+# have worked for this client before -- rather than immediately asking the
+# operator to type one in. Only when NONE of them work does this refuse and
+# point at set-endpoint. A candidate that answers and is not the one already
+# on record is PROMOTED to ACTIVE_ENDPOINT: it already proved itself once,
+# which is the entire reason known candidates are kept at all.
 cmd_verify_endpoint() {
     local name="${1:-}"
     [ -n "$name" ] || die "verify-endpoint requires a client name"
@@ -1798,67 +1932,55 @@ cmd_verify_endpoint() {
     esac
 
     load_client_and_connection "$cpath"
-    log "verifying endpoint '$ACTIVE_ENDPOINT' ($LOAD_HOST:$LOAD_PORT) for '$name'..."
+    local current="$LOAD_HOST:$LOAD_PORT"
+    log "verifying endpoint '$current' for '$name'..."
 
-    # REV-20260730-005 F2: this used to conclude "incremental" from the ABSENCE
-    # of the words "full send" in snapget.sh's prose output -- a negative
-    # heuristic over a log message, which a reworded line or any new rc=0
-    # planner branch would silently have turned into a false "verified".
-    # snapget.sh -n now prints exactly one machine-readable verdict per dataset
-    # on STDOUT (logging goes to stderr): PLAN=INCREMENTAL / PLAN=FULL, derived
-    # from the same $common_snapshot the real transfer branches on. Anything
-    # that is not a recognised PLAN= line is treated as unknown and FAILS --
-    # fail-closed, per the review.
-    local ds localpath failed=0 needs_full=0 unknown=0 out plan
-    # REV-20260802-033 F4: stderr used to go to /dev/null here, which silently
-    # swallowed the ONE diagnostic that distinguishes a source-IP/firewall
-    # restriction from every other kind of failure -- snapget.sh's own
-    # "CONNECTION-level failure (authentication, host key, network or DNS)"
-    # message (lib-zfs-snap.sh log level 0). Kept in a file instead, and
-    # printed only on this dataset's failure, so the operator sees WHY a
-    # relocation's re-verify failed instead of just an rc number.
-    local errtmp; errtmp=$(mktemp) || die "mktemp failed"
-    local base; base=$(snapget_local_base)
-    for ds in $PEER_SAVED_DATASETS; do
-        localpath=$(client_local_path "$ds")
-        # stdout carries the machine-readable PLAN= verdict; stderr carries the
-        # human log, captured separately (never mixed into $out, which is what
-        # made the old text heuristic fragile) but no longer discarded.
-        # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base" 2>"$errtmp"); local rc=$?
-        if [ "$rc" -ne 0 ]; then
-            warn "  FAILED (rc=$rc): $ds"
-            if [ -s "$errtmp" ]; then
-                while IFS= read -r errline; do warn "    $errline"; done < "$errtmp"
-            fi
-            failed=$((failed + 1))
-            continue
-        fi
-        plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
-        case "$plan" in
-            PLAN=INCREMENTAL*) log "  OK (incremental): $ds  [${plan#PLAN=INCREMENTAL }]" ;;
-            PLAN=FULL*)
-                warn "  $ds would require a FULL transfer through this endpoint -- no common base"
-                needs_full=$((needs_full + 1)) ;;
-            *)
-                warn "  $ds: snapget.sh -n gave no PLAN= verdict (got: ${plan:-<none>}) -- treating as UNKNOWN, not as incremental"
-                unknown=$((unknown + 1)) ;;
-        esac
+    local -a candidates=("$current")
+    local k
+    for k in ${ENDPOINT_KNOWN:-}; do
+        [ "$k" = "$current" ] && continue
+        candidates+=("$k")
     done
-    rm -f "$errtmp"
-    [ "$failed" -eq 0 ] || die "$failed dataset(s) failed connectivity/host-key verification through '$ACTIVE_ENDPOINT'"
-    [ "$unknown" -eq 0 ] || die "$unknown dataset(s) returned no machine-readable plan -- refusing to mark verified on an unknown result. Check that snapget.sh is v2.65+ on this host."
-    if [ "$needs_full" -ne 0 ]; then
-        die "$needs_full dataset(s) would need a full resend through '$ACTIVE_ENDPOINT' -- refusing to mark verified. If this endpoint genuinely has no common base (e.g. never seeded through it), seed again or investigate before proceeding."
+
+    local chosen="" tried_report=""
+    local cand ch cp
+    for cand in "${candidates[@]}"; do
+        ch="${cand%:*}"; cp="${cand##*:}"
+        if probe_snapget_endpoint "$ch" "$cp"; then
+            chosen="$cand"
+            break
+        fi
+        tried_report="${tried_report}'$cand':"$'\n'"$PROBE_DETAIL"
+        [ "$cand" != "$current" ] && warn "  '$cand' (known candidate) did not answer either"
+    done
+
+    if [ -z "$chosen" ]; then
+        die "none of the known endpoints answered for '$name' (tried: ${candidates[*]}):
+$tried_report
+If the source has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"
+    fi
+
+    if [ "$chosen" != "$current" ]; then
+        warn "current endpoint '$current' did not answer; '$chosen' (a previously known address) did -- promoting it to the active endpoint."
     fi
 
     {
         cat "$cpath"
+        if [ "$chosen" != "$current" ]; then
+            write_client_field ACTIVE_ENDPOINT "$chosen"
+            local -a kept=("$current")
+            for k in ${ENDPOINT_KNOWN:-}; do
+                [ "$k" = "$chosen" ] && continue
+                [ "$k" = "$current" ] && continue
+                kept+=("$k")
+            done
+            write_client_field ENDPOINT_KNOWN "${kept[*]}"
+        fi
         write_client_field STATE                endpoint_verified
         write_client_field ENDPOINT_VERIFIED_AT "$(date '+%Y-%m-%d %H:%M:%S')"
-        write_client_field ENDPOINT_VERIFIED_FOR "$ACTIVE_ENDPOINT"
+        write_client_field ENDPOINT_VERIFIED_FOR "$chosen"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
-    log "client '$name': endpoint '$ACTIVE_ENDPOINT' verified, incremental-only confirmed for every dataset. Ready for activate-client."
+    log "client '$name': endpoint '$chosen' verified, incremental-only confirmed for every dataset. Ready for activate-client."
 }
 
 # ------------------------------------------------------------------------------
@@ -1915,7 +2037,7 @@ cmd_activate_client() {
     local -a managed=()
     emit_client_sections "$workfile" "$name" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
 
-    log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$ACTIVE_ENDPOINT'"
+    log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$(endpoint_display)'"
 
     log "validating generated config (working copy only, nothing real touched yet)..."
     if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
@@ -1949,7 +2071,7 @@ cmd_activate_client() {
     echo
     echo "Klient:              $name"
     echo "Peer (LAN parowania): $PEER_HOST"
-    echo "Endpoint aktywny:    $ACTIVE_ENDPOINT ($LOAD_HOST:$LOAD_PORT)"
+    echo "Endpoint aktywny:    $(endpoint_display)"
     echo "Zrodla:              $PEER_SAVED_DATASETS"
     if [ -n "$base" ]; then
         echo "Cel:                 $base"
@@ -2010,7 +2132,7 @@ cmd_activate_client() {
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
 
-    log "client '$name' active (cron runs over endpoint '$ACTIVE_ENDPOINT')."
+    log "client '$name' active (cron runs over endpoint '$(endpoint_display)')."
 }
 
 # ------------------------------------------------------------------------------
@@ -2953,11 +3075,14 @@ cmd_status() {
     [ -r "$mpath" ] && { # shellcheck disable=SC1090
         . "$mpath"; }
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
+    local LOAD_HOST="$host" LOAD_PORT="$port"
     echo "Klient:            $CLIENT_NAME"
     echo "Stan:              ${STATE:-unknown}"
-    echo "Endpoint docelowy: ${ACTIVE_ENDPOINT:-?} ($host:$port)"
+    echo "Endpoint docelowy: $(endpoint_display)"
+    # Legacy display (records that predate U9): the dormant slot, if any.
     [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
     [ -n "${ENDPOINT_VPN_HOST:-}" ] && echo "  vpn:  ${ENDPOINT_VPN_HOST}:${ENDPOINT_VPN_PORT:-22}"
+    [ -n "${ENDPOINT_KNOWN:-}" ] && echo "  znane:  $ENDPOINT_KNOWN"
     # REV-20260730-005 F4: name the divergence outright rather than leaving the
     # operator to infer it from a state word. The dangerous reading this
     # prevents is "status says seed_complete, so nothing is running" while the
@@ -3009,7 +3134,7 @@ cmd_test() {
         fi
     done
     [ "$failed" -eq 0 ] || die "$failed dataset(s) failed"
-    log "all datasets OK (endpoint: $ACTIVE_ENDPOINT)"
+    log "all datasets OK (endpoint: $(endpoint_display))"
 }
 
 # ------------------------------------------------------------------------------

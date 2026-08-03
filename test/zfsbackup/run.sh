@@ -384,9 +384,32 @@ rm -f "/tmp/zfsbackup-pwned-$$"
 
 out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn ENDPOINT_VPN_HOST=10.8.0.11 ENDPOINT_VPN_PORT=2222; active_endpoint_host_port" 2>&1)"
 if [ "$out" = "10.8.0.11 2222" ]; then
-    ok "active_endpoint_host_port resolves the currently active endpoint's host/port"
+    ok "active_endpoint_host_port resolves a LEGACY (slot-named) endpoint's host/port"
 else
-    bad "active_endpoint_host_port resolves the currently active endpoint's host/port" "out=$out"
+    bad "active_endpoint_host_port resolves a LEGACY (slot-named) endpoint's host/port" "out=$out"
+fi
+
+# REV-20260802-033 U9: a new-shape record carries the literal "host:port" in
+# ACTIVE_ENDPOINT directly, no slot indirection -- distinguished from the
+# legacy shape purely by the presence of ':' (never valid in a bare hostname).
+out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=10.8.0.11:2222; active_endpoint_host_port" 2>&1)"
+if [ "$out" = "10.8.0.11 2222" ]; then
+    ok "active_endpoint_host_port resolves a NEW-shape (literal host:port) endpoint (U9)"
+else
+    bad "active_endpoint_host_port resolves a NEW-shape (literal host:port) endpoint (U9)" "out=$out"
+fi
+
+out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=10.8.0.11:2222 LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display" 2>&1)"
+if [ "$out" = "10.8.0.11:2222" ]; then
+    ok "endpoint_display shows a bare host:port for a new-shape record (nothing extra to add)"
+else
+    bad "endpoint_display shows a bare host:port for a new-shape record" "out=$out"
+fi
+out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display" 2>&1)"
+if [ "$out" = "vpn (10.8.0.11:2222)" ]; then
+    ok "endpoint_display shows 'slot (host:port)' for a legacy record"
+else
+    bad "endpoint_display shows 'slot (host:port)' for a legacy record" "out=$out"
 fi
 
 # --- 9. real bug, live on pve0 (2026-07-30): unquoted date in a client conf -
@@ -406,12 +429,17 @@ else
     bad "a quoted date field sources with no stray 'command not found' output" "out=$out"
 fi
 
-# --- final-catchup gate (REV-20260730-005 F3 / REV-20260731-007 §7) ----------
+# --- final-catchup gate (REV-20260730-005 F3 / REV-20260731-007 §7), -------
+# rebuilt on the U9 one-current-endpoint model (REV-20260802-033) -----------
 #
-# Switching a client from LAN to VPN is the relocation moment. Without a final
-# incremental over the link that still works, the first VPN transfer carries
-# everything since the SEED -- over the slow link, unattended. The gate makes
-# that a decision instead of an accident.
+# Switching a client's endpoint is the relocation moment. Without a final
+# incremental over the link that still works, the first transfer over the new
+# one carries everything since the SEED -- over the slow link, unattended.
+# The gate makes that a decision instead of an accident. Under U9 there is
+# only ONE current endpoint (a literal "host:port", no named slots), so every
+# actual change goes through this same gate uniformly -- the old asymmetry
+# ("correcting the inactive slot is not gated") no longer exists because
+# there is no inactive slot to correct.
 #
 # Run in subshells: the refusal path calls die, which would take this suite with
 # it. CLIENTS_DIR is reassigned rather than parameterised because the file is
@@ -422,10 +450,8 @@ mk_client() {   # mk_client <name> <extra lines...>
     { echo "CLIENT_NAME=$n"
       echo "STATE=active"
       echo "PEER_HOST=10.0.0.9"
-      echo "ACTIVE_ENDPOINT=lan"
-      echo "INSTALLED_ENDPOINT=lan"
-      echo "ENDPOINT_LAN_HOST=10.0.0.9"
-      echo "ENDPOINT_LAN_PORT=22"
+      echo "ACTIVE_ENDPOINT=10.0.0.9:22"
+      echo "INSTALLED_ENDPOINT=10.0.0.9:22"
       echo 'SEED_COMPLETED_AT="2026-07-01 00:00:00"'
       for l in "$@"; do echo "$l"; done
     } > "$GATE/$n.conf"
@@ -435,83 +461,101 @@ gate_run() {    # gate_run <name> <args...>  -> prints output, sets $?
 }
 
 mk_client c1
-out=$(gate_run c1 --vpn=10.9.9.9); r=$?
+out=$(gate_run c1 --host=10.9.9.9); r=$?
 if [ "$r" != 0 ] && case "$out" in *"final-catchup c1"*) true ;; *) false ;; esac; then
-    ok "gate: switching to vpn without a catch-up is refused, and names the command"
+    ok "gate: switching without a catch-up is refused, and names the command"
 else
-    bad "gate: switching to vpn without a catch-up is refused, and names the command" "rc=$r out=$out"
+    bad "gate: switching without a catch-up is refused, and names the command" "rc=$r out=$out"
 fi
 
 # A catch-up recorded against the endpoint being LEFT is what makes the switch
 # safe. Anything else -- including one recorded against the endpoint being
-# switched TO -- says nothing about this switch.
-# The full record, not just the name: REV-20260731-008 F1 tightened this
-# contract deliberately, and a bare FINAL_CATCHUP_ENDPOINT no longer suffices.
-mk_client c2 'FINAL_CATCHUP_ENDPOINT=lan' 'FINAL_CATCHUP_HOST=10.0.0.9'              'FINAL_CATCHUP_PORT=22' "FINAL_CATCHUP_EPOCH=$(date '+%s')"              'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
-out=$(gate_run c2 --vpn=10.9.9.9); r=$?
+# switched TO -- says nothing about this switch. Under U9, FINAL_CATCHUP_ENDPOINT
+# is now always the literal address it was recorded against (cmd_final_catchup),
+# so this is a plain string match against ACTIVE_ENDPOINT's own domain.
+mk_client c2 'FINAL_CATCHUP_ENDPOINT=10.0.0.9:22' 'FINAL_CATCHUP_HOST=10.0.0.9'              'FINAL_CATCHUP_PORT=22' "FINAL_CATCHUP_EPOCH=$(date '+%s')"              'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+out=$(gate_run c2 --host=10.9.9.9); r=$?
 [ "$r" = 0 ] && ok "gate: a catch-up over the endpoint being left lets the switch through" \
              || bad "gate: a catch-up over the endpoint being left lets the switch through" "rc=$r out=$out"
 
-mk_client c3 'FINAL_CATCHUP_ENDPOINT=vpn' 'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
-out=$(gate_run c3 --vpn=10.9.9.9); r=$?
+mk_client c3 'FINAL_CATCHUP_ENDPOINT=10.9.9.9:22' 'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+out=$(gate_run c3 --host=10.9.9.9); r=$?
 [ "$r" != 0 ] && ok "gate: a catch-up over the WRONG endpoint does not count" \
               || bad "gate: a catch-up over the WRONG endpoint does not count" "rc=$r"
 
-# The reviewer's case: the source is already unplugged, so there is nothing to
-# catch up over. Allowed, but it must warn -- and say what it will cost.
+# The reviewer's case: the collector is already unplugged, so there is nothing
+# to catch up over. Allowed, but it must warn -- and say what it will cost.
 mk_client c4
-out=$(gate_run c4 --vpn=10.9.9.9 --skip-final-catchup); r=$?
+out=$(gate_run c4 --host=10.9.9.9 --skip-final-catchup); r=$?
 if [ "$r" = 0 ] && case "$out" in *SKIPPING*) true ;; *) false ;; esac; then
     ok "gate: --skip-final-catchup proceeds but warns"
 else
     bad "gate: --skip-final-catchup proceeds but warns" "rc=$r out=$out"
 fi
 
-# Not every set-endpoint is a relocation. Correcting the LAN address of a
-# client that stays on LAN must not demand a catch-up.
+# U9's central claim, now directly testable: giving the ALREADY-current
+# host:port is a no-op -- no gate, no catch-up demand, no state mutation.
+# This is what makes "no set-endpoint call needed for a routed VPN" true by
+# construction rather than by an operator simply not calling it.
 mk_client c5
-out=$(gate_run c5 --lan=10.0.0.10); r=$?
-[ "$r" = 0 ] && ok "gate: changing the LAN address only is not gated" \
-             || bad "gate: changing the LAN address only is not gated" "rc=$r out=$out"
+out=$(gate_run c5 --host=10.0.0.9:22); r=$?
+if [ "$r" = 0 ] && case "$out" in *"already the current endpoint"*) true ;; *) false ;; esac; then
+    ok "gate: giving the endpoint already on record is a no-op (U9)"
+else
+    bad "gate: giving the endpoint already on record is a no-op (U9)" "rc=$r out=$out"
+fi
 
-# --- catch-up freshness and identity (REV-20260731-008 F1) -------------------
+# ENDPOINT_KNOWN (U9): the address being left is remembered as a fallback
+# candidate once the switch actually happens.
+mk_client c6 'FINAL_CATCHUP_ENDPOINT=10.0.0.9:22' 'FINAL_CATCHUP_HOST=10.0.0.9'              'FINAL_CATCHUP_PORT=22' "FINAL_CATCHUP_EPOCH=$(date '+%s')"              'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+gate_run c6 --host=10.9.9.9 >/dev/null 2>&1
+known=$(grep -m1 '^ENDPOINT_KNOWN=' "$GATE/c6.conf" 2>/dev/null || true)
+if case "$known" in *"10.0.0.9:22"*) true ;; *) false ;; esac; then
+    ok "set-endpoint records the address just left as a known candidate (U9)"
+else
+    bad "set-endpoint records the address just left as a known candidate (U9)" "$known"
+fi
+
+# A legacy record's dormant second slot (never migrated) is folded into
+# ENDPOINT_KNOWN on its first switch, rather than silently lost.
+mk_client c7 'ACTIVE_ENDPOINT=lan' 'ENDPOINT_LAN_HOST=10.0.0.9' 'ENDPOINT_LAN_PORT=22'          'ENDPOINT_VPN_HOST=10.9.9.5' 'ENDPOINT_VPN_PORT=1194'          'FINAL_CATCHUP_ENDPOINT=10.0.0.9:22' 'FINAL_CATCHUP_HOST=10.0.0.9'          'FINAL_CATCHUP_PORT=22' "FINAL_CATCHUP_EPOCH=$(date '+%s')"          'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+gate_run c7 --host=10.9.9.9:2222 >/dev/null 2>&1
+known7=$(grep -m1 '^ENDPOINT_KNOWN=' "$GATE/c7.conf" 2>/dev/null || true)
+if case "$known7" in *"10.0.0.9:22"*"10.9.9.5:1194"*) true ;; *"10.9.9.5:1194"*"10.0.0.9:22"*) true ;; *) false ;; esac; then
+    ok "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too"
+else
+    bad "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too" "$known7"
+fi
+
+# --- catch-up freshness (REV-20260731-008 F1, simplified under U9) ----------
 #
-# The endpoint NAME alone was too weak a claim: it survived a change of host or
-# port on that endpoint, and it never went stale. A catch-up run on Monday
-# authorised a Friday relocation, and a catch-up against one LAN address
-# authorised a switch away from a different one.
+# The endpoint NAME alone was too weak a claim under the old lan/vpn model: it
+# survived a change of host or port on that slot, and it never went stale.
+# Under U9 there is no slot indirection left to exploit -- FINAL_CATCHUP_ENDPOINT
+# IS the literal address -- so identity is now just the string match tested
+# above (c3); what remains genuinely separate is freshness (age).
 
 NOW=$(date '+%s')
-mk_fresh() {   # mk_fresh <name> <age-seconds> [host] [port]
-    local n="$1" age="$2" h="${3:-10.0.0.9}" p="${4:-22}"
-    mk_client "$n"         "FINAL_CATCHUP_ENDPOINT=lan"         "FINAL_CATCHUP_HOST=$h"         "FINAL_CATCHUP_PORT=$p"         "FINAL_CATCHUP_EPOCH=$((NOW - age))"         'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
+mk_fresh() {   # mk_fresh <name> <age-seconds> [host:port]
+    local n="$1" age="$2" hp="${3:-10.0.0.9:22}"
+    mk_client "$n"         "FINAL_CATCHUP_ENDPOINT=$hp"         "FINAL_CATCHUP_EPOCH=$((NOW - age))"         'FINAL_CATCHUP_AT="2026-07-31 10:00:00"'
 }
 
 mk_fresh f1 60
-out=$(gate_run f1 --vpn=10.9.9.9); r=$?
+out=$(gate_run f1 --host=10.9.9.9); r=$?
 [ "$r" = 0 ] && ok "fresh: a 1-minute-old catch-up against the exact endpoint passes"              || bad "fresh: a 1-minute-old catch-up against the exact endpoint passes" "rc=$r out=$out"
 
 mk_fresh f2 7200
-out=$(gate_run f2 --vpn=10.9.9.9); r=$?
+out=$(gate_run f2 --host=10.9.9.9); r=$?
 if [ "$r" != 0 ] && case "$out" in *"120 min old"*) true ;; *) false ;; esac; then
     ok "stale: a 2-hour-old catch-up is refused, and the age is named"
 else
     bad "stale: a 2-hour-old catch-up is refused, and the age is named" "rc=$r out=$out"
 fi
 
-# Same endpoint name, different machine behind it. The old record proves a
-# transport that is not the one being left.
-mk_fresh f3 60 10.0.0.77
-out=$(gate_run f3 --vpn=10.9.9.9); r=$?
-[ "$r" != 0 ] && ok "identity: a catch-up against a different HOST does not count"               || bad "identity: a catch-up against a different HOST does not count" "rc=$r"
-
-mk_fresh f4 60 10.0.0.9 2222
-out=$(gate_run f4 --vpn=10.9.9.9); r=$?
-[ "$r" != 0 ] && ok "identity: a catch-up against a different PORT does not count"               || bad "identity: a catch-up against a different PORT does not count" "rc=$r"
-
 # The override exists because relocation plans slip; it must not be silent.
 mk_fresh f5 7200
-out=$(gate_run f5 --vpn=10.9.9.9 --allow-stale-catchup); r=$?
+out=$(gate_run f5 --host=10.9.9.9 --allow-stale-catchup); r=$?
 if [ "$r" = 0 ] && case "$out" in *"--allow-stale-catchup"*) true ;; *) false ;; esac; then
     ok "override: --allow-stale-catchup proceeds but says what it costs"
 else
@@ -520,19 +564,9 @@ fi
 
 # A record written before freshness tracking existed has no epoch, so its age
 # is unknowable -- treat that as unproven rather than as fresh.
-mk_client f6 "FINAL_CATCHUP_ENDPOINT=lan" "FINAL_CATCHUP_HOST=10.0.0.9" "FINAL_CATCHUP_PORT=22"
-out=$(gate_run f6 --vpn=10.9.9.9); r=$?
+mk_client f6 "FINAL_CATCHUP_ENDPOINT=10.0.0.9:22"
+out=$(gate_run f6 --host=10.9.9.9); r=$?
 [ "$r" != 0 ] && ok "legacy: a record with no epoch is not treated as fresh"               || bad "legacy: a record with no epoch is not treated as fresh" "rc=$r"
-
-# Moving the endpoint the catch-up was recorded against invalidates it, at the
-# moment of the move rather than silently later.
-mk_fresh f7 60
-out=$(gate_run f7 --lan=10.0.0.55); r=$?
-if [ "$r" = 0 ] && case "$out" in *"no longer applies"*) true ;; *) false ;; esac; then
-    ok "invalidation: moving the LAN endpoint drops the catch-up recorded for it"
-else
-    bad "invalidation: moving the LAN endpoint drops the catch-up recorded for it" "rc=$r out=$out"
-fi
 
 # --- 8. show_activation_proposal --------------------------------------------
 #
@@ -3072,6 +3106,89 @@ if [ "$rc" != 0 ] && case "$out" in *"CONNECTION-level failure"*) true ;; *) fal
     ok "verify-endpoint: a connectivity failure's stderr diagnostic reaches the operator (F4)"
 else
     bad "verify-endpoint: a connectivity failure's stderr diagnostic reaches the operator (F4)" "rc=$rc out=$out"
+fi
+
+# 38c. U9: when the CURRENT endpoint does not answer, verify-endpoint tries
+# each ENDPOINT_KNOWN candidate before giving up -- and promotes whichever one
+# answers to ACTIVE_ENDPOINT, since it just proved itself. The stub picks its
+# behaviour off which host it was called against, so both current and known
+# addresses can be exercised in one client without touching real ssh.
+printf '10.5.6.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' \
+    > "$VE/keys/10.5.6.1_known_hosts"
+
+cat > "$VE/peerstate/10.5.6.1.conf" <<'EOF'
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_DATASETS="tank/data/ds1"
+EOF
+
+cat > "$VE/clients/vefallback.conf" <<'EOF'
+CLIENT_NAME=vefallback
+PEER_HOST=10.5.6.1
+STATE=seed_complete
+ACTIVE_ENDPOINT=10.5.6.6:22
+ENDPOINT_KNOWN=10.5.6.7:22
+EOF
+
+VESTUB2="$VE/snapget_fallback.sh"
+cat > "$VESTUB2" <<'EOF'
+#!/bin/bash
+for a in "$@"; do
+    case "$a" in
+        *10.5.6.6:*) echo "current endpoint unreachable" >&2; exit 255 ;;
+        *10.5.6.7:*) echo "PLAN=INCREMENTAL base=x src=tank/data/ds1 tgt=tank/backups/lbl/tank/data/ds1"; exit 0 ;;
+    esac
+done
+echo "unexpected args: $*" >&2
+exit 1
+EOF
+chmod +x "$VESTUB2"
+
+out=$( ( CLIENTS_DIR="$VE/clients" PEER_STATE_DIR="$VE/peerstate" PEER_KEY_DIR="$VE/keys" SNAPGET="$VESTUB2"
+         cmd_verify_endpoint vefallback ) 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && case "$out" in *"promoting it to the active endpoint"*) true ;; *) false ;; esac; then
+    ok "verify-endpoint: falls back to a known candidate when the current endpoint does not answer (U9)"
+else
+    bad "verify-endpoint: falls back to a known candidate when the current endpoint does not answer (U9)" "rc=$rc out=$out"
+fi
+promoted=$(grep '^ACTIVE_ENDPOINT=' "$VE/clients/vefallback.conf" 2>/dev/null | tail -1 || true)
+if case "$promoted" in *"10.5.6.7:22"*) true ;; *) false ;; esac; then
+    ok "verify-endpoint: the working candidate is promoted to ACTIVE_ENDPOINT"
+else
+    bad "verify-endpoint: the working candidate is promoted to ACTIVE_ENDPOINT" "$promoted"
+fi
+knownafter=$(grep '^ENDPOINT_KNOWN=' "$VE/clients/vefallback.conf" 2>/dev/null | tail -1 || true)
+if case "$knownafter" in *"10.5.6.6:22"*) true ;; *) false ;; esac; then
+    ok "verify-endpoint: the address that stopped answering becomes a known candidate in turn"
+else
+    bad "verify-endpoint: the address that stopped answering becomes a known candidate in turn" "$knownafter"
+fi
+
+# 38d. When NEITHER the current endpoint nor any known candidate answers,
+# verify-endpoint refuses and names every address it tried.
+cat > "$VE/clients/venone.conf" <<'EOF'
+CLIENT_NAME=venone
+PEER_HOST=10.5.6.1
+STATE=seed_complete
+ACTIVE_ENDPOINT=10.5.6.6:22
+ENDPOINT_KNOWN=10.5.6.9:22
+EOF
+VESTUB3="$VE/snapget_none.sh"
+cat > "$VESTUB3" <<'EOF'
+#!/bin/bash
+echo "nope" >&2
+exit 255
+EOF
+chmod +x "$VESTUB3"
+out=$( ( CLIENTS_DIR="$VE/clients" PEER_STATE_DIR="$VE/peerstate" PEER_KEY_DIR="$VE/keys" SNAPGET="$VESTUB3"
+         cmd_verify_endpoint venone ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] \
+   && case "$out" in *"10.5.6.6:22"*) true ;; *) false ;; esac \
+   && case "$out" in *"10.5.6.9:22"*) true ;; *) false ;; esac \
+   && case "$out" in *"set-endpoint"*) true ;; *) false ;; esac; then
+    ok "verify-endpoint: refuses and names every tried address when none answer"
+else
+    bad "verify-endpoint: refuses and names every tried address when none answer" "rc=$rc out=$out"
 fi
 
 # --- 39. sync mode: path mapping + cluster-membership refusal (slice 8) -----
