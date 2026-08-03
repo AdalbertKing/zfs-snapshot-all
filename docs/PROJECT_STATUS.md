@@ -10,11 +10,69 @@
 - Data odświeżenia: **2026-08-04** (po REV-034 w całości, po REV-033
   plasterkach 1-10 (WSZYSTKIE dziesięć z pierwotnego planu) + korekcie U9 +
   łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po REV-035, po REV-036
-  w całości + wszystkie follow-upy, i po ad hoc `--pause`/`--resume` poza
-  kolejką recenzji, w tym przeróbka na tryb blokowy)
+  w całości + wszystkie follow-upy, po ad hoc `--pause`/`--resume` poza
+  kolejką recenzji (przeróbka na tryb blokowy), po REV-20260804-037
+  w całości (F1 + żywa kampania Gate A-J) i po REV-20260804-038 w całości
+  (atomowy commit manifestu join))
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 10**
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-037/038 — pełna
+  żywa kampania enrolmentu (Gate A-J), osiem błędów znalezionych i
+  naprawionych na żywo, zero fabrykowanych dowodów.** Kolektor pve1
+  ↔ peer/source pve2 (metropolis), throwaway dataset, od czystego stanu do
+  pełnego demontażu. Skrót ośmiu poprawek (każda to osobny commit, pełny
+  opis w `docs/reviews/responses/REV-20260804-037.md`'s Gate ledger i
+  `REV-20260804-038.md`):
+  1. `deploy.sh do_join()`: brakujący `local PEER_CONF_MODE` — pierwszy
+     realny `--join --mode=` na żywym drugim hoście od razu się wywalił
+     (`unbound variable`) w trakcie zapisu manifestu.
+  2. `deploy.sh`: manifest join staje się atomowym, weryfikowanym commitem
+     (render→temp→weryfikacja→rename→weryfikacja), zamiast niesprawdzanego
+     `cat > plik` PO mutacjach konta/klucza (REV-038, `verify_join_manifest`,
+     `test/joinmanifest` 7/7).
+  3. `deploy.sh`: F1 z REV-037 — zdalny edytor `--join-remotely` mógł
+     zgłosić fałszywy sukces po nieudanym drafcie; wydzielona
+     `remote_scope_stage` z rozróżnialnymi kodami wyjścia
+     (`test/joinremote` 8/8).
+  4. `deploy.sh` (×2 miejsca): instrukcje `./deploy.sh --join=...`
+     zakładały uruchomienie z `/root`, a skrypt leży w `$REPO_DIR` —
+     dotyczyło też instrukcji ręcznych drukowanych od zawsze, pierwszy raz
+     ktokolwiek wykonał je dosłownie.
+  5. `zfs-backup.sh resolve_mode_datasets`: pobierał zatwierdzony plik
+     zakresu pod złą etykietą (`LOAD_LABEL` = adres peera, zamiast
+     `hostname -s` kolektora) — nowy globalny `COLLECTOR_LABEL`.
+  6. `snapget.sh` — **KRYTYCZNE, dotyczy całej floty**: bramka
+     bezpieczeństwa `-F` z plasterka 8 odmawiała KAŻDEGO pierwszego seeda
+     (cel jest zawsze wstępnie tworzony pusty, co czyniło
+     `target_exists()` zawsze prawdziwym).
+  7. `snapget.sh` — **KRYTYCZNE, dotyczy całej floty**: `written@`
+     porównywało sformatowaną wartość zfs (`"0B"`) z gołą cyfrą (`"0"`) —
+     odmawiało przy KAŻDEJ zerowej rozbieżności, czyli normalnym stanie
+     większości zwykłych incrementali w produkcji.
+  8. `snapget.sh`: `written@` pytało o migawkę pod nazwą ŹRÓDŁA względem
+     CELU — po dopasowaniu przez GUID (migawka zmieniona nazwą) cel nie
+     ma migawki o tej nazwie, zapytanie zwraca `"-"`, odmowa mimo zera
+     rozbieżności. Złapane przez WŁASNY istniejący test `test/snapsend`
+     (sekcja guid-match), uruchomiony na żywo pierwszy raz od plasterka 8.
+
+  `test/snapsend` **202/202** na pve1 (pierwszy przebieg od plasterka 8 —
+  root+zfs nie było dostępne w sesji implementującej ten plasterek).
+  Pełny cykl enrolmentu potwierdzony end-to-end: add-client → join
+  (ręczny i zdalny) → draft/edit/commit-scope → seed (real transfer,
+  md5 zgodny) → final-catchup (real incremental) → verify-endpoint →
+  activate-client (dokładnie jeden zarządzany blok crona, reszta
+  nietknięta, ręczne wykonanie jak prawdziwy cron: rc=0) → remove-client
+  → pełny demontaż (crontab bajt-w-bajt jak przed testem na obu hostach,
+  zero rezydualnych grantów/kont/holdów).
+
+  **Dwie ujawnione, nienaprawione luki** (odzyskiwalne ręcznie,
+  low-impact dziś): `remove-client` nie potrafi usunąć OSTATNIEGO klienta
+  z configu (gen-cron.sh odmawia pustego zestawu reguł); przerwany
+  `--join-remotely` może zostawić poprawnie dołączonego peera bez wpisu
+  po stronie kolektora (odzyskiwalne przez ponowny `add-client`, do_join
+  traktuje to jako rotację).
+
+- Wcześniej: **REV-20260802-033 plasterek 10**
   (korekty nazewnictwa ról) — trzy komunikaty w `zfs-backup.sh`
   (`cmd_seed`, `cmd_final_catchup`, `cmd_verify_endpoint`) nazywały peera
   "the source" tuż obok już poprawnego "this collector" dla maszyny, która
@@ -720,9 +778,18 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `joinremote` | **7/7** | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
 | `joinmanifest` | **7/7** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze |
 
-Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-01 na metropolis
-pve1 przy `d8bb52a`** (i wcześniej przy `244ec0d` i `55d33a2`), bo `snapsend.sh` zmienił się
-razem z biblioteką:
+Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-04 na metropolis
+pve1 przy `4ebfa11`** (i wcześniej przy `d8bb52a`, `244ec0d`, `55d33a2`) — pierwszy
+przebieg od czasu, gdy REV-20260802-033 plasterek 8 dotknął `snapget.sh`
+(root+zfs nie było dostępne w sesji implementującej ten plasterek). Znalazł
+na żywo dwa realne błędy istniejące od plasterka 8, oba naprawione w tej
+samej kampanii co REV-20260804-037/038 (patrz tam pełny rejestr Gate A-J):
+`recv_force_flag` odmawiał KAŻDEGO pierwszego seeda (cel zawsze jest
+wstępnie tworzony pusty, co czyniło `target_exists()` prawdziwym zawsze),
+i `written@` porównywało sformatowaną wartość (`"0B"`) z gołą cyfrą
+(`"0"`), więc odmawiało też przy zerowej rozbieżności — w tym w przypadku
+dopasowania po GUID, gdzie migawka na celu ma inną nazwę niż na źródle
+(`written@<nazwa-źródła>` na celu zwracał `"-"`, nie liczbę):
 
 | Pakiet | Wynik | Czego wymaga | Zakres |
 |---|---|---|---|
