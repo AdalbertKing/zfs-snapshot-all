@@ -3657,6 +3657,40 @@ EOF
     log "===================================================================="
 }
 
+# verify_join_manifest <path> <role> <as> <mode> <target> <account> <fp> <remote>
+# -- REV-20260804-038: reads back a join manifest at <path> and confirms every
+# field do_join() rendered actually landed, byte for byte, as parsed values --
+# not just "the write returned 0". Explicit parameters (not the caller's own
+# locals via bash's dynamic scoping) so this is independently testable, same
+# reasoning as remote_scope_stage's own extraction (REV-20260804-037 F1).
+# Used twice by do_join(): once on the temp file, before it is trusted enough
+# to become the durable record, and again on the final path, after the atomic
+# rename -- two different failure classes (a bad render; a rename that landed
+# something else) share nothing except that both must be caught before
+# "Join zakonczony" is allowed to print.
+verify_join_manifest() {
+    local path="$1" want_role="$2" want_as="$3" want_mode="$4" want_target="$5" \
+          want_account="$6" want_fp="$7" want_remote="$8"
+    [ -r "$path" ] || return 1
+    local got_role got_as got_mode got_target got_account got_fp got_remote
+    { read -r got_role; read -r got_as; read -r got_mode; read -r got_target; \
+      read -r got_account; read -r got_fp; read -r got_remote; } < <(
+        (
+            PEER_JOIN_ROLE="" PEER_JOIN_AS="" PEER_JOIN_MODE="" PEER_JOIN_TARGET="" \
+            PEER_JOIN_ACCOUNT="" PEER_JOIN_FINGERPRINT="" PEER_JOIN_REMOTE=""
+            # shellcheck disable=SC1090
+            . "$path" 2>/dev/null
+            printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+                "$PEER_JOIN_ROLE" "$PEER_JOIN_AS" "$PEER_JOIN_MODE" "$PEER_JOIN_TARGET" \
+                "$PEER_JOIN_ACCOUNT" "$PEER_JOIN_FINGERPRINT" "$PEER_JOIN_REMOTE"
+        )
+    )
+    [ "$got_role" = "$want_role" ] && [ "$got_as" = "$want_as" ] \
+        && [ "$got_mode" = "$want_mode" ] && [ "$got_target" = "$want_target" ] \
+        && [ "$got_account" = "$want_account" ] && [ "$got_fp" = "$want_fp" ] \
+        && [ "$got_remote" = "$want_remote" ]
+}
+
 # do_join -- runs on the second host, once, from its own console. Consumes the
 # wsad produced by --pair: never touches any account/relationship other than
 # the one this specific package describes.
@@ -3796,7 +3830,29 @@ EOF2
 )
     fi
 
-    cat > "$mpath" <<EOF
+    # REV-20260804-038: found live -- the direct `cat > "$mpath"` below used
+    # to be unchecked and non-atomic, AFTER the account/key mutations above
+    # had already happened. The live campaign hit exactly the failure this
+    # allowed: a `set -u` abort mid-heredoc (the missing PEER_CONF_MODE local,
+    # fixed in 0131c74) left a ZERO-BYTE manifest on disk while do_join()
+    # still printed "Join zakonczony" and returned non-zero -- a real account
+    # and trusted key with no durable relationship record, reported as
+    # success by everything except the exit code. Fixed by treating the
+    # manifest as this function's actual commit point: render to a temp file
+    # in the same directory (atomic rename requires that), verify it reads
+    # back correctly BEFORE it is trusted, rename, then verify the FINAL path
+    # too (a rename landing something else is a different failure class than
+    # a bad render, and costs nothing extra to also catch). Any failure past
+    # this point returns non-zero, names the account/key that already exist,
+    # and states plainly that re-running --join with the same package is safe
+    # and repairs it -- never deletes an account or key that may predate this
+    # attempt.
+    local want_remote=""; [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && want_remote="yes"
+    local partial_msg="PARTIAL ENROLMENT: account '$account' and its authorized key already exist (created above, before this failure) -- the manifest at $mpath was NOT published. Re-running './deploy.sh --join=<same package>' is safe and will repair it (the account/key steps above are already idempotent); do not delete the account or key by hand, they may predate this attempt."
+
+    local mtmp
+    mtmp=$(mktemp "${mpath}.XXXXXX" 2>/dev/null) || die "join: could not create a manifest temp file next to $mpath -- $partial_msg"
+    if ! cat > "$mtmp" <<EOF
 # peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
 PEER_JOIN_ROLE="$PEER_CONF_ROLE"
 PEER_JOIN_AS="$PEER_CONF_AS"
@@ -3807,7 +3863,27 @@ PEER_JOIN_ACCOUNT="$account"
 PEER_JOIN_FINGERPRINT="$new_fp"
 $remote_fields
 EOF
-    chmod 0600 "$mpath"
+    then
+        rm -f "$mtmp"
+        die "join: could not write the manifest temp file -- $partial_msg"
+    fi
+    if ! chmod 0600 "$mtmp"; then
+        rm -f "$mtmp"
+        die "join: could not chmod the manifest temp file -- $partial_msg"
+    fi
+    if ! verify_join_manifest "$mtmp" "$PEER_CONF_ROLE" "$PEER_CONF_AS" "$PEER_CONF_MODE" \
+            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote"; then
+        rm -f "$mtmp"
+        die "join: the rendered manifest failed read-back verification (a field did not match what was intended) -- refused before publication. $partial_msg"
+    fi
+    if ! mv -f "$mtmp" "$mpath"; then
+        rm -f "$mtmp"
+        die "join: could not atomically install the manifest at $mpath -- $partial_msg"
+    fi
+    if ! verify_join_manifest "$mpath" "$PEER_CONF_ROLE" "$PEER_CONF_AS" "$PEER_CONF_MODE" \
+            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote"; then
+        die "join: manifest at $mpath failed verification AFTER the atomic rename (should not happen) -- $partial_msg Report this if it recurs."
+    fi
 
     echo
     log "===================================================================="
