@@ -44,17 +44,25 @@ printf 'hdd\nrpool\n'
 EOF
 cat > "$TMPD/bin/zfs" <<'EOF'
 #!/bin/bash
-fields="" pool=""
+fields="" pool="" type=""
 while [ $# -gt 0 ]; do
     case "$1" in
         list) shift ;;
         -H|-r) shift ;;
         -o) fields="$2"; shift 2 ;;
+        -t) type="$2"; shift 2 ;;
         -d) shift 2 ;;
         --) shift; pool="$1"; shift ;;
         *) shift ;;
     esac
 done
+if [ "$type" = "snapshot" ]; then
+    case "$pool" in
+        rpool) printf 'rpool/data@automated_hourly_2026-08-02_16-00-00\nrpool/data@automated_hourly_2026-08-02_17-00-00\nrpool/data@vzdump\n' ;;
+        hdd)   printf 'hdd/LXC@__replicate_100-0_1785679201__\nhdd/LXC@__migration__\n' ;;
+    esac
+    exit 0
+fi
 case "$fields" in
     name)
         case "$pool" in
@@ -156,6 +164,21 @@ else
     check "A18 the scope file is world-readable (0644)" "644" "$(stat_mode "$sfile")"
 fi
 rm -f "$_probe"
+
+# ENROLMENT-AGREED-2026-08-02 T5: a census of snapshot name families seen on
+# this host, printed as comments so an operator editing the file can see
+# what actually exists instead of guessing. Purely informational -- the
+# fixture data below deliberately covers all three shapes T5/U6 discuss
+# (this project's own automated_* dated names, Proxmox's epoch-stamped
+# __replicate_, and bare vzdump/__migration__ with no timestamp at all).
+check "A19 dated automated_ snapshots collapse to one family, counted" "1" \
+      "$(grep -cE '^# automated_hourly_ +2 snapshot\(s\)$' "$sfile")"
+check "A20 a bare family name with no timestamp survives verbatim (vzdump)" "1" \
+      "$(grep -cE '^# vzdump +1 snapshot\(s\)$' "$sfile")"
+check "A21 a bare family name with no timestamp survives verbatim (__migration__)" "1" \
+      "$(grep -cE '^# __migration__ +1 snapshot\(s\)$' "$sfile")"
+check "A22 an epoch-stamped family is still recognisable" "1" \
+      "$(grep -cE '^# __replicate_100-0_ +1 snapshot\(s\)$' "$sfile")"
 
 # ---- B. a second draft against the same label refuses (do_draft_scope_check
 # already covers this via --draft-scope-check in test/join/run.sh; asserted

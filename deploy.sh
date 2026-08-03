@@ -896,6 +896,37 @@ draft_scope_is_system() {   # <depth-1 dataset name>
     return 1
 }
 
+# ENROLMENT-AGREED-2026-08-02 T5: a rough census of snapshot NAME FAMILIES
+# actually present on this host, printed as comments alongside the
+# inventory. Purely informational -- nothing here drives any decision in
+# this script, so the prefix derived below only needs to be useful to a
+# human reading the file, not exact. Strips a trailing date (this project's
+# own automated_* convention) or a run of 6+ digits (epoch-stamped names
+# like Proxmox's __replicate_..._<epoch>__) and treats what is left as the
+# family; a name with neither (vzdump, __migration__) is its own family
+# verbatim.
+draft_scope_snapshot_census() {   # <pool>...
+    local pool name prefix fam n
+    local -A counts=()
+    for pool in "$@"; do
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            prefix=$(printf '%s' "$name" | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}.*$//; s/[0-9]{6,}.*$//')
+            [ -n "$prefix" ] || prefix="$name"
+            counts["$prefix"]=$(( ${counts["$prefix"]:-0} + 1 ))
+        done < <(zfs list -H -o name -t snapshot -r -- "$pool" 2>/dev/null | sed 's/^[^@]*@//')
+    done
+    if [ "${#counts[@]}" -eq 0 ]; then
+        echo "# (no snapshots found)"
+        return 0
+    fi
+    for fam in "${!counts[@]}"; do
+        printf '%s\t%s\n' "$fam" "${counts[$fam]}"
+    done | sort | while IFS=$'\t' read -r fam n; do
+        printf '# %-40s %s snapshot(s)\n' "$fam" "$n"
+    done
+}
+
 # do_draft_scope_check -- everything --draft-scope validates before it is
 # willing to write anything: manifest exists, describes a delegated PULL peer
 # (same shape as do_commit_scope_check -- a scope file only ever applies
@@ -993,6 +1024,15 @@ do_draft_scope() {
             zfs list -H -o name,type,used,refer,mountpoint -r -- "$pool" 2>/dev/null \
                 | sort | while IFS= read -r line; do printf '# %s\n' "$line"; done
         done
+        echo "# =========================================================="
+        echo "# Snapshot families seen on this host -- informational"
+        echo "# (ENROLMENT-AGREED-2026-08-02 T5). A collector generating a job"
+        echo "# from this scope protects its OWN reserved prefixes"
+        echo "# (__replicate_, __migration__, vzdump) on its copies regardless of"
+        echo "# this list; it exists so an operator editing this file can see"
+        echo "# what is actually here, not guess."
+        echo "# =========================================================="
+        draft_scope_snapshot_census "${pools[@]}"
     } > "$tmp"
 
     # World-readable (matches this project's existing convention for
