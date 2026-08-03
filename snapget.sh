@@ -1285,7 +1285,29 @@ process_dataset() {
             # by -F.
             local recv_base=""
             if [[ "$common_snapshot" != "null" ]]; then
-                recv_base="$common_snapshot"
+                # REV-20260804-037/038 campaign: found live -- find_common_snapshot
+                # returns the SOURCE-side name (what `zfs send -i` needs), but a
+                # name-mismatched GUID match (the target's snapshot was renamed
+                # since the last sync -- exactly the case that fallback exists
+                # for) means the TARGET has no snapshot by that name at all.
+                # written@ below is a TARGET-side query, so querying
+                # written@$common_snapshot against a name the target does not
+                # have returned "-" (property not applicable), which is neither
+                # "0" nor empty and so read as "diverged, refuse" every time.
+                # If the name matches on the target directly, use it as before;
+                # otherwise re-resolve the TARGET's own name for that same GUID.
+                if printf '%s\n' "${tgt_snaps[@]}" | grep -qFx -- "$common_snapshot"; then
+                    recv_base="$common_snapshot"
+                else
+                    local common_guid
+                    common_guid=$(get_snapshot_guid "$src_dataset" "$common_snapshot" "$remote_user" "$remote_host")
+                    if [ -n "$common_guid" ]; then
+                        local tname
+                        for tname in "${tgt_snaps[@]}"; do
+                            [ "$(get_snapshot_guid "$tgt_dataset" "$tname")" = "$common_guid" ] && { recv_base="$tname"; break; }
+                        done
+                    fi
+                fi
             elif [ -n "$bookmark_base" ] && [ ${#tgt_snaps[@]} -gt 0 ]; then
                 recv_base="${tgt_snaps[-1]}"
             fi
