@@ -864,6 +864,17 @@ peer_scope_path() {
     echo "$PEER_STATE_DIR/$1.scope"
 }
 
+# ENROLMENT-AGREED-2026-08-02 T3: the sha256 of the scope file --commit-scope
+# most recently granted from, as a sidecar next to it -- not a second
+# manifest (there is nothing here a parser could disagree about, just a
+# hash), and not embedded in the scope file itself (which would change the
+# file's own hash the moment it recorded one). The collector fetches this
+# alongside the scope file and refuses to generate/activate a job config
+# when the two disagree.
+peer_scope_granted_hash_path() {
+    echo "$PEER_STATE_DIR/$1.scope.sha256"
+}
+
 # REV-20260802-033 slice 4: names Proxmox's own installer-created system
 # datasets, checked against a depth-1 dataset's LAST path component only --
 # never a prefix/substring match, so a real workload named e.g. "rootfs" or
@@ -3634,6 +3645,35 @@ do_commit_scope() {
     [ "${#granted[@]}" -gt 0 ] \
         || die "scope file $sfile selects nothing that exists on this host -- nothing to grant"
 
+    # ENROLMENT-AGREED-2026-08-02 U2: finalization is the deliberate act, and
+    # the diff it shows is against what is granted TODAY (the manifest's
+    # prior list), not the file's previous edit -- after a third edit nobody
+    # remembers which version last went out. So the WHOLE plan (grant,
+    # revoke, and revoke candidates a hold defers) is computed and printed
+    # BEFORE any zfs command runs, not discovered log line by log line as
+    # the loop below executes it.
+    local -a prior=() revoke_clean=() revoke_held=() revoke_gone=()
+    # shellcheck disable=SC2206
+    [ -n "$prior_datasets" ] && prior=($prior_datasets)
+    local p
+    for p in "${prior[@]:-}"; do
+        [ -n "$p" ] || continue
+        case " ${granted[*]:-} " in *" $p "*) continue ;; esac
+        if ! zfs list -H -o name -- "$p" >/dev/null 2>&1; then
+            revoke_gone+=("$p")
+        elif commit_scope_dataset_held "$p"; then
+            revoke_held+=("$p")
+        else
+            revoke_clean+=("$p")
+        fi
+    done
+
+    log "commit-scope plan for '$label' ($account):"
+    log "  grant:  ${granted[*]}"
+    [ "${#revoke_clean[@]}" -gt 0 ] && log "  revoke: ${revoke_clean[*]}"
+    [ "${#revoke_held[@]}" -gt 0 ] && log "  left granted, in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG): ${revoke_held[*]}"
+    [ "${#revoke_gone[@]}" -gt 0 ] && log "  already gone from this host, dropping from the record: ${revoke_gone[*]}"
+
     local perms="snapshot,destroy,send,hold,release,bookmark"
     for ds in "${granted[@]}"; do
         zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
@@ -3648,26 +3688,18 @@ do_commit_scope() {
     # job) on a dataset this scope file never selected is never even looked
     # at, let alone touched -- it was never a candidate, not spared after
     # consideration.
-    local -a prior=() revoke_list=() still_granted=("${granted[@]}")
-    # shellcheck disable=SC2206
-    [ -n "$prior_datasets" ] && prior=($prior_datasets)
-    local p
-    for p in "${prior[@]:-}"; do
-        [ -n "$p" ] || continue
-        case " ${granted[*]:-} " in *" $p "*) continue ;; esac
-        revoke_list+=("$p")
-    done
-    for ds in "${revoke_list[@]:-}"; do
+    local -a still_granted=("${granted[@]}")
+    for ds in "${revoke_gone[@]:-}"; do
         [ -n "$ds" ] || continue
-        if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
-            log "revoke-on-narrow: $ds no longer exists on this host -- nothing to revoke"
-            continue
-        fi
-        if commit_scope_dataset_held "$ds"; then
-            warn "revoke-on-narrow: $ds has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- refusing to revoke mid-transfer. Left granted; re-run --commit-scope=$label once the transfer completes to finish narrowing."
-            still_granted+=("$ds")
-            continue
-        fi
+        log "revoke-on-narrow: $ds no longer exists on this host -- nothing to revoke"
+    done
+    for ds in "${revoke_held[@]:-}"; do
+        [ -n "$ds" ] || continue
+        warn "revoke-on-narrow: $ds has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- refusing to revoke mid-transfer. Left granted; re-run --commit-scope=$label once the transfer completes to finish narrowing."
+        still_granted+=("$ds")
+    done
+    for ds in "${revoke_clean[@]:-}"; do
+        [ -n "$ds" ] || continue
         if zfs unallow -u "$account" "$perms" -- "$ds" 2>/dev/null; then
             log "revoke-on-narrow: revoked ($perms) on $ds from $account -- no longer in scope for '$label'"
         else
@@ -3696,7 +3728,22 @@ do_commit_scope() {
     mv "${mpath}.tmp" "$mpath"
     chmod 0600 "$mpath"
 
-    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_list[@]} revoke candidate(s) considered"
+    # ENROLMENT-AGREED-2026-08-02 T3: a hash instead of a second manifest. The
+    # collector (slice 6) fetches this alongside the scope file and refuses
+    # to generate/activate from a copy whose hash does not match -- proof
+    # that what it just fetched is EXACTLY what was granted from, not an
+    # edit made on the source after the last --commit-scope. World-readable
+    # for the same reason the scope file itself is (REV-033 slice 4
+    # follow-up): the collector reads it as its delegated account, not root.
+    local hpath; hpath=$(peer_scope_granted_hash_path "$label")
+    local digest; digest=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
+    [ -n "$digest" ] || die "could not compute a sha256 of $sfile -- grant already committed, but the hash sidecar is missing. Re-run --commit-scope=$label to retry writing it"
+    local htmp; htmp=$(mktemp) || die "mktemp failed"
+    printf '%s\n' "$digest" > "$htmp"
+    chmod 0644 "$htmp" 2>/dev/null
+    mv -f "$htmp" "$hpath" || die "could not write $hpath"
+
+    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_clean[@]} revoked, ${#revoke_held[@]} held back, ${#revoke_gone[@]} already gone"
 }
 
 # ==============================================================================
