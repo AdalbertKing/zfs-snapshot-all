@@ -1259,13 +1259,23 @@ process_dataset() {
         # has somewhere to write into. That pre-created leaf made
         # target_exists() true on every first-ever seed, which then found no
         # recv_base (nothing to be common WITH yet) and refused outright --
-        # the tool's own preparation step defeating its next one. Only a
-        # target with actual snapshots has real history worth protecting;
-        # guest_disk_is_live above already covers the other danger this
-        # guard exists for (a live, unsnaphotted guest disk occupying the
-        # same path in sync mode) regardless of snapshot count.
+        # the tool's own preparation step defeating its next one.
+        #
+        # `-F` stays SET here (recv_force_flag keeps its "-F" default from
+        # above), not cleared: `zfs receive` itself refuses to write a new
+        # filesystem stream into an already-existing destination without
+        # -F, even one that is completely empty -- confirmed live ("cannot
+        # receive new filesystem stream: ... exists / must specify -F to
+        # overwrite it") clearing it produced exactly that error. The
+        # distinction this whole gate exists for is not "-F yes or no", it
+        # is "is -F safe here" -- and with zero snapshots there is nothing
+        # for -F to roll back, so it is. A target WITH actual snapshots
+        # still needs the recv_base/written@ reasoning below; guest_disk_is_live
+        # above already covers the other danger this guard exists for (a
+        # live, unsnapshotted guest disk occupying the same path in sync
+        # mode) regardless of snapshot count.
         if [ ${#tgt_snaps[@]} -eq 0 ]; then
-            recv_force_flag=""
+            :
         else
             # The snapshot this receive would resume from: the common one if a
             # real name/GUID match was found, else the target's own current head
