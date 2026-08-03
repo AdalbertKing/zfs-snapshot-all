@@ -2285,6 +2285,28 @@ cmd_migrate_to_account() {
     crontab_of_or_die root    "$rootcron"
     crontab_of_or_die "$acct" "$acctcron"
 
+    # REV-20260803-036 F5 follow-up: this verb commits through cron_replace_all,
+    # the same primitive deploy.sh --pause/--resume use, and that primitive is
+    # deliberately NOT guarded by cron_paused_guard -- guarding it unconditionally
+    # would make --pause refuse itself. Left alone, that means migrate-to-account
+    # could run during an operator's own maintenance window and silently commit
+    # an active managed block over (or next to) a paused one -- exactly the
+    # "next ordinary writer undoes the pause" failure mode F5 exists to close,
+    # just via a different verb than the ones already guarded inside lib-cron.sh.
+    # Checked here, explicitly, before any other preflight work: cheaper to ask
+    # "is either side paused" once than to reconstruct which four checks would
+    # have to duplicate cron_paused_guard's own logic at every write site below.
+    if cron_fullcron_paused "$rootcron" || cron_block_paused "$rootcron" zfs-backup-managed \
+        || cron_block_paused "$rootcron" zfs-backup-host; then
+        rm -f "$rootcron" "$acctcron"
+        die "root's crontab is currently paused (deploy.sh --pause) -- migrating now would commit an active managed block during a maintenance window that is supposed to have nothing changing. Run deploy.sh --resume first, then retry. Nothing has been changed."
+    fi
+    if cron_fullcron_paused "$acctcron" || cron_block_paused "$acctcron" zfs-backup-managed \
+        || cron_block_paused "$acctcron" zfs-backup-host; then
+        rm -f "$rootcron" "$acctcron"
+        die "'$acct's crontab is currently paused (deploy.sh --pause) -- run deploy.sh --resume first, then retry. Nothing has been changed."
+    fi
+
     if grep -q '^# BEGIN zfs-backup-managed' "$rootcron"; then
         _have "root ma blok zarzadzany ($(grep -cE '^[0-9*]' "$rootcron") linii zadan lacznie)"
     else

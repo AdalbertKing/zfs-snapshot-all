@@ -2690,6 +2690,85 @@ case "$back" in
     *) bad "second-look: ...and reprints what to do about it" "$back" ;;
 esac
 
+# --- 35. migrate-to-account refuses while either crontab is paused ----------
+#
+# REV-20260803-036 F5 follow-up: this verb commits through cron_replace_all,
+# the one primitive deliberately left unguarded by cron_paused_guard (guarding
+# it unconditionally would make deploy.sh --pause refuse itself, since pause
+# and resume both commit through it too). Left unchecked here, migrating
+# during an operator's own maintenance window would silently install an
+# active managed block over -- or next to -- a paused one, undoing the pause
+# exactly like the ordinary writers F5 already guards.
+PM="$WORK/pausedmig"; mkdir -p "$PM/bin"
+cat > "$PM/bin/getent" <<'EOF'
+#!/bin/bash
+[ "$1" = passwd ] && echo "zfsbackup:x:1001:1001::/home/zfsbackup:/bin/bash"
+exit 0
+EOF
+cat > "$PM/bin/id" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+echo root
+EOF
+chmod +x "$PM/bin/getent" "$PM/bin/id"
+
+# 35a: root's crontab is the --fullcron placeholder (a single line).
+cat > "$PM/bin/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && exit 0
+echo "# zfs-snapshot-all: PAUSED by deploy.sh --pause at 2026-01-01 00:00:00 UTC -- run: deploy.sh --resume"
+exit 0
+EOF
+chmod +x "$PM/bin/crontab"
+out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"currently paused"*"deploy.sh --resume"*) true ;; *) false ;; esac; then
+    ok "migrate-to-account: refuses while root is --fullcron paused"
+else
+    bad "migrate-to-account: refuses while root is --fullcron paused" "rc=$rc out=$out"
+fi
+
+# 35b: root's crontab is NOT fullcron-paused, but its own managed block is
+# (block mode) -- the more common real shape, since block mode is the
+# default. Same refusal, same reason.
+cat > "$PM/bin/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && exit 0
+echo "# BEGIN zfs-backup-managed"
+echo "# ZSA-PAUSED by deploy.sh --pause at 2026-01-01 00:00:00 UTC -- run: deploy.sh --resume"
+echo "#ZSA-PAUSED## Source: /etc/zfs-snapshot-all/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "#ZSA-PAUSED#7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"automated_hourly_\" \"tank/a\" 2>>/root/scripts/cron.log"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+chmod +x "$PM/bin/crontab"
+out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"currently paused"*"deploy.sh --resume"*) true ;; *) false ;; esac; then
+    ok "migrate-to-account: refuses while root's managed block is (block-mode) paused"
+else
+    bad "migrate-to-account: refuses while root's managed block is (block-mode) paused" "rc=$rc out=$out"
+fi
+
+# 35c: neither side paused -- the guard must not fire on the ordinary case
+# (an unpaused managed block, same shape minus the pause header/prefixes).
+# Expected to fail LATER, for an unrelated reason (no readable config/checkout
+# in this minimal stub) -- the only thing asserted here is that it gets PAST
+# the pause check, i.e. never mentions "currently paused".
+cat > "$PM/bin/crontab" <<'EOF'
+#!/bin/bash
+[ "$1" = "-u" ] && exit 0
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: /etc/zfs-snapshot-all/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "7 * * * * /root/scripts/zfs-snapshot-all/snapsend.sh -m \"automated_hourly_\" \"tank/a\" 2>>/root/scripts/cron.log"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+chmod +x "$PM/bin/crontab"
+out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ) || :
+case "$out" in
+    *"currently paused"*) bad "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" "$out" ;;
+    *) ok "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
