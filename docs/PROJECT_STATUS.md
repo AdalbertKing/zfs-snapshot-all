@@ -432,7 +432,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
-| `cron` | **97/97** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego") |
+| `cron` | **111/111** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14) |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
@@ -678,10 +678,18 @@ czterech hostach w obu formach hosta.
   zdrową migrację. Recenzent trafnie nazwał też mój test: zostawiał capacity
   **luzem** poza blokiem, więc podmiana całości wyglądała nieszkodliwie.
   **F4** (`cecfeaf`): walidacja markerów była lokalna dla nazwy, więc cudzy blok
-  zagnieżdżony w docelowym przechodził i ginął w całości. **F2** (brak
-  wspólnego zamka) i **F3** (`migrate-to-account` nadal woła `crontab`
-  bezpośrednio) przyjęte, w kolejnym plasterku — model zamków i pełny spis
-  bezpośrednich zapisów jest w odpowiedzi.
+  zagnieżdżony w docelowym przechodził i ginął w całości.
+  **F2 ZROBIONE**: zamek per-użytkownik na każdym mutującym wejściu
+  (`cron_lock_acquire`/`_release`, wariant `_multi` sortowany po nazwie —
+  deadlock niemożliwy konstrukcyjnie), `test/cron` sekcje P–S (+14), przeplot
+  **wymuszony barierą**, nie ścigany czasem. Przy okazji własny błąd tej samej
+  klasy co się tu ściga: `local user="$1" fd="${CRON_LOCK_FD[$user]:-}"` — bash
+  rozwija obie wartości w jednej komendzie `local` przed przypisaniem, więc
+  `$user` w drugim polu odwoływał się do niczego pod `set -u`, a diagnoza szła
+  w `/dev/null` linijkę niżej — suita padała bez żadnego komunikatu. Naprawione
+  rozbiciem na dwie instrukcje.
+  **F3** (`migrate-to-account` nadal woła `crontab` bezpośrednio) — kolejny
+  plasterek; potrzebny `cron_replace_all` jako brakujący prymityw.
   Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik

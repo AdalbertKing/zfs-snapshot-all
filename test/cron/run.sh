@@ -52,7 +52,59 @@ if [ "$mode" = liar ]; then cat "${1:?}" > "$f"; echo "# something else" >> "$f"
 cat "${1:?}" > "$f"; exit 0
 EOF
 chmod +x "$TMPD/bin/crontab"
-export PATH="$TMPD/bin:$PATH" CRONTAB_DIR="$TMPD/tabs" CRONTAB_MODE=ok
+
+# ---- a flock(1) shim, for THIS DEV MACHINE only -----------------------------
+#
+# Production hosts have real flock -- deploy.sh already refuses to run without
+# it (Phase 1) -- so lib-cron.sh's locking is exercised for real on every host
+# it ships to. This machine's git-bash does not carry the binary, and the
+# suite still has to run here.
+#
+# lib-cron.sh only ever calls two shapes: `flock -w SEC fd` (acquire within a
+# bound) and `flock -u fd` (release). Real flock(1) locks by fd via flock(2);
+# this shim resolves the fd's target path through /proc/self/fd (present here)
+# and mutexes on that path with `mkdir`, which is atomic on every filesystem
+# this suite runs on. Good enough to prove lib-cron.sh's acquire/release/
+# timeout contract -- it is not a reimplementation of flock(2) and must never
+# be mistaken for one.
+if ! command -v flock >/dev/null 2>&1; then
+cat > "$TMPD/bin/flock" <<'EOF'
+#!/bin/bash
+mode="" timeout="" fd=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -w) timeout="$2"; shift 2 ;;
+        -u) mode="unlock"; shift ;;
+        -n) mode="${mode:-nonblock}"; shift ;;
+        -x|-s) shift ;;
+        *) fd="$1"; shift ;;
+    esac
+done
+path=$(readlink /proc/self/fd/"$fd" 2>/dev/null) || exit 1
+lockdir="${path}.lockdir"
+if [ "$mode" = unlock ]; then rmdir "$lockdir" 2>/dev/null; exit 0; fi
+if [ -z "$timeout" ]; then
+    mkdir "$lockdir" 2>/dev/null && exit 0
+    exit 1
+fi
+deadline=$(( $(date +%s%N) + timeout * 1000000000 ))
+while :; do
+    mkdir "$lockdir" 2>/dev/null && exit 0
+    [ "$(date +%s%N)" -ge "$deadline" ] && exit 1
+    sleep 0.05
+done
+EOF
+chmod +x "$TMPD/bin/flock"
+fi
+
+# Lock files live inside $TMPD, not the library's real default (/run,
+# falling back to /tmp): those are SHARED, system-wide paths, and a run that
+# crashed without releasing (or, on this dev machine, the mkdir-based flock
+# shim above, which -- unlike real flock(2) -- does not auto-release when a
+# process dies) would poison every run after it. $TMPD is fresh every time and
+# is removed on exit regardless of how the run ends.
+mkdir -p "$TMPD/locks"
+export PATH="$TMPD/bin:$PATH" CRONTAB_DIR="$TMPD/tabs" CRONTAB_MODE=ok CRON_LOCK_DIR="$TMPD/locks"
 
 # shellcheck disable=SC1090
 source "$LIB"
@@ -417,6 +469,173 @@ cron_block_install "$ME" zfs-backup-host "$(body '0 8 * * * capacity' '0 7 * * *
 check "O9 adjacent blocks are normal and still accepted" "0" "$?"
 check "O10 ...the other block survives" "1" "$(grep -c 'snapsend' "$(tab)")"
 check "O11 ...and the human's line" "1" "$(grep -c 'loose-but-human' "$(tab)")"
+
+# ---- P. serialization: concurrent writers to the SAME crontab -----------------
+#
+# REV-20260802-034 F2. Read-back proves THIS write landed; it cannot prove
+# nothing was lost between the read and the write. Without a shared lock, two
+# processes can each read the same starting crontab and each write back a
+# result that is individually correct and read-back-verified, and the SECOND
+# write still erases the first's change. This is the exact race the
+# single-writer refactor exists to remove, and giving it a second writer
+# without a shared lock just gave the race a narrower door.
+#
+# The interleaving is FORCED with a barrier (mkdir/files, atomic everywhere
+# this suite runs), not raced by timing: process A acquires the lock, signals
+# it is INSIDE the critical section, waits for a go-ahead, then writes;
+# process B is started only once A has confirmed it holds the lock, so B's
+# acquire is a real, provable contention rather than a hopeful race.
+seed '# untouched' '1 * * * * preexisting'
+BARRIER_HELD="$TMPD/barrier-held"; BARRIER_GO="$TMPD/barrier-go"
+rm -f "$BARRIER_HELD" "$BARRIER_GO"
+
+cat > "$TMPD/writer_a.sh" <<WRITERA
+#!/bin/bash
+PATH="$TMPD/bin:\$PATH"
+CRONTAB_DIR="$TMPD/tabs" CRON_LOCK_DIR="$TMPD/locks"
+export PATH CRONTAB_DIR CRON_LOCK_DIR
+source "$REPO/lib-cron.sh"
+cron_lock_acquire "$ME" || { echo "A-ACQUIRE-FAILED" > "$TMPD/a-result"; exit 1; }
+: > "$BARRIER_HELD"
+while [ ! -e "$BARRIER_GO" ]; do sleep 0.05; done
+# Do the write WHILE still holding the lock -- if B's acquire below is not
+# really blocked, this sleep is where its write would land in between.
+sleep 0.3
+tmp=\$(mktemp)
+printf '%s\n' '# untouched' '1 * * * * preexisting' '2 * * * * from-A' > "\$tmp"
+cron_write "$ME" "\$tmp"
+rm -f "\$tmp"
+cron_lock_release "$ME"
+echo "A-DONE" > "$TMPD/a-result"
+WRITERA
+chmod +x "$TMPD/writer_a.sh"
+
+cat > "$TMPD/writer_b.sh" <<WRITERB
+#!/bin/bash
+PATH="$TMPD/bin:\$PATH"
+CRONTAB_DIR="$TMPD/tabs" CRON_LOCK_DIR="$TMPD/locks"
+export PATH CRONTAB_DIR CRON_LOCK_DIR
+source "$REPO/lib-cron.sh"
+start=\$(date +%s)
+cron_block_install "$ME" zfs-backup-managed "$TMPD/b-body" >/dev/null 2>&1
+end=\$(date +%s)
+echo "\$((end-start))" > "$TMPD/b-wait-seconds"
+echo "B-DONE" > "$TMPD/b-result"
+WRITERB
+chmod +x "$TMPD/writer_b.sh"
+printf '3 * * * * from-B\n' > "$TMPD/b-body"
+
+bash "$TMPD/writer_a.sh" &
+apid=$!
+while [ ! -e "$BARRIER_HELD" ]; do sleep 0.05; done
+# A provably holds the lock now. Start B, THEN release A -- so B's
+# cron_block_install has to sit through A's write, not merely start near it.
+bash "$TMPD/writer_b.sh" &
+bpid=$!
+sleep 0.2
+: > "$BARRIER_GO"
+wait "$apid" "$bpid" 2>/dev/null
+
+check "P1 writer A completed" "A-DONE" "$(cat "$TMPD/a-result" 2>/dev/null)"
+check "P2 writer B completed" "B-DONE" "$(cat "$TMPD/b-result" 2>/dev/null)"
+# The property the review asked for: BOTH survive. A's line into the host
+# block and B's own managed block must both be present -- neither writer's
+# read-modify-write window overlapped the other's.
+check "P3 A's line survived" "1" "$(grep -c 'from-A' "$(tab)")"
+check "P4 B's block survived" "1" "$(grep -c 'from-B' "$(tab)")"
+check "P5 the line that predates both writers survived" "1" "$(grep -c 'preexisting' "$(tab)")"
+
+# ---- Q. lock contention: a clear diagnostic, no write, no hang -------------
+#
+# Non-blocking with a bounded wait, then a clear diagnostic and NO write --
+# never a silent, unbounded hang, and never a write that skipped the queue.
+rm -f "$BARRIER_HELD" "$BARRIER_GO"
+cat > "$TMPD/holder.sh" <<HOLDER
+#!/bin/bash
+PATH="$TMPD/bin:\$PATH"
+CRON_LOCK_DIR="$TMPD/locks"
+export PATH CRON_LOCK_DIR
+source "$REPO/lib-cron.sh"
+cron_lock_acquire heldsvc || exit 1
+: > "$BARRIER_HELD"
+while [ ! -e "$BARRIER_GO" ]; do sleep 0.05; done
+cron_lock_release heldsvc
+HOLDER
+chmod +x "$TMPD/holder.sh"
+bash "$TMPD/holder.sh" &
+hpid=$!
+while [ ! -e "$BARRIER_HELD" ]; do sleep 0.05; done
+CRON_LOCK_TIMEOUT=1 cron_lock_acquire heldsvc
+rc=$?
+err="$CRON_ERR"
+: > "$BARRIER_GO"
+wait "$hpid" 2>/dev/null
+check "Q1 a held lock refuses within its bounded timeout" "1" "$rc"
+case "$err" in *"another writer is holding it"*) ok "Q2 ...with a diagnostic naming contention, not a generic failure" ;;
+  *) bad "Q2 ...with a diagnostic naming contention, not a generic failure" "$err" ;; esac
+cron_lock_release heldsvc 2>/dev/null
+
+# ---- R. two DIFFERENT users proceed independently ---------------------------
+#
+# The lock is keyed by target user, so writes to unrelated crontabs never wait
+# on each other -- serializing everyone against everyone would just trade one
+# race for a different bottleneck.
+rm -f "$BARRIER_HELD" "$BARRIER_GO"
+bash "$TMPD/holder.sh" &
+hpid=$!
+while [ ! -e "$BARRIER_HELD" ]; do sleep 0.05; done
+t0=$(date +%s%N)
+cron_lock_acquire otheruser
+rc=$?
+t1=$(date +%s%N)
+: > "$BARRIER_GO"
+wait "$hpid" 2>/dev/null
+cron_lock_release otheruser 2>/dev/null
+check "R1 a different user's lock is unaffected: acquired" "0" "$rc"
+ms=$(( (t1 - t0) / 1000000 ))
+if [ "$ms" -lt 2000 ]; then ok "R2 ...and immediately, not after waiting for the other user's lock"
+else bad "R2 ...and immediately, not after waiting for the other user's lock" "${ms}ms"; fi
+
+# ---- S. multi-user acquisition is deadlock-free by construction ------------
+#
+# Two users, taken in a DETERMINISTIC order (sorted by name) regardless of the
+# order they are named in -- so a transaction naming (root, zzz) and one
+# naming (zzz, root) can never form a cycle.
+cron_lock_acquire_multi zzz-user aaa-user
+check "S1 acquiring in reverse name order still succeeds" "0" "$?"
+h1=$([ -n "${CRON_LOCK_FD[zzz-user]:-}" ] && echo held || echo NO)
+h2=$([ -n "${CRON_LOCK_FD[aaa-user]:-}" ] && echo held || echo NO)
+check "S2 both are actually held" "held held" "$h1 $h2"
+cron_lock_release_multi zzz-user aaa-user
+h1=$([ -n "${CRON_LOCK_FD[zzz-user]:-}" ] && echo 1 || echo 0)
+h2=$([ -n "${CRON_LOCK_FD[aaa-user]:-}" ] && echo 1 || echo 0)
+check "S3 both are released" "0 0" "$h1 $h2"
+
+# A failed acquisition midway releases whatever it already got -- no partial
+# hold left behind for the caller to leak.
+rm -f "$BARRIER_HELD" "$BARRIER_GO"
+cat > "$TMPD/holder2.sh" <<HOLDER2
+#!/bin/bash
+PATH="$TMPD/bin:\$PATH"
+CRON_LOCK_DIR="$TMPD/locks"
+export PATH CRON_LOCK_DIR
+source "$REPO/lib-cron.sh"
+cron_lock_acquire bbb-user || exit 1
+: > "$BARRIER_HELD"
+while [ ! -e "$BARRIER_GO" ]; do sleep 0.05; done
+cron_lock_release bbb-user
+HOLDER2
+chmod +x "$TMPD/holder2.sh"
+bash "$TMPD/holder2.sh" &
+hpid=$!
+while [ ! -e "$BARRIER_HELD" ]; do sleep 0.05; done
+CRON_LOCK_TIMEOUT=1 cron_lock_acquire_multi aaa-user bbb-user
+rc=$?
+: > "$BARRIER_GO"
+wait "$hpid" 2>/dev/null
+check "S4 a multi-lock that cannot complete: refused" "1" "$rc"
+h1=$([ -n "${CRON_LOCK_FD[aaa-user]:-}" ] && echo 1 || echo 0)
+check "S5 ...and the one it DID get is released, not leaked" "0" "$h1"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

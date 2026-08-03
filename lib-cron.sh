@@ -87,6 +87,90 @@ cron_is_self() {   # <user>
     [ "$1" = "$(id -un)" ] || [ "$1" = root ]
 }
 
+# ---- serialization (REV-20260802-034 F2) ------------------------------------
+#
+# Read-back proves THIS write landed; it cannot prove nothing was lost between
+# the read and the write. gen-cron.sh's own GEN_CRON_LOCKFILE is private to its
+# own --install run, and deploy.sh never took it -- so a gen-cron install and a
+# deploy.sh run against the same user could each read the same stale copy, and
+# the second write would silently erase the first's change. Read-modify-write
+# without a shared lock is the exact race the single-writer refactor exists to
+# remove, and adding one writer without one just gave the race a narrower door.
+#
+# So every mutating entry point takes a lock keyed by the TARGET USER, held
+# from before the first read to after the read-back or the restore decision. A
+# requester does not have to remember a separate lock to be safe, because there
+# is no path from a requester to crontab(1) that skips this one.
+#
+# flock(1) locks are held by an OPEN FILE DESCRIPTION, not by the process --
+# opening the same lock file a second time from the same process and flock-ing
+# THAT would self-deadlock rather than succeed, because flock has no concept of
+# "this process already holds it". That is why every mutating function below
+# has an internal *_impl that does the real work UNLOCKED, and only the
+# outermost public call opens the lock: cron_block_adopt_line's wrapper calls
+# cron_block_ensure_line_impl directly, never the locked cron_block_ensure_line.
+CRON_LOCK_DIR="${CRON_LOCK_DIR:-/run}"
+[ -d "$CRON_LOCK_DIR" ] && [ -w "$CRON_LOCK_DIR" ] || CRON_LOCK_DIR="${TMPDIR:-/tmp}"
+CRON_LOCK_TIMEOUT="${CRON_LOCK_TIMEOUT:-10}"
+declare -gA CRON_LOCK_FD=()
+
+cron_lock_path() { printf '%s/lib-cron.%s.lock' "$CRON_LOCK_DIR" "$1"; }   # <user>
+
+# Non-blocking with a bounded wait, then a clear diagnostic and NO write --
+# never a silent, unbounded hang, and never a write that skipped the queue.
+cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
+    local user="$1" path fd
+    if [ -n "${CRON_LOCK_FD[$user]:-}" ]; then
+        CRON_ERR="the crontab lock for '$user' is already held by this process -- that is a bug in the caller, not lock contention"
+        return 1
+    fi
+    path=$(cron_lock_path "$user")
+    exec {fd}>"$path" 2>/dev/null || { CRON_ERR="could not open the lock file $path"; return 1; }
+    if ! flock -w "$CRON_LOCK_TIMEOUT" "$fd"; then
+        eval "exec $fd>&-" 2>/dev/null
+        CRON_ERR="could not acquire the crontab lock for '$user' within ${CRON_LOCK_TIMEOUT}s -- another writer is holding it. Refusing to write rather than racing it"
+        return 1
+    fi
+    CRON_LOCK_FD[$user]="$fd"
+    return 0
+}
+
+cron_lock_release() {   # <user>
+    # Two statements, not one `local a=X b=$a`: a single `local` command
+    # expands ALL of its words before assigning any of them, so `$user` in the
+    # second field would resolve against whatever `user` meant before this
+    # call (nothing, under `set -u`) rather than the "$1" just given -- an
+    # unbound-variable abort, found by the suite dying with no message because
+    # the diagnosing stderr was routed to /dev/null one line below.
+    local user="$1"
+    local fd="${CRON_LOCK_FD[$user]:-}"
+    [ -n "$fd" ] || return 0
+    flock -u "$fd" 2>/dev/null
+    eval "exec $fd>&-" 2>/dev/null
+    unset "CRON_LOCK_FD[$user]"
+}
+
+# Several users, ONE deterministic order -- sorted by name, never by call
+# order -- so a migration naming root and an account can never deadlock against
+# a hypothetical other transaction that happened to name them the other way
+# round. Anything already acquired is released before reporting failure, so a
+# refused multi-lock never leaves a partial hold behind.
+cron_lock_acquire_multi() {   # <user> [<user> ...]  -> 0 all held, 1 refused
+    local sorted u got=()
+    sorted=$(printf '%s\n' "$@" | sort -u)
+    for u in $sorted; do
+        if ! cron_lock_acquire "$u"; then
+            local g; for g in "${got[@]}"; do cron_lock_release "$g"; done
+            return 1
+        fi
+        got+=("$u")
+    done
+    return 0
+}
+cron_lock_release_multi() {   # <user> [<user> ...]
+    local u; for u in "$@"; do cron_lock_release "$u"; done
+}
+
 # Read <user>'s crontab into <outfile>, or fail loudly.
 #
 # "No crontab for user" is EMPTY. Anything else is UNKNOWN, and an unknown
@@ -311,6 +395,13 @@ cron_body_valid() {   # <bodyfile>
 # restore separately from the original failure -- "the write failed" and "the
 # write failed and I could not put it back" are different emergencies.
 cron_block_install() {   # <user> <name> <bodyfile> [begin_tail]
+    local who="$1"
+    cron_lock_acquire "$who" || return 1
+    cron_block_install_impl "$@"; local rc=$?
+    cron_lock_release "$who"
+    return "$rc"
+}
+cron_block_install_impl() {
     local who="$1" name="$2" body="$3" tail="${4:-}"
     CRON_ERR=""
     cron_block_name_valid "$name" || { CRON_ERR="invalid block name '$name'"; return 1; }
@@ -368,6 +459,13 @@ cron_restore_after_failure() {   # <user> <curfile> <original error>
 # is called on teardown paths, where "it was already gone" is the goal state,
 # not an error.
 cron_block_remove() {   # <user> <name>
+    local who="$1"
+    cron_lock_acquire "$who" || return 1
+    cron_block_remove_impl "$@"; local rc=$?
+    cron_lock_release "$who"
+    return "$rc"
+}
+cron_block_remove_impl() {
     local who="$1" name="$2"
     CRON_ERR=""
     cron_block_name_valid "$name" || { CRON_ERR="invalid block name '$name'"; return 1; }
@@ -433,6 +531,13 @@ cron_block_diff() {   # <user> <name> <bodyfile|->  -> prints a diff, 0 if ident
 # needs it: its updater line has had three shapes, and leaving one of them next
 # to the current one would run the update twice an hour.
 cron_block_ensure_line() {   # <user> <name> <match> <line> [begin_tail] [also]
+    local who="$1"
+    cron_lock_acquire "$who" || return 1
+    cron_block_ensure_line_impl "$@"; local rc=$?
+    cron_lock_release "$who"
+    return "$rc"
+}
+cron_block_ensure_line_impl() {
     local who="$1" name="$2" match="$3" line="$4" tail="${5:-}" also="${6:-}"
     CRON_ERR=""; CRON_ADOPTED=0
     cron_block_name_valid "$name" || { CRON_ERR="invalid block name '$name'"; return 1; }
@@ -497,6 +602,13 @@ cron_block_ensure_line() {   # <user> <name> <match> <line> [begin_tail] [also]
 # deliberate exception and uses cron_block_ensure_line, because normalising
 # three historical spellings to one is the whole point there.
 cron_block_adopt_line() {   # <user> <name> <match> <default line> [begin_tail]
+    local who="$1"
+    cron_lock_acquire "$who" || return 1
+    cron_block_adopt_line_impl "$@"; local rc=$?
+    cron_lock_release "$who"
+    return "$rc"
+}
+cron_block_adopt_line_impl() {
     local who="$1" name="$2" match="$3" line="$4" tail="${5:-}"
     CRON_ERR=""
     local cur found
@@ -505,7 +617,9 @@ cron_block_adopt_line() {   # <user> <name> <match> <default line> [begin_tail]
     found=$(grep -m1 -F -- "$match" "$cur" || true)
     rm -f "$cur"
     [ -n "$found" ] && line="$found"
-    cron_block_ensure_line "$who" "$name" "$match" "$line" "$tail"
+    # ...ensure_line's IMPL directly, never the locked wrapper: this process
+    # already holds who's lock, and flock would self-deadlock reacquiring it.
+    cron_block_ensure_line_impl "$who" "$name" "$match" "$line" "$tail"
 }
 
 # Render <name>'s block with <linesfile> ADDED to whatever it already holds.
