@@ -7,15 +7,17 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-03** (po REV-034 w całości i po REV-033
-  plasterku 2 — `--join` przestaje nadawać, `--commit-scope` nadaje z pliku
-  zakresu)
-- Zweryfikowano przeciw: `4190d83` **plus commit niosący ten dokument** —
+- Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
+  plasterku 2 i po REV-035 — zamek F2 kluczowany tożsamością wywołującego,
+  naprawione)
+- Zweryfikowano przeciw: `9e977f6` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `4190d83` — `--join` (peer pull)
-  nie nadaje już żadnych uprawnień ZFS; nowa komenda `--commit-scope` nadaje
-  dokładnie to, co wybiera plik zakresu (REV-033 plasterek 2); wcześniej
+- Ostatnia zmiana zachowania produkcyjnego: `9e977f6` — `CRON_LOCK_DIR` to
+  teraz jeden stały katalog bez fallbacku zależnego od wywołującego (REV-035);
+  wcześniej `4190d83` — `--join` (peer pull) nie nadaje już żadnych uprawnień
+  ZFS; nowa komenda `--commit-scope` nadaje dokładnie to, co wybiera plik
+  zakresu (REV-033 plasterek 2); wcześniej
   `ff712df` — gramatyka i czytnik pliku zakresu, `lib-scope.sh` (REV-033
   plasterek 1); wcześniej `41afa2f` — goły `exec ... 2>/dev/null`
   w `cron_lock_acquire`/`_release` trwale kasował stderr procesu zamiast
@@ -441,7 +443,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
 | `gencron` | 56/56 | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
-| `cron` | **120/120** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14), całościowy zapis `cron_replace_all` z odczytem zwrotnym (REV-034 F3, +9) |
+| `cron` | **123/123** | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14), całościowy zapis `cron_replace_all` z odczytem zwrotnym (REV-034 F3, +9), jeden stały katalog blokad bez fallbacku per-caller (REV-035, +8, część SKIP na tej maszynie) |
 | `cron2conf` | 10/10 | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze |
 | `quiesce` | **161/161** | księgowanie `-q`: własność guesta, deduplikacja, trasa uprzywilejowana lokalnej ścieżki (+10) odmowa zamiast degradacji (+14, REV-023) **oraz okno zamrożenia jako termin (+15, REV-024)** |
 | `tune` | 48/48 | cache autotune `-A` |
@@ -728,6 +730,26 @@ czterech hostach w obu formach hosta.
   prawdziwym produkcyjnym bloku — wszystkie cztery hosty migrowały się na
   kodzie sprzed F3.
   Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
+- **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
+  F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
+  `CRON_LOCK_DIR` = `/run` jeśli zapisywalny, inaczej `$TMPDIR`/`/tmp` — root
+  zawsze widzi `/run` jako zapisywalny, delegowane konto zwykle nie, więc
+  root blokował `/run/lib-cron.<user>.lock`, a `gen-cron.sh` uruchomiony
+  jako to samo konto blokował `/tmp/lib-cron.<user>.lock` **na tym samym
+  crontabie**. Dwa różne zamki na jednym pliku to brak zamka — dokładnie
+  wyścig F2, który miał być zamknięty. Testy P–S z REV-034 nie mogły tego
+  złapać, bo obie strony testu dostają ten sam `CRON_LOCK_DIR` z zewnątrz.
+  Naprawione: jeden stały katalog `/var/lib/zfs-snapshot-all/locks`
+  (`$ALERT_SHARED_DIR`, ta sama obróbka 2775 root:zfsalert co kolejka
+  alertów), bez żadnego fallbacku — niedostępny katalog odmawia, nie wybiera
+  po cichu innego miejsca. Dodana też ochrona przed symlinkiem na
+  przewidywalnej ścieżce blokady. `cron` **123/123** (+8, 5 SKIP na tej
+  maszynie — bity uprawnień i symlink wymagają prawdziwego Linuksa).
+  **Nie sprawdzone tutaj:** prawdziwy `flock` między realnym procesem roota
+  a realnym procesem konta na tym samym hoście — wymaga żywego hosta,
+  zgłoszone jako zobowiązanie ręczne (Faza 4 jest idempotentna, więc
+  najbliższy `deploy.sh` na dowolnym hoście to podejmie za darmo).
+  Odpowiedź: `docs/reviews/responses/REV-20260803-035.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
   zakresu i odróżniać endpoint od trasy. Recenzja wprost zabrania
