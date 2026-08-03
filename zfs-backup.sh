@@ -1474,7 +1474,16 @@ cmd_seed() {
         echo "STATE=seed_complete"
         printf 'SEED_COMPLETED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
-    log "client '$name' seed complete. Next: relocate if needed, then set-endpoint/verify-endpoint, then activate-client."
+    # REV-20260802-033 F4 / owner decisions 13-14: set-endpoint is conditional,
+    # not a standard step -- it is needed only when the address used by SSH
+    # actually changes (a new host or port). A routed site-to-site VPN that
+    # preserves the original host:port needs no endpoint mutation at all: just
+    # re-run verify-endpoint against the endpoint already on record. Saying
+    # Saying "then set-endpoint" followed by "verify-endpoint" here used to
+    # read as a fixed two-step sequence, which is exactly the failure mode F4
+    # warns about -- an administrator inventing or repeating an address that
+    # never changed.
+    log "client '$name' seed complete. Next: if the source relocates, run final-catchup first over the still-working link. If SSH now reaches it at a DIFFERENT host or port, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
 }
 
 # ------------------------------------------------------------------------------
@@ -1710,14 +1719,26 @@ cmd_verify_endpoint() {
     # that is not a recognised PLAN= line is treated as unknown and FAILS --
     # fail-closed, per the review.
     local ds localpath failed=0 needs_full=0 unknown=0 out plan
+    # REV-20260802-033 F4: stderr used to go to /dev/null here, which silently
+    # swallowed the ONE diagnostic that distinguishes a source-IP/firewall
+    # restriction from every other kind of failure -- snapget.sh's own
+    # "CONNECTION-level failure (authentication, host key, network or DNS)"
+    # message (lib-zfs-snap.sh log level 0). Kept in a file instead, and
+    # printed only on this dataset's failure, so the operator sees WHY a
+    # relocation's re-verify failed instead of just an rc number.
+    local errtmp; errtmp=$(mktemp) || die "mktemp failed"
     for ds in $PEER_SAVED_DATASETS; do
         localpath="$PEER_SAVED_TARGET/$LOAD_LABEL/$ds"
-        # stdout only: stderr carries the human log, and mixing them back
-        # together is exactly what made the old text heuristic fragile.
+        # stdout carries the machine-readable PLAN= verdict; stderr carries the
+        # human log, captured separately (never mixed into $out, which is what
+        # made the old text heuristic fragile) but no longer discarded.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL" 2>/dev/null); local rc=$?
+        out=$(bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$PEER_SAVED_TARGET/$LOAD_LABEL" 2>"$errtmp"); local rc=$?
         if [ "$rc" -ne 0 ]; then
             warn "  FAILED (rc=$rc): $ds"
+            if [ -s "$errtmp" ]; then
+                while IFS= read -r errline; do warn "    $errline"; done < "$errtmp"
+            fi
             failed=$((failed + 1))
             continue
         fi
@@ -1732,6 +1753,7 @@ cmd_verify_endpoint() {
                 unknown=$((unknown + 1)) ;;
         esac
     done
+    rm -f "$errtmp"
     [ "$failed" -eq 0 ] || die "$failed dataset(s) failed connectivity/host-key verification through '$ACTIVE_ENDPOINT'"
     [ "$unknown" -eq 0 ] || die "$unknown dataset(s) returned no machine-readable plan -- refusing to mark verified on an unknown result. Check that snapget.sh is v2.65+ on this host."
     if [ "$needs_full" -ne 0 ]; then

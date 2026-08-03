@@ -3010,6 +3010,70 @@ mode_rc() { ( cmd_add_client "modeclient" --lan=10.0.0.1 "$@" ) >/dev/null 2>&1;
     && ok "add-client: neither --datasets nor --mode is refused" \
     || bad "add-client: neither --datasets nor --mode is refused" "accepted neither"
 
+# --- 38. endpoint model (REV-20260802-033 slice 7 / F4) ---------------------
+#
+# Owner decisions 13-14: set-endpoint is conditional on the address actually
+# changing, never a mandatory step after relocation. Two small, concrete
+# defects matched that requirement's failure mode and were fixed here rather
+# than a state-machine rewrite -- the seed/set-endpoint/verify-endpoint/
+# activate-client machine already implemented 13-14 structurally (a routed-
+# VPN relocation with an unchanged host:port never forces a set-endpoint call,
+# since nothing but an explicit --lan=/--vpn= mutates the record).
+
+# 38a. The post-seed hint used to read "then set-endpoint/verify-endpoint" as
+# a fixed two-step sequence -- exactly the failure mode F4 names ("makes an
+# administrator invent or repeat an address that did not change"). Pinned as
+# a source grep because completing a real seed needs a live deploy.sh --pair
+# (see file header) -- this only pins the wording, not the seed flow itself.
+if grep -q 'skip straight to verify-endpoint' "$ZFSBACKUP" \
+   && ! grep -q 'then set-endpoint/verify-endpoint' "$ZFSBACKUP"; then
+    ok "seed: the next-step hint no longer presents set-endpoint as mandatory"
+else
+    bad "seed: the next-step hint no longer presents set-endpoint as mandatory" "old wording still present or new wording missing"
+fi
+
+# 38b. verify-endpoint used to discard snapget.sh's stderr (2>/dev/null),
+# which silently swallowed the one diagnostic that distinguishes a source-IP/
+# firewall restriction from every other failure (lib-zfs-snap.sh's "CONNECTION-
+# level failure" message, F4's "source-IP restrictions... clearly reported").
+# Stubbing snapget.sh itself (not ssh) is enough: cmd_verify_endpoint's own
+# redirect handling is what is under test, not the connection.
+VE="$WORK/verifyendpoint"; mkdir -p "$VE/clients" "$VE/peerstate" "$VE/keys"
+
+printf '10.5.5.5 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' \
+    > "$VE/keys/10.5.5.5_known_hosts"
+
+cat > "$VE/peerstate/10.5.5.5.conf" <<'EOF'
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_DATASETS="tank/data/ds1"
+EOF
+
+cat > "$VE/clients/vetest.conf" <<'EOF'
+CLIENT_NAME=vetest
+PEER_HOST=10.5.5.5
+STATE=seed_complete
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.5.5.5
+ENDPOINT_LAN_PORT=22
+EOF
+
+VESTUB="$VE/snapget_fail.sh"
+cat > "$VESTUB" <<'EOF'
+#!/bin/bash
+echo "2026-08-03 22:00:00 - Cannot reach zfsbackup@10.5.5.5 over ssh (exit 255) while listing the snapshots of 'tank/data/ds1' -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT an empty dataset." >&2
+exit 1
+EOF
+chmod +x "$VESTUB"
+
+out=$( ( CLIENTS_DIR="$VE/clients" PEER_STATE_DIR="$VE/peerstate" PEER_KEY_DIR="$VE/keys" SNAPGET="$VESTUB"
+         cmd_verify_endpoint vetest ) 2>&1 ); rc=$?
+if [ "$rc" != 0 ] && case "$out" in *"CONNECTION-level failure"*) true ;; *) false ;; esac; then
+    ok "verify-endpoint: a connectivity failure's stderr diagnostic reaches the operator (F4)"
+else
+    bad "verify-endpoint: a connectivity failure's stderr diagnostic reaches the operator (F4)" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
