@@ -3303,10 +3303,37 @@ EOF
 # against them keeps exclusion simple at the cost of nothing new appearing
 # until the next commit -- the same tradeoff every explicit dataset list in
 # this project already makes.
+# The same tag lib-zfs-snap.sh's hold_snapshot() uses (HOLD_TAG there),
+# duplicated as a literal rather than sourcing lib-zfs-snap.sh -- deploy.sh
+# deliberately does not (that library is the send/receive engine the
+# transfer scripts source, not something the provisioning tool needs).
+# Keep this in sync if that tag ever changes.
+COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
+
+# Does <dataset> have a snapshot held under the in-flight transfer tag? A
+# resumable snapshot/send.py.load cycle holds its own snapshot for exactly as
+# long as it needs to retry -- revoking the account's send/hold/release
+# permission out from under that would strand the resume with no way to
+# release its own hold or finish. Checked per dataset, not recursively: each
+# entry in PEER_JOIN_GRANTED_DATASETS is one real dataset (do_commit_scope
+# grants per descendant, never via inheritance), so that is also the unit a
+# revoke acts on.
+commit_scope_dataset_held() {   # <dataset>
+    local ds="$1" snap
+    while IFS= read -r snap; do
+        [ -n "$snap" ] || continue
+        zfs holds -H -- "$snap" 2>/dev/null | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+    done < <(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)
+    return 1
+}
+
 do_commit_scope() {
     local label="$1"
     do_commit_scope_check "$label"
     local mpath="$COMMIT_SCOPE_MPATH" sfile="$COMMIT_SCOPE_SFILE" account="$COMMIT_SCOPE_ACCOUNT"
+    # do_commit_scope_check sourced the manifest, so a PRIOR commit's list (if
+    # any) is already in scope here, before this run's write below replaces it.
+    local prior_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
 
     local -a granted=()
     local root ds
@@ -3331,23 +3358,63 @@ do_commit_scope() {
         log "delegated ($perms) on $ds to $account"
     done
 
+    # Slice 3 (REV-20260802-033 U3): revoke-on-narrow, bounded strictly by
+    # what THIS relationship's own manifest recorded as granted last time --
+    # never by what `zfs allow` happens to show for the account now. A
+    # dataset is only ever a revoke CANDIDATE if it appears in that recorded
+    # list, so a foreign grant (another peer, an older deployment, a manual
+    # job) on a dataset this scope file never selected is never even looked
+    # at, let alone touched -- it was never a candidate, not spared after
+    # consideration.
+    local -a prior=() revoke_list=() still_granted=("${granted[@]}")
+    # shellcheck disable=SC2206
+    [ -n "$prior_datasets" ] && prior=($prior_datasets)
+    local p
+    for p in "${prior[@]:-}"; do
+        [ -n "$p" ] || continue
+        case " ${granted[*]:-} " in *" $p "*) continue ;; esac
+        revoke_list+=("$p")
+    done
+    for ds in "${revoke_list[@]:-}"; do
+        [ -n "$ds" ] || continue
+        if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
+            log "revoke-on-narrow: $ds no longer exists on this host -- nothing to revoke"
+            continue
+        fi
+        if commit_scope_dataset_held "$ds"; then
+            warn "revoke-on-narrow: $ds has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- refusing to revoke mid-transfer. Left granted; re-run --commit-scope=$label once the transfer completes to finish narrowing."
+            still_granted+=("$ds")
+            continue
+        fi
+        if zfs unallow -u "$account" "$perms" -- "$ds" 2>/dev/null; then
+            log "revoke-on-narrow: revoked ($perms) on $ds from $account -- no longer in scope for '$label'"
+        else
+            warn "revoke-on-narrow: could not revoke $account's grant on $ds -- left as-is, resolve by hand"
+            still_granted+=("$ds")
+        fi
+    done
+
     # Same list, so the quiesce scope cannot drift from the replication scope
-    # -- identical reasoning to the pre-slice-2 code this replaces.
+    # -- identical reasoning to the pre-slice-2 code this replaces. Uses
+    # still_granted, not granted: a dataset held back from revoke above keeps
+    # its quiesce grant too, for the same reason it keeps its ZFS permission.
     if [ "$ALLOW_QUIESCE" -eq 1 ]; then
-        install_quiesce_grant "$account" "${granted[*]}"
+        install_quiesce_grant "$account" "${still_granted[*]}"
     else
         log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."
     fi
 
-    # Recorded for a future narrower commit (slice 3): what THIS relationship
-    # granted, and nothing else, is the only thing a later revoke is allowed
-    # to take back.
+    # Recorded for the NEXT narrower commit: what this relationship grants as
+    # of right now (still_granted), not what it merely selected this time
+    # (granted) -- a dataset held back above must stay recorded as granted,
+    # or the next commit would treat it as already gone and never retry the
+    # revoke.
     grep -v '^PEER_JOIN_GRANTED_DATASETS=' "$mpath" > "${mpath}.tmp"
-    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "${granted[*]}" >> "${mpath}.tmp"
+    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "${still_granted[*]}" >> "${mpath}.tmp"
     mv "${mpath}.tmp" "$mpath"
     chmod 0600 "$mpath"
 
-    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account"
+    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_list[@]} revoke candidate(s) considered"
 }
 
 # ==============================================================================
