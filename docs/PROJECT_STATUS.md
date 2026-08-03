@@ -8,14 +8,17 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterku 2 i po REV-035 — zamek F2 kluczowany tożsamością wywołującego,
-  naprawione)
-- Zweryfikowano przeciw: `9e977f6` **plus commit niosący ten dokument** —
+  plasterku 2, po REV-035 i po ad hoc `--pause`/`--resume` poza kolejką
+  recenzji)
+- Zweryfikowano przeciw: `54de481` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: `9e977f6` — `CRON_LOCK_DIR` to
-  teraz jeden stały katalog bez fallbacku zależnego od wywołującego (REV-035);
-  wcześniej `4190d83` — `--join` (peer pull) nie nadaje już żadnych uprawnień
+- Ostatnia zmiana zachowania produkcyjnego: `54de481` — `deploy.sh
+  --pause`/`--resume`, zatrzymanie i przywrócenie całego crontaba hosta
+  (root + konto) na okno serwisowe, zbudowane na zamku `lib-cron.sh`;
+  wcześniej `9e977f6` — `CRON_LOCK_DIR` to teraz jeden stały katalog bez
+  fallbacku zależnego od wywołującego (REV-035); wcześniej `4190d83` —
+  `--join` (peer pull) nie nadaje już żadnych uprawnień
   ZFS; nowa komenda `--commit-scope` nadaje dokładnie to, co wybiera plik
   zakresu (REV-033 plasterek 2); wcześniej
   `ff712df` — gramatyka i czytnik pliku zakresu, `lib-scope.sh` (REV-033
