@@ -8,14 +8,35 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterkach 1-6 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
+  plasterkach 1-7 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
   REV-035, po REV-036 w całości + wszystkie follow-upy, i po ad hoc
   `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na tryb
   blokowy)
-- Zweryfikowano przeciw: `9f08af6` **plus commit niosący ten dokument** —
-  dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
-  nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 6**
+- Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
+  podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 7**
+  (model endpointu, F4) — recenzja żądała porównania stanu maszyny stanów z
+  decyzjami właściciela 13-14 ("set-endpoint tylko gdy adres faktycznie się
+  zmienia") i najmniejszej korekty. Ustalenie: maszyna stanów zbudowana pod
+  REV-20260730-004/005 i REV-20260731-007/008 już to spełnia strukturalnie —
+  `cmd_set_endpoint` nigdy nie mutuje rekordu bez jawnego `--lan=`/`--vpn=`,
+  więc trasa VPN z niezmienionym `host:port` już dziś nie wymaga żadnego
+  `set-endpoint` (wystarczy ponowne `verify-endpoint`). Dwie realne luki
+  naprawione zamiast przebudowy: (1) `cmd_verify_endpoint` odrzucał stderr
+  `snapget.sh` (`2>/dev/null`) na każdym nieudanym sprawdzeniu — dokładnie
+  tam, gdzie miałoby się pojawić rozróżnienie „ograniczenie po adresie
+  źródłowym" od zwykłej awarii (istniejący diagnostyk `snapget.sh`/
+  `lib-zfs-snap.sh` dla ssh exit 255 był po prostu wyrzucany); teraz stderr
+  trafia do pliku tymczasowego i jest wypisywany przy niepowodzeniu. (2)
+  podpowiedź po `seed` sugerowała `set-endpoint`/`verify-endpoint` jako stały
+  dwuetapowy ciąg — dokładnie błąd nazwany w F4 ("administrator wymyśla lub
+  powtarza adres, który się nie zmienił") — przeformułowana na warunek:
+  `set-endpoint` tylko gdy SSH łączy się teraz pod innym host:port, inaczej
+  od razu `verify-endpoint`. Nazewnictwo ról w komunikatach (kolektor vs
+  źródło jako przenoszona maszyna) świadomie odłożone do plasterka 10.
+  `zfsbackup` **232/232** (+2). Odpowiedź: addendum "Slice 7" w
+  `docs/reviews/responses/REV-20260802-033.md`.
+- Wcześniej: **REV-20260802-033 plasterek 6**
   (kolektor: fetch/digest/generate) — `zfs-backup.sh` przestaje wymagać listy
   datasetów przy `add-client --mode=backup|sync` (alternatywa dla
   `--datasets`, przekazywana do `deploy.sh --pair` jako `--mode=`).
@@ -590,7 +611,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **230/230** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta) |
+| `zfsbackup` | **232/232** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **77/77** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
