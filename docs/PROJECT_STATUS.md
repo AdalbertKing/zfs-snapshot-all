@@ -473,7 +473,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **211/211** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3) |
+| `zfsbackup` | **214/214** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **54/54** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2) |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
@@ -800,7 +800,15 @@ czterech hostach w obu formach hosta.
   dokładnie scenariusz „forced interleaving" z recenzji, tyle że w jednym
   wywołaniu zamiast dwóch procesów. `sudo ./test/scenarios/run.sh`
   uruchomiony tego samego dnia na pve2 — **34/34**, scratch dataset
-  posprzątany przez własny EXIT trap suity.
+  posprzątany przez własny EXIT trap suity. **Domknięta luka zakresu F5:**
+  `migrate-to-account` commituje przez `cron_replace_all`, ten sam prymityw
+  co pauza/resume, celowo NIE owinięty `cron_paused_guard` (bo inaczej
+  pauza odmawiałaby sama sobie) — co zostawiało migrację bez ochrony przed
+  cichym nadpisaniem aktywnej pauzy. Naprawione bez dotykania wspólnego
+  prymitywu: `cmd_migrate_to_account` sprawdza oba crontaby
+  (`cron_fullcron_paused` + `cron_block_paused` dla `zfs-backup-managed`
+  i `zfs-backup-host`) na starcie preflight, przed jakąkolwiek pracą.
+  `zfsbackup` **214/214** (+3, sekcja 35).
   Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
