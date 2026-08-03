@@ -8,13 +8,52 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterkach 1-7 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
+  plasterkach 1-8 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
   REV-035, po REV-036 w całości + wszystkie follow-upy, i po ad hoc
   `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na tryb
   blokowy)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 7**
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 8**
+  (kontrakty sync: F3, U7, U8) — dwie niezależne połówki. (1) `snapget.sh`,
+  `process_dataset`: `-F` przestało być bezwarunkowym domyślnym flagiem przy
+  KAŻDYM odbiorze (dotyczy więc też dzisiejszego ruchu backup) — nowy
+  `recv_force_flag` odmawia zamiast cicho nadpisywać, gdy cel to dysk ŻYWEGO
+  guesta (`guest_disk_is_live`, reużywa `quiesce_guest_id`/
+  `quiesce_guest_status` z `lib-zfs-snap.sh`, fail-closed gdy stanu nie da
+  się ustalić), gdy brak wspólnego snapshotu po GUID (pełny resend wymaga
+  jawnego `-f`), albo gdy `written@<wspólny>` > 0 (nazywa ilość). `-F`
+  zostaje TYLKO przy kontynuacji własnej, nierozjechanej kopii, gdzie jest
+  operacją pustą. Dowód (2026-08-02, klaster 192.168.11.x): `snapget.sh -r
+  pve0:rpool/data/vm-100-disk-0` (sync bez drugiego argumentu) celowałoby w
+  żywy dysk vsql2 (VM 100) i cofnęłoby bazę do repliki pvesr — dziś ratuje
+  przed tym wyłącznie `dataset is busy` samego ZFS, nie własność
+  bezpieczeństwa. (2) `deploy.sh --pair --mode=sync`: peer będący członkiem
+  TEGO SAMEGO klastra PVE jest odrzucany PRZY ENROLLMENCIE (U8), zanim
+  cokolwiek zostanie sparowane — sprawdzane tanio przez `/etc/pve/nodes/`
+  (`PVE_NODES_DIR`, nadpisywalny jak `QUIESCE_PVE_DIR`, więc testowalny bez
+  prawdziwego klastra); ograniczenie: dopasowanie po nazwie hosta, nie po
+  tożsamości klastra — nazwane wprost, nie ukryte. (3) `zfs-backup.sh`:
+  mapowanie F3 dla trybu sync wreszcie zaimplementowane — dotąd KAŻDE
+  wywołanie `snapget.sh` z wrappera używało twardo mapowania backupowego
+  (`$PEER_SAVED_TARGET/$LOAD_LABEL/$ds`), nawet dla `--mode=sync`, co dawało
+  ścieżkę ze slashem na początku zamiast „ta sama ścieżka co źródło" —
+  martwy kod od plasterka 5/6, nigdy nie przetestowany end-to-end. Nowe
+  `snapget_local_base`/`client_local_path` to jedyne miejsce rozstrzygające
+  tryb; `emit_client_sections` w trybie sync generuje jeden `[prune:$ds]` na
+  dataset (`recursive = no`, bo nie ma wspólnego rodzica do zamiatania —
+  inaczej byłby to ten sam wyścig `[prune:]`-pod-rekurencyjnym-`[prune:]`,
+  który już raz naprawiono dla delsnaps). `zfsbackup` **238/238** (+6).
+  **Korekta do plasterka 7:** U9 w `ENROLMENT-AGREED-2026-08-02.md` (ten sam
+  wieczór, przed implementacją plasterka 7) już ROZSTRZYGNĄŁ, że sloty
+  `lan`/`vpn` mają zniknąć z interfejsu na rzecz „jeden aktualny endpoint +
+  lista znanych kandydatów" — przeoczone przy plasterku 7, potraktowane tam
+  jako wciąż otwarte pytanie z samej recenzji. Nie cofnięte w już wypchniętych
+  commitach plasterka 7 — zapisane jako otwarta korekta, do zrobienia razem z
+  poprawką nazewnictwa ról (kolektor vs źródło), bo dotyczą tych samych pól i
+  komunikatów. Odpowiedź: addendum "Slice 8" + "Correction to slice 7: U9"
+  w `docs/reviews/responses/REV-20260802-033.md`.
+- Wcześniej: **REV-20260802-033 plasterek 7**
   (model endpointu, F4) — recenzja żądała porównania stanu maszyny stanów z
   decyzjami właściciela 13-14 ("set-endpoint tylko gdy adres faktycznie się
   zmienia") i najmniejszej korekty. Ustalenie: maszyna stanów zbudowana pod
@@ -611,7 +650,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **232/232** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana |
+| `zfsbackup` | **238/238** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **77/77** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
