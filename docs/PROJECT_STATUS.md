@@ -8,14 +8,52 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 - Data odświeżenia: **2026-08-03** (po REV-034 w całości, po REV-033
-  plasterkach 1-5 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
+  plasterkach 1-6 + łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po
   REV-035, po REV-036 w całości + wszystkie follow-upy, i po ad hoc
   `--pause`/`--resume` poza kolejką recenzji, w tym przeróbka na tryb
   blokowy)
-- Zweryfikowano przeciw: `b6d5032` **plus commit niosący ten dokument** —
+- Zweryfikowano przeciw: `9f08af6` **plus commit niosący ten dokument** —
   dokument nie może podać własnego SHA, więc podaje rodzica; to jest konwencja,
   nie niedopatrzenie
-- Ostatnia zmiana zachowania produkcyjnego: **łatki T3/U2/T5**
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260802-033 plasterek 6**
+  (kolektor: fetch/digest/generate) — `zfs-backup.sh` przestaje wymagać listy
+  datasetów przy `add-client --mode=backup|sync` (alternatywa dla
+  `--datasets`, przekazywana do `deploy.sh --pair` jako `--mode=`).
+  `resolve_mode_datasets()`, wpięte w `load_client_and_connection` (więc
+  `seed`/`final-catchup`/`verify-endpoint`/`activate-client`/`migrate-profile`
+  nie potrzebują ŻADNEJ zmiany), dla klienta trybowego: pobiera przez ssh
+  plik zakresu peera ORAZ jego sidecar sha256 (T3), odmawia przy
+  niezgodności, czyta przez `lib-scope.sh` (`scope_read`/`scope_includes` —
+  realna krawędź źródłowa, nie duplikat) i przechodzi realne liście przez
+  zdalne `zfs list -r`, wypełniając `PEER_SAVED_DATASETS` dokładnie tak, jak
+  robił to dotąd ręcznie podany `--peer-datasets`. `cmd_seed` pomija swoje
+  dotychczasowe wywołanie `--draft-config` (specyficzne dla listy
+  datasetów) dla klienta trybowego — `resolve_mode_datasets` jest jego
+  odpowiednikiem sprawdzenia gotowości/łączności.
+  **Ważne dla recenzenta:** wynikiem jest GOTOWY, od razu instalowany config
+  (istniejący mechanizm `PROFILE_GFS`/`emit_client_sections`), nie kandydaci
+  do ręcznego przeglądu jak w starszej konwencji `do_draft_config` —
+  to jest model uzgodniony w dyskusji zapisanej w
+  `docs/discussions/ENROLMENT-AGREED-2026-08-02.md` (scenariusz odniesienia:
+  „dostaję gotowy domyślny config… i zaczyna się backup”), nie coś
+  wywnioskowane z samej recenzji.
+  U11 (per-sekcyjny znacznik własności): `emit_client_sections` pisze
+  `# managed-by: zfs-backup.sh client=<nazwa>` jako pierwszą linię treści
+  każdej wygenerowanej sekcji `[dataset:]`/`[prune:]`; `remove_managed_sections`
+  usuwa sekcję tylko gdy ten znacznik się zgadza ALBO ścieżka była już
+  wcześniej zapisana we WŁASNYM `MANAGED_DATASETS`/`MANAGED_PRUNE_SCOPE`
+  wywołującego (to drugie jest tym, co zachowuje działanie każdego klienta
+  aktywowanego przed U11 bez zmian — ich sekcje sprzed znacznika są nadal
+  rozpoznawane jako własne po własnym zapisie, znacznik dochodzi przy
+  najbliższym przepisaniu). Dopasowanie nagłówka bez znacznika i bez
+  wcześniejszego zapisu jest ODMAWIANE, nie cicho kasowane — wygląda na
+  ręcznie napisaną sekcję w tym samym miejscu.
+  U6/rozstrzygnięcie pytania 2: `ensure_cron_config` dopisuje globalny próg
+  `keep = 2` dla wszystkich trzech zastrzeżonych prefiksów
+  (`__replicate_`, `vzdump`, `__migration__`) przez `[excluded:]`, wyłącznie
+  DOKŁADAJĄC brakujący próg — silniejszy `keep` operatora nigdy nie jest
+  zawężany. `zfsbackup` **230/230** (+16). Odpowiedź: addendum "Slice 6" w
+  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej **łatki T3/U2/T5**
   (`6c930ff`, `b6d5032`) wobec `docs/discussions/ENROLMENT-AGREED-2026-08-02.md`
   — ten dokument, nie sama recenzja, jest właściwą specyfikacją mechaniki,
   do której plasterki REV-033 dążą. T3: `--commit-scope` zapisuje sha256
@@ -446,6 +484,22 @@ setup-server → add-client → seed → verify-endpoint → activate-client
              → status / test / migrate-profile / remove-client
 ```
 
+**Dwa sposoby wyboru datasetów w `add-client` (REV-033 plasterek 6).**
+`--datasets="A B"` (jak dotąd) nazywa je z góry, tu, na kolektorze.
+`--mode=backup|sync` odsuwa wybór na źródło: `add-client` przekazuje
+`--mode=` do `deploy.sh --pair` zamiast `--peer-datasets`, a peer wybiera
+przez `--draft-scope`/edycję/`--commit-scope` na SOBIE (plik zakresu,
+`lib-scope.sh` — patrz wpis "REV-20260802-033 plasterek 4" w historii
+wyżej). Każda następna
+komenda (`seed`, `verify-endpoint`, `activate-client`, `migrate-profile`)
+wygląda identycznie dla obu ścieżek — `load_client_and_connection` woła
+`resolve_mode_datasets`, które dla klienta trybowego pobiera committed
+scope peera przez ssh, weryfikuje sha256 (T3) i wylicza realną listę
+liści przez zdalne `zfs list -r`, wypełniając `PEER_SAVED_DATASETS`
+dokładnie tak, jak zrobiłby to ręcznie podany `--peer-datasets`. Wynikiem
+`activate-client` jest zawsze GOTOWY config, od razu instalowany po
+potwierdzeniu — nie kandydaci do ręcznej selekcji.
+
 **Jedna kadencja wysyłki, jedna drabina.** Na klienta generuje się: jedna linia
 `snapget` per dataset (co godzinę o :01), jedna
 `delsnaps -G -R <cel>/<label> "automated_" -H24 -D7 -W4 -M12` (o :21) i **jeden**
@@ -536,7 +590,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **214/214** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą |
+| `zfsbackup` | **230/230** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta) |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **77/77** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5). Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
