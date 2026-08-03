@@ -14,7 +14,7 @@ set -uo pipefail
 #
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
+#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--join-remotely]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
@@ -144,7 +144,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N]
+  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT] [--skip-final-catchup] [--allow-stale-catchup]
@@ -1277,7 +1277,7 @@ cmd_setup_server() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local lan="" datasets="" target="" bandwidth="" mode=""
+    local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0
     for a in "$@"; do
         case "$a" in
             --lan=*)       lan="${a#*=}" ;;
@@ -1285,6 +1285,7 @@ cmd_add_client() {
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
+            --join-remotely) join_remotely=1 ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
@@ -1374,6 +1375,11 @@ cmd_add_client() {
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
     [ -n "${LOCAL_USER:-}" ] && pair_args+=(--local-user="$LOCAL_USER")
+    # REV-20260802-033 slice 9 / U10: pass-through only -- this file does not
+    # reimplement the remote scp/ssh/editor flow, deploy.sh --pair does it
+    # (see do_pair). Off by default; --lan= alone still ends with the same
+    # manual "copy this and run --join there" instructions as before.
+    [ "$join_remotely" -eq 1 ] && pair_args+=(--join-remotely)
     bash "$DEPLOY" "${pair_args[@]}" || die "deploy.sh --pair failed -- see above"
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
@@ -1392,7 +1398,11 @@ cmd_add_client() {
     chmod 0600 "$cpath"
 
     log "client '$name' created, state=pending_enroll"
-    log "next: copy the package above to $lan_host and run there:  ./deploy.sh --join=<package>"
+    if [ "$join_remotely" -eq 1 ]; then
+        log "next: see deploy.sh's own output above for whether --join-remotely succeeded on $lan_host, or fell back to manual instructions"
+    else
+        log "next: copy the package above to $lan_host and run there:  ./deploy.sh --join=<package>"
+    fi
     log "then here:  $0 seed $name"
 }
 

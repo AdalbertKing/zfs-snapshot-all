@@ -3279,6 +3279,39 @@ else
     bad "add-client --mode=sync does not refuse a peer with no matching node directory" "rc=$rc out=$out"
 fi
 
+# --- 40. add-client --join-remotely pass-through (REV-20260802-033 slice 9) -
+#
+# This file does not reimplement deploy.sh's scp/ssh/ssh-t orchestration
+# (do_pair does that -- see test/join/run.sh for the package-field half of
+# it); the ONLY thing to pin here is that add-client forwards the flag
+# through to deploy.sh --pair, and only when it was actually given. DEPLOY is
+# overridden the same way SNAPGET already is in sections 38/39 -- a plain
+# global reassigned in a subshell.
+JR="$WORK/joinremote"; mkdir -p "$JR/clients"
+JRDEPLOY="$JR/deploy_stub.sh"
+cat > "$JRDEPLOY" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" > "$JR/args.out"
+exit 0
+EOF
+chmod +x "$JRDEPLOY"
+
+out=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+         cmd_add_client jrtest --lan=10.7.7.7 --datasets="tank/a" --target=tank/backups --join-remotely ) 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && grep -qF -- "--join-remotely" "$JR/args.out"; then
+    ok "add-client --join-remotely: forwarded to deploy.sh --pair"
+else
+    bad "add-client --join-remotely: forwarded to deploy.sh --pair" "rc=$rc out=$out args=$(cat "$JR/args.out" 2>/dev/null)"
+fi
+
+out2=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+          cmd_add_client jrtest2 --lan=10.7.7.8 --datasets="tank/a" --target=tank/backups ) 2>&1 ); rc2=$?
+if [ "$rc2" -eq 0 ] && ! grep -qF -- "--join-remotely" "$JR/args.out"; then
+    ok "add-client without --join-remotely: deploy.sh --pair is not passed the flag"
+else
+    bad "add-client without --join-remotely: deploy.sh --pair is not passed the flag" "rc=$rc2 args=$(cat "$JR/args.out" 2>/dev/null)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

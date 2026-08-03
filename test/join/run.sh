@@ -653,6 +653,53 @@ fi
 
 unset PEER_STATE_DIR
 
+# ---------------------------------------------------------------------------
+# --join-remotely / PEER_CONF_REMOTE_JOIN (REV-20260802-033 slice 9, U10).
+#
+# do_pair's own scp/ssh/ssh-t orchestration needs a real second host and root
+# -- not covered here, same reasoning as the grant loop in --commit-scope
+# above and the pairing key loop in slices 2/3 (a stubbed ssh would only
+# prove fidelity to the stub, per the project's own established choice for
+# this exact class of code). What IS pure, local, and root-free is the
+# package-field grammar do_join validates before it ever touches anything --
+# exercised the same way as every other peer.conf field in this file, via
+# --join-check.
+# ---------------------------------------------------------------------------
+new_case remote-join-yes
+{ good_conf; echo 'PEER_CONF_REMOTE_JOIN=yes'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "remote-join/PEER_CONF_REMOTE_JOIN=yes is accepted" "$D/wsad.tgz"
+
+new_case remote-join-bogus
+{ good_conf; echo 'PEER_CONF_REMOTE_JOIN=maybe'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_reject "remote-join/an unrecognised value is refused" "must be 'yes' or absent"
+
+new_case remote-join-absent-legacy-package
+good_conf > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "remote-join/a package with no PEER_CONF_REMOTE_JOIN key still validates (legacy)" "$D/wsad.tgz"
+
+new_case remote-join-check-prints-it
+{ good_conf; echo 'PEER_CONF_REMOTE_JOIN=yes'; } > "$D/peer.conf"
+mkpkg "$D"
+out="$(bash "$DEPLOY" --join-check="$D/wsad.tgz" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE 'PEER_CONF_REMOTE_JOIN\s+yes'; then
+    ok "remote-join/--join-check prints the field so a package can be inspected before trusting it"
+else
+    bad "remote-join/--join-check prints the field so a package can be inspected before trusting it" "rc=$rc" "$out"
+fi
+
+# --join-remotely's own CLI-argument parsing (no --pair, no network, no root
+# needed to reach "not an unknown option" -- same technique as the --mode
+# CLI cases above).
+out="$(bash "$DEPLOY" --join-remotely 2>&1)"; rc=$?
+if ! printf '%s' "$out" | grep -qF "unknown option"; then
+    ok "remote-join/CLI: --join-remotely parses (does not fall through to 'unknown option')"
+else
+    bad "remote-join/CLI: --join-remotely parses (does not fall through to 'unknown option')" "rc=$rc" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

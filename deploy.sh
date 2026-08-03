@@ -201,6 +201,11 @@ PEER_ROTATE=0
 PEER_REVOKE_OLD=0
 PEER_DRAFT_CONFIG=0
 PEER_UNPAIR=0
+# REV-20260802-033 slice 9 / U10: opt-in, off by default -- see do_pair's own
+# comment above the block this gates for the three conditions that make it
+# safe (finalize stays local always; rides the pin already established by
+# ssh-keyscan above; the peer's manifest records the remote origin).
+PEER_JOIN_REMOTELY=0
 # The LOCAL account that will actually run the generated jobs. Independent of
 # --as, which names the account on the PEER: one is who we log in as there, the
 # other is who runs cron here. Empty means root runs the jobs.
@@ -263,6 +268,7 @@ while [ "$#" -gt 0 ]; do
         --allow-public-peer) PEER_ALLOW_PUBLIC=1; shift ;;
         --rotate)       PEER_ROTATE=1; shift ;;
         --revoke-old)   PEER_REVOKE_OLD=1; shift ;;
+        --join-remotely) PEER_JOIN_REMOTELY=1; shift ;;
         --draft-config) PEER_DRAFT_CONFIG=1; shift ;;
         # Implies --pair so it reads as the opposite of it -- `--unpair --peer=X`
         # rather than the `--pair --unpair` the other sub-modes would suggest.
@@ -331,6 +337,15 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             --peer is a literal IP address.
     --rotate                generate a new key alongside the existing one
     --revoke-old             finish a rotation: remove the old key on both ends
+    --join-remotely          opt-in (REV-20260802-033 U10): after producing
+                            the wsad, deliver it and run --join on the peer
+                            over the host key just pinned, using THIS
+                            operator's own ssh access -- then, for a mode-
+                            based pairing, open the scope editor there over
+                            ssh -t. Finalize (--commit-scope, the grant)
+                            never runs remotely, under any flag. Off by
+                            default: the default path stays printing the
+                            wsad and the exact commands to run by hand.
     --draft-config           after --join has run on the peer: list its
                             datasets and write a reviewed-by-hand .suggested
                             file (never installs anything)
@@ -728,7 +743,8 @@ parse_peer_conf() {
         val="${line#*=}"
         case "$key" in
             PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
-            PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL) ;;
+            PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL|\
+            PEER_CONF_REMOTE_JOIN) ;;
             *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
         esac
         [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
@@ -798,6 +814,13 @@ validate_peer_conf() {
         || die "peer.conf PEER_CONF_ACCOUNT='${PC[PEER_CONF_ACCOUNT]}' is not a valid account name (this string is passed to useradd)"
     pc_is_label "${PC[PEER_CONF_INITIATOR_LABEL]}" \
         || die "peer.conf PEER_CONF_INITIATOR_LABEL='${PC[PEER_CONF_INITIATOR_LABEL]}' is not a valid label (it becomes a path component)"
+    # REV-20260802-033 slice 9 / U10: present only when --pair --join-remotely
+    # wrote this package -- a fixed literal, not a free-form claim, since all
+    # it needs to say is "yes". A package that predates this slice has no such
+    # key (parse_peer_conf leaves it unset), so absent reads the same as "no".
+    if [ -n "${PC[PEER_CONF_REMOTE_JOIN]:-}" ] && [ "${PC[PEER_CONF_REMOTE_JOIN]}" != "yes" ]; then
+        die "peer.conf PEER_CONF_REMOTE_JOIN='${PC[PEER_CONF_REMOTE_JOIN]}' -- must be 'yes' or absent"
+    fi
     if [ -n "${PC[PEER_CONF_PORT]:-}" ]; then
         pc_is_port "${PC[PEER_CONF_PORT]}" \
             || die "peer.conf PEER_CONF_PORT='${PC[PEER_CONF_PORT]}' is not a port number in 1..65535"
@@ -1063,7 +1086,7 @@ do_join_check() {
     printf '  %-26s %s
 ' "sha256" "${PKG_SHA256:-?}"
     local k
-    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_MODE PEER_CONF_ACCOUNT PEER_CONF_TARGET              PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL; do
+    for k in PEER_CONF_ROLE PEER_CONF_AS PEER_CONF_MODE PEER_CONF_ACCOUNT PEER_CONF_TARGET              PEER_CONF_DATASETS PEER_CONF_PORT PEER_CONF_INITIATOR_LABEL PEER_CONF_REMOTE_JOIN; do
         printf '  %-26s %s
 ' "$k" "${PC[$k]:-}"
     done
@@ -3457,6 +3480,11 @@ PEER_CONF_ACCOUNT=$proposed_account
 PEER_CONF_PORT=$PEER_PORT
 PEER_CONF_INITIATOR_LABEL=$my_label
 EOF
+    # REV-20260802-033 slice 9 / U10 condition 3: the peer's OWN manifest
+    # records that this entry was created remotely -- do_join reads this flag
+    # from the validated package and writes it, plus who/when on ITS side,
+    # into its own manifest. Not written unless the flag was actually given.
+    [ "$PEER_JOIN_REMOTELY" -eq 1 ] && echo "PEER_CONF_REMOTE_JOIN=yes" >> "$workdir/peer.conf"
     local outdir="/root/scripts/pairing"
     mkdir -p "$outdir"
     local suffix=""; [ "$PEER_ROTATE" -eq 1 ] && suffix="-rotate"
@@ -3464,13 +3492,57 @@ EOF
     tar -C "$workdir" -czf "$pkg" peer.conf pubkey.pub
     rm -rf "$workdir"
 
+    # REV-20260802-033 slice 9 / U10: opt-in remote --join + scope editor.
+    # Three conditions from the discussion, all held to exactly:
+    #   1. Finalize (--commit-scope, the GRANT) stays local, always -- this
+    #      block never runs it, over ssh -t or otherwise. Only --join (which
+    #      grants nothing since U2) and the SCOPE EDITOR (an interactive
+    #      session, not an automated commit) are automated.
+    #   2. Rides the pin ssh-keyscan just established above (/root/.ssh/
+    #      known_hosts) -- no accept-new, no separate trust decision.
+    #   3. The peer's manifest records the remote origin (PEER_CONF_REMOTE_JOIN
+    #      above, consumed by do_join below).
+    # On any failure this WARNS and falls through to the manual instructions
+    # -- "manual transfer remains as the emergency path" (U10) means exactly
+    # that a failed automated attempt must not strand the operator.
+    local remote_ok=0
+    if [ "$PEER_JOIN_REMOTELY" -eq 1 ]; then
+        log "--join-remotely: delivering the wsad and running --join on $PEER_HOST over the pin just established..."
+        if scp -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+               -P "$PEER_PORT" "$pkg" "root@$PEER_HOST:/root/" \
+           && ssh -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+                  -p "$PEER_PORT" "root@$PEER_HOST" \
+                  "cd /root && ./deploy.sh --join=/root/$(basename "$pkg")"; then
+            remote_ok=1
+            log "remote --join on $PEER_HOST succeeded."
+            if [ -n "$PEER_MODE" ]; then
+                log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first if it does not exist yet, same as 'crontab -e')..."
+                ssh -t -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+                    -p "$PEER_PORT" "root@$PEER_HOST" \
+                    "./deploy.sh --draft-scope=$my_label 2>/dev/null; \${VISUAL:-\${EDITOR:-vi}} $(peer_scope_path "$my_label")" \
+                    || warn "the remote editor session on $PEER_HOST ended non-zero -- check by hand: $(peer_scope_path "$my_label")"
+            fi
+        else
+            warn "--join-remotely could not complete automatically (see any ssh/scp error above) -- falling back to the manual steps below."
+        fi
+    fi
+
     echo
     log "===================================================================="
-    log "Wsad gotowy: $pkg"
-    log "Przenies go recznie na $PEER_HOST i uruchom tam z konsoli:"
-    log "  scp $pkg root@$PEER_HOST:/root/"
-    log "  ssh root@$PEER_HOST"
-    log "  ./deploy.sh --join=/root/$(basename "$pkg")"
+    if [ "$remote_ok" -eq 1 ]; then
+        log "Wsad dostarczony i --join wykonany zdalnie na $PEER_HOST (--join-remotely)."
+        if [ -n "$PEER_MODE" ]; then
+            log "Zakres zredagowany zdalnie (ssh -t). Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
+            log "  ./deploy.sh --commit-scope=$my_label"
+            log "(finalizacja/grant NIGDY nie jedzie zdalnie -- U10, warunek 1)"
+        fi
+    else
+        log "Wsad gotowy: $pkg"
+        log "Przenies go recznie na $PEER_HOST i uruchom tam z konsoli:"
+        log "  scp $pkg root@$PEER_HOST:/root/"
+        log "  ssh root@$PEER_HOST"
+        log "  ./deploy.sh --join=/root/$(basename "$pkg")"
+    fi
     if [ "$PEER_ROTATE" -eq 1 ]; then
         log "Po --join tam: zweryfikuj dry-runem z NOWYM kluczem ($active_keyfile -n),"
         log "dopiero potem tutaj: --pair --peer=$PEER_HOST --revoke-old"
@@ -3497,6 +3569,7 @@ do_join() {
     local PEER_CONF_AS="${PC[PEER_CONF_AS]}"
     local PEER_CONF_DATASETS="${PC[PEER_CONF_DATASETS]:-}"
     local PEER_CONF_INITIATOR_LABEL="${PC[PEER_CONF_INITIATOR_LABEL]}"
+    local PEER_CONF_REMOTE_JOIN="${PC[PEER_CONF_REMOTE_JOIN]:-}"
 
     # pc_is_label already refused anything this would have had to rewrite, so
     # the old sanitising tr is gone: a label that needed sanitising is now a
@@ -3597,6 +3670,24 @@ do_join() {
     # it asked for (slice 5 makes it optional) -- it is no longer what
     # anything grants from. PEER_JOIN_AS lets do_commit_scope tell a root peer
     # apart from a delegated one without re-deriving it from the account name.
+    # REV-20260802-033 slice 9 / U10 condition 3: "za pol roku 'skad sie tu
+    # wzielo to konto' musi miec odpowiedz w pliku, nie w czyjejs pamieci".
+    # PEER_JOIN_REMOTE_FROM duplicates $label deliberately -- $label is
+    # already this manifest's own filename, but this field answers the
+    # question without anyone needing to know that convention. The session
+    # is captured HERE, on the peer, at the moment --join actually runs --
+    # more trustworthy than a claim the collector could make about itself.
+    local remote_fields=""
+    if [ "$PEER_CONF_REMOTE_JOIN" = "yes" ]; then
+        remote_fields=$(cat <<EOF2
+PEER_JOIN_REMOTE="yes"
+PEER_JOIN_REMOTE_FROM="$label"
+PEER_JOIN_REMOTE_AT="$(date '+%Y-%m-%d %H:%M:%S')"
+PEER_JOIN_REMOTE_SESSION="${SUDO_USER:-$(whoami)}@$(hostname -s 2>/dev/null || hostname)"
+EOF2
+)
+    fi
+
     cat > "$mpath" <<EOF
 # peer pairing manifest (join side) -- managed by deploy.sh --join, do not edit by hand
 PEER_JOIN_ROLE="$PEER_CONF_ROLE"
@@ -3606,12 +3697,14 @@ PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
 PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
 PEER_JOIN_FINGERPRINT="$new_fp"
+$remote_fields
 EOF
     chmod 0600 "$mpath"
 
     echo
     log "===================================================================="
     log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
+    [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && log "Wpis utworzony ZDALNIE z kolektora '$label' (--join-remotely) -- zapisane w manifescie."
     if [ "$PEER_CONF_AS" != "root" ] && [ "$PEER_CONF_ROLE" = "pull" ]; then
         if [ -n "$PEER_CONF_MODE" ]; then
             log "Tryb '$PEER_CONF_MODE' -- brak listy datasetow w paczce (F1: wybor po stronie zrodla)."
