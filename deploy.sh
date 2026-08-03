@@ -134,6 +134,18 @@ JOIN_CHECK=0
 COMMIT_SCOPE_MODE=0
 COMMIT_SCOPE_CHECK=0
 COMMIT_SCOPE_LABEL=""
+
+# ---- --pause/--resume: stop (and later restore) every crontab this host
+# manages, for a maintenance window (disk swap, live migration off this host)
+# where new snapshots would be actively unwelcome -- not just unhelpful.
+# See docs/reviews/responses/ for the incident this answers: a VM migration
+# off a host ahead of hardware work, where an hour of untouched cron would
+# hand pvesr's own send -Rpv | recv -F cycle a set of foreign snapshots to
+# contend with while it is trying to re-establish replication in the other
+# direction. Goes through lib-cron.sh's own lock/read-back, same as every
+# other writer -- this is one more requester, not a bypass.
+PAUSE_MODE=0
+RESUME_MODE=0
 # Whether this host lets the joining peer freeze its guests (remote quiesce).
 # Deliberately a LOCAL flag, not a field in the package: freezing a guest is
 # real power -- whoever can freeze can cause an outage by never thawing, and the
@@ -208,6 +220,8 @@ while [ "$#" -gt 0 ]; do
         --commit-scope)         COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
+        --pause)        PAUSE_MODE=1; shift ;;
+        --resume)       RESUME_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
         --peer=*)       PEER_HOST="${1#*=}"; shift ;;
@@ -316,6 +330,17 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           Off by default: whoever can freeze can cause an
                           outage by never thawing, so this host decides -- the
                           package cannot ask for it.
+
+Maintenance window -- stop and later restore EVERY crontab this host manages
+(root's, and the delegated account's if one exists or --backup-user names
+one). For hardware work or a live migration off this host, where an hour of
+untouched cron would hand pvesr foreign snapshots to contend with:
+  --pause                 save both crontabs, then blank them (replaced with
+                          one comment saying why). Refuses if already paused.
+  --resume                restore exactly what --pause saved, and only if the
+                          crontab still looks like --pause's own placeholder
+                          (a manual edit made during the window is never
+                          silently discarded -- resolve it by hand instead).
 USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -393,6 +418,17 @@ if [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
 fi
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ] && [ "$CHECK_ONLY" -eq 1 ]; then
     echo "--check-only cannot be combined with --commit-scope -- an audit installs nothing, so there would be no grant to make (use --commit-scope-check to validate without granting)" >&2; exit 2
+fi
+if [ "$PAUSE_MODE" -eq 1 ] && [ "$RESUME_MODE" -eq 1 ]; then
+    echo "--pause and --resume are mutually exclusive -- pick one" >&2; exit 2
+fi
+if [ "$PAUSE_MODE" -eq 1 ] || [ "$RESUME_MODE" -eq 1 ]; then
+    if [ "$PAIR_MODE" -eq 1 ] || [ "$JOIN_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_MODE" -eq 1 ] || [ "$COMMIT_SCOPE_CHECK" -eq 1 ]; then
+        echo "--pause/--resume cannot be combined with --pair/--join/--commit-scope -- run them separately" >&2; exit 2
+    fi
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        echo "--check-only cannot be combined with --pause/--resume -- an audit changes nothing, so there would be nothing to pause or resume" >&2; exit 2
+    fi
 fi
 if [ "$PEER_UNPAIR" -eq 1 ]; then
     [ -n "$PEER_HOST" ] || { echo "--unpair requires --peer=NAME" >&2; exit 2; }
@@ -3295,6 +3331,133 @@ do_commit_scope() {
     log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account"
 }
 
+# ==============================================================================
+# --pause / --resume: stop every crontab this host manages, for a maintenance
+# window where new snapshots are actively unwelcome (hardware work, a live
+# migration off this host ahead of it) -- not merely inconvenient. An hour of
+# untouched cron on a pvesr-replicated dataset hands pvesr's own
+# `zfs send -Rpv | zfs recv -F` cycle a set of foreign snapshots to contend
+# with exactly while it is trying to re-establish replication the other way.
+#
+# Goes through lib-cron.sh's own lock and read-back -- one more requester,
+# not a bypass, so it cannot land between a concurrent gen-cron.sh/deploy.sh
+# write. The saved state is a plain copy of the crontab exactly as it was,
+# not a synthetic reconstruction, so --resume cannot drift from what a human
+# would have restored by hand.
+# ==============================================================================
+PAUSE_STATE_DIR="${PAUSE_STATE_DIR:-/root/.zfs-snapshot-all-pause-state}"
+PAUSE_MARKER="# zfs-snapshot-all: PAUSED"
+
+pause_state_path() { printf '%s/%s.saved' "$PAUSE_STATE_DIR" "$1"; }   # <user>
+
+# The same scan Phase 8 uses below to find an already-provisioned delegated
+# account when none is named -- so --pause does not require remembering
+# --backup-user for an account this run did not just create.
+detect_delegated_account() {
+    local cand owner
+    for cand in /home/*/zfs-snapshot-all; do
+        [ -d "$cand" ] || continue
+        owner=$(stat -c %U "$(dirname "$cand")" 2>/dev/null) || continue
+        id "$owner" >/dev/null 2>&1 && { printf '%s' "$owner"; return 0; }
+    done
+    return 1
+}
+
+# Which crontabs --pause touches: root, always, plus the delegated account --
+# named with --backup-user, or detected the same way Phase 8 would. Printed
+# one per line rather than returned as an array: this is read with a `while
+# read` loop below, which is also what keeps a failure on one user from
+# aborting the other.
+pause_targets() {
+    printf 'root\n'
+    local acct="$BACKUP_USER"
+    if [ -z "$acct" ]; then acct=$(detect_delegated_account) || true; fi
+    if [ -n "$acct" ]; then
+        printf '%s\n' "$acct"
+    else
+        warn "no delegated account found or given (--backup-user=NAME) -- only root's crontab will be paused. If this host has one, name it explicitly."
+    fi
+}
+
+do_pause_one() {   # <user>  -> 0 paused, 1 already paused or failed
+    local user="$1" state; state=$(pause_state_path "$user")
+    if [ -e "$state" ]; then
+        warn "$user: already paused (saved $(stat -c '%y' "$state" 2>/dev/null | cut -d. -f1)) -- run --resume first if you want to re-pause cleanly"
+        return 1
+    fi
+    cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
+    local cur; cur=$(mktemp) || { warn "$user: mktemp failed"; cron_lock_release "$user"; return 1; }
+    if ! cron_read "$user" "$cur"; then
+        warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    local placeholder; placeholder=$(mktemp) || { warn "$user: mktemp failed"; rm -f "$cur"; cron_lock_release "$user"; return 1; }
+    printf '%s by deploy.sh --pause at %s -- run: deploy.sh --resume\n' \
+        "$PAUSE_MARKER" "$(date '+%Y-%m-%d %H:%M:%S %Z')" > "$placeholder"
+    if ! cron_write "$user" "$placeholder"; then
+        warn "$user: $CRON_ERR -- original crontab left untouched"
+        rm -f "$cur" "$placeholder"; cron_lock_release "$user"; return 1
+    fi
+    mkdir -p "$PAUSE_STATE_DIR"; chmod 700 "$PAUSE_STATE_DIR"
+    mv "$cur" "$state"
+    rm -f "$placeholder"
+    cron_lock_release "$user"
+    log "$user: crontab paused, saved to $state"
+    return 0
+}
+
+do_pause() {
+    local user rc=0
+    while IFS= read -r user; do
+        [ -n "$user" ] || continue
+        do_pause_one "$user" || rc=1
+    done < <(pause_targets)
+    return "$rc"
+}
+
+do_resume_one() {   # <user>  -> 0 resumed, 1 nothing to resume or failed
+    local user="$1" state; state=$(pause_state_path "$user")
+    [ -e "$state" ] || { warn "$user: nothing paused (no saved state at $state)"; return 1; }
+    cron_lock_acquire "$user" || { warn "$user: $CRON_ERR"; return 1; }
+    local cur; cur=$(mktemp) || { warn "$user: mktemp failed"; cron_lock_release "$user"; return 1; }
+    if ! cron_read "$user" "$cur"; then
+        warn "$user: $CRON_ERR"; rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    if ! grep -qF "$PAUSE_MARKER" "$cur"; then
+        warn "$user: the current crontab does not look like --pause's own placeholder -- refusing to overwrite what may be a manual edit made during the maintenance window. The saved pre-pause state is still at $state; compare by hand, then either restore it yourself or remove it once you are sure it is no longer needed."
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    if ! cron_markers_valid "$state"; then
+        warn "$user: saved pre-pause crontab at $state fails marker validation ($CRON_ERR) -- refusing to restore a broken layout, resolve by hand"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    if ! cron_write "$user" "$state"; then
+        warn "$user: $CRON_ERR -- saved state left in place at $state, nothing was lost"
+        rm -f "$cur"; cron_lock_release "$user"; return 1
+    fi
+    rm -f "$cur"
+    cron_lock_release "$user"
+    rm -f "$state"
+    log "$user: crontab resumed from the saved pre-pause state"
+    return 0
+}
+
+do_resume() {
+    local f user rc=0 any=0
+    if [ -d "$PAUSE_STATE_DIR" ]; then
+        for f in "$PAUSE_STATE_DIR"/*.saved; do
+            [ -e "$f" ] || continue
+            any=1
+            user=$(basename "$f" .saved)
+            do_resume_one "$user" || rc=1
+        done
+    fi
+    if [ "$any" -eq 0 ]; then
+        warn "nothing paused -- no saved state in $PAUSE_STATE_DIR"
+        return 1
+    fi
+    return "$rc"
+}
+
 # do_revoke_old -- the ONLY step in this whole feature that removes something.
 # Deliberately its own explicit command, only runs mid-rotation, and only ever
 # touches the one exact key line recorded at --rotate time.
@@ -3774,6 +3937,14 @@ fi
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
     do_commit_scope "$COMMIT_SCOPE_LABEL"
     exit 0
+fi
+if [ "$PAUSE_MODE" -eq 1 ]; then
+    do_pause
+    exit $?
+fi
+if [ "$RESUME_MODE" -eq 1 ]; then
+    do_resume
+    exit $?
 fi
 
 # ------------------------------------------------------------------------------
