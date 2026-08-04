@@ -2,7 +2,7 @@
 set -o pipefail
 # snapget.sh (run with -V for version; see git log for full changelog) - twin of snapsend.sh
 # ------------------------------------------------------------------------------
-# Author: [Your Name]
+# Author: Wojciech Król <lurk@lurk.com.pl>
 # Refactored: March 17, 2026
 # Description: ZFS snapshot manager with force full pull
 #

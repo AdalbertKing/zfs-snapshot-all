@@ -30,8 +30,15 @@ set -uo pipefail
 # ==============================================================================
 #  WHAT THIS HOST GETS -- edit here, or override with a flag for one run
 # ==============================================================================
-# Where alerts are mailed.
-NOTIFY_EMAIL="${NOTIFY_EMAIL:-lurk@lurk.com.pl}"
+# Where alerts are mailed. Defaults to local root mail, which is deliverable on
+# any host without configuring anything -- a remote address baked in here would
+# mean a fresh install silently mails a stranger, and the operator who needs the
+# alert never learns it fired. Set it with --email=ADDR, or here for a fleet.
+#
+# Only used when /etc/zfs-alert.conf does not yet exist. Once that file is
+# written its ZFS_ALERT_EMAIL wins at runtime and re-running deploy.sh never
+# overwrites it, so changing this default cannot move an existing host's alerts.
+NOTIFY_EMAIL="${NOTIFY_EMAIL:-root}"
 
 # daily     = queue findings, ONE summary mail per host per day (default)
 # immediate = mail each finding as it happens. Worth setting while bringing a
@@ -51,9 +58,26 @@ ALERT_MODE="daily"
 # without anyone having to remember which machine has an account and which does
 # not; creating one stays a deliberate, explicit act.
 BACKUP_USER=""
+# What that account gets delegated, when it is created. These two are the stock
+# Proxmox VE layout, not one site's paths: `rpool/data` is where the installer
+# puts guest disks, and `rpool/ROOT/pve-1` is the root filesystem dataset the
+# installer creates under that literal name regardless of the node's hostname
+# (verified across three differently-named nodes). Override with --datasets="A B"
+# on any host that departs from it -- a non-Proxmox host almost certainly does.
 BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
 
-REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+# Where this host pulls its updates from -- and, for a delegated account, where
+# ITS own checkout is cloned from.
+#
+# Deliberately NOT a hardcoded upstream URL. It is derived below from the origin
+# of the checkout THIS script is running out of, so a fork deploys itself rather
+# than the original author's `main`. Hardcoding it meant that anyone who cloned
+# this repo got hosts that fetched somebody else's tree every hour -- their own
+# commits would never reach their own machines, and an upstream change would
+# land on them unreviewed.
+#
+# Set it here (or in the environment) only to override that derivation.
+REPO_URL="${REPO_URL:-}"
 # Overridable so the self-update tests can drive a throwaway checkout instead
 # of the live one. Production never sets these.
 # The single crontab writer, taken from BESIDE this script rather than from
@@ -61,6 +85,19 @@ REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
 # it may not exist yet, while this file is by definition next to the one being
 # executed.
 _DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve REPO_URL now that $_DEPLOY_DIR exists (see the config block above).
+# `git remote get-url origin` on the checkout this file lives in is the only
+# answer that is right for BOTH the upstream repo and any fork of it. The
+# literal fallback is for a checkout with no origin at all -- unreachable in
+# practice, since the source() below already refuses to run outside a complete
+# checkout, but a bare URL beats an empty one that would make `git clone ""`
+# the failure the operator has to diagnose.
+if [ -z "$REPO_URL" ]; then
+    REPO_URL="$(git -C "$_DEPLOY_DIR" remote get-url origin 2>/dev/null)"
+    [ -n "$REPO_URL" ] || REPO_URL="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+fi
+
 if [ -r "$_DEPLOY_DIR/lib-cron.sh" ]; then
     # shellcheck disable=SC1090
     source "$_DEPLOY_DIR/lib-cron.sh"

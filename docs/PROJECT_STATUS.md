@@ -29,6 +29,43 @@
   otwartych findingów blokujących wydanie w tej kampanii. Odpowiedź
   implementera nie jest wymagana, chyba że kolejny commit zmieni
   zrecenzowane zachowanie lub unieważni zapisany dowód.
+- **Przygotowanie do publikacji (2026-08-04): licencja MIT + usunięcie wartości
+  jednej instalacji z `deploy.sh`.** Trzy rzeczy, które sprawiały, że pakiet
+  nadawał się do użytku wyłącznie dla autora:
+  1. **Brak `LICENSE`** — formalnie nikt nie miał prawa tego użyć. Dodany MIT.
+  2. **`REPO_URL` zaszyty na `AdalbertKing/zfs-snapshot-all`** — to był realny
+     defekt, nie kosmetyka: KAŻDY fork wdrażał hosty, które co godzinę
+     ciągnęły cudzy `main`. Własne commity nigdy nie dotarłyby na własne
+     maszyny, a zmiana z upstreamu lądowałaby u nich bez recenzji. Teraz
+     wyprowadzany z `git remote get-url origin` checkoutu, w którym leży sam
+     `deploy.sh` — jedyna odpowiedź poprawna zarówno dla upstreamu, jak i dla
+     forka. Zweryfikowane w trzech przypadkach: prawdziwy checkout (zwraca
+     dokładnie dotychczasową zaszytą wartość, więc **istniejące hosty nie
+     widzą żadnej zmiany**), katalog bez gita (fallback), nadpisanie ze
+     środowiska (wygrywa).
+  3. **`NOTIFY_EMAIL` domyślnie na adres autora** — świeża instalacja cicho
+     wysyłałaby alerty obcej osobie, a operator nigdy by się nie dowiedział,
+     że coś się zepsuło. Domyślnie `root` (poczta lokalna, zawsze
+     dostarczalna). Bezpieczne dla floty: `/etc/zfs-alert.conf` istnieje na
+     wszystkich hostach (sprawdzone na żywo) i nigdy nie jest nadpisywany, a
+     jego `ZFS_ALERT_EMAIL` wygrywa w czasie działania.
+
+  `BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"` **celowo zostawione** —
+  wstępna ocena mówiła, że to wartość jednej instalacji, pomiar ją obalił:
+  `rpool/ROOT/pve-1` jest identyczne na trzech hostach o różnych nazwach
+  (pve0, pve1, pve2), czyli to konwencja instalatora PVE, nie lokalna ścieżka.
+  Dopisany komentarz wyjaśniający, skąd ta wartość, plus wskazanie
+  `--datasets=` dla hostów spoza Proxmoksa. Naprawiony też placeholder
+  `# Author: [Your Name]` w `snapsend.sh`/`snapget.sh`.
+
+  Testy: 8 lokalnych suit wymaganych przez graf — `join` 82/82,
+  `joinmanifest` 10/10, `joinremote` 8/8, `twins` 24/24, `draftscope` 26/26,
+  `pause` 74/74, `quiescehelper` 119/119, `selfupdate` 28/28 (7 SKIP);
+  łącznie 371, zero błędów. Suity wymagające roota/ZFS (`snapsend`,
+  `scenarios`) i drugiego hosta (`remote`) są przez graf wywołane zmianą w
+  `snapsend.sh`, ale ta zmiana to **wyłącznie jedna linia komentarza**
+  (nagłówek autora) — co potwierdza niezależnie zielony wynik `twins`,
+  normalizującej komentarze.
 - **Scalenie `snapsend.sh`+`snapget.sh` w jeden silnik: ROZWAŻONE I ODRZUCONE
   (2026-08-04).** Zamiast tego dodano alarm dryfu (`test/twins`, suita niżej,
   kontrakt `twin-functions` w `test/deps.conf`). Powód odrzucenia, zmierzony a

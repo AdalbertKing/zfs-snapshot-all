@@ -1,6 +1,7 @@
 *
 !.gitignore
 !.gitattributes
+!LICENSE
 !README.md
 !PAIRING-DESIGN.md
 !AGENTS.md
