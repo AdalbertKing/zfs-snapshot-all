@@ -3364,7 +3364,20 @@ cmd_remove_client() {
             chmod 0644 "$workfile" 2>/dev/null || :
             if ! mv -f "$workfile" "$CRON_CONFIG"; then
                 rm -f "$workfile"
-                warn "the zfs-backup-managed cron block was removed, but $CRON_CONFIG could not be updated to match -- fix by hand (it should now describe zero managed jobs) before the next activate-client on this collector"
+                # REV-20260804-041: found by review -- this used to warn and
+                # fall through into --unpair and STATE=removed, which is
+                # worse than the failure it was reporting: the client record
+                # would claim removal complete while $CRON_CONFIG still
+                # described '$name', with no way to retry because the
+                # record no longer says there is anything left to remove.
+                # Die here instead, before any of that: the client record
+                # is untouched by this point (its own STATE=removed write is
+                # still below, unreached), so remove-client is a plain safe
+                # retry -- cron_block_remove above is already idempotent
+                # (a block that is already absent renders identically to
+                # what is there and no-ops), it is only this config-file
+                # swap that needs to succeed.
+                die "the zfs-backup-managed cron block for $(cron_target_user) has ALREADY been removed, but $CRON_CONFIG could not be updated to match (still describes '$name') -- refusing to call --unpair or mark '$name' removed on top of that mixed state. Fix whatever blocked the rename (disk full, permissions on $(dirname "$CRON_CONFIG")), then re-run remove-client $name -- it is a safe retry: the cron side is already done and idempotent, only this config swap remains."
             fi
         fi
     else

@@ -1651,6 +1651,128 @@ else
 fi
 
 
+# --- 23b. remove-client, last client: a failed config-publish refuses closed,
+# does not call --unpair, and does not mark the client removed -------------
+#
+# REV-20260804-041: found by review -- the last-client branch (REV-20260804-039
+# F2, section 39e below) removed the zfs-backup-managed cron block via the
+# shared writer, then WARNED (and continued into --unpair and STATE=removed)
+# if the config-file swap that follows it failed. That converts a genuinely
+# recoverable partial commit (cron side already done, idempotent to retry)
+# into a client record that falsely claims removal is complete, with no way
+# to retry it (remove-client's own guards key off state this write is about
+# to overwrite).
+#
+# cron_block_remove is function-overridden to a no-op success here -- this
+# section is about what happens to the SURROUNDING transaction when the
+# publish step fails, not about re-proving cron_block_remove's own
+# correctness (REV-036's pause suite already does that).
+RL="$WORK/removelast"; mkdir -p "$RL/bin" "$RL/clients"
+cat > "$RL/jobs.conf" <<'EOF'
+[defaults]
+	host_label = testhost
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+
+[dataset:tank/onlyclient]
+	# managed-by: zfs-backup.sh client=lastclient
+	use_template = standard_hourly
+EOF
+cat > "$RL/bin/crontab" <<EOF
+#!/bin/bash
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: $RL/jobs.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "1 * * * * x"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+chmod +x "$RL/bin/crontab"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$RL" > "$RL/server.conf"
+printf 'STATE=active\nPEER_HOST=peer.example\nMANAGED_DATASETS="tank/onlyclient"\nCRON_CONFIG=%s/jobs.conf\n' "$RL" > "$RL/clients/lastclient.conf"
+
+# Force the publish step (mv workfile -> CRON_CONFIG) to fail: a stub `mv`
+# that fails ONLY the exact "swap the .zfsbackup-work.* tempfile onto
+# jobs.conf" call and delegates everything else to the real mv.
+cat > "$RL/bin/mv" <<EOF
+#!/bin/bash
+if [ "\$#" -ge 2 ]; then
+    dst="\${@: -1}"; src="\${@: -2:1}"
+    case "\$src" in
+        *.zfsbackup-work.*) case "\$dst" in "$RL/jobs.conf") echo "mv: simulated failure for the test" >&2; exit 1 ;; esac ;;
+    esac
+fi
+exec /bin/mv "\$@"
+EOF
+chmod +x "$RL/bin/mv"
+
+# A marker file, not a text-in-output check: `bash "$DEPLOY" ...` against
+# /bin/false or /bin/true proves nothing about whether it ran (neither
+# prints its own args), and a real deploy.sh stub is the only way to know
+# for certain --unpair was never invoked.
+cat > "$RL/deploy_marker.sh" <<EOF
+#!/bin/bash
+touch "$RL/DEPLOY_WAS_CALLED"
+exit 0
+EOF
+chmod +x "$RL/deploy_marker.sh"
+
+before_conf=$(cat "$RL/clients/lastclient.conf")
+before_jobsconf=$(cat "$RL/jobs.conf")
+
+out=$( PATH="$RL/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$RL/server.conf'; CLIENTS_DIR='$RL/clients'; DEPLOY='$RL/deploy_marker.sh'
+    cron_block_remove() { CRON_CHANGED=1; return 0; }
+    cmd_remove_client lastclient
+" 2>&1 ); rc=$?
+
+if [ "$rc" -ne 0 ]; then
+    ok "remove-client last-client, publish fails: command exits non-zero"
+else
+    bad "remove-client last-client, publish fails: command exits non-zero" "rc=$rc out=$out"
+fi
+if [ ! -e "$RL/DEPLOY_WAS_CALLED" ]; then
+    ok "remove-client last-client, publish fails: deploy.sh --unpair is not reached"
+else
+    bad "remove-client last-client, publish fails: deploy.sh --unpair is not reached" "marker file exists -- deploy.sh was invoked"
+fi
+if [ "$(cat "$RL/clients/lastclient.conf")" = "$before_conf" ]; then
+    ok "remove-client last-client, publish fails: client record is untouched (not marked removed)"
+else
+    bad "remove-client last-client, publish fails: client record is untouched (not marked removed)" "$(cat "$RL/clients/lastclient.conf")"
+fi
+if [ "$(cat "$RL/jobs.conf")" = "$before_jobsconf" ]; then
+    ok "remove-client last-client, publish fails: the old config is left in place (mixed state, not silently swapped)"
+else
+    bad "remove-client last-client, publish fails: the old config is left in place (mixed state, not silently swapped)" "$(cat "$RL/jobs.conf")"
+fi
+if printf '%s' "$out" | grep -qF "ALREADY been removed" && printf '%s' "$out" | grep -qF "could not be updated to match"; then
+    ok "remove-client last-client, publish fails: the diagnostic names the exact mixed state"
+else
+    bad "remove-client last-client, publish fails: the diagnostic names the exact mixed state" "$out"
+fi
+
+# Retry after the publish problem is fixed: same stubbed crontab (still
+# needed for assert_cron_config_matches_installed), but the REAL mv this
+# time -- a fresh bin dir rather than removing the stub from $RL/bin, so
+# nothing here depends on cleanup order.
+mkdir -p "$RL/bin2"
+cp "$RL/bin/crontab" "$RL/bin2/crontab"
+out2=$( PATH="$RL/bin2:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$RL/server.conf'; CLIENTS_DIR='$RL/clients'; DEPLOY='$RL/deploy_marker.sh'
+    cron_block_remove() { CRON_CHANGED=1; return 0; }
+    cmd_remove_client lastclient
+" 2>&1 ); rc2=$?
+if [ "$rc2" -eq 0 ] && grep -q 'STATE=removed' "$RL/clients/lastclient.conf" \
+   && ! grep -q '\[dataset:' "$RL/jobs.conf" && [ -e "$RL/DEPLOY_WAS_CALLED" ]; then
+    ok "remove-client last-client: retry after the publish problem is fixed completes cleanly"
+else
+    bad "remove-client last-client: retry after the publish problem is fixed completes cleanly" "rc=$rc2 out=$out2"
+fi
+
 # --- 24. preflight can render before phase 2 has moved anything -------------
 #
 # Found by the FIRST live preflight, metropolis pve1, 2026-08-01. Phase 1 has to
