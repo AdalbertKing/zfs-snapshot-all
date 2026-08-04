@@ -24,11 +24,21 @@
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
 - **Kampania enrolmentu (Gates A-J, REV-037…044): ZAMKNIĘTA.** Recenzent
-  ACCEPTED w `docs/reviews/REV-20260804-044-FINAL-AJ-VERDICT.md` —
+  ACCEPTED w `docs/internal/reviews/REV-20260804-044-FINAL-AJ-VERDICT.md` —
   wszystkie dziesięć bramek PASS, REV-037 przez REV-043 CLOSED, zero
   otwartych findingów blokujących wydanie w tej kampanii. Odpowiedź
   implementera nie jest wymagana, chyba że kolejny commit zmieni
   zrecenzowane zachowanie lub unieważni zapisany dowód.
+- **Recenzje przeniesione do `docs/internal/reviews/` (2026-08-04).** `git mv`,
+  więc historia zachowana; 109 odwołań w 12 plikach przepisanych, w tym
+  protokół w `CLAUDE.md`, `AGENTS.md` i `docs/AI_PROJECT_RULES.md`. Powód:
+  `docs/` zawierało 52 pozycje archiwum procesu recenzyjnego wobec 5 plików
+  dokumentacji właściwej — ktoś obcy otwierał katalog dokumentacji i widział
+  rejestr wewnętrzny. Żadne odwołanie w `.sh` nie było ścieżką wykonywaną,
+  wyłącznie komentarze, więc zmiana jest bezbehawioralna.
+  **UWAGA DLA RECENZENTA:** recenzent publikuje `REV-*.md` przez commit gita.
+  Nowa ścieżka to `docs/internal/reviews/` — plik wrzucony pod starą
+  `docs/reviews/` odtworzy katalog i rozjedzie kanał na dwie lokalizacje.
 - **Przygotowanie do publikacji (2026-08-04): licencja MIT + usunięcie wartości
   jednej instalacji z `deploy.sh`.** Trzy rzeczy, które sprawiały, że pakiet
   nadawał się do użytku wyłącznie dla autora:
@@ -110,7 +120,11 @@
      (REV-20260804-043, P1). Naprawione precyzyjnie: normalizacja
      WYŁĄCZNIE mutowalnego `host` w `-A "acct@host:path"`, reszta
      tożsamości joba (konto, source, target, harmonogram) musi się
-     zgadzać dokładnie (`3a89892`). `test/zfsbackup` **263/263**,
+     zgadzać dokładnie (`3a89892`). `test/zfsbackup` **260/260**
+     (dokument twierdził tu `263/263` — zmierzone 2026-08-04 dwukrotnie,
+     na HEAD i na `b4d1624` sprzed przeniesienia recenzji: obie dają 260,
+     a suita ma `needs = nothing` i zero warunków od roota/ZFS, więc jest
+     deterministyczna. Liczba 263 była błędna, nie środowiskowa),
      regresja potwierdzona (stash samej łatki → dokładnie te dwa nowe
      testy padają, reszta zielona). Gate G ponownie uruchomiony na żywo
      z poprawioną bramką — czysto, bez FATAL.
@@ -153,8 +167,8 @@
      Crontaby (root i `zfsbackup`) potwierdzone bajt w bajt identyczne
      z bazową linią sesji; `zfs allow` na realnych datasetach
      produkcyjnych bez zmian; `deploy.sh --check-only` → `audit clean
-     on pve1`. Pełny rejestr: `docs/reviews/responses/REV-20260804-042.md`,
-     `docs/reviews/responses/REV-20260804-043.md`.
+     on pve1`. Pełny rejestr: `docs/internal/reviews/responses/REV-20260804-042.md`,
+     `docs/internal/reviews/responses/REV-20260804-043.md`.
 - Wcześniej: **REV-20260804-039/040/041 —
   drugi krąg werdyktu recenzenta nad kampanią enrolmentu: cztery kolejne
   findingi, wszystkie zamknięte na żywo.**
@@ -197,14 +211,14 @@
      drugi klaster (192.168.11.x) siedzą na wzajemnie nieosiągalnych
      VPN-ach (potwierdzone w obie strony) — żaden dostępny w tej sesji
      hostpair nie jest jednocześnie nieklastrowany I wzajemnie osiągalny.
-     Pełny rejestr: `docs/reviews/responses/REV-20260804-039.md`.
+     Pełny rejestr: `docs/internal/reviews/responses/REV-20260804-039.md`.
 
 - Wcześniej: **REV-20260804-037/038 — pełna
   żywa kampania enrolmentu (Gate A-J), osiem błędów znalezionych i
   naprawionych na żywo, zero fabrykowanych dowodów.** Kolektor pve1
   ↔ peer/source pve2 (metropolis), throwaway dataset, od czystego stanu do
   pełnego demontażu. Skrót ośmiu poprawek (każda to osobny commit, pełny
-  opis w `docs/reviews/responses/REV-20260804-037.md`'s Gate ledger i
+  opis w `docs/internal/reviews/responses/REV-20260804-037.md`'s Gate ledger i
   `REV-20260804-038.md`):
   1. `deploy.sh do_join()`: brakujący `local PEER_CONF_MODE` — pierwszy
      realny `--join --mode=` na żywym drugim hoście od razu się wywalił
@@ -268,7 +282,7 @@
   38a). Tym samym WSZYSTKIE dziesięć plasterków z planu REV-20260802-033
   jest zaimplementowanych; jedyne co zostaje przed wdrożeniem to żywy test
   end-to-end na dwóch hostach (zadanie stojące, patrz niżej). Odpowiedź:
-  "Slice 10" w `docs/reviews/responses/REV-20260802-033.md`.
+  "Slice 10" w `docs/internal/reviews/responses/REV-20260802-033.md`.
 - Wcześniej: **REV-20260802-033 plasterek 9**
   (zdalny `--join` + edytor zakresu przez `ssh -t`, U10) — jedna jawna,
   domyślnie WYŁĄCZONA flaga `--join-remotely` na `deploy.sh --pair`
@@ -288,7 +302,7 @@
   nieudana próba automatyzacji ostrzega i spada do dokładnie tych samych
   ręcznych instrukcji co dotychczas — awaryjna droga ręczna zostaje.
   `join` **82/82** (+5), `zfsbackup` **246/246** (+2). Odpowiedź: addendum
-  "Slice 9" w `docs/reviews/responses/REV-20260802-033.md`.
+  "Slice 9" w `docs/internal/reviews/responses/REV-20260802-033.md`.
 - Wcześniej: **korekta U9** (model endpointu,
   naprawiona natychmiast po zgłoszeniu, nie odłożona do plasterka 9/10) —
   `ACTIVE_ENDPOINT` uogólnione ze slotu nazwanego (`lan`/`vpn`) na dosłowny
@@ -316,7 +330,7 @@
   rozpoznaje. `zfsbackup` **244/244** (+6 netto nad plasterkiem 8, po
   przepisaniu — nie tylko dopisaniu — fixture'ów bramki `set-endpoint` na
   nowe CLI). Odpowiedź: "U9 implemented" w
-  `docs/reviews/responses/REV-20260802-033.md`.
+  `docs/internal/reviews/responses/REV-20260802-033.md`.
 - Wcześniej: **REV-20260802-033 plasterek 8**
   (kontrakty sync: F3, U7, U8) — dwie niezależne połówki. (1) `snapget.sh`,
   `process_dataset`: `-F` przestało być bezwarunkowym domyślnym flagiem przy
@@ -355,7 +369,7 @@
   commitach plasterka 7 — zapisane jako otwarta korekta, do zrobienia razem z
   poprawką nazewnictwa ról (kolektor vs źródło), bo dotyczą tych samych pól i
   komunikatów. Odpowiedź: addendum "Slice 8" + "Correction to slice 7: U9"
-  w `docs/reviews/responses/REV-20260802-033.md`.
+  w `docs/internal/reviews/responses/REV-20260802-033.md`.
 - Wcześniej: **REV-20260802-033 plasterek 7**
   (model endpointu, F4) — recenzja żądała porównania stanu maszyny stanów z
   decyzjami właściciela 13-14 ("set-endpoint tylko gdy adres faktycznie się
@@ -377,7 +391,7 @@
   od razu `verify-endpoint`. Nazewnictwo ról w komunikatach (kolektor vs
   źródło jako przenoszona maszyna) świadomie odłożone do plasterka 10.
   `zfsbackup` **232/232** (+2). Odpowiedź: addendum "Slice 7" w
-  `docs/reviews/responses/REV-20260802-033.md`.
+  `docs/internal/reviews/responses/REV-20260802-033.md`.
 - Wcześniej: **REV-20260802-033 plasterek 6**
   (kolektor: fetch/digest/generate) — `zfs-backup.sh` przestaje wymagać listy
   datasetów przy `add-client --mode=backup|sync` (alternatywa dla
@@ -416,7 +430,7 @@
   (`__replicate_`, `vzdump`, `__migration__`) przez `[excluded:]`, wyłącznie
   DOKŁADAJĄC brakujący próg — silniejszy `keep` operatora nigdy nie jest
   zawężany. `zfsbackup` **230/230** (+16). Odpowiedź: addendum "Slice 6" w
-  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej **łatki T3/U2/T5**
+  `docs/internal/reviews/responses/REV-20260802-033.md`. Wcześniej **łatki T3/U2/T5**
   (`6c930ff`, `b6d5032`) wobec `docs/discussions/ENROLMENT-AGREED-2026-08-02.md`
   — ten dokument, nie sama recenzja, jest właściwą specyfikacją mechaniki,
   do której plasterki REV-033 dążą. T3: `--commit-scope` zapisuje sha256
@@ -430,7 +444,7 @@
   żywo na metropolis pve2 (T3/U2 na scratch datasetach, T5 na prawdziwych,
   bałaganiarskich danych produkcyjnych). `draftscope` **26/26** (+4).
   Odpowiedź: sekcja "Patches against ENROLMENT-AGREED" w
-  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  `docs/internal/reviews/responses/REV-20260802-033.md`. Wcześniej
   **REV-20260802-033 plasterek 5** (`d839c91`) — `--pair --role=pull` przyjmuje teraz `--mode=backup|sync`
   jako alternatywę dla `--peer-datasets`: pakiet niesie `PEER_CONF_MODE`
   zamiast listy datasetów, wybór odsunięty na peera (`--draft-scope`/
@@ -445,7 +459,7 @@
   identycznie jak wcześniej — zgodność wsteczna potwierdzona osobnym
   testem, nie wywnioskowana z diffu. `join` **77/77** (+13).
   Odpowiedź: addendum "Slice 5" w
-  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  `docs/internal/reviews/responses/REV-20260802-033.md`. Wcześniej
   **REV-20260802-033 plasterek 4** (`279303b`) — `deploy.sh --draft-scope=LABEL` generuje plik zakresu
   z prawdziwego inwentarza ZFS peera: jeden `[dataset:X]` na niesystemowy
   dataset jeden poziom pod każdą pulą (`include_parent=no`,
@@ -460,7 +474,7 @@
   3 korzenie puli + `rpool/ROOT` poprawnie wykluczone, pełny inwentarz
   (30 datasetów) zgadza się z ręcznym `zfs list -r`. `join` **64/64** (+10),
   nowa suita `draftscope` **22/22**. Odpowiedź: addendum "Slice 4" w
-  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  `docs/internal/reviews/responses/REV-20260802-033.md`. Wcześniej
   **REV-20260802-033 plasterek 3** (`b7e0478`) — `do_commit_scope` teraz też
   ODBIERA: zbiór do odwołania to
   (poprzedni zbiór z manifestu) MINUS (obecny zbiór ze scope file) — nigdy
@@ -476,7 +490,7 @@
   Sprzątnięte: scratch datasety zniszczone, `--revoke-quiesce` użyty do
   usunięcia whitelisty/reguły sudoers które ten test stworzył.
   Odpowiedź: addendum "Slice 3" w
-  `docs/reviews/responses/REV-20260802-033.md`. Wcześniej
+  `docs/internal/reviews/responses/REV-20260802-033.md`. Wcześniej
   **REV-20260803-036** —
   `--pause`/`--resume` z durable-transaction hardeningiem: zapis stanu
   `--fullcron` jest teraz durable PRZED zamianą crontaba (kolejność
@@ -493,7 +507,7 @@
   `gen-cron.sh --install`) nadpisania go, więc pauza przeżywa zwykły zapis
   wykonany po jej zakończeniu, nie tylko zapis współbieżny (F5). `pause`
   **74/74** (+25). Odpowiedź:
-  `docs/reviews/responses/REV-20260803-036.md`. Wcześniej `f6f4ce3` —
+  `docs/internal/reviews/responses/REV-20260803-036.md`. Wcześniej `f6f4ce3` —
   `deploy.sh --pause`/`--resume` domyślnie zatrzymuje TYLKO bloki tego
   pakietu (zakomentowanie ciała bloku w miejscu, markery `lib-cron.sh`),
   zamiast całego crontaba; `--fullcron` przywraca dawne zamiatanie całego
@@ -527,7 +541,7 @@
 - Status ogólny: **Cała flota (4 hosty) pracuje z kont delegowanych, każdy host
   ma własny config w `/etc/zfs-snapshot-all/`. Kolejka recenzji pusta, dług suit
   zerowy — wszystkie odpowiedzi na REV-021…032 są w
-  `docs/reviews/responses/`.** REV-032 przeszedł pełen komplet suit **przed**
+  `docs/internal/reviews/responses/`.** REV-032 przeszedł pełen komplet suit **przed**
   wejściem na `main` (gałąź `rev-032`, klon na metropolis pve1): `quiesce`
   161/161 jako konto, `snapsend` 202/202, `scenarios` 34/34, `remote` 145/145
   jako root i 145/145 jako konto. Migracja zaczęła się 2026-08-01 18:10 na
@@ -954,7 +968,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `twins` | **24/24** | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **263/263** | REV-20260804-042/043 (+8 netto): sekcja "clobber" (26) przepisana pod endpoint-normalized identity — jeden job endpoint-switch przechodzi, dwa joby tego samego klienta z jednym porzuconym pod nowym adresem nadal odmawia (kontrprzykład recenzenta), oba zachowane przechodzi, zmiana source datasetu obok endpointu NIE jest maskowana jako endpoint-only, inny klient nadal odmawia. Warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie. Korekta U9 (+6 netto, po przepisaniu fixture'ów bramki na nowe CLI): `active_endpoint_host_port`/`endpoint_display` dla obu kształtów rekordu, no-op `set-endpoint` na już aktualnym adresie, zapis `ENDPOINT_KNOWN` przy realnym przełączeniu, wciągnięcie uśpionego slotu klienta legacy, awans `verify-endpoint` na znanego kandydata (i odwrotnie — adres, co przestał odpowiadać, sam staje się kandydatem), odmowa z wymienieniem wszystkich wypróbowanych adresów gdy żaden nie odpowiada. Plasterek 9 (+2, U10): `add-client --join-remotely` przekazuje flagę do `deploy.sh --pair` przez podstawiony `$DEPLOY` przechwytujący argv (ten sam wzorzec co `$SNAPGET` w sekcjach 38/39), obecną tylko gdy podana. Plasterek 10 (+3, korekty ról): sekcja 41 — source-grep piny na poprawioną treść trzech komunikatów (`seed`, `final-catchup`, `verify-endpoint`), gdzie "the source" mylnie nazywało peera zaraz obok już poprawnego "this collector". REV-20260804-039 F1: komunikat błędu `add-client` po nieudanym/przerwanym `--pair` mówi teraz wprost, że retry TEJ SAMEJ komendy jest bezpieczny (żywo dowiedzione, patrz nagłówek). Sekcja 23b (+7, REV-20260804-041): `remove-client` na OSTATNIM kliencie — wymuszona awaria podmiany pliku configu PO udanym usunięciu bloku crona (`mv` zaślepiony tylko dla tego jednego wywołania) potwierdza: kod wychodzi niezerowo, `deploy.sh --unpair` nigdy nie jest wywoływany (skrypt-znacznik jako dowód, nie dopasowanie tekstu), rekord klienta i stary config zostają nietknięte, komunikat nazywa dokładny stan mieszany, a retry (prawdziwy `mv`) kończy się czysto z `STATE=removed` |
+| `zfsbackup` | **260/260** (dokument podawał 263/263 — poprawione 2026-08-04 po dwukrotnym pomiarze, patrz nagłówek) | REV-20260804-042/043 (+8 netto): sekcja "clobber" (26) przepisana pod endpoint-normalized identity — jeden job endpoint-switch przechodzi, dwa joby tego samego klienta z jednym porzuconym pod nowym adresem nadal odmawia (kontrprzykład recenzenta), oba zachowane przechodzi, zmiana source datasetu obok endpointu NIE jest maskowana jako endpoint-only, inny klient nadal odmawia. Warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie. Korekta U9 (+6 netto, po przepisaniu fixture'ów bramki na nowe CLI): `active_endpoint_host_port`/`endpoint_display` dla obu kształtów rekordu, no-op `set-endpoint` na już aktualnym adresie, zapis `ENDPOINT_KNOWN` przy realnym przełączeniu, wciągnięcie uśpionego slotu klienta legacy, awans `verify-endpoint` na znanego kandydata (i odwrotnie — adres, co przestał odpowiadać, sam staje się kandydatem), odmowa z wymienieniem wszystkich wypróbowanych adresów gdy żaden nie odpowiada. Plasterek 9 (+2, U10): `add-client --join-remotely` przekazuje flagę do `deploy.sh --pair` przez podstawiony `$DEPLOY` przechwytujący argv (ten sam wzorzec co `$SNAPGET` w sekcjach 38/39), obecną tylko gdy podana. Plasterek 10 (+3, korekty ról): sekcja 41 — source-grep piny na poprawioną treść trzech komunikatów (`seed`, `final-catchup`, `verify-endpoint`), gdzie "the source" mylnie nazywało peera zaraz obok już poprawnego "this collector". REV-20260804-039 F1: komunikat błędu `add-client` po nieudanym/przerwanym `--pair` mówi teraz wprost, że retry TEJ SAMEJ komendy jest bezpieczny (żywo dowiedzione, patrz nagłówek). Sekcja 23b (+7, REV-20260804-041): `remove-client` na OSTATNIM kliencie — wymuszona awaria podmiany pliku configu PO udanym usunięciu bloku crona (`mv` zaślepiony tylko dla tego jednego wywołania) potwierdza: kod wychodzi niezerowo, `deploy.sh --unpair` nigdy nie jest wywoływany (skrypt-znacznik jako dowód, nie dopasowanie tekstu), rekord klienta i stary config zostają nietknięte, komunikat nazywa dokładny stan mieszany, a retry (prawdziwy `mv`) kończy się czysto z `STATE=removed` |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **82/82** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5), +5 dla `PEER_CONF_REMOTE_JOIN`/`--join-remotely` (REV-033 plasterek 9, U10) — pole `yes`/nieznana wartość/brak (legacy), `--join-check` je wypisuje, flaga CLI się parsuje. Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. `do_pair`'s own scp/ssh/`ssh -t` orchestration (plasterek 9) tym samym wyborem BEZ stubu — patrz addendum "Slice 9". Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
@@ -1012,7 +1026,7 @@ czterech hostach w obu formach hosta.
   może skasować zadań, które cel już wykonuje (`assert_target_block_not_clobbered`),
   a linie „porzucone" przez render konta trafiają do bloku ogólnohostowego
   **tylko** jeśli są rozpoznane jako ogólnohostowe — reszta zatrzymuje migrację
-  z podaniem linii. Odpowiedź: `docs/reviews/responses/REV-20260801-021.md`.
+  z podaniem linii. Odpowiedź: `docs/internal/reviews/responses/REV-20260801-021.md`.
 - **REV-018/-019/-020 — zaimplementowane w `1d5a8c4`, czekają na werdykt.**
   Bramka duplikacji porównuje teraz **tożsamość zadań**, nie ścieżkę configu
   (`job_identity()` zdejmuje katalog skryptu i log, zostawia harmonogram,
@@ -1020,7 +1034,7 @@ czterech hostach w obu formach hosta.
   `zfs-backup.sh migrate-to-account <konto> [--preflight] [--yes]` z pięcioma
   fazami REV-020 F3, a linie ogólnohostowe (digest) dostały własny blok
   `# BEGIN zfs-backup-host` w crontabie roota zamiast być luźną linią, której
-  nikt nie jest właścicielem. Odpowiedzi: `docs/reviews/responses/REV-20260801-018.md`,
+  nikt nie jest właścicielem. Odpowiedzi: `docs/internal/reviews/responses/REV-20260801-018.md`,
   `-019.md`, `-020.md`.
 - **Świadomie NIEzrobione z REV-020 F1, i recenzent to potwierdził:** faza
   `prepare` przenosi config, ale **nie nadaje** `zfs allow` ani grantu quiesce —
@@ -1082,17 +1096,17 @@ czterech hostach w obu formach hosta.
 - **REV-20260804-042** — drugi krąg werdyktu A-J: żaden nowy defekt kodu w
   REV-041, REV-039 F1 i REV-040 zamknięte przez recenzenta. Bramki G i I
   nadal **NOT RUN** na żywo — recenzent wprost zabronił zmiany kodu, żeby
-  je „zaliczyć". Odpowiedź `docs/reviews/responses/REV-20260804-042.md`:
+  je „zaliczyć". Odpowiedź `docs/internal/reviews/responses/REV-20260804-042.md`:
   NEEDS-DISCUSSION dla obu, bo to pytanie o infrastrukturę (druga trasa
   sieciowa / nieklastrowana para hostów), nie o implementację — patrz
   „Czeka na decyzję właściciela" niżej.
 - **REV-20260801-021** (`1edca10`, `99ba1f5`) — instalacja nie może skasować
   zadań, które cel już wykonuje; tylko rozpoznane linie ogólnohostowe zostają
-  w crontabie roota. Odpowiedź w `docs/reviews/responses/REV-20260801-021.md`.
+  w crontabie roota. Odpowiedź w `docs/internal/reviews/responses/REV-20260801-021.md`.
 - **REV-20260801-022 F1** (`32d6ed1`) — `--allow-quiesce` musi nazwać konto,
   które dostaje grant, i odmówić zamiast kończyć się zerem. Odmowa przeniesiona
   na czas argumentów, czyli mocniej niż wymagała recenzja. Odpowiedź w
-  `docs/reviews/responses/REV-20260801-022.md`. **Nota produktowa recenzji
+  `docs/internal/reviews/responses/REV-20260801-022.md`. **Nota produktowa recenzji
   (jeden przepływ zamiast trzech poleceń) przyjęta i NIEZROBIONA** — patrz
   „Czeka na decyzję właściciela".
 - **`55d33a2` — nie z recenzji, ale wymaga tego samego spojrzenia.** Lokalny
@@ -1106,44 +1120,44 @@ czterech hostach w obu formach hosta.
   flush kontenera, tryb niepasujący do rodzaju guesta). Wszystkie odmawiają
   kodem 3 przed snapshotem. Nieudany thaw też kończy przebieg niezerowo i
   **zatrzymuje** guesta na liście odzysku zamiast go zapomnieć. Odpowiedź w
-  `docs/reviews/responses/REV-20260801-023.md`. Piąta gałąź (tryb niepasujący)
+  `docs/internal/reviews/responses/REV-20260801-023.md`. Piąta gałąź (tryb niepasujący)
   wykracza poza literę recenzji — zaznaczone tam wprost do ewentualnego
   odrzucenia.
 - **REV-20260801-026** (`5ff1b0b`) — uprawnienia ZFS wyprowadzane z wyrenderowanych
   zadań, nie z typu sekcji; komunikat naprawczy z dokładną listą datasetów.
-  Odpowiedź w `docs/reviews/responses/REV-20260801-026.md`.
+  Odpowiedź w `docs/internal/reviews/responses/REV-20260801-026.md`.
 - **REV-20260801-027** — to samo o jeden poziom wyżej: quiesce sprawdzany
   **per zadanie** przez prawdziwego helpera, jako konto, zamiast jednego
   hostowego „czy konto dosięga helpera". Zweryfikowane na żywo na wszystkich
-  czterech hostach. Odpowiedź w `docs/reviews/responses/REV-20260801-027.md`.
+  czterech hostach. Odpowiedź w `docs/internal/reviews/responses/REV-20260801-027.md`.
 - **REV-20260801-024** (`be1cfe7` + `d8bb52a`) — okno zamrożenia jako termin, nie
   kolejność. Wszystkie pięć wymaganych zachowań, zmierzone na żywo: 18 s → 1 s.
-  Odpowiedź w `docs/reviews/responses/REV-20260801-024.md`. Do zważenia przez
+  Odpowiedź w `docs/internal/reviews/responses/REV-20260801-024.md`. Do zważenia przez
   recenzenta: budżet 5 s oznacza, że host z kilkoma wolno mrożącymi się gośćmi
   Windows w **jednym** zadaniu legalnie go przekroczy i to zadanie padnie —
   kierunek fail-closed, ale zmiana zachowania dla konfiguracji, której nikt
   jeszcze nie próbował.
 - **REV-20260801-025** (`7564f8e` + `c7ce8da`) — granica quiesce'u ma objąć
   **każdą pulę** i **ścieżkę zdalną**. Odpowiedź w
-  `docs/reviews/responses/REV-20260801-025.md`, **napisana z opóźnieniem i tak
+  `docs/internal/reviews/responses/REV-20260801-025.md`, **napisana z opóźnieniem i tak
   właśnie opisana**: F1 zostało bez pliku odpowiedzi, więc recenzent nie miał
   jak odróżnić „niesione" od „nieprzeczytane" i zapytał drugi raz jako REV-029.
 - **REV-20260802-028** (`90a06c8`) — `--add-quiesce`: grant wyłącznie
   dokładający, idempotentny, fail-closed przy nieczytelnej whiteliście;
   `--allow-quiesce` nadal nadpisuje, bo dla **zapisu** to jest poprawne.
-  Odpowiedź w `docs/reviews/responses/REV-20260802-028.md`.
+  Odpowiedź w `docs/internal/reviews/responses/REV-20260802-028.md`.
 - **REV-20260802-029** (`c7ce8da`) — powtórka REV-025 F1: granica sprawdzana
   przed **każdą** pulą, na obu ścieżkach. Odpowiedź w
-  `docs/reviews/responses/REV-20260802-029.md`.
+  `docs/internal/reviews/responses/REV-20260802-029.md`.
 - **REV-20260802-030** (`9fbf1df`) — niekompletny zestaw quiesce jest
   **usuwany**, nie tłumaczony: rejestr tego, co przebieg utworzył, trzy wyjścia
   (komplet / nic nie zatwierdzono / **ROLLBACK INCOMPLETE**, kod 7, z nazwą
   każdego ocalałego snapshotu). Odpowiedź w
-  `docs/reviews/responses/REV-20260802-030.md`.
+  `docs/internal/reviews/responses/REV-20260802-030.md`.
 - **REV-20260802-031** (`3d4c13f`) — sam raport wycofania nie może zawieść
   fail-open. Drugi plik tymczasowy **usunięty**, nie obsłużony; nieudany zapis
   rejestru kończy się kodem 7 z nazwą snapshotu. Odpowiedź w
-  `docs/reviews/responses/REV-20260802-031.md`.
+  `docs/internal/reviews/responses/REV-20260802-031.md`.
 - **REV-20260802-032** (`700d045`, `52ec5e6`) — nieudany zapis rejestru musiał
   rozliczyć **cały** zestaw, nie tylko nazwę, która akurat nie weszła. Rozwiązane
   **inaczej niż sugerowała recenzja**: nie drugim rejestrem na to, czego pierwszy
@@ -1151,7 +1165,7 @@ czterech hostach w obu formach hosta.
   ścieżce lokalnej, więc klasa błędu znika zamiast być obsługiwana. Powód
   odstępstwa jest zmierzony i opisany w odpowiedzi: każda przenośna próba
   zepsucia pliku *między pulami* kasowała też **zapis wcześniejszej puli**.
-  Odpowiedź w `docs/reviews/responses/REV-20260802-032.md`. **Do zważenia przez
+  Odpowiedź w `docs/internal/reviews/responses/REV-20260802-032.md`. **Do zważenia przez
   recenzenta:** pięć nowych asercji, które padają na `HEAD~`, to asercje
   strukturalne — część behawioralna przypina kontrakt, ale nie rozróżnia wersji,
   bo stary defekt wymagał trybu awarii, którego już nie ma. Reprodukcja defektu
@@ -1254,7 +1268,7 @@ czterech hostach w obu formach hosta.
   oczekującej migracji, więc `cron_replace_all` nie był jeszcze wywołany na
   prawdziwym produkcyjnym bloku — wszystkie cztery hosty migrowały się na
   kodzie sprzed F3.
-  Odpowiedź: `docs/reviews/responses/REV-20260802-034.md`.
+  Odpowiedź: `docs/internal/reviews/responses/REV-20260802-034.md`.
 - **REV-20260803-036** — **CHANGES REQUIRED, ZROBIONE** (ten commit): pauza
   była tekstowym konwenansem, nie transakcją. Pięć findingów P1, wszystkie
   ACCEPTED/IMPLEMENTED: `--fullcron` zamieniał crontab PRZED durable
@@ -1319,7 +1333,7 @@ czterech hostach w obu formach hosta.
   jedyny osiągalny stan mieszany po przebudowie F2 to "jedna strona
   zapauzowana, druga nie" — nie częściowa korupcja. `cron_lock_acquire_multi`
   zostaje nieużywany, gdyby przyszły incydent zmienił ten osąd.
-  Odpowiedź: `docs/reviews/responses/REV-20260803-036.md`.
+  Odpowiedź: `docs/internal/reviews/responses/REV-20260803-036.md`.
 - **REV-20260803-035** — **CHANGES REQUIRED, ZROBIONE** (`9e977f6`): zamek
   F2 był kluczowany ścieżką zależną od **tożsamości wywołującego**.
   `CRON_LOCK_DIR` = `/run` jeśli zapisywalny, inaczej `$TMPDIR`/`/tmp` — root
@@ -1339,12 +1353,12 @@ czterech hostach w obu formach hosta.
   a realnym procesem konta na tym samym hoście — wymaga żywego hosta,
   zgłoszone jako zobowiązanie ręczne (Faza 4 jest idempotentna, więc
   najbliższy `deploy.sh` na dowolnym hoście to podejmie za darmo).
-  Odpowiedź: `docs/reviews/responses/REV-20260803-035.md`.
+  Odpowiedź: `docs/internal/reviews/responses/REV-20260803-035.md`.
 - **REV-20260802-033** — recenzja **projektowa**, nie defektowa: uproszczony
   enrolment ma odkrywać dane **na źródle**, trzymać jeden edytowalny plik
   zakresu i odróżniać endpoint od trasy. Recenzja wprost zabrania
   implementowania czegokolwiek przed odpowiedzią. Odpowiedź w
-  `docs/reviews/responses/REV-20260802-033.md`: **wszystkie pięć findingów
+  `docs/internal/reviews/responses/REV-20260802-033.md`: **wszystkie pięć findingów
   ACCEPTED**, F3 i F5 z naddatkiem.
   Poprzedziła ją rozmowa właściciel ↔ implementer — dziesięć uzgodnień spisanych
   w `docs/discussions/ENROLMENT-AGREED-2026-08-02.md`, m.in. edycja pliku na
@@ -1376,7 +1390,7 @@ czterech hostach w obu formach hosta.
   puli — wymaga żywego hosta ze świeżym `--join`/`--commit-scope`, żaden
   istniejący peer nie jest w stanie sprzed tego plasterka. Zgłoszone jako
   zobowiązanie ręczne, tym samym kształtem co ryzyko F3 w REV-034.
-  Odpowiedź: `docs/reviews/responses/REV-20260802-033.md` (addendum
+  Odpowiedź: `docs/internal/reviews/responses/REV-20260802-033.md` (addendum
   2026-08-03).
 - **REV-20260731-011 §2 — spór.** Zakwestionowałem tezę, że ścieżka błędu
   `mkdir allow_dir` nie wywołuje rollbacku: wywołanie jest tam od `763767b`,
@@ -1394,7 +1408,7 @@ czterech hostach w obu formach hosta.
   wyżej). Bramka G (zmiana trasy przy zachowanym endpointcie) i bramka I
   (sync na nieklastrowanej parze) nie mają więc gdzie się wykonać na
   prawdziwej infrastrukturze. Trzy opcje wypisane w
-  `docs/reviews/responses/REV-20260804-042.md` dla każdej bramki osobno:
+  `docs/internal/reviews/responses/REV-20260804-042.md` dla każdej bramki osobno:
   (a) dostawić prawdziwą drugą trasę/piąty host, (b) autoryzować
   odizolowane środowisko laboratoryjne na istniejącym hoście (kontenery/
   network namespace, bez dotykania produkcyjnej sieci klastra), albo
@@ -1554,4 +1568,4 @@ właśnie działa.
 
 Poprzedni uzgodniony punkt bazowy `388a78e` (2026-07-30) pozostaje ważny jako
 zapis tego, co zostało wtedy wspólnie przyjęte. Ten dokument opisuje stan
-bieżący; historia decyzji żyje w `docs/reviews/` i `docs/reviews/responses/`.
+bieżący; historia decyzji żyje w `docs/internal/reviews/` i `docs/internal/reviews/responses/`.

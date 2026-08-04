@@ -476,7 +476,7 @@ fi
 # for this second command -- so it is what gets exercised here, via
 # --commit-scope-check. The actual grant loop (do_commit_scope) walks real
 # `zfs list` output and calls real `zfs allow`; that half needs a live host
-# and is not covered by this suite (see docs/reviews/responses/REV-20260802-033.md).
+# and is not covered by this suite (see docs/internal/reviews/responses/REV-20260802-033.md).
 #
 # PEER_STATE_DIR is overridable for exactly this: it points the manifest/scope
 # lookup at a throwaway directory instead of the real, root-owned

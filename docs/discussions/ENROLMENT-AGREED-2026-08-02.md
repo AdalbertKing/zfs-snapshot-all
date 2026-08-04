@@ -457,7 +457,7 @@ wypisanie dokładnej komendy do uruchomienia na pve2.
 ## Stan dyskusji
 
 Pięć obszarów REV-20260802-033 przegadanych, dziesięć uzgodnień spisanych.
-Następny artefakt: `docs/reviews/responses/REV-20260802-033.md` — odpowiedź
+Następny artefakt: `docs/internal/reviews/responses/REV-20260802-033.md` — odpowiedź
 dokumentacyjna, bez zmian w kodzie produkcyjnym, zgodnie z żądaniem recenzji.
 
 ---
@@ -642,4 +642,4 @@ cicha kasacja.
 
 Kod: `9f08af6`. Testy: `test/zfsbackup/run.sh` **230/230**. Odpowiedź dla
 recenzenta z tym samym opisem: addendum "Slice 6" w
-`docs/reviews/responses/REV-20260802-033.md`.
+`docs/internal/reviews/responses/REV-20260802-033.md`.

@@ -8,7 +8,7 @@
 # Everything that DOES (add-client's --pair call, activate-client's
 # --draft-config/snapget.sh -n/gen-cron.sh --install) needs a real pairing
 # between two hosts and is covered by manual live verification instead --
-# see docs/reviews/responses/ for that evidence once it exists.
+# see docs/internal/reviews/responses/ for that evidence once it exists.
 #
 #   ./test/zfsbackup/run.sh
 set -u

@@ -110,7 +110,7 @@ abandon_resume() {
 #
 # Same shape as the invocation lock, which had been doing this correctly all
 # along: NUL-delimited fields so no value can impersonate a boundary, through a
-# stable hash. Reported as F3 in docs/reviews/REV-20260729-001.md.
+# stable hash. Reported as F3 in docs/internal/reviews/REV-20260729-001.md.
 job_state_key() {
     local tgt="$1" src="${2:-}"
     printf '%s\0%s\0%s\0%s' "$(basename "$0")" "${IDENTIFIER:-}" "$src" "$tgt" \

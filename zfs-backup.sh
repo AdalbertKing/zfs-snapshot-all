@@ -175,7 +175,7 @@ Run on the backup appliance (pve1). The peer (pve2) side is unchanged:
   ./deploy.sh --join=/path/to/package.tgz
 
 See docs/discussions/DEPLOY-UX-AGREED-POSITION.md and
-docs/reviews/responses/REV-20260730-004.md for the model this follows.
+docs/internal/reviews/responses/REV-20260730-004.md for the model this follows.
 EOF
 }
 

@@ -11,7 +11,7 @@
 # own logic (pool iteration, system-name filtering, sorting, text formatting)
 # is a plain text transformation, not the security-sensitive `zfs allow`/
 # `unallow`/`holds` semantics do_commit_scope's grant loop deliberately leaves
-# to live verification only (see docs/reviews/responses/REV-20260802-033.md).
+# to live verification only (see docs/internal/reviews/responses/REV-20260802-033.md).
 #
 #   ./test/draftscope/run.sh
 set -u

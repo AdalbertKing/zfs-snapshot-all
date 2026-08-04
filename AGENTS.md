@@ -1,6 +1,6 @@
 # Reviewer instructions
 
-Read `docs/AI_PROJECT_RULES.md` and `docs/reviews/README.md` before reviewing or changing this repository.
+Read `docs/AI_PROJECT_RULES.md` and `docs/internal/reviews/README.md` before reviewing or changing this repository.
 
 ## Default role
 
@@ -9,7 +9,7 @@ The default role for ChatGPT/Codex in this repository is **reviewer**, not imple
 Unless the owner explicitly requests implementation:
 
 - inspect repository state, design documents, commit ranges, Pull Request diffs, tests, and operational contracts;
-- publish durable findings under `docs/reviews/`;
+- publish durable findings under `docs/internal/reviews/`;
 - review Claude's implementation commits or Pull Requests;
 - request changes or approve based on evidence;
 - do not modify production scripts merely to demonstrate a proposed fix.
@@ -31,7 +31,7 @@ When the owner revokes the exception, return to branch-and-Pull-Request review p
 
 Use an ID of the form `REV-YYYYMMDD-NNN` and create:
 
-`docs/reviews/REV-YYYYMMDD-NNN.md`
+`docs/internal/reviews/REV-YYYYMMDD-NNN.md`
 
 Each finding must contain:
 
@@ -50,7 +50,7 @@ Do not mark an issue fixed from a commit message alone. Inspect the actual diff 
 
 Claude responds in:
 
-`docs/reviews/responses/REV-YYYYMMDD-NNN.md`
+`docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
 
 Do not overwrite that file. Discussion may continue in commit or PR comments, but any decision that changes scope, acceptance criteria, risk, or status must be reflected in a Markdown artifact.
 

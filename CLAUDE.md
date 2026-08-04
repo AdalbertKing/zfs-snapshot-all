@@ -1,6 +1,6 @@
 # Implementer instructions
 
-Read `docs/AI_PROJECT_RULES.md`, `docs/reviews/README.md`, and the referenced review file before changing code.
+Read `docs/AI_PROJECT_RULES.md`, `docs/internal/reviews/README.md`, and the referenced review file before changing code.
 
 ## Default role
 
@@ -13,7 +13,7 @@ While it remains active:
 
 1. A branch and Pull Request are preferred when practical but are not required.
 2. Claude may commit a reviewed logical change directly to `main`.
-3. Create or update `docs/reviews/responses/REV-YYYYMMDD-NNN.md` with the implementation evidence.
+3. Create or update `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md` with the implementation evidence.
 4. Address one logical finding per commit whenever findings can be separated safely.
 5. Add regression tests that fail on the reviewed base and pass after the fix.
 6. Run the impact graph and all available required suites before push.
@@ -24,7 +24,7 @@ When the owner revokes the exception, return to the normal branch and Pull Reque
 
 ## Response file
 
-Do not edit the reviewer's `docs/reviews/REV-*.md` file. Record the response separately using this structure:
+Do not edit the reviewer's `docs/internal/reviews/REV-*.md` file. Record the response separately using this structure:
 
 ```markdown
 # Response to REV-YYYYMMDD-NNN
@@ -73,7 +73,7 @@ Refresh it at the end of **every** stage, before reporting the stage as done:
 
 Where a change replaces a design the document describes, **rewrite that section**
 rather than appending to it. Historical accuracy belongs in
-`docs/reviews/responses/`; current truth belongs in `PROJECT_STATUS.md`. A
+`docs/internal/reviews/responses/`; current truth belongs in `PROJECT_STATUS.md`. A
 document that lags behind `main` is not untidy, it is a reviewer reading a design
 that no longer exists.
 

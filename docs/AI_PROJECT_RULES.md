@@ -44,7 +44,7 @@ During this exception:
 - every commit must still be one reviewable logical change;
 - relevant tests must be run before push when the environment permits;
 - GitHub Actions on push is post-delivery evidence, not a pre-merge gate;
-- review findings and implementer responses must still be written under `docs/reviews/`;
+- review findings and implementer responses must still be written under `docs/internal/reviews/`;
 - the implementer must not mark findings `CLOSED`; the reviewer still owns technical closure;
 - no force-push, history rewrite, silent fixture blessing, or weakening of safety checks is permitted;
 - any direct-main change that fails review must be corrected by a new forward commit, never by rewriting published history.
@@ -53,11 +53,11 @@ This exception changes delivery mechanics only. It does not waive testing, evide
 
 ## Review artifacts
 
-Durable review communication lives under `docs/reviews/`.
+Durable review communication lives under `docs/internal/reviews/`.
 
-- Reviewer finding: `docs/reviews/REV-YYYYMMDD-NNN.md`
-- Implementer response: `docs/reviews/responses/REV-YYYYMMDD-NNN.md`
-- Optional closure record: `docs/reviews/closures/REV-YYYYMMDD-NNN.md`
+- Reviewer finding: `docs/internal/reviews/REV-YYYYMMDD-NNN.md`
+- Implementer response: `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
+- Optional closure record: `docs/internal/reviews/closures/REV-YYYYMMDD-NNN.md`
 
 The implementer must not edit the reviewer's finding file. Disagreement is recorded in the response file, with technical evidence. The reviewer must not silently rewrite the implementer's response.
 

