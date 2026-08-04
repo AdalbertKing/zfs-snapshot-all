@@ -306,6 +306,52 @@ bringing a host up, immediate alerting is worth it:
 ./deploy.sh --alerts=immediate
 ```
 
+### Mail on plain Debian (non-Proxmox)
+
+On Proxmox this works by itself, because the PVE installer configures postfix.
+**On plain Debian there is usually no MTA at all** — and then the backup runs
+correctly while every failure is silent.
+
+`deploy.sh` installs the `mailutils` package, but that only provides the `mail`
+*command*. Delivery needs an MTA, which is a separate package. That is why the
+script issues a **standalone verdict** on alerting, in every mode including
+`--check-only`:
+
+```
+alert delivery: postfix present, queue empty -- this host can send
+ALERTING IS NOT WIRED UP: 'mail' exists but no MTA provides sendmail(8)
+mail transport present (postfix) but 3 message(s) are STUCK IN THE QUEUE
+```
+
+If you see either of the last two, alerts from this host are not working. The
+minimal fix:
+
+```bash
+apt-get install postfix
+```
+
+At the installer's prompt choose **"Local only"** if alerts should go to local
+root (this package's default address), or **"Internet Site"** / **"Satellite
+system"** if they need to leave the machine.
+
+> **`deploy.sh` deliberately does NOT configure postfix.** That is a host-wide
+> change: on a machine with working mail already (exim4, a configured relay,
+> msmtp), rewriting `main.cf` would break somebody else's setup. Choosing a
+> smarthost and its SMTP credentials is also a per-site decision, and the
+> password would have to live somewhere. Same principle that stops
+> `--commit-scope` touching ZFS grants it did not create.
+
+**Verifying afterwards** — the simplest proof that mail actually leaves:
+
+```bash
+./deploy.sh --check-only
+mailq
+```
+
+An empty queue after a send means the MTA accepted and dispatched the message.
+Messages sitting in `mailq` mean alerts are being produced and not arriving —
+a thing to fix, not a cosmetic detail.
+
 ---
 
 ## 6. `sync` mode — a mirror rather than an archive
@@ -469,6 +515,8 @@ vi /etc/zfs-snapshot-all/peers/192.168.1.20.scope      # selection + exclusions
 | no cron entries | the client never reached `endpoint_verified` — check `status` |
 | a new VM is not being copied | that is section 7.1, not a failure |
 | updates stopped arriving | `git -C /root/zfs-snapshot-all status` — a dirty tree blocks `--ff-only` |
+| backups run but no alerts arrive | `./deploy.sh --check-only` gives a mail verdict; then `mailq`. On non-Proxmox this is usually a missing MTA (section 5) |
+| `mailq` shows `alias database unavailable` | `/etc/aliases.db` is missing — `newaliases` rebuilds it |
 
 The overall state is always available from:
 

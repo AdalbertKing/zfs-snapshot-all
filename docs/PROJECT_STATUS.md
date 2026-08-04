@@ -29,6 +29,33 @@
   otwartych findingów blokujących wydanie w tej kampanii. Odpowiedź
   implementera nie jest wymagana, chyba że kolejny commit zmieni
   zrecenzowane zachowanie lub unieważni zapisany dowód.
+- **Werdykt o dostarczalności alertów (2026-08-04).** Do tej pory `deploy.sh`
+  sprawdzał wyłącznie `command -v mail`, co dowodzi istnienia *klienta*, nie
+  zdolności dostarczenia. Na Proxmoksie nie było tego widać, bo instalator PVE
+  konfiguruje postfixa; na czystym Debianie wdrożenie kończyło się sukcesem na
+  hoście, którego alerty nigdy nie wychodzą — ta sama klasa co „quiesce zwrócił
+  rc=0 i nic nie zamroził". Nowe `mta_present`/`mta_name`/`mail_queue_depth`/
+  `alert_delivery_verdict`: werdykt w KAŻDYM trybie, w tym `--check-only`, plus
+  sprawdzenie kolejki po teście maila (dotąd „wyślij i miej nadzieję" —
+  instrukcja kazała operatorowi zajrzeć do skrzynki ręcznie).
+  **Postfix celowo nietykany** — decyzja właściciela: to zmiana ogólnohostowa,
+  a host z działającym exim4/relayem straciłby konfigurację; wybór smarthosta i
+  poświadczeń SMTP jest per instalacja. Ta sama zasada co nietykanie cudzych
+  grantów ZFS i cudzych bloków crona. Świadomie NIE wnioskujemy o zdolności
+  wysyłki na zewnątrz z `main.cf`: debianowe „Local only" ustawia
+  `inet_interfaces=loopback-only`, co blokuje ODBIERANIE i nic nie mówi o
+  wysyłce — jedynym uczciwym sygnałem jest kolejka po realnej próbie.
+  Znaleziony przy okazji **błąd fail-open we własnym kodzie**: pierwsza wersja
+  werdyktu przy nieczytelnej kolejce twierdziła „queue empty -- this host can
+  send", czyli orzekała sprawność z braku danych; poprawione na jawne
+  „dispatch is unverified". Pięć scenariuszy przetestowanych na podstawionym
+  `PATH` (brak `mail`, brak MTA, kolejka zapchana, host zdrowy, kolejka
+  nieczytelna) + parsowanie zweryfikowane na prawdziwym wyjściu `postqueue`
+  z trzech żywych hostów.
+  **Znalezisko produkcyjne:** metropolis pve2 ma zaległą wiadomość w kolejce od
+  2026-08-04 09:37 — bounce `MAILER-DAEMON` z `(alias database unavailable)`,
+  czyli brak `/etc/aliases.db`. Do naprawy przez `newaliases`; NIE zrobione,
+  bo właściciel wyraźnie ograniczył zakres do „bez ruszania postfiksa".
 - **Recenzje przeniesione do `docs/internal/reviews/` (2026-08-04).** `git mv`,
   więc historia zachowana; 109 odwołań w 12 plikach przepisanych, w tym
   protokół w `CLAUDE.md`, `AGENTS.md` i `docs/AI_PROJECT_RULES.md`. Powód:

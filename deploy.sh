@@ -2112,6 +2112,80 @@ apt_install_with_fallback() {
     apt-get install -y "$pkg"
 }
 
+# ---- can this host actually DELIVER an alert? ------------------------------
+#
+# `command -v mail` only proves a client binary exists. Delivery needs an MTA
+# behind it, and the two are separate packages: on Proxmox the installer sets
+# postfix up for us, which is why this never surfaced here, but a plain Debian
+# can end up with mailutils and no working transport at all. A deploy that
+# "succeeded" onto a host whose alerts silently go nowhere is the same class of
+# failure as a quiesce that returns 0 without freezing anything -- so it gets a
+# verdict of its own rather than a warning that scrolls past.
+#
+# What is deliberately NOT inferred: whether REMOTE delivery works. Debian's
+# "Local only" postfix profile sets inet_interfaces=loopback-only, which stops
+# it RECEIVING and says nothing about whether it can send outbound -- reading
+# main.cf would produce a confident wrong answer. The queue after a real send
+# is the only honest signal, and that is what the test-mail path checks.
+
+# The sendmail(8) interface every MTA on Debian provides -- postfix, exim4,
+# msmtp-mta, ssmtp, nullmailer. Checked by path, not `command -v`: /usr/sbin is
+# not on every PATH this script may be invoked with.
+mta_present() {
+    [ -x /usr/sbin/sendmail ] || [ -x /usr/lib/sendmail ]
+}
+
+# Which one, for the operator who now has to fix it. Best-effort, never fatal.
+mta_name() {
+    if command -v postconf >/dev/null 2>&1;   then echo postfix
+    elif command -v exim4 >/dev/null 2>&1;    then echo exim4
+    elif command -v msmtp >/dev/null 2>&1;    then echo msmtp
+    elif mta_present;                         then echo "an MTA"
+    else                                           echo none
+    fi
+}
+
+# Messages still waiting. Empty output means "could not tell" -- NOT zero, so a
+# caller cannot read an unsupported MTA as proof of an empty queue.
+mail_queue_depth() {
+    if command -v postqueue >/dev/null 2>&1; then
+        postqueue -p 2>/dev/null | awk '/^-- [0-9]+ Kbytes in [0-9]+ Request/ {print $5; f=1} END {if (!f) print 0}'
+    elif command -v exim4 >/dev/null 2>&1; then
+        exim4 -bpc 2>/dev/null
+    fi
+}
+
+# One line of verdict, in every mode. Returns non-zero when this host cannot be
+# shown to deliver, so the caller can decide how loud to be.
+alert_delivery_verdict() {
+    if ! command -v mail >/dev/null 2>&1; then
+        warn "  ALERTING IS NOT WIRED UP: no 'mail' command. Every backup failure on this host would be silent."
+        warn "    fix: apt-get install mailutils   (pulls a default MTA on Debian)"
+        return 1
+    fi
+    if ! mta_present; then
+        warn "  ALERTING IS NOT WIRED UP: 'mail' exists but no MTA provides sendmail(8), so nothing can leave this host."
+        warn "    fix: apt-get install postfix   (or exim4 / msmtp-mta -- this script deliberately does not choose or configure one for you)"
+        return 1
+    fi
+    local q; q=$(mail_queue_depth)
+    if [ -z "$q" ]; then
+        # Unreadable queue is NOT an empty queue. Saying "this host can send"
+        # here would be a verdict derived from missing data -- the same
+        # fail-open shape as reporting a backup fine because the check itself
+        # did not run. Report exactly what is known: a transport exists.
+        log "  alert delivery: $(mta_name) present; queue depth not readable here, so dispatch is unverified"
+        return 0
+    fi
+    if [ "$q" -gt 0 ] 2>/dev/null; then
+        warn "  mail transport present ($(mta_name)) but $q message(s) are STUCK IN THE QUEUE -- alerts are being written and not delivered."
+        warn "    look: mailq   and   tail -20 /var/log/mail.log"
+        return 1
+    fi
+    log "  alert delivery: $(mta_name) present, queue empty -- this host can send"
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 log "Phase 1: dependencies"
 # ------------------------------------------------------------------------------
@@ -2679,6 +2753,14 @@ fi
 # per host: four hosts upgraded three times in an afternoon put twelve messages
 # in the operator's inbox, none of which said anything about backups. That is
 # the very mailbox the one-mail-per-day rule exists to protect.
+
+# The verdict runs in EVERY mode, before the send decision: --check-only exists
+# to answer "is this host healthy", and "its alerts cannot leave the building"
+# belongs in that answer even though nothing is being installed. It is also the
+# only report a host gets on a re-run, where the test mail is deliberately
+# skipped.
+alert_delivery_verdict || true
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
     log "skipping the test email (check-only)"
 elif [ "$SEND_TEST_MAIL" -eq 0 ] && [ "$FIRST_TIME_SETUP" -eq 0 ]; then
@@ -2687,14 +2769,28 @@ elif command -v mail >/dev/null; then
     log "sending a test email to confirm mail delivery works from THIS host..."
     # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
     # routing the delivery smoke test through it would prove nothing about mail.
+    _q_before=$(mail_queue_depth)
     echo "deploy.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
         | mail -s "[ZFS BACKUP] test na $(hostname -f 2>/dev/null || hostname)" "$NOTIFY_EMAIL"
-    log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
-    log "If it does NOT arrive: this host's postfix likely can't deliver externally without a relay"
-    log "(no relayhost configured is fine IF direct delivery to the recipient's MX works, as it did"
-    log "for pve0/pve1 -- but that is not guaranteed on every network. If it fails, you'll need to"
-    log "configure relayhost/smarthost credentials for this host manually -- that's a per-host"
-    log "decision (which SMTP relay, credentials), not something this script can pick for you.)"
+    # Then actually LOOK. Until 2026-08-04 this was fire-and-forget: it told the
+    # operator to check an inbox and a log by hand, which on a fresh host is
+    # exactly the check nobody performs. A message still queued a few seconds
+    # later has not been delivered -- that is not proof of permanent failure
+    # (a deferred retry may still succeed), but it is proof that "the mail was
+    # sent" is not yet true, and saying so beats implying it is.
+    sleep 3
+    _q_after=$(mail_queue_depth)
+    if [ -n "$_q_after" ] && [ "$_q_after" -gt 0 ] 2>/dev/null; then
+        warn "  the test message is STILL QUEUED ($_q_after in the queue, $_q_before before the send) -- it has not been delivered yet"
+        warn "    this host can hold mail but has not shown it can send it. Look: mailq / tail -20 /var/log/mail.log"
+        warn "    a relayhost/smarthost is the usual missing piece; which relay and whose credentials is a per-host decision this script does not make"
+    elif [ -n "$_q_after" ]; then
+        log "  queue empty after the send -- the MTA accepted and dispatched it. Confirm arrival at $NOTIFY_EMAIL."
+    else
+        log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
+        log "  (queue depth could not be read for $(mta_name) -- no verdict on dispatch, only that mail(1) accepted it)"
+    fi
+    unset _q_before _q_after
 else
     warn "no 'mail' command -- install mailutils/postfix, then re-run this script, or create $NOTIFY_SCRIPT manually"
 fi

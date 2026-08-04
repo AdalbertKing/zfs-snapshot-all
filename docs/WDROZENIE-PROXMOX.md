@@ -308,6 +308,51 @@ wdrażania warto przełączyć na natychmiastowe:
 ./deploy.sh --alerts=immediate
 ```
 
+### Poczta na czystym Debianie (nie-Proxmox)
+
+Na Proxmoksie to działa samo, bo instalator PVE konfiguruje postfixa. **Na
+czystym Debianie zwykle nie ma żadnego MTA** — i wtedy backup chodzi
+poprawnie, a każda awaria jest niema.
+
+`deploy.sh` doinstaluje pakiet `mailutils`, ale to daje tylko *polecenie*
+`mail`. Dostarczanie wymaga MTA, czyli osobnego pakietu. Dlatego skrypt
+**wydaje osobny werdykt** o alertowaniu — w każdym trybie, także w
+`--check-only`:
+
+```
+alert delivery: postfix present, queue empty -- this host can send
+ALERTING IS NOT WIRED UP: 'mail' exists but no MTA provides sendmail(8)
+mail transport present (postfix) but 3 message(s) are STUCK IN THE QUEUE
+```
+
+Jeśli zobaczysz którykolwiek z dwóch ostatnich — alerty z tego hosta nie
+działają. Minimalna naprawa:
+
+```bash
+apt-get install postfix
+```
+
+Przy pytaniu instalatora wybierz **„Local only"**, jeśli alerty mają iść do
+lokalnego roota (domyślny adres tego pakietu), albo **„Internet Site"** /
+**„Satellite system"**, jeśli mają wychodzić na zewnętrzny adres.
+
+> **`deploy.sh` celowo NIE konfiguruje postfiksa.** To zmiana ogólnohostowa: gdy
+> host ma już działającą pocztę (exim4, ustawiony relay, msmtp), nadpisanie
+> `main.cf` zepsułoby cudzą konfigurację. Wybór smarthosta i poświadczeń SMTP
+> to też decyzja per instalacja, a hasło musiałoby gdzieś zamieszkać. Ta sama
+> zasada, dla której `--commit-scope` nie rusza cudzych grantów ZFS.
+
+**Sprawdzenie po fakcie** — najprostszy dowód, że poczta faktycznie wychodzi:
+
+```bash
+./deploy.sh --check-only
+mailq
+```
+
+Pusta kolejka po wysyłce znaczy, że MTA przyjął i wyprawił wiadomość.
+Wiadomości zalegające w `mailq` znaczą, że alerty są produkowane i nie
+docierają — to stan do naprawy, nie kosmetyka.
+
 ---
 
 ## 6. Wariant `sync` — lustro zamiast archiwum
@@ -470,6 +515,8 @@ vi /etc/zfs-snapshot-all/peers/192.168.1.20.scope      # wybór + wykluczenia
 | brak wpisów w cronie | klient nie doszedł do `endpoint_verified` — sprawdź `status` |
 | nowa VM nie jest kopiowana | to punkt 7.1, nie awaria |
 | aktualizacje przestały przychodzić | `git -C /root/zfs-snapshot-all status` — brudne drzewo blokuje `--ff-only` |
+| backup działa, ale nie ma alertów | `./deploy.sh --check-only` wyda werdykt o poczcie; potem `mailq`. Na nie-Proxmoksie zwykle brak MTA (rozdz. 5) |
+| `mailq` pokazuje `alias database unavailable` | brak `/etc/aliases.db` — `newaliases` odbudowuje |
 
 Stan całości zawsze pokaże:
 
