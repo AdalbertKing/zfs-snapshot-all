@@ -14,13 +14,82 @@
   kolejką recenzji (przeróbka na tryb blokowy), po REV-20260804-037 w
   całości, REV-20260804-038 w całości, REV-20260804-039 w całości (F1
   disputed-with-evidence, F2/F3/F4 zamknięte), REV-20260804-040 w całości
-  (UID-binding) i REV-20260804-041 w całości (transakcja last-client),
-  po REV-20260804-042 — drugi krąg werdyktu: kod bez zastrzeżeń, bramki
-  G/I nadal NOT RUN, odpowiedź NEEDS-DISCUSSION czeka na decyzję
-  właściciela o infrastrukturze, zero zmian w kodzie produkcyjnym)
+  (UID-binding), REV-20260804-041 w całości (transakcja last-client),
+  po REV-20260804-042 Gate G i Gate I zamknięte NA ŻYWO (owner wybrał
+  budowę labu zamiast NEEDS-DISCUSSION) i po REV-20260804-043 — P1
+  korekta znaleziona przez recenzenta PRZED wdrożeniem, naprawiona i
+  ponownie zweryfikowana na żywo tego samego dnia)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
-- Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-039/040/041 —
+- Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-042/043 —
+  Gate G i Gate I kampanii enrolmentu zamknięte na żywo, dwa realne błędy
+  znalezione i naprawione, plus jedna P1 korekta recenzenta zanim
+  cokolwiek trafiło do wdrożenia.**
+  1. **Gate G (route-switch): PASS na żywo.** Throwaway LXC (`/dev/zfs`
+     passthrough przez cgroup — WAŻNE: bez `lxc.mount.entry`, ta
+     dyrektywa psuje auto-mount `/proc` kontenera; sam cgroup allow
+     wystarcza) na metropolis pve1, dwie niezależne ścieżki sieciowe
+     (LAN + efemeryczny most `ip link add`, nigdy nie zapisany do
+     `/etc/network/interfaces`). Pełny cykl: enroll+seed+activate po
+     LAN → `final-catchup` → `set-endpoint` na drugą ścieżkę →
+     `verify-endpoint` → `activate-client` → realny przyrost danych po
+     nowej trasie, potwierdzony bajt w bajt. Po drodze znaleziony
+     realny bug: `assert_target_block_not_clobbered` porównywał linie
+     crona dosłownie, więc KAŻDA zmiana endpointu wyglądała jak cudzy
+     job znikający i FATAL-owała reaktywację (`2e02a7d`). Recenzja
+     złapała PRZED wdrożeniem, że ta pierwsza łatka była za
+     gruboziarnista — jeden wspólny `HostKeyAlias` dla wszystkich
+     jobów klienta mógł zamaskować cichą utratę JEDNEGO datasetu, jeśli
+     inny dataset tego samego klienta przetrwał pod nowym adresem
+     (REV-20260804-043, P1). Naprawione precyzyjnie: normalizacja
+     WYŁĄCZNIE mutowalnego `host` w `-A "acct@host:path"`, reszta
+     tożsamości joba (konto, source, target, harmonogram) musi się
+     zgadzać dokładnie (`3a89892`). `test/zfsbackup` **263/263**,
+     regresja potwierdzona (stash samej łatki → dokładnie te dwa nowe
+     testy padają, reszta zielona). Gate G ponownie uruchomiony na żywo
+     z poprawioną bramką — czysto, bez FATAL.
+  2. **Gate I (sync na nieklastrowanej parze): PASS na żywo**, po
+     korekcie metodologii ujawnionej wprost, nie wygładzonej. Pierwsza
+     próba (ten sam LXC co Gate G) znalazła realny bug w `do_pair`:
+     `--mode=sync` celowo nie ma `--target`, więc `PEER_TARGET` jest
+     pusty, a kod tworzył `"$PEER_TARGET/$label"` bezwarunkowo dla
+     KAŻDEJ roli pull — dla sync zwija się to do `/$label`, `zfs
+     create -p` słusznie odmawia. Sync mode nigdy wcześniej nie parował
+     się z żywą infrastrukturą. Naprawione: pomiń pre-tworzenie celu,
+     gdy nie ma targetu (`d58e847`). Po naprawie ujawnił się GŁĘBSZY
+     problem: privileged LXC dzieli JĄDRO i przestrzeń nazw puli z
+     hostem — dla sync mode (ścieżka 1:1, bez prefiksu) "źródło" i
+     "cel" okazały się DOSŁOWNIE tym samym datasetem
+     (`zfs list -r hdd/backuptest_targets` pokazywał jeden wpis, nie
+     dwa). Kontener nie mógł tego udowodnić strukturalnie — dwie
+     zaimportowane pule o tej samej nazwie w jednym jądrze to
+     sprzeczność. Owner zdecydował: zbuduj prawdziwą VM zamiast
+     akceptować częściowy dowód. Zbudowano `labvm` (Debian 12
+     cloud-init, WŁASNE jądro `6.1.0-51-cloud-amd64`, `zfs-dkms`
+     skompilowany od zera po poprawce złego wariantu nagłówków —
+     pierwsza kompilacja trafiła w `linux-headers-amd64` zamiast
+     `-cloud-amd64` i dała moduł, który się nie ładował), własna pula
+     `testsync` na drugim wirtualnym dysku (GUID
+     `7174827982115380259`), niezależna od dopasowanej nazwą puli
+     `testsync` utworzonej OSOBNO na pve1 (GUID `6403485474931656966`).
+     Pełny cykl (seed + realna zmiana + druga synchronizacja)
+     zweryfikowany po GUID snapshotu (identyczny po obu, naprawdę
+     niezależnych stronach) i zawartości pliku. Po drodze: kolizja
+     UID 1000 z prawdziwym produkcyjnym kontem `zfsbackup` w PIERWSZYM
+     (już zniszczonym) kontenerze LXC — ujawniona natychmiast, brak
+     trwałego wpływu (`zfs allow` na `rpool/data`/`rpool/ROOT/pve-1`
+     zweryfikowany bez zmian), w drugiej próbie zapobieżona jawnym
+     `UID_MIN 5000` przed jakimkolwiek `useradd`.
+  3. **Sprzątanie: zero rezydualnych zmian.** VM i LXC zniszczone,
+     efemeryczny most usunięty, throwaway pula `testsync` na pve1
+     zniszczona z plikiem backingowym, wszystkie datasety testowe
+     usunięte, klucze parowania i wpisy `known_hosts` wyczyszczone.
+     Crontaby (root i `zfsbackup`) potwierdzone bajt w bajt identyczne
+     z bazową linią sesji; `zfs allow` na realnych datasetach
+     produkcyjnych bez zmian; `deploy.sh --check-only` → `audit clean
+     on pve1`. Pełny rejestr: `docs/reviews/responses/REV-20260804-042.md`,
+     `docs/reviews/responses/REV-20260804-043.md`.
+- Wcześniej: **REV-20260804-039/040/041 —
   drugi krąg werdyktu recenzenta nad kampanią enrolmentu: cztery kolejne
   findingi, wszystkie zamknięte na żywo.**
   1. **F1 (039): przerwany `--join-remotely` — DISPUTED z dowodem, nie
@@ -818,7 +887,7 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `tune` | 48/48 | cache autotune `-A` |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | 28/28 (7 SKIP) | kontroler aktualizacji i rollbacku |
-| `zfsbackup` | **255/255** | warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie. Korekta U9 (+6 netto, po przepisaniu fixture'ów bramki na nowe CLI): `active_endpoint_host_port`/`endpoint_display` dla obu kształtów rekordu, no-op `set-endpoint` na już aktualnym adresie, zapis `ENDPOINT_KNOWN` przy realnym przełączeniu, wciągnięcie uśpionego slotu klienta legacy, awans `verify-endpoint` na znanego kandydata (i odwrotnie — adres, co przestał odpowiadać, sam staje się kandydatem), odmowa z wymienieniem wszystkich wypróbowanych adresów gdy żaden nie odpowiada. Plasterek 9 (+2, U10): `add-client --join-remotely` przekazuje flagę do `deploy.sh --pair` przez podstawiony `$DEPLOY` przechwytujący argv (ten sam wzorzec co `$SNAPGET` w sekcjach 38/39), obecną tylko gdy podana. Plasterek 10 (+3, korekty ról): sekcja 41 — source-grep piny na poprawioną treść trzech komunikatów (`seed`, `final-catchup`, `verify-endpoint`), gdzie "the source" mylnie nazywało peera zaraz obok już poprawnego "this collector". REV-20260804-039 F1: komunikat błędu `add-client` po nieudanym/przerwanym `--pair` mówi teraz wprost, że retry TEJ SAMEJ komendy jest bezpieczny (żywo dowiedzione, patrz nagłówek). Sekcja 23b (+7, REV-20260804-041): `remove-client` na OSTATNIM kliencie — wymuszona awaria podmiany pliku configu PO udanym usunięciu bloku crona (`mv` zaślepiony tylko dla tego jednego wywołania) potwierdza: kod wychodzi niezerowo, `deploy.sh --unpair` nigdy nie jest wywoływany (skrypt-znacznik jako dowód, nie dopasowanie tekstu), rekord klienta i stary config zostają nietknięte, komunikat nazywa dokładny stan mieszany, a retry (prawdziwy `mv`) kończy się czysto z `STATE=removed` |
+| `zfsbackup` | **263/263** | REV-20260804-042/043 (+8 netto): sekcja "clobber" (26) przepisana pod endpoint-normalized identity — jeden job endpoint-switch przechodzi, dwa joby tego samego klienta z jednym porzuconym pod nowym adresem nadal odmawia (kontrprzykład recenzenta), oba zachowane przechodzi, zmiana source datasetu obok endpointu NIE jest maskowana jako endpoint-only, inny klient nadal odmawia. Warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie. Korekta U9 (+6 netto, po przepisaniu fixture'ów bramki na nowe CLI): `active_endpoint_host_port`/`endpoint_display` dla obu kształtów rekordu, no-op `set-endpoint` na już aktualnym adresie, zapis `ENDPOINT_KNOWN` przy realnym przełączeniu, wciągnięcie uśpionego slotu klienta legacy, awans `verify-endpoint` na znanego kandydata (i odwrotnie — adres, co przestał odpowiadać, sam staje się kandydatem), odmowa z wymienieniem wszystkich wypróbowanych adresów gdy żaden nie odpowiada. Plasterek 9 (+2, U10): `add-client --join-remotely` przekazuje flagę do `deploy.sh --pair` przez podstawiony `$DEPLOY` przechwytujący argv (ten sam wzorzec co `$SNAPGET` w sekcjach 38/39), obecną tylko gdy podana. Plasterek 10 (+3, korekty ról): sekcja 41 — source-grep piny na poprawioną treść trzech komunikatów (`seed`, `final-catchup`, `verify-endpoint`), gdzie "the source" mylnie nazywało peera zaraz obok już poprawnego "this collector". REV-20260804-039 F1: komunikat błędu `add-client` po nieudanym/przerwanym `--pair` mówi teraz wprost, że retry TEJ SAMEJ komendy jest bezpieczny (żywo dowiedzione, patrz nagłówek). Sekcja 23b (+7, REV-20260804-041): `remove-client` na OSTATNIM kliencie — wymuszona awaria podmiany pliku configu PO udanym usunięciu bloku crona (`mv` zaślepiony tylko dla tego jednego wywołania) potwierdza: kod wychodzi niezerowo, `deploy.sh --unpair` nigdy nie jest wywoływany (skrypt-znacznik jako dowód, nie dopasowanie tekstu), rekord klienta i stary config zostają nietknięte, komunikat nazywa dokładny stan mieszany, a retry (prawdziwy `mv`) kończy się czysto z `STATE=removed` |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **82/82** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5), +5 dla `PEER_CONF_REMOTE_JOIN`/`--join-remotely` (REV-033 plasterek 9, U10) — pole `yes`/nieznana wartość/brak (legacy), `--join-check` je wypisuje, flaga CLI się parsuje. Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. `do_pair`'s own scp/ssh/`ssh -t` orchestration (plasterek 9) tym samym wyborem BEZ stubu — patrz addendum "Slice 9". Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
