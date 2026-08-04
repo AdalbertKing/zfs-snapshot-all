@@ -130,6 +130,35 @@ else
     bad "a legacy manifest with no PEER_JOIN_REMOTE field verifies when none was expected" "expected success"
 fi
 
+# ---------------------------------------------------------------------------
+# REV-20260804-040: PEER_JOIN_ACCOUNT_UID, the durable principal binding
+# --leave uses instead of ever scanning `zfs allow` for "the first unknown
+# uid" (REV-20260804-039 F3's own first, wrong attempt at this -- caught by
+# review before it shipped as accepted, not live, but the same class of bug).
+# ---------------------------------------------------------------------------
+WITHUID="$TMPD/withuid.conf"
+cp "$GOOD" "$WITHUID"
+printf 'PEER_JOIN_ACCOUNT_UID="1001"\n' >> "$WITHUID"
+if verify_join_manifest "$WITHUID" pull delegated backup tank/backups zfsbackup-pve1 SHA256:abc123 "" 1001; then
+    ok "a manifest with the recorded uid verifies when the expected uid matches"
+else
+    bad "a manifest with the recorded uid verifies when the expected uid matches" "expected success"
+fi
+
+if verify_join_manifest "$WITHUID" pull delegated backup tank/backups zfsbackup-pve1 SHA256:abc123 "" 9999; then
+    bad "a manifest with a mismatched recorded uid is refused" "verify_join_manifest returned success despite a uid mismatch (1001 recorded, 9999 expected)"
+else
+    ok "a manifest with a mismatched recorded uid is refused"
+fi
+
+# A legacy manifest (no PEER_JOIN_ACCOUNT_UID field at all) still verifies
+# when no uid is expected either -- absence is the expected legacy shape.
+if verify_join_manifest "$GOOD" pull delegated backup tank/backups zfsbackup-pve1 SHA256:abc123 ""; then
+    ok "a legacy manifest with no PEER_JOIN_ACCOUNT_UID field verifies when no uid was expected"
+else
+    bad "a legacy manifest with no PEER_JOIN_ACCOUNT_UID field verifies when no uid was expected" "expected success"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

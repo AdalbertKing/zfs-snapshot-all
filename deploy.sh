@@ -3688,25 +3688,27 @@ EOF
 # "Join zakonczony" is allowed to print.
 verify_join_manifest() {
     local path="$1" want_role="$2" want_as="$3" want_mode="$4" want_target="$5" \
-          want_account="$6" want_fp="$7" want_remote="$8"
+          want_account="$6" want_fp="$7" want_remote="$8" want_uid="${9:-}"
     [ -r "$path" ] || return 1
-    local got_role got_as got_mode got_target got_account got_fp got_remote
+    local got_role got_as got_mode got_target got_account got_fp got_remote got_uid
     { read -r got_role; read -r got_as; read -r got_mode; read -r got_target; \
-      read -r got_account; read -r got_fp; read -r got_remote; } < <(
+      read -r got_account; read -r got_fp; read -r got_remote; read -r got_uid; } < <(
         (
             PEER_JOIN_ROLE="" PEER_JOIN_AS="" PEER_JOIN_MODE="" PEER_JOIN_TARGET="" \
-            PEER_JOIN_ACCOUNT="" PEER_JOIN_FINGERPRINT="" PEER_JOIN_REMOTE=""
+            PEER_JOIN_ACCOUNT="" PEER_JOIN_FINGERPRINT="" PEER_JOIN_REMOTE="" \
+            PEER_JOIN_ACCOUNT_UID=""
             # shellcheck disable=SC1090
             . "$path" 2>/dev/null
-            printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+            printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
                 "$PEER_JOIN_ROLE" "$PEER_JOIN_AS" "$PEER_JOIN_MODE" "$PEER_JOIN_TARGET" \
-                "$PEER_JOIN_ACCOUNT" "$PEER_JOIN_FINGERPRINT" "$PEER_JOIN_REMOTE"
+                "$PEER_JOIN_ACCOUNT" "$PEER_JOIN_FINGERPRINT" "$PEER_JOIN_REMOTE" \
+                "$PEER_JOIN_ACCOUNT_UID"
         )
     )
     [ "$got_role" = "$want_role" ] && [ "$got_as" = "$want_as" ] \
         && [ "$got_mode" = "$want_mode" ] && [ "$got_target" = "$want_target" ] \
         && [ "$got_account" = "$want_account" ] && [ "$got_fp" = "$want_fp" ] \
-        && [ "$got_remote" = "$want_remote" ]
+        && [ "$got_remote" = "$want_remote" ] && [ "$got_uid" = "$want_uid" ]
 }
 
 # do_join -- runs on the second host, once, from its own console. Consumes the
@@ -3760,6 +3762,7 @@ do_join() {
 
     local account="$PEER_CONF_ACCOUNT"
     local home_dir="/root"
+    local account_uid=""
     if [ "$PEER_CONF_AS" != "root" ]; then
         if id "$account" >/dev/null 2>&1; then
             log "account $account already exists, leaving it alone"
@@ -3769,6 +3772,13 @@ do_join() {
             log "created isolated peer account $account"
         fi
         home_dir="/home/$account"
+        # REV-20260804-040: the durable principal binding --leave needs to
+        # revoke correctly after the account (and its NAME) may already be
+        # gone. Captured once, here, at the one point this account is known
+        # to exist under this exact name -- not re-derived later from
+        # whatever `zfs allow` happens to display, which cannot distinguish
+        # this relationship's orphan from another one's on the same dataset.
+        account_uid=$(id -u "$account")
     fi
 
     local ssh_dir="$home_dir/.ssh"
@@ -3878,6 +3888,7 @@ PEER_JOIN_MODE="$PEER_CONF_MODE"
 PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
 PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
+PEER_JOIN_ACCOUNT_UID="$account_uid"
 PEER_JOIN_FINGERPRINT="$new_fp"
 $remote_fields
 EOF
@@ -3890,7 +3901,7 @@ EOF
         die "join: could not chmod the manifest temp file -- $partial_msg"
     fi
     if ! verify_join_manifest "$mtmp" "$PEER_CONF_ROLE" "$PEER_CONF_AS" "$PEER_CONF_MODE" \
-            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote"; then
+            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote" "$account_uid"; then
         rm -f "$mtmp"
         die "join: the rendered manifest failed read-back verification (a field did not match what was intended) -- refused before publication. $partial_msg"
     fi
@@ -3899,7 +3910,7 @@ EOF
         die "join: could not atomically install the manifest at $mpath -- $partial_msg"
     fi
     if ! verify_join_manifest "$mpath" "$PEER_CONF_ROLE" "$PEER_CONF_AS" "$PEER_CONF_MODE" \
-            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote"; then
+            "$PEER_CONF_TARGET" "$account" "$new_fp" "$want_remote" "$account_uid"; then
         die "join: manifest at $mpath failed verification AFTER the atomic rename (should not happen) -- $partial_msg Report this if it recurs."
     fi
 
@@ -3962,6 +3973,30 @@ do_commit_scope() {
     # do_commit_scope_check sourced the manifest, so a PRIOR commit's list (if
     # any) is already in scope here, before this run's write below replaces it.
     local prior_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
+
+    # REV-20260804-040: the durable UID binding --leave needs to revoke
+    # correctly after the account name may be gone. Verified/captured HERE,
+    # before any grant, because this is the one point a live account is
+    # guaranteed present (do_commit_scope_check already required it) --
+    # --leave, running later and possibly after the account is long gone,
+    # has no such guarantee and must never guess.
+    if [ "$account" != root ] && id "$account" >/dev/null 2>&1; then
+        local live_uid; live_uid=$(id -u "$account")
+        if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+            [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
+                || die "refusing to grant: account '$account' is uid $live_uid, but the manifest for '$label' recorded uid $PEER_JOIN_ACCOUNT_UID at join time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to grant through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry."
+        else
+            # Legacy manifest (joined before this field existed) -- capture
+            # now, while the account is confirmed live, rather than leaving
+            # --leave to face a missing account with nothing recorded.
+            grep -v '^PEER_JOIN_ACCOUNT_UID=' "$mpath" > "${mpath}.tmp"
+            printf 'PEER_JOIN_ACCOUNT_UID="%s"\n' "$live_uid" >> "${mpath}.tmp"
+            mv "${mpath}.tmp" "$mpath"
+            chmod 0600 "$mpath"
+            PEER_JOIN_ACCOUNT_UID="$live_uid"
+            log "recorded uid $live_uid for account '$account' in the manifest (legacy relationship, joined before this field existed)"
+        fi
+    fi
 
     local -a granted=()
     local root ds
@@ -4787,20 +4822,35 @@ do_leave() {
     if [ "${PEER_JOIN_AS:-}" = root ]; then
         log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
     else
-        # REV-20260804-039 F3 (self-correction, found live in this same
-        # implementation's own re-test): a bare "account already gone ->
-        # skip the whole grant loop" is exactly the failure mode this
-        # command exists to close. `userdel` alone leaves the grant behind
-        # under the bare UID; if something else (an operator, a script)
-        # already ran userdel before this command reaches the dataset, that
-        # orphan is EXACTLY what would be sitting there. So the account's
-        # presence only changes how the UID is found -- not whether the
-        # dataset loop runs at all.
+        # REV-20260804-040: the durable principal binding is the ONLY thing
+        # --leave may revoke by -- never a scan of `zfs allow`'s output. A
+        # dataset can carry more than one numeric/unknown principal (another
+        # relationship's own orphan, a second live delegated account); "the
+        # first unknown uid" or "any numeric grant" is not evidence of
+        # OWNERSHIP, and REV-20260804-039 F3's own first attempt at this
+        # (commit 1f6ca0b) revoked and residue-checked exactly that way --
+        # caught before merge, not live, but the review that caught it is
+        # correct that it could have taken another relationship's access
+        # with it.
         local uid=""
         if id "$account" >/dev/null 2>&1; then
-            uid=$(id -u "$account")
+            local live_uid; live_uid=$(id -u "$account")
+            if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+                [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
+                    || die "refusing --leave='$label': account '$account' is uid $live_uid, but the manifest recorded uid $PEER_JOIN_ACCOUNT_UID at join/commit time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to tear down through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry. Nothing has been changed."
+                uid="$live_uid"
+            else
+                # Legacy manifest (joined before this field existed) and the
+                # account is still live -- safe to capture and use now,
+                # exactly as do_commit_scope does at grant time.
+                uid="$live_uid"
+                log "recording uid $uid for account '$account' before teardown (legacy relationship, no uid was on file)"
+            fi
+        elif [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+            uid="$PEER_JOIN_ACCOUNT_UID"
+            warn "account '$account' already gone -- using the manifest-recorded uid $uid (never a guess) to find and revoke its grant"
         else
-            warn "account '$account' already gone -- looking for an orphaned grant left under its former uid rather than assuming none remains"
+            die "refusing --leave='$label': account '$account' is already gone AND no uid was ever recorded for it (a legacy relationship joined before this field existed, never committed since). There is no durable identifier left to safely find its grant among possibly several numeric/unknown principals on these datasets -- guessing was REV-20260804-039 F3's own first, wrong attempt at this. Resolve by hand: 'zfs allow <dataset>' on each of: ${PEER_JOIN_GRANTED_DATASETS:-<none recorded>} -- identify which numeric uid is actually this relationship's (system logs, /var/log/auth.log around when the account was removed, etc.), then 'zfs unallow -u <that uid> <dataset>' yourself before removing $mpath by hand. Nothing has been changed."
         fi
 
         local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
@@ -4817,57 +4867,45 @@ do_leave() {
         fi
 
         local perms="snapshot,destroy,send,hold,release,bookmark"
-        local ds_uid found_uid
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
             if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
                 log "leave: $ds no longer exists on this host -- nothing to revoke"
                 continue
             fi
-            ds_uid="$uid"
-            if [ -z "$ds_uid" ]; then
-                # No live account -- the only trace left of who was granted
-                # is the bare numeric uid `zfs allow` itself now shows.
-                found_uid=$(zfs allow "$ds" 2>/dev/null \
-                    | grep -oE 'user \(unknown: [0-9]+\)' | grep -oE '[0-9]+' | head -1)
-                [ -n "$found_uid" ] && ds_uid="$found_uid"
-            fi
-            if [ -z "$ds_uid" ]; then
-                log "leave: $ds has no grant under '$account' or an orphaned uid -- nothing to revoke"
-                continue
-            fi
-            if zfs unallow -u "$ds_uid" "$perms" -- "$ds" 2>/dev/null; then
-                log "leave: revoked ($perms) on $ds from uid $ds_uid${uid:+ ($account)}"
+            if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
+                log "leave: revoked ($perms) on $ds from uid $uid ($account)"
             else
-                warn "leave: could not revoke uid $ds_uid's grant on $ds -- check by hand: zfs allow $ds"
+                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
             fi
         done
 
         # Verify before userdel, not after -- a grant that survives the loop
         # above (permission denied, a property-level grant unallow -u didn't
         # reach, etc.) must stop this here, not be discovered later as a
-        # residue nobody was looking for. Matches on the account name too,
-        # in case the account still exists under a DIFFERENT uid than
-        # expected (should not happen, but this check is the one place that
-        # would catch it before userdel makes it unrecoverable).
+        # residue nobody was looking for. Matches ONLY this relationship's
+        # exact bound uid, or the exact account name (a drift/collision
+        # signal if it still shows under some OTHER uid) -- never "any
+        # numeric grant", which would false-positive on a second legitimate
+        # delegated account sharing the same dataset.
         local -a residual=()
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
             zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
-            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])(user [0-9]+|user \(unknown: [0-9]+\)|user $account)([[:space:],]|$)" \
+            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
-            die "refusing to proceed: ${residual[*]} still show a numeric-uid or '$account' ZFS grant after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u <uid> <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
+            die "refusing to proceed: ${residual[*]} still show a grant for uid $uid or account '$account' after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u $uid <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
         fi
 
         if id "$account" >/dev/null 2>&1; then
             revoke_quiesce_grant "$account"
             passwd -l "$account" >/dev/null 2>&1 || true
             userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
-            log "leave: removed account '$account' and its home directory"
+            log "leave: removed account '$account' (uid $uid) and its home directory"
         else
-            log "leave: account '$account' already gone; any orphaned grant found above is now cleared"
+            log "leave: account '$account' (uid $uid) already gone; its orphaned grant is now cleared"
         fi
     fi
 
