@@ -3316,11 +3316,42 @@ cmd_remove_client() {
         chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086
         remove_managed_sections "$workfile" "$name" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
-        if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
-            rm -f "$workfile"
-            die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
+        if grep -qE '^\[(dataset|prune):' "$workfile"; then
+            if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+                rm -f "$workfile"
+                die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
+            fi
+            atomic_replace_and_install "$CRON_CONFIG" "$workfile"
+        else
+            # REV-20260804-039 F2: found live (Gate J) -- gen-cron.sh
+            # deliberately refuses to render/install a config with zero
+            # send/prune/monitor rules (a real, older safety feature, not
+            # something to weaken), so removing a collector's LAST client
+            # left nothing for it to render and this whole branch used to
+            # die here, unconditionally, on the single most ordinary
+            # teardown a small collector ever does. A collector with one
+            # client is a normal deployment, not an edge case.
+            #
+            # No managed sections remain to install, so there is nothing
+            # for gen-cron.sh to do -- ask the shared cron writer directly
+            # to remove exactly the zfs-backup-managed block (its own
+            # diff/lock/rollback semantics, the same primitive --pause
+            # uses to touch a block without disturbing anything else in
+            # the crontab), THEN swap the config file. Cron first: if the
+            # config swapped first and the cron removal then failed, the
+            # config would already describe zero jobs while real cron
+            # lines survived, with nothing left recording what they were.
+            log "no managed sections remain after removing '$name' -- asking the cron writer to remove the zfs-backup-managed block entirely, then updating $CRON_CONFIG"
+            if ! cron_block_remove "$(cron_target_user)" zfs-backup-managed; then
+                rm -f "$workfile"
+                die "could not remove the zfs-backup-managed cron block for $(cron_target_user): ${CRON_ERR:-unknown error} -- $CRON_CONFIG was NOT touched and the client record was NOT updated. Investigate by hand before retrying; re-running remove-client is safe once this is resolved."
+            fi
+            chmod 0644 "$workfile" 2>/dev/null || :
+            if ! mv -f "$workfile" "$CRON_CONFIG"; then
+                rm -f "$workfile"
+                warn "the zfs-backup-managed cron block was removed, but $CRON_CONFIG could not be updated to match -- fix by hand (it should now describe zero managed jobs) before the next activate-client on this collector"
+            fi
         fi
-        atomic_replace_and_install "$CRON_CONFIG" "$workfile"
     else
         warn "no managed dataset list on file (client was never activated?) -- skipping cron removal"
     fi
