@@ -4786,10 +4786,23 @@ do_leave() {
 
     if [ "${PEER_JOIN_AS:-}" = root ]; then
         log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
-    elif ! id "$account" >/dev/null 2>&1; then
-        warn "account '$account' already gone -- proceeding as if its teardown already ran (idempotent retry)"
     else
-        local uid; uid=$(id -u "$account")
+        # REV-20260804-039 F3 (self-correction, found live in this same
+        # implementation's own re-test): a bare "account already gone ->
+        # skip the whole grant loop" is exactly the failure mode this
+        # command exists to close. `userdel` alone leaves the grant behind
+        # under the bare UID; if something else (an operator, a script)
+        # already ran userdel before this command reaches the dataset, that
+        # orphan is EXACTLY what would be sitting there. So the account's
+        # presence only changes how the UID is found -- not whether the
+        # dataset loop runs at all.
+        local uid=""
+        if id "$account" >/dev/null 2>&1; then
+            uid=$(id -u "$account")
+        else
+            warn "account '$account' already gone -- looking for an orphaned grant left under its former uid rather than assuming none remains"
+        fi
+
         local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
         local -a held=()
         local ds
@@ -4800,42 +4813,62 @@ do_leave() {
             fi
         done
         if [ "${#held[@]}" -gt 0 ]; then
-            die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking $account's access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
+            die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
         fi
 
         local perms="snapshot,destroy,send,hold,release,bookmark"
+        local ds_uid found_uid
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
             if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
                 log "leave: $ds no longer exists on this host -- nothing to revoke"
                 continue
             fi
-            if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
-                log "leave: revoked ($perms) on $ds from uid $uid ($account)"
+            ds_uid="$uid"
+            if [ -z "$ds_uid" ]; then
+                # No live account -- the only trace left of who was granted
+                # is the bare numeric uid `zfs allow` itself now shows.
+                found_uid=$(zfs allow "$ds" 2>/dev/null \
+                    | grep -oE 'user \(unknown: [0-9]+\)' | grep -oE '[0-9]+' | head -1)
+                [ -n "$found_uid" ] && ds_uid="$found_uid"
+            fi
+            if [ -z "$ds_uid" ]; then
+                log "leave: $ds has no grant under '$account' or an orphaned uid -- nothing to revoke"
+                continue
+            fi
+            if zfs unallow -u "$ds_uid" "$perms" -- "$ds" 2>/dev/null; then
+                log "leave: revoked ($perms) on $ds from uid $ds_uid${uid:+ ($account)}"
             else
-                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
+                warn "leave: could not revoke uid $ds_uid's grant on $ds -- check by hand: zfs allow $ds"
             fi
         done
 
         # Verify before userdel, not after -- a grant that survives the loop
         # above (permission denied, a property-level grant unallow -u didn't
         # reach, etc.) must stop this here, not be discovered later as a
-        # residue nobody was looking for.
+        # residue nobody was looking for. Matches on the account name too,
+        # in case the account still exists under a DIFFERENT uid than
+        # expected (should not happen, but this check is the one place that
+        # would catch it before userdel makes it unrecoverable).
         local -a residual=()
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
             zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
-            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])(user $uid|user $account)([[:space:],]|$)" \
+            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])(user [0-9]+|user \(unknown: [0-9]+\)|user $account)([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
-            die "refusing to remove account '$account' (uid $uid): it still has a ZFS grant on ${residual[*]} after the revoke attempt above -- resolve by hand ('zfs unallow -u $uid <dataset>'), then re-run --leave='$label'. Account and key left in place."
+            die "refusing to proceed: ${residual[*]} still show a numeric-uid or '$account' ZFS grant after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u <uid> <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
         fi
 
-        revoke_quiesce_grant "$account"
-        passwd -l "$account" >/dev/null 2>&1 || true
-        userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
-        log "leave: removed account '$account' (uid $uid) and its home directory"
+        if id "$account" >/dev/null 2>&1; then
+            revoke_quiesce_grant "$account"
+            passwd -l "$account" >/dev/null 2>&1 || true
+            userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
+            log "leave: removed account '$account' and its home directory"
+        else
+            log "leave: account '$account' already gone; any orphaned grant found above is now cleared"
+        fi
     fi
 
     rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
