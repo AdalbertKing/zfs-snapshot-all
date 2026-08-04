@@ -1391,7 +1391,22 @@ cmd_add_client() {
     # (see do_pair). Off by default; --lan= alone still ends with the same
     # manual "copy this and run --join there" instructions as before.
     [ "$join_remotely" -eq 1 ] && pair_args+=(--join-remotely)
-    bash "$DEPLOY" "${pair_args[@]}" || die "deploy.sh --pair failed -- see above"
+    # REV-20260804-039 F1: found live -- a process/terminal/SSH loss during
+    # --join-remotely's interactive scope editor kills THIS process (add-
+    # client's own), so the client record below is never written -- no
+    # partial/misleading state is left, but nothing records that the PEER
+    # may already be fully joined (do_pair's keypair generation is
+    # idempotent: it reuses an existing, unconsumed key for this peer host
+    # unless --rotate is given, and do_join's own collision handling
+    # treats a resubmitted package with the SAME fingerprint as a no-op
+    # reconfirmation, not a rotation -- confirmed live, twice, deliberately
+    # killing an in-progress --join-remotely mid-edit and re-running this
+    # exact command: the peer's account/key/manifest end up byte-identical
+    # to a clean single run, and no second key or duplicate authorized_keys
+    # line is ever created). The one thing missing was telling the operator
+    # that plainly, rather than leaving them to guess whether it is safe.
+    bash "$DEPLOY" "${pair_args[@]}" \
+        || die "deploy.sh --pair failed or was interrupted -- see above. Re-running this EXACT add-client command is safe: the pairing key for this peer is reused (not regenerated) unless --rotate is passed, and --join is a no-op reconfirmation when the peer already has this exact key, never a duplicate account, key line, or rotation. If the peer is not reachable at all yet, nothing there has been touched either way."
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
     {
