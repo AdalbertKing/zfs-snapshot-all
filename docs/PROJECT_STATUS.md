@@ -14,7 +14,10 @@
   kolejką recenzji (przeróbka na tryb blokowy), po REV-20260804-037 w
   całości, REV-20260804-038 w całości, REV-20260804-039 w całości (F1
   disputed-with-evidence, F2/F3/F4 zamknięte), REV-20260804-040 w całości
-  (UID-binding) i REV-20260804-041 w całości (transakcja last-client))
+  (UID-binding) i REV-20260804-041 w całości (transakcja last-client),
+  po REV-20260804-042 — drugi krąg werdyktu: kod bez zastrzeżeń, bramki
+  G/I nadal NOT RUN, odpowiedź NEEDS-DISCUSSION czeka na decyzję
+  właściciela o infrastrukturze, zero zmian w kodzie produkcyjnym)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
 - Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-039/040/041 —
@@ -940,6 +943,13 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na werdykt recenzenta
 
+- **REV-20260804-042** — drugi krąg werdyktu A-J: żaden nowy defekt kodu w
+  REV-041, REV-039 F1 i REV-040 zamknięte przez recenzenta. Bramki G i I
+  nadal **NOT RUN** na żywo — recenzent wprost zabronił zmiany kodu, żeby
+  je „zaliczyć". Odpowiedź `docs/reviews/responses/REV-20260804-042.md`:
+  NEEDS-DISCUSSION dla obu, bo to pytanie o infrastrukturę (druga trasa
+  sieciowa / nieklastrowana para hostów), nie o implementację — patrz
+  „Czeka na decyzję właściciela" niżej.
 - **REV-20260801-021** (`1edca10`, `99ba1f5`) — instalacja nie może skasować
   zadań, które cel już wykonuje; tylko rozpoznane linie ogólnohostowe zostają
   w crontabie roota. Odpowiedź w `docs/reviews/responses/REV-20260801-021.md`.
@@ -1240,6 +1250,20 @@ czterech hostach w obu formach hosta.
 
 ### Czeka na decyzję właściciela
 
+- **NOWE (REV-20260804-042): Bramki G i I potrzebują infrastruktury, nie
+  kodu.** Dostępne dziś cztery hosty to dokładnie dwa dwuhostowe klastry
+  Proxmox (pve0/pve1 na 192.168.11.x, metropolis pve1/pve2 na
+  192.168.28.x), każda para ma dokładnie jedną trasę sieciową między sobą,
+  a oba VPN-y klastrów są wzajemnie nieosiągalne (patrz punkt REV-039/F4
+  wyżej). Bramka G (zmiana trasy przy zachowanym endpointcie) i bramka I
+  (sync na nieklastrowanej parze) nie mają więc gdzie się wykonać na
+  prawdziwej infrastrukturze. Trzy opcje wypisane w
+  `docs/reviews/responses/REV-20260804-042.md` dla każdej bramki osobno:
+  (a) dostawić prawdziwą drugą trasę/piąty host, (b) autoryzować
+  odizolowane środowisko laboratoryjne na istniejącym hoście (kontenery/
+  network namespace, bez dotykania produkcyjnej sieci klastra), albo
+  (c) świadomie przyjąć lukę i przestać ją traktować jako blokującą.
+  Żadna opcja nie wymaga zmiany kodu produkcyjnego.
 - ~~Jeden przepływ zamiast trzech poleceń~~ — **ROZSTRZYGNIĘTE 2026-08-02:
   opcja (b).** Uprzywilejowany grant zostaje osobną, świadomą komendą;
   `migrate-to-account` wypisuje **jeden uporządkowany blok naprawczy** zamiast
