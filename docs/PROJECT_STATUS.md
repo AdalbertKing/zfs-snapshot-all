@@ -23,6 +23,8 @@
   A-J zamknięta bez odpowiedzi implementera)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
+- Ostatni stan floty potwierdzony na żywo: **2026-08-04 23:44**, trzy osiągalne
+  hosty na `a567328`, `audit clean` na każdym, kolejki poczty puste
 - **Kampania enrolmentu (Gates A-J, REV-037…044): ZAMKNIĘTA.** Recenzent
   ACCEPTED w `docs/internal/reviews/REV-20260804-044-FINAL-AJ-VERDICT.md` —
   wszystkie dziesięć bramek PASS, REV-037 przez REV-043 CLOSED, zero
@@ -52,10 +54,33 @@
   `PATH` (brak `mail`, brak MTA, kolejka zapchana, host zdrowy, kolejka
   nieczytelna) + parsowanie zweryfikowane na prawdziwym wyjściu `postqueue`
   z trzech żywych hostów.
-  **Znalezisko produkcyjne:** metropolis pve2 ma zaległą wiadomość w kolejce od
-  2026-08-04 09:37 — bounce `MAILER-DAEMON` z `(alias database unavailable)`,
-  czyli brak `/etc/aliases.db`. Do naprawy przez `newaliases`; NIE zrobione,
-  bo właściciel wyraźnie ograniczył zakres do „bez ruszania postfiksa".
+  **Dwa znaleziska produkcyjne — oba NAPRAWIONE i zweryfikowane na żywo
+  2026-08-04 23:44, na polecenie właściciela wydane po zgłoszeniu.** Nowy
+  werdykt zwrócił się dwukrotnie przy pierwszym uruchomieniu:
+  1. **metropolis pve2: `/etc/aliases.db` nie istniał.** Sam `/etc/aliases`
+     leżał tam od 2023-03-22, ale skompilowanej bazy nigdy nie zbudowano, więc
+     postfix odbijał każdą przesyłkę idącą przez alias z `(alias database
+     unavailable)` — w kolejce siedział bounce od 09:37 tego dnia. To nie był
+     jeden zablokowany list: **każdy alert kierowany aliasem na tym hoście
+     lądował w kolejce zamiast dojść.** `newaliases` + `postqueue -f`;
+     zaległa wiadomość faktycznie doszła (`status=sent (250 2.0.0 Ok: queued
+     as 44CB32BE0FB1)`, relay `lurk.com.pl[89.161.153.182]:25`), kolejka pusta.
+  2. **pve0: brak `/var/lib/zfs-snapshot-all/locks`** (katalog nadrzędny i
+     `notify-state` były na miejscu — brakowało wyłącznie tego jednego).
+     Znaczyło to, że `lib-cron.sh` odmówiłby KAŻDEGO zapisu crontaba na tym
+     hoście; nic tego akurat nie robiło, więc stan był niemy. Naprawione przez
+     zwykły `bash deploy.sh` — narzędzie będące właścicielem tego katalogu, nie
+     ręczny `mkdir` — powstał z uprawnieniami identycznymi jak na pozostałych
+     hostach (`2775 root:zfsalert`). Ze względu na incydent z mutacją crontaba
+     na TYM hoście (patrz historia `$0` vs `BASH_SOURCE[0]`) sumy kontrolne
+     zabezpieczone przed i po: `root` `a52e3b31…` → `a52e3b31…`, `zfsbackup`
+     `6b9b15c4…` → `6b9b15c4…`, 8 linii zadań bez zmian. Bajt w bajt.
+
+  Stan floty po naprawach: `locks` OK, `aliases.db` OK, kolejka 0 i
+  `audit clean` na wszystkich trzech osiągalnych hostach. Obie usterki należą
+  do tej samej rodziny co reszta historii tego projektu — **nie awarie, tylko
+  cisza tam, gdzie powinien być sygnał**; żadna nie zgłaszała się sama, dopóki
+  `--check-only` nie zaczął pytać o dostarczalność alertów.
 - **Recenzje przeniesione do `docs/internal/reviews/` (2026-08-04).** `git mv`,
   więc historia zachowana; 109 odwołań w 12 plikach przepisanych, w tym
   protokół w `CLAUDE.md`, `AGENTS.md` i `docs/AI_PROJECT_RULES.md`. Powód:
@@ -586,10 +611,19 @@
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
-Cztery żywe hosty, wszystkie na `5ff1b0b` lub nowszym (godzinowy
-`--self-update`; metropolis pve1 i pve2 pociągane bezpośrednio 2026-08-01, oba
-checkouty — root i konto). `deploy.sh --check-only` czysty na metropolis pve1
-2026-08-01, na pozostałych 2026-07-31.
+Trzy osiągalne hosty potwierdzone na `a567328` (2026-08-04 23:44, wymuszony
+`--self-update` na każdym; godzinowy pull o :15 działa niezależnie). Czwarty,
+pve1 klastra 192.168.11.x, nie był w tej sesji aktualizowany — patrz uwaga o
+DEGRADED rpool niżej.
+
+**`deploy.sh --check-only` czysty na wszystkich trzech osiągalnych**
+(`audit clean on pve0` / `pve1` / `pve2`), zweryfikowane 2026-08-04 23:44 po
+naprawie dwóch usterek opisanych w nagłówku: brakującego katalogu blokad na
+pve0 i brakującej bazy aliasów na metropolis pve2.
+
+Repo na hostach mieszka w `/root/scripts/zfs-snapshot-all` (nie
+`/root/zfs-snapshot-all`), a konto delegowane ma własny checkout w
+`/home/zfsbackup/zfs-snapshot-all`.
 
 | Host | Adres | Konto delegowane | `sudo` | grant quiesce | kto uruchamia blok |
 |---|---|---|---|---|---|
