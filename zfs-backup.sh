@@ -693,6 +693,17 @@ crontab_of_or_die() {   # <user> <outfile>
         || die "$CRON_ERR -- this check exists to stop two identities running the same jobs. Nothing has been changed."
 }
 
+# REV-20260804-043: normalizes ONLY the mutable host in a generated pull
+# line's -A "acct@host:path" argument to a placeholder -- account and path
+# (which may itself legally contain a colon, per pc_is_dataset) are left
+# exactly as they are. Anchored to the "-A \"...@" prefix so it can never
+# match a colon that happens to appear later, inside the dataset path.
+# A line with no such argument at all (delsnaps.sh/check-snap-age.sh -- no
+# remote connection to switch) is returned unchanged.
+endpoint_normalized_identity() {
+    sed -E 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/'
+}
+
 # REV-20260801-021 F1. The overlap guard below deliberately allows a target that
 # runs DISJOINT jobs -- two collectors on one host is a real deployment. On its
 # own that is fine; combined with the commit path it was not. `gen-cron.sh
@@ -717,25 +728,34 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
 
     local lost; lost=$(comm -23 <(printf '%s\n' "$current") <(printf '%s\n' "$proposed"))
 
-    # REV-20260804-042 Gate G (live route-switch test): a legitimate
+    # REV-20260804-042 Gate G (live route-switch test) / REV-20260804-043
+    # (P1 correction to the first attempt at this): a legitimate
     # set-endpoint + activate-client cycle changes the live host:port
-    # embedded in a client's pull line, which changes the line's literal
-    # text and therefore its identity here -- even though it is still the
-    # SAME client's SAME job, just reached a different way. Every pull line
-    # this tool generates carries -O HostKeyAlias=zfs-client-<name>
-    # specifically because that alias is stable across an endpoint switch
-    # (REV-20260730-004 F1's whole point: identity does not follow the
-    # address). If a "lost" line's HostKeyAlias also appears among the
-    # newly rendered lines, this is that job being updated in place, not a
-    # foreign job disappearing -- found live, the first time this guard and
-    # the endpoint-switch feature ever ran against each other for real.
+    # embedded in a client's pull line's -A "acct@host:path" argument,
+    # which changes the line's literal text and therefore its identity
+    # here -- even though it is still the SAME job, just reached a
+    # different way. The first fix (2e02a7d) matched on HostKeyAlias
+    # alone, which is shared by every job belonging to one client -- a
+    # client with two datasets could lose one of them silently as long as
+    # the OTHER one still appeared under the new endpoint, exactly the
+    # deletion this guard exists to catch. Fixed by normalizing only the
+    # mutable host between "acct@" and the following ":" in -A's argument
+    # (endpoint_normalized below) and comparing the REST of each line
+    # verbatim -- account, source dataset, target dataset, schedule,
+    # retention, HostKeyAlias, everything else still has to match exactly.
+    # A line with no -A "acct@host:..." shape at all (delsnaps.sh,
+    # check-snap-age.sh -- no remote connection to switch) passes through
+    # unnormalized, so it can only be excused here by being byte-identical
+    # already, which the earlier comm(1) diff would not have called "lost"
+    # in the first place -- fail-closed by construction, not by a special
+    # case.
     if [ -n "$lost" ]; then
-        local proposed_aliases; proposed_aliases=$(printf '%s\n' "$proposed" | grep -oE 'HostKeyAlias=[^ ]+' | sort -u)
-        local still_lost="" line alias
+        local proposed_norm; proposed_norm=$(printf '%s\n' "$proposed" | endpoint_normalized_identity | sort -u)
+        local still_lost="" line norm
         while IFS= read -r line; do
             [ -n "$line" ] || continue
-            alias=$(printf '%s\n' "$line" | grep -oE 'HostKeyAlias=[^ ]+')
-            if [ -n "$alias" ] && printf '%s\n' "$proposed_aliases" | grep -qxF -- "$alias"; then
+            norm=$(printf '%s\n' "$line" | endpoint_normalized_identity)
+            if printf '%s\n' "$proposed_norm" | grep -qxF -- "$norm"; then
                 continue
             fi
             still_lost="$still_lost$line

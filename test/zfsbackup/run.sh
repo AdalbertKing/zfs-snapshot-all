@@ -2177,18 +2177,27 @@ out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
                 || bad "clobber: a target with no managed block passes" "rc=$rc out=$out"
 
 # REV-20260804-042 Gate G, found live: an endpoint switch (set-endpoint +
-# activate-client) changes the literal host:port in a client's pull line,
-# which used to look exactly like "a foreign job disappearing" to this guard
-# and FATAL-refused every real re-activation after a route change -- the
-# documented relocation feature never actually worked. The fix: a line
-# carrying the same -O HostKeyAlias=zfs-client-<name> as one of the newly
-# rendered lines is the same relationship being updated, not deleted.
+# activate-client) changes the literal host:port in a client's pull line's
+# -A "acct@host:path" argument, which used to look exactly like "a foreign
+# job disappearing" to this guard and FATAL-refused every real
+# re-activation after a route change -- the documented relocation feature
+# never actually worked.
+#
+# REV-20260804-043 (P1 correction): the first fix (2e02a7d) matched on
+# HostKeyAlias alone, shared by every job belonging to one client -- a
+# client with two datasets could lose one of them silently as long as the
+# OTHER one still appeared under the new endpoint. Fixed to normalize ONLY
+# the host between "acct@" and the following ":" and compare the rest of
+# each line verbatim (endpoint_normalized_identity). The cases below match
+# the reviewer's own acceptance criteria.
 cat > "$CL/target.cron" <<'EOF'
 0 8 * * * /root/scripts/check-pool-capacity.sh
 # BEGIN zfs-backup-managed
 1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-labgateg -A "acct@192.168.28.151:tank/src" "tank/dst" 2>>/home/zfsbackup/cron.log
 # END zfs-backup-managed
 EOF
+
+# Criterion 1: a one-job endpoint change for the same relationship passes.
 cat > "$CL/proposal-endpoint-switch.txt" <<'EOF'
 # BEGIN zfs-backup-managed
 1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-labgateg -A "acct@10.99.99.2:tank/src" "tank/dst" 2>>/home/zfsbackup/cron.log
@@ -2196,12 +2205,10 @@ cat > "$CL/proposal-endpoint-switch.txt" <<'EOF'
 EOF
 out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
        "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-endpoint-switch.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
-[ "$rc" -eq 0 ] && ok "clobber: an endpoint switch for the same client (same HostKeyAlias) is not a deletion" \
-                || bad "clobber: an endpoint switch for the same client (same HostKeyAlias) is not a deletion" "rc=$rc out=$out"
+[ "$rc" -eq 0 ] && ok "clobber: a one-job endpoint change for the same relationship passes" \
+                || bad "clobber: a one-job endpoint change for the same relationship passes" "rc=$rc out=$out"
 
-# The HostKeyAlias carve-out must stay narrow: a DIFFERENT client's job
-# disappearing (different alias, no match in the new render) is still a real
-# deletion and must still refuse.
+# Criterion 5: a different client's removed job continues to refuse.
 cat > "$CL/proposal-other-client.txt" <<'EOF'
 # BEGIN zfs-backup-managed
 1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-someoneelse -A "acct@10.1.2.3:tank/other" "tank/otherdst" 2>>/home/zfsbackup/cron.log
@@ -2211,10 +2218,84 @@ out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
        "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-other-client.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
    && case "$out" in *"zfs-client-labgateg"*) true ;; *) false ;; esac; then
-    ok "clobber: a genuinely different client's job disappearing is still caught (alias carve-out stays narrow)"
+    ok "clobber: a different client's removed job continues to refuse"
 else
-    bad "clobber: a genuinely different client's job disappearing is still caught (alias carve-out stays narrow)" "rc=$rc out=$out"
+    bad "clobber: a different client's removed job continues to refuse" "rc=$rc out=$out"
 fi
+
+# REV-20260804-043's own counterexample: one client, two datasets, both
+# sharing the same HostKeyAlias. The target currently runs both.
+cat > "$CL/target-multi.cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@old:tank/a" "tank/a" 2>>/home/zfsbackup/cron.log
+2 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@old:tank/b" "tank/b" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CL/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && { cat "$CL/target-multi.cron"; exit 0; }
+cat "$CL/target-multi.cron"
+exit 0
+EOF
+chmod +x "$CL/bin/crontab"
+
+# Criterion 2: only tank/a survives under the new endpoint -- tank/b
+# disappearing must still refuse, exactly the case the coarse alias match
+# missed.
+cat > "$CL/proposal-multi-partial.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@new:tank/a" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-multi-partial.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
+   && case "$out" in *"tank/b"*) true ;; *) false ;; esac; then
+    ok "clobber: same client, one of two datasets dropped under the new endpoint still refuses"
+else
+    bad "clobber: same client, one of two datasets dropped under the new endpoint still refuses" "rc=$rc out=$out"
+fi
+
+# Criterion 3: both jobs for the same client survive, only the endpoint
+# changed on both -- passes.
+cat > "$CL/proposal-multi-full.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@new:tank/a" "tank/a" 2>>/home/zfsbackup/cron.log
+2 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@new:tank/b" "tank/b" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-multi-full.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "clobber: same client, both datasets survive an endpoint switch, passes" \
+                || bad "clobber: same client, both datasets survive an endpoint switch, passes" "rc=$rc out=$out"
+
+# Criterion 4: the SOURCE dataset path changing (not just the endpoint) for
+# an otherwise identical job must not be silently classified as an
+# endpoint-only update.
+cat > "$CL/target-srcchange.cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@old:tank/a" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CL/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && { cat "$CL/target-srcchange.cron"; exit 0; }
+cat "$CL/target-srcchange.cron"
+exit 0
+EOF
+chmod +x "$CL/bin/crontab"
+cat > "$CL/proposal-srcchange.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-alpha -A "acct@new:tank/DIFFERENT" "tank/a" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-srcchange.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
+    && ok "clobber: a source dataset change alongside the endpoint is not disguised as endpoint-only" \
+    || bad "clobber: a source dataset change alongside the endpoint is not disguised as endpoint-only" "rc=$rc out=$out"
 
 # --- 27. only RECOGNISED host-level lines may be kept behind ----------------
 #
