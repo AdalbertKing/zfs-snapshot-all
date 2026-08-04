@@ -3486,7 +3486,19 @@ do_pair() {
     # per-relationship root is target/label, not the bare target -- otherwise
     # a second peer pairing to the same --target parent would land in the same
     # spot. ----
-    if [ "$PEER_ROLE" = "pull" ] && [ "$PEER_ROTATE" -eq 0 ]; then
+    # REV-20260804-042 Gate I, found live: --mode=sync deliberately refuses
+    # --target (F3/U7 -- sync reproduces the source's own paths 1:1, there is
+    # no separate target root to namespace under), so PEER_TARGET is empty
+    # for a sync-mode pull relationship. The block below assumed a pull
+    # relationship always has a non-empty target and built "$PEER_TARGET/$label"
+    # unconditionally -- for sync that collapses to "/$label", a bare
+    # leading-slash path `zfs create -p` correctly refuses. Sync mode has
+    # never actually paired live before this gate ran. Whatever path a sync
+    # relationship eventually receives into is created on demand at receive
+    # time (snapget.sh/zfs receive -p), the same way a brand-new multi-level
+    # backup-mode target already is -- there is nothing meaningful to
+    # pre-create or delegate here for it.
+    if [ "$PEER_ROLE" = "pull" ] && [ "$PEER_ROTATE" -eq 0 ] && [ -n "$PEER_TARGET" ]; then
         local dest_root="$PEER_TARGET/$label"
         if zfs list -H -o name "$dest_root" >/dev/null 2>&1; then
             log "target dataset $dest_root already exists"
