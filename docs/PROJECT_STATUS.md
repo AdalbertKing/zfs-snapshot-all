@@ -16,11 +16,19 @@
   disputed-with-evidence, F2/F3/F4 zamknięte), REV-20260804-040 w całości
   (UID-binding), REV-20260804-041 w całości (transakcja last-client),
   po REV-20260804-042 Gate G i Gate I zamknięte NA ŻYWO (owner wybrał
-  budowę labu zamiast NEEDS-DISCUSSION) i po REV-20260804-043 — P1
+  budowę labu zamiast NEEDS-DISCUSSION), po REV-20260804-043 — P1
   korekta znaleziona przez recenzenta PRZED wdrożeniem, naprawiona i
-  ponownie zweryfikowana na żywo tego samego dnia)
+  ponownie zweryfikowana na żywo tego samego dnia, i po
+  **REV-20260804-044 — werdykt końcowy: ACCEPTED**, cała kampania Gates
+  A-J zamknięta bez odpowiedzi implementera)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
+- **Kampania enrolmentu (Gates A-J, REV-037…044): ZAMKNIĘTA.** Recenzent
+  ACCEPTED w `docs/reviews/REV-20260804-044-FINAL-AJ-VERDICT.md` —
+  wszystkie dziesięć bramek PASS, REV-037 przez REV-043 CLOSED, zero
+  otwartych findingów blokujących wydanie w tej kampanii. Odpowiedź
+  implementera nie jest wymagana, chyba że kolejny commit zmieni
+  zrecenzowane zachowanie lub unieważni zapisany dowód.
 - Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-042/043 —
   Gate G i Gate I kampanii enrolmentu zamknięte na żywo, dwa realne błędy
   znalezione i naprawione, plus jedna P1 korekta recenzenta zanim
