@@ -9,6 +9,14 @@ VM/CT dataset naming, qemu-guest-agent quiescing, non-root delegated operation).
 No package to install beyond the scripts themselves and their runtime dependencies (`zfs`,
 `mbuffer`, and optionally `zstd`/`pigz`, `ssh`, `mail`). Everything is plain bash.
 
+> **Setting up two Proxmox hosts for the first time?** Start with the
+> step-by-step deployment guide — a worked two-host example with dataset
+> selection, exclusions, and both the `backup` and `sync` variants:
+> **[docs/DEPLOYMENT-PROXMOX.md](docs/DEPLOYMENT-PROXMOX.md)** (English) ·
+> **[docs/WDROZENIE-PROXMOX.md](docs/WDROZENIE-PROXMOX.md)** (polski).
+> The reference below documents the individual tools; the guide documents the
+> procedure.
+
 ## Table of contents
 
 - [Components at a glance](#components-at-a-glance)
