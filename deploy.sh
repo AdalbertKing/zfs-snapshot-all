@@ -141,6 +141,13 @@ COMMIT_SCOPE_LABEL=""
 DRAFT_SCOPE_MODE=0
 DRAFT_SCOPE_CHECK=0
 DRAFT_SCOPE_LABEL=""
+# REV-20260804-039 F3: run on the PEER (this host, where --join created the
+# account), tearing down that side of a pull relationship. Distinct from
+# --unpair (run on the COLLECTOR, tears down ITS side and only PRINTS
+# instructions for this one) -- --leave actually executes them, bounded by
+# THIS host's own join manifest, never a name/UID an operator typed.
+LEAVE_MODE=0
+LEAVE_LABEL=""
 
 # ---- --pause/--resume: stop (and later restore) every crontab this host
 # manages, for a maintenance window (disk swap, live migration off this host)
@@ -242,6 +249,8 @@ while [ "$#" -gt 0 ]; do
         --commit-scope)         COMMIT_SCOPE_MODE=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --draft-scope=*)        DRAFT_SCOPE_MODE=1; DRAFT_SCOPE_LABEL="${1#*=}"; shift ;;
         --draft-scope)          DRAFT_SCOPE_MODE=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
+        --leave=*)               LEAVE_MODE=1; LEAVE_LABEL="${1#*=}"; shift ;;
+        --leave)                 LEAVE_MODE=1; LEAVE_LABEL="${2:-}"; shift 2 ;;
         --draft-scope-check=*)  DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${1#*=}"; shift ;;
         --draft-scope-check)    DRAFT_SCOPE_CHECK=1; DRAFT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
@@ -398,6 +407,15 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                           Off by default: whoever can freeze can cause an
                           outage by never thawing, so this host decides -- the
                           package cannot ask for it.
+  --leave=LABEL           run on THIS host (the peer, where --join created the
+                          account) to actually tear it down -- unlike --unpair
+                          on the collector, which only PRINTS these steps.
+                          Revokes the ZFS grant by numeric UID (works even if
+                          the account is already gone), verifies nothing
+                          remains, revokes any quiesce grant, THEN removes the
+                          account. Refuses if a granted dataset has an
+                          in-flight transfer hold rather than stranding it.
+                          Safe to re-run after a partial failure.
 
 Maintenance window -- stop and later restore what this host's crontabs run
 (root's, and the delegated account's if one exists or --backup-user names
@@ -4687,23 +4705,17 @@ do_unpair() {
     log "removed the manifest and any leftover wsad/draft for '$PEER_HOST'"
 
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"
+    # Sanitized the same way do_join sanitizes PEER_CONF_INITIATOR_LABEL --
+    # computed here (not just below, next to the manifest-path print) so the
+    # pull branch can reference it too.
+    local my_label; my_label=$(hostname -s 2>/dev/null || hostname)
+    my_label=$(printf '%s' "$my_label" | tr -c 'A-Za-z0-9._-' '-')
     echo
     echo ">>> ===================================================================="
     echo ">>> Strona lokalna posprzatana. Reszta jest na $PEER_HOST -- uruchom tam"
     echo ">>> z konsoli (nie stad: to konto i te uprawnienia sa ich, nie nasze):"
     echo ">>> ===================================================================="
-    if [ "${PEER_SAVED_AS:-delegated}" = "delegated" ]; then
-        echo "  # 1. cofnij delegacje ZFS (dataset ZOSTAJE, znika tylko dostep konta)"
-        local ds
-        for ds in ${PEER_SAVED_DATASETS:-}; do
-            echo "  zfs unallow -u $remote_user $ds"
-        done
-        echo "  # (sprawdz tez, czy konto nie ma dostepu z grantu na PRZODKU:"
-        echo "  #  'zfs allow <dataset>' pokazuje rowniez odziedziczone -- unallow"
-        echo "  #  na samym datasecie ich nie zdejmuje)"
-        echo "  # 2. usun konto razem z jego authorized_keys"
-        echo "  userdel -r $remote_user"
-    else
+    if [ "${PEER_SAVED_AS:-delegated}" != "delegated" ]; then
         echo "  # konto to root (--as=root), wiec zostaje -- usun sam klucz:"
         printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
             "'${PEER_CURRENT_PUBKEY:-<brak w manifescie>}'"
@@ -4711,19 +4723,124 @@ do_unpair() {
             printf '  grep -vF %s ~/.ssh/authorized_keys > /tmp/ak.$$ && mv /tmp/ak.$$ ~/.ssh/authorized_keys\n' \
                 "'${PEER_PREVIOUS_PUBKEY}'"
         fi
+        echo "  # usun manifest stworzony tam przez --join"
+        echo "  rm -f $(peer_manifest_path "$my_label")"
+    elif [ "${PEER_SAVED_ROLE:-pull}" = pull ]; then
+        # REV-20260804-039 F3: this used to print a manual "zfs unallow ...;
+        # userdel" pair here, bounded by PEER_SAVED_DATASETS -- the PAIRING-
+        # time list, which is empty for any mode-based client (dataset
+        # selection happens later, via --commit-scope). Every mode-based
+        # relationship therefore printed ZERO unallow commands, and an
+        # operator following them literally ran userdel with no revoke at
+        # all -- confirmed live, Gate J: the grant survived as an orphaned
+        # numeric-UID entry. --leave reads the PEER's own manifest instead,
+        # which has the real granted-dataset list regardless of how it was
+        # chosen, revokes by UID before removing the account, AND removes
+        # the manifest/scope/hash itself -- no separate rm -f step here.
+        echo "  deploy.sh --leave=$my_label"
+    else
+        # push_dest_root, from the peer's own point of view: do_join computes
+        # it as $PEER_CONF_TARGET/$PEER_CONF_INITIATOR_LABEL -- from here,
+        # that is this relationship's own PEER_SAVED_TARGET/$my_label.
+        local push_dest_root="${PEER_SAVED_TARGET:-<TARGET>}/$my_label"
+        echo "  # 1. cofnij delegacje ZFS na wlasnym celu odbioru (dataset ZOSTAJE)"
+        echo "  zfs unallow -u $remote_user $push_dest_root"
+        echo "  # 2. usun konto razem z jego authorized_keys"
+        echo "  userdel -r $remote_user"
+        echo "  # 3. usun manifest stworzony tam przez --join"
+        echo "  rm -f $(peer_manifest_path "$my_label")"
     fi
-    # Sanitized the same way do_join sanitizes PEER_CONF_INITIATOR_LABEL, so the
-    # printed path is the one that is actually there.
-    local my_label; my_label=$(hostname -s 2>/dev/null || hostname)
-    my_label=$(printf '%s' "$my_label" | tr -c 'A-Za-z0-9._-' '-')
-    echo "  # 3. usun manifest stworzony tam przez --join"
-    echo "  rm -f $(peer_manifest_path "$my_label")"
     echo ">>> ===================================================================="
     echo ">>> Klucz hosta $PEER_HOST zostal w /root/.ssh/known_hosts -- to nasz"
     echo ">>> zapis o tym, kim oni sa, nie uprawnienie dla nich. Jesli naprawde"
     echo ">>> chcesz go usunac: ssh-keygen -f /root/.ssh/known_hosts -R $PEER_HOST"
     echo ">>> (usunie WSZYSTKIE wpisy dla tego hosta, nie tylko przypiety tutaj)."
     echo ">>> ===================================================================="
+}
+
+# do_leave <label> -- REV-20260804-039 F3: run on the PEER (this host), tears
+# down its side of a pull relationship. --unpair only ever PRINTS these steps
+# for an operator to run by hand on the peer console -- this actually runs
+# them, bounded strictly by what THIS host's own join manifest recorded, the
+# same "never touch what was never a candidate" discipline do_commit_scope's
+# revoke-on-narrow already uses.
+#
+# Found live (REV-20260804-037 Gate J): userdel does NOT touch zfs allow --
+# deleting the account first left an orphaned grant under the bare numeric
+# UID ("user (unknown: 1001)"), invisible to `zfs allow` by name and a real
+# durable-authorization risk if that UID is ever reused. Order matters:
+# capture the UID, revoke by UID (works even if userdel already ran and the
+# name is gone -- makes a repeated call after a partial failure safe), VERIFY
+# nothing remains, only THEN userdel.
+do_leave() {
+    local label="$1"
+    [ -n "$label" ] || die "internal: do_leave needs a label"
+    local mpath; mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no join manifest for '$label' at $mpath -- nothing to leave (was --join even run here under this label?)"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ "${PEER_JOIN_ROLE:-}" = pull ] \
+        || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- --leave only tears down the PULL side (a scope-granted account on this host); a push peer's teardown is --unpair on the COLLECTOR, which owns that receive delegation"
+    local account="${PEER_JOIN_ACCOUNT:-}"
+    [ -n "$account" ] || die "internal: manifest for '$label' has no account recorded"
+
+    if [ "${PEER_JOIN_AS:-}" = root ]; then
+        log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
+    elif ! id "$account" >/dev/null 2>&1; then
+        warn "account '$account' already gone -- proceeding as if its teardown already ran (idempotent retry)"
+    else
+        local uid; uid=$(id -u "$account")
+        local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
+        local -a held=()
+        local ds
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            if zfs list -H -o name -- "$ds" >/dev/null 2>&1 && commit_scope_dataset_held "$ds"; then
+                held+=("$ds")
+            fi
+        done
+        if [ "${#held[@]}" -gt 0 ]; then
+            die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking $account's access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
+        fi
+
+        local perms="snapshot,destroy,send,hold,release,bookmark"
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
+                log "leave: $ds no longer exists on this host -- nothing to revoke"
+                continue
+            fi
+            if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
+                log "leave: revoked ($perms) on $ds from uid $uid ($account)"
+            else
+                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
+            fi
+        done
+
+        # Verify before userdel, not after -- a grant that survives the loop
+        # above (permission denied, a property-level grant unallow -u didn't
+        # reach, etc.) must stop this here, not be discovered later as a
+        # residue nobody was looking for.
+        local -a residual=()
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
+            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])(user $uid|user $account)([[:space:],]|$)" \
+                && residual+=("$ds")
+        done
+        if [ "${#residual[@]}" -gt 0 ]; then
+            die "refusing to remove account '$account' (uid $uid): it still has a ZFS grant on ${residual[*]} after the revoke attempt above -- resolve by hand ('zfs unallow -u $uid <dataset>'), then re-run --leave='$label'. Account and key left in place."
+        fi
+
+        revoke_quiesce_grant "$account"
+        passwd -l "$account" >/dev/null 2>&1 || true
+        userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
+        log "leave: removed account '$account' (uid $uid) and its home directory"
+    fi
+
+    rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
+    log "leave: removed the join manifest and any scope file/hash for '$label'"
+    log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."
 }
 
 # do_draft_config -- best-effort, deliberately conservative. gen-cron.sh's INI
@@ -5006,6 +5123,10 @@ if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
 fi
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
     do_commit_scope "$COMMIT_SCOPE_LABEL"
+    exit 0
+fi
+if [ "$LEAVE_MODE" -eq 1 ]; then
+    do_leave "$LEAVE_LABEL"
     exit 0
 fi
 if [ "$PAUSE_MODE" -eq 1 ]; then
