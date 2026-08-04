@@ -716,6 +716,33 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
     [ -n "$proposed" ] || die "'$u' already runs a managed block and the block this run would install could not be rendered -- so whether the install would delete any of them is unknown. Refusing rather than guessing; nothing has been changed."
 
     local lost; lost=$(comm -23 <(printf '%s\n' "$current") <(printf '%s\n' "$proposed"))
+
+    # REV-20260804-042 Gate G (live route-switch test): a legitimate
+    # set-endpoint + activate-client cycle changes the live host:port
+    # embedded in a client's pull line, which changes the line's literal
+    # text and therefore its identity here -- even though it is still the
+    # SAME client's SAME job, just reached a different way. Every pull line
+    # this tool generates carries -O HostKeyAlias=zfs-client-<name>
+    # specifically because that alias is stable across an endpoint switch
+    # (REV-20260730-004 F1's whole point: identity does not follow the
+    # address). If a "lost" line's HostKeyAlias also appears among the
+    # newly rendered lines, this is that job being updated in place, not a
+    # foreign job disappearing -- found live, the first time this guard and
+    # the endpoint-switch feature ever ran against each other for real.
+    if [ -n "$lost" ]; then
+        local proposed_aliases; proposed_aliases=$(printf '%s\n' "$proposed" | grep -oE 'HostKeyAlias=[^ ]+' | sort -u)
+        local still_lost="" line alias
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            alias=$(printf '%s\n' "$line" | grep -oE 'HostKeyAlias=[^ ]+')
+            if [ -n "$alias" ] && printf '%s\n' "$proposed_aliases" | grep -qxF -- "$alias"; then
+                continue
+            fi
+            still_lost="$still_lost$line
+"
+        done <<< "$lost"
+        lost="${still_lost%$'\n'}"
+    fi
     [ -n "$lost" ] || return 0
 
     local n; n=$(printf '%s\n' "$lost" | grep -c .)

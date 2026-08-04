@@ -2176,6 +2176,46 @@ out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
 [ "$rc" -eq 0 ] && ok "clobber: a target with no managed block passes" \
                 || bad "clobber: a target with no managed block passes" "rc=$rc out=$out"
 
+# REV-20260804-042 Gate G, found live: an endpoint switch (set-endpoint +
+# activate-client) changes the literal host:port in a client's pull line,
+# which used to look exactly like "a foreign job disappearing" to this guard
+# and FATAL-refused every real re-activation after a route change -- the
+# documented relocation feature never actually worked. The fix: a line
+# carrying the same -O HostKeyAlias=zfs-client-<name> as one of the newly
+# rendered lines is the same relationship being updated, not deleted.
+cat > "$CL/target.cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-labgateg -A "acct@192.168.28.151:tank/src" "tank/dst" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CL/proposal-endpoint-switch.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-labgateg -A "acct@10.99.99.2:tank/src" "tank/dst" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-endpoint-switch.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "clobber: an endpoint switch for the same client (same HostKeyAlias) is not a deletion" \
+                || bad "clobber: an endpoint switch for the same client (same HostKeyAlias) is not a deletion" "rc=$rc out=$out"
+
+# The HostKeyAlias carve-out must stay narrow: a DIFFERENT client's job
+# disappearing (different alias, no match in the new render) is still a real
+# deletion and must still refuse.
+cat > "$CL/proposal-other-client.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /home/zfsbackup/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -O HostKeyAlias=zfs-client-someoneelse -A "acct@10.1.2.3:tank/other" "tank/otherdst" 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-other-client.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
+   && case "$out" in *"zfs-client-labgateg"*) true ;; *) false ;; esac; then
+    ok "clobber: a genuinely different client's job disappearing is still caught (alias carve-out stays narrow)"
+else
+    bad "clobber: a genuinely different client's job disappearing is still caught (alias carve-out stays narrow)" "rc=$rc out=$out"
+fi
+
 # --- 27. only RECOGNISED host-level lines may be kept behind ----------------
 #
 # REV-20260801-021, separate observation. "the account's render does not
