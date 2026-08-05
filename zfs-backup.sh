@@ -164,8 +164,16 @@ Usage:
   zfs-backup.sh migrate-profile [--yes]
   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
   zfs-backup.sh status [NAME]
+  zfs-backup.sh pause-client NAME [--reason=TEXT]
+  zfs-backup.sh resume-client NAME
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
+
+pause-client stops the managed jobs of ONE relationship without touching cron,
+the job config, zfs allow, or SSH keys. It is an orchestration control, not a
+security boundary: a hand-written snapget.sh/snapsend.sh that omits
+--pair-label is NOT blocked by it. Refusing the data plane regardless of what
+the caller passes needs a peer-side SSH gate, which is not implemented.
 
 State machine: pending_enroll -> seeding -> seed_complete -> endpoint_verified
 -> active. Cron is installed only from endpoint_verified (or re-activating an
@@ -186,12 +194,49 @@ EOF
 # script displays or builds itself (see the file header on stable identity).
 peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 
-client_name_valid() {
-    case "$1" in
-        ""|*[!A-Za-z0-9._-]*) return 1 ;;
-        *) return 0 ;;
+# One namespace, one validator. A client name IS the relationship label that
+# pause-client keys on and that the generated cron line carries, so the two
+# cannot be allowed to drift: a name accepted here but rejected there would
+# enrol a client that can never be paused.
+#
+# Delegating also closes a latent hole in the old charset-only check, which
+# accepted a leading '.' or '-' and therefore accepted '..' -- harmless while a
+# name only became "$CLIENTS_DIR/$name.conf", but '..' as a DIRECTORY component
+# under $PAIR_STATE_DIR is path traversal. Tightened rather than worked around,
+# because the looser rule had no user: every name this repo has ever enrolled
+# or tested starts alphanumeric.
+client_name_valid() { pair_label_valid "$1"; }
+# ---------------------------------------------------------------------------
+# Relationship pause state (REV-20260804-045)
+# ---------------------------------------------------------------------------
+# DUPLICATED from lib-zfs-snap.sh on purpose, with a declared contract in
+# test/deps.conf (pair-pause-state) and a cross-check in test/pairpause -- the
+# same treatment delsnaps.sh gives HOLD_TAG, and for the same reason. This
+# script is the control plane: it drives snapsend/snapget as SUBPROCESSES and
+# never sources their library. Sourcing a transfer library here to reach two
+# path helpers would pull VERBOSE, IDENTIFIER, LOCKDIR and every ZFS helper
+# into a process that must not touch ZFS at all.
+#
+# What must stay in agreement between the two copies is exactly this: the
+# directory, the marker filename, and the label charset. The writer lives here;
+# the reader lives in the library. A drift in either is a silent failure -- the
+# gate would look installed and never fire -- so it is asserted by a test
+# rather than left to review.
+PAIR_STATE_DIR="${PAIR_STATE_DIR:-/etc/zfs-snapshot-all/relationships}"
+pair_state_dir_for() { printf '%s/%s' "$PAIR_STATE_DIR" "$1"; }
+pair_paused_marker() { printf '%s/%s/paused' "$PAIR_STATE_DIR" "$1"; }
+
+pair_label_valid() {   # <label> -- keep identical to lib-zfs-snap.sh
+    local l="${1:-}"
+    [ -n "$l" ] || return 1
+    [ "${#l}" -le 64 ] || return 1
+    case "$l" in
+        [!A-Za-z0-9]*)     return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
     esac
+    return 0
 }
+
 client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
 peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
 # Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
@@ -873,7 +918,16 @@ emit_client_sections() {   # <workfile> <client name>
             echo "	$marker"
             echo "	use_template = standard_hourly"
             echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-            echo "	flags        = $LOAD_FLAGS"
+            # --pair-label rides in `flags` rather than getting a field of its
+            # own, which is what keeps gen-cron.sh out of this change entirely:
+            # `flags` is already a verbatim pass-through to snapget/snapsend,
+            # and lint_flags() only rejects -f and -n. The label is what makes
+            # pause-client possible WITHOUT rewriting cron -- the identity is
+            # already in the installed line, so pausing only has to drop a
+            # marker file. Note this does mean an existing client must be
+            # re-activated once to gain the label; until then pause-client
+            # writes a marker no job reads, which `status` will show.
+            echo "	flags        = $LOAD_FLAGS --pair-label $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
     done
@@ -1379,6 +1433,16 @@ cmd_add_client() {
 
     local cpath; cpath=$(client_conf_path "$name")
     [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
+    # REV-20260804-045 §3: re-enrolment must not silently inherit pause state
+    # from a previous relationship that happened to reuse this label. Fails
+    # closed rather than guessing: a marker with no client record means either
+    # an interrupted teardown or a genuinely different relationship reusing the
+    # name, and this code cannot tell those apart. Clearing it silently would
+    # be the dangerous half of that guess -- the other half, refusing, costs
+    # one command.
+    if [ -e "$(pair_paused_marker "$name")" ]; then
+        die "refusing to enrol '$name': a pause marker for that label already exists ($(pair_paused_marker "$name")), left over from an earlier relationship with the same name. Nothing was created. Inspect it, then clear it with: rm -f $(pair_paused_marker "$name") -- and satisfy yourself that reusing this label is what you mean, because pause state is keyed on the label alone."
+    fi
 
     read_server_conf
     if [ "$mode" != sync ]; then
@@ -3144,6 +3208,101 @@ remove_template_section() {   # <file> <template name>
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
+# Reports a transfer that is already running for this relationship.
+#
+# Best-effort and said so out loud: it matches on the label in a running
+# command line, which is what a managed cron job carries. It cannot see a
+# hand-written transfer that omitted the label -- the same blind spot the whole
+# logical-pause feature has, named here rather than papered over.
+pair_inflight_report() {   # <label>
+    command -v pgrep >/dev/null 2>&1 || return 0
+    local pids
+    pids=$(pgrep -f -- "--pair-label[= ]$1" 2>/dev/null | tr '\n' ' ')
+    [ -n "${pids// /}" ] || return 0
+    log "UWAGA: transfer dla '$1' JUZ TRWA (pid: ${pids% })."
+    log "       Pauza nie przerywa biezacego przebiegu -- on dokonczy sie normalnie."
+    log "       Zablokowany jest dopiero KAZDY NASTEPNY przebieg."
+}
+
+# REV-20260804-045: logical, collector-local pause for exactly one relationship.
+#
+# What it does NOT do, because each of these was an explicit review boundary:
+# it does not edit cron, it does not touch the generated job config, it does not
+# revoke `zfs allow`, and it does not rewrite authorized_keys. It creates one
+# marker file. That is the entire mechanism.
+cmd_pause_client() {
+    local name="" reason="" a
+    for a in "$@"; do
+        case "$a" in
+            --reason=*) reason="${a#--reason=}" ;;
+            -*)         die "pause-client: unknown option $a" ;;
+            *)          [ -z "$name" ] || die "pause-client takes exactly one client name"
+                        name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "pause-client requires a client name (try: $0 status)"
+    pair_label_valid "$name" \
+        || die "pause-client: '$name' is not a valid relationship label -- 1-64 characters starting with a letter or digit, then only letters, digits, dot, dash or underscore. Nothing was created."
+    # Must resolve to ONE enrolled relationship. A label that resolves to
+    # nothing would otherwise leave a marker no job will ever read, which looks
+    # like a pause and is not one.
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "pause-client: no client '$name' -- pause only accepts a label recorded at enrolment (see: $0 status). Nothing was created."
+
+    local dir marker; dir=$(pair_state_dir_for "$name"); marker=$(pair_paused_marker "$name")
+    if [ -e "$marker" ]; then
+        log "relacja '$name' jest juz wstrzymana -- bez zmian (idempotentne)"
+    else
+        install -d -m 0755 "$PAIR_STATE_DIR" || die "could not create $PAIR_STATE_DIR"
+        install -d -m 0755 "$dir"            || die "could not create $dir"
+        # Written to a temp file in the SAME directory and renamed: a reader
+        # that stats the marker sees it either absent or complete, never a
+        # half-written file. Rename within one filesystem is atomic.
+        local tmp; tmp=$(mktemp "$dir/.paused.XXXXXX") || die "mktemp failed in $dir"
+        {
+            echo "# zfs-backup.sh relationship pause marker -- managed by pause-client/resume-client."
+            echo "# Presence of this file is the whole signal; the fields below are for humans."
+            echo "paused_at=$(date -u +%FT%TZ)"
+            echo "paused_by=$(id -un 2>/dev/null || echo '?')"
+            # `if`, not `[ -n ... ] && echo`: as the LAST command of the group
+            # the short-circuit form returns 1 whenever no reason was given,
+            # which the redirection below would then report as a failed write.
+            if [ -n "$reason" ]; then echo "reason=$reason"; fi
+        } > "$tmp" || { rm -f "$tmp"; die "could not write the pause marker in $dir"; }
+        chmod 0644 "$tmp" || { rm -f "$tmp"; die "could not set permissions on the pause marker"; }
+        mv -f "$tmp" "$marker" || { rm -f "$tmp"; die "could not commit $marker -- nothing was paused"; }
+        log "relacja '$name' WSTRZYMANA (pauza logiczna)"
+    fi
+
+    pair_inflight_report "$name"
+    log "cron NIE zostal zmieniony -- linie zadan sa nietkniete i wroca same po resume-client."
+    log "GRANICA: to jest pauza logiczna, nie granica bezpieczenstwa. Zadanie z cron-a (niosace"
+    log "         --pair-label $name) nie wystartuje, ale RECZNE snapget.sh/snapsend.sh bez tej"
+    log "         flagi nadal zadziala. Odciecie odporne na to wymaga bramki SSH po stronie peera."
+    log "Wznowienie: $0 resume-client $name"
+}
+
+cmd_resume_client() {
+    local name="${1:-}"
+    [ -n "$name" ] || die "resume-client requires a client name (try: $0 status)"
+    pair_label_valid "$name" \
+        || die "resume-client: '$name' is not a valid relationship label. Nothing was changed."
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "resume-client: no client '$name' (see: $0 status). Nothing was changed."
+
+    local marker; marker=$(pair_paused_marker "$name")
+    if [ ! -e "$marker" ]; then
+        log "relacja '$name' nie byla wstrzymana -- bez zmian (idempotentne)"
+        return 0
+    fi
+    rm -f "$marker" || die "could not remove $marker -- relationship '$name' is STILL paused"
+    # Prune the now-empty per-relationship directory, but never recursively and
+    # never the parent: rmdir refuses a non-empty directory, which is exactly
+    # the guard wanted if a future marker type lands next to this one.
+    rmdir "$(pair_state_dir_for "$name")" 2>/dev/null || true
+    log "relacja '$name' WZNOWIONA -- nastepny zaplanowany przebieg wystartuje normalnie"
+}
+
 cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
@@ -3154,7 +3313,12 @@ cmd_status() {
             ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
               # shellcheck disable=SC1090
               . "$f"
-              printf '%-20s state=%-18s endpoint=%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" )
+              # Shown in the list, not only in the detail view: a paused
+              # relationship that looks identical to a running one in the
+              # overview is how a pause gets forgotten for a month.
+              _paused=""
+              [ -n "$CLIENT_NAME" ] && [ -e "$(pair_paused_marker "$CLIENT_NAME")" ] && _paused="  [PAUSED_LOCAL]"
+              printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$_paused" )
         done
         return 0
     fi
@@ -3169,6 +3333,24 @@ cmd_status() {
     local LOAD_HOST="$host" LOAD_PORT="$port"
     echo "Klient:            $CLIENT_NAME"
     echo "Stan:              ${STATE:-unknown}"
+    # Only two of REV-045's five presentation states are reachable today,
+    # because only logical pause is implemented. DISABLED_REMOTE and the mixed
+    # states arrive with the peer-side SSH gate; claiming them here would
+    # advertise a guarantee nothing enforces.
+    local _pmark; _pmark=$(pair_paused_marker "$CLIENT_NAME")
+    if [ -e "$_pmark" ]; then
+        local _pat _pby _prsn
+        _pat=$(sed -n 's/^paused_at=//p'  "$_pmark" 2>/dev/null | head -1)
+        _pby=$(sed -n 's/^paused_by=//p'  "$_pmark" 2>/dev/null | head -1)
+        _prsn=$(sed -n 's/^reason=//p'    "$_pmark" 2>/dev/null | head -1)
+        echo "Pauza:             PAUSED_LOCAL od ${_pat:-?} (przez ${_pby:-?})"
+        [ -n "$_prsn" ] && echo "  powod:           $_prsn"
+        echo "  zasieg:          zadania z cron-a tej relacji nie startuja; cron jest NIETKNIETY"
+        echo "  obejscie:        reczne snapget/snapsend BEZ --pair-label nadal zadziala"
+        echo "Wznowienie:        $0 resume-client $CLIENT_NAME"
+    else
+        echo "Pauza:             RUNNING (brak pauzy)"
+    fi
     echo "Endpoint docelowy: $(endpoint_display)"
     # Legacy display (records that predate U9): the dormant slot, if any.
     [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
@@ -3438,6 +3620,12 @@ cmd_remove_client() {
         echo "STATE=removed"
         printf 'REMOVED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+    # REV-20260804-045 §3: teardown removes residual state for THIS relationship
+    # only. Targeted deletes plus a non-recursive rmdir, never `rm -rf` on a
+    # path built from an argument -- and never a sweep of $PAIR_STATE_DIR, which
+    # holds every other relationship on this host.
+    rm -f "$(pair_paused_marker "$name")" 2>/dev/null || true
+    rmdir "$(pair_state_dir_for "$name")" 2>/dev/null || true
     log "client '$name' removed locally. Run the peer-side commands deploy.sh --unpair printed above."
 }
 
@@ -3457,6 +3645,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         migrate-to-account) shift; cmd_migrate_to_account "$@" ;;
         status)           shift; cmd_status "$@" ;;
+        pause-client)     shift; cmd_pause_client "$@" ;;
+        resume-client)    shift; cmd_resume_client "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
         -h|--help|"")     usage; exit 0 ;;

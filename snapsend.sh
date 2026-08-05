@@ -1443,6 +1443,26 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
+# --pair-label is pre-parsed out of argv here, before getopts ever sees it.
+# Same reasoning, same shape as snapget.sh -- see the comment there, and the
+# relationship-pause section in lib-zfs-snap.sh for what the label is and what
+# it deliberately is not.
+PAIR_LABEL=""
+_pl_argv=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pair-label)
+            [ $# -ge 2 ] || { echo "Error: --pair-label needs a value (the relationship label recorded at enrolment)." >&2; exit 1; }
+            PAIR_LABEL="$2"; shift 2 ;;
+        --pair-label=*)
+            PAIR_LABEL="${1#--pair-label=}"; shift ;;
+        *)
+            _pl_argv+=("$1"); shift ;;
+    esac
+done
+if [ "${#_pl_argv[@]}" -gt 0 ]; then set -- "${_pl_argv[@]}"; else set --; fi
+unset _pl_argv
+
 while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
@@ -1584,6 +1604,26 @@ if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
 fi
 
 [ $# -ge 1 ] || { echo "Uzycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
+
+# Relationship pause gate (REV-20260804-045). Same position and same contract as
+# in snapget.sh: after every argument check, so a pause never hides a malformed
+# job, and before the single-instance lock and section 5B, so nothing has been
+# snapshotted, held, transferred or even locked when the gate fires.
+if [ -n "$PAIR_LABEL" ]; then
+    if ! pair_label_valid "$PAIR_LABEL"; then
+        echo "Error: --pair-label '$PAIR_LABEL' is not a valid relationship label -- expected 1-64 characters starting with a letter or digit, then only letters, digits, dot, dash or underscore." >&2
+        exit 1
+    fi
+    if pair_is_paused "$PAIR_LABEL"; then
+        # Exit 0 for the same reason as snapget.sh: an intentional pause is not
+        # a failure. SKIPPED_PAUSED in the stats log, not the exit code, is what
+        # distinguishes this from a successful transfer.
+        log 0 "SKIPPED: relationship $PAIR_LABEL is paused"
+        log 0 "SKIPPED_PAUSED: nothing was snapshotted, held or transferred. Resume with: zfs-backup.sh resume-client $PAIR_LABEL"
+        emit_stats "$1" "${2:-}" "SKIPPED_PAUSED" 0
+        exit 0
+    fi
+fi
 ###############################################################################
 #END 5A
 

@@ -1448,6 +1448,35 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
+# --pair-label is pre-parsed out of argv here, before getopts ever sees it.
+#
+# getopts understands single-letter flags only: it reads `--pair-label` as the
+# unknown option `-` and exits 1, so a long option cannot simply be added to the
+# optstring below. Pre-parsing is the smaller change -- the alternative was
+# spending one of the few remaining single letters on something that is not a
+# transfer knob at all, and which every generated cron line would then carry in
+# a form nobody could read.
+#
+# Removed from argv rather than passed through, so the getopts loop and every
+# positional-argument check below see exactly what they saw before this flag
+# existed. See the relationship-pause section in lib-zfs-snap.sh for what the
+# label is and, more importantly, what it is not.
+PAIR_LABEL=""
+_pl_argv=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pair-label)
+            [ $# -ge 2 ] || { echo "Error: --pair-label needs a value (the relationship label recorded at enrolment)." >&2; exit 1; }
+            PAIR_LABEL="$2"; shift 2 ;;
+        --pair-label=*)
+            PAIR_LABEL="${1#--pair-label=}"; shift ;;
+        *)
+            _pl_argv+=("$1"); shift ;;
+    esac
+done
+if [ "${#_pl_argv[@]}" -gt 0 ]; then set -- "${_pl_argv[@]}"; else set --; fi
+unset _pl_argv
+
 while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
@@ -1575,6 +1604,37 @@ case "$QUIESCE_DEADMAN" in
 esac
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] REMOTE_DATASETS [LOCAL_BASE]" >&2; exit 1; }
+
+# Relationship pause gate (REV-20260804-045).
+#
+# Placed HERE on purpose, and the position is the contract:
+#
+#   * AFTER every argument check above, so pausing a relationship never hides a
+#     malformed job. A paused job with a bad -X regex still says so.
+#   * BEFORE the single-instance lock, the dependency probes, and section 5B --
+#     nothing up to this line has created a snapshot, taken a hold, opened ssh,
+#     probed the source, or written a single byte anywhere.
+#
+# The label is checked for validity even when the relationship is not paused: a
+# typo in a cron line would otherwise mean the job silently runs unpausable
+# forever, which is exactly the failure this feature exists to prevent.
+if [ -n "$PAIR_LABEL" ]; then
+    if ! pair_label_valid "$PAIR_LABEL"; then
+        echo "Error: --pair-label '$PAIR_LABEL' is not a valid relationship label -- expected 1-64 characters starting with a letter or digit, then only letters, digits, dot, dash or underscore." >&2
+        exit 1
+    fi
+    if pair_is_paused "$PAIR_LABEL"; then
+        # Exit 0, not non-zero: an intentional pause is not a failure, and a
+        # paused relationship must not fire notify-fail.sh on every scheduled
+        # run. What separates this from a real successful transfer is the
+        # SKIPPED_PAUSED status in the stats log, never the exit code -- see
+        # the monitoring note in README.md.
+        log 0 "SKIPPED: relationship $PAIR_LABEL is paused"
+        log 0 "SKIPPED_PAUSED: nothing was snapshotted, held or transferred. Resume with: zfs-backup.sh resume-client $PAIR_LABEL"
+        emit_stats "$1" "${2:-}" "SKIPPED_PAUSED" 0
+        exit 0
+    fi
+fi
 ###############################################################################
 #END 5A
 

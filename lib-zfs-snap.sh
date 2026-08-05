@@ -146,6 +146,75 @@ reset_resume_attempts() {
 }
 
 ###############################################################################
+# RELATIONSHIP PAUSE (LOGICAL, COLLECTOR-LOCAL)
+###############################################################################
+# Per-relationship operational pause, as specified by REV-20260804-045.
+#
+# WHAT THIS IS NOT, stated first because the distinction is the whole point:
+# this is an ORCHESTRATION control, not a security boundary. It stops jobs that
+# identify themselves with --pair-label from starting. A hand-written
+# snapsend.sh/snapget.sh that omits the label is NOT stopped by it, because
+# nothing here runs on the peer -- the peer cannot tell a paused relationship
+# from a running one. Refusing the data plane for a relationship regardless of
+# what the caller passes needs a peer-side SSH gate (REV-045 "hard disable"),
+# which is deliberately NOT implemented here. Do not describe this as
+# `zfs unallow`, and do not describe it as blocking manual transfers.
+#
+# Three deliberate non-choices, each of which would re-open a closed risk:
+#
+#   * NOT the join manifest and NOT the generated cron config. Pausing must
+#     leave cron byte-identical -- a toggle that regenerates cron would put
+#     job identity, ownership and the install transaction on the path of an
+#     operational switch that runs many times a day.
+#   * NOT `zfs unallow`. Persistent delegation belongs to enrolment/teardown;
+#     revoking and re-granting per pause would re-open the UID-ownership,
+#     partial-revoke and multi-dataset transaction risks closed by REV-039/040.
+#   * NOT keyed on endpoint. Host, IP, port, account or HostKeyAlias are all
+#     mutable -- REV-043 proved endpoint identity is not job identity. The key
+#     is the durable relationship label recorded at enrolment, so every dataset
+#     and every endpoint candidate of one relationship observes one state.
+#
+# Root-owned and world-READABLE on purpose: the gate is read by the delegated
+# non-root account that actually runs the cron job. Only writers need
+# privilege, and only zfs-backup.sh writes.
+PAIR_STATE_DIR="${PAIR_STATE_DIR:-/etc/zfs-snapshot-all/relationships}"
+
+# Strict, allowlist-based, and applied on BOTH sides (writer and reader): the
+# label reaches the reader from a cron line and the writer from argv, and it is
+# used to build a filesystem path. A label is a durable identifier, not a
+# sentence -- so the charset stays narrow rather than trying to escape a wide
+# one. Rejects path traversal ('..', anything with '/'), leading '-' (which
+# would read as an option elsewhere), leading '.' (hidden files, and '..'),
+# every form of whitespace, and shell metacharacters.
+pair_label_valid() {   # <label>
+    local l="${1:-}"
+    [ -n "$l" ] || return 1
+    [ "${#l}" -le 64 ] || return 1
+    case "$l" in
+        [!A-Za-z0-9]*)        return 1 ;;   # must START alphanumeric: kills -x, .x, ..
+        *[!A-Za-z0-9._-]*)    return 1 ;;   # body charset: kills /, spaces, $, ;, quotes
+    esac
+    return 0
+}
+
+pair_state_dir_for()  { printf '%s/%s' "$PAIR_STATE_DIR" "$1"; }
+pair_paused_marker()  { printf '%s/%s/paused' "$PAIR_STATE_DIR" "$1"; }
+
+# True (0) when this relationship is paused and the caller must skip.
+#
+# Fails OPEN by design: an unreadable or absent state directory means "not
+# paused", so a broken or not-yet-created state tree can never silently stop
+# every backup on the host. The failure mode of a wrong answer is asymmetric --
+# skipping a backup that should have run is invisible until you need it, while
+# running one that should have been skipped is merely noise.
+pair_is_paused() {   # <label>
+    local l="${1:-}"
+    [ -n "$l" ] || return 1
+    pair_label_valid "$l" || return 1
+    [ -e "$(pair_paused_marker "$l")" ]
+}
+
+###############################################################################
 # HOLD-BASED PROTECTION FOR IN-FLIGHT SNAPSHOTS
 ###############################################################################
 # A snapshot that is the source of a `zfs send` currently in flight -- or that
