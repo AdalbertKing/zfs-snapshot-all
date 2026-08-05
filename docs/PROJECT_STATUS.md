@@ -7,7 +7,10 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-04** (po REV-034 w całości, po REV-033
+- Data odświeżenia: **2026-08-05** (po REV-20260804-045 — pauza logiczna
+  jednej relacji, `pause-client`/`resume-client`, ZAKRES OGRANICZONY: bez
+  bramki SSH po stronie peera, więc bez `disable-pair`; szczegóły i lista
+  znanych braków w sekcji 6 i w odpowiedzi). Poprzednio: **2026-08-04** (po REV-034 w całości, po REV-033
   plasterkach 1-10 (WSZYSTKIE dziesięć z pierwotnego planu) + korekcie U9 +
   łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po REV-035, po REV-036
   w całości + wszystkie follow-upy, po ad hoc `--pause`/`--resume` poza
@@ -1154,6 +1157,41 @@ czterech hostach w obu formach hosta.
   niewłaściwej funkcji, i przechodzą dziś.
 
 ### Czeka na werdykt recenzenta
+
+- **REV-20260804-045 — zaimplementowane w `db5bb1e` (pauza logiczna), czeka na
+  werdykt.** Zakres zadeklarowany PRZED kodowaniem, zgodnie z wymogiem recenzji:
+  **tylko pauza logiczna**, bez bramki SSH po stronie peera — więc bez
+  `disable-pair`/`enable-pair`. Nowe czasowniki `zfs-backup.sh pause-client
+  NAME [--reason=]` / `resume-client NAME`, stan jako jeden plik-marker w
+  `/etc/zfs-snapshot-all/relationships/<LABEL>/paused` (atomowy rename, 0644,
+  czytelny dla konta delegowanego, które uruchamia zadanie). Generowane zadania
+  niosą `--pair-label <LABEL>` w istniejącym polu `flags`, więc `gen-cron.sh`
+  jest NIETKNIĘTY, a pauza nigdy nie musi ruszać crona — tożsamość jest już w
+  zainstalowanej linii. Bramka w `snapsend.sh`/`snapget.sh` siedzi PO walidacji
+  argumentów (pauza nie może ukrywać błędnej konfiguracji) i PRZED blokadą
+  pojedynczej instancji: zapauzowany przebieg nie tworzy migawki, nie zakłada
+  holda, nie otwiera ssh i nie dochodzi nawet do `flock` — dowodzone pustym
+  trace ze stubów, nie czytaniem kodu. Wyjście 0 (świadoma pauza nie ma budzić
+  nikogo co godzinę), a rozróżnia ją `"status":"SKIPPED_PAUSED"` w stats logu,
+  nie kod wyjścia.
+  **Granica powiedziana wprost w czterech miejscach** (README, `--help`, wydruk
+  `pause-client`, `status`) i ASERTOWANA testem: ręczne `snapget.sh`/`snapsend.sh`
+  BEZ `--pair-label` nadal działa — to nie przeoczenie, tylko różnica między
+  pauzą logiczną a niezaimplementowanym hard disable. Przy okazji utwardzone:
+  `client_name_valid` deleguje teraz do `pair_label_valid`, bo stary test tylko
+  na zbiór znaków przyjmował wiodącą kropkę, a więc i `..` — nieszkodliwe, dopóki
+  nazwa stawała się wyłącznie plikiem `clients/<nazwa>.conf`, groźne od chwili,
+  gdy ta sama nazwa jest KOMPONENTEM KATALOGU.
+  Odpowiedź: `docs/internal/reviews/responses/REV-20260804-045.md`.
+  **Znane braki, wypisane tam wprost:** retencja NIE jest bramkowana (chroni
+  bookmark, więc długa pauza jest bezpieczna, o ile nie kasuje się bookmarków
+  `-B` tej relacji); `check-snap-age.sh` nie zna pauzy, więc długa pauza w końcu
+  podniesie zwykły alarm staleness (druga połowa §1 recenzji, celowo zostawiona
+  na osobny commit); klient sprzed tej zmiany musi raz przejść
+  `activate-client`, żeby jego linie crona w ogóle dostały etykietę — do tego
+  czasu marker jest widoczny w `status`, ale nieskuteczny, i NIC o tym nie
+  ostrzega; wyścig między sprawdzeniem a połączeniem pozostaje otwarty z
+  konstrukcji (zamyka go dopiero bramka po stronie peera).
 
 - **REV-20260804-042** — drugi krąg werdyktu A-J: żaden nowy defekt kodu w
   REV-041, REV-039 F1 i REV-040 zamknięte przez recenzenta. Bramki G i I
