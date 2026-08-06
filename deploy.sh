@@ -3910,9 +3910,35 @@ install_pair_gate() {
     chmod 0755 "$PAIR_GATE_STATE_DIR" 2>/dev/null || :
     mkdir -p "$PAIR_GATE_STATE_DIR/$label" || { warn "could not create $PAIR_GATE_STATE_DIR/$label"; return 1; }
     if [ "$account" != root ]; then
-        chown "root:$account" "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null \
-            || warn "could not give $account group ownership of $PAIR_GATE_STATE_DIR/$label -- 'enable' through the gate will refuse until this is fixed"
+        chown "root:$account" "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
         chmod 0775 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
+        # VERIFY, do not assume. Seen live on metropolis pve2 (2026-08-06):
+        # the chown did not take on the first join of a freshly created
+        # account -- and because this only warned, the relationship came out
+        # of enrolment looking complete while `enable` through the gate could
+        # never work. The operator would have discovered that at the worst
+        # possible moment: while trying to lift a block.
+        #
+        # Not fatal to the join, deliberately: the account and key are
+        # already created by this point, the gate still ENFORCES (a disable
+        # is honoured), and root on the peer can always clear a marker. What
+        # is lost is the remote enable path, so that is what the message has
+        # to say, precisely, instead of a vague "check this".
+        local st; st=$(stat -c '%a %G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null) || st=""
+        case "$st" in
+            *" $account")
+                case "${st%% *}" in
+                    *7*|*6*|*3*|*2*) : ;;   # group write present
+                    *) st="" ;;
+                esac ;;
+            *) st="" ;;
+        esac
+        if [ -z "$st" ]; then
+            warn "$PAIR_GATE_STATE_DIR/$label is not group-writable by '$account' (now: $(stat -c '%a %U:%G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null))"
+            warn "  consequence: disable still WORKS and is enforced, but 'enable' through the gate will refuse -- re-enabling would need root on this host."
+            warn "  fix here, then re-run --join (it is a safe no-op reconfirmation):"
+            warn "    chown root:$account $PAIR_GATE_STATE_DIR/$label && chmod 0775 $PAIR_GATE_STATE_DIR/$label"
+        fi
     else
         chmod 0755 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
     fi
