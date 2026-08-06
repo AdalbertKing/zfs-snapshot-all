@@ -7,7 +7,10 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-06**, wieczorem: **pakiet hard-disable ZBUDOWANY
+- Data odświeżenia: **2026-08-07**: **pakiet hard-disable ZAMKNIĘTY przez
+  recenzenta** (`REV-20260807-052`, APPROVED — zero otwartych znalezisk; zamknięte
+  także REV-049, REV-050 i REV-051). Zbudowany i zweryfikowany na żywo
+  2026-08-06 wieczorem: **hard-disable ZBUDOWANY
   I ZWERYFIKOWANY NA ŻYWO** (ADR-0012 `DISABLED`). Bramka `zfs-pair-gate.sh` po
   stronie peera, wpinana automatycznie przy `--join` (wymuszone polecenie w
   `authorized_keys` + własny katalog stanu relacji), orkiestracja
