@@ -2207,6 +2207,54 @@ alert_delivery_verdict() {
     return 0
 }
 
+# The ACTIVE half of the verdict: submit one real message, then watch the
+# local queue. Extracted from the Phase 4 inline block (REV-20260806-046 F3)
+# so test/alertmail/run.sh can pin its claims to its evidence. What a drained
+# queue proves is BOUNDED: the message left this MTA. A smarthost can still
+# bounce it, a recipient can still reject it, a bounce can arrive after the
+# three-second look -- so the strongest statement this function may make is
+# "local dispatch observed", never end-to-end delivery. Returns non-zero when
+# the probe could not submit or the message is still sitting in the queue.
+alert_delivery_probe() {
+    local email="$1" q_before q_after
+    log "sending a test email to probe delivery from THIS host..."
+    # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
+    # routing the delivery smoke test through it would prove nothing about mail.
+    q_before=$(mail_queue_depth)
+    if ! echo "deploy.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
+        | mail -s "[ZFS BACKUP] test na $(hostname -f 2>/dev/null || hostname)" "$email"; then
+        # Until REV-046 the submission was fire-and-forget: mail(1) could exit
+        # non-zero and the run still told the operator to go check an inbox.
+        warn "  the test message was NOT ACCEPTED: mail(1) exited non-zero -- nothing was submitted, so nothing can arrive"
+        warn "    look: tail -20 /var/log/mail.log"
+        return 1
+    fi
+    # Then actually LOOK. Until 2026-08-04 this was fire-and-forget: it told the
+    # operator to check an inbox and a log by hand, which on a fresh host is
+    # exactly the check nobody performs. A message still queued a few seconds
+    # later has not been delivered -- that is not proof of permanent failure
+    # (a deferred retry may still succeed), but it is proof that "the mail was
+    # sent" is not yet true, and saying so beats implying it is.
+    sleep 3
+    q_after=$(mail_queue_depth)
+    case "$q_after" in
+    ''|*[!0-9]*)
+        log "check the target inbox ($email) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
+        log "  (queue depth could not be read for $(mta_name) -- no verdict on dispatch, only that mail(1) accepted it)"
+        ;;
+    0)
+        log "  local queue empty after the submission -- the message LEFT THIS MTA; recipient delivery is NOT independently verified. Confirm arrival at $email."
+        ;;
+    *)
+        warn "  the test message is STILL QUEUED ($q_after in the queue, ${q_before:-?} before the send) -- it has not been delivered yet"
+        warn "    this host can hold mail but has not shown it can send it. Look: mailq / tail -20 /var/log/mail.log"
+        warn "    a relayhost/smarthost is the usual missing piece; which relay and whose credentials is a per-host decision this script does not make"
+        return 1
+        ;;
+    esac
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 log "Phase 1: dependencies"
 # ------------------------------------------------------------------------------
@@ -2787,31 +2835,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 elif [ "$SEND_TEST_MAIL" -eq 0 ] && [ "$FIRST_TIME_SETUP" -eq 0 ]; then
     log "skipping the test email (host already set up -- pass --test-mail to force one)"
 elif command -v mail >/dev/null; then
-    log "sending a test email to confirm mail delivery works from THIS host..."
-    # Sent directly, NOT through notify-fail.sh: since v4 that only queues, so
-    # routing the delivery smoke test through it would prove nothing about mail.
-    _q_before=$(mail_queue_depth)
-    echo "deploy.sh: test delivery from $(hostname -f 2>/dev/null || hostname) at $(date '+%Y-%m-%d %H:%M:%S')" \
-        | mail -s "[ZFS BACKUP] test na $(hostname -f 2>/dev/null || hostname)" "$NOTIFY_EMAIL"
-    # Then actually LOOK. Until 2026-08-04 this was fire-and-forget: it told the
-    # operator to check an inbox and a log by hand, which on a fresh host is
-    # exactly the check nobody performs. A message still queued a few seconds
-    # later has not been delivered -- that is not proof of permanent failure
-    # (a deferred retry may still succeed), but it is proof that "the mail was
-    # sent" is not yet true, and saying so beats implying it is.
-    sleep 3
-    _q_after=$(mail_queue_depth)
-    if [ -n "$_q_after" ] && [ "$_q_after" -gt 0 ] 2>/dev/null; then
-        warn "  the test message is STILL QUEUED ($_q_after in the queue, $_q_before before the send) -- it has not been delivered yet"
-        warn "    this host can hold mail but has not shown it can send it. Look: mailq / tail -20 /var/log/mail.log"
-        warn "    a relayhost/smarthost is the usual missing piece; which relay and whose credentials is a per-host decision this script does not make"
-    elif [ -n "$_q_after" ]; then
-        log "  queue empty after the send -- the MTA accepted and dispatched it. Confirm arrival at $NOTIFY_EMAIL."
-    else
-        log "check the target inbox ($NOTIFY_EMAIL) and/or 'tail -20 /var/log/mail.log' to confirm delivery."
-        log "  (queue depth could not be read for $(mta_name) -- no verdict on dispatch, only that mail(1) accepted it)"
-    fi
-    unset _q_before _q_after
+    alert_delivery_probe "$NOTIFY_EMAIL" || true
 else
     warn "no 'mail' command -- install mailutils/postfix, then re-run this script, or create $NOTIFY_SCRIPT manually"
 fi

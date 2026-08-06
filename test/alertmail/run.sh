@@ -38,7 +38,7 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
-for fn in mta_present mta_name mail_queue_depth alert_delivery_verdict; do
+for fn in mta_present mta_name mail_queue_depth alert_delivery_verdict alert_delivery_probe; do
     eval "$(sed -n "/^$fn() {/,/^}/p" "$DEPLOY_SRC")"
     if ! declare -F "$fn" >/dev/null; then
         echo "FATAL: could not extract $fn from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
@@ -184,6 +184,72 @@ else
     bad "F2 control: non-empty postfix queue still counts (2 requests -> 2)" "emitted: '$Q'"
 fi
 rm -f "$STUB/postqueue"
+
+# ---------------------------------------------------------------------------
+# F3: the active probe. Submission status is checked (was fire-and-forget on
+# the reviewed base), and a drained queue is claimed as LOCAL dispatch only
+# -- the base said "the MTA accepted and dispatched it", which a smarthost
+# bounce five seconds later would make false.
+# ---------------------------------------------------------------------------
+# run_probe <mail_rc> <q_before> <q_after> -- q values "NONE" emit nothing.
+# mail_queue_depth consumes one line of $TMPD/qseq per call, so before/after
+# can differ, exactly as two real queue looks straddling the send would.
+run_probe() {
+    local mail_rc="$1" qb="$2" qa="$3"
+    printf '%s\n%s\n' "$qb" "$qa" > "$TMPD/qseq"
+    (
+        PROBLEMS=0
+        eval "mail() { cat >/dev/null; return $mail_rc; }"
+        sleep() { :; }
+        mail_queue_depth() {
+            local v; v=$(head -n1 "$TMPD/qseq"); sed -i '1d' "$TMPD/qseq"
+            [ "$v" = "NONE" ] || printf '%s\n' "$v"
+        }
+        alert_delivery_probe "ops@example.invalid" >"$TMPD/out" 2>&1
+        echo "rc=$? problems=$PROBLEMS"
+    )
+}
+
+R=$(run_probe 1 "0" "0")
+if [ "${R%% *}" = "rc=1" ] && [ "${R##* }" != "problems=0" ] && grep -q "NOT ACCEPTED" "$TMPD/out"; then
+    ok "F3: mail(1) exiting non-zero is a failure, not a shrug toward the inbox"
+else
+    bad "F3: mail(1) exiting non-zero is a failure, not a shrug toward the inbox" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+R=$(run_probe 0 "0" "1")
+if [ "${R%% *}" = "rc=1" ] && [ "${R##* }" != "problems=0" ] && grep -q "STILL QUEUED" "$TMPD/out"; then
+    ok "F3: a message still queued after the send stays a warned failure"
+else
+    bad "F3: a message still queued after the send stays a warned failure" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+R=$(run_probe 0 "0" "0")
+if [ "$R" = "rc=0 problems=0" ] && grep -q "LEFT THIS MTA" "$TMPD/out" \
+        && grep -qi "not independently verified" "$TMPD/out"; then
+    ok "F3: a drained queue is claimed as local dispatch, bounded explicitly"
+else
+    bad "F3: a drained queue is claimed as local dispatch, bounded explicitly" "got: $R" "$(cat "$TMPD/out")"
+fi
+if grep -qiE "accepted and dispatched|delivery works|can send" "$TMPD/out"; then
+    bad "F3: a drained queue makes no end-to-end delivery claim" "$(cat "$TMPD/out")"
+else
+    ok "F3: a drained queue makes no end-to-end delivery claim"
+fi
+
+R=$(run_probe 0 "0" "NONE")
+if [ "$R" = "rc=0 problems=0" ] && grep -q "no verdict on dispatch" "$TMPD/out"; then
+    ok "F3: unreadable queue after the send stays bounded to 'mail(1) accepted it'"
+else
+    bad "F3: unreadable queue after the send stays bounded to 'mail(1) accepted it'" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+R=$(run_probe 0 "0" "sendmail: garbage")
+if [ "${R%% *}" = "rc=0" ] && grep -q "no verdict on dispatch" "$TMPD/out"; then
+    ok "F3: non-numeric queue output after the send reads as unreadable, not drained"
+else
+    bad "F3: non-numeric queue output after the send reads as unreadable, not drained" "got: $R" "$(cat "$TMPD/out")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
