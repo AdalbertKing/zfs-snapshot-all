@@ -283,7 +283,16 @@ ensure_alias_known_hosts() {
     # Found live on metropolis pve1, 2026-08-01. deploy.sh --pair gets the other
     # two files right (key and known_hosts are both account-owned); only this
     # one, generated later by this wrapper, was left behind.
-    local _lu="${LOCAL_USER:-}" _lh=""
+    #
+    # Found live AGAIN 2026-08-06 (REV-045 slice 4): the owner must follow the
+    # PATH, not the server conf. $user (PEER_SAVED_LOCAL_USER, this function's
+    # own argument) is what chose ~account/.ssh as the destination -- but the
+    # chown below keyed on $LOCAL_USER, which is set only by commands that
+    # call read_server_conf first. In any other flow the file landed
+    # root:root 0600 in the account's OWN ~/.ssh and every account-side pull
+    # failed "Host key verification failed" with the correct pinned key
+    # sitting right there, unreadable.
+    local _lu="${user:-${LOCAL_USER:-}}" _lh=""
     [ -n "$_lu" ] && _lh=$(getent passwd "$_lu" 2>/dev/null | cut -d: -f6)
     if [ -n "$_lh" ]; then
         case "$dst" in

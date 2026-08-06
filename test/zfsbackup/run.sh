@@ -3602,6 +3602,33 @@ else
     bad "verify-endpoint failure: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
 fi
 
+# --- 41b. ensure_alias_known_hosts: the alias file's OWNER follows its PATH -
+# (found live twice: 2026-08-01 and again 2026-08-06 during REV-045 slice 4).
+# $user chose ~account/.ssh as the destination, so $user must own the result;
+# keying the chown on $LOCAL_USER left root:root 0600 in the account's own
+# ~/.ssh whenever the calling flow had not run read_server_conf -- and every
+# account-side pull then failed host key verification with the correct pinned
+# key sitting right there, unreadable.
+AKH_HOME="$WORK/akh-home"; mkdir -p "$AKH_HOME/.ssh"
+printf 'fakehost ssh-ed25519 AAAATESTKEY\n' > "$AKH_HOME/.ssh/pairing-fakepeer_known_hosts"
+akh_out="$(
+    LOCAL_USER=""
+    getent() { [ "$2" = "fakeacct" ] && echo "fakeacct:x:1234:1234::$AKH_HOME:/bin/bash"; }
+    chown() { echo "CHOWN $*" >> "$WORK/akh-chown.log"; }
+    ensure_alias_known_hosts fakepeer fakeacct 22 zfs-client-fk
+)"
+if [ "$akh_out" = "$AKH_HOME/.ssh/pairing-fakepeer_alias_known_hosts" ] \
+        && grep -q "^CHOWN fakeacct:fakeacct $AKH_HOME/.ssh/pairing-fakepeer_alias_known_hosts$" "$WORK/akh-chown.log" 2>/dev/null; then
+    ok "ensure_alias_known_hosts chowns to the PATH's account even with LOCAL_USER unset"
+else
+    bad "ensure_alias_known_hosts chowns to the PATH's account even with LOCAL_USER unset" "out=$akh_out" "$(cat "$WORK/akh-chown.log" 2>/dev/null)"
+fi
+if grep -q "^zfs-client-fk ssh-ed25519 AAAATESTKEY$" "$AKH_HOME/.ssh/pairing-fakepeer_alias_known_hosts"; then
+    ok "ensure_alias_known_hosts still rewrites the pinned key under the alias"
+else
+    bad "ensure_alias_known_hosts still rewrites the pinned key under the alias" "$(cat "$AKH_HOME/.ssh/pairing-fakepeer_alias_known_hosts" 2>/dev/null)"
+fi
+
 # --- 42. pause-client / resume-client (REV-20260804-045, logical pause) -----
 # The ONLY mutation either verb is allowed is the marker under
 # $RELATIONSHIPS_DIR. Both dirs overridden into $WORK; the root gate is
