@@ -3963,6 +3963,34 @@ write_gated_key_line() {
     printf '%s\n' "$want" >> "$tmp" || { rm -f "$tmp"; warn "could not write $tmp"; return 1; }
     chmod 600 "$tmp" 2>/dev/null || :
 
+    # Carry the ORIGINAL file's ownership onto the replacement. An atomic
+    # replace done as root otherwise silently hands the account's
+    # authorized_keys to root:root, and sshd with StrictModes=yes (the
+    # default) then refuses EVERY key in it -- the account is locked out of
+    # its own host, including by keys that have nothing to do with this
+    # relationship.
+    #
+    # Found live on metropolis pve2, 2026-08-06, by the residue/lockout check
+    # for this step: after a clean, correct rewrite, both the relationship key
+    # AND the operator's own key stopped working, and auth.log said only
+    # "Connection closed [preauth]". do_join happens to repair this a few
+    # lines later with its own `chown -R`, so the join path was never broken
+    # -- but any other caller (starting with the migration of relationships
+    # enrolled before the gate existed) would have locked the account out.
+    # A function that replaces a file atomically owns the job of preserving
+    # its metadata; relying on an unrelated later chown is how this stays
+    # broken for the next caller.
+    local owner=""
+    if [ -e "$ak" ]; then
+        owner=$(stat -c '%U:%G' "$ak" 2>/dev/null) || owner=""
+    else
+        owner=$(stat -c '%U:%G' "$(dirname "$ak")" 2>/dev/null) || owner=""
+    fi
+    if [ -n "$owner" ] && [ "$owner" != ":" ]; then
+        chown "$owner" "$tmp" 2>/dev/null \
+            || warn "could not set ownership '$owner' on $tmp -- sshd may refuse the file; check it by hand"
+    fi
+
     # Read back BEFORE trusting the rename: the gated line must be present
     # exactly once, and every line that was there before and is not this key
     # must still be there.

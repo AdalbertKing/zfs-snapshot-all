@@ -482,7 +482,27 @@ case "$line" in
     *) bad "install: the rendered line is command=<gate> <label>,restrict <key>" "$line" ;;
 esac
 
-# 9. Structural pin: do_join must install the gate BEFORE writing the key
+# 9. LOCKOUT, the live one: the replacement must keep the ORIGINAL file's
+#    ownership. Doing this as root without it hands the account's
+#    authorized_keys to root:root, and sshd with StrictModes (the default)
+#    then refuses every key in the file -- the account loses its own host,
+#    including via keys unrelated to this relationship. Observed exactly that
+#    on metropolis pve2 (2026-08-06): after a correct rewrite, both keys were
+#    refused with nothing in auth.log but "Connection closed [preauth]".
+#    Stubbed chown, because a test cannot own files as another user.
+AK="$AKD/owner"; printf '%s\n' "$KEY_B" > "$AK"
+CHOWN_LOG="$WORK/chown.log"; : > "$CHOWN_LOG"
+stat() { case "$*" in *"-c %U:%G"*|*"'%U:%G'"*) echo "acct:acct" ;; *) command stat "$@" ;; esac; }
+chown() { echo "CHOWN $*" >> "$CHOWN_LOG"; }
+write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null
+unset -f stat chown
+if grep -q "^CHOWN acct:acct $AKD/owner.new" "$CHOWN_LOG"; then
+    ok "install: the replacement inherits the original file's ownership (no sshd lockout)"
+else
+    bad "install: the replacement inherits the original file's ownership (no sshd lockout)" "$(cat "$CHOWN_LOG")"
+fi
+
+# 10. Structural pin: do_join must install the gate BEFORE writing the key
 #    line, or a working key would briefly point at a gate that is not there.
 jorder=$(grep -n 'install_pair_gate "\$label"\|write_gated_key_line "\$ak"' "$DEPLOY_SRC" | cut -d: -f1 | tr '\n' ' ')
 set -- $jorder
