@@ -20,6 +20,7 @@
 !update-control.sh
 !zfs-backup.sh
 !zfs-quiesce-helper.sh
+!zfs-pair-gate.sh
 !cron2conf.sh
 # deploy_new_server.sh / deploy_backup_user.sh were merged into deploy.sh and no
 # longer exist; the entries are gone with them. deploy.sh itself was missing
