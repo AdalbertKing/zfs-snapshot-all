@@ -1,6 +1,10 @@
 # Pair Pause — Functional Design
 
-Status: logical pause implemented by REV-045; hard disable not yet implemented.
+Status: logical pause implemented by REV-045. Hard disable implemented
+2026-08-06 (gate, install at --join, disable-client/enable-client, full live
+campaign) -- see docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md for the evidence.
+The CLI verbs landed as `disable-client`/`enable-client`, matching the names
+proposed below.
 
 ## User-visible states
 
@@ -30,7 +34,7 @@ Contract:
 
 A manual invocation without the relationship label can bypass logical pause. This is intentional and must be documented.
 
-## Hard-disable CLI (future)
+## Hard-disable CLI
 
 Proposed commands:
 
@@ -77,4 +81,9 @@ The hard-disable exit code must be stable and documented. Authentication failure
 
 ## Scope boundary
 
-REV-045 closes logical pause only. Hard disable begins as a separate package after ADR review and explicit acceptance criteria.
+REV-045 closed logical pause only. Hard disable was built as a separate
+package on top of it. One consequence of the owner's control-channel choice
+is carried in ADR-0012 and repeated here: the relationship's own key can run
+`enable` and lift its own block, so DISABLED stops automation, accidents and
+manual runs -- including those omitting `-L` -- but is not a boundary against
+a deliberate holder of that key. Every lift is logged on the peer.
