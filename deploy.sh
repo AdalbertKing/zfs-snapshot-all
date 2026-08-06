@@ -2146,10 +2146,16 @@ mta_name() {
 }
 
 # Messages still waiting. Empty output means "could not tell" -- NOT zero, so a
-# caller cannot read an unsupported MTA as proof of an empty queue.
+# caller cannot read an unsupported MTA as proof of an empty queue. That rule
+# has to hold when the queue COMMAND fails, too: piping a failed postqueue into
+# the awk below used to hit the END{print 0} branch and report a queue nobody
+# could inspect as empty (REV-20260806-046 F2), so the exit status is checked
+# before any counting happens.
 mail_queue_depth() {
+    local out
     if command -v postqueue >/dev/null 2>&1; then
-        postqueue -p 2>/dev/null | awk '/^-- [0-9]+ Kbytes in [0-9]+ Request/ {print $5; f=1} END {if (!f) print 0}'
+        out=$(postqueue -p 2>/dev/null) || return 0
+        printf '%s\n' "$out" | awk '/^-- [0-9]+ Kbytes in [0-9]+ Request/ {print $5; f=1} END {if (!f) print 0}'
     elif command -v exim4 >/dev/null 2>&1; then
         exim4 -bpc 2>/dev/null
     fi
@@ -2169,15 +2175,19 @@ alert_delivery_verdict() {
         return 1
     fi
     local q; q=$(mail_queue_depth)
-    if [ -z "$q" ]; then
-        # Unreadable queue is NOT an empty queue. Saying "this host can send"
-        # here would be a verdict derived from missing data -- the same
-        # fail-open shape as reporting a backup fine because the check itself
-        # did not run. Report exactly what is known: a transport exists.
-        log "  alert delivery: $(mta_name) present; queue depth not readable here, so dispatch is unverified"
-        return 0
-    fi
-    if [ "$q" -gt 0 ] 2>/dev/null; then
+    case "$q" in ''|*[!0-9]*)
+        # Unreadable queue is NOT an empty queue -- and non-numeric garbage is
+        # unreadable, not "not greater than zero". Until REV-20260806-046 F2
+        # this branch log()ged and returned 0, so a host whose queue could not
+        # be inspected at all still ended "audit clean": a verdict derived
+        # from missing data, the same fail-open shape as reporting a backup
+        # fine because the check itself did not run. warn() feeds PROBLEMS,
+        # so --check-only ends non-zero, matching the contract above.
+        warn "  alert delivery UNVERIFIED: $(mta_name) present but its queue cannot be inspected here -- dispatch is unproven, not proven"
+        warn "    this audit can read postfix (postqueue) and exim4 queues; anything else needs a manual look"
+        return 1
+    ;; esac
+    if [ "$q" -gt 0 ]; then
         warn "  mail transport present ($(mta_name)) but $q message(s) are STUCK IN THE QUEUE -- alerts are being written and not delivered."
         warn "    look: mailq   and   tail -20 /var/log/mail.log"
         return 1

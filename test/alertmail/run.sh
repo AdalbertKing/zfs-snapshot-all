@@ -1,0 +1,167 @@
+#!/bin/bash
+# Tests for deploy.sh's alert-delivery audit (REV-20260806-046) -- the
+# mta_present/mta_name/mail_queue_depth/alert_delivery_verdict quartet that
+# decides whether "this host's alerts can leave the building" counts against
+# --check-only's exit code.
+#
+# The review's finding class is FALSE HEALTH: a verdict that reports a host
+# able to send mail when the evidence it measured proves no such thing.
+# Three concrete shapes, all pinned here:
+#   F2  queue unreadable (unsupported MTA, failed postqueue, garbage output)
+#       used to log() and return 0 -- "audit clean" on a host nobody inspected;
+#   F1  an empty queue used to print "this host can send" -- a delivery claim
+#       derived from the absence of queued work;
+#   F3  a drained queue after the test mail used to read as "dispatched" --
+#       true only of the LOCAL queue, silent about the relay/recipient.
+#
+# Functions are extracted from deploy.sh by sed pattern (the technique of
+# test/pause, test/draftscope, test/joinmanifest -- deploy.sh's root check
+# would otherwise abort the suite). mta_present() inspects absolute paths
+# (/usr/sbin/sendmail), so cases override it per-scenario; everything that
+# resolves through PATH (mail, postqueue, exim4, postconf) is stubbed with a
+# per-case stub directory. Each case runs in a subshell with PROBLEMS=0 so
+# the suite can assert the return code AND the PROBLEMS accounting agree with
+# the emitted wording -- acceptance criterion 9 of the review.
+#
+# Run against an older deploy.sh (to show a case failing on the reviewed
+# base): DEPLOY_SRC=/path/to/old/deploy.sh ./test/alertmail/run.sh
+#
+#   ./test/alertmail/run.sh
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
+[ -r "$DEPLOY_SRC" ] || { echo "cannot read deploy.sh at $DEPLOY_SRC" >&2; exit 1; }
+
+PASS=0; FAIL=0
+ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
+bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
+
+for fn in mta_present mta_name mail_queue_depth alert_delivery_verdict; do
+    eval "$(sed -n "/^$fn() {/,/^}/p" "$DEPLOY_SRC")"
+    if ! declare -F "$fn" >/dev/null; then
+        echo "FATAL: could not extract $fn from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
+        exit 1
+    fi
+done
+
+# deploy.sh's own log/warn, verbatim: warn() must keep incrementing PROBLEMS,
+# because that increment IS the audit result the review is about.
+eval "$(grep -E '^(log|warn)\(\)' "$DEPLOY_SRC")"
+declare -F warn >/dev/null || { echo "FATAL: could not extract warn() from $DEPLOY_SRC" >&2; exit 1; }
+
+TMPD="$(mktemp -d)"
+trap 'rm -rf "$TMPD"' EXIT
+
+# A stub PATH: only what a case puts there resolves. `mail` is a no-op
+# accepting stdin; postqueue/exim4/postconf are (re)written per case.
+STUB="$TMPD/stub"
+mkdir -p "$STUB"
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$STUB/mail"
+chmod +x "$STUB"/*
+# mail_queue_depth's real pipeline needs awk; keep it reachable next to the
+# stubs, or a missing awk would fake the exact "emits nothing" result the
+# failed-postqueue case is trying to prove.
+AWKDIR="$(dirname "$(command -v awk)")"
+
+# run_verdict <mta_present_rc> <queue_depth_output> -- runs the verdict in a
+# subshell with PROBLEMS=0, stubbed mta_present and mail_queue_depth, and
+# reports "rc=<rc> problems=<n>" on stdout; the verdict's own output goes to
+# $TMPD/out. queue_depth_output "NONE" means emit nothing (unreadable).
+run_verdict() {
+    local mp_rc="$1" qd="$2"
+    (
+        PROBLEMS=0
+        eval "mta_present() { return $mp_rc; }"
+        if [ "$qd" = "NONE" ]; then
+            mail_queue_depth() { :; }
+        else
+            eval "mail_queue_depth() { printf '%s\n' \"$qd\"; }"
+        fi
+        PATH="$STUB" alert_delivery_verdict >"$TMPD/out" 2>&1
+        echo "rc=$? problems=$PROBLEMS"
+    )
+}
+
+# ---------------------------------------------------------------------------
+# Baseline hard failures: missing pieces stay loud. (Review criterion 3.)
+# ---------------------------------------------------------------------------
+R=$( (
+    PROBLEMS=0
+    PATH="$TMPD/nowhere" alert_delivery_verdict >"$TMPD/out" 2>&1
+    echo "rc=$? problems=$PROBLEMS"
+) )
+if [ "$R" = "rc=1 problems=2" ] && grep -q "no 'mail' command" "$TMPD/out"; then
+    ok "no mail(1) at all: hard failure, PROBLEMS incremented"
+else
+    bad "no mail(1) at all: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+R=$(run_verdict 1 "NONE")
+if [ "$R" = "rc=1 problems=2" ] && grep -q "no MTA provides sendmail" "$TMPD/out"; then
+    ok "mail(1) present but no MTA: hard failure, PROBLEMS incremented"
+else
+    bad "mail(1) present but no MTA: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+R=$(run_verdict 0 "3")
+if [ "$R" = "rc=1 problems=2" ] && grep -q "STUCK IN THE QUEUE" "$TMPD/out"; then
+    ok "3 messages queued: hard failure, PROBLEMS incremented"
+else
+    bad "3 messages queued: hard failure, PROBLEMS incremented" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+# ---------------------------------------------------------------------------
+# F2: unverifiable queue state must NOT end as audit clean. The reviewed base
+# log()ged and returned 0 here -- these three cases fail on it.
+# ---------------------------------------------------------------------------
+R=$(run_verdict 0 "NONE")
+if [ "${R%% *}" = "rc=1" ] && [ "${R##* }" != "problems=0" ] && grep -qi "UNVERIFIED" "$TMPD/out"; then
+    ok "F2: unreadable queue (unsupported MTA) is non-clean and says UNVERIFIED"
+else
+    bad "F2: unreadable queue (unsupported MTA) is non-clean and says UNVERIFIED" "got: $R" "$(cat "$TMPD/out")"
+fi
+if grep -qi "can send" "$TMPD/out"; then
+    bad "F2: unreadable queue makes no positive delivery claim" "output claims 'can send': $(cat "$TMPD/out")"
+else
+    ok "F2: unreadable queue makes no positive delivery claim"
+fi
+
+R=$(run_verdict 0 "mailq: command garbage")
+if [ "${R%% *}" = "rc=1" ] && [ "${R##* }" != "problems=0" ]; then
+    ok "F2: non-numeric queue output fails closed (no arithmetic error read as empty)"
+else
+    bad "F2: non-numeric queue output fails closed (no arithmetic error read as empty)" "got: $R" "$(cat "$TMPD/out")"
+fi
+
+# mail_queue_depth itself: a postqueue that FAILS must emit nothing (unknown),
+# not fall through awk's END{print 0} and report an empty queue.
+printf '#!/bin/sh\nexit 69\n' > "$STUB/postqueue"; chmod +x "$STUB/postqueue"
+Q=$(PATH="$STUB:$AWKDIR" mail_queue_depth)
+if [ -z "$Q" ]; then
+    ok "F2: mail_queue_depth emits nothing when postqueue itself fails"
+else
+    bad "F2: mail_queue_depth emits nothing when postqueue itself fails" "emitted: '$Q'"
+fi
+
+# ...and a postqueue that works keeps counting correctly, both shapes.
+printf '#!/bin/sh\necho "Mail queue is empty"\n' > "$STUB/postqueue"
+Q=$(PATH="$STUB:$AWKDIR" mail_queue_depth)
+if [ "$Q" = "0" ]; then
+    ok "F2 control: healthy empty postfix queue still reads as 0"
+else
+    bad "F2 control: healthy empty postfix queue still reads as 0" "emitted: '$Q'"
+fi
+printf '#!/bin/sh\nprintf -- "-- 5 Kbytes in 2 Requests.\\n"\n' > "$STUB/postqueue"
+Q=$(PATH="$STUB:$AWKDIR" mail_queue_depth)
+if [ "$Q" = "2" ]; then
+    ok "F2 control: non-empty postfix queue still counts (2 requests -> 2)"
+else
+    bad "F2 control: non-empty postfix queue still counts (2 requests -> 2)" "emitted: '$Q'"
+fi
+rm -f "$STUB/postqueue"
+
+echo "--------------------------------------------"
+echo "PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ]
