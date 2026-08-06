@@ -7,7 +7,10 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-04** (po REV-034 w całości, po REV-033
+- Data odświeżenia: **2026-08-06** (po odpowiedzi na **REV-20260806-046** —
+  werdykt o dostarczalności alertów orzekał zdrowie z braku dowodów; F1/F2/F3
+  IMPLEMENTED, nowa suita `alertmail`, szczegóły niżej; wcześniej: po REV-034
+  w całości, po REV-033
   plasterkach 1-10 (WSZYSTKIE dziesięć z pierwotnego planu) + korekcie U9 +
   łatki T3/U2/T5 z `ENROLMENT-AGREED-2026-08-02.md`, po REV-035, po REV-036
   w całości + wszystkie follow-upy, po ad hoc `--pause`/`--resume` poza
@@ -23,8 +26,21 @@
   A-J zamknięta bez odpowiedzi implementera)
 - Zweryfikowano przeciw: **commit niosący ten dokument** — dokument nie może
   podać własnego SHA, więc ta linia jest konwencją, nie niedopatrzeniem
-- Ostatni stan floty potwierdzony na żywo: **2026-08-04 23:44**, trzy osiągalne
-  hosty na `a567328`, `audit clean` na każdym, kolejki poczty puste
+- Ostatni stan floty potwierdzony na żywo: **2026-08-06 ~16:30**, CZTERY
+  osiągalne hosty (metropolis pve1/pve2, 11.x pve0/pve1) na `d859af5`,
+  `audit clean` na każdym, kolejki poczty puste. Po drodze audyt złapał na
+  11.11 pve1 **brak `/var/lib/zfs-snapshot-all/locks`** — ta sama usterka,
+  którą 2026-08-04 znalazł na pve0 (patrz niżej), naprawiona tak samo:
+  pełny `bash deploy.sh` (narzędzie-właściciel katalogu, nie ręczny
+  `mkdir`), katalog powstał `2775 root:zfsalert`, sumy md5 obu crontabów
+  (root `976e16cd…`, zfsbackup `70e7bc0b…`) identyczne przed i po.
+- Poprzedni stan floty: **2026-08-04 23:44**, trzy osiągalne
+  hosty na `a567328`, `audit clean` na każdym, kolejki poczty puste.
+  **Zastrzeżenie (REV-20260806-046):** tamten `audit clean` obejmował werdykt
+  alertów sprzed poprawek — dowodził obecności MTA i pustej kolejki, NIE
+  zdolności dostarczenia. Nie używać go jako dowodu, że poczta z tych hostów
+  wychodzi; dowodem dostarczalności pozostaje wyłącznie próbka `--test-mail`
+  z obserwacją kolejki (i tak ograniczona do „opuściło ten MTA")
 - **Kampania enrolmentu (Gates A-J, REV-037…044): ZAMKNIĘTA.** Recenzent
   ACCEPTED w `docs/internal/reviews/REV-20260804-044-FINAL-AJ-VERDICT.md` —
   wszystkie dziesięć bramek PASS, REV-037 przez REV-043 CLOSED, zero
@@ -47,13 +63,31 @@
   wysyłki na zewnątrz z `main.cf`: debianowe „Local only" ustawia
   `inet_interfaces=loopback-only`, co blokuje ODBIERANIE i nic nie mówi o
   wysyłce — jedynym uczciwym sygnałem jest kolejka po realnej próbie.
-  Znaleziony przy okazji **błąd fail-open we własnym kodzie**: pierwsza wersja
-  werdyktu przy nieczytelnej kolejce twierdziła „queue empty -- this host can
-  send", czyli orzekała sprawność z braku danych; poprawione na jawne
-  „dispatch is unverified". Pięć scenariuszy przetestowanych na podstawionym
-  `PATH` (brak `mail`, brak MTA, kolejka zapchana, host zdrowy, kolejka
-  nieczytelna) + parsowanie zweryfikowane na prawdziwym wyjściu `postqueue`
-  z trzech żywych hostów.
+  **REV-20260806-046 (2026-08-06, P1): pierwsza wersja werdyktu sama orzekała
+  zdrowie z braku dowodów** — dokładnie ta klasa, którą miała eliminować.
+  Trzy findingi, wszystkie IMPLEMENTED, po jednym commicie na finding:
+  1. **F2 (`c668b51`):** nieczytelna kolejka logowała „unverified" ale
+     zwracała 0, więc host, którego kolejki nikt nie umiał obejrzeć, kończył
+     `audit clean`. Do tego `postqueue`, który sam padł, wpadał w awk-owe
+     `END{print 0}` i czytał się jako PUSTA kolejka, a nienumeryczne wyjście
+     prześlizgiwało się obok `[ -gt 0 ]` do zdrowej gałęzi. Wszystkie trzy
+     kształty teraz fail-closed: UNVERIFIED = `warn()` = `PROBLEMS` =
+     `--check-only` wychodzi niezerowo.
+  2. **F1 (`b4de04a`):** pusta kolejka drukowała „this host can send" —
+     pewny pozytyw wywiedziony z nieobecności zakolejkowanej pracy, przy
+     zablokowanym porcie 25 tak samo jak przy sprawnym relayu. Teraz:
+     „prerequisites OK; actual delivery UNVERIFIED in this run".
+  3. **F3 (`d859af5`):** blok test-maila wyjęty do `alert_delivery_probe()`;
+     status `mail(1)` jest sprawdzany (był fire-and-forget), a opróżniona
+     kolejka twierdzi tylko tyle, ile trzysekundowe spojrzenie dowodzi:
+     „the message LEFT THIS MTA; recipient delivery is NOT independently
+     verified" zamiast „accepted and dispatched it".
+  Nowa suita **`test/alertmail/run.sh` 18/18** (zarejestrowana w grafie):
+  kwartet funkcji na podstawionych `mail`/`postqueue`/`sleep` + wyjęty
+  z deploy.sh oryginalny `warn()`, każdy przypadek sprawdza zgodność kodu
+  powrotu, licznika `PROBLEMS` i emitowanego brzmienia; przypadki regresyjne
+  F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=` wspiera
+  uruchomienie suity przeciw dowolnej wersji deploy.sh).
   **Dwa znaleziska produkcyjne — oba NAPRAWIONE i zweryfikowane na żywo
   2026-08-04 23:44, na polecenie właściciela wydane po zgłoszeniu.** Nowy
   werdykt zwrócił się dwukrotnie przy pierwszym uruchomieniu:
@@ -1015,7 +1049,12 @@ testem.
 Uruchomione lokalnie przy `55d33a2` (bez roota, bez ZFS, bez sieci). Pakiety
 wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 `selfupdate` dla `deploy.sh`; `quiesce`, `statekey`, `tune` dla
-`lib-zfs-snap.sh`) przebiegnięte ponownie przy tym commicie:
+`lib-zfs-snap.sh`) przebiegnięte ponownie przy tym commicie. **2026-08-06
+(REV-046):** komplet suit wymaganych grafem dla zmiany w `deploy.sh`
+przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
+`draftscope` 26/26, `impact` 21/21, `join` 82/82, `joinmanifest` 10/10,
+`joinremote` 8/8, `pause` 74/74, `quiescehelper` 119/119, `selfupdate` 28/28
+(7 SKIP); zero błędów:
 
 | Pakiet | Wynik | Zakres |
 |---|---|---|
@@ -1034,7 +1073,8 @@ wskazane przez `./test/impact.sh` dla zmian tego dnia (`quiescehelper`, `join`,
 | `join` | **82/82** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5), +5 dla `PEER_CONF_REMOTE_JOIN`/`--join-remotely` (REV-033 plasterek 9, U10) — pole `yes`/nieznana wartość/brak (legacy), `--join-check` je wypisuje, flaga CLI się parsuje. Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. `do_pair`'s own scp/ssh/`ssh -t` orchestration (plasterek 9) tym samym wyborem BEZ stubu — patrz addendum "Slice 9". Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
 | `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
 | `draftscope` | **26/26** | `deploy.sh --draft-scope` (REV-033 plasterek 4): generuje plik zakresu z prawdziwego inwentarza ZFS peera — domyślnie aktywne datasety jeden poziom pod każdą pulą, poza znanymi systemowymi (`ROOT`, `swap`) i samym korzeniem puli, plus pełny inwentarz jako komentarz. Przeciw stubowanemu `zpool`/`zfs` (ekstrakcja funkcji jak `test/pause`) — właściwy grant/`zfs allow` zostaje bez zmian nietestowany stubem (ta sama zasada co plasterek 2/3). Drugi draft dla tej samej etykiety odmawia zamiast nadpisać; host z samymi systemowymi datasetami odmawia zamiast zapisać pusty plik. +4 (ENROLMENT-AGREED T5): spis rodzin snapshotów jako komentarz obok inwentarza datasetów |
-| `joinremote` | **7/7** | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
+| `joinremote` | **8/8** (dokument podawał 7/7 — zmierzone 2026-08-06, suita jest deterministyczna, `needs = nothing`) | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
+| `alertmail` | **18/18** | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
 | `joinmanifest` | **10/10** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. +3 (REV-20260804-040): pole `PEER_JOIN_ACCOUNT_UID` — manifest z zapisanym UID weryfikuje się dokładnie przy zgodności, odmawia przy niezgodności, manifest legacy bez tego pola nadal weryfikuje się gdy UID nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze |
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-04 na metropolis
