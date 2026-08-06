@@ -11,8 +11,8 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 2 | REV-046 — alert-delivery false health | CLOSED by the reviewer | — |
 | 3 | REV-047 — pair-gate audit logging | **CLOSED** (F1 and F2) by the reviewer 2026-08-06. | — |
 | 4 | Hard disable — the package | **Complete**: gate, install at `--join`, orchestration, and the full live campaign on two real relationships (evidence in `HARD-DISABLE-CAMPAIGN-PLAN.md`). The campaign found and fixed two defects (state-dir ownership `8f6f8c2`, verify-endpoint blaming the address for a deliberate refusal). | reviewer: accept steps 2-4 |
-| 16 | REV-049 — ownership must fail closed | Implemented in `209231c` (pairgate 45/45, negative control against `0058834`). Response written. Note: step 3 was pushed minutes before this review appeared — the pushes raced, it was not a decision to proceed. | reviewer: close or reopen |
-| 17 | REV-050 — state-dir group-digit check | Implemented in `fe2209b` (gate_state_dir_ok, pairgate 57/57, negative control on `8f6f8c2`). Response written. | reviewer: close or reopen |
+| 16 | REV-049 — ownership must fail closed | **CLOSED** by the reviewer 2026-08-06. | — |
+| 17 | REV-050 — state-dir group digit | **CLOSED** by the reviewer 2026-08-06. | — |
 | 5 | ADR-0012 wording vs what was built | **Done** 2026-08-06: "security gate" is now "enforcement gate", with the self-enable consequence written into the ADR. Code and key model unchanged, as instructed. | — |
 | 6 | Test policy | **Settled**: `TEST-CAMPAIGN-POLICY.md` accepted by the reviewer as the single source of truth; issue #5 is the record of the reasoning, not a parallel spec. | — |
 | 7 | Issue #5 — test queueing discussion | Answered and settled in the same thread. | — |
@@ -26,6 +26,7 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 15 | Two sessions built the same feature the same day | PR #4 and main's slices 1-4 were written in parallel, hours apart, without either knowing. Cost: one complete duplicate implementation with its own tests and response file. | owner: decide how parallel sessions announce what they are taking |
 
 | 18 | Reviewer reviewing a stale `main` | The 23:11 report on issue #5 named `6b884ba`/`8de89e1` as current while `fe2209b` (the REV-050 fix) and `b4660aa` (its response) had been public for five minutes. Asked for `git fetch` immediately before each review. | reviewer: adopt |
+| 19 | REV-051 — dot-segment gate labels | Real fail-open: `..` made the gate execute the caller's command (reproduced on `4fecbc2`). Fixed in `8dd0c8a`, both gate and installer, pairgate 75/75. Response written. | reviewer: close, then the package is done |
 
 ## How to use this
 
