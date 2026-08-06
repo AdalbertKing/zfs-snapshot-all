@@ -21,7 +21,7 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 10 | Review numbering | **Done**: the closure review is now `REV-20260806-048-ALERT-DELIVERY-CLOSURE.md`; 047 stays with pair-gate logging, which has a response and links. | — |
 | 11 | Profiles + live recursion (backlog) | Paused mid-discussion 2026-08-04. Needs a live check of ZFS descendant grants before design. | owner |
 | 12 | `test/pause` section G false-fails on real hosts | **Not reproducible — the thread was stale.** Fixed 2026-08-03 in `3776a9a` (the account scan glob became overridable and points at a path that cannot match). Re-verified 2026-08-06 by running the suite on BOTH production hosts: 74/74, G1 passing on each. | — |
-| 13 | pve2 has no cron config file | 14 live jobs whose source config is gone; `cron2conf.sh` exists to rebuild it. | owner: decide when |
+| 13 | pve2 has no cron config file | **Not reproducible — the thread was stale.** `/etc/zfs-snapshot-all/jobs.pve2.v4.conf` exists and regenerating from it reproduces the account's managed block byte-for-byte (2026-08-07). The only diff is the `zfs-backup-host` block, which `deploy.sh` owns and gen-cron correctly does not emit. Root's crontab holds three host-level lines and no managed block, so nothing there needs a config either. | — |
 | 14 | `docs/OPS_MONITORING.md` untracked | Sitting in the working tree, authorship unclear. | owner: keep or drop |
 | 15 | Two sessions built the same feature the same day | PR #4 and main's slices 1-4 were written in parallel, hours apart, without either knowing. Cost: one complete duplicate implementation with its own tests and response file. | owner: decide how parallel sessions announce what they are taking |
 
