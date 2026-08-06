@@ -2161,8 +2161,14 @@ mail_queue_depth() {
     fi
 }
 
-# One line of verdict, in every mode. Returns non-zero when this host cannot be
-# shown to deliver, so the caller can decide how loud to be.
+# One line of verdict, in every mode. This is a PASSIVE audit: it can prove
+# negatives (no mail(1), no MTA, mail stuck in the queue, a queue nobody can
+# read) but it cannot prove delivery -- only the test-mail probe below observes
+# an actual dispatch, and even that only shows the message left THIS host.
+# Returns non-zero when the host cannot be shown ready: missing pieces and a
+# stuck queue are failures, an unreadable queue is UNVERIFIED and still counts.
+# Return 0 means "prerequisites present, nothing queued" -- never "can send"
+# (REV-20260806-046 F1: that claim was never in the evidence).
 alert_delivery_verdict() {
     if ! command -v mail >/dev/null 2>&1; then
         warn "  ALERTING IS NOT WIRED UP: no 'mail' command. Every backup failure on this host would be silent."
@@ -2192,7 +2198,12 @@ alert_delivery_verdict() {
         warn "    look: mailq   and   tail -20 /var/log/mail.log"
         return 1
     fi
-    log "  alert delivery: $(mta_name) present, queue empty -- this host can send"
+    # An empty queue proves only that nothing is WAITING. It says nothing
+    # about routing, DNS/MX, relay auth or sender acceptance -- outbound 25
+    # can be walled off and this branch still runs. "This host can send" was
+    # a confident positive derived from the absence of queued work; what the
+    # evidence supports is prerequisites-OK, delivery unverified.
+    log "  alert delivery: $(mta_name) present, no queued mail -- prerequisites OK; actual delivery UNVERIFIED in this run (--test-mail probes it)"
     return 0
 }
 

@@ -145,6 +145,29 @@ else
     bad "F2: mail_queue_depth emits nothing when postqueue itself fails" "emitted: '$Q'"
 fi
 
+# ---------------------------------------------------------------------------
+# F1: an empty queue with no fresh probe is READY/UNVERIFIED, never a
+# delivery claim. The reviewed base printed "this host can send" here --
+# the review's concrete counterexample is exactly this state with outbound
+# 25 walled off. Wording is part of the contract: the case greps for it.
+# ---------------------------------------------------------------------------
+R=$(run_verdict 0 "0")
+if [ "$R" = "rc=0 problems=0" ]; then
+    ok "F1: empty queue, no probe: still audit-clean (prerequisites are OK)"
+else
+    bad "F1: empty queue, no probe: still audit-clean (prerequisites are OK)" "got: $R" "$(cat "$TMPD/out")"
+fi
+if grep -qi "can send" "$TMPD/out"; then
+    bad "F1: empty queue makes no positive delivery claim" "output claims 'can send': $(cat "$TMPD/out")"
+else
+    ok "F1: empty queue makes no positive delivery claim"
+fi
+if grep -qi "UNVERIFIED" "$TMPD/out"; then
+    ok "F1: empty queue names delivery as unverified, not merely omits the claim"
+else
+    bad "F1: empty queue names delivery as unverified, not merely omits the claim" "$(cat "$TMPD/out")"
+fi
+
 # ...and a postqueue that works keeps counting correctly, both shapes.
 printf '#!/bin/sh\necho "Mail queue is empty"\n' > "$STUB/postqueue"
 Q=$(PATH="$STUB:$AWKDIR" mail_queue_depth)
