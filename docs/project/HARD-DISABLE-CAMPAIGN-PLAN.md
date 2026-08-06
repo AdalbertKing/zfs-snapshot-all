@@ -117,6 +117,44 @@ denied" into the alert mail of every transfer) and the enable path, which
 failed against a root-owned state directory and produced the design question
 answered above rather than a silent false "enabled".
 
+## Step 2 evidence — installing the gate (2026-08-06)
+
+Commits `656eae0` (install + gated key line + 9 tests) and `0058834` (the
+ownership fix the live check forced). Reviewer's instruction for this step
+was join/negative tests plus a live residue/lockout check, no full campaign.
+
+Stubbed: **pairgate 40/40**. Graph-selected suites for the deploy.sh change,
+all green: alertmail 18, draftscope 26, join 82, joinmanifest 10, joinremote
+8, pause 74, quiescehelper 119, selfupdate 28 (7 standing SKIPs). Contracts
+flagged by the graph (account-paths, delegation-verbs, notify-markers,
+ssh-flag-parity): none touched — no path, zfs verb, heredoc marker or ssh
+flag changed.
+
+**Live residue/lockout check** on metropolis pve2, on a throwaway account
+whose `authorized_keys` started in the pre-gate shape: an operator key plus a
+BARE relationship key, both working. Production pairing was deliberately not
+involved.
+
+| Check | Result |
+|---|---|
+| migration | the bare relationship line became the gated line; the operator's line survived byte for byte; no `.new` residue |
+| **lockout (first run)** | **both keys refused** — the atomic replace had left the file root:root and sshd's StrictModes refuses that. Cause confirmed in `auth.log` and by restoring ownership, not guessed |
+| lockout (after `0058834`) | ownership preserved (`gatetest-c:gatetest-c`, 0600); operator key logs in; relationship key runs through the gate |
+| disable after migration | `zfs list` over the relationship key refused with `PAIR_DISABLED` |
+| blast radius of a disable | the operator's key on the SAME account still logs in — a disable stops a relationship, not an account |
+| teardown | account, keys, state dir and the installed gate removed; `audit clean` on both hosts |
+
+The lockout was real and would have hit production: `do_join` repairs it a few
+lines later with its own `chown -R`, so the join path was never broken, but
+any other caller — starting with migrating relationships enrolled before the
+gate existed — would have locked accounts out one at a time.
+
+**No separate migration command was built, deliberately.** Every client record
+on the only collector is `state=removed`, so there is nothing enrolled to
+migrate; re-joining an old relationship migrates its key line in place, which
+is exactly what the live check exercised. A `--migrate-gate` verb would be
+speculative code with its own live-test cost and no current subject.
+
 ## Constraints carried from ADR-0012
 
 No cron rewriting, no key deletion as a switch, no `zfs allow`/`unallow`
