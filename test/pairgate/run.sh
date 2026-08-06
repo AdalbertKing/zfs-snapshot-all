@@ -268,6 +268,75 @@ fi
 # tails stderr into its alert mail, so a logging detail would have become
 # alert noise on every single transfer.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Both sinks, deterministically (REV-20260806-047 F2). Varying only GATE_LOG
+# proves nothing: on a host with logger(1) the file path is never reached, on
+# a host without it the syslog path never is. A stubbed logger first on PATH
+# decides the branch on THIS machine, whatever it really has installed.
+#
+# The property under test is delivery, not presence (F1): a logger that EXISTS
+# and FAILS must still reach the file sink.
+# ---------------------------------------------------------------------------
+LOGSTUB="$WORK/logstub"; mkdir -p "$LOGSTUB"
+SYSLOG_SINK="$WORK/syslog.captured"
+mk_logger() {   # <exit-code>
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexit %s\n' "$SYSLOG_SINK" "$1" > "$LOGSTUB/logger"
+    chmod +x "$LOGSTUB/logger"
+}
+FILE_SINK="$WORK/filesink.log"
+
+# 1. logger succeeds: syslog takes the record, the file sink stays untouched,
+#    and the caller sees nothing.
+: > "$SYSLOG_SINK"; rm -f "$FILE_SINK"
+mk_logger 0
+err=$(SSH_ORIGINAL_COMMAND="true" RELATIONSHIPS_DIR="$REL" GATE_LOG="$FILE_SINK" \
+      PATH="$LOGSTUB:$PATH" bash "$GATE" alpha 2>&1 >/dev/null); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$err" ] && grep -q 'label=alpha' "$SYSLOG_SINK" && [ ! -e "$FILE_SINK" ]; then
+    ok "logging: logger succeeds -> syslog only, no file sink, caller silent"
+else
+    bad "logging: logger succeeds -> syslog only, no file sink, caller silent" "rc=$rc err=[$err] syslog=$(cat "$SYSLOG_SINK") file=$([ -e "$FILE_SINK" ] && echo present || echo absent)"
+fi
+
+# 2. logger EXISTS and FAILS: the file sink must receive exactly one bounded
+#    record. This is F1 -- the case the presence-based branch never reached.
+: > "$SYSLOG_SINK"; rm -f "$FILE_SINK"
+mk_logger 1
+err=$(SSH_ORIGINAL_COMMAND="true" RELATIONSHIPS_DIR="$REL" GATE_LOG="$FILE_SINK" \
+      PATH="$LOGSTUB:$PATH" bash "$GATE" alpha 2>&1 >/dev/null); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$err" ] && [ "$(grep -c 'label=alpha' "$FILE_SINK" 2>/dev/null)" = "1" ]; then
+    ok "logging: logger exists but fails -> exactly one record in the file sink"
+else
+    bad "logging: logger exists but fails -> exactly one record in the file sink" "rc=$rc err=[$err] file=$(cat "$FILE_SINK" 2>/dev/null)"
+fi
+
+# 3. both sinks fail: the decision and the exit code are unchanged, and the
+#    caller still sees nothing.
+: > "$SYSLOG_SINK"
+mk_logger 1
+err=$(SSH_ORIGINAL_COMMAND="exit 5" RELATIONSHIPS_DIR="$REL" GATE_LOG="/proc/nonexistent/x.log" \
+      PATH="$LOGSTUB:$PATH" bash "$GATE" alpha 2>&1 >/dev/null); rc=$?
+if [ "$rc" -eq 5 ] && [ -z "$err" ]; then
+    ok "logging: both sinks fail -> the wrapped command's own result is unchanged, caller silent"
+else
+    bad "logging: both sinks fail -> the wrapped command's own result is unchanged, caller silent" "rc=$rc err=[$err]"
+fi
+
+# 4. the refusal path under both failure shapes: stderr carries exactly the
+#    one refusal line, which is what the collector reads for the reason.
+printf 'DISABLED_AT="x"\n' > "$REL/beta/disabled"
+for sink in "$FILE_SINK" "/proc/nonexistent/x.log"; do
+    mk_logger 1
+    err=$(SSH_ORIGINAL_COMMAND="zfs send tank/q@s" RELATIONSHIPS_DIR="$REL" GATE_LOG="$sink" \
+          PATH="$LOGSTUB:$PATH" bash "$GATE" beta 2>&1 >/dev/null); rc=$?
+    if [ "$rc" -eq 93 ] && [ "$err" = "PAIR_DISABLED: relationship beta is disabled by administrator" ]; then
+        ok "logging: refusal stderr stays exactly one line with a failing logger (sink=$sink)"
+    else
+        bad "logging: refusal stderr stays exactly one line with a failing logger (sink=$sink)" "rc=$rc err=[$err]"
+    fi
+done
+rm -f "$REL/beta/disabled"
+rm -f "$LOGSTUB/logger"
+
 NOWRITE_DIR="$WORK/nowrite"; mkdir -p "$NOWRITE_DIR"; chmod 555 "$NOWRITE_DIR" 2>/dev/null || true
 # Where logger(1) exists the syslog branch runs and the file is never touched;
 # where it does not (this dev box), the file branch runs against a path that

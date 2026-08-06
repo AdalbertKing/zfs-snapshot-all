@@ -101,11 +101,12 @@ GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"
 # gate that refuses to work because it cannot write its log would turn a log
 # permission problem into a backup outage.
 #
-# syslog FIRST, file second. This runs as the delegated ACCOUNT (a forced
-# command runs as the ssh user, not root), which cannot write a root-owned
-# file in /var/log -- and an audit trail the audited principal can rewrite is
-# a weak one anyway. logger(1) hands the line to the daemon, which appends it
-# where the account cannot reach.
+# syslog FIRST, file second -- second meaning "whenever syslog did not take
+# it", including a logger that exists and fails. This runs as the delegated
+# ACCOUNT (a forced command runs as the ssh user, not root), which cannot
+# write a root-owned file in /var/log -- and an audit trail the audited
+# principal can rewrite is a weak one anyway. logger(1) hands the line to the
+# daemon, which appends it where the account cannot reach.
 #
 # The whole thing runs in a SUBSHELL with stderr closed, and that placement is
 # the point: `printf >> file 2>/dev/null` does NOT hide a failure to open the
@@ -114,15 +115,24 @@ GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"
 # gated command answered with "/var/log/zfs-pair-gate.log: Permission denied"
 # on the caller's stderr, and snapget.sh puts the tail of stderr straight into
 # its alert mail. A logging detail would have become alert noise on every run.
+#
+# The fallback is chosen by DELIVERY, not by the presence of the executable
+# (REV-20260806-047 F1). `command -v logger` succeeding says only that a
+# binary exists: on a host where syslog/journald is down or its socket is
+# absent, logger exits non-zero and the message is gone. Selecting the branch
+# on presence meant the file sink was reachable only on hosts with no logger
+# at all -- precisely the hosts that needed it least -- and the outer `|| :`
+# then swallowed the loss. An audit trail that disappears when the logging
+# daemon is unwell is the same fail-open shape this project keeps removing
+# from its own checks.
 gate_log() {
+    local line="gate=$VERSION label=${1:-?} decision=${2:-?} ${3:-}"
     (
-        if command -v logger >/dev/null 2>&1; then
-            logger -t zfs-pair-gate -- "gate=$VERSION label=${1:-?} decision=${2:-?} ${3:-}"
-        else
-            printf '%s gate=%s label=%s decision=%s %s\n' \
-                "$(date '+%Y-%m-%d %H:%M:%S')" "$VERSION" "${1:-?}" "${2:-?}" "${3:-}" \
-                >> "$GATE_LOG"
-        fi
+        # Try syslog. Success here is the command's exit status, not the
+        # binary's existence -- a missing logger and a logger that could not
+        # deliver are the same case, and both fall through to the file.
+        logger -t zfs-pair-gate -- "$line" && exit 0
+        printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$GATE_LOG"
     ) >/dev/null 2>&1 || :
 }
 
