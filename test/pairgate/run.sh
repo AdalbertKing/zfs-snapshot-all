@@ -492,7 +492,9 @@ esac
 #    Stubbed chown, because a test cannot own files as another user.
 AK="$AKD/owner"; printf '%s\n' "$KEY_B" > "$AK"
 CHOWN_LOG="$WORK/chown.log"; : > "$CHOWN_LOG"
-stat() { case "$*" in *"-c %U:%G"*|*"'%U:%G'"*) echo "acct:acct" ;; *) command stat "$@" ;; esac; }
+# the staging file is root-owned (as it would be when root runs this), the
+# live file belongs to the account -- so a chown is genuinely required.
+stat() { case "$*" in *.new.*) echo "root:root" ;; *) echo "acct:acct" ;; esac; }
 chown() { echo "CHOWN $*" >> "$CHOWN_LOG"; }
 write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null
 unset -f stat chown
@@ -501,6 +503,45 @@ if grep -q "^CHOWN acct:acct $AKD/owner.new" "$CHOWN_LOG"; then
 else
     bad "install: the replacement inherits the original file's ownership (no sshd lockout)" "$(cat "$CHOWN_LOG")"
 fi
+
+# 9b. REV-049 F1: ownership is an INVARIANT, not best effort. A stat or
+#     chown that fails must leave the live file byte-for-byte, drop the
+#     staging file, and return non-zero -- warning and committing anyway
+#     recreates the very lockout the ownership work exists to prevent.
+for mode in stat-fails chown-fails; do
+    AK="$AKD/own-$mode"; printf '%s\n' "$KEY_B" "$KEY_A" > "$AK"
+    sum_before=$(md5sum < "$AK"); n_before=$(wc -l < "$AK")
+    case "$mode" in
+        stat-fails)  stat() { return 1; };            chown() { return 0; } ;;
+        chown-fails) stat() { case "$*" in *.new.*) echo "root:root" ;; *) echo "acct:acct" ;; esac; }
+                     chown() { return 1; } ;;
+    esac
+    write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null 2>&1; rc=$?
+    unset -f stat chown
+    if [ "$rc" -ne 0 ] \
+            && [ "$(md5sum < "$AK")" = "$sum_before" ] \
+            && [ "$(wc -l < "$AK")" = "$n_before" ] \
+            && [ -z "$(ls "$AKD/own-$mode".new.* 2>/dev/null)" ]; then
+        ok "install: $mode -> refuses, original untouched, no staging residue"
+    else
+        bad "install: $mode -> refuses, original untouched, no staging residue" "rc=$rc" "$(cat "$AK")" "residue=$(ls "$AKD/own-$mode".new.* 2>/dev/null)"
+    fi
+done
+
+# ...and an ownership string that is structurally unusable (empty side) is
+# treated the same way: a chown of ':group' or 'user:' is not a safe answer.
+for owner in ":grp" "usr:" ""; do
+    AK="$AKD/own-str"; printf '%s\n' "$KEY_B" > "$AK"
+    sum_before=$(md5sum < "$AK")
+    stat() { printf '%s\n' "$owner"; }; chown() { return 0; }
+    write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null 2>&1; rc=$?
+    unset -f stat chown
+    if [ "$rc" -ne 0 ] && [ "$(md5sum < "$AK")" = "$sum_before" ]; then
+        ok "install: an unusable ownership string ('$owner') refuses without touching the file"
+    else
+        bad "install: an unusable ownership string ('$owner') refuses without touching the file" "rc=$rc $(cat "$AK")"
+    fi
+done
 
 # 10. Structural pin: do_join must install the gate BEFORE writing the key
 #    line, or a working key would briefly point at a gate that is not there.

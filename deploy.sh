@@ -3980,15 +3980,38 @@ write_gated_key_line() {
     # A function that replaces a file atomically owns the job of preserving
     # its metadata; relying on an unrelated later chown is how this stays
     # broken for the next caller.
+    # REV-20260806-049 F1: this is FAIL-CLOSED, not best-effort. Warning and
+    # committing anyway would leave exactly the lockout that motivated the
+    # ownership work in the first place -- a root:root authorized_keys that
+    # sshd refuses wholesale, taking unrelated operator keys down with it.
+    # An atomic writer owns the metadata invariant: if safe ownership cannot
+    # be established, the live file is not replaced at all. A relationship
+    # that is not gated yet is a known, recoverable state; an account locked
+    # out of its own host is not.
     local owner=""
     if [ -e "$ak" ]; then
         owner=$(stat -c '%U:%G' "$ak" 2>/dev/null) || owner=""
     else
         owner=$(stat -c '%U:%G' "$(dirname "$ak")" 2>/dev/null) || owner=""
     fi
-    if [ -n "$owner" ] && [ "$owner" != ":" ]; then
-        chown "$owner" "$tmp" 2>/dev/null \
-            || warn "could not set ownership '$owner' on $tmp -- sshd may refuse the file; check it by hand"
+    case "$owner" in
+        ""|:*|*:) rm -f "$tmp"
+                  warn "could not determine who owns $ak (got '$owner') -- refusing to replace it, because a replacement of unknown ownership can lock this account out of its own host. $ak is unchanged."
+                  return 1 ;;
+    esac
+    # Only chown when it is actually needed. Two real cases where the
+    # replacement already has the right ownership and a chown would be
+    # pointless -- and, worse, could FAIL and block a correct write: this
+    # function running as the account itself rather than as root, and any
+    # environment whose chown cannot name the same owner back (the dev box
+    # this suite also runs on). Compare first, act only on a difference.
+    local tmp_owner; tmp_owner=$(stat -c '%U:%G' "$tmp" 2>/dev/null) || tmp_owner=""
+    if [ "$tmp_owner" != "$owner" ]; then
+        if ! chown "$owner" "$tmp" 2>/dev/null; then
+            rm -f "$tmp"
+            warn "could not set ownership '$owner' on the replacement -- refusing to commit it. $ak is unchanged; fix the ownership problem and re-run."
+            return 1
+        fi
     fi
 
     # Read back BEFORE trusting the rename: the gated line must be present
