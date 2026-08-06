@@ -163,9 +163,17 @@ Usage:
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh migrate-profile [--yes]
   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
+  zfs-backup.sh pause-client NAME [--reason=TEXT]
+  zfs-backup.sh resume-client NAME
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
+
+pause-client/resume-client: LOGICAL pause of one relationship (REV-045).
+Managed jobs and labeled manual runs skip before any snapshot/SSH work;
+other clients are untouched, cron/config/grants/keys are never edited.
+LIMITATION: a manual snapget.sh/snapsend.sh that omits '-L NAME' is NOT
+blocked -- this is an orchestration switch, not a security boundary.
 
 State machine: pending_enroll -> seeding -> seed_complete -> endpoint_verified
 -> active. Cron is installed only from endpoint_verified (or re-activating an
@@ -194,6 +202,23 @@ client_name_valid() {
 }
 client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
 peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
+
+# ------------------------------------------------------------------------------
+# Relationship-scoped OPERATIONAL state (REV-20260804-045, logical pause).
+# Deliberately not in /etc/zfs-snapshot-all: /etc holds what a relationship IS
+# (identity, config -- immutable manifests, client records), /var/lib holds
+# what is currently TRUE about it. The marker is written only by root's
+# pause-client/resume-client below and read by snapget.sh/snapsend.sh's -L
+# preflight running as the delegated account -- hence 0755/0644 root:root,
+# chmod'ed explicitly so the setgid zfsalert parent cannot make the marker
+# group-writable (an account must not be able to unpause itself).
+#
+# Logical pause is an ORCHESTRATION feature, not a security boundary: a
+# command that omits -L is not blocked. The hard-disable half of REV-045
+# (peer-side SSH gate) is deliberately NOT implemented in this stage.
+RELATIONSHIPS_DIR="/var/lib/zfs-snapshot-all/relationships"
+pause_marker_path() { echo "$RELATIONSHIPS_DIR/$1/paused"; }
+client_paused() { [ -f "$(pause_marker_path "$1")" ]; }
 # Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
 # exactly (REV-20260802-033 slices 4/T3) -- same reason as peer_manifest_path
 # above: this reads what --draft-scope/--commit-scope already wrote on the
@@ -1454,6 +1479,17 @@ cmd_add_client() {
     # that plainly, rather than leaving them to guess whether it is safe.
     bash "$DEPLOY" "${pair_args[@]}" \
         || die "deploy.sh --pair failed or was interrupted -- see above. Re-running this EXACT add-client command is safe: the pairing key for this peer is reused (not regenerated) unless --rotate is passed, and --join is a no-op reconfirmation when the peer already has this exact key, never a duplicate account, key line, or rotation. If the peer is not reachable at all yet, nothing there has been touched either way."
+
+    # REV-20260804-045: a reused name must not inherit an old pause. remove-
+    # client clears its marker, but a crash between those steps -- or a
+    # marker left by hand -- would otherwise start this client's life
+    # secretly paused, with nothing anywhere saying why. Not silently
+    # consumed and not silently kept: reported, then cleared.
+    if client_paused "$name"; then
+        warn "a stale PAUSED_LOCAL marker exists under $RELATIONSHIPS_DIR/$name (left by a previous relationship of this name) -- clearing it so the new client does not start paused"
+        rm -f "$(pause_marker_path "$name")" || die "could not remove the stale pause marker $(pause_marker_path "$name")"
+        rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
+    fi
 
     mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR"
     {
@@ -3144,6 +3180,74 @@ remove_template_section() {   # <file> <template name>
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
+# ------------------------------------------------------------------------------
+# pause-client / resume-client (REV-20260804-045, logical pause only).
+# Neither touches cron, config, ZFS grants, keys, or the client record --
+# the ONLY mutation is the marker under $RELATIONSHIPS_DIR. Both idempotent.
+cmd_pause_client() {
+    local name="${1:-}"; shift || :
+    local reason="" a
+    for a in "$@"; do
+        case "$a" in
+            --reason=*) reason="${a#*=}" ;;
+            *) die "pause-client: unknown option $a (only --reason=TEXT)" ;;
+        esac
+    done
+    [ -n "$name" ] || die "pause-client requires a client name"
+    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    # Pause only what exists: a typo'd name must not create orphan state that
+    # a future client of that name would silently inherit.
+    [ -r "$(client_conf_path "$name")" ] || die "no client '$name' -- nothing to pause (client records: $CLIENTS_DIR)"
+    local marker; marker=$(pause_marker_path "$name")
+    if [ -f "$marker" ]; then
+        log "client '$name' is already paused:"
+        sed 's/^/      /' "$marker"
+        return 0
+    fi
+    local mdir; mdir=$(dirname "$marker")
+    mkdir -p "$mdir" || die "could not create $mdir"
+    # Explicit modes: the setgid 2775 zfsalert parent would otherwise hand
+    # the group write on this state to every delegated account.
+    chmod 0755 "$RELATIONSHIPS_DIR" "$mdir" || die "could not set permissions on $mdir"
+    # Stage-then-rename in the same directory, the project's usual commit
+    # shape -- a torn marker must not exist even across a crash.
+    {
+        printf 'PAUSED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        [ -n "$reason" ] && printf 'PAUSED_REASON="%s"\n' "$reason"
+        :
+    } > "$marker.new" || { rm -f "$marker.new"; die "could not write $marker.new"; }
+    chmod 0644 "$marker.new" || { rm -f "$marker.new"; die "could not chmod $marker.new"; }
+    mv "$marker.new" "$marker" || { rm -f "$marker.new"; die "could not commit $marker"; }
+    log "client '$name' paused (PAUSED_LOCAL). Managed jobs and labeled manual runs now exit 'SKIPPED: relationship $name is paused' before any snapshot/SSH work."
+    # In-flight contract (REV-045 boundary 4): a run already past its
+    # preflight finishes -- pause gates the NEXT run, it kills nothing.
+    local running
+    running=$(pgrep -af "snap(get|send)\.sh .*-L $name( |$)" 2>/dev/null || :)
+    if [ -n "$running" ]; then
+        log "NOTE: a transfer for '$name' is in flight RIGHT NOW -- it will finish; only subsequent runs are blocked:"
+        printf '      %s\n' "$running"
+    fi
+    log "LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L $name' is not blocked. Hard disable (peer-side gate) is a separate, unimplemented stage."
+}
+
+cmd_resume_client() {
+    local name="${1:-}"
+    [ -n "$name" ] || die "resume-client requires a client name"
+    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    # No client-record requirement here, unlike pause: resume doubles as the
+    # cleanup path for a marker whose client is already gone.
+    local marker; marker=$(pause_marker_path "$name")
+    if [ ! -f "$marker" ]; then
+        log "client '$name' is not paused -- nothing to do"
+        return 0
+    fi
+    rm -f "$marker" || die "could not remove $marker"
+    rmdir "$(dirname "$marker")" 2>/dev/null || :
+    log "client '$name' resumed -- the next scheduled run proceeds normally. Snapshots aged while paused; the first run simply catches up incrementally."
+}
+
 cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
@@ -3154,7 +3258,9 @@ cmd_status() {
             ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
               # shellcheck disable=SC1090
               . "$f"
-              printf '%-20s state=%-18s endpoint=%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" )
+              pausemark=""
+              client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
+              printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
         done
         return 0
     fi
@@ -3169,6 +3275,15 @@ cmd_status() {
     local LOAD_HOST="$host" LOAD_PORT="$port"
     echo "Klient:            $CLIENT_NAME"
     echo "Stan:              ${STATE:-unknown}"
+    if client_paused "$name"; then
+        local PAUSED_AT="" PAUSED_REASON=""
+        # shellcheck disable=SC1090
+        . "$(pause_marker_path "$name")"
+        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+        echo "                   joby i reczne uruchomienia Z etykieta '-L $name' sa pomijane;"
+        echo "                   reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,"
+        echo "                   nie granica bezpieczenstwa). Wznowienie: $0 resume-client $name"
+    fi
     echo "Endpoint docelowy: $(endpoint_display)"
     # Legacy display (records that predate U9): the dormant slot, if any.
     [ -n "${ENDPOINT_LAN_HOST:-}" ] && echo "  lan:  ${ENDPOINT_LAN_HOST}:${ENDPOINT_LAN_PORT:-22}"
@@ -3438,6 +3553,16 @@ cmd_remove_client() {
         echo "STATE=removed"
         printf 'REMOVED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+
+    # REV-20260804-045: teardown removes THIS relationship's operational
+    # state and nothing else's -- exact path, no globbing.
+    if client_paused "$name"; then
+        rm -f "$(pause_marker_path "$name")" \
+            && log "cleared this client's PAUSED_LOCAL marker" \
+            || warn "could not remove $(pause_marker_path "$name") -- remove it by hand, or the next client named '$name' will report (and clear) it at add-client"
+    fi
+    rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
+
     log "client '$name' removed locally. Run the peer-side commands deploy.sh --unpair printed above."
 }
 
@@ -3456,6 +3581,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         migrate-to-account) shift; cmd_migrate_to_account "$@" ;;
+        pause-client)     shift; cmd_pause_client "$@" ;;
+        resume-client)    shift; cmd_resume_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;

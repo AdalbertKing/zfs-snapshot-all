@@ -3602,6 +3602,140 @@ else
     bad "verify-endpoint failure: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
 fi
 
+# --- 42. pause-client / resume-client (REV-20260804-045, logical pause) -----
+# The ONLY mutation either verb is allowed is the marker under
+# $RELATIONSHIPS_DIR. Both dirs overridden into $WORK; the root gate is
+# satisfied by shadowing id(1) with a function inside each subshell -- the
+# gate protects /var/lib in real life, not the logic under test here.
+PAUSE_CLIENTS="$WORK/pause-clients"
+PAUSE_REL="$WORK/pause-relationships"
+mkdir -p "$PAUSE_CLIENTS"
+printf 'CLIENT_NAME=alpha\nSTATE=active\nACTIVE_ENDPOINT=10.0.0.1:22\n' > "$PAUSE_CLIENTS/alpha.conf"
+printf 'CLIENT_NAME=beta\nSTATE=active\nACTIVE_ENDPOINT=10.0.0.2:22\n'  > "$PAUSE_CLIENTS/beta.conf"
+
+run_pause() {  # <verb> <args...> -- captured subshell with overridden state
+    (
+        id() { echo 0; }
+        CLIENTS_DIR="$PAUSE_CLIENTS"
+        RELATIONSHIPS_DIR="$PAUSE_REL"
+        "cmd_$1" "${@:2}"
+    ) >"$WORK/pause.out" 2>&1
+}
+
+# 1. pause creates exactly one marker, with a timestamp and the reason.
+if run_pause pause_client alpha --reason="disk swap" \
+        && [ -f "$PAUSE_REL/alpha/paused" ] \
+        && grep -q '^PAUSED_AT="' "$PAUSE_REL/alpha/paused" \
+        && grep -q '^PAUSED_REASON="disk swap"' "$PAUSE_REL/alpha/paused" \
+        && [ "$(find "$PAUSE_REL" -type f | wc -l)" = "1" ]; then
+    ok "pause-client creates exactly one marker with timestamp and reason"
+else
+    bad "pause-client creates exactly one marker with timestamp and reason" "$(cat "$WORK/pause.out")" "$(find "$PAUSE_REL" 2>/dev/null)"
+fi
+
+# ...and no leftover staging file survives next to it.
+if ls "$PAUSE_REL/alpha/"*.new >/dev/null 2>&1; then
+    bad "pause-client leaves no staging file behind" "$(ls "$PAUSE_REL/alpha/")"
+else
+    ok "pause-client leaves no staging file behind"
+fi
+
+# 2. repeated pause: no-op success, marker unchanged.
+before="$(cat "$PAUSE_REL/alpha/paused")"
+if run_pause pause_client alpha && grep -q "already paused" "$WORK/pause.out" \
+        && [ "$(cat "$PAUSE_REL/alpha/paused")" = "$before" ]; then
+    ok "repeated pause-client is a no-op success, marker byte-identical"
+else
+    bad "repeated pause-client is a no-op success, marker byte-identical" "$(cat "$WORK/pause.out")"
+fi
+
+# 6. isolation: alpha's pause does not touch beta, and beta's own state
+# machinery sees it unpaused.
+if ( RELATIONSHIPS_DIR="$PAUSE_REL"; client_paused beta ); then
+    bad "one paused client does not affect a second client" "beta reads as paused"
+else
+    ok "one paused client does not affect a second client"
+fi
+
+# status (list) marks the paused one and only it.
+stat_out="$( ( CLIENTS_DIR="$PAUSE_CLIENTS"; RELATIONSHIPS_DIR="$PAUSE_REL"; cmd_status ) 2>&1 )"
+if echo "$stat_out" | grep 'alpha' | grep -q 'PAUSED_LOCAL' \
+        && ! echo "$stat_out" | grep 'beta' | grep -q 'PAUSED_LOCAL'; then
+    ok "status list shows PAUSED_LOCAL for alpha and not for beta"
+else
+    bad "status list shows PAUSED_LOCAL for alpha and not for beta" "$stat_out"
+fi
+
+# 5. invalid / path-traversal labels refuse without filesystem mutation.
+snap_before="$(find "$PAUSE_REL" | sort)"
+for evil in "../alpha" "a/b" "" "x;rm"; do
+    if run_pause pause_client "$evil"; then
+        bad "pause-client refuses label '$evil'" "accepted: $(cat "$WORK/pause.out")"
+    else
+        ok "pause-client refuses label '$evil'"
+    fi
+done
+if [ "$(find "$PAUSE_REL" | sort)" = "$snap_before" ]; then
+    ok "refused labels caused no filesystem mutation under the state dir"
+else
+    bad "refused labels caused no filesystem mutation under the state dir" "$(find "$PAUSE_REL")"
+fi
+
+# pause of a name with no client record refuses (typo cannot create orphan
+# state a future client would inherit).
+if run_pause pause_client ghost; then
+    bad "pause-client refuses a name with no client record" "accepted: $(cat "$WORK/pause.out")"
+else
+    ok "pause-client refuses a name with no client record"
+fi
+
+# 3. resume removes exactly that marker (and its now-empty dir).
+if run_pause resume_client alpha && [ ! -e "$PAUSE_REL/alpha/paused" ] \
+        && [ ! -e "$PAUSE_REL/alpha" ]; then
+    ok "resume-client removes exactly the marker and its empty dir"
+else
+    bad "resume-client removes exactly the marker and its empty dir" "$(cat "$WORK/pause.out")" "$(find "$PAUSE_REL" 2>/dev/null)"
+fi
+
+# 4. repeated resume: no-op success.
+if run_pause resume_client alpha && grep -q "not paused" "$WORK/pause.out"; then
+    ok "repeated resume-client is a no-op success"
+else
+    bad "repeated resume-client is a no-op success" "$(cat "$WORK/pause.out")"
+fi
+
+# resume works for a label whose client record is GONE (cleanup path).
+mkdir -p "$PAUSE_REL/orphan"; printf 'PAUSED_AT="x"\n' > "$PAUSE_REL/orphan/paused"
+if run_pause resume_client orphan && [ ! -e "$PAUSE_REL/orphan/paused" ]; then
+    ok "resume-client clears a marker whose client record no longer exists"
+else
+    bad "resume-client clears a marker whose client record no longer exists" "$(cat "$WORK/pause.out")"
+fi
+
+# 9/10. source pins for the halves that need a live pairing to exercise:
+# add-client reports-and-clears a stale marker; remove-client clears its own.
+if grep -q "does not start paused" "$ZFSBACKUP" \
+        && grep -q "secretly paused" "$ZFSBACKUP"; then
+    ok "add-client carries the report-and-clear rule for a stale pause marker"
+else
+    bad "add-client carries the report-and-clear rule for a stale pause marker" "source pin missing"
+fi
+if grep -q "cleared this client's PAUSED_LOCAL marker" "$ZFSBACKUP"; then
+    ok "remove-client carries its own pause-state cleanup"
+else
+    bad "remove-client carries its own pause-state cleanup" "source pin missing"
+fi
+
+# The documented limitation is part of the surface: help and pause output
+# both say a label-less manual run is NOT blocked.
+if run_pause pause_client beta && grep -q "not blocked" "$WORK/pause.out" \
+        && usage 2>&1 | grep -q "NOT" && usage 2>&1 | grep -qi "orchestration switch"; then
+    ok "limitation (label-less manual run not blocked) is stated by pause output and --help"
+else
+    bad "limitation (label-less manual run not blocked) is stated by pause output and --help" "$(cat "$WORK/pause.out")"
+fi
+run_pause resume_client beta || :
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
