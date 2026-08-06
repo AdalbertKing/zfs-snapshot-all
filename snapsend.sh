@@ -200,6 +200,15 @@ set -o pipefail
 #                    for a faster/weaker cipher on a CPU-bound link. Default (omitted)
 #                    is whatever ssh/sshd negotiate on their own. No-op on a local run
 #                    -- ssh is never invoked there.
+#   -L <LABEL>        The backup relationship (zfs-backup.sh client) this run
+#                    belongs to. If that relationship is paused
+#                    (zfs-backup.sh pause-client), the run exits 0 with
+#                    "SKIPPED: relationship LABEL is paused" BEFORE any lock,
+#                    snapshot, hold, ssh or stream work, and logs the distinct
+#                    stats status skipped_paused (never a fake success).
+#                    Written into generated cron lines by gen-cron.sh's
+#                    pair_label field; a run that omits -L is NOT gated --
+#                    logical pause is orchestration, not a security boundary.
 #   -K <FILE>         SSH private key to authenticate with (ssh -i, plus -o
 #                    IdentitiesOnly=yes so an ssh-agent holding OTHER keys can't
 #                    make the server try them first and get this account locked
@@ -411,7 +420,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.68'
+VERSION='v2.69'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1443,7 +1452,8 @@ process_dataset() {
 ###############################################################################
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:" opt; do
+PAIR_LABEL=""
+while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
@@ -1477,10 +1487,11 @@ while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:" opt; do
         O) EXTRA_SSH_OPTS+=("$OPTARG");;
         b) BWLIMIT="$OPTARG";;
         F) RECONCILE=1;;
+        L) PAIR_LABEL="$OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Blad: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -q -j -o -x -c -b -K -O -U -F -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -q -j -o -x -c -b -K -O -U -F -L -V" >&2
             exit 1
             ;;
     esac
@@ -1584,6 +1595,28 @@ if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
 fi
 
 [ $# -ge 1 ] || { echo "Uzycie: $0 [opcje] DATASETS [REMOTE]" >&2; exit 1; }
+
+# REV-20260804-045 (logical pause): -L names the backup relationship this
+# invocation belongs to (the zfs-backup.sh client). If that relationship is
+# paused (pause-client wrote the marker), exit HERE -- before the lock, any
+# snapshot, hold, ssh or stream work -- with exit 0 so cron stays quiet, and
+# a stats status of its own so a paused run can never be read back as a
+# fresh successful backup (same pattern as skipped_lock below). A run that
+# OMITS -L is deliberately not gated: logical pause is an orchestration
+# switch, not a security boundary, and this file does not pretend otherwise.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+if [ -n "$PAIR_LABEL" ]; then
+    case "$PAIR_LABEL" in
+        *[!A-Za-z0-9._-]*)
+            echo "Error: -L '$PAIR_LABEL' -- a relationship label is letters, digits, dot, dash, underscore only." >&2
+            exit 1 ;;
+    esac
+    if [ -f "$RELATIONSHIPS_DIR/$PAIR_LABEL/paused" ]; then
+        log 0 "SKIPPED: relationship $PAIR_LABEL is paused (resume: zfs-backup.sh resume-client $PAIR_LABEL)"
+        emit_stats "${1:-}" "${2:-}" "skipped_paused" "0"
+        exit 0
+    fi
+fi
 ###############################################################################
 #END 5A
 
