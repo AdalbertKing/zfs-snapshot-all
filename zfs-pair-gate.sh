@@ -75,10 +75,30 @@ GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"
 # time, the decision, and a coarse class of what was asked. Best-effort -- a
 # gate that refuses to work because it cannot write its log would turn a log
 # permission problem into a backup outage.
+#
+# syslog FIRST, file second. This runs as the delegated ACCOUNT (a forced
+# command runs as the ssh user, not root), which cannot write a root-owned
+# file in /var/log -- and an audit trail the audited principal can rewrite is
+# a weak one anyway. logger(1) hands the line to the daemon, which appends it
+# where the account cannot reach.
+#
+# The whole thing runs in a SUBSHELL with stderr closed, and that placement is
+# the point: `printf >> file 2>/dev/null` does NOT hide a failure to open the
+# file, because the shell reports that itself, before printf exists, on the
+# shell's own stderr. Found live on metropolis pve2 2026-08-06 -- every single
+# gated command answered with "/var/log/zfs-pair-gate.log: Permission denied"
+# on the caller's stderr, and snapget.sh puts the tail of stderr straight into
+# its alert mail. A logging detail would have become alert noise on every run.
 gate_log() {
-    printf '%s gate=%s label=%s decision=%s %s\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$VERSION" "${1:-?}" "${2:-?}" "${3:-}" \
-        >> "$GATE_LOG" 2>/dev/null || :
+    (
+        if command -v logger >/dev/null 2>&1; then
+            logger -t zfs-pair-gate -- "gate=$VERSION label=${1:-?} decision=${2:-?} ${3:-}"
+        else
+            printf '%s gate=%s label=%s decision=%s %s\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" "$VERSION" "${1:-?}" "${2:-?}" "${3:-}" \
+                >> "$GATE_LOG"
+        fi
+    ) >/dev/null 2>&1 || :
 }
 
 if [ "${1:-}" = "-V" ] || [ "${1:-}" = "--version" ]; then

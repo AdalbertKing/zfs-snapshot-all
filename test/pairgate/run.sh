@@ -35,10 +35,13 @@ LOG="$WORK/gate.log"
 
 # run_gate <label> <request> -- returns rc, output in $OUT
 OUT=""
+ERR=""
 run_gate() {
     OUT=$(SSH_ORIGINAL_COMMAND="${2-}" RELATIONSHIPS_DIR="$REL" GATE_LOG="$LOG" \
-          bash "$GATE" "$1" 2>&1)
-    return $?
+          bash "$GATE" "$1" 2>"$WORK/stderr"); local rc=$?
+    ERR=$(cat "$WORK/stderr")
+    OUT="$OUT$ERR"
+    return $rc
 }
 # A request whose only effect is observable: it creates $WORK/ran.<tag>
 touch_cmd() { printf 'touch %s/ran.%s' "$WORK" "$1"; }
@@ -219,6 +222,41 @@ if grep -q 'ran\.' "$LOG" && ! grep -q 'class=touch' "$LOG"; then
     bad "log keeps the request class bounded and sanitised" "raw request text leaked into the log: $(grep -m1 'ran\.' "$LOG")"
 else
     ok "log keeps the request class bounded and sanitised"
+fi
+
+# ---------------------------------------------------------------------------
+# Logging must never reach the CALLER's stderr. Found live on metropolis pve2
+# (2026-08-06): the gate runs as the delegated account, could not open the
+# root-owned /var/log file, and the SHELL reported that on stderr -- before
+# printf existed, so the `2>/dev/null` on the printf did nothing. snapget.sh
+# tails stderr into its alert mail, so a logging detail would have become
+# alert noise on every single transfer.
+# ---------------------------------------------------------------------------
+NOWRITE_DIR="$WORK/nowrite"; mkdir -p "$NOWRITE_DIR"; chmod 555 "$NOWRITE_DIR" 2>/dev/null || true
+# Where logger(1) exists the syslog branch runs and the file is never touched;
+# where it does not (this dev box), the file branch runs against a path that
+# cannot be created. Both branches must be equally silent, so the assertion is
+# the same either way and each host exercises whichever branch it has.
+for probe in "$NOWRITE_DIR/deep/gate.log" "/proc/nonexistent/gate.log"; do
+    err=$(SSH_ORIGINAL_COMMAND="true" RELATIONSHIPS_DIR="$REL" GATE_LOG="$probe" \
+          bash "$GATE" alpha 2>&1 >/dev/null); rc=$?
+    if [ "$rc" -eq 0 ] && [ -z "$err" ]; then
+        ok "an unwritable log ($probe) is silent on the caller's stderr and does not fail the command"
+    else
+        bad "an unwritable log ($probe) is silent on the caller's stderr and does not fail the command" "rc=$rc stderr=[$err]"
+    fi
+done
+
+# ...and the same must hold on the REFUSAL path, where the caller is reading
+# stderr for the reason and must find exactly one line there.
+printf 'DISABLED_AT="x"\n' > "$REL/beta/disabled"
+err=$(SSH_ORIGINAL_COMMAND="zfs send tank/z@s" RELATIONSHIPS_DIR="$REL" \
+      GATE_LOG="$NOWRITE_DIR/deep/gate.log" bash "$GATE" beta 2>&1 >/dev/null); rc=$?
+rm -f "$REL/beta/disabled"
+if [ "$rc" -eq 93 ] && [ "$err" = "PAIR_DISABLED: relationship beta is disabled by administrator" ]; then
+    ok "a refusal puts exactly its own reason on stderr, with no logging noise around it"
+else
+    bad "a refusal puts exactly its own reason on stderr, with no logging noise around it" "rc=$rc stderr=[$err]"
 fi
 
 echo "--------------------------------------------"
