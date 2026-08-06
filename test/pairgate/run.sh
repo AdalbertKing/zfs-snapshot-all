@@ -543,6 +543,31 @@ for owner in ":grp" "usr:" ""; do
     fi
 done
 
+# 9c. REV-050 F1: the state directory's GROUP must be able to write, and the
+#     group digit is the only digit that answers that. `stat -c %a` renders
+#     0755 as "755", so a pattern hunting a 7 anywhere matched the OWNER and
+#     declared a directory writable that the account could not touch --
+#     accepting, for the wrong reason, the exact degraded state the check
+#     exists to catch. Driven by value: no filesystem, no stubs.
+eval "$(sed -n '/^gate_state_dir_ok() {/,/^}/p' "$DEPLOY_SRC")"
+if ! declare -F gate_state_dir_ok >/dev/null; then
+    bad "extract gate_state_dir_ok from deploy.sh" "sed anchors no longer match"
+else
+    # "<stat output>|<account>|<expected: ok|warn>"
+    for c in "775 acct|acct|ok"      "2775 acct|acct|ok"    "770 acct|acct|ok" \
+             "3775 acct|acct|ok"     "755 acct|acct|warn"   "2755 acct|acct|warn" \
+             "1755 acct|acct|warn"   "705 acct|acct|warn"   "775 other|acct|warn" \
+             "|acct|warn"            "775|acct|warn"        "garbage acct|acct|warn"; do
+        IFS='|' read -r st acct want <<< "$c"
+        if gate_state_dir_ok "$st" "$acct"; then got=ok; else got=warn; fi
+        if [ "$got" = "$want" ]; then
+            ok "state-dir check: '$st' for '$acct' -> $want"
+        else
+            bad "state-dir check: '$st' for '$acct' -> $want" "got $got"
+        fi
+    done
+fi
+
 # 10. Structural pin: do_join must install the gate BEFORE writing the key
 #    line, or a working key would briefly point at a gate that is not there.
 jorder=$(grep -n 'install_pair_gate "\$label"\|write_gated_key_line "\$ak"' "$DEPLOY_SRC" | cut -d: -f1 | tr '\n' ' ')

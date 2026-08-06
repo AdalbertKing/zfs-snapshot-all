@@ -3879,6 +3879,33 @@ EOF
 PAIR_GATE_PATH="${PAIR_GATE_PATH:-/usr/local/sbin/zfs-pair-gate}"
 PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 
+# gate_state_dir_ok "<mode> <group>" <account>
+#
+# Does the relationship's state directory actually let its account remove the
+# marker? Two conditions, and the GROUP DIGIT is the whole point of the second
+# one: `stat -c %a` renders 0755 as "755", and a pattern looking for a 7
+# anywhere in that string matches the OWNER's digit while the group cannot
+# write at all (REV-20260806-050 F1 -- exactly the degraded state this check
+# was added to catch, accepted for the wrong reason). Modes may be three or
+# four digits (2775), so the group digit is the second from the right, never
+# a fixed offset from the left.
+#
+# Split out as its own function purely so it can be tested by value instead of
+# by stubbing a filesystem.
+gate_state_dir_ok() {
+    local st="$1" account="$2" mode grp
+    [ -n "$st" ] || return 1                 # stat failed
+    case "$st" in *" "*) ;; *) return 1 ;; esac
+    mode="${st%% *}"; grp="${st##* }"
+    [ "$grp" = "$account" ] || return 1
+    case "$mode" in ""|*[!0-7]*) return 1 ;; esac
+    [ "${#mode}" -ge 2 ] || return 1
+    case "${mode:$(( ${#mode} - 2 )):1}" in
+        2|3|6|7) return 0 ;;
+    esac
+    return 1
+}
+
 # install_pair_gate <label> <account>
 install_pair_gate() {
     local label="$1" account="$2"
@@ -3925,15 +3952,7 @@ install_pair_gate() {
         # is lost is the remote enable path, so that is what the message has
         # to say, precisely, instead of a vague "check this".
         local st; st=$(stat -c '%a %G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null) || st=""
-        case "$st" in
-            *" $account")
-                case "${st%% *}" in
-                    *7*|*6*|*3*|*2*) : ;;   # group write present
-                    *) st="" ;;
-                esac ;;
-            *) st="" ;;
-        esac
-        if [ -z "$st" ]; then
+        if ! gate_state_dir_ok "$st" "$account"; then
             warn "$PAIR_GATE_STATE_DIR/$label is not group-writable by '$account' (now: $(stat -c '%a %U:%G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null))"
             warn "  consequence: disable still WORKS and is enforced, but 'enable' through the gate will refuse -- re-enabling would need root on this host."
             warn "  fix here, then re-run --join (it is a safe no-op reconfirmation):"
