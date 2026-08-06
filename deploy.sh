@@ -3865,6 +3865,126 @@ EOF
     log "===================================================================="
 }
 
+# ------------------------------------------------------------------------------
+# The peer-side gate (ADR-0012 DISABLED). Installed here, at --join, because
+# this is the one moment the relationship's account and key are both being
+# created: a gate installed later would leave a window in which the key runs
+# ungated, and a gate installed by hand would be one more thing to forget.
+#
+# Deployed OUTSIDE the repo checkout, same reasoning as update-control.sh: a
+# rollback of the managed checkout must not be able to remove the thing that
+# enforces a disable. If the gate file ever goes missing, sshd runs a command
+# that does not exist and the relationship fails loudly -- fail-closed, which
+# is the correct direction for this particular file.
+PAIR_GATE_PATH="${PAIR_GATE_PATH:-/usr/local/sbin/zfs-pair-gate}"
+PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+
+# install_pair_gate <label> <account>
+install_pair_gate() {
+    local label="$1" account="$2"
+    # $_DEPLOY_DIR, not $REPO_DIR: the gate must come from the checkout this
+    # very script was invoked from (BASH_SOURCE, never $0 -- see the crontab
+    # incident this project already had), not from wherever REPO_DIR happens
+    # to point on a host where the two differ.
+    local src="$_DEPLOY_DIR/zfs-pair-gate.sh"
+    [ -r "$src" ] || { warn "$src is missing from this checkout"; return 1; }
+
+    if [ -L "$PAIR_GATE_PATH" ]; then
+        warn "$PAIR_GATE_PATH is a symlink -- refusing to install through it"
+        return 1
+    fi
+    install -m 0755 -o root -g root "$src" "$PAIR_GATE_PATH" \
+        || { warn "could not install $src to $PAIR_GATE_PATH"; return 1; }
+    # Read back by RUNNING it, not by stat'ing it: an installed file that
+    # cannot execute (noexec mount, wrong interpreter) would otherwise be
+    # discovered by the first backup instead of by this install.
+    "$PAIR_GATE_PATH" -V >/dev/null 2>&1 \
+        || { warn "$PAIR_GATE_PATH was written but does not run"; return 1; }
+
+    # The relationship's own state directory. Group-owned by the account and
+    # group-writable, because the owner's model (2026-08-06) lets the
+    # relationship's key run `enable` -- the removal of the marker is an
+    # unlink IN this directory. The PARENT stays root-owned and not group
+    # writable, so no relationship can reach another's state.
+    mkdir -p "$PAIR_GATE_STATE_DIR" || { warn "could not create $PAIR_GATE_STATE_DIR"; return 1; }
+    chmod 0755 "$PAIR_GATE_STATE_DIR" 2>/dev/null || :
+    mkdir -p "$PAIR_GATE_STATE_DIR/$label" || { warn "could not create $PAIR_GATE_STATE_DIR/$label"; return 1; }
+    if [ "$account" != root ]; then
+        chown "root:$account" "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null \
+            || warn "could not give $account group ownership of $PAIR_GATE_STATE_DIR/$label -- 'enable' through the gate will refuse until this is fixed"
+        chmod 0775 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
+    else
+        chmod 0755 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
+    fi
+    log "pair gate installed at $PAIR_GATE_PATH; relationship state at $PAIR_GATE_STATE_DIR/$label"
+    return 0
+}
+
+# write_gated_key_line <authorized_keys> <pubkey line> <label>
+#
+# Replaces THIS relationship's line and nothing else. Not append-only any
+# more: the line now carries a forced command, so a stale bare copy of the
+# same key sitting above it would authenticate ungated and silently defeat
+# every disable. Every OTHER line in the file is preserved byte for byte --
+# other relationships, other tools, and the operator's own keys.
+#
+# Written to a temp file in the same directory and renamed, so a crash cannot
+# leave a truncated authorized_keys (which locks the account out entirely),
+# and read back before the rename is trusted.
+write_gated_key_line() {
+    local ak="$1" pub="$2" label="$3"
+    # The key material only: type + base64, without any comment. That is what
+    # identifies "the same key" across a re-join whose comment changed.
+    # Validated as a KEY, not merely as "two words": the first field must be a
+    # real key type, which also means an authorized_keys options prefix
+    # (command="...", environment="...") can never arrive here and be pasted
+    # in as if it were key material -- defence in depth beside the check the
+    # package parser already does on pubkey.pub.
+    local ktype kdata
+    ktype=$(printf '%s' "$pub" | awk '{print $1}')
+    kdata=$(printf '%s' "$pub" | awk '{print $2}')
+    case "$ktype" in
+        ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*) ;;
+        *) warn "not a public key: '$ktype' is not a key type"; return 1 ;;
+    esac
+    [ -n "$kdata" ] || { warn "not a public key: no key material after the type"; return 1; }
+    local keymat="$ktype $kdata"
+
+    local want="command=\"$PAIR_GATE_PATH $label\",restrict $pub"
+    local tmp="$ak.new.$$"
+
+    # Everything that is not this key, verbatim. `grep -vF` on the key
+    # material catches both the bare form and any previously gated form.
+    if [ -s "$ak" ]; then
+        grep -vF "$keymat" "$ak" > "$tmp" 2>/dev/null || : # no match => empty file, fine
+    else
+        : > "$tmp"
+    fi
+    printf '%s\n' "$want" >> "$tmp" || { rm -f "$tmp"; warn "could not write $tmp"; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || :
+
+    # Read back BEFORE trusting the rename: the gated line must be present
+    # exactly once, and every line that was there before and is not this key
+    # must still be there.
+    if [ "$(grep -cxF "$want" "$tmp")" != "1" ]; then
+        rm -f "$tmp"; warn "read-back failed: the gated key line is not in $tmp exactly once"; return 1
+    fi
+    local lost=0 line
+    if [ -s "$ak" ]; then
+        while IFS= read -r line; do
+            case "$line" in *"$keymat"*) continue ;; esac
+            grep -qxF "$line" "$tmp" || lost=1
+        done < "$ak"
+    fi
+    if [ "$lost" -ne 0 ]; then
+        rm -f "$tmp"; warn "read-back failed: another key line would have been lost -- $ak is unchanged"; return 1
+    fi
+
+    mv -f "$tmp" "$ak" || { rm -f "$tmp"; warn "could not commit $ak"; return 1; }
+    log "installed the gated key line in $ak (forced command: $PAIR_GATE_PATH $label); every other line preserved"
+    return 0
+}
+
 # verify_join_manifest <path> <role> <as> <mode> <target> <account> <fp> <remote>
 # -- REV-20260804-038: reads back a join manifest at <path> and confirms every
 # field do_join() rendered actually landed, byte for byte, as parsed values --
@@ -3976,12 +4096,8 @@ do_join() {
     mkdir -p "$ssh_dir"
     chmod 700 "$ssh_dir"
     touch "$ak"
-    if grep -qF "$new_pub" "$ak" 2>/dev/null; then
-        log "this exact key is already in $ak, leaving it alone"
-    else
-        echo "$new_pub" >> "$ak"
-        log "appended new key to $ak (append-only, existing keys untouched)"
-    fi
+    install_pair_gate "$label" "$account" || die "could not install the pair gate for '$label' -- refusing to install a key line pointing at a gate that is not there"
+    write_gated_key_line "$ak" "$new_pub" "$label" || die "could not write $ak -- it is unchanged; see the error above"
     chmod 600 "$ak"
     if [ "$PEER_CONF_AS" != "root" ]; then
         chown -R "$account:$account" "$ssh_dir"

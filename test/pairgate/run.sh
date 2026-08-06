@@ -364,6 +364,136 @@ else
     bad "a refusal puts exactly its own reason on stderr, with no logging noise around it" "rc=$rc stderr=[$err]"
 fi
 
+# ===========================================================================
+# Installation (step 2): deploy.sh's write_gated_key_line / install_pair_gate.
+# Extracted by pattern, the technique test/pause and test/draftscope use --
+# deploy.sh's own root check would abort the suite otherwise.
+#
+# The risk here is not logic, it is RESIDUE and LOCKOUT: authorized_keys is
+# the file that decides whether anyone can reach the account at all. Every
+# case below therefore checks what happened to the OTHER lines, not just to
+# ours.
+# ===========================================================================
+DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
+if [ ! -r "$DEPLOY_SRC" ]; then
+    echo "SKIP install cases (no deploy.sh at $DEPLOY_SRC)"
+else
+eval "$(sed -n '/^write_gated_key_line() {/,/^}/p' "$DEPLOY_SRC")"
+if ! declare -F write_gated_key_line >/dev/null; then
+    bad "extract write_gated_key_line from deploy.sh" "the sed anchors no longer match -- update this suite"
+else
+log()  { :; }
+warn() { :; }
+PAIR_GATE_PATH="/usr/local/sbin/zfs-pair-gate"
+
+AKD="$WORK/ak"; mkdir -p "$AKD"
+KEY_A="ssh-ed25519 AAAAKEYAAA pairing-a"
+KEY_B="ssh-ed25519 AAAAKEYBBB someone-else"
+GATED_A="command=\"$PAIR_GATE_PATH lbl\",restrict $KEY_A"
+
+# 1. A fresh account: one gated line, nothing else.
+AK="$AKD/fresh"; : > "$AK"
+if write_gated_key_line "$AK" "$KEY_A" lbl && [ "$(cat "$AK")" = "$GATED_A" ]; then
+    ok "install: a fresh authorized_keys gets exactly the gated line"
+else
+    bad "install: a fresh authorized_keys gets exactly the gated line" "$(cat "$AK")"
+fi
+
+# 2. Migration: an existing BARE line for the same key becomes the gated one,
+#    and does not survive alongside it. A leftover bare copy would
+#    authenticate ungated and silently defeat every disable -- the single
+#    most dangerous outcome in this whole step.
+AK="$AKD/migrate"; printf '%s\n' "$KEY_B" "$KEY_A" "# a comment" > "$AK"
+if write_gated_key_line "$AK" "$KEY_A" lbl \
+        && [ "$(grep -cxF "$GATED_A" "$AK")" = "1" ] \
+        && ! grep -qxF "$KEY_A" "$AK" \
+        && grep -qxF "$KEY_B" "$AK" && grep -qxF "# a comment" "$AK"; then
+    ok "install: a pre-existing BARE line for the same key is replaced, not left beside the gated one"
+else
+    bad "install: a pre-existing BARE line for the same key is replaced, not left beside the gated one" "$(cat "$AK")"
+fi
+
+# 3. Other principals are preserved byte for byte, in content and count.
+AK="$AKD/others"
+printf '%s\n' "$KEY_B" 'command="/opt/other/tool",restrict ssh-rsa AAAAOTHER admin' "$KEY_A" > "$AK"
+before_others=$(grep -vF "AAAAKEYAAA" "$AK")
+write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null
+after_others=$(grep -vF "AAAAKEYAAA" "$AK")
+if [ "$before_others" = "$after_others" ]; then
+    ok "install: every line that is not this relationship's key survives byte for byte"
+else
+    bad "install: every line that is not this relationship's key survives byte for byte" "$(diff <(printf '%s\n' "$before_others") <(printf '%s\n' "$after_others"))"
+fi
+
+# 4. Idempotent: running it again changes nothing at all.
+sum_before=$(md5sum < "$AK")
+write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null
+if [ "$(md5sum < "$AK")" = "$sum_before" ]; then
+    ok "install: a second run is byte-identical (idempotent)"
+else
+    bad "install: a second run is byte-identical (idempotent)" "$(cat "$AK")"
+fi
+
+# 5. Rotation: a NEW key for the same relationship adds its gated line; the
+#    old key's line is a separate principal and is NOT silently dropped here
+#    (revocation is --leave/--revoke-old's job, deliberately not this one).
+AK="$AKD/rotate"; printf '%s\n' "$GATED_A" > "$AK"
+KEY_C="ssh-ed25519 AAAAKEYCCC pairing-a-rotated"
+write_gated_key_line "$AK" "$KEY_C" lbl >/dev/null
+if grep -q "AAAAKEYCCC" "$AK" && grep -q "AAAAKEYAAA" "$AK"; then
+    ok "install: a rotated key is added gated; retiring the old one stays a separate, deliberate act"
+else
+    bad "install: a rotated key is added gated; retiring the old one stays a separate, deliberate act" "$(cat "$AK")"
+fi
+
+# 6. NEGATIVE -- the lockout case. If the temp file cannot be committed, the
+#    original must be untouched: a truncated authorized_keys locks the
+#    account out of its own host.
+AK="$AKD/lockout"; printf '%s\n' "$KEY_B" "$KEY_A" > "$AK"
+sum_before=$(md5sum < "$AK")
+mv() { return 1; }          # force the commit to fail
+write_gated_key_line "$AK" "$KEY_A" lbl >/dev/null 2>&1; rc=$?
+unset -f mv
+if [ "$rc" -ne 0 ] && [ "$(md5sum < "$AK")" = "$sum_before" ] && [ -z "$(ls "$AKD"/lockout.new.* 2>/dev/null)" ]; then
+    ok "install: a failed commit leaves authorized_keys untouched and no staging file behind"
+else
+    bad "install: a failed commit leaves authorized_keys untouched and no staging file behind" "rc=$rc file=$(cat "$AK") staging=$(ls "$AKD"/lockout.new.* 2>/dev/null)"
+fi
+
+# 7. NEGATIVE -- a malformed public key is refused before the file is touched.
+AK="$AKD/badkey"; printf '%s\n' "$KEY_B" > "$AK"
+sum_before=$(md5sum < "$AK")
+if write_gated_key_line "$AK" "notakey" lbl >/dev/null 2>&1; then
+    bad "install: a malformed public key is refused" "accepted: $(cat "$AK")"
+elif [ "$(md5sum < "$AK")" = "$sum_before" ]; then
+    ok "install: a malformed public key is refused and the file is untouched"
+else
+    bad "install: a malformed public key is refused and the file is untouched" "$(cat "$AK")"
+fi
+
+# 8. The rendered line is what sshd needs: forced command carrying the label,
+#    plus restrict (no pty, no forwarding, no user rc).
+AK="$AKD/shape"; : > "$AK"
+write_gated_key_line "$AK" "$KEY_A" mylabel >/dev/null
+line=$(cat "$AK")
+case "$line" in
+    "command=\"$PAIR_GATE_PATH mylabel\",restrict ssh-ed25519 "*)
+        ok "install: the rendered line is command=<gate> <label>,restrict <key>" ;;
+    *) bad "install: the rendered line is command=<gate> <label>,restrict <key>" "$line" ;;
+esac
+
+# 9. Structural pin: do_join must install the gate BEFORE writing the key
+#    line, or a working key would briefly point at a gate that is not there.
+jorder=$(grep -n 'install_pair_gate "\$label"\|write_gated_key_line "\$ak"' "$DEPLOY_SRC" | cut -d: -f1 | tr '\n' ' ')
+set -- $jorder
+if [ "${1:-0}" -lt "${2:-0}" ]; then
+    ok "install: do_join installs the gate before it writes the key line"
+else
+    bad "install: do_join installs the gate before it writes the key line" "line order: $jorder"
+fi
+fi
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
