@@ -777,6 +777,50 @@ else
     check "U5c ...and the symlink's target is untouched" "" "$(cat "$SYMLINK_TARGET")"
 fi
 
+# ---- V. the lock FILE is shareable across the identities that share the ----
+# lock DIRECTORY (found live, metropolis pve1 2026-08-06) ----------------------
+#
+# U fixed the lock PATH; this is the same failure one level down. The file is
+# created with the CALLER's umask, and root gets there first on a fresh host
+# (deploy/activate-client take the ACCOUNT's lock as root) -- a 0644
+# root-owned lock file then permanently refuses the account's OWN crontab
+# writes. Two identities sharing one lock object need the object itself
+# group-writable; the setgid 2775 zfsalert directory already decides WHO.
+
+# V1: acquisition leaves the lock file group-writable even under a 022 umask.
+V_LOCKS="$TMPD/v-locks"; mkdir -p "$V_LOCKS"
+: > "$V_LOCKS/.probe"; chmod 664 "$V_LOCKS/.probe" 2>/dev/null
+probe_perms=$(stat -c '%a' "$V_LOCKS/.probe" 2>/dev/null || stat -f '%Lp' "$V_LOCKS/.probe" 2>/dev/null)
+if [ "$probe_perms" != "664" ]; then
+    echo "SKIP V1 this filesystem cannot represent 664 (probe shows $probe_perms) -- verify on Linux"
+else
+( umask 022
+  CRON_LOCK_DIR="$V_LOCKS" bash -c "
+    source '$REPO/lib-cron.sh'
+    CRON_LOCK_DIR='$V_LOCKS'
+    cron_lock_acquire vuser && cron_lock_release vuser" )
+perms=$(stat -c '%a' "$V_LOCKS/lib-cron.vuser.lock" 2>/dev/null || stat -f '%Lp' "$V_LOCKS/lib-cron.vuser.lock" 2>/dev/null)
+check "V1 the lock file ends group-writable under a 022 umask" "664" "$perms"
+fi
+
+# V2: a pre-fix foreign 0644-style file (simulated: unwritable) refuses with
+# the one-line fix in the message, instead of a bare "could not open".
+V2F="$V_LOCKS/lib-cron.v2user.lock"
+: > "$V2F"; chmod 444 "$V2F" 2>/dev/null || true
+if [ -w "$V2F" ]; then
+    echo "SKIP V2 this filesystem ignores 0444 for the owner -- verify on Linux"
+else
+    out=$(CRON_LOCK_DIR="$V_LOCKS" bash -c "
+        source '$REPO/lib-cron.sh'
+        CRON_LOCK_DIR='$V_LOCKS'
+        if cron_lock_acquire v2user; then echo ACQUIRED; else printf '%s' \"\$CRON_ERR\"; fi")
+    case "$out" in
+        ACQUIRED) bad "V2 an unwritable existing lock file refuses" "acquired through a file this identity cannot write" ;;
+        *"chmod 664"*) ok "V2 an unwritable existing lock file refuses and names the chmod 664 fix" ;;
+        *) bad "V2 an unwritable existing lock file refuses and names the chmod 664 fix" "$out" ;;
+    esac
+fi
+
 echo "--------------------------------------------"
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

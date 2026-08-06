@@ -224,9 +224,21 @@ cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
     # writability with a real command first -- its redirect IS scoped to that
     # command alone -- then do the persistent exec with no redirect to leak.
     if ! : >"$path" 2>/dev/null; then
-        CRON_ERR="could not open the lock file $path"
+        CRON_ERR="could not open the lock file $path$([ -e "$path" ] && printf ' -- it exists but is not writable by %s. A lock file created by an earlier root-side write with a 0644 umask does this; fix once with: chmod 664 %s' "$(id -un 2>/dev/null || echo '?')" "$path")"
         return 1
     fi
+    # The truncate above creates the file with the CALLER's umask -- and root
+    # gets here first on a fresh host (deploy/activate-client take the
+    # ACCOUNT's lock as root), leaving a 0644 root-owned file that then
+    # permanently refuses the account's own crontab writes. Found live on
+    # metropolis pve1 2026-08-06: gen-cron --install as the account failed
+    # with "could not open the lock file" after one root-side activate-client
+    # had touched the same path. The shared-lock design already scopes WHO
+    # shares through the setgid 2775 zfsalert directory; the file itself has
+    # to be group-writable for that to mean anything. Best-effort: only the
+    # owner may chmod, and a pre-fix foreign 0644 file fails the open above
+    # with the exact one-line fix in the message.
+    chmod 664 "$path" 2>/dev/null || :
     exec {fd}>"$path"
     if ! flock -w "$CRON_LOCK_TIMEOUT" "$fd"; then
         eval "exec $fd>&-"
