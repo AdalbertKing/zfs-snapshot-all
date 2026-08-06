@@ -147,7 +147,22 @@ if [ -z "$LABEL" ]; then
     gate_log "-" misuse "reason=no-label"
     exit "$RC_MISUSE"
 fi
+# A character-class check is NOT enough (REV-20260806-051 F1). '.' and '..'
+# contain only permitted characters, yet they are PATH components, not names:
+# "$RELATIONSHIPS_DIR/.." resolves to a directory that exists, so the
+# unknown-relationship guard below would succeed for an identity that is not
+# a relationship at all -- and with no 'disabled' file there, the gate would
+# fall through to ACTIVE and run the caller's command. The one boundary whose
+# entire job is to fail closed would have failed open on two characters.
+#
+# This is duplicated in deploy.sh's pair_label_valid rather than shared: the
+# gate is deployed standalone, outside the checkout, and must not depend on
+# sourcing anything that could be missing or rolled back underneath it.
 case "$LABEL" in
+    .|..)
+        echo "PAIR_GATE_MISUSE: '$LABEL' is a path component, not a relationship label" >&2
+        gate_log "-" misuse "reason=dot-segment-label"
+        exit "$RC_MISUSE" ;;
     *[!A-Za-z0-9._-]*)
         echo "PAIR_GATE_MISUSE: relationship label '$LABEL' is not a valid label (letters, digits, dot, dash, underscore only)" >&2
         gate_log "$LABEL" misuse "reason=bad-label"

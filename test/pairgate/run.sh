@@ -130,6 +130,31 @@ else
     bad "C7c a traversal label is refused before any path is built from it" "rc=$rc out=$OUT"
 fi
 
+# REV-051 F1: '.' and '..' are PATH COMPONENTS that pass a character-class
+# check. "$RELATIONSHIPS_DIR/.." resolves to a directory that exists, so the
+# unknown-relationship guard succeeded for an identity that is not a
+# relationship -- and with no 'disabled' file there, the gate fell through to
+# ACTIVE and ran the caller's command. Two characters turned the one
+# fail-closed boundary into a pass-through.
+for dotlbl in "." ".."; do
+    tag="dot$(printf '%s' "$dotlbl" | tr -d '.' | wc -c)"
+    run_gate "$dotlbl" "$(touch_cmd "$tag")"; rc=$?
+    if [ "$rc" -eq 91 ] && ! ran "$tag" \
+            && case "$OUT" in *"path component"*) true;; *) false;; esac; then
+        ok "C7e label '$dotlbl' is refused as a path component, and nothing ran"
+    else
+        bad "C7e label '$dotlbl' is refused as a path component, and nothing ran" "rc=$rc ran=$(ran "$tag" && echo YES || echo no) out=$OUT"
+    fi
+done
+# ...while an ordinary dotted label is untouched by that rule.
+mkdir -p "$REL/site.a"
+run_gate "site.a" "$(touch_cmd dotok)"; rc=$?
+if [ "$rc" -eq 0 ] && ran dotok; then
+    ok "C7f an ordinary dotted label ('site.a') still works"
+else
+    bad "C7f an ordinary dotted label ('site.a') still works" "rc=$rc out=$OUT"
+fi
+
 # An interactive session (no command at all) is not a backup job.
 run_gate beta ""; rc=$?
 if [ "$rc" -eq 91 ] && case "$OUT" in *"not an interactive login"*) true;; *) false;; esac; then
@@ -378,6 +403,7 @@ DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
 if [ ! -r "$DEPLOY_SRC" ]; then
     echo "SKIP install cases (no deploy.sh at $DEPLOY_SRC)"
 else
+eval "$(sed -n '/^pair_label_valid() {/,/^}/p' "$DEPLOY_SRC")"
 eval "$(sed -n '/^write_gated_key_line() {/,/^}/p' "$DEPLOY_SRC")"
 if ! declare -F write_gated_key_line >/dev/null; then
     bad "extract write_gated_key_line from deploy.sh" "the sed anchors no longer match -- update this suite"
@@ -566,6 +592,67 @@ else
             bad "state-dir check: '$st' for '$acct' -> $want" "got $got"
         fi
     done
+fi
+
+# 9d. REV-051 F1, installer side: the same two labels must never be rendered
+#     into a key line or given a state directory. Both sides validate, because
+#     the gate is deployed standalone and cannot source this file.
+if ! declare -F pair_label_valid >/dev/null; then
+    bad "extract pair_label_valid from deploy.sh" "sed anchors no longer match"
+else
+    for l in "" "." ".." "a/b" "../x" "x;y"; do
+        if pair_label_valid "$l"; then
+            bad "installer label grammar refuses '$l'" "accepted"
+        else
+            ok "installer label grammar refuses '$l'"
+        fi
+    done
+    for l in "pve1" "site.a" "a_b-1" "10.0.0.9"; do
+        if pair_label_valid "$l"; then
+            ok "installer label grammar keeps accepting '$l'"
+        else
+            bad "installer label grammar keeps accepting '$l'" "refused a real label"
+        fi
+    done
+fi
+
+AK="$AKD/dotlabel"; printf '%s\n' "$KEY_B" > "$AK"
+sum_before=$(md5sum < "$AK")
+for l in "." ".."; do
+    if write_gated_key_line "$AK" "$KEY_A" "$l" >/dev/null 2>&1; then
+        bad "install: a '$l' label never reaches a key line" "accepted"
+    elif [ "$(md5sum < "$AK")" = "$sum_before" ]; then
+        ok "install: a '$l' label never reaches a key line, file untouched"
+    else
+        bad "install: a '$l' label never reaches a key line, file untouched" "$(cat "$AK")"
+    fi
+done
+
+# install_pair_gate must refuse the same, before creating any directory.
+eval "$(sed -n '/^install_pair_gate() {/,/^}/p' "$DEPLOY_SRC")"
+if declare -F install_pair_gate >/dev/null; then
+    IPG_STATE="$WORK/ipg-state"; IPG_BIN="$WORK/ipg-bin/zfs-pair-gate"
+    mkdir -p "$WORK/ipg-bin"
+    for l in "." ".."; do
+        ( _DEPLOY_DIR="$REPO"; PAIR_GATE_PATH="$IPG_BIN"; PAIR_GATE_STATE_DIR="$IPG_STATE"
+          install_pair_gate "$l" acct ) >/dev/null 2>&1; rc=$?
+        if [ "$rc" -ne 0 ] && [ ! -d "$IPG_STATE" ]; then
+            ok "install_pair_gate refuses '$l' before creating any state directory"
+        else
+            bad "install_pair_gate refuses '$l' before creating any state directory" "rc=$rc statedir=$(ls -d "$IPG_STATE" 2>/dev/null)"
+        fi
+    done
+    # ...and a real label is NOT refused by the guard. The rest of the
+    # function needs root (`install -o root -g root`), so on an unprivileged
+    # box only the guard itself is asserted -- the full path is what the live
+    # campaign exercised.
+    ( _DEPLOY_DIR="$REPO"; PAIR_GATE_PATH="$IPG_BIN"; PAIR_GATE_STATE_DIR="$IPG_STATE"
+      install_pair_gate site.a acct ) >"$WORK/ipg.out" 2>&1
+    if grep -q "not a valid relationship label" "$WORK/ipg.out"; then
+        bad "install_pair_gate does not refuse a real label ('site.a')" "$(cat "$WORK/ipg.out")"
+    else
+        ok "install_pair_gate does not refuse a real label ('site.a')"
+    fi
 fi
 
 # 10. Structural pin: do_join must install the gate BEFORE writing the key

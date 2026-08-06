@@ -3879,6 +3879,24 @@ EOF
 PAIR_GATE_PATH="${PAIR_GATE_PATH:-/usr/local/sbin/zfs-pair-gate}"
 PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 
+# pair_label_valid <label>
+#
+# The ONE grammar for a relationship label on the installing side, applied
+# before any path is built or any forced-command line is rendered. Rejects
+# the empty string, the path components '.' and '..' (REV-20260806-051 F1 --
+# they pass a character-class check and then resolve to real directories),
+# and anything outside the project's usual name charset, which also excludes
+# '/'. Deliberately mirrored, not shared, with the copy inside
+# zfs-pair-gate.sh: that file is deployed standalone and must not depend on
+# sourcing this one.
+pair_label_valid() {
+    case "${1-}" in
+        ""|.|..) return 1 ;;
+        *[!A-Za-z0-9._-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # gate_state_dir_ok "<mode> <group>" <account>
 #
 # Does the relationship's state directory actually let its account remove the
@@ -3909,6 +3927,10 @@ gate_state_dir_ok() {
 # install_pair_gate <label> <account>
 install_pair_gate() {
     local label="$1" account="$2"
+    pair_label_valid "$label" || {
+        warn "refusing to install a gate for '$label': not a valid relationship label"
+        return 1
+    }
     # $_DEPLOY_DIR, not $REPO_DIR: the gate must come from the checkout this
     # very script was invoked from (BASH_SOURCE, never $0 -- see the crontab
     # incident this project already had), not from wherever REPO_DIR happens
@@ -3978,6 +4000,12 @@ install_pair_gate() {
 # and read back before the rename is trusted.
 write_gated_key_line() {
     local ak="$1" pub="$2" label="$3"
+    # Before anything is written: a forced-command line carrying '.' or '..'
+    # would be a gate that cannot identify itself (REV-20260806-051 F1).
+    pair_label_valid "$label" || {
+        warn "refusing to render a key line for '$label': not a valid relationship label"
+        return 1
+    }
     # The key material only: type + base64, without any comment. That is what
     # identifies "the same key" across a re-join whose comment changed.
     # Validated as a KEY, not merely as "two words": the first field must be a
