@@ -3763,6 +3763,66 @@ else
 fi
 run_pause resume_client beta || :
 
+# --- 42b. test plan A8/A11: the two baseline properties hard disable builds on
+# (docs/testing/pair-pause-test-plan.md). Both are about IDENTITY and
+# DURABILITY of the pause state, which is exactly what a peer-side DISABLED
+# marker will later have to match.
+
+# A8: the state is durable across a restart. The property that decides this
+# is WHERE it lives: /run and /tmp are cleared on boot, /var/lib is not. A
+# marker under a volatile directory would "work" in every other test here
+# and silently resume every paused relationship at the next reboot.
+default_rel_dir=$(bash -c "source '$ZFSBACKUP' 2>/dev/null; printf '%s' \"\$RELATIONSHIPS_DIR\"")
+case "$default_rel_dir" in
+    /var/lib/*) ok "A8 pause state lives under /var/lib (survives reboot), not /run or /tmp" ;;
+    *) bad "A8 pause state lives under /var/lib (survives reboot), not /run or /tmp" "got: $default_rel_dir" ;;
+esac
+
+# ...and it is read from disk by a FRESH process, holding no state of its own:
+# pause written by one process is seen by another that shares nothing but the
+# filesystem (a restart differs from this only in taking longer).
+run_pause pause_client alpha --reason="A8 durability" >/dev/null
+if bash -c "source '$ZFSBACKUP' 2>/dev/null; RELATIONSHIPS_DIR='$PAUSE_REL'; client_paused alpha"; then
+    ok "A8 a fresh process reads the pause state from disk, holding nothing in memory"
+else
+    bad "A8 a fresh process reads the pause state from disk, holding nothing in memory" "a separate process did not see the marker"
+fi
+
+# A11: an endpoint switch preserves pause identity. The label is the CLIENT
+# NAME, so a relationship that moves from LAN to VPN keeps the same -L and
+# the same marker path -- the address changes in src=, nothing else. This is
+# the ADR-0012 identity rule ("not hostname, IP, LAN/VPN endpoint") asserted
+# on the generator that actually writes the cron lines.
+EP1="$WORK/emit_ep_lan.conf"; : > "$EP1"
+EP2="$WORK/emit_ep_vpn.conf"; : > "$EP2"
+( PEER_SAVED_MODE="" PEER_SAVED_TARGET="hdd/backups" LOAD_LABEL=10.0.0.5 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.0.0.5 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data/vm-1" PROFILE_GFS=1
+  emit_client_sections "$EP1" epclient ) >/dev/null 2>&1
+( PEER_SAVED_MODE="" PEER_SAVED_TARGET="hdd/backups" LOAD_LABEL=10.0.0.5 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=172.16.9.9 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data/vm-1" PROFILE_GFS=1
+  emit_client_sections "$EP2" epclient ) >/dev/null 2>&1
+lan_label=$(grep -c '^	pair_label   = epclient$' "$EP1")
+vpn_label=$(grep -c '^	pair_label   = epclient$' "$EP2")
+if [ "$lan_label" -ge 1 ] && [ "$lan_label" = "$vpn_label" ] \
+        && grep -q 'src          = zfsbackup@10.0.0.5:' "$EP1" \
+        && grep -q 'src          = zfsbackup@172.16.9.9:' "$EP2"; then
+    ok "A11 an endpoint switch changes src= only -- pair_label (the pause identity) is unchanged"
+else
+    bad "A11 an endpoint switch changes src= only -- pair_label (the pause identity) is unchanged" "lan=$lan_label vpn=$vpn_label" "$(grep -E 'src|pair_label' "$EP1" "$EP2")"
+fi
+
+# ...and the marker path itself never mentions the endpoint, so no address
+# change can strand or duplicate the state.
+mp=$( RELATIONSHIPS_DIR="$PAUSE_REL"; pause_marker_path epclient )
+case "$mp" in
+    *10.0.0.5*|*172.16.9.9*) bad "A11 the marker path is keyed by relationship only, never by endpoint" "$mp" ;;
+    "$PAUSE_REL/epclient/paused") ok "A11 the marker path is keyed by relationship only, never by endpoint" ;;
+    *) bad "A11 the marker path is keyed by relationship only, never by endpoint" "unexpected: $mp" ;;
+esac
+run_pause resume_client alpha >/dev/null || :
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
