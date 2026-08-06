@@ -155,6 +155,58 @@ migrate; re-joining an old relationship migrates its key line in place, which
 is exactly what the live check exercised. A `--migrate-gate` verb would be
 speculative code with its own live-test cost and no current subject.
 
+## Step 3 + full campaign — live evidence (2026-08-06, metropolis)
+
+Two REAL relationships, both enrolled through the ordinary CLI, both gated
+automatically by `--join`: **ca** ← pve2 (`hdd/campsrc`) and **cb** ← a
+throwaway LXC peer with its own address (`hdd/campsrcb`) — one relationship
+per host pair, so the second peer has to be its own machine.
+
+| Test-plan item | Result |
+|---|---|
+| gate installed by enrolment | `--join` installed `/usr/local/sbin/zfs-pair-gate`, wrote `command="… pve1",restrict …` into the account's `authorized_keys`, and created the relationship's state dir — on both peers, with no manual step |
+| disable ordering | local pause first, then the peer, then a read-back — observed in that order |
+| **the point of the whole package** | with A disabled, a **hand-written `snapget` carrying no `-L` at all** was refused by the peer: `PAIR_DISABLED`. This is exactly what logical pause cannot do |
+| A's own cron line | skipped at the collector (`SKIPPED: relationship ca is paused`) — the local half stops it before it ever reaches the link |
+| A's monitor line | `OK -- relationship ca is paused … staleness is expected` — no page for a backup stopped on purpose |
+| B throughout | pulled normally, `"status":"success"`, unaffected by A's state |
+| endpoint change | an ephemeral second address on the peer (`192.168.28.208`, never written to any config) still answered `PAIR_DISABLED` — identity is the key, not the address |
+| persistence | marker survived an `sshd` restart |
+| peer unreachable mid-operation | happened for real (a DNS name resolving to a public address): `enable` reported `STATE unchanged: still disabled on the peer and paused locally. Safe to retry`, and the retry converged |
+| enable + return | after enable, the exact cron line transferred again, `"status":"success"` |
+| **no side effects** | config md5, account crontab md5 and the pairing key fingerprint **byte-identical from before the disable to after the enable** |
+| teardown while disabled | `remove-client` worked with the relationship disabled, cleared its own marker, left no cron line |
+| residue | both peers `--leave`d, LXC destroyed, ephemeral address removed, scratch datasets gone, `audit clean` on both hosts |
+
+### Two defects the campaign found
+
+1. **The state directory's ownership did not take on the first join** of a
+   freshly created account, and `install_pair_gate` only warned — so
+   enrolment finished looking complete while `enable` through the gate could
+   never work. Surfaced as a `disable-client` that failed halfway, and the
+   orchestration reported that correctly (`PAUSED_LOCAL, peer NOT disabled`,
+   safe retry named). Fixed in `8f6f8c2`: the result is verified, and the
+   warning now says precisely what is lost and how to fix it. Deliberately
+   not fatal — the account and key already exist by then, and the security
+   property still holds.
+
+2. **`verify-endpoint` read a deliberate refusal as a dead address.** Its
+   probe is a data-plane command, so a disabled relationship refuses it, and
+   the tool then blamed the endpoint — sending the operator to hunt a network
+   fault that does not exist. Same rule as the ssh-exit-255 discrimination
+   elsewhere in this estate: never blame the link for an answer the far end
+   gave on purpose. Fixed with a distinct message naming `enable-client` as
+   the remedy, pinned by a source test.
+
+### Process note
+
+The campaign's first attempt failed on a stale manifest from the REV-045
+lab: `remove-client` prints the peer-side commands and does not run them, and
+I had not run them. The collision guard refused the new join, correctly. The
+lesson is about teardown discipline, not the tool — but it is worth knowing
+that a collector-side removal leaves the peer holding state until someone
+runs `--leave` there.
+
 ## Constraints carried from ADR-0012
 
 No cron rewriting, no key deletion as a switch, no `zfs allow`/`unallow`

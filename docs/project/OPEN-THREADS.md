@@ -10,7 +10,7 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 1 | REV-045 — logical pause | **CLOSED** by the reviewer 2026-08-06 for the declared scope. Endpoint-switch and in-flight live cases explicitly not required for closure. | — |
 | 2 | REV-046 — alert-delivery false health | CLOSED by the reviewer | — |
 | 3 | REV-047 — pair-gate audit logging | **CLOSED** (F1 and F2) by the reviewer 2026-08-06. | — |
-| 4 | Hard disable — the package | Steps 1-3 on main: gate, install at `--join`, and `disable-client`/`enable-client` orchestration (`78a4214`). Remaining: the package's full live campaign (test plan D+E). | reviewer: accept step 2/3; then implementer runs the campaign |
+| 4 | Hard disable — the package | **Complete**: gate, install at `--join`, orchestration, and the full live campaign on two real relationships (evidence in `HARD-DISABLE-CAMPAIGN-PLAN.md`). The campaign found and fixed two defects (state-dir ownership `8f6f8c2`, verify-endpoint blaming the address for a deliberate refusal). | reviewer: accept steps 2-4 |
 | 16 | REV-049 — ownership must fail closed | Implemented in `209231c` (pairgate 45/45, negative control against `0058834`). Response written. Note: step 3 was pushed minutes before this review appeared — the pushes raced, it was not a decision to proceed. | reviewer: close or reopen |
 | 5 | ADR-0012 wording vs what was built | **Done** 2026-08-06: "security gate" is now "enforcement gate", with the self-enable consequence written into the ADR. Code and key model unchanged, as instructed. | — |
 | 6 | Test policy | **Settled**: `TEST-CAMPAIGN-POLICY.md` accepted by the reviewer as the single source of truth; issue #5 is the record of the reasoning, not a parallel spec. | — |

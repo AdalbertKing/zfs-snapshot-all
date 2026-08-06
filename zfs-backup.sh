@@ -2104,6 +2104,18 @@ cmd_verify_endpoint() {
     done
 
     if [ -z "$chosen" ]; then
+        # A DELIBERATE refusal is not a dead endpoint. The probe is a
+        # data-plane command, so a disabled relationship refuses it at the
+        # peer -- and the old message then blamed the address, sending the
+        # operator to hunt a network problem that does not exist. Same rule
+        # as the ssh-exit-255 discrimination elsewhere in this estate: never
+        # blame the link for an answer the far end gave on purpose. Found
+        # live during the hard-disable campaign, 2026-08-06.
+        case "$tried_report" in
+            *PAIR_DISABLED*)
+                die "relationship '$name' is DISABLED at the peer, so its endpoints cannot be verified -- the peer answered, it refused. This is not an address problem.
+Enable it first: $0 enable-client $name   (then re-run verify-endpoint)" ;;
+        esac
         die "none of the known endpoints answered for '$name' (tried: ${candidates[*]}):
 $tried_report
 If the peer has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"

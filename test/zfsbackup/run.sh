@@ -3921,6 +3921,19 @@ else
     bad "43 enable: a read-back still showing DISABLED keeps the local pause" "$(cat "$WORK/dis.out")"
 fi
 
+# 7b. A deliberate refusal is not a dead endpoint. verify-endpoint's probe is
+# a data-plane command, so a DISABLED relationship refuses it at the peer --
+# and blaming the address sends the operator hunting a network fault that
+# does not exist. Source pin: the discrimination and the remedy must both be
+# there (the live campaign hit exactly this, 2026-08-06).
+if grep -q "is DISABLED at the peer, so its endpoints cannot be verified" "$ZFSBACKUP" \
+        && grep -q "This is not an address problem" "$ZFSBACKUP" \
+        && grep -q "Enable it first" "$ZFSBACKUP"; then
+    ok "43 verify-endpoint tells a disabled relationship apart from an unreachable address"
+else
+    bad "43 verify-endpoint tells a disabled relationship apart from an unreachable address" "the PAIR_DISABLED discrimination is missing"
+fi
+
 # 7. An unreachable peer is never read as "active": peer_pair_state must fail
 #    rather than default to a comfortable answer.
 out=$( ( pair_control() { return 255; }; peer_pair_state; echo "rc=$?; state=[${PEER_PAIR_STATE:-}]" ) 2>&1 )
