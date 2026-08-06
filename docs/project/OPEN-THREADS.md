@@ -20,7 +20,7 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 9 | Issue #3 — enrolment contract consensus | Open since 2026-08-03, untouched since. | owner+reviewer |
 | 10 | Review numbering | **Done**: the closure review is now `REV-20260806-048-ALERT-DELIVERY-CLOSURE.md`; 047 stays with pair-gate logging, which has a response and links. | — |
 | 11 | Profiles + live recursion (backlog) | Paused mid-discussion 2026-08-04. Needs a live check of ZFS descendant grants before design. | owner |
-| 12 | `test/pause` section G false-fails on real hosts | Known test-isolation gap, not a product defect. | implementer, when convenient |
+| 12 | `test/pause` section G false-fails on real hosts | **Not reproducible — the thread was stale.** Fixed 2026-08-03 in `3776a9a` (the account scan glob became overridable and points at a path that cannot match). Re-verified 2026-08-06 by running the suite on BOTH production hosts: 74/74, G1 passing on each. | — |
 | 13 | pve2 has no cron config file | 14 live jobs whose source config is gone; `cron2conf.sh` exists to rebuild it. | owner: decide when |
 | 14 | `docs/OPS_MONITORING.md` untracked | Sitting in the working tree, authorship unclear. | owner: keep or drop |
 | 15 | Two sessions built the same feature the same day | PR #4 and main's slices 1-4 were written in parallel, hours apart, without either knowing. Cost: one complete duplicate implementation with its own tests and response file. | owner: decide how parallel sessions announce what they are taking |
