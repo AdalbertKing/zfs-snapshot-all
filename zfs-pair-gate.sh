@@ -185,6 +185,14 @@ if [ "$DISABLED" -eq 1 ]; then
                 "$LABEL" "${at:-unknown}" "${reason:-}"
             gate_log "$LABEL" control "verb=status"
             exit 0 ;;
+        "PAIR-CONTROL disable")
+            # Already disabled: a no-op success, so a retry after a lost
+            # acknowledgement converges instead of reporting a second
+            # failure. The original DISABLED_AT is kept -- when it started
+            # is the useful fact, not when it was last re-asserted.
+            printf 'PAIR_STATE=DISABLED\nPAIR_LABEL=%s\n' "$LABEL"
+            gate_log "$LABEL" control "verb=disable result=already-disabled"
+            exit 0 ;;
         "PAIR-CONTROL enable")
             if rm -f "$STATE_DIR/disabled"; then
                 printf 'PAIR_STATE=ACTIVE\nPAIR_LABEL=%s\n' "$LABEL"
@@ -214,6 +222,26 @@ case "$REQ" in
         printf 'PAIR_STATE=ACTIVE\nPAIR_LABEL=%s\n' "$LABEL"
         gate_log "$LABEL" control "verb=enable result=already-active"
         exit 0 ;;
+    "PAIR-CONTROL disable")
+        # Deliberately takes NO argument. A reason would be caller-supplied
+        # text landing in a file that is later parsed as KEY="value" -- and
+        # the whole control protocol's safety rests on these being exact
+        # literals with nothing to quote, split or smuggle. What the marker
+        # records instead is what the PEER knows for itself: the time, and
+        # where the connection came from. The operator's own reason is kept
+        # on the collector side, where it is not a security question.
+        if {
+            printf 'DISABLED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+            printf 'DISABLED_FROM="%s"\n' "$(printf '%s' "${SSH_CONNECTION:-unknown}" | cut -d' ' -f1 | tr -c 'A-Za-z0-9.:_-' '?')"
+        } > "$STATE_DIR/disabled.new" && mv "$STATE_DIR/disabled.new" "$STATE_DIR/disabled"; then
+            printf 'PAIR_STATE=DISABLED\nPAIR_LABEL=%s\n' "$LABEL"
+            gate_log "$LABEL" control "verb=disable result=disabled"
+            exit 0
+        fi
+        rm -f "$STATE_DIR/disabled.new" 2>/dev/null
+        echo "PAIR_CONTROL_FAILED: could not write $STATE_DIR/disabled" >&2
+        gate_log "$LABEL" control "verb=disable result=failed"
+        exit "$RC_MISUSE" ;;
 esac
 
 # An interactive session (no command) is not part of this relationship's job.

@@ -165,6 +165,8 @@ Usage:
   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
   zfs-backup.sh pause-client NAME [--reason=TEXT]
   zfs-backup.sh resume-client NAME
+  zfs-backup.sh disable-client NAME [--reason=TEXT]
+  zfs-backup.sh enable-client NAME
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
@@ -174,6 +176,14 @@ Managed jobs and labeled manual runs skip before any snapshot/SSH work;
 other clients are untouched, cron/config/grants/keys are never edited.
 LIMITATION: a manual snapget.sh/snapsend.sh that omits '-L NAME' is NOT
 blocked -- this is an orchestration switch, not a security boundary.
+
+disable-client/enable-client: the PEER refuses this relationship's
+data-plane commands, including manual ones carrying no -L. Order is
+fixed: disable pauses locally first, then blocks at the peer and reads
+the state back; enable clears the peer first, verifies, then lifts the
+local pause. Any partial failure is reported as such and is safe to
+retry. LIMIT: the relationship's own key can lift its own block; every
+lift is logged on the peer.
 
 State machine: pending_enroll -> seeding -> seed_complete -> endpoint_verified
 -> active. Cron is installed only from endpoint_verified (or re-activating an
@@ -3260,6 +3270,122 @@ cmd_resume_client() {
     log "client '$name' resumed -- the next scheduled run proceeds normally. Snapshots aged while paused; the first run simply catches up incrementally."
 }
 
+# ------------------------------------------------------------------------------
+# Hard disable (ADR-0012 DISABLED): the peer-side state, driven from here.
+#
+# The control channel IS the relationship's own gated key -- there is no
+# second trust path to the peer, and inventing one (root-to-root ssh) would
+# undo the pairing model. The gate accepts three exact literal verbs and
+# nothing else; see zfs-pair-gate.sh for why they take no arguments.
+pair_control() {   # <verb> -> prints the gate's reply, non-zero on failure
+    local verb="$1"
+    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null \
+        -o CheckHostIP=no -o ConnectTimeout=15)
+    ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "PAIR-CONTROL $verb"
+}
+
+# Reads the peer's own view. Returns 0 and sets PEER_PAIR_STATE, or non-zero
+# when the peer could not be asked at all -- which is NEVER reported as
+# "active": an unreachable peer is an unknown peer.
+peer_pair_state() {
+    local out rc
+    out=$(pair_control status 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        PEER_PAIR_STATE=""
+        PEER_PAIR_ERROR="$out"
+        return 1
+    fi
+    PEER_PAIR_STATE=$(printf '%s' "$out" | sed -n 's/^PAIR_STATE=//p' | head -1)
+    [ -n "$PEER_PAIR_STATE" ] || { PEER_PAIR_ERROR="the gate answered without a PAIR_STATE line: $out"; return 1; }
+    return 0
+}
+
+cmd_disable_client() {
+    local name="${1:-}"; shift || :
+    local reason="" a
+    for a in "$@"; do
+        case "$a" in
+            --reason=*) reason="${a#*=}" ;;
+            *) die "disable-client: unknown option $a (only --reason=TEXT)" ;;
+        esac
+    done
+    [ -n "$name" ] || die "disable-client requires a client name"
+    client_name_valid "$name" || die "invalid client name '$name'"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    load_client_and_connection "$cpath"
+
+    # ORDER (ADR-0012): local pause FIRST, so no scheduled job can start a
+    # transfer in the window between deciding to disable and the peer knowing
+    # about it. If the remote half then fails, the relationship is stopped
+    # locally and the operator is told exactly that -- stopped, not disabled.
+    if client_paused "$name"; then
+        log "local pause already in place for '$name'"
+    else
+        cmd_pause_client "$name" ${reason:+--reason="$reason"} >/dev/null \
+            || die "could not establish the local pause -- nothing was sent to the peer"
+        log "local pause established for '$name'"
+    fi
+
+    log "asking the peer to disable this relationship..."
+    local out rc
+    out=$(pair_control disable 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        warn "the peer did NOT confirm the disable (ssh/gate said: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160))"
+        warn "STATE: PAUSED_LOCAL, peer NOT disabled -- scheduled jobs and labeled manual runs are stopped, but a manual command that omits -L would still reach the peer."
+        die "retry the same command once the peer is reachable: $0 disable-client $name -- it is a safe retry, the local pause is already in place and the peer verb is idempotent"
+    fi
+
+    # READ-BACK, not the write's own reply: the reply says what the gate
+    # believed it did, the read-back says what the next connection will see.
+    if ! peer_pair_state; then
+        warn "the disable was accepted but reading the peer's state back failed: ${PEER_PAIR_ERROR:-unknown}"
+        die "STATE: TRANSITION_INCOMPLETE. Re-run $0 disable-client $name to confirm; nothing was rolled back, and the peer may well be disabled already"
+    fi
+    if [ "$PEER_PAIR_STATE" != "DISABLED" ]; then
+        die "STATE: TRANSITION_INCOMPLETE -- the peer reports '$PEER_PAIR_STATE' after a disable it accepted. Do not assume this relationship is blocked; investigate the gate on the peer before relying on it"
+    fi
+    log "client '$name' is DISABLED: the peer refuses this relationship's data-plane commands, including manual ones that carry no -L."
+    log "LIMIT: the relationship's own key can lift this itself ($0 enable-client $name, or PAIR-CONTROL enable over the same key). Every lift is logged on the peer."
+}
+
+cmd_enable_client() {
+    local name="${1:-}"
+    [ -n "$name" ] || die "enable-client requires a client name"
+    client_name_valid "$name" || die "invalid client name '$name'"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    load_client_and_connection "$cpath"
+
+    # ORDER (ADR-0012), the mirror image: the REMOTE block goes first and is
+    # verified, and only then does the local pause lift. Clearing the local
+    # pause first would let a scheduled job start against a peer that is
+    # still refusing -- a nightly alert instead of a backup.
+    log "asking the peer to enable this relationship..."
+    local out rc
+    out=$(pair_control enable 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        warn "the peer did NOT confirm the enable (ssh/gate said: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160))"
+        die "STATE unchanged: still disabled on the peer and paused locally. Safe to retry: $0 enable-client $name"
+    fi
+    if ! peer_pair_state; then
+        die "the enable was accepted but reading the peer's state back failed: ${PEER_PAIR_ERROR:-unknown}. Local pause left IN PLACE deliberately -- retry $0 enable-client $name rather than assume"
+    fi
+    if [ "$PEER_PAIR_STATE" != "ACTIVE" ]; then
+        die "STATE: TRANSITION_INCOMPLETE -- the peer still reports '$PEER_PAIR_STATE'. Local pause left in place; retry $0 enable-client $name"
+    fi
+    log "peer confirms ACTIVE"
+
+    if client_paused "$name"; then
+        cmd_resume_client "$name" >/dev/null || die "the peer is enabled but the LOCAL pause could not be cleared -- STATE: PAUSED_LOCAL. Retry $0 enable-client $name (the peer verb is idempotent) or clear it with $0 resume-client $name"
+    fi
+    log "client '$name' is ACTIVE again on both sides. The next scheduled run catches up incrementally."
+}
+
 cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
@@ -3595,6 +3721,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         migrate-to-account) shift; cmd_migrate_to_account "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         resume-client)    shift; cmd_resume_client "$@" ;;
+        disable-client)   shift; cmd_disable_client "$@" ;;
+        enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;

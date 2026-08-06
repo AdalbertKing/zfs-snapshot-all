@@ -3823,6 +3823,113 @@ case "$mp" in
 esac
 run_pause resume_client alpha >/dev/null || :
 
+# --- 43. disable-client / enable-client ordering (ADR-0012) ------------------
+# The ADR fixes the ORDER, and the order is the safety property: disable
+# pauses locally BEFORE the peer is touched (so no scheduled job can start in
+# the window), enable clears the PEER first and verifies before the local
+# pause lifts (so no job starts against a peer that still refuses). Every
+# case below stubs the peer and asserts the sequence plus what survives a
+# failure at each boundary.
+DIS_CLIENTS="$WORK/dis-clients"; DIS_REL="$WORK/dis-rel"
+mkdir -p "$DIS_CLIENTS"
+printf 'CLIENT_NAME=dc\nSTATE=active\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:22\n' > "$DIS_CLIENTS/dc.conf"
+
+# run_dis <verb> <disable_rc> <status_reply> -- captures the call sequence
+run_dis() {
+    local verb="$1" ctl_rc="$2" status_reply="$3"
+    ( set +e
+      id() { echo 0; }
+      CLIENTS_DIR="$DIS_CLIENTS"; RELATIONSHIPS_DIR="$DIS_REL"
+      load_client_and_connection() { . "$1"; LOAD_KEYFILE=/dev/null; LOAD_PORT=22
+                                     LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null
+                                     LOAD_ACCOUNT=acct; LOAD_HOST=10.0.0.9; }
+      pair_control() {
+          echo "CALL $1" >> "$WORK/dis.seq"
+          case "$1" in
+              status) printf 'PAIR_STATE=%s\nPAIR_LABEL=dc\n' "$status_reply"; return 0 ;;
+              *) return "$ctl_rc" ;;
+          esac
+      }
+      "cmd_${verb}_client" dc
+      echo "RC=$?" >> "$WORK/dis.seq" ) >"$WORK/dis.out" 2>&1
+}
+
+# 1. disable, happy path: local pause exists BEFORE the peer is asked, and
+#    the peer's state is READ BACK rather than trusted from the write.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"
+run_dis disable 0 DISABLED
+seq_got=$(tr '\n' ' ' < "$WORK/dis.seq")
+if [ -f "$DIS_REL/dc/paused" ] && [ "$seq_got" = "CALL disable CALL status RC=0 " ]; then
+    ok "43 disable: local pause first, then the peer, then a read-back"
+else
+    bad "43 disable: local pause first, then the peer, then a read-back" "seq=[$seq_got] paused=$([ -f "$DIS_REL/dc/paused" ] && echo yes || echo NO)" "$(cat "$WORK/dis.out")"
+fi
+
+# 2. disable, peer unreachable: the local pause STAYS (the relationship is
+#    stopped), the failure is named as partial, and the retry is spelled out.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"
+run_dis disable 1 ACTIVE
+# (no RC= line is expected on the failure paths: die exits the subshell
+# before run_dis can record one, which is itself the contract -- a partial
+# transition must be fatal to the command, not a warning it survives.)
+if [ -f "$DIS_REL/dc/paused" ] && grep -q "PAUSED_LOCAL, peer NOT disabled" "$WORK/dis.out" \
+        && grep -q "safe retry" "$WORK/dis.out"; then
+    ok "43 disable: a peer failure leaves the local pause in place and says so"
+else
+    bad "43 disable: a peer failure leaves the local pause in place and says so" "$(cat "$WORK/dis.out")"
+fi
+
+# 3. disable, peer accepts but read-back disagrees: never reported as
+#    disabled -- the operator must not act as though it is blocked.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"
+run_dis disable 0 ACTIVE
+if grep -q "TRANSITION_INCOMPLETE" "$WORK/dis.out" && ! grep -q "is DISABLED" "$WORK/dis.out"; then
+    ok "43 disable: a read-back that disagrees is TRANSITION_INCOMPLETE, never success"
+else
+    bad "43 disable: a read-back that disagrees is TRANSITION_INCOMPLETE, never success" "$(cat "$WORK/dis.out")"
+fi
+
+# 4. enable, happy path: the PEER is cleared and verified BEFORE the local
+#    pause lifts.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"; mkdir -p "$DIS_REL/dc"; printf 'PAUSED_AT="x"\n' > "$DIS_REL/dc/paused"
+run_dis enable 0 ACTIVE
+seq_got=$(tr '\n' ' ' < "$WORK/dis.seq")
+if [ "$seq_got" = "CALL enable CALL status RC=0 " ] && [ ! -e "$DIS_REL/dc/paused" ]; then
+    ok "43 enable: peer cleared and verified first, local pause lifted last"
+else
+    bad "43 enable: peer cleared and verified first, local pause lifted last" "seq=[$seq_got] paused=$([ -e "$DIS_REL/dc/paused" ] && echo STILL-THERE || echo gone)" "$(cat "$WORK/dis.out")"
+fi
+
+# 5. enable, peer refuses: the local pause must NOT lift -- otherwise a
+#    scheduled job starts against a peer that still refuses, turning a
+#    deliberate block into a nightly alert.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"; mkdir -p "$DIS_REL/dc"; printf 'PAUSED_AT="x"\n' > "$DIS_REL/dc/paused"
+run_dis enable 1 DISABLED
+if [ -f "$DIS_REL/dc/paused" ] && grep -q "STATE unchanged" "$WORK/dis.out"; then
+    ok "43 enable: a peer failure leaves the local pause in place"
+else
+    bad "43 enable: a peer failure leaves the local pause in place" "$(cat "$WORK/dis.out")"
+fi
+
+# 6. enable, peer accepts but still reports DISABLED: same rule, and the
+#    local pause stays.
+: > "$WORK/dis.seq"; rm -rf "$DIS_REL"; mkdir -p "$DIS_REL/dc"; printf 'PAUSED_AT="x"\n' > "$DIS_REL/dc/paused"
+run_dis enable 0 DISABLED
+if [ -f "$DIS_REL/dc/paused" ] && grep -q "TRANSITION_INCOMPLETE" "$WORK/dis.out"; then
+    ok "43 enable: a read-back still showing DISABLED keeps the local pause"
+else
+    bad "43 enable: a read-back still showing DISABLED keeps the local pause" "$(cat "$WORK/dis.out")"
+fi
+
+# 7. An unreachable peer is never read as "active": peer_pair_state must fail
+#    rather than default to a comfortable answer.
+out=$( ( pair_control() { return 255; }; peer_pair_state; echo "rc=$?; state=[${PEER_PAIR_STATE:-}]" ) 2>&1 )
+if case "$out" in *"rc=1; state=[]"*) true;; *) false;; esac; then
+    ok "43 an unreachable peer yields no state at all, never ACTIVE"
+else
+    bad "43 an unreachable peer yields no state at all, never ACTIVE" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
