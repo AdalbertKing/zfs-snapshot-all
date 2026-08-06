@@ -12,9 +12,11 @@ Three states are defined:
 
 - `ACTIVE`: normal operation.
 - `PAUSED`: local orchestration gate. Managed snapget/snapsend invocations carrying the relationship label exit successfully as skipped before lock acquisition, snapshot creation, holds, SSH, or transfer.
-- `DISABLED`: peer-side security gate. SSH may authenticate, but the relationship-bound forced command refuses before any ZFS command or other data-plane action.
+- `DISABLED`: peer-side enforcement gate. SSH may authenticate, but the relationship-bound forced command refuses before any ZFS command or other data-plane action.
 
-`PAUSED` and `DISABLED` are distinct. Logical pause is operational control; hard disable is a security boundary.
+`PAUSED` and `DISABLED` are distinct. Logical pause is enforced by the collector and can be bypassed by omitting the label; hard disable is enforced by the peer and cannot.
+
+The owner chose (2026-08-06) to keep the control verbs reachable through the same authenticated gate, which means the relationship's own key may run `enable` and lift its own block — every lift being logged. `DISABLED` therefore stops cron, automation, accidents, and manual transfers including those omitting `-L`, but it is not a boundary against a deliberate holder of the relationship key. Making it one requires a separate admin key; that variant was considered and declined.
 
 ## Identity
 
