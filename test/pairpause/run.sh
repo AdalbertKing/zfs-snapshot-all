@@ -103,6 +103,53 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# check-snap-age.sh -L (slice 3): while the relationship is paused, staleness
+# is the EXPECTED state -- OK with explicit wording, never a page and never
+# silence. The script requires zfs in PATH before parsing, so a stub stands
+# in for it; the paused path exits before any zfs invocation, and the
+# unpaused path is pushed only as far as its ordinary argument validation.
+# ---------------------------------------------------------------------------
+CSA="${CSA:-$REPO/check-snap-age.sh}"
+STUB="$WORK/stub"; mkdir -p "$STUB"
+printf '#!/bin/sh\nexit 0\n' > "$STUB/zfs"; chmod +x "$STUB/zfs"
+CSA_PATH="$STUB:$PATH"
+
+out=$(PATH="$CSA_PATH" RELATIONSHIPS_DIR="$REL" bash "$CSA" -L alpha "tank/x" "automated_" 90m 3h 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "relationship alpha is paused" \
+        && echo "$out" | grep -q "staleness is expected"; then
+    ok "check-snap-age: paused label exits OK naming the pause, not silence"
+else
+    bad "check-snap-age: paused label exits OK naming the pause, not silence" "rc=$rc" "$out"
+fi
+
+# Unpaused label: the monitor must behave exactly as an unlabeled run -- here
+# both die identically on the same malformed threshold (UNKNOWN=3), which
+# also proves config errors stay loud even with -L present...
+out=$(PATH="$CSA_PATH" RELATIONSHIPS_DIR="$REL" bash "$CSA" -L beta "tank/x" "automated_" 90x 3h 2>&1); rc=$?
+if [ "$rc" -eq 3 ] && echo "$out" | grep -q "invalid duration"; then
+    ok "check-snap-age: unpaused label falls through to normal validation (UNKNOWN on bad duration)"
+else
+    bad "check-snap-age: unpaused label falls through to normal validation (UNKNOWN on bad duration)" "rc=$rc" "$out"
+fi
+
+# ...and a PAUSED label with a malformed threshold is STILL a loud UNKNOWN:
+# the pause suppresses expected staleness, not broken configuration.
+out=$(PATH="$CSA_PATH" RELATIONSHIPS_DIR="$REL" bash "$CSA" -L alpha "tank/x" "automated_" 90x 3h 2>&1); rc=$?
+if [ "$rc" -eq 3 ] && echo "$out" | grep -q "invalid duration"; then
+    ok "check-snap-age: a paused label does not swallow a malformed threshold (still UNKNOWN)"
+else
+    bad "check-snap-age: a paused label does not swallow a malformed threshold (still UNKNOWN)" "rc=$rc" "$out"
+fi
+
+# A traversal label is UNKNOWN, before any path is probed.
+out=$(PATH="$CSA_PATH" RELATIONSHIPS_DIR="$REL" bash "$CSA" -L "../alpha" "tank/x" "automated_" 90m 3h 2>&1); rc=$?
+if [ "$rc" -eq 3 ] && echo "$out" | grep -q "not a valid relationship label"; then
+    ok "check-snap-age: a path-traversal label is UNKNOWN, refused before any path is probed"
+else
+    bad "check-snap-age: a path-traversal label is UNKNOWN, refused before any path is probed" "rc=$rc" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

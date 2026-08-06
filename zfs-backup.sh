@@ -899,6 +899,7 @@ emit_client_sections() {   # <workfile> <client name>
             echo "	use_template = standard_hourly"
             echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
             echo "	flags        = $LOAD_FLAGS"
+            echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
     done
@@ -929,6 +930,7 @@ emit_client_sections() {   # <workfile> <client name>
                     echo "	recursive    = no"
                     echo "	gfs          = yes"
                     echo "	gfs_pattern  = automated_"
+                    echo "	pair_label   = $name"
                     echo "	notify       = ${name}-$(basename "$ds")"
                 } >> "$workfile" || return 1
             done
@@ -951,6 +953,7 @@ emit_client_sections() {   # <workfile> <client name>
                 echo "	recursive    = yes"
                 echo "	gfs          = yes"
                 echo "	gfs_pattern  = automated_"
+                echo "	pair_label   = $name"
                 echo "	notify       = ${name}"
             } >> "$workfile" || return 1
         fi

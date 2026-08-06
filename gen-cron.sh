@@ -69,6 +69,15 @@ set -o pipefail
 #       flags_<tier> = <per-tier flags override>
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
+#       pair_label   = <name>              # REV-045: the zfs-backup.sh client
+#                                          # this dataset's jobs belong to.
+#                                          # Becomes -L on the transfer line
+#                                          # and on this dataset's monitor, so
+#                                          # pause-client skips both. Dataset/
+#                                          # prune-section scope only (never
+#                                          # inherited); on a [prune:] it
+#                                          # reaches ONLY the monitor -- prune
+#                                          # itself keeps running while paused.
 #       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
 #                                          # that owns this dataset before
 #                                          # snapshotting it (snapsend.sh -q)
@@ -276,7 +285,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.25'
+VERSION='v4.26'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The single crontab writer. Sourced from beside this script, not from
@@ -642,11 +651,20 @@ _allow_fields defaults  host_label repo_dir notify_script warn_script \
                         digest_script cron_log $POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
+# pair_label names the RELATIONSHIP (zfs-backup.sh client) a section belongs
+# to (REV-20260804-045). On a [dataset:] it reaches the transfer command
+# (-L) and that dataset's staleness monitor; on a [prune:] it reaches ONLY
+# the section's staleness monitor -- the delsnaps line itself is never
+# gated, because retention of what already landed stays correct while a
+# relationship is paused; only new transfers and the alarms about their
+# absence stop. Deliberately NOT in POLICY_FIELDS: no template/defaults
+# inheritance -- a label that silently spread to unrelated sections would
+# make one pause skip a stranger's backup.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template $POLICY_FIELDS
+_allow_fields dataset   use_template pair_label $POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
-                        gfs gfs_pattern $POLICY_FIELDS
+                        gfs gfs_pattern pair_label $POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify
 _allow_fields excluded  keep
 
@@ -937,6 +955,20 @@ build_dataset() {
     local tier_list
     tier_list="$(resolve_field use_template "$ds" "" "")" || die "[dataset:$ds_path] has no use_template"
 
+    # REV-20260804-045: the relationship (zfs-backup.sh client) this
+    # dataset's jobs belong to. Dataset-scope only (no template/defaults
+    # inheritance -- a label that silently spread to unrelated datasets
+    # would make one pause skip a stranger's backup). Validated to the same
+    # charset as the scripts' own -L, because it becomes an -L argument and
+    # a state-directory name.
+    local pair_label
+    pair_label="$(resolve_field pair_label "$ds" "" "")" || pair_label=""
+    if [ -n "$pair_label" ]; then
+        case "$pair_label" in
+            *[!A-Za-z0-9._-]*) die "[dataset:$ds_path]: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only (it becomes snapget/snapsend/check-snap-age -L and a directory name under /var/lib/zfs-snapshot-all/relationships)" ;;
+        esac
+    fi
+
     local -a tiers=()
     IFS=',' read -ra tiers <<< "$tier_list"
     local tier tmpl
@@ -989,6 +1021,11 @@ build_dataset() {
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
+            # Appended to 'flags' rather than carried as a tuple field of its
+            # own: flags are part of the send group key, so two relationships
+            # can never merge into one cron line that a single pause would
+            # have to half-skip -- and emit_send needs no change at all.
+            [ -n "$pair_label" ] && flags="${flags:+$flags }-L $pair_label"
             label="$(resolve_field notify "$ds" "" "")" || label=""
             raw_notify="$(resolve_field notify_raw "$ds" "$tmpl" "")" || raw_notify=""
             word="$(resolve_field notify_word "" "$tmpl" "")" || word="backup"
@@ -1025,7 +1062,7 @@ build_dataset() {
                 mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
                 mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
                 mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
-                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}")
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
             fi
         fi
     done
@@ -1047,6 +1084,17 @@ build_prune_section() {
     local ssh_flags
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune:$scope]" "$scope"
+
+    # REV-20260804-045: reaches ONLY this section's staleness monitor below.
+    # The delsnaps line itself is never gated by logical pause -- see the
+    # comment at the field allow-list.
+    local pair_label
+    pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
+    if [ -n "$pair_label" ]; then
+        case "$pair_label" in
+            *[!A-Za-z0-9._-]*) die "[prune:$scope]: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only (it becomes check-snap-age -L and a directory name under /var/lib/zfs-snapshot-all/relationships)" ;;
+        esac
+    fi
 
     # gfs=yes: every tier in use_template contributes its retain COUNT LETTER
     # to ONE combined delsnaps.sh -G line (cascading ladder) instead of each
@@ -1142,7 +1190,7 @@ build_prune_section() {
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}")
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
         fi
     done
 
@@ -1255,10 +1303,13 @@ group_inline_prune() {
 group_monitor() {
     declare -gA MONITOR_GROUPS=()
     declare -ga MONITOR_GROUP_ORDER=()
-    local e scope pattern warn crit schedule recursive notify broken warntext key
+    local e scope pattern warn crit schedule recursive notify broken warntext pairlbl key
     for e in "${MONITOR_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl <<< "$e"
+        # pair_label is IN the key (REV-045): two relationships sharing a
+        # threshold shape must not merge into one check-snap-age line --
+        # pausing one would silence the staleness alarm of the other.
+        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -1524,25 +1575,30 @@ emit_gfs_prune_sections() {
 # Do not drop these redirects; a host with MAILTO="" set merely hides the
 # symptom, and not every host has it.
 emit_monitor() {
-    local key list scope pattern warn crit schedule recursive notify broken warntext
+    local key list scope pattern warn crit schedule recursive notify broken warntext pairlbl
     for key in "${MONITOR_GROUP_ORDER[@]}"; do
         list="${MONITOR_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt
+        local m mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt <<< "$m"
+            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl <<< "$m"
             targets+=("$mscope")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local flag=""
+        local flag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
-        local cmd="$REPO_DIR/check-snap-age.sh ${flag}\"$joined\" \"$pattern\" $warn $crit"
+        # REV-045: while the relationship is paused, its staleness IS the
+        # expected state -- check-snap-age -L reports OK-paused instead of
+        # paging every monitor interval for a backup that was stopped on
+        # purpose. Resume restores normal thresholds with no other change.
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}\"$joined\" \"$pattern\" $warn $crit"
         # The verdict is CAPTURED and handed to the notify script, not just
         # appended to the log. check-snap-age.sh already prints the dataset, the
         # pattern, the newest snapshot, its real age and both thresholds -- all

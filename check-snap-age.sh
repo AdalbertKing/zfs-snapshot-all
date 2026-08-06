@@ -18,7 +18,7 @@ set -o pipefail
 # delsnaps.sh/snapsend.sh there is no remote/ssh mode, since a monitor check is
 # meant to run on the same host that owns the schedule being verified.
 #
-# Usage: check-snap-age.sh [-R] [-v] <comma-separated datasets> <pattern> <warn> <crit>
+# Usage: check-snap-age.sh [-R] [-v] [-L LABEL] <comma-separated datasets> <pattern> <warn> <crit>
 #
 # -R            : also check every descendant dataset (filesystem/volume) under
 #                 each entry, evaluated independently against the SAME
@@ -26,6 +26,11 @@ set -o pipefail
 #                 per-dataset, not a single aggregate check across the subtree).
 # -v, --verbose : print a status line for every dataset checked, not just the
 #                 ones that trip a threshold.
+# -L <LABEL>    : the backup relationship (zfs-backup.sh client) these datasets
+#                 belong to. While that relationship is paused (pause-client),
+#                 exit OK with wording naming the pause -- staleness is the
+#                 EXPECTED state of a deliberately stopped backup, not a page
+#                 (REV-20260804-045). resume-client restores normal thresholds.
 # -V, --version : print version and exit.
 #
 # <warn>/<crit> : duration strings, <N><unit> with unit m(inutes)/h(ours)/d(ays)
@@ -58,7 +63,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.0'
+VERSION='v2.1'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -74,7 +79,7 @@ fi
 # point no snapshot has been examined, so any answer about staleness would be
 # fabricated.
 usage() {
-    echo "Usage: $0 [-R] [-v] <comma-separated list of datasets> <pattern> <warn> <crit>" >&2
+    echo "Usage: $0 [-R] [-v] [-L LABEL] <comma-separated list of datasets> <pattern> <warn> <crit>" >&2
     echo "   warn/crit are durations like 90m, 3h, 9d" >&2
     exit "$EXIT_UNKNOWN"
 }
@@ -83,13 +88,18 @@ command -v zfs >/dev/null || { echo "UNKNOWN -- 'zfs' command not found in PATH"
 
 VERBOSE=false
 RECURSE=false
+PAIR_LABEL=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -R) RECURSE=true; shift ;;
         -v|--verbose) VERBOSE=true; shift ;;
+        -L) PAIR_LABEL="${2:-}"; shift 2 ;;
         *) break ;;
     esac
 done
+case "$PAIR_LABEL" in
+    *[!A-Za-z0-9._-]*) echo "UNKNOWN -- -L '$PAIR_LABEL' is not a valid relationship label (letters, digits, dot, dash, underscore only)" >&2; exit "$EXIT_UNKNOWN" ;;
+esac
 
 [ "$#" -eq 4 ] || usage
 DATASETS_LIST="$1"
@@ -114,6 +124,19 @@ parse_duration() {
 WARN_SEC=$(parse_duration "$WARN_ARG") || exit "$EXIT_UNKNOWN"
 CRIT_SEC=$(parse_duration "$CRIT_ARG") || exit "$EXIT_UNKNOWN"
 [ "$CRIT_SEC" -ge "$WARN_SEC" ] || { echo "UNKNOWN -- crit ($CRIT_ARG) must be >= warn ($WARN_ARG)" >&2; exit "$EXIT_UNKNOWN"; }
+
+# REV-20260804-045 (logical pause): while the -L relationship is paused,
+# staleness IS the expected state -- the backup was stopped on purpose, so
+# aging snapshots must not page every monitor interval. OK with explicit
+# wording, never silence: the line still lands in cron.log, and `status`
+# shows the pause. Checked AFTER argument validation on purpose -- a
+# malformed threshold stays a loud UNKNOWN even on a paused relationship.
+# Resume deletes the marker and the very next run enforces thresholds again.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+if [ -n "$PAIR_LABEL" ] && [ -f "$RELATIONSHIPS_DIR/$PAIR_LABEL/paused" ]; then
+    echo "OK -- relationship $PAIR_LABEL is paused (zfs-backup.sh pause-client); staleness is expected until resume-client"
+    exit "$EXIT_OK"
+fi
 
 # Formats a seconds count back into the same "<N><unit>" shorthand, picking the
 # coarsest unit that divides evenly, purely for readable status lines.

@@ -58,7 +58,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v1.0'
+VERSION='v1.1'
 SEP=$'\x1c'   # field separator inside one encoded entity string, matches gen-cron.sh
 
 die() { echo "cron2conf.sh: error: $*" >&2; exit 1; }
@@ -276,6 +276,10 @@ parse_checkage_cmd() {
     local rest="${cmd#*/check-snap-age.sh }"
     C_RECURSIVE=0
     if [[ "$rest" == "-R "* ]]; then C_RECURSIVE=1; rest="${rest#-R }"; fi
+    # -L follows -R in gen-cron's emission order (REV-045): the relationship
+    # label, reconstructed as the section's pair_label field below.
+    C_PAIR_LABEL=""
+    if [[ "$rest" == "-L "* ]]; then rest="${rest#-L }"; C_PAIR_LABEL="${rest%% *}"; rest="${rest#* }"; fi
     [[ "$rest" == \"* ]] || return 1
     local -a p; qsplit p "$rest"
     [ "${#p[@]}" -ge 5 ] || return 1
@@ -345,7 +349,7 @@ classify_lines() {
         if parse_monitor_envelope "$line"; then
             parse_checkage_cmd "$CMD" || die "monitor line does not call check-snap-age.sh: $line"
             WARN_SCRIPT="${WARN_SCRIPT:-$WARNSCRIPT}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"
-            MON_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_WARN}${SEP}${C_CRIT}${SEP}${C_RECURSIVE}${SEP}${NOTIFY}")
+            MON_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_WARN}${SEP}${C_CRIT}${SEP}${C_RECURSIVE}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}")
             continue
         fi
         if parse_digest_line "$line"; then
@@ -524,11 +528,12 @@ emit_prune_and_monitor_sections() {
             local midx match_idx=-1
             for midx in "${!MON_E[@]}"; do
                 [ -n "${MON_USED[$midx]:-}" ] && continue
-                local msched mscope mpattern mwarn mcrit mrec mnotify
-                IFS="$SEP" read -r msched mscope mpattern mwarn mcrit mrec mnotify <<< "${MON_E[$midx]}"
+                local msched mscope mpattern mwarn mcrit mrec mnotify mplbl
+                IFS="$SEP" read -r msched mscope mpattern mwarn mcrit mrec mnotify mplbl <<< "${MON_E[$midx]}"
                 if [ "$mscope" = "$scope" ] && [ "$mrec" = "$rec" ] && [ "$mpattern" = "$pattern" ]; then
                     match_idx="$midx"; mon_warn="$mwarn"; mon_crit="$mcrit"
                     parse_notify_text "$mnotify" && { mon_tier="$N_TIER"; mon_label="$N_LABEL"; }
+                    [ -n "$mplbl" ] && section_set_field "$key" pair_label "$mplbl"
                     break
                 fi
             done
@@ -542,8 +547,8 @@ emit_prune_and_monitor_sections() {
     local midx
     for midx in "${!MON_E[@]}"; do
         [ -n "${MON_USED[$midx]:-}" ] && continue
-        local msched mscope mpattern mwarn mcrit mrec mnotify
-        IFS="$SEP" read -r msched mscope mpattern mwarn mcrit mrec mnotify <<< "${MON_E[$midx]}"
+        local msched mscope mpattern mwarn mcrit mrec mnotify mplbl
+        IFS="$SEP" read -r msched mscope mpattern mwarn mcrit mrec mnotify mplbl <<< "${MON_E[$midx]}"
         if [ -n "${SCOPE_VARIANTS[$mscope]+x}" ]; then
             warn "UNREPRESENTABLE: monitor on scope '$mscope' pattern '$mpattern' could not be matched to an existing prune tier, and that scope is already a real [prune:] section -- co-locating would wrongly force prune=no onto it. Left out; add by hand."
             continue
@@ -551,6 +556,7 @@ emit_prune_and_monitor_sections() {
         get_section prune "$mscope"
         local key="$SECTION_KEY"
         section_set_field "$key" prune no
+        [ -n "$mplbl" ] && section_set_field "$key" pair_label "$mplbl"
         [ "$mrec" = "1" ] && section_set_field "$key" recursive yes
         parse_notify_text "$mnotify" || die "cannot parse monitor notify text: $mnotify"
         new_template pattern "$mpattern" tier_label "$N_TIER" notify "$N_LABEL" monitor_warn "$mwarn" monitor_crit "$mcrit"
