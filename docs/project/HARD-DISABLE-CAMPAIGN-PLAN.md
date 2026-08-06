@@ -21,6 +21,31 @@ disabled) and **control** (`status`, `enable`; permitted while disabled and
 structurally unable to move data). The gate decides the class. The caller
 never declares it.
 
+### Follow-up decision forced by the live checkpoint (2026-08-06)
+
+The checkpoint surfaced what "control through the same gate" actually costs.
+The control verbs run **as the delegated account**, so `enable` can only work
+if that account may remove its own marker — which means the relationship's
+own key can lift its own block. Three ways out were put to the owner: a
+separate admin key (gate-reachable control, backup key never able to
+self-enable), self-enable by the backup key, or root-on-peer only.
+
+**Owner chose self-enable by the backup key**, for the simpler operation.
+Recorded consequence, which must not be quietly upgraded later:
+
+> `DISABLED` stops every scheduled job, every manual command including one
+> that omits `-L` entirely, and every accidental or automated re-run — and
+> logs each lift to syslog. It is **not** a boundary against someone who
+> holds the relationship key and deliberately lifts it. Making it that
+> boundary needs the separate admin key, considered and declined here.
+
+**Open point for the reviewer:** `ADR-0012` calls `DISABLED` a "peer-side
+security gate", and REV-045's guidance sanctions "a narrowly permitted resume
+verb through the same authenticated gate" — the shape built here. Those two
+statements sit at different strengths, and the implementation matches the
+second. If the ADR's wording is meant literally, the admin-key variant is the
+change that satisfies it, and nothing else in the design moves.
+
 ## Steps and the test scope each one earns
 
 **1. The gate itself** (`zfs-pair-gate`): identity from the key line's own
@@ -58,6 +83,39 @@ workflow, and everything below it is already proven.
 
 Between steps 1-3 no full campaign runs: each step touches the same gate, so
 a campaign in the middle would be re-run and re-paid for at the end.
+
+## Step 1 evidence — the gate and its live security checkpoint (2026-08-06)
+
+Commits `d4b0932` (gate + suite), `6914c11` (stderr fix), and this one.
+Stubbed: **pairgate 25/25** (one SKIP on this dev box: a filesystem that
+ignores 0555 for the owner), impact 21/21, graph `--verify` clean. The graph
+selects only those two suites — nothing sources the gate yet, so the blast
+radius really is that small; no campaign was run for that reason.
+
+Live checkpoint on metropolis (test plan §C), run WITHOUT the enrolment
+machinery on purpose: two throwaway accounts on pve2 with hand-written
+`command="/usr/local/sbin/zfs-pair-gate <label>",restrict` key lines, a
+scratch dataset with its own grants, and real pulls from pve1. That isolates
+what the checkpoint is for — does sshd truly route a real key through the
+gate — from enrolment code that does not exist yet.
+
+| § | Observation |
+|---|---|
+| C1 | ACTIVE: `snapget` over the gated key completed, snapshot landed on the target, rc 0 |
+| C2 | DISABLED: the same `snapget` refused, `PAIR_DISABLED`, and **the source snapshot count did not move (1 → 1)** — refused before any zfs command, not after |
+| C4/C5 | a hand-written `snapget` with no `-L` at all, and a raw `ssh … zfs send`, both refused (rc 93) — the caller's own claims never entered the decision |
+| C6 | relationship B on the same host transferred normally throughout |
+| C7d | an interactive session on the relationship key refused (rc 91) |
+| control | `PAIR-CONTROL status` answered while disabled, carrying the recorded reason |
+| C11 | `authorized_keys` md5 and `zfs allow` output byte-identical before and after the whole cycle; 63 decisions in syslog with label, decision and a sanitised command class |
+| resume | after enable, the next pull completed incrementally — no re-seed |
+| teardown | accounts, keys, datasets, state dirs and the gate removed; zero residue; `audit clean` on both hosts |
+
+Two real defects found by this checkpoint, both fixed forward with
+regressions: the stderr leak (`6914c11` — it would have put "Permission
+denied" into the alert mail of every transfer) and the enable path, which
+failed against a root-owned state directory and produced the design question
+answered above rather than a silent false "enabled".
 
 ## Constraints carried from ADR-0012
 

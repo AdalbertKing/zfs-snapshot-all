@@ -195,6 +195,42 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# enable when the state directory is NOT writable: the owner's model
+# (2026-08-06) is that the relationship's own key may lift its own block, so
+# the directory is account-writable by design. Where it is not -- a
+# half-installed peer, a directory root re-created by hand -- enable must FAIL
+# LOUDLY and leave the marker in place, never report ACTIVE on a relationship
+# that is still disabled. Found live on metropolis pve2: with a root-owned
+# directory the rm failed, and the branch below is what made that visible
+# instead of a false "enabled".
+# ---------------------------------------------------------------------------
+mkdir -p "$REL/frozen"
+printf 'DISABLED_AT="x"\n' > "$REL/frozen/disabled"
+chmod 555 "$REL/frozen" 2>/dev/null || true
+if [ -w "$REL/frozen" ]; then
+    echo "SKIP enable-on-unwritable-dir (this filesystem ignores 0555 for the owner)"
+else
+    run_gate frozen "PAIR-CONTROL enable"; rc=$?
+    if [ "$rc" -eq 93 ] && case "$OUT" in *PAIR_CONTROL_FAILED*) true;; *) false;; esac \
+            && [ -f "$REL/frozen/disabled" ]; then
+        ok "enable on an unwritable state dir fails loudly and leaves the relationship disabled"
+    else
+        bad "enable on an unwritable state dir fails loudly and leaves the relationship disabled" "rc=$rc out=$OUT marker=$([ -f "$REL/frozen/disabled" ] && echo present || echo GONE)"
+    fi
+    chmod 755 "$REL/frozen" 2>/dev/null || true
+fi
+rm -rf "$REL/frozen"
+
+# The documented threat-model limit is part of the contract, like the
+# logical-pause limitation before it: the file must say plainly that the
+# relationship's own key can lift its own block.
+if grep -q "OWN key can lift its own block" "$GATE" && grep -q "NOT a boundary against someone" "$GATE"; then
+    ok "the file states plainly that the relationship key can lift its own block"
+else
+    bad "the file states plainly that the relationship key can lift its own block" "the honesty note is missing from zfs-pair-gate.sh"
+fi
+
+# ---------------------------------------------------------------------------
 # C11 (the gate's half): the gate itself mutates nothing but its own marker.
 # ---------------------------------------------------------------------------
 before=$(find "$REL" | sort; find "$WORK" -maxdepth 1 -name 'ran.*' | sort)

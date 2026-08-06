@@ -43,7 +43,32 @@
 # and they cannot move data. The owner chose (2026-08-06) to keep the control
 # channel reachable through this same authenticated gate rather than requiring
 # an administrator physically on the peer -- both ends of every relationship in
-# this estate belong to one operator, see the campaign plan.
+# this estate belong to one operator, see the campaign plan. REV-045's own
+# guidance sanctions exactly this shape ("a narrowly permitted resume verb
+# through the same authenticated gate").
+#
+# WHAT THAT MEANS, PLAINLY -- do not let anyone claim more for this later:
+# `PAIR-CONTROL enable` runs as the delegated account, so the relationship's
+# OWN key can lift its own block. DISABLED therefore stops:
+#
+#   * every scheduled job of that relationship;
+#   * every manual transfer command, including one that omits -L entirely
+#     (proved live: snapget refused, zero snapshots created on the source);
+#   * every accidental or automated re-run,
+#
+# and it records every lift in syslog. It is NOT a boundary against someone
+# who holds the relationship key and deliberately decides to lift it: they
+# can, in one command, and the log will say so. Making it that boundary needs
+# a SEPARATE admin key whose forced command permits control verbs while the
+# backup key never can -- considered and declined on 2026-08-06 in favour of
+# the simpler operation. If the threat model ever changes, that is the change
+# to make; nothing else here needs to move.
+#
+# Mechanically this means the relationship's state directory is writable by
+# its own account (the removal below is an unlink IN that directory), while
+# the parent stays root-owned so no relationship can reach another's state.
+# A directory that is NOT writable makes enable fail loudly rather than
+# silently pretend -- see the PAIR_CONTROL_FAILED branch.
 #
 # Exit codes -- stable, and deliberately distinct so the collector can tell
 # these four apart (docs/design/pair-pause.md "Diagnostics"):
