@@ -196,6 +196,39 @@ Linia retencji — **celowo bez `-L`**:
 Dwie relacje o identycznych progach nie scalą się w jedną linię monitora: `pair_label` wchodzi
 do klucza grupowania. Inaczej pauza jednej wyciszałaby alarm drugiej.
 
+### Ta sama linia po ludzku
+
+Kto czyta te linie raz na pół roku, przy awarii, nie ma czasu odtwarzać znaczenia flag z pamięci.
+Więc rozbiór tego samego przykładu, kawałek po kawałku:
+
+```text
+-i -K /root/.ssh/pairing/alpha_ed25519 -A -L alpha "zfsbackup-arc@10.0.0.1:tank/data" "hdd/backups/arc/alpha"
+```
+
+| fragment | co znaczy | skąd się wziął |
+|---|---|---|
+| `-i` | przy nadrabianiu zaległości **przeskocz od razu do najnowszego stanu**, zamiast przechodzić przez wszystkie snapshoty po drodze. Szybciej i mniej danych, ale na kopii nie będzie stanów pośrednich | z Twojego `flags` w configu |
+| `-K …/alpha_ed25519` | loguj się na drugi serwer **tym konkretnym kluczem**. Robi to, co `ssh -i`, ale litera `i` była już zajęta (patrz wyżej), więc klucz dostał `K` | z Twojego `flags` w configu |
+| `-A` | **zmierz łącze i sam zdecyduj**, czy kompresja się opłaca. Wynik pamiętany tydzień: prędkość łącza per host, podatność danych per dataset | dokłada generator, domyślnie |
+| `-L alpha` | ten transfer należy do **relacji `alpha`**. Jedyny powód: gdy relacja jest zapauzowana lub zablokowana, zadanie wycofa się, zanim cokolwiek zrobi | z `pair_label` |
+| `"zfsbackup-arc@10.0.0.1:tank/data"` | **skąd bierzemy**: konto `zfsbackup-arc` na `10.0.0.1`, dataset `tank/data`. Adres dosłowny — dokładnie to, co pokazuje tam `zfs list` | z `src` |
+| `"hdd/backups/arc/alpha"` | **katalog bazowy, nie miejsce docelowe.** Skrypt dokleja pod spodem oryginalną ścieżkę ze źródła | z nagłówka sekcji `[dataset:]` |
+
+Ostatni wiersz to najczęstsze nieporozumienie i realna przyczyna awarii w tym projekcie. Dane
+wylądują **nie** w `hdd/backups/arc/alpha`, tylko:
+
+```text
+hdd/backups/arc/alpha/tank/data
+```
+
+Seed wpisany kiedyś o jeden poziom za głęboko sprawił, że każdy przebieg robił pełną kopię od
+zera — a monitoring twierdził, że wszystko gra, bo zaglądał w to samo złe miejsce.
+
+**Całość jednym zdaniem:** *co godzinę zabierz z `tank/data` na `10.0.0.1` to, czego jeszcze nie
+mam, zaloguj się kluczem alpha, przy zaległościach skocz od razu do najnowszego stanu, sam
+zdecyduj o kompresji, odłóż to pod `hdd/backups/arc/alpha` — i odpuść całkiem, jeśli relacja
+`alpha` jest zapauzowana.*
+
 ---
 
 ## Strona peera — co robi `deploy.sh`
