@@ -7,6 +7,7 @@ Last update: 2026-08-07, after reviewer approval of REV-054 recursion design.
 
 | # | Thread | State | Whose move |
 |---|---|---|---|
+| **R** | **GOTOWE DO RECENZJI na `a2777af`** | Siedem commitów od `a3c8e3d` (REV-061): `f26a205` blokada instalacyjna, `332aa25` mechanizm świeżości + W1–W5, `e8ecde3` odświeżenie statusu ze znacznikiem, `63b9a60` odpowiedź REV-061, `2f69c2d` naprawa i audyt plików blokad, `d675178` cztery asercje, które nic nie sprawdzały, `a2777af` przesunięcie znacznika + wątek #38. Suity: run 65, cron **129**, cron2conf 11, migrate 52, monitor 24, impact 21, join 83 lokalnie / **91 na Linuksie** (root i konto delegowane), alertmail 20, draftscope 28, pause 74; `impact.sh --verify` czysty. Kontrole negatywne: `123fca8` → 124/3 dla W1–W3, `63b9a60` → L0 pada. Na żywo: `--install` jako konto delegowane **bez** `GEN_CRON_LOCKFILE` na czterech hostach, crontaby niezmienione; tryby blokad naprawione na czterech hostach. | recenzent: werdykt |
 | 1 | REV-045 — logical pause | **CLOSED** by the reviewer 2026-08-06 for the declared scope. Endpoint-switch and in-flight live cases explicitly not required for closure. | — |
 | 2 | REV-046 — alert-delivery false health | CLOSED by the reviewer | — |
 | 3 | REV-047 — pair-gate audit logging | **CLOSED** (F1 and F2) by the reviewer 2026-08-06. | — |
