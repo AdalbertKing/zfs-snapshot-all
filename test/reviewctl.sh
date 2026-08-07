@@ -42,6 +42,73 @@ hdr() {   # <file> <field>
     sed -n "s|^<!-- $2: *\\([^ ][^>]*[^ ]\\) *-->$|\\1|p" "$1" 2>/dev/null | head -1
 }
 
+# ---- commit-bearing headers must name something the reviewer can fetch -----
+#
+# REV-20260807-067 F1. A header that identifies a commit is a promise that the
+# reviewer can fetch, diff and pin exactly the submitted change. A SHA that
+# cannot be resolved breaks the one property Protocol V2 exists to provide.
+#
+# The check is REACHABILITY FROM THE PUBLISHED BRANCH, not mere resolvability,
+# and that distinction is the whole finding. The SHA that triggered REV-067
+# (c49afd2 on REV-066) DOES resolve in the implementer's clone -- it is a real
+# commit, orphaned by a rewrite, whose content was published as 39663b2. A
+# `git cat-file -e` check would have passed it and the reviewer would still
+# have got "No commit found" from GitHub. Only "is it on the branch the
+# reviewer reads" catches that, so that is what this asks.
+#
+# The publication ref is origin/main when a remote-tracking branch exists, and
+# HEAD otherwise (a clone with no remote can still check internal coherence).
+# GITREPO is the PROJECT repository, which is not always $REPO: REVIEWCTL_REPO
+# relocates the ARTIFACT tree so the suite can build throwaway layouts, but the
+# SHAs in those artifacts always name commits of the project. So resolve git
+# from the relocated tree when it happens to be a checkout, and from this
+# script's own location otherwise.
+GITREPO=""
+PUBREF=""
+gitrepo() {
+    [ -n "$GITREPO" ] && { echo "$GITREPO"; return; }
+    if git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1; then
+        GITREPO="$REPO"
+    else
+        GITREPO="$SCRIPT_DIR"
+    fi
+    echo "$GITREPO"
+}
+pubref() {
+    [ -n "$PUBREF" ] && { echo "$PUBREF"; return; }
+    if git -C "$(gitrepo)" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+        PUBREF=origin/main
+    else
+        PUBREF=HEAD
+    fi
+    echo "$PUBREF"
+}
+
+require_commit() {   # <rev> <field> <value>
+    local rev="$1" field="$2" sha="$3" ref g
+    # `-` is the protocol's explicit "no such commit yet", not a broken value.
+    [ -z "$sha" ] && return 0
+    [ "$sha" = "-" ] && return 0
+    g="$(gitrepo)"
+    # No git at all means the claim cannot be checked. Unverifiable is not the
+    # same as verified -- the exact confusion REV-20260806-046 removed from the
+    # alert-delivery verdict -- so it fails closed and says why.
+    if ! git -C "$g" rev-parse --show-toplevel >/dev/null 2>&1; then
+        err "$rev: $field names $sha but there is no git repository to resolve it against; refusing to publish an unverifiable commit reference"
+        return 1
+    fi
+    ref="$(pubref)"
+    if ! git -C "$g" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+        err "$rev: $field names $sha, which is not a commit in this repository"
+        return 1
+    fi
+    if ! git -C "$g" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null; then
+        err "$rev: $field names $sha, which is a commit but is not reachable from $ref -- unpushed, or rewritten and orphaned; point at the published commit that carries the whole delivery"
+        return 1
+    fi
+    return 0
+}
+
 declare -A R_VERDICT R_REVIEWED R_FILE
 declare -A P_STATUS P_IMPL P_FILE
 declare -A C_BY C_FILE
@@ -66,6 +133,7 @@ collect() {
         R_FILE[$rev]="$f"
         R_VERDICT[$rev]="$(hdr "$f" verdict)"
         R_REVIEWED[$rev]="$(hdr "$f" reviewed-implementation)"
+        require_commit "$rev" reviewed-implementation "${R_REVIEWED[$rev]}" || true
         case "${R_VERDICT[$rev]}" in
             APPROVED|CHANGES-REQUIRED) ;;
             *) err "$rev: verdict '${R_VERDICT[$rev]}' is not APPROVED or CHANGES-REQUIRED" ;;
@@ -81,6 +149,7 @@ collect() {
         P_FILE[$rev]="$f"
         P_STATUS[$rev]="$(hdr "$f" response-status)"
         P_IMPL[$rev]="$(hdr "$f" implementation)"
+        require_commit "$rev" implementation "${P_IMPL[$rev]}" || true
         seen_rev "$rev" || REVS+=("$rev")
     done
     for f in "$RDIR"/closures/REV-*.md; do
@@ -92,6 +161,7 @@ collect() {
         C_FILE[$rev]="$f"
         C_BY[$rev]="$(hdr "$f" closed-by)"
         [ -n "${C_BY[$rev]}" ] || err "$rev: closure artifact has no 'closed-by:'"
+        require_commit "$rev" closed-by "${C_BY[$rev]}" || true
         seen_rev "$rev" || REVS+=("$rev")
     done
 }

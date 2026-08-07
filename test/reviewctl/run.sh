@@ -36,18 +36,29 @@ expect() { local got; got="$(state "$2")"; [ "$got" = "$3" ] && ok "$1" || bad "
 
 R=REV-20260808-001
 
+# The state machine only ever compares these for EQUALITY, so what they are
+# does not matter to the transitions -- but since REV-20260807-067 reviewctl
+# also demands that a commit-bearing header names a commit REACHABLE FROM THE
+# PUBLISHED BRANCH, so they have to be real. Three published commits, resolved
+# once. Structural cases keep testing structure; the commit check gets its own
+# cases below.
+sha1="$(git -C "$REPO" rev-parse origin/main~2)"
+sha2="$(git -C "$REPO" rev-parse origin/main~1)"
+deadbeef="$(git -C "$REPO" rev-parse origin/main)"
+[ -n "$sha1" ] && [ -n "$sha2" ] && [ -n "$deadbeef" ] || { echo "cannot resolve published commits"; exit 1; }
+
 # ---- the happy path, one transition at a time ------------------------------
 world a; review $R CHANGES-REQUIRED -
 expect "canonical review, no response -> OPEN" $R OPEN
 
-world b; review $R CHANGES-REQUIRED -;            respond $R IMPLEMENTED sha1
+world b; review $R CHANGES-REQUIRED -;            respond $R IMPLEMENTED $sha1
 expect "response submits sha1, unreviewed -> IMPLEMENTED" $R IMPLEMENTED
 
 # The label on this case was right and its expectation was wrong: it pinned the
 # bug instead of the contract, and the reviewer caught it, not me
 # (REV-20260807-065). Rejection of the SUBMITTED sha is the one backward
 # transition the protocol has.
-world c; review $R CHANGES-REQUIRED sha1;         respond $R IMPLEMENTED sha1
+world c; review $R CHANGES-REQUIRED $sha1;         respond $R IMPLEMENTED $sha1
 expect "reviewer rejects the submitted sha -> OPEN" $R OPEN
 # State alone is not the contract -- routing is. A rejected submission whose
 # owner still reads Reviewer sends the reviewer back to the sha they rejected.
@@ -57,48 +68,48 @@ case "$row" in *"| Claude |"*) ok "rejection routes back to Claude" ;;
 case "$row" in *"implement and respond"*) ok "rejection asks for an implementation, not a review" ;;
   *) bad "rejection asks for an implementation, not a review" "$row" ;; esac
 
-world c2; review $R CHANGES-REQUIRED sha1;        respond $R IMPLEMENTED sha2
+world c2; review $R CHANGES-REQUIRED $sha1;        respond $R IMPLEMENTED $sha2
 expect "after rejection, advancing to sha2 -> IMPLEMENTED again" $R IMPLEMENTED
 
-world d; review $R CHANGES-REQUIRED sha1;         respond $R IMPLEMENTED sha2
+world d; review $R CHANGES-REQUIRED $sha1;         respond $R IMPLEMENTED $sha2
 expect "response advances to sha2 -> IMPLEMENTED" $R IMPLEMENTED
 
-world e; review $R APPROVED sha2;                 respond $R IMPLEMENTED sha2
+world e; review $R APPROVED $sha2;                 respond $R IMPLEMENTED $sha2
 expect "reviewer approves the submitted sha -> APPROVED" $R APPROVED
 
-world f; review $R APPROVED sha2; respond $R IMPLEMENTED sha2; closure $R deadbeef
+world f; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R $deadbeef
 expect "closure on top of a matching approval -> CLOSED" $R CLOSED
 
 # ---- the cases that must NOT be accepted -----------------------------------
 # Approval that names a different commit than the one on the table is not
 # approval of what is on the table. This is the one that would otherwise let a
 # stale verdict close current work.
-world g; review $R APPROVED sha1;                 respond $R IMPLEMENTED sha2
+world g; review $R APPROVED $sha1;                 respond $R IMPLEMENTED $sha2
 expect "approval for sha1 while sha2 is submitted -> not APPROVED" $R IMPLEMENTED
 
-world h; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED sha1; closure $R deadbeef
+world h; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED $sha1; closure $R $deadbeef
 expect "closure without an approval -> refused" $R FAILED
 
 world i; review $R CHANGES-REQUIRED -
 cp "$W/docs/internal/reviews/$R.md" "$W/docs/internal/reviews/$R-EXTRA.md"
 expect "two files claiming one REV identity -> refused" $R FAILED
 
-world j; respond $R IMPLEMENTED sha1
+world j; respond $R IMPLEMENTED $sha1
 expect "orphan response with no review -> refused" $R FAILED
 
-world k; review $R CHANGES-REQUIRED -; closure $R deadbeef
+world k; review $R CHANGES-REQUIRED -; closure $R $deadbeef
 out="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && ok "orphan-ish closure without approval refuses" || bad "orphan-ish closure without approval refuses" "$out"
 
 world l; printf '<!-- rev: %s -->\n<!-- verdict: MAYBE -->\n' "$R" > "$W/docs/internal/reviews/$R.md"
 expect "malformed verdict -> refused, not guessed" $R FAILED
 
-world m; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED sha1; closure $R ""
+world m; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED $sha1; closure $R ""
 out="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"; rc=$?
 [ "$rc" -ne 0 ] && ok "closure with no closed-by refuses" || bad "closure with no closed-by refuses" "$out"
 
 # ---- generated views must match the facts ----------------------------------
-world n; review $R APPROVED sha2; respond $R IMPLEMENTED sha2
+world n; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2
 REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
 REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
 [ $? -eq 0 ] && ok "freshly generated ledger verifies" || bad "freshly generated ledger verifies"
@@ -119,6 +130,58 @@ REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1
 world o; review $R CHANGES-REQUIRED -
 printf '# an old review with no machine header\n' > "$W/docs/internal/reviews/REV-20260101-999-DESCRIPTIVE-NAME.md"
 expect "a pre-V2 file without headers is ignored, not an error" $R OPEN
+
+# ---- commit-bearing headers must name a fetchable commit (REV-067 F1) ------
+#
+# The protocol's core promise is that the reviewer can fetch, diff and pin
+# exactly the submitted change. REV-066 was routed to the reviewer carrying
+# `implementation: c49afd2...`, and GitHub answered "No commit found".
+#
+# The diagnosis matters more than the symptom: that SHA was NOT fabricated and
+# NOT a typo. It is a real commit in the implementer's clone, orphaned by a
+# rewrite, whose content was published as a DIFFERENT SHA. So resolvability is
+# not the property -- a `git cat-file -e` check passes it and the reviewer
+# still cannot fetch it. Reachability from the published branch is the
+# property, and it is what these cases pin.
+ORPHAN="$(git -C "$REPO" commit-tree "$(git -C "$REPO" rev-parse origin/main^{tree})" -p "$(git -C "$REPO" rev-parse origin/main)" -m 'orphan for test' 2>/dev/null)"
+NOSUCH=0123456789abcdef0123456789abcdef01234567
+
+world p1; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED $sha1
+expect "a published commit is accepted" $R IMPLEMENTED
+
+world p2; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED $NOSUCH
+expect "a well-formed but nonexistent SHA is refused" $R FAILED
+
+world p3; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED not-a-sha-at-all
+expect "a non-commit value is refused" $R FAILED
+
+if [ -n "$ORPHAN" ]; then
+    world p4; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED "$ORPHAN"
+    expect "a REAL commit that is not on the published branch is refused" $R FAILED
+    # The message has to name the REV, the field and the SHA, or the reviewer
+    # cannot act on it (REV-067 required outcome 4).
+    msg="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"
+    case "$msg" in
+      *"$R"*implementation*"$ORPHAN"*) ok "the refusal names the REV, the field and the SHA" ;;
+      *) bad "the refusal names the REV, the field and the SHA" "$msg" ;;
+    esac
+else
+    bad "a REAL commit that is not on the published branch is refused" "could not build an orphan commit"
+fi
+
+# The reviewer's own header is held to the same standard -- a review that pins
+# a head nobody can fetch is the same failure pointing the other way.
+world p5; review $R CHANGES-REQUIRED $NOSUCH; respond $R IMPLEMENTED $sha1
+expect "an unfetchable reviewed-implementation is refused too" $R FAILED
+
+# And the closure artifact, which is the one that declares a thread finished.
+world p6; review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2; closure $R $NOSUCH
+expect "an unfetchable closed-by is refused" $R FAILED
+
+# `-` is the protocol's explicit "no commit yet". It must stay legal, or the
+# very first review of any thread becomes unrepresentable.
+world p7; review $R CHANGES-REQUIRED -
+expect "the literal - is not treated as a broken SHA" $R OPEN
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
