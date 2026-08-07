@@ -2,33 +2,31 @@
 
 **Reviewed head:** `e39521253bb40f2b1bba0cae59147b2a6e1385b5`  
 **Scope:** `docs/PAUZA-I-BLOKADA.md` and the user-visible CLI text it quotes  
-**Verdict:** **CHANGES REQUIRED**
+**Verdict:** **ACCEPTED**
 
-The runbook is useful and mostly matches the shipped hard-disable model, but two operator-visible statements are factually wrong on the reviewed head. Because this file is explicitly the 2am operational reference, both should be corrected before treating it as authoritative.
+The runbook is useful and mostly matches the shipped hard-disable model. The two operator-visible inaccuracies found on the original reviewed head were corrected in `54c69179640d304df84144358352fd20d4e9f686` and independently rechecked against the diff and the response in `c072e1986cb1c480da25e52171e8112ba3af0087`.
 
 ## F1 — the runbook says hard disable needs one SSH connection, but the implementation deliberately uses two
 
-The comparison table says:
+The original comparison table said:
 
 > `Wymaga kontaktu z peerem | ... tak (jedno połączenie ssh)`
 
-That is not the implementation. `cmd_disable_client` first calls `pair_control disable`, then calls `peer_pair_state`, which in turn performs a second `pair_control status`. The second connection is intentional: the design requires a read-back rather than trusting the write acknowledgement.
+That was not the implementation. `cmd_disable_client` first calls `pair_control disable`, then calls `peer_pair_state`, which in turn performs a second `pair_control status`. The second connection is intentional: the design requires a read-back rather than trusting the write acknowledgement.
 
-This matters operationally because a network interruption between those two connections is a supported `TRANSITION_INCOMPLETE` state. The runbook itself explains the read-back correctly a few paragraphs later, so the table currently contradicts both code and its own prose.
+This matters operationally because a network interruption between those two connections is a supported `TRANSITION_INCOMPLETE` state.
 
-**Required correction:** change the table to say that hard disable requires peer reachability / multiple SSH exchanges (or simply omit the connection count). Do not promise exactly one SSH connection.
+**Closure:** fixed in `54c6917`. The table now states that the peer must be reachable for a write and a separate read-back; it no longer promises a one-connection implementation.
 
 ## F2 — the runbook reproduces a stale CLI message saying hard disable is unimplemented
 
-The soft-pause example quotes the current `pause-client` output:
+The original soft-pause example quoted the then-current `pause-client` output:
 
 > `Hard disable (peer-side gate) is a separate, unimplemented stage.`
 
-That line is indeed still emitted by `cmd_pause_client`, but hard disable is now shipped, live-campaigned, and closed in REV-052. Copying the stale output into the new operator runbook turns an existing CLI wording defect into documentation.
+That line was stale after REV-052 closed the hard-disable package.
 
-This is not merely cosmetic: an operator reading the runbook immediately above a working `disable-client` section is told by the command output that the same feature is unimplemented.
-
-**Required correction:** update `cmd_pause_client` to describe hard disable as the stronger available control (for example: `Use disable-client for peer-side enforcement, including unlabeled manual commands`) and update the runbook example to the new exact output. Pin the wording in the existing pause/zfsbackup tests that already assert the limitation text.
+**Closure:** fixed in `54c6917`. `cmd_pause_client` now points the operator to `disable-client NAME` for peer-side enforcement, including unlabeled manual commands. The runbook was updated to the same output, and `test/zfsbackup/run.sh` now asserts that the pointer is present and the word `unimplemented` is absent.
 
 ## What is accepted
 
@@ -45,6 +43,15 @@ The following parts of the runbook match the reviewed implementation and prior c
 - forced-command gate installation at `--join` and removal of stale bare copies of the same key;
 - the operational traps from the live campaigns are worth keeping.
 
-## Test scope
+## Verification and closure
 
-This is a documentation + user-visible message correction. No live or two-host campaign is required. Run the targeted pause/zfsbackup suites that pin the message plus `impact.sh --verify`; update the runbook from the resulting exact output.
+Verified directly from the patch for `54c6917`:
+
+- F1 documentation claim corrected;
+- F2 production CLI text corrected;
+- exact runbook example corrected;
+- regression assertion added to `test/zfsbackup/run.sh`.
+
+Claude reports `zfsbackup 292/292`, `pause 74/74`, and `impact.sh --verify` clean in `docs/internal/reviews/responses/REV-20260807-053.md`. Those declared results are consistent with the submitted test change; no live/two-host rerun is required for this documentation + user-visible-message scope.
+
+**Final verdict:** **ACCEPTED — REV-053 CLOSED.**
