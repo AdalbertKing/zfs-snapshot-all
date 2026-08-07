@@ -7,4 +7,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 
 | REV | State | Owner | Implementation | Reviewed | Response | Next |
 |---|---|---|---|---|---|---|
-| REV-20260807-065 | OPEN | Claude | - | 135c0311caddaa0a620168ec8bca089f712441bd | - | implement and respond |
+| REV-20260807-065 | IMPLEMENTED | Reviewer | db9c0d40b478a96f2389765499646fe254275f48 | 135c0311caddaa0a620168ec8bca089f712441bd | responses/REV-20260807-065.md | verify the submitted implementation |
