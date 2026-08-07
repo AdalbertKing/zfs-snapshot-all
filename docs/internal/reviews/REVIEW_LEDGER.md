@@ -8,4 +8,5 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV | State | Owner | Implementation | Reviewed | Response | Next |
 |---|---|---|---|---|---|---|
 | REV-20260807-065 | CLOSED | - | db9c0d40b478a96f2389765499646fe254275f48 | db9c0d40b478a96f2389765499646fe254275f48 | responses/REV-20260807-065.md | - |
-| REV-20260807-066 | IMPLEMENTED | Reviewer | c49afd2afbb3a40643e34303bf2a7b6d7aaaa948 | 8b69e1afc40ab6a25a0b42532db9769508797fde | responses/REV-20260807-066.md | verify the submitted implementation |
+| REV-20260807-066 | IMPLEMENTED | Reviewer | 39663b2b754f2194b0342f068a93fe3b22aaeadc | 8b69e1afc40ab6a25a0b42532db9769508797fde | responses/REV-20260807-066.md | verify the submitted implementation |
+| REV-20260807-067 | IMPLEMENTED | Reviewer | d4a1e7dae3ec085db8728d1c01c5a92b25e2a034 | 8980e2653cfff76aec0dd3b1a30700d9f704a555 | responses/REV-20260807-067.md | verify the submitted implementation |
