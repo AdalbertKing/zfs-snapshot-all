@@ -5540,9 +5540,12 @@ do_draft_config() {
                 [ -n "$ds" ] || continue
                 echo
                 [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- 'zfs allow' dziedziczy"
-                [ "$n" -gt 0 ] && echo "#  na nie, wiec jedno '-R' we flags obejmie caly podzbior)"
+                [ "$n" -gt 0 ] && echo "#  na nie, wiec 'recursive' ponizej obejmie caly podzbior:"
+                [ "$n" -gt 0 ] && echo "#  'flat' = kazdy potomek osobnym zadaniem, 'atomic' = cale"
+                [ "$n" -gt 0 ] && echo "#  poddrzewo jednym strumieniem w jednym punkcie czasu.)"
                 echo "# [dataset:${PEER_SAVED_TARGET}/${label}/${ds}]"
                 echo "#   src          = ${remote_user}@${PEER_HOST}:${ds}"
+                [ "$n" -gt 0 ] && echo "#   recursive    = flat"
                 echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")
@@ -5593,9 +5596,12 @@ do_draft_config() {
             while IFS=$'\t' read -r ds n; do
                 [ -n "$ds" ] || continue
                 echo
-                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- jedno '-R' we flags obejmie caly podzbior)"
+                [ "$n" -gt 0 ] && echo "# ($ds ma $n datasetow potomnych -- 'recursive' ponizej obejmie caly"
+                [ "$n" -gt 0 ] && echo "#  podzbior: 'flat' = kazdy potomek osobnym zadaniem, 'atomic' = cale"
+                [ "$n" -gt 0 ] && echo "#  poddrzewo jednym strumieniem w jednym punkcie czasu.)"
                 echo "# [dataset:$ds]"
                 echo "#   dst          = ${remote_user}@${PEER_HOST}:${PEER_SAVED_TARGET}/${my_label}/${ds}"
+                [ "$n" -gt 0 ] && echo "#   recursive    = flat"
                 echo "#   flags        = -K ${job_keyfile}${kh_flag}${port_flag}"
                 echo "#   use_template = <WYBIERZ ISTNIEJACY [template:]>"
             done < <(printf '%s\n' "${DRAFT_ROOTS[@]}")

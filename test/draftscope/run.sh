@@ -222,6 +222,37 @@ case "$out" in *"nothing to activate"*) ok "C2 ...named plainly, not a generic f
 check "C3 no scope file was left behind by the refused draft" "1" \
       "$([ -e "$TMPD/peers/onlysystem.scope" ]; echo $?)"
 
+# ---- D. --draft-config suggests the TYPED recursion field, not a flag ------
+#
+# REV-20260807-054 acceptance condition 5. Scope of this check, stated plainly:
+# it is a STATIC read of deploy.sh, not an execution of --draft-config. That
+# path needs a real pairing (saved peer, key, manifest) which is exactly why it
+# has no behavioural suite today -- see the note on [file:zfs-backup.sh] in
+# test/deps.conf. So this proves the generator no longer TELLS an operator to
+# write `flags = -R`; it does not prove the emitted file parses.
+#
+# Worth having anyway: the old prose was advice to write a config that
+# gen-cron.sh now refuses outright, and a draft that hands someone a rejected
+# config is a support call, not a typo.
+DEPLOY_SRC="${DEPLOY_SRC:-$DIR/../../deploy.sh}"
+
+if grep -q "recursive    = flat" "$DEPLOY_SRC"; then
+    ok "D1 --draft-config offers the typed 'recursive' field"
+else
+    bad "D1 --draft-config offers the typed 'recursive' field" "no 'recursive    = flat' line in $DEPLOY_SRC"
+fi
+
+# The exact shape being outlawed: telling the operator that a -R placed in
+# 'flags' covers the subtree. Narrow on purpose -- deploy.sh still documents
+# -r/-R for HAND-WRITTEN snapsend/delsnaps cron lines further down, and those
+# are still correct; it is only the CONFIG advice that changed.
+if grep -qE "'-R' we flags|-R\" we flags|we flags obejmie" "$DEPLOY_SRC"; then
+    bad "D2 no leftover advice to put -R in a config's 'flags'" \
+        "$(grep -nE "'-R' we flags|-R\" we flags|we flags obejmie" "$DEPLOY_SRC")"
+else
+    ok "D2 no leftover advice to put -R in a config's 'flags'"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
