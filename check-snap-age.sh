@@ -37,8 +37,19 @@ set -o pipefail
 #                 -- e.g. 90m, 3h, 9d. crit must be >= warn.
 #
 # Exit codes (Nagios convention): 0=OK, 1=WARNING, 2=CRITICAL, 3=UNKNOWN.
-# A dataset with NO snapshot matching the pattern at all is CRITICAL (nothing
-# has ever landed -- worth paging).
+#
+# A dataset with NO snapshot matching the pattern is judged by the age of the
+# DATASET ITSELF, through the same warn/crit ladder (REV-20260807-056). It used
+# to be an unconditional CRITICAL, which was wrong for a dataset younger than
+# its own backup interval: a guest created after the last scheduled run, and
+# snapshotted by pvesr or vzdump before the next one, was reported as a stale
+# backup of something that had never had the chance to have one. Nothing was
+# broken, and the daily digest carried a false line anyway.
+# Measuring from creation puts the alarm where the promise is actually broken:
+# a 10-minute-old dataset reads OK, a 3-day-old one with no backup still reads
+# CRITICAL. Status lines say which of the two the age came from, because
+# "age=72h" means different things in each case.
+# A dataset whose creation time cannot be read is UNKNOWN, never a guessed age.
 #
 # UNKNOWN (3) means THE CHECK ITSELF could not answer the question -- bad
 # arguments, missing zfs, a dataset that does not exist -- as opposed to
@@ -63,7 +74,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.1'
+VERSION='v2.2'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -162,13 +173,32 @@ SAW_UNKNOWN=0 # tracked separately: UNKNOWN is not "worse CRITICAL", it is a
 # and prints a status line (always in -v mode, otherwise only when non-OK).
 #
 # explicit=true for a dataset named directly on the command line: "nothing
-# matches" there is always CRITICAL, the caller asked for this exact path.
+# matches" there is still judged, by dataset age -- the caller asked for this
+# exact path, so it is answered rather than skipped.
 # explicit=false for a -R discovered descendant: a dataset that has NEVER had
 # ANY snapshot at all (not just none matching the pattern) is silently
 # skipped -- it's almost always an intermediate container in the hierarchy
 # (e.g. the parent of several real leaf datasets), not something meant to be
 # monitored on its own. A descendant that HAS other snapshots but none
 # matching the pattern is still a real finding and stays CRITICAL.
+# The ONLY way a creation timestamp enters this script (REV-20260807-056 §4/§5).
+#
+# `zfs get` can fail, print nothing, or -- on a dataset destroyed between the
+# list and the get -- print "-". Bash reads an empty or non-numeric value in
+# arithmetic as 0, so the old inline `$((NOW - $(zfs get ...)))` turned a failed
+# read into an age of the entire Unix epoch and reported CRITICAL with a
+# fabricated number. Fail-closed, but a measurement nobody made.
+#
+# Echoes a validated epoch, or returns 1 and echoes nothing.
+creation_epoch() {   # <dataset or snapshot>
+    local v
+    v="$(zfs get -H -p -o value creation "$1" 2>/dev/null)" || return 1
+    case "$v" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$v"
+}
+
 check_one() {
     local ds="$1" explicit="$2"
     local newest="" newest_epoch="" line snapname any_snap=false
@@ -190,18 +220,37 @@ check_one() {
         [[ "$snapname" == "${PATTERN}"* ]] && newest="$line"
     done < <(zfs list -H -o name -s creation -t snapshot "$ds" 2>/dev/null)
 
+    local from_creation=false detail
     if [ -z "$newest" ]; then
         if [ "$any_snap" = false ] && [ "$explicit" != true ]; then
             [ "$VERBOSE" = true ] && echo "SKIP dataset=$ds -- no snapshots at all (not an explicit target, likely a container node)" >&2
             return
         fi
-        echo "CRITICAL dataset=$ds pattern=$PATTERN -- no snapshot found matching this pattern" >&2
-        [ "$WORST" -lt 2 ] && WORST=2
-        return
+        # REV-20260807-056: a dataset cannot be late before it exists. This used
+        # to be an unconditional CRITICAL, which reported a guest created after
+        # the last scheduled run -- and snapshotted by pvesr or vzdump before
+        # the next one -- as a stale backup of something that never had the
+        # chance to have one. Measuring from the dataset's own creation puts the
+        # alarm where the promise is actually broken, and gives this case the
+        # WARNING band it never had.
+        if ! newest_epoch="$(creation_epoch "$ds")"; then
+            echo "UNKNOWN dataset=$ds -- no snapshot matches pattern=$PATTERN and the dataset's creation time could not be read, so its age is unknown" >&2
+            SAW_UNKNOWN=1
+            return
+        fi
+        from_creation=true
+    else
+        if ! newest_epoch="$(creation_epoch "$newest")"; then
+            echo "UNKNOWN dataset=$ds -- the creation time of ${newest#*@} could not be read, so its age is unknown" >&2
+            SAW_UNKNOWN=1
+            return
+        fi
     fi
 
-    newest_epoch=$(zfs get -H -p -o value creation "$newest" 2>/dev/null)
     local age=$((NOW - newest_epoch))
+    # A timestamp in the future (clock skew, a pool imported from a host whose
+    # clock ran ahead) is not negative age, it is no evidence of staleness.
+    [ "$age" -lt 0 ] && age=0
     local age_h=$((age / 3600))
 
     local sev=0 label="OK"
@@ -212,8 +261,16 @@ check_one() {
     fi
     [ "$WORST" -lt "$sev" ] && WORST=$sev
 
+    # Provenance is part of the contract: an operator reading "age=72h" must not
+    # have to work out whether that is the age of a snapshot or of the dataset.
+    if [ "$from_creation" = true ]; then
+        detail="pattern=$PATTERN -- no snapshot found matching this pattern; age measured from dataset creation"
+    else
+        detail="pattern=$PATTERN newest=${newest#*@}"
+    fi
+
     if [ "$sev" -gt 0 ] || [ "$VERBOSE" = true ]; then
-        echo "$label dataset=$ds pattern=$PATTERN newest=${newest#*@} age=${age_h}h (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
+        echo "$label dataset=$ds $detail age=${age_h}h (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
     fi
 }
 
