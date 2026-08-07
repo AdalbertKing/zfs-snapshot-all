@@ -350,52 +350,60 @@ REVIEW_MARKER_RE='^<!-- review-head: ([0-9a-f]{7,40}) -->$'
 # on the thing that matters.
 ledger_coherence() {
     echo "== OPEN-THREADS.md routes only work that still needs doing"
-    [ -f "$REPO/$THREADS_FILE" ] || { echo "  $THREADS_FILE is missing"; return 1; }
+    local tf="${THREADS_FILE_OVERRIDE:-$REPO/$THREADS_FILE}"
+    [ -f "$tf" ] || { echo "  $tf is missing"; return 1; }
     local rc=0
 
-    # 1. A row whose STATE says it is finished must not still name someone in
-    #    "Whose move". That column is the live field; a name in it is a claim
-    # `print`, not `printf`: it supplies its own newline, so there is no escape
-    # to survive every layer that generates or edits this file. Two earlier
-    # versions of this line shipped a LITERAL newline inside the awk string and
-    # died with "unterminated string" -- the same trap that already ate a sed
-    # backreference in status_freshness.
+    # Every row carries exactly one canonical token and the routing rule is
+    # derived from THAT, not from the prose (REV-20260807-064):
     #
-    # The em-dash is passed in as a variable rather than pasted, so this file
-    # stays pure ASCII and cannot be broken by an editor re-encoding it.
+    #   [CLOSED]       -> must route to nobody
+    #   [OPEN]         -> must name whose move it is
+    #   [IMPLEMENTED]  -> must name whose move it is. NOT terminal: "delivered,
+    #                     verdict pending" is a real state, and the previous
+    #                     rule text claimed otherwise while this checker --
+    #                     correctly -- never enforced it.
+    #   anything else  -> refused, not guessed
+    #
+    # A cell may legitimately contain an ESCAPED pipe (`no\|flat\|atomic`).
+    # Markdown handles that; awk -F'|' does not, and a row that splits into the
+    # wrong columns is read as the wrong state. Escaped pipes are folded to a
+    # placeholder before splitting.
     local bad awkrc
-    bad="$(awk -F'|' -v DASH="$(printf '\342\200\224')" '
-        /^\| / && NF>=5 {
-            # Leading "|" makes $1 empty, so the columns are:
-            #   $2=#  $3=Thread  $4=State  $5=Whose move
-            # The first version read $4 as $3 and therefore scanned the thread
-            # TITLE for "CLOSED" -- it could never have fired, and only a
-            # properly constructed positive control showed it.
-            st=$4; mv=$5; gsub(/^ +| +$/,"",mv);
-            if (st ~ /CLOSED|DONE/ && mv != "-" && mv != DASH && mv != "")
-                print "    row " $2 " still routes to: " mv
-        }' "$REPO/$THREADS_FILE")"; awkrc=$?
+    bad="$(sed 's/[\]|//g' "$tf" | awk -F'|' -v DASH="$(printf '\342\200\224')" '
+        /^\| / && NF>=5 && $2 !~ /^ *# *$/ && $0 !~ /^\|---/ {
+            id=$2; st=$4; mv=$5;
+            gsub(/^ +| +$/,"",id); gsub(/^ +| +$/,"",mv);
+            tok="";
+            if (st ~ /\*\*\[CLOSED\]\*\*/)           tok="CLOSED";
+            else if (st ~ /\*\*\[IMPLEMENTED\]\*\*/) tok="IMPLEMENTED";
+            else if (st ~ /\*\*\[OPEN\]\*\*/)        tok="OPEN";
+            terminal = (mv == "-" || mv == DASH || mv == "");
+            if (tok == "")                     print "    row " id ": no [OPEN]/[IMPLEMENTED]/[CLOSED] token -- refusing to guess its state";
+            else if (tok == "CLOSED" && !terminal) print "    row " id ": [CLOSED] but still routes to: " mv;
+            else if (tok != "CLOSED" && terminal)  print "    row " id ": [" tok "] but names nobody -- who owes this?";
+        }')"; awkrc=$?
     # A parser that errors must not read as "no violations found" -- that is
     # the fail-open this whole mechanism exists to remove, and the first
     # version of this function had it.
     if [ "$awkrc" -ne 0 ]; then
-        echo "  could not parse $THREADS_FILE (awk exit $awkrc) -- refusing to call that clean"
+        echo "  could not parse $tf (awk exit $awkrc) -- refusing to call that clean"
         rc=1
     elif [ -n "$bad" ]; then
-        echo "  rows marked finished that still route work:"
+        echo "  ledger rows whose state and routing disagree:"
         printf '%s
 ' "$bad"
         rc=1
     fi
 
-    # 2. The announced review head must not be older than the newest change the
-    #    reviewer would be asked to look at.
+    # The announced review head must not be older than the newest change the
+    # reviewer would be asked to look at.
     git rev-parse --git-dir >/dev/null 2>&1 || return $rc
     local rh
-    rh="$(grep -oE "$REVIEW_MARKER_RE" "$REPO/$THREADS_FILE" 2>/dev/null | head -1)"
+    rh="$(grep -oE "$REVIEW_MARKER_RE" "$tf" 2>/dev/null | head -1)"
     rh="${rh#<!-- review-head: }"; rh="${rh% -->}"
     if [ -z "$rh" ]; then
-        echo "  $THREADS_FILE has no '<!-- review-head: <sha> -->' marker"; return 1
+        echo "  $tf has no '<!-- review-head: <sha> -->' marker"; return 1
     fi
     git cat-file -e "${rh}^{commit}" 2>/dev/null || {
         echo "  the review-head marker names '$rh', which is not a commit here"; return 1; }
