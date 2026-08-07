@@ -1133,7 +1133,16 @@ przerywa przed pytaniem — „nie dało się odczytać" to nie to samo co „je
 edycja szablonów: usuwa stare szablony, przebudowuje aktywnych klientów tą samą
 funkcją co aktywacja, waliduje, pokazuje diff i pyta raz.
 
-**Limit pasma** `--bandwidth=N` jest per klient (bajty/s, `mbuffer -r`).
+**Limit pasma** `--bandwidth=N` (bajty/s, `mbuffer -r`) jest **per proces
+transferu**, nie sumaryczny dla relacji. W praktyce dla pojedynczego zadania
+znaczy to tyle samo: datasety w jednym wywołaniu `snapsend` idą sekwencyjnie
+(snapsend.sh:2012 — bez `&`), a generator scala datasety o wspólnym
+harmonogramie w jedną komendę. **Ale dwa nakładające się zadania tej samej
+relacji** (np. przeciągnięty hourly i startujący daily) **sumują się do 2×N** —
+dziś zamek w `snapsend` jest kluczowany na `(datasety, cel, prefiks)`, więc łapie
+hourly-na-hourly, a nie hourly-na-daily. Naprawa jest w NOW (zamek kluczowany
+etykietą relacji). Pułap **całego kolektora** to osobna sprawa, świadomie
+odłożona — kilka relacji nadal może sumować się ponad N.
 
 **Pełny cykl przetestowany na żywo 2026-08-01** (metropolis, pve1 jako kolektor
 jako root, pve2 jako źródło): `setup-server` → `add-client` → paczka → `--join` →
