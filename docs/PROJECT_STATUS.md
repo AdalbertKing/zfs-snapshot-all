@@ -22,8 +22,16 @@
   Dowód zachowawczości na żywo na 192.168.11.11 (jedyny host we flocie z
   rekurencyjnym datasetem): stary kod + stary config i nowy kod + config po
   migracji dają wynik **bajt w bajt identyczny**, a config niezmigrowany zostaje
-  odrzucony z komunikatem wskazującym `recursive = atomic`. Nic nie
-  instalowano; config i crontab tego hosta zweryfikowane sumą md5 jako nietknięte.
+  odrzucony z komunikatem wskazującym `recursive = atomic`. Po REV-055
+  domknięte także porównanie wprost z **zainstalowanym blokiem**: zarówno
+  generator sprzed zmiany z niezmigrowanym configiem, jak i v4.27 z configiem po
+  migracji odtwarzają go **bajt w bajt** (pierwszy przebieg jest kontrolą — bez
+  niego zgodność drugiego nie odróżniałaby poprawnej migracji od porównania,
+  które nie może wypaść źle). Nic nie instalowano; config i crontab tego hosta
+  zweryfikowane sumą md5 jako nietknięte.
+  **v4.27 jest już wdrożone na flocie** (godzinny `git pull`), więc wdrożony
+  `gen-cron.sh` na 192.168.11.11 odmawia obsługi własnego configu tego hosta —
+  to zamierzone twarde odcięcie, nie awaria (patrz niżej).
   **Migracja floty NIE jest wykonana** — patrz sekcja 6. Sprawdzone na wszystkich
   czterech hostach: nic nie regeneruje crontaba cyklicznie (jedyne zadania to
   godzinny `git pull --ff-only` i `update-control.sh --self-update`), więc
