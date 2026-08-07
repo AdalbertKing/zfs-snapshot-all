@@ -7,7 +7,29 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-07**: **pakiet hard-disable ZAMKNIĘTY przez
+- Data odświeżenia: **2026-08-07**, commit **`121892f`**: **model rekurencji
+  przebudowany** (REV-054, zatwierdzony do implementacji z migracją „twarde
+  odrzucenie"). `gen-cron.sh` **v4.27** przyjmuje na `[dataset:]` pole
+  `recursive = no | flat | atomic`, które steruje **wszystkimi trzema** liniami
+  generowanymi przez sekcję — transferem, prune'em inline i monitorem. Wcześniej
+  rekurencję dało się wyrazić wyłącznie jako `flags = -R`, co docierało **tylko
+  do transferu**: nowo utworzony dataset potomny był replikowany w nieskończoność,
+  nigdy nie przycinany i nigdy nie monitorowany, a każdy przebieg raportował
+  sukces. `-r`/`-R` we `flags` jest teraz błędem krytycznym, sprawdzanym
+  **równoważnie z `getopts`** (formy sklejone `-Rv`, `-rZ` też odrzucane;
+  argument opcji, np. `-m R-daily_`, nie jest mylony z flagą).
+  **Silnik nietknięty** — zmiana dotyczy generatora, walidatora i `cron2conf.sh`.
+  Dowód zachowawczości na żywo na 192.168.11.11 (jedyny host we flocie z
+  rekurencyjnym datasetem): stary kod + stary config i nowy kod + config po
+  migracji dają wynik **bajt w bajt identyczny**, a config niezmigrowany zostaje
+  odrzucony z komunikatem wskazującym `recursive = atomic`. Nic nie
+  instalowano; config i crontab tego hosta zweryfikowane sumą md5 jako nietknięte.
+  **Migracja floty NIE jest wykonana** — patrz sekcja 6. Sprawdzone na wszystkich
+  czterech hostach: nic nie regeneruje crontaba cyklicznie (jedyne zadania to
+  godzinny `git pull --ff-only` i `update-control.sh --self-update`), więc
+  wejście v4.27 **nie zmienia zachowania żadnego hosta** — odmowa pojawi się
+  dopiero, gdy człowiek sam uruchomi `gen-cron.sh` na 192.168.11.11.
+- Poprzednie odświeżenie, 2026-08-07: **pakiet hard-disable ZAMKNIĘTY przez
   recenzenta** (`REV-20260807-052`, APPROVED — zero otwartych znalezisk; zamknięte
   także REV-049, REV-050 i REV-051). Zbudowany i zweryfikowany na żywo
   2026-08-06 wieczorem: **hard-disable ZBUDOWANY
@@ -1176,6 +1198,34 @@ czterech hostach w obu formach hosta.
   uznana za akceptowalną infrastrukturę dla **opcjonalnego** remote quiesce.
 
 ### Otwarte u implementera
+
+- **REV-054 (model rekurencji) — zaimplementowane w `ba24c8b` + `121892f`,
+  czeka na werdykt.** Wszystkie sześć warunków akceptacji spełnione; odpowiedź:
+  `docs/internal/reviews/responses/REV-20260807-054.md`. Trzy rzeczy zostają
+  jawnie poza zakresem i są w odpowiedzi nazwane: (1) `cron2conf.sh` **nie
+  parsuje w ogóle linii `snapget.sh`**, więc połowa round-tripu dla pull jest
+  nietestowalna — usterka sprzed tej zmiany, znaleziona przy budowie fixture'a;
+  (2) `--draft-config` nadal nie ma testu behawioralnego, bo wymaga prawdziwego
+  parowania — nowe D1/D2 w `draftscope` to **statyczny odczyt `deploy.sh`**, nie
+  uruchomienie CLI; (3) migracja floty, niżej.
+
+### Otwarte u właściciela — decyzje, nie kod
+
+- **Migracja 192.168.11.11 na `recursive = atomic`.** To jedyny zarządzany
+  config we flocie z `-r` we `flags`. Zmiana jest jednoliniowa
+  (`flags = -r -v 3` → `recursive = atomic` + `flags = -v 3`) i sprawdzona na
+  żywo jako bajt w bajt zachowawcza, ale dotyka produkcyjnego pliku, więc nie
+  została wykonana bez decyzji. **Nic się nie pali:** nic nie regeneruje
+  crontaba cyklicznie, więc host działa dalej bez zmian; odmowa pojawi się
+  dopiero przy ręcznym `gen-cron.sh`.
+- **pve0: goście bez żadnej kopii** (wątek #22 w `OPEN-THREADS.md`). VM 104
+  `debian` **działa** i ma zero snapshotów `automated_*` na
+  `hdd/data/vm-104-disk-1`; VM 103, VM 107 i CT 105 (zatrzymane) tak samo.
+  Przyczyną nie jest usterka narzędzia — config wylicza datasety po jednym,
+  goście powstali później i **nic nie porównuje deklaracji z rzeczywistością**.
+  REV-054 tego **nie naprawia** i celowo nie próbował: pole `recursive` ułatwia
+  napisanie kompletnego configu, ale nie zauważy niekompletnego. Do decyzji:
+  dopisać te cztery datasety, czy zamówić uzgadnianie zakresu jako funkcję.
 
 - **REV-021 — zaimplementowane w `1edca10`, czeka na werdykt.** Instalacja nie
   może skasować zadań, które cel już wykonuje (`assert_target_block_not_clobbered`),
