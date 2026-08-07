@@ -12,41 +12,42 @@ filenames or transitions, `PROTOCOL.md` wins.
 
 ## V2 authority model
 
-Current review workflow state belongs in exactly one machine-owned file:
+Current review workflow state is read from exactly one generated view:
 
 `docs/internal/reviews/REVIEW_LEDGER.md`
 
-Humans and agents do not edit ledger rows manually. State transitions are made
-through `reviewctl` (or the equivalent implementation defined by Protocol V2).
+Nobody edits ledger rows manually.
 
-Review and response files are durable evidence and preserve separate
-authorship. They are not a second authority for current workflow state.
+The ledger is generated deterministically from small machine facts in the
+role-owned review, response and closure artifacts. Those files preserve
+evidence and authorship; they are not competing current-state tables.
 
-`docs/project/OPEN-THREADS.md` is a generated routing view and is never edited
-manually after the V2 cutover.
+`docs/project/OPEN-THREADS.md` is generated from the ledger and is never edited
+manually after V2 cutover.
 
 ## Artifact layout
 
 ```text
 docs/internal/reviews/
 ├── README.md
-├── REVIEW_LEDGER.md                 # machine-owned workflow state
-├── REV-YYYYMMDD-NNN.md              # reviewer evidence
+├── REVIEW_LEDGER.md                 # generated current-state view
+├── REV-YYYYMMDD-NNN.md              # reviewer evidence + machine facts
 ├── responses/
 │   └── REV-YYYYMMDD-NNN.md          # implementer evidence; exactly one
 └── closures/
-    └── REV-YYYYMMDD-NNN.md          # legacy/optional closure evidence
+    └── REV-YYYYMMDD-NNN.md          # tiny reviewer closure fact
 ```
 
 For new V2 reviews, filenames are canonical and carry no descriptive suffixes.
-Legacy files are not renamed merely for aesthetics; migration records any
-required aliases/exceptions.
+A duplicate `rev:` identity is a hard error even if two filenames differ.
+Legacy files are not renamed merely for aesthetics; migration records required
+exceptions.
 
-- `REV-*.md` is written and maintained by the reviewer.
-- `responses/REV-*.md` is written and maintained by the implementer.
-- the reviewer must not rewrite the implementer's response prose;
-- the implementer must not rewrite the reviewer's finding prose;
-- a second response file for the same REV is prohibited.
+- Reviewer maintains reviewer files.
+- Claude maintains implementer response files.
+- Reviewer must not rewrite implementer response prose.
+- Implementer must not rewrite reviewer finding prose.
+- Subsequent implementation attempts extend the same response file.
 
 ## V2 finite-state machine
 
@@ -55,42 +56,49 @@ Exactly four workflow states exist:
 ```text
 OPEN -> IMPLEMENTED -> APPROVED -> CLOSED
              |
-             +----------> OPEN     # rejected implementation
+             +----------> OPEN     # reviewer rejected submitted SHA
 ```
 
-No other word is a workflow state.
+Each state is derived from repository facts; nobody types the state into a
+manual routing table.
 
-`ACCEPTED`, `DISPUTED`, `NEEDS-DISCUSSION`, `DEFERRED`, `REJECTED` and similar
-terms may survive as evidence/resolution metadata only. They do not create
-parallel state machines.
+In outline:
 
-Only the reviewer approves or closes technical findings. Only the owner accepts
-operational risk or changes project priority.
+- new review/no unreviewed implementation -> `OPEN`;
+- response implementation SHA differs from reviewer's
+  `reviewed-implementation` -> `IMPLEMENTED`;
+- reviewer verdict `APPROVED` applies to the current response SHA -> `APPROVED`;
+- valid canonical closure artifact exists for that approval -> `CLOSED`.
+
+Terms such as `ACCEPTED`, `DISPUTED`, `NEEDS-DISCUSSION`, `DEFERRED` and
+`REJECTED` may exist as evidence/resolution metadata only.
 
 ## Normal V2 loop
 
-Before acting, every participant runs:
+The single normal pre-stage gate is:
 
 ```text
-reviewctl verify
+./test/impact.sh --verify
 ```
 
-The reviewer additionally lists `OPEN` and `IMPLEMENTED` work and acts only on
-the exact implementation SHA recorded in the ledger.
+Protocol verification is invoked from that gate. A focused `reviewctl verify`
+may exist for development/testing, but normal operation must not depend on
+remembering two independent verification commands.
 
 Representative lifecycle:
 
-1. Reviewer publishes `REV-YYYYMMDD-NNN.md` and opens the ledger record.
-2. Claude extends/creates exactly one matching response file and submits an
+1. Reviewer publishes the canonical `REV-YYYYMMDD-NNN.md`.
+2. Claude creates/extends exactly one matching response and submits an exact
    implementation SHA.
-3. `reviewctl implement` transitions `OPEN -> IMPLEMENTED` and routes to
-   Reviewer.
-4. Reviewer verifies the actual diff, tests and required live evidence.
-5. Failed verification transitions `IMPLEMENTED -> OPEN`; the same REV and
-   response file continue.
-6. Successful verification transitions `IMPLEMENTED -> APPROVED`.
-7. Reviewer closes the approved REV: `APPROVED -> CLOSED`.
-8. A genuinely new finding after approval receives a new REV; clarification or
+3. Generated ledger shows `IMPLEMENTED`, owner `Reviewer`.
+4. Reviewer verifies the actual SHA, tests and required live evidence.
+5. Rejection records `CHANGES-REQUIRED` for that SHA; generated state becomes
+   `OPEN` and the same REV continues.
+6. A new implementation SHA in the same response makes state `IMPLEMENTED`
+   again.
+7. Reviewer approval for the current SHA makes state `APPROVED`.
+8. Reviewer creates the canonical closure fact; state becomes `CLOSED`.
+9. A genuinely new finding after approval receives a new REV; clarification or
    another attempt on the same finding does not.
 
 Never infer the active review from chat memory, the largest REV number,
@@ -98,7 +106,7 @@ Never infer the active review from chat memory, the largest REV number,
 
 ## Finding content
 
-A product finding should still record:
+A product finding should record:
 
 ```markdown
 ## F1 — Title
@@ -127,7 +135,7 @@ A product finding should still record:
 ...
 ```
 
-Do not encode workflow state in free-form finding prose. The ledger owns that.
+Do not encode current workflow state in free-form finding prose.
 
 ## Required reviewer verification
 
@@ -140,30 +148,29 @@ The reviewer inspects:
 - documentation changes;
 - evidence for remote, non-root, ZFS, destructive and live-cron paths.
 
-The implementation PR/commit evidence must contain exact test commands and
-results. Tests not run must be stated explicitly.
+Implementation evidence must contain exact test commands and results. Tests not
+run must be stated explicitly.
 
 ## Severity
 
 - **P0 — critical blocker:** credible path to root compromise, data loss,
-  destructive mis-targeting, or a backup mechanism that cannot be trusted.
+  destructive mis-targeting, or an untrustworthy backup mechanism.
 - **P1 — high:** likely operational failure, broken security promise, corrupted
   state, or unsafe release process.
 - **P2 — medium:** important maintainability, test, CI, or documentation defect
   that increases future failure probability.
 - **P3 — low:** cleanup or clarity issue with limited immediate impact.
 
-Each finding may also declare `Blocking: yes|no|owner-decision`; severity and
+A finding may also declare `Blocking: yes|no|owner-decision`; severity and
 release policy are related but not identical.
 
 ## Discussion rule
 
 PR comments remain suitable for short questions and line references. Any
 conclusion that changes interpretation, acceptance criteria, severity,
-blocking status, accepted risk or implementation evidence must survive in the
-canonical review/response artifacts and be reflected through a legal
-`reviewctl` transition where workflow state changes.
+blocking status, accepted risk, reviewer verdict or implementation evidence
+must survive in the appropriate role-owned artifact.
 
-Documentation-only responses should be concise. Findings exclusively about the
-communication protocol should not recursively create full REV cycles unless
-they expose a product/release risk; follow `docs/project/PROTOCOL.md`.
+Documentation-only responses should normally be one concise paragraph.
+Protocol-only process notes should not recursively create full REV cycles unless
+they expose product/release risk; follow `docs/project/PROTOCOL.md`.
