@@ -311,7 +311,15 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.27'
+VERSION='v4.28'
+
+# Legacy-render mode, used ONLY by --migrate-recursion to produce the
+# before-migration baseline it compares against. Assigned unconditionally here
+# so an inherited environment variable of the same name cannot preset it, and
+# reachable only via an undocumented argument that is refused together with
+# --install -- so it can render to stdout and can never write a crontab. It
+# does not weaken the v4.27 rejection for any normal run.
+MIGRATE_LEGACY=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The single crontab writer. Sourced from beside this script, not from
@@ -563,6 +571,60 @@ flags_opt_letters() {   # <flags string> -> option letters, one per line
             esac
         done
     done
+}
+
+# Splits legacy recursion OUT of a flags string, using the same option walk as
+# flags_opt_letters (REV-20260807-057 contract 1: detection must not be a
+# substring rule that mistakes `-m R-daily_` for recursion).
+#
+# Sets SR_REC to atomic|flat|"" and SR_REST to what remains. When no recursion
+# is present SR_REST is the INPUT, byte for byte -- reconstructing an unchanged
+# string would let whitespace drift in, and this function's output is written
+# back into a live config file.
+#
+# Bundled forms are split rather than refused (`-Rv 3` -> flat + `-v 3`,
+# `-rZ` -> atomic + `-Z`), because refusing them would leave a legal config
+# with no migration path.
+split_recursion_flags() {   # <flags>  -> 0 ok / 1 refused (SR_ERR set)
+    SR_REC=""; SR_REST=""; SR_ERR=""
+    local tok rest c kept want_arg=0 found=0 no_more_opts=0 want
+    local -a out=()
+    for tok in $1; do
+        if [ "$want_arg" -eq 1 ] || [ "$no_more_opts" -eq 1 ]; then
+            want_arg=0; out+=("$tok"); continue
+        fi
+        case "$tok" in
+            --)  no_more_opts=1; out+=("$tok"); continue ;;
+            -?*) ;;
+            *)   out+=("$tok"); continue ;;
+        esac
+        rest="${tok#-}"; kept=""
+        while [ -n "$rest" ]; do
+            c="${rest%"${rest#?}"}"; rest="${rest#?}"
+            case "$c" in
+                r|R)
+                    [ "$c" = r ] && want=atomic || want=flat
+                    if [ -n "$SR_REC" ] && [ "$SR_REC" != "$want" ]; then
+                        SR_ERR="both -r and -R appear in the same flags string ('$1') -- these are different modes and guessing which was meant is not migration"
+                        return 1
+                    fi
+                    SR_REC="$want"; found=1; continue ;;
+            esac
+            kept="$kept$c"
+            case "$FLAGS_ARG_LETTERS" in
+                *"$c"*)
+                    # The remainder of this token is that option's argument.
+                    kept="$kept$rest"
+                    [ -n "$rest" ] || want_arg=1
+                    rest=""
+                    ;;
+            esac
+        done
+        [ -n "$kept" ] && out+=("-$kept")
+    done
+    if [ "$found" -eq 0 ]; then SR_REST="$1"; return 0; fi
+    SR_REST="${out[*]}"
+    return 0
 }
 
 # Rejects flags that never make sense in a standing/recurring cron job, and
@@ -1081,6 +1143,22 @@ build_dataset() {
     else
         ds_recursive=no
     fi
+    # Baseline render for --migrate-recursion: the legacy spelling lives in the
+    # section's 'flags', so it has to be read HERE, before the tier loop, for
+    # the same reason 'recursive' is -- it decides the prune and monitor scope
+    # for the whole section, not just for whichever tier happens to be first.
+    if [ "$MIGRATE_LEGACY" -eq 1 ]; then
+        local legacy_raw
+        legacy_raw="$(resolve_field flags "$ds" "" "")" || legacy_raw=""
+        if [ -n "$legacy_raw" ]; then
+            split_recursion_flags "$legacy_raw" || die "[dataset:$ds_path]: $SR_ERR"
+            if [ -n "$SR_REC" ]; then
+                [ "$ds_recursive" = no ] || die "[dataset:$ds_path]: has BOTH 'recursive = $ds_recursive' and legacy recursion in flags -- ambiguous, refusing rather than picking one"
+                ds_recursive="$SR_REC"
+            fi
+        fi
+    fi
+
     local rec_send_flag=""
     case "$ds_recursive" in
         flat)   rec_send_flag="-R" ;;
@@ -1144,6 +1222,14 @@ build_dataset() {
             quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
+            # Baseline render for --migrate-recursion: the recursion VALUE was
+            # already taken from these flags before the tier loop; here the
+            # letters are only stripped out, so lint_flags sees what a migrated
+            # config would give it.
+            if [ "$MIGRATE_LEGACY" -eq 1 ]; then
+                split_recursion_flags "$flags" || die "[dataset:$ds_path] tier=$tier: $SR_ERR"
+                flags="$SR_REST"
+            fi
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
             # PREPENDED, where a hand-written flags string would have carried it
             # (the engines take options in any order, but an operator reading a
@@ -1896,15 +1982,207 @@ install_crontab() {
 #END 5
 
 ###############################################################################
+#BEGIN 5b [RECURSION SCHEMA MIGRATION]  (REV-20260807-057)
+#
+# v4.27 hard-rejects `-r`/`-R` inside a [dataset:]'s 'flags'. That rejection is
+# correct, but on its own it left a live config that the installed generator
+# refuses -- the next administrator trying to REPAIR something would meet the
+# refusal at the worst moment. This is the bounded path from the old accepted
+# representation to the new one.
+#
+# It migrates the config and NOTHING else. It never touches the crontab: if the
+# migrated config reproduces the installed block, there is nothing to install.
+###############################################################################
+
+# Rewrites the config text. Returns the new text on stdout, and sets
+# MIG_REPORT (one "section<TAB>value" line per migrated section).
+migrate_rewrite() {   # <config file>
+    local file="$1" line key val sec="" indent
+    local n=0
+    MIG_REPORT=""
+    MIG_COUNT=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n+1))
+        case "$line" in
+            '['*']')
+                sec=""
+                case "$line" in
+                    '[dataset:'*) sec="${line#[dataset:}"; sec="${sec%]}" ;;
+                esac
+                printf '%s\n' "$line"
+                continue ;;
+        esac
+        # Only a 'flags' assignment inside a [dataset:] section is a candidate.
+        # Whitespace around the key and the '=' is free-form in live configs
+        # (pve2 has "flags         = -e -v 3"), so it is matched, not assumed.
+        if [ -n "$sec" ]; then
+            key="${line%%=*}"
+            if [ "$key" != "$line" ]; then
+                local bare="$key"
+                bare="${bare#"${bare%%[![:space:]]*}"}"
+                bare="${bare%"${bare##*[![:space:]]}"}"
+                if [ "$bare" = flags ]; then
+                    val="${line#*=}"
+                    val="${val#"${val%%[![:space:]]*}"}"
+                    val="${val%"${val##*[![:space:]]}"}"
+                    if ! split_recursion_flags "$val"; then
+                        MIG_ERR="line $n, [dataset:$sec]: $SR_ERR"
+                        return 1
+                    fi
+                    if [ -n "$SR_REC" ]; then
+                        # Reuse the line's own indentation AND its '=' column,
+                        # so the migrated file keeps the shape its author gave
+                        # it. These configs align their values; leaving two
+                        # lines out of column makes a hand-maintained file look
+                        # machine-mangled, which is how people stop trusting
+                        # the tool that touched it.
+                        indent="${line%%[![:space:]]*}"
+                        local eqcol pad
+                        eqcol=$(( ${#key} - ${#indent} ))
+                        pad=$(( eqcol - 9 )); [ "$pad" -lt 1 ] && pad=1     # 9 = len("recursive")
+                        printf '%s%s%*s= %s\n' "$indent" "recursive" "$pad" "" "$SR_REC"
+                        # A flags value that is now empty loses its line
+                        # entirely -- "flags = " is not a tidier way to say
+                        # nothing, it is a field someone will wonder about.
+                        if [ -n "$SR_REST" ]; then
+                            pad=$(( eqcol - ${#bare} )); [ "$pad" -lt 1 ] && pad=1
+                            printf '%s%s%*s= %s\n' "$indent" "$bare" "$pad" "" "$SR_REST"
+                        fi
+                        MIG_REPORT="${MIG_REPORT}${sec}	${SR_REC}
+"
+                        MIG_COUNT=$((MIG_COUNT+1))
+                        continue
+                    fi
+                fi
+            fi
+        fi
+        printf '%s\n' "$line"
+    done < "$file"
+    return 0
+}
+
+# Renders a config to its managed block, NORMALISED for comparison. $1 =
+# config, $2 = 1 for the legacy baseline. Runs this same script as a child so
+# the two renders cannot share global state.
+#
+# Two lines are dropped, and neither is cosmetic:
+#   - the BEGIN/END markers, because cron_block_read returns the block's
+#     CONTENTS and comparing content against a marked-up render would differ
+#     every time, for a reason that has nothing to do with the migration;
+#   - "# Source: <path>", because the migrated config is rendered from a temp
+#     file. Left in, every migration would look like a change to the one line
+#     that only ever names where the config was read from.
+migrate_normalise() { grep -vE '^# (BEGIN|END) zfs-backup-managed|^# Source: '; }
+
+migrate_render() {   # <config> <legacy 0|1>  -> normalised block on stdout
+    local self="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+    if [ "$2" -eq 1 ]; then
+        "$self" --internal-legacy-render -c "$1" | migrate_normalise
+    else
+        "$self" -c "$1" | migrate_normalise
+    fi
+}
+
+migrate_recursion() {   # <config file>
+    local file="$1"
+    [ -w "$file" ] || die "cannot write $file -- migration would not be able to commit"
+
+    local work
+    work="$(mktemp)" || die "could not create a work file"
+    # shellcheck disable=SC2064
+    trap "rm -f '$work' '$work.base' '$work.mig'" EXIT
+
+    # NOT in a command substitution: that runs the rewriter in a subshell, and
+    # MIG_COUNT/MIG_REPORT would be set in a shell that then exits.
+    if ! migrate_rewrite "$file" > "$work"; then
+        die "refusing to migrate: ${MIG_ERR:-unrepresentable input}"
+    fi
+
+    if [ "$MIG_COUNT" -eq 0 ]; then
+        echo "$file: no legacy recursion in any [dataset:] 'flags' -- nothing to migrate."
+        return 0
+    fi
+
+    # ---- the three-way comparison, control FIRST ---------------------------
+    # A comparison whose baseline is not itself verified proves nothing. That
+    # mistake was made by hand during REV-055 and caught only because the
+    # control differed; it is mechanised here so it cannot be skipped.
+    echo "checking that the migration changes nothing that runs..."
+    migrate_render "$file" 1 > "$work.base" 2>/dev/null \
+        || die "could not render the CURRENT config even in legacy mode -- aborting before touching anything"
+    migrate_render "$work" 0 > "$work.mig" 2>/dev/null \
+        || die "the migrated config does not generate -- aborting, $file is untouched"
+
+    if ! diff -q "$work.base" "$work.mig" >/dev/null; then
+        echo "REFUSED: the migrated config would generate a DIFFERENT crontab block." >&2
+        diff "$work.base" "$work.mig" >&2
+        die "$file is untouched"
+    fi
+    echo "  before/after render: identical"
+
+    # Control: does the CURRENT config still describe what is installed? If it
+    # does not, that mismatch predates this migration and is the operator's to
+    # resolve -- migrating on top of it would silently adopt the drift.
+    local installed me
+    me="$(id -un)"
+    installed="$(cron_block_read "$me" zfs-backup-managed 2>/dev/null | migrate_normalise || true)"
+    if [ -n "$installed" ]; then
+        if diff -q <(printf '%s\n' "$installed") "$work.base" >/dev/null 2>&1; then
+            echo "  installed crontab block: matches (control passed)"
+        else
+            echo "NOTE: the installed managed block does not match what this config renders," >&2
+            echo "      and that is true BEFORE the migration as well -- so it is pre-existing" >&2
+            echo "      drift, not something this migration would cause. Resolve it first:" >&2
+            echo "      the usual cause is a render environment (REPO_DIR/CRON_LOG/NOTIFY_SCRIPT/" >&2
+            echo "      WARN_SCRIPT/DIGEST_SCRIPT) different from the one the block was made with." >&2
+            die "$file is untouched"
+        fi
+    else
+        echo "  installed crontab block: none found -- skipping that control"
+    fi
+
+    # ---- transactional commit ----------------------------------------------
+    local backup stage
+    backup="${file}.pre-recursion.$(date +%Y%m%d-%H%M%S)"
+    cp -p "$file" "$backup" || die "could not write the rollback copy $backup"
+    stage="${file}.migrating.$$"
+    # cp -p first so the staged file inherits owner and mode from the original;
+    # the content is then overwritten in place, and the rename carries both.
+    cp -p "$file" "$stage" || die "could not stage the new config"
+    cat "$work" > "$stage" || { rm -f "$stage"; die "could not write the staged config"; }
+    # Read back before the rename: a short write here becomes a live config.
+    if ! diff -q "$stage" "$work" >/dev/null; then
+        rm -f "$stage"
+        die "the staged config does not match what was validated -- $file is untouched"
+    fi
+    mv -f "$stage" "$file" || die "could not commit the migrated config (rollback copy: $backup)"
+
+    echo
+    echo "$file: MIGRATED"
+    printf '%s' "$MIG_REPORT" | while IFS="	" read -r s v; do
+        [ -n "$s" ] && echo "  [dataset:$s] -> recursive = $v"
+    done
+    echo "  rollback copy: $backup"
+    echo "  crontab: NOT touched -- the generated block is unchanged, so there is nothing to install."
+    return 0
+}
+
+###############################################################################
 #BEGIN 6 [MAIN]
 ###############################################################################
 CONFIG=""
 INSTALL=0
+MIGRATE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -c) CONFIG="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
+        --migrate-recursion) MIGRATE=1; shift ;;
+        # Undocumented, and deliberately so: it renders a PRE-v4.27 config as
+        # the baseline --migrate-recursion compares against. Refused together
+        # with --install below, so it can only ever reach stdout.
+        --internal-legacy-render) MIGRATE_LEGACY=1; shift ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
         # Prints "<kind> <field>" for every accepted field and exits. Exists so
         # the suite can check the allow-list against the lookups in the code
@@ -1919,10 +2197,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+[ "$MIGRATE_LEGACY" -eq 1 ] && [ "$INSTALL" -eq 1 ] \
+    && die "--internal-legacy-render cannot be combined with --install: it renders a config shape this version refuses, and must never reach a crontab"
+[ "$MIGRATE" -eq 1 ] && [ "$INSTALL" -eq 1 ] \
+    && die "--migrate-recursion migrates the CONFIG only and never installs -- run --install separately if you actually want to reinstall"
+
 if [ -z "$CONFIG" ]; then
     CONFIG="$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf"
 fi
 [ -f "$CONFIG" ] || die "config file not found: $CONFIG (pass -c to specify one)"
+
+if [ "$MIGRATE" -eq 1 ]; then
+    migrate_recursion "$CONFIG"
+    exit 0
+fi
 
 parse_ini "$CONFIG"
 [ "${#SECTION_ORDER[@]}" -gt 0 ] || die "no sections found in $CONFIG"
