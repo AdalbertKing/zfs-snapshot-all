@@ -7,36 +7,54 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-07**, commit **`121892f`**: **model rekurencji
-  przebudowany** (REV-054, zatwierdzony do implementacji z migracją „twarde
-  odrzucenie"). `gen-cron.sh` **v4.27** przyjmuje na `[dataset:]` pole
+- Data odświeżenia: **2026-08-07 16:10**, commit **`3e911ee`**.
+  `gen-cron.sh` **v4.29**, `check-snap-age.sh` **v2.2**.
+
+  **Model rekurencji: ZAMKNIĘTY I WDROŻONY.** `[dataset:]` przyjmuje pole
   `recursive = no | flat | atomic`, które steruje **wszystkimi trzema** liniami
-  generowanymi przez sekcję — transferem, prune'em inline i monitorem. Wcześniej
-  rekurencję dało się wyrazić wyłącznie jako `flags = -R`, co docierało **tylko
-  do transferu**: nowo utworzony dataset potomny był replikowany w nieskończoność,
-  nigdy nie przycinany i nigdy nie monitorowany, a każdy przebieg raportował
-  sukces. `-r`/`-R` we `flags` jest teraz błędem krytycznym, sprawdzanym
-  **równoważnie z `getopts`** (formy sklejone `-Rv`, `-rZ` też odrzucane;
-  argument opcji, np. `-m R-daily_`, nie jest mylony z flagą).
-  **Silnik nietknięty** — zmiana dotyczy generatora, walidatora i `cron2conf.sh`.
-  Dowód zachowawczości na żywo na 192.168.11.11 (jedyny host we flocie z
-  rekurencyjnym datasetem): stary kod + stary config i nowy kod + config po
-  migracji dają wynik **bajt w bajt identyczny**, a config niezmigrowany zostaje
-  odrzucony z komunikatem wskazującym `recursive = atomic`. Po REV-055
-  domknięte także porównanie wprost z **zainstalowanym blokiem**: zarówno
-  generator sprzed zmiany z niezmigrowanym configiem, jak i v4.27 z configiem po
-  migracji odtwarzają go **bajt w bajt** (pierwszy przebieg jest kontrolą — bez
-  niego zgodność drugiego nie odróżniałaby poprawnej migracji od porównania,
-  które nie może wypaść źle). Nic nie instalowano; config i crontab tego hosta
-  zweryfikowane sumą md5 jako nietknięte.
-  **v4.27 jest już wdrożone na flocie** (godzinny `git pull`), więc wdrożony
-  `gen-cron.sh` na 192.168.11.11 odmawia obsługi własnego configu tego hosta —
-  to zamierzone twarde odcięcie, nie awaria (patrz niżej).
-  **Migracja floty NIE jest wykonana** — patrz sekcja 6. Sprawdzone na wszystkich
-  czterech hostach: nic nie regeneruje crontaba cyklicznie (jedyne zadania to
-  godzinny `git pull --ff-only` i `update-control.sh --self-update`), więc
-  wejście v4.27 **nie zmienia zachowania żadnego hosta** — odmowa pojawi się
-  dopiero, gdy człowiek sam uruchomi `gen-cron.sh` na 192.168.11.11.
+  generowanymi przez sekcję — transferem, prune'em inline i monitorem. `-r`/`-R`
+  we `flags` jest błędem krytycznym, sprawdzanym równoważnie z `getopts` (formy
+  sklejone `-Rv`, `-rZ` odrzucane; argument opcji, np. `-m R-daily_`, nie jest
+  mylony z flagą). Silnika nie ruszano — zmiana dotyczy generatora, walidatora
+  i `cron2conf.sh`.
+
+  **Migracja floty WYKONANA 2026-08-07 14:42** przez
+  `gen-cron.sh --migrate-recursion` na 192.168.11.11 (jedyny host, który jej
+  wymagał). Crontab md5 **bez zmian**, właściciel i prawa zachowane, kopia
+  rollback zostawiona, render identyczny z zainstalowanym blokiem.
+  **Żaden zarządzany config we flocie nie niesie już `-r`/`-R` we `flags`** —
+  zweryfikowane detektorem na wszystkich czterech hostach.
+
+  **Monitor: wiek z `creation` datasetu** (REV-056, **ZAMKNIĘTA przez
+  recenzenta**). Gdy nic nie pasuje do wzorca, wiek liczony jest z daty
+  utworzenia datasetu i przechodzi przez tę samą drabinkę progów — świeża
+  maszyna czyta się OK, trzydniowa bez kopii nadal CRITICAL. Nieodczytany
+  znacznik czasu to UNKNOWN, nigdy zmyślony wiek (naprawione po obu stronach,
+  łącznie z istniejącą wcześniej ścieżką pasującego snapshotu).
+
+  **Kontrola migracji niezależna od UID-u** (REV-058, **ZAMKNIĘTA przez
+  recenzenta**, `ebe951c`). Configi są `root:root 0644` w `/etc`, więc migrację
+  zapisuje root — a zarządzany blok należy do konta delegowanego. Kontrola
+  szuka teraz bloku po jego własnej linii `# Source:` u wszystkich użytkowników
+  i **odmawia przed zapisem** przy każdej niepewności: nieczytelny crontab,
+  nieczytelna lista użytkowników, dwa pasujące bloki.
+
+  **Nowy dokument `docs/discussions/ENGINE-FINALIZATION-PROFILES-RESTORE-2026-08-07.md`
+  i moja odpowiedź `ENGINE-PROFILES-RESTORE-CLAUDE-ANSWERS-2026-08-07.md` to
+  DYSKUSJA PROJEKTOWA, nie stan wdrożony.** Nic z długich opcji rekursji, profili
+  ani restore nie jest zaimplementowane.
+
+  Otwarte, oddzielone od pracy już wykonanej: patrz sekcja 6 oraz
+  `docs/project/OPEN-THREADS.md`. W skrócie — u recenzenta werdykt dla REV-057;
+  u właściciela VM 104 na pve0 bez kopii (wątek #22) i decyzje o
+  `docs/OPS_MONITORING.md`, PR #4 oraz sposobie ogłaszania się równoległych
+  sesji.
+
+- **Stan poprzedni, 2026-08-07 (nieaktualny, zachowany dla historii):** commit
+  `121892f`, `gen-cron.sh` v4.27 — model rekurencji przebudowany, ale migracja
+  floty jeszcze **niewykonana**, a wdrożony na 192.168.11.11 generator odmawiał
+  obsługi własnego configu tego hosta. Oba te zdania przestały być prawdziwe
+  2026-08-07 o 14:42.
 - Poprzednie odświeżenie, 2026-08-07: **pakiet hard-disable ZAMKNIĘTY przez
   recenzenta** (`REV-20260807-052`, APPROVED — zero otwartych znalezisk; zamknięte
   także REV-049, REV-050 i REV-051). Zbudowany i zweryfikowany na żywo
@@ -1209,15 +1227,19 @@ czterech hostach w obu formach hosta.
 
 ### Otwarte u implementera
 
-- **REV-054 (model rekurencji) — zaimplementowane w `ba24c8b` + `121892f`,
-  czeka na werdykt.** Wszystkie sześć warunków akceptacji spełnione; odpowiedź:
-  `docs/internal/reviews/responses/REV-20260807-054.md`. Trzy rzeczy zostają
-  jawnie poza zakresem i są w odpowiedzi nazwane: (1) `cron2conf.sh` **nie
-  parsuje w ogóle linii `snapget.sh`**, więc połowa round-tripu dla pull jest
-  nietestowalna — usterka sprzed tej zmiany, znaleziona przy budowie fixture'a;
-  (2) `--draft-config` nadal nie ma testu behawioralnego, bo wymaga prawdziwego
-  parowania — nowe D1/D2 w `draftscope` to **statyczny odczyt `deploy.sh`**, nie
-  uruchomienie CLI; (3) migracja floty, niżej.
+- **REV-057 — zaimplementowane, czeka na werdykt.** Migracja wykonana i
+  zweryfikowana; odpowiedź: `docs/internal/reviews/responses/REV-20260807-057.md`.
+  REV-054, REV-055, REV-056 i REV-058 są **zamknięte przez recenzenta**.
+- **Znane luki, nazwane w odpowiedziach i nadal otwarte:** (1) `cron2conf.sh`
+  **nie parsuje w ogóle linii `snapget.sh`**, więc połowa round-tripu dla pull
+  jest nietestowalna — usterka sprzed tych zmian, znaleziona przy budowie
+  fixture'a (wątek #21d); (2) `--draft-config` nie ma testu behawioralnego, bo
+  wymaga prawdziwego parowania — D1/D2 w `draftscope` to **statyczny odczyt
+  `deploy.sh`**, nie uruchomienie CLI; (3) silniki transferu **nie odrzucają
+  `-r -R` naraz** — wygrywa ostatnia flaga, choć generator odmawia tego w
+  configu (wątek #31); (4) pod `flat` bez `-q` nazwa snapshotu jest liczona
+  osobno dla każdego datasetu, więc przebieg nie jest korelowalny — jednolinijkowa
+  zmiana należąca do prac przed zamrożeniem silnika (wątek #30).
 
 ### Otwarte u właściciela — decyzje, nie kod
 
