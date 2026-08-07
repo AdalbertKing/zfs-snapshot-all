@@ -13,7 +13,9 @@
      i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od
      takiego, ktory tylko wyglada na aktualny. -->
 
-- Data odświeżenia: **2026-08-07 17:2x**, commit **`332aa25`**.
+- Data odświeżenia: **2026-08-07**. Commit, który ten blok opisuje, jest
+  w znaczniku maszynowym powyżej — celowo NIE powtórzony tutaj, bo dwie
+  kopie tej samej informacji to dwie rzeczy, które mogą się rozjechać.
   `gen-cron.sh` **v4.30**, `check-snap-age.sh` **v2.2**.
 
   **Etap 0 WYKONANY na pve0**: sześć datasetów gości objętych kopią
@@ -82,7 +84,7 @@
 
   Otwarte, oddzielone od pracy już wykonanej: patrz sekcja 6 oraz
   `docs/project/OPEN-THREADS.md`. W skrócie — u recenzenta werdykt dla REV-057;
-  u właściciela VM 104 na pve0 bez kopii (wątek #22) i decyzje o
+  u właściciela decyzje o
   `docs/OPS_MONITORING.md`, PR #4 oraz sposobie ogłaszania się równoległych
   sesji.
 
@@ -1284,15 +1286,13 @@ czterech hostach w obu formach hosta.
   właściciel i prawa zachowane, kopia rollback zostawiona, render identyczny z
   zainstalowanym blokiem. **Żaden config we flocie nie niesie już starego
   zapisu rekurencji** — pakiet rekurencji jest operacyjnie kompletny.
-- **pve0: goście bez żadnej kopii** (wątek #22 w `OPEN-THREADS.md`). VM 104
-  `debian` **działa** i ma zero snapshotów `automated_*` na
-  `hdd/data/vm-104-disk-1`; VM 103, VM 107 i CT 105 (zatrzymane) tak samo.
-  Przyczyną nie jest usterka narzędzia — config wylicza datasety po jednym,
-  goście powstali później i **nic nie porównuje deklaracji z rzeczywistością**.
-  REV-054 tego **nie naprawia** i celowo nie próbował: pole `recursive` ułatwia
-  napisanie kompletnego configu, ale nie zauważy niekompletnego. Do decyzji:
-  dopisać te cztery datasety, czy zamówić uzgadnianie zakresu jako funkcję.
-
+- ~~pve0: goście bez żadnej kopii~~ — **ZAŁATWIONE 2026-08-07 (Etap 0).** VM 104
+  `debian` (działająca), VM 103, VM 107 (trzy datasety) i CT 105 są objęte kopią,
+  granty nadane, monitor `rc=0`. Zostaje decyzja **strukturalna, nie awaryjna**:
+  granty na pve0 są per dataset, więc nowy gość znów wymaga ręcznego kroku.
+  Nadanie grantu na rodzicu objęłoby przyszłych automatycznie, ale poszerza
+  powierzchnię uprzywilejowaną (wątek #36). Prawdziwą naprawą klasy jest
+  uzgadnianie zakresu — Etap 4 planu.
 - **REV-021 — zaimplementowane w `1edca10`, czeka na werdykt.** Instalacja nie
   może skasować zadań, które cel już wykonuje (`assert_target_block_not_clobbered`),
   a linie „porzucone" przez render konta trafiają do bloku ogólnohostowego

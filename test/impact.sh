@@ -313,6 +313,7 @@ verify() {
     done
 
     status_freshness || rc=1
+    ledger_coherence || rc=1
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
     return $rc
@@ -332,6 +333,92 @@ verify() {
 # names the last behaviour-changing commit the document describes; anything
 # newer touching a project-status file means the document is describing a tree
 # that no longer exists.
+THREADS_FILE="docs/project/OPEN-THREADS.md"
+REVIEW_MARKER_RE='^<!-- review-head: ([0-9a-f]{7,40}) -->$'
+
+# Is the live ledger internally coherent? (REV-20260807-063 F1.)
+#
+# The status marker stops PROJECT_STATUS.md lagging a commit. It does NOT stop
+# a document contradicting itself, and twice in one day these files routed a
+# reader to work that was already done -- a row still naming an owner for a
+# decision taken hours earlier, and an announced review head three commits
+# behind the tree.
+#
+# Both checks below read STRUCTURE, never prose: a table column and a marker
+# line, both formats this repo controls. Grepping Polish sentences for meaning
+# was explicitly rejected, and rightly -- it would fail on rewording and pass
+# on the thing that matters.
+ledger_coherence() {
+    echo "== OPEN-THREADS.md routes only work that still needs doing"
+    [ -f "$REPO/$THREADS_FILE" ] || { echo "  $THREADS_FILE is missing"; return 1; }
+    local rc=0
+
+    # 1. A row whose STATE says it is finished must not still name someone in
+    #    "Whose move". That column is the live field; a name in it is a claim
+    # `print`, not `printf`: it supplies its own newline, so there is no escape
+    # to survive every layer that generates or edits this file. Two earlier
+    # versions of this line shipped a LITERAL newline inside the awk string and
+    # died with "unterminated string" -- the same trap that already ate a sed
+    # backreference in status_freshness.
+    #
+    # The em-dash is passed in as a variable rather than pasted, so this file
+    # stays pure ASCII and cannot be broken by an editor re-encoding it.
+    local bad awkrc
+    bad="$(awk -F'|' -v DASH="$(printf '\342\200\224')" '
+        /^\| / && NF>=5 {
+            # Leading "|" makes $1 empty, so the columns are:
+            #   $2=#  $3=Thread  $4=State  $5=Whose move
+            # The first version read $4 as $3 and therefore scanned the thread
+            # TITLE for "CLOSED" -- it could never have fired, and only a
+            # properly constructed positive control showed it.
+            st=$4; mv=$5; gsub(/^ +| +$/,"",mv);
+            if (st ~ /CLOSED|DONE/ && mv != "-" && mv != DASH && mv != "")
+                print "    row " $2 " still routes to: " mv
+        }' "$REPO/$THREADS_FILE")"; awkrc=$?
+    # A parser that errors must not read as "no violations found" -- that is
+    # the fail-open this whole mechanism exists to remove, and the first
+    # version of this function had it.
+    if [ "$awkrc" -ne 0 ]; then
+        echo "  could not parse $THREADS_FILE (awk exit $awkrc) -- refusing to call that clean"
+        rc=1
+    elif [ -n "$bad" ]; then
+        echo "  rows marked finished that still route work:"
+        printf '%s
+' "$bad"
+        rc=1
+    fi
+
+    # 2. The announced review head must not be older than the newest change the
+    #    reviewer would be asked to look at.
+    git rev-parse --git-dir >/dev/null 2>&1 || return $rc
+    local rh
+    rh="$(grep -oE "$REVIEW_MARKER_RE" "$REPO/$THREADS_FILE" 2>/dev/null | head -1)"
+    rh="${rh#<!-- review-head: }"; rh="${rh% -->}"
+    if [ -z "$rh" ]; then
+        echo "  $THREADS_FILE has no '<!-- review-head: <sha> -->' marker"; return 1
+    fi
+    git cat-file -e "${rh}^{commit}" 2>/dev/null || {
+        echo "  the review-head marker names '$rh', which is not a commit here"; return 1; }
+    local -a watched=()
+    local f
+    for f in "${!SEC_KIND[@]}"; do
+        case "$f" in file:*) ;; *) continue ;; esac
+        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
+    done
+    if [ ${#watched[@]} -gt 0 ]; then
+        local behind
+        behind="$(git log --format='%h %s' "${rh}..HEAD" -- "${watched[@]}" 2>/dev/null)"
+        if [ -n "$behind" ]; then
+            echo "  the announced review head ($rh) is behind these changes:"
+            printf '%s
+' "$behind" | sed 's/^/    /'
+            echo "  Re-announce, or the reviewer assesses a tree that no longer exists."
+            rc=1
+        fi
+    fi
+    return $rc
+}
+
 STATUS_FILE="docs/PROJECT_STATUS.md"
 STATUS_MARKER_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
 status_freshness() {
