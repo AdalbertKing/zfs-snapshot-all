@@ -232,12 +232,34 @@ MON_WARN="$("$CHECKAGE" "$ROOT/aged" automated_hourly_ 1m 999h 2>&1; echo "rc=$?
 check "check-snap-age exits 1 (WARNING) past warn threshold" "1" \
       "$(printf '%s' "$MON_WARN" | sed -n 's/^rc=//p')"
 
-# CRITICAL without any waiting: a dataset that exists but has NO snapshot
-# matching the pattern is critical by definition, which is also the more
-# operationally interesting case (a backup job that silently stopped running).
-MON_CRIT="$("$CHECKAGE" "$ROOT" automated_hourly_ 90m 3h 2>&1; echo "rc=$?")"
-check "check-snap-age exits 2 (CRITICAL) when no snapshot matches at all" "2" \
+# A dataset that exists but has NO snapshot matching the pattern -- the
+# operationally interesting case, a backup job that silently stopped running.
+#
+# This used to assert CRITICAL against thresholds of 90m/3h on a dataset
+# created seconds earlier, and passed only because "nothing matches" was an
+# unconditional CRITICAL. Since REV-20260807-056 the age of such a dataset
+# comes from the DATASET, so the verdict depends on how old it is -- which is
+# the entire point of that change: a guest created minutes ago is not a stale
+# backup. The scenario now pins BOTH halves, which is what makes it a
+# regression test for the new contract rather than a survivor of the old one.
+#
+# $ROOT is >65s old by now (S2 waited for it above), so a 1m crit is genuinely
+# crossed rather than assumed.
+MON_CRIT="$("$CHECKAGE" "$ROOT" automated_hourly_ 1m 1m 2>&1; echo "rc=$?")"
+check "check-snap-age exits 2 (CRITICAL): nothing matches and the dataset is older than crit" "2" \
       "$(printf '%s' "$MON_CRIT" | sed -n 's/^rc=//p')"
+case "$MON_CRIT" in
+    *"age measured from dataset creation"*)
+        check "the CRITICAL says the age came from dataset creation" "0" "0" ;;
+    *)  check "the CRITICAL says the age came from dataset creation" "provenance" "$MON_CRIT" ;;
+esac
+
+# The other half: a dataset too new to be late. Created here so its age is
+# unambiguously seconds, against the same thresholds a real hourly job uses.
+zfs create "$ROOT/justborn"
+MON_NEW="$("$CHECKAGE" "$ROOT/justborn" automated_hourly_ 90m 3h 2>&1; echo "rc=$?")"
+check "check-snap-age exits 0 (OK): nothing matches but the dataset is younger than warn" "0" \
+      "$(printf '%s' "$MON_NEW" | sed -n 's/^rc=//p')"
 
 MON_UNK="$("$CHECKAGE" "$ROOT/does-not-exist" automated_hourly_ 90m 3h 2>&1; echo "rc=$?")"
 check "check-snap-age exits 3 (UNKNOWN) on a missing dataset" "3" \
