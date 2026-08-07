@@ -311,7 +311,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.28'
+VERSION='v4.29'
 
 # Legacy-render mode, used ONLY by --migrate-recursion to produce the
 # before-migration baseline it compares against. Assigned unconditionally here
@@ -2083,6 +2083,84 @@ migrate_render() {   # <config> <legacy 0|1>  -> normalised block on stdout
     fi
 }
 
+# Finds the ONE installed managed block that belongs to <config>, whoever owns
+# the crontab it lives in (REV-20260807-058 F1).
+#
+# The problem this solves: on this fleet configs are root:root 0644 in /etc, so
+# only root can commit a migration -- but the managed block belongs to the
+# DELEGATED ACCOUNT. Reading only the current user's crontab meant the
+# strongest control was unavailable in the only mode that can write the file,
+# and the command degraded to a weaker two-way proof while still committing.
+# A two-way proof preserves pre-existing drift, which is exactly what the
+# three-way structure exists to catch.
+#
+# Binding key is the block's own "# Source:" line. Candidates: this user, plus
+# every passwd user when running as root -- `getent passwd` rather than a cron
+# spool path, because the spool location is distro-specific and a wrong guess
+# would silently narrow the search.
+#
+# Sets MCB_BLOCK / MCB_USER. Returns 0 found, 1 none anywhere, 2 refuse (MCB_ERR).
+migrate_find_control_block() {   # <config file>
+    local file="$1" canon who cur src n=0
+    MCB_BLOCK=""; MCB_USER=""; MCB_ERR=""; MCB_WHY=""
+    canon="$(readlink -f "$file" 2>/dev/null || printf '%s' "$file")"
+
+    # No cron at all is a DECIDED state, not an uncertain one: nothing can be
+    # installed on a system with no crontab(1), so "not installed" is proved
+    # rather than assumed. Kept distinct from "a crontab exists and could not
+    # be read", which is uncertainty and must refuse (REV-058 §8).
+    if ! command -v crontab >/dev/null 2>&1; then
+        MCB_WHY="this system has no crontab(1), so no config can be installed anywhere"
+        return 1
+    fi
+
+    local -a users=()
+    users+=("$(id -un)")
+    if [ "$(id -u)" = 0 ]; then
+        local list
+        if ! list="$(getent passwd 2>/dev/null | cut -d: -f1)" || [ -z "$list" ]; then
+            # Refusing rather than falling back to "just me": a narrowed search
+            # that finds nothing is indistinguishable from a config that is
+            # genuinely not installed, and one of those may be committed safely
+            # while the other may not.
+            MCB_ERR="running as root but the user list could not be read (getent passwd) -- cannot prove which crontab holds this config's installed block"
+            return 2
+        fi
+        while IFS= read -r who; do
+            [ -n "$who" ] && [ "$who" != "$(id -un)" ] && users+=("$who")
+        done <<< "$list"
+    fi
+
+    MCB_WHY="searched every user's crontab"
+    cur="$(mktemp)" || { MCB_ERR="mktemp failed"; return 2; }
+    for who in "${users[@]}"; do
+        if ! cron_read "$who" "$cur"; then
+            # An unreadable crontab is not an empty one. Treating it as empty
+            # here is precisely how the proof would go missing again.
+            rm -f "$cur"
+            MCB_ERR="could not read ${who}'s crontab, so the installed state cannot be proved: ${CRON_ERR:-unknown error}"
+            return 2
+        fi
+        cron_block_locate "$cur" zfs-backup-managed || continue
+        [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B+1)) ] || continue
+        local body
+        body="$(sed -n "$((CRON_B+1)),$((CRON_E-1))p" "$cur")"
+        src="$(printf '%s\n' "$body" | sed -n 's/^# Source: \(.*\) -- DO NOT EDIT.*$/\1/p' | head -1)"
+        [ -n "$src" ] || continue
+        [ "$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")" = "$canon" ] || continue
+        n=$((n+1))
+        if [ "$n" -gt 1 ]; then
+            rm -f "$cur"
+            MCB_ERR="two crontabs (${MCB_USER} and ${who}) both hold a managed block naming $file -- which one is authoritative is a guess, so nothing is migrated"
+            return 2
+        fi
+        MCB_BLOCK="$body"; MCB_USER="$who"
+    done
+    rm -f "$cur"
+    [ "$n" -eq 1 ] && return 0
+    return 1
+}
+
 migrate_recursion() {   # <config file>
     local file="$1"
     [ -w "$file" ] || die "cannot write $file -- migration would not be able to commit"
@@ -2131,18 +2209,14 @@ migrate_recursion() {   # <config file>
     # fixture with a "pre-existing drift" message that is simply untrue --
     # found by running this suite as the delegated account on a host whose
     # crontab holds a different config's block.
-    local installed me raw src
-    me="$(id -un)"
-    raw="$(cron_block_read "$me" zfs-backup-managed 2>/dev/null || true)"
-    src="$(printf '%s\n' "$raw" | sed -n 's/^# Source: \(.*\) -- DO NOT EDIT.*$/\1/p' | head -1)"
-    installed=""
-    if [ -z "$raw" ]; then
-        echo "  installed crontab block: none found -- skipping that control"
-    elif [ -z "$src" ] || [ "$(readlink -f "$src" 2>/dev/null)" != "$(readlink -f "$file" 2>/dev/null)" ]; then
-        echo "  installed crontab block: belongs to ${src:-another config} -- not a control for this file, skipping"
-    else
-        installed="$(printf '%s\n' "$raw" | migrate_normalise)"
-    fi
+    local installed rc_find=0
+    migrate_find_control_block "$file" || rc_find=$?
+    case "$rc_find" in
+        2) echo "REFUSED: $MCB_ERR" >&2; die "$file is untouched" ;;
+        1) echo "  installed crontab block: none -- ${MCB_WHY}; there is no installed state to prove, proceeding" ;;
+        0) installed="$(printf '%s\n' "$MCB_BLOCK" | migrate_normalise)"
+           echo "  installed crontab block: found in ${MCB_USER}'s crontab" ;;
+    esac
     if [ -n "$installed" ]; then
         if diff -q <(printf '%s\n' "$installed") "$work.base" >/dev/null 2>&1; then
             echo "  installed crontab block: matches (control passed)"
