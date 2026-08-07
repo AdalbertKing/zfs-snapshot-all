@@ -30,6 +30,10 @@ PASS=0; FAIL=0
 CANARY="$WORK/PWNED"
 
 ok()   { echo "PASS $1"; PASS=$((PASS+1)); }
+# This suite asserts with ok/bad only. A call to `check` (which several other
+# suites DO have) would just be a command-not-found and assert NOTHING -- which
+# is exactly what four cases in section L did until it was noticed. Fail loudly.
+check() { echo "FAIL harness: this suite has no check(); use ok/bad -- args: $*"; FAIL=$((FAIL+1)); }
 bad()  { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
 # mkpkg <dir> -> builds <dir>/wsad.tgz from <dir>/peer.conf + <dir>/pubkey.pub
@@ -730,7 +734,7 @@ else
     else
         # L1: the audit NAMES the unshareable ones and refuses.
         out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
-        check "L1 the audit refuses when a lock is not group-writable" "1" "$rc"
+        [ "$rc" = 1 ] && ok "L1 the audit refuses when a lock is not group-writable" \n                      || bad "L1 the audit refuses when a lock is not group-writable" "rc=$rc"
         case "$out" in
             *lib-cron.root.lock*) ok "L1 ...and names the 0644 one" ;;
             *) bad "L1 ...and names the 0644 one" "$out" ;;
@@ -753,16 +757,16 @@ else
         # L3: and the audit is then silent -- the pair has to agree, or one of
         # them is lying about the same directory.
         out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
-        check "L3 the audit passes after the repair" "0" "$rc"
+        [ "$rc" = 0 ] && ok "L3 the audit passes after the repair" \n                      || bad "L3 the audit passes after the repair" "rc=$rc out=$out"
 
         # L4: an empty or absent directory is not a finding -- locks appear
         # when something takes one, and warning about their absence would train
         # the operator to ignore this line.
         mkdir -p "$WORK/emptylocks"
         out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/emptylocks" 2>&1); rc=$?
-        check "L4 an empty lock directory is not a finding" "0" "$rc"
+        [ "$rc" = 0 ] && ok "L4 an empty lock directory is not a finding" \n                      || bad "L4 an empty lock directory is not a finding" "rc=$rc out=$out"
         out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/nosuchdir" 2>&1); rc=$?
-        check "L5 a missing lock directory is not this check's business" "0" "$rc"
+        [ "$rc" = 0 ] && ok "L5 a missing lock directory is not this check's business" \n                      || bad "L5 a missing lock directory is not this check's business" "rc=$rc out=$out"
     fi
 fi
 
