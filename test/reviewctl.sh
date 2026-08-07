@@ -133,6 +133,14 @@ state_of_raw() {   # <rev>  -> echoes STATE
         # is not approval of what is on the table.
         echo IMPLEMENTED; return
     fi
+    # The one backward transition the protocol allows: the reviewer looked at
+    # exactly this submission and rejected it, so the next move is Claude's.
+    # Without this the generated routing would send the reviewer back to the
+    # SHA they already rejected, and never route the correction to anyone
+    # (REV-20260807-065 F1).
+    if [ -n "$im" ] && [ "$ri" = "$im" ]; then echo OPEN; return; fi
+    # A rejection of an OLDER sha does not reopen a newer submission: Claude has
+    # already advanced, and that newer sha is genuinely awaiting review.
     [ -n "$im" ] && { echo IMPLEMENTED; return; }
     echo OPEN
 }

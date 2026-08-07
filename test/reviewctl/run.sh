@@ -43,8 +43,22 @@ expect "canonical review, no response -> OPEN" $R OPEN
 world b; review $R CHANGES-REQUIRED -;            respond $R IMPLEMENTED sha1
 expect "response submits sha1, unreviewed -> IMPLEMENTED" $R IMPLEMENTED
 
+# The label on this case was right and its expectation was wrong: it pinned the
+# bug instead of the contract, and the reviewer caught it, not me
+# (REV-20260807-065). Rejection of the SUBMITTED sha is the one backward
+# transition the protocol has.
 world c; review $R CHANGES-REQUIRED sha1;         respond $R IMPLEMENTED sha1
-expect "reviewer rejects sha1 -> OPEN again for the implementer" $R IMPLEMENTED
+expect "reviewer rejects the submitted sha -> OPEN" $R OPEN
+# State alone is not the contract -- routing is. A rejected submission whose
+# owner still reads Reviewer sends the reviewer back to the sha they rejected.
+row="$(awk -F'|' -v r=" $R " '$2==r {print}' "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+case "$row" in *"| Claude |"*) ok "rejection routes back to Claude" ;;
+  *) bad "rejection routes back to Claude" "$row" ;; esac
+case "$row" in *"implement and respond"*) ok "rejection asks for an implementation, not a review" ;;
+  *) bad "rejection asks for an implementation, not a review" "$row" ;; esac
+
+world c2; review $R CHANGES-REQUIRED sha1;        respond $R IMPLEMENTED sha2
+expect "after rejection, advancing to sha2 -> IMPLEMENTED again" $R IMPLEMENTED
 
 world d; review $R CHANGES-REQUIRED sha1;         respond $R IMPLEMENTED sha2
 expect "response advances to sha2 -> IMPLEMENTED" $R IMPLEMENTED
