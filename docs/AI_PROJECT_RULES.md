@@ -7,9 +7,11 @@ Chat transcripts, local notes, and unpushed files are not project state.
 
 - **Owner:** decides product direction, operational risk acceptance, delivery mode, and whether a change may be deployed.
 - **Implementer (Claude by default):** analyzes accepted findings, changes code, adds tests, and supplies evidence.
-- **Reviewer (ChatGPT by default):** inspects design and diffs, publishes findings, verifies evidence, and decides whether a finding is closed. The reviewer does not implement production fixes unless the owner explicitly asks.
+- **Reviewer (ChatGPT by default):** inspects design and diffs, publishes findings, verifies evidence, and decides whether a finding is approved/closed. The reviewer does not implement production fixes unless the owner explicitly asks.
 
 The roles may be swapped for a specific task only when the owner says so explicitly.
+
+For detailed review ownership and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V2) is authoritative.
 
 ## Git workflow
 
@@ -45,33 +47,41 @@ During this exception:
 - relevant tests must be run before push when the environment permits;
 - GitHub Actions on push is post-delivery evidence, not a pre-merge gate;
 - review findings and implementer responses must still be written under `docs/internal/reviews/`;
-- the implementer must not mark findings `CLOSED`; the reviewer still owns technical closure;
+- workflow state must follow `docs/project/PROTOCOL.md` and, after V2 cutover, the machine-owned `REVIEW_LEDGER.md`;
+- the implementer must not approve or close own findings; the reviewer owns technical approval/closure;
 - no force-push, history rewrite, silent fixture blessing, or weakening of safety checks is permitted;
 - any direct-main change that fails review must be corrected by a new forward commit, never by rewriting published history.
 
 This exception changes delivery mechanics only. It does not waive testing, evidence, review, or safety requirements.
 
-## Review artifacts
+## Review artifacts and workflow state
 
 Durable review communication lives under `docs/internal/reviews/`.
 
+For V2, the authoritative specification is `docs/project/PROTOCOL.md`.
+
+Canonical new artifacts:
+
 - Reviewer finding: `docs/internal/reviews/REV-YYYYMMDD-NNN.md`
 - Implementer response: `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
-- Optional closure record: `docs/internal/reviews/closures/REV-YYYYMMDD-NNN.md`
+- Current workflow state: `docs/internal/reviews/REVIEW_LEDGER.md` (machine-owned after V2 cutover)
 
-The implementer must not edit the reviewer's finding file. Disagreement is recorded in the response file, with technical evidence. The reviewer must not silently rewrite the implementer's response.
+The implementer must not edit the reviewer's finding prose. Disagreement is recorded in the existing response file, with technical evidence. The reviewer must not silently rewrite the implementer's response.
 
-Review states:
+Exactly four V2 workflow states exist:
 
-- `OPEN` — published and awaiting response or implementation.
-- `ACCEPTED` — implementer agrees with the finding; not yet proven fixed.
-- `DISPUTED` — implementer disagrees and provides evidence.
-- `IMPLEMENTED` — code and tests are available for review; not yet accepted by the reviewer.
-- `CLOSED` — reviewer verified the acceptance criteria.
-- `DEFERRED` — owner explicitly accepted postponement and recorded the reason.
-- `REJECTED` — reviewer withdrew the finding or owner accepted the documented risk.
+- `OPEN`
+- `IMPLEMENTED`
+- `APPROVED`
+- `CLOSED`
 
-Only the reviewer marks a technical finding `CLOSED`. Only the owner accepts operational risk or changes priority.
+The only rejection transition is `IMPLEMENTED -> OPEN`. A genuinely new finding after approval receives a new REV; clarification or a second implementation attempt does not.
+
+Terms such as `ACCEPTED`, `DISPUTED`, `NEEDS-DISCUSSION`, `DEFERRED` and `REJECTED` may be retained as evidence or resolution metadata but are not parallel workflow states.
+
+After cutover, agents do not manually edit `REVIEW_LEDGER.md` or `OPEN-THREADS.md`; workflow transitions go through `reviewctl`, and `OPEN-THREADS.md` is generated from the ledger.
+
+Only the reviewer approves/closes a technical finding. Only the owner accepts operational risk or changes priority.
 
 ## Required evidence
 
