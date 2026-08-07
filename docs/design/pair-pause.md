@@ -6,6 +6,9 @@ campaign) -- see docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md for the evidence.
 The CLI verbs landed as `disable-client`/`enable-client`, matching the names
 proposed below.
 
+Operator runbook (commands, config and cron shapes as actually generated):
+`docs/PAUZA-I-BLOKADA.md`.
+
 ## User-visible states
 
 - `ACTIVE`
