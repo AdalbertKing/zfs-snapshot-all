@@ -13,6 +13,27 @@ The roles may be swapped for a specific task only when the owner says so explici
 
 For detailed review ownership, state derivation and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V2) is authoritative.
 
+## AI-to-AI disagreement and Owner escalation
+
+Claude and the Reviewer are expected to resolve ordinary technical disagreements directly through the durable review artifacts before involving the Owner.
+
+A temporary disagreement is not an Owner decision and must not be surfaced to the Owner merely because the agents initially reached different conclusions.
+
+Before escalation, both sides must:
+
+1. state the disputed claim precisely;
+2. provide repository evidence, tests, code, documentation, live/operational evidence or a reproducible counterexample where applicable;
+3. answer the other side's strongest technical argument;
+4. attempt to derive the answer from existing architecture, safety rules, accepted project goals and observable behavior.
+
+If evidence resolves the dispute, record the consensus in the existing REV/response/closure path and continue. Do not create a new REV solely because a discussion occurred.
+
+Escalation to the Owner is allowed only for a genuinely irreducible Owner choice such as product/architecture direction between technically valid alternatives, priority/scope, accepted risk, intentional compatibility break, defer-versus-fix, or release/deployment timing.
+
+Unresolved Owner choices are recorded concisely in `docs/project/OWNER-DECISIONS.md`. That file is an escalation queue, not review workflow state and never competes with `REVIEW_LEDGER.md`.
+
+Do not escalate synchronization failures, wording disagreements, bookkeeping errors, or questions that can be decided by code/tests/evidence.
+
 ## Git workflow
 
 Normal workflow:
