@@ -313,7 +313,7 @@ verify() {
     done
 
     status_freshness || rc=1
-    ledger_coherence || rc=1
+    protocol_verify || rc=1
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
     return $rc
@@ -333,8 +333,6 @@ verify() {
 # names the last behaviour-changing commit the document describes; anything
 # newer touching a project-status file means the document is describing a tree
 # that no longer exists.
-THREADS_FILE="docs/project/OPEN-THREADS.md"
-REVIEW_MARKER_RE='^<!-- review-head: ([0-9a-f]{7,40}) -->$'
 
 # Is the live ledger internally coherent? (REV-20260807-063 F1.)
 #
@@ -348,83 +346,15 @@ REVIEW_MARKER_RE='^<!-- review-head: ([0-9a-f]{7,40}) -->$'
 # line, both formats this repo controls. Grepping Polish sentences for meaning
 # was explicitly rejected, and rightly -- it would fail on rewording and pass
 # on the thing that matters.
-ledger_coherence() {
-    echo "== OPEN-THREADS.md routes only work that still needs doing"
-    local tf="${THREADS_FILE_OVERRIDE:-$REPO/$THREADS_FILE}"
-    [ -f "$tf" ] || { echo "  $tf is missing"; return 1; }
-    local rc=0
-
-    # Every row carries exactly one canonical token and the routing rule is
-    # derived from THAT, not from the prose (REV-20260807-064):
-    #
-    #   [CLOSED]       -> must route to nobody
-    #   [OPEN]         -> must name whose move it is
-    #   [IMPLEMENTED]  -> must name whose move it is. NOT terminal: "delivered,
-    #                     verdict pending" is a real state, and the previous
-    #                     rule text claimed otherwise while this checker --
-    #                     correctly -- never enforced it.
-    #   anything else  -> refused, not guessed
-    #
-    # A cell may legitimately contain an ESCAPED pipe (`no\|flat\|atomic`).
-    # Markdown handles that; awk -F'|' does not, and a row that splits into the
-    # wrong columns is read as the wrong state. Escaped pipes are folded to a
-    # placeholder before splitting.
-    local bad awkrc
-    bad="$(sed 's/[\]|//g' "$tf" | awk -F'|' -v DASH="$(printf '\342\200\224')" '
-        /^\| / && NF>=5 && $2 !~ /^ *# *$/ && $0 !~ /^\|---/ {
-            id=$2; st=$4; mv=$5;
-            gsub(/^ +| +$/,"",id); gsub(/^ +| +$/,"",mv);
-            tok="";
-            if (st ~ /\*\*\[CLOSED\]\*\*/)           tok="CLOSED";
-            else if (st ~ /\*\*\[IMPLEMENTED\]\*\*/) tok="IMPLEMENTED";
-            else if (st ~ /\*\*\[OPEN\]\*\*/)        tok="OPEN";
-            terminal = (mv == "-" || mv == DASH || mv == "");
-            if (tok == "")                     print "    row " id ": no [OPEN]/[IMPLEMENTED]/[CLOSED] token -- refusing to guess its state";
-            else if (tok == "CLOSED" && !terminal) print "    row " id ": [CLOSED] but still routes to: " mv;
-            else if (tok != "CLOSED" && terminal)  print "    row " id ": [" tok "] but names nobody -- who owes this?";
-        }')"; awkrc=$?
-    # A parser that errors must not read as "no violations found" -- that is
-    # the fail-open this whole mechanism exists to remove, and the first
-    # version of this function had it.
-    if [ "$awkrc" -ne 0 ]; then
-        echo "  could not parse $tf (awk exit $awkrc) -- refusing to call that clean"
-        rc=1
-    elif [ -n "$bad" ]; then
-        echo "  ledger rows whose state and routing disagree:"
-        printf '%s
-' "$bad"
-        rc=1
-    fi
-
-    # The announced review head must not be older than the newest change the
-    # reviewer would be asked to look at.
-    git rev-parse --git-dir >/dev/null 2>&1 || return $rc
-    local rh
-    rh="$(grep -oE "$REVIEW_MARKER_RE" "$tf" 2>/dev/null | head -1)"
-    rh="${rh#<!-- review-head: }"; rh="${rh% -->}"
-    if [ -z "$rh" ]; then
-        echo "  $tf has no '<!-- review-head: <sha> -->' marker"; return 1
-    fi
-    git cat-file -e "${rh}^{commit}" 2>/dev/null || {
-        echo "  the review-head marker names '$rh', which is not a commit here"; return 1; }
-    local -a watched=()
-    local f
-    for f in "${!SEC_KIND[@]}"; do
-        case "$f" in file:*) ;; *) continue ;; esac
-        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
-    done
-    if [ ${#watched[@]} -gt 0 ]; then
-        local behind
-        behind="$(git log --format='%h %s' "${rh}..HEAD" -- "${watched[@]}" 2>/dev/null)"
-        if [ -n "$behind" ]; then
-            echo "  the announced review head ($rh) is behind these changes:"
-            printf '%s
-' "$behind" | sed 's/^/    /'
-            echo "  Re-announce, or the reviewer assesses a tree that no longer exists."
-            rc=1
-        fi
-    fi
-    return $rc
+# REVIEW PROTOCOL V2 (docs/project/PROTOCOL.md): review state is DERIVED from
+# machine facts, so there is nothing here to police any more. ledger_coherence
+# and the review-head marker existed only to catch drift in a hand-maintained
+# table; a generated table cannot drift from what generates it. Both deleted
+# rather than kept "just in case" -- a check nobody can make fail is noise.
+protocol_verify() {
+    echo "== review ledger agrees with the review artifacts"
+    "$REPO/test/reviewctl.sh" --verify 2>&1 | sed 's/^/  /'
+    return "${PIPESTATUS[0]}"
 }
 
 STATUS_FILE="docs/PROJECT_STATUS.md"

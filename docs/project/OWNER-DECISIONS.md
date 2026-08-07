@@ -32,3 +32,20 @@ Transient disagreement, wording disputes, review bookkeeping, or lack of synchro
 ## Open decisions
 
 None.
+
+## Currently queued
+
+Carried over from the pre-V2 thread table. Each is a real choice that repository
+facts cannot settle.
+
+| # | Item | Whose move |
+|---|---|---|
+| 8 | PR #4 — a SECOND implementation of logical pause | owner: confirm the close, or say what else to salvage |
+| 9 | Issue #3 — enrolment contract consensus | owner+reviewer |
+| 11 | Profiles + live recursion (backlog) | owner |
+| 14 | `docs/OPS_MONITORING.md` untracked | owner: keep or drop |
+| 15 | Two sessions built the same feature the same day | owner: decide how parallel sessions announce what they are taking |
+| 36 | Grants on pve0 are per-dataset, not on the parent | owner: per-dataset (today) or parent grant |
+| 32 | Plan: method + stages | owner+reviewer: approve or amend |
+| 29 | Engine CLI / profiles / restore — design discussion | owner+reviewer: discuss |
+| 30 | Atomic restore point — measured, and one gap | owner+reviewer: accept into the pre-freeze engine slice |
