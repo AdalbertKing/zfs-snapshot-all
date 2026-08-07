@@ -3,7 +3,8 @@
 Bramka z `REV-20260807-060`: Etap 2 nie powstaje, dopóki kontrakt i lista testów
 nie zostaną zatwierdzone. To jest ten dokument. **Zero kodu.**
 
-Trzy zmiany w silnikach transferu, jedna kaskada testów, osobne commity.
+Trzy zmiany w silnikach transferu, osobne commity, i **osobna weryfikacja dla
+każdej** — dobierana do tego, od czego dana zmiana faktycznie zależy (REV-066).
 
 ---
 
@@ -56,7 +57,8 @@ decyzji — chorobę, którą REV-054 wyleczyła w configu.
 
 ## Testy, które to wymuszą
 
-Kaskada jedna, ale kontrakty osobne — commit na zmianę.
+Kontrakty osobne, commit na zmianę, weryfikacja per zmiana — patrz sekcja
+poniżej tabel.
 
 ### 2.1 — korelacja przebiegu
 | przypadek | oczekiwane |
@@ -87,8 +89,7 @@ dać różne nazwy, a po zmianie jedną.
 |---|---|
 | `--recursive=atomic` ≡ `-r`, `=flat` ≡ `-R` | identyczne zachowanie |
 | `--recursive` w `delsnaps`/`check-snap-age` ≡ `-R` | identyczne |
-| wygenerowany cron | **bajt w bajt jak dziś** na wszystkich czterech hostach |
-| `cron2conf` round-trip | bez zmian |
+| wygenerowany cron | **bajt w bajt jak dziś** — sprawdzane tylko wtedy, gdy graf wskaże `gen-cron.sh` jako tknięty |
 
 ### Weryfikacja — dobierana do zależności, nie jedna kampania na wszystko
 
