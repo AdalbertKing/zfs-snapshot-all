@@ -875,6 +875,31 @@ else
     chmod 664 "$W2F" 2>/dev/null || true
 fi
 
+# W4: real contention must still be refused -- the point of relaxing WHERE the
+# lock lives is not to relax WHETHER it locks. A second run while the first
+# holds it has to fail closed, and this time "already running" IS the truth.
+W4H="$TMPD/w4.holder"
+( exec 9>"$W_LOCKS/gen-cron.install.lock"; flock -n 9 && sleep 6 ) & W4PID=$!
+sleep 1
+out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$W_LOCKS"       REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L       "$GEN" -c "$TMPD/w.conf" --install 2>&1); rc=$?
+wait $W4PID 2>/dev/null
+if [ "$rc" -eq 0 ]; then
+    bad "W4 a genuinely held lock refuses" "the second --install succeeded while the lock was held"
+else
+    case "$out" in
+        *"already running"*) ok "W4 a genuinely held lock refuses, and here 'already running' is true" ;;
+        *) bad "W4 a genuinely held lock refuses, and here 'already running' is true" "$out" ;;
+    esac
+fi
+
+# W5: the override still works. It is a test/operator escape hatch, not the
+# thing normal delegated operation depends on -- W1 already proved the default
+# is usable, so this only pins that the hatch did not rot shut.
+W5F="$TMPD/w5-elsewhere.lock"
+out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$W_LOCKS" GEN_CRON_LOCKFILE="$W5F"       REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L       "$GEN" -c "$TMPD/w.conf" --install 2>&1)
+if [ -e "$W5F" ]; then ok "W5 GEN_CRON_LOCKFILE still overrides the default"
+else bad "W5 GEN_CRON_LOCKFILE still overrides the default" "$out"; fi
+
 # W3: a missing shared directory refuses and points at deploy.sh, rather than
 # silently locking somewhere else.
 out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$TMPD/w-absent"       REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L       "$GEN" -c "$TMPD/w.conf" --install 2>&1)

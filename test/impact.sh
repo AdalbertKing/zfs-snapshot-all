@@ -312,8 +312,63 @@ verify() {
         [ -n "${SEC_KIND[file:$name]:-}" ] || { echo "  $name is sourced by${SOURCED_BY[$name]} but is not declared"; rc=1; }
     done
 
+    status_freshness || rc=1
+
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
     return $rc
+}
+
+# Is PROJECT_STATUS.md still true? (REV-20260807-060 A2, made mandatory by
+# REV-20260807-061 F2.)
+#
+# The obligation `project-status` has been raised on every change for weeks and
+# discharged by editing whichever paragraph had just been made stale, never by
+# re-reading the document. It went stale again LESS THAN AN HOUR after a review
+# closed for having fixed it. A reminder that has failed that consistently is
+# not a reminder problem.
+#
+# Keyed off an explicit MACHINE marker, never the prose: A2 is emphatic that
+# rewording the introduction must not silently disable the check. The marker
+# names the last behaviour-changing commit the document describes; anything
+# newer touching a project-status file means the document is describing a tree
+# that no longer exists.
+STATUS_FILE="docs/PROJECT_STATUS.md"
+STATUS_MARKER_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
+status_freshness() {
+    echo "== PROJECT_STATUS.md still describes the current tree"
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
+    [ -f "$REPO/$STATUS_FILE" ] || { echo "  $STATUS_FILE is missing"; return 1; }
+
+    local marker
+    marker="$(grep -oE "$STATUS_MARKER_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1               | sed -E "s/$STATUS_MARKER_RE//")"
+    if [ -z "$marker" ]; then
+        echo "  $STATUS_FILE has no '<!-- status-covers-commit: <sha> -->' marker."
+        echo "  Add it naming the last behaviour-changing commit the document describes."
+        return 1
+    fi
+    git cat-file -e "${marker}^{commit}" 2>/dev/null || {
+        echo "  the marker names '$marker', which is not a commit in this repository"; return 1; }
+
+    # Which files oblige a status refresh: whatever deps.conf says, so the two
+    # never disagree.
+    local -a watched=()
+    local f
+    for f in "${!SEC_KIND[@]}"; do
+        case "$f" in file:*) ;; *) continue ;; esac
+        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
+    done
+    [ ${#watched[@]} -gt 0 ] || { echo "  (no file declares the project-status obligation)"; return 0; }
+
+    local behind
+    behind="$(git log --format='%h %s' "${marker}..HEAD" -- "${watched[@]}" 2>/dev/null)"
+    if [ -n "$behind" ]; then
+        echo "  STALE. These behaviour-changing commits landed after the marker ($marker):"
+        printf '%s
+' "$behind" | sed 's/^/    /'
+        echo "  Refresh $STATUS_FILE and move the marker to the commit it now describes."
+        return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
