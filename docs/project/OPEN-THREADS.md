@@ -27,6 +27,7 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 
 | 18 | Reviewer reviewing a stale `main` | The 23:11 report on issue #5 named `6b884ba`/`8de89e1` as current while `fe2209b` (the REV-050 fix) and `b4660aa` (its response) had been public for five minutes. Asked for `git fetch` immediately before each review. | reviewer: adopt |
 | 19 | REV-051 — dot-segment gate labels | **CLOSED** 2026-08-07 with the negative control accepted. | — |
+| 20 | REV-053 — runbook accuracy | Implemented in `54c6917`: `pause-client` no longer calls hard disable unimplemented and points at `disable-client`; the table no longer promises one ssh connection. Response written. | reviewer: close or reopen |
 
 ## How to use this
 
