@@ -12,6 +12,11 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Overridable so section W can be run against an older gen-cron.sh as a
+# negative control. Without this the control silently exercises the CURRENT
+# file and passes for the wrong reason -- which is exactly what it did the
+# first time it was written.
+GEN="${GEN:-$REPO/gen-cron.sh}"
 LIB="${LIB:-$REPO/lib-cron.sh}"
 [ -r "$LIB" ] || { echo "cannot read lib-cron.sh at $LIB" >&2; exit 1; }
 
@@ -822,6 +827,62 @@ else
 fi
 
 echo "--------------------------------------------"
+# ---- W. gen-cron.sh's OWN install lock lives where the account can reach it --
+#
+# Found live on pve0 2026-08-07 while bringing its uncovered guests under
+# backup: `gen-cron.sh --install` defaulted its lock to /var/run, which is
+# root-only -- and the managed block belongs to the DELEGATED ACCOUNT. So the
+# one identity that owns what --install installs could not run it, and a single
+# earlier root-side run left a 0644 root-owned file there that locked the
+# account out permanently.
+#
+# Section V fixed the same shape for lib-cron's per-user lock. This is
+# gen-cron's own, which V does not touch.
+W_LOCKS="$TMPD/w-locks"; mkdir -p "$W_LOCKS" "$TMPD/w-tabs"
+cat > "$TMPD/w.conf" <<'EOF'
+[defaults]
+	host_label = w
+[template:hourly]
+	send_schedule = 7 * * * *
+	prefix        = automated_
+[dataset:tank/w]
+	use_template = hourly
+EOF
+
+# W1: with no override, the lock is created in the SHARED directory -- not in
+# /var/run, and not in some per-caller path another writer would never look at.
+out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$W_LOCKS"       REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L       "$GEN" -c "$TMPD/w.conf" --install 2>&1)
+if [ -e "$W_LOCKS/gen-cron.install.lock" ]; then
+    ok "W1 the install lock is created in the shared lock directory"
+else
+    bad "W1 the install lock is created in the shared lock directory" "$out"
+fi
+
+# W2: an existing lock this identity cannot write must say so, and must NOT
+# claim another --install is running. That message sent me looking for a
+# process that did not exist.
+W2F="$W_LOCKS/gen-cron.install.lock"
+: > "$W2F"; chmod 444 "$W2F" 2>/dev/null || true
+if [ -w "$W2F" ]; then
+    echo "SKIP W2 this filesystem ignores 0444 for the owner -- verify on Linux"
+else
+    out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$W_LOCKS"           REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L           "$GEN" -c "$TMPD/w.conf" --install 2>&1)
+    case "$out" in
+        *"already running"*) bad "W2 an unwritable lock does not claim a run is in progress" "$out" ;;
+        *"chmod 664"*)       ok  "W2 an unwritable lock refuses and names the chmod 664 fix" ;;
+        *)                   bad "W2 an unwritable lock refuses and names the chmod 664 fix" "$out" ;;
+    esac
+    chmod 664 "$W2F" 2>/dev/null || true
+fi
+
+# W3: a missing shared directory refuses and points at deploy.sh, rather than
+# silently locking somewhere else.
+out=$(CRONTAB_DIR="$TMPD/w-tabs" CRON_LOCK_DIR="$TMPD/w-absent"       REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L       "$GEN" -c "$TMPD/w.conf" --install 2>&1)
+case "$out" in
+    *"missing or not writable"*) ok "W3 a missing lock directory refuses and names deploy.sh" ;;
+    *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

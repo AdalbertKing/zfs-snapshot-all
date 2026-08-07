@@ -311,7 +311,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.29'
+VERSION='v4.30'
 
 # Legacy-render mode, used ONLY by --migrate-recursion to produce the
 # before-migration baseline it compares against. Assigned unconditionally here
@@ -345,7 +345,22 @@ WARN_SCRIPT="${WARN_SCRIPT:-/root/scripts/notify-warn.sh}"
 DIGEST_SCRIPT="${DIGEST_SCRIPT:-/root/scripts/alert-digest.sh}"
 DIGEST_SCHEDULE="${DIGEST_SCHEDULE:-0 7 * * *}"
 CRON_LOG="${CRON_LOG:-/root/scripts/cron.log}"
-LOCKFILE="${GEN_CRON_LOCKFILE:-/var/run/gen-cron.install.lock}"
+# The install lock lives in the project's SHARED lock directory, not /var/run.
+#
+# /var/run is root-only, and the managed block belongs to the DELEGATED
+# ACCOUNT -- so the default path made `gen-cron.sh --install` unusable by the
+# very identity that owns what it installs. Worse, a single earlier root-side
+# run left a root-owned 0644 file there that the account could not open even
+# once, permanently. Hit live on pve0 2026-08-07 while covering its uncovered
+# guests, and the same shape lib-cron.sh already documents from metropolis
+# pve1 2026-08-06.
+#
+# No fallback to the old path if the shared directory is missing: lib-cron.sh
+# refuses in that case anyway (cron_lock_acquire), so --install already fails
+# there -- this only moves the failure earlier, with a message that names the
+# fix. A silent fallback would split the lock namespace, which is exactly what
+# a lock exists to prevent.
+LOCKFILE="${GEN_CRON_LOCKFILE:-$CRON_LOCK_DIR/gen-cron.install.lock}"
 # How many trailing lines of a failed job's output travel into the alert. Enough
 # for a ZFS error plus the line that provoked it, short enough that a mail stays
 # a mail even when eight datasets fail in one run.
@@ -1922,6 +1937,28 @@ install_crontab() {
     command -v flock >/dev/null || die "flock command not found"
     command -v crontab >/dev/null || die "crontab command not found"
 
+    # Same discipline as lib-cron.sh's cron_lock_acquire, and for the same
+    # reasons -- this used to be a bare `exec 200>"$LOCKFILE"` whose failure
+    # was then reported as "another --install is already running", which was
+    # simply untrue: nothing was running, the file could not be opened. A lock
+    # that misdiagnoses its own failure sends the operator looking for a
+    # process that does not exist.
+    local lockdir; lockdir="$(dirname "$LOCKFILE")"
+    [ -d "$lockdir" ] && [ -w "$lockdir" ] \
+        || die "the lock directory $lockdir is missing or not writable by $(id -un 2>/dev/null || echo '?') -- refusing to install rather than locking somewhere another writer would not look. Run deploy.sh to (re)create it (2775 root:zfsalert)."
+    # A predictable path in a directory writable by more than one identity is
+    # where a symlink can be pre-planted to redirect the open below.
+    [ -L "$LOCKFILE" ] && die "$LOCKFILE is a symlink -- refusing to lock through it"
+    # Probe with a scoped redirect first: a trailing 2>/dev/null on a bare
+    # `exec` would apply to the whole shell permanently, not to the attempt.
+    if ! : >"$LOCKFILE" 2>/dev/null; then
+        die "could not open the lock file $LOCKFILE$([ -e "$LOCKFILE" ] && printf ' -- it exists but is not writable by %s. A lock file created by an earlier root-side run with a 0644 umask does this; fix once with: chmod 664 %s' "$(id -un 2>/dev/null || echo '?')" "$LOCKFILE")"
+    fi
+    # The truncate above used the CALLER's umask. Root usually gets here first
+    # on a fresh host, and a 0644 root-owned file then locks the account out of
+    # its own crontab for good. The setgid group directory scopes WHO shares
+    # the lock; the file has to be group-writable for that to mean anything.
+    chmod 664 "$LOCKFILE" 2>/dev/null || :
     exec 200>"$LOCKFILE"
     if ! flock -n 200; then
         die "another gen-cron.sh --install is already running (lock: $LOCKFILE) -- retry once it finishes"
