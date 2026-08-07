@@ -13,7 +13,12 @@
 # in negative/<name>.err.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GEN="$DIR/../gen-cron.sh"
+# Overridable so a new case can be run against an OLDER gen-cron.sh as a
+# negative control -- the only way to show a test actually pins the change
+# rather than passing for unrelated reasons. `git stash` is not a substitute:
+# it reverts the tests along with the code, so everything "passes" by not
+# running (learned the hard way, REV-052).
+GEN="${GEN:-$DIR/../gen-cron.sh}"
 
 # Fixed, machine-independent paths so expected output is deterministic.
 export REPO_DIR="/REPO" NOTIFY_SCRIPT="/NOTIFY" WARN_SCRIPT="/WARN" DIGEST_SCRIPT="/DIGEST" CRON_LOG="/LOG"

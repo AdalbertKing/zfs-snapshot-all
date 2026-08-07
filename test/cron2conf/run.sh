@@ -21,7 +21,8 @@
 # out) and print the substring in the matching .err file.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-C2C="$DIR/../../cron2conf.sh"
+# Overridable for negative controls -- see the note in test/run.sh.
+C2C="${C2C:-$DIR/../../cron2conf.sh}"
 GEN="$DIR/../../gen-cron.sh"
 
 pass=0 fail=0

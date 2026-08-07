@@ -464,13 +464,72 @@ build_excluded_sections() {
     done
 }
 
+# Pull the recursion flag back OUT of a reconstructed flags string
+# (REV-20260807-054). Since gen-cron.sh v4.27 recursion is the [dataset:]
+# field 'recursive', and -r/-R in 'flags' is a hard error -- so leaving it
+# where it was found would emit a config the real generator refuses.
+#
+# Sets C_REC to flat|atomic|"" and C_FLAGS_REST to what is left.
+#
+# Argument-aware for the same reason gen-cron's scanner is: a token following
+# an option that takes one is an ARGUMENT, and `-m -R` names a prefix, not a
+# recursion. The arg-letter set is the union across both engines, matching
+# gen-cron.sh's FLAGS_ARG_LETTERS.
+C2C_ARG_LETTERS='mlvjpkqQToxcbXKOL'
+split_recursion() {   # <flags>
+    local tok rest c want_arg=0
+    C_REC=""; C_FLAGS_REST=""
+    for tok in $1; do
+        if [ "$want_arg" -eq 1 ]; then
+            want_arg=0
+            C_FLAGS_REST="${C_FLAGS_REST:+$C_FLAGS_REST }$tok"
+            continue
+        fi
+        case "$tok" in
+            -r) C_REC="atomic"; continue ;;
+            -R) C_REC="flat";   continue ;;
+            -?*)
+                # Bundled forms are not something gen-cron.sh emits, but a
+                # hand-edited crontab can hold one. Refuse rather than hand
+                # back a config the generator will reject with a message
+                # pointing at a file this tool wrote.
+                rest="${tok#-}"
+                while [ -n "$rest" ]; do
+                    c="${rest%"${rest#?}"}"; rest="${rest#?}"
+                    case "$c" in
+                        r|R) die "cannot represent '$tok': recursion is bundled with other options. Split it into its own -$c before converting -- gen-cron.sh v4.27+ takes recursion as the [dataset:] field 'recursive', not as a flag" ;;
+                    esac
+                    case "$C2C_ARG_LETTERS" in *"$c"*) [ -n "$rest" ] || want_arg=1; rest="" ;; esac
+                done
+                ;;
+        esac
+        C_FLAGS_REST="${C_FLAGS_REST:+$C_FLAGS_REST }$tok"
+    done
+}
+
 # ---- sends: one [dataset:] section per distinct src, one template per tier ----
 build_send_sections() {
-    local e sched flags src dst prefix notify
+    local e sched flags src dst prefix notify prev
     for e in "${SEND_E[@]}"; do
         IFS="$SEP" read -r sched flags src dst prefix notify <<< "$e"
+        split_recursion "$flags"
         get_section dataset "$src"
-        new_template send_schedule "$sched" prefix "$prefix" flags "$flags" dst "$dst" notify_raw "$notify"
+        if [ -n "$C_REC" ]; then
+            # 'recursive' is a SECTION field, not a template one, so two tiers
+            # of the same dataset disagreeing about it is unrepresentable --
+            # and it would be a real defect in the source crontab, where one
+            # tier walks the subtree and another does not.
+            prev=""
+            case "${SECTION_FIELDS[$SECTION_KEY]:-}" in
+                *"recursive = flat"*)   prev=flat ;;
+                *"recursive = atomic"*) prev=atomic ;;
+            esac
+            if [ -n "$prev" ] && [ "$prev" != "$C_REC" ]; then
+                die "dataset '$src' has tiers with DIFFERENT recursion ('$prev' and '$C_REC'). A [dataset:] section declares recursion once for all its tiers, so this crontab cannot be represented as one section -- split it into separate configs, or make the tiers agree"
+            fi
+            section_set_field "$SECTION_KEY" "recursive" "$C_REC"
+        fi
+        new_template send_schedule "$sched" prefix "$prefix" flags "$C_FLAGS_REST" dst "$dst" notify_raw "$notify"
         section_add_template "$SECTION_KEY" "$NEW_TEMPLATE_NAME"
     done
 }

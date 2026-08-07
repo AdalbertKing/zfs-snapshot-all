@@ -125,16 +125,42 @@ set -o pipefail
 #                                          # so merging into one snapget.sh
 #                                          # call never makes sense the way it
 #                                          # does for push.
+#       recursive    = no | flat | atomic  # default no; SCOPE of every line this
+#                                          # section generates -- see below.
+#                                          # Section-scope only: never inherited
+#                                          # from a template or [defaults].
 #       ...any template field can be overridden here (dst, send_schedule,
 #          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
-#     A dataset section runs, scoped to ITS OWN path, non-recursively:
+#     A dataset section runs scoped to ITS OWN path, or -- if 'recursive' says
+#     so -- to its whole subtree:
 #       create(+send)  if its tiers resolve send_schedule
 #       self-prune     if its tiers resolve prune_schedule (retention defined
 #                      right here, at the dataset, independent of every other)
+#
+#     'recursive' drives ALL THREE generated lines from one declaration
+#     (REV-20260807-054). It has to: the old shape could only make the
+#     TRANSFER recursive, by hiding -r/-R in free-form 'flags', while the
+#     inline prune and the monitor stayed on the named dataset -- so a newly
+#     created child was replicated forever, never pruned, never watched, and
+#     every run reported success. -r/-R in 'flags' is now a hard error.
+#
+#       value    transfer              inline prune       monitor
+#       no       this dataset          this dataset       this dataset
+#       flat     snapsend/snapget -R   delsnaps -R        check-snap-age -R
+#       atomic   snapsend/snapget -r   delsnaps -R        check-snap-age -R
+#
+#     flat = each descendant is its own job (one child failing does not stop
+#     its siblings; -X/-S filters apply; per-dataset bookmarks). atomic = the
+#     subtree in ONE stream at ONE point in time, failing as a unit. delsnaps
+#     and check-snap-age have no atomic mode and need none -- retention and
+#     staleness are per-dataset questions either way.
+#
 #     Datasets sharing a resolved (send_schedule,dst,prefix,flags) merge into one
-#     send line; datasets sharing a resolved (prune_schedule,pattern,keep/retain)
-#     merge into one prune line that lists them BY FULL PATH, non-recursively.
-#     Inline prune NEVER collapses to a recursive -R sweep.
+#     send line; datasets sharing a resolved
+#     (prune_schedule,pattern,keep/retain,recursive) merge into one prune line
+#     that lists them BY FULL PATH. Recursion is never INFERRED from a shared
+#     parent: a list of separately named datasets stays a list, because
+#     collapsing it to a sweep would prune snapshots nobody named.
 #
 #   [prune:<scope>]                       # standalone, additive prune of a scope
 #       use_template = <tier>[,<tier>...]  # borrows each tier's prune policy
@@ -285,7 +311,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v4.26'
+VERSION='v4.27'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The single crontab writer. Sourced from beside this script, not from
@@ -492,6 +518,53 @@ maybe_add_quiesce() {
     if [ -n "$flags" ]; then printf '%s -q %s' "$flags" "$want"; else printf -- '-q %s' "$want"; fi
 }
 
+# The OPTION LETTERS in a free-form flags string, one per line, read the way
+# the engine's own `getopts` reads them (REV-20260807-054 acceptance
+# condition 1).
+#
+# Scanning for a whole token like "-R" is not equivalent and never was: getopts
+# accepts bundled short options, so `-Rv 3` means -R -v 3, and a check that
+# only ever compares complete tokens lets the exact same policy back in under
+# a different spelling. It is also wrong in the other direction -- an option
+# ARGUMENT is not an option, and `-m -R-daily_` carries no -R at all.
+#
+# So this walks characters and consults the engine's own optstrings for which
+# letters take an argument. The two engines differ (snapget has -Q, snapsend
+# has neither), and the union is used deliberately: a letter that takes an
+# argument in EITHER engine must consume one here, or a pull-side flags string
+# would be mis-scanned by a push-side reading of it. Being too eager to treat
+# something as an argument can only ever make this MISS a letter, so the
+# recursion check that depends on it is written to fail closed separately.
+#
+#   arg-taking (union): m l v j p k q Q T o x c b X K O L
+#   boolean    (union): e z Z g N r R n i H u U f w V A F S
+FLAGS_ARG_LETTERS='mlvjpkqQToxcbXKOL'
+flags_opt_letters() {   # <flags string> -> option letters, one per line
+    local tok rest c want_arg=0
+    for tok in $1; do
+        if [ "$want_arg" -eq 1 ]; then want_arg=0; continue; fi
+        case "$tok" in
+            --) break ;;          # end of options, same as getopts
+            -?*) rest="${tok#-}" ;;
+            *) continue ;;        # a positional, or an argument we did not have to consume
+        esac
+        while [ -n "$rest" ]; do
+            c="${rest%"${rest#?}"}"
+            rest="${rest#?}"
+            printf '%s\n' "$c"
+            case "$FLAGS_ARG_LETTERS" in
+                *"$c"*)
+                    # The argument is the remainder of this token if there is
+                    # one, otherwise the next token. Either way nothing left in
+                    # this token is an option letter.
+                    [ -n "$rest" ] || want_arg=1
+                    rest=""
+                    ;;
+            esac
+        done
+    done
+}
+
 # Rejects flags that never make sense in a standing/recurring cron job, and
 # warns about ones that are merely dead.
 #
@@ -503,17 +576,30 @@ maybe_add_quiesce() {
 # runtime, and a regeneration that suddenly refuses to produce a crontab is worse
 # than one that produces a correct crontab and tells you to tidy the config.
 lint_flags() {
-    local flags="$1" ctx="$2" dst="${3:-}" tok
-    for tok in $flags; do
+    local flags="$1" ctx="$2" dst="${3:-}" tok letters
+    letters="$(flags_opt_letters "$flags")"
+    for tok in $letters; do
         case "$tok" in
-            -f) die "$ctx: flag -f (force full send) not allowed in a recurring job -- it would destroy and re-seed the target every run" ;;
-            -n) die "$ctx: flag -n (dry-run) not allowed in a recurring job -- it never actually sends anything" ;;
-            -q)
-                case " $flags " in
-                    *" -e "*) warn "$ctx: -q has no effect together with -e -- -e reuses an existing snapshot, so there is nothing being created for a freeze to make consistent" ;;
+            r|R)
+                # REV-20260807-054: recursion is 'recursive =' and nothing else.
+                # Accepting it here as well would leave two ways to say the same
+                # thing, free to disagree -- and they DID disagree: this flag
+                # only ever reached the transfer, while the inline prune and the
+                # monitor generated from the same section stayed non-recursive,
+                # so a new child was copied forever and never pruned or watched.
+                local want=flat
+                [ "$tok" = r ] && want=atomic
+                die "$ctx: flag -$tok in 'flags' -- recursion is no longer expressed as a transfer flag. Use this section's own 'recursive = $want' instead, which also makes the prune and the monitor recursive. See docs/design/recursion-model.md"
+                ;;
+            f) die "$ctx: flag -f (force full send) not allowed in a recurring job -- it would destroy and re-seed the target every run" ;;
+            n) die "$ctx: flag -n (dry-run) not allowed in a recurring job -- it never actually sends anything" ;;
+            q)
+                case "$letters" in
+                    *e*) warn "$ctx: -q has no effect together with -e -- -e reuses an existing snapshot, so there is nothing being created for a freeze to make consistent" ;;
                 esac
                 ;;
-            -z|-Z|-g)
+            z|Z|g)
+                tok="-$tok"
                 # Three cases, not two. An EMPTY dst is not "a local target" --
                 # it means no target at all: snapsend gets one argument, creates
                 # a snapshot and transfers nothing. Saying "dst '' is local"
@@ -661,7 +747,7 @@ _allow_fields template  $POLICY_FIELDS
 # inheritance -- a label that silently spread to unrelated sections would
 # make one pause skip a stranger's backup.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label $POLICY_FIELDS
+_allow_fields dataset   use_template pair_label recursive $POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $POLICY_FIELDS
@@ -969,6 +1055,44 @@ build_dataset() {
         esac
     fi
 
+    # REV-20260807-054: recursion, declared ONCE for the whole section. The
+    # three lines a [dataset:] can generate -- transfer, inline prune, monitor
+    # -- all read this, which is the entire point: the old shape let the
+    # transfer be recursive (via 'flags = -R') while the prune and the monitor
+    # could not be, so a newly created child was replicated forever and never
+    # pruned or watched, and the run looked healthy the whole time.
+    #
+    # Section scope only, like pair_label and like [prune:]'s own 'recursive':
+    # a template that silently made an unrelated dataset recursive would be
+    # the same class of accident, in the direction that destroys snapshots.
+    #
+    # An unrecognised value is fatal rather than falsy. "recursive = ture"
+    # meaning "no" is precisely the fail-open this whole review exists to
+    # remove, and a blank value is a question nobody answered.
+    local ds_recursive rec_raw
+    if rec_raw="$(resolve_field recursive "$ds" "" "")"; then
+        case "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" in
+            no)     ds_recursive=no ;;
+            flat)   ds_recursive=flat ;;
+            atomic) ds_recursive=atomic ;;
+            '')     die "[dataset:$ds_path]: 'recursive' is blank -- a blank field is not a default, it is a question nobody answered (say no, flat or atomic)" ;;
+            *)      die "[dataset:$ds_path]: recursive = '$rec_raw' -- expected 'no' (this dataset only), 'flat' (each descendant as its own job, snapsend/snapget -R) or 'atomic' (the subtree in one stream, -r). See docs/design/recursion-model.md" ;;
+        esac
+    else
+        ds_recursive=no
+    fi
+    local rec_send_flag=""
+    case "$ds_recursive" in
+        flat)   rec_send_flag="-R" ;;
+        atomic) rec_send_flag="-r" ;;
+    esac
+    # delsnaps.sh and check-snap-age.sh have no atomic mode and need none:
+    # retention and staleness are per-dataset questions even when the transfer
+    # that fed them was one atomic stream. -R is correct for both under either
+    # recursive value.
+    local rec_scope=0
+    [ "$ds_recursive" = no ] || rec_scope=1
+
     local -a tiers=()
     IFS=',' read -ra tiers <<< "$tier_list"
     local tier tmpl
@@ -1021,6 +1145,13 @@ build_dataset() {
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             lint_flags "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
+            # PREPENDED, where a hand-written flags string would have carried it
+            # (the engines take options in any order, but an operator reading a
+            # generated line should meet the scope decision before the details).
+            # Added after lint_flags on purpose: the lint refuses -r/-R coming
+            # from the CONFIG, and must not trip over the one this generator
+            # puts there itself.
+            [ -n "$rec_send_flag" ] && flags="$rec_send_flag${flags:+ $flags}"
             # Appended to 'flags' rather than carried as a tuple field of its
             # own: flags are part of the send group key, so two relationships
             # can never merge into one cron line that a single pause would
@@ -1053,16 +1184,16 @@ build_dataset() {
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}")
+            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
-            # ---- monitor (rides this same pattern, own path, non-recursive) ----
+            # ---- monitor (rides this same pattern and the same scope) ----
             if resolve_monitor "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier"; then
                 local mnotify mbroken mwarntext
                 mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
                 mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
                 mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
-                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}0${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
             fi
         fi
     done
@@ -1288,10 +1419,15 @@ group_send() {
 group_inline_prune() {
     declare -gA INLINE_PRUNE_GROUPS=()
     declare -ga INLINE_PRUNE_GROUP_ORDER=()
-    local e ds tier pattern retain schedule notify key
+    local e ds tier pattern retain schedule notify recursive key
     for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier pattern retain schedule notify <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${retain}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "$e"
+        # 'recursive' is IN the key. A delsnaps.sh line carries -R or it does
+        # not, for every dataset it names -- so merging a recursive dataset
+        # with a non-recursive one would silently give one of them the wrong
+        # scope, either leaving descendants unpruned or pruning descendants
+        # nobody asked about.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -1482,26 +1618,33 @@ job_cron_line() {
         "$schedule" "$cmd" "$CRON_LOG" "$NOTIFY_SCRIPT" "$notify" "$DETAIL_LINES" "$CRON_LOG"
 }
 
-# Inline prune: one delsnaps line per (schedule,pattern,retain) group, listing
-# every member dataset BY FULL PATH, non-recursively. No -R, ever.
+# Inline prune: one delsnaps line per (schedule,pattern,retain,recursive) group,
+# listing every member dataset BY FULL PATH.
+#
+# -R appears here only when the section said 'recursive =' (REV-20260807-054).
+# It is never inferred: a group of separately named datasets that happen to
+# share a parent is still a list, not a subtree, and collapsing it to a sweep
+# would prune snapshots nobody named.
 emit_inline_prune() {
-    local key list ds tier pattern retain schedule notify
+    local key list ds tier pattern retain schedule notify recursive
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
         list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier pattern retain schedule notify <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "${members[0]}"
 
         local -a targets=()
-        local m mds mtier mpat mret msch mnot
+        local m mds mtier mpat mret msch mnot mrec
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mds mtier mpat mret msch mnot <<< "$m"
+            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec <<< "$m"
             targets+=("$mds")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local cmd="$REPO_DIR/delsnaps.sh ${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
+        local rflag=""
+        [ "$recursive" = "1" ] && rflag="-R "
+        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
