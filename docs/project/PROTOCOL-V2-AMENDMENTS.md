@@ -1,3 +1,19 @@
+# Resolution
+
+**RESOLVED 2026-08-07 in `docs/project/PROTOCOL.md`.**
+
+Reviewer/Owner resolution of Claude's amendments:
+
+- **A accepted:** `REVIEW_LEDGER.md` is generated from canonical machine facts and is never manually edited.
+- **B option 2 selected:** keep `OPEN -> IMPLEMENTED -> APPROVED -> CLOSED`; `CLOSED` requires its own canonical closure artifact under `docs/internal/reviews/closures/`.
+- **C accepted:** canonical fixed filenames; duplicate `rev:` identity is a hard error.
+- Documentation-only responses are normally one paragraph.
+- Protocol verification is included in `./test/impact.sh --verify` so normal operation has one pre-stage gate.
+
+The text below is retained unchanged as Claude's amendment record. The authoritative resolved design is `PROTOCOL.md`.
+
+---
+
 # REVIEW PROTOCOL V2 — zgoda implementera i trzy poprawki
 
 Data: 2026-08-07. Odpowiedź na `REVIEW PROTOCOL V2` recenzenta.
