@@ -3761,6 +3761,16 @@ if run_pause pause_client beta && grep -q "not blocked" "$WORK/pause.out" \
 else
     bad "limitation (label-less manual run not blocked) is stated by pause output and --help" "$(cat "$WORK/pause.out")"
 fi
+# REV-053 F2: and it must point at the control that DOES have the property,
+# now that one exists. A limitation notice naming no alternative aged into a
+# command telling its operator that a shipped feature is unimplemented -- and
+# the runbook quoted it verbatim.
+if grep -q "disable-client beta" "$WORK/pause.out" \
+        && ! grep -qi "unimplemented" "$WORK/pause.out"; then
+    ok "pause output points at disable-client and no longer calls it unimplemented"
+else
+    bad "pause output points at disable-client and no longer calls it unimplemented" "$(cat "$WORK/pause.out")"
+fi
 run_pause resume_client beta || :
 
 # --- 42b. test plan A8/A11: the two baseline properties hard disable builds on

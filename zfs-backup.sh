@@ -3262,7 +3262,13 @@ cmd_pause_client() {
         log "NOTE: a transfer for '$name' is in flight RIGHT NOW -- it will finish; only subsequent runs are blocked:"
         printf '      %s\n' "$running"
     fi
-    log "LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L $name' is not blocked. Hard disable (peer-side gate) is a separate, unimplemented stage."
+    # The second sentence used to say hard disable was "a separate,
+    # unimplemented stage". It shipped and closed (REV-052), so that line
+    # became a command telling its operator a working feature does not
+    # exist -- and it had already been copied verbatim into the runbook
+    # (REV-053 F2). A limitation notice is only useful if it also names
+    # what does not have the limitation.
+    log "LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L $name' is not blocked. For enforcement at the peer, including unlabeled manual commands, use: $0 disable-client $name"
 }
 
 cmd_resume_client() {

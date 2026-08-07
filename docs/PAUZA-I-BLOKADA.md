@@ -11,7 +11,7 @@ i `docs/design/pair-pause.md`. Tutaj jest tylko to, co się wpisuje i co się wi
 | Zatrzymuje zadania z crona | tak | tak |
 | Zatrzymuje ręczne polecenie **z** etykietą `-L` | tak | tak |
 | Zatrzymuje ręczne polecenie **bez** `-L` | **nie** | **tak** |
-| Wymaga kontaktu z peerem | nie | tak (jedno połączenie ssh) |
+| Wymaga kontaktu z peerem | nie | tak — peer musi być osiągalny (zapis, a potem osobny odczyt zwrotny) |
 | Typowe użycie | okno serwisowe, wymiana dysku, głośny sąsiad na łączu | „ta relacja ma stać i nikt ma jej przypadkiem nie ruszyć" |
 
 Obie zostawiają crona, config, klucze i granty ZFS **nietknięte** — nic nie jest przepisywane,
@@ -34,7 +34,8 @@ zfs-backup.sh pause-client pve2 --reason='wymiana dysku w szafie'
 >>> client 'pve2' paused (PAUSED_LOCAL). Managed jobs and labeled manual runs now exit
     'SKIPPED: relationship pve2 is paused' before any snapshot/SSH work.
 >>> LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L pve2'
-    is not blocked. Hard disable (peer-side gate) is a separate, unimplemented stage.
+    is not blocked. For enforcement at the peer, including unlabeled manual commands,
+    use: zfs-backup.sh disable-client pve2
 ```
 
 Zdjęcie:
