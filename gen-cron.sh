@@ -2136,10 +2136,12 @@ migrate_recursion() {   # <config file>
     raw="$(cron_block_read "$me" zfs-backup-managed 2>/dev/null || true)"
     src="$(printf '%s\n' "$raw" | sed -n 's/^# Source: \(.*\) -- DO NOT EDIT.*$/\1/p' | head -1)"
     installed=""
-    if [ -n "$raw" ] && [ -n "$src" ] && [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$file" 2>/dev/null)" ]; then
-        installed="$(printf '%s\n' "$raw" | migrate_normalise)"
-    elif [ -n "$raw" ]; then
+    if [ -z "$raw" ]; then
+        echo "  installed crontab block: none found -- skipping that control"
+    elif [ -z "$src" ] || [ "$(readlink -f "$src" 2>/dev/null)" != "$(readlink -f "$file" 2>/dev/null)" ]; then
         echo "  installed crontab block: belongs to ${src:-another config} -- not a control for this file, skipping"
+    else
+        installed="$(printf '%s\n' "$raw" | migrate_normalise)"
     fi
     if [ -n "$installed" ]; then
         if diff -q <(printf '%s\n' "$installed") "$work.base" >/dev/null 2>&1; then
@@ -2152,8 +2154,6 @@ migrate_recursion() {   # <config file>
             echo "      WARN_SCRIPT/DIGEST_SCRIPT) different from the one the block was made with." >&2
             die "$file is untouched"
         fi
-    else
-        echo "  installed crontab block: none found -- skipping that control"
     fi
 
     # ---- transactional commit ----------------------------------------------
