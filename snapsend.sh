@@ -859,7 +859,7 @@ find_common_snapshot() {
 
 create_snapshot() {
     local dataset="$1"
-    local snapshot_name="${dataset}@${MESSAGE}$(date '+%Y-%m-%d_%H-%M-%S')"
+    local snapshot_name="${dataset}@${MESSAGE}${RUN_SUFFIX}"
     local recursive_flag=""
     [ $RECURSIVE -eq 1 ] && recursive_flag="-r"
     
@@ -1714,6 +1714,22 @@ SSH_OPTS+=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax
 # -j/IDENTIFIER is the one deliberate exception: it exists precisely to let a
 # second, independent job aimed at the same pair opt OUT of this serialization.
 LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' -f1)
+# One suffix per RUN, not per dataset (Etap 2.1).
+#
+# create_snapshot() used to call date(1) itself, so a flat-recursive run over a
+# subtree that crossed a second boundary produced DIFFERENT snapshot names for
+# datasets belonging to the same run -- and a run that cannot be correlated
+# cannot be restored as a coherent set. `atomic` was never affected (one
+# `zfs snapshot -r` call) and neither was -q (which already computed one suffix
+# before freezing); this closes the remaining case.
+#
+# Computed once here so there is exactly one definition. The quiesce path below
+# consumes this same value rather than deriving its own.
+#
+# What this does NOT claim: a shared suffix proves a shared RUN, not a shared
+# point in time. Under plain flat the snapshots are still taken one after
+# another. Restore must report which of the three guarantees applies.
+RUN_SUFFIX="$(date '+%Y-%m-%d_%H-%M-%S')"
 LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
@@ -1932,7 +1948,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # run reported success.
     quiesce_init "$QUIESCE"
 
-    quiesce_snap_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
+    quiesce_snap_suffix="$RUN_SUFFIX"   # one definition, see RUN_SUFFIX above
     # pool -> space-separated snapshot names. A space-joined string is safe as a
     # list here because ZFS dataset names cannot contain whitespace, and bash has
     # no array-of-arrays to hold this properly.
