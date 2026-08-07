@@ -361,35 +361,72 @@ STATUS_FILE="docs/PROJECT_STATUS.md"
 STATUS_MARKER_RE='^<!-- status-covers-digest: ([0-9a-f]{16}) -->$'
 STATUS_LEGACY_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
 
-# The invariant is over the CONTENT of the watched files, not over a commit.
+# The invariant is over the PROSPECTIVE COMMIT -- the git index -- not over a
+# commit SHA and not over the working tree.
 #
-# REV-20260807-068 F1. The old marker named the last behaviour-changing commit
-# the document described, which cannot be checked before that commit exists: a
-# commit cannot contain its own hash. So `--verify` run as a pre-stage gate saw
-# only `marker..HEAD`, reported clean, and the commit it was blessing landed
-# stale. I cited exactly that clean run in eea6339 while producing a stale tree.
+# Two rounds of REV-20260807-068 got here:
 #
-# A content digest is provable against the working tree BEFORE the commit and
-# is unchanged BY the commit, so one run proves the property on both sides of
-# the boundary. It is also strictly stronger: it fails on an edit that has not
-# been committed at all, which the commit-based marker could never see.
+#   round 1: the marker named the last behaviour-changing COMMIT. That cannot
+#   be checked before the commit exists (a commit cannot contain its own hash),
+#   so run as a pre-stage gate it reported clean and blessed a commit that
+#   landed stale.
+#
+#   round 2: a digest over the WORKING TREE. Still wrong at the boundary,
+#   because `git commit` records the INDEX. Stage a watched file, refresh the
+#   status into the working tree, do NOT stage it, verify -- clean; commit --
+#   stale. Same false-green, one step further along.
+#
+# So everything the verdict rests on is read from the index: the watched
+# blobs, the PROJECT_STATUS.md that carries the marker, and the deps.conf that
+# DEFINES the watched set. Mixing index-derived behaviour with a working-tree
+# status or configuration is what round 2 did.
+#
+# The guarantee: if a normal `git commit` runs immediately after a successful
+# --verify without changing the index, the committed tree satisfies the
+# invariant.
+#
+# Not covered, deliberately: `git commit -a`, `git commit <path>` and `--amend`
+# all change the index after verification. The guarantee is explicitly
+# conditioned on the index not moving, and those move it.
 #
 # No self-reference: PROJECT_STATUS.md is not itself a watched file, so writing
 # the digest into it does not change the digest.
 #
 # 16 hex characters. This defends against forgetting to refresh a document, not
 # against an adversary constructing a collision.
-status_digest() {   # -> hex, or empty if the watched set is empty
+
+# The blob a path has IN THE INDEX -- what the next commit will record.
+index_blob() {   # <path> -> blob sha, or empty
+    git -C "$REPO" rev-parse ":$1" 2>/dev/null
+}
+
+# The watched set as the PROSPECTIVE COMMIT defines it: parsed from the staged
+# deps.conf, because a config change that adds or drops a watched file is
+# itself part of what is about to land.
+watched_from_index() {   # -> paths, one per line
+    local rel blob
+    rel="${CONF#$REPO/}"
+    blob="$(index_blob "$rel")"
+    [ -n "$blob" ] || return 1
+    git -C "$REPO" cat-file blob "$blob" 2>/dev/null | awk '
+        /^\[file:/ { f=$0; sub(/^\[file:/,"",f); sub(/\]$/,"",f); cur=f; next }
+        /^\[/      { cur="" ; next }
+        cur != "" && /^[ 	]*manual[ 	]*=/ {
+            line=$0; sub(/^[^=]*=/,"",line)
+            n=split(line, parts, ",")
+            for (i=1;i<=n;i++) { gsub(/^[ 	]+|[ 	]+$/,"",parts[i]);
+                                 if (parts[i]=="project-status") print cur }
+        }'
+}
+
+status_digest() {   # <watched...> -> hex
     local f
     { for f in $(printf '%s
 ' "${@}" | sort); do
-        if [ -f "$REPO/$f" ]; then
-            printf '%s %s
-' "$(git -C "$REPO" hash-object "$f" 2>/dev/null)" "$f"
-        else
-            printf 'ABSENT %s
-' "$f"
-        fi
+        local b; b="$(index_blob "$f")"
+        if [ -n "$b" ]; then printf '%s %s
+' "$b" "$f"; else printf 'ABSENT %s
+' "$f"; fi
       done; } | sha256sum | cut -c1-16
 }
 
@@ -398,14 +435,14 @@ status_digest() {   # -> hex, or empty if the watched set is empty
 # previous message ("these commits landed after the marker") was the one thing
 # genuinely lost in the move. Never part of the verdict.
 status_changed_hint() {   # <watched...>
-    local commit f now then
+    local commit f now before
     commit="$(git -C "$REPO" log -1 --format=%H -- "$STATUS_FILE" 2>/dev/null)"
     [ -n "$commit" ] || return 0
     for f in "$@"; do
-        [ -f "$REPO/$f" ] || continue
-        now="$(git -C "$REPO" hash-object "$f" 2>/dev/null)"
-        then="$(git -C "$REPO" rev-parse "$commit:$f" 2>/dev/null)" || continue
-        [ -n "$then" ] && [ "$now" != "$then" ] && printf '    %s
+        now="$(index_blob "$f")"
+        [ -n "$now" ] || continue
+        before="$(git -C "$REPO" rev-parse "$commit:$f" 2>/dev/null)" || continue
+        [ -n "$before" ] && [ "$now" != "$before" ] && printf '    %s
 ' "$f"
     done
 }
@@ -414,28 +451,37 @@ status_freshness() {
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
     [ -f "$REPO/$STATUS_FILE" ] || { echo "  $STATUS_FILE is missing"; return 1; }
 
-    local marker legacy
+    local marker legacy status_blob
+    # EVERYTHING the verdict rests on comes from the index -- that is the
+    # finding. Reading the marker from the working tree while reading the
+    # watched blobs from the index is precisely the split that let round 2
+    # certify one tree while the commit recorded another.
+    status_blob="$(index_blob "$STATUS_FILE")"
+    if [ -z "$status_blob" ]; then
+        echo "  $STATUS_FILE is not in the index, so the next commit would not record it."
+        echo "  git add $STATUS_FILE (after ./test/impact.sh --refresh-status)"
+        return 1
+    fi
+
     # Extracted without a backreference on purpose: take the whole matched
     # line, then strip the fixed prefix and suffix by parameter expansion.
     # Escaping a sed backreference through every layer that generates or edits
     # this file is exactly how the check silently started reading an EMPTY
     # marker and reporting a missing commit instead of a stale document.
-    marker="$(grep -oE "$STATUS_MARKER_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1)"
+    marker="$(git -C "$REPO" cat-file blob "$status_blob" 2>/dev/null | grep -oE "$STATUS_MARKER_RE" | head -1)"
     marker="${marker#<!-- status-covers-digest: }"
     marker="${marker% -->}"
 
-    # Which files oblige a status refresh: whatever deps.conf says, so the two
-    # never disagree.
+    # The watched set as the PROSPECTIVE COMMIT defines it, not as the working
+    # copy of deps.conf does.
     local -a watched=()
-    local f
-    for f in "${!SEC_KIND[@]}"; do
-        case "$f" in file:*) ;; *) continue ;; esac
-        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
-    done
-    [ ${#watched[@]} -gt 0 ] || { echo "  (no file declares the project-status obligation)"; return 0; }
+    mapfile -t watched < <(watched_from_index)
+    if [ ${#watched[@]} -eq 0 ]; then
+        echo "  (no staged file declares the project-status obligation)"; return 0
+    fi
 
     if [ -z "$marker" ]; then
-        legacy="$(grep -oE "$STATUS_LEGACY_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1)"
+        legacy="$(git -C "$REPO" cat-file blob "$status_blob" 2>/dev/null | grep -oE "$STATUS_LEGACY_RE" | head -1)"
         if [ -n "$legacy" ]; then
             echo "  $STATUS_FILE still carries the OLD commit marker: $legacy"
             echo "  That marker could not be checked before its own commit existed"
@@ -450,7 +496,7 @@ status_freshness() {
     local now
     now="$(status_digest "${watched[@]}")"
     if [ "$marker" != "$now" ]; then
-        echo "  STALE. $STATUS_FILE was written for a different state of the watched files."
+        echo "  STALE. The STAGED $STATUS_FILE does not describe what the next commit would record."
         echo "  recorded: $marker   current: $now"
         local hint
         hint="$(status_changed_hint "${watched[@]}")"
@@ -459,7 +505,7 @@ status_freshness() {
             printf '%s
 ' "$hint"
         fi
-        echo "  Refresh $STATUS_FILE, then: ./test/impact.sh --refresh-status"
+        echo "  git add <intended changes>; ./test/impact.sh --refresh-status; git add $STATUS_FILE"
         return 1
     fi
     return 0
@@ -470,12 +516,8 @@ status_freshness() {
 # the class of thing Stage 1 existed to remove.
 refresh_status() {
     local -a watched=()
-    local f
-    for f in "${!SEC_KIND[@]}"; do
-        case "$f" in file:*) ;; *) continue ;; esac
-        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
-    done
-    [ ${#watched[@]} -gt 0 ] || die "no file declares the project-status obligation"
+    mapfile -t watched < <(watched_from_index)
+    [ ${#watched[@]} -gt 0 ] || die "no staged file declares the project-status obligation (git add it first)"
     [ -f "$REPO/$STATUS_FILE" ] || die "$STATUS_FILE is missing"
 
     local now line tmp
@@ -494,8 +536,9 @@ refresh_status() {
     cat "$tmp" > "$REPO/$STATUS_FILE"
     rm -f "$tmp"
     echo "status marker refreshed: $now"
-    echo "Stage this file together with the change it describes -- the digest is"
-    echo "over the watched files' CONTENT, so it stays true across the commit."
+    echo "The digest is over the STAGED content, so stage this file too:"
+    echo "  git add $STATUS_FILE"
+    echo "Until it is staged, --verify fails -- the next commit would not record it."
 }
 
 # ---------------------------------------------------------------------------

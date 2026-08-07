@@ -166,6 +166,9 @@ EOF
     printf '# status\n\n| `only` | 1/1 | x |\n' > "$FW/docs/PROJECT_STATUS.md"
     git -C "$FW" init -q >/dev/null 2>&1
     git -C "$FW" config user.email t@t; git -C "$FW" config user.name t
+    # Stage FIRST. Since REV-068 round 3 the marker is derived from the index,
+    # so refreshing before anything is staged has nothing to hash and refuses.
+    git -C "$FW" add -A >/dev/null 2>&1
     # Run from INSIDE the world. The pre-REV-068 gate resolves git against the
     # CURRENT DIRECTORY, not $REPO, so invoking it from the real repo made it
     # measure the real repo -- the marker "is not a commit in this repository"
@@ -179,7 +182,7 @@ EOF
         # case came back NOT-CLEAN because the old gate found no marker at all,
         # so the pending-change case "passed" against the old implementation and
         # appeared to show there was nothing to fix.
-        git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm base >/dev/null 2>&1
+        git -C "$FW" commit -qm base >/dev/null 2>&1
         printf '<!-- status-covers-commit: %s -->
 ' "$(git -C "$FW" rev-parse --short HEAD)"             >> "$FW/docs/PROJECT_STATUS.md"
         git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm marker >/dev/null 2>&1
@@ -198,41 +201,91 @@ fresh_says() {
     if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then echo CLEAN; else echo NOT-CLEAN; fi
 }
 
+G() { git -C "$FW" "$@" >/dev/null 2>&1; }
+IMP() { (cd "$FW" && ./test/impact.sh "$@"); }
+
 fresh_world clean
-check "freshness: an up-to-date status on a clean tree is accepted" "CLEAN" "$(fresh_says)"
+check "freshness: an up-to-date staged status on a clean tree is accepted" "CLEAN" "$(fresh_says)"
 
-# THE FINDING. Marker current at HEAD, a watched behaviour file edited but not
-# yet committed. The gate must refuse to certify freshness: the commit about to
-# be made would leave the document describing a tree that is gone.
-fresh_world pending
-printf 'echo CHANGED\n' > "$FW/engine.sh"
-check "freshness: a PENDING watched change is not clean (REV-068 F1)" "NOT-CLEAN" "$(fresh_says)"
+# THE DECISIVE CASE (REV-068 round 2). Stage the behaviour change, refresh the
+# status into the WORKING TREE, and do not stage it. The working tree is
+# self-consistent, so a worktree-based gate says clean -- and the commit that
+# follows records the NEW behaviour with the OLD status.
+fresh_world split
+printf 'echo CHANGED
+' > "$FW/engine.sh"
+G add engine.sh
+IMP --refresh-status >/dev/null 2>&1
+check "freshness: staged change + UNSTAGED refreshed status is refused" "NOT-CLEAN" "$(fresh_says)"
+# ...and the reason it must be refused, demonstrated rather than argued: commit
+# exactly what was staged and the committed tree is stale.
+G commit -qm "what the gate was asked to bless"
+check "freshness: ...because committing exactly that leaves a stale tree" "NOT-CLEAN" "$(fresh_says)"
 
-fresh_world staged
-printf 'echo CHANGED\n' > "$FW/engine.sh"
-git -C "$FW" add engine.sh >/dev/null 2>&1
-check "freshness: staging the change does not launder it" "NOT-CLEAN" "$(fresh_says)"
+# Staging the refreshed status is what completes the sequence.
+fresh_world sequence
+printf 'echo CHANGED
+' > "$FW/engine.sh"
+G add engine.sh
+IMP --refresh-status >/dev/null 2>&1
+G add docs/PROJECT_STATUS.md
+check "freshness: staging the refreshed status makes it clean" "CLEAN" "$(fresh_says)"
+G commit -qm staged
+check "freshness: and the tree it committed is clean" "CLEAN" "$(fresh_says)"
 
-# The property REV-061 asked for must survive the redesign.
+# The verdict is about what the next commit RECORDS. An unstaged working-tree
+# edit is not in that commit, so it must not make the gate fail.
+#
+# This REVERSES a case pinned in the previous round, which asserted that any
+# pending working-tree change was unclean. That was the wrong invariant: it
+# fails on edits the commit will not contain, and -- far worse -- it passed the
+# split above, which the commit WILL contain.
+fresh_world unstaged
+printf 'echo CHANGED
+' > "$FW/engine.sh"
+check "freshness: an UNSTAGED watched edit is not part of the next commit" "CLEAN" "$(fresh_says)"
+
+# Moving the index after a clean verification invalidates it.
+fresh_world mutated
+printf 'echo ONE
+' > "$FW/engine.sh"
+G add engine.sh
+IMP --refresh-status >/dev/null 2>&1
+G add docs/PROJECT_STATUS.md
+check "freshness: clean after staging the refresh" "CLEAN" "$(fresh_says)"
+printf 'echo TWO
+' > "$FW/engine.sh"
+G add engine.sh
+check "freshness: staging a further watched change invalidates it" "NOT-CLEAN" "$(fresh_says)"
+
+# The watched SET comes from the staged deps.conf: a config change that brings a
+# new file under the obligation is itself part of what is about to land.
+fresh_world configchange
+printf 'echo other
+' > "$FW/other.sh"
+printf '
+[file:other.sh]
+suites    = only
+manual    = project-status
+' >> "$FW/test/deps.conf"
+G add other.sh test/deps.conf
+check "freshness: a staged deps.conf that widens the watched set is seen" "NOT-CLEAN" "$(fresh_says)"
+
+# The property REV-061 asked for must survive two redesigns.
 fresh_world committed
-printf 'echo CHANGED\n' > "$FW/engine.sh"
-git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm later >/dev/null 2>&1
+printf 'echo CHANGED
+' > "$FW/engine.sh"
+G add -A; G commit -qm later
 check "freshness: a committed watched change without a refresh is still stale" "NOT-CLEAN" "$(fresh_says)"
-
-# Refreshing is what makes it clean, and it stays clean ACROSS the commit --
-# the whole point of a content digest.
-fresh_world cycle
-printf 'echo CHANGED\n' > "$FW/engine.sh"
-(cd "$FW" && ./test/impact.sh --refresh-status) >/dev/null 2>&1
-check "freshness: refresh-status makes a pending change clean BEFORE the commit" "CLEAN" "$(fresh_says)"
-git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm refreshed >/dev/null 2>&1
-check "freshness: and it is still clean AFTER that commit" "CLEAN" "$(fresh_says)"
 
 # An unwatched file must not demand a refresh, or the gate becomes noise -- and
 # the first response to noise is to stop reading it.
 fresh_world unrelated
-printf 'nothing to do with behaviour\n' > "$FW/README"
+printf 'nothing to do with behaviour
+' > "$FW/README"
+G add -A
 check "freshness: an unwatched file does not demand a refresh" "CLEAN" "$(fresh_says)"
+
 # --- summary -----------------------------------------------------------------
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
