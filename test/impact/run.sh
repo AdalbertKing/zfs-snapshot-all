@@ -271,6 +271,22 @@ manual    = project-status
 G add other.sh test/deps.conf
 check "freshness: a staged deps.conf that widens the watched set is seen" "NOT-CLEAN" "$(fresh_says)"
 
+# A tree entry is <mode> <object> <path>. Changing ONLY the staged executable
+# bit changes the prospective commit while leaving the blob identical, so a
+# digest over object ids alone stays equal and reports clean -- then the commit
+# records a behaviour-relevant change the status never covered.
+#
+# Not academic: a wrong mode bit on a new suite happened earlier the same night,
+# and 100755 -> 100644 on a production script means it simply stops running.
+fresh_world modebit
+G update-index --chmod=+x engine.sh
+check "freshness: a staged MODE-ONLY change is seen (REV-068 round 4)" "NOT-CLEAN" "$(fresh_says)"
+IMP --refresh-status >/dev/null 2>&1
+G add docs/PROJECT_STATUS.md
+check "freshness: refreshing after a mode-only change restores clean" "CLEAN" "$(fresh_says)"
+G commit -qm modebit
+check "freshness: and the tree it committed is clean" "CLEAN" "$(fresh_says)"
+
 # The property REV-061 asked for must survive two redesigns.
 fresh_world committed
 printf 'echo CHANGED

@@ -395,9 +395,23 @@ STATUS_LEGACY_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
 # 16 hex characters. This defends against forgetting to refresh a document, not
 # against an adversary constructing a collision.
 
-# The blob a path has IN THE INDEX -- what the next commit will record.
+# The blob a path has IN THE INDEX. Used to READ staged content (deps.conf, the
+# status file); never to decide the verdict -- see index_entry.
 index_blob() {   # <path> -> blob sha, or empty
     git -C "$REPO" rev-parse ":$1" 2>/dev/null
+}
+
+# The full stage-0 index ENTRY: mode and object id.
+#
+# The verdict is about the prospective commit TREE, and a tree entry is
+# <mode> <object> <path>. Round 3 hashed the object alone, so
+# `git update-index --chmod=+x snapsend.sh` changed the prospective commit while
+# leaving the digest equal -- CLEAN, then a commit recording a behaviour-relevant
+# change the status never covered. That is not academic: a mode bit on a new
+# suite was wrong earlier the same night, and 100755 -> 100644 on a production
+# script is worse, because the file simply stops running.
+index_entry() {   # <path> -> "<mode> <object>", or empty
+    git -C "$REPO" ls-files --stage --full-name -- "$1" 2>/dev/null         | awk 'NR==1 && $3=="0" { print $1, $2 }'
 }
 
 # The watched set as the PROSPECTIVE COMMIT defines it: parsed from the staged
@@ -423,9 +437,9 @@ status_digest() {   # <watched...> -> hex
     local f
     { for f in $(printf '%s
 ' "${@}" | sort); do
-        local b; b="$(index_blob "$f")"
-        if [ -n "$b" ]; then printf '%s %s
-' "$b" "$f"; else printf 'ABSENT %s
+        local e; e="$(index_entry "$f")"
+        if [ -n "$e" ]; then printf '%s %s
+' "$e" "$f"; else printf 'ABSENT %s
 ' "$f"; fi
       done; } | sha256sum | cut -c1-16
 }
@@ -439,9 +453,10 @@ status_changed_hint() {   # <watched...>
     commit="$(git -C "$REPO" log -1 --format=%H -- "$STATUS_FILE" 2>/dev/null)"
     [ -n "$commit" ] || return 0
     for f in "$@"; do
-        now="$(index_blob "$f")"
+        now="$(index_entry "$f")"
         [ -n "$now" ] || continue
-        before="$(git -C "$REPO" rev-parse "$commit:$f" 2>/dev/null)" || continue
+        before="$(git -C "$REPO" ls-tree "$commit" -- "$f" 2>/dev/null | awk '{print $1, $3}')"
+        [ -n "$before" ] || continue
         [ -n "$before" ] && [ "$now" != "$before" ] && printf '    %s
 ' "$f"
     done
