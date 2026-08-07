@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-commit: 332aa25 -->
+<!-- status-covers-commit: d675178 -->
 <!-- Znacznik maszynowy: ostatni commit zmieniajacy zachowanie, ktory ten
      dokument opisuje. Sprawdzany przez ./test/impact.sh --verify. Nie usuwac
      i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od
@@ -27,6 +27,15 @@
   katalogu projektu, z tą samą dyscypliną co `lib-cron.sh`. Wcześniej konto
   będące właścicielem zarządzanego bloku **nie mogło go zainstalować**, a
   komunikat błędu twierdził nieprawdziwie, że trwa inny `--install`.
+
+  **Pliki blokad naprawiane i audytowane, nie tylko ich katalog.** `deploy.sh`
+  nadawał katalogowi blokad `2775 root:zfsalert` i na tym audyt się kończył —
+  ale katalog setgid nadaje plikowi tylko **grupę**, nie **tryb**. Trzy z
+  czterech hostów miały blokadę `0644 root`, przez którą konto delegowane nie
+  mogło w ogóle zapisać własnego crontaba, podczas gdy `--check-only`
+  raportował katalog jako poprawny. Naprawione w `cron_lock_files_repair()` i
+  `cron_lock_files_audit()`; wszystkie cztery hosty doprowadzone do stanu
+  poprawnego.
 
   **Świeżość tego dokumentu jest teraz sprawdzana maszynowo** przez
   `./test/impact.sh --verify` (znacznik powyżej). Obowiązek `project-status`
