@@ -340,7 +340,14 @@ status_freshness() {
     [ -f "$REPO/$STATUS_FILE" ] || { echo "  $STATUS_FILE is missing"; return 1; }
 
     local marker
-    marker="$(grep -oE "$STATUS_MARKER_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1               | sed -E "s/$STATUS_MARKER_RE//")"
+    # Extracted without a backreference on purpose: take the whole matched
+    # line, then strip the fixed prefix and suffix by parameter expansion.
+    # Escaping a sed backreference through every layer that generates or edits
+    # this file is exactly how the check silently started reading an EMPTY
+    # marker and reporting a missing commit instead of a stale document.
+    marker="$(grep -oE "$STATUS_MARKER_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1)"
+    marker="${marker#<!-- status-covers-commit: }"
+    marker="${marker% -->}"
     if [ -z "$marker" ]; then
         echo "  $STATUS_FILE has no '<!-- status-covers-commit: <sha> -->' marker."
         echo "  Add it naming the last behaviour-changing commit the document describes."

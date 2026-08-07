@@ -7,8 +7,30 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-- Data odświeżenia: **2026-08-07 16:10**, commit **`3e911ee`**.
-  `gen-cron.sh` **v4.29**, `check-snap-age.sh` **v2.2**.
+<!-- status-covers-commit: 332aa25 -->
+<!-- Znacznik maszynowy: ostatni commit zmieniajacy zachowanie, ktory ten
+     dokument opisuje. Sprawdzany przez ./test/impact.sh --verify. Nie usuwac
+     i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od
+     takiego, ktory tylko wyglada na aktualny. -->
+
+- Data odświeżenia: **2026-08-07 17:2x**, commit **`332aa25`**.
+  `gen-cron.sh` **v4.30**, `check-snap-age.sh` **v2.2**.
+
+  **Etap 0 WYKONANY na pve0**: sześć datasetów gości objętych kopią
+  (VM 104 `debian` — **działająca, wcześniej bez żadnej kopii** — VM 103,
+  VM 107 ×3, CT 105). Granty `zfs allow` nadane per dataset, pierwsze
+  snapshoty wykonane, wszystkie trzy linie monitora `rc=0`. Blok crontaba
+  29 → 33 linie, identyczny z renderem configu.
+
+  **`gen-cron.sh --install` naprawione dla konta delegowanego**: blokada
+  instalacyjna przeniesiona z `/var/run` (tylko root) do współdzielonego
+  katalogu projektu, z tą samą dyscypliną co `lib-cron.sh`. Wcześniej konto
+  będące właścicielem zarządzanego bloku **nie mogło go zainstalować**, a
+  komunikat błędu twierdził nieprawdziwie, że trwa inny `--install`.
+
+  **Świeżość tego dokumentu jest teraz sprawdzana maszynowo** przez
+  `./test/impact.sh --verify` (znacznik powyżej). Obowiązek `project-status`
+  przestał być prośbą.
 
   **Model rekurencji: ZAMKNIĘTY I WDROŻONY.** `[dataset:]` przyjmuje pole
   `recursive = no | flat | atomic`, które steruje **wszystkimi trzema** liniami
