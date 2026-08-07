@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-commit: 9f14daa -->
+<!-- status-covers-commit: 8c10e2e -->
 <!-- Znacznik maszynowy: ostatni commit zmieniajacy zachowanie, ktory ten
      dokument opisuje. Sprawdzany przez ./test/impact.sh --verify. Nie usuwac
      i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od

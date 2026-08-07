@@ -5,7 +5,7 @@ here, nobody is tracking it. Updated by whoever moves a thread.
 
 Last update: 2026-08-07 18:4x, after REV-063.
 
-<!-- review-head: c00eb24 -->
+<!-- review-head: 8c10e2e -->
 <!-- Machine marker: the commit announced to the reviewer. Checked by
      ./test/impact.sh --verify against later behaviour-changing commits, the
      same way PROJECT_STATUS.md's marker is. Deliberately the ONLY place
