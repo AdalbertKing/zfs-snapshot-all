@@ -2501,20 +2501,33 @@ cron_lock_files_repair() {   # <lock dir> <group>
 # a fixed-width pattern, because a mode may print as 644 or 2664. Write is set
 # in 2,3,6,7. REV-20260806-050 caught this exact confusion (owner digit vs
 # group digit) once already.
-cron_lock_files_audit() {   # <lock dir>  -> 0 all shareable, 1 some are not
-    local dir="$1" lk m g bad=""
+cron_lock_files_audit() {   # <lock dir> <expected group>  -> 0 all usable, 1 not
+    local dir="$1" grp="$2" lk m g og bad_grp="" bad_mode=""
     [ -d "$dir" ] || return 0
     for lk in "$dir"/*.lock; do
         [ -f "$lk" ] || continue
+        # BOTH properties, because either one alone is worthless: a 0664 file
+        # owned by group root is group-writable to a group the delegated
+        # account is not in, and a file in the right group with 0644 is in a
+        # group that cannot write it. The production invariant is shared group
+        # AND group-write -- REV-20260807-062 caught this audit asserting only
+        # the second half of what its own repair function guarantees.
+        og="$(stat -c '%G' "$lk" 2>/dev/null)"
+        [ "$og" = "$grp" ] || bad_grp="$bad_grp $(basename "$lk")(group=$og)"
         m="$(stat -c '%a' "$lk" 2>/dev/null)"
         g="${m%?}"; g="${g: -1}"
         case "$g" in
             2|3|6|7) ;;
-            *) bad="$bad $(basename "$lk")($m)" ;;
+            *) bad_mode="$bad_mode $(basename "$lk")($m)" ;;
         esac
     done
-    [ -n "$bad" ] || return 0
-    warn "  lock files NOT group-writable:$bad -- whichever identity did not create them cannot write that crontab at all. A normal (non --check-only) deploy.sh run repairs this."
+    [ -n "$bad_grp$bad_mode" ] || return 0
+    # Named separately: "wrong group" and "not group-writable" have different
+    # causes and the operator reads this to decide whether something else is
+    # also misconfigured.
+    [ -n "$bad_grp" ] && warn "  lock files in the WRONG GROUP (expected $grp):$bad_grp -- the delegated account is not in that group, so it cannot open them whatever the mode says."
+    [ -n "$bad_mode" ] && warn "  lock files NOT group-writable:$bad_mode -- whichever identity did not create them cannot write that crontab at all."
+    warn "  a normal (non --check-only) deploy.sh run repairs this."
     return 1
 }
 
@@ -2529,7 +2542,7 @@ cron_lock_files_audit() {   # <lock dir>  -> 0 all shareable, 1 some are not
     # reach is not a lock.
     if [ -d "$CRON_LOCK_DIR" ]; then
         log "  $CRON_LOCK_DIR present ($(stat -c '%a %U:%G' "$CRON_LOCK_DIR"))"
-        cron_lock_files_audit "$CRON_LOCK_DIR"
+        cron_lock_files_audit "$CRON_LOCK_DIR" "$ALERT_GROUP"
     else
         warn "  $CRON_LOCK_DIR missing -- lib-cron.sh would refuse every crontab write until this is created"
     fi

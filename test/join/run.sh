@@ -733,7 +733,7 @@ else
         echo "SKIP L1-L3 this filesystem cannot represent 664 (probe shows $probe) -- verify on Linux"
     else
         # L1: the audit NAMES the unshareable ones and refuses.
-        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" "$(id -gn)" 2>&1); rc=$?
         [ "$rc" = 1 ] && ok "L1 the audit refuses when a lock is not group-writable" \n                      || bad "L1 the audit refuses when a lock is not group-writable" "rc=$rc"
         case "$out" in
             *lib-cron.root.lock*) ok "L1 ...and names the 0644 one" ;;
@@ -756,16 +756,47 @@ else
 
         # L3: and the audit is then silent -- the pair has to agree, or one of
         # them is lying about the same directory.
-        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" "$(id -gn)" 2>&1); rc=$?
         [ "$rc" = 0 ] && ok "L3 the audit passes after the repair" \n                      || bad "L3 the audit passes after the repair" "rc=$rc out=$out"
+
+        # L6/L7: the invariant is shared group AND group-write. A 0664 file in
+        # the WRONG group passes a mode-only check while the delegated account
+        # still cannot open it -- REV-20260807-062 found this audit asserting
+        # only the half its own repair function does not need help with.
+        #
+        # Needs a second group this user belongs to; a machine where the user
+        # has only one group cannot express "wrong group" at all.
+        L_OTHER=""
+        for _g in $(id -Gn); do [ "$_g" != "$(id -gn)" ] && { L_OTHER="$_g"; break; }; done
+        if [ -z "$L_OTHER" ]; then
+            echo "SKIP L6-L7 this user has only one group -- cannot build a wrong-group lock"
+        else
+            L_WG="$WORK/wglocks"; mkdir -p "$L_WG"
+            : > "$L_WG/lib-cron.acct.lock"
+            chgrp "$L_OTHER" "$L_WG/lib-cron.acct.lock" 2>/dev/null
+            chmod 0664 "$L_WG/lib-cron.acct.lock"
+            if [ "$(stat -c '%G' "$L_WG/lib-cron.acct.lock")" = "$(id -gn)" ]; then
+                echo "SKIP L6-L7 chgrp did not take on this filesystem -- verify on Linux"
+            else
+                out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_WG" "$(id -gn)" 2>&1); rc=$?
+                [ "$rc" = 1 ] && ok "L6 a 0664 lock in the WRONG GROUP is refused"                               || bad "L6 a 0664 lock in the WRONG GROUP is refused" "rc=$rc out=$out"
+                case "$out" in
+                    *WRONG\ GROUP*) ok "L6 ...and the diagnostic says wrong group, not wrong mode" ;;
+                    *) bad "L6 ...and the diagnostic says wrong group, not wrong mode" "$out" ;;
+                esac
+                ( warn() { :; }; . "$L_SRC"; cron_lock_files_repair "$L_WG" "$(id -gn)" ) >/dev/null 2>&1
+                out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_WG" "$(id -gn)" 2>&1); rc=$?
+                [ "$rc" = 0 ] && ok "L7 the repair puts it in the expected group and audit then passes"                               || bad "L7 the repair puts it in the expected group and audit then passes" "rc=$rc out=$out"
+            fi
+        fi
 
         # L4: an empty or absent directory is not a finding -- locks appear
         # when something takes one, and warning about their absence would train
         # the operator to ignore this line.
         mkdir -p "$WORK/emptylocks"
-        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/emptylocks" 2>&1); rc=$?
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/emptylocks" "$(id -gn)" 2>&1); rc=$?
         [ "$rc" = 0 ] && ok "L4 an empty lock directory is not a finding" \n                      || bad "L4 an empty lock directory is not a finding" "rc=$rc out=$out"
-        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/nosuchdir" 2>&1); rc=$?
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/nosuchdir" "$(id -gn)" 2>&1); rc=$?
         [ "$rc" = 0 ] && ok "L5 a missing lock directory is not this check's business" \n                      || bad "L5 a missing lock directory is not this check's business" "rc=$rc out=$out"
     fi
 fi
