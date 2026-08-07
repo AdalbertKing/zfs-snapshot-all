@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-commit: d675178 -->
+<!-- status-covers-commit: 9f14daa -->
 <!-- Znacznik maszynowy: ostatni commit zmieniajacy zachowanie, ktory ten
      dokument opisuje. Sprawdzany przez ./test/impact.sh --verify. Nie usuwac
      i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od
@@ -36,6 +36,11 @@
   raportował katalog jako poprawny. Naprawione w `cron_lock_files_repair()` i
   `cron_lock_files_audit()`; wszystkie cztery hosty doprowadzone do stanu
   poprawnego.
+
+  Audyt sprawdza **oba** warunki: wspólna grupa **i** zapis grupy (REV-062).
+  Wcześniej pilnował tylko trybu, więc plik `0664` należący do grupy `root`
+  przechodził, choć konto delegowane i tak nie mogło go otworzyć — audyt nie
+  weryfikował tego, co gwarantuje jego własna naprawa.
 
   **Świeżość tego dokumentu jest teraz sprawdzana maszynowo** przez
   `./test/impact.sh --verify` (znacznik powyżej). Obowiązek `project-status`
