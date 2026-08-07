@@ -1221,13 +1221,11 @@ czterech hostach w obu formach hosta.
 
 ### Otwarte u właściciela — decyzje, nie kod
 
-- **Migracja 192.168.11.11 na `recursive = atomic`.** To jedyny zarządzany
-  config we flocie z `-r` we `flags`. Zmiana jest jednoliniowa
-  (`flags = -r -v 3` → `recursive = atomic` + `flags = -v 3`) i sprawdzona na
-  żywo jako bajt w bajt zachowawcza, ale dotyka produkcyjnego pliku, więc nie
-  została wykonana bez decyzji. **Nic się nie pali:** nic nie regeneruje
-  crontaba cyklicznie, więc host działa dalej bez zmian; odmowa pojawi się
-  dopiero przy ręcznym `gen-cron.sh`.
+- ~~Migracja 192.168.11.11~~ — **WYKONANA 2026-08-07 14:42** przez
+  `gen-cron.sh --migrate-recursion` (REV-057). Crontab md5 **bez zmian**,
+  właściciel i prawa zachowane, kopia rollback zostawiona, render identyczny z
+  zainstalowanym blokiem. **Żaden config we flocie nie niesie już starego
+  zapisu rekurencji** — pakiet rekurencji jest operacyjnie kompletny.
 - **pve0: goście bez żadnej kopii** (wątek #22 w `OPEN-THREADS.md`). VM 104
   `debian` **działa** i ma zero snapshotów `automated_*` na
   `hdd/data/vm-104-disk-1`; VM 103, VM 107 i CT 105 (zatrzymane) tak samo.
