@@ -700,6 +700,72 @@ else
     bad "remote-join/CLI: --join-remotely parses (does not fall through to 'unknown option')" "rc=$rc" "$out"
 fi
 
+# ---- L. shared lock FILES, not just the lock directory ---------------------
+#
+# Found on 2026-08-07 while proving REV-061's install-lock fix on a second
+# host: deploy.sh provisions the lock DIRECTORY 2775 root:zfsalert, and its
+# audit reported that and stopped there. But the setgid directory only makes a
+# lock file inherit the GROUP -- the MODE comes from whoever creates it first,
+# and root usually does. Three of four production hosts held a 0644 root-owned
+# lock that the delegated account could never open, so `gen-cron.sh --install`
+# as that account failed outright while the audit said everything was present.
+#
+# Same shape deploy.sh already fixes for alert-queue.log; the lock files were
+# simply not included.
+L_SRC="$WORK/lockfns.sh"
+sed -n '/^cron_lock_files_repair() {/,/^}/p;/^cron_lock_files_audit() {/,/^}/p' "$DEPLOY" > "$L_SRC"
+if [ ! -s "$L_SRC" ]; then
+    bad "L0 the lock-file helpers can be extracted from deploy.sh" "nothing matched in $DEPLOY"
+else
+    ok "L0 the lock-file helpers can be extracted from deploy.sh"
+
+    L_DIR="$WORK/locks"; mkdir -p "$L_DIR"
+    : > "$L_DIR/lib-cron.root.lock";      chmod 0644 "$L_DIR/lib-cron.root.lock"
+    : > "$L_DIR/lib-cron.acct.lock";      chmod 0664 "$L_DIR/lib-cron.acct.lock"
+    : > "$L_DIR/gen-cron.install.lock";   chmod 0600 "$L_DIR/gen-cron.install.lock"
+
+    probe=$(stat -c '%a' "$L_DIR/lib-cron.acct.lock" 2>/dev/null)
+    if [ "$probe" != "664" ]; then
+        echo "SKIP L1-L3 this filesystem cannot represent 664 (probe shows $probe) -- verify on Linux"
+    else
+        # L1: the audit NAMES the unshareable ones and refuses.
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
+        check "L1 the audit refuses when a lock is not group-writable" "1" "$rc"
+        case "$out" in
+            *lib-cron.root.lock*) ok "L1 ...and names the 0644 one" ;;
+            *) bad "L1 ...and names the 0644 one" "$out" ;;
+        esac
+        case "$out" in
+            *lib-cron.acct.lock*) bad "L1 ...without accusing the correct one" "$out" ;;
+            *) ok "L1 ...without accusing the correct one" ;;
+        esac
+
+        # L2: the repair makes every one of them shareable.
+        ( warn() { :; }; . "$L_SRC"; cron_lock_files_repair "$L_DIR" "$(id -gn)" ) >/dev/null 2>&1
+        still=""
+        for f in "$L_DIR"/*.lock; do
+            m=$(stat -c '%a' "$f"); g="${m%?}"; g="${g: -1}"
+            case "$g" in 2|3|6|7) ;; *) still="$still $(basename "$f")($m)" ;; esac
+        done
+        if [ -z "$still" ]; then ok "L2 the repair makes every lock group-writable"
+        else bad "L2 the repair makes every lock group-writable" "still wrong:$still"; fi
+
+        # L3: and the audit is then silent -- the pair has to agree, or one of
+        # them is lying about the same directory.
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$L_DIR" 2>&1); rc=$?
+        check "L3 the audit passes after the repair" "0" "$rc"
+
+        # L4: an empty or absent directory is not a finding -- locks appear
+        # when something takes one, and warning about their absence would train
+        # the operator to ignore this line.
+        mkdir -p "$WORK/emptylocks"
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/emptylocks" 2>&1); rc=$?
+        check "L4 an empty lock directory is not a finding" "0" "$rc"
+        out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/nosuchdir" 2>&1); rc=$?
+        check "L5 a missing lock directory is not this check's business" "0" "$rc"
+    fi
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

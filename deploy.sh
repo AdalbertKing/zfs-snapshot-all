@@ -2467,6 +2467,57 @@ log "Phase 4: notify-fail.sh (alert reporting)"
 ALERT_GROUP="zfsalert"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
+# A lock file is a SHARED object in a setgid directory: the directory makes it
+# inherit the group, but the MODE comes from whoever creates it first -- and
+# root usually does (deploy and activate-client take the ACCOUNT's lock as
+# root). A 0644 file then locks the delegated account out of its own crontab
+# permanently, not once. Measured 2026-08-07: three of four production hosts
+# were in exactly that state and `gen-cron.sh --install` as the account failed
+# on each.
+#
+# lib-cron.sh cannot fix this itself -- it runs as the unprivileged account and
+# may not chmod a root-owned file. deploy.sh runs as root, so it is the
+# component whose job this is. Identical treatment to alert-queue.log, for the
+# identical reason.
+#
+# Nothing is created on spec here; locks appear when something takes one. This
+# only repairs what already exists, and is cheap enough to run every time.
+cron_lock_files_repair() {   # <lock dir> <group>
+    local dir="$1" grp="$2" lk
+    [ -d "$dir" ] || return 0
+    for lk in "$dir"/*.lock; do
+        [ -f "$lk" ] || continue
+        chgrp "$grp" "$lk" 2>/dev/null
+        chmod 0664 "$lk" 2>/dev/null
+    done
+}
+
+# The DIRECTORY being right says nothing about the files in it, and the files
+# are what actually refuse a write. An audit that checked the container and not
+# its contents passed three of four production hosts that could not install a
+# crontab at all.
+#
+# The GROUP digit is the one second from the right -- read positionally, not by
+# a fixed-width pattern, because a mode may print as 644 or 2664. Write is set
+# in 2,3,6,7. REV-20260806-050 caught this exact confusion (owner digit vs
+# group digit) once already.
+cron_lock_files_audit() {   # <lock dir>  -> 0 all shareable, 1 some are not
+    local dir="$1" lk m g bad=""
+    [ -d "$dir" ] || return 0
+    for lk in "$dir"/*.lock; do
+        [ -f "$lk" ] || continue
+        m="$(stat -c '%a' "$lk" 2>/dev/null)"
+        g="${m%?}"; g="${g: -1}"
+        case "$g" in
+            2|3|6|7) ;;
+            *) bad="$bad $(basename "$lk")($m)" ;;
+        esac
+    done
+    [ -n "$bad" ] || return 0
+    warn "  lock files NOT group-writable:$bad -- whichever identity did not create them cannot write that crontab at all. A normal (non --check-only) deploy.sh run repairs this."
+    return 1
+}
+
     if [ -d "$ALERT_SHARED_DIR" ]; then
         log "  $ALERT_SHARED_DIR present ($(stat -c '%a %U:%G' "$ALERT_SHARED_DIR"))"
     else
@@ -2478,6 +2529,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     # reach is not a lock.
     if [ -d "$CRON_LOCK_DIR" ]; then
         log "  $CRON_LOCK_DIR present ($(stat -c '%a %U:%G' "$CRON_LOCK_DIR"))"
+        cron_lock_files_audit "$CRON_LOCK_DIR"
     else
         warn "  $CRON_LOCK_DIR missing -- lib-cron.sh would refuse every crontab write until this is created"
     fi
@@ -2500,6 +2552,7 @@ else
     chgrp "$ALERT_GROUP" "$CRON_LOCK_DIR"
     chmod 2775 "$CRON_LOCK_DIR"
     log "shared cron lock dir $CRON_LOCK_DIR (2775 root:$ALERT_GROUP)"
+    cron_lock_files_repair "$CRON_LOCK_DIR" "$ALERT_GROUP"
 fi
 
 # ------------------------------------------------------------------------------
