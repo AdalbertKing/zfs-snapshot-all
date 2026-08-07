@@ -3,7 +3,7 @@
 One table, three readers: owner, reviewer, implementer. If a thread is not
 here, nobody is tracking it. Updated by whoever moves a thread.
 
-Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
+Last update: 2026-08-07, after reviewer closure of REV-053.
 
 | # | Thread | State | Whose move |
 |---|---|---|---|
@@ -25,9 +25,9 @@ Last update: 2026-08-06, after the reviewer's acceptance comment on issue #5.
 | 14 | `docs/OPS_MONITORING.md` untracked | Sitting in the working tree, authorship unclear. | owner: keep or drop |
 | 15 | Two sessions built the same feature the same day | PR #4 and main's slices 1-4 were written in parallel, hours apart, without either knowing. Cost: one complete duplicate implementation with its own tests and response file. | owner: decide how parallel sessions announce what they are taking |
 
-| 18 | Reviewer reviewing a stale `main` | The 23:11 report on issue #5 named `6b884ba`/`8de89e1` as current while `fe2209b` (the REV-050 fix) and `b4660aa` (its response) had been public for five minutes. Asked for `git fetch` immediately before each review. | reviewer: adopt |
+| 18 | Reviewer reviewing a stale `main` | **Adopted 2026-08-07:** reviewer re-fetches latest `main` immediately before verdict/write; REV-053 closure was performed only after a fresh commit-list check confirmed `c072e19` as head. | — |
 | 19 | REV-051 — dot-segment gate labels | **CLOSED** 2026-08-07 with the negative control accepted. | — |
-| 20 | REV-053 — runbook accuracy | Implemented in `54c6917`: `pause-client` no longer calls hard disable unimplemented and points at `disable-client`; the table no longer promises one ssh connection. Response written. | reviewer: close or reopen |
+| 20 | REV-053 — runbook accuracy | **CLOSED** by reviewer 2026-08-07 after direct diff verification of `54c6917`; both F1 and F2 accepted. | — |
 
 ## How to use this
 
