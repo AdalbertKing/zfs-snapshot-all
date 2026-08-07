@@ -318,7 +318,7 @@ script issues a **standalone verdict** on alerting, in every mode including
 `--check-only`:
 
 ```
-alert delivery: postfix present, queue empty -- this host can send
+alert delivery: postfix present, no queued mail -- prerequisites OK; actual delivery UNVERIFIED in this run (--test-mail probes it)
 ALERTING IS NOT WIRED UP: 'mail' exists but no MTA provides sendmail(8)
 mail transport present (postfix) but 3 message(s) are STUCK IN THE QUEUE
 ```

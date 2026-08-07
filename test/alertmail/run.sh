@@ -251,6 +251,38 @@ else
     bad "F3: non-numeric queue output after the send reads as unreadable, not drained" "got: $R" "$(cat "$TMPD/out")"
 fi
 
+# ---------------------------------------------------------------------------
+# The operator guides QUOTE this verdict. A quote is an assertion, and this
+# one went stale twice: REV-046 removed "this host can send" from the code,
+# and both deployment guides kept printing it to the reader for a day --
+# then REV-053 caught the same class again in the pause runbook. So the
+# healthy-branch wording is pinned against the docs that reproduce it, not
+# just against the code.
+#
+# Deliberately narrow: it checks the ONE line the guides quote verbatim, and
+# only in the files that quote it. A general "docs must not contain stale
+# strings" rule would need a list of every retired message, which nobody
+# would maintain.
+# ---------------------------------------------------------------------------
+verdict_line=$(sed -n 's/.*log "  \(alert delivery: \$(mta_name) present, no queued mail[^"]*\)".*/\1/p' "$DEPLOY_SRC" | head -1)
+verdict_doc=${verdict_line/\$(mta_name)/postfix}
+if [ -z "$verdict_line" ]; then
+    bad "the healthy verdict line can be located in deploy.sh" "sed pattern no longer matches -- update this check with the wording"
+else
+    for guide in "$REPO/docs/WDROZENIE-PROXMOX.md" "$REPO/docs/DEPLOYMENT-PROXMOX.md"; do
+        name=$(basename "$guide")
+        [ -r "$guide" ] || { echo "SKIP $name not present"; continue; }
+        if ! grep -q "alert delivery: postfix present" "$guide"; then
+            echo "SKIP $name no longer quotes the alert-delivery verdict"
+        elif grep -qF "$verdict_doc" "$guide"; then
+            ok "$name quotes the alert-delivery verdict exactly as deploy.sh emits it"
+        else
+            bad "$name quotes the alert-delivery verdict exactly as deploy.sh emits it" \
+                "code:  $verdict_doc" "docs:  $(grep -m1 'alert delivery: postfix present' "$guide")"
+        fi
+    done
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

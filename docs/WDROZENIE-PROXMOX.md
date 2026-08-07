@@ -284,6 +284,51 @@ dziesięciu różnych hostów bez żadnej kolizji nazw.
 
 ---
 
+## 4a. Jak czytać wygenerowaną linię crona
+
+Tych linii nikt nie pisze ręcznie — generuje je `gen-cron.sh` z pliku konfiguracyjnego. Ale
+otwiera się je zwykle raz na pół roku, przy awarii, więc rozbiór jednego przykładu (to jest
+prawdziwe wyjście dla wdrożenia z tej instrukcji, nie przepisane z pamięci):
+
+```text
+1 * * * * … snapget.sh -m "automated_hourly_" -i -K /root/.ssh/pairing/192.168.1.20_ed25519     -A -L pve-prod "zfsbackup-pve-backup@192.168.1.20:rpool/data/vm-100-disk-0"     "rpool/backups/192.168.1.20" …
+```
+
+| fragment | co znaczy | skąd się wziął |
+|---|---|---|
+| `1 * * * *` | co godzinę o :01 | `send_schedule` z szablonu |
+| `-m "automated_hourly_"` | takim prefiksem nazywaj tworzone snapshoty; po nim rozpoznaje je retencja i monitoring | `prefix` |
+| `-i` | przy nadrabianiu zaległości **przeskocz od razu do najnowszego stanu**, zamiast przechodzić przez wszystkie snapshoty po drodze. Szybciej i mniej danych, ale na kopii nie będzie stanów pośrednich | Twój `flags` |
+| `-K …/192.168.1.20_ed25519` | loguj się na źródło **tym konkretnym kluczem** (tym z parowania). Robi to, co `ssh -i`, ale litera `i` była już zajęta — patrz wyżej | Twój `flags` |
+| `-A` | **zmierz łącze i sam zdecyduj**, czy kompresja się opłaca. Wynik pamiętany tydzień: prędkość łącza per host, podatność danych per dataset | dokłada generator, domyślnie |
+| `-L pve-prod` | ten transfer należy do **relacji `pve-prod`**. Dzięki temu `pause-client` i `disable-client` mogą go zatrzymać, zanim cokolwiek zrobi (patrz `docs/PAUZA-I-BLOKADA.md`) | `pair_label` |
+| `"zfsbackup-…@192.168.1.20:rpool/data/vm-100-disk-0"` | **skąd bierzemy**: konto na źródle, jego adres i dataset. Ścieżka dosłowna — dokładnie to, co pokazuje tam `zfs list` | `src` |
+| `"rpool/backups/192.168.1.20"` | **katalog bazowy, nie miejsce docelowe** | cel z `--target` + etykieta |
+
+Ostatni wiersz to najczęstsze nieporozumienie. Dane **nie** wylądują w
+`rpool/backups/192.168.1.20`, tylko o kilka poziomów głębiej — skrypt dokleja pod spodem całą
+oryginalną ścieżkę ze źródła:
+
+```text
+rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0
+```
+
+czyli dokładnie to, co opisuje rozdział 4. To nie jest drobiazg redakcyjny: wpisanie tu od razu
+pełnej ścieżki docelowej sprawia, że kopia ląduje o poziom za głęboko, **każdy przebieg robi
+pełny transfer od zera**, a monitoring melduje, że wszystko gra — bo zagląda w to samo złe
+miejsce. Ten błąd wystąpił naprawdę i był niewidoczny przez wiele dni.
+
+Linia monitora dla tego samego datasetu wygląda tak:
+
+```text
+*/15 * * * * … check-snap-age.sh -L pve-prod "rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0"     "automated_hourly" 90m 150m …
+```
+
+— czyli sprawdza **cel**, nie źródło, i zna tę samą etykietę relacji, więc podczas pauzy
+odpowiada „to normalne, ta relacja stoi" zamiast budzić Cię co 15 minut.
+
+---
+
 ## 5. Co się dzieje po wdrożeniu
 
 Profil domyślny (jedyny zaimplementowany), wartości wprost z kodu:
@@ -320,7 +365,7 @@ poprawnie, a każda awaria jest niema.
 `--check-only`:
 
 ```
-alert delivery: postfix present, queue empty -- this host can send
+alert delivery: postfix present, no queued mail -- prerequisites OK; actual delivery UNVERIFIED in this run (--test-mail probes it)
 ALERTING IS NOT WIRED UP: 'mail' exists but no MTA provides sendmail(8)
 mail transport present (postfix) but 3 message(s) are STUCK IN THE QUEUE
 ```
