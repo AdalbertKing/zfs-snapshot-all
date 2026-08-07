@@ -133,6 +133,106 @@ for s in $(grep '^\[suite:' "$REPO/test/deps.conf" | sed 's/\[suite://;s/\]//');
 done
 check "every declared suite appears in PROJECT_STATUS.md" "" "$missing"
 
+
+# --- the freshness invariant, at the lifecycle boundary ----------------------
+#
+# REV-20260807-068 F1. The gate used to name the last behaviour-changing COMMIT,
+# which cannot be checked before that commit exists -- so run as a pre-stage
+# gate it reported clean and blessed a commit that landed stale. I cited exactly
+# such a run in eea6339 while producing a stale tree.
+#
+# Each case is a throwaway git repo holding a COPY OF THE SCRIPT UNDER TEST, so
+# the script's own $REPO resolves to that repo with no override, and the same
+# construction runs the negative control against the old implementation:
+#
+#   IMPACT_UNDER_TEST=/path/to/old/impact.sh ./test/impact/run.sh
+UNDER_TEST="${IMPACT_UNDER_TEST:-$IMPACT}"
+FRESH_TMP="$(mktemp -d)"; trap 'rm -rf "$FRESH_TMP"' EXIT
+
+# fresh_world <name> -> $FW, a git repo whose status marker is current
+fresh_world() {
+    FW="$FRESH_TMP/$1"; rm -rf "$FW"; mkdir -p "$FW/test" "$FW/docs"
+    cp "$UNDER_TEST" "$FW/test/impact.sh"; chmod +x "$FW/test/impact.sh"
+    printf 'echo original\n' > "$FW/engine.sh"
+    cat > "$FW/test/deps.conf" <<'EOF'
+[file:engine.sh]
+suites    = only
+manual    = project-status
+
+[suite:only]
+cmd   = ./test/only.sh
+needs = nothing
+EOF
+    printf '# status\n\n| `only` | 1/1 | x |\n' > "$FW/docs/PROJECT_STATUS.md"
+    git -C "$FW" init -q >/dev/null 2>&1
+    git -C "$FW" config user.email t@t; git -C "$FW" config user.name t
+    # Run from INSIDE the world. The pre-REV-068 gate resolves git against the
+    # CURRENT DIRECTORY, not $REPO, so invoking it from the real repo made it
+    # measure the real repo -- the marker "is not a commit in this repository"
+    # while the world was perfectly consistent.
+    if ! (cd "$FW" && ./test/impact.sh --refresh-status) >/dev/null 2>&1; then
+        # The script under test predates --refresh-status: give it the marker
+        # IT understands, naming the base commit, so the cases measure the
+        # PROPERTY rather than the absence of a marker.
+        #
+        # Without this the control was worthless and actively misleading: every
+        # case came back NOT-CLEAN because the old gate found no marker at all,
+        # so the pending-change case "passed" against the old implementation and
+        # appeared to show there was nothing to fix.
+        git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm base >/dev/null 2>&1
+        printf '<!-- status-covers-commit: %s -->
+' "$(git -C "$FW" rev-parse --short HEAD)"             >> "$FW/docs/PROJECT_STATUS.md"
+        git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm marker >/dev/null 2>&1
+        return
+    fi
+    git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm base >/dev/null 2>&1
+}
+
+# fresh_says -> the freshness section's verdict: CLEAN or NOT-CLEAN
+fresh_says() {
+    local out
+    out="$( (cd "$FW" && ./test/impact.sh --verify) 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+    # Read ONLY the freshness section: the throwaway repo has no reviews, so the
+    # protocol check fails there for reasons unrelated to this property.
+    out="$(printf '%s\n' "$out" | awk '/PROJECT_STATUS.md still describes/{f=1;next} /^== /{f=0} f')"
+    if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then echo CLEAN; else echo NOT-CLEAN; fi
+}
+
+fresh_world clean
+check "freshness: an up-to-date status on a clean tree is accepted" "CLEAN" "$(fresh_says)"
+
+# THE FINDING. Marker current at HEAD, a watched behaviour file edited but not
+# yet committed. The gate must refuse to certify freshness: the commit about to
+# be made would leave the document describing a tree that is gone.
+fresh_world pending
+printf 'echo CHANGED\n' > "$FW/engine.sh"
+check "freshness: a PENDING watched change is not clean (REV-068 F1)" "NOT-CLEAN" "$(fresh_says)"
+
+fresh_world staged
+printf 'echo CHANGED\n' > "$FW/engine.sh"
+git -C "$FW" add engine.sh >/dev/null 2>&1
+check "freshness: staging the change does not launder it" "NOT-CLEAN" "$(fresh_says)"
+
+# The property REV-061 asked for must survive the redesign.
+fresh_world committed
+printf 'echo CHANGED\n' > "$FW/engine.sh"
+git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm later >/dev/null 2>&1
+check "freshness: a committed watched change without a refresh is still stale" "NOT-CLEAN" "$(fresh_says)"
+
+# Refreshing is what makes it clean, and it stays clean ACROSS the commit --
+# the whole point of a content digest.
+fresh_world cycle
+printf 'echo CHANGED\n' > "$FW/engine.sh"
+(cd "$FW" && ./test/impact.sh --refresh-status) >/dev/null 2>&1
+check "freshness: refresh-status makes a pending change clean BEFORE the commit" "CLEAN" "$(fresh_says)"
+git -C "$FW" add -A >/dev/null 2>&1; git -C "$FW" commit -qm refreshed >/dev/null 2>&1
+check "freshness: and it is still clean AFTER that commit" "CLEAN" "$(fresh_says)"
+
+# An unwatched file must not demand a refresh, or the gate becomes noise -- and
+# the first response to noise is to stop reading it.
+fresh_world unrelated
+printf 'nothing to do with behaviour\n' > "$FW/README"
+check "freshness: an unwatched file does not demand a refresh" "CLEAN" "$(fresh_says)"
 # --- summary -----------------------------------------------------------------
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -358,28 +358,71 @@ protocol_verify() {
 }
 
 STATUS_FILE="docs/PROJECT_STATUS.md"
-STATUS_MARKER_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
+STATUS_MARKER_RE='^<!-- status-covers-digest: ([0-9a-f]{16}) -->$'
+STATUS_LEGACY_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
+
+# The invariant is over the CONTENT of the watched files, not over a commit.
+#
+# REV-20260807-068 F1. The old marker named the last behaviour-changing commit
+# the document described, which cannot be checked before that commit exists: a
+# commit cannot contain its own hash. So `--verify` run as a pre-stage gate saw
+# only `marker..HEAD`, reported clean, and the commit it was blessing landed
+# stale. I cited exactly that clean run in eea6339 while producing a stale tree.
+#
+# A content digest is provable against the working tree BEFORE the commit and
+# is unchanged BY the commit, so one run proves the property on both sides of
+# the boundary. It is also strictly stronger: it fails on an edit that has not
+# been committed at all, which the commit-based marker could never see.
+#
+# No self-reference: PROJECT_STATUS.md is not itself a watched file, so writing
+# the digest into it does not change the digest.
+#
+# 16 hex characters. This defends against forgetting to refresh a document, not
+# against an adversary constructing a collision.
+status_digest() {   # -> hex, or empty if the watched set is empty
+    local f
+    { for f in $(printf '%s
+' "${@}" | sort); do
+        if [ -f "$REPO/$f" ]; then
+            printf '%s %s
+' "$(git -C "$REPO" hash-object "$f" 2>/dev/null)" "$f"
+        else
+            printf 'ABSENT %s
+' "$f"
+        fi
+      done; } | sha256sum | cut -c1-16
+}
+
+# Which watched files changed since PROJECT_STATUS.md was last touched. Purely
+# a HINT for the operator -- a digest cannot say what went into it, and the
+# previous message ("these commits landed after the marker") was the one thing
+# genuinely lost in the move. Never part of the verdict.
+status_changed_hint() {   # <watched...>
+    local commit f now then
+    commit="$(git -C "$REPO" log -1 --format=%H -- "$STATUS_FILE" 2>/dev/null)"
+    [ -n "$commit" ] || return 0
+    for f in "$@"; do
+        [ -f "$REPO/$f" ] || continue
+        now="$(git -C "$REPO" hash-object "$f" 2>/dev/null)"
+        then="$(git -C "$REPO" rev-parse "$commit:$f" 2>/dev/null)" || continue
+        [ -n "$then" ] && [ "$now" != "$then" ] && printf '    %s
+' "$f"
+    done
+}
 status_freshness() {
     echo "== PROJECT_STATUS.md still describes the current tree"
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
     [ -f "$REPO/$STATUS_FILE" ] || { echo "  $STATUS_FILE is missing"; return 1; }
 
-    local marker
+    local marker legacy
     # Extracted without a backreference on purpose: take the whole matched
     # line, then strip the fixed prefix and suffix by parameter expansion.
     # Escaping a sed backreference through every layer that generates or edits
     # this file is exactly how the check silently started reading an EMPTY
     # marker and reporting a missing commit instead of a stale document.
     marker="$(grep -oE "$STATUS_MARKER_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1)"
-    marker="${marker#<!-- status-covers-commit: }"
+    marker="${marker#<!-- status-covers-digest: }"
     marker="${marker% -->}"
-    if [ -z "$marker" ]; then
-        echo "  $STATUS_FILE has no '<!-- status-covers-commit: <sha> -->' marker."
-        echo "  Add it naming the last behaviour-changing commit the document describes."
-        return 1
-    fi
-    git cat-file -e "${marker}^{commit}" 2>/dev/null || {
-        echo "  the marker names '$marker', which is not a commit in this repository"; return 1; }
 
     # Which files oblige a status refresh: whatever deps.conf says, so the two
     # never disagree.
@@ -391,16 +434,68 @@ status_freshness() {
     done
     [ ${#watched[@]} -gt 0 ] || { echo "  (no file declares the project-status obligation)"; return 0; }
 
-    local behind
-    behind="$(git log --format='%h %s' "${marker}..HEAD" -- "${watched[@]}" 2>/dev/null)"
-    if [ -n "$behind" ]; then
-        echo "  STALE. These behaviour-changing commits landed after the marker ($marker):"
-        printf '%s
-' "$behind" | sed 's/^/    /'
-        echo "  Refresh $STATUS_FILE and move the marker to the commit it now describes."
+    if [ -z "$marker" ]; then
+        legacy="$(grep -oE "$STATUS_LEGACY_RE" "$REPO/$STATUS_FILE" 2>/dev/null | head -1)"
+        if [ -n "$legacy" ]; then
+            echo "  $STATUS_FILE still carries the OLD commit marker: $legacy"
+            echo "  That marker could not be checked before its own commit existed"
+            echo "  (REV-20260807-068 F1). Replace it: ./test/impact.sh --refresh-status"
+        else
+            echo "  $STATUS_FILE has no '<!-- status-covers-digest: <hex> -->' marker."
+            echo "  Add it with: ./test/impact.sh --refresh-status"
+        fi
+        return 1
+    fi
+
+    local now
+    now="$(status_digest "${watched[@]}")"
+    if [ "$marker" != "$now" ]; then
+        echo "  STALE. $STATUS_FILE was written for a different state of the watched files."
+        echo "  recorded: $marker   current: $now"
+        local hint
+        hint="$(status_changed_hint "${watched[@]}")"
+        if [ -n "$hint" ]; then
+            echo "  Changed since $STATUS_FILE was last touched:"
+            printf '%s
+' "$hint"
+        fi
+        echo "  Refresh $STATUS_FILE, then: ./test/impact.sh --refresh-status"
         return 1
     fi
     return 0
+}
+
+# The other half of the mechanism: without a command that writes the digest,
+# the invariant is unmeetable and the operator is back to a human reminder --
+# the class of thing Stage 1 existed to remove.
+refresh_status() {
+    local -a watched=()
+    local f
+    for f in "${!SEC_KIND[@]}"; do
+        case "$f" in file:*) ;; *) continue ;; esac
+        list_of "$f" manual | grep -qx project-status && watched+=("${f#file:}")
+    done
+    [ ${#watched[@]} -gt 0 ] || die "no file declares the project-status obligation"
+    [ -f "$REPO/$STATUS_FILE" ] || die "$STATUS_FILE is missing"
+
+    local now line tmp
+    now="$(status_digest "${watched[@]}")"
+    line="<!-- status-covers-digest: $now -->"
+    tmp="$(mktemp)"
+    # Replace either marker in place; append after the title if neither exists.
+    if grep -qE "$STATUS_MARKER_RE|$STATUS_LEGACY_RE" "$REPO/$STATUS_FILE"; then
+        awk -v repl="$line" '
+            /^<!-- status-covers-(digest|commit): [0-9a-f]+ -->$/ && !done { print repl; done=1; next }
+            { print }
+        ' "$REPO/$STATUS_FILE" > "$tmp"
+    else
+        awk -v repl="$line" 'NR==1 { print; print ""; print repl; next } { print }'             "$REPO/$STATUS_FILE" > "$tmp"
+    fi
+    cat "$tmp" > "$REPO/$STATUS_FILE"
+    rm -f "$tmp"
+    echo "status marker refreshed: $now"
+    echo "Stage this file together with the change it describes -- the digest is"
+    echo "over the watched files' CONTENT, so it stays true across the commit."
 }
 
 # ---------------------------------------------------------------------------
@@ -452,6 +547,7 @@ while [ $# -gt 0 ]; do
         --all)    MODE="all" ;;
         --graph)  MODE="graph" ;;
         --verify) MODE="verify" ;;
+        --refresh-status) MODE="refresh-status" ;;
         -f)       shift; [ $# -gt 0 ] || die "-f needs a file"; EXPLICIT_FILES+=("$1"); MODE="files" ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
         -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
@@ -467,6 +563,7 @@ derive_source_edges
 case "$MODE" in
     graph)  emit_graph; exit 0 ;;
     verify) verify; exit $? ;;
+    refresh-status) refresh_status; exit $? ;;
 esac
 
 declare -a CHANGED=()

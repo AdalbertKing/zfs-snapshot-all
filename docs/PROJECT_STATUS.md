@@ -7,13 +7,21 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-commit: d4a1e7d -->
-<!-- Znacznik maszynowy: ostatni commit zmieniajacy zachowanie, ktory ten
-     dokument opisuje. Sprawdzany przez ./test/impact.sh --verify. Nie usuwac
-     i nie zmieniac formatu -- to jedyne, co odroznia dokument aktualny od
-     takiego, ktory tylko wyglada na aktualny. -->
+<!-- status-covers-digest: e4c05a332a488b55 -->
+<!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
+     obowiazek project-status. Zapisywany przez ./test/impact.sh
+     --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
+     formatu -- to jedyne, co odroznia dokument aktualny od takiego, ktory
+     tylko wyglada na aktualny.
 
-- Data odświeżenia: **2026-08-07**. Commit, który ten blok opisuje, jest
+     Byl tu wczesniej SHA ostatniego commita zmieniajacego zachowanie. Tego nie
+     dalo sie sprawdzic PRZED tym commitem -- commit nie zawiera wlasnego
+     skrotu -- wiec --verify uruchomiony jako bramka przed etapem raportowal
+     czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
+     F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
+     commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- Data odświeżenia: **2026-08-07**. Stan plików, który ten blok opisuje, jest
   w znaczniku maszynowym powyżej — celowo NIE powtórzony tutaj, bo dwie
   kopie tej samej informacji to dwie rzeczy, które mogą się rozjechać.
   `gen-cron.sh` **v4.30**, `check-snap-age.sh` **v2.2**.
@@ -1204,7 +1212,7 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 
 | Pakiet | Wynik | Zakres |
 |---|---|---|
-| `impact` | 21/21 | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie |
+| `impact` | **27/27** | rozwiązywanie grafu testowego + `--verify` na prawdziwym drzewie. +7 (REV-20260807-068): niezmiennik świeżości `PROJECT_STATUS.md` liczony ze **skrótu TREŚCI** obserwowanych plików, nie z SHA commita. Stary znacznik nazywał ostatni commit zmieniający zachowanie, czego nie dało się sprawdzić PRZED tym commitem — commit nie zawiera własnego skrótu — więc `--verify` jako bramka przed etapem raportował czysto i błogosławił commit, który lądował nieświeży. Skrót treści jest dowodliwy przed commitem i **niezmieniony przez** commit. Każdy przypadek to osobne repozytorium git z KOPIĄ badanego skryptu w środku, więc ta sama konstrukcja uruchamia kontrolę negatywną (`IMPACT_UNDER_TEST=`). Przypięte: zmiana obserwowanego pliku niezacommitowana i zainscenizowana NIE jest czysta; zmiana już zacommitowana bez odświeżenia nadal nie jest (własność z REV-061 przeżywa przeprojektowanie); `--refresh-status` czyni ją czystą przed commitem i **pozostaje** czysta po nim; plik nieobserwowany nie wymusza odświeżenia. Kontrola negatywna wobec `eea6339`: 4 asercje padają, w tym obie decydujące (pending, staged) |
 | `gencron` | 58/58 (+2: golden `pair-label`, negatyw `pair-label-charset`) | parsowanie konfiguracji `gen-cron.sh`, golden + przypadki negatywne |
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
 | `cron` | **124/124** (+2 sekcja V: tryb pliku zamka, znaleziony na zywo 2026-08-06) (bez zmiany liczby — nowe funkcje ćwiczone przez `pause`) | `lib-cron.sh` — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14), całościowy zapis `cron_replace_all` z odczytem zwrotnym (REV-034 F3, +9), jeden stały katalog blokad bez fallbacku per-caller (REV-035, +8, część SKIP na tej maszynie). Od REV-036 F5 biblioteka sama rozpoznaje zapauzowany kształt (`cron_fullcron_paused`/`cron_block_paused`) i odmawia przez `cron_paused_guard` w `cron_block_install_impl`/`cron_block_ensure_line_impl`/`cron_block_remove_impl` — ćwiczone przez `pause` (sekcje S/T), nie tu |
