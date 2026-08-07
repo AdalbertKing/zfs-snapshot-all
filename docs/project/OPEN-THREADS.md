@@ -28,6 +28,8 @@ Last update: 2026-08-07, after reviewer closure of REV-053.
 | 18 | Reviewer reviewing a stale `main` | **Adopted 2026-08-07:** reviewer re-fetches latest `main` immediately before verdict/write; REV-053 closure was performed only after a fresh commit-list check confirmed `c072e19` as head. | — |
 | 19 | REV-051 — dot-segment gate labels | **CLOSED** 2026-08-07 with the negative control accepted. | — |
 | 20 | REV-053 — runbook accuracy | **CLOSED** by reviewer 2026-08-07 after direct diff verification of `54c6917`; both F1 and F2 accepted. | — |
+| 21 | Recursion is three decisions, not one | Owner raised 2026-08-07: a `[dataset:]` section declares recursion for its send (as free text in `flags`) but cannot declare it for the prune or monitor it generates, so `flags = -R` replicates a new child and never prunes or watches it. Proposal + live four-host survey: `docs/design/recursion-model.md`. Latent, not live — no managed config carries `-R` in `flags`. | reviewer: verdict on the field design and on migration (a) hard reject vs (b) deprecate |
+| 22 | pve0 has guests with zero backups | Found while surveying for #21. VM 104 `debian` is **running** with 0 `automated_*` snapshots on `hdd/data/vm-104-disk-1`; VMs 103/107 and CT 105 (all stopped) likewise. The config enumerates datasets, reality grew, nothing reconciles them — same shape as the VM 101 gap. Not fixed by #21. | owner: decide whether to just add them, or ask for scope reconciliation as a feature |
 
 ## How to use this
 
