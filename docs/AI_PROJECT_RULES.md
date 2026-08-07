@@ -11,7 +11,7 @@ Chat transcripts, local notes, and unpushed files are not project state.
 
 The roles may be swapped for a specific task only when the owner says so explicitly.
 
-For detailed review ownership and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V2) is authoritative.
+For detailed review ownership, state derivation and transitions, `docs/project/PROTOCOL.md` (REVIEW PROTOCOL V2) is authoritative.
 
 ## Git workflow
 
@@ -47,7 +47,7 @@ During this exception:
 - relevant tests must be run before push when the environment permits;
 - GitHub Actions on push is post-delivery evidence, not a pre-merge gate;
 - review findings and implementer responses must still be written under `docs/internal/reviews/`;
-- workflow state must follow `docs/project/PROTOCOL.md` and, after V2 cutover, the machine-owned `REVIEW_LEDGER.md`;
+- workflow state must follow `docs/project/PROTOCOL.md` and, after V2 cutover, the generated `REVIEW_LEDGER.md`;
 - the implementer must not approve or close own findings; the reviewer owns technical approval/closure;
 - no force-push, history rewrite, silent fixture blessing, or weakening of safety checks is permitted;
 - any direct-main change that fails review must be corrected by a new forward commit, never by rewriting published history.
@@ -62,9 +62,12 @@ For V2, the authoritative specification is `docs/project/PROTOCOL.md`.
 
 Canonical new artifacts:
 
-- Reviewer finding: `docs/internal/reviews/REV-YYYYMMDD-NNN.md`
-- Implementer response: `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
-- Current workflow state: `docs/internal/reviews/REVIEW_LEDGER.md` (machine-owned after V2 cutover)
+- Reviewer finding/evidence: `docs/internal/reviews/REV-YYYYMMDD-NNN.md`
+- Implementer response/evidence: `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md`
+- Reviewer closure fact: `docs/internal/reviews/closures/REV-YYYYMMDD-NNN.md`
+- Current workflow state view: `docs/internal/reviews/REVIEW_LEDGER.md` (generated after V2 cutover)
+
+New V2 artifact filenames carry no descriptive suffixes. A duplicate REV identity is a hard error even if filenames differ.
 
 The implementer must not edit the reviewer's finding prose. Disagreement is recorded in the existing response file, with technical evidence. The reviewer must not silently rewrite the implementer's response.
 
@@ -75,13 +78,21 @@ Exactly four V2 workflow states exist:
 - `APPROVED`
 - `CLOSED`
 
+They are derived from canonical machine facts in the role-owned artifacts. Nobody manually assigns state in the generated ledger.
+
 The only rejection transition is `IMPLEMENTED -> OPEN`. A genuinely new finding after approval receives a new REV; clarification or a second implementation attempt does not.
 
 Terms such as `ACCEPTED`, `DISPUTED`, `NEEDS-DISCUSSION`, `DEFERRED` and `REJECTED` may be retained as evidence or resolution metadata but are not parallel workflow states.
 
-After cutover, agents do not manually edit `REVIEW_LEDGER.md` or `OPEN-THREADS.md`; workflow transitions go through `reviewctl`, and `OPEN-THREADS.md` is generated from the ledger.
+After cutover, agents do not manually edit `REVIEW_LEDGER.md` or `OPEN-THREADS.md`; the latter is generated from the ledger.
 
 Only the reviewer approves/closes a technical finding. Only the owner accepts operational risk or changes priority.
+
+The normal mandatory pre-stage verification command is:
+
+`./test/impact.sh --verify`
+
+Protocol verification is included in that gate; normal operation must not depend on remembering a separate second verification command.
 
 ## Required evidence
 
@@ -104,8 +115,9 @@ Before declaring work complete:
 1. Run `./test/impact.sh <range>` or `./test/impact.sh` for the actual diff.
 2. Run every listed dependency-free suite.
 3. Run root/ZFS/remote suites when the impact graph requires them and the environment is available.
-4. Record any unperformed manual obligation explicitly; never imply that a green local suite covers remote SSH, delegated accounts, destructive force-full paths, or live cron installation.
-5. Do not use `--bless` merely to make golden tests pass. A fixture change must be reviewed as an intentional behavior change.
+4. Run `./test/impact.sh --verify` for the final pre-stage consistency gate.
+5. Record any unperformed manual obligation explicitly; never imply that a green local suite covers remote SSH, delegated accounts, destructive force-full paths, or live cron installation.
+6. Do not use `--bless` merely to make golden tests pass. A fixture change must be reviewed as an intentional behavior change.
 
 ## Safety boundaries
 
