@@ -122,7 +122,15 @@ chmod 0555 "$TMPD/ro"
 # assert nothing -- reporting a pass there would be worse than skipping.
 if (: > "$TMPD/ro/.probe") 2>/dev/null; then
     rm -f "$TMPD/ro/.probe"; chmod 0755 "$TMPD/ro"
-    echo "SKIP D4 this filesystem does not enforce directory permissions -- verify on Linux"
+    # Two different reasons, and naming the wrong one sends the next person to
+    # the wrong place: root bypasses directory permissions entirely, and Git
+    # Bash on Windows does not enforce them at all. Both were hit while
+    # building this case.
+    if [ "$(id -u)" = 0 ]; then
+        echo "SKIP D4 running as root, which bypasses directory permissions -- run this suite as an unprivileged user to exercise it"
+    else
+        echo "SKIP D4 this filesystem does not enforce directory permissions -- verify on Linux"
+    fi
 else
     out="$("$GEN" --migrate-recursion -c "$c" 2>&1)"; rc=$?
     chmod 0755 "$TMPD/ro"
