@@ -2123,9 +2123,24 @@ migrate_recursion() {   # <config file>
     # Control: does the CURRENT config still describe what is installed? If it
     # does not, that mismatch predates this migration and is the operator's to
     # resolve -- migrating on top of it would silently adopt the drift.
-    local installed me
+    #
+    # Only when the installed block actually CAME FROM this config. The block
+    # records that in its own "# Source:" line, which is exactly what it is
+    # for. Comparing against whatever this user happens to have installed would
+    # abort every migration of a second config, a staging copy or a test
+    # fixture with a "pre-existing drift" message that is simply untrue --
+    # found by running this suite as the delegated account on a host whose
+    # crontab holds a different config's block.
+    local installed me raw src
     me="$(id -un)"
-    installed="$(cron_block_read "$me" zfs-backup-managed 2>/dev/null | migrate_normalise || true)"
+    raw="$(cron_block_read "$me" zfs-backup-managed 2>/dev/null || true)"
+    src="$(printf '%s\n' "$raw" | sed -n 's/^# Source: \(.*\) -- DO NOT EDIT.*$/\1/p' | head -1)"
+    installed=""
+    if [ -n "$raw" ] && [ -n "$src" ] && [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$file" 2>/dev/null)" ]; then
+        installed="$(printf '%s\n' "$raw" | migrate_normalise)"
+    elif [ -n "$raw" ]; then
+        echo "  installed crontab block: belongs to ${src:-another config} -- not a control for this file, skipping"
+    fi
     if [ -n "$installed" ]; then
         if diff -q <(printf '%s\n' "$installed") "$work.base" >/dev/null 2>&1; then
             echo "  installed crontab block: matches (control passed)"
