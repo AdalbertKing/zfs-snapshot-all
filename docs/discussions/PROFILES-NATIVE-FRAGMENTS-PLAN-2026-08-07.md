@@ -450,3 +450,118 @@ large design unless needed:
 Goal of the discussion: one agreed plan. No implementation until these are
 resolved and no Owner escalation unless a real nontechnical product choice
 remains.
+
+---
+
+## 13. Profiles are OPTIONAL — native manual configuration remains first-class
+
+Owner clarification, 2026-08-07: an administrator may deliberately choose to
+use **no predefined or custom profile at all** and configure the system directly.
+Profiles are convenience presets, not a mandatory abstraction layer.
+
+The architecture must therefore preserve two equivalent entry paths into the
+same engine contract:
+
+```text
+A. convenience path
+   relationship facts + profile fragments -> CONFIG v4 -> gen-cron -> engines
+
+B. expert/manual path
+   administrator-authored CONFIG v4       -> gen-cron -> engines
+```
+
+Path B must remain complete and supported. It is not an escape hatch, debug mode
+or legacy compatibility path.
+
+Consequences:
+
+1. `gen-cron.sh -c FILE` remains independently usable without `zfs-backup.sh`
+   and without any profile metadata.
+2. A hand-authored valid CONFIG v4 must never require a synthetic profile name
+   merely to satisfy orchestration bookkeeping.
+3. `zfs-backup.sh` may offer `--profile NAME` as a convenience, but there must be
+   a deliberate manual/config mode that accepts or operates on native CONFIG v4
+   without reinterpreting it through profile semantics.
+4. Profile validation cannot become a second validation authority for CONFIG v4.
+   The final authority remains the native consumer (`gen-cron.sh`).
+5. Do not make future engine capabilities reachable only through profiles.
+   Every capability must first exist in the batch/CLI/config layer; a profile
+   may package it afterward.
+6. When a generated/profile-managed config and a hand-managed config coexist,
+   ownership boundaries must be explicit and fail closed. The tool must never
+   silently rewrite hand-authored sections merely because a profile exists.
+
+This also changes one earlier assumption: persisting `selected profile name` is
+required only for a relationship that actually uses profile management. Manual
+CONFIG-v4 operation has no fake `PROFILE=manual` object unless a concrete
+implementation reason proves that such a marker is useful and does not become a
+new semantic layer.
+
+Claude: include the manual path in the design review. A proposal that works only
+when every relationship selects a profile is incomplete.
+
+---
+
+## 14. Long-horizon architecture: CLI/batch first, WebGUI last
+
+Owner's software-development philosophy for this project is explicit:
+
+> Build a complete, working, scriptable batch/CLI package first. Put the user
+> interface on top of it afterward — like the traditional Unix/Linux model.
+
+The eventual WebGUI is therefore a **client of the existing public contracts**,
+not a new implementation of backup logic.
+
+Target layering:
+
+```text
+              future WebGUI
+                   |
+                   | calls / displays
+                   v
+        stable high-level CLI/API boundary
+                   |
+          zfs-backup / deploy / preview
+                   |
+        native CONFIG v4 + scope.ini
+                   |
+                gen-cron
+                   |
+     snapget / snapsend / delsnaps / monitors
+                   |
+                   ZFS
+```
+
+Architectural rules implied by that target:
+
+1. **No business logic only in the GUI.** Dataset selection, validation,
+   profile application, preview, activation, pause/disable, restore planning and
+   later destructive confirmations must all be executable without a browser.
+2. **Machine-readable output where state matters.** Human prose is useful, but
+   commands the GUI will need should eventually have stable structured output
+   (`--json` or equivalent) rather than forcing the GUI to scrape sentences.
+   This does not mean replacing CONFIG v4 with JSON; it means exposing command
+   results/state in a machine-readable representation at the UI boundary.
+3. **Plan/preview before mutation.** If the CLI can produce an exact plan or
+   candidate config/cron before applying it, the GUI can show the same object and
+   invoke the same apply operation. No separate GUI planner.
+4. **Stable identifiers.** Relationship/client/profile names and operation IDs
+   should be explicit enough that a GUI can address them without parsing paths or
+   cron text heuristically.
+5. **Idempotent verbs and explicit state.** Web requests may be repeated. Public
+   operations should therefore converge safely or fail with a precise state
+   mismatch instead of relying on an interactive shell session.
+6. **Interactive prompts are a presentation mode, not the only contract.** Any
+   operation that currently asks `[t/N]` should, when eventually exposed to the
+   GUI, also have a noninteractive equivalent carrying the same explicit consent
+   and safety checks. The GUI must not bypass safeguards.
+7. **Configuration remains inspectable.** The GUI should be able to show the
+   resulting CONFIG v4, cron and effective scope rather than hiding the layer
+   underneath it. An expert administrator can always drop below the GUI.
+8. **Do not design an HTTP API now just because a GUI is planned.** The near-term
+   requirement is only to avoid CLI/config choices that would force us to
+   duplicate logic later. First finish and stabilize the batch package.
+
+This principle is a design constraint for profiles now: profiles should make the
+CLI easier, but must not become an invisible state machine that only a future GUI
+can understand.
