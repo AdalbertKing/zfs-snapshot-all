@@ -58,26 +58,51 @@ Do not interrupt Claude in the middle of the current Stage-2 implementation mere
 
 Required order:
 
-1. Finish all accepted Stage-2 implementation slices.
-2. Run their targeted/local/negative-control tests as each slice requires.
-3. Produce one final Stage-2 candidate SHA.
-4. Run the integrated campaign below against **that exact SHA**.
-5. Fix any finding and repeat only the affected portions plus the final required regression set.
-6. Record exact evidence.
-7. Only then declare the low-level engine frozen and proceed to Profile B1/high-level work.
+1. Finish Stage 2.2 recursion declaration normalisation.
+2. Finish Stage 2.3 long CLI option support.
+3. **STOP adding further engine/config behaviour to this package.** The next step is verification, not another feature slice.
+4. Run each slice's targeted/local/negative-control tests as required.
+5. Produce one final Stage-2 candidate SHA.
+6. Run the impact graph and integrated campaign below against **that exact SHA**.
+7. Fix any finding and repeat only the affected portions plus the final required regression set.
+8. Record exact evidence.
+9. Only then declare the low-level engine frozen and proceed to Profile B1/high-level work.
 
 If Stage 2 changes again after the campaign, the reviewer decides whether the changed blast radius requires repeating part or all of this campaign.
+
+### Long-option compatibility rule
+
+Stage 2.3 adds readable long CLI spellings. It does **not** migrate generated cron away from the existing short recursion flags.
+
+The compatibility contract is:
+
+- direct/manual CLI may use the accepted long semantic spelling;
+- `gen-cron.sh` continues emitting short `-r` / `-R` forms;
+- existing managed crontabs must not churn merely because a second CLI spelling exists;
+- `cron2conf` must not be forced into a second emitted representation merely to accommodate Stage 2.3.
+
+Long options are an additional human-facing CLI surface, not a fleet-wide cron migration.
 
 ## 5. Final-commit automated gate
 
 Against the final Stage-2 candidate:
 
-- run `./test/impact.sh --verify`;
-- run every suite selected by the impact graph for the final diff/package;
+- run `./test/impact.sh --verify` first;
+- derive the required suites from the impact graph for the **whole final Stage-2 diff/package**, not from memory and not from counts copied from intermediate commits;
+- run every graph-selected suite;
 - run the dedicated Stage-2 suites and their negative controls;
-- record counts, skips and failures from the final SHA, never copy counts from earlier intermediate commits.
+- record counts, skips and failures from the final SHA.
 
-At minimum this includes the suites owning the changed recursion/run-suffix/CLI/lock behaviour and the existing pause regression selected by the graph.
+At minimum the final graph/test evidence must discriminate:
+
+- run-suffix ownership/correlation changes in both transfer engines;
+- recursion declaration parsing and conflict refusal;
+- short/long spelling interactions;
+- unchanged generated-cron representation (`-r` / `-R` remain the emitted form);
+- any relationship-lock refinement that lands in the same package;
+- pause regression where the graph selects the shared engine paths.
+
+The graph is the source of truth for automated blast radius. The campaign below adds only the environment-dependent evidence the graph cannot provide.
 
 ## 6. Integrated real-ZFS recursion campaign
 
@@ -174,13 +199,40 @@ If P1/P2 pass, the historical full pause/hard-disable campaigns do not need to b
 
 If either fails, reopen the relevant campaign scope and test according to the failure, not according to this shortcut.
 
-## 8. Stage-2-specific live obligations
+## 8. Stage-2-specific obligations
 
 Apply the risk-shaped obligations from `docs/design/stage2-engine-contract.md`:
 
-- Stage 2.1: real ZFS run-suffix/correlation proof — mandatory;
-- Stage 2.2: recursion declaration normalisation is argv parsing; targeted tests/negative controls are sufficient unless implementation unexpectedly changes environment-dependent code;
-- Stage 2.3: prove the **installed** copy accepts the new long spelling under the delegated execution context where required; do not substitute a local checkout test for deployed-version compatibility.
+### Stage 2.1 — run identity
+
+Real ZFS run-suffix/correlation proof is mandatory.
+
+### Stage 2.2 — one semantic recursion declaration
+
+This is primarily argv normalisation, so targeted tests and negative controls are the primary evidence unless implementation unexpectedly touches environment-dependent code.
+
+The parser tests must cover the semantic conflict matrix, including at least:
+
+- `-r`;
+- `-R`;
+- accepted long forms for `atomic`, `flat`, and `no`;
+- `-r -R` -> refuse;
+- short + contradictory long declaration -> refuse;
+- `--recursive=no -r` -> refuse;
+- malformed/unknown long value -> refuse;
+- duplicate declarations handled exactly according to the accepted Stage-2 contract rather than by "last flag wins" accident.
+
+The property under test is **one recursion decision**, independent of spelling.
+
+### Stage 2.3 — long CLI spelling
+
+Prove all of the following:
+
+1. both `snapsend.sh` and `snapget.sh` accept the intended long spelling;
+2. mixed short/long conflicts fail closed according to Stage 2.2;
+3. generated cron remains byte-stable in representation and still emits short `-r` / `-R` forms;
+4. the **installed** copy on a real host accepts the new spelling in the delegated execution context where required;
+5. a local checkout test is not accepted as proof of deployed-version compatibility.
 
 If the accepted relationship-wide overlap-lock refinement lands in the same engine-finalisation package, include one real or otherwise discriminating overlap case that proves a second job of the same labeled relationship skips rather than streams concurrently. This does not require a new scheduler campaign.
 
@@ -189,6 +241,7 @@ If the accepted relationship-wide overlap-lock refinement lands in the same engi
 Record in one closure artifact:
 
 - final commit SHA;
+- impact-graph result and exact selected suites;
 - hosts used;
 - scratch datasets/relationships;
 - exact commands;
@@ -197,6 +250,8 @@ Record in one closure artifact:
 - proof that a newly created child was dynamically discovered in recursive mode;
 - proof manual snapshot survived managed prune;
 - flat vs atomic run/snapshot observations;
+- long-option installed-copy proof;
+- proof generated cron still uses the established short representation;
 - pause and hard-disable smoke results;
 - automated suite counts;
 - negative-control results where applicable;
@@ -208,12 +263,16 @@ Do not report only `PASS`. The evidence must make it possible for Reviewer to di
 
 The engine/config layer may be called **frozen for the next high-level phase** only when:
 
-1. Stage 2 implementation is complete;
-2. automated final-SHA gates are green;
-3. the required real-ZFS recursion/run-suffix campaign is green;
-4. pause/hard-disable regression smoke is green;
-5. any campaign finding is fixed and reverified;
-6. the evidence artifact is committed and independently reviewed.
+1. Stage 2.1/2.2/2.3 implementation is complete;
+2. no further behaviour slice has been stacked on top before verification;
+3. `./test/impact.sh --verify` is green on the final candidate;
+4. every graph-selected automated suite is green on that same SHA;
+5. Stage-2 negative controls discriminate the old behaviour;
+6. the required real-ZFS recursion/run-suffix campaign is green;
+7. installed-copy long-option proof is green;
+8. pause/hard-disable regression smoke is green;
+9. any campaign finding is fixed and reverified;
+10. the evidence artifact is committed and independently reviewed.
 
 Only after that gate should Profile B1 / high-level collector/profile work proceed.
 
