@@ -90,15 +90,69 @@ dać różne nazwy, a po zmianie jedną.
 | wygenerowany cron | **bajt w bajt jak dziś** na wszystkich czterech hostach |
 | `cron2conf` round-trip | bez zmian |
 
-### Wspólne
-- `test/snapsend`, `test/delsnaps`, `test/monitor`, `test/cron`, `test/cron2conf`,
-  `impact.sh --verify`;
-- `test/scenarios` **na prawdziwym ZFS-ie** — dziś złapało kontrakt, którego
-  suita jednostkowa nie mogła;
-- kontrola negatywna dla każdej z trzech zmian, raportowana **obiema** liczbami;
-- przebieg na hoście **jako konto delegowane**, nie tylko root.
+### Weryfikacja — dobierana do zależności, nie jedna kampania na wszystko
 
----
+REV-066 słusznie odrzuciła moją pierwotną listę „wspólne dla wszystkich trzech".
+Sedno zarzutu, i zgadzam się z nim: dzień pokazał, że **duża liczba zielonych
+testów bywa słabym dowodem**, ale to samo działa w drugą stronę — **przebieg na
+żywym hoście na ścieżce, która nie potrafi rozróżnić zmiany, nie jest mocniejszym
+dowodem, tylko droższym**.
+
+Pytanie rozstrzygające dla każdej zmiany brzmi: **od jakiej właściwości
+środowiska ona zależy?**
+
+| | od czego zależy | co to rozróżnia |
+|---|---|---|
+| 2.1 sufiks | od rzeczywistego czasu powstawania snapshotów | **tylko prawdziwy ZFS** |
+| 2.2 jedna deklaracja | od niczego — to normalizacja argv | **nic w środowisku**; host nie doda dowodu |
+| 2.3 długie opcje | od tego, czy **wdrożony** skrypt je rozumie | **jedno** wywołanie jako konto delegowane |
+
+#### 2.1 — sufiks i korelacja przebiegu
+
+- ukierunkowana regresja `snapsend`: tryb `flat` na ≥2 datasetach, plus zaślepka
+  `date` przekraczająca granicę sekundy;
+- kontrola negatywna: na dzisiejszym kodzie przypadek korelacji **musi paść**,
+  a przypadki nietknięte przejść — obie liczby raportowane;
+- suity wskazane przez `impact.sh` dla faktycznego diffu;
+- **jeden** scenariusz na prawdziwym ZFS-ie dowodzący korelacji end to end —
+  bo ta właściwość istnieje wyłącznie w rzeczywistym zachowaniu snapshotów;
+- konto delegowane **tylko jeśli** zmieniona ścieżka jest pod nim wykonywana.
+
+#### 2.2 — jedna deklaracja rekursji
+
+- testy parsera dla obu silników transferu, każda pisownia i każdy konflikt
+  z tabeli wyżej;
+- kontrola negatywna wobec obecnego kodu;
+- suity wybrane przez graf, nic ponadto;
+- **bez kampanii na ZFS-ie i bez przebiegu na hoście.** To jest normalizacja
+  argumentów; `-r -r` albo `--recursive=ture` zachowa się na produkcyjnym hoście
+  identycznie jak lokalnie. Przebieg na żywo dowiódłby tu wyłącznie tego, że
+  ssh działa.
+
+#### 2.3 — długie opcje
+
+- testy równoważności dla skryptów, które faktycznie dostają aliasy;
+- kontrola negatywna: stara wersja **nie rozumie** nowej pisowni, a stara
+  krótka forma działa bez zmian;
+- suity wybrane przez graf;
+- **jedno** wywołanie na hoście jako konto delegowane — bo tylko ono dowodzi, że
+  **zainstalowana** kopia skryptu przyjmuje nową pisownię. Lokalny przebieg tego
+  nie rozstrzyga: wdrożony plik może być starszy. To jest tani, rozróżniający
+  dowód, w przeciwieństwie do kampanii na czterech hostach.
+- **bajtowa równość crona: tylko jeśli graf ją wskaże.** Jeżeli `gen-cron.sh`
+  nie jest tknięty, nie uruchamiam `cron`/`cron2conf` po to, żeby dowieść, że
+  nietknięty plik się nie zmienił.
+
+#### Wspólne — naprawdę wspólne
+
+`./test/impact.sh --verify`. Tyle. Waliduje sam graf, więc obowiązuje zawsze.
+
+#### Kiedy zakres rośnie
+
+Eskalacja do szerszej kampanii jest **warunkowa, nie domyślna**: gdy
+implementacja wyjdzie poza normalizację argumentów, gdy dotknie
+`gen-cron.sh`/`lib-*`, albo gdy `impact.sh` wskaże krawędź, której ten dokument
+nie przewidział. Wtedy zakres bierze się z grafu, nie z ostrożności.
 
 ## Czego w Etapie 2 nie ma
 
