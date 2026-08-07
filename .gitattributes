@@ -1,3 +1,10 @@
 *.sh text eol=lf
 test/** text eol=lf
 .github/** text eol=lf
+
+# The two GENERATED protocol views. reviewctl.sh writes LF and --verify compares
+# byte for byte, so a checkout that rewrites them to CRLF makes the ledger look
+# hand-edited on every Windows clone -- a false alarm about the one file whose
+# whole purpose is to be trustworthy.
+docs/internal/reviews/REVIEW_LEDGER.md text eol=lf
+docs/project/OPEN-THREADS.md text eol=lf
