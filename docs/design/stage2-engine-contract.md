@@ -28,8 +28,21 @@ drugim. Restore ma to raportować, a nie udawać, że trzy tryby są równoważn
 
 ## 2.2 Dokładnie jedna deklaracja rekursji na wywołanie
 
-**Dziś:** `-r -R` naraz nie jest odrzucane — wygrywa ostatnia flaga. Generator
-odrzuca to w configu, CLI nie.
+**Dziś — SPROSTOWANIE (2026-08-07, przy implementacji).** Zdanie, które tu
+stało — „`-r -R` naraz nie jest odrzucane, wygrywa ostatnia flaga" — było
+**nieprawdziwe**. Zmierzone na `a51e09f`: oba silniki odrzucają `-r -R`
+w obu kolejnościach, i robią to od dawna (`snapsend.sh:1501`,
+`snapget.sh:1512`). Kontrola negatywna to potwierdza — te przypadki
+**przechodzą** na kodzie sprzed zmiany.
+
+Prawdziwa luka jest węższa: **powtórzona deklaracja tego samego trybu**
+(`-r -r`, `-R -R`) przechodzi po cichu. To jedyne, co Etap 2.2 dokłada dla
+flag krótkich; reszta reguły z REV-054 A4 dotyczy pisowni długich i wchodzi
+z Etapem 2.3.
+
+Zapisuję to zamiast po cichu poprawić, bo recenzent zatwierdził plan
+zawierający tę przesłankę (REV-060), a zakres 2.2 wyszedł przez to mniejszy,
+niż był wyceniony.
 
 **Kontrakt (REV-054 A4, dosłownie):**
 

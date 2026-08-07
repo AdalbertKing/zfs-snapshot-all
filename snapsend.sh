@@ -420,7 +420,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.69'
+VERSION='v2.70'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -470,6 +470,17 @@ QUIESCE=no
 QUIESCE_SNAPPED=0
 RECURSIVE=0
 FLAT_RECURSE=0
+# Exactly ONE recursion declaration per invocation (Stage 2.2, REV-054 A4).
+# Counted rather than inferred from the resulting flags: -r -r leaves RECURSIVE
+# at 1 and is indistinguishable afterwards from a single -r, so the count has
+# to be kept while parsing. RECURSION_SPELLINGS records what was actually
+# written so the refusal can quote it back.
+RECURSION_DECLS=0
+RECURSION_SPELLINGS=""
+declare_recursion() {   # <spelling>
+    RECURSION_DECLS=$((RECURSION_DECLS+1))
+    RECURSION_SPELLINGS="${RECURSION_SPELLINGS:+$RECURSION_SPELLINGS }$1"
+}
 # -X: extended regexes; an expanded dataset is dropped if ANY of them matches.
 # -S: drop the listed dataset itself, keep its descendants.
 declare -a EXCLUDE_PATTERNS=()
@@ -1466,8 +1477,8 @@ while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:" opt; do
         N) NO_COMPRESS=1;;
         l) COMPRESSION_LEVEL="$OPTARG"; COMPRESSION_LEVEL_SET=1;;
         v) VERBOSE="$OPTARG";;
-        r) RECURSIVE=1;;
-        R) FLAT_RECURSE=1;;
+        r) RECURSIVE=1; declare_recursion -r;;
+        R) FLAT_RECURSE=1; declare_recursion -R;;
         X) EXCLUDE_PATTERNS+=("$OPTARG");;
         S) SKIP_PARENT=1;;
         n) DRY_RUN=1;;
@@ -1498,8 +1509,19 @@ while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:" opt; do
 done
 shift $((OPTIND-1))
 
+# Two different modes keep their own message: it is the mistake people actually
+# make, and the useful answer is what the two modes MEAN, not how many were
+# given.
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs send -R stream, -R = independent per-dataset sends)" >&2
+    exit 1
+fi
+# A repeat of the SAME mode is refused too. It is harmless today -- but the
+# rule is about the declaration, not its effect, and once --recursive=<mode>
+# exists a spelling that "collapses harmlessly" is exactly how
+# `--recursive=no -r` would quietly become -r.
+if [ $RECURSION_DECLS -gt 1 ]; then
+    echo "Error: recursion declared more than once ($RECURSION_SPELLINGS). Exactly one declaration per invocation, even when they agree." >&2
     exit 1
 fi
 
