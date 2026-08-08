@@ -49,3 +49,39 @@ facts cannot settle.
 | 32 | Plan: method + stages | owner+reviewer: approve or amend |
 | 29 | Engine CLI / profiles / restore — design discussion | owner+reviewer: discuss |
 | 30 | Atomic restore point — measured, and one gap | owner+reviewer: accept into the pre-freeze engine slice |
+
+---
+
+## ROZSTRZYGNIETE 2026-08-08 — czym jest zabezpieczenie na tym poziomie
+
+Implementer zmierzyl, ze 24 z 29 zadan we flocie tylko snapshotuje, a wszystkie
+5 pozostalych ma cel LOKALNY, i przedstawil to jako luke: "w tej flocie nie ma
+ani jednej kopii poza host".
+
+**Wlasciciel: to jest bledna przeslanka, nie luka.**
+
+> Nikt nie powiedzial, ze zabezpieczenie to wyslanie poza host. Nie na tym
+> poziomie taka ocena. Host moze miec druga pare dyskow i na niej oddzielny pool
+> (tu `hdd`), i wyslanie tam snapshotow z `rpool/data` jest zabezpieczeniem.
+> Replika zalatwia tu transfer miedzyhostowy.
+
+Warstwy sa rozdzielone i kazda robi swoje:
+
+| warstwa | przed czym chroni |
+|---|---|
+| snapshot lokalny | skasowanie pliku, blad w maszynie |
+| kopia na DRUGA PULE tego samego hosta | utrata puli / pary dyskow |
+| pvesr | smierc hosta |
+
+Zmierzone i zgodne z tym wzorcem: `rpool/data/*` -> `hdd/backups/*` na pve2
+i pve0 to kopie MIEDZY PULAMI. 11.x pve1 ma tylko jedna pule (`rpool`), wiec
+kopia miedzypulowa jest tam fizycznie niemozliwa.
+
+**Konsekwencja dla narzedzi:** `--reconcile` NIE dostaje pojecia "poziomu
+ochrony" i nie ocenia, czy zabezpieczenie jest wystarczajace. Taka ocena jest
+architektoniczna i nie nalezy do audytu zakresu. Propozycja implementera, zeby
+rozdzielic "snapshot lokalny" od "kopia poza hostem" jako klasy w raporcie,
+jest **odrzucona** — zaszywalaby opinie polityczna w mechanizmie, ktory ma
+raportowac fakty.
+
+Audyt odpowiada na pytanie "czy cokolwiek to obejmuje", nie "czy to wystarczy".

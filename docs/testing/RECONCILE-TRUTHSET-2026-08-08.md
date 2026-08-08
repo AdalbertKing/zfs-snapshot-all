@@ -143,3 +143,28 @@ mistake in miniature as reading disk names to decide what an orphan was.
 Signal is now roughly **11 of 68**, up from 11 of 72. The container class was
 never the bulk of the noise; **scratch and test datasets are**, at 53 lines, and
 that decision is still open.
+
+---
+
+## 7. CORRECTION 2026-08-08 — "no off-host copy" was my premise, not a finding
+
+While answering the owner's question about pvesr replicas I measured that 24 of
+29 fleet jobs are snapshot-only and all 5 destinations are local, and presented
+that as a gap.
+
+**The owner rejected the premise, and he is right.** Nobody agreed that
+protection means an off-host copy, and that judgement does not belong at this
+layer. A host with a second pair of disks and a separate pool — here `hdd` —
+gets real protection from sending `rpool/data` snapshots there: it survives
+losing a pool, which is the common failure. pvesr covers host death.
+
+Measured and consistent with that: `rpool/data/*` → `hdd/backups/*` on pve2 and
+pve0 are **cross-pool** copies. 11.x pve1 has only `rpool`, so a cross-pool copy
+is physically impossible there.
+
+So section 1's "no false negatives" stands as written. The definition of
+`covered` — a send job exists — is correct for a scope audit, and my proposal to
+split "local snapshot" from "off-host copy" is withdrawn: it would encode a
+policy opinion in a mechanism whose job is to report facts.
+
+The audit answers "does anything cover this", not "is that enough".
