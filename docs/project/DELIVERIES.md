@@ -7,3 +7,4 @@ Clearing is explicit: the reviewer opens a REV whose `reviewed-implementation`
 is that sha, or records `<!-- no-review-required: <sha> -->` here.
 
 <!-- delivered: a3df471a66b0e26e1e55b7f78772d3d100dec333 scope reconciliation, gen-cron.sh --reconcile (read-only) -->
+<!-- reviewed-by: a3df471a66b0e26e1e55b7f78772d3d100dec333 REV-20260808-071 -->

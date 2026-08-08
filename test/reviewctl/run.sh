@@ -236,6 +236,24 @@ world d5; deliver "$NOSUCH" "unfetchable"
 REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
 [ $? -ne 0 ] && ok "an unreachable delivery sha is refused" || bad "an unreachable delivery sha is refused"
 
+
+# The moving-pointer flaw, found by USING the mechanism (2026-08-08).
+# reviewed-implementation is advanced by the reviewer to each new submission, so
+# a delivery cleared by "some REV currently names this sha" reappears the moment
+# that thread progresses -- and would do so forever. "It was reviewed" is a fact
+# about the past and must be recorded as one.
+world d6; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
+printf '<!-- reviewed-by: %s %s -->
+' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
+case "$(threads_txt)" in *DELIVERED*) bad "reviewed-by clears a delivery whose REV has moved on" "$(threads_txt)" ;;
+  *) ok "reviewed-by clears a delivery whose REV has moved on" ;; esac
+
+# Without the marker the same world still shows the row: the flaw is real, and
+# this pins that the marker is what closes it rather than something incidental.
+world d7; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
+case "$(threads_txt)" in *DELIVERED*) ok "...and without it the delivery is still open" ;;
+  *) bad "...and without it the delivery is still open" "$(threads_txt)" ;; esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

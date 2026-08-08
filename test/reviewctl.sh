@@ -151,6 +151,19 @@ collect_deliveries() {
             '<!-- no-review-required: '*' -->')
                 sha="${line#<!-- no-review-required: }"; sha="${sha% -->}"
                 [ -n "$sha" ] && NO_REVIEW[$sha]=1 ;;
+            '<!-- reviewed-by: '*' -->')
+                # A delivery that WAS reviewed, recorded explicitly.
+                #
+                # Found by using the mechanism: clearing originally depended on
+                # some REV currently naming the sha in reviewed-implementation.
+                # That header is a MOVING POINTER -- the reviewer advances it to
+                # each new submission -- so once a thread progressed past the
+                # delivered commit, the delivery reappeared as unreviewed and
+                # would have done so forever. "It was reviewed" is a fact about
+                # the past and has to be recorded as one.
+                rest="${line#<!-- reviewed-by: }"; rest="${rest% -->}"
+                sha="${rest%% *}"
+                [ -n "$sha" ] && NO_REVIEW[$sha]=1 ;;
         esac
     done < "$DELIVERIES"
 }
