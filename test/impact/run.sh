@@ -20,6 +20,10 @@ FIX="$SCRIPT_DIR/fixtures"
 PASS=0
 FAIL=0
 
+# One place that knows how to strip the ANSI bold: the escape has now been
+# mangled twice by edits that reached through another tool.
+strip_ansi() { sed 's/\[[0-9;]*m//g'; }
+
 check() {
     local label="$1" expected="$2" actual="$3"
     if [ "$expected" = "$actual" ]; then
@@ -302,6 +306,111 @@ printf 'nothing to do with behaviour
 G add -A
 check "freshness: an unwatched file does not demand a refresh" "CLEAN" "$(fresh_says)"
 
+
+# --- the engine freeze (Stage 3) ---------------------------------------------
+#
+# A freeze that is a sentence in a document is a wish. These cases pin the
+# mechanism: a frozen file cannot change silently, and the only thing that lifts
+# the refusal is a named review that exists and is still open.
+#
+# Same construction as the freshness cases -- a throwaway repo holding a COPY of
+# the script under test -- so IMPACT_UNDER_TEST runs the control.
+freeze_world() {
+    fresh_world "fz-$1"
+    mkdir -p "$FW/docs/project" "$FW/docs/internal/reviews/closures"
+    printf 'echo engine\n' > "$FW/engine.sh"
+    G add engine.sh
+    cat > "$FW/docs/project/ENGINE-FREEZE.md" <<'EOF'
+# Engine freeze
+
+<!-- frozen: engine.sh 100644 0000000000000000000000000000000000000000 -->
+<!-- unfreeze: - -->
+EOF
+    G add docs/project/ENGINE-FREEZE.md
+    IMP --refreeze >/dev/null 2>&1
+    G add docs/project/ENGINE-FREEZE.md
+    IMP --refresh-status >/dev/null 2>&1
+    G add docs/PROJECT_STATUS.md
+    G commit -qm frozen
+}
+
+# freeze_says -> CLEAN or NOT-CLEAN, reading ONLY the freeze section
+freeze_msg() {
+    ( cd "$FW" && ./test/impact.sh --verify ) 2>&1 | strip_ansi | awk '/frozen engine files/{f=1;next} /^== /{f=0} f' 
+}
+freeze_says() {
+    # The verdict is the REFUSAL marker, not "did it print anything". An
+    # authorised change prints "authorised by REV-..." and is CLEAN; the first
+    # version of this helper treated ANY output as a refusal, so the authorised
+    # case failed while the mechanism under test was working correctly.
+    case "$(freeze_msg)" in
+        *FROZEN.*) echo NOT-CLEAN ;;
+        *)         echo CLEAN ;;
+    esac
+}
+set_unfreeze() {   # <value>
+    awk -v v="$1" '/^<!-- unfreeze: /{ print "<!-- unfreeze: " v " -->"; next } { print }' \
+        "$FW/docs/project/ENGINE-FREEZE.md" > "$FW/.u" && mv "$FW/.u" "$FW/docs/project/ENGINE-FREEZE.md"
+    G add docs/project/ENGINE-FREEZE.md
+}
+make_review() {    # <rev> [closed]
+    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: - -->\n' \
+        "$1" > "$FW/docs/internal/reviews/$1.md"
+    [ "${2:-}" = closed ] && printf '<!-- rev: %s -->\n<!-- closed-by: x -->\n' "$1" \
+        > "$FW/docs/internal/reviews/closures/$1.md"
+    G add docs/internal/reviews
+}
+
+freeze_world clean
+check "freeze: an unchanged frozen file is clean" "CLEAN" "$(freeze_says)"
+
+# THE mechanism. Without this the freeze is a document nobody enforces.
+freeze_world changed
+printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
+check "freeze: a staged change to a frozen file is refused" "NOT-CLEAN" "$(freeze_says)"
+# This suite has only check(); ok/bad belong to the other suites, and calling
+# them here is a command-not-found that asserts nothing.
+check "freeze: the refusal names the file" "1"       "$(freeze_msg | grep -c 'engine.sh')"
+
+# A mode-only change is a change: same reasoning as REV-20260807-068 round 4.
+freeze_world modeonly
+G update-index --chmod=+x engine.sh
+check "freeze: a mode-only change to a frozen file is refused" "NOT-CLEAN" "$(freeze_says)"
+
+# The refusal lifts only for a review that EXISTS...
+freeze_world ghost
+printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
+set_unfreeze REV-20260808-999
+check "freeze: naming a review that does not exist does not authorise it" "NOT-CLEAN" "$(freeze_says)"
+
+freeze_world open
+printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-900
+set_unfreeze REV-20260808-900
+check "freeze: an OPEN review authorises the change" "CLEAN" "$(freeze_says)"
+
+# ...and is not already answered. A closed review cannot authorise new work.
+freeze_world closed
+printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-901 closed
+set_unfreeze REV-20260808-901
+check "freeze: a CLOSED review does not authorise new work" "NOT-CLEAN" "$(freeze_says)"
+
+# Re-taking the baseline is the documented way out, and it resets the
+# authorisation so it cannot be left standing.
+freeze_world retake
+printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-902
+set_unfreeze REV-20260808-902
+IMP --refreeze >/dev/null 2>&1; G add docs/project/ENGINE-FREEZE.md
+check "freeze: --refreeze accepts the new baseline" "CLEAN" "$(freeze_says)"
+check "freeze: --refreeze resets the authorisation" "1"       "$(grep -c '^<!-- unfreeze: - -->' "$FW/docs/project/ENGINE-FREEZE.md")"
+
+# A file outside the freeze must not be caught by it, or the freeze becomes a
+# tax on the work it was scoped to leave alone.
+freeze_world other
+printf 'echo other\n' > "$FW/other.sh"; G add other.sh
+check "freeze: an unfrozen file is not caught by the freeze" "CLEAN" "$(freeze_says)"
 # --- summary -----------------------------------------------------------------
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

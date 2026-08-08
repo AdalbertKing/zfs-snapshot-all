@@ -313,6 +313,7 @@ verify() {
     done
 
     status_freshness || rc=1
+    engine_freeze || rc=1
     protocol_verify || rc=1
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
@@ -358,6 +359,7 @@ protocol_verify() {
 }
 
 STATUS_FILE="docs/PROJECT_STATUS.md"
+RDIR_FREEZE="$REPO/docs/internal/reviews"
 STATUS_MARKER_RE='^<!-- status-covers-digest: ([0-9a-f]{16}) -->$'
 STATUS_LEGACY_RE='^<!-- status-covers-commit: ([0-9a-f]{7,40}) -->$'
 
@@ -556,6 +558,106 @@ refresh_status() {
     echo "Until it is staged, --verify fails -- the next commit would not record it."
 }
 
+
+# ---------------------------------------------------------------------------
+# Engine freeze (Stage 3). docs/project/ENGINE-FREEZE.md is the definition.
+# ---------------------------------------------------------------------------
+#
+# A freeze that is a sentence in a document is a wish. This is the mechanism.
+#
+# It compares each frozen file's INDEX ENTRY -- mode and object id, the
+# primitive REV-20260807-068 took four rounds to arrive at -- against a recorded
+# baseline, and refuses a difference unless `unfreeze:` names a review that
+# exists and is not CLOSED. A closed review cannot authorise new work: it was
+# answered and the answer was accepted.
+#
+# Not tamper-proof, and the document says so. Anyone can --refreeze. What it
+# removes is the SILENT case: an engine edit cannot land without either a named
+# authorising review or a visible baseline reset sitting in the diff.
+FREEZE_FILE="docs/project/ENGINE-FREEZE.md"
+FROZEN_RE='^<!-- frozen: [^ ]+ [0-7]{6} [0-9a-f]{40} -->$'
+UNFREEZE_RE='^<!-- unfreeze: [^ ]+ -->$'
+
+freeze_lines() {   # -> "<path> <mode> <object>" per frozen marker, from the INDEX
+    local blob
+    blob="$(index_blob "$FREEZE_FILE")"
+    [ -n "$blob" ] || return 1
+    git -C "$REPO" cat-file blob "$blob" 2>/dev/null         | grep -oE "$FROZEN_RE"         | sed -e 's|^<!-- frozen: ||' -e 's| -->$||'
+}
+
+freeze_authorised_by() {   # -> the REV named by unfreeze:, or "-"
+    local blob v
+    blob="$(index_blob "$FREEZE_FILE")"
+    [ -n "$blob" ] || { echo "-"; return; }
+    v="$(git -C "$REPO" cat-file blob "$blob" 2>/dev/null | grep -oE "$UNFREEZE_RE" | head -1)"
+    v="${v#<!-- unfreeze: }"; v="${v% -->}"
+    echo "${v:--}"
+}
+
+engine_freeze() {
+    echo "== frozen engine files are unchanged, or an open review authorises it"
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
+    [ -f "$REPO/$FREEZE_FILE" ] || { echo "  (no freeze in force)"; return 0; }
+
+    local baseline moved="" path want now rev
+    baseline="$(freeze_lines)" || {
+        echo "  $FREEZE_FILE is not in the index, so the next commit would not record the freeze."
+        return 1; }
+    [ -n "$baseline" ] || { echo "  (freeze document declares no files)"; return 0; }
+
+    while read -r path want; do
+        [ -n "$path" ] || continue
+        now="$(index_entry "$path")"
+        [ "$now" = "$want" ] || moved="$moved $path"
+    done < <(printf '%s
+' "$baseline" | awk '{print $1, $2" "$3}')
+
+    [ -n "$moved" ] || return 0
+
+    rev="$(freeze_authorised_by)"
+    if [ "$rev" = "-" ]; then
+        echo "  FROZEN.$moved changed, and nothing authorises it."
+        echo "  A frozen engine file changes only after a review asks for it."
+        echo "  Name that review in the unfreeze: marker of $FREEZE_FILE,"
+        echo "  or run ./test/impact.sh --refreeze if the change is already reviewed and closed."
+        return 1
+    fi
+    if [ ! -f "$RDIR_FREEZE/$rev.md" ] && ! ls "$RDIR_FREEZE/$rev"-*.md >/dev/null 2>&1; then
+        echo "  FROZEN.$moved changed, and unfreeze: names '$rev', which is not a review in this repository."
+        return 1
+    fi
+    if [ -f "$REPO/docs/internal/reviews/closures/$rev.md" ]; then
+        echo "  FROZEN.$moved changed, and unfreeze: names '$rev', which is already CLOSED."
+        echo "  A closed review cannot authorise new work. Re-take the baseline (--refreeze)"
+        echo "  or name the review that asked for THIS change."
+        return 1
+    fi
+    echo "  authorised by $rev:$moved"
+    return 0
+}
+
+refreeze() {
+    [ -f "$REPO/$FREEZE_FILE" ] || die "$FREEZE_FILE is missing"
+    local baseline path tmp now
+    baseline="$(grep -oE "$FROZEN_RE" "$REPO/$FREEZE_FILE" | sed -e 's|^<!-- frozen: ||' -e 's| -->$||')"
+    [ -n "$baseline" ] || die "$FREEZE_FILE declares no frozen files"
+    tmp="$(mktemp)"; cp "$REPO/$FREEZE_FILE" "$tmp"
+    while read -r path _; do
+        [ -n "$path" ] || continue
+        now="$(index_entry "$path")"
+        [ -n "$now" ] || die "$path is not in the index; git add it before re-taking the baseline"
+        awk -v p="$path" -v e="$now" '
+            $0 ~ "^<!-- frozen: " p " " { print "<!-- frozen: " p " " e " -->"; next }
+            { print }' "$tmp" > "$tmp.new" && mv "$tmp.new" "$tmp"
+        echo "  $path -> $now"
+    done < <(printf '%s
+' "$baseline")
+    awk '/^<!-- unfreeze: /{ print "<!-- unfreeze: - -->"; next } { print }' "$tmp" > "$tmp.new"
+    mv "$tmp.new" "$REPO/$FREEZE_FILE"; rm -f "$tmp"
+    echo "freeze baseline re-taken from the INDEX; unfreeze reset to -"
+    echo "  git add $FREEZE_FILE"
+}
+
 # ---------------------------------------------------------------------------
 # --graph: mermaid, so the thing can actually be looked at
 # ---------------------------------------------------------------------------
@@ -606,6 +708,7 @@ while [ $# -gt 0 ]; do
         --graph)  MODE="graph" ;;
         --verify) MODE="verify" ;;
         --refresh-status) MODE="refresh-status" ;;
+        --refreeze) MODE="refreeze" ;;
         -f)       shift; [ $# -gt 0 ] || die "-f needs a file"; EXPLICIT_FILES+=("$1"); MODE="files" ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
         -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
@@ -622,6 +725,7 @@ case "$MODE" in
     graph)  emit_graph; exit 0 ;;
     verify) verify; exit $? ;;
     refresh-status) refresh_status; exit $? ;;
+    refreeze) refreeze; exit $? ;;
 esac
 
 declare -a CHANGED=()
