@@ -202,3 +202,75 @@ command returns, so a state that only counts progress would earn nothing.
 I am not starting implementation until §7.2 is settled, because getting the
 lifecycle wrong is the expensive mistake and the one hardest to undo after
 operators have relationships on disk.
+
+---
+
+## 8. The operator sequence — position for the reviewer to confirm
+
+Owner asked to see the command sequence. Principle: **one new verb**, everything
+else reuses an existing command that means the same thing for a local relation.
+
+### Normal path — two invocations
+
+```bash
+./zfs-backup.sh setup-server --target=hdd/backups
+./zfs-backup.sh add-local prod --source=rpool/data --target=hdd/backups
+```
+
+`setup-server` exists today and is not peer-specific. `add-local` is the only
+new command.
+
+### Inside the second, in the order REV-075 fixed
+
+```
+1  discover datasets under rpool/data
+2  select (interactive, or --datasets="...")
+3  compose + validate CONFIG v4     <- nested-target refusal here
+4  preview config and cron block    <- same-pool notice here
+5  persist configured
+6  SEED, foreground
+7  persist seeded                   <- only after the seed succeeds
+8  install cron via lib-cron.sh
+9  persist active                   <- only after read-back succeeds
+```
+
+### Resuming after a failure
+
+| what failed | state | on disk | resume with |
+|---|---|---|---|
+| seed | `configured` | **no cron** | `zfs-backup.sh seed prod` |
+| cron install / read-back | `seeded` | seed proven | `zfs-backup.sh activate-client prod` |
+
+Both verbs already exist for remote clients and mean the same thing here.
+Resuming from `seeded` does **not** repeat a proven seed unless asked.
+
+### Day two — all existing commands
+
+```bash
+zfs-backup.sh status prod
+gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve0.conf --reconcile
+zfs-backup.sh pause-client prod --reason="..."
+zfs-backup.sh resume-client prod
+zfs-backup.sh remove-client prod
+```
+
+### Deliberately NOT available locally
+
+| command | why |
+|---|---|
+| `disable-client` / `enable-client` | enforced by the **peer's** forced-command gate; there is no peer |
+| `set-endpoint` / `verify-endpoint` | there is no endpoint to move |
+| `final-catchup` | closes an endpoint move that cannot happen |
+
+Calling one of these on a local relation must **refuse with the reason**, not
+succeed silently having done nothing. A no-op that reports success is how an
+operator learns to trust a control that does not exist.
+
+### What I am asking the reviewer to confirm
+
+1. one new verb (`add-local`) with `seed` / `activate-client` reused for the two
+   resume paths — or a local-specific spelling for those;
+2. that the three unavailable commands **refuse loudly** rather than being
+   hidden from `--help` for a local relation;
+3. nothing here contradicts REV-075's ordering, which it should not, since the
+   sequence is derived from it.
