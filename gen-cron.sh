@@ -2434,25 +2434,32 @@ reconcile_label() {   # <dataset> -> " (qm/104)" or ""
 # Inventing a rule for it would be exactly the quiet-classification the review
 # forbids.
 reconcile_receive_roots() {   # -> one root per line
-    local section ds dst src rest
-    for section in "${SECTION_ORDER[@]}"; do
-        [ "${SECTION_KIND[$section]}" = dataset ] || continue
-        ds="${SECTION_NAME[$section]}"
+    local e ds tier sched remote rest
+    for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r ds tier sched remote rest <<< "$e"
         [ -n "$ds" ] || continue
-        dst="$(resolve_field dst "$section" "" defaults || true)"
-        src="$(resolve_field src "$section" "" defaults || true)"
-        if [ -n "$src" ]; then
-            # pull: the local base is this section's own path, and the remote
-            # dataset name lands beneath it.
-            rest="${src#*:}"
-            [ -n "$rest" ] && printf '%s/%s\n' "$ds" "$rest"
-            continue
-        fi
-        [ -n "$dst" ] || continue
-        # A ':' is a remote host; a bare '@' is sync mode, equally remote. Both
-        # write somewhere else. Same test snapsend itself uses.
-        case "$dst" in *:*|*@*) continue ;; esac
-        printf '%s/%s\n' "$dst" "$ds"
+        case "$rest" in
+            *"${SEP}pull") 
+                # A VALID pull section's own path ALREADY ends with the literal
+                # remote dataset name -- emit_send enforces that contract -- so
+                # the local receive root is the section dataset itself.
+                #
+                # REV-20260808-071 interim direction 3: my first version wrote
+                # <section>/<remote name>, and the test that "proved" it used a
+                # config normal generation REJECTS. It passed only because
+                # --reconcile returns before emit_send validates the suffix. A
+                # test that cannot exist as a real config proves nothing.
+                printf '%s
+' "$ds" ;;
+            *)
+                # push: only a LOCAL destination lands on this host. A remote
+                # one writes on the peer and is not derivable here -- reported
+                # as a limit rather than guessed.
+                [ -n "$remote" ] || continue
+                case "$remote" in *:*|*@*) continue ;; esac
+                printf '%s/%s
+' "$remote" "$ds" ;;
+        esac
     done
 }
 
@@ -2488,15 +2495,25 @@ do_reconcile() {
     local section ds mode line
     local -a missing=()
 
-    for section in "${SECTION_ORDER[@]}"; do
-        [ "${SECTION_KIND[$section]}" = dataset ] || continue
-        ds="${SECTION_NAME[$section]}"
+    # Coverage is derived from the send entities the generator ACTUALLY built,
+    # and only from PUSH ones.
+    #
+    # REV-20260808-071 interim direction 4: the first version walked every
+    # [dataset:] section and called it covered before asking whether any tier
+    # resolves a send schedule -- so a prune-only or monitor-only section looked
+    # backed up. It also counted a PULL section's local destination as
+    # source-side coverage, which is backwards: that path is where a copy
+    # LANDS.
+    local e etier esched eremote erest edir
+    for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r ds etier esched eremote erest <<< "$e"
         [ -n "$ds" ] || continue
+        case "$erest" in *"${SEP}pull") continue ;; esac
         if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
-            missing+=("$ds")
+            case " ${missing[*]-} " in *" $ds "*) ;; *) missing+=("$ds") ;; esac
             continue
         fi
-        mode="$(resolve_field recursive "$section" "" "" || true)"
+        mode="$(resolve_field recursive "dataset:$ds" "" "" || true)"
         case "$mode" in
             flat|atomic)
                 while IFS= read -r line; do

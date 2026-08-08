@@ -212,17 +212,53 @@ out="$(run)"
 case "$out" in *UNCOVERED*tank/store*) ok "a remote dst does not classify a local path as received" ;;
   *) bad "a remote dst does not classify a local path as received" "$out" ;; esac
 
-# pull: the local base is the section's own path, the remote name lands beneath.
-world tank tank/incoming tank/incoming/far/data
+# pull: a VALID pull section's own path ALREADY ends with the literal remote
+# dataset name -- emit_send enforces that -- so the receive root is the section
+# dataset itself.
+#
+# The first version of this case used [dataset:tank/incoming] with
+# src=root@far:far/data, which normal cron generation REJECTS. It passed only
+# because --reconcile returns before emit_send validates the suffix: a test
+# whose config cannot exist proves nothing (REV-20260808-071, direction 3).
+world tank tank/incoming tank/incoming/far/data tank/incoming/far/data/sub
 conf_own '[defaults]
 	host_label = t
 
-[dataset:tank/incoming]
+[dataset:tank/incoming/far/data]
 	use_template = hourly
 	src          = root@far:far/data'
 out="$(run)"
-case "$out" in *"received backups"*"tank/incoming/far/data"*) ok "a pulled dataset is a received backup" ;;
-  *) bad "a pulled dataset is a received backup" "$out" ;; esac
+recv="$(printf '%s
+' "$out" | awk '/received backups/{f=1;next} /^$/{f=0} f')"
+case "$recv" in *"tank/incoming/far/data"*) ok "a valid pull section IS the receive root" ;;
+  *) bad "a valid pull section IS the receive root" "$out" ;; esac
+case "$recv" in *"tank/incoming/far/data/sub"*) ok "and its subtree is received too" ;;
+  *) bad "and its subtree is received too" "$recv" ;; esac
+# A pull destination is where a copy LANDS. Counting it as source-side coverage
+# is backwards, and the covered count must not include it.
+case "$out" in *"covered by a send job: 0 dataset(s)"*) ok "a pull destination is not source-side coverage" ;;
+  *) bad "a pull destination is not source-side coverage" "$(printf '%s
+' "$out" | grep covered)" ;; esac
+
+# --- coverage comes from generated SEND entities, not from sections ----------
+# A section that resolves no send schedule is not backed up, whatever else it
+# carries. Calling it covered is the silence the whole tool exists to remove.
+world tank tank/pruned
+conf_own '[defaults]
+	host_label = t
+	dst        = root@far:b/t
+
+[template:pruneonly]
+	prune_schedule = 7 4 * * *
+	prefix         = automated_
+	retain         = -D7
+	pattern        = automated_daily
+
+[dataset:tank/pruned]
+	use_template = pruneonly'
+out="$(run)"
+case "$out" in *UNCOVERED*tank/pruned*) ok "a prune-only dataset is NOT counted as covered" ;;
+  *) bad "a prune-only dataset is NOT counted as covered" "$out" ;; esac
 
 # Guest attribution must not ride on a received copy: labelling guest 103's
 # BACKUP as (pct/103) is what made the false finding look authoritative.
