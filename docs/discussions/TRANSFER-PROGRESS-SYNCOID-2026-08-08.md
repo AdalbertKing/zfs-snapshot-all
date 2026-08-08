@@ -1,13 +1,27 @@
 # Transfer progress inspired by syncoid — Reviewer/Claude design discussion
 
 Date: 2026-08-08
-Status: **ACTIVE DESIGN DISCUSSION — DO NOT IMPLEMENT UNTIL CONVERGENCE AND, IF FROZEN FILES ARE NEEDED, EXPLICIT REVIEW AUTHORISATION**
+Status: **TODO / DESIGN BACKLOG — DO NOT DISTURB CURRENT STAGE 5 PATH; NO IMPLEMENTATION UNTIL EXPLICITLY REACTIVATED AND, IF FROZEN FILES ARE NEEDED, EXPLICIT REVIEW AUTHORISATION**
 
 Owner question:
 
 > Syncoid shows transfer progress and ETA. Evaluate whether `snapget.sh` / `snapsend.sh` can gain an equivalent mechanism cheaply, and decide **when** to implement it so we do not destabilise the frozen engine.
 
+Owner follow-up, 2026-08-08:
+
+> Treat this as a TODO idea that must not disturb the current work path. The interesting value is broader than an interactive progress bar: cron telemetry, status, reports/mail and future tuning may all consume the same measurements.
+
 Current main when this discussion was opened: `1592aa45e443229eb5b9fd53058c2704d9d09c49`.
+
+---
+
+## 0. Scheduling boundary — this is NOT current-path work
+
+This discussion records a potentially valuable future feature. It is **not** a Stage 5 blocker, not a reason to unfreeze the engine now, and not permission to expand the current delivery scope.
+
+Current work continues unchanged.
+
+Only revisit implementation at a natural checkpoint where the cost can be compared against the already-planned test campaign. If the smallest safe implementation is not clearly cheap at that point, leave it in TODO.
 
 ---
 
@@ -41,7 +55,84 @@ For our design, do not assume exact option spelling or output parsing from memor
 
 ---
 
-## 3. Reviewer preliminary ranking of implementation strategies
+## 3. The useful abstraction is telemetry, not a progress bar
+
+Do not optimise only for an interactive terminal. The smallest future contract should, if practical, expose measurements that several consumers can reuse without turning the engine into a monitoring platform.
+
+Candidate primitives:
+
+```text
+planned_bytes          # when an estimate was requested/available
+actual_logical_bytes   # bytes of the logical ZFS stream actually observed
+wire_bytes             # optional/later; distinct from logical bytes
+started_at / duration_seconds
+average_rate
+mode=full|incremental|resume
+result=ok|failed|skipped
+```
+
+The exact schema/storage is deliberately NOT decided here.
+
+The important separation is:
+
+```text
+transfer
+   |
+   +--> interactive CLI: percent / rate / ETA
+   +--> cron: quiet execution + one final measurement record
+   +--> future `zfsbackup status`: current job state/progress
+   +--> future reports/mail: aggregate successes, resumes, anomalies
+   +--> future tuning: real duration/throughput/change-volume history
+```
+
+### Interactive execution
+
+A human-run command may show live progress on stderr:
+
+```text
+38.7 GiB estimated
+21.4 / 38.7 GiB   55%   43.8 MiB/s   ETA 00:06:44
+```
+
+Machine-readable stdout contracts must remain untouched.
+
+### Cron execution
+
+Do **not** emit a moving progress bar into cron logs. For non-interactive jobs the useful output is a compact final fact, for example conceptually:
+
+```text
+RESULT=OK mode=incremental logical_bytes=41553824768 duration=824 avg_rate=...
+```
+
+Do not assume cron needs a pre-transfer `zfs send -nP` merely to collect history. If actual bytes and duration can be measured cheaply during the real transfer, history/tuning may not need a planned total at all. Estimate is necessary for `%`/ETA, not necessarily for post-run telemetry.
+
+### Reports / mail
+
+Avoid success mail on every hourly job. More useful future consumers are:
+
+- immediate failure/warning mail;
+- anomaly notification (e.g. throughput collapse or unusually large incremental);
+- daily/periodic aggregate: success ratio, transferred volume, average/p95 duration, resumes, notable deviations.
+
+No mail implementation is part of this TODO.
+
+### Future tuning value
+
+Historical measurements could later support decisions with evidence rather than guesses:
+
+- stable schedule staggering based on real job durations;
+- identifying a relation whose runtime approaches/exceeds cadence;
+- detecting throughput degradation while backups still technically succeed;
+- spotting unexpectedly large change volume;
+- comparing logical-stream bytes with wire bytes to assess compression value;
+- feeding future autotune/resource decisions;
+- trend input for capacity warnings, with explicit acknowledgement that send-stream volume is not equal to snapshot space usage.
+
+Do **not** build predictive scheduling, a database, a daemon, or analytics now merely because these future consumers exist.
+
+---
+
+## 4. Reviewer preliminary ranking of implementation strategies
 
 ### A. Estimate/progress outside the engine — attractive but probably wrong if it duplicates planning
 
@@ -54,31 +145,29 @@ A high-level wrapper could in theory ask ZFS for a size before invoking the engi
 The lowest-risk shape appears to be:
 
 1. Keep all existing transfer decisions untouched.
-2. After the real send command has been resolved, derive/execute a dry-run estimate for that exact stream.
-3. Only in an interactive progress mode, insert a byte counter whose total is the ZFS estimate.
+2. After the real send command has been resolved, derive/execute a dry-run estimate for that exact stream only when a consumer needs a total/ETA.
+3. In interactive progress mode, insert a byte counter whose total is the ZFS estimate.
 4. If progress support is unavailable or estimation fails, **fall back to today's exact transfer path**. Telemetry must never turn a valid backup into a failed backup.
-5. Do not add progress output to normal cron by default.
+5. For cron, prefer cheap measurement of the real transfer and one final record; no moving progress output.
 
-A particularly low-cost v1 would make progress conditional on an interactive terminal and availability of `pv`:
+A particularly low-cost interactive v1 would make progress conditional on an interactive terminal and availability of `pv`:
 
 ```text
 interactive + pv + valid estimate -> progress
 otherwise                         -> current pipeline unchanged
 ```
 
-`pv` normally suppresses its display when stderr is not a terminal, but the engine should not rely on undocumented accidental behaviour: decide and test the policy explicitly.
-
 This avoids making `pv` a hard dependency for production cron and avoids a new daemon/state service.
 
-### C. Mandatory progress/state infrastructure now — likely too expensive
+### C. Mandatory progress/state infrastructure now — too expensive for this TODO
 
-Persisted progress for `zfsbackup status`, WebGUI polling, cross-process ETA and historical throughput is useful later, but it introduces state ownership, lifecycle/cleanup, crash semantics and concurrency questions.
+Persisted progress for `zfsbackup status`, WebGUI polling, cross-process ETA and historical throughput may be useful later, but it introduces state ownership, lifecycle/cleanup, crash semantics and concurrency questions.
 
-**Preliminary verdict: defer.** First prove a thin CLI progress layer. Persisted status can consume a stable progress contract later if the product needs it.
+**Verdict for current path: defer.** First prove, if/when reactivated, the smallest telemetry/progress seam. Persistence and consumers can be layered later only when justified.
 
 ---
 
-## 4. Where the byte counter must sit
+## 5. Where the byte counter must sit
 
 The denominator from ZFS is the logical ZFS send stream. If external compression is enabled, the counter must observe the corresponding uncompressed logical stream, not compressed WAN bytes.
 
@@ -87,7 +176,7 @@ Candidate placements:
 ### `snapsend.sh`
 
 ```text
-zfs send -> progress counter -> optional compressor -> ssh/mbuffer -> decompressor -> zfs recv
+zfs send -> progress/logical-byte counter -> optional compressor -> ssh/mbuffer -> decompressor -> zfs recv
 ```
 
 The source is local, so this can be done without requiring a progress tool on the remote target.
@@ -97,18 +186,18 @@ The source is local, so this can be done without requiring a progress tool on th
 To avoid a new dependency on the remote source:
 
 ```text
-remote zfs send -> optional remote compressor -> ssh -> mbuffer -> local decompressor -> progress counter -> zfs recv
+remote zfs send -> optional remote compressor -> ssh -> mbuffer -> local decompressor -> progress/logical-byte counter -> zfs recv
 ```
 
 That measures logical stream progress after decompression. It may lag slightly behind bytes already buffered on the wire, but its denominator remains semantically correct.
 
-If Claude sees a cheaper placement that preserves the same denominator, argue it with the current pipeline.
+If Claude sees a cheaper placement that preserves the same denominator, argue it with the current pipeline when this TODO is reactivated.
 
 Network-byte telemetry, if ever wanted, is a **different metric** and should not be confused with ZFS-stream completion.
 
 ---
 
-## 5. Resume
+## 6. Resume
 
 Two acceptable first-version choices exist:
 
@@ -117,49 +206,50 @@ Two acceptable first-version choices exist:
 
 What is not acceptable is silently reusing the original full-stream denominator after a resume and presenting a false percentage.
 
-Claude: please verify current OpenZFS behaviour on the actual hosts rather than assuming it.
+Claude: when this TODO is reactivated, verify current OpenZFS behaviour on the actual hosts rather than assuming it.
 
 ---
 
-## 6. Timing — preliminary recommendation
+## 7. Timing — TODO checkpoint only
 
-**Do not implement this now while Stage 5 contracts/profile runtime are still moving.** The engines are frozen for a reason.
+**Do not implement this now while Stage 5 contracts/profile runtime are moving.** The engines are frozen for a reason and the Owner explicitly says this idea must not disturb the current work path.
 
-If the technical discussion concludes that strategy B is genuinely small and non-semantic, the cheapest integration window is probably:
+Potential cheapest future integration window, only if strategy B is proven genuinely small and non-semantic:
 
 ```text
 Stage 5 runtime functionally complete
         ↓
 additional owner-selected profiles prepared
         ↓
-explicit small engine-unfreeze review for progress
+RE-EVALUATE THIS TODO
         ↓
-focused progress regression/live proof
+if cheap: explicit small engine-unfreeze review for progress/telemetry
+        ↓
+focused regression/live proof
         ↓
 ONE final Stage-5 live campaign covers profiles + final production path
         ↓
 Stage 6 restore
 ```
 
-Reason: if we add progress **after** the expensive final Stage-5 live campaign, we immediately owe another production-path proof for a frozen-engine change. If we add it too early, profile work and engine work become entangled.
-
-Fallback if the implementation is not clearly tiny by that checkpoint: **defer it rather than delaying Stage 5**. Restore does not require a progress bar to be correct.
+If it is not clearly cheap at that checkpoint: **leave it TODO and continue to Stage 6**. No current milestone is blocked by this feature.
 
 ---
 
-## 7. Minimum proof if implemented
+## 8. Minimum proof if ever implemented
 
-Do not rerun 619 assertions mechanically just because a frozen file changed. Use the dependency graph, but the progress feature itself must prove at least:
+Do not rerun 619 assertions mechanically just because a frozen file changed. Use the dependency graph, but the progress/telemetry feature itself must prove at least:
 
-- estimator and actual send are derived from the same resolved transfer decision;
-- full send progress;
-- ordinary incremental progress;
+- instrumentation does not alter transfer planning;
+- estimator, when used, and actual send derive from the same resolved transfer decision;
+- full send progress/measurement;
+- ordinary incremental progress/measurement;
 - `-i`/`-I` distinction preserved;
 - recursive stream denominator is sane;
 - external compression counter is placed on logical-stream side, not compressed-wire side;
 - no `pv` / no TTY / estimator failure -> transfer still follows today's path and succeeds;
 - progress output cannot corrupt machine-readable stdout contracts;
-- cron/noninteractive execution does not produce uncontrolled progress spam;
+- cron/noninteractive execution has no uncontrolled progress spam and can still produce a compact final measurement if that feature is enabled;
 - resume behaviour is either correctly supported and tested or explicitly unavailable without lying;
 - one real ZFS local proof and one real remote push/pull proof on the appropriate identities;
 - a negative/mutation control that proves the test would catch a denominator/pipeline-placement defect;
@@ -169,21 +259,24 @@ If the change touches shared helpers or alters command construction rather than 
 
 ---
 
-## 8. Questions for Claude
+## 9. Questions for Claude — answer only when useful; do not interrupt current work
 
-Please respond with code-specific evidence, preferably in:
+A Claude response is welcome when there is a natural pause, but this discussion must not preempt current Stage 5 work.
+
+Preferred response path if/when taken up:
 
 `docs/discussions/TRANSFER-PROGRESS-CLAUDE-RESPONSE-2026-08-08.md`
 
-Answer these points:
+Questions:
 
 1. Can the dry-run estimator be built from the **already-resolved** send operation without creating a second planner or unsafe string surgery?
 2. What is the smallest diff: duplicated tiny helper in the twin engines, shared helper in `lib-zfs-snap.sh`, or another existing seam?
 3. Is optional interactive `pv` the cheapest robust v1, or does existing `mbuffer` provide enough total-aware progress to avoid another tool? Verify, do not assume.
-4. For compressed `snapget`, is local post-decompression counting the cleanest way to avoid a remote `pv` dependency?
-5. Does the installed OpenZFS support useful dry-run size estimation for resume tokens on all relevant hosts?
-6. Which existing suites/graph edges must fire for this exact diff, and what smallest live proof closes the environment-sensitive part?
-7. Do you agree that, if implemented, the cheapest timing is **late Stage 5 immediately before the already-planned final live campaign**, not now and not after that campaign?
-8. If you disagree, identify the concrete cost/risk that dominates and propose the cheaper checkpoint.
+4. Can cron cheaply collect actual logical bytes + duration without paying for a dry-run estimate when no `%`/ETA consumer exists?
+5. For compressed `snapget`, is local post-decompression counting the cleanest way to avoid a remote `pv` dependency?
+6. Does the installed OpenZFS support useful dry-run size estimation for resume tokens on all relevant hosts?
+7. What minimal stable telemetry primitives are worth exposing now so future status/mail/tuning can reuse them without requiring a database or daemon?
+8. Which existing suites/graph edges must fire for this exact diff, and what smallest live proof closes the environment-sensitive part?
+9. At the late-Stage-5 checkpoint, would implementing this still be cheaper than deferring it beyond Stage 6? Re-evaluate from the then-current diff/risk, not today's enthusiasm.
 
-Goal: converge on **implement late-Stage-5 / defer / reject**, with an exact minimal mechanism and proof boundary. No production change from this discussion alone.
+Goal: preserve the idea and its potential value while keeping today's delivery path untouched. No production change from this discussion alone.
