@@ -46,6 +46,25 @@ conf() {   # <body>
       printf '%s\n' "$1"; } > "$TMPD/jobs.conf"
 }
 
+# conf_own: the case supplies its OWN [defaults], because it is testing what
+# dst/src resolve to. conf() prepends a [defaults] of its own, and two of them
+# in one file is a duplicate section the generator rightly refuses -- which is
+# how five of these cases failed on their first run, for a reason that had
+# nothing to do with the classification under test.
+conf_own() {
+    # The case supplies its OWN [defaults], because dst/src are what it tests.
+    # No injection magic: an earlier version tried to sed host_label into the
+    # block and produced a sed with a raw newline in the replacement, which
+    # fails silently enough that four cases died on "must set host_label".
+    { printf '[template:hourly]
+	send_schedule = 59 * * * *
+	prefix        = automated_
+
+'
+      printf '%s
+' "$1"; } > "$TMPD/jobs.conf"
+}
+
 run() { "$GEN" -c "$TMPD/jobs.conf" --reconcile 2>&1; }
 rc()  { "$GEN" -c "$TMPD/jobs.conf" --reconcile >/dev/null 2>&1; echo $?; }
 
@@ -143,6 +162,108 @@ case "$out" in *"vm-104-disk-0"*"(qm/104)"*) ok "an uncovered volume is attribut
 # only a label.
 case "$out" in *"vm-104-disk-1"*"(qm/104)"*) ok "efidisk-style volumes are attributed too" ;;
   *) bad "efidisk-style volumes are attributed too" "$out" ;; esac
+
+
+# --- received trees are copies, not unprotected workloads (REV-071 F1) -------
+#
+# Classified from the CONFIG topology, never from names: a path is not
+# "received" because it contains "backup", it is received because a job in this
+# file writes there.
+
+# push with a LOCAL dst: the target is <dst>/<source path>
+world_push() {
+    world tank tank/vm-1 tank/store tank/store/tank tank/store/tank/vm-1 tank/store-other
+    conf_own '[defaults]
+	host_label = t
+	dst = tank/store
+
+[dataset:tank/vm-1]
+	use_template = hourly'
+}
+world_push; out="$(run)"
+case "$out" in *"received backups"*"tank/store/tank/vm-1"*) ok "a dataset under the receive root is a received backup" ;;
+  *) bad "a dataset under the receive root is a received backup" "$out" ;; esac
+# ...and must NOT also appear as uncovered.
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *"tank/store/tank/vm-1"*) bad "a received dataset is never reported as UNCOVERED" "$unc" ;;
+  *) ok "a received dataset is never reported as UNCOVERED" ;; esac
+# The exact boundary: a sibling whose name merely STARTS with the root is not
+# under it. tank/store-other is not beneath tank/store.
+case "$unc" in *"tank/store-other"*) ok "an adjacent similarly named dataset stays UNCOVERED" ;;
+  *) bad "an adjacent similarly named dataset stays UNCOVERED" "$unc" ;; esac
+# The root itself is a container the job creates; it is inside the tree.
+case "$out" in *"received backups"*"tank/store"*) ok "the receive root itself is classified as received" ;;
+  *) bad "the receive root itself is classified as received" "$out" ;; esac
+
+# A REMOTE dst writes on the peer, so nothing local may be classified from it.
+# Guessing here is exactly the quiet classification the review forbids.
+world tank tank/vm-1 tank/store
+conf_own '[defaults]
+	host_label = t
+	dst = root@peer:tank/store
+
+[dataset:tank/vm-1]
+	use_template = hourly'
+out="$(run)"
+# NOTE: this case is regression cover, NOT evidence. Measured by mutation:
+# removing the remote-dst guard leaves it passing, because a root built from
+# "root@peer:tank/store" never matches any local dataset name anyway. It pins
+# the behaviour; it does not prove the guard.
+case "$out" in *UNCOVERED*tank/store*) ok "a remote dst does not classify a local path as received" ;;
+  *) bad "a remote dst does not classify a local path as received" "$out" ;; esac
+
+# pull: the local base is the section's own path, the remote name lands beneath.
+world tank tank/incoming tank/incoming/far/data
+conf_own '[defaults]
+	host_label = t
+
+[dataset:tank/incoming]
+	use_template = hourly
+	src          = root@far:far/data'
+out="$(run)"
+case "$out" in *"received backups"*"tank/incoming/far/data"*) ok "a pulled dataset is a received backup" ;;
+  *) bad "a pulled dataset is a received backup" "$out" ;; esac
+
+# Guest attribution must not ride on a received copy: labelling guest 103's
+# BACKUP as (pct/103) is what made the false finding look authoritative.
+cat > "$TMPD/bin/pct" <<'EOF'
+#!/bin/bash
+case "$1" in
+    list)   printf 'VMID STATUS\n103 running\n' ;;
+    config) printf 'rootfs: local-zfs:subvol-103-disk-0,size=8G\n' ;;
+esac
+EOF
+chmod +x "$TMPD/bin/pct"
+world tank tank/subvol-103-disk-0 tank/store tank/store/tank tank/store/tank/subvol-103-disk-0
+conf_own '[defaults]
+	host_label = t
+	dst = tank/store
+
+[dataset:tank/subvol-103-disk-0]
+	use_template = hourly'
+out="$(run)"
+recv="$(printf '%s\n' "$out" | awk '/received backups/{f=1;next} /^$/{f=0} f')"
+case "$recv" in *"(pct/103)"*) bad "a received copy is not labelled with the guest" "$recv" ;;
+  *) ok "a received copy is not labelled with the guest" ;; esac
+rm -f "$TMPD/bin/pct"
+
+# --- system anchor AND its descendants (REV-071 F2) --------------------------
+world rpool rpool/ROOT rpool/ROOT/pve-1 rpool/data rpool/data/swap rpool/swap-backups
+conf '[dataset:rpool/data]
+	use_template = hourly
+	recursive    = no'
+out="$(run)"
+sys="$(printf '%s\n' "$out" | awk '/not counted/{f=1;next} /^$/{f=0} f')"
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$sys" in *"rpool/ROOT/pve-1"*) ok "the boot dataset under the anchor is system-classified" ;;
+  *) bad "the boot dataset under the anchor is system-classified" "$sys" ;; esac
+case "$sys" in *"rpool/ROOT"*) ok "the anchor itself is still system-classified" ;;
+  *) bad "the anchor itself is still system-classified" "$sys" ;; esac
+# The boundary the old rule got right and must keep: depth alone is not system.
+case "$unc" in *"rpool/data/swap"*) ok "a nested workload named swap stays an ordinary finding" ;;
+  *) bad "a nested workload named swap stays an ordinary finding" "$unc" ;; esac
+case "$unc" in *"rpool/swap-backups"*) ok "swap-backups stays an ordinary finding" ;;
+  *) bad "swap-backups stays an ordinary finding" "$unc" ;; esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

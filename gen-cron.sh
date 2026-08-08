@@ -2354,15 +2354,32 @@ done
 
 RECONCILE_SYSTEM_NAMES="ROOT swap"
 
-reconcile_is_system() {   # <dataset>
-    # Depth-1 only, LAST path component, exact match -- never a substring. A
-    # workload legitimately called "swap-backups" or "rootfs" must not be
-    # mistaken for Proxmox's own. Same rule as deploy.sh, same reasoning.
+# A system ANCHOR is a depth-1 dataset whose LAST component is exactly one of
+# the names above -- never a substring, so a workload called "swap-backups" or
+# "rootfs" is never mistaken for Proxmox's own.
+reconcile_is_system_anchor() {   # <dataset>
     local ds="$1" n
     case "$ds" in */*/*) return 1 ;; */*) ;; *) return 1 ;; esac
     for n in $RECONCILE_SYSTEM_NAMES; do
         [ "${ds##*/}" = "$n" ] && return 0
     done
+    return 1
+}
+
+# The anchor AND everything beneath it. REV-20260808-071 F2: `rpool/ROOT/pve-1`
+# is the ordinary Proxmox boot dataset and was being reported as an uncovered
+# workload, because the old rule matched the anchor only.
+#
+# The boundary that must survive: depth alone does not make something system.
+# `rpool/data/swap` is deeper than an anchor but is not BENEATH one, so it stays
+# an ordinary finding -- which is the whole reason the check is anchored rather
+# than matching the last component anywhere in the path.
+reconcile_is_system() {   # <dataset>
+    local ds="$1" anchor="${1%%/*}/${1#*/}" head
+    reconcile_is_system_anchor "$ds" && return 0
+    case "$ds" in */*/*) ;; *) return 1 ;; esac
+    head="${ds%%/*}/$(printf '%s' "${ds#*/}" | cut -d/ -f1)"
+    reconcile_is_system_anchor "$head" && return 0
     return 1
 }
 
@@ -2396,6 +2413,74 @@ reconcile_label() {   # <dataset> -> " (qm/104)" or ""
     [ -n "$g" ] && printf ' (%s)' "$g"
 }
 
+# Received trees: what THIS host's jobs WRITE, as opposed to what they read.
+#
+# REV-20260808-071 F1. The first version compared against send jobs only and
+# never asked what any job writes, so a collector's received tree came back as
+# "exists, and no send job backs it up" -- demanding that a backup be backed up.
+# On pve2 that was most of the output, and the guest label made it read as
+# "guest 103 is unprotected" when that dataset IS guest 103's copy.
+#
+# Derived from the CONFIG topology, never from names. A path is not classified
+# as received because it contains "backup"; it is classified because a job in
+# this file writes there.
+#
+#   push, LOCAL dst   ->  <dst>/<source path>          derivable here
+#   push, REMOTE dst  ->  the target is on the PEER     NOT derivable here
+#   pull, src=h:R     ->  <section path>/<R>            derivable here
+#
+# The middle row is a real limit and is reported rather than guessed: an inbound
+# push is declared in the SENDING host's config, which this host does not have.
+# Inventing a rule for it would be exactly the quiet-classification the review
+# forbids.
+reconcile_receive_roots() {   # -> one root per line
+    local section ds dst src rest
+    for section in "${SECTION_ORDER[@]}"; do
+        [ "${SECTION_KIND[$section]}" = dataset ] || continue
+        ds="${SECTION_NAME[$section]}"
+        [ -n "$ds" ] || continue
+        dst="$(resolve_field dst "$section" "" defaults || true)"
+        src="$(resolve_field src "$section" "" defaults || true)"
+        if [ -n "$src" ]; then
+            # pull: the local base is this section's own path, and the remote
+            # dataset name lands beneath it.
+            rest="${src#*:}"
+            [ -n "$rest" ] && printf '%s/%s\n' "$ds" "$rest"
+            continue
+        fi
+        [ -n "$dst" ] || continue
+        # A ':' is a remote host; a bare '@' is sync mode, equally remote. Both
+        # write somewhere else. Same test snapsend itself uses.
+        case "$dst" in *:*|*@*) continue ;; esac
+        printf '%s/%s\n' "$dst" "$ds"
+    done
+}
+
+# The container levels a receive creates on its way to the root: `tank/store`
+# and `tank/store/tank` on the way to `tank/store/tank/vm-1`. They exist only
+# because the job writes through them, so calling them unprotected workloads is
+# the same false finding one level up.
+#
+# Matched EXACTLY by the caller, never as a subtree. Declaring `tank/store` a
+# receive root outright would be simpler and would quietly absolve anything an
+# operator later put beneath it, including a real workload. `tank/store-other`
+# and `tank/store/something-else` must still be found.
+reconcile_receive_structure() {   # <root>... -> ancestor paths, one per line
+    local r p rest
+    for r in "$@"; do
+        [ -n "$r" ] || continue
+        p="${r%%/*}"
+        rest="${r#*/}"
+        while :; do
+            case "$rest" in
+                */*) p="$p/${rest%%/*}"; rest="${rest#*/}"; printf '%s
+' "$p" ;;
+                *)   break ;;
+            esac
+        done
+    done
+}
+
 do_reconcile() {
     command -v zfs >/dev/null 2>&1 || die "--reconcile needs zfs on this host"
 
@@ -2423,12 +2508,28 @@ do_reconcile() {
 
     reconcile_guest_map
 
-    local -a uncovered=() systems=()
+    local -a recv_roots=() recv_struct=()
+    mapfile -t recv_roots < <(reconcile_receive_roots | sort -u)
+    mapfile -t recv_struct < <(reconcile_receive_structure "${recv_roots[@]+"${recv_roots[@]}"}" | sort -u)
+
+    local -a uncovered=() systems=() received=()
     while IFS= read -r ds; do
         [ -n "$ds" ] || continue
         case "$ds" in */*) ;; *) continue ;; esac      # a pool root is not a workload
         [ -n "${covered[$ds]:-}" ] && continue
-        if reconcile_is_system "$ds"; then systems+=("$ds"); else uncovered+=("$ds"); fi
+        local r hit=0
+        for r in "${recv_roots[@]+"${recv_roots[@]}"}"; do
+            [ -z "$r" ] && continue
+            if [ "$ds" = "$r" ] || case "$ds" in "$r"/*) true ;; *) false ;; esac; then hit=1; break; fi
+        done
+        if [ "$hit" -eq 0 ]; then
+            for r in "${recv_struct[@]+"${recv_struct[@]}"}"; do
+                [ "$ds" = "$r" ] && { hit=1; break; }
+            done
+        fi
+        if [ "$hit" -eq 1 ];        then received+=("$ds")
+        elif reconcile_is_system "$ds"; then systems+=("$ds")
+        else                              uncovered+=("$ds"); fi
     done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null | sort)
 
     echo "=== scope reconciliation: $CONFIG on $(hostname -s 2>/dev/null || hostname)"
@@ -2439,6 +2540,13 @@ do_reconcile() {
     if [ "${#uncovered[@]}" -gt 0 ]; then
         echo "UNCOVERED -- exists, and no send job backs it up:"
         for ds in "${uncovered[@]}"; do printf '  %s%s\n' "$ds" "$(reconcile_label "$ds")"; done
+        echo
+    fi
+    if [ "${#received[@]}" -gt 0 ]; then
+        echo "received backups -- a job in this config WRITES here, so these are copies,"
+        echo "not unprotected workloads:"
+        for ds in "${received[@]}"; do printf '  %s
+' "$ds"; done
         echo
     fi
     if [ "${#missing[@]}" -gt 0 ]; then
