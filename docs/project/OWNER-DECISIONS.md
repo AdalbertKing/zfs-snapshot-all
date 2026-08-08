@@ -85,3 +85,38 @@ jest **odrzucona** — zaszywalaby opinie polityczna w mechanizmie, ktory ma
 raportowac fakty.
 
 Audyt odpowiada na pytanie "czy cokolwiek to obejmuje", nie "czy to wystarczy".
+
+---
+
+## ROZSTRZYGNIETE 2026-08-08 — hdd/isos na pve0
+
+Fakty: 16 GB, zamontowany, uklad magazynu katalogowego Proxmoksa
+(`dump/`, `private/`, `template/`), zalozony 2019-09-18, zero snapshotow, zadne
+zadanie go nie obejmuje.
+
+**Wlasciciel: bez kopii — na liste ignorowanych.** Obrazy instalacyjne i
+szablony sa do pobrania ponownie.
+
+**Status wykonania: NIEZROBIONE, i to swiadomie.** Mechanizmu listy
+ignorowanych jeszcze nie ma. Nie buduje go teraz z dwoch powodow:
+
+1. recenzent uwarunkowal go wprost: jawna lista ignorowanych jest do rozwazenia
+   **dopiero gdy sam detektor bedzie poprawny**, a REV-20260808-074 jest wciaz
+   otwarta wlasnie na jego poprawnosci (dwie wady w klasyfikacji i parsowaniu
+   flag znalezione tego samego dnia);
+2. ksztalt mechanizmu to **zmiana schematu CONFIG v4** albo nowy plik obok
+   niego, a to decyzja projektowa, nie szczegol implementacyjny.
+
+### Propozycja do rozstrzygniecia (wlasciciel + recenzent)
+
+| wariant | za | przeciw |
+|---|---|---|
+| nowa sekcja `[ignore:<dataset>]` w CONFIG v4 | jedno zrodlo prawdy, ten sam plik co reszta polityki, `cron2conf` i migracje juz go widza | poszerza schemat, ktory wlasnie zamrozilismy pojeciowo; kazdy konsument configu musi ja umiec pominac |
+| osobny plik `/etc/zfs-snapshot-all/reconcile-ignore`, jeden dataset na linie | zero zmian w schemacie, czytelne dla czlowieka, latwe do wersjonowania | drugi plik do utrzymania i do wdrozenia na hosty |
+
+Sklaniam sie do **drugiego**: audyt zakresu to nie polityka kopii, wiec jego
+lista wyjatkow nie musi mieszkac w pliku polityki — a schematu nie ruszamy w
+momencie, gdy detektor jest jeszcze recenzowany.
+
+Do czasu rozstrzygniecia `hdd/isos` **pozostaje zgloszany** przez `--reconcile`.
+Zapisane tutaj, zeby decyzja nie zyla wylacznie w rozmowie.
