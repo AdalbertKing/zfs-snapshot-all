@@ -109,3 +109,72 @@ an owner decision, not an implementation detail.
 
 **Not coding until this is settled.** Discovered mid-implementation it would
 have meant a rewrite; discovered by the check it costs one measurement.
+
+---
+
+## Owner decision 2026-08-09: option 3
+
+Scope B1 to the GFS shape; the pre-GFS profile is **frozen**, with a written
+migration path for pve0.
+
+### What I measured before writing the path down
+
+The question I stopped on was "how expensive is retiring a profile a live host
+runs". The answer turned out to rest on a fact I had not checked: **which
+templates any host actually uses.**
+
+| host | built-in templates DEFINED | of those, USED by a section |
+|---|---|---|
+| metropolis pve1 | `standard_hourly`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` | **0** |
+| metropolis pve2 | none | **0** |
+| 11.x pve0 | `standard_hourly`, `standard_daily`, `standard_weekly`, `standard_monthly` | **0** |
+| 11.x pve1 | none | **0** |
+
+Every section on every host uses a hand-written template — `hourly`, `daily`,
+`vm101_*`, `store_*`, `lxc_*`, `local_*`, `flat_prune`. **Not one production job
+in this fleet references a built-in template, in either shape.** pve0's four
+`standard_*` sections are dead text: appended once by `zfs-backup.sh`, never
+referenced.
+
+So my framing was wrong in the direction that mattered. I wrote that pve0 "runs
+the pre-GFS profile in production". It carries the pre-GFS *marker*; it does not
+run it. Nothing on pve0 would change behaviour if those four sections vanished.
+
+### Where the branch is genuinely live
+
+Not in the existing configs — in **future enrolments**. `emit_client_sections`
+writes `use_template = standard_hourly` under pre-GFS and
+`use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly` under GFS, so
+the shape decides what a client enrolled *tomorrow* gets. pve0's
+`/etc/zfs-snapshot-all/clients/` is **empty** — it has never enrolled one.
+
+And `PROFILE_GFS` is not stored anywhere. It is **detected from the config**: if
+`[template:standard_hourly]` exists and carries `prune_schedule`, the host is
+pre-GFS. pve0 is pre-GFS purely because of four unused sections.
+
+### The migration path, therefore
+
+1. **Detection stays.** Removing it would let a GFS enrolment land on a host
+   whose `standard_hourly` prunes on its own schedule — the double-prune race
+   `gen-cron.sh`'s own docs warn about, and the reason the branch was written.
+2. **Under B1 the pre-GFS branch stops emitting and starts refusing.** A host
+   detected as pre-GFS gets a named refusal at enrolment, not a silent switch to
+   the GFS shape. Fail closed: the frozen profile is not quietly reinterpreted.
+3. **pve0's migration is deleting four unreferenced sections** from
+   `/etc/zfs-snapshot-all/jobs.pve0.v4.conf`, after which detection reports GFS.
+   Zero jobs reference them, zero clients are enrolled, so it changes no
+   behaviour — but it is an owner-run edit on a live config, not something B1
+   does behind anyone's back, exactly as the existing comment insists.
+
+### What the acceptance criterion must now include
+
+Byte-identity of regenerated configs is **not sufficient** and this is why: on
+pve0 nothing is appended, so the diff is empty whether the branch works or not.
+B1 must additionally pin, on a fixture:
+
+- a pre-GFS config **refuses** enrolment with the reason named;
+- a GFS config emits `keep_*` from `profiles/default/`;
+- a host with its own template names (the pve2 case) still receives nothing.
+
+That third one is the quiet requirement: built-ins are appended **only when
+missing**, and two of four hosts never receive them at all.
