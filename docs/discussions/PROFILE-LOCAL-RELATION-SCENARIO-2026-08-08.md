@@ -1,6 +1,6 @@
 # Single-host / local cross-pool deployment — UX requirement and architecture discussion
 
-Status: **OWNER UX REQUIREMENT — IMPLEMENTATION PLACEMENT OPEN FOR CLAUDE + REVIEWER DISCUSSION**
+Status: **OWNER UX REQUIREMENT — A/B IMPLEMENTATION PLACEMENT OPEN FOR CLAUDE + REVIEWER DISCUSSION**
 
 Date: 2026-08-08
 
@@ -20,6 +20,12 @@ host deployment plus backup-task/config/retention lifecycle. That is a hypothesi
 to test against the current code, not an architectural order. Claude and Reviewer
 should resolve the cheapest clean design from repository facts and discuss any
 remaining genuine trade-off before escalating it.
+
+**Owner decision, 2026-08-08:** a third public/local wrapper is rejected. The
+project must not grow a parallel local-deployment script and a second copy of
+orchestration/state/status logic. The design discussion is therefore **A vs B
+only**: extend `zfs-backup.sh`, or extend/reuse `deploy.sh` beneath the same
+operator-facing `zfsbackup` boundary.
 
 This is not a new REV and does not authorize changes to the frozen transfer
 engines.
@@ -94,8 +100,8 @@ Those remain internal mechanisms / expert escape hatches.
 
 ## What remains open: cheapest internal placement
 
-Claude + Reviewer should compare these variants against the actual code rather
-than decide from naming alone.
+Claude + Reviewer should compare these **two** variants against the actual code
+rather than decide from naming alone.
 
 ### A — extend `zfs-backup.sh` with a local-relation branch
 
@@ -125,29 +131,38 @@ But Claude must verify the real cost: how much of current `zfs-backup.sh` assume
 adding `local` requires invasive surgery through that state machine, the apparent
 simplicity may be false.
 
-### B — extend `deploy.sh` to own local backup deployment
+A valid refinement of A is to extract a **small shared internal relation/composer
+boundary** if that reduces branching inside `zfs-backup.sh`; that is not a new
+public wrapper and does not create another operator-facing script.
 
-Potential advantage: `deploy.sh` already prepares one host end-to-end.
+### B — extend/reuse `deploy.sh` for the local branch beneath `zfsbackup`
+
+Potential advantage: `deploy.sh` already prepares one host end-to-end and may
+already contain reusable bootstrap/preflight pieces.
 
 Potential problem: its current contract explicitly separates host bootstrap from
 actual backup job lines. Making it own dataset selection, profile policy,
 effective CONFIG and cron activation may mix provisioning and backup policy and
 create a second orchestration owner beside `zfs-backup.sh`.
 
-Claude should only prefer this if code inspection shows materially less change
-and a clean single ownership boundary — not merely because the script is named
-`deploy.sh`.
+Even if B wins internally, the **operator-facing command remains `zfsbackup`**;
+`deploy.sh` must stay an implementation detail on the normal path. Claude should
+only prefer B if code inspection shows materially less change and a clean single
+ownership boundary — not merely because the script is named `deploy.sh`.
 
-### C — introduce another local deployment wrapper
+### C — separate local deployment wrapper — REJECTED BY OWNER
 
-This is the least attractive default because it risks duplicating discovery,
-profile composition, state, status and cron lifecycle. It should be chosen only
-if A and B both force substantially worse coupling. A separate public UX for the
-simple case needs a strong technical justification.
+Do not create `zfsbackup-local.sh`, `local-deploy.sh`, or an equivalent new public
+orchestration script. That would start a script tree with duplicated discovery,
+profile composition, persistent state, status, cron lifecycle and tests. This
+option is no longer part of the design space.
+
+Internal helper extraction is still allowed when it removes duplication; the
+prohibition is against another public workflow/owner, not against factoring code.
 
 ## Profile ownership remains unchanged
 
-Whichever internal placement wins:
+Whichever A/B placement wins:
 
 ```text
 RELATION = WHAT / WHERE
@@ -175,27 +190,28 @@ not make the profile the owner of scope.
 ## Required outcome of the Claude + Reviewer discussion
 
 Before implementing the local deployment path, Claude should answer with a
-code-grounded comparison of A/B/C:
+code-grounded comparison of **A vs B**:
 
 1. Which existing functions/state files in `zfs-backup.sh` can be reused for a
    local relation unchanged?
 2. Which assumptions are hard-wired to peer/SSH/endpoint state and would need to
    be split?
-3. If `deploy.sh` were extended instead, which responsibilities would move or be
-   duplicated, and what existing contract would change?
+3. If `deploy.sh` were extended/reused instead, which responsibilities would move
+   or be duplicated, and what existing contract would change?
 4. What is the smallest diff that gives the fixed UX without creating a second
-   config renderer or cron owner?
+   config renderer, cron owner, persistent-state model or public wrapper?
 5. What persistent representation should identify `local` versus `remote` while
    keeping `RELATION + PROFILE -> CONFIG v4` possible?
 6. Which tests and live proof are required for each option? Compare blast radius,
    not raw line count alone.
-7. Recommend one option and explicitly state why the rejected alternatives cost
-   more or create worse ownership.
+7. Recommend A or B and explicitly state why the rejected alternative costs more
+   or creates worse ownership.
 
 Reviewer should challenge that recommendation on dependency boundaries,
 state-machine failure modes, idempotence and future profile integration. Resolve
 technical disagreements between the two AIs in this discussion; ask the Owner
-only if two materially different but technically valid product choices remain.
+only if A and B remain materially different but technically valid product choices
+after the code-grounded comparison.
 
 ## Acceptance constraints independent of implementation choice
 
@@ -215,12 +231,13 @@ The final one-host path must satisfy all of these:
 9. `status` can identify the local relation and its source/target.
 10. Named profile runtime can plug into the same local path without redesigning
     it.
+11. No new public local-deployment wrapper/script is introduced.
 
 ## Test / sequencing rule
 
 Do not interrupt the current REV-074 correction merely because this design issue
-was discovered. Resolve the architecture before freezing the Stage 5 runtime
-shape, then implement at the cheapest clean boundary.
+was discovered. Resolve A vs B before freezing the Stage 5 runtime shape, then
+implement at the cheapest clean boundary.
 
 Do not open frozen engines unless code evidence proves orchestration alone cannot
 solve the requirement. A targeted live one-host cross-pool proof on scratch ZFS
