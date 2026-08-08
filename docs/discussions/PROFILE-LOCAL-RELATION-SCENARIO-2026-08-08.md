@@ -1,20 +1,28 @@
-# Stage 5 profile architecture — single-host / local cross-pool deployment
+# Single-host / local cross-pool deployment — UX requirement and architecture discussion
 
-Status: **OWNER DIRECTIVE — IMPLEMENT AS FIRST-CLASS `zfsbackup` UX**
+Status: **OWNER UX REQUIREMENT — IMPLEMENTATION PLACEMENT OPEN FOR CLAUDE + REVIEWER DISCUSSION**
 
 Date: 2026-08-08
 
 Audience: Claude + Reviewer
 
-This note was originally recorded only as a future architecture constraint. The
-Owner has now explicitly rejected that deferral after walking the current manual
-procedure. A normal one-host deployment must **not** require an administrator to
-hand-write CONFIG v4, invoke `gen-cron.sh`, or manually stitch engine commands.
-That is precisely the implementation detail the `zfsbackup` orchestration layer
-exists to hide.
+The Owner rejects the current manual one-host procedure as a normal deployment
+path. An administrator must not have to hand-write CONFIG v4, invoke
+`gen-cron.sh`, assemble `snapsend.sh` calls or edit crontab just because source
+and target happen to be on the same host.
 
-This is an implementation requirement for the Stage 5 path, not a new review
-finding and not authorization to redesign the frozen engines.
+What is fixed is the **operator boundary**, not yet the internal placement of the
+implementation.
+
+The Owner's working intuition is that extending `zfs-backup.sh` is probably the
+cheapest and most logical solution because that program already orchestrates
+host deployment plus backup-task/config/retention lifecycle. That is a hypothesis
+to test against the current code, not an architectural order. Claude and Reviewer
+should resolve the cheapest clean design from repository facts and discuss any
+remaining genuine trade-off before escalating it.
+
+This is not a new REV and does not authorize changes to the frozen transfer
+engines.
 
 ## Concrete scenario
 
@@ -33,196 +41,187 @@ TARGET / backup:
   hdd/backups
 ```
 
-The package is installed only on this host. There is no peer and no network
-transfer. The wanted protection is:
+Only this host receives the package. There is no peer and no network transfer.
+The desired protection is:
 
 ```text
 rpool/data/...  ->  hdd/backups/...
 ```
 
-with the same orchestration quality as a remote deployment:
+with normal orchestration around it:
 
-- local dataset discovery and scope selection;
+- dataset discovery and selection;
 - snapshot creation;
-- incremental/full ZFS send/receive as appropriate;
+- incremental/full local ZFS send/receive;
 - retention / GFS;
 - recursion policy (`no|flat|atomic`);
 - monitoring;
-- effective CONFIG v4 generation;
-- cron preview/generation/installation;
+- effective CONFIG v4;
+- cron preview/install;
 - first seed;
 - reconciliation/status;
-- profile selection as soon as the Stage 5 profile runtime is wired.
+- named profile selection when Stage 5 profile runtime is active.
 
-The existing engine already supports the data plane natively: `snapsend.sh`
-accepts a local target without a REMOTE host. Do not emulate a remote relation to
-self.
+The data plane itself already exists: `snapsend.sh` has a native local-target
+path. The problem is operator orchestration, not a missing transfer engine.
 
-## Required operator boundary
+## Fixed UX requirement
 
-From a clean host, the normal deployment must require **at most two high-level
-`zfsbackup` invocations**. The exact subcommand spelling may follow the existing
-CLI conventions, but the ownership boundary is fixed.
+The normal one-host deployment must stay at the same high-level boundary as the
+remote product UX. From a clean host, target **at most two operator-facing
+`zfsbackup` invocations** with all required input supplied interactively or by
+arguments.
 
-Intended shape (illustrative spelling):
-
-```text
-1. zfs-backup.sh setup-server [...host-level options...]
-
-2. zfs-backup.sh add-local NAME \
-       --source=rpool/data \
-       --target=hdd/backups \
-       [--profile=default] \
-       [--yes]
-```
-
-The second command owns the whole local-relation transaction. It must not print
-instructions telling the operator to edit CONFIG v4 or run lower-level scripts.
-Internally it may call the already-owned mechanisms (`deploy.sh` host bootstrap,
-`gen-cron.sh`, `snapsend.sh`, retention/monitor helpers), but those are
-implementation details.
-
-Interactive mode may show the discovered scope, effective config and rendered
-cron before confirmation. A noninteractive/`--yes` form may consume all required
-input on the command line. Either way, the operator stays at the `zfsbackup`
-layer.
-
-## What `deploy.sh` is for
-
-`deploy.sh` remains useful, but it is **not the operator-facing second half of a
-local deployment**.
-
-It has two roles beneath `zfsbackup`:
-
-1. host bootstrap/maintenance: dependencies, checkout, alerting, smoke checks,
-   host-level jobs;
-2. remote-relation provisioning where needed: pair/join, SSH trust/identity,
-   grants, endpoint facts and enrolment state.
-
-For a local relation there is no peer, no SSH, no pair/join, no remote grant, no
-endpoint verification, no LAN seed and no endpoint switch. Do not invent any of
-those merely to reuse remote code.
-
-## Durable abstraction
-
-The runtime model must be:
+Illustrative only — exact CLI spelling is NOT decided here:
 
 ```text
-                         zfsbackup
-                            |
-                   construct RELATION
-                            |
-               +------------+------------+
-               |                         |
-             LOCAL                     REMOTE
-               |                         |
-      local discovery/preflight       deploy.sh remote provisioning
-      source/target mapping           pair/join / grants / SSH
-      local scope selection           endpoint facts
-               |                         |
-               +------------+------------+
-                            |
-                     RELATION READY
-                            |
-                         PROFILE
-                            |
-             relation facts + HOW policy
-                            |
-                  effective CONFIG v4
-                            |
-                       gen-cron.sh
-                            |
-                  seed / install cron
+zfs-backup.sh setup-server ...
+zfs-backup.sh <local-relation-command> --source=rpool/data --target=hdd/backups [--profile=default] ...
 ```
 
-Do **not** implement:
+The operator must not be told, on the normal path, to:
 
 ```text
-REMOTE CLIENT RECORD + PROFILE -> CONFIG
+edit CONFIG v4
+run deploy.sh directly
+run gen-cron.sh directly
+run snapsend.sh directly
+run delsnaps.sh directly
+edit crontab
 ```
 
-The durable contract is:
+Those remain internal mechanisms / expert escape hatches.
+
+## What remains open: cheapest internal placement
+
+Claude + Reviewer should compare these variants against the actual code rather
+than decide from naming alone.
+
+### A — extend `zfs-backup.sh` with a local-relation branch
+
+Conceptually:
 
 ```text
-RELATION + PROFILE -> effective CONFIG v4
+zfsbackup
+  ├─ host bootstrap (reuse deploy.sh as needed)
+  ├─ REMOTE relation -> existing remote enrolment path
+  └─ LOCAL relation  -> local discovery + source/target mapping
+
+RELATION + PROFILE -> effective CONFIG v4 -> existing gen-cron -> existing engines
 ```
 
-where a relation can be at least `local` or `remote`.
+Why this currently looks attractive to the Owner and Reviewer:
 
-## Ownership remains REV-073
+- `zfs-backup.sh` is already the operator-facing orchestrator;
+- it already owns client/relation state, config composition, activation and cron
+  lifecycle;
+- `deploy.sh` already states that actual snapsend/snapget/delsnaps job lines
+  belong elsewhere;
+- local `snapsend.sh` needs no new engine path;
+- it preserves one public UX for local and remote backup.
 
-This directive does not move dataset selection into the profile.
+But Claude must verify the real cost: how much of current `zfs-backup.sh` assumes
+`remote client`, peer manifest, endpoint state, seed/catch-up state, etc. If
+adding `local` requires invasive surgery through that state machine, the apparent
+simplicity may be false.
+
+### B — extend `deploy.sh` to own local backup deployment
+
+Potential advantage: `deploy.sh` already prepares one host end-to-end.
+
+Potential problem: its current contract explicitly separates host bootstrap from
+actual backup job lines. Making it own dataset selection, profile policy,
+effective CONFIG and cron activation may mix provisioning and backup policy and
+create a second orchestration owner beside `zfs-backup.sh`.
+
+Claude should only prefer this if code inspection shows materially less change
+and a clean single ownership boundary — not merely because the script is named
+`deploy.sh`.
+
+### C — introduce another local deployment wrapper
+
+This is the least attractive default because it risks duplicating discovery,
+profile composition, state, status and cron lifecycle. It should be chosen only
+if A and B both force substantially worse coupling. A separate public UX for the
+simple case needs a strong technical justification.
+
+## Profile ownership remains unchanged
+
+Whichever internal placement wins:
 
 ```text
-LOCAL RELATION                          PROFILE
-  discovers local datasets               defines HOW to back up
-  selects WHAT is protected              cadence / schedule
-  owns source -> target mapping           retention / GFS
-  owns local topology facts               recursion / monitoring
-                                          quiesce / autotune where supported
-                \                        /
-                 +----------+-----------+
-                            |
-                  effective CONFIG v4
+RELATION = WHAT / WHERE
+PROFILE  = HOW
 ```
 
-A profile still contains no concrete dataset names, source/target mapping,
-endpoint data, keys or grants. The relation chooses the source/root/scope. The
-profile chooses HOW that scope is protected.
+For the example:
 
-If the relation chooses a dynamic root such as `rpool/data` and the profile uses
-`flat` or `atomic`, newly created descendants can enter according to the already
-agreed recursion semantics. The relation still owns the root; the profile owns
-recursion behaviour.
+```text
+relation:
+  type        = local
+  source_root = rpool/data
+  target_root = hdd/backups
+  selected    = operator-selected scope/root
 
-## Profile timing
+profile:
+  cadence / retention / GFS / recursion / monitoring / supported policy
+```
 
-Do not block this local orchestration boundary on inventing the Owner's additional
-profile names now. The local relation path must be built so profile selection is a
-normal input to it. As soon as named profile runtime is wired, the same local
-command must accept e.g. `--profile=default` and later the additional Owner-defined
-profiles without a local-mode redesign.
+The profile contains no concrete dataset names, target paths, endpoints, keys or
+grants. A dynamic relation root plus profile recursion may cover future
+descendants according to the already-agreed recursion contract; that still does
+not make the profile the owner of scope.
 
-Until named profiles are active, using the current standard/default policy
-internally is acceptable only as a transitional implementation detail; it must not
-be exposed as hand-written CONFIG work for the administrator.
+## Required outcome of the Claude + Reviewer discussion
 
-## Acceptance criteria
+Before implementing the local deployment path, Claude should answer with a
+code-grounded comparison of A/B/C:
 
-The one-host feature is not complete until all of the following are true:
+1. Which existing functions/state files in `zfs-backup.sh` can be reused for a
+   local relation unchanged?
+2. Which assumptions are hard-wired to peer/SSH/endpoint state and would need to
+   be split?
+3. If `deploy.sh` were extended instead, which responsibilities would move or be
+   duplicated, and what existing contract would change?
+4. What is the smallest diff that gives the fixed UX without creating a second
+   config renderer or cron owner?
+5. What persistent representation should identify `local` versus `remote` while
+   keeping `RELATION + PROFILE -> CONFIG v4` possible?
+6. Which tests and live proof are required for each option? Compare blast radius,
+   not raw line count alone.
+7. Recommend one option and explicitly state why the rejected alternatives cost
+   more or create worse ownership.
 
-1. A fresh supported host can be prepared and a local cross-pool relationship
-   activated with at most two operator-facing `zfsbackup` invocations.
-2. No normal-path step asks the operator to edit CONFIG v4 manually.
-3. No normal-path step asks the operator to invoke `deploy.sh`, `gen-cron.sh`,
-   `snapsend.sh`, `delsnaps.sh` or `crontab` directly.
-4. Local discovery proves the selected source datasets/root actually exist.
-5. Target mapping is previewed and validated before activation.
-6. Effective CONFIG v4 is generated by orchestration and validated by the real
-   `gen-cron.sh`; do not create a second cron renderer.
-7. First local seed uses the existing native local `snapsend.sh` path, with no
-   localhost SSH/fake peer.
-8. Activation installs the managed cron transactionally through the existing
-   cron ownership mechanism.
-9. Re-running the command is idempotent or fails closed with a clear existing-
-   relation explanation; it must not duplicate cron/jobs.
-10. Failure before activation leaves no false `active` state. If seed/config/cron
-    installation fails, the relationship remains visibly incomplete/retryable.
-11. `zfsbackup status` can identify the local relationship and its source/target.
-12. Profile runtime, once enabled, uses this same path: `LOCAL RELATION + PROFILE
-    -> effective CONFIG v4`.
+Reviewer should challenge that recommendation on dependency boundaries,
+state-machine failure modes, idempotence and future profile integration. Resolve
+technical disagreements between the two AIs in this discussion; ask the Owner
+only if two materially different but technically valid product choices remain.
 
-## Test boundary
+## Acceptance constraints independent of implementation choice
 
-Do not open frozen engines merely to implement orchestration; the local data-plane
-capability already exists. Test the smallest affected graph:
+The final one-host path must satisfy all of these:
 
-- `zfsbackup` local relation parsing/state/composition;
-- real `gen-cron.sh` validation/rendering;
-- idempotence and failure/rollback controls;
-- targeted live one-host cross-pool proof on scratch datasets;
-- once profiles are active, include local+default and the Owner's later profile
-  matrix in the final Stage 5 live campaign.
+1. At most two normal operator-facing `zfsbackup` invocations from clean host to
+   active local backup relationship.
+2. No manual CONFIG v4 or manual cron work on the normal path.
+3. Local source discovery and target mapping are validated and previewable.
+4. Effective CONFIG v4 goes through the real existing `gen-cron.sh`; do not
+   create another renderer.
+5. First seed uses the existing native local transfer path — no localhost SSH or
+   fake peer.
+6. Cron activation uses the existing transactional cron ownership mechanism.
+7. Re-run is idempotent or fails closed without duplicate jobs.
+8. Failure before activation cannot leave a false `active` relationship.
+9. `status` can identify the local relation and its source/target.
+10. Named profile runtime can plug into the same local path without redesigning
+    it.
 
-The manual CONFIG-v4 procedure may remain documented as an expert/debug escape
-hatch. It is **not** an acceptable normal deployment UX.
+## Test / sequencing rule
+
+Do not interrupt the current REV-074 correction merely because this design issue
+was discovered. Resolve the architecture before freezing the Stage 5 runtime
+shape, then implement at the cheapest clean boundary.
+
+Do not open frozen engines unless code evidence proves orchestration alone cannot
+solve the requirement. A targeted live one-host cross-pool proof on scratch ZFS
+will be required once the chosen orchestration path exists.
