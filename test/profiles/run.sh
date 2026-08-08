@@ -26,29 +26,15 @@ fi
 # Native fragment validator for the CONTRACT TEST only. Runtime validation is
 # intentionally not implemented in Slice A. The accepted schema comes from the
 # real generator; only ownership exclusions live here.
-validate_fragment() { # <dataset|prune> <file>
-    local kind="$1" file="$2" raw field
-    while IFS= read -r raw || [ -n "$raw" ]; do
-        # This repo is LF in the index but CRLF in a Windows working tree, so an
-        # "empty" line arrives as a lone . A config fragment also legitimately
-        # contains blank lines between stanzas. Strip the CR and skip anything
-        # that is only whitespace -- otherwise the contract test fails for a
-        # reason that has nothing to do with the contract.
-        raw="${raw%$''}"
-        [ -z "${raw//[[:space:]]/}" ] && continue
-        case "$raw" in
-            '#'*) continue ;;
-            *'['*|*']'*) return 1 ;;
-        esac
-        field=$(printf '%s\n' "$raw" | sed -n -E 's/^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=.*$/\1/p')
-        [ -n "$field" ] || return 1
-        grep -qxF "$kind $field" "$DUMP" || return 1
-        case "$field" in
-            src|dst|flags|pair_label|notify) return 1 ;;
-        esac
-        if [ "$kind" = prune ] && [ "$field" = recursive ]; then return 1; fi
-    done < "$file"
-}
+# The contract test calls the PRODUCTION validator. REV-20260808-076 point 7:
+# runtime and test must share one path, so a test cannot bless a rule that
+# production never executes -- which is exactly what happened here, where the
+# only implementation of the ownership rule lived in this file.
+. "$ROOT/lib-profile.sh"
+DUMPFILE="$(mktemp)"; trap 'rm -f "$DUMPFILE"' EXIT
+profile_schema_dump "$GEN" "$DUMPFILE" || { echo "cannot read the field schema: $PROFILE_ERR"; exit 1; }
+
+validate_fragment() { profile_validate_fragment "$1" "$2" "$DUMPFILE"; }
 
 if validate_fragment dataset "$PROFILE/dataset.inc"; then
     ok "dataset.inc contains only native profile-owned dataset fields"
@@ -129,6 +115,78 @@ if validate_fragment prune "$TMP/bad-unknown.inc"; then bad "negative: unknown f
 cp "$PROFILE/dataset.inc" "$TMP/bad-section.inc"
 echo '[dataset:tank/evil]' >> "$TMP/bad-section.inc"
 if validate_fragment dataset "$TMP/bad-section.inc"; then bad "negative: section header was accepted in .inc"; else ok "negative: section header refused in .inc"; fi
+
+# --- templates.conf is validated FIELD BY FIELD (REV-20260808-076 F1) --------
+#
+# It used to be checked only for section-header shape and then composed into a
+# config gen-cron accepts -- and `template dst` IS legal in that schema, because
+# an ordinary deployment template may carry topology. So a profile could smuggle
+# topology past the contract suite. Measured before the fix: adding
+# `dst = hdd/evil` to the built-in profile left this suite at 22/22.
+tconf() {   # <body> -> a templates.conf in $TMP
+    printf '[template:t]\n\tprefix = automated_\n%s\n' "$1" > "$TMP/t.conf"
+    printf '%s' "$TMP/t.conf"
+}
+refuses_t() {   # <label> <body>
+    if profile_validate_templates "$(tconf "$2")" "$DUMPFILE"; then
+        bad "$1"
+    else
+        ok "$1"
+    fi
+}
+
+refuses_t "negative: dst in templates.conf refused"   '	dst = hdd/evil'
+refuses_t "negative: src in templates.conf refused"   '	src = root@far:tank/x'
+refuses_t "negative: raw flags in templates.conf refused" '	flags = -e -u'
+refuses_t "negative: pair_label in templates.conf refused" '	pair_label = prod'
+refuses_t "negative: notify in templates.conf refused" '	notify = somebody'
+refuses_t "negative: unknown field in templates.conf refused" '	nosuchfield = 1'
+refuses_t "negative: a non-template section refused" '[dataset:tank/x]
+	prefix = automated_'
+
+# The positive control that keeps the fix honest: policy fields still pass.
+if profile_validate_templates "$(tconf '	retain = -H24')" "$DUMPFILE"; then
+    ok "positive: a policy-only templates.conf is accepted"
+else
+    bad "positive: a policy-only templates.conf is accepted" "$PROFILE_ERR"
+fi
+
+# And the real shipped profile must still validate through the same path.
+if profile_validate_templates "$PROFILE/templates.conf" "$DUMPFILE"; then
+    ok "the built-in profile's templates.conf passes the production validator"
+else
+    bad "the built-in profile's templates.conf passes the production validator" "$PROFILE_ERR"
+fi
+if profile_validate_dir "$PROFILE" "$GEN"; then
+    ok "profile_validate_dir accepts the built-in profile"
+else
+    bad "profile_validate_dir accepts the built-in profile" "$PROFILE_ERR"
+fi
+
+# --- the schema must NOT be narrowed (REV-076 point 4) ----------------------
+#
+# A deployment-owned [template:] with dst is legitimate and runs in production:
+# pve0 has [template:vm_archive] with dst = hdd/backups/pve1 feeding two real
+# dataset sections. Narrowing gen-cron's schema to constrain profiles would
+# break it, so this pins that gen-cron still accepts it.
+cat > "$TMP/deploy.conf" <<'EOF'
+[defaults]
+	host_label = t
+
+[template:vm_archive]
+	send_schedule = 1 * * * *
+	prefix        = automated_
+	dst           = hdd/backups/pve1
+
+[dataset:rpool/data/vm-100-disk-0]
+	use_template = vm_archive
+EOF
+if "$GEN" -c "$TMP/deploy.conf" >/dev/null 2>&1; then
+    ok "positive: an ordinary deployment [template:] with dst still renders"
+else
+    bad "positive: an ordinary deployment [template:] with dst still renders"
+fi
+
 
 echo
 echo "profiles: $pass passed, $fail failed"
