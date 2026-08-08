@@ -2526,6 +2526,41 @@ reconcile_receive_structure() {   # <root>... -> ancestor paths, one per line
     done
 }
 
+# A structural container: every child is covered, and it holds no data of its
+# own. `rpool/data` and `hdd/vm-disks` are the fleet's examples -- they exist
+# only to group vm-*-disk-* beneath them.
+#
+# Owner decision 2026-08-08: suppress these. The reasoning is the project's own:
+# snapsend's -S flag is documented as exactly this case, "the container case:
+# rpool/data holds no data of its own and exists only to group vm-*-disk-*
+# beneath it". Alerting that a container has no snapshot, when backing up its
+# children individually is the deliberate design, is noise.
+#
+# TWO guards, because "suppress the parent" done carelessly hides real data:
+#
+#   * EVERY child must be covered. One uncovered child and the parent stays a
+#     finding, because then it is not a solved container.
+#   * It must hold no data OF ITS OWN -- usedbydataset above a small floor means
+#     somebody put files directly in it, and that data has no backup.
+#
+# Suppressed means "not counted and not alerted", NOT invisible: they are
+# printed under their own heading, like the system datasets.
+RECONCILE_CONTAINER_MAX_OWN=1048576   # 1 MiB: an empty ZFS filesystem is ~100 KiB
+
+reconcile_is_container() {   # <dataset> ; needs COVERED_LIST in the caller
+    local ds="$1" child own kids=0
+    own="$(zfs get -Hp -o value usedbydataset -- "$ds" 2>/dev/null)"
+    case "$own" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$own" -gt "$RECONCILE_CONTAINER_MAX_OWN" ] && return 1
+    while IFS= read -r child; do
+        [ -n "$child" ] || continue
+        [ "$child" = "$ds" ] && continue
+        kids=$((kids+1))
+        [ -n "${covered[$child]:-}" ] || return 1
+    done < <(zfs list -H -o name -r -- "$ds" 2>/dev/null)
+    [ "$kids" -gt 0 ]
+}
+
 do_reconcile() {
     command -v zfs >/dev/null 2>&1 || die "--reconcile needs zfs on this host"
 
@@ -2542,11 +2577,11 @@ do_reconcile() {
     # backed up. It also counted a PULL section's local destination as
     # source-side coverage, which is backwards: that path is where a copy
     # LANDS.
-    local e etier esched eremote erest edir
+    local e etier esched eremote eprefix eflags enotify elabel edir
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r ds etier esched eremote erest <<< "$e"
+        IFS="$SEP" read -r ds etier esched eremote eprefix eflags enotify elabel edir <<< "$e"
         [ -n "$ds" ] || continue
-        case "$erest" in *"${SEP}pull") continue ;; esac
+        [ "$edir" = "pull" ] && continue
         if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
             case " ${missing[*]-} " in *" $ds "*) ;; *) missing+=("$ds") ;; esac
             continue
@@ -2554,8 +2589,32 @@ do_reconcile() {
         mode="$(resolve_field recursive "dataset:$ds" "" "" || true)"
         case "$mode" in
             flat|atomic)
+                # -S and -X change WHICH datasets the run actually touches, so
+                # coverage has to honour them. Expanding with a plain
+                # `zfs list -r` claims coverage for a parent the engine skips
+                # (-S) or for a child it filters out (-X) -- a FALSE NEGATIVE,
+                # the direction that hides an unprotected dataset. Latent
+                # rather than live today: no config in this fleet uses either.
+                local skip_parent=0 tok
+                local -a excl=()
+                local expect_x=0
+                for tok in $eflags; do
+                    if [ "$expect_x" -eq 1 ]; then excl+=("$tok"); expect_x=0; continue; fi
+                    case "$tok" in
+                        -S)  skip_parent=1 ;;
+                        -X)  expect_x=1 ;;
+                        -X*) excl+=("${tok#-X}") ;;
+                    esac
+                done
                 while IFS= read -r line; do
-                    [ -n "$line" ] && covered["$line"]=1
+                    [ -n "$line" ] || continue
+                    [ "$skip_parent" -eq 1 ] && [ "$line" = "$ds" ] && continue
+                    local rx dropped=0
+                    for rx in "${excl[@]+"${excl[@]}"}"; do
+                        printf '%s' "$line" | grep -Eq -- "$rx" && { dropped=1; break; }
+                    done
+                    [ "$dropped" -eq 1 ] && continue
+                    covered["$line"]=1
                 done < <(zfs list -H -o name -r -- "$ds" 2>/dev/null) ;;
             *)  covered["$ds"]=1 ;;
         esac
@@ -2567,7 +2626,7 @@ do_reconcile() {
     mapfile -t recv_roots < <(reconcile_receive_roots | sort -u)
     mapfile -t recv_struct < <(reconcile_receive_structure "${recv_roots[@]+"${recv_roots[@]}"}" | sort -u)
 
-    local -a uncovered=() systems=() received=()
+    local -a uncovered=() systems=() received=() containers=()
     while IFS= read -r ds; do
         [ -n "$ds" ] || continue
         case "$ds" in */*) ;; *) continue ;; esac      # a pool root is not a workload
@@ -2583,8 +2642,9 @@ do_reconcile() {
             done
         fi
         if [ "$hit" -eq 1 ];        then received+=("$ds")
-        elif reconcile_is_system "$ds"; then systems+=("$ds")
-        else                              uncovered+=("$ds"); fi
+        elif reconcile_is_system "$ds";    then systems+=("$ds")
+        elif reconcile_is_container "$ds"; then containers+=("$ds")
+        else                                    uncovered+=("$ds"); fi
     done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null | sort)
 
     echo "=== scope reconciliation: $CONFIG on $(hostname -s 2>/dev/null || hostname)"
@@ -2608,6 +2668,13 @@ do_reconcile() {
         echo "DECLARED BUT ABSENT -- the config names it, ZFS does not have it:"
         for ds in "${missing[@]}"; do printf '  %s\n' "$ds"; done
         echo "  (a job pointing at nothing fails nightly, or worse, quietly does nothing)"
+        echo
+    fi
+    if [ "${#containers[@]}" -gt 0 ]; then
+        echo "not counted -- structural containers: every child is covered and they hold no"
+        echo "data of their own (snapsend's -S case). Listed so the omission is visible:"
+        for ds in "${containers[@]}"; do printf '  %s
+' "$ds"; done
         echo
     fi
     if [ "${#systems[@]}" -gt 0 ]; then

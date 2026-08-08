@@ -46,16 +46,23 @@ world() { printf '%s\n' "$@" > "$TMPD/world"; }
 
 cat > "$TMPD/bin/zfs" <<'EOF'
 #!/bin/bash
-# Only the two shapes --reconcile uses.
+# Only the shapes --reconcile uses. The world file is "<dataset> [<own bytes>]",
+# so EVERY branch must take column 1 only -- an earlier version stripped it in
+# some branches and not others, and the names that reached the caller carried a
+# trailing " 0", so no lookup ever matched.
+names() { awk '{print $1}' "$TMPD_WORLD"; }
 args="$*"
-case "$args" in
-    *"-t filesystem,volume"*) cat "$TMPD_WORLD"; exit 0 ;;
-esac
 target="${@: -1}"
 case "$args" in
-    *" -r "*) grep -E "^${target}(/|$)" "$TMPD_WORLD"; exit 0 ;;
+    *usedbydataset*)
+        awk -v d="$target" '$1==d { print ($2==""?0:$2); f=1 } END{ if(!f) print 0 }' "$TMPD_WORLD"
+        exit 0 ;;
+    *"-t filesystem,volume"*) names; exit 0 ;;
 esac
-grep -qx "$target" "$TMPD_WORLD" && { echo "$target"; exit 0; }
+case "$args" in
+    *" -r "*) names | grep -E "^${target}(/|$)"; exit 0 ;;
+esac
+names | grep -qx "$target" && { echo "$target"; exit 0; }
 exit 1
 EOF
 chmod +x "$TMPD/bin/zfs"
@@ -354,6 +361,83 @@ rec_rc=$?
 out="$("$GEN" -c "$TMPD/jobs.conf" --reconcile 2>&1)"
 case "$out" in *"must end with the remote dataset name"*) ok "--reconcile names the contract it refused on" ;;
   *) bad "--reconcile names the contract it refused on" "$out" ;; esac
+
+
+# --- structural containers (owner decision, 2026-08-08) ---------------------
+#
+# A parent whose children are all covered and which holds no data of its own is
+# the case snapsend's -S flag is documented for: "rpool/data holds no data of
+# its own and exists only to group vm-*-disk-* beneath it". Alerting on it,
+# when backing the children up individually IS the design, is noise.
+#
+# Suppressed means not counted and not alerted -- never invisible.
+world tank "tank/store 0" "tank/store/a 0" "tank/store/b 0"
+conf '[dataset:tank/store/a]
+	use_template = hourly
+
+[dataset:tank/store/b]
+	use_template = hourly'
+out="$(run)"
+case "$out" in *"structural containers"*"tank/store"*) ok "a parent whose children are all covered is a container" ;;
+  *) bad "a parent whose children are all covered is a container" "$out" ;; esac
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *tank/store*) bad "a container is not counted as uncovered" "$unc" ;;
+  *) ok "a container is not counted as uncovered" ;; esac
+[ "$(rc)" = 0 ] && ok "containers alone leave the exit code zero" || bad "containers alone leave the exit code zero" "rc=$(rc)"
+
+# GUARD 1: one uncovered child and it is not a solved container any more.
+world tank "tank/store 0" "tank/store/a 0" "tank/store/b 0"
+conf '[dataset:tank/store/a]
+	use_template = hourly'
+out="$(run)"
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *"tank/store"*) ok "a parent with an uncovered child stays a finding" ;;
+  *) bad "a parent with an uncovered child stays a finding" "$out" ;; esac
+
+# GUARD 2: it must hold no data OF ITS OWN. Files put directly in the parent
+# have no backup, and suppressing that is exactly the blindness being avoided.
+world tank "tank/store 50000000" "tank/store/a 0"
+conf '[dataset:tank/store/a]
+	use_template = hourly'
+out="$(run)"
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *"tank/store"*) ok "a parent holding its own data is NOT suppressed" ;;
+  *) bad "a parent holding its own data is NOT suppressed" "$out" ;; esac
+
+# A leaf is never a container: no children means nothing was solved.
+world tank "tank/lonely 0"
+conf '[dataset:tank/other]
+	use_template = hourly'
+out="$(run)"
+case "$out" in *UNCOVERED*tank/lonely*) ok "a childless dataset is never a container" ;;
+  *) bad "a childless dataset is never a container" "$out" ;; esac
+
+# --- -S and -X change WHICH datasets a run touches ---------------------------
+# Expanding recursion with a plain `zfs list -r` claims coverage for a parent
+# the engine skips (-S) or a child it filters out (-X). That is a FALSE
+# NEGATIVE -- it hides an unprotected dataset -- and it is the direction that
+# matters. Latent rather than live: no config in this fleet uses either flag.
+world tank "tank/p 9000000" "tank/p/a 0" "tank/p/b 0"
+conf '[dataset:tank/p]
+	use_template = hourly
+	recursive    = flat
+	flags        = -S'
+out="$(run)"
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *"tank/p"*) ok "-S: the skipped parent is NOT counted as covered" ;;
+  *) bad "-S: the skipped parent is NOT counted as covered" "$out" ;; esac
+
+world tank "tank/p 0" "tank/p/keep 0" "tank/p/drop 0"
+conf '[dataset:tank/p]
+	use_template = hourly
+	recursive    = flat
+	flags        = -X drop'
+out="$(run)"
+unc="$(printf '%s\n' "$out" | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f')"
+case "$unc" in *"tank/p/drop"*) ok "-X: the excluded child is NOT counted as covered" ;;
+  *) bad "-X: the excluded child is NOT counted as covered" "$out" ;; esac
+case "$unc" in *"tank/p/keep"*) bad "-X: the kept child is still covered" "$unc" ;;
+  *) ok "-X: the kept child is still covered" ;; esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
