@@ -57,23 +57,6 @@ renders profiles, which is what REV-073 said explicitly about ownership: fixing
 it later "would be substantially more expensive and could create a second source
 of truth".
 
-## Sync mode — checked, and it does NOT break the contract
-
-The owner asked whether the two-host `--mode=sync` violates the ownership split.
-It does not. Sync expresses topology structurally (a bare `user@host` dst,
-mirroring to the identical path), and that `dst` lives in `[defaults]` or
-`[dataset:]` — deployment-owned sections. The profile is not involved.
-
-`zfs-backup.sh` also refuses `--target` together with `--mode=sync`, and refuses
-sync to a member of the same PVE cluster because pvesr would fight it. Both are
-relationship-level rules in the right layer.
-
-Locally, sync is **structurally meaningless**: it mirrors to the identical path
-on another host, and there is no other host. The engine already refuses a bare
-`user@host` that resolves to this machine — "a dataset cannot sync to itself".
-The local path must therefore refuse `--mode=sync` **with the reason**, not
-accept it as a no-op.
-
 ## Measured on the fleet before recommending
 
 I first wrote that narrowing the schema "could refuse a config that is running
