@@ -193,6 +193,38 @@ for pair in "delsnaps.sh recurse" "check-snap-age.sh RECURSE"; do
     esac
 done
 
+
+# --- short-option CLUSTERS (REV-20260808-069 F1) ------------------------------
+#
+# getopts parses `-em` as -e then -m, and since m: takes an argument with
+# nothing following it inside the token, the NEXT argv is that argument. The
+# first pre-pass only consumed the next argv when the token was exactly two
+# characters, so `-em --recursive=flat` read the MESSAGE as a declaration.
+#
+# The probe is a deliberately INVALID mode. "No error" is not evidence here:
+# whether the token is data or a declaration, a VALID mode produces no output
+# either way, and a second declaration is swallowed as the option's argument --
+# both of my first two probes were blind for exactly that reason. Only an
+# invalid value is visible from outside: if the token is data, nobody validates
+# it; if it is parsed as an option, it is refused by value.
+clusterprobe() {   # <engine> <label> data|parsed <args...>
+    local engine="$1" label="$2" want="$3"; shift 3
+    local out got
+    out="$(bash "$REPO/$engine" "$@" tank/src tank/dst 2>&1)"
+    case "$out" in *"got 'ture'"*) got=parsed ;; *) got=data ;; esac
+    [ "$got" = "$want" ] && ok "$engine: $label" || bad "$engine: $label" "wanted $want, got $got"
+}
+
+for engine in snapsend.sh snapget.sh; do
+    clusterprobe "$engine" "-em: the cluster ends in m, so the next argv is its ARGUMENT"                  data   -em --recursive=ture
+    clusterprobe "$engine" "-m alone behaves the same (the case that already worked)"                  data   -m --recursive=ture
+    clusterprobe "$engine" "-ez: no letter takes an argument, so the next argv is an OPTION"                  parsed -ez --recursive=ture
+    clusterprobe "$engine" "-mfoo: the value is attached, so the next argv is an OPTION"                  parsed -mfoo --recursive=ture
+    # A letter that takes an argument in the MIDDLE of a cluster: everything
+    # after it is that argument, so the next argv is an option again.
+    clusterprobe "$engine" "-mfoo with more letters after the value stays attached"                  parsed -mfooe --recursive=ture
+done
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

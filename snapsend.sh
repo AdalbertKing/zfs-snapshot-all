@@ -428,7 +428,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.71'
+VERSION='v2.72'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1499,6 +1499,23 @@ opt_takes_arg() {   # <letter>
     case "$OPTSTRING" in *"$1:"*) return 0 ;; *) return 1 ;; esac
 }
 
+# Does this short-option token take its value from the NEXT argv?
+#
+# Yes only when some letter in the cluster takes an argument AND nothing
+# follows it inside the token. `-m` yes; `-em` yes (e takes none, m does, and
+# the token ends); `-mfoo` no, foo IS the value; `-ez` no.
+cluster_needs_next() {   # <token beginning with a single dash>
+    local t="${1#-}" i c
+    for (( i=0; i<${#t}; i++ )); do
+        c="${t:i:1}"
+        if opt_takes_arg "$c"; then
+            [ $(( i + 1 )) -eq ${#t} ] && return 0
+            return 1        # the remainder of the token is the value
+        fi
+    done
+    return 1
+}
+
 translate_long_options() {
     local -a out=()
     local a mode last
@@ -1526,13 +1543,18 @@ translate_long_options() {
                 echo "Error: unknown option $a" >&2; exit 1 ;;
             -?*)
                 out+=("$a"); shift
-                # A cluster ends in a letter that takes an argument, and the
-                # value is not attached: the NEXT argv is that value, so it must
-                # not be inspected as an option.
-                last="${a: -1}"
-                if [ "${#a}" -eq 2 ] && opt_takes_arg "$last" && [ $# -gt 0 ]; then
-                    out+=("$1"); shift
-                fi ;;
+                # Walk the cluster the way getopts does, left to right. The
+                # FIRST letter that takes an argument consumes the rest of the
+                # token as its value; if there is no rest, it consumes the NEXT
+                # argv, which must then not be inspected as an option.
+                #
+                # REV-20260808-069 F1: this used to fire only when the token was
+                # exactly two characters, so `-m --recursive=flat` was handled
+                # and the legal clustered form `-em --recursive=flat` was not --
+                # the message was read as a recursion declaration. "The last
+                # letter of a two-character token" is not the getopts grammar,
+                # it is one case of it.
+                cluster_needs_next "$a" && [ $# -gt 0 ] && { out+=("$1"); shift; } ;;
             *)
                 # First non-option argument: getopts stops here, so do we.
                 out+=("$@"); break ;;
