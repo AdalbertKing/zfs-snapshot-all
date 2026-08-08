@@ -10,6 +10,15 @@
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Negative control: CTL must point at a copy living INSIDE this repository,
+# e.g. test/.oldctl.sh. reviewctl resolves the git repo from its own
+# SCRIPT_DIR when REVIEWCTL_REPO points at a non-git artifact tree, so a copy
+# in /tmp cannot resolve any commit and EVERY case fails -- 15 of them, most
+# unrelated to whatever is being controlled for. That looks like a devastating
+# regression and means nothing.
+#
+#   git show <base>:test/reviewctl.sh > test/.oldctl.sh && chmod +x test/.oldctl.sh
+#   CTL="$PWD/test/.oldctl.sh" ./test/reviewctl/run.sh ; rm -f test/.oldctl.sh
 CTL="${CTL:-$REPO/test/reviewctl.sh}"
 
 PASS=0; FAIL=0
@@ -182,6 +191,50 @@ expect "an unfetchable closed-by is refused" $R FAILED
 # very first review of any thread becomes unrepresentable.
 world p7; review $R CHANGES-REQUIRED -
 expect "the literal - is not treated as a broken SHA" $R OPEN
+
+
+# ---- deliveries: direct-main work awaiting a first look (REV-070 F4) --------
+#
+# The failure is demonstrated, not hypothetical: OPEN-THREADS.md said "nothing
+# to do" while Stage 3 sat on main unreviewed, because routing derives from REV
+# artifacts only. A delivery with no REV had no way to exist.
+deliver() { printf '<!-- delivered: %s %s -->
+' "$1" "${2:-a delivery}" >> "$W/docs/project/DELIVERIES.md"; }
+threads_rows() { REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1; grep -c '^| ' "$W/docs/project/OPEN-THREADS.md"; }
+threads_txt()  { REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1; cat "$W/docs/project/OPEN-THREADS.md"; }
+
+world d1; deliver "$sha1" "stage three"
+case "$(threads_txt)" in
+    *"${sha1:0:8}"*DELIVERED*Reviewer*) ok "a delivery with no REV becomes reviewer-owned work" ;;
+    *) bad "a delivery with no REV becomes reviewer-owned work" "$(threads_txt)" ;;
+esac
+
+# Cleared by the reviewer opening a REV for exactly that sha -- and cleared
+# WITHOUT leaving the same work listed twice.
+world d2; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha1
+txt="$(threads_txt)"
+case "$txt" in *DELIVERED*) bad "opening a REV for the delivery clears the delivery row" "$txt" ;;
+  *) ok "opening a REV for the delivery clears the delivery row" ;; esac
+case "$txt" in *"$R"*) ok "...and the REV row replaces it, so the work is listed once" ;;
+  *) bad "...and the REV row replaces it, so the work is listed once" "$txt" ;; esac
+
+# ...or by the reviewer explicitly waiving it. Deterministic, never "it aged out".
+world d3; deliver "$sha1" "a docs-only change"
+printf '<!-- no-review-required: %s -->
+' "$sha1" >> "$W/docs/project/DELIVERIES.md"
+case "$(threads_txt)" in *DELIVERED*) bad "an explicit waiver clears the delivery" "$(threads_txt)" ;;
+  *) ok "an explicit waiver clears the delivery" ;; esac
+
+# A REV for a DIFFERENT sha does not clear this delivery.
+world d4; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
+case "$(threads_txt)" in *DELIVERED*) ok "a REV for another sha leaves the delivery open" ;;
+  *) bad "a REV for another sha leaves the delivery open" "$(threads_txt)" ;; esac
+
+# Same reachability rule as an implementation sha: a reviewer who cannot fetch
+# it cannot review it.
+world d5; deliver "$NOSUCH" "unfetchable"
+REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
+[ $? -ne 0 ] && ok "an unreachable delivery sha is refused" || bad "an unreachable delivery sha is refused"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

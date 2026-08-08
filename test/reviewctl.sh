@@ -109,6 +109,62 @@ require_commit() {   # <rev> <field> <value>
     return 0
 }
 
+# ---- deliveries: direct-main work awaiting a first look --------------------
+#
+# REV-20260808-070 F4. Under the owner's direct-main exception the implementer
+# lands first and the reviewer reviews what landed. But state here is derived
+# from REV artifacts ONLY, so a delivery with no REV is invisible: on
+# 2026-08-08 OPEN-THREADS.md said "nothing to do" while Stage 3 sat on main
+# unreviewed, and the same had been true of Stages 2.1 and 2.2 until the
+# reviewer happened to look. "He happened to look" is not a mechanism.
+#
+# One line per delivery, in docs/project/DELIVERIES.md:
+#
+#   <!-- delivered: <sha> <what it is> -->
+#
+# A delivery becomes reviewer-owned work until it is cleared, and clearing is
+# explicit and deterministic -- never "it aged out":
+#
+#   * the reviewer opens a REV whose reviewed-implementation is that sha; or
+#   * the reviewer records <!-- no-review-required: <sha> --> in the same file.
+#
+# The sha is held to the same published-branch reachability rule as an
+# implementation sha, for the same reason: a reviewer who cannot fetch it
+# cannot review it.
+DELIVERIES="$REPO/docs/project/DELIVERIES.md"
+declare -a DELIVERED=()
+declare -A DELIVERED_WHAT=()
+declare -A NO_REVIEW=()
+
+collect_deliveries() {
+    [ -f "$DELIVERIES" ] || return 0
+    local line sha rest
+    while IFS= read -r line; do
+        case "$line" in
+            '<!-- delivered: '*' -->')
+                rest="${line#<!-- delivered: }"; rest="${rest% -->}"
+                sha="${rest%% *}"
+                [ -n "$sha" ] || continue
+                require_commit "delivery" "delivered" "$sha" || true
+                DELIVERED+=("$sha")
+                DELIVERED_WHAT[$sha]="${rest#"$sha"}" ;;
+            '<!-- no-review-required: '*' -->')
+                sha="${line#<!-- no-review-required: }"; sha="${sha% -->}"
+                [ -n "$sha" ] && NO_REVIEW[$sha]=1 ;;
+        esac
+    done < "$DELIVERIES"
+}
+
+# A delivery is open until a REV names it, or the reviewer waives it.
+delivery_open() {   # <sha>
+    local rev
+    [ -n "${NO_REVIEW[$1]:-}" ] && return 1
+    for rev in "${REVS[@]}"; do
+        [ "${R_REVIEWED[$rev]:-}" = "$1" ] && return 1
+    done
+    return 0
+}
+
 declare -A R_VERDICT R_REVIEWED R_FILE
 declare -A P_STATUS P_IMPL P_FILE
 declare -A C_BY C_FILE
@@ -266,13 +322,24 @@ render_threads() {
     echo
     echo "| REV | State | Whose move | Next action |"
     echo "|---|---|---|---|"
-    [ "${#REVS[@]}" -eq 0 ] && { echo "| _(no V2 reviews yet)_ | - | - | - |"; echo; echo "Closed reviews are in \`docs/internal/reviews/REVIEW_LEDGER.md\`."; return; }
-    local rev st
+    local rev st any=0
     while IFS= read -r rev; do
+        [ -n "$rev" ] || continue
         st="${STATE[$rev]}"
         [ "$st" = CLOSED ] && continue
-        printf '| %s | %s | %s | %s |\n' "$rev" "$st" "$(owner_of "$st")" "$(next_of "$st")"
-    done < <(printf '%s\n' "${REVS[@]}" | sort)
+        any=1
+        printf '| %s | %s | %s | %s |
+' "$rev" "$st" "$(owner_of "$st")" "$(next_of "$st")"
+    done < <([ "${#REVS[@]}" -gt 0 ] && printf '%s
+' "${REVS[@]}" | sort)
+    local sha
+    for sha in "${DELIVERED[@]+"${DELIVERED[@]}"}"; do
+        delivery_open "$sha" || continue
+        any=1
+        printf '| %s | DELIVERED | Reviewer | review it, or open a REV for it |
+'                "${sha:0:8}${DELIVERED_WHAT[$sha]}"
+    done
+    [ "$any" -eq 1 ] || echo "| _(nothing open)_ | - | - | - |"
     echo
     echo "Closed reviews are in \`docs/internal/reviews/REVIEW_LEDGER.md\`."
 }
@@ -284,6 +351,7 @@ case "${1:-}" in
 esac
 
 collect
+collect_deliveries
 derive_all
 # An empty ledger is a legal starting state: V2 begins at the first REV that
 # carries machine headers.

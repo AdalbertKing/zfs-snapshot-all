@@ -632,8 +632,39 @@ engine_freeze() {
         echo "  or name the review that asked for THIS change."
         return 1
     fi
+
+    # REV-20260808-070 F2. "Is some review open" is not authorisation. Without
+    # this, any unrelated open thread could be named to wave an arbitrary engine
+    # edit through -- weaker than what the freeze document claimed.
+    #
+    # The permission is a REVIEWER-OWNED machine fact in the review artifact,
+    # never inferred from prose, and it must name every path that moved.
+    local allowed p covered_all=1 unlisted=""
+    allowed=" $(freeze_authorises "$rev") "
+    for p in $moved; do
+        case "$allowed" in *" $p "*) ;; *) covered_all=0; unlisted="$unlisted $p" ;; esac
+    done
+    if [ "$covered_all" -ne 1 ]; then
+        echo "  FROZEN.$unlisted changed, and '$rev' does not authorise$unlisted."
+        echo "  The review must carry <!-- authorizes-frozen: <paths> --> naming every"
+        echo "  frozen path it asks to change. That marker is the reviewer's to write."
+        return 1
+    fi
     echo "  authorised by $rev:$moved"
     return 0
+}
+
+# The reviewer-owned permission, read from the review artifact.
+freeze_authorises() {   # <rev> -> space-separated paths
+    local rev="$1" f v
+    for f in "$RDIR_FREEZE/$rev.md" "$RDIR_FREEZE/$rev"-*.md; do
+        [ -f "$f" ] || continue
+        v="$(grep -oE '^<!-- authorizes-frozen:[^>]*-->' "$f" | head -1)"
+        [ -n "$v" ] || continue
+        v="${v#<!-- authorizes-frozen:}"; v="${v%-->}"
+        printf '%s' "$v"
+        return 0
+    done
 }
 
 refreeze() {

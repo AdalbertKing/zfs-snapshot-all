@@ -2,6 +2,8 @@
 
 <!-- frozen: snapsend.sh 100755 aff7b28d5ce0b8d0332ad74793c07538920c5870 -->
 <!-- frozen: snapget.sh 100755 898fe0ebd903ca5322201d139928f5448836483d -->
+<!-- frozen: delsnaps.sh 100755 3a7dd5f07af8fc886737928ac141e1b73700e688 -->
+<!-- frozen: check-snap-age.sh 100755 59dda7e685f8f2d39dea638b95ee9341313fbfb1 -->
 <!-- frozen: lib-zfs-snap.sh 100644 902b307cbcac9fbedf7c3f076334a801884f3666 -->
 <!-- unfreeze: - -->
 
@@ -13,16 +15,25 @@ nobody measured.
 
 The two transfer engines and the library they both run on:
 
+The set approved in the Stage-3 plan, in full:
+
 | file | why it is in scope |
 |---|---|
 | `snapsend.sh` | the push engine |
 | `snapget.sh` | the pull engine |
-| `lib-zfs-snap.sh` | the code both of them execute |
+| `delsnaps.sh` | the destructive one — it deletes snapshots |
+| `check-snap-age.sh` | the monitor whose silence is indistinguishable from health |
+| `lib-zfs-snap.sh` | the code the engines execute |
 
-**Not frozen, deliberately:** `gen-cron.sh`, `deploy.sh`, `delsnaps.sh`,
-`check-snap-age.sh`, `zfs-backup.sh`, the pair-gate and the test tree. Those are
-where the remaining planned work lives — profiles, scope reconciliation,
-restore. Freezing them would freeze the roadmap, not the risk.
+The first version of this document dropped `delsnaps.sh` and `check-snap-age.sh`
+on the grounds that later work might need them. REV-20260808-070 F1 rejected
+that, correctly: it changed an approved contract instead of implementing it, and
+if future work genuinely needs one of those files, **requiring a review first is
+exactly what the freeze is for**.
+
+**Not frozen:** `gen-cron.sh`, `deploy.sh`, `zfs-backup.sh`, the pair-gate and
+the test tree. Not added speculatively either — `lib-cron.sh` and
+`zfs-pair-gate.sh` stay out until a dependency argument requires them.
 
 ## What the freeze means
 
@@ -38,9 +49,19 @@ obvious.
 and object id, the same primitive REV-20260807-068 arrived at — against the
 baseline recorded above. A difference is refused, naming the file.
 
-The refusal lifts only when `unfreeze:` names a review that exists and is not
-yet CLOSED. A closed review cannot authorise new work: it was answered, and its
-answer was accepted.
+The refusal lifts only when **all** of these hold:
+
+1. `unfreeze:` names a review that exists;
+2. that review is not CLOSED — a closed review was answered and the answer was
+   accepted, so it cannot authorise new work;
+3. that review carries a **reviewer-owned** `<!-- authorizes-frozen: <paths> -->`
+   marker, and **every** changed frozen path appears in it.
+
+Point 3 is REV-20260808-070 F2. Without it the gate only asked "is some review
+open", so any unrelated open thread could be named to wave an arbitrary engine
+edit through — weaker than what this document claimed. The marker is written by
+the reviewer, in the review artifact, because authorisation is theirs to give.
+Never inferred from prose.
 
 The sequence for an authorised engine change:
 

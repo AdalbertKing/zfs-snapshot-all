@@ -353,13 +353,37 @@ set_unfreeze() {   # <value>
         "$FW/docs/project/ENGINE-FREEZE.md" > "$FW/.u" && mv "$FW/.u" "$FW/docs/project/ENGINE-FREEZE.md"
     G add docs/project/ENGINE-FREEZE.md
 }
-make_review() {    # <rev> [closed]
-    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: - -->\n' \
-        "$1" > "$FW/docs/internal/reviews/$1.md"
-    [ "${2:-}" = closed ] && printf '<!-- rev: %s -->\n<!-- closed-by: x -->\n' "$1" \
-        > "$FW/docs/internal/reviews/closures/$1.md"
+make_review() {    # <rev> <authorised-paths|-> [closed]
+    {
+      printf '<!-- rev: %s -->
+<!-- verdict: CHANGES-REQUIRED -->
+<!-- reviewed-implementation: - -->
+' "$1" 
+      [ "$2" = "-" ] || printf '<!-- authorizes-frozen: %s -->
+' "$2" 
+    } > "$FW/docs/internal/reviews/$1.md"
+    [ "${3:-}" = closed ] && printf '<!-- rev: %s -->
+<!-- closed-by: x -->
+' "$1" > "$FW/docs/internal/reviews/closures/$1.md" 
     G add docs/internal/reviews
+    return 0
 }
+
+
+# The frozen set is DERIVED from the freeze document, not restated here.
+# REV-20260808-070 F1 rejected a hand-narrowed list once already; a second
+# hand-kept list living in the test would be the same defect in test clothing.
+FROZEN_PATHS="$(grep -oE '^<!-- frozen: [^ ]+ ' "$REPO/docs/project/ENGINE-FREEZE.md" | sed -e 's|^<!-- frozen: ||' -e 's| $||')"
+check "freeze: the approved five files are the frozen set" "5" "$(printf '%s
+' $FROZEN_PATHS | grep -c .)"
+for f in snapsend.sh snapget.sh delsnaps.sh check-snap-age.sh lib-zfs-snap.sh; do
+    check "freeze: $f is in the frozen set" "1" "$(printf '%s
+' $FROZEN_PATHS | grep -cx "$f")"
+done
+
+# REV-20260808-070 F3: the freeze document is executable policy, so a change to
+# it must route to the suite that tests its semantics.
+check "freeze: a change to ENGINE-FREEZE.md routes to the impact suite" "1" "$("$IMPACT" -f docs/project/ENGINE-FREEZE.md 2>&1 | strip_ansi | grep -c 'test/impact/run.sh')"
 
 freeze_world clean
 check "freeze: an unchanged frozen file is clean" "CLEAN" "$(freeze_says)"
@@ -385,22 +409,50 @@ check "freeze: naming a review that does not exist does not authorise it" "NOT-C
 
 freeze_world open
 printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
-make_review REV-20260808-900
+make_review REV-20260808-900 engine.sh
 set_unfreeze REV-20260808-900
 check "freeze: an OPEN review authorises the change" "CLEAN" "$(freeze_says)"
 
 # ...and is not already answered. A closed review cannot authorise new work.
 freeze_world closed
 printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
-make_review REV-20260808-901 closed
+make_review REV-20260808-901 engine.sh closed
 set_unfreeze REV-20260808-901
 check "freeze: a CLOSED review does not authorise new work" "NOT-CLEAN" "$(freeze_says)"
+
+
+# REV-20260808-070 F2, the decisive regression. Before this the gate asked only
+# "is some review open", so any unrelated open thread could be named to wave an
+# arbitrary engine edit through -- weaker than the freeze document claimed.
+freeze_world wrongpath
+printf 'echo other
+' > "$FW/other.sh"; G add other.sh
+printf 'echo CHANGED
+' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-903 other.sh
+set_unfreeze REV-20260808-903
+check "freeze: a review authorising a DIFFERENT path does not authorise this one" "NOT-CLEAN" "$(freeze_says)"
+check "freeze: the refusal names the unauthorised path" "1" "$(freeze_msg | grep -c 'engine.sh')"
+
+freeze_world nomarker
+printf 'echo CHANGED
+' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-904 -
+set_unfreeze REV-20260808-904
+check "freeze: an open review with NO authorizes-frozen marker does not authorise" "NOT-CLEAN" "$(freeze_says)"
+
+freeze_world multi
+printf 'echo CHANGED
+' > "$FW/engine.sh"; G add engine.sh
+make_review REV-20260808-905 "other.sh engine.sh"
+set_unfreeze REV-20260808-905
+check "freeze: a marker listing several paths covers the changed one" "CLEAN" "$(freeze_says)"
 
 # Re-taking the baseline is the documented way out, and it resets the
 # authorisation so it cannot be left standing.
 freeze_world retake
 printf 'echo CHANGED\n' > "$FW/engine.sh"; G add engine.sh
-make_review REV-20260808-902
+make_review REV-20260808-902 engine.sh
 set_unfreeze REV-20260808-902
 IMP --refreeze >/dev/null 2>&1; G add docs/project/ENGINE-FREEZE.md
 check "freeze: --refreeze accepts the new baseline" "CLEAN" "$(freeze_says)"
