@@ -145,3 +145,43 @@ and belongs to the owner and the reviewer.
 no config file exists on any host at all. This document adds the sharper point:
 for half the fleet, the copy that exists on the workstation is not what the host
 runs either.
+
+---
+
+## F3 evidence, per REV-20260808-071 follow-up point 2
+
+A summary table is not proof, and the preceding measurement reached the opposite
+conclusion by selecting the wrong files — so the comparison is recorded with the
+identity of everything that went into it.
+
+**Command identity.** Run on each host as the account that owns the crontab:
+
+```
+su - zfsbackup -c 'cd /home/zfsbackup/zfs-snapshot-all &&
+  ./gen-cron.sh -c /etc/zfs-snapshot-all/<config> |
+    grep -oE "(snapsend|snapget|delsnaps|check-snap-age)\.sh[^;]*" |
+    sed "s/ 2>.*//" | sort -u  > /tmp/g
+  crontab -l |
+    grep -oE "(snapsend|snapget|delsnaps|check-snap-age)\.sh[^;]*" |
+    sed "s/ 2>.*//" | sort -u  > /tmp/l
+  diff /tmp/g /tmp/l'
+```
+
+The `sed` drops the logging/notify tail, because that portion encodes **who ran
+the generator** (`/root/scripts/` vs `/home/zfsbackup/`), not what the job does.
+Everything else — script, flags, prefixes, dataset lists, retention — is compared
+verbatim.
+
+**Result.** Deployed repo `834b147` on every host, `whoami=zfsbackup` on every
+host, and the generated and installed sets are *the same bytes*:
+
+| host | config (`sha256`, 16) | generated | installed | set `sha256` (16) | diff |
+|---|---|---|---|---|---|
+| metropolis pve1 | `jobs.pve1.v4.conf` `5c30a24d81a576fe` | 15 | 15 | `bfbd69cfa236fcb1` = `bfbd69cfa236fcb1` | rc=0, 0 bytes |
+| metropolis pve2 | `jobs.pve2.v4.conf` `8c4d23547b9a8fe1` | 11 | 11 | `03979d81a54ba6a8` = `03979d81a54ba6a8` | rc=0, 0 bytes |
+| 11.x pve0 | `jobs.pve0.v4.conf` `f795781418cc9b53` | 31 | 31 | `72e534b60fa3544c` = `72e534b60fa3544c` | rc=0, 0 bytes |
+| 11.x pve1 | `jobs.11.11.v4.conf` `4ddc96600fc6ea83` | 7 | 7 | `7bcf9b7e2daf7e74` = `7bcf9b7e2daf7e74` | rc=0, 0 bytes |
+
+The acceptance property is the equality of the compared sets — the identical
+hash and the empty diff — not the `N/N` cardinality, which is what the earlier
+version of this document leaned on and which is why it was able to be wrong.
