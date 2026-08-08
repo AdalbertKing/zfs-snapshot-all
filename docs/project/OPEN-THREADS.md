@@ -6,6 +6,7 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| REV-20260808-070 | OPEN | Claude | implement and respond |
+| REV-20260808-070 | IMPLEMENTED | Reviewer | verify the submitted implementation |
+| a3df471a scope reconciliation, gen-cron.sh --reconcile (read-only) | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
