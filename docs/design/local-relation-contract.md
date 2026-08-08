@@ -310,3 +310,91 @@ path introduces, and every existing caller already lives with it. I am recording
 it rather than fixing it here: widening the lock to cover interactive edits is
 its own change, with its own blast radius, and it does not belong inside a
 single-host deployment feature.
+
+---
+
+## 10. REVISED CLI — owner, 2026-08-08 evening
+
+Sections 3 and 8 proposed `add-local` with an interactive checkbox selection.
+The owner rejected the shape on grounds worth writing down, because they are a
+design philosophy and not a preference:
+
+> Jak najmniej zbednych nielogicznych aliasow. Jak najwiecej domyslnych
+> ustawien. Logika i intuicja — musisz wcielac sie w "admina po Uniwerku".
+
+### What that struck out
+
+| I proposed | why it was wrong |
+|---|---|
+| `setup-host` alias | translating our vocabulary into more of our vocabulary |
+| `add-local` verb | the ABSENCE of a subcommand already means local; `local` in the verb repeats it |
+| `seed` / `activate-client` to resume | forces the admin to learn our state machine to retry something that failed |
+
+An admin whose command fails **runs it again**. State is persisted, so the same
+command must resume from where it stopped. Those two verbs stay for remote
+relations, where they carry history; nobody needs them locally.
+
+### The shape
+
+```bash
+zfs-backup.sh --target=hdd/backups          # a property of the HOST, set once
+zfs-backup.sh --source=rpool/data,rpool/lxc # what to protect; called again as the host grows
+zfs-backup.sh --source=rpool/newpool        # later, additively
+```
+
+Dispatch rule, one sentence: **first argument starts with `-` and is not
+`-h`/`--help` -> no subcommand -> local mode.** Verified free: today that path
+hits `unknown command`, and a bare `zfs-backup.sh` still prints usage, so help
+does not turn into an action.
+
+`--target` persists as `DEFAULT_TARGET` in `server.conf` — the mechanism
+`setup-server` already writes. `--source` grows over time, which matches how a
+host actually evolves: this is the VM 104 lifecycle, where a guest created after
+the config was written had zero backups.
+
+**Cost, stated once:** this spends the "options with no subcommand" slot
+permanently. A future global option before a verb (`--verbose status prod`)
+becomes impossible. There are none today; every option belongs to its
+subcommand.
+
+### Selection is a DRAFT CONFIG, not a menu
+
+Owner: the same process as joining a client to a server — a proposal built from
+the datasets that exist, presented **as a config**.
+
+The precedent is real and already shipped: `deploy.sh --draft-config` lists the
+peer's datasets and writes a reviewed-by-hand `.suggested` file, and **never
+installs anything**. The local path reuses that idea rather than inventing an
+interactive selector.
+
+Why it is better than my checkbox menu: the artifact **is** a CONFIG v4 file,
+which is what the operator maintains anyway; it is editable in a real editor;
+and proposal is separated from action by construction.
+
+Flow: `--source=...` writes the draft, shows it, asks to adopt. Decline and the
+`.suggested` file stays on disk to edit; re-run adopts it. The happy path stays
+one command, and editing is the natural second call rather than a third verb.
+
+### Recursion belongs to the PROFILE, not the flag
+
+I asked whether `--source=rpool/data` should mean "these children" or
+"recursively". **Wrong question** — owner: that is what the profile specifies.
+
+`recursive = no|flat|atomic` is a profile field (REV-054), and per REV-073 the
+profile owns *how*. `--source` says only *what to consider*. Today's
+container-like behaviour comes from a **hardcoded default**, which is exactly
+the hardcode Stage 5 slice B1 exists to lift out into the profile.
+
+So the CLI decides nothing here, the draft shows what the current profile
+resolved, and a human can change it in the file before adopting.
+
+### Defaults, and where they stop
+
+Everything the admin does not need to start is defaulted: schedule, retention,
+prefix, monitoring, recursion (from the profile). Two things stay on the command
+line: **what to protect**, and **where it lands when that is ambiguous**.
+
+`--target` may be inferred when the host has exactly one candidate pool, as
+`setup-server` already does. It is **refused when ambiguous** — pve2 has three
+pools, and quietly choosing where backups land is not convenience, it is a
+surprise.
