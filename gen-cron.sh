@@ -1607,6 +1607,50 @@ validate_retain_patterns() {
 #END 3.7
 
 ###############################################################################
+# The pull transfer contract, in ONE place so every caller applies it.
+#
+# REV-20260808-072 F1: this rule used to live only inside emit_send, which
+# --reconcile never reaches. So the audit could certify a config that normal
+# generation refuses to execute -- a checker that is more permissive than the
+# thing it checks, which is worse than no checker.
+#
+# Returns status and sets globals rather than echoing, deliberately. If it
+# echoed, every caller would write `x="$(pull_check ...)"` and a `die` inside
+# that command substitution would kill only the SUBSHELL -- the fail-OPEN
+# already recorded in this project once.
+PULL_LOCAL_BASE=""
+PULL_ERR=""
+pull_check() {   # <local dataset> <src value>  -> 0 valid, 1 invalid
+    local ds="$1" src="$2" remote_name="${2#*:}"
+    PULL_LOCAL_BASE=""; PULL_ERR=""
+    if [ "$ds" = "$remote_name" ]; then
+        return 0
+    elif [[ "$ds" == */"$remote_name" ]]; then
+        PULL_LOCAL_BASE="${ds%/$remote_name}"
+        return 0
+    fi
+    PULL_ERR="[dataset:$ds] direction=pull: the local path must end with the remote dataset name ('$remote_name', from src='$src') -- e.g. local dataset:<base>/$remote_name. snapget.sh has no way to reconcile an unrelated local name with a fixed remote one."
+    return 1
+}
+
+# Every semantic check a config must pass before ANY consumer trusts it.
+# Called before the --reconcile branch as well as before emission, so the audit
+# and the generator accept exactly the same inputs.
+validate_transfer_semantics() {
+    local key list ds tier schedule dst prefix flags notify label direction
+    for key in "${SEND_GROUP_ORDER[@]+"${SEND_GROUP_ORDER[@]}"}"; do
+        list="${SEND_GROUPS[$key]}"
+        local -a members=()
+        IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
+        [ "$direction" = "pull" ] || continue
+        if [ "${#members[@]}" -gt 1 ]; then
+            die "[dataset:$ds] and other section(s) all resolved the identical src='$dst' -- pull datasets cannot be merged (snapget.sh needs one local destination per literal remote name). Give each a distinct remote path, or split them onto different schedules/prefixes/flags."
+        fi
+        pull_check "$ds" "$dst" || die "$PULL_ERR"
+    done
+}
+
 #BEGIN 3.8 [EMISSION]
 ###############################################################################
 # Appends into JOB_LINES/RETAIN_LINES (consumed unchanged by generate_block
@@ -1629,15 +1673,9 @@ emit_send() {
             if [ "${#members[@]}" -gt 1 ]; then
                 die "[dataset:$ds] and other section(s) all resolved the identical src='$dst' -- pull datasets cannot be merged (snapget.sh needs one local destination per literal remote name). Give each a distinct remote path, or split them onto different schedules/prefixes/flags."
             fi
-            local remote_name local_base
-            remote_name="${dst#*:}"
-            if [ "$ds" = "$remote_name" ]; then
-                local_base=""
-            elif [[ "$ds" == */"$remote_name" ]]; then
-                local_base="${ds%/$remote_name}"
-            else
-                die "[dataset:$ds] direction=pull: the local path must end with the remote dataset name ('$remote_name', from src='$dst') -- e.g. local dataset:<base>/$remote_name. snapget.sh has no way to reconcile an unrelated local name with a fixed remote one."
-            fi
+            local local_base
+            pull_check "$ds" "$dst" || die "$PULL_ERR"
+            local_base="$PULL_LOCAL_BASE"
             local cmd
             cmd="$REPO_DIR/snapget.sh -m \"$prefix\""
             [ -n "$flags" ] && cmd="$cmd $flags"
@@ -2608,6 +2646,7 @@ group_inline_prune
 group_bookmark_prune
 group_monitor
 validate_retain_patterns
+validate_transfer_semantics
 
 if [ "${RECONCILE:-0}" -eq 1 ]; then
     do_reconcile

@@ -301,6 +301,39 @@ case "$unc" in *"rpool/data/swap"*) ok "a nested workload named swap stays an or
 case "$unc" in *"rpool/swap-backups"*) ok "swap-backups stays an ordinary finding" ;;
   *) bad "swap-backups stays an ordinary finding" "$unc" ;; esac
 
+
+# --- rejection parity: the audit must not accept what generation refuses -----
+#
+# REV-20260808-072 F1. The pull suffix contract lived only inside emit_send,
+# which --reconcile never reaches, so the audit could certify a config the
+# generator refuses to execute. A checker more permissive than the thing it
+# checks is worse than no checker: it issues a clean bill of health for
+# something that cannot run.
+#
+# The malformed shape is the one that exposed it: the local path does not end
+# with the literal remote dataset name.
+conf_own '[defaults]
+	host_label = t
+
+[dataset:tank/incoming]
+	use_template = hourly
+	src          = root@far:far/data'
+world tank tank/incoming
+
+"$GEN" -c "$TMPD/jobs.conf" >/dev/null 2>&1
+gen_rc=$?
+"$GEN" -c "$TMPD/jobs.conf" --reconcile >/dev/null 2>&1
+rec_rc=$?
+[ "$gen_rc" -ne 0 ] && ok "normal generation rejects the malformed pull" \
+                    || bad "normal generation rejects the malformed pull" "rc=$gen_rc"
+[ "$rec_rc" -ne 0 ] && ok "--reconcile rejects it too (same boundary)" \
+                    || bad "--reconcile rejects it too (same boundary)" "rc=$rec_rc"
+# The refusal must say WHY, not merely exit non-zero -- both commands run in
+# cron and their output is all an operator gets.
+out="$("$GEN" -c "$TMPD/jobs.conf" --reconcile 2>&1)"
+case "$out" in *"must end with the remote dataset name"*) ok "--reconcile names the contract it refused on" ;;
+  *) bad "--reconcile names the contract it refused on" "$out" ;; esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
