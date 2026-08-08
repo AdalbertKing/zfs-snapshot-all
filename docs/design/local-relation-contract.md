@@ -274,3 +274,39 @@ operator learns to trust a control that does not exist.
    hidden from `--help` for a local relation;
 3. nothing here contradicts REV-075's ordering, which it should not, since the
    sequence is derived from it.
+
+---
+
+## 9. The "transactionally" claim, established rather than assumed
+
+I wrote step 7 as "install the managed cron block transactionally" and then said
+I had not read `lib-cron.sh` closely enough to promise it. Read now, so the
+contract rests on the code rather than on a hope.
+
+**What `cron_block_install` actually provides:**
+
+| property | how |
+|---|---|
+| mutual exclusion | `flock -w $CRON_LOCK_TIMEOUT` on a per-user lock file, refusing a symlinked lock path and an unwritable lock dir |
+| read-modify-write inside the lock | reads the current crontab, renders, compares |
+| no-op detection | identical content returns success with `CRON_CHANGED=0`, so a rerun writes nothing |
+| **write verified by read-back** | `cron_write` re-reads after `crontab(1)` and refuses to report success if the content differs |
+| failure classification | `cron_restore_after_failure` checks whether the crontab actually changed before shouting; a crontab that never changed is not a false emergency |
+| unverifiable restore | distinct **exit 2**, prior content deliberately left on disk |
+
+So **step 9's read-back already exists in the library** — `add-local` inherits
+it rather than needing to add it, which also means there is no second place for
+it to drift.
+
+**The boundary, stated because it is real:** the `flock` serialises writers that
+go *through this library*. It does not serialise a human running `crontab -e`,
+and `crontab(1)` offers no compare-and-swap. A concurrent hand-edit landing
+between the read and the write would be silently overwritten — except that the
+read-back then compares against what *we* wrote, so the loss would be real and
+unreported.
+
+That is a pre-existing property of the whole package, not something the local
+path introduces, and every existing caller already lives with it. I am recording
+it rather than fixing it here: widening the lock to cover interactive edits is
+its own change, with its own blast radius, and it does not belong inside a
+single-host deployment feature.
