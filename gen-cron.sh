@@ -563,30 +563,52 @@ maybe_add_quiesce() {
 #   arg-taking (union): m l v j p k q Q T o x c b X K O L
 #   boolean    (union): e z Z g N r R n i H u U f w V A F S
 FLAGS_ARG_LETTERS='mlvjpkqQToxcbXKOL'
-flags_opt_letters() {   # <flags string> -> option letters, one per line
-    local tok rest c want_arg=0
+# One grammar, two views. flags_opt_pairs does the getopts-equivalent walk and
+# yields "<letter><TAB><argument>"; flags_opt_letters is the letters-only view of
+# the SAME walk, so there is no second implementation to keep in step.
+#
+# REV-20260808-074 follow-up: --reconcile had grown its own token walker that
+# recognised only `-S`, `-X` and `-Xpat` as whole tokens. Legal clustered
+# spellings the engine accepts -- `-eS`, `-SX drop$` -- were misread, and the
+# skipped parent or excluded child came back COVERED. That is the same defect
+# REV-20260808-069 fixed in the engines' own pre-pass, rewritten by hand a
+# second time. Hence: extract, do not re-implement.
+flags_opt_pairs() {   # <flags string> -> "<letter>	<argument>" per option
+    local tok rest c want_arg=0 pending=""
     for tok in $1; do
-        if [ "$want_arg" -eq 1 ]; then want_arg=0; continue; fi
+        if [ "$want_arg" -eq 1 ]; then
+            printf '%s	%s
+' "$pending" "$tok"; want_arg=0; pending=""; continue
+        fi
         case "$tok" in
             --) break ;;          # end of options, same as getopts
             -?*) rest="${tok#-}" ;;
-            *) continue ;;        # a positional, or an argument we did not have to consume
+            *) continue ;;        # a positional, or an argument we did not consume
         esac
         while [ -n "$rest" ]; do
             c="${rest%"${rest#?}"}"
             rest="${rest#?}"
-            printf '%s\n' "$c"
             case "$FLAGS_ARG_LETTERS" in
                 *"$c"*)
                     # The argument is the remainder of this token if there is
                     # one, otherwise the next token. Either way nothing left in
                     # this token is an option letter.
-                    [ -n "$rest" ] || want_arg=1
-                    rest=""
+                    if [ -n "$rest" ]; then
+                        printf '%s	%s
+' "$c" "$rest"; rest=""
+                    else
+                        pending="$c"; want_arg=1
+                    fi
                     ;;
+                *) printf '%s	
+' "$c" ;;
             esac
         done
     done
+}
+
+flags_opt_letters() {   # <flags string> -> option letters, one per line
+    flags_opt_pairs "$1" | cut -f1
 }
 
 # Splits legacy recursion OUT of a flags string, using the same option walk as
@@ -2595,17 +2617,14 @@ do_reconcile() {
                 # (-S) or for a child it filters out (-X) -- a FALSE NEGATIVE,
                 # the direction that hides an unprotected dataset. Latent
                 # rather than live today: no config in this fleet uses either.
-                local skip_parent=0 tok
+                local skip_parent=0 oletter oarg
                 local -a excl=()
-                local expect_x=0
-                for tok in $eflags; do
-                    if [ "$expect_x" -eq 1 ]; then excl+=("$tok"); expect_x=0; continue; fi
-                    case "$tok" in
-                        -S)  skip_parent=1 ;;
-                        -X)  expect_x=1 ;;
-                        -X*) excl+=("${tok#-X}") ;;
+                while IFS="$(printf '	')" read -r oletter oarg; do
+                    case "$oletter" in
+                        S) skip_parent=1 ;;
+                        X) [ -n "$oarg" ] && excl+=("$oarg") ;;
                     esac
-                done
+                done < <(flags_opt_pairs "$eflags")
                 while IFS= read -r line; do
                     [ -n "$line" ] || continue
                     [ "$skip_parent" -eq 1 ] && [ "$line" = "$ds" ] && continue

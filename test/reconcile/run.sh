@@ -439,6 +439,56 @@ case "$unc" in *"tank/p/drop"*) ok "-X: the excluded child is NOT counted as cov
 case "$unc" in *"tank/p/keep"*) bad "-X: the kept child is still covered" "$unc" ;;
   *) ok "-X: the kept child is still covered" ;; esac
 
+
+# --- clustered -S / -X spellings (REV-20260808-074 follow-up) ----------------
+#
+# The engine uses getopts, so `-eS` is -e plus -S and `-SX drop$` is -S plus -X
+# taking the next token. Reconciliation had its own token walker recognising
+# only -S, -X and -Xpat as whole tokens, so those legal spellings were misread
+# and the skipped parent or excluded child came back COVERED -- a false green.
+#
+# Same defect REV-069 fixed in the engines' pre-pass, hand-written a second time
+# in a different file. The fix is one shared grammar, not a longer list of
+# spellings.
+unc_of() {   # -> the UNCOVERED block for the current config
+    run | awk '/UNCOVERED/{f=1;next} /^$/{f=0} f'
+}
+
+world tank "tank/p 9000000" "tank/p/a 0" "tank/p/b 0"
+conf '[dataset:tank/p]
+	use_template = hourly
+	recursive    = flat
+	flags        = -eS'
+case "$(unc_of)" in *"tank/p"*) ok "-eS: clustered skip-parent is honoured" ;;
+  *) bad "-eS: clustered skip-parent is honoured" "$(unc_of)" ;; esac
+
+world tank "tank/p 9000000" "tank/p/keep 0" "tank/p/drop 0"
+conf '[dataset:tank/p]
+	use_template = hourly
+	recursive    = flat
+	flags        = -SX drop$'
+u="$(unc_of)"
+case "$u" in *"tank/p/drop"*) ok "-SX <pat>: the cluster gives -S AND -X with the next token" ;;
+  *) bad "-SX <pat>: the cluster gives -S AND -X with the next token" "$u" ;; esac
+case "$u" in *"tank/p"$'\n'*|*"tank/p") ok "-SX <pat>: the parent is skipped too" ;;
+  *) bad "-SX <pat>: the parent is skipped too" "$u" ;; esac
+case "$u" in *"tank/p/keep"*) bad "-SX <pat>: the non-matching child stays covered" "$u" ;;
+  *) ok "-SX <pat>: the non-matching child stays covered" ;; esac
+
+# Argument boundary: the S inside an -X ARGUMENT is data, not skip-parent.
+# Getting this wrong is the mirror image -- it would skip a parent nobody asked
+# to skip, and report it as unprotected.
+world tank "tank/p 0" "tank/p/fooS 0" "tank/p/other 0"
+conf '[dataset:tank/p]
+	use_template = hourly
+	recursive    = flat
+	flags        = -X fooS'
+u="$(unc_of)"
+case "$u" in *"tank/p/fooS"*) ok "-X fooS: the excluded child is uncovered" ;;
+  *) bad "-X fooS: the excluded child is uncovered" "$u" ;; esac
+case "$u" in *"tank/p"$'\n'*|*"tank/p") bad "-X fooS: S inside the ARGUMENT is not skip-parent" "$u" ;;
+  *) ok "-X fooS: S inside the ARGUMENT is not skip-parent" ;; esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
