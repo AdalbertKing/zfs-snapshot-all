@@ -1,5 +1,53 @@
 # F3: which config is each host actually running?
 
+> ## CORRECTION, 2026-08-08 13:40 — the first version of this document was WRONG
+>
+> It concluded that two of four stored configs had drifted from the installed
+> cron. **They have not.** Measured against the configs that actually live on the
+> hosts, in `/etc/zfs-snapshot-all/`, all four match exactly:
+>
+> | host | config | generated | installed | only in cron | only in config |
+> |---|---|---|---|---|---|
+> | metropolis pve1 | `/etc/zfs-snapshot-all/jobs.pve1.v4.conf` | 15 | 15 | 0 | 0 |
+> | metropolis pve2 | `/etc/zfs-snapshot-all/jobs.pve2.v4.conf` | 11 | 11 | 0 | 0 |
+> | 11.x pve0 | `/etc/zfs-snapshot-all/jobs.pve0.v4.conf` | 31 | 31 | 0 | 0 |
+> | 11.x pve1 | `/etc/zfs-snapshot-all/jobs.11.11.v4.conf` | 7 | 7 | 0 | 0 |
+>
+> **There is no config provenance problem.** `docs/PROJECT_STATUS.md` was right
+> that the configs were moved to `/etc/zfs-snapshot-all/`; my measurement was
+> wrong.
+>
+> **How I got it wrong, since the mechanism matters more than the conclusion.**
+> I searched `/opt`, `/root/scripts`, the git checkout and
+> `/home/zfsbackup/cron-configs`, found nothing, and reported "the configs do not
+> live on the hosts" — **without ever looking at the location the status document
+> names**. Then, having decided no host-local config existed, I compared the
+> WORKSTATION copies in `cron-configs/` and read their differences as fleet
+> drift.
+>
+> Those workstation copies *are* stale — `jobs.pve0.v4-po-migracji.conf` is not
+> even the file pve0 uses, which is `jobs.pve0.v4.conf` — but that is a
+> housekeeping matter in a private register, not a fleet integrity problem, and I
+> reported it as the latter.
+>
+> Consequence for REV-20260808-071: the reviewer's interim direction to
+> *reconstruct the two drifted configs from installed cron* addresses a problem
+> that does not exist. Nothing needs reconstructing. The `cron2conf.sh` work is
+> not required.
+>
+> What survives from below: the 11.x pve1 workstation copy genuinely did not
+> parse and was migrated (the host-local copy had already been migrated on
+> 2026-08-07, `.pre-recursion.20260807-144253`); and the note that generating as
+> root rather than as the crontab owner makes every line differ on the log path
+> alone.
+>
+> The rest of this document is kept unedited below as the record of a wrong
+> conclusion, not as current fact.
+
+---
+
+# (superseded) F3: which config is each host actually running?
+
 REV-20260808-071 F3 requires that, before any reconciliation output is believed,
 the config it was run against is proven to generate the job set the host really
 executes. Measured 2026-08-08 at `8b578bd`.

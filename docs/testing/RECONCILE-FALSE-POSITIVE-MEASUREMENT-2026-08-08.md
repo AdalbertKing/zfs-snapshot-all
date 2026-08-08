@@ -55,7 +55,13 @@ implementation detail, and it belongs to the owner and the reviewer.
 
 ## 3. Two operational findings the measurement surfaced
 
-**a. The configs do not live on the hosts.** `/home/zfsbackup/zfs-snapshot-all`
+**a. CORRECTED 2026-08-08 13:40 — this claim was false.** The configs DO live on
+the hosts, in `/etc/zfs-snapshot-all/`, on all four. I searched several other
+places and never the one `docs/PROJECT_STATUS.md` names. The measurement below
+was run against workstation copies for that reason. See
+`RECONCILE-CONFIG-PROVENANCE-2026-08-08.md`.
+
+~~**a. The configs do not live on the hosts.**~~ `/home/zfsbackup/zfs-snapshot-all`
 contains no `jobs.*.conf` on any host; the files live only in the private
 `cron-configs` repository on the workstation. Metropolis pve1 runs **8** live
 `snapsend` jobs with no config file present anywhere on it.
