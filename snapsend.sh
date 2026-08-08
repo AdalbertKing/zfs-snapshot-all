@@ -70,6 +70,14 @@ set -o pipefail
 #                    below). Mutually exclusive with -r. Quiescing still takes
 #                    one atomic snapshot across the whole expanded set before
 #                    the per-child sends start.
+#
+#   Long spellings (Stage 2.3), exactly equivalent to the short flags:
+#     --recursive=atomic   = -r
+#     --recursive=flat     = -R
+#     --recursive=no       = neither, stated explicitly
+#   Exactly ONE recursion declaration per invocation. A second is refused even
+#   when it agrees, and even when the two use different spellings -- so
+#   `--recursive=no -r` is an error, not a silent -r.
 #   -X <REGEX>        Under -R only: drop every expanded dataset whose full name
 #                    matches REGEX -- an extended regex as `grep -E` reads it,
 #                    unanchored, so anchor it yourself with ^ / $ when you mean
@@ -420,7 +428,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.70'
+VERSION='v2.71'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1464,6 +1472,87 @@ process_dataset() {
 #BEGIN 5A [ARGUMENT PARSING]
 ###############################################################################
 PAIR_LABEL=""
+# --- long options (Stage 2.3) ------------------------------------------------
+#
+# getopts has no long options, so the only place to handle them is a pre-pass
+# over "$@". It must be getopts-EQUIVALENT or it becomes the very bug REV-054
+# fixed in the generator: walking flags without knowing which letters take an
+# argument, so `-m --recursive=flat` -- a MESSAGE that happens to look like a
+# flag -- gets rewritten as a declaration.
+#
+# Two rules it copies from getopts, deliberately:
+#   * `--` ends option processing;
+#   * the first non-option argument ends it too.
+# Anything after either point is data and is passed through untouched.
+#
+# The letters that take an argument are read FROM THE OPTSTRING, not from a
+# second list. A hand-kept list is a list that drifts, and a drift here is
+# silent: it mis-parses one specific invocation and looks fine everywhere else.
+#
+# The recursion long forms set the variables DIRECTLY and emit nothing, rather
+# than being rewritten to -r/-R. If they emitted short flags, getopts would
+# count a second declaration for the same one the user wrote, and the refusal
+# would quote a spelling that never appeared on the command line.
+OPTSTRING="m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:"
+
+opt_takes_arg() {   # <letter>
+    case "$OPTSTRING" in *"$1:"*) return 0 ;; *) return 1 ;; esac
+}
+
+translate_long_options() {
+    local -a out=()
+    local a mode last
+    while [ $# -gt 0 ]; do
+        a="$1"
+        case "$a" in
+            --)  out+=("$@"); break ;;
+            --recursive=*)
+                mode="${a#--recursive=}"
+                case "$mode" in
+                    atomic) RECURSIVE=1;    declare_recursion "$a" ;;
+                    flat)   FLAT_RECURSE=1; declare_recursion "$a" ;;
+                    # A full declaration, not the absence of one: it says "do
+                    # not recurse", and a second declaration after it is still
+                    # one too many. Emitting nothing here is what makes
+                    # `--recursive=no -r` refuse instead of collapsing to -r
+                    # (REV-20260807-060 A4, on my own first design).
+                    no)     declare_recursion "$a" ;;
+                    *) echo "Error: --recursive= takes atomic, flat or no (got '$mode')" >&2; exit 1 ;;
+                esac
+                shift ;;
+            --recursive)
+                echo "Error: --recursive needs a mode: --recursive=atomic|flat|no" >&2; exit 1 ;;
+            --*)
+                echo "Error: unknown option $a" >&2; exit 1 ;;
+            -?*)
+                out+=("$a"); shift
+                # A cluster ends in a letter that takes an argument, and the
+                # value is not attached: the NEXT argv is that value, so it must
+                # not be inspected as an option.
+                last="${a: -1}"
+                if [ "${#a}" -eq 2 ] && opt_takes_arg "$last" && [ $# -gt 0 ]; then
+                    out+=("$1"); shift
+                fi ;;
+            *)
+                # First non-option argument: getopts stops here, so do we.
+                out+=("$@"); break ;;
+        esac
+    done
+    TRANSLATED_ARGS=("${out[@]+"${out[@]}"}")
+}
+
+# Assigned through a GLOBAL array, not printed and re-read. A process
+# substitution would put the whole walk in a SUBSHELL, so RECURSIVE,
+# FLAT_RECURSE and the declaration counter would be set in a child that then
+# exits -- the same subshell trap that made the first run-suffix test pass
+# against unchanged code. It also keeps arguments containing whitespace or
+# newlines intact, with no delimiter to choose.
+TRANSLATED_ARGS=()
+if [ $# -gt 0 ]; then
+    translate_long_options "$@"
+    set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
+fi
+
 while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;

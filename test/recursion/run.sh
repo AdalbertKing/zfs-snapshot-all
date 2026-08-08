@@ -98,6 +98,101 @@ for engine in snapsend.sh snapget.sh; do
     accepts "$engine" "-m -R -r is a message plus ONE declaration" -m -R -r
 done
 
+
+# --- long options (Stage 2.3) ------------------------------------------------
+
+# understands <engine> <label> <args...>
+# Stronger than accepts(): the spelling must be RECOGNISED, not merely
+# un-refused-for-recursion. Without this, "--recursive=atomic is a declaration"
+# passes against a version that has no long options at all, because its
+# complaint is an unknown-option error rather than a recursion error.
+understands() {
+    local engine="$1" label="$2"; shift 2
+    local out
+    out="$(bash "$REPO/$engine" "$@" tank/src tank/dst 2>&1)"
+    case "$out" in
+        *"illegal option"*|*"Nieznana opcja"*|*"unknown option"*)
+            bad "$engine: $label" "spelling not recognised: $(printf '%s' "$out" | grep -iE 'illegal|Nieznana|unknown' | head -1)" ;;
+        *"recursion declared more than once"*|*"mutually exclusive"*)
+            bad "$engine: $label" "refused a single declaration" ;;
+        *) ok "$engine: $label" ;;
+    esac
+}
+
+for engine in snapsend.sh snapget.sh; do
+    refuses "$engine" "--recursive=ture is refused, naming the value" "got 'ture'" --recursive=ture
+    refuses "$engine" "bare --recursive is refused"        "needs a mode" --recursive
+    refuses "$engine" "an unknown long option is refused"  "unknown option" --nonsense
+
+    understands "$engine" "--recursive=atomic is a declaration" --recursive=atomic
+    understands "$engine" "--recursive=flat is a declaration"   --recursive=flat
+    understands "$engine" "--recursive=no is a declaration"     --recursive=no
+
+    # THE case REV-20260807-060 A4 caught in my first design: if --recursive=no
+    # were argv erasure, this would collapse silently to -r.
+    refuses "$engine" "--recursive=no -r is refused, not collapsed to -r"             "declared more than once" --recursive=no -r
+    refuses "$engine" "mixed short and long forms are two declarations"             "declared more than once" -r --recursive=atomic
+    refuses "$engine" "the same long form twice is two declarations"             "declared more than once" --recursive=atomic --recursive=atomic
+
+    # getopts equivalence: the pre-pass must know which letters take an
+    # argument, or a MESSAGE that looks like a flag becomes a declaration.
+    understands "$engine" "-m --recursive=flat is a message, not a declaration" -m --recursive=flat
+
+    # Both of getopts' stop rules.
+    accepts "$engine" "after -- a long form is data"        -- --recursive=flat
+    accepts "$engine" "after a positional a long form is data" tank/first --recursive=flat
+done
+
+# --- delsnaps / check-snap-age: one case branch, extracted --------------------
+#
+# These two die on a missing dependency (flock, zfs) BEFORE reaching their
+# argument loop, so running them proves nothing about parsing on a machine
+# without those tools -- a bare invocation "accepts" a typo just as happily as
+# the real spelling. The loop is therefore extracted and exercised on its own.
+argloop() {   # <script> <var> <args...> -> the variable's value, or UNKNOWN-REJECTED
+    local src="$1" var="$2"; shift 2
+    local start end body
+    start="$(grep -n '^while \[ "\$#" -gt 0 \]; do' "$REPO/$src" | head -1 | cut -d: -f1)"
+    end="$(awk -v s="$start" 'NR>=s && /^done$/ {print NR; exit}' "$REPO/$src")"
+    body="$(sed -n "${start},${end}p" "$REPO/$src")"
+    (
+        set -u
+        RECURSE=false; recurse=false; DRY_RUN=false; CLEARCUT=false
+        VERBOSE=false; PAIR_LABEL=""
+        usage() { echo UNKNOWN-REJECTED; exit 7; }
+        die()   { echo UNKNOWN-REJECTED; exit 7; }
+        set -- "$@"
+        eval "$body" || exit $?
+        eval "printf '%s
+' \"\$$var\""
+    ) 2>/dev/null
+}
+
+for pair in "delsnaps.sh recurse" "check-snap-age.sh RECURSE"; do
+    set -- $pair; src="$1"; var="$2"
+    got="$(argloop "$src" "$var" --recursive)"
+    case "$got" in
+        true) ok "$src: --recursive sets recursion" ;;
+        *)    bad "$src: --recursive sets recursion" "got '$got'" ;;
+    esac
+    got="$(argloop "$src" "$var" -R)"
+    case "$got" in
+        true) ok "$src: -R still sets recursion" ;;
+        *)    bad "$src: -R still sets recursion" "got '$got'" ;;
+    esac
+    got="$(argloop "$src" "$var")"
+    case "$got" in
+        false) ok "$src: no flag leaves recursion off" ;;
+        *)     bad "$src: no flag leaves recursion off" "got '$got'" ;;
+    esac
+    # A typo must NOT quietly enable recursion -- the failure that would matter.
+    got="$(argloop "$src" "$var" --recursiv)"
+    case "$got" in
+        true) bad "$src: a typo does not enable recursion" "--recursiv set it" ;;
+        *)    ok "$src: a typo does not enable recursion" ;;
+    esac
+done
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

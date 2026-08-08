@@ -18,9 +18,9 @@ set -o pipefail
 # delsnaps.sh/snapsend.sh there is no remote/ssh mode, since a monitor check is
 # meant to run on the same host that owns the schedule being verified.
 #
-# Usage: check-snap-age.sh [-R] [-v] [-L LABEL] <comma-separated datasets> <pattern> <warn> <crit>
+# Usage: check-snap-age.sh [-R|--recursive] [-v] [-L LABEL] <comma-separated datasets> <pattern> <warn> <crit>
 #
-# -R            : also check every descendant dataset (filesystem/volume) under
+# -R, --recursive : also check every descendant dataset (filesystem/volume) under
 #                 each entry, evaluated independently against the SAME
 #                 pattern/thresholds -- mirrors delsnaps.sh -R (one rule applied
 #                 per-dataset, not a single aggregate check across the subtree).
@@ -74,7 +74,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.2'
+VERSION='v2.3'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -102,7 +102,10 @@ RECURSE=false
 PAIR_LABEL=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -R) RECURSE=true; shift ;;
+        # --recursive is the long spelling of -R (Stage 2.3). Unlike the
+        # transfer engines this script has ONE recursion mode, so there is no
+        # =atomic/=flat to distinguish and the bare long form is the alias.
+        -R|--recursive) RECURSE=true; shift ;;
         -v|--verbose) VERBOSE=true; shift ;;
         -L) PAIR_LABEL="${2:-}"; shift 2 ;;
         *) break ;;

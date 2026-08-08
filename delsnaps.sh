@@ -47,7 +47,7 @@ set -o pipefail
 #    ./delsnaps.sh -p2222 "backup@pve2:tank/data" "monthly-" -M12
 
 # Options:
-# -R                   : Recursively process child datasets (each with its own
+# -R, --recursive      : Recursively process child datasets (each with its own
 #                        retention). This is the correct way to prune a subtree.
 # -n                   : Dry-run. Print what would be deleted/kept; never calls
 #                        `zfs destroy`. Can be combined with -R, in any order.
@@ -162,7 +162,7 @@ set -o pipefail
 #   ./delsnaps.sh -n -G -R "hdd/backups" "" -H24 -D7 -W4 -M12 -Y3
 # (drop -n to actually delete once the dry-run output looks right)
 
-VERSION='v1.28'
+VERSION='v1.29'
 EXIT_CODE=0
 DRY_RUN=false
 CLEARCUT=false
@@ -948,7 +948,10 @@ recurse=false
 # (datasets list).
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -R) recurse=true; shift ;;
+        # --recursive is the long spelling of -R (Stage 2.3). One recursion
+        # mode here, so the bare long form is the alias -- there is no
+        # =atomic/=flat distinction to make.
+        -R|--recursive) recurse=true; shift ;;
         -n) DRY_RUN=true; shift ;;
         -F) CLEARCUT=true; shift ;;
         -B) BOOKMARK_MODE=true; shift ;;
