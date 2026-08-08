@@ -120,3 +120,27 @@ momencie, gdy detektor jest jeszcze recenzowany.
 
 Do czasu rozstrzygniecia `hdd/isos` **pozostaje zgloszany** przez `--reconcile`.
 Zapisane tutaj, zeby decyzja nie zyla wylacznie w rozmowie.
+
+---
+
+## ROZSTRZYGNIETE 2026-08-08 — cel w tej samej puli przy `add-local`
+
+**Wlasciciel: wariant B — podac sam fakt, raz, w podgladzie, bez werdyktu.**
+
+```
+Uwaga: cel hdd/backups jest w tej samej puli co zrodlo hdd/vm-disks.
+```
+
+Bez „czy na pewno", bez flagi do obejscia, bez tlumaczenia przed czym to chroni.
+**Nic z tego nie trafia do `--reconcile`** — tam obowiazuje wczesniejsze
+rozstrzygniecie w calosci: audyt nie ocenia wystarczalnosci.
+
+Uzasadnienie rozdzialu: podglad to nie audyt. Audyt chodzi w nocy i nie moze
+moralizowac; podglad to jednorazowy ekran dla czlowieka w momencie wyboru.
+
+**Osobno i niezaleznie od tego: cel ZAGNIEZDZONY w zrodle jest ODRZUCANY.**
+To wada poprawnosciowa, nie polityka. Zmierzone, bo pierwszy opis mechanizmu
+byl bledny: pierwszy przebieg konczy sie `rc=0`, drugi zglasza
+`Transfer failed` i **mimo to** tworzy kolejny poziom zagniezdzenia. Kazdy
+przebieg kopiuje poprzednia kopie do nowej — narastanie bez granicy, podane jako
+zwykla awaria transferu. Dzis nic tego nie pilnuje.

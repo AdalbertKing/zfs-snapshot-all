@@ -86,11 +86,45 @@ zfs-backup.sh add-local NAME --source=rpool/data --target=hdd/backups \
   engines are frozen and this needs nothing from them.
 - **No new renderer.** `gen-cron.sh` stays the only thing that turns CONFIG v4
   into cron. `add-local` writes config and calls it.
-- **Same-pool targets.** `rpool/data -> hdd/backups` is cross-pool and is the
-  point. `hdd/x -> hdd/backups` is legal and weaker. The owner decided
-  2026-08-08 that judging protection *sufficiency* is not this layer's job, so
-  `add-local` will **not** refuse a same-pool target. Open question: should it
-  say so once, at preview time?
+- **Same-pool targets — SETTLED 2026-08-08, owner chose option B.**
+  `rpool/data -> hdd/backups` is cross-pool and is the point. `hdd/x ->
+  hdd/backups` is legal and weaker. `add-local` will **not** refuse it, and will
+  state the topology **once, at preview, without a verdict**:
+
+  ```
+  Uwaga: cel hdd/backups jest w tej samej puli co zrodlo hdd/vm-disks.
+  ```
+
+  No "are you sure", no flag to bypass, no explanation of what it does or does
+  not protect against. The deciding argument: **the preview is not the audit.**
+  `--reconcile` is a machine that runs nightly and must not editorialise -- the
+  owner's ruling applies there in full and nothing is added to it. The preview is
+  a one-time screen shown to a human at the moment they choose a design. A fact
+  that would be noise in a nightly alert is exactly right once, there.
+
+  Cost of being wrong: one line to delete. A refusal with `--allow-same-pool`
+  would have stayed in the interface forever.
+
+- **Nested targets are REFUSED.** A target inside the source is a correctness
+  defect, not a policy question, and nothing guards it today -- the existing
+  self-sync guard covers only bare `user@host` resolving to this host.
+
+  Measured on metropolis pve1 rather than argued, because my first description
+  of the failure was wrong. `snapsend.sh -R hdd/nest-src hdd/nest-src/backup`:
+
+  | run | result |
+  |---|---|
+  | 1 | `rc=0`, "All datasets processed successfully" -- `-R` expands descendants BEFORE the run and the target did not exist yet |
+  | 2 | reports **`Transfer failed`** and still creates a second nesting level |
+
+  Dataset count went 6 -> 10, depth reached
+  `hdd/nest-src/backup/hdd/nest-src/backup/hdd/nest-src/child`. So it is not an
+  infinite loop inside one run: **each run copies the previous backup into the
+  new one**, growing without bound while reporting a transfer error. That shape
+  is worse than a loop, because it reads as an ordinary transfer failure.
+
+  `add-local` refuses a target at or beneath the source, before writing
+  anything. Scratch datasets destroyed after the measurement.
 - **Profiles.** `--profile` is accepted only once the Stage 5 runtime exists.
   Until then `add-local` takes cadence/retention from a built-in default and
   says which one it used.
@@ -123,8 +157,7 @@ zfs-backup.sh add-local NAME --source=rpool/data --target=hdd/backups \
    name it);
 2. **reviewer:** the lifecycle decision in §2 — own short lifecycle, or reuse
    with peer states declared N/A;
-3. **reviewer:** whether `add-local` should warn once about a same-pool target,
-   given the owner's ruling that sufficiency is not judged here.
+3. ~~same-pool warning~~ — **settled by the owner: option B**, see §4.
 
 I am not starting implementation until §7.2 is settled, because getting the
 lifecycle wrong is the expensive mistake and the one hardest to undo after
