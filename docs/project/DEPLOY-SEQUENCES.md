@@ -39,10 +39,21 @@ Seeding over LAN and running over VPN adds `set-endpoint pve2 --host=<vpn>` and
 ./deploy.sh                                              # bootstrap
 zfs create -p hdd/backups
 vi /etc/zfs-snapshot-all/jobs.pve1.conf                  # CONFIG v4 BY HAND
-./gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve1.conf            # preview
-./gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve1.conf --install
-./snapsend.sh -m automated_ rpool/data hdd/backups               # seed by hand
+./gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve1.conf            # render/validate only
+./snapsend.sh -m automated_ rpool/data hdd/backups               # seed, FOREGROUND
+./gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve1.conf --install  # ONLY after the seed succeeded
+./gen-cron.sh -c /etc/zfs-snapshot-all/jobs.pve1.conf --reconcile # read back
 ```
+
+**CORRECTED after the reviewer's comparison (2026-08-09).** The first version of
+this row put `--install` *before* the manual seed — the exact ordering REV-075
+had just made me fix in the single-host contract. Labelling a sequence TODAY does
+not make it safe to publish in the wrong order: a runbook teaches whatever order
+it prints, and this one would have taught scheduled jobs firing on a
+relationship whose first seed had never run.
+
+This is an expert escape path, not product UX. Keeping it fail-closed in the
+same direction as the future orchestrator is the least it must do.
 
 Six steps, including writing a config from memory and a hand-run seed with no
 gate between it and the installed cron.
