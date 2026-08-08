@@ -143,16 +143,39 @@ profile_validate_templates() {   # <file> <schema dump>
 }
 
 # The whole profile directory, which is what a runtime should call.
+#
+# A profile IS exactly three artifacts -- templates.conf, dataset.inc,
+# prune.inc. That is Slice A's definition, not an open-ended directory format,
+# so completeness is part of this contract and is checked HERE.
+#
+# REV-20260809-077 F1: the first version wrote `[ -f "$dir/x" ] && ! validate`,
+# which reads as "if it exists and fails, complain" -- so a MISSING artifact
+# returned success from the production boundary. An empty directory validated
+# clean. Putting the completeness check in the caller instead would have
+# recreated the exact problem REV-076 removed: a second piece of profile grammar
+# living outside the one boundary that owns it.
 profile_validate_dir() {   # <profile dir> <gen-cron.sh path>
     PROFILE_ERR=""
-    local dir="$1" gen="$2" dump rc=0
+    local dir="$1" gen="$2" dump f
     [ -d "$dir" ] || { PROFILE_ERR="no such profile directory: $dir"; return 1; }
+
+    # Completeness first: a profile missing a piece is not a smaller profile,
+    # it is a broken one, and the message names the path so the operator is not
+    # left guessing which of the three.
+    for f in templates.conf dataset.inc prune.inc; do
+        if [ ! -r "$dir/$f" ]; then
+            PROFILE_ERR="$dir/$f is missing or unreadable -- a profile is exactly templates.conf, dataset.inc and prune.inc"
+            return 1
+        fi
+    done
+
     dump="$(mktemp)" || { PROFILE_ERR="mktemp failed"; return 1; }
     if ! profile_schema_dump "$gen" "$dump"; then rm -f "$dump"; return 1; fi
-    if   [ -f "$dir/templates.conf" ] && ! profile_validate_templates "$dir/templates.conf" "$dump"; then rc=1
-    elif [ -f "$dir/dataset.inc" ]    && ! profile_validate_fragment dataset "$dir/dataset.inc" "$dump"; then rc=1
-    elif [ -f "$dir/prune.inc" ]      && ! profile_validate_fragment prune   "$dir/prune.inc"   "$dump"; then rc=1
-    fi
+
+    if ! profile_validate_templates "$dir/templates.conf" "$dump"; then rm -f "$dump"; return 1; fi
+    if ! profile_validate_fragment dataset "$dir/dataset.inc" "$dump"; then rm -f "$dump"; return 1; fi
+    if ! profile_validate_fragment prune   "$dir/prune.inc"   "$dump"; then rm -f "$dump"; return 1; fi
+
     rm -f "$dump"
-    return "$rc"
+    return 0
 }

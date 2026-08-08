@@ -189,5 +189,63 @@ fi
 
 
 echo
+
+# --- a profile is exactly three artifacts (REV-20260809-077 F1) --------------
+#
+# profile_validate_dir used to write `[ -f "$dir/x" ] && ! validate`, which
+# reads as "if it exists and fails, complain" -- so a MISSING artifact returned
+# SUCCESS from the production boundary and an empty directory validated clean.
+# The suite could not see it, because it checked the shipped fixture's files
+# exist separately -- a different property, and one B1 would not inherit.
+mkprofile() {   # <which to omit|-> -> a profile dir in $TMP
+    local omit="$1" d="$TMP/prof.$$"
+    rm -rf "$d"; mkdir -p "$d"
+    [ "$omit" = templates.conf ] || cp "$PROFILE/templates.conf" "$d/"
+    [ "$omit" = dataset.inc ]    || cp "$PROFILE/dataset.inc"    "$d/"
+    [ "$omit" = prune.inc ]      || cp "$PROFILE/prune.inc"      "$d/"
+    printf '%s' "$d"
+}
+refuses_dir() {   # <label> <omitted artifact>
+    local d; d="$(mkprofile "$2")"
+    if profile_validate_dir "$d" "$GEN"; then
+        bad "$1"
+    else
+        case "$PROFILE_ERR" in
+            *"$2"*) ok "$1" ;;
+            *) bad "$1" "refused, but the message does not name $2: $PROFILE_ERR" ;;
+        esac
+    fi
+    rm -rf "$d"
+}
+
+refuses_dir "negative: a profile without templates.conf is refused" templates.conf
+refuses_dir "negative: a profile without dataset.inc is refused"    dataset.inc
+refuses_dir "negative: a profile without prune.inc is refused"      prune.inc
+
+EMPTYD="$TMP/emptyprof"; rm -rf "$EMPTYD"; mkdir -p "$EMPTYD"
+if profile_validate_dir "$EMPTYD" "$GEN"; then
+    bad "negative: an EMPTY profile directory is refused"
+else
+    ok "negative: an EMPTY profile directory is refused"
+fi
+rm -rf "$EMPTYD"
+
+if profile_validate_dir "$TMP/no-such-profile-dir" "$GEN"; then
+    bad "negative: a missing profile directory is refused"
+else
+    ok "negative: a missing profile directory is refused"
+fi
+
+# The positive control that keeps the completeness rule honest: all three
+# present and valid still passes through the same call.
+COMPLETE="$(mkprofile -)"
+if profile_validate_dir "$COMPLETE" "$GEN"; then
+    ok "positive: a complete profile still validates"
+else
+    bad "positive: a complete profile still validates" "$PROFILE_ERR"
+fi
+rm -rf "$COMPLETE"
+
+
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
