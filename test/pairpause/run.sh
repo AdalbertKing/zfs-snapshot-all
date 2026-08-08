@@ -65,7 +65,14 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # (and fails on this machine's missing deps or the bogus dataset).
     out=$(RELATIONSHIPS_DIR="$REL" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK" \
           bash "$script" -n -L beta "$BOGUS" 2>&1); rc=$?
-    if [ "$rc" -ne 0 ] && ! echo "$out" | grep -q "SKIPPED: relationship"; then
+    # The property is that the gate did NOT fire -- nothing more. The exit code
+    # used to be part of this assertion, and it is scaffolding, not contract: an
+    # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
+    # real host `zpool list` reports the unknown pool and the run ends rc=0, so
+    # these six cases false-failed on every host while passing on the laptop.
+    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # before Stage 2 touched anything, so it was the assertion and not the code.
+    if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: an unpaused label is not gated (run proceeds past the gate and fails later, no SKIPPED)"
     else
         bad "$sname: an unpaused label is not gated (run proceeds past the gate and fails later, no SKIPPED)" "rc=$rc" "$out"
@@ -76,7 +83,14 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # limitation of logical pause, asserted as behavior.
     out=$(RELATIONSHIPS_DIR="$REL" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK" \
           bash "$script" -n "$BOGUS" 2>&1); rc=$?
-    if [ "$rc" -ne 0 ] && ! echo "$out" | grep -q "SKIPPED: relationship"; then
+    # The property is that the gate did NOT fire -- nothing more. The exit code
+    # used to be part of this assertion, and it is scaffolding, not contract: an
+    # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
+    # real host `zpool list` reports the unknown pool and the run ends rc=0, so
+    # these six cases false-failed on every host while passing on the laptop.
+    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # before Stage 2 touched anything, so it was the assertion and not the code.
+    if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: a label-less run is NOT gated (documented logical-pause limitation)"
     else
         bad "$sname: a label-less run is NOT gated (documented logical-pause limitation)" "rc=$rc" "$out"
@@ -96,7 +110,14 @@ for script in "$SNAPGET" "$SNAPSEND"; do
     # convention -- not a gate against an empty-named relationship.
     out=$(RELATIONSHIPS_DIR="$REL" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK" \
           bash "$script" -n -L "" "$BOGUS" 2>&1); rc=$?
-    if [ "$rc" -ne 0 ] && ! echo "$out" | grep -q "SKIPPED: relationship"; then
+    # The property is that the gate did NOT fire -- nothing more. The exit code
+    # used to be part of this assertion, and it is scaffolding, not contract: an
+    # ungated run fails LATER on a bogus dataset only where zfs is missing. On a
+    # real host `zpool list` reports the unknown pool and the run ends rc=0, so
+    # these six cases false-failed on every host while passing on the laptop.
+    # Measured 2026-08-08 on metropolis pve1: identical 12/6 at 643238a, i.e.
+    # before Stage 2 touched anything, so it was the assertion and not the code.
+    if ! echo "$out" | grep -q "SKIPPED: relationship"; then
         ok "$sname: -L '' means no label, not a gate"
     else
         bad "$sname: -L '' means no label, not a gate" "rc=$rc" "$out"
