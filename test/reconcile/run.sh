@@ -7,6 +7,27 @@
 #
 # `zfs`, `qm` and `pct` are stubbed, so the whole matrix runs with no root, no
 # ZFS and no Proxmox. What is being tested is the COMPARISON, not zfs.
+# Sweep result, 2026-08-08 (the debt named in the REV-20260808-072 response).
+#
+# I said I would not claim that the pull contract was the ONLY config-semantic
+# rule living behind the --reconcile branch without establishing it. Established:
+#
+#   emit_send                2 refusals  -> both now in validate_transfer_semantics
+#   emit_inline_prune        0
+#   emit_prune_sections      0
+#   emit_gfs_prune_sections  0
+#   emit_bookmark_prune      0
+#   emit_monitor             0
+#   generate_block           0
+#   install_crontab         11  -> all environment/state (flock, crontab, lock
+#                                  dir, symlink, mktemp, crontab read/write),
+#                                  none a config-validity rule. --reconcile
+#                                  neither locks nor installs, so it correctly
+#                                  does not reach them.
+#
+# The count was taken with emit_send as a POSITIVE CONTROL: a sweep that reports
+# zero everywhere is indistinguishable from a sweep whose pattern matched
+# nothing, and that has happened here more than once.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
