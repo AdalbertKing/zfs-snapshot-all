@@ -43,7 +43,7 @@ facts cannot settle.
 | 8 | PR #4 — a SECOND implementation of logical pause | owner: confirm the close, or say what else to salvage |
 | 9 | Issue #3 — enrolment contract consensus | owner+reviewer |
 | 11 | Profiles + live recursion (backlog) | owner |
-| 14 | `docs/OPS_MONITORING.md` untracked | owner: keep or drop |
+| ~~14~~ | ~~`docs/OPS_MONITORING.md` untracked~~ | **ROZSTRZYGNIETE 2026-08-09, patrz nizej** |
 | 15 | Two sessions built the same feature the same day | owner: decide how parallel sessions announce what they are taking |
 | 36 | Grants on pve0 are per-dataset, not on the parent | owner: per-dataset (today) or parent grant |
 | 32 | Plan: method + stages | owner+reviewer: approve or amend |
@@ -144,3 +144,45 @@ byl bledny: pierwszy przebieg konczy sie `rc=0`, drugi zglasza
 `Transfer failed` i **mimo to** tworzy kolejny poziom zagniezdzenia. Kazdy
 przebieg kopiuje poprzednia kopie do nowej — narastanie bez granicy, podane jako
 zwykla awaria transferu. Dzis nic tego nie pilnuje.
+
+---
+
+## ROZSTRZYGNIETE 2026-08-09 — decyzja #14, `docs/OPS_MONITORING.md` usuniety
+
+**Wlasciciel: „jesli to zalega i nie jest terenem naszych prac biezacych, to usun".**
+
+Warunek sprawdzony przed usunieciem, bo plik byl NIESLEDZONY i skasowanie go
+jest nieodwracalne — nie ma historii gita do odzyskania:
+
+- **rutyna, ktora autoryzowal, nie istnieje**: zero wpisow crona pasujacych do
+  monitoringu, ani u roota, ani na koncie delegowanym;
+- **nic w repozytorium go nie konsumuje**: trzy odwolania to wylacznie wpisy
+  „decyzja otwarta" (ten rejestr, plan, PROJECT_STATUS) plus zdanie w domknietej
+  REV-052, ze to osobna decyzja wlasciciela.
+
+Plik nie byl smieciem — byl dokumentem autoryzacyjnym: *"standing authorization
+for what the daily routine may do without asking the owner first; anything not
+listed here is a report, never an action"*. Dlatego jego SUBSTANCJA jest
+zachowana tutaj, zanim plik zniknal.
+
+### Bialy lista automatycznych napraw, jaka opisywal
+
+Tylko te cztery, i nic wiecej, mialy dziac sie bez pytania:
+
+1. zawieszony/przestarzaly proces skryptu monitorujacego — ubic i uruchomic
+   ponownie (sam check jest read-only);
+2. zatkana lokalna kolejka poczty — `postfix flush`, nigdy edycja ani porzucenie
+   tresci wiadomosci;
+3. nieudany NIEDESTRUKCYJNY check wygladajacy na chwilowy blip SSH/sieci —
+   jedno powtorzenie, bez zmiany stanu;
+4. przestarzaly `/var/run/*.lock` bez zywego wlasciciela — usuniecie, zeby
+   nastepny cron nie zostal pominiety.
+
+**Wszystko inne to raport, nigdy automatyczna naprawa** — w szczegolnosci:
+zajetosc puli powyzej progu 90%, pula DEGRADED/FAULTED, `pvesr` FailCount > 0
+lub opoznienie ponad kadencje zadania, nieosiagalny host, zablokowany token
+resume/receive, jakakolwiek decyzja `zfs destroy`/hold/prune oraz dryf tresci
+crontaba wobec bloku zarzadzanego.
+
+Jesli taka rutyna kiedykolwiek powstanie, to jest jej punkt wyjscia — a decyzja,
+czym ma byc, wraca wtedy do wlasciciela i recenzenta, a nie do implementera.
