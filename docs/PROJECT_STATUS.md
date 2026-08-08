@@ -1236,6 +1236,32 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `pairgate` | **45/45** | brama peera `zfs-pair-gate.sh` + instalacja w `deploy.sh --join` (pakiet hard-disable). Sedno: każdy przypadek data-plane każe bramie uruchomić komendę tworzącą plik i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem. Przypięte: odmowa przed parsowaniem, tożsamość z klucza a nie z żądania, kody 91/92/93 rozróżnialne, fail-closed przy nieznanej relacji i złej etykiecie, verby kontrolne jako dokładne literały, logowanie do syslogu z zejściem do pliku wybieranym po WYNIKU a nie po obecności `logger` (REV-047 F1) i nigdy nie zanieczyszczające stderr wywołującego. Instalacja: migracja gołej linii klucza bez pozostawienia jej obok bramkowanej, cudze linie bajt w bajt, idempotencja, awaria commitu bez tknięcia pliku, i fail-closed na własności pliku — bo podmiana atomowa rootem odbiera kontu dostęp do własnego hosta (REV-049 F1) |
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `runsuffix` | **6/6** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |
+
+**Dowód na żywo dla Etapu 2.1 (2026-08-08, metropolis pve1, `42fd7de`).** Kontrakt wymagał JEDNEGO scenariusza na prawdziwym ZFS-ie dowodzącego korelacji end to end — suita `scenarios` tego NIE pokrywa (sprawdzone: zero trafień na sufiks/korelację), więc dług był realny.
+
+Drzewo robocze `hdd/rs-src` + trzy dzieci po 300 MB losowych danych, żeby przebieg trwał sekundy i naprawdę przekroczył granicę sekundy. Wywołanie długą pisownią, więc ten sam przebieg dowodzi też 2.3 na prawdziwym transferze:
+
+```
+./snapsend.sh --recursive=flat -m runcorr_ hdd/rs-src hdd/rs-dst     # 04:23:04 -> 04:23:30, rc=0
+hdd/rs-src@runcorr_2026-08-08_04-23-04
+hdd/rs-src/a@runcorr_2026-08-08_04-23-04
+hdd/rs-src/b@runcorr_2026-08-08_04-23-04
+hdd/rs-src/c@runcorr_2026-08-08_04-23-04
+```
+
+26 sekund przebiegu, **jeden sufiks na wszystkich czterech datasetach**.
+
+Kontrola negatywna na TYM SAMYM drzewie, silnikiem z `643238a` (sprzed 2.1), przez `git worktree`:
+
+```
+./snapsend.sh -R -m oldcorr_ hdd/rs-src hdd/rs-dst2                  # 04:23:50 -> 04:24:18, rc=0
+hdd/rs-src@oldcorr_2026-08-08_04-23-50
+hdd/rs-src/a@oldcorr_2026-08-08_04-23-54
+hdd/rs-src/b@oldcorr_2026-08-08_04-24-03
+hdd/rs-src/c@oldcorr_2026-08-08_04-24-11
+```
+
+**Cztery różne sufiksy rozrzucone na 21 sekund** — dokładnie ta niekorelowalność, dla której powstał Etap 2.1, zaobserwowana, a nie wywnioskowana. Wszystkie datasety robocze zniszczone po teście, worktree usunięty.
 | `recursion` | **64/64** | dokładnie JEDNA deklaracja rekursji na wywołanie + długie opcje (Etapy 2.2 i 2.3). Na PRAWDZIWYCH silnikach: odmowa zapada przy parsowaniu argv, przed sprawdzeniem zależności, datasetu i SSH — dlatego bez roota i ZFS-a. Przypięte: `-r -R` odrzucane w OBU kolejnościach (było prawdą już wcześniej, kontrakt twierdził inaczej); powtórzenie TEGO SAMEGO trybu też odrzucane; litera rekursji jako ARGUMENT OPCJI (`-m -r`) to dana. **2.3:** `--recursive=atomic|flat|no` równoważne `-r`/`-R`/braku, `--recursive=ture` odrzucane z podaniem wartości, gołe `--recursive` odrzucane, nieznana długa opcja odrzucana; `--recursive=no -r` **odrzucane, nie zwijane do `-r`** (przypadek, który REV-060 A4 wyłapała w mojej pierwszej propozycji); mieszanie form krótkiej i długiej to dwie deklaracje; po `--` i po pierwszym pozycyjnym długie formy są danymi (obie reguły stopu `getopts`). `delsnaps`/`check-snap-age` dostają `--recursive` ≡ `-R` — testowane przez EKSTRAKCJĘ pętli argumentów, bo oba giną na braku `flock`/`zfs` ZANIM do niej dojdą, więc samo uruchomienie „przyjmuje" literówkę równie chętnie co poprawną pisownię. Kontrola negatywna wobec `bda5602`: **20 asercji pada**, 34 przechodzą. +10 (REV-20260808-069 F1): KLASTRY flag krótkich. `getopts` czyta `-em` jako `-e` i `-m`, a skoro `m:` bierze argument i nic po nim w tokenie nie zostaje, argumentem jest NASTĘPNY argv. Pierwszy pre-pass pochłaniał następny argv tylko dla tokenu długości 2, więc `-em --recursive=flat` czytał WIADOMOŚĆ jako deklarację. Sondą jest celowo NIEPOPRAWNY tryb (`ture`) — „brak błędu" niczego tu nie dowodzi, bo poprawny tryb milczy w obu interpretacjach, a druga deklaracja bywa połknięta jako argument opcji; obie moje pierwsze sondy były z tego powodu ślepe. Kontrola wobec `46b96b4`: **2 asercje padają** (`-em` w obu silnikach), reszta przechodzi — pozostałe przypadki klastrowe stary kod obsługiwał przypadkiem poprawnie |
 
 **Dowód na żywo dla Etapu 2.3 (2026-08-08, `3d44488`).** Kontrakt wymagał JEDNEGO wywołania jako konto delegowane, dowodzącego, że **zainstalowana** kopia rozumie nową pisownię — wykonane na **wszystkich czterech hostach** (metropolis pve1/pve2, 11.x pve0/pve1), jako `zfsbackup`, na nieistniejącej puli, więc obie sondy kończą się na parsowaniu argumentów i niczego nie dotykają:
