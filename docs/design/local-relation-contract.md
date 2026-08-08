@@ -398,3 +398,74 @@ line: **what to protect**, and **where it lands when that is ambiguous**.
 `setup-server` already does. It is **refused when ambiguous** — pve2 has three
 pools, and quietly choosing where backups land is not convenience, it is a
 surprise.
+
+---
+
+## 11. `--source` is OPTIONAL — owner confirmed 2026-08-08
+
+### What the two-host flow actually requires, read from the code
+
+`zfs-backup.sh add-client` demands exactly one of two things, and naming
+datasets is not the mandatory one:
+
+```
+--datasets="A B"        an explicit list
+--mode=backup|sync      "to let the source choose"
+```
+
+`zfs-backup.sh:1414` says it in those words. The two are alternatives
+(`:1403`), and under `--mode` the scope comes from the scope file that
+`--draft-scope` generated **on the source host** and a human reviewed there.
+
+So the mandatory thing is not the list. It is **saying where the scope comes
+from**.
+
+### The principle that covers both cases
+
+> The machine that HAS the data proposes what to protect.
+
+Two hosts: the peer proposes its own datasets. One host: the same host proposes
+its own. Not two mechanisms — one.
+
+### Therefore
+
+```bash
+zfs-backup.sh --target=hdd/backups   # where backups land
+zfs-backup.sh                        # propose a config from what exists
+```
+
+**No `--source` means "everything sensible on this host"**, using the census
+`--draft-scope` already implements: active datasets one level under each pool,
+minus `ROOT`/`swap`, minus pool roots. Plus two exclusions the local case adds:
+
+1. **the target subtree** — otherwise the proposal would back up the backups;
+2. **datasets an existing relation already covers** — so a later re-run proposes
+   only what is new.
+
+`--source=rpool/data,rpool/lxc` remains, as a **narrowing filter** for when the
+default proposal is too broad. Not an obligation.
+
+### Why not force it
+
+An admin who has just built a host does not yet know what to type after
+`--source`. He knows he wants backups. Forcing the flag makes him produce a list
+that the tool can produce better, because the tool reads ZFS and he reads from
+memory.
+
+This is **not** the guessing I refused for `--target`. The difference is real: a
+silent target choice means "you do not know where your data is". A source
+proposal is **shown as a config and adopted only on confirmation**, so nothing
+happens unseen.
+
+### The property this gives, which is the point
+
+Exclusion 2 makes re-running the whole point rather than a nuisance:
+
+```bash
+zfs-backup.sh          # month later, after creating a new guest
+                       # -> proposes exactly the datasets nothing covers yet
+```
+
+That is the VM 104 failure answered at the UX level, not only in the audit: the
+guest created after the config was written stops being invisible, because the
+normal way to check is to run the same command again.
