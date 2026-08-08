@@ -109,3 +109,37 @@ the host, against `/etc/zfs-snapshot-all/<config>`, with the deployed repo at th
 commit recorded in the provenance document. The guest inventory comes from
 `qm config`/`pct config` and `/etc/pve/storage.cfg` on the same host in the same
 session, never from dataset names.
+
+---
+
+## 6. After the owner's container decision — measured, not predicted
+
+Re-run on all four hosts once the suppression landed.
+
+| host | uncovered before | after | suppressed as containers |
+|---|---|---|---|
+| metropolis pve1 | 16 | 15 | `rpool/data` |
+| metropolis pve2 | 12 | 11 | `rpool/data` |
+| 11.x pve0 | 28 | 26 | `hdd/lxc`, `rpool/data` |
+| 11.x pve1 | 16 | 16 | — none |
+
+**Four suppressed, not the eight I predicted, and the shortfall is the guard
+working rather than the rule failing.**
+
+`hdd/vm-disks` stayed a finding on both metropolis hosts because it has children
+that are **not** covered — `subvol-101-disk-0`, `subvol-101-disk-1` and
+`vm-102-disk-0` on pve2. Suppressing it would have hidden exactly the three
+genuine findings section 2 identified. Guard 1 ("every child must be covered")
+is what stopped that.
+
+On 11.x pve1 nothing was suppressed at all: `rpool/lxc` and `rpool/lxc64` have
+no covered children, so they are not solved containers, they are simply
+unprotected.
+
+I predicted 8 by counting "two parents per host" from the shape of the output.
+That was pattern-matching on names, and the measurement disagrees — the same
+mistake in miniature as reading disk names to decide what an orphan was.
+
+Signal is now roughly **11 of 68**, up from 11 of 72. The container class was
+never the bulk of the noise; **scratch and test datasets are**, at 53 lines, and
+that decision is still open.
