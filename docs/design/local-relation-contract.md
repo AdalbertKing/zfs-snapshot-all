@@ -69,16 +69,49 @@ zfs-backup.sh add-local NAME --source=rpool/data --target=hdd/backups \
                              [--recursive=flat] [--profile=default] [--yes]
 ```
 
-`add-local` performs, in one run:
+`add-local` performs, in one run. **The order is the contract**, corrected by
+REV-20260808-075 F1:
 
 1. **discover** the local datasets under `--source` (reusing the `--draft-scope`
    census and its `ROOT`/`swap` rule);
 2. **select** — interactively, or non-interactively from `--datasets`/the scope
    file. Per REV-073 the *deployment* owns this, never the profile;
-3. **render** effective CONFIG v4 into `/etc/zfs-snapshot-all/`;
-4. **preview** the cron block and require confirmation unless `--yes`;
-5. **install** the cron block through `lib-cron.sh`, the single writer;
-6. **seed** — the first send, foreground, with its result reported.
+3. **compose and validate** effective CONFIG v4 — including the nested-target
+   refusal and the same-pool notice;
+4. **preview** the rendered cron block; confirmation required unless `--yes`;
+5. **persist** the relation as `configured`;
+6. **seed** — the first send, foreground, result reported;
+7. **persist** `seeded`, only after that seed succeeds;
+8. **install** the managed cron block through `lib-cron.sh`, transactionally;
+9. **persist** `active`, only after the installed block reads back correctly.
+
+### Why this order, and what I had wrong
+
+My first draft installed cron at step 5 and seeded afterwards. That contradicted
+the lifecycle **two sections above it**: `configured -> seeded -> active`, with
+cron belonging to `active`. Scheduled jobs would have been eligible to fire on a
+relationship that never finished bootstrapping — precisely the state the
+lifecycle exists to make impossible — and a schedule firing during a long
+initial full send would have raced it. The engine's lock might serialise the
+work, but leaning on that repairs nothing in the control plane.
+
+The remote path has had this invariant all along: cron is installed only from
+`endpoint_verified`. I moved the feature to a single host and dropped the rule.
+
+### Failure behaviour, stated as the contract
+
+| what fails | resulting state | what exists on disk |
+|---|---|---|
+| seed | stays `configured` | **no managed cron** |
+| cron install or read-back | stays `seeded` | seed is done, retryable |
+| nothing | `active` | cron installed and read back |
+
+Re-running from `configured` retries the seed without duplicating state or jobs.
+Re-running from `seeded` retries activation and does **not** repeat a proven
+seed unless the operator asks for it explicitly.
+
+No transient `seeding` state: `configured` is durable until the foreground
+command returns, so a state that only counts progress would earn nothing.
 
 ## 4. Boundaries I am asking to have confirmed
 
@@ -142,21 +175,28 @@ zfs-backup.sh add-local NAME --source=rpool/data --target=hdd/backups \
 
 - unit: `add-local` argument validation, refusal of a source that does not
   exist, refusal of a target inside the source;
+- **ordering (REV-075 F1)**: the cron writer is **not called** when the seed
+  fails; `active` is **not** persisted before cron read-back; a failed seed
+  leaves the relation visibly non-active and retryable; retry from `configured`
+  and from `seeded` are both idempotent;
 - rendering: the generated CONFIG v4 for a known selection is **byte-stable**,
   and `gen-cron.sh` accepts it;
 - crontab: install goes through `lib-cron.sh` and touches only the managed
   block — asserted by a real side effect, not by the command's own report;
 - reconciliation: after `add-local`, `--reconcile` reports the selected datasets
   as covered and the target tree as received;
-- one live run on a real host with a scratch pool pair, destroyed afterwards;
+- one live run on a real host with a scratch cross-pool relation: induce a seed
+  failure and prove **no managed cron was installed**, then a successful seed and
+  activation with the actual crontab and relation state read back; destroyed
+  afterwards;
 - negative control against today's tree, where `add-local` does not exist.
 
 ## 7. What I need before coding
 
 1. **owner:** confirm the two-invocation shape and the `add-local` spelling (or
    name it);
-2. **reviewer:** the lifecycle decision in §2 — own short lifecycle, or reuse
-   with peer states declared N/A;
+2. ~~lifecycle~~ — **settled by the reviewer (REV-075): own short lifecycle**,
+   not peer states declared N/A;
 3. ~~same-pool warning~~ — **settled by the owner: option B**, see §4.
 
 I am not starting implementation until §7.2 is settled, because getting the
