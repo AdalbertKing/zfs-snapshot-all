@@ -42,26 +42,26 @@ REV-082, REV-083, REV-084, REV-085, REV-086 and REV-087 are all **CLOSED**. Ther
 
 ---
 
-## Phase 2 — finish the CREATE-only additive model — ACTIVE NOW
+## Phase 2 — finish the CREATE-only additive model — IMPLEMENTER-COMPLETE, AWAITING REVIEW
 
 Goal: a preset may safely create **one new, independent, non-overlapping task package** inside an existing CONFIG without touching old policy.
 
-Required properties:
+Audited 2026-08-09 against the existing `add-client`/`activate-client` create-only path (built through REV-082–087) before writing anything new, per operating rule 2 (reduction over completeness — do not rebuild what already satisfies the property):
 
-- existing unrelated CONFIG/task remains byte/semantic unchanged;
-- new disjoint source/task can be appended transactionally;
-- existing source refuses;
-- parent/child overlap refuses;
-- identical semantic template may be reused;
-- template identity with different semantic content refuses;
-- whole candidate CONFIG is validated and previewed before install;
-- resulting managed cron is previewed and installed atomically with rollback/read-back.
+- existing unrelated CONFIG/task remains byte/semantic unchanged — **already implemented**: `ensure_cron_config()` only appends missing content, `emit_client_sections()` touches only the calling client's own sections; `test/zfsbackup/run.sh` pins this with md5-checked re-runs;
+- new disjoint source/task can be appended transactionally — **already implemented**: `activate-client`'s workfile/validate/dry-run/preview/`atomic_replace_and_install` sequence;
+- existing source refuses; parent/child overlap refuses — **already implemented**: `coverage_conflicts()`/`assert_no_coverage_overlap()`/`path_overlaps()` (REV-083/084/085), now proven live (REV-086) at both `cmd_seed()` and `emit_client_sections()`;
+- identical semantic template may be reused — **already implemented**: `ensure_cron_config()`'s per-name append loop is a no-op when the namespaced name is already present and a re-render of the same unmodified profile is always byte-identical;
+- **template identity with different semantic content refuses — was a genuine gap, now fixed** (`dc0b66a686a81787eea690ddde320b754f0124be`): the append loop's presence check was name-only, so a template already on disk under a namespaced name kept serving stale content forever if the active profile's own template content later changed, with no diff, warning, or refusal. Fixed by comparing the on-disk section against what the current profile would render now (same generator, so an unmodified profile never false-positives) and refusing with a diff when they differ. `test/zfsbackup/run.sh` section 4: 321/321, negative control confirms the discriminating assertion fails against the pre-fix code;
+- whole candidate CONFIG validated and previewed before install; resulting managed cron previewed and installed atomically with rollback/read-back — **already implemented**: `gen-cron.sh -c`, `show_activation_proposal`, `atomic_replace_and_install`, `assert_cron_config_matches_installed`.
 
-No merge engine, no precedence/carve-out machinery, no profile update semantics.
+No merge engine, no precedence/carve-out machinery, no profile update semantics were added.
+
+Registered as an unreviewed direct-main delivery in `docs/project/DELIVERIES.md` pending a REV.
 
 ### Gate 2
 
-Preset can **add new** but cannot mutate old.
+Preset can **add new** but cannot mutate old. All required properties have implementer evidence above; gate closure is the reviewer's call.
 
 ---
 
