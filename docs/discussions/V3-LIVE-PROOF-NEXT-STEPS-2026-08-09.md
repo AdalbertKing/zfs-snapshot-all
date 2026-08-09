@@ -114,3 +114,62 @@ one refinement: capture CONFIG and `crontab -l` immediately after activation,
 run the overlap refusal, prove both read-backs unchanged, then teardown and
 record cleanup. One campaign closes the remaining V3 evidence for both REV-082
 and REV-083; do not run a second seed merely for evidence volume.
+
+---
+
+## Owner authorized the window (2026-08-09) — but pre-flight found a structural blocker
+
+Before running step 1, I worked through exactly how step 5 (the overlap
+attempt) would be constructed on this specific host pair, and it cannot
+exercise `path_overlaps()` at all. Reporting before touching anything live,
+per the owner's instruction to raise it here first.
+
+**Why.** `client_local_path()` computes every backup-mode relationship's
+managed path as `snapget_local_base()/dataset`, and `snapget_local_base()` is
+`$PEER_SAVED_TARGET/$LOAD_LABEL` — `LOAD_LABEL` is the client name. Two
+different clients always have different names, so their computed local paths
+always diverge at that exact segment, for any target/dataset I choose. This
+is not an oversight; it's the same property `test/zfsbackup/run.sh` section
+45 already documents ("two backup clients cannot collide by taking a parent
+and a child of the same source — their target paths differ at the label").
+It also means exact-path collision between two different backup-mode clients
+is equally unreachable through `path_overlaps()` — `add-client` refuses a
+reused client NAME before the overlap guard is ever consulted, and two
+different names never produce identical computed paths.
+
+The one mode where a real cross-client overlap CAN occur is sync mode — no
+label, local path is the bare source dataset. But `add-client --mode=sync`
+unconditionally refuses when `--lan=` resolves to a node in the same PVE
+cluster (the U8/ENROLMENT-AGREED-2026-08-02 guard), and pve2 genuinely is a
+cluster-mate of pve1. Sync mode dies there for a real, correct, unrelated
+reason before reaching `path_overlaps()`.
+
+**Net effect on this specific host pair:** REV-082's positive leg (real
+create → seed → activate → CONFIG/crontab read-back) is fully achievable
+live, no obstruction. REV-083's parent/child overlap direction cannot be
+exercised through the real CLI on metropolis pve1/pve2, in either mode — not
+because of missing setup, but by the interaction of two already-correct
+safety properties (label separation in backup mode, same-cluster refusal in
+sync mode).
+
+I have not run any part of the campaign yet. Options as I see them, from
+smallest to largest scope:
+
+1. Run the positive leg live (closes REV-082 V3), and record — accurately —
+   that REV-083's parent/child direction is provably untestable live on this
+   pair by construction; the existing `test/zfsbackup/run.sh` §45/46 local
+   regressions remain the only evidence for that specific property.
+2. Same as (1), plus one real refusal live via the pre-existing
+   duplicate-client-name path (attempt `add-client` with the SAME name
+   again) — proves "a second real attempt refuses before mutation,
+   CONFIG/crontab unchanged" end-to-end for SOME real refusal path, clearly
+   labeled as exercising the name-collision guard, not `path_overlaps()`.
+3. Bring in a peer outside this PVE cluster to unblock sync mode and get a
+   genuine `path_overlaps()` hit live. Larger scope — a new pairing, new
+   keys, a new host — which conflicts with "no unrelated SSH/grant/ZFS
+   experiments... merely to increase evidence volume" from the consolidation
+   note, so I'm not inclined toward this without your agreement.
+
+I'd lean toward (2) as the best real evidence achievable on the agreed host
+pair without scope creep, but the choice of what actually counts as adequate
+V3 evidence for REV-083 given this constraint is yours to make, not mine.
