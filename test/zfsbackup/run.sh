@@ -3987,6 +3987,62 @@ else
     bad "43 an unreachable peer yields no state at all, never ACTIVE" "$out"
 fi
 
+# --- 44. FIELD SURVIVAL: the profile fragment is composed, not translated ----
+#
+# REV-20260809-082 F1. The runtime used to lift three named keys out of the
+# rendered fragment and write them by hand, so any other valid profile field
+# validated at the boundary and was then silently dropped. The built-in profile
+# carries only use_template, which is why nothing failed.
+#
+# This is also the case that caught a much worse thing while it was being
+# written: with profile_emit UNDEFINED -- client sections losing their entire
+# policy reference -- the suite still reported 295/295. Nothing here asserted
+# that a generated [dataset:] carries a use_template line at all. So this block
+# pins the field, not just the extra one.
+FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
+cp "$REPO/profiles/default/templates.conf" "$FS/p/prof/templates.conf"
+cp "$REPO/profiles/default/prune.inc"      "$FS/p/prof/prune.inc"
+# A second VALID dataset field the built-in profile does not carry. `recursive`
+# is explicitly profile-owned (REV-073) and is not in the forbidden list, so a
+# profile is entitled to set it and the runtime must carry it through.
+{ cat "$REPO/profiles/default/dataset.inc"; printf 'recursive = flat\n'; } > "$FS/p/prof/dataset.inc"
+
+EC_FS="$FS/out.conf"; : > "$EC_FS"
+out=$( ( PROFILE_ROOT="$FS/p" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+         PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pveX \
+         LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.1.1.1 LOAD_FLAGS="-K /dev/null" \
+         PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1
+         emit_client_sections "$EC_FS" fstest ) 2>&1 ); rc=$?
+
+# The field that was always there. Asserted because it was NOT: see the header.
+if [ "$rc" -eq 0 ] && grep -q 'use_template *= *profile__prof__standard_hourly' "$EC_FS"; then
+    ok "field survival: the emitted [dataset:] carries the profile's use_template at all"
+else
+    bad "field survival: the emitted [dataset:] carries the profile's use_template at all" "rc=$rc out=$out file=$(cat "$EC_FS")"
+fi
+
+# The field the old extractor dropped.
+if grep -q '^	recursive = flat$' "$EC_FS"; then
+    ok "field survival: a valid profile-owned field the extractor did not know survives"
+else
+    bad "field survival: a valid profile-owned field the extractor did not know survives" "$(cat "$EC_FS")"
+fi
+
+# Prune policy comes from the fragment too, not from literals in the runtime.
+if grep -q 'gfs *= *yes' "$EC_FS" && grep -q 'gfs_pattern *= *automated_' "$EC_FS"; then
+    ok "field survival: the [prune:] policy fields come from the profile fragment"
+else
+    bad "field survival: the [prune:] policy fields come from the profile fragment" "$(cat "$EC_FS")"
+fi
+
+# ...and the relationship still owns what is its: prune recursion is written by
+# the caller, and the profile boundary refuses it, so there is exactly one.
+if [ "$(grep -c 'recursive    = ' "$EC_FS")" = 1 ]; then
+    ok "field survival: prune recursion is written once, by the relationship"
+else
+    bad "field survival: prune recursion is written once, by the relationship" "$(grep -n recursive "$EC_FS")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

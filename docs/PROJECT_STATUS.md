@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3be437d91a2a1ce5 -->
+<!-- status-covers-digest: 16e8533aa44a61c8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -46,11 +46,13 @@
   | jednohostowa orkiestracja wysokopoziomowa (`--target`/`--source`, add-local) | **NIEwdrożone** — dyskusja projektowa | `docs/project/DEPLOY-SEQUENCES.md`, `docs/design/local-relation-contract.md` |
   | restore | **NIEwdrożone**, nie zaczęte | — |
 
-  Sam fakt, że granica profilu jest kodem produkcyjnym, a runtime nie —
-  to jest dziś najważniejsze rozróżnienie w projekcie: `profiles/` istnieje,
-  jest walidowane i pilnowane, ale **żaden kod produkcyjny jeszcze z niego nie
-  czyta**. Kto przeczyta „profile wdrożone" bez tego zdania, zobaczy zdolność,
-  której nie ma.
+  Najważniejsze dziś rozróżnienie — jedno zdanie, nie powtarzane niżej
+  (REV-20260809-082 F3): **`zfs-backup.sh` czyta profil przy generowaniu
+  configu, ale nikt profilu nie WYBIERA.** Jest jeden wbudowany preset i
+  używają go wyłącznie nowe enrolmenty; żaden host we flocie nie został na
+  niego przeniesiony i decyzja właściciela z 2026-08-09 mówi, że profil
+  generuje kandydata JEDEN RAZ, po czym prawdą wykonawczą jest CONFIG v4, a
+  nie profil.
 
   Stan wątków recenzji jest GENEROWANY i nie jest tu przepisywany:
   `docs/internal/reviews/REVIEW_LEDGER.md` oraz `docs/project/OPEN-THREADS.md`

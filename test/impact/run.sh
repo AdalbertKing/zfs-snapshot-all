@@ -100,6 +100,20 @@ check "verify rejects a section for a file that does not exist" "1" "$(verify_rc
 # not a broken test.
 check "the REAL deps.conf is consistent with the REAL tree" "0"       "$("$IMPACT" --verify >/dev/null 2>&1; echo $?)"
 
+# REV-20260809-082 F2. A SOURCE edge that exists in the code must exist in the
+# graph. B1 made zfs-backup.sh source lib-profile.sh, so a change to the profile
+# boundary can now break the runtime -- but the graph routed such a change only
+# to `profiles`, and the runtime suite that would have caught it was never
+# selected.
+#
+# Asserted against the REAL graph rather than a fixture, deliberately: a fixture
+# would prove the resolver can follow an edge, which was never in doubt. What
+# was in doubt is whether THIS edge is declared, and only the real file can say.
+prof_suites="$("$IMPACT" --for lib-profile.sh 2>/dev/null || "$IMPACT" --suites-for lib-profile.sh 2>/dev/null || true)"
+[ -n "$prof_suites" ] || prof_suites="$(awk '/^\[file:lib-profile\.sh\]/{f=1;next} f&&/^suites/{print;exit} f&&/^\[/{exit}' "$REPO/test/deps.conf")"
+check "a lib-profile.sh change routes to the profiles suite"  "1" "$(printf '%s' "$prof_suites" | grep -c 'profiles')"
+check "a lib-profile.sh change ALSO routes to the runtime suite that consumes it" "1"       "$(printf '%s' "$prof_suites" | grep -c 'zfsbackup')"
+
 OUT="$("$IMPACT" --graph)"
 check "the graph renders as mermaid" "1" "$(echo "$OUT" | grep -c '^graph LR')"
 check "the graph includes contract nodes" "1" \

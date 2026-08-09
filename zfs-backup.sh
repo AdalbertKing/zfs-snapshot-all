@@ -587,12 +587,32 @@ load_active_profile() {
     PROFILE_LOADED=1
     return 0
 }
-
-# One field out of a rendered fragment. The fragment is the single source for
-# these values -- reading them from here rather than restating them is what
-# stops the emitted section and the profile drifting apart.
-profile_value() {   # <rendered fragment> <field>
-    sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*(.*)$/\1/p" "$1" | head -1
+# COMPOSE the rendered fragment. Do not translate it.
+#
+# REV-20260809-082 F1. The first version pulled three named keys out of the
+# fragment -- use_template, gfs, gfs_pattern -- and wrote them by hand. That is
+# a second semantic layer over a contract that is already native CONFIG v4: the
+# boundary validates every dataset/prune field gen-cron declares, so any OTHER
+# valid field validated cleanly at the one declared boundary and was then
+# silently dropped by its only consumer. The built-in fixture carries only
+# use_template, so nothing failed -- a false green sitting exactly where B1 was
+# meant to remove one.
+#
+# It is also more machinery, not less: every future native field would need
+# another edit here although gen-cron.sh already owns its semantics. The owner's
+# reduction direction and this finding point the same way.
+#
+# What the RELATIONSHIP owns -- recursive on a prune scope, pair_label, notify,
+# src -- is still written by the caller and cannot collide, because
+# lib-profile.sh refuses those fields inside a profile.
+profile_emit() {   # <rendered fragment>
+    local raw
+    while IFS= read -r raw || [ -n "$raw" ]; do
+        raw="${raw%$'\r'}"
+        [ -z "${raw//[[:space:]]/}" ] && continue
+        case "$raw" in '#'*) continue ;; esac
+        printf '\t%s\n' "${raw#"${raw%%[![:space:]]*}"}"
+    done < "$1"
 }
 
 # One rendered [template:NS] section, whole.
@@ -992,7 +1012,7 @@ emit_client_sections() {   # <workfile> <client name>
             echo
             echo "[dataset:$localpath]"
             echo "	$marker"
-            echo "	use_template = $(profile_value "$PROFILE_DS_FILE" use_template)"
+            profile_emit "$PROFILE_DS_FILE"
             echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
             echo "	flags        = $LOAD_FLAGS"
             echo "	pair_label   = $name"
@@ -1022,10 +1042,8 @@ emit_client_sections() {   # <workfile> <client name>
                     echo
                     echo "[prune:$ds]"
                     echo "	$marker"
-                    echo "	use_template = $(profile_value "$PROFILE_PRUNE_FILE" use_template)"
+                    profile_emit "$PROFILE_PRUNE_FILE"
                     echo "	recursive    = no"
-                    echo "	gfs          = $(profile_value "$PROFILE_PRUNE_FILE" gfs)"
-                    echo "	gfs_pattern  = $(profile_value "$PROFILE_PRUNE_FILE" gfs_pattern)"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}-$(basename "$ds")"
                 } >> "$workfile" || return 1
@@ -1045,10 +1063,8 @@ emit_client_sections() {   # <workfile> <client name>
                 echo
                 echo "[prune:$prune_scope]"
                 echo "	$marker"
-                echo "	use_template = $(profile_value "$PROFILE_PRUNE_FILE" use_template)"
+                profile_emit "$PROFILE_PRUNE_FILE"
                 echo "	recursive    = yes"
-                echo "	gfs          = $(profile_value "$PROFILE_PRUNE_FILE" gfs)"
-                echo "	gfs_pattern  = $(profile_value "$PROFILE_PRUNE_FILE" gfs_pattern)"
                 echo "	pair_label   = $name"
                 echo "	notify       = ${name}"
             } >> "$workfile" || return 1
