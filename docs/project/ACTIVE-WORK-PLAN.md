@@ -18,37 +18,31 @@ This file does **not** duplicate review state. Current REV ownership/status rema
 
 ---
 
-## Phase 1 — close the current live gate (ACTIVE NOW)
+## Phase 1 — close the current live gate — CLOSED
 
 Goal: close the current safety/evidence boundary before adding more Stage 5 behavior.
 
-Use the already-authorized bounded metropolis pve1/pve2 throwaway window and the smallest suitable scratch dataset.
-
-Executed campaign on this specific pair (2026-08-09, see REV-20260809-086 response for the full transcript):
+The bounded metropolis pve1/pve2 campaign was executed on 2026-08-09. See REV-20260809-086 response for the full transcript.
 
 1. Real `add-client -> seed -> activate-client` for one throwaway relationship (`v3proofA`).
 2. Confirmed `STATE=active`; captured canonical CONFIG and the managed `crontab -l` block verbatim.
-3. A second, differently-named relationship (`v3proofB`) — a hand-written client record reusing `v3proofA`'s already-established peer manifest, never going through its own `add-client` — attempted `seed` and was refused by `assert_no_coverage_overlap()` naming `v3proofA`, before any transfer. Proved canonical CONFIG, managed crontab, and the entire destination subtree unchanged afterward.
-4. Removed the throwaway relationship through the normal lifecycle; verified state and cron cleanup.
-5. Command transcript and before/after evidence are in the REV-082/083/085/086 responses.
+3. A second, differently-named relationship (`v3proofB`) — a hand-written client record reusing `v3proofA`'s already-established peer manifest, never going through its own `add-client` — attempted `seed` and was refused by `assert_no_coverage_overlap()` naming `v3proofA`, before any transfer. Canonical CONFIG, managed crontab, and the entire destination subtree were unchanged afterward.
+4. Removed the throwaway relationship through the normal lifecycle and verified cleanup.
+5. The campaign exposed the independent `CRON_CONFIG` clobber defect, fixed in `67415a5795ad3d1cb659e3017c1485bc99b59a61` and formally closed as REV-087.
 
-### REV-083 overlap-specific acceptance boundary on this pair — CORRECTED (REV-086)
+### Corrected overlap model
 
-The premise this section previously stated — "distinct relationship names produce distinct `LABEL` namespaces, so cross-client overlap is structurally unreachable" — was **false** and is corrected here per REV-20260809-086. `load_client_and_connection()` derives `LOAD_LABEL` from `peer_label(PEER_HOST)`, not from the relationship's own name: two differently-named relationships sharing a peer share the same `target/label` namespace, and (before REV-085's fix) `cmd_seed()` could perform a real receive into that shared coverage before any guard ran.
+The earlier premise that distinct relationship names imply distinct backup `LABEL` namespaces was false. `LOAD_LABEL` is derived from `peer_label(PEER_HOST)`, so differently named relationships sharing a peer share the same `target/label` namespace. REV-085 added the canonical overlap guard before real seed transfer; the live campaign then exercised that exact boundary.
 
-A genuine cross-client overlap **is** reachable on this pair, and was reached live: see the campaign above and the REV-086 response for the exact-path overlap that `v3proofB` hit via `cmd_seed()`, refused before transfer.
+Sync mode remains correctly refused when the peer is a member of the same PVE cluster.
 
-Sync mode remains correctly refused when the peer is a member of the same PVE cluster; that part of the original note was accurate and is unaffected by this correction.
+### Gate 1 — CLOSED
 
-### Gate 1
-
-REV-082, REV-083, REV-085 and REV-086 are **CLOSED** after reviewer verification of the corrected local and live evidence.
-
-The same live campaign exposed one independent production defect: `read_server_conf()` could clobber a relationship-recorded `CRON_CONFIG` during reactivation/remove-client when no server.conf exists. It is tracked separately as **REV-087**. The narrow candidate fix already exists in `67415a5795ad3d1cb659e3017c1485bc99b59a61`; Phase 2 remains blocked only until Claude formally responds to REV-087 and that existing fix is reviewer-verified/closed.
+REV-082, REV-083, REV-084, REV-085, REV-086 and REV-087 are all **CLOSED**. There are no open review threads. Phase 2 may proceed.
 
 ---
 
-## Phase 2 — finish the CREATE-only additive model
+## Phase 2 — finish the CREATE-only additive model — ACTIVE NOW
 
 Goal: a preset may safely create **one new, independent, non-overlapping task package** inside an existing CONFIG without touching old policy.
 
@@ -202,8 +196,7 @@ Do not build:
 ## Active sequence in one line
 
 ```text
-REV-087 formal close
- -> CREATE-only additive
+CREATE-only additive
  -> endpoint/reactivation preserves policy
  -> --profile at CREATE + preview
  -> simple --source/--target workflow
