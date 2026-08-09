@@ -24,26 +24,25 @@ Goal: close the only remaining evidence boundary for REV-082/REV-083 before addi
 
 Use the already-authorized bounded metropolis pve1/pve2 throwaway window and the smallest suitable scratch dataset.
 
-Accepted campaign on this specific pair:
+Executed campaign on this specific pair (2026-08-09, see REV-20260809-086 response for the full transcript):
 
-1. Real `add-client -> seed -> activate-client` for one throwaway relationship.
-2. Confirm `STATE=active`; capture canonical CONFIG and the managed `crontab -l` block verbatim.
-3. Make one real second-add refusal using the existing client name; prove canonical CONFIG and managed crontab are unchanged afterward.
-4. Remove the throwaway relationship through normal `remove-client`; verify state and cron cleanup.
-5. Put the command transcript and before/after evidence into the REV-082 and REV-083 responses.
+1. Real `add-client -> seed -> activate-client` for one throwaway relationship (`v3proofA`).
+2. Confirmed `STATE=active`; captured canonical CONFIG and the managed `crontab -l` block verbatim.
+3. A second, differently-named relationship (`v3proofB`) — a hand-written client record reusing `v3proofA`'s already-established peer manifest, never going through its own `add-client` — attempted `seed` and was refused by `assert_no_coverage_overlap()` naming `v3proofA`, before any transfer. Proved canonical CONFIG, managed crontab, and the entire destination subtree unchanged afterward.
+4. Removed the throwaway relationship through the normal lifecycle; verified state and cron cleanup.
+5. Command transcript and before/after evidence are in the REV-082/083/085/086 responses.
 
-### REV-083 overlap-specific acceptance boundary on this pair
+### REV-083 overlap-specific acceptance boundary on this pair — CORRECTED (REV-086)
 
-A genuine cross-client parent/child `path_overlaps()` hit is structurally unreachable on metropolis pve1/pve2:
+The premise this section previously stated — "distinct relationship names produce distinct `LABEL` namespaces, so cross-client overlap is structurally unreachable" — was **false** and is corrected here per REV-20260809-086. `load_client_and_connection()` derives `LOAD_LABEL` from `peer_label(PEER_HOST)`, not from the relationship's own name: two differently-named relationships sharing a peer share the same `target/label` namespace, and (before REV-085's fix) `cmd_seed()` could perform a real receive into that shared coverage before any guard ran.
 
-- backup mode computes `TARGET/LABEL/source`, and distinct relationship names produce distinct `LABEL` namespaces;
-- sync mode can expose the bare source path, but `add-client` correctly refuses sync when the peer is a member of the same PVE cluster.
+A genuine cross-client overlap **is** reachable on this pair, and was reached live: see the campaign above and the REV-086 response for the exact-path overlap that `v3proofB` hit via `cmd_seed()`, refused before transfer.
 
-Therefore **do not add a third host merely to manufacture a live `path_overlaps()` hit**. The parent/child guard itself is accepted from the discriminating local regressions, negative control, direct production-code inspection and the proof-by-construction above. The live campaign verifies the real high-level mutation/transaction plumbing and a real refusal with unchanged CONFIG/crontab.
+Sync mode remains correctly refused when the peer is a member of the same PVE cluster; that part of the original note was accurate and is unaffected by this correction.
 
 ### Gate 1
 
-REV-082 and REV-083 are reviewer-approved/closed. No new Stage 5 feature starts before this gate.
+REV-082, REV-083, REV-085 and REV-086 are implementer-complete with live evidence submitted; reviewer approval/closure pending. No new Stage 5 feature starts before this gate.
 
 ---
 
