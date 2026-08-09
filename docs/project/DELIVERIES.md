@@ -13,3 +13,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: 86b8bcd765e8aa0ecc7dcf04a152814309840cb9 B1 step 1: profile renderer with deterministic namespace -->
 <!-- reviewed-by: 86b8bcd765e8aa0ecc7dcf04a152814309840cb9 REV-20260809-081 -->
 <!-- delivered: 0dccb0beaf115fd75e2c875db43a36b278a449e6 B1 step 2: zfs-backup.sh consumes the profile; pre-GFS refuses -->
+<!-- reviewed-by: 0dccb0beaf115fd75e2c875db43a36b278a449e6 REV-20260809-082 -->
