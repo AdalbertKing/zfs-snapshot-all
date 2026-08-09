@@ -254,6 +254,78 @@ world d7; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
 case "$(threads_txt)" in *DELIVERED*) ok "...and without it the delivery is still open" ;;
   *) bad "...and without it the delivery is still open" "$(threads_txt)" ;; esac
 
+# ---- commit ids must be CANONICAL, not merely resolvable (REV-080 F1) -------
+#
+# Resolvability and canonical form are different properties, and the gap
+# between them cost a real thread. REV-078's response carried
+# `implementation: dc1c038` while the approval carried the full 40-char SHA of
+# THE SAME COMMIT. require_commit passed it -- git resolves an unambiguous
+# abbreviation -- and then state_of_raw() compared the two header STRINGS,
+# found them unequal, and derived IMPLEMENTED from an approval already granted.
+# rc=0 throughout, so routing sent the thread back to the reviewer who had
+# already done the work.
+#
+# The discriminating case is therefore NOT "a bad sha is refused". It is "a
+# sha that IS the same commit, written short, does not silently mean a
+# different one". Everything else here is the same class in the other
+# commit-bearing fields, which requirement 4 says must not be left behind.
+short1="${sha1:0:7}"
+# Prove the premise rather than assume it: if this abbreviation did not resolve
+# to sha1, the case below would pass for the wrong reason -- refused as
+# unresolvable rather than as non-canonical.
+[ "$(git -C "$REPO" rev-parse "$short1" 2>/dev/null)" = "$sha1" ] \
+    && ok "premise: the abbreviation resolves to the same commit" \
+    || bad "premise: the abbreviation resolves to the same commit" "short=$short1"
+
+world q1; review $R APPROVED $sha1; respond $R IMPLEMENTED $sha1
+expect "canonical full SHAs on both sides still reach APPROVED" $R APPROVED
+
+world q2; review $R APPROVED $sha1; respond $R IMPLEMENTED "$short1"
+expect "an abbreviated implementation of the SAME commit is refused, not silently IMPLEMENTED" $R FAILED
+
+msg="$(REVIEWCTL_REPO="$W" "$CTL" --generate 2>&1)"
+case "$msg" in
+  *"$R"*implementation*"$short1"*) ok "the refusal names the REV, the field and the abbreviated value" ;;
+  *) bad "the refusal names the REV, the field and the abbreviated value" "$msg" ;;
+esac
+
+world q3; review $R APPROVED "$short1"; respond $R IMPLEMENTED $sha1
+expect "an abbreviated reviewed-implementation is refused too" $R FAILED
+
+world q4; review $R APPROVED $sha1; respond $R IMPLEMENTED $sha1; closure $R "$short1"
+expect "an abbreviated closed-by is refused" $R FAILED
+
+# Not just length: a 40-character value that is not lowercase hex is not an
+# object id either, and uppercase would compare unequal to git's own output.
+world q5; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED "$(printf '%s' "$sha1" | tr 'a-f' 'A-F')"
+expect "an uppercase 40-char value is refused" $R FAILED
+
+# `-` keeps working in the field the protocol defines it for. Without this the
+# canonical-form rule would make the first submission of any thread illegal.
+world q6; review $R CHANGES-REQUIRED -; respond $R ACCEPTED -
+expect "the literal - stays legal in implementation" $R OPEN
+
+# Requirement 4: the same rule in delivery bookkeeping. These two markers CLEAR
+# a delivery by matching its sha as a key, so an abbreviated one clears nothing
+# and the delivery stays open forever -- and before this change they were not
+# even reachability-checked.
+world q7; deliver "$short1" "abbreviated delivery"
+REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1 \
+    && bad "an abbreviated delivered sha is refused" \
+    || ok "an abbreviated delivered sha is refused"
+
+world q8; deliver "$sha1" "stage three"
+printf '<!-- no-review-required: %s -->\n' "$short1" >> "$W/docs/project/DELIVERIES.md"
+REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1 \
+    && bad "an abbreviated no-review-required is refused rather than silently clearing nothing" \
+    || ok "an abbreviated no-review-required is refused rather than silently clearing nothing"
+
+world q9; deliver "$sha1" "stage three"
+printf '<!-- reviewed-by: %s %s -->\n' "$short1" "$R" >> "$W/docs/project/DELIVERIES.md"
+REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1 \
+    && bad "an abbreviated reviewed-by is refused" \
+    || ok "an abbreviated reviewed-by is refused"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

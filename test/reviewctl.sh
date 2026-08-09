@@ -84,11 +84,42 @@ pubref() {
     echo "$PUBREF"
 }
 
+# REV-20260809-080 F1. A commit-bearing header must be CANONICAL before any
+# equality decision is made about it, and that is a separate property from
+# "does git resolve it".
+#
+# The failure was real, not synthetic. REV-078's response carried
+# `implementation: dc1c038` while the approval carried the full 40-char SHA of
+# the SAME commit. require_commit passed it -- git resolves an unambiguous
+# abbreviation -- and then state_of_raw() compared the two header STRINGS,
+# found them different, and derived IMPLEMENTED from an approval that had
+# already been granted. rc=0 throughout. OPEN-THREADS routed the thread back to
+# the reviewer, who had already done the work.
+#
+# Rejection rather than canonicalisation, per the review's stated preference:
+# these files are long-lived audit facts, not interactive git input, and an
+# abbreviation that is unambiguous today can become ambiguous as the repository
+# grows. Canonicalising would also silently rewrite what an artifact says.
+canonical_sha() {   # <rev> <field> <value> -> 0 canonical
+    local rev="$1" field="$2" sha="$3"
+    case "$sha" in
+        *[!0-9a-f]*)
+            err "$rev: $field names '$sha', which is not a lowercase 40-character commit id -- protocol headers are durable audit facts and must be canonical"
+            return 1 ;;
+    esac
+    if [ "${#sha}" -ne 40 ]; then
+        err "$rev: $field names '$sha', an abbreviated commit id (${#sha} chars) -- write the full 40-character SHA, or state equality cannot be decided (REV-20260809-080)"
+        return 1
+    fi
+    return 0
+}
+
 require_commit() {   # <rev> <field> <value>
     local rev="$1" field="$2" sha="$3" ref g
     # `-` is the protocol's explicit "no such commit yet", not a broken value.
     [ -z "$sha" ] && return 0
     [ "$sha" = "-" ] && return 0
+    canonical_sha "$rev" "$field" "$sha" || return 1
     g="$(gitrepo)"
     # No git at all means the claim cannot be checked. Unverifiable is not the
     # same as verified -- the exact confusion REV-20260806-046 removed from the
@@ -150,7 +181,15 @@ collect_deliveries() {
                 DELIVERED_WHAT[$sha]="${rest#"$sha"}" ;;
             '<!-- no-review-required: '*' -->')
                 sha="${line#<!-- no-review-required: }"; sha="${sha% -->}"
-                [ -n "$sha" ] && NO_REVIEW[$sha]=1 ;;
+                # REV-20260809-080 F1, requirement 4: these two markers CLEAR a
+                # delivery by matching its sha as an array key, so an
+                # abbreviated one silently clears nothing and the delivery
+                # stays open forever with no error. Same class as the
+                # implementation/reviewed-implementation comparison, and it was
+                # not even reachability-checked before.
+                [ -n "$sha" ] || continue
+                require_commit "delivery" "no-review-required" "$sha" || true
+                NO_REVIEW[$sha]=1 ;;
             '<!-- reviewed-by: '*' -->')
                 # A delivery that WAS reviewed, recorded explicitly.
                 #
@@ -163,7 +202,9 @@ collect_deliveries() {
                 # the past and has to be recorded as one.
                 rest="${line#<!-- reviewed-by: }"; rest="${rest% -->}"
                 sha="${rest%% *}"
-                [ -n "$sha" ] && NO_REVIEW[$sha]=1 ;;
+                [ -n "$sha" ] || continue
+                require_commit "delivery" "reviewed-by" "$sha" || true
+                NO_REVIEW[$sha]=1 ;;
         esac
     done < "$DELIVERIES"
 }
