@@ -8,4 +8,5 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 
 <!-- delivered: a3df471a66b0e26e1e55b7f78772d3d100dec333 scope reconciliation, gen-cron.sh --reconcile (read-only) -->
 <!-- reviewed-by: a3df471a66b0e26e1e55b7f78772d3d100dec333 REV-20260808-071 -->
-<!-- delivered: 8505601 B1 scope decision: pre-GFS frozen, migration path measured (docs only) -->
+<!-- delivered: 8505601d39b79e931a357cf81c4595b833550b78 B1 scope decision: pre-GFS frozen, migration path measured (docs only) -->
+<!-- reviewed-by: 8505601d39b79e931a357cf81c4595b833550b78 REV-20260809-079 -->
