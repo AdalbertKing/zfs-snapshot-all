@@ -63,9 +63,20 @@ an undated compatibility alias becomes a permanent second spelling.
 
 Not deciding that myself.
 
-## Status of these two documents
+## Status of these two documents — corrected 2026-08-09
 
-Both carry owner-decision headings for decisions I have not heard directly. I am
-treating them as recorded design intent to implement when the single-host layer
-is built, not as authorisation to change the shipped CLI today, and I have said
-so to the owner rather than assuming either way.
+I first wrote that both carry owner-decision headings "for decisions I have not
+heard directly", and treated them as unverified. **That was wrong and the owner
+corrected it.** An owner-decision heading in a review document means the decision
+really was agreed with him; it is not a claim awaiting confirmation.
+
+His standing rule, in his words: those decisions are *not immediately binding on
+the implementer*, because the implementer is the one who knows the code and can
+demonstrate that a decision is mistaken. He is team lead, not an oracle, and he
+expects to be shown.
+
+So the correct handling — and what this note already does in practice — is:
+implement against the decision, and where the code contradicts it, say so **with
+the measurement**, rather than either obeying silently or stalling for
+permission. The `peer_label()` trap above is exactly that case: the UX decision
+stands, and the routing constraint is what the code adds to it.
