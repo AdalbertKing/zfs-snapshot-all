@@ -982,6 +982,81 @@ assert_cron_config_matches_installed() {
 # Requires load_client_and_connection() to have run. Sets `managed` (the local
 # paths) and `prune_scope` in the CALLER's scope, which both callers then record
 # in the client conf.
+# ---- coverage overlap: one fail-closed preflight (REV-20260809-083) ---------
+#
+# The owner's create-only contract says a preset may APPEND a new independent
+# task, and must refuse when the requested source overlaps coverage that already
+# exists. Exact-path collisions were already refused by relationship ownership,
+# but overlap that is not an exact match was not: relationship A owning
+# `rpool/data` and relationship B later taking `rpool/data/vm-101` produce
+# DIFFERENT section headers, so no marker check fires -- and the two then send
+# and prune the same snapshots under different policy. Silent duplicate
+# ownership, not cosmetic duplication.
+#
+# Deliberately the conservative rule the review asked for, NOT a second
+# recursion model. A relationship with `recursive = no` does not really cover
+# its children, so prefix rejection is stricter than semantics require. That is
+# the accepted trade: a too-cautious refusal costs the expert one native CONFIG
+# edit; a missing refusal costs a silent double-prune. If exact semantics are
+# ever wanted, extract the coverage model `--reconcile` already has rather than
+# copying it here.
+path_overlaps() {   # <a> <b> -> 0 when either contains the other, or equal
+    [ "$1" = "$2" ] && return 0
+    case "$1" in "$2"/*) return 0 ;; esac
+    case "$2" in "$1"/*) return 0 ;; esac
+    return 1
+}
+
+# Prints one conflict per line: <other client> <TAB> <owned path> <TAB> <requested>.
+# It PRINTS rather than dying, because a `die` inside $( ) kills only the
+# subshell and reads as success to the caller -- a fail-open this project has
+# already paid for once. The caller decides, on the text AND on the status.
+coverage_conflicts() {   # <this client> <requested path>...
+    local me="$1"; shift
+    [ -d "$CLIENTS_DIR" ] || return 0
+    local f
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        # A subshell per record: emit_client_sections runs with this client's
+        # LOAD_*/MANAGED_* already loaded, and sourcing another record here
+        # would overwrite them mid-emit.
+        (
+            CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""
+            # shellcheck disable=SC1090
+            . "$f" 2>/dev/null || exit 0
+            [ "${CLIENT_NAME:-}" = "$me" ] && exit 0
+            [ "${STATE:-}" = removed ] && exit 0
+            local owned req
+            for owned in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-}; do
+                for req in "$@"; do
+                    path_overlaps "$owned" "$req" \
+                        && printf '%s\t%s\t%s\n' "${CLIENT_NAME:-$f}" "$owned" "$req"
+                done
+            done
+        )
+    done
+    return 0
+}
+
+assert_no_coverage_overlap() {   # <this client> <requested path>...
+    local me="$1"; shift
+    [ "$#" -gt 0 ] || return 0
+    local conflicts rc=0
+    conflicts="$(coverage_conflicts "$me" "$@")" || rc=$?
+    [ "$rc" -eq 0 ] || die "could not check whether '$me' overlaps existing coverage -- refusing rather than guessing; nothing has been changed"
+    [ -z "$conflicts" ] && return 0
+    local line other owned req msg=""
+    while IFS=$'\t' read -r other owned req; do
+        [ -n "$other" ] || continue
+        msg="$msg
+  '$req' overlaps '$owned', already owned by relationship '$other'"
+    done <<< "$conflicts"
+    die "refusing to add '$me': it would take coverage another relationship already owns.$msg
+
+Two high-level relationships covering the same datasets would send and prune the same snapshots under different policy. Nothing has been changed -- no config, no crontab.
+If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+}
+
 emit_client_sections() {   # <workfile> <client name>
     local workfile="$1" name="$2" ds localpath
     # The emitted sections REFERENCE the profile templates ensure_cron_config
@@ -1002,6 +1077,9 @@ emit_client_sections() {   # <workfile> <client name>
     for ds in $PEER_SAVED_DATASETS; do
         managed+=("$(client_local_path "$ds")")
     done
+    # Fail closed BEFORE the first mutation: remove_managed_sections below is
+    # already a write to the working config (REV-20260809-083).
+    [ "${#managed[@]}" -gt 0 ] && assert_no_coverage_overlap "$name" "${managed[@]}"
     # Remove-then-add unconditionally, never skip-if-present: that is what makes
     # a re-run after an endpoint switch actually pick up the new host/port/alias
     # instead of leaving the old connection details in place forever.

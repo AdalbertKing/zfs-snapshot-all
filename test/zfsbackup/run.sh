@@ -4084,6 +4084,139 @@ else
     bad "field survival: the profile's recursive=flat reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
 fi
 
+
+# --- 45. coverage overlap: one fail-closed preflight (REV-20260809-083) ------
+#
+# Exact-path collisions were already refused by relationship ownership. Overlap
+# that is NOT an exact match was not: A owning rpool/data and B later taking
+# rpool/data/vm-101 produce different section headers, so no marker check fires,
+# and both then send and prune the same snapshots under different policy.
+#
+# The guard reads other clients' records, so these cases substitute CLIENTS_DIR.
+# Without that substitution the guard silently does nothing here -- /etc/... does
+# not exist on this machine -- which is why the reachability case below exists at
+# all: a suite that cannot reach the guard would pass whether it worked or not.
+OV="$WORK/overlap"; mkdir -p "$OV/clients"
+cat > "$OV/clients/peerA.conf" <<'EOF'
+CLIENT_NAME=peerA
+STATE=active
+MANAGED_DATASETS="tank/backups/peerA/rpool/data"
+MANAGED_PRUNE_SCOPE="tank/backups/peerA"
+EOF
+
+ov_emit() {   # <client name> <datasets> -> rc, output on stdout
+    # NOT one `local` statement: bash expands every word BEFORE performing any
+    # of the assignments, so `wf="$OV/$nm.conf"` would see nm unset.
+    local nm="$1" dss="$2"
+    local wf="$OV/$nm.conf"
+    : > "$wf"
+    ( CLIENTS_DIR="$OV/clients" PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" \
+      LOAD_LABEL="$nm" LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.2.2.2 LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="$dss" PROFILE_GFS=1
+      emit_client_sections "$wf" "$nm" ) 2>&1
+}
+
+# 1. parent already owned, child requested.
+#
+# MEASURED WHILE WRITING THIS, and it corrects the review's example: in BACKUP
+# mode each relationship lands under its own label directory
+# (tank/backups/<label>/...), so two backup clients cannot collide by taking a
+# parent and a child of the same source -- their target paths differ at the
+# label. The hazard is real in SYNC mode, where client_local_path returns the
+# BARE source path with no label to separate them. So this case is written in
+# sync mode, which is where the failure actually lives.
+cat > "$OV/clients/syncA.conf" <<'EOF'
+CLIENT_NAME=syncA
+STATE=active
+MANAGED_DATASETS="rpool/data"
+MANAGED_PRUNE_SCOPE="rpool/data"
+EOF
+outB="$OV/syncB.conf"; : > "$outB"
+out=$( ( CLIENTS_DIR="$OV/clients" PEER_SAVED_MODE=sync PEER_SAVED_TARGET=""          LOAD_LABEL=syncB LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.3.3.3 LOAD_FLAGS="-K /dev/null"          PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
+         emit_client_sections "$outB" syncB ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *syncA*) true ;; *) false ;; esac; then
+    ok "overlap (sync): a child of an owned path is refused, naming the other relationship"
+else
+    bad "overlap (sync): a child of an owned path is refused, naming the other relationship" "rc=$rc out=$out"
+fi
+rm -f "$OV/clients/syncA.conf"
+
+# 2. child already owned, parent requested -- the other direction
+cat > "$OV/clients/peerC.conf" <<'EOF'
+CLIENT_NAME=peerC
+STATE=active
+MANAGED_DATASETS="tank/backups/peerC/rpool/data/vm-9"
+MANAGED_PRUNE_SCOPE=""
+EOF
+out=$(ov_emit peerC2 "rpool/data"); rc=$?
+# peerC2's own path is tank/backups/peerC2/rpool/data, which does NOT contain
+# peerC's -- so build the colliding case explicitly instead of pretending.
+cat > "$OV/clients/peerD.conf" <<'EOF'
+CLIENT_NAME=peerD
+STATE=active
+MANAGED_DATASETS="tank/backups/peerE/rpool/data/vm-9"
+MANAGED_PRUNE_SCOPE=""
+EOF
+out=$(ov_emit peerE "rpool/data"); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *peerD*) true ;; *) false ;; esac; then
+    ok "overlap: a parent of an owned path is refused too (both directions)"
+else
+    bad "overlap: a parent of an owned path is refused too (both directions)" "rc=$rc out=$out"
+fi
+
+# 3. disjoint is still allowed -- the guard must not refuse ordinary additive work
+rm -f "$OV/clients/peerD.conf" "$OV/clients/peerC.conf"
+out=$(ov_emit peerF "rpool/lxc"); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "overlap: a disjoint source is still appendable"
+else
+    bad "overlap: a disjoint source is still appendable" "rc=$rc out=$out"
+fi
+
+# 4. exact-path collision still refuses.
+#
+# I first wrote "it always did; kept as regression" and the negative control
+# disproved it: this case FAILS against the pre-guard build. The old marker
+# mechanism protects sections ALREADY PRESENT in the config being edited, and
+# this fixture starts from an empty working config -- so what refuses here is
+# the new preflight, reading another relationship's record. Both mechanisms are
+# wanted; they cover different moments.
+out=$(ov_emit peerG "rpool/data"); rc=$?
+cat > "$OV/clients/peerH.conf" <<'EOF'
+CLIENT_NAME=peerH
+STATE=active
+MANAGED_DATASETS="tank/backups/peerI/rpool/data"
+MANAGED_PRUNE_SCOPE=""
+EOF
+out=$(ov_emit peerI "rpool/data"); rc=$?
+if [ "$rc" -ne 0 ]; then
+    ok "overlap: an exact-path collision is still refused"
+else
+    bad "overlap: an exact-path collision is still refused" "rc=$rc out=$out"
+fi
+
+# 5. the refusal happens BEFORE any mutation: the working config stays empty.
+if [ ! -s "$OV/peerI.conf" ]; then
+    ok "overlap: the refusal leaves the working config untouched"
+else
+    bad "overlap: the refusal leaves the working config untouched" "$(cat "$OV/peerI.conf")"
+fi
+
+# 6. a removed relationship owns nothing -- otherwise a torn-down pair would
+#    block its own replacement forever.
+cat > "$OV/clients/peerJ.conf" <<'EOF'
+CLIENT_NAME=peerJ
+STATE=removed
+MANAGED_DATASETS="tank/backups/peerK/rpool/zzz"
+MANAGED_PRUNE_SCOPE=""
+EOF
+out=$(ov_emit peerK "rpool/zzz"); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "overlap: a removed relationship no longer reserves its coverage"
+else
+    bad "overlap: a removed relationship no longer reserves its coverage" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
