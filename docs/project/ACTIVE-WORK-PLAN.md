@@ -20,7 +20,7 @@ This file does **not** duplicate review state. Current REV ownership/status rema
 
 ## Phase 1 — close the current live gate (ACTIVE NOW)
 
-Goal: close the only remaining evidence boundary for REV-082/REV-083 before adding more Stage 5 behavior.
+Goal: close the current safety/evidence boundary before adding more Stage 5 behavior.
 
 Use the already-authorized bounded metropolis pve1/pve2 throwaway window and the smallest suitable scratch dataset.
 
@@ -42,7 +42,9 @@ Sync mode remains correctly refused when the peer is a member of the same PVE cl
 
 ### Gate 1
 
-REV-082, REV-083, REV-085 and REV-086 are implementer-complete with live evidence submitted; reviewer approval/closure pending. No new Stage 5 feature starts before this gate.
+REV-082, REV-083, REV-085 and REV-086 are **CLOSED** after reviewer verification of the corrected local and live evidence.
+
+The same live campaign exposed one independent production defect: `read_server_conf()` could clobber a relationship-recorded `CRON_CONFIG` during reactivation/remove-client when no server.conf exists. It is tracked separately as **REV-087**. The narrow candidate fix already exists in `67415a5795ad3d1cb659e3017c1485bc99b59a61`; Phase 2 remains blocked only until Claude formally responds to REV-087 and that existing fix is reviewer-verified/closed.
 
 ---
 
@@ -200,7 +202,7 @@ Do not build:
 ## Active sequence in one line
 
 ```text
-V3 live gate
+REV-087 formal close
  -> CREATE-only additive
  -> endpoint/reactivation preserves policy
  -> --profile at CREATE + preview
