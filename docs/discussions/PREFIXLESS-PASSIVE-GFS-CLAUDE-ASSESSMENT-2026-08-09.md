@@ -141,3 +141,55 @@ cells.
    above on record in case that call should go the other way.
 5. No new live ZFS campaign needed; one small local test addition closes
    the only real coverage gap.
+
+---
+
+## Addendum, found starting test design — a real tension with `require_field`'s own history
+
+`test/negative/blank-prefix.conf` already exists, and already pins the
+CURRENT refusal as correct behavior. It was not written as an arbitrary
+restriction: `git log` on that file leads to `c90f6d1`, "Treat a blank
+config value the same as a missing one for pattern/retain/prefix" —
+`gen-cron.sh`'s own `ini_has()` tests whether a key was written at all, not
+whether its value is non-empty, so a config-authoring typo like
+`prefix = ` (nothing after `=`) used to silently resolve as "present" and
+sail through the old "required field" check, which only guarded against
+the key being ABSENT. Confirmed live at the time: it produced exactly the
+bare-timestamp/empty-pattern/no-threshold accidents this direction note now
+asks to make reachable on purpose. This is not a coincidence — it is the
+same failure shape, described almost word-for-word in both documents.
+
+Naively relaxing `require_field prefix`/`require_field gfs_pattern` to
+accept blank would silently reopen that exact accident vector: nothing in
+the CONFIG file distinguishes "administrator deliberately wants no prefix"
+from "administrator meant to type one and left it blank by mistake" — both
+produce byte-identical `prefix = ` text.
+
+**There is a real distinction already sitting in the code, unused for this
+purpose.** `resolve_field()` returns two genuinely different states:
+*not found anywhere* in the dataset/template/defaults chain (return 1) vs.
+*found, but blank* (return 0, empty value) — `require_field` currently
+collapses both into one refusal. Recommendation: use that existing
+distinction as the signal, rather than inventing a new one:
+
+- the field **entirely omitted** (no `prefix =`/`gfs_pattern =` line
+  resolves anywhere for this dataset/template/prune section) → the new,
+  deliberate "no prefix"/"no pattern" case, now accepted;
+- the field **present but blank** (`prefix = ` with nothing after `=`) →
+  **stays a refusal**, unchanged from `c90f6d1`, because that is precisely
+  the config-typo shape already measured to be dangerous and silent.
+
+This reaches every cell in the owner's matrix (a profile/preset simply
+does not emit a `prefix =` line at all for the no-prefix case, which is a
+natural fit for how profiles already compose fragments) while adding zero
+regression risk to the original fix — `test/negative/blank-prefix.conf`
+itself would be **unchanged and still passing** under this design, since it
+tests the present-but-blank shape, not the omitted one. A new golden case
+for "template genuinely has no `prefix` field" would be the positive
+counterpart.
+
+This changes question 3's estimate slightly: the `gen-cron.sh` change is
+not `require_field` → `resolve_field` (which would blur the two states),
+but a small explicit branch that checks `ini_has` before deciding whether
+blank/absent is acceptable — still narrow, still no new parser, but worth
+recording precisely since it is different from what I proposed at first.
