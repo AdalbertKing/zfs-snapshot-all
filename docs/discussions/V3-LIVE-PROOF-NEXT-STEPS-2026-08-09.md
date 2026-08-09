@@ -173,3 +173,69 @@ smallest to largest scope:
 I'd lean toward (2) as the best real evidence achievable on the agreed host
 pair without scope creep, but the choice of what actually counts as adequate
 V3 evidence for REV-083 given this constraint is yours to make, not mine.
+
+---
+
+## Reviewer resolution — 2026-08-09 18:03 CEST
+
+**Choose option 2. Do not add a third host.**
+
+I independently checked the production path rather than accepting the argument
+from the discussion alone:
+
+- `snapget_local_base()` returns `$PEER_SAVED_TARGET/$LOAD_LABEL` in backup
+  mode and an empty base in sync mode; `client_local_path()` therefore yields
+  `TARGET/LABEL/source` for backup and the bare source path for sync;
+- `emit_client_sections()` computes the concrete managed paths first and calls
+  `assert_no_coverage_overlap` before `remove_managed_sections`, i.e. before
+  the first candidate mutation;
+- `cmd_add_client()` refuses `--mode=sync` when the peer resolves to a member
+  of this host's `/etc/pve/nodes` cluster.
+
+So the claimed obstruction is real and is itself produced by two intended
+safety properties. Requiring an unrelated third peer solely to force a live
+`path_overlaps()` hit would increase SSH/pairing/grant/ZFS scope without
+increasing useful confidence proportionally.
+
+### Accepted V3 campaign on metropolis pve1/pve2
+
+Proceed under the owner-authorized bounded window already recorded above:
+
+1. Create/seed/activate one throwaway backup-mode relationship using the
+   smallest suitable scratch dataset and the established test-target
+   convention.
+2. Confirm `STATE=active`, then capture the canonical CONFIG and managed
+   `crontab -l` block verbatim.
+3. Attempt a second `add-client` using the **same client name**. Require a hard
+   refusal. This is explicitly evidence for a real high-level refusal/no-
+   mutation path, **not** a claim that it exercised `path_overlaps()`.
+4. Read CONFIG and managed crontab back and prove both unchanged from step 2.
+5. Teardown with normal `remove-client` and verify cleanup/state/crontab.
+
+### How REV-083 is judged
+
+For this specific pair, the parent/child overlap leg does **not** require a
+live hit that the product architecture makes unreachable. Its acceptance is
+composed from:
+
+- discriminating section-45/46 regressions and the negative control;
+- direct reviewer inspection/reproduction of the overlap/fail-closed logic;
+- direct inspection that the guard is called before the first candidate
+  mutation;
+- the proof-by-construction that backup-mode clients are namespace-separated
+  here and same-cluster sync is refused earlier;
+- the live option-2 campaign proving the real high-level lifecycle can install
+  and can refuse a second relationship attempt without changing CONFIG/cron.
+
+Do not describe duplicate-name refusal as a `path_overlaps()` live test. The
+point is to prove the remaining transaction/plumbing boundary honestly, not to
+manufacture a misleading label.
+
+If the campaign above passes and its transcript/before-after evidence is
+recorded in both responses, there is no remaining V3 evidence requirement for
+REV-082/083 on this host pair. Route both back to the reviewer for final
+approval/closure.
+
+The owner-approved work sequence is now canonical in
+`docs/project/ACTIVE-WORK-PLAN.md`. Phase 1 is this V3 gate; no later Stage 5
+feature should start before it closes.
