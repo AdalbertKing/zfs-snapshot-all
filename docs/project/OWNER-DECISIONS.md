@@ -46,7 +46,7 @@ facts cannot settle.
 | ~~14~~ | ~~`docs/OPS_MONITORING.md` untracked~~ | **ROZSTRZYGNIETE 2026-08-09, patrz nizej** |
 | 15 | Two sessions built the same feature the same day | owner: decide how parallel sessions announce what they are taking |
 | 36 | Grants on pve0 are per-dataset, not on the parent | owner: per-dataset (today) or parent grant |
-| 32 | Plan: method + stages | owner+reviewer: approve or amend |
+| ~~32~~ | ~~Plan: method + stages~~ | **ROZSTRZYGNIETE 2026-08-09 — `ACTIVE-WORK-PLAN.md`** |
 | 29 | Engine CLI / profiles / restore — design discussion | owner+reviewer: discuss |
 | 30 | Atomic restore point — measured, and one gap | owner+reviewer: accept into the pre-freeze engine slice |
 
@@ -118,7 +118,7 @@ Sklaniam sie do **drugiego**: audyt zakresu to nie polityka kopii, wiec jego
 lista wyjatkow nie musi mieszkac w pliku polityki — a schematu nie ruszamy w
 momencie, gdy detektor jest jeszcze recenzowany.
 
-Do czasu rozstrzygniecia `hdd/isos` **pozostaje zgloszany** przez `--reconcile`.
+Do czasu rozstrzygniecia `hdd/isos` **pozostaje zglaszany** przez `--reconcile`.
 Zapisane tutaj, zeby decyzja nie zyla wylacznie w rozmowie.
 
 ---
@@ -186,3 +186,35 @@ crontaba wobec bloku zarzadzanego.
 
 Jesli taka rutyna kiedykolwiek powstanie, to jest jej punkt wyjscia — a decyzja,
 czym ma byc, wraca wtedy do wlasciciela i recenzenta, a nie do implementera.
+
+---
+
+## ROZSTRZYGNIETE 2026-08-09 — decyzja #32, aktywny program prac
+
+**Wlasciciel zatwierdzil program prac laczacy dwa kryteria: waznosc i koszt wdrozenia.**
+
+Kanoniczna kolejnosc od tej decyzji jest zapisana w:
+
+`docs/project/ACTIVE-WORK-PLAN.md`
+
+Ten plik jest teraz aktywnym planem wykonawczym i ma pierwszenstwo przed
+kolejnoscia z `PLAN-2026-08-07.md`, gdy dokumenty sie roznia. Stary plan
+pozostaje historia decyzji i metoda pracy, nie drugim aktywnym backlogiem.
+
+Kolejnosc wysokiego poziomu:
+
+```text
+V3 live gate
+ -> CREATE-only additive
+ -> endpoint/reactivation preserves policy
+ -> --profile at CREATE + preview
+ -> simple --source/--target workflow
+ -> minimal presets + expert docs
+ -> RESTORE
+ -> optional conveniences only when backed by a concrete need
+```
+
+Obowiazuje redukcja zamiast kompletnego modelowania wszystkich wyjatkow:
+preset tworzy nowy fragment, CONFIG v4 jest prawda po instalacji, a bespoke
+policy pozostaje wspierane przez native CONFIG + dokumentacje zamiast przez
+profile inheritance/drift/precedence framework.
