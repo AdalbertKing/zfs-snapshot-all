@@ -24,8 +24,9 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260809-079 | CLOSED | - | be5906430728916b2a0fe6751dd4fb79b9cdc874 | be5906430728916b2a0fe6751dd4fb79b9cdc874 | responses/REV-20260809-079.md | - |
 | REV-20260809-080 | CLOSED | - | 004b4662efed7254997f99e2f301218b653ceaf9 | 004b4662efed7254997f99e2f301218b653ceaf9 | responses/REV-20260809-080.md | - |
 | REV-20260809-081 | CLOSED | - | 27435d131a8c4c41abb3abd22379b810cad0c9fc | 27435d131a8c4c41abb3abd22379b810cad0c9fc | responses/REV-20260809-081.md | - |
-| REV-20260809-082 | IMPLEMENTED | Reviewer | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | 3562bfb0fa0b02c67efc53b2527495acf8843a1a | responses/REV-20260809-082.md | verify the submitted implementation |
-| REV-20260809-083 | IMPLEMENTED | Reviewer | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-083.md | verify the submitted implementation |
+| REV-20260809-082 | CLOSED | - | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | responses/REV-20260809-082.md | - |
+| REV-20260809-083 | CLOSED | - | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | aee1b2bb06c0aedbfa1375cd46f3750a70505bce | responses/REV-20260809-083.md | - |
 | REV-20260809-084 | CLOSED | - | 57deecb23d8962e5ad47fc9312141e248776f3f5 | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-084.md | - |
-| REV-20260809-085 | IMPLEMENTED | Reviewer | a1ff3a07f5d60a1437c2799b548dc188f134688d | f1c4b9607a4d5e86351538aa71675a2d619c73af | responses/REV-20260809-085.md | verify the submitted implementation |
-| REV-20260809-086 | IMPLEMENTED | Reviewer | 67415a5795ad3d1cb659e3017c1485bc99b59a61 | 25da6033626a0948750e46ca4c0f1a0737058e58 | responses/REV-20260809-086.md | verify the submitted implementation |
+| REV-20260809-085 | CLOSED | - | a1ff3a07f5d60a1437c2799b548dc188f134688d | a1ff3a07f5d60a1437c2799b548dc188f134688d | responses/REV-20260809-085.md | - |
+| REV-20260809-086 | CLOSED | - | 67415a5795ad3d1cb659e3017c1485bc99b59a61 | 67415a5795ad3d1cb659e3017c1485bc99b59a61 | responses/REV-20260809-086.md | - |
+| REV-20260809-087 | OPEN | Claude | - | a1ff3a07f5d60a1437c2799b548dc188f134688d | - | implement and respond |
