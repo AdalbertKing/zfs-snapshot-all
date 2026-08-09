@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a63adbc1b3f02d55 -->
+<!-- status-covers-digest: daf196c801ee3717 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -40,7 +40,8 @@
   | Etap 3 — ZAMROŻENIE SILNIKA | **wdrożone i domknięte** | `docs/project/ENGINE-FREEZE.md`, egzekwowane przez `./test/impact.sh` |
   | Etap 4 — `gen-cron.sh --reconcile` | **wdrożone i domknięte** (REV-071…074) | suita `reconcile`, `docs/testing/RECONCILE-*.md` |
   | Etap 5 — GRANICA profilu | **wdrożona jako kod PRODUKCYJNY** `lib-profile.sh` | REV-073/076/077, suita `profiles` |
-  | Etap 5 — RUNTIME profilu (`zfs-backup.sh` czyta profil zamiast zaszytych szablonów) | **NIEwdrożone** — to jest następny plasterek B1 | `docs/design/slice-b1-plan.md` |
+  | Etap 5 — RENDERER profilu (`profile_render_templates`/`profile_render_fragment`, namespace `profile__<nazwa>__<szablon>`) | **wdrożony** w `lib-profile.sh`, suita `profiles` 50/50 | plasterek B1, krok 1 |
+  | Etap 5 — RUNTIME profilu (`zfs-backup.sh` czyta profil zamiast zaszytych szablonów) | **NIEwdrożone** — renderer istnieje, ale nikt go jeszcze nie woła | `docs/design/slice-b1-plan.md` |
   | jednohostowa orkiestracja wysokopoziomowa (`--target`/`--source`, add-local) | **NIEwdrożone** — dyskusja projektowa | `docs/project/DEPLOY-SEQUENCES.md`, `docs/design/local-relation-contract.md` |
   | restore | **NIEwdrożone**, nie zaczęte | — |
 

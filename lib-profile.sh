@@ -34,6 +34,51 @@
 
 PROFILE_ERR=""
 
+###############################################################################
+# NAMESPACING -- REV-20260809-079 / PER-SOURCE-PROFILE-SCENARIOS-2026-08-09
+#
+# A relationship may bind DIFFERENT profiles to different source roots, and all
+# of them compose into ONE effective CONFIG v4 file. gen-cron.sh has a single
+# global section namespace and refuses a duplicate `[template:NAME]` outright
+# (measured, not assumed). Two profiles carrying the same native template name
+# -- which every profile derived from the built-in one does -- would therefore
+# make the config unusable.
+#
+# So profile-owned template names are namespaced DETERMINISTICALLY FROM THE
+# FIRST EMISSION, never only once a second profile appears. Switching it on
+# later would rewrite the FIRST source's template section and its use_template
+# line as a side effect of adding a second source -- which is exactly the
+# "adding a source must not silently change existing bindings" property the
+# per-source design requires.
+#
+# The mapping is one-way but readable, so a human reading a generated config can
+# see which profile a template came from:
+#
+#     profile "default", template "standard_hourly"
+#         -> profile__default__standard_hourly
+#
+# What this deliberately does NOT do: reuse a host's existing bare
+# `[template:standard_hourly]`. A hand-written section that happens to share a
+# name is NOT this profile's template, and binding to it would silently adopt
+# somebody else's policy. The cost is visible and accepted -- a host carrying
+# legacy bare sections gains namespaced ones beside them, and the activation
+# preview shows it.
+PROFILE_NS_SEP='__'
+
+profile_ns_name() {   # <profile> <template> -> namespaced name
+    printf 'profile%s%s%s%s' "$PROFILE_NS_SEP" "$1" "$PROFILE_NS_SEP" "$2"
+}
+
+# A profile name has to survive being part of a section header, so it is held
+# to the same character class CONFIG v4 allows in a template name. Fail closed:
+# a profile whose name could break the header is refused, not sanitised.
+profile_name_ok() {   # <profile>
+    case "$1" in
+        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+    return 0
+}
+
 # Fields a profile must never carry, whatever the schema permits.
 #
 #   src, dst   topology -- the relationship's, not the policy's
@@ -139,6 +184,93 @@ profile_validate_templates() {   # <file> <schema dump>
         profile_check_field template "$field" "$dump" "$file:$n" || return 1
     done < "$file"
     [ "$in_section" -eq 1 ] || { PROFILE_ERR="$file: no [template:NAME] section found"; return 1; }
+    return 0
+}
+
+###############################################################################
+# RENDERING -- turning a validated profile into effective CONFIG v4 text.
+#
+# Validation says a profile is well-formed. Rendering is what a production
+# runtime actually consumes, and it lives here for the reason REV-076 gave: a
+# second implementation of profile grammar outside this boundary is how the rule
+# and the thing that applies it drift apart.
+###############################################################################
+
+# Set by profile_render_templates: the namespaced names this profile defines.
+PROFILE_TEMPLATE_NAMES=""
+
+profile_render_templates() {   # <dir> <profile> <outfile>
+    PROFILE_ERR=""; PROFILE_TEMPLATE_NAMES=""
+    local dir="$1" prof="$2" out="$3" file raw name ns n=0
+    profile_name_ok "$prof" || { PROFILE_ERR="profile name '$prof' is not usable in a section header (letters, digits, _ and - only)"; return 1; }
+    file="$dir/templates.conf"
+    [ -r "$file" ] || { PROFILE_ERR="cannot read profile templates '$file'"; return 1; }
+    : > "$out" || { PROFILE_ERR="cannot write '$out'"; return 1; }
+    while IFS= read -r raw || [ -n "$raw" ]; do
+        n=$((n+1))
+        raw="${raw%$'\r'}"
+        case "$raw" in
+            '[template:'*']')
+                name="${raw#\[template:}"; name="${name%\]}"
+                ns="$(profile_ns_name "$prof" "$name")"
+                # A repeat inside one profile would emit a duplicate section and
+                # gen-cron would refuse the composed file. Refuse HERE instead,
+                # naming the profile -- a refusal from the generator names only
+                # the composed temporary file, which tells the operator nothing
+                # about which profile produced it.
+                case " $PROFILE_TEMPLATE_NAMES " in
+                    *" $ns "*) PROFILE_ERR="$file:$n: '[template:$name]' appears twice in profile '$prof' -- the composed config would carry a duplicate section"; return 1 ;;
+                esac
+                PROFILE_TEMPLATE_NAMES="$PROFILE_TEMPLATE_NAMES $ns"
+                printf '[template:%s]\n' "$ns" >> "$out" ;;
+            *)
+                printf '%s\n' "$raw" >> "$out" ;;
+        esac
+    done < "$file"
+    PROFILE_TEMPLATE_NAMES="${PROFILE_TEMPLATE_NAMES# }"
+    [ -n "$PROFILE_TEMPLATE_NAMES" ] || { PROFILE_ERR="$file: no [template:NAME] section found"; return 1; }
+    return 0
+}
+
+# A fragment's `use_template = a,b` must resolve INSIDE this profile, and is
+# rewritten to the namespaced names.
+#
+# The resolution requirement is not tidiness -- it is the invariant that a
+# profile must never silently bind to a host's existing hand-written template
+# just because a bare name happens to match. Structurally enforced: a name this
+# profile does not define cannot be referenced at all.
+profile_render_fragment() {   # <file> <profile> <outfile>
+    PROFILE_ERR=""
+    local file="$1" prof="$2" out="$3" raw field val part ns first n=0
+    [ -r "$file" ] || { PROFILE_ERR="cannot read profile fragment '$file'"; return 1; }
+    [ -n "$PROFILE_TEMPLATE_NAMES" ] || { PROFILE_ERR="profile_render_fragment called before profile_render_templates"; return 1; }
+    : > "$out" || { PROFILE_ERR="cannot write '$out'"; return 1; }
+    while IFS= read -r raw || [ -n "$raw" ]; do
+        n=$((n+1))
+        raw="${raw%$'\r'}"
+        field=$(printf '%s\n' "$raw" | sed -n -E 's/^[[:space:]]*(use_template)[[:space:]]*=.*$/\1/p')
+        if [ -z "$field" ]; then
+            printf '%s\n' "$raw" >> "$out"
+            continue
+        fi
+        val="${raw#*=}"
+        first=1; ns=""
+        local IFS_SAVE="$IFS"; IFS=','
+        for part in $val; do
+            IFS="$IFS_SAVE"
+            part="${part#"${part%%[![:space:]]*}"}"; part="${part%"${part##*[![:space:]]}"}"
+            [ -n "$part" ] || { PROFILE_ERR="$file:$n: empty template name in 'use_template'"; return 1; }
+            local cand; cand="$(profile_ns_name "$prof" "$part")"
+            case " $PROFILE_TEMPLATE_NAMES " in
+                *" $cand "*) ;;
+                *) PROFILE_ERR="$file:$n: 'use_template' names '$part', which profile '$prof' does not define -- a profile may not bind to a template it does not own"; return 1 ;;
+            esac
+            if [ "$first" -eq 1 ]; then ns="$cand"; first=0; else ns="$ns,$cand"; fi
+            IFS=','
+        done
+        IFS="$IFS_SAVE"
+        printf '\tuse_template = %s\n' "$ns" >> "$out"
+    done < "$file"
     return 0
 }
 

@@ -247,5 +247,123 @@ fi
 rm -rf "$COMPLETE"
 
 
+# ---- Slice B1: rendering a profile into effective CONFIG v4 -----------------
+#
+# Namespacing is the requirement from PER-SOURCE-PROFILE-SCENARIOS: two profiles
+# bound in one relationship compose into ONE config, and gen-cron refuses a
+# duplicate [template:NAME]. These cases pin the mapping, the reference rewrite
+# and the two refusals that keep it safe.
+
+RD="$TMP/render"; mkdir -p "$RD"
+
+if profile_render_templates "$ROOT/profiles/default" default "$RD/t.conf"; then
+    ok "render: the built-in profile renders its templates"
+else
+    bad "render: the built-in profile renders its templates" "$PROFILE_ERR"
+fi
+
+if grep -q '^\[template:profile__default__standard_hourly\]$' "$RD/t.conf"; then
+    ok "render: template sections carry the deterministic namespace"
+else
+    bad "render: template sections carry the deterministic namespace"
+fi
+
+# The bare name must NOT survive: a host's own hand-written [template:standard_hourly]
+# is somebody else's policy, and binding to it is the failure this prevents.
+if grep -q '^\[template:standard_hourly\]$' "$RD/t.conf"; then
+    bad "render: the bare template name does not survive rendering"
+else
+    ok "render: the bare template name does not survive rendering"
+fi
+
+if profile_render_fragment "$ROOT/profiles/default/prune.inc" default "$RD/p.inc"; then
+    ok "render: a fragment renders"
+else
+    bad "render: a fragment renders" "$PROFILE_ERR"
+fi
+
+# Every reference rewritten, none left bare -- a half-rewritten list would
+# resolve some tiers to this profile and some to whatever the host already has.
+if grep -q 'use_template = profile__default__keep_hourly,profile__default__keep_daily,profile__default__keep_weekly,profile__default__keep_monthly' "$RD/p.inc"; then
+    ok "render: every use_template reference is rewritten, in order"
+else
+    bad "render: every use_template reference is rewritten, in order" "$(grep use_template "$RD/p.inc")"
+fi
+
+# Non-template lines are carried through untouched -- gfs=/gfs_pattern= are the
+# policy the profile exists to supply.
+if grep -q '^gfs *= *yes' "$RD/p.inc" && grep -q '^gfs_pattern *= *automated_' "$RD/p.inc"; then
+    ok "render: policy fields other than use_template are untouched"
+else
+    bad "render: policy fields other than use_template are untouched"
+fi
+
+# A reference this profile does not define is REFUSED rather than passed
+# through. This is the structural half of "never silently bind to an unrelated
+# hand-written template": an unknown name cannot be referenced at all.
+UNK="$TMP/unknown-ref.inc"
+printf 'use_template = keep_hourly,not_mine\n' > "$UNK"
+if profile_render_fragment "$UNK" default "$RD/u.inc"; then
+    bad "render: a reference the profile does not define is refused"
+else
+    case "$PROFILE_ERR" in
+        *not_mine*) ok "render: a reference the profile does not define is refused" ;;
+        *) bad "render: a reference the profile does not define is refused" "$PROFILE_ERR" ;;
+    esac
+fi
+
+# A duplicate inside one profile is caught HERE, naming the profile. gen-cron
+# would also refuse the composed file, but its message names only a temporary
+# path and tells the operator nothing about which profile produced it.
+DUPP="$(mkprofile -)"
+printf '\n[template:standard_hourly]\n\tsend_schedule = 5 * * * *\n' >> "$DUPP/templates.conf"
+if profile_render_templates "$DUPP" default "$RD/dup.conf"; then
+    bad "render: a duplicate template inside one profile is refused"
+else
+    case "$PROFILE_ERR" in
+        *standard_hourly*default*) ok "render: a duplicate template inside one profile is refused" ;;
+        *) bad "render: a duplicate template inside one profile is refused" "$PROFILE_ERR" ;;
+    esac
+fi
+rm -rf "$DUPP"
+
+# A profile name that could break a section header is refused, not sanitised.
+if profile_render_templates "$ROOT/profiles/default" 'bad name]' "$RD/bad.conf"; then
+    bad "render: a profile name unusable in a header is refused"
+else
+    ok "render: a profile name unusable in a header is refused"
+fi
+
+# The property the whole scheme exists for: two profiles compose without
+# colliding. Same source templates, two names, one config gen-cron accepts.
+profile_render_templates "$ROOT/profiles/default" flat   "$RD/flat.conf"   || bad "render: two-profile composition (flat)"   "$PROFILE_ERR"
+profile_render_templates "$ROOT/profiles/default" atomic "$RD/atomic.conf" || bad "render: two-profile composition (atomic)" "$PROFILE_ERR"
+{
+    printf '[defaults]\n\thost_label = t\n\tdst = hdd/backups\n\n'
+    cat "$RD/flat.conf"; printf '\n'; cat "$RD/atomic.conf"
+    printf '\n[dataset:rpool/data]\n\tuse_template = profile__flat__standard_hourly\n\trecursive = flat\n'
+    printf '\n[dataset:rpool/lxc]\n\tuse_template = profile__atomic__standard_hourly\n\trecursive = atomic\n'
+} > "$RD/composed.conf"
+if bash "$GEN" -c "$RD/composed.conf" >/dev/null 2>&1; then
+    ok "render: two profiles compose into one config gen-cron accepts"
+else
+    bad "render: two profiles compose into one config gen-cron accepts" "$(bash "$GEN" -c "$RD/composed.conf" 2>&1 | tail -2)"
+fi
+
+# ...and the negative that proves the collision is real rather than assumed:
+# the same two profiles WITHOUT namespacing are refused by gen-cron.
+{
+    printf '[defaults]\n\thost_label = t\n\tdst = hdd/backups\n\n'
+    cat "$ROOT/profiles/default/templates.conf"; printf '\n'
+    cat "$ROOT/profiles/default/templates.conf"
+    printf '\n[dataset:rpool/data]\n\tuse_template = standard_hourly\n'
+} > "$RD/collide.conf"
+if bash "$GEN" -c "$RD/collide.conf" >/dev/null 2>&1; then
+    bad "render: WITHOUT namespacing the same two profiles collide"
+else
+    ok "render: WITHOUT namespacing the same two profiles collide"
+fi
+
+
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
