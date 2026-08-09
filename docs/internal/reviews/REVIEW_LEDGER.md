@@ -24,6 +24,6 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260809-079 | CLOSED | - | be5906430728916b2a0fe6751dd4fb79b9cdc874 | be5906430728916b2a0fe6751dd4fb79b9cdc874 | responses/REV-20260809-079.md | - |
 | REV-20260809-080 | CLOSED | - | 004b4662efed7254997f99e2f301218b653ceaf9 | 004b4662efed7254997f99e2f301218b653ceaf9 | responses/REV-20260809-080.md | - |
 | REV-20260809-081 | CLOSED | - | 27435d131a8c4c41abb3abd22379b810cad0c9fc | 27435d131a8c4c41abb3abd22379b810cad0c9fc | responses/REV-20260809-081.md | - |
-| REV-20260809-082 | OPEN | Claude | a1bfa19f814bdb05d8ca22f2821b5ca62610ec80 | a1bfa19f814bdb05d8ca22f2821b5ca62610ec80 | responses/REV-20260809-082.md | implement and respond |
+| REV-20260809-082 | IMPLEMENTED | Reviewer | 3562bfb0fa0b02c67efc53b2527495acf8843a1a | a1bfa19f814bdb05d8ca22f2821b5ca62610ec80 | responses/REV-20260809-082.md | verify the submitted implementation |
 | REV-20260809-083 | OPEN | Claude | 57deecb23d8962e5ad47fc9312141e248776f3f5 | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-083.md | implement and respond |
 | REV-20260809-084 | CLOSED | - | 57deecb23d8962e5ad47fc9312141e248776f3f5 | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-084.md | - |
