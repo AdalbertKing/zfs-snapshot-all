@@ -97,6 +97,9 @@ SNAPGET="$SCRIPT_DIR/snapget.sh"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
 LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
+LIBPROFILE="$SCRIPT_DIR/lib-profile.sh"
+PROFILE_ROOT="${PROFILE_ROOT:-$SCRIPT_DIR/profiles}"
+PROFILE_ACTIVE="${PROFILE_ACTIVE:-default}"
 
 # The single crontab writer. Sourced, not reimplemented: this script used to
 # hold its own reader, its own writer and its own block renderer, which is how
@@ -113,6 +116,14 @@ source "$LIBCRON"
 [ -r "$LIBSCOPE" ] || { echo "cannot read $LIBSCOPE -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBSCOPE"
+
+# The profile boundary and renderer (REV-073/076/077/079/081). Sourced for the
+# same reason as the two above: the rule about what a profile may own, and the
+# encoding of its template names, must have exactly one implementation. B1
+# makes this file the first production consumer of profiles/.
+[ -r "$LIBPROFILE" ] || { echo "cannot read $LIBPROFILE -- the checkout is incomplete" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$LIBPROFILE"
 
 # Mirrors deploy.sh's own peer-pairing state locations exactly (see
 # PAIRING-DESIGN.md) -- this file reads what --pair/--join already write, it
@@ -547,6 +558,52 @@ KEEP_TEMPLATE_keep_monthly='
 # version of this script) was previously considered "complete" because only
 # standard_hourly was ever checked, AND a single-blob append would have
 # duplicated whatever templates were already present.
+# ---- the profile runtime (Slice B1) -----------------------------------------
+#
+# Until B1 the policy above lived in shell variables in this file. It now lives
+# in profiles/<name>/, and this is the only place that reads it.
+#
+# The rendered artifacts are held in temporary files for the life of the
+# process, not re-rendered per call: rendering twice is two chances to disagree,
+# and the section names it produces end up in a config we then compare against.
+PROFILE_LOADED=""
+PROFILE_TPL_FILE=""
+PROFILE_DS_FILE=""
+PROFILE_PRUNE_FILE=""
+
+load_active_profile() {
+    [ -n "$PROFILE_LOADED" ] && return 0
+    local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
+    # Validate before rendering. A profile that carries relationship-owned
+    # fields must never reach a config, and finding that out from gen-cron
+    # afterwards would mean it already had.
+    profile_validate_dir "$dir" "$GENCRON" || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    PROFILE_TPL_FILE=$(mktemp)   || die "mktemp failed"
+    PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
+    PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"
+    profile_render_templates "$dir" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$dir/dataset.inc" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$dir/prune.inc" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    PROFILE_LOADED=1
+    return 0
+}
+
+# One field out of a rendered fragment. The fragment is the single source for
+# these values -- reading them from here rather than restating them is what
+# stops the emitted section and the profile drifting apart.
+profile_value() {   # <rendered fragment> <field>
+    sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*(.*)$/\1/p" "$1" | head -1
+}
+
+# One rendered [template:NS] section, whole.
+profile_template_section() {   # <namespaced name>
+    awk -v want="[template:$1]" '
+        $0 == want { emit=1; print; next }
+        emit && /^\[/ { exit }
+        emit { print }
+    ' "$PROFILE_TPL_FILE"
+}
+
 ensure_cron_config() {
     local file="$1"
     if [ ! -e "$file" ]; then
@@ -591,25 +648,40 @@ ensure_cron_config() {
     if grep -q "^\[template:standard_hourly\]" "$file" 2>/dev/null; then
         if sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$file" | grep -q "prune_schedule"; then
             PROFILE_GFS=0
-            log "$file uses the pre-GFS profile (standard_* still carries prune_schedule) -- keeping flat per-tier retention for this host. Migration is a deliberate edit, not something activate-client will do behind your back."
         fi
     fi
 
-    local t varname added=""
-    for t in $STANDARD_TEMPLATE_NAMES; do
+    # Slice B1 / owner option 3: the pre-GFS shape is FROZEN, not reinterpreted.
+    #
+    # Before B1 this branch emitted a second, flat-retention template family.
+    # That family is no longer expressible -- profiles/ carries the GFS shape --
+    # and the one thing this must never do is quietly hand a pre-GFS host the
+    # GFS ladder instead: its standard_* still prunes on its own schedule, so
+    # the two would prune the same snapshots on the same schedule, which is the
+    # race gen-cron.sh's own documentation warns about.
+    #
+    # So it refuses, and names the way out. migrate-profile is transactional --
+    # working copy, preview, confirmation, read-back -- and reaches this code
+    # only after removing the legacy family, at which point the detection above
+    # sees a GFS host and this refusal does not fire.
+    if [ "$PROFILE_GFS" -eq 0 ]; then
+        die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
+    fi
+
+    load_active_profile
+
+    # Name by name, exactly as before (REV-20260809-079 F2): what suppresses an
+    # append is THAT name already being present, never the config having some
+    # other templates of its own. A host with hand-written sections still
+    # receives the profile's, under the profile's own namespaced names -- it is
+    # never given somebody else's template because a bare name happened to match.
+    local t added=""
+    for t in $PROFILE_TEMPLATE_NAMES; do
         grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
-        varname="STANDARD_TEMPLATE_$t"
-        printf '%s\n' "${!varname}" >> "$file" || die "could not append [template:$t] to $file"
+        printf '\n%s\n' "$(profile_template_section "$t")" >> "$file" \
+            || die "could not append [template:$t] to $file"
         added="$added $t"
     done
-    if [ "$PROFILE_GFS" -eq 1 ]; then
-        for t in $KEEP_TEMPLATE_NAMES; do
-            grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
-            varname="KEEP_TEMPLATE_$t"
-            printf '%s\n' "${!varname}" >> "$file" || die "could not append [template:$t] to $file"
-            added="$added $t"
-        done
-    fi
     [ -n "$added" ] && log "added missing profile template(s) to $file:$added"
 
     # ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: every reserved
@@ -892,6 +964,11 @@ assert_cron_config_matches_installed() {
 # in the client conf.
 emit_client_sections() {   # <workfile> <client name>
     local workfile="$1" name="$2" ds localpath
+    # The emitted sections REFERENCE the profile templates ensure_cron_config
+    # appends, so both read the same rendered profile. Extracted into one loader
+    # rather than two readers for the reason the comment above them already
+    # gives: activation and migration must not be able to drift.
+    load_active_profile
     # REV-20260802-033 U11: this comment, as the section's first content
     # line, is what lets remove_managed_sections tell a section IT wrote from
     # a hand-written one that coincidentally shares the same header text --
@@ -915,7 +992,7 @@ emit_client_sections() {   # <workfile> <client name>
             echo
             echo "[dataset:$localpath]"
             echo "	$marker"
-            echo "	use_template = standard_hourly"
+            echo "	use_template = $(profile_value "$PROFILE_DS_FILE" use_template)"
             echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
             echo "	flags        = $LOAD_FLAGS"
             echo "	pair_label   = $name"
@@ -945,10 +1022,10 @@ emit_client_sections() {   # <workfile> <client name>
                     echo
                     echo "[prune:$ds]"
                     echo "	$marker"
-                    echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+                    echo "	use_template = $(profile_value "$PROFILE_PRUNE_FILE" use_template)"
                     echo "	recursive    = no"
-                    echo "	gfs          = yes"
-                    echo "	gfs_pattern  = automated_"
+                    echo "	gfs          = $(profile_value "$PROFILE_PRUNE_FILE" gfs)"
+                    echo "	gfs_pattern  = $(profile_value "$PROFILE_PRUNE_FILE" gfs_pattern)"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}-$(basename "$ds")"
                 } >> "$workfile" || return 1
@@ -968,10 +1045,10 @@ emit_client_sections() {   # <workfile> <client name>
                 echo
                 echo "[prune:$prune_scope]"
                 echo "	$marker"
-                echo "	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly"
+                echo "	use_template = $(profile_value "$PROFILE_PRUNE_FILE" use_template)"
                 echo "	recursive    = yes"
-                echo "	gfs          = yes"
-                echo "	gfs_pattern  = automated_"
+                echo "	gfs          = $(profile_value "$PROFILE_PRUNE_FILE" gfs)"
+                echo "	gfs_pattern  = $(profile_value "$PROFILE_PRUNE_FILE" gfs_pattern)"
                 echo "	pair_label   = $name"
                 echo "	notify       = ${name}"
             } >> "$workfile" || return 1

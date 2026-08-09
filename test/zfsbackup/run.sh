@@ -73,7 +73,7 @@ ensure_cron_config "$CF"
 # ONE send cadence since REV-20260801-016 F2, so standard_daily must NOT be
 # created -- a second send tier would add snapshots and transfers that the GFS
 # ladder, which buckets by time and ignores prefixes, gives no retention meaning.
-if [ -f "$CF" ] && grep -q '^\[defaults\]' "$CF" && grep -q '^\[template:standard_hourly\]' "$CF"    && ! grep -q '^\[template:standard_daily\]' "$CF" && grep -q '^\[template:keep_monthly\]' "$CF"; then
+if [ -f "$CF" ] && grep -q '^\[defaults\]' "$CF" && grep -q '^\[template:profile__default__standard_hourly\]' "$CF"    && ! grep -q '^\[template:profile__default__standard_daily\]' "$CF" && grep -q '^\[template:profile__default__keep_monthly\]' "$CF"; then
     ok "ensure_cron_config creates [defaults], one send tier, and the keep ladder"
 else
     bad "ensure_cron_config creates [defaults], one send tier, and the keep ladder" "$(cat "$CF" 2>/dev/null)"
@@ -82,7 +82,7 @@ fi
 before_lines=$(wc -l < "$CF")
 ensure_cron_config "$CF"
 after_lines=$(wc -l < "$CF")
-hourly_count=$(grep -c '^\[template:standard_hourly\]' "$CF")
+hourly_count=$(grep -c '^\[template:profile__default__standard_hourly\]' "$CF")
 if [ "$before_lines" = "$after_lines" ] && [ "$hourly_count" = "1" ]; then
     ok "ensure_cron_config is idempotent (no duplicate templates on a second call)"
 else
@@ -127,7 +127,7 @@ CF2="$WORK/jobs.existing.conf"
 printf '[defaults]\n\thost_label = existing\n\n[dataset:rpool/other]\n\tuse_template = hourly\n' > "$CF2"
 orig_md5=$(md5sum "$CF2" | cut -d' ' -f1)
 ensure_cron_config "$CF2"
-if grep -q 'host_label = existing' "$CF2" && grep -q 'dataset:rpool/other' "$CF2" && grep -q '^\[template:standard_hourly\]' "$CF2"; then
+if grep -q 'host_label = existing' "$CF2" && grep -q 'dataset:rpool/other' "$CF2" && grep -q '^\[template:profile__default__standard_hourly\]' "$CF2"; then
     ok "ensure_cron_config appends templates to an existing hand-written file without disturbing it"
 else
     bad "ensure_cron_config appends templates to an existing hand-written file without disturbing it" "$(cat "$CF2")"
@@ -722,10 +722,10 @@ fi
 PROF="$WORK/profile"; mkdir -p "$PROF"
 
 ensure_cron_config "$PROF/fresh.conf" >/dev/null 2>&1
-if grep -q "^\[template:keep_hourly\]" "$PROF/fresh.conf" \
-   && grep -q "^\[template:standard_hourly\]" "$PROF/fresh.conf" \
+if grep -q "^\[template:profile__default__keep_hourly\]" "$PROF/fresh.conf" \
+   && grep -q "^\[template:profile__default__standard_hourly\]" "$PROF/fresh.conf" \
    && [ "${PROFILE_GFS:-}" = 1 ] \
-   && ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$PROF/fresh.conf" | grep -q prune_schedule; then
+   && ! sed -n '/^\[template:profile__default__standard_hourly\]/,/^\[/p' "$PROF/fresh.conf" | grep -q prune_schedule; then
     ok "profile: a fresh config gets both families, and standard_* no longer prunes"
 else
     bad "profile: a fresh config gets both families, and standard_* no longer prunes" "$(cat "$PROF/fresh.conf")"
@@ -745,12 +745,38 @@ cat > "$PROF/legacy.conf" <<'EOF'
 	pattern        = automated_hourly
 	retain         = -H24
 EOF
-ensure_cron_config "$PROF/legacy.conf" >/dev/null 2>&1
-if [ "${PROFILE_GFS:-}" = 0 ] && ! grep -q "^\[template:keep_" "$PROF/legacy.conf"; then
-    ok "profile: a pre-GFS config keeps flat retention and gets no keep_* templates"
+# Slice B1 / owner option 3 changed the answer here, and the change IS the
+# point: the pre-GFS shape is FROZEN, so ordinary activation REFUSES rather
+# than leaving the host quietly half-configured. Silently handing it the GFS
+# ladder would prune the same snapshots twice on the same schedule.
+#
+# The call runs in a SUBSHELL because the refusal is a die(): sourced straight
+# into the harness it takes the whole suite down -- which is exactly what
+# happened while writing this. 88 of 292 cases ran and there was no summary
+# line at all to say so, so "4 failures" was a floor, not a result.
+legacy_md5_before=$(md5sum "$PROF/legacy.conf" | cut -d' ' -f1)
+legacy_out=$( ensure_cron_config "$PROF/legacy.conf" 2>&1 ); legacy_rc=$?
+legacy_md5_after=$(md5sum "$PROF/legacy.conf" | cut -d' ' -f1)
+if [ "$legacy_rc" -ne 0 ]; then
+    ok "profile: a pre-GFS config is REFUSED by ordinary activation, not converted"
 else
-    bad "profile: a pre-GFS config keeps flat retention and gets no keep_* templates" \
-        "PROFILE_GFS=${PROFILE_GFS:-unset}; $(grep -c '^\[template:keep_' "$PROF/legacy.conf") keep_* sections"
+    bad "profile: a pre-GFS config is REFUSED by ordinary activation, not converted" "rc=$legacy_rc"
+fi
+# A refusal that mutated the file on its way out would be the worst of both.
+if [ "$legacy_md5_before" = "$legacy_md5_after" ]; then
+    ok "profile: the pre-GFS refusal leaves the config byte-identical"
+else
+    bad "profile: the pre-GFS refusal leaves the config byte-identical"
+fi
+# A frozen profile with no stated way out is just a wall.
+case "$legacy_out" in
+    *migrate-profile*) ok "profile: the pre-GFS refusal names migrate-profile as the way out" ;;
+    *) bad "profile: the pre-GFS refusal names migrate-profile as the way out" "$legacy_out" ;;
+esac
+if ! grep -q "^\[template:profile__default__keep_" "$PROF/legacy.conf"; then
+    ok "profile: no ladder is injected into a pre-GFS config"
+else
+    bad "profile: no ladder is injected into a pre-GFS config"
 fi
 
 # remove_managed_sections has to see [prune:] too, or a re-activation appends a
@@ -780,12 +806,12 @@ ensure_cron_config "$PROF/gen.conf" >/dev/null 2>&1
 cat >> "$PROF/gen.conf" <<'EOF'
 
 [dataset:tank/backups/peer1/rpool/data]
-	use_template = standard_hourly
+	use_template = profile__default__standard_hourly
 	src          = robot@10.0.0.1:rpool/data
 	notify       = peer1-data
 
 [prune:tank/backups/peer1]
-	use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly
+	use_template = profile__default__keep_hourly,profile__default__keep_daily,profile__default__keep_weekly,profile__default__keep_monthly
 	recursive    = yes
 	gfs          = yes
 	gfs_pattern  = automated_
@@ -888,7 +914,7 @@ fi
 # put the new families in -- that is the whole migration in two steps.
 PROFILE_GFS=1
 ensure_cron_config "$MIG/work.conf" >/dev/null 2>&1
-if [ "${PROFILE_GFS:-}" = 1 ] && grep -q '^\[template:keep_monthly\]' "$MIG/work.conf"    && ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$MIG/work.conf" | grep -q prune_schedule; then
+if [ "${PROFILE_GFS:-}" = 1 ] && grep -q '^\[template:profile__default__keep_monthly\]' "$MIG/work.conf"    && ! sed -n '/^\[template:profile__default__standard_hourly\]/,/^\[/p' "$MIG/work.conf" | grep -q prune_schedule; then
     ok "migrate: the rebuilt config is on the GFS profile"
 else
     bad "migrate: the rebuilt config is on the GFS profile" "PROFILE_GFS=${PROFILE_GFS:-unset}"
@@ -896,8 +922,16 @@ fi
 
 # And the untouched legacy file must still read as legacy, so a host that never
 # ran the migration keeps flat retention.
-ensure_cron_config "$MIG/legacy.conf" >/dev/null 2>&1
-[ "${PROFILE_GFS:-}" = 0 ] && ok "migrate: an unmigrated host still reads as legacy"                            || bad "migrate: an unmigrated host still reads as legacy" "PROFILE_GFS=${PROFILE_GFS:-unset}"
+# And the untouched legacy file must still be REFUSED, so a host that never ran
+# the migration is never quietly converted by an ordinary activation. Subshell
+# again -- the refusal is a die().
+mig_legacy_md5=$(md5sum "$MIG/legacy.conf" | cut -d' ' -f1)
+( ensure_cron_config "$MIG/legacy.conf" >/dev/null 2>&1 ); mig_legacy_rc=$?
+if [ "$mig_legacy_rc" -ne 0 ] && [ "$mig_legacy_md5" = "$(md5sum "$MIG/legacy.conf" | cut -d' ' -f1)" ]; then
+    ok "migrate: an unmigrated host is still refused, and left untouched"
+else
+    bad "migrate: an unmigrated host is still refused, and left untouched" "rc=$mig_legacy_rc"
+fi
 
 # --- 12. the dedicated collector account (--local-user) ---------------------
 #

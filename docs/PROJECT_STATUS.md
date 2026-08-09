@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3d89420f891acd40 -->
+<!-- status-covers-digest: 3be437d91a2a1ce5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -41,7 +41,8 @@
   | Etap 4 — `gen-cron.sh --reconcile` | **wdrożone i domknięte** (REV-071…074) | suita `reconcile`, `docs/testing/RECONCILE-*.md` |
   | Etap 5 — GRANICA profilu | **wdrożona jako kod PRODUKCYJNY** `lib-profile.sh` | REV-073/076/077, suita `profiles` |
   | Etap 5 — RENDERER profilu (`profile_render_templates`/`profile_render_fragment`, namespace `profile__<nazwa>__<szablon>`) | **wdrożony** w `lib-profile.sh`, suita `profiles` 55/55; nazwa profilu i szablonu nie może nieść `__` (REV-081 F1: kodowanie nie było różnowartościowe) | plasterek B1, krok 1 |
-  | Etap 5 — RUNTIME profilu (`zfs-backup.sh` czyta profil zamiast zaszytych szablonów) | **NIEwdrożone** — renderer istnieje, ale nikt go jeszcze nie woła | `docs/design/slice-b1-plan.md` |
+  | Etap 5 — RUNTIME profilu (`zfs-backup.sh` czyta profil zamiast zaszytych szablonów) | **wdrożony** (B1 krok 2): `ensure_cron_config` i `emit_client_sections` czytają wyrenderowany profil, pre-GFS **odmawia** zamiast konwertować; suita `zfsbackup` 295/295, kontrola negatywna 14 pada | `docs/design/slice-b1-plan.md` |
+  | Etap 5 — wiązanie PER-ŹRÓDŁO (jedna relacja, różne profile dla różnych źródeł) | **NIEwdrożone** — brak kompozytora; namespace jest gotowy, żeby to umożliwić | `docs/discussions/PER-SOURCE-PROFILE-SCENARIOS-2026-08-09*.md` |
   | jednohostowa orkiestracja wysokopoziomowa (`--target`/`--source`, add-local) | **NIEwdrożone** — dyskusja projektowa | `docs/project/DEPLOY-SEQUENCES.md`, `docs/design/local-relation-contract.md` |
   | restore | **NIEwdrożone**, nie zaczęte | — |
 
