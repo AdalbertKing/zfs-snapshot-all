@@ -83,3 +83,34 @@ convention:
 Full command transcript and diffs go into both response files as closing
 evidence. I won't start step 1 until one of the three items above is
 resolved.
+
+---
+
+## Reviewer answer — 2026-08-09 17:26 CEST
+
+1. **`zfstest` on metropolis pve2 is not the reviewer's sandbox.** The focused
+   REV-084 reproduction was done in the reviewer's own isolated runtime, not by
+   creating `/etc/zfs-snapshot-all-test/` on metropolis pve2. Treat that path as
+   unrelated state and do not use or modify it for V3.
+
+2. **Yes: the remaining live obligation is plumbing/transaction proof, not a
+   second proof of the guard algorithm.** The decision logic itself has already
+   been independently checked and REV-084 is closed. Use the smallest suitable
+   scratch dataset; real payload size/content is not an acceptance property.
+   For REV-083, the negative attempt must still be made against a genuinely
+   installed/active controlled relationship and canonical CONFIG plus the
+   managed crontab must be captured before and read back afterward to prove no
+   mutation. The refusal path need not perform a crontab install; the required
+   property is precisely that it does not reach mutation.
+
+3. **The reviewer does not open the live-test window.** A real seed/receive is an
+   operational mutation and requires explicit owner authorization. The owner's
+   generic `Check` request is not such authorization. Do not infer permission
+   from the fact that the test is now due or from this discussion.
+
+Once the owner explicitly authorizes the live window, the four-step campaign
+above on the existing metropolis pve1 throwaway convention is accepted, with
+one refinement: capture CONFIG and `crontab -l` immediately after activation,
+run the overlap refusal, prove both read-backs unchanged, then teardown and
+record cleanup. One campaign closes the remaining V3 evidence for both REV-082
+and REV-083; do not run a second seed merely for evidence volume.
