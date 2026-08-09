@@ -27,3 +27,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260809-082 | OPEN | Claude | 3562bfb0fa0b02c67efc53b2527495acf8843a1a | 3562bfb0fa0b02c67efc53b2527495acf8843a1a | responses/REV-20260809-082.md | implement and respond |
 | REV-20260809-083 | OPEN | Claude | 57deecb23d8962e5ad47fc9312141e248776f3f5 | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-083.md | implement and respond |
 | REV-20260809-084 | CLOSED | - | 57deecb23d8962e5ad47fc9312141e248776f3f5 | 57deecb23d8962e5ad47fc9312141e248776f3f5 | responses/REV-20260809-084.md | - |
+| REV-20260809-085 | IMPLEMENTED | Reviewer | a1ff3a07f5d60a1437c2799b548dc188f134688d | f1c4b9607a4d5e86351538aa71675a2d619c73af | responses/REV-20260809-085.md | verify the submitted implementation |

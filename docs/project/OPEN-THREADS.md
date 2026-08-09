@@ -8,5 +8,6 @@ Do not edit. Owner decisions that are not reviews live in
 |---|---|---|---|
 | REV-20260809-082 | OPEN | Claude | implement and respond |
 | REV-20260809-083 | OPEN | Claude | implement and respond |
+| REV-20260809-085 | IMPLEMENTED | Reviewer | verify the submitted implementation |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
