@@ -4264,6 +4264,140 @@ else
 fi
 rm -f "$OV/clients/peerN.conf"
 
+# --- 47. seed-time overlap guard: refuse BEFORE the real transfer, not just
+#         at activate-client time (REV-20260809-085) -------------------------
+#
+# coverage_conflicts()/assert_no_coverage_overlap() only ran inside
+# emit_client_sections(), reached at activate-client time. But the backup-mode
+# namespace is peer_label(PEER_HOST) (LOAD_LABEL in load_client_and_
+# connection), NOT the client's own name -- so two DIFFERENTLY NAMED clients
+# pairing with the SAME peer land in the SAME namespace, and cmd_seed() could
+# perform a REAL, non-dry-run snapget.sh receive into another relationship's
+# coverage before that guard ever ran. This section drives the real cmd_seed()
+# with a recording SNAPGET stub: a refused case must show ZERO invocations of
+# it, proving no real transfer was attempted, not merely that it "would have
+# failed anyway".
+SD="$WORK/seedoverlap"; mkdir -p "$SD/clients" "$SD/peerstate" "$SD/keys"
+printf '10.9.9.9 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' \
+    > "$SD/keys/10.9.9.9_known_hosts"
+
+SD_RECORDER="$SD/recorder.log"
+SD_SNAPGET="$SD/snapget_recorder.sh"
+cat > "$SD_SNAPGET" <<EOF
+#!/bin/bash
+echo "\$@" >> "$SD_RECORDER"
+exit 0
+EOF
+chmod +x "$SD_SNAPGET"
+
+# alpha: already-active relationship owning rpool/data under peer 10.9.9.9's
+# namespace -- the coverage a second, differently-named relationship must not
+# be allowed to write into.
+cat > "$SD/clients/alpha.conf" <<'EOF'
+CLIENT_NAME=alpha
+PEER_HOST=10.9.9.9
+STATE=active
+MANAGED_DATASETS="tank/backups/10.9.9.9/rpool/data"
+MANAGED_PRUNE_SCOPE="tank/backups/10.9.9.9"
+EOF
+
+sd_seed() {   # <candidate client name> <peer datasets string> -> rc, output on stdout
+    local nm="$1" dss="$2"
+    cat > "$SD/clients/$nm.conf" <<EOF2
+CLIENT_NAME=$nm
+PEER_HOST=10.9.9.9
+STATE=pending_enroll
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.9.9.9
+ENDPOINT_LAN_PORT=22
+EOF2
+    # PEER_SAVED_MODE is set purely so cmd_seed's own peer_mode check skips
+    # its deploy.sh --draft-config refresh (the dataset list below is already
+    # final) -- resolve_mode_datasets() itself is a no-op whenever
+    # PEER_SAVED_DATASETS is already non-empty, mode or not.
+    cat > "$SD/peerstate/10.9.9.9.conf" <<EOF2
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="$dss"
+EOF2
+    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+      cmd_seed "$nm" --yes ) 2>&1
+}
+
+# 1. parent already owned (rpool/data), child requested (rpool/data/vm-101).
+rm -f "$SD_RECORDER"
+out=$(sd_seed beta "rpool/data/vm-101"); rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$SD_RECORDER" ] && case "$out" in *alpha*) true ;; *) false ;; esac; then
+    ok "seed overlap: child of an owned path refuses before any real transfer"
+else
+    bad "seed overlap: child of an owned path refuses before any real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
+fi
+
+# 2. child already owned would be the mirror case; exercised instead as
+#    parent-requested here (rpool, parent of alpha's rpool/data) -- both
+#    directions of path_overlaps() are already pinned locally in section 45,
+#    this section's job is proving the SEED-TIME wiring, not re-deriving the
+#    directionality.
+rm -f "$SD_RECORDER"
+out=$(sd_seed gamma "rpool"); rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$SD_RECORDER" ] && case "$out" in *alpha*) true ;; *) false ;; esac; then
+    ok "seed overlap: parent of an owned path refuses before any real transfer"
+else
+    bad "seed overlap: parent of an owned path refuses before any real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
+fi
+
+# 3. exact-path overlap under a different client name.
+rm -f "$SD_RECORDER"
+out=$(sd_seed delta "rpool/data"); rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$SD_RECORDER" ] && case "$out" in *alpha*) true ;; *) false ;; esac; then
+    ok "seed overlap: exact-path collision refuses before any real transfer"
+else
+    bad "seed overlap: exact-path collision refuses before any real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
+fi
+
+# 4. disjoint coverage still reaches the real transfer path -- the guard must
+#    not become a second reason ordinary seeds stop working.
+#
+# MEASURED WHILE WRITING THIS: a same-peer, same-target candidate is NOT a
+# valid disjoint case here. A GFS client's real MANAGED_PRUNE_SCOPE is the
+# WHOLE `target/label` subtree (line ~1170, `prune_scope="$PEER_SAVED_TARGET/
+# $LOAD_LABEL"`, recursive) -- and coverage_conflicts() checks a candidate's
+# requested paths against both MANAGED_DATASETS and MANAGED_PRUNE_SCOPE of
+# every other active relationship. So once alpha exists, EVERY dataset under
+# the SAME peer+target is covered by alpha's own prune scope, by design --
+# that is one relationship per peer+target namespace under GFS, not a defect
+# this section should paper over. A genuine disjoint case needs a DIFFERENT
+# peer, landing in a different `target/label` subtree entirely.
+printf '10.9.9.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' \
+    > "$SD/keys/10.9.9.10_known_hosts"
+sd_seed_other_peer() {   # <candidate client name> <peer datasets string>
+    local nm="$1" dss="$2"
+    cat > "$SD/clients/$nm.conf" <<EOF2
+CLIENT_NAME=$nm
+PEER_HOST=10.9.9.10
+STATE=pending_enroll
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.9.9.10
+ENDPOINT_LAN_PORT=22
+EOF2
+    cat > "$SD/peerstate/10.9.9.10.conf" <<EOF2
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="$dss"
+EOF2
+    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+      cmd_seed "$nm" --yes ) 2>&1
+}
+rm -f "$SD_RECORDER"
+out=$(sd_seed_other_peer epsilon "rpool/other"); rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$SD_RECORDER" ] && case "$(cat "$SD_RECORDER")" in *rpool/other*) true ;; *) false ;; esac; then
+    ok "seed overlap: a disjoint dataset (different peer) still reaches the real transfer"
+else
+    bad "seed overlap: a disjoint dataset (different peer) still reaches the real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

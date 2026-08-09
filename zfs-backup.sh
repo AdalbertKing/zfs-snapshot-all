@@ -1922,6 +1922,23 @@ cmd_seed() {
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
 
+    # REV-20260809-085 F1. This is the earliest point where every candidate
+    # local destination path is known, and the LAST point before the real,
+    # non-dry-run transfer below. The backup-mode namespace is keyed by
+    # peer_label(PEER_HOST) (see LOAD_LABEL in load_client_and_connection),
+    # NOT by this client's own name -- so two differently-named relationships
+    # against the SAME peer land in the SAME namespace, and without this
+    # check a second one could receive real data into another relationship's
+    # coverage before emit_client_sections()'s activate-time guard ever runs.
+    # Reuses the same canonical assert_no_coverage_overlap() rather than a
+    # second overlap implementation; that guard is itself fail-closed on
+    # unreadable/unparseable/nameless active records (REV-20260809-084).
+    local ds seed_candidates=()
+    for ds in $PEER_SAVED_DATASETS; do
+        seed_candidates+=("$(client_local_path "$ds")")
+    done
+    assert_no_coverage_overlap "$name" "${seed_candidates[@]}"
+
     local base; base=$(snapget_local_base)
     if [ "$yes" -ne 1 ]; then
         echo "Klient:  $name"
