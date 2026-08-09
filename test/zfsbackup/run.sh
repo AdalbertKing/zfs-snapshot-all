@@ -4398,6 +4398,100 @@ else
     bad "seed overlap: a disjoint dataset (different peer) still reaches the real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
 fi
 
+
+# --- 48. read_server_conf() clobbers a client's own recorded CRON_CONFIG,
+#         found live during the REV-082/083/085 campaign -------------------
+#
+# read_server_conf() unconditionally does CRON_CONFIG="" and only refills it
+# by sourcing $SERVER_CONF -- on a host with no server.conf (setup-server
+# never run with an explicit --config, exactly metropolis pve1's shape),
+# that reset is never undone. Both cmd_remove_client and cmd_activate_client
+# source the client's OWN record first (which carries CRON_CONFIG from the
+# client's own prior activation) and call read_server_conf AFTER -- so the
+# recorded value was silently replaced with an empty string every time,
+# regardless of what the client actually has installed.
+#
+# The EXISTING remove-client test (section 23) never caught this: its fixture
+# gives server.conf and the client record the SAME CRON_CONFIG value, so
+# clobbering it with an identical value is invisible. This section uses a
+# server.conf that does not exist at all, and a client CRON_CONFIG that
+# differs from any recomputed default -- the shape that actually broke live.
+RSC="$WORK/readserverconf"; mkdir -p "$RSC/bin" "$RSC/clients"
+cat > "$RSC/bin/crontab" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$RSC/calls"
+echo "# BEGIN zfs-backup-managed"
+echo "# Source: $RSC/jobs.recorded.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+echo "1 * * * * x"
+echo "# END zfs-backup-managed"
+exit 0
+EOF
+chmod +x "$RSC/bin/crontab"
+: > "$RSC/jobs.recorded.conf"
+printf 'STATE=active\nMANAGED_DATASETS="tank/a"\nCRON_CONFIG=%s/jobs.recorded.conf\n' "$RSC" > "$RSC/clients/rc1.conf"
+
+# No SERVER_CONF at all -- points at a path that does not exist, matching a
+# host that never ran setup-server with an explicit --config.
+out=$( PATH="$RSC/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$RSC/no-such-server.conf'; CLIENTS_DIR='$RSC/clients'
+    cmd_remove_client rc1" 2>&1 ); rc=$?
+if case "$out" in *"no managed dataset list on file"*) false ;; *) true ;; esac; then
+    ok "remove-client: with no server.conf, the client's own recorded CRON_CONFIG survives read_server_conf"
+else
+    bad "remove-client: with no server.conf, the client's own recorded CRON_CONFIG survives read_server_conf" "rc=$rc out=$out"
+fi
+# The recorded file must be the one actually consulted -- proven by the
+# crontab stub being asked at all (any 'no managed dataset' skip means
+# remove-client never got far enough to call crontab -l in the first place).
+if [ -s "$RSC/calls" ]; then
+    ok "remove-client: cron cleanup actually engaged the recorded CRON_CONFIG, not a skipped no-op"
+else
+    bad "remove-client: cron cleanup actually engaged the recorded CRON_CONFIG, not a skipped no-op" "no crontab calls recorded; out=$out"
+fi
+
+# Same defect, same fix shape, in cmd_activate_client's RE-activation path:
+# a client already STATE=active has its OWN CRON_CONFIG on record from its
+# FIRST activation. Re-activating (e.g. after set-endpoint) must keep writing
+# to that SAME file, not silently recompute a fresh default and orphan the
+# actually-installed one. Driven far enough to name the file it is about to
+# validate -- it need not succeed end to end (that needs a real peer/dry-run,
+# covered live) to prove WHICH path it chose.
+AC="$WORK/activateclient"; mkdir -p "$AC/clients" "$AC/peerstate" "$AC/keys" "$AC/recorded-dir"
+printf '10.7.7.7 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' \
+    > "$AC/keys/10.7.7.7_known_hosts"
+cat > "$AC/peerstate/10.7.7.7.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+cat > "$AC/clients/reactivate.conf" <<EOF
+CLIENT_NAME=reactivate
+PEER_HOST=10.7.7.7
+STATE=active
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.7.7.7
+ENDPOINT_LAN_PORT=22
+MANAGED_DATASETS=tank/backups/10.7.7.7/rpool/data
+CRON_CONFIG=$AC/recorded-dir/jobs.recorded.conf
+EOF
+: > "$AC/recorded-dir/jobs.recorded.conf"
+out=$( CLIENTS_DIR="$AC/clients" PEER_STATE_DIR="$AC/peerstate" PEER_KEY_DIR="$AC/keys" \
+       SERVER_CONF="$AC/no-such-server.conf" SNAPGET=/bin/false \
+       cmd_activate_client reactivate --yes 2>&1 ); rc=$?
+if case "$out" in *"$AC/recorded-dir/jobs.recorded.conf"*) true ;; *) false ;; esac; then
+    ok "activate-client: re-activation keeps writing to the recorded CRON_CONFIG, not a recomputed default"
+else
+    bad "activate-client: re-activation keeps writing to the recorded CRON_CONFIG, not a recomputed default" "rc=$rc out=$out"
+fi
+# And it must not have silently fallen back to the SCRIPT_DIR default path.
+if case "$out" in *"$SCRIPT_DIR/jobs."*".conf"*) false ;; *) true ;; esac; then
+    ok "activate-client: re-activation does not target the SCRIPT_DIR default path instead"
+else
+    bad "activate-client: re-activation does not target the SCRIPT_DIR default path instead" "out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

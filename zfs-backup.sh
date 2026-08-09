@@ -2379,6 +2379,16 @@ cmd_activate_client() {
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
     # shellcheck disable=SC1090
     . "$cpath"
+    # A re-activation (endpoint switch, etc.) already has its own CRON_CONFIG
+    # on record from the FIRST activation. read_server_conf below unconditionally
+    # resets CRON_CONFIG="" and only refills it from $SERVER_CONF -- on a host
+    # with no server.conf (setup-server never run with an explicit --config),
+    # that reset was never undone, so the recorded value was silently replaced
+    # by a freshly recomputed default path. A client re-activating would then
+    # write its next managed sections into the WRONG file, leaving the actually
+    # installed crontab/config orphaned with no record of where it lives.
+    # Captured here, before that reset, and restored after it.
+    local recorded_cron_config="${CRON_CONFIG:-}"
     case "${STATE:-}" in
         endpoint_verified|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- activate-client requires endpoint_verified (run seed, then verify-endpoint first). Fail-closed: no cron entry exists before this gate." ;;
@@ -2388,6 +2398,7 @@ cmd_activate_client() {
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
 
     read_server_conf
+    [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
     local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
 
     # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
@@ -3848,6 +3859,17 @@ cmd_remove_client() {
     [ -r "$cpath" ] || die "no client '$name'"
     # shellcheck disable=SC1090
     . "$cpath"
+    # read_server_conf below unconditionally resets CRON_CONFIG="" and only
+    # refills it from $SERVER_CONF -- on a host with no server.conf, that
+    # reset is never undone, so the CRON_CONFIG this client actually recorded
+    # at activation is silently replaced with an empty string, and the branch
+    # below reads it as "never activated" and skips cron cleanup entirely.
+    # Live-found 2026-08-09 (metropolis pve1, REV-082/083/085 live proof):
+    # remove-client warned "no managed dataset list on file (client was never
+    # activated?)" for a client that plainly HAD been. Captured here, before
+    # the reset, and restored after it -- same defect and same fix shape as
+    # cmd_activate_client's re-activation case.
+    local recorded_cron_config="${CRON_CONFIG:-}"
     # Without this, LOCAL_USER is unset here and every crontab operation below
     # silently targets ROOT -- on a collector with a dedicated account that
     # means reading the wrong crontab, comparing against the wrong '# Source:',
@@ -3857,6 +3879,7 @@ cmd_remove_client() {
     # assert_cron_config_matches_installed caught it, which is the third time
     # today a guard turned a defect into a message instead of an incident.
     read_server_conf
+    [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
     [ "${STATE:-}" = "removed" ] && die "client '$name' is already removed"
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
