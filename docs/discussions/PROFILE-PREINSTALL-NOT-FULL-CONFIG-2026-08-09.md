@@ -237,3 +237,94 @@ expert admin:
 The high-level tool should become simpler as native CONFIG remains powerful.
 
 **Reduction over completeness.**
+
+## 13. Owner follow-up: preset is CREATE-only; existing CONFIG may receive a new independent task
+
+The existence of a CONFIG file is **not** itself a reason to refuse use of a preset. A preset may append a new, non-overlapping task/source package to an existing CONFIG.
+
+The public rule is:
+
+```text
+PROFILE/PRESET = CREATE NEW CONFIG FRAGMENT ONLY
+CONFIG v4      = SOURCE OF TRUTH FOR EDITS
+```
+
+Examples:
+
+```text
+existing CONFIG:
+  rpool/data -> bespoke/manual policy
+
+later:
+  add rpool/lxc using preset X
+
+result:
+  rpool/data unchanged
+  new rpool/lxc package appended transactionally after full validation/preview
+```
+
+A preset must refuse if the requested source/task already exists or overlaps existing coverage. It must not update, merge, re-adopt, or reconstruct existing policy.
+
+## 14. Deletion belongs to relationship lifecycle, never to presets
+
+Do not define "remove profile output" and do not reverse-match installed CONFIG to a template in order to delete it.
+
+Deleting a relationship/task is a separate package operation and belongs at the `zfs-backup.sh` orchestration layer, because that layer owns stable relationship identity and knows which concrete sections/state belong to the relationship.
+
+Current code already has the right architectural shape via:
+
+```text
+zfs-backup.sh remove-client NAME
+```
+
+It uses `CLIENT_NAME`, recorded `MANAGED_DATASETS`/`MANAGED_PRUNE_SCOPE`, and the section marker:
+
+```text
+# managed-by: zfs-backup.sh client=<name>
+```
+
+to identify exactly this relationship's `[dataset:]` / `[prune:]` sections. It refuses a collision that looks hand-written rather than silently deleting it.
+
+The teardown sequence is relationship-level:
+
+```text
+identify relationship
+  -> remove only its owned dataset/prune sections from working CONFIG
+  -> validate remaining CONFIG
+  -> regenerate/update cron, or remove the managed cron block if no jobs remain
+  -> atomically install remaining CONFIG
+  -> deploy.sh --unpair
+  -> mark client STATE=removed
+  -> clear relationship operational state
+```
+
+Lower layers keep narrow responsibilities:
+
+```text
+gen-cron/lib-cron -> render/write cron
+
+deploy.sh         -> pairing/grant/key teardown
+
+zfs-backup.sh     -> decides WHAT constitutes the relationship being removed
+```
+
+The shared CONFIG file itself is not necessarily deleted, because other relationships, templates, defaults, or manual sections may remain. "Remove the pair" means remove that pair's owned task sections and relationship state, not delete unrelated shared configuration.
+
+The ownership test must be relationship identity/marker based, never "this still looks like preset X".
+
+This yields the reduced contract:
+
+```text
+PRESET        creates a new starting task
+CONFIG v4     is the execution truth
+zfs-backup.sh owns explicit relationship lifecycle, including remove
+lower layers  execute narrow primitives
+```
+
+No profile history, reverse template matching, delete-by-profile semantics, or profile manager is required.
+
+## 15. Claude response already supports the reduction
+
+Claude's current-tree analysis at commit `66d3b1cbd8602a9e96f306973dfa2f4120375804` concludes that the one-way preset model lets the project delete/defer persistent SOURCE ROOT -> PROFILE management, profile drift/version adoption, per-source carve-out precedence, and custom-profile CLI complexity. `PROFILE_ACTIVE` is process-local today and no runtime operation currently requires persisted profile identity.
+
+Claude also points out that the existing `managed-by` marker is already the right ownership primitive: it records **who owns the CONFIG section**, not which profile it resembles. That distinction is exactly what relationship removal needs.
