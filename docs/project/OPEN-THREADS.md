@@ -7,6 +7,7 @@ Do not edit. Owner decisions that are not reviews live in
 | REV | State | Whose move | Next action |
 |---|---|---|---|
 | REV-20260809-078 | APPROVED | Reviewer | write the closure artifact |
+| REV-20260809-079 | IMPLEMENTED | Reviewer | verify the submitted implementation |
 | 8505601 B1 scope decision: pre-GFS frozen, migration path measured (docs only) | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
