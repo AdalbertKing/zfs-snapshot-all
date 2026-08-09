@@ -1022,8 +1022,19 @@ coverage_conflicts() {   # <this client> <requested path>...
         # would overwrite them mid-emit.
         (
             CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""
+            # REV-20260809-084 F1. This was `|| exit 0`, which turned an
+            # unreadable or unparseable record into "no conflict" -- fail-OPEN,
+            # and it made the refusal path in assert_no_coverage_overlap
+            # unreachable for exactly the case that diagnostic describes. A
+            # damaged state record is when the system knows LESS and must refuse
+            # rather than guess. Exit 2 is distinct from "found nothing" so the
+            # caller can tell the two apart.
+            [ -r "$f" ] || exit 2
             # shellcheck disable=SC1090
-            . "$f" 2>/dev/null || exit 0
+            . "$f" 2>/dev/null || exit 2
+            # A record that parses but names no relationship cannot be reasoned
+            # about either: it may own anything.
+            [ -n "${CLIENT_NAME:-}" ] || exit 2
             [ "${CLIENT_NAME:-}" = "$me" ] && exit 0
             [ "${STATE:-}" = removed ] && exit 0
             local owned req
@@ -1033,7 +1044,16 @@ coverage_conflicts() {   # <this client> <requested path>...
                         && printf '%s\t%s\t%s\n' "${CLIENT_NAME:-$f}" "$owned" "$req"
                 done
             done
-        )
+            # Without this, the subshell's exit status is whatever the LAST
+            # `path_overlaps && printf` happened to return -- 1 (false) for
+            # any record whose final dataset/path pair does not overlap. That
+            # turned every ordinary disjoint record into a false "unreadable"
+            # once the line below started treating a nonzero subshell exit as
+            # a read/parse failure. A record that was actually read and
+            # scanned exits 0 no matter what the scan found; conflicts are
+            # reported through the printed lines, not through the exit code.
+            exit 0
+        ) || { printf '!\t%s\t%s\n' "$f" "unreadable or unparseable relationship record"; return 2; }
     done
     return 0
 }
@@ -1043,7 +1063,19 @@ assert_no_coverage_overlap() {   # <this client> <requested path>...
     [ "$#" -gt 0 ] || return 0
     local conflicts rc=0
     conflicts="$(coverage_conflicts "$me" "$@")" || rc=$?
-    [ "$rc" -eq 0 ] || die "could not check whether '$me' overlaps existing coverage -- refusing rather than guessing; nothing has been changed"
+    if [ "$rc" -ne 0 ]; then
+        # coverage_conflicts() names the specific record it could not read or
+        # parse on a line starting with "!" (REV-20260809-084); surface that
+        # here instead of a generic message, so the operator knows which
+        # record to fix rather than having to guess across CLIENTS_DIR.
+        local badf reason badmsg="" tag
+        while IFS=$'\t' read -r tag badf reason; do
+            [ "$tag" = "!" ] || continue
+            badmsg="$badmsg
+  '$badf': $reason"
+        done <<< "$conflicts"
+        die "could not check whether '$me' overlaps existing coverage -- refusing rather than guessing; nothing has been changed$badmsg"
+    fi
     [ -z "$conflicts" ] && return 0
     local line other owned req msg=""
     while IFS=$'\t' read -r other owned req; do

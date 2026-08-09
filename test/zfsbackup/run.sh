@@ -4217,6 +4217,53 @@ else
     bad "overlap: a removed relationship no longer reserves its coverage" "rc=$rc out=$out"
 fi
 
+
+# --- 46. coverage overlap: an unreadable/unparseable record refuses, it does
+#         not silently vanish (REV-20260809-084) ----------------------------
+#
+# coverage_conflicts() used to do `. "$f" 2>/dev/null || exit 0` per record: a
+# damaged record read as "no conflict" and assert_no_coverage_overlap's own
+# fail-closed diagnostic ("could not check ... refusing rather than guessing")
+# was therefore unreachable for exactly the failure it names. A record that
+# cannot be read is not proof it is irrelevant -- it might own the requested
+# path, so the guard must refuse rather than guess.
+cat > "$OV/clients/peerL.conf" <<'EOF'
+CLIENT_NAME=peerL
+STATE=active
+MANAGED_DATASETS="rpool/unrelated
+EOF
+# ^ deliberately unterminated quote: `.` fails to parse this file. The naming
+# of an "unrelated" path is the point -- the guard cannot know that, because it
+# cannot read the record at all, so it must refuse regardless of what the
+# broken record would have said if it had parsed.
+out=$(ov_emit peerM "rpool/disjoint-from-everything"); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *peerL*) true ;; *) false ;; esac; then
+    ok "overlap: an unparseable existing record refuses rather than being skipped"
+else
+    bad "overlap: an unparseable existing record refuses rather than being skipped" "rc=$rc out=$out"
+fi
+if [ ! -s "$OV/peerM.conf" ]; then
+    ok "overlap: the unparseable-record refusal also leaves the working config untouched"
+else
+    bad "overlap: the unparseable-record refusal also leaves the working config untouched" "$(cat "$OV/peerM.conf")"
+fi
+
+# A record with STATE=active but no CLIENT_NAME at all parses cleanly yet
+# names no relationship -- it could own anything, so it must refuse too, not
+# just records that fail to source.
+rm -f "$OV/clients/peerL.conf"
+cat > "$OV/clients/peerN.conf" <<'EOF'
+STATE=active
+MANAGED_DATASETS="rpool/also-unrelated"
+EOF
+out=$(ov_emit peerO "rpool/disjoint-again"); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *peerN*) true ;; *) false ;; esac; then
+    ok "overlap: a nameless record refuses rather than being skipped"
+else
+    bad "overlap: a nameless record refuses rather than being skipped" "rc=$rc out=$out"
+fi
+rm -f "$OV/clients/peerN.conf"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
