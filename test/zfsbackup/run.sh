@@ -89,40 +89,81 @@ else
     bad "ensure_cron_config is idempotent" "before=$before_lines after=$after_lines hourly_count=$hourly_count"
 fi
 
-# Phase 2 property 6 (ACTIVE-WORK-PLAN.md): presence-by-name alone is not
-# enough -- a template already on disk under this namespaced name must be
-# compared against what the active profile renders NOW, not merely found.
-# real_section is exactly what ensure_cron_config itself would have written;
-# feeding it back in must NOT be mistaken for a stale copy (no false positive).
+# Phase 2 property 6 (ACTIVE-WORK-PLAN.md), corrected per REV-20260809-088:
+# the collision check is CREATE-time only (check_new_template_collision=1,
+# passed by activate-client ONLY on a relationship's first activation) and
+# compares SEMANTICS, not raw text -- an ordinary re-activation call
+# (the default, flag omitted/0) must never fail just because the active
+# profile's current rendering differs from what is already installed.
 real_section="$(profile_template_section "profile__default__standard_hourly")"
-CF3="$WORK/jobs.matching-template.conf"
-{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$real_section"; } > "$CF3"
+stale_section="$(printf '%s\n' "$real_section" | sed 's/^\(\tsend_schedule *= *\).*/\1 59 23 * * */')"
+# A cosmetically different but semantically IDENTICAL rendering: reordered
+# fields and a comment line -- accepted-but-cosmetic per profile_emit's own
+# normalization (strips comment lines and blank lines, trims indentation);
+# field order does not change CONFIG v4 lookup semantics. The comment is
+# unindented (column 0), matching this project's own comment convention and
+# what profile_emit's own '#'* case actually recognizes -- an indented '#'
+# is not a comment to that normalizer, so it must not be used here either.
+cosmetic_section="$(cat <<'EOF'
+[template:profile__default__standard_hourly]
+	notify_word    = backup
+# reordered and commented, same fields
+	prefix         = automated_hourly_
+	send_schedule  = 1 * * * *
+EOF
+)"
+
+# 1. Ordinary call (re-activation shape): DIFFERENT content on the ALREADY-
+#    PRESENT template must NOT refuse, and that specific section must be
+#    left exactly as installed -- independent of whatever the active
+#    profile renders today. The fixture deliberately carries only this one
+#    template, so ensure_cron_config legitimately appends the others
+#    (keep_hourly etc.) and the reserved-prefix floors regardless; the
+#    property under test is about THIS section, not the whole file.
+CF3="$WORK/jobs.reactivation-stale.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$stale_section"; } > "$CF3"
 out=$(ensure_cron_config "$CF3" 2>&1); rc=$?
-if [ "$rc" -eq 0 ]; then
-    ok "ensure_cron_config: an existing template matching the current profile is left alone (no false positive)"
+after_section="$(cron_config_section "$CF3" "[template:profile__default__standard_hourly]")"
+if [ "$rc" -eq 0 ] && [ "$after_section" = "$stale_section" ]; then
+    ok "ensure_cron_config: an ordinary (re-activation) call never fails on profile drift, and never touches the installed section"
 else
-    bad "ensure_cron_config: an existing template matching the current profile is left alone (no false positive)" "rc=$rc out=$out"
+    bad "ensure_cron_config: an ordinary (re-activation) call never fails on profile drift, and never touches the installed section" "rc=$rc out=$out after=[$after_section]"
 fi
 
-# A template present under the same namespaced name but with DIFFERENT
-# content (the active profile changed after this host already had it
-# installed) must refuse -- not silently keep serving the stale copy, and
-# not silently overwrite what is actually installed.
-stale_section="$(printf '%s\n' "$real_section" | sed 's/^\(\tsend_schedule *= *\).*/\1 59 23 * * */')"
-CF4="$WORK/jobs.stale-template.conf"
-{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$stale_section"; } > "$CF4"
-before_md5=$(md5sum "$CF4" | cut -d' ' -f1)
-out=$(ensure_cron_config "$CF4" 2>&1); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"no longer matches what the active profile renders"*) true ;; *) false ;; esac; then
-    ok "ensure_cron_config: an existing template with DIFFERENT content than the current profile refuses"
+# 2. CREATE-time call (flag=1), content matching the current profile exactly:
+#    no false positive.
+CF4="$WORK/jobs.create-matching.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$real_section"; } > "$CF4"
+out=$(ensure_cron_config "$CF4" 1 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "ensure_cron_config: CREATE-time call reuses a template matching the current profile (no false positive)"
 else
-    bad "ensure_cron_config: an existing template with DIFFERENT content than the current profile refuses" "rc=$rc out=$out"
+    bad "ensure_cron_config: CREATE-time call reuses a template matching the current profile (no false positive)" "rc=$rc out=$out"
 fi
-after_md5=$(md5sum "$CF4" | cut -d' ' -f1)
-if [ "$before_md5" = "$after_md5" ]; then
-    ok "ensure_cron_config: the stale-template refusal leaves the file untouched"
+
+# 3. CREATE-time call, cosmetically different but SEMANTICALLY equal
+#    rendering: reuse, not refuse -- Gate 2 says "identical SEMANTIC
+#    template may be reused", not byte-identical text.
+CF5="$WORK/jobs.create-cosmetic.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$cosmetic_section"; } > "$CF5"
+out=$(ensure_cron_config "$CF5" 1 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "ensure_cron_config: CREATE-time call reuses a semantically-equal template despite cosmetic formatting differences"
 else
-    bad "ensure_cron_config: the stale-template refusal leaves the file untouched" "$(cat "$CF4")"
+    bad "ensure_cron_config: CREATE-time call reuses a semantically-equal template despite cosmetic formatting differences" "rc=$rc out=$out"
+fi
+
+# 4. CREATE-time call, genuinely different policy: refuses, leaves the file
+#    untouched.
+CF6="$WORK/jobs.create-conflict.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$stale_section"; } > "$CF6"
+before_md5=$(md5sum "$CF6" | cut -d' ' -f1)
+out=$(ensure_cron_config "$CF6" 1 2>&1); rc=$?
+after_md5=$(md5sum "$CF6" | cut -d' ' -f1)
+if [ "$rc" -ne 0 ] && [ "$before_md5" = "$after_md5" ] && case "$out" in *"different effective policy"*) true ;; *) false ;; esac; then
+    ok "ensure_cron_config: CREATE-time call refuses a genuinely conflicting template and leaves the file untouched"
+else
+    bad "ensure_cron_config: CREATE-time call refuses a genuinely conflicting template and leaves the file untouched" "rc=$rc out=$out"
 fi
 
 # ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: a floor of 2

@@ -637,8 +637,18 @@ cron_config_section() {   # <file> <exact header, e.g. '[template:foo]'>
     ' "$file" 2>/dev/null
 }
 
-ensure_cron_config() {
+ensure_cron_config() {   # <file> [check_new_template_collision=0]
     local file="$1"
+    # REV-20260809-088 F1: the collision check below must fire ONLY at the
+    # moment a genuinely NEW relationship is being created and is about to
+    # rely on a template identity for the first time -- never on an ordinary
+    # re-activation of an ALREADY-active relationship. This function itself
+    # is called on every activate-client run, first activation and every
+    # later endpoint-switch re-activation alike, and Phase 3's already-agreed
+    # boundary is that reactivation preserves installed policy rather than
+    # re-validating it against whatever the profile currently says. Callers
+    # that are not creating a new relationship must pass nothing (or 0) here.
+    local check_new_template_collision="${2:-0}"
     if [ ! -e "$file" ]; then
         # Found live on pve2, 2026-08-01. That host's crontab held 14 production
         # jobs whose '# Source:' named a config under a directory that had since
@@ -709,27 +719,39 @@ ensure_cron_config() {
     # receives the profile's, under the profile's own namespaced names -- it is
     # never given somebody else's template because a bare name happened to match.
     #
-    # Phase 2 property 6 (ACTIVE-WORK-PLAN.md): presence-by-name alone answers
-    # "is something here", not "is what the profile means NOW here". If the
-    # active profile's templates.conf changes after a host already has this
-    # namespaced name on disk (an edited retention value, a corrected
-    # schedule), the old check silently kept serving the STALE content
-    # forever -- the exact silent-drift shape a CREATE-only model must not
-    # have. `profile_template_section` is the one function that wrote this
-    # section in the first place; re-rendering it now and comparing is a
-    # same-generator diff, not a heuristic -- an unedited profile always
-    # reproduces byte-identical output, so this only ever fires on a REAL
-    # semantic change.
+    # Phase 2 property 6 (ACTIVE-WORK-PLAN.md), corrected per REV-20260809-088:
+    # presence-by-name alone answers "is something here", not "does a NEW
+    # relationship that needs this identity conflict with what is already
+    # here". This is a CREATE-time collision check, not a standing drift
+    # gate -- it runs ONLY when the caller says a new relationship is being
+    # created (check_new_template_collision=1), never on an ordinary
+    # re-activation, so an already-installed CONFIG stays independent of
+    # later profile edits exactly as the one-way handoff requires.
+    #
+    # The comparison is SEMANTIC (Gate 2's own wording), not raw text: two
+    # renderings that differ only in accepted-but-cosmetic formatting (blank
+    # lines, comment lines, leading whitespace, field order) are the same
+    # template. `profile_emit` is the existing normalizer that already
+    # strips comments/blanks and trims indentation for this exact field
+    # grammar; sorting afterward makes the comparison field-order
+    # independent, since CONFIG v4 fields are looked up by name, not
+    # position.
     local t added=""
     for t in $PROFILE_TEMPLATE_NAMES; do
         if grep -q "^\[template:$t\]" "$file" 2>/dev/null; then
-            local existing wanted
-            existing="$(cron_config_section "$file" "[template:$t]")"
-            wanted="$(profile_template_section "$t")"
-            [ "$existing" = "$wanted" ] && continue
-            die "[template:$t] in $file no longer matches what the active profile renders -- the profile changed after this host already had this namespaced template installed. Refusing to silently keep the stale copy or silently overwrite the installed one.
-$(diff <(printf '%s\n' "$existing") <(printf '%s\n' "$wanted"))
-Resolve by hand: either revert the profile change, or remove [template:$t] from $file and re-run so the current profile content is adopted -- as a deliberate, previewed step, not a side effect of the next activation."
+            if [ "$check_new_template_collision" -eq 1 ]; then
+                local existing wanted existing_norm wanted_norm
+                existing="$(cron_config_section "$file" "[template:$t]")"
+                wanted="$(profile_template_section "$t")"
+                existing_norm="$(profile_emit <(printf '%s\n' "$existing") | sort)"
+                wanted_norm="$(profile_emit <(printf '%s\n' "$wanted") | sort)"
+                if [ "$existing_norm" != "$wanted_norm" ]; then
+                    die "[template:$t] already exists in $file with different effective policy than the template this new relationship needs. Refusing to silently reuse a conflicting template or silently overwrite the installed one.
+$(diff <(printf '%s\n' "$existing_norm") <(printf '%s\n' "$wanted_norm"))
+Resolve by hand: give the new relationship's profile a different template identity, or reconcile the two definitions deliberately, then retry -- not as a side effect of activation."
+                fi
+            fi
+            continue
         fi
         printf '\n%s\n' "$(profile_template_section "$t")" >> "$file" \
             || die "could not append [template:$t] to $file"
@@ -2422,6 +2444,15 @@ cmd_activate_client() {
     # installed crontab/config orphaned with no record of where it lives.
     # Captured here, before that reset, and restored after it.
     local recorded_cron_config="${CRON_CONFIG:-}"
+    # REV-20260809-088 F1: STATE here is still whatever it was BEFORE this
+    # call -- 'endpoint_verified' means this relationship has never reached
+    # 'active' before, i.e. this really is the moment a NEW relationship is
+    # being created and may first rely on a template identity. 'active'
+    # means it is being re-activated (e.g. after set-endpoint) and its
+    # already-installed policy must not be re-validated against whatever
+    # the active profile currently renders.
+    local is_new_relationship=0
+    [ "${STATE:-}" = "endpoint_verified" ] && is_new_relationship=1
     case "${STATE:-}" in
         endpoint_verified|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- activate-client requires endpoint_verified (run seed, then verify-endpoint first). Fail-closed: no cron entry exists before this gate." ;;
@@ -2451,7 +2482,7 @@ cmd_activate_client() {
     # Both the PREVIEW and the install read this file as the collector account,
     # so it has to be readable before either runs -- not after the swap.
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
-    ensure_cron_config "$workfile"
+    ensure_cron_config "$workfile" "$is_new_relationship"
 
     # Remove-then-add every managed dataset's section unconditionally (not
     # skip-if-present): this is what makes re-running activate-client after
