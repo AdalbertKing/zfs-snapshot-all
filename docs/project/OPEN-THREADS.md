@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| 0dccb0be B1 step 2: zfs-backup.sh consumes the profile; pre-GFS refuses | DELIVERED | Reviewer | review it, or open a REV for it |
+| REV-20260809-082 | OPEN | Claude | implement and respond |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
