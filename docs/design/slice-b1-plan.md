@@ -178,3 +178,105 @@ B1 must additionally pin, on a fixture:
 
 That third one is the quiet requirement: built-ins are appended **only when
 missing**, and two of four hosts never receive them at all.
+
+---
+
+## Corrections after REV-20260809-079 — both findings accepted
+
+### F1 — I proposed a hand edit while a transactional migration verb already exists
+
+`zfs-backup.sh migrate-profile` has existed since REV-20260801-016 F3. Verified
+in the tree, not taken from the review: `cmd_migrate_profile()` at
+`zfs-backup.sh:2311` refuses a config that is already GFS, works on a `mktemp`
+working copy beside the real file, removes the four legacy `standard_*` sections
+through `remove_template_section()`, calls `ensure_cron_config()` to build the
+GFS shape, rebuilds every **active** client through the same
+`emit_client_sections()` activation uses, logs `no active clients -- migrating
+the templates only` for exactly pve0's case, validates the working copy through
+the real `gen-cron.sh`, shows the config and cron preview, asks once, then runs
+the config-source / foreign-block / clobber / readability guards and installs
+through `atomic_replace_and_install()`.
+
+So my "delete four unreferenced sections" was not a lighter path. It was the
+same migration with every guard removed.
+
+**This is my recurring failure mode, and naming it is the point:** I proposed a
+mechanism without searching for the existing one. The same mistake produced my
+claim that host configs "do not live on the hosts" while `/etc/zfs-snapshot-all/`
+held all four of them.
+
+The review's time-of-check objection is also right and is the part I would have
+got wrong even with the correct verb. "Zero clients, zero references" are
+**mutable live-host facts measured on 2026-08-09**. A migration must prove the
+state at execution time. `migrate-profile` does precisely that — it re-reads the
+config, rebuilds from current client records and previews the real cron delta —
+whereas my plan would have carried a day-old inventory as a precondition.
+
+**Corrected path for pve0:** run `zfs-backup.sh migrate-profile`, read the
+preview, confirm. The 2026-08-09 inventory is evidence that the migration should
+be uneventful, not a licence to skip the preview.
+
+### The interaction B1 must not break, named as F1.2 requires
+
+After B1 the loader changes what `ensure_cron_config()` emits, and
+`migrate-profile` calls it. Two things must stay true:
+
+1. **The removal list stays a LEGACY-name list.** `migrate-profile` removes the
+   bare `standard_hourly|daily|weekly|monthly`. Those are the names the pre-GFS
+   *hardcode* wrote. They must not be re-derived from the loaded profile, which
+   after namespacing emits different names — a migration that removed the names
+   it is about to write, and left the legacy ones behind, would be a no-op that
+   reports success.
+2. **`emit_client_sections()` and `ensure_cron_config()` must resolve the same
+   names.** They already share this by construction (`:885` says they are
+   extracted so activation and migration cannot drift). B1 must keep that single
+   source, not give the loader its own naming.
+
+If either cannot hold, F1.2 applies: fix that path inside B1 rather than
+migrating pve0 by hand.
+
+### F2 — my suppression rule does not exist in the code
+
+I wrote that built-ins are appended "only when missing", so "hosts with their own
+never receive them", and turned it into a B1 acceptance criterion.
+
+The first clause is true **name by name**; the conclusion is false. The loop at
+`zfs-backup.sh:599` is:
+
+```bash
+for t in $STANDARD_TEMPLATE_NAMES; do
+    grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
+    ...append...
+```
+
+It asks whether *that name* is present, never whether the config has some other
+templates. A config carrying only `local_daily`/`store_hourly` does **not**
+suppress anything; if `ensure_cron_config()` runs on it, the missing built-in
+names are appended.
+
+So pve2's state proves only where pve2 is, not which rule produced it. Had that
+criterion gone into B1, a test would have blessed a semantic rule the code does
+not have — under the banner of extraction equivalence, which is the one thing
+extraction must not do.
+
+**Corrected acceptance criterion:** name-by-name idempotence.
+
+- a built-in section already present is not duplicated;
+- a missing one is emitted per the applicable GFS/pre-GFS rule, **regardless of
+  unrelated custom template names**;
+- a pre-GFS config refuses ordinary enrolment rather than converting silently;
+- "custom templates ⇒ never append" stays out of B1 entirely; if the product
+  wants it, it is its own decision with its own tests.
+
+### Acceptance criterion, superseded by the reviewer's namespace resolution
+
+The byte-identity criterion this document opened with is replaced by
+behaviour-equivalence, per `PER-SOURCE-PROFILE-SCENARIOS-2026-08-09-REVIEWER.md`:
+profile-owned template names are namespaced deterministically from the first
+emission, `use_template` references are rewritten during composition, the profile
+files themselves are never mutated, hand-written sections are never renamed as
+collateral, and a post-normalisation collision is a hard refusal before mutation.
+
+What must stay byte-identical is the **rendered job semantics** — schedule,
+prefix, retention/GFS, recursion, monitoring, source/target mapping, flags — not
+the config text.
