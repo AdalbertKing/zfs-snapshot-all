@@ -89,6 +89,42 @@ else
     bad "ensure_cron_config is idempotent" "before=$before_lines after=$after_lines hourly_count=$hourly_count"
 fi
 
+# Phase 2 property 6 (ACTIVE-WORK-PLAN.md): presence-by-name alone is not
+# enough -- a template already on disk under this namespaced name must be
+# compared against what the active profile renders NOW, not merely found.
+# real_section is exactly what ensure_cron_config itself would have written;
+# feeding it back in must NOT be mistaken for a stale copy (no false positive).
+real_section="$(profile_template_section "profile__default__standard_hourly")"
+CF3="$WORK/jobs.matching-template.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$real_section"; } > "$CF3"
+out=$(ensure_cron_config "$CF3" 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "ensure_cron_config: an existing template matching the current profile is left alone (no false positive)"
+else
+    bad "ensure_cron_config: an existing template matching the current profile is left alone (no false positive)" "rc=$rc out=$out"
+fi
+
+# A template present under the same namespaced name but with DIFFERENT
+# content (the active profile changed after this host already had it
+# installed) must refuse -- not silently keep serving the stale copy, and
+# not silently overwrite what is actually installed.
+stale_section="$(printf '%s\n' "$real_section" | sed 's/^\(\tsend_schedule *= *\).*/\1 59 23 * * */')"
+CF4="$WORK/jobs.stale-template.conf"
+{ echo "[defaults]"; echo "	host_label = x"; echo; echo "$stale_section"; } > "$CF4"
+before_md5=$(md5sum "$CF4" | cut -d' ' -f1)
+out=$(ensure_cron_config "$CF4" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"no longer matches what the active profile renders"*) true ;; *) false ;; esac; then
+    ok "ensure_cron_config: an existing template with DIFFERENT content than the current profile refuses"
+else
+    bad "ensure_cron_config: an existing template with DIFFERENT content than the current profile refuses" "rc=$rc out=$out"
+fi
+after_md5=$(md5sum "$CF4" | cut -d' ' -f1)
+if [ "$before_md5" = "$after_md5" ]; then
+    ok "ensure_cron_config: the stale-template refusal leaves the file untouched"
+else
+    bad "ensure_cron_config: the stale-template refusal leaves the file untouched" "$(cat "$CF4")"
+fi
+
 # ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: a floor of 2
 # protected NEWEST snapshots for every reserved prefix this estate's own
 # scripts write, so the collector's own prune sweep can never age one out.

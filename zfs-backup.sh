@@ -624,6 +624,19 @@ profile_template_section() {   # <namespaced name>
     ' "$PROFILE_TPL_FILE"
 }
 
+# The same extraction, generalized to any CONFIG v4 file and any section
+# header -- used to read back what is ALREADY on disk so it can be compared
+# against what a template would render now, rather than only checking that
+# a name is present (Phase 2 property 6, ACTIVE-WORK-PLAN.md).
+cron_config_section() {   # <file> <exact header, e.g. '[template:foo]'>
+    local file="$1" want="$2"
+    awk -v want="$want" '
+        $0 == want { emit=1; print; next }
+        emit && /^\[/ { exit }
+        emit { print }
+    ' "$file" 2>/dev/null
+}
+
 ensure_cron_config() {
     local file="$1"
     if [ ! -e "$file" ]; then
@@ -695,9 +708,29 @@ ensure_cron_config() {
     # other templates of its own. A host with hand-written sections still
     # receives the profile's, under the profile's own namespaced names -- it is
     # never given somebody else's template because a bare name happened to match.
+    #
+    # Phase 2 property 6 (ACTIVE-WORK-PLAN.md): presence-by-name alone answers
+    # "is something here", not "is what the profile means NOW here". If the
+    # active profile's templates.conf changes after a host already has this
+    # namespaced name on disk (an edited retention value, a corrected
+    # schedule), the old check silently kept serving the STALE content
+    # forever -- the exact silent-drift shape a CREATE-only model must not
+    # have. `profile_template_section` is the one function that wrote this
+    # section in the first place; re-rendering it now and comparing is a
+    # same-generator diff, not a heuristic -- an unedited profile always
+    # reproduces byte-identical output, so this only ever fires on a REAL
+    # semantic change.
     local t added=""
     for t in $PROFILE_TEMPLATE_NAMES; do
-        grep -q "^\[template:$t\]" "$file" 2>/dev/null && continue
+        if grep -q "^\[template:$t\]" "$file" 2>/dev/null; then
+            local existing wanted
+            existing="$(cron_config_section "$file" "[template:$t]")"
+            wanted="$(profile_template_section "$t")"
+            [ "$existing" = "$wanted" ] && continue
+            die "[template:$t] in $file no longer matches what the active profile renders -- the profile changed after this host already had this namespaced template installed. Refusing to silently keep the stale copy or silently overwrite the installed one.
+$(diff <(printf '%s\n' "$existing") <(printf '%s\n' "$wanted"))
+Resolve by hand: either revert the profile change, or remove [template:$t] from $file and re-run so the current profile content is adopted -- as a deliberate, previewed step, not a side effect of the next activation."
+        fi
         printf '\n%s\n' "$(profile_template_section "$t")" >> "$file" \
             || die "could not append [template:$t] to $file"
         added="$added $t"
