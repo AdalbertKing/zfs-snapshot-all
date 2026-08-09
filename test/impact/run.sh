@@ -106,13 +106,18 @@ check "the REAL deps.conf is consistent with the REAL tree" "0"       "$("$IMPAC
 # to `profiles`, and the runtime suite that would have caught it was never
 # selected.
 #
-# Asserted against the REAL graph rather than a fixture, deliberately: a fixture
-# would prove the resolver can follow an edge, which was never in doubt. What
-# was in doubt is whether THIS edge is declared, and only the real file can say.
-prof_suites="$("$IMPACT" --for lib-profile.sh 2>/dev/null || "$IMPACT" --suites-for lib-profile.sh 2>/dev/null || true)"
-[ -n "$prof_suites" ] || prof_suites="$(awk '/^\[file:lib-profile\.sh\]/{f=1;next} f&&/^suites/{print;exit} f&&/^\[/{exit}' "$REPO/test/deps.conf")"
-check "a lib-profile.sh change routes to the profiles suite"  "1" "$(printf '%s' "$prof_suites" | grep -c 'profiles')"
-check "a lib-profile.sh change ALSO routes to the runtime suite that consumes it" "1"       "$(printf '%s' "$prof_suites" | grep -c 'zfsbackup')"
+# Asserted against the RESOLVED PLAN, through the real `-f` interface, never
+# against deps.conf text. The first version tried `--for`/`--suites-for`, which
+# impact.sh does not have, and fell through a `|| true` to grepping the
+# declaration -- so it proved the file had been edited and would have passed even
+# if resolution stopped selecting the suite entirely (REV-20260809-082 V2). The
+# fallback I added to make the test robust is exactly what made it measure the
+# wrong thing.
+plan="$("$IMPACT" -f lib-profile.sh 2>&1)"
+check "a lib-profile.sh change resolves to the profiles suite" "1"       "$(printf '%s
+' "$plan" | grep -c 'test/profiles/run.sh')"
+check "a lib-profile.sh change ALSO resolves to the runtime suite that consumes it" "1"       "$(printf '%s
+' "$plan" | grep -c 'test/zfsbackup/run.sh')"
 
 OUT="$("$IMPACT" --graph)"
 check "the graph renders as mermaid" "1" "$(echo "$OUT" | grep -c '^graph LR')"

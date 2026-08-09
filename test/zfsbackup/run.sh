@@ -4043,6 +4043,47 @@ else
     bad "field survival: prune recursion is written once, by the relationship" "$(grep -n recursive "$EC_FS")"
 fi
 
+# REV-20260809-082 V1. The assertions above prove the field reaches the emitted
+# TEXT. They do not prove the resulting candidate is a config the real consumer
+# accepts -- and "it appears in the file" is exactly the kind of appearance this
+# project keeps mistaking for the property.
+#
+# So the same discriminating profile is composed into a COMPLETE candidate --
+# [defaults], its own rendered templates, and the emitted stanzas -- and run
+# through the real gen-cron.sh. No new framework: same profile, same output,
+# one more boundary.
+FS_CAND="$FS/candidate.conf"
+( . "$REPO/lib-profile.sh"
+  profile_render_templates "$FS/p/prof" prof "$FS/tpl.conf" ) || true
+{
+    # No [defaults] dst: this client PULLS -- the emitted section carries src --
+    # and gen-cron refuses a section that resolves both.
+    printf '[defaults]
+	host_label = fstest
+
+'
+    cat "$FS/tpl.conf"
+    printf '\n'
+    cat "$EC_FS"
+} > "$FS_CAND"
+gen_rc=0
+gen_out="$(bash "$REPO/gen-cron.sh" -c "$FS_CAND" 2>&1)" || gen_rc=$?
+if [ "$gen_rc" -eq 0 ]; then
+    ok "field survival: the complete candidate is accepted by the REAL gen-cron.sh"
+else
+    bad "field survival: the complete candidate is accepted by the REAL gen-cron.sh" "rc=$gen_rc $(printf '%s' "$gen_out" | tail -3)"
+fi
+
+# And the extra field must have MEANT something, not merely parsed. recursive =
+# flat is the -R spelling in the generated transfer line; without it the line
+# carries no recursion flag at all.
+if printf '%s
+' "$gen_out" | grep -qE 'snap(send|get)\.sh.* -R '; then
+    ok "field survival: the profile's recursive=flat reaches the rendered cron line"
+else
+    bad "field survival: the profile's recursive=flat reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
