@@ -14,5 +14,5 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: 86b8bcd765e8aa0ecc7dcf04a152814309840cb9 REV-20260809-081 -->
 <!-- delivered: 0dccb0beaf115fd75e2c875db43a36b278a449e6 B1 step 2: zfs-backup.sh consumes the profile; pre-GFS refuses -->
 <!-- reviewed-by: 0dccb0beaf115fd75e2c875db43a36b278a449e6 REV-20260809-082 -->
-<!-- delivered: dc0b66a686a81787eea690ddde320b754f0124be Phase 2 property 6: ensure_cron_config refuses a template present under an existing name but with content that no longer matches the active profile, instead of silently keeping the stale copy -->
+<!-- delivered: 20f333d9d96de3b2e814d6cd87a86cfe515d3568 Phase 2 property 6, corrected per REV-20260809-088: ensure_cron_config's template-identity collision check is CREATE-time only (not a standing profile-drift gate hit on every re-activation) and semantic (not raw text) -->
 
