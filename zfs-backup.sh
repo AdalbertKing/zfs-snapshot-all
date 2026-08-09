@@ -1144,8 +1144,65 @@ Two high-level relationships covering the same datasets would send and prune the
 If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
 }
 
-emit_client_sections() {   # <workfile> <client name>
+# REV-20260809-089. The ownership test remove_managed_sections applies, made
+# available WITHOUT mutating the file, so a re-activation can tell "this is my
+# own installed section, preserve it" from "this is not mine". The two tests are
+# deliberately identical: marker as the section's FIRST content line, or the
+# path already recorded in this client's own MANAGED_DATASETS/
+# MANAGED_PRUNE_SCOPE. A header match alone is NOT ownership (REV-20260802-033
+# U11) -- an unowned header falls through to the regeneration path, where
+# remove_managed_sections still refuses it exactly as before.
+section_owned_by() {   # <file> <exact header> <client name> <path>
+    local file="$1" want="$2" name="$3" path="$4" x first
+    grep -qxF "$want" "$file" 2>/dev/null || return 1
+    for x in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-}; do
+        [ "$x" = "$path" ] && return 0
+    done
+    first=$(cron_config_section "$file" "$want" | sed -n '2p')
+    first="${first#"${first%%[![:space:]]*}"}"
+    [ "$first" = "# managed-by: zfs-backup.sh client=$name" ]
+}
+
+# Replace ONE field's value inside ONE section, leaving every other line of that
+# section -- profile policy, hand-added fields, comments, ordering, alignment --
+# byte-identical. Everything up to and including the original '=' is kept, so a
+# hand-formatted line keeps its own formatting. Returns 3 if the field is not
+# present in the section: silently writing nothing would leave the relationship
+# pointing at the OLD endpoint with no error, which is the failure this whole
+# change exists to prevent.
+update_section_field() {   # <file> <exact header> <field> <new value>
+    local file="$1" want="$2" field="$3" value="$4" rc
+    local tmp; tmp=$(mktemp) || return 1
+    # ENVIRON, not -v: awk -v interprets backslash escapes in the value.
+    FIELD_VALUE="$value" awk -v want="$want" -v field="$field" '
+        $0 == want { emit=1; print; next }
+        emit && /^\[/ { emit=0 }
+        emit {
+            line=$0
+            sub(/^[ \t]+/, "", line)
+            n=index(line, "=")
+            if (n > 0) {
+                key=substr(line, 1, n-1)
+                gsub(/[ \t]+$/, "", key)
+                if (key == field) {
+                    found=1
+                    p=index($0, "=")
+                    printf "%s %s\n", substr($0, 1, p), ENVIRON["FIELD_VALUE"]
+                    next
+                }
+            }
+        }
+        { print }
+        END { if (!found) exit 3 }
+    ' "$file" > "$tmp"
+    rc=$?
+    [ "$rc" -eq 0 ] || { rm -f "$tmp"; return "$rc"; }
+    mv_preserving_mode "$tmp" "$file"
+}
+
+emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local workfile="$1" name="$2" ds localpath
+    local is_new_relationship="${3:-0}"
     # The emitted sections REFERENCE the profile templates ensure_cron_config
     # appends, so both read the same rendered profile. Extracted into one loader
     # rather than two readers for the reason the comment above them already
@@ -1167,11 +1224,65 @@ emit_client_sections() {   # <workfile> <client name>
     # Fail closed BEFORE the first mutation: remove_managed_sections below is
     # already a write to the working config (REV-20260809-083).
     [ "${#managed[@]}" -gt 0 ] && assert_no_coverage_overlap "$name" "${managed[@]}"
-    # Remove-then-add unconditionally, never skip-if-present: that is what makes
-    # a re-run after an endpoint switch actually pick up the new host/port/alias
-    # instead of leaving the old connection details in place forever.
-    [ "${#managed[@]}" -gt 0 ] && remove_managed_sections "$workfile" "$name" "${managed[@]}"
+
+    # REV-20260809-089. The old code removed and regenerated EVERY section on
+    # EVERY call. That is right exactly once -- at CREATE, when there is nothing
+    # installed to preserve. On every later re-activation it re-derived the
+    # installed policy from whatever the active profile renders TODAY, which
+    # breaks the project's one-way handoff (PROFILE -> generate once -> CONFIG
+    # v4 -> runtime truth): a hand-customized field was silently discarded, and
+    # an edited shared profile silently re-pointed an already-installed
+    # relationship at different policy.
+    #
+    # Split, not rewrite: a dataset whose section this client already owns is
+    # PRESERVED and only its topology-owned fields are refreshed in place;
+    # anything else (first activation, a dataset newly in scope, a section this
+    # client does not own) takes the original remove-then-add path unchanged,
+    # including its fail-closed refusal of a foreign section.
+    #
+    # Topology-owned = the fields that are a function of the ENDPOINT rather
+    # than of policy, i.e. exactly the two this function computes from
+    # LOAD_ACCOUNT/LOAD_HOST/LOAD_FLAGS -- `src` and `flags`. Those are what
+    # set-endpoint changes, and they are the reason the unconditional rewrite
+    # existed in the first place. `pair_label` and `notify` are NOT rewritten:
+    # both are pure functions of $name (the relationship identity, fixed for the
+    # life of the client record -- there is no rename command) and $ds (fixed
+    # for a dataset that is already in scope; a dataset whose path changed is a
+    # different dataset and lands in the regeneration branch above). Rewriting
+    # them could therefore only ever write back the identical value, while
+    # leaving them alone additionally preserves an operator edit -- so leaving
+    # them is both semantically invariant and strictly safer.
+    local -a regen_ds=() regen_paths=() keep_ds=()
     for ds in $PEER_SAVED_DATASETS; do
+        localpath=$(client_local_path "$ds")
+        if [ "$is_new_relationship" -eq 0 ] \
+           && section_owned_by "$workfile" "[dataset:$localpath]" "$name" "$localpath" \
+           && { [ "$sync_mode" -eq 0 ] || [ "${PROFILE_GFS:-1}" -ne 1 ] \
+                || section_owned_by "$workfile" "[prune:$ds]" "$name" "$ds"; }; then
+            # sync mode puts this client's [dataset:] and [prune:] at the SAME
+            # path, and preserving one means never calling
+            # remove_managed_sections on that path -- so the prune half would
+            # escape the ownership check entirely. Require both, or regenerate.
+            keep_ds+=("$ds")
+        else
+            regen_ds+=("$ds"); regen_paths+=("$localpath")
+        fi
+    done
+
+    # Remove-then-add for the regenerated set only: that is what makes a re-run
+    # after an endpoint switch pick up the new host/port/alias for a dataset
+    # that has no installed section yet.
+    [ "${#regen_paths[@]}" -gt 0 ] && remove_managed_sections "$workfile" "$name" "${regen_paths[@]}"
+
+    for ds in ${keep_ds[@]+"${keep_ds[@]}"}; do
+        localpath=$(client_local_path "$ds")
+        update_section_field "$workfile" "[dataset:$localpath]" src "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" \
+            || die "[dataset:$localpath] in $workfile has no 'src' field to refresh -- refusing to leave the relationship pointing at an unknown endpoint. Fix or remove that section by hand and re-run."
+        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS" \
+            || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
+    done
+
+    for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
         {
             echo
@@ -1200,9 +1311,20 @@ emit_client_sections() {   # <workfile> <client name>
             # is not ALSO its own separately listed entry here -- recursive
             # would be the leaf-under-a-recursive-parent race this project
             # already fixed once for delsnaps (prune scope race).
+            #
+            # REV-20260809-089: a [prune:] section carries NO topology-owned
+            # field at all -- it is pure policy plus name-derived labels. So a
+            # preserved dataset's prune section needs no in-place refresh
+            # either: the correct action on re-activation is to leave it
+            # entirely alone. Only the regenerated datasets get one written,
+            # and those are exactly the paths remove_managed_sections cleared
+            # above (same paths -- sync's local name IS the source name), so
+            # no separate removal call is needed here.
             local -a scopes=()
             for ds in $PEER_SAVED_DATASETS; do
                 scopes+=("$ds")
+            done
+            for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
                 {
                     echo
                     echo "[prune:$ds]"
@@ -1222,17 +1344,26 @@ emit_client_sections() {   # <workfile> <client name>
             # carries the same single send tier, so a recursive sweep cannot
             # hit the "this leaf only has some of these tiers" trap that
             # forces per-leaf monitor carriers elsewhere in this estate.
+            #
+            # REV-20260809-089: the ladder carries no topology-owned field, and
+            # it is ONE recursive section over the client's whole subtree -- a
+            # dataset newly in scope lands under it without the section needing
+            # to change. So on re-activation an already-owned ladder is left
+            # untouched, not removed and re-derived from today's profile.
             prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
-            remove_managed_sections "$workfile" "$name" "$prune_scope"
-            {
-                echo
-                echo "[prune:$prune_scope]"
-                echo "	$marker"
-                profile_emit "$PROFILE_PRUNE_FILE"
-                echo "	recursive    = yes"
-                echo "	pair_label   = $name"
-                echo "	notify       = ${name}"
-            } >> "$workfile" || return 1
+            if [ "$is_new_relationship" -ne 0 ] \
+               || ! section_owned_by "$workfile" "[prune:$prune_scope]" "$name" "$prune_scope"; then
+                remove_managed_sections "$workfile" "$name" "$prune_scope"
+                {
+                    echo
+                    echo "[prune:$prune_scope]"
+                    echo "	$marker"
+                    profile_emit "$PROFILE_PRUNE_FILE"
+                    echo "	recursive    = yes"
+                    echo "	pair_label   = $name"
+                    echo "	notify       = ${name}"
+                } >> "$workfile" || return 1
+            fi
         fi
     fi
     return 0
@@ -2484,14 +2615,15 @@ cmd_activate_client() {
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
     ensure_cron_config "$workfile" "$is_new_relationship"
 
-    # Remove-then-add every managed dataset's section unconditionally (not
-    # skip-if-present): this is what makes re-running activate-client after
-    # an endpoint switch actually pick up the new host/port/alias in the
-    # generated job, instead of silently leaving the OLD connection details
-    # in an already-present section forever.
+    # First activation generates the sections from the profile. A re-activation
+    # (e.g. after set-endpoint) refreshes only the endpoint-owned fields inside
+    # the sections already installed, so an operator's customization and the
+    # policy the relationship was created with both survive -- REV-20260809-089,
+    # and the same one-way-handoff boundary REV-20260809-088 F1 drew for
+    # ensure_cron_config, one level down.
     local ds localpath
     local -a managed=()
-    emit_client_sections "$workfile" "$name" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
+    emit_client_sections "$workfile" "$name" "$is_new_relationship" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
 
     log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$(endpoint_display)'"
 
@@ -2650,7 +2782,12 @@ cmd_migrate_profile() {
         [ "${STATE:-}" = active ] || { log "skipping client '${CLIENT_NAME:-$f}' (state=${STATE:-unknown}) -- only active clients have cron sections to rewrite"; continue; }
         name="$CLIENT_NAME"
         load_client_and_connection "$f"
-        emit_client_sections "$workfile" "$name" || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
+        # REV-20260809-089: full generation, deliberately. Every other caller
+        # must NOT re-derive installed policy from the active profile -- but
+        # re-deriving it is the entire purpose of migrate-profile, which exists
+        # precisely to move a host off the legacy profile in one decision. This
+        # is the one call site where the profile is meant to win.
+        emit_client_sections "$workfile" "$name" 1 || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
         migrated=$((migrated + 1))
     done
     [ "$migrated" -gt 0 ] || log "no active clients -- migrating the templates only"

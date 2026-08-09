@@ -79,6 +79,42 @@ endpoint / host / transport change
 
 A manually customized generated CONFIG must survive reactivation and endpoint switch unchanged in policy semantics.
 
+### Status — implemented, awaiting reviewer
+
+The defect blocking this property was found by auditing the reactivation path
+against the property itself, written up in
+`docs/discussions/PHASE3-EMIT-CLIENT-SECTIONS-CLAUDE-FINDING-2026-08-09.md`, and
+confirmed independently as **REV-20260809-089** (P1). `emit_client_sections()`
+removed and regenerated every relationship-owned section from the *current*
+active profile on every call — correct exactly once, at CREATE, and a silent
+policy clobber on every later reactivation.
+
+Implemented per the review's required correction:
+
+- **first activation** — unchanged, full generation from the selected profile;
+- **reactivation** — the installed section is the base; only the two
+  topology-owned fields (`src`, transport `flags`) are refreshed in place, with
+  the field set justified from the runtime contracts rather than guessed;
+- `pair_label`/`notify` are deliberately **not** rewritten — both are pure
+  functions of the relationship name and the dataset path, neither of which can
+  change for a dataset that is already in scope;
+- `[prune:]` sections carry no topology-owned field at all, so an owned one is
+  left entirely untouched, in both the backup-mode GFS ladder shape and the
+  sync-mode per-dataset shape;
+- ownership-marker checks and fail-closed refusal preserved unchanged; a
+  section this client does not own is still refused, never adopted by header
+  alone;
+- `migrate-profile` passes the first-activation flag explicitly, because
+  re-deriving policy from the profile is that command's entire purpose.
+
+Evidence: `test/zfsbackup/run.sh` section 49, **333/333**; negative control
+against the reviewed base `8d0dc243…` → **328/333**, the five failures being
+exactly the new discriminating assertions. Response:
+`docs/internal/reviews/responses/REV-20260809-089.md`.
+
+Deferred and explicitly out of scope per the review: source-removal /
+dataset-set reconciliation.
+
 ### Gate 3
 
 One-way handoff is true in production behavior:

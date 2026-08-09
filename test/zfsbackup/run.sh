@@ -4569,6 +4569,170 @@ else
     bad "activate-client: re-activation does not target the SCRIPT_DIR default path instead" "out=$out"
 fi
 
+# --- 49. PHASE 3 / REV-20260809-089: reactivation preserves installed policy --
+#
+# emit_client_sections() used to remove-and-regenerate EVERY section on EVERY
+# call, from whatever the active profile renders at that moment. Correct exactly
+# once, at CREATE. On every later re-activation it silently discarded operator
+# customization and re-derived installed policy from a profile that may have
+# changed since -- breaking the one-way handoff
+# (PROFILE -> generate once -> CONFIG v4 -> runtime truth), the same boundary
+# REV-20260809-088 F1 drew one level up in ensure_cron_config.
+#
+# The nine steps below are the reviewer's required discriminating proof.
+P9="$WORK/phase3"; mkdir -p "$P9/prof"
+cp "$REPO/profiles/default/templates.conf" "$P9/prof/templates.conf"
+cp "$REPO/profiles/default/prune.inc"      "$P9/prof/prune.inc"
+cp "$REPO/profiles/default/dataset.inc"    "$P9/prof/dataset.inc"
+
+emit9() {   # <conf> <name> <host> <is_new> [mode] [datasets]
+    # MANAGED_DATASETS/MANAGED_PRUNE_SCOPE deliberately EMPTY: ownership must be
+    # proven by the marker this function itself wrote, which is the harder half
+    # of remove_managed_sections' own test and the one a fresh record relies on.
+    ( PROFILE_ROOT="$P9" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      PEER_SAVED_MODE="${5:-backup}" PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST="$3" LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="${6:-rpool/data}" PROFILE_GFS=1 \
+      MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+      emit_client_sections "$1" "$2" "$4" ) 2>&1
+}
+
+# --- backup mode: one [dataset:] + one recursive GFS ladder ---
+C9="$P9/backup.conf"; DS9="tank/backups/pve9/rpool/data"; PR9="tank/backups/pve9"
+: > "$C9"
+
+# STEP 1 -- first activation creates the normal managed sections.
+out=$(emit9 "$C9" c9 10.9.9.1 1); rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF "[dataset:$DS9]" "$C9" && grep -qxF "[prune:$PR9]" "$C9" \
+        && grep -q "src *= *zfsbackup@10.9.9.1:rpool/data" "$C9"; then
+    ok "89 step 1: first activation creates the managed [dataset:] and GFS [prune:]"
+else
+    bad "89 step 1: first activation creates the managed [dataset:] and GFS [prune:]" "rc=$rc out=$out file=$(cat "$C9")"
+fi
+
+# STEP 2 -- customize the installed policy by hand, both section kinds.
+# `recursive` is explicitly profile-owned (REV-073), so pinning it per
+# relationship is a legitimate operator edit, not an abuse of the format.
+sed -i "/^\[dataset:$(printf '%s' "$DS9" | sed 's,/,\\/,g')\]/,/^\[prune:/ s/^\tsrc /\trecursive    = flat\n\tsrc /" "$C9"
+sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_custom_/' "$C9"
+before_recursive=$(grep -c 'recursive    = flat' "$C9")
+before_pattern=$(grep -c 'gfs_pattern  = automated_custom_' "$C9")
+
+# STEP 3 -- a real endpoint change, then a real re-activation.
+out=$(emit9 "$C9" c9 10.9.9.2 0); rc=$?
+
+# STEP 4 -- the endpoint-owned field DID change.
+if [ "$rc" -eq 0 ] && grep -q "src *= *zfsbackup@10.9.9.2:rpool/data" "$C9" \
+        && ! grep -q "10.9.9.1" "$C9"; then
+    ok "89 step 4: re-activation refreshes src to the new endpoint"
+else
+    bad "89 step 4: re-activation refreshes src to the new endpoint" "rc=$rc out=$out file=$(cat "$C9")"
+fi
+
+# STEP 5 -- the customized/policy fields did NOT.
+if [ "$(grep -c 'recursive    = flat' "$C9")" = "$before_recursive" ] \
+        && [ "$before_recursive" -ge 1 ] \
+        && [ "$(grep -c 'gfs_pattern  = automated_custom_' "$C9")" = "$before_pattern" ] \
+        && [ "$before_pattern" -ge 1 ]; then
+    ok "89 step 5: re-activation preserves the hand-customized dataset and prune policy"
+else
+    bad "89 step 5: re-activation preserves the hand-customized dataset and prune policy" \
+        "recursive before=$before_recursive after=$(grep -c 'recursive    = flat' "$C9") pattern before=$before_pattern after=$(grep -c 'gfs_pattern  = automated_custom_' "$C9") file=$(cat "$C9")"
+fi
+
+# The section must not have grown a second copy of itself either.
+if [ "$(grep -cxF "[dataset:$DS9]" "$C9")" = 1 ] && [ "$(grep -cxF "[prune:$PR9]" "$C9")" = 1 ]; then
+    ok "89 step 5b: preserving a section does not append a duplicate of it"
+else
+    bad "89 step 5b: preserving a section does not append a duplicate of it" "$(cat "$C9")"
+fi
+
+# STEP 6 -- edit the ACTIVE PROFILE between activations. An installed
+# relationship must be independent of it: this is the one-way handoff itself.
+# The drift is expressed in VALID profile fields on purpose: an invalid one
+# would be refused at the profile boundary and would prove nothing about the
+# handoff.
+printf 'recursive = yes\n' >> "$P9/prof/dataset.inc"
+sed -i 's/^gfs_pattern *=.*/gfs_pattern = automated_PROFILEDRIFT_/' "$P9/prof/prune.inc"
+out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
+        && grep -q 'recursive    = flat' "$C9" \
+        && grep -q 'gfs_pattern  = automated_custom_' "$C9" \
+        && grep -q "src *= *zfsbackup@10.9.9.3:rpool/data" "$C9"; then
+    ok "89 step 6: a profile edited after CREATE does not reach an installed relationship"
+else
+    bad "89 step 6: a profile edited after CREATE does not reach an installed relationship" "rc=$rc out=$out file=$(cat "$C9")"
+fi
+
+# ...and the preserved-plus-refreshed result is still a config the REAL consumer
+# accepts, with the new endpoint actually reaching the rendered line. "The text
+# looks right" is the appearance this project keeps mistaking for the property
+# (REV-20260809-082 V1), so the boundary is crossed here too.
+P9_CAND="$P9/candidate.conf"
+( . "$REPO/lib-profile.sh"; profile_render_templates "$P9/prof" prof "$P9/tpl.conf" ) || true
+{ printf '[defaults]\n\thost_label = p9test\n\n'; cat "$P9/tpl.conf"; printf '\n'; cat "$C9"; } > "$P9_CAND"
+gen_rc=0; gen_out="$(bash "$REPO/gen-cron.sh" -c "$P9_CAND" 2>&1)" || gen_rc=$?
+if [ "$gen_rc" -eq 0 ] && printf '%s\n' "$gen_out" | grep -q 'zfsbackup@10.9.9.3'; then
+    ok "89 step 6b: the preserved+refreshed config is accepted by the REAL gen-cron.sh, carrying the new endpoint"
+else
+    bad "89 step 6b: the preserved+refreshed config is accepted by the REAL gen-cron.sh, carrying the new endpoint" "rc=$gen_rc $(printf '%s' "$gen_out" | tail -5)"
+fi
+
+# STEP 7 -- sync mode's OTHER prune shape: one [prune:] per dataset, at the
+# same path as the [dataset:] section, which is why both halves must be owned
+# before either is preserved.
+S9="$P9/sync.conf"; : > "$S9"
+out=$(emit9 "$S9" s9 10.9.9.1 1 sync "rpool/a rpool/b"); rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF "[prune:rpool/a]" "$S9" && grep -qxF "[prune:rpool/b]" "$S9" \
+        && grep -qxF "[dataset:rpool/a]" "$S9"; then
+    ok "89 step 7: sync mode first activation writes one [prune:] per dataset"
+else
+    bad "89 step 7: sync mode first activation writes one [prune:] per dataset" "rc=$rc out=$out file=$(cat "$S9")"
+fi
+sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = sync_custom_/' "$S9"
+out=$(emit9 "$S9" s9 10.9.9.4 0 sync "rpool/a rpool/b"); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(grep -c 'gfs_pattern  = sync_custom_' "$S9")" -ge 2 ] \
+        && grep -q "src *= *zfsbackup@10.9.9.4:rpool/a" "$S9" \
+        && grep -q "src *= *zfsbackup@10.9.9.4:rpool/b" "$S9" \
+        && [ "$(grep -cxF "[prune:rpool/a]" "$S9")" = 1 ]; then
+    ok "89 step 7b: sync mode re-activation refreshes every src and preserves every prune policy"
+else
+    bad "89 step 7b: sync mode re-activation refreshes every src and preserves every prune policy" "rc=$rc out=$out file=$(cat "$S9")"
+fi
+
+# First activation is UNAFFECTED -- still full generation. This is not a
+# leftover: migrate-profile passes 1 deliberately, because re-deriving policy
+# from the profile is that command's entire purpose.
+out=$(emit9 "$C9" c9 10.9.9.5 1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q "gfs_pattern *= *automated_PROFILEDRIFT_" "$C9" \
+        && ! grep -q 'gfs_pattern  = automated_custom_' "$C9"; then
+    ok "89 first-activation/migrate path still regenerates from the profile"
+else
+    bad "89 first-activation/migrate path still regenerates from the profile" "rc=$rc out=$out file=$(cat "$C9")"
+fi
+
+# Fail-closed is preserved: a section at a path this client manages that it
+# does NOT own is still refused, never silently adopted by header alone.
+F9="$P9/foreign.conf"
+printf '\n[dataset:%s]\n\tuse_template = something_else\n\tsrc          = a@b:c\n' "$DS9" > "$F9"
+out=$(emit9 "$F9" c9 10.9.9.1 0); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"looks hand-written"*) true ;; *) false ;; esac; then
+    ok "89 a foreign section at a managed path is still refused, not adopted"
+else
+    bad "89 a foreign section at a managed path is still refused, not adopted" "rc=$rc out=$out"
+fi
+
+# An owned section with no src field cannot be refreshed -- refusing beats
+# leaving the relationship silently pointing at the old endpoint.
+N9="$P9/nosrc.conf"
+printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n\tflags        = -K /dev/null\n' "$DS9" > "$N9"
+out=$(emit9 "$N9" c9 10.9.9.1 0); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"no 'src' field to refresh"*) true ;; *) false ;; esac; then
+    ok "89 an owned section with no src refuses rather than silently keeping the old endpoint"
+else
+    bad "89 an owned section with no src refuses rather than silently keeping the old endpoint" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
