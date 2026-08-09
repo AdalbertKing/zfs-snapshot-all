@@ -30,7 +30,7 @@ fi
 # runtime and test must share one path, so a test cannot bless a rule that
 # production never executes -- which is exactly what happened here, where the
 # only implementation of the ownership rule lived in this file.
-. "$ROOT/lib-profile.sh"
+. "${PROFLIB:-$ROOT/lib-profile.sh}"
 DUMPFILE="$(mktemp)"; trap 'rm -f "$DUMPFILE"' EXIT
 profile_schema_dump "$GEN" "$DUMPFILE" || { echo "cannot read the field schema: $PROFILE_ERR"; exit 1; }
 
@@ -362,6 +362,77 @@ if bash "$GEN" -c "$RD/collide.conf" >/dev/null 2>&1; then
     bad "render: WITHOUT namespacing the same two profiles collide"
 else
     ok "render: WITHOUT namespacing the same two profiles collide"
+fi
+
+
+# ---- REV-081 F1: the encoding must be INJECTIVE, not merely separated -------
+#
+# The first version concatenated with `__` and called that disjoint identity.
+# It is not, and the counterexample is exact:
+#
+#     profile "a__b", template "c"    -> profile__a__b__c
+#     profile "a",    template "b__c" -> profile__a__b__c
+#
+# Two distinct pairs, one section identity -- the collision the namespace exists
+# to prevent, moved from the native names into the separator.
+#
+# First: DEMONSTRATE the collision from the encoding itself rather than assert
+# it. If these two ever stop being equal the rejection rule below is guarding
+# nothing and this case says so.
+n1="$(profile_ns_name 'a__b' 'c')"
+n2="$(profile_ns_name 'a' 'b__c')"
+if [ "$n1" = "$n2" ]; then
+    ok "injectivity: the bare encoding really does collide ($n1)"
+else
+    bad "injectivity: the bare encoding really does collide" "n1=$n1 n2=$n2"
+fi
+
+# The contract chosen is option 2 from the review: a restricted naming domain
+# in which the separator cannot occur inside either component. So BOTH members
+# of the colliding pair are refused at the boundary, before rendering -- which
+# is why "both profiles independently validate" cannot hold here and is not
+# claimed.
+COLL1="$(mkprofile -)"
+if profile_render_templates "$COLL1" 'a__b' "$RD/coll1.conf"; then
+    bad "injectivity: a profile NAME carrying the separator is refused"
+else
+    case "$PROFILE_ERR" in
+        *"$PROFILE_NS_SEP"*|*separator*) ok "injectivity: a profile NAME carrying the separator is refused" ;;
+        *) bad "injectivity: a profile NAME carrying the separator is refused" "$PROFILE_ERR" ;;
+    esac
+fi
+rm -rf "$COLL1"
+
+# The other half: a native TEMPLATE name carrying the separator. Refused at
+# validation, so such a profile never reaches a runtime at all...
+COLL2="$(mkprofile -)"
+printf '\n[template:b__c]\n\tsend_schedule = 1 * * * *\n\tprefix = x_\n' >> "$COLL2/templates.conf"
+if profile_validate_dir "$COLL2" "$GEN"; then
+    bad "injectivity: a TEMPLATE name carrying the separator is refused at validation"
+else
+    case "$PROFILE_ERR" in
+        *b__c*) ok "injectivity: a TEMPLATE name carrying the separator is refused at validation" ;;
+        *) bad "injectivity: a TEMPLATE name carrying the separator is refused at validation" "$PROFILE_ERR" ;;
+    esac
+fi
+# ...and refused again at the render boundary, because rendering is what
+# actually encodes the name and must not depend on a caller having validated.
+if profile_render_templates "$COLL2" default "$RD/coll2.conf"; then
+    bad "injectivity: a TEMPLATE name carrying the separator is refused at render too"
+else
+    case "$PROFILE_ERR" in
+        *b__c*) ok "injectivity: a TEMPLATE name carrying the separator is refused at render too" ;;
+        *) bad "injectivity: a TEMPLATE name carrying the separator is refused at render too" "$PROFILE_ERR" ;;
+    esac
+fi
+rm -rf "$COLL2"
+
+# The rule must not be wider than the defect: single underscores are how every
+# built-in template is named, and a hyphenated profile name is ordinary.
+if profile_render_templates "$ROOT/profiles/default" 'site-a' "$RD/ok1.conf"; then
+    ok "injectivity: single underscores and hyphens are still accepted"
+else
+    bad "injectivity: single underscores and hyphens are still accepted" "$PROFILE_ERR"
 fi
 
 

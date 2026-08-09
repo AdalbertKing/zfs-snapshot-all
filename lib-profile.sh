@@ -63,20 +63,55 @@ PROFILE_ERR=""
 # somebody else's policy. The cost is visible and accepted -- a host carrying
 # legacy bare sections gains namespaced ones beside them, and the activation
 # preview shows it.
+# REV-20260809-081 F1: concatenation with a separator is NOT injective unless
+# the separator cannot occur inside either component. The first version of this
+# encoding forgot that, and the counterexample is exact:
+#
+#     profile "a__b", template "c"   ->  profile__a__b__c
+#     profile "a",    template "b__c" ->  profile__a__b__c
+#
+# Two distinct (profile, template) pairs, one section identity. The collision
+# the namespace exists to prevent had simply moved from the native names into
+# the separator encoding. gen-cron would eventually refuse the duplicate
+# section, which is fail-safe, but by then the useful diagnosis -- WHICH two
+# profile/name pairs collided -- is gone.
+#
+# The fix is a restricted naming domain rather than a cleverer encoding: `__`
+# is forbidden inside a profile name and inside a native template name, so the
+# separator is unambiguous by construction and the encoding stays readable. A
+# length-prefixed scheme would also be injective and is unreadable in a config a
+# human has to audit.
+#
+# Compatibility checked before choosing it: the built-in profile's names are
+# `standard_hourly` and `keep_hourly|daily|weekly|monthly`, all single
+# underscores, and the profile name in use is `default`. Nothing valid today is
+# refused by this rule.
 PROFILE_NS_SEP='__'
 
 profile_ns_name() {   # <profile> <template> -> namespaced name
     printf 'profile%s%s%s%s' "$PROFILE_NS_SEP" "$1" "$PROFILE_NS_SEP" "$2"
 }
 
-# A profile name has to survive being part of a section header, so it is held
-# to the same character class CONFIG v4 allows in a template name. Fail closed:
-# a profile whose name could break the header is refused, not sanitised.
-profile_name_ok() {   # <profile>
-    case "$1" in
-        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+# One rule, applied to both encoded components. Fail closed: a name that could
+# break the header or the encoding is refused, never sanitised -- silently
+# rewriting a name would make the generated config disagree with the profile
+# that produced it.
+profile_component_ok() {   # <kind> <value>  -> 0 usable, else PROFILE_ERR set
+    local kind="$1" v="$2"
+    case "$v" in
+        '') PROFILE_ERR="empty $kind name"; return 1 ;;
+        *[!A-Za-z0-9_-]*)
+            PROFILE_ERR="$kind name '$v' is not usable in a section header (letters, digits, _ and - only)"
+            return 1 ;;
+        *"$PROFILE_NS_SEP"*)
+            PROFILE_ERR="$kind name '$v' contains '$PROFILE_NS_SEP', which is the namespace separator -- it would make two different profile/template pairs render to the same section identity (REV-20260809-081)"
+            return 1 ;;
     esac
     return 0
+}
+
+profile_name_ok() {   # <profile>
+    profile_component_ok profile "$1"
 }
 
 # Fields a profile must never carry, whatever the schema permits.
@@ -169,6 +204,12 @@ profile_validate_templates() {   # <file> <schema dump>
         case "$raw" in
             '#'*) continue ;;
             '[template:'*']')
+                # REV-20260809-081 F1: the name is half of the rendered section
+                # identity, so its grammar is a validation concern, not only a
+                # rendering one. Refusing here means a profile carrying an
+                # ambiguous name never reaches a runtime at all.
+                field="${raw#\[template:}"; field="${field%\]}"
+                profile_component_ok template "$field" || { PROFILE_ERR="$file:$n: $PROFILE_ERR"; return 1; }
                 in_section=1
                 continue ;;
             '['*)
@@ -212,6 +253,7 @@ profile_render_templates() {   # <dir> <profile> <outfile>
         case "$raw" in
             '[template:'*']')
                 name="${raw#\[template:}"; name="${name%\]}"
+                profile_component_ok template "$name" || { PROFILE_ERR="$file:$n: $PROFILE_ERR"; return 1; }
                 ns="$(profile_ns_name "$prof" "$name")"
                 # A repeat inside one profile would emit a duplicate section and
                 # gen-cron would refuse the composed file. Refuse HERE instead,

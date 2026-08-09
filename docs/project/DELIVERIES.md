@@ -10,3 +10,5 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: a3df471a66b0e26e1e55b7f78772d3d100dec333 REV-20260808-071 -->
 <!-- delivered: 8505601d39b79e931a357cf81c4595b833550b78 B1 scope decision: pre-GFS frozen, migration path measured (docs only) -->
 <!-- reviewed-by: 8505601d39b79e931a357cf81c4595b833550b78 REV-20260809-079 -->
+<!-- delivered: 86b8bcd765e8aa0ecc7dcf04a152814309840cb9 B1 step 1: profile renderer with deterministic namespace -->
+<!-- reviewed-by: 86b8bcd765e8aa0ecc7dcf04a152814309840cb9 REV-20260809-081 -->
