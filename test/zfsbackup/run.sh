@@ -4733,6 +4733,166 @@ else
     bad "89 an owned section with no src refuses rather than silently keeping the old endpoint" "rc=$rc out=$out"
 fi
 
+# --- 50. REV-20260810-090: reactivation is independent of the profile ---------
+#
+# REV-089 stopped the relationship-local section body from being regenerated,
+# but `cmd_activate_client()` still called `ensure_cron_config`, which still
+# called `load_active_profile` unconditionally and still appended any profile
+# template the installed CONFIG did not carry. So the one-way handoff still had
+# two holes: an already-installed relationship could not be reactivated at all
+# once its CREATE-time profile was gone or invalid (F1), and ordinary endpoint
+# maintenance could silently re-introduce policy material (F2).
+#
+# Section 49 drove emit_client_sections() directly and kept the profile
+# directory present and valid, so it could not have caught either. These cross
+# the REAL cmd_activate_client()/ensure_cron_config() boundary.
+AP="$WORK/profilegone"
+mkdir -p "$AP/clients" "$AP/peerstate" "$AP/keys" "$AP/dir" "$AP/root/prof" "$AP/cap"
+cp "$REPO/profiles/default/prune.inc"   "$AP/root/prof/prune.inc"
+cp "$REPO/profiles/default/dataset.inc" "$AP/root/prof/dataset.inc"
+# An extra template nothing references: the "otherwise-unused generated template
+# the operator removed" of the review's proof step 4. A referenced one could not
+# tell F2 apart from gen-cron simply rejecting a dangling use_template.
+{ cat "$REPO/profiles/default/templates.conf"
+  printf '\n[template:extra_unused]\n\tsend_schedule = 0 5 * * *\n\tprefix        = automated_extra_\n'
+} > "$AP/root/prof/templates.conf"
+
+for h in 10.7.7.8 10.7.7.9; do
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' "$h" \
+        > "$AP/keys/${h}_known_hosts"
+done
+cat > "$AP/peerstate/10.7.7.8.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+
+# The installed CONFIG is built by the REAL generators at their REAL first-CREATE
+# setting, so the fixture is what a first activation actually leaves behind
+# rather than a hand-written approximation of it.
+APC="$AP/dir/jobs.conf"
+printf '[defaults]\n\thost_label = aptest\n' > "$APC"
+( PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+  PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  ensure_cron_config "$APC" 1 1 >/dev/null 2>&1
+  PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+  PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  emit_client_sections "$APC" apx 1 ) >/dev/null 2>&1
+# A per-relationship customization an operator might reasonably make.
+sed -i '/^\tsrc          = zfsbackup@10.7.7.8/i\\trecursive    = flat' "$APC"
+
+cat > "$AP/clients/apx.conf" <<EOF
+CLIENT_NAME=apx
+PEER_HOST=10.7.7.8
+STATE=active
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.7.7.9
+ENDPOINT_LAN_PORT=22
+MANAGED_DATASETS=tank/backups/10.7.7.8/rpool/data
+MANAGED_PRUNE_SCOPE=tank/backups/10.7.7.8
+CRON_CONFIG=$APC
+EOF
+
+# The working copy never survives the run (it is removed on any failure and
+# swapped away on success), so the dry-run stub copies it out at the one moment
+# it is guaranteed to exist -- the same $SNAPGET-substitution pattern sections
+# 38/39 already use to observe an interior step.
+cat > "$AP/snapget-capture.sh" <<EOF
+#!/usr/bin/env bash
+cp -f "$AP/dir"/.zfsbackup-work.* "$AP/cap/workfile" 2>/dev/null
+exit 0
+EOF
+chmod +x "$AP/snapget-capture.sh"
+
+run_ap() {   # <profile-root> -> output; leaves the captured workfile in $AP/cap
+    rm -f "$AP/cap/workfile"
+    ( CLIENTS_DIR="$AP/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
+      SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$AP/snapget-capture.sh" \
+      PROFILE_ROOT="$1" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      cmd_activate_client apx --yes ) 2>&1
+}
+
+# --- F1: the CREATE-time profile is gone. Reactivation must still work. ---
+mv "$AP/root/prof" "$AP/root/prof.gone"
+out=$(run_ap "$AP/root")
+if [ -f "$AP/cap/workfile" ] && case "$out" in *"profile 'prof'"*) false ;; *) true ;; esac; then
+    ok "90 F1: reactivation gets past profile handling when the CREATE-time profile is gone"
+else
+    bad "90 F1: reactivation gets past profile handling when the CREATE-time profile is gone" \
+        "captured=$([ -f "$AP/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
+fi
+# ...and it did the topology work while doing it.
+if [ -f "$AP/cap/workfile" ] \
+        && grep -q "src *= *zfsbackup@10.7.7.9:rpool/data" "$AP/cap/workfile" \
+        && grep -q 'recursive    = flat' "$AP/cap/workfile" \
+        && grep -q 'gfs_pattern' "$AP/cap/workfile"; then
+    ok "90 F1: with no profile at all it still refreshes src and preserves installed policy"
+else
+    bad "90 F1: with no profile at all it still refreshes src and preserves installed policy" \
+        "$([ -f "$AP/cap/workfile" ] && cat "$AP/cap/workfile" || echo '(no workfile captured)')"
+fi
+mv "$AP/root/prof.gone" "$AP/root/prof"
+
+# A profile that is PRESENT but no longer valid is the same class of dependency
+# -- an installed CONFIG must not stop being reactivatable because a file it no
+# longer needs stopped parsing.
+printf 'src = zfsbackup@nope:x\n' >> "$AP/root/prof/dataset.inc"
+out=$(run_ap "$AP/root")
+if [ -f "$AP/cap/workfile" ] && case "$out" in *"profile 'prof'"*) false ;; *) true ;; esac; then
+    ok "90 F1: reactivation is unaffected by the CREATE-time profile becoming invalid"
+else
+    bad "90 F1: reactivation is unaffected by the CREATE-time profile becoming invalid" \
+        "captured=$([ -f "$AP/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
+fi
+sed -i '/^src = zfsbackup@nope:x$/d' "$AP/root/prof/dataset.inc"
+
+# --- F2: a removed, otherwise-unused generated template stays removed. ---
+if grep -q "^\[template:profile__prof__extra_unused\]" "$APC"; then
+    ok "90 F2 precondition: the unused namespaced template was installed at CREATE"
+else
+    bad "90 F2 precondition: the unused namespaced template was installed at CREATE" "$(grep -c '^\[template:' "$APC") template(s) in the fixture"
+fi
+awk '/^\[template:profile__prof__extra_unused\]/{skip=1;next} skip&&/^\[/{skip=0} !skip' "$APC" > "$APC.tmp" && mv "$APC.tmp" "$APC"
+out=$(run_ap "$AP/root")
+if [ -f "$AP/cap/workfile" ] \
+        && ! grep -q "^\[template:profile__prof__extra_unused\]" "$AP/cap/workfile" \
+        && case "$out" in *"added missing profile template"*) false ;; *) true ;; esac; then
+    ok "90 F2: ordinary reactivation does not re-append a deliberately removed template"
+else
+    bad "90 F2: ordinary reactivation does not re-append a deliberately removed template" \
+        "out=$(printf '%s' "$out" | grep -i template) workfile=$([ -f "$AP/cap/workfile" ] && grep -c '^\[template:' "$AP/cap/workfile" || echo none)"
+fi
+
+# The dependency is not removed, only moved to the boundary that genuinely needs
+# it: a relationship that must GENERATE a section still loads the profile, and
+# still fails clearly when it cannot. Otherwise F1's fix would have turned a
+# loud failure into a silently policy-less CREATE.
+cat > "$AP/clients/apnew.conf" <<EOF
+CLIENT_NAME=apnew
+PEER_HOST=10.7.7.8
+STATE=endpoint_verified
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.7.7.9
+ENDPOINT_LAN_PORT=22
+CRON_CONFIG=$APC
+EOF
+mv "$AP/root/prof" "$AP/root/prof.gone"
+out=$( ( CLIENTS_DIR="$AP/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
+         SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$AP/snapget-capture.sh" \
+         PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+         cmd_activate_client apnew --yes ) 2>&1 ); rc=$?
+mv "$AP/root/prof.gone" "$AP/root/prof"
+if [ "$rc" -ne 0 ] && case "$out" in *"profile 'prof'"*) true ;; *) false ;; esac; then
+    ok "90 a first activation with no profile still fails loudly at the additive boundary"
+else
+    bad "90 a first activation with no profile still fails loudly at the additive boundary" "rc=$rc out=$(printf '%s' "$out" | tail -5)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

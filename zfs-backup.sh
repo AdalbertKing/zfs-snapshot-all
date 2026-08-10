@@ -637,7 +637,21 @@ cron_config_section() {   # <file> <exact header, e.g. '[template:foo]'>
     ' "$file" 2>/dev/null
 }
 
-ensure_cron_config() {   # <file> [check_new_template_collision=0]
+# A config written before the profile split has prune_schedule INSIDE
+# standard_*, so its [dataset:] sections prune themselves flat, per tier. This
+# is read off the INSTALLED file, never from the profile -- which is why it can
+# be answered before deciding whether the profile is needed at all
+# (REV-20260810-090).
+detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
+    PROFILE_GFS=1
+    if grep -q "^\[template:standard_hourly\]" "$1" 2>/dev/null; then
+        if sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$1" | grep -q "prune_schedule"; then
+            PROFILE_GFS=0
+        fi
+    fi
+}
+
+ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profile=1]
     local file="$1"
     # REV-20260809-088 F1: the collision check below must fire ONLY at the
     # moment a genuinely NEW relationship is being created and is about to
@@ -649,6 +663,16 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0]
     # re-validating it against whatever the profile currently says. Callers
     # that are not creating a new relationship must pass nothing (or 0) here.
     local check_new_template_collision="${2:-0}"
+    # REV-20260810-090 F1/F2. The profile is a CREATE-time input, so needing it
+    # is a property of the operation, not of this function. An ordinary
+    # reactivation that generates nothing passes 0 and never loads a profile:
+    # under the one-way handoff an installed CONFIG must keep working after the
+    # profile it was created from is renamed, removed or edited into something
+    # that no longer validates. Callers that genuinely create policy
+    # (setup-server, migrate-profile, a first activation, an activation that
+    # must generate a section) pass 1, which is also the default -- a caller
+    # that has not thought about it gets the old, safe behaviour.
+    local needs_profile="${3:-1}"
     if [ ! -e "$file" ]; then
         # Found live on pve2, 2026-08-01. That host's crontab held 14 production
         # jobs whose '# Source:' named a config under a directory that had since
@@ -680,19 +704,12 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0]
         } > "$file" || die "could not create $file"
         log "created new cron config $file"
     fi
-    # A config written before the profile split has prune_schedule INSIDE
-    # standard_*, so its [dataset:] sections prune themselves flat, per tier.
-    # Adding a GFS [prune:] section on top of that would prune the same
-    # snapshots twice on the same schedule -- the race gen-cron.sh's own docs
-    # warn about. Templates already present are never rewritten (that is what
-    # makes this function safe to re-run), so such a host keeps flat retention
-    # until someone migrates it deliberately.
-    PROFILE_GFS=1
-    if grep -q "^\[template:standard_hourly\]" "$file" 2>/dev/null; then
-        if sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$file" | grep -q "prune_schedule"; then
-            PROFILE_GFS=0
-        fi
-    fi
+    # Adding a GFS [prune:] section on top of a pre-GFS config would prune the
+    # same snapshots twice on the same schedule -- the race gen-cron.sh's own
+    # docs warn about. Templates already present are never rewritten (that is
+    # what makes this function safe to re-run), so such a host keeps flat
+    # retention until someone migrates it deliberately.
+    detect_profile_gfs "$file"
 
     # Slice B1 / owner option 3: the pre-GFS shape is FROZEN, not reinterpreted.
     #
@@ -711,6 +728,14 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0]
         die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
     fi
 
+    # REV-20260810-090 F2: the whole template block below is additive -- it
+    # appends any profile template the config does not already carry. That is
+    # right when policy is genuinely being created, and wrong on an endpoint
+    # refresh: an operator who deliberately removed a generated template they
+    # no longer need must not have it silently restored as a side effect of
+    # maintenance. The collision flag only decided whether a PRESENT name was
+    # compared; it never decided whether an ABSENT one was written.
+    if [ "$needs_profile" -eq 1 ]; then
     load_active_profile
 
     # Name by name, exactly as before (REV-20260809-079 F2): what suppresses an
@@ -758,6 +783,7 @@ Resolve by hand: give the new relationship's profile a different template identi
         added="$added $t"
     done
     [ -n "$added" ] && log "added missing profile template(s) to $file:$added"
+    fi
 
     # ENROLMENT-AGREED-2026-08-02 U6 / resolved question 2: every reserved
     # prefix this estate's own scripts write ("__replicate_" from pvesr,
@@ -1200,14 +1226,80 @@ update_section_field() {   # <file> <exact header> <field> <new value>
     mv_preserving_mode "$tmp" "$file"
 }
 
+# Which of this relationship's sections must be GENERATED, and therefore whether
+# this activation needs a profile at all.
+#
+# REV-20260810-090. Deliberately computed WITHOUT consulting the profile: "does
+# this run need the profile" cannot be answered by a function that has already
+# loaded it. Everything here reads the installed config and the client record —
+# ownership markers, the peer's dataset list, and `PROFILE_GFS`, which
+# detect_profile_gfs() reads off the installed file, not off a profile.
+#
+# One implementation, two callers: cmd_activate_client() needs the answer BEFORE
+# ensure_cron_config() so it can say whether a profile is required, and
+# emit_client_sections() needs the same split to do the work. Two copies of this
+# rule drifting apart is exactly the failure this project has paid for before,
+# so there is only one.
+declare -a PLAN_REGEN_DS=() PLAN_REGEN_PATHS=() PLAN_KEEP_DS=()
+PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0
+client_section_plan() {   # <file> <client name> <is_new_relationship>
+    local file="$1" name="$2" is_new="$3" ds localpath
+    local sync_mode=0
+    [ "${PEER_SAVED_MODE:-}" = sync ] && sync_mode=1
+    PLAN_REGEN_DS=(); PLAN_REGEN_PATHS=(); PLAN_KEEP_DS=()
+    PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0
+
+    for ds in $PEER_SAVED_DATASETS; do
+        localpath=$(client_local_path "$ds")
+        if [ "$is_new" -eq 0 ] \
+           && section_owned_by "$file" "[dataset:$localpath]" "$name" "$localpath" \
+           && { [ "$sync_mode" -eq 0 ] || [ "${PROFILE_GFS:-1}" -ne 1 ] \
+                || section_owned_by "$file" "[prune:$ds]" "$name" "$ds"; }; then
+            # sync mode puts this client's [dataset:] and [prune:] at the SAME
+            # path, and preserving one means never calling
+            # remove_managed_sections on that path -- so the prune half would
+            # escape the ownership check entirely. Require both, or regenerate.
+            PLAN_KEEP_DS+=("$ds")
+        else
+            PLAN_REGEN_DS+=("$ds"); PLAN_REGEN_PATHS+=("$localpath")
+        fi
+    done
+
+    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+        if [ "$sync_mode" -eq 1 ]; then
+            local -a scopes=()
+            for ds in $PEER_SAVED_DATASETS; do scopes+=("$ds"); done
+            PLAN_PRUNE_SCOPE="${scopes[*]}"
+            [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && PLAN_PRUNE_NEEDS_GEN=1
+        else
+            # One recursive ladder over the client's whole subtree: a dataset
+            # newly in scope lands UNDER it without the section needing to
+            # change, so an already-owned ladder needs no regeneration even
+            # when some datasets do. LOAD_LABEL is peer_label "$PEER_HOST" --
+            # the pairing peer, not the endpoint address -- so set-endpoint
+            # does not move this path.
+            PLAN_PRUNE_SCOPE="$PEER_SAVED_TARGET/$LOAD_LABEL"
+            if [ "$is_new" -ne 0 ] \
+               || ! section_owned_by "$file" "[prune:$PLAN_PRUNE_SCOPE]" "$name" "$PLAN_PRUNE_SCOPE"; then
+                PLAN_PRUNE_NEEDS_GEN=1
+            fi
+        fi
+    fi
+
+    if [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] || [ "$PLAN_PRUNE_NEEDS_GEN" -eq 1 ]; then
+        PLAN_NEEDS_PROFILE=1
+    fi
+    return 0
+}
+
 emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local workfile="$1" name="$2" ds localpath
     local is_new_relationship="${3:-0}"
-    # The emitted sections REFERENCE the profile templates ensure_cron_config
-    # appends, so both read the same rendered profile. Extracted into one loader
-    # rather than two readers for the reason the comment above them already
-    # gives: activation and migration must not be able to drift.
-    load_active_profile
+    # The profile is loaded LAZILY, below, once the plan says something must
+    # actually be generated (REV-20260810-090 F1). The emitted sections
+    # REFERENCE the profile templates ensure_cron_config appends, so when it IS
+    # loaded both read the same rendered profile -- one loader, not two readers,
+    # so activation and migration cannot drift.
     # REV-20260802-033 U11: this comment, as the section's first content
     # line, is what lets remove_managed_sections tell a section IT wrote from
     # a hand-written one that coincidentally shares the same header text --
@@ -1252,22 +1344,19 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # them could therefore only ever write back the identical value, while
     # leaving them alone additionally preserves an operator edit -- so leaving
     # them is both semantically invariant and strictly safer.
+    client_section_plan "$workfile" "$name" "$is_new_relationship"
     local -a regen_ds=() regen_paths=() keep_ds=()
-    for ds in $PEER_SAVED_DATASETS; do
-        localpath=$(client_local_path "$ds")
-        if [ "$is_new_relationship" -eq 0 ] \
-           && section_owned_by "$workfile" "[dataset:$localpath]" "$name" "$localpath" \
-           && { [ "$sync_mode" -eq 0 ] || [ "${PROFILE_GFS:-1}" -ne 1 ] \
-                || section_owned_by "$workfile" "[prune:$ds]" "$name" "$ds"; }; then
-            # sync mode puts this client's [dataset:] and [prune:] at the SAME
-            # path, and preserving one means never calling
-            # remove_managed_sections on that path -- so the prune half would
-            # escape the ownership check entirely. Require both, or regenerate.
-            keep_ds+=("$ds")
-        else
-            regen_ds+=("$ds"); regen_paths+=("$localpath")
-        fi
-    done
+    regen_ds=(${PLAN_REGEN_DS[@]+"${PLAN_REGEN_DS[@]}"})
+    regen_paths=(${PLAN_REGEN_PATHS[@]+"${PLAN_REGEN_PATHS[@]}"})
+    keep_ds=(${PLAN_KEEP_DS[@]+"${PLAN_KEEP_DS[@]}"})
+    local prune_needs_gen="$PLAN_PRUNE_NEEDS_GEN"
+
+    # REV-20260810-090 F1: only now, and only if the plan says something must be
+    # written from it. A reactivation that preserves everything never touches the
+    # profile, so an installed CONFIG keeps working after the profile it was
+    # created from is renamed, removed, or edited into something that no longer
+    # validates -- which is what "CONFIG v4 is runtime truth" has to mean.
+    [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && load_active_profile
 
     # Remove-then-add for the regenerated set only: that is what makes a re-run
     # after an endpoint switch pick up the new host/port/alias for a dataset
@@ -1320,10 +1409,6 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # and those are exactly the paths remove_managed_sections cleared
             # above (same paths -- sync's local name IS the source name), so
             # no separate removal call is needed here.
-            local -a scopes=()
-            for ds in $PEER_SAVED_DATASETS; do
-                scopes+=("$ds")
-            done
             for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
                 {
                     echo
@@ -1335,7 +1420,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     echo "	notify       = ${name}-$(basename "$ds")"
                 } >> "$workfile" || return 1
             done
-            prune_scope="${scopes[*]}"
+            prune_scope="$PLAN_PRUNE_SCOPE"
         else
             # One ladder for the whole client. gfs_pattern is 'automated_'
             # rather than any tier's own narrower pattern, because the ladder
@@ -1350,9 +1435,8 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # dataset newly in scope lands under it without the section needing
             # to change. So on re-activation an already-owned ladder is left
             # untouched, not removed and re-derived from today's profile.
-            prune_scope="$PEER_SAVED_TARGET/$LOAD_LABEL"
-            if [ "$is_new_relationship" -ne 0 ] \
-               || ! section_owned_by "$workfile" "[prune:$prune_scope]" "$name" "$prune_scope"; then
+            prune_scope="$PLAN_PRUNE_SCOPE"
+            if [ "$prune_needs_gen" -eq 1 ]; then
                 remove_managed_sections "$workfile" "$name" "$prune_scope"
                 {
                     echo
@@ -2613,7 +2697,15 @@ cmd_activate_client() {
     # Both the PREVIEW and the install read this file as the collector account,
     # so it has to be readable before either runs -- not after the swap.
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
-    ensure_cron_config "$workfile" "$is_new_relationship"
+    # REV-20260810-090 F1/F2: decide whether this run needs a profile at all
+    # BEFORE ensure_cron_config, because ensure_cron_config is where the profile
+    # would otherwise be loaded and its templates appended. The plan is computed
+    # from the installed config and the client record only -- no profile is
+    # consulted to answer "is a profile required", which would be circular.
+    # PROFILE_GFS is read off the installed file first, for the same reason.
+    detect_profile_gfs "$workfile"
+    client_section_plan "$workfile" "$name" "$is_new_relationship"
+    ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
 
     # First activation generates the sections from the profile. A re-activation
     # (e.g. after set-endpoint) refreshes only the endpoint-owned fields inside

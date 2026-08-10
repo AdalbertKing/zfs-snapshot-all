@@ -112,7 +112,35 @@ against the reviewed base `8d0dc243…` → **328/333**, the five failures being
 exactly the new discriminating assertions. Response:
 `docs/internal/reviews/responses/REV-20260809-089.md`.
 
-Deferred and explicitly out of scope per the review: source-removal /
+**That was necessary but not sufficient — REV-20260810-090 (two further P1s).**
+REV-089 stopped the relationship-local section *body* from being regenerated,
+but `cmd_activate_client()` still reached `ensure_cron_config()`, which still
+called `load_active_profile` unconditionally (F1) and still appended any profile
+template the installed CONFIG did not carry (F2). So the handoff still had an
+availability dependency and an additive mutation path. My REV-089 evidence could
+not have caught either: section 49 drove `emit_client_sections()` directly and
+kept the profile present and valid throughout — the residual dependency sat in
+the caller I never crossed.
+
+Fixed by making the profile a **lazy** dependency gated at the additive boundary
+the review named, not by removing it:
+
+- `detect_profile_gfs()` extracted — the pre-GFS check always read the installed
+  file, never a profile, so it can be answered first;
+- `client_section_plan()` extracted — the preserve/regenerate split, now the
+  single implementation shared by `cmd_activate_client()` and
+  `emit_client_sections()`, reporting `PLAN_NEEDS_PROFILE`;
+- `ensure_cron_config()` takes `needs_profile` (default 1); `load_active_profile`
+  and the template-append loop both move inside it;
+- a reactivation that generates nothing never touches the profile; one that must
+  generate a section still loads it and still fails loudly there.
+
+Evidence: section 50, six assertions, all crossing the real
+`cmd_activate_client()` boundary — **339/339**; negative control against
+`c5f04ab0…` → **335/339**, the four failures being exactly the new assertions.
+Response: `docs/internal/reviews/responses/REV-20260810-090.md`.
+
+Deferred and explicitly out of scope per both reviews: source-removal /
 dataset-set reconciliation.
 
 ### Gate 3
