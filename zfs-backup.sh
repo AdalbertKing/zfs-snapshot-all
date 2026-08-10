@@ -166,7 +166,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh local-backup --source=DATASET --target=DATASET [--profile=NAME] [--config=FILE]  (LOCAL, plan/preview only)
+  zfs-backup.sh --source=DATASET --target=DATASET [--profile=NAME] [--config=FILE]  (LOCAL backup, plan/preview only; `local-backup ...` is an alias)
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
@@ -681,6 +681,21 @@ config_has_relationship_policy() {   # <file> -> 0 when something is already ins
     grep -qE '^\[(dataset|prune):' "$1" 2>/dev/null
 }
 
+# The pve2 fail-closed guard (found live 2026-08-01), extracted so both
+# ensure_cron_config and local-backup planning apply the SAME check rather than a
+# second, weaker one: never treat a MISSING config as a blank file to (re)create
+# when an installed crontab block still says it was generated from that path --
+# creating it would let the next --install replace live jobs with nothing.
+assert_config_not_claimed_if_missing() {   # <file> ; dies if a live block claims a missing file
+    [ -e "$1" ] && return 0
+    local claimed
+    claimed=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    [ -n "$claimed" ] || return 0
+    [ "$(normalize_cron_source "$claimed")" = "$(normalize_cron_source "$1")" ] || return 0
+    local jobs; jobs=$(crontab_for_target 2>/dev/null | grep -cE '^[0-9*]')
+    die "refusing to create $1: the installed crontab block says it was generated FROM that file, and it is missing. Creating it would produce a config describing no jobs at all, and the next --install would replace $jobs live cron line(s) with nothing. Find or rebuild the real config first (the installed block is still the record of what should be in it: crontab -l), then re-run. Nothing has been changed."
+}
+
 ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profile=1] [global_policy_mode=auto]
     local file="$1"
     # REV-20260809-088 F1: the collision check below must fire ONLY at the
@@ -729,13 +744,9 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
         #
         # So: never create the file the installed block claims to come from.
         # Whoever meets this has a real config to find or rebuild, and telling
-        # them that is the only useful thing to do.
-        local claimed
-        claimed=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
-        if [ -n "$claimed" ] && [ "$(normalize_cron_source "$claimed")" = "$(normalize_cron_source "$file")" ]; then
-            local jobs; jobs=$(crontab_for_target 2>/dev/null | grep -cE '^[0-9*]')
-            die "refusing to create $file: the installed crontab block says it was generated FROM that file, and it is missing. Creating it would produce a config describing no jobs at all, and the next --install would replace $jobs live cron line(s) with nothing. Find or rebuild the real config first (the installed block is still the record of what should be in it: crontab -l), then re-run. Nothing has been changed."
-        fi
+        # them that is the only useful thing to do. (Shared guard, also used by
+        # local-backup planning.)
+        assert_config_not_claimed_if_missing "$file"
         mkdir -p "$(dirname "$file")" || die "could not create $(dirname "$file")"
         {
             echo "[defaults]"
@@ -1947,14 +1958,17 @@ cmd_setup_server() {
 # ------------------------------------------------------------------------------
 # Phase 5 slice 1: high-level LOCAL backup, planning/preview only.
 #
-#   zfs-backup.sh local-backup --source=rpool/data --target=hdd/backups
+#   zfs-backup.sh --source=rpool/data --target=hdd/backups     (bare, canonical)
+#   zfs-backup.sh local-backup --source=... --target=...       (alias)
 #
 # One coherent local workflow -- distinct from add-client/activate-client, which
-# pair two hosts for a remote PULL. It validates the source/target relationship,
-# chooses a preset, generates the candidate CONFIG v4 and shows the config + cron
-# it WOULD install. This slice stops before install (read-only planning first,
-# the same shape as the planned restore --plan); the transactional install lands
-# in a later slice, so no crontab can be touched here. See
+# pair two hosts for a remote PULL. It PROVES the explicit source exists on local
+# ZFS (REV-097 F1), chooses a preset, composes the candidate CONFIG v4
+# ADDITIVELY over the installed target config -- preserving existing jobs and
+# refusing on overlap (REV-097 F2) -- and shows the full config + cron it WOULD
+# install. This slice stops before install (read-only planning first, the same
+# shape as the planned restore --plan); the transactional install lands in a
+# later slice, so no crontab can be touched here. See
 # docs/discussions/PHASE5-LOCAL-BACKUP-DESIGN-2026-08-10.md.
 
 # local_backup_overlap SRC TGT -> rc 0 (overlap: REFUSE) when TGT and SRC are
@@ -1969,6 +1983,24 @@ local_backup_overlap() {
 }
 # local_backup_same_pool SRC TGT -> rc 0 when the leading pool component matches.
 local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
+
+# config_section_overlap FILE PATH... -> prints one line per existing
+# [dataset:]/[prune:] section in FILE whose scope overlaps a requested PATH.
+# path_overlaps is the same containment test the pull coverage guard uses. Empty
+# output means the requested job is disjoint from every job already in the file.
+config_section_overlap() {   # <file> <path>...
+    local file="$1"; shift
+    [ -f "$file" ] || return 0
+    local hdr owned req
+    while IFS= read -r hdr; do
+        owned="${hdr#\[}"; owned="${owned%\]}"; owned="${owned#*:}"
+        for req in "$@"; do
+            path_overlaps "$owned" "$req" \
+                && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$owned" "$req"
+        done
+    done < <(grep -oE '^\[(dataset|prune):[^]]+\]' "$file")
+    return 0
+}
 
 cmd_local_backup() {
     local source="" target="" profile="default" config=""
@@ -1996,6 +2028,14 @@ cmd_local_backup() {
         die "local-backup: --target='$target' overlaps --source='$source' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up. Pick a target outside the source subtree."
     fi
 
+    # REV-20260810-097 F1: an explicit source is authoritative WHAT and must be
+    # PROVEN to exist on local ZFS before anything is planned. A typo is a missing
+    # source, and the owner contract (EXPLICIT-SOURCE-BEATS-DISCOVERY) is: any
+    # missing explicit source REFUSES the whole operation -- never reinterpreted
+    # as discovery, empty, or a fallback. Read-only; no install.
+    zfs list -H -o name -- "$source" >/dev/null 2>&1 \
+        || die "local-backup: source '$source' does not exist on this host (zfs list found nothing). An explicit source must exist -- refusing the whole operation, no fallback, no partial plan."
+
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf}"
 
@@ -2005,15 +2045,41 @@ cmd_local_backup() {
     PROFILE_ACTIVE="$profile"
     load_active_profile
 
-    # Build the candidate LOCAL config in a working copy -- nothing real is read
-    # or written. dst=<target> (no ':') is snapsend.sh's local-to-local branch.
-    # The [dataset:]/[prune:] shape mirrors emit_client_sections' backup-mode
-    # ladder, with dst= where the pull path writes src=.
+    # REV-20260810-097 F2: the candidate is the ACTUAL ADDITIVE result over the
+    # installed target CONFIG, not a fresh file. Copy the existing config (so the
+    # preview shows old jobs A alongside new job B), or -- if it is missing --
+    # apply the shared fail-closed guard before inventing one. ensure_cron_config
+    # then adds the profile templates/floors idempotently (the same primitive
+    # activate-client uses), so "add B, do not mutate A" is provable and template
+    # reuse/collision and global [excluded:] interactions are exercised against
+    # the real installed file.
     local marker="# managed-by: zfs-backup.sh local-backup source=$source"
     local cand; cand=$(mktemp) || die "mktemp failed"
+    if [ -f "$config" ]; then
+        cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
+    else
+        assert_config_not_claimed_if_missing "$config"
+        printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
+            || { rm -f "$cand"; die "could not create the candidate config"; }
+    fi
+    # Idempotent: templates already present are never rewritten; a pre-GFS config
+    # is REFUSED here rather than handed a second, racing ladder (REV-091).
+    ensure_cron_config "$cand" 1 1
+
+    # Refuse a job whose source or target overlaps a section already installed --
+    # "add B, do not mutate A" (Gate 2). Nothing is written on refusal.
+    local conflict; conflict="$(config_section_overlap "$cand" "$source" "$target")"
+    if [ -n "$conflict" ]; then
+        rm -f "$cand"
+        die "local-backup: a job for source '$source' / target '$target' would overlap coverage already in $config:$conflict
+Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+    fi
+
+    # Append the additive local sections. dst=<target> (no ':') is snapsend.sh's
+    # local-to-local branch; the shape mirrors emit_client_sections' backup-mode
+    # ladder with dst= where the pull path writes src=.
     {
-        printf '[defaults]\n\thost_label = %s\n\n' "$COLLECTOR_LABEL"
-        cat "$PROFILE_TPL_FILE"; printf '\n'
+        echo
         echo "[dataset:$source]"
         echo "	$marker"
         profile_emit "$PROFILE_DS_FILE"
@@ -2027,11 +2093,11 @@ cmd_local_backup() {
             echo "	recursive    = yes"
             echo "	notify       = local-$(basename "$source")"
         fi
-    } > "$cand" || { rm -f "$cand"; die "could not write the candidate config"; }
+    } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
 
     if ! bash "$GENCRON" -c "$cand" >/dev/null 2>"$cand.err"; then
         warn "$(cat "$cand.err" 2>/dev/null)"; rm -f "$cand" "$cand.err"
-        die "the candidate config was rejected by gen-cron.sh (see above) -- this is a local-backup bug, please report it"
+        die "the additive candidate config was rejected by gen-cron.sh (see above) -- refusing; $config was NOT touched"
     fi
     rm -f "$cand.err"
 
@@ -2043,12 +2109,12 @@ cmd_local_backup() {
         echo "  Uwaga:            zrodlo i cel dziela pule '${source%%/*}' -- awaria puli dotknie oba kopie (to fakt, nie zakaz)"
     fi
     echo "  Preset:           $profile"
-    echo "  Config docelowy:  $config"
+    echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
     echo
-    echo "--- kandydat CONFIG v4 ---"
+    echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
     cat "$cand"
     echo
-    echo "--- wygenerowany blok crona (gen-cron.sh -c) ---"
+    echo "--- wygenerowany blok crona (gen-cron.sh -c, pelny) ---"
     bash "$GENCRON" -c "$cand"
     echo
     echo "To jest wylacznie plan. Instalacja transakcyjna (seed + atomowy zapis"
@@ -4487,6 +4553,11 @@ cmd_remove_client() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         setup-server)     shift; cmd_setup_server "$@" ;;
+        # REV-20260810-097 F3: the canonical public LOCAL entrypoint is the bare
+        # high-level form `zfs-backup.sh --source=X --target=Y` (ACTIVE-WORK-PLAN
+        # Phase 5). `local-backup` stays as an internal alias reaching the same
+        # logic, but an operator is never required to learn it.
+        --source=*|--target=*) cmd_local_backup "$@" ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;

@@ -409,6 +409,17 @@ Keep the already-agreed rules:
 
 Design + slice plan: `docs/discussions/PHASE5-LOCAL-BACKUP-DESIGN-2026-08-10.md`.
 
+**Revised per REV-20260810-097** (3 findings, all test-only-facing, no defect
+survived into behaviour once fixed): F1 — an explicit `--source` is now proven to
+exist on local ZFS before planning (missing = hard refuse, no fallback), per the
+EXPLICIT-SOURCE contract; F2 — the candidate is composed ADDITIVELY over the
+installed target CONFIG (existing jobs preserved, overlap refuses, missing-but-
+claimed config fail-closed via the guard shared with `ensure_cron_config`), so
+Gate 2's "add B, do not mutate A" holds for the shared-CONFIG model; F3 — the
+canonical public entrypoint is the bare `zfs-backup.sh --source/--target` form,
+with `local-backup` kept as an alias. `test/localbackup` 19/19; zfsbackup 363/363
+after the `ensure_cron_config` guard extraction.
+
 `zfs-backup.sh local-backup --source=X --target=Y [--profile=N] [--config=F]`
 validates the source/target relationship, chooses a preset, renders the
 candidate CONFIG v4 + cron through the real `gen-cron.sh`, and **stops before
