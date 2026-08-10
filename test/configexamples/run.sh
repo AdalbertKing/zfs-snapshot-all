@@ -53,6 +53,30 @@ assert_absent() {
 # count_matches HAYSTACK NEEDLE -> prints the number of matching lines.
 count_matches() { printf '%s\n' "$1" | grep -cE -- "$2"; }
 
+# The registry of examples that carry the layer-2 semantic assertions below.
+# The layer-3 meta-guard holds this list EXACTLY equal to docs/examples/*.conf,
+# so adding a runnable example without registering its semantics, or leaving a
+# registry entry whose file was deleted/renamed, is a FAIL rather than a silent
+# gap (REV-20260810-096). When you add an example and its assertions, add its
+# basename here too.
+COVERED="independent-tiers selective-quiesce short-local-long-store manual-prune"
+
+# coverage_mismatches <examples-dir> <registry> -> one line per offender:
+#   uncovered:<base>  a *.conf with no registry entry (no semantic assertions)
+#   stale:<base>      a registry entry with no matching *.conf
+# Empty output means semantic coverage is exactly total over the example set.
+coverage_mismatches() {
+    local dir="$1" reg="$2" f base
+    shopt -s nullglob
+    for f in "$dir"/*.conf; do
+        base="$(basename "$f" .conf)"
+        case " $reg " in *" $base "*) ;; *) echo "uncovered:$base" ;; esac
+    done
+    for base in $reg; do
+        [ -e "$dir/$base.conf" ] || echo "stale:$base"
+    done
+}
+
 # ---- layer 1: every example renders cleanly ----
 shopt -s nullglob
 found=0
@@ -119,6 +143,41 @@ if printf '%s\n' "$rmut" | grep -qE -- 'delsnaps\.sh "tank/vm-100-disk-0" "autom
 else
     echo "PASS negctl/keep-drift-detected (mutated example renders -H99, so the -H24 assertion would fail as intended)"
     pass=$((pass+1))
+fi
+
+# ---- layer 3: semantic coverage is TOTAL over the runnable example set -------
+# (REV-20260810-096) Layer 1 only requires a new example to PARSE; without this,
+# adding docs/examples/new.conf with no layer-2 assertions would pass silently,
+# leaving coverage dependent on reviewer memory. This meta-guard makes the
+# registry above exactly equal the file set.
+mm="$(coverage_mismatches "$EXAMPLES" "$COVERED")"
+if [ -z "$mm" ]; then
+    echo "PASS coverage/total (every docs/examples/*.conf has registered semantic assertions)"; pass=$((pass+1))
+else
+    echo "FAIL coverage/total -- registry and docs/examples/*.conf disagree:"; printf '  %s\n' $mm
+    echo "  (add the basename to COVERED with its layer-2 assertions, or remove the stale entry)"
+    fail=$((fail+1))
+fi
+
+# Negative control A -- a NEW unregistered example must be rejected. Proven on a
+# throwaway fixture directory so the real repository tree is never mutated during
+# the committed run (REV-096 point 4).
+fixdir="$(mktemp -d)"; trap 'rm -f "$tmp"; rm -rf "$fixdir"' EXIT
+for base in $COVERED; do : > "$fixdir/$base.conf"; done   # basenames are all coverage_mismatches inspects
+: > "$fixdir/new-unregistered.conf"
+if coverage_mismatches "$fixdir" "$COVERED" | grep -qxF 'uncovered:new-unregistered'; then
+    echo "PASS coverage/negctl-uncovered (a new example with no registry entry is flagged)"; pass=$((pass+1))
+else
+    echo "FAIL coverage/negctl-uncovered (an unregistered example was NOT flagged -- guard is inert)"; fail=$((fail+1))
+fi
+
+# Negative control B -- a registry entry whose file was deleted/renamed must be
+# flagged too, so stale assertions cannot silently detach. Augment the registry
+# rather than deleting a real file: no tree mutation.
+if coverage_mismatches "$EXAMPLES" "$COVERED ghost-renamed" | grep -qxF 'stale:ghost-renamed'; then
+    echo "PASS coverage/negctl-stale (a registry entry with no file is flagged)"; pass=$((pass+1))
+else
+    echo "FAIL coverage/negctl-stale (a stale registry entry was NOT flagged -- guard is inert)"; fail=$((fail+1))
 fi
 
 echo "----------------------------------------"
