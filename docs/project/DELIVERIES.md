@@ -18,4 +18,6 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: 20f333d9d96de3b2e814d6cd87a86cfe515d3568 REV-20260809-088 -->
 <!-- delivered: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 Gate 3 closure question and Phase 3.5 planning/design note (docs only) -->
 <!-- no-review-required: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 -->
+<!-- delivered: 3495ec4d8706b22ae8f3cfdd199752285245213d Phase 3.5: resolve_field_or_omit() -- prefix/gfs_pattern omitted-vs-blank distinction, gencron 67/67, dependency cascade clean -->
+
 
