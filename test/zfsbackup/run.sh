@@ -5206,6 +5206,163 @@ fi
     && ok "apply_client_profile_choice: a pre-existing client record with no PROFILE field is a no-op" \
     || bad "apply_client_profile_choice: a pre-existing client record with no PROFILE field is a no-op" "PROFILE_ACTIVE changed with no chosen profile"
 
+# --- 54. REV-20260810-095: the stored profile drives the REAL first activation -
+#
+# Section 53 proves add-client validates/stores the choice and unit-tests
+# apply_client_profile_choice() directly. Neither crosses cmd_activate_client(),
+# so neither proves the property Gate 4 exposes to the operator: a CREATE-time
+# --profile choice, stored on the record, is what actually sources the candidate
+# CONFIG on a real first activation. REV-089/090 already showed helper-level
+# green while the caller still mishandled the profile -- so the discriminating
+# test has to run the caller.
+#
+# Same fixture/stub strategy as section 50 (peerstate + keys + no-such-server +
+# a $SNAPGET stub that copies the working copy out), with one difference that
+# makes it safe on a host that HAS crontab: the stub captures the workfile and
+# then exits non-zero, so cmd_activate_client dies at the "dry-run failed --
+# not installing" gate, BEFORE the grant check and atomic_replace_and_install.
+# The candidate CONFIG is fully rendered by then; nothing real is touched.
+#
+# The environment forces PROFILE_ACTIVE=default. The ONLY path by which the
+# alternate profile can reach the rendered config is the record's PROFILE field
+# threaded through apply_client_profile_choice() on first activation -- exactly
+# the wiring under test.
+PC="$WORK/profilechoice"
+mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" \
+         "$PC/root/default" "$PC/root/alt"
+for p in default alt; do
+    cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
+       "$REPO/profiles/default/prune.inc" "$PC/root/$p/"
+done
+# ALT's only difference is an observable, safe-to-render marker: the hourly
+# send cadence. If the candidate carries minute 7 it came from ALT's content,
+# not just ALT's namespace string.
+sed -i 's/^\tsend_schedule  = 1 \* \* \* \*/\tsend_schedule  = 7 * * * */' "$PC/root/alt/templates.conf"
+
+for h in 10.7.7.8 10.7.7.9; do
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$PC/keys/${h}_known_hosts"
+done
+cat > "$PC/peerstate/10.7.7.8.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+printf '[defaults]\n\thost_label = pctest\n' > "$PC/dir/jobs.conf"
+cat > "$PC/snapget-capture.sh" <<EOF
+#!/usr/bin/env bash
+cp -f "$PC/dir"/.zfsbackup-work.* "$PC/cap/workfile" 2>/dev/null
+exit 1
+EOF
+chmod +x "$PC/snapget-capture.sh"
+
+pc_client() {   # <name> <PROFILE-line-or-empty>
+    { printf 'CLIENT_NAME=%s\nPEER_HOST=10.7.7.8\nSTATE=endpoint_verified\n' "$1"
+      printf 'ACTIVE_ENDPOINT=lan\nENDPOINT_LAN_HOST=10.7.7.9\nENDPOINT_LAN_PORT=22\n'
+      [ -n "$2" ] && printf '%s\n' "$2"
+      printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$PC"
+    } > "$PC/clients/$1.conf"
+}
+pc_client apalt "PROFILE=alt"
+pc_client apdef "PROFILE=default"
+
+run_pc() {   # <client> <neuter 0|1> -> leaves the captured candidate in $PC/cap/workfile
+    rm -f "$PC/cap/workfile" "$PC/dir"/.zfsbackup-work.*
+    ( if [ "$2" = 1 ]; then apply_client_profile_choice() { :; }; fi
+      CLIENTS_DIR="$PC/clients" PEER_STATE_DIR="$PC/peerstate" PEER_KEY_DIR="$PC/keys" \
+      SERVER_CONF="$PC/no-such-server.conf" SNAPGET="$PC/snapget-capture.sh" \
+      PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_activate_client "$1" --yes ) >/dev/null 2>&1
+}
+
+# 1. First activation with PROFILE=alt: the candidate CONFIG is sourced from ALT.
+run_pc apalt 0
+if [ -f "$PC/cap/workfile" ] \
+        && grep -qE '^\[template:profile__alt__standard_hourly\]' "$PC/cap/workfile" \
+        && grep -qE 'send_schedule[[:space:]]+= 7 \* \* \* \*' "$PC/cap/workfile" \
+        && grep -qE 'use_template = profile__alt__' "$PC/cap/workfile" \
+        && ! grep -qE 'profile__default__' "$PC/cap/workfile"; then
+    ok "95: a stored PROFILE=alt drives the real first activation's candidate CONFIG"
+else
+    bad "95: a stored PROFILE=alt drives the real first activation's candidate CONFIG" \
+        "$([ -f "$PC/cap/workfile" ] && cat "$PC/cap/workfile" || echo '(no candidate captured)')"
+fi
+
+# ...and the ALT semantics reach the rendered cron through the REAL gen-cron.sh,
+# not just the config text (REV-20260809-082 V1: "the text looks right" is the
+# appearance this project keeps mistaking for the property). Render into a
+# variable first: this suite runs under pipefail, so `gen-cron | grep -q` would
+# report the whole pipeline as failed (gen-cron takes SIGPIPE the moment grep -q
+# short-circuits on a match), which is the opposite of what the grep found.
+pc_rendered="$(bash "$REPO/gen-cron.sh" -c "$PC/cap/workfile" 2>/dev/null)"
+if [ -f "$PC/cap/workfile" ] && printf '%s\n' "$pc_rendered" | grep -qE '^7 \* \* \* \* '; then
+    ok "95: the ALT send cadence reaches the rendered cron via the real gen-cron.sh"
+else
+    bad "95: the ALT send cadence reaches the rendered cron via the real gen-cron.sh" \
+        "$(printf '%s\n' "$pc_rendered" | grep -E 'snapget|snapsend|^[0-9]' | head -3)"
+fi
+
+# 2. The omitted-choice path (add-client stores PROFILE=default) still resolves
+# to the existing default semantics -- minute 1, default namespace, no ALT leak.
+run_pc apdef 0
+if [ -f "$PC/cap/workfile" ] \
+        && grep -qE '^\[template:profile__default__standard_hourly\]' "$PC/cap/workfile" \
+        && grep -qE 'send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
+        && ! grep -qE 'profile__alt__|= 7 \* \* \* \*' "$PC/cap/workfile"; then
+    ok "95: the default (omitted-choice) profile still yields the default semantics"
+else
+    bad "95: the default (omitted-choice) profile still yields the default semantics" \
+        "$([ -f "$PC/cap/workfile" ] && cat "$PC/cap/workfile" || echo '(no candidate captured)')"
+fi
+
+# 3. Negative control: remove the wiring (apply_client_profile_choice neutered).
+# Same PROFILE=alt record, same run -- but with the setter bypassed the stored
+# choice must have NO effect, so the candidate falls back to the environment's
+# default profile. If this "control" still produced ALT, the assertions above
+# would be proving nothing.
+run_pc apalt 1
+if [ -f "$PC/cap/workfile" ] \
+        && grep -qE 'profile__default__' "$PC/cap/workfile" \
+        && ! grep -qE 'profile__alt__|= 7 \* \* \* \*' "$PC/cap/workfile"; then
+    ok "95 control: with the wiring bypassed, the stored PROFILE has no effect"
+else
+    bad "95 control: with the wiring bypassed, the stored PROFILE has no effect" \
+        "the neutered run still carried ALT -- the positive assertions are not discriminating: $([ -f "$PC/cap/workfile" ] && grep -c profile__alt__ "$PC/cap/workfile")"
+fi
+
+# 4. Re-activation must still ignore the stored profile even now that the caller
+# reads it -- the one-way handoff REV-089 drew. A STATE=active record with
+# PROFILE=alt, reactivated, must NOT pull ALT policy in.
+pc_client apre "PROFILE=alt"
+sed -i 's/^STATE=endpoint_verified$/STATE=active/' "$PC/clients/apre.conf"
+# reactivation needs the section already owned/installed; point it at a config
+# that carries a default-profile section this client owns.
+PRE="$PC/dir/jobs-apre.conf"
+printf '[defaults]\n\thost_label = pctest\n' > "$PRE"
+( PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
+  PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  ensure_cron_config "$PRE" 1 1 >/dev/null 2>&1
+  PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
+  PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  emit_client_sections "$PRE" apre 1 ) >/dev/null 2>&1
+sed -i "s#^CRON_CONFIG=.*#CRON_CONFIG=$PRE#; s#^ENDPOINT_LAN_HOST=.*#ENDPOINT_LAN_HOST=10.7.7.9#" "$PC/clients/apre.conf"
+printf 'MANAGED_DATASETS=tank/backups/10.7.7.8/rpool/data\nMANAGED_PRUNE_SCOPE=tank/backups/10.7.7.8\n' >> "$PC/clients/apre.conf"
+rm -f "$PC/cap/workfile" "$PC/dir"/.zfsbackup-work.*
+( CLIENTS_DIR="$PC/clients" PEER_STATE_DIR="$PC/peerstate" PEER_KEY_DIR="$PC/keys" \
+  SERVER_CONF="$PC/no-such-server.conf" SNAPGET="$PC/snapget-capture.sh" \
+  PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
+  cmd_activate_client apre --yes ) >/dev/null 2>&1
+if [ -f "$PC/cap/workfile" ] && ! grep -qE 'profile__alt__|= 7 \* \* \* \*' "$PC/cap/workfile"; then
+    ok "95: re-activation still ignores the stored profile (one-way handoff intact)"
+else
+    bad "95: re-activation still ignores the stored profile (one-way handoff intact)" \
+        "$([ -f "$PC/cap/workfile" ] && grep -c profile__alt__ "$PC/cap/workfile" || echo '(no candidate captured)')"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
