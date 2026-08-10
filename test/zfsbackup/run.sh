@@ -5028,6 +5028,110 @@ else
     bad "91 F2: a policy-generating call on a pre-GFS config still refuses" "rc=$rc out=$(printf '%s' "$out" | tail -3)"
 fi
 
+# --- 52. REV-20260810-092: additive CREATE must not mutate installed global policy
+#
+# [excluded:] is CONFIG-WIDE. gen-cron.sh resolves every one of them into a
+# single PROTECT_FLAGS fragment and pastes it onto EVERY generated prune line in
+# the file. So "append a missing reserved-prefix floor" is only additive while
+# nothing else is installed; into a populated CONFIG it silently rewrites the
+# effective prune command of relationships that were already there -- breaking
+# Gate 2's own invariant, "add one new independent relationship -> old
+# relationships unchanged".
+#
+# Section 51's positive guard proved a policy-creating call on a FRESH fixture
+# installs the floors. That cannot tell initial-config scaffolding apart from
+# forbidden shared-policy mutation, because it had no established task to
+# disturb. This section adds one.
+GX="$WORK/gate2additive"; mkdir -p "$GX/prof"
+cp "$REPO/profiles/default/templates.conf" "$GX/prof/templates.conf"
+cp "$REPO/profiles/default/prune.inc"      "$GX/prof/prune.inc"
+cp "$REPO/profiles/default/dataset.inc"    "$GX/prof/dataset.inc"
+GXC="$GX/shared.conf"
+
+emit_gx() {   # <client> <label> <host> -- a normal first activation into $GXC
+    ( PROFILE_ROOT="$GX" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL="$2" \
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST="$3" LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+      ensure_cron_config "$GXC" 1 1
+      PROFILE_ROOT="$GX" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL="$2" \
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST="$3" LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+      emit_client_sections "$GXC" "$1" 1 ) 2>&1
+}
+gx_prune_line() {   # <label> -> A's rendered delsnaps line, from the REAL generator
+    bash "$REPO/gen-cron.sh" -c "$GXC" 2>/dev/null | grep "delsnaps.sh" | grep -F "tank/backups/$1"
+}
+
+# STEP 1 -- relationship A created into a new shared CONFIG through the normal
+# path. A brand-new CONFIG legitimately gets the CONFIG-wide safety defaults.
+printf '[defaults]\n\thost_label = gxtest\n' > "$GXC"
+out=$(emit_gx cliA labelA 10.8.8.1); rc=$?
+if [ "$rc" -eq 0 ] && grep -qF "[excluded:vzdump]" "$GXC" && grep -qxF "[prune:tank/backups/labelA]" "$GXC"; then
+    ok "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults"
+else
+    bad "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults" "rc=$rc out=$out file=$(cat "$GXC")"
+fi
+
+# STEP 2 -- the administrator customizes the installed global policy, keeping
+# the CONFIG valid.
+awk '/^\[excluded:vzdump\]/{skip=1;next} skip&&/^\[/{skip=0} !skip' "$GXC" > "$GXC.tmp" && mv "$GXC.tmp" "$GXC"
+
+# STEP 3 -- record A's effective prune command as the REAL generator renders it.
+# The assertion is on the rendered command, not on the config text: PROTECT_FLAGS
+# is a generator-side concatenation, so config-level equality would not prove the
+# thing Gate 2 actually promises.
+a_before=$(gx_prune_line labelA)
+if [ -n "$a_before" ] && case "$a_before" in *"-P vzdump"*) false ;; *) true ;; esac; then
+    ok "92 step 3: with the floor removed, A's rendered prune line no longer carries it"
+else
+    bad "92 step 3: with the floor removed, A's rendered prune line no longer carries it" "a_before=$a_before"
+fi
+
+# STEP 4 -- a disjoint relationship B is created into the SAME populated CONFIG
+# through the normal first-activation path.
+out=$(emit_gx cliB labelB 10.8.8.2); rc=$?
+
+# STEP 6 -- B is added successfully under the existing global policy.
+if [ "$rc" -eq 0 ] && grep -qxF "[dataset:tank/backups/labelB/rpool/data]" "$GXC" \
+        && bash "$REPO/gen-cron.sh" -c "$GXC" >/dev/null 2>&1; then
+    ok "92 step 6: B is created successfully under the installed global policy"
+else
+    bad "92 step 6: B is created successfully under the installed global policy" "rc=$rc out=$(printf '%s' "$out" | tail -3)"
+fi
+
+# STEP 5 -- and A is untouched: the customized global state was not repaired,
+# and A's effective prune command is byte-identical.
+a_after=$(gx_prune_line labelA)
+if ! grep -qF "[excluded:vzdump]" "$GXC" && [ "$a_after" = "$a_before" ] && [ -n "$a_after" ]; then
+    ok "92 step 5: creating B neither restores the removed floor nor changes A's prune command"
+else
+    bad "92 step 5: creating B neither restores the removed floor nor changes A's prune command" \
+        "restored=$(grep -qF '[excluded:vzdump]' "$GXC" && echo YES || echo no)
+before=$a_before
+after =$a_after"
+fi
+
+# ...and the operator is told, rather than left to find out from a missing pvesr
+# snapshot. Inheriting the installed policy is correct; doing it silently is not.
+if case "$out" in *"inherits the CONFIG-wide protection policy exactly as installed"*) true ;; *) false ;; esac; then
+    ok "92 the additive CREATE says out loud which floors it is inheriting as absent"
+else
+    bad "92 the additive CREATE says out loud which floors it is inheriting as absent" "$(printf '%s' "$out" | tail -3)"
+fi
+
+# The explicit-migration escape hatch still lays global policy down deliberately:
+# migrate-profile is previewed and confirmed, and it is the one command that
+# INSTALLS the broad GFS ladder these floors exist to fence.
+( PROFILE_ROOT="$GX" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+  ensure_cron_config "$GXC" 0 1 always ) >/dev/null 2>&1
+if grep -qF "[excluded:vzdump]" "$GXC"; then
+    ok "92 an explicit migration may still install the CONFIG-wide floors"
+else
+    bad "92 an explicit migration may still install the CONFIG-wide floors" "$(grep -c '^\[excluded:' "$GXC") excluded section(s)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

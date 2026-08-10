@@ -651,7 +651,21 @@ detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
     fi
 }
 
-ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profile=1]
+# Does this CONFIG already carry relationship policy anyone could be affected by?
+#
+# REV-20260810-092. [excluded:] is CONFIG-WIDE: gen-cron.sh resolves every one of
+# them into a single PROTECT_FLAGS fragment and pastes it onto EVERY generated
+# prune line in the file. So "add a missing floor" is not additive scaffolding
+# once anything else is installed -- it silently rewrites the effective prune
+# command of relationships that were there first, which is precisely what Gate 2
+# forbids. A file with no [dataset:]/[prune:] section at all has no such
+# relationship to disturb, and that is the only state in which the standard
+# CONFIG-wide defaults may be laid down as a side effect.
+config_has_relationship_policy() {   # <file> -> 0 when something is already installed
+    grep -qE '^\[(dataset|prune):' "$1" 2>/dev/null
+}
+
+ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profile=1] [global_policy_mode=auto]
     local file="$1"
     # REV-20260809-088 F1: the collision check below must fire ONLY at the
     # moment a genuinely NEW relationship is being created and is about to
@@ -673,6 +687,15 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # must generate a section) pass 1, which is also the default -- a caller
     # that has not thought about it gets the old, safe behaviour.
     local needs_profile="${3:-1}"
+    # REV-20260810-092. 'auto' lays down the CONFIG-wide safety defaults only
+    # while the file carries no relationship policy at all -- initializing a new
+    # CONFIG, where there is nothing installed for them to change. 'always' is
+    # the explicit-migration escape hatch: migrate-profile is a previewed,
+    # confirmed transaction that shows the operator the exact config and cron
+    # diff before anything is installed, and it is also the one command that
+    # INSTALLS the broad GFS ladder these floors exist to fence, so it must not
+    # leave a legacy host with that ladder and no protection.
+    local global_policy_mode="${4:-auto}"
     if [ ! -e "$file" ]; then
         # Found live on pve2, 2026-08-01. That host's crontab held 14 production
         # jobs whose '# Source:' named a config under a directory that had since
@@ -817,8 +840,26 @@ Resolve by hand: give the new relationship's profile a different template identi
     # and endpoint maintenance is not the boundary at which it may be repaired
     # or normalized: an operator who deliberately removed one of these floors
     # must not find it silently restored by a set-endpoint follow-up.
+    #
+    # REV-20260810-092 F1: and only while the CONFIG carries no relationship
+    # policy yet, or the caller is an explicit migration. Adding a floor to a
+    # populated CONFIG is not additive -- PROTECT_FLAGS is global, so it rewrites
+    # the effective prune command of every relationship already installed, and
+    # "add one new independent relationship -> old relationships unchanged" is
+    # exactly the Gate 2 invariant that would break. An administrator who
+    # deliberately removed or narrowed one of these after CREATE keeps their
+    # decision; a new relationship simply inherits the global policy as it
+    # stands, the same policy every existing relationship is already running
+    # under.
     local prefix
+    local install_floors=0
     if [ "$needs_profile" -eq 1 ]; then
+        case "$global_policy_mode" in
+            always) install_floors=1 ;;
+            *)      config_has_relationship_policy "$file" || install_floors=1 ;;
+        esac
+    fi
+    if [ "$install_floors" -eq 1 ]; then
         for prefix in "__replicate_" "vzdump" "__migration__"; do
             grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
             {
@@ -828,6 +869,18 @@ Resolve by hand: give the new relationship's profile a different template identi
             } >> "$file" || die "could not append [excluded:$prefix] to $file"
             log "added missing reserved-prefix protection [excluded:$prefix] (keep=2) to $file"
         done
+    elif [ "$needs_profile" -eq 1 ]; then
+        # Inheriting the installed policy is the correct action, but doing it
+        # silently is not: the new relationship is about to get a prune sweep
+        # that runs WITHOUT a protection this estate normally carries, and the
+        # operator should learn that here rather than from a missing pvesr or
+        # vzdump snapshot later. A warning is neither a mutation nor a refusal,
+        # and activate-client shows its full proposal before installing.
+        local missing=""
+        for prefix in "__replicate_" "vzdump" "__migration__"; do
+            grep -qF "[excluded:$prefix]" "$file" 2>/dev/null || missing="$missing $prefix"
+        done
+        [ -n "$missing" ] && warn "$file has no [excluded:] floor for:$missing -- the new relationship inherits the CONFIG-wide protection policy exactly as installed, and it is NOT being repaired here (that would change the prune command of every relationship already in this file). If those floors are wanted, add them by hand, deliberately, in one edit that you can see affects everything."
     fi
     # Explicit: without it this function's exit status would be whatever the
     # last conditional happened to evaluate to -- the fail-open shape REV-084
@@ -2886,7 +2939,11 @@ cmd_migrate_profile() {
         remove_template_section "$workfile" "$t"
     done
     PROFILE_GFS=1
-    ensure_cron_config "$workfile"
+    # REV-20260810-092: 'always'. This is the explicit-migration boundary the
+    # review carves out -- a previewed, confirmed transaction that shows the
+    # exact config and cron diff first, and the one command that installs the
+    # broad GFS ladder the reserved-prefix floors exist to fence.
+    ensure_cron_config "$workfile" 0 1 always
 
     local f name migrated=0
     local -a managed=(); local prune_scope=""

@@ -63,6 +63,46 @@ Registered as an unreviewed direct-main delivery in `docs/project/DELIVERIES.md`
 
 Preset can **add new** but cannot mutate old. All required properties have implementer evidence above; gate closure is the reviewer's call.
 
+**REOPENED and re-answered — REV-20260810-092 (P1).** Found by the reviewer while
+verifying REV-091, and it is a genuine Gate 2 residual rather than a Phase 3 one:
+`ensure_cron_config()` appended any missing reserved-prefix `[excluded:]` section
+whenever `needs_profile=1`, including an additive CREATE into an
+already-populated CONFIG. `[excluded:]` is **not relationship-local** —
+`gen-cron.sh` resolves every one of them into a single `PROTECT_FLAGS` fragment
+and pastes it onto *every* generated prune line in the file — so adding one
+rewrites the effective prune command of relationships that were installed first.
+That is the invariant this gate exists for: *add one new independent relationship
+-> old relationships unchanged.*
+
+My REV-091 positive guard could not have caught it: it ran against a fixture
+holding only `[defaults]`, where "installs the floors" and "mutates shared
+policy" are indistinguishable because there was no established task to disturb.
+
+Implemented to the review's four bullets exactly:
+
+- a genuinely new CONFIG (no `[dataset:]`/`[prune:]` section at all) still gets
+  the CONFIG-wide safety defaults;
+- explicit migration may still lay them down — `migrate-profile` passes the new
+  `global_policy_mode=always`, being a previewed, confirmed transaction and the
+  one command that *installs* the broad GFS ladder these floors fence;
+- an additive CREATE into a populated CONFIG inherits the installed `[excluded:]`
+  state exactly and repairs nothing;
+- the "refuse rather than mutate" escape hatch is unreachable here and
+  deliberately not built: `[excluded:]` is uniform global policy, so a new
+  relationship under a missing floor is in exactly the state every existing
+  relationship is already in. The review's own proof step 6 requires B to be
+  created successfully in that state.
+
+One addition beyond the required minimum, flagged in the response for rejection:
+the declined-repair path *warns*, naming the absent floors. Inheriting installed
+policy is correct; doing it silently is not.
+
+Evidence: section 52, six assertions asserting on the **rendered `delsnaps.sh`
+command** rather than on config text (`PROTECT_FLAGS` is a generator-side
+concatenation, so section-level equality would not test what the gate promises)
+— **352/352**. Response:
+`docs/internal/reviews/responses/REV-20260810-092.md`.
+
 ---
 
 ## Phase 3 — decouple endpoint/reactivation from policy regeneration
