@@ -405,9 +405,32 @@ Keep the already-agreed rules:
 - same-pool target may be allowed with one factual preview note, not policy judgement;
 - decline/failed seed leaves retryable state and no production cron.
 
+### Status — slice 1 (planning/preview) implementer-complete, awaiting reviewer
+
+Design + slice plan: `docs/discussions/PHASE5-LOCAL-BACKUP-DESIGN-2026-08-10.md`.
+
+`zfs-backup.sh local-backup --source=X --target=Y [--profile=N] [--config=F]`
+validates the source/target relationship, chooses a preset, renders the
+candidate CONFIG v4 + cron through the real `gen-cron.sh`, and **stops before
+install** (read-only planning first, mirroring the planned `restore --plan`).
+Reuses `lib-profile.sh` rendering and `gen-cron.sh` as the config truth; adds no
+second renderer. Overlap refuses in both directions (target⊆source, source⊆target,
+equal); same-pool proceeds with one factual note, not a refusal; remote (`:`)
+refused (LOCAL only). `test/localbackup` 13/13, pure/text (no ZFS/network/crontab;
+a `crontab` stub proves nothing is installed). Registered as an unreviewed
+direct-main delivery in `docs/project/DELIVERIES.md`.
+
+Deferred to slice 2 (named in the design note): the transactional install
+(workfile → `gen-cron.sh -c` validate → preview → confirm →
+`atomic_replace_and_install` with read-back), ownership markers so `local-backup`
+and `activate-client` never fight over one CONFIG, and live-host verification.
+Slice 3: target discovery/proposal when omitted.
+
 ### Gate 5
 
-Basic local backup deployment is one coherent operator workflow.
+Basic local backup deployment is one coherent operator workflow. Reached when
+slice 2's transactional install lands and is live-verified; slice 1 is the
+read-only planning half.
 
 ---
 

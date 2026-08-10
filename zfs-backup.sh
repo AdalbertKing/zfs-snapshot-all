@@ -166,6 +166,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
+  zfs-backup.sh local-backup --source=DATASET --target=DATASET [--profile=NAME] [--config=FILE]  (LOCAL, plan/preview only)
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
@@ -1941,6 +1942,119 @@ cmd_setup_server() {
     assert_config_readable_by_target "$config"
 
     log "server ready: target=$target, cron config=$config"
+}
+
+# ------------------------------------------------------------------------------
+# Phase 5 slice 1: high-level LOCAL backup, planning/preview only.
+#
+#   zfs-backup.sh local-backup --source=rpool/data --target=hdd/backups
+#
+# One coherent local workflow -- distinct from add-client/activate-client, which
+# pair two hosts for a remote PULL. It validates the source/target relationship,
+# chooses a preset, generates the candidate CONFIG v4 and shows the config + cron
+# it WOULD install. This slice stops before install (read-only planning first,
+# the same shape as the planned restore --plan); the transactional install lands
+# in a later slice, so no crontab can be touched here. See
+# docs/discussions/PHASE5-LOCAL-BACKUP-DESIGN-2026-08-10.md.
+
+# local_backup_overlap SRC TGT -> rc 0 (overlap: REFUSE) when TGT and SRC are
+# equal or one is nested in the other. Pure string test with trailing-slash
+# boundaries so rpool/data does not spuriously match rpool/database.
+local_backup_overlap() {
+    local s="$1" t="$2"
+    [ "$s" = "$t" ] && return 0
+    case "$t/" in "$s/"*) return 0 ;; esac
+    case "$s/" in "$t/"*) return 0 ;; esac
+    return 1
+}
+# local_backup_same_pool SRC TGT -> rc 0 when the leading pool component matches.
+local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
+
+cmd_local_backup() {
+    local source="" target="" profile="default" config=""
+    for a in "$@"; do
+        case "$a" in
+            --source=*)  source="${a#*=}" ;;
+            --target=*)  target="${a#*=}" ;;
+            --profile=*) profile="${a#*=}" ;;
+            --config=*)  config="${a#*=}" ;;
+            --plan)      ;;   # accepted and implied; the install verb is a later slice
+            *) die "local-backup: unknown option $a" ;;
+        esac
+    done
+    [ -n "$source" ] || die "local-backup: --source=<dataset> is required (the dataset to back up)"
+    [ -n "$target" ] || die "local-backup: --target=<dataset> is required (where the backup lands)"
+    # Data, not code: this value ends up in a config gen-cron.sh reads, so reject
+    # anything that could carry shell or section syntax. A plain dataset name only.
+    case "$source" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --source='$source' is not a plain dataset name" ;; esac
+    case "$target" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --target='$target' is not a plain dataset name" ;; esac
+    case "$source$target" in *:*) die "local-backup is LOCAL only -- neither --source nor --target may name a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
+    case "$profile" in ""|*[!A-Za-z0-9_-]*) die "local-backup: --profile='$profile' is not a valid profile name" ;; esac
+
+    # A backup whose destination overlaps its own source is a self-reference.
+    if local_backup_overlap "$source" "$target"; then
+        die "local-backup: --target='$target' overlaps --source='$source' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up. Pick a target outside the source subtree."
+    fi
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf}"
+
+    # Choose the preset. load_active_profile calls profile_validate_dir, which
+    # refuses a profile carrying any relationship-owned field before it can reach
+    # a config, and dies with the profile named if it does not exist.
+    PROFILE_ACTIVE="$profile"
+    load_active_profile
+
+    # Build the candidate LOCAL config in a working copy -- nothing real is read
+    # or written. dst=<target> (no ':') is snapsend.sh's local-to-local branch.
+    # The [dataset:]/[prune:] shape mirrors emit_client_sections' backup-mode
+    # ladder, with dst= where the pull path writes src=.
+    local marker="# managed-by: zfs-backup.sh local-backup source=$source"
+    local cand; cand=$(mktemp) || die "mktemp failed"
+    {
+        printf '[defaults]\n\thost_label = %s\n\n' "$COLLECTOR_LABEL"
+        cat "$PROFILE_TPL_FILE"; printf '\n'
+        echo "[dataset:$source]"
+        echo "	$marker"
+        profile_emit "$PROFILE_DS_FILE"
+        echo "	dst          = $target"
+        echo "	notify       = local-$(basename "$source")"
+        if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+            echo
+            echo "[prune:$target]"
+            echo "	$marker"
+            profile_emit "$PROFILE_PRUNE_FILE"
+            echo "	recursive    = yes"
+            echo "	notify       = local-$(basename "$source")"
+        fi
+    } > "$cand" || { rm -f "$cand"; die "could not write the candidate config"; }
+
+    if ! bash "$GENCRON" -c "$cand" >/dev/null 2>"$cand.err"; then
+        warn "$(cat "$cand.err" 2>/dev/null)"; rm -f "$cand" "$cand.err"
+        die "the candidate config was rejected by gen-cron.sh (see above) -- this is a local-backup bug, please report it"
+    fi
+    rm -f "$cand.err"
+
+    echo
+    echo "Plan lokalnego backupu (PODGLAD -- nic nie zostalo zainstalowane):"
+    echo "  Zrodlo (WHAT):    $source"
+    echo "  Cel:              $target"
+    if local_backup_same_pool "$source" "$target"; then
+        echo "  Uwaga:            zrodlo i cel dziela pule '${source%%/*}' -- awaria puli dotknie oba kopie (to fakt, nie zakaz)"
+    fi
+    echo "  Preset:           $profile"
+    echo "  Config docelowy:  $config"
+    echo
+    echo "--- kandydat CONFIG v4 ---"
+    cat "$cand"
+    echo
+    echo "--- wygenerowany blok crona (gen-cron.sh -c) ---"
+    bash "$GENCRON" -c "$cand"
+    echo
+    echo "To jest wylacznie plan. Instalacja transakcyjna (seed + atomowy zapis"
+    echo "crona z odczytem zwrotnym) przyjdzie w kolejnym wycinku Fazy 5 -- ten"
+    echo "wycinek celowo nie dotyka zadnego crontaba ani configu produkcyjnego."
+    rm -f "$cand"
 }
 
 # ------------------------------------------------------------------------------
@@ -4373,6 +4487,7 @@ cmd_remove_client() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         setup-server)     shift; cmd_setup_server "$@" ;;
+        local-backup)     shift; cmd_local_backup "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         final-catchup)    shift; cmd_final_catchup "$@" ;;
