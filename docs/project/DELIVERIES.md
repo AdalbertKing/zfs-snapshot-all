@@ -19,5 +19,6 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 Gate 3 closure question and Phase 3.5 planning/design note (docs only) -->
 <!-- no-review-required: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 -->
 <!-- delivered: 3495ec4d8706b22ae8f3cfdd199752285245213d Phase 3.5: resolve_field_or_omit() -- prefix/gfs_pattern omitted-vs-blank distinction, gencron 67/67, dependency cascade clean -->
+<!-- delivered: 9074fe5543fa1077aa871b135c721232a2cdf0b5 Phase 4 slice 1: add-client --profile=NAME, apply_client_profile_choice(), zfsbackup 358/358 -->
 
 

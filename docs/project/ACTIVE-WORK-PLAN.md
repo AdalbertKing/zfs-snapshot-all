@@ -331,7 +331,7 @@ rejected what the new one accepts.
 
 ---
 
-## Phase 4 — expose presets as a small user feature
+## Phase 4 — expose presets as a small user feature — SLICE 1 IMPLEMENTER-COMPLETE
 
 Goal: turn the existing profile boundary/renderer into a useful operator-facing CREATE choice without creating a profile manager.
 
@@ -343,9 +343,39 @@ Implement the smallest public surface:
 - no persistent profile authority after install;
 - optional provenance only if it enables a concrete operator action; otherwise do not store it.
 
+### Status — first slice implemented, awaiting reviewer
+
+Not blocked by REV-093's pending live-ZFS evidence: that evidence gap sits on
+Phase 3.5's runtime behavior, not on Phase 4's stated dependency, which is
+Phase 3.5's generator-side CODE contract (implementer-complete, no known
+defect per REV-093's own independent-review section). See
+`docs/discussions/REVIEW-PROTOCOL-V3-OWNER-CADENCE-IMPLEMENTER-2026-08-10.md`
+for the worked dependency analysis.
+
+Commit `9074fe5`: `add-client --profile=NAME` validates the profile directory
+(`profile_validate_dir`) before any pairing, stores the choice on the client
+record, defaults to `default` when omitted (zero-choice path unchanged).
+`activate-client`'s first-activation branch reads it via a new
+`apply_client_profile_choice()` helper; re-activation never consults it, same
+one-way handoff boundary Phase 3 (REV-089) already draws for the profile in
+general, so a pre-existing client record with no `PROFILE` field is a no-op.
+`show_activation_proposal`/`atomic_replace_and_install` already satisfy "show
+candidate CONFIG and resulting cron before install" — reused as-is, no new
+preview mechanism built. Only one profile (`profiles/default`) currently
+exists; this slice is the selection mechanism, not a second named profile —
+defining further profiles is a separate product decision.
+
+`test/zfsbackup/run.sh` section 53: 358/358 (whole suite). `test/impact.sh`:
+only `test/zfsbackup/run.sh` required, run clean. Manual obligation not
+covered by any suite: `zfsbackup-live-pair` (needs two live hosts + root —
+the real `deploy.sh --pair`/`snapget.sh -n`/`gen-cron.sh --install` path
+`add-client`/`activate-client` actually exercise).
+
 ### Gate 4
 
 A normal administrator can select/accept a sensible preset and obtain a valid native CONFIG without learning internal profile machinery.
+
+**Status: first slice (the CLI flag + CREATE-time storage + first-activation wiring) implementer-complete, closure is the reviewer's call.**
 
 ---
 
