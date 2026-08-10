@@ -16,4 +16,6 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: 0dccb0beaf115fd75e2c875db43a36b278a449e6 REV-20260809-082 -->
 <!-- delivered: 20f333d9d96de3b2e814d6cd87a86cfe515d3568 Phase 2 property 6, corrected per REV-20260809-088: ensure_cron_config's template-identity collision check is CREATE-time only (not a standing profile-drift gate hit on every re-activation) and semantic (not raw text) -->
 <!-- reviewed-by: 20f333d9d96de3b2e814d6cd87a86cfe515d3568 REV-20260809-088 -->
+<!-- delivered: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 Gate 3 closure question and Phase 3.5 planning/design note (docs only) -->
+<!-- no-review-required: ea5971ad86ec3de29c5ab23f2edadc5b24a240d6 -->
 
