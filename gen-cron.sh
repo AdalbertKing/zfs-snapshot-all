@@ -940,20 +940,42 @@ resolve_field() {
     return 1
 }
 
-# Same as resolve_field, but for fields where a BLANK value is exactly as
-# broken as a missing one -- 'pattern' and 'prefix' have no sensible empty
-# meaning (unlike 'dst', where blank legitimately means "no target, snapshot
-# only"). ini_has only tests whether the key exists, so "pattern = " with
-# nothing after the '=' used to read as "resolved" with an empty string --
-# a config typo that silently produced a delsnaps.sh line with an empty
-# pattern (matches every snapshot) or a snapsend.sh -m "" (bare-timestamp
-# snapshot no retention job can ever match). Use this instead of resolve_field
-# wherever an empty resolved value would be just as wrong as no value at all.
+# Same as resolve_field(), but for fields where a BLANK value is exactly as
+# broken as a missing one -- 'pattern' has no sensible empty meaning (unlike
+# 'dst', where blank legitimately means "no target, snapshot only"). ini_has
+# only tests whether the key exists, so "pattern = " with nothing after the
+# '=' used to read as "resolved" with an empty string -- a config typo that
+# silently produced a delsnaps.sh line with an empty pattern (matches every
+# snapshot). Callers use this function, instead of resolve_field(), in any
+# case where an empty resolved value would be just as wrong as no value at
+# all. 'prefix' and 'gfs_pattern' used to be in this category too (c90f6d1);
+# Phase 3.5 gave them a sensible empty/omitted meaning of their own -- see
+# resolve_field_or_omit(), defined further down -- so they no longer call
+# this function.
 require_field() {
     local field="$1" ds="$2" tmpl="$3" defaults="$4" val
     val="$(resolve_field "$field" "$ds" "$tmpl" "$defaults")" || return 1
     [ -n "$val" ] || return 1
     printf '%s' "$val"
+}
+
+# Phase 3.5: distinguishes "unresolved anywhere in the inheritance chain"
+# (deliberate, accepted absence -- prints "", returns 0, exactly the same
+# empty output resolve_field() itself would give a caller that ignored its
+# own failure) from "resolved but blank" (a config typo, refused exactly the
+# way require_field() has always refused it -- c90f6d1 stays fixed). Only
+# for fields that have both an accepted native "not set at all" meaning AND
+# a c90f6d1-shaped blank-typo risk: 'prefix' (no-prefix create/existing) and
+# 'gfs_pattern' (prefixless single-series GFS ladder). 'pattern' is NOT one
+# of these -- it has no accepted omitted meaning and must keep calling
+# require_field().
+resolve_field_or_omit() {
+    local field="$1" ds="$2" tmpl="$3" defaults="$4" val
+    if val="$(resolve_field "$field" "$ds" "$tmpl" "$defaults")"; then
+        [ -n "$val" ] || return 1
+        printf '%s' "$val"
+    fi
+    return 0
 }
 
 # resolve_field_tiered FIELD TIER DS TMPL DEFAULTS -- checks a per-tier
@@ -1250,7 +1272,13 @@ build_dataset() {
                 direction="push"
                 remote_spec="$dst"
             fi
-            prefix="$(require_field prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: send_schedule is set but 'prefix' did not resolve (missing, or set but blank)"
+            # Phase 3.5: 'prefix' omitted across the whole ds/tmpl/defaults
+            # chain is now the deliberate no-prefix case (a bare-timestamp
+            # create, or an -e passive pickup of an already-named existing
+            # snapshot) -- resolves to "", which reaches snapsend.sh/
+            # snapget.sh as an explicit -m "" (identical to -m never given).
+            # A key that IS present but blank is still refused, unchanged.
+            prefix="$(resolve_field_or_omit prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: 'prefix' resolved to a blank value -- omit the field entirely for no-prefix, do not set it to nothing"
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
@@ -1366,8 +1394,14 @@ build_prune_section() {
     gfs_raw="$(resolve_field gfs "$sec" "" "")" || gfs_raw="no"
     [ "$(trim "$gfs_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && gfs=1
     if [ "$gfs" -eq 1 ]; then
-        gfs_pattern="$(require_field gfs_pattern "$sec" "" defaults)" \
-            || die "[prune:$scope]: gfs=yes needs 'gfs_pattern' (the ONE shared prefix the combined -G ladder matches against -- distinct from each tier's own 'pattern', which still drives its own monitor)"
+        # Phase 3.5: 'gfs_pattern' omitted across the section/defaults chain
+        # is now the deliberate prefixless-ladder case -- resolves to "",
+        # reaching delsnaps.sh as an explicit empty positional PATTERN
+        # argument, matching every otherwise-eligible snapshot on the scope
+        # (subject to the same protected-prefix/overlap guards as always). A
+        # key that IS present but blank is still refused, unchanged.
+        gfs_pattern="$(resolve_field_or_omit gfs_pattern "$sec" "" defaults)" \
+            || die "[prune:$scope]: 'gfs_pattern' resolved to a blank value -- omit the field entirely for an intentional prefixless GFS ladder, do not set it to nothing"
     fi
 
     local -a tiers=()

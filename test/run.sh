@@ -117,7 +117,7 @@ rm -f "$pathcfg"
 # site the test loses coverage, which is survivable -- a scraper that produced
 # FALSE failures on a reformatted line would just get muted, which is not.
 declared="$(bash "$GEN" --dump-fields | awk '{print $2}' | sort -u)"
-used="$( { grep -oE '\b(resolve_field|require_field|resolve_field_tiered) +"?[a-z_]+"?' "$GEN"
+used="$( { grep -oE '\b(resolve_field|require_field|resolve_field_tiered|resolve_field_or_omit) +"?[a-z_]+"?' "$GEN"
            grep -oE '\b(ini_has|ini_get) +("\$[a-z_]+"|defaults) +"?[a-z_]+"?' "$GEN"
          } | sed -E 's/.* +"?([a-z_]+)"?$/\1/' | sort -u )"
 missing="$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$used") | tr '\n' ' ')"

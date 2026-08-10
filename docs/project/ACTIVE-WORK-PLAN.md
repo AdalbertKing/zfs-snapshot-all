@@ -111,7 +111,7 @@ the grounds that it changes no policy and makes inherited global policy visible.
 
 ---
 
-## Phase 3 — decouple endpoint/reactivation from policy regeneration — IMPLEMENTER-COMPLETE, GATE 3 AWAITING REVIEWER
+## Phase 3 — decouple endpoint/reactivation from policy regeneration — CLOSED
 
 Goal: ordinary relation/topology maintenance must not cause profile policy to be regenerated.
 
@@ -215,9 +215,9 @@ One-way handoff is true in production behavior:
 PROFILE/PRESET -> generate once -> CONFIG v4 -> runtime truth
 ```
 
-**Status: implementer-complete, closure is the reviewer's call.** Three reviews
-took this from "the section body is not regenerated" to the full property, each
-finding a residual the previous round's evidence could not have caught:
+**Status: CLOSED by the reviewer, 2026-08-10.** Three reviews took this from
+"the section body is not regenerated" to the full property, each finding a
+residual the previous round's evidence could not have caught:
 
 | REV | residual | state |
 |---|---|---|
@@ -226,13 +226,17 @@ finding a residual the previous round's evidence could not have caught:
 | REV-20260810-091 | reactivation still re-added `[excluded:]` floors and still refused a pre-GFS config | CLOSED |
 
 `docs/internal/reviews/closures/REV-20260810-091.md` records *"Both residual
-Phase 3 paths are resolved"*, but no explicit Gate 3 closure statement has been
-written the way Gate 1 and Gate 2 have. Flagged rather than assumed — see
-`docs/discussions/GATE3-CLOSURE-AND-PHASE35-2026-08-10.md`.
+Phase 3 paths are resolved"*, but no explicit Gate 3 closure statement had been
+written the way Gate 1 and Gate 2 have one until
+`docs/discussions/GATE3-PHASE35-REVIEWER-RESOLUTION-2026-08-10.md`: *"REV-089,
+REV-090 and REV-091 are all CLOSED and together cover the full property rather
+than only one implementation detail... No remaining Phase 3 acceptance
+property is visible in the current code or review artifacts... Gate 3
+acceptance property is proved. Phase 3 is CLOSED and Phase 3.5 may begin."*
 
 ---
 
-## Phase 3.5 — expose prefixless create / passive (`-e`) / single-series GFS
+## Phase 3.5 — expose prefixless create / passive (`-e`) / single-series GFS — IMPLEMENTER-COMPLETE, AWAITING REVIEWER
 
 **Owner direction: MUST DO** —
 `docs/discussions/PREFIXLESS-PASSIVE-GFS-OWNER-DIRECTION-2026-08-09.md`.
@@ -260,19 +264,61 @@ Scope (from the assessment in
 - keep expressing passive as `flags = -e`; revisit a first-class field only when
   Phase 4's preview UX actually needs it.
 
-**One design question is still unanswered and blocks implementation, not
-analysis.** `test/negative/blank-prefix.conf` deliberately pins the CURRENT
-refusal as correct (`c90f6d1`: a config typo `prefix = ` used to sail through as
-"present"). Naively relaxing `require_field` reopens that measured accident.
-The proposed resolution uses a distinction already sitting unused in the code —
-`resolve_field()` returns *not found anywhere* (rc 1) separately from *found but
-blank* (rc 0, empty):
+**Design question resolved by the reviewer** —
+`docs/discussions/GATE3-PHASE35-REVIEWER-RESOLUTION-2026-08-10.md` §2: the
+`resolve_field()` not-found-anywhere (rc 1) vs. found-but-blank (rc 0, empty)
+distinction is exactly right; `test/negative/blank-prefix.conf` must keep
+pinning blank as a refusal unchanged.
 
-- field **entirely omitted** → the new, deliberate "no prefix" case, accepted;
-- field **present but blank** → stays a refusal, unchanged from `c90f6d1`.
+### Status — implemented, awaiting reviewer
 
-That keeps `test/negative/blank-prefix.conf` passing untouched. Awaiting
-reviewer/owner confirmation before implementation.
+`gen-cron.sh` gained `resolve_field_or_omit()`, a small wrapper around
+`resolve_field()` used only for `prefix` and `gfs_pattern`: unresolved
+anywhere in the ds/tmpl/defaults (or section/defaults) chain now resolves to
+`""` — the deliberate no-prefix / prefixless-GFS case — while a key that is
+present but blank still refuses exactly as `require_field()` always has.
+`pattern` was deliberately left on `require_field()` — it has no accepted
+omitted meaning, per the reviewer's resolution.
+
+- `snapsend.sh -m ""` / `snapget.sh -m ""` for the two no-prefix create/
+  existing cells — identical to `-m` never given at all, already the engines'
+  existing behavior;
+- `delsnaps.sh -G ... "" -H24 ...` for the prefixless GFS ladder — an
+  intentional empty positional PATTERN, already accepted by the engine,
+  matching every otherwise-eligible snapshot on the scope subject to the
+  existing protected-prefix/overlap guards;
+- the same-scope pattern-overlap guard (`validate_retain_patterns`) already
+  treats an empty pattern as a prefix of everything, so a prefixless GFS
+  ladder colliding with another prune rule on the same scope still refuses;
+- passive representation stays `flags = -e`, per the reviewer's §3 — no
+  second `snapshot_mode` field added.
+
+Evidence: `test/run.sh` (the gencron suite) **67/67**; new golden
+`fixtures/prefixless-matrix.conf` pins all four create/existing ×
+prefix/no-prefix cells at the generated-command boundary; `fixtures/
+gfs-no-pattern.conf` (promoted from a negative fixture — the omitted case is
+no longer refused) pins the empty positional GFS pattern; new negative
+`negative/blank-gfs-pattern.conf` pins present-but-blank still refusing;
+`negative/blank-prefix.conf` passes unchanged (message text updated only).
+Negative control against the pre-Phase-3.5 generator (`8693b4e3…`, `GEN=`
+override): the two new goldens fail (old generator refuses what the new one
+now accepts) — confirms the change, not a coincidence. Dependency-selected
+cascade (`test/impact.sh`): `test/migrate/run.sh` 52/52, `test/profiles/
+run.sh` 55/55, `test/reconcile/run.sh` 47/47, `test/zfsbackup/run.sh`, plus
+`test/cron2conf/run.sh` 11/11 for the cron-line-shape contract. Full details
+and exact commands: `docs/discussions/PHASE35-IMPLEMENTATION-CLAUDE-2026-08-10.md`.
+Registered as an unreviewed direct-main delivery in `docs/project/DELIVERIES.md`
+pending a REV, same as Phase 2's property 6.
+
+The bare-passive (`-e`, no `-m`) direct engine test the scope note above
+asked for turned out to already exist — `test/snapsend/run.sh` "-e with no
+-m" (send side) and its snapget mirror "snapget -e with no -m" (pull side)
+both assert the pre-existing snapshot is the one actually transferred, not
+just that no warning fires. Needs real ZFS to execute; not run in this
+environment (see the response file for what live verification remains).
+
+`sudo ./test/scenarios/run.sh` (needs root, zfs, mbuffer) was not executed in
+this environment — flagged as a manual obligation, not skipped silently.
 
 ### Gate 3.5
 
@@ -280,6 +326,8 @@ All four create/existing × prefix/no-prefix combinations are expressible in
 native CONFIG and provable at the generated-command boundary; prefixed behaviour
 is preserved byte/semantically; negative controls show the old generator
 rejected what the new one accepts.
+
+**Status: implementer-complete, closure is the reviewer's call.**
 
 ---
 
