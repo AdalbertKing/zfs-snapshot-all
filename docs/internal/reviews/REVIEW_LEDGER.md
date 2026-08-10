@@ -36,5 +36,6 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260810-091 | CLOSED | - | 05816e808a97fc6c49ef4842a50b136b1231322f | 05816e808a97fc6c49ef4842a50b136b1231322f | responses/REV-20260810-091.md | - |
 | REV-20260810-092 | CLOSED | - | 4682d27347a8d090f47236f3c2193b8f8465699d | 4682d27347a8d090f47236f3c2193b8f8465699d | responses/REV-20260810-092.md | - |
 | REV-20260810-093 | CLOSED | - | 3495ec4d8706b22ae8f3cfdd199752285245213d | 3495ec4d8706b22ae8f3cfdd199752285245213d | responses/REV-20260810-093.md | - |
-| REV-20260810-094 | IMPLEMENTED | Reviewer | 58f67f69dc3ac8225c93b58d5b643758c3284978 | 5df74522d91a78569fd7755aefe37939ea60c3c3 | responses/REV-20260810-094.md | verify the submitted implementation |
-| REV-20260810-095 | IMPLEMENTED | Reviewer | 8db8c4d4c4b57efcafb83fcc447ffe336ac4622b | 9074fe5543fa1077aa871b135c721232a2cdf0b5 | responses/REV-20260810-095.md | verify the submitted implementation |
+| REV-20260810-094 | CLOSED | - | 58f67f69dc3ac8225c93b58d5b643758c3284978 | 58f67f69dc3ac8225c93b58d5b643758c3284978 | responses/REV-20260810-094.md | - |
+| REV-20260810-095 | CLOSED | - | 8db8c4d4c4b57efcafb83fcc447ffe336ac4622b | 8db8c4d4c4b57efcafb83fcc447ffe336ac4622b | responses/REV-20260810-095.md | - |
+| REV-20260810-096 | OPEN | Claude | - | 58f67f69dc3ac8225c93b58d5b643758c3284978 | - | implement and respond |
