@@ -1991,13 +1991,23 @@ local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
 config_section_overlap() {   # <file> <path>...
     local file="$1"; shift
     [ -f "$file" ] || return 0
-    local hdr owned req
+    local hdr scope member req
     while IFS= read -r hdr; do
-        owned="${hdr#\[}"; owned="${owned%\]}"; owned="${owned#*:}"
-        for req in "$@"; do
-            path_overlaps "$owned" "$req" \
-                && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$owned" "$req"
-        done
+        scope="${hdr#\[}"; scope="${scope%\]}"; scope="${scope#*:}"
+        # REV-20260811-098: a section scope may name SEVERAL datasets comma-
+        # separated ([prune:a,b,c] -- metropolis pve2 has such sections), so
+        # evaluate each member independently, using the same comma split and
+        # whitespace trim config_datasets() applies. Treating the whole
+        # comma-joined string as one path would miss an overlap with any member
+        # but the accidental prefix, letting the planner accept a job installed
+        # policy already covers.
+        while IFS= read -r member; do
+            [ -n "$member" ] || continue
+            for req in "$@"; do
+                path_overlaps "$member" "$req" \
+                    && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
+            done
+        done < <(printf '%s\n' "$scope" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     done < <(grep -oE '^\[(dataset|prune):[^]]+\]' "$file")
     return 0
 }

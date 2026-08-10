@@ -124,6 +124,31 @@ out="$(run --source=rpool/other --target=hdd/fresh --config="$WORK/existing.conf
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'overlap'; } \
     && ok "F2/overlap with existing coverage refuses" || bad "F2/overlap with existing coverage refuses" "rc=$rc"
 
+# REV-20260811-098: a section scope may be a comma-separated list; the overlap
+# guard must expand it and check every member, not the comma-joined blob.
+cat > "$WORK/multi.conf" <<'EOF'
+[defaults]
+	host_label = h
+[prune:rpool/other,rpool/data]
+	# managed-by: zfs-backup.sh local-backup source=multi
+	use_template = profile__default__keep_hourly,profile__default__keep_daily,profile__default__keep_weekly,profile__default__keep_monthly
+	gfs          = yes
+	gfs_pattern  = automated_
+	recursive    = yes
+	notify       = local-multi
+EOF
+# overlap with the SECOND member (rpool/data) must refuse
+out="$(run --source=rpool/data --target=hdd/fresh2 --config="$WORK/multi.conf")"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'overlap'; } \
+    && ok "098/overlap with a non-first member of a comma-list scope refuses" \
+    || bad "098/overlap with a non-first member of a comma-list scope refuses" "rc=$rc out=$(printf '%s' "$out"|tail -1)"
+# a genuinely disjoint request beside the same multi-path section still proceeds
+# (guards against a lazy "any comma means conflict" implementation)
+out="$(run --source=rpool/db --target=hdd/disjoint --config="$WORK/multi.conf")"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/db\]'; } \
+    && ok "098/disjoint request beside a comma-list scope still proceeds" \
+    || bad "098/disjoint request beside a comma-list scope still proceeds" "rc=$rc out=$(printf '%s' "$out"|tail -2)"
+
 # missing config CLAIMED by an installed managed block refuses (fail-closed)
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/claimed.conf")"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qiE 'refusing to create|installed crontab block'; } \
