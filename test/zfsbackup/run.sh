@@ -5132,6 +5132,80 @@ else
     bad "92 an explicit migration may still install the CONFIG-wide floors" "$(grep -c '^\[excluded:' "$GXC") excluded section(s)"
 fi
 
+# --- 53. Phase 4: --profile=NAME on add-client -------------------------------
+#
+# Goal (ACTIVE-WORK-PLAN.md Phase 4): a CREATE-time preset choice, validated
+# up front, stored as provenance, consulted exactly once (first activation),
+# never re-consulted on re-activation, and a zero-choice default unchanged.
+
+# 1. An unknown profile name is refused at add-client, before any pairing --
+# same pattern as the --bandwidth validation above (section 10): the check
+# runs before the deploy.sh --pair call, so a subshell against a bogus /
+# unreachable --lan is enough to prove refusal without a real peer.
+prof_rc() { ( cmd_add_client "proftest" --lan=10.0.0.1 --datasets="tank/x" --profile="$1" ) >/dev/null 2>&1; echo $?; }
+if [ "$(prof_rc "does-not-exist")" != 0 ]; then
+    ok "add-client: an unknown --profile name is refused"
+else
+    bad "add-client: an unknown --profile name is refused" "exit 0 for --profile=does-not-exist"
+fi
+
+# 2. The default profile is accepted, and the choice is stored on the client
+# record -- proven through the real add-client path (deploy.sh stubbed with a
+# marker, same technique used for remove-client above) rather than asserting
+# the write_client_field call was reached.
+P53="$WORK/profile53"; mkdir -p "$P53/clients"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$P53" > "$P53/server.conf"
+cat > "$P53/deploy_marker.sh" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$P53/deploy_marker.sh"
+( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  cmd_add_client "proftest2" --lan=10.0.0.1 --datasets="tank/x" ) >/dev/null 2>&1
+if grep -q "^PROFILE=default$" "$P53/clients/proftest2.conf"; then
+    ok "add-client: omitted --profile stores the zero-choice default"
+else
+    bad "add-client: omitted --profile stores the zero-choice default" "$(cat "$P53/clients/proftest2.conf" 2>&1)"
+fi
+
+# 3. A second, real, DIFFERENT profile name is validated and stored correctly
+# -- not just "default" happening to work.
+mkdir -p "$P53/profiles/altprofile"
+cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" "$REPO/profiles/default/prune.inc" "$P53/profiles/altprofile/"
+( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
+  PROFILE_ROOT="$P53/profiles" \
+  cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
+if grep -q "^PROFILE=altprofile$" "$P53/clients/proftest3.conf"; then
+    ok "add-client: a named non-default profile is validated and stored"
+else
+    bad "add-client: a named non-default profile is validated and stored" "$(cat "$P53/clients/proftest3.conf" 2>&1)"
+fi
+
+# 4. apply_client_profile_choice: the wiring that turns the stored field into
+# PROFILE_ACTIVE, unit-tested directly rather than through the full
+# activate-client flow (which needs a live peer/manifest this suite
+# deliberately does not stub -- see the file header).
+#
+# First activation with a chosen profile: adopted.
+( PROFILE_ACTIVE=default; apply_client_profile_choice 1 altprofile; [ "$PROFILE_ACTIVE" = altprofile ] ) \
+    && ok "apply_client_profile_choice: first activation adopts the stored profile" \
+    || bad "apply_client_profile_choice: first activation adopts the stored profile" "not adopted"
+
+# Re-activation: the profile field is never re-consulted, even if a client
+# record happens to carry one (e.g. after this feature ships and an old
+# relationship is later touched by set-endpoint) -- matches REV-20260809-089's
+# one-way handoff for the profile in general.
+( PROFILE_ACTIVE=default; apply_client_profile_choice 0 altprofile; [ "$PROFILE_ACTIVE" = default ] ) \
+    && ok "apply_client_profile_choice: re-activation ignores the stored profile" \
+    || bad "apply_client_profile_choice: re-activation ignores the stored profile" "PROFILE_ACTIVE was overwritten on a re-activation"
+
+# Old client record, created before this field existed: PROFILE is empty on
+# first activation too -- must be a no-op, not an error and not a switch to
+# some other default.
+( PROFILE_ACTIVE=default; apply_client_profile_choice 1 ""; [ "$PROFILE_ACTIVE" = default ] ) \
+    && ok "apply_client_profile_choice: a pre-existing client record with no PROFILE field is a no-op" \
+    || bad "apply_client_profile_choice: a pre-existing client record with no PROFILE field is a no-op" "PROFILE_ACTIVE changed with no chosen profile"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

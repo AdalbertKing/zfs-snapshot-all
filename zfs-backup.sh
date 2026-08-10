@@ -14,7 +14,7 @@ set -uo pipefail
 #
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--join-remotely]
+#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
@@ -166,7 +166,7 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--join-remotely]
+  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT] [--skip-final-catchup] [--allow-stale-catchup]
@@ -586,6 +586,21 @@ load_active_profile() {
     profile_render_fragment "$dir/prune.inc" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     PROFILE_LOADED=1
     return 0
+}
+
+# Phase 4: the profile choice is CREATE-time provenance, consulted only the
+# one time a relationship first renders its sections. A re-activation never
+# re-reads it -- same one-way handoff boundary REV-20260809-088/089 already
+# draw for the profile in general: an operator's installed policy, and any
+# customization on top of it, survive set-endpoint/re-activation untouched
+# regardless of what the client record's PROFILE field says or whether it
+# even exists (old client records predating this field pass "" here, which
+# is a no-op -- PROFILE_ACTIVE keeps its env/default value, zero migration).
+apply_client_profile_choice() {   # <is_new_relationship 0|1> <chosen profile name, may be empty>
+    local is_new="$1" chosen="$2"
+    if [ "$is_new" -eq 1 ] && [ -n "$chosen" ]; then
+        PROFILE_ACTIVE="$chosen"
+    fi
 }
 # COMPOSE the rendered fragment. Do not translate it.
 #
@@ -1932,7 +1947,7 @@ cmd_setup_server() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0
+    local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile=""
     for a in "$@"; do
         case "$a" in
             --lan=*)       lan="${a#*=}" ;;
@@ -1940,10 +1955,19 @@ cmd_add_client() {
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
+            --profile=*)   profile="${a#*=}" ;;
             --join-remotely) join_remotely=1 ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
+    # Phase 4: CREATE-time choice only. Validated now, at enrolment, so a
+    # typo'd/nonexistent profile fails before any pairing or key exchange
+    # happens, not silently at the first activate-client. Zero-choice default
+    # unchanged: an operator who never heard of profiles gets exactly the
+    # same "default" behaviour as before this flag existed.
+    [ -n "$profile" ] || profile="default"
+    profile_validate_dir "$PROFILE_ROOT/$profile" "$GENCRON" \
+        || die "add-client: --profile='$profile': $PROFILE_ERR"
     [ -n "$lan" ] || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
     # REV-20260802-033 slice 6: --mode is the alternative to --datasets --
     # dataset selection deferred to the source's own scope file
@@ -2074,11 +2098,12 @@ cmd_add_client() {
         # named-slot indirection -- see active_endpoint_host_port.
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
+        write_client_field PROFILE           "$profile"
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
-    log "client '$name' created, state=pending_enroll"
+    log "client '$name' created, state=pending_enroll, profile=$profile"
     if [ "$join_remotely" -eq 1 ]; then
         log "next: see deploy.sh's own output above for whether --join-remotely succeeded on $lan_host, or fell back to manual instructions"
     else
@@ -2752,6 +2777,8 @@ cmd_activate_client() {
 
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
+
+    apply_client_profile_choice "$is_new_relationship" "${PROFILE:-}"
 
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
