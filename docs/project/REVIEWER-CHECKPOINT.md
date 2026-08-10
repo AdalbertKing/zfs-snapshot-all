@@ -45,32 +45,42 @@ Canonical architecture references:
 - `docs/discussions/EXPLICIT-SOURCE-BEATS-DISCOVERY-2026-08-09.md`
 - `docs/project/ACTIVE-WORK-PLAN.md`
 
-## Current compact state — observed 2026-08-10 22:29 CEST
+## Current compact state — refreshed 2026-08-10 22:33 CEST
 
-Observed `main` before this checkpoint write: `40bc0522206acf18f69f516621c4452f4118df56`. Always refresh before using this SHA.
+Always refresh `main` before relying on any SHA below.
 
 Closed gates/phases already established in repo:
 - Phase 1 — live safety gate: CLOSED.
 - Phase 2 — additive CREATE cannot mutate old policy: CLOSED; REV-092 resolved the CONFIG-global `[excluded:]` residual.
 - Phase 3 — endpoint/reactivation preserves installed policy: CLOSED; REV-089/090/091 closed.
 - Phase 3.5 — prefixless create / passive `-e` / prefixless GFS expressibility: CLOSED; REV-093 closed with live-ZFS evidence.
-- Phase 4 / Gate 4 — public CREATE-time profile selection proof: CLOSED by REV-095; **Phase 5 is not blocked by Gate 4**.
+- Phase 4 / Gate 4 — public CREATE-time profile selection proof: CLOSED by REV-095.
+- Phase 6 runnable-example hygiene through the current four examples: REV-094 and REV-096 CLOSED.
 
-Current open review at observation time:
+Current review routing after REV-096 closure:
 
-**REV-20260810-096 — runnable CONFIG examples lack a total semantic-coverage registry for future examples — IMPLEMENTED -> Reviewer.**
+**No open reviews.** `docs/project/OPEN-THREADS.md` is canonical and must still be read fresh before acting.
 
-Implementation recorded by Claude: `ac6fe3119412a684edf483caa0895fd2bb1e5883` (must be independently verified before approval). Scope is **test hygiene only** for Phase 6 examples: every `docs/examples/*.conf` must be registered for semantic assertions; adding, deleting, or renaming a runnable example without updating semantic coverage must fail. It does **not** reopen REV-094/current four examples and does **not** block Phase 5.
+Latest reviewer-reviewed test-hygiene implementation:
+- REV-096 — total semantic-coverage registry for runnable `docs/examples/*.conf` — implementation `ac6fe3119412a684edf483caa0895fd2bb1e5883` — APPROVED/CLOSED.
+- The registry now fails both for an unregistered runnable example (`uncovered`) and for a stale semantic-coverage registration whose file disappeared (`stale`).
+- This was test-only; no live ZFS/SSH/crontab/grant/account proof was required.
 
-Current routing is always read from `docs/project/OPEN-THREADS.md` before acting.
-
-## Work sequence
+## Work sequence / current next move
 
 Canonical sequence remains:
 
 `CREATE-only additive -> endpoint/reactivation preserves policy -> public --profile at CREATE + preview -> simple local --source/--target workflow -> minimal presets + expert docs -> RESTORE -> optional conveniences only on proven need`
 
-At this checkpoint, Phase 5 may proceed independently of REV-096; REV-096 only blocks the next Phase 6 slice that adds/materially changes runnable examples.
+**Next functional work per the owner-approved plan: Phase 5 — high-level local deployment UX — ACTIVE NOW.**
+
+Target operator shape:
+
+`./zfs-backup.sh --source=rpool/data --target=hdd/backups`
+
+Phase 5 must preserve the explicit-source contract above: omitted source may trigger discovery/proposal; any explicit invalid source hard-refuses the whole requested set; no fallback or partial success. Recursion remains HOW/preset, not WHAT. Nested target inside source refuses. Decline/failed seed must remain retryable with no production cron.
+
+Phase 6 documentation work may proceed independently where it does not cross Phase 5's gate, but must not stall or replace the next functional Phase 5 work.
 
 ## Reporting format for Owner
 
@@ -80,6 +90,6 @@ For every `Check`, report short descriptions, not bare IDs:
 
 then e.g.
 
-`REV-096 — semantic coverage registry for runnable CONFIG examples — IMPLEMENTED -> Reviewer`
+`REV-096 — semantic coverage registry for runnable CONFIG examples — CLOSED`
 
 Manual `Check` means an immediate fresh independent review, not a repetition of hourly automation state.
