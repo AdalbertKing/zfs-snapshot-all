@@ -2,6 +2,10 @@
 test/** text eol=lf
 .github/** text eol=lf
 
+# Runnable example configs a reader may copy straight onto a Linux host: keep
+# them LF so a CRLF checkout on a Windows clone cannot ship broken snapshots.
+docs/examples/*.conf text eol=lf
+
 # The two GENERATED protocol views. reviewctl.sh writes LF and --verify compares
 # byte for byte, so a checkout that rewrites them to CRLF makes the ledger look
 # hand-edited on every Windows clone -- a false alarm about the one file whose

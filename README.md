@@ -730,6 +730,11 @@ lines. Idempotent `--install`: replaces its own previously-generated block rathe
 Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
 ```
 
+For worked, ready-to-run expert configs (independent tiers without GFS, selective
+quiesce, short-local/long-store retention, hand-authored prune schedules,
+validate/preview workflow, editing a generated config) see
+[`docs/CONFIG-EXAMPLES.md`](docs/CONFIG-EXAMPLES.md).
+
 Section types (a header is always `[type:name]`, split on the first `:`, except `[defaults]`):
 
 | Section | Purpose |

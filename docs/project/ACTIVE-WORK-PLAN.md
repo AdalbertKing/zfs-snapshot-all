@@ -419,16 +419,28 @@ Documentation work may proceed in parallel when it does not cross an earlier gat
 
 Do not build a Cartesian catalog. Keep `default`; add another shipped preset only when production evidence shows a common HOW policy with enough value to justify it.
 
-### Native CONFIG examples
+### Native CONFIG examples — DELIVERED (docs), awaiting reviewer
 
-Document concise expert examples for:
+`docs/CONFIG-EXAMPLES.md` + four runnable configs under `docs/examples/`
+document all six required expert examples:
 
-- independent hourly/daily retention without forcing GFS;
-- quiesce only on selected create tiers;
-- intentionally shorter local retention than remote/replicated history (Kancelaria pattern);
-- manual prune schedules/patterns;
-- safe CONFIG validation and preview;
-- deliberate manual customization after preset generation.
+- independent hourly/daily retention without forcing GFS — `examples/independent-tiers.conf`;
+- quiesce only on selected datasets — `examples/selective-quiesce.conf`;
+- intentionally shorter local retention than store/replicated history (Kancelaria pattern) — `examples/short-local-long-store.conf`;
+- manual prune schedules/patterns (incl. monitor-only carrier + bookmark prune) — `examples/manual-prune.conf`;
+- safe CONFIG validation and preview — the `gen-cron.sh -c` → diff → `--install` workflow;
+- deliberate manual customization after preset generation — grounded in the Phase 3 reactivation-preserves-policy guarantee.
+
+Each of the four `.conf` files was rendered through `./gen-cron.sh -c` and
+produces the intended send/prune/monitor lines; the doc gives the reader the
+exact command to re-validate. Gate-safe under operating rule 1 (documentation,
+crosses no earlier gate). Linked from `README.md`. Registered as an unreviewed
+direct-main delivery in `docs/project/DELIVERIES.md`.
+
+**Known test-hygiene gap:** the four example configs are not yet pinned by a
+suite, so generator changes could let them rot. Deferred as a follow-up (a small
+`test/` golden that renders each `docs/examples/*.conf`) rather than expanding
+this documentation slice.
 
 Documentation is the intended escape hatch for bespoke policy; the CLI must not absorb every expert exception.
 
