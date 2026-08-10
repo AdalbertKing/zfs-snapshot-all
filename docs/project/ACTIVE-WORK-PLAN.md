@@ -42,7 +42,7 @@ REV-082, REV-083, REV-084, REV-085, REV-086 and REV-087 are all **CLOSED**. Ther
 
 ---
 
-## Phase 2 — finish the CREATE-only additive model — IMPLEMENTER-COMPLETE, AWAITING REVIEW
+## Phase 2 — finish the CREATE-only additive model — CLOSED
 
 Goal: a preset may safely create **one new, independent, non-overlapping task package** inside an existing CONFIG without touching old policy.
 
@@ -103,9 +103,15 @@ concatenation, so section-level equality would not test what the gate promises)
 — **352/352**. Response:
 `docs/internal/reviews/responses/REV-20260810-092.md`.
 
+**Gate 2 CLOSED by the reviewer, 2026-08-10** (`57e7914e…` approval,
+`5cb6a84` closure): *"Gate 2 acceptance property is now proved: preset/additive
+CREATE may add B but may not mutate A. Phase 2 may close."* The extra warning on
+the declined-repair path — offered for rejection — was explicitly accepted, on
+the grounds that it changes no policy and makes inherited global policy visible.
+
 ---
 
-## Phase 3 — decouple endpoint/reactivation from policy regeneration
+## Phase 3 — decouple endpoint/reactivation from policy regeneration — IMPLEMENTER-COMPLETE, GATE 3 AWAITING REVIEWER
 
 Goal: ordinary relation/topology maintenance must not cause profile policy to be regenerated.
 
@@ -208,6 +214,72 @@ One-way handoff is true in production behavior:
 ```text
 PROFILE/PRESET -> generate once -> CONFIG v4 -> runtime truth
 ```
+
+**Status: implementer-complete, closure is the reviewer's call.** Three reviews
+took this from "the section body is not regenerated" to the full property, each
+finding a residual the previous round's evidence could not have caught:
+
+| REV | residual | state |
+|---|---|---|
+| REV-20260809-089 | reactivation regenerated the relationship-local section body from the current profile | CLOSED |
+| REV-20260810-090 | reactivation still *loaded* the profile and appended its templates | CLOSED |
+| REV-20260810-091 | reactivation still re-added `[excluded:]` floors and still refused a pre-GFS config | CLOSED |
+
+`docs/internal/reviews/closures/REV-20260810-091.md` records *"Both residual
+Phase 3 paths are resolved"*, but no explicit Gate 3 closure statement has been
+written the way Gate 1 and Gate 2 have. Flagged rather than assumed — see
+`docs/discussions/GATE3-CLOSURE-AND-PHASE35-2026-08-10.md`.
+
+---
+
+## Phase 3.5 — expose prefixless create / passive (`-e`) / single-series GFS
+
+**Owner direction: MUST DO** —
+`docs/discussions/PREFIXLESS-PASSIVE-GFS-OWNER-DIRECTION-2026-08-09.md`.
+Recorded here because the plan is the sequencing document
+and this phase existed only in discussion notes until now, which is exactly how
+an agreed requirement gets quietly dropped.
+
+Goal: the engines already support all four cells of create/existing ×
+prefix/no-prefix, and `delsnaps.sh -G` already supports an empty pattern.
+`gen-cron.sh` artificially narrows that with `require_field prefix` and
+`require_field gfs_pattern`, making the prefixless variants unreachable from
+native CONFIG or from any preset.
+
+Sequencing agreed by owner, reviewer and implementer: **after Phase 3, before
+Phase 4** — it defines what a native CONFIG/preset is *allowed to express*, so
+it must land before Phase 4 makes presets a public contract.
+
+Scope (from the assessment in
+`docs/discussions/PREFIXLESS-PASSIVE-GFS-CLAUDE-ASSESSMENT-2026-08-09.md`):
+
+- `gen-cron.sh`: two field-requirement relaxations, `test/gencron` goldens and
+  negative controls;
+- one small addition to `test/snapsend`/`test/snapget` for the bare-passive
+  (`-e`, no `-m`) cell, the only one of the four with no direct test evidence;
+- keep expressing passive as `flags = -e`; revisit a first-class field only when
+  Phase 4's preview UX actually needs it.
+
+**One design question is still unanswered and blocks implementation, not
+analysis.** `test/negative/blank-prefix.conf` deliberately pins the CURRENT
+refusal as correct (`c90f6d1`: a config typo `prefix = ` used to sail through as
+"present"). Naively relaxing `require_field` reopens that measured accident.
+The proposed resolution uses a distinction already sitting unused in the code —
+`resolve_field()` returns *not found anywhere* (rc 1) separately from *found but
+blank* (rc 0, empty):
+
+- field **entirely omitted** → the new, deliberate "no prefix" case, accepted;
+- field **present but blank** → stays a refusal, unchanged from `c90f6d1`.
+
+That keeps `test/negative/blank-prefix.conf` passing untouched. Awaiting
+reviewer/owner confirmation before implementation.
+
+### Gate 3.5
+
+All four create/existing × prefix/no-prefix combinations are expressible in
+native CONFIG and provable at the generated-command boundary; prefixed behaviour
+is preserved byte/semantically; negative controls show the old generator
+rejected what the new one accepts.
 
 ---
 
