@@ -6,9 +6,8 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| REV-20260810-097 | IMPLEMENTED | Reviewer | verify the submitted implementation |
-| REV-20260811-098 | IMPLEMENTED | Reviewer | verify the submitted implementation |
 | 9074fe55 Phase 4 slice 1: add-client --profile=NAME, apply_client_profile_choice(), zfsbackup 358/358 | DELIVERED | Reviewer | review it, or open a REV for it |
 | 5df74522 Phase 6 Native CONFIG examples: docs/CONFIG-EXAMPLES.md + 4 generator-validated docs/examples/*.conf (docs only, no graph impact) | DELIVERED | Reviewer | review it, or open a REV for it |
+| f8ec3eae Phase 5 slice 1: zfs-backup.sh local-backup --source/--target planning/preview (read-only, no install); overlap+same-pool validation, candidate CONFIG via real gen-cron; test/localbackup 13/13; zfsbackup 363/363 | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
