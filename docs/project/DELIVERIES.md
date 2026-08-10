@@ -21,5 +21,6 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: 3495ec4d8706b22ae8f3cfdd199752285245213d Phase 3.5: resolve_field_or_omit() -- prefix/gfs_pattern omitted-vs-blank distinction, gencron 67/67, dependency cascade clean -->
 <!-- delivered: 9074fe5543fa1077aa871b135c721232a2cdf0b5 Phase 4 slice 1: add-client --profile=NAME, apply_client_profile_choice(), zfsbackup 358/358 -->
 <!-- delivered: 5df74522d91a78569fd7755aefe37939ea60c3c3 Phase 6 Native CONFIG examples: docs/CONFIG-EXAMPLES.md + 4 generator-validated docs/examples/*.conf (docs only, no graph impact) -->
+<!-- delivered: f8ec3eaec11210884a10af311b0e02e56443cf4b Phase 5 slice 1: zfs-backup.sh local-backup --source/--target planning/preview (read-only, no install); overlap+same-pool validation, candidate CONFIG via real gen-cron; test/localbackup 13/13; zfsbackup 363/363 -->
 
 
