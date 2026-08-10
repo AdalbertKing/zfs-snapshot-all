@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Program Files/PuTTY/plink.exe\" -batch root@192.168.28.9 \"zfs destroy hdd/backuptest/rev093/create@2026-08-10_14-16-59\")",
+      "Bash(\"/c/Program Files/PuTTY/plink.exe\" -batch root@192.168.28.9 \"sudo -u zfsbackup bash -c 'cd /home/zfsbackup/zfs-snapshot-all && ./snapsend.sh -m \\\"\\\" hdd/backuptest/rev093/create hdd/backuptest_targets'\")"
+    ]
+  }
+}
