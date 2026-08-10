@@ -236,7 +236,15 @@ acceptance property is proved. Phase 3 is CLOSED and Phase 3.5 may begin."*
 
 ---
 
-## Phase 3.5 — expose prefixless create / passive (`-e`) / single-series GFS — IMPLEMENTER-COMPLETE, AWAITING REVIEWER
+## Phase 3.5 — expose prefixless create / passive (`-e`) / single-series GFS — CLOSED
+
+`docs/internal/reviews/closures/REV-20260810-093.md` (2026-08-10): APPROVED /
+CLOSED. The attended live-ZFS proof (`docs/internal/reviews/responses/
+REV-20260810-093.md`, commit `0356545`) supplied the targeted real-ZFS
+evidence the reviewer required for the three newly-exposed cells; no
+production-code defect was found at any point. "Phase 3.5 production approval
+is therefore granted. No engine thaw or production-code follow-up is
+required by REV-093."
 
 **Owner direction: MUST DO** —
 `docs/discussions/PREFIXLESS-PASSIVE-GFS-OWNER-DIRECTION-2026-08-09.md`.
@@ -327,7 +335,7 @@ native CONFIG and provable at the generated-command boundary; prefixed behaviour
 is preserved byte/semantically; negative controls show the old generator
 rejected what the new one accepts.
 
-**Status: implementer-complete, closure is the reviewer's call.**
+**Status: CLOSED** (`REV-20260810-093.md`, 2026-08-10).
 
 ---
 
@@ -345,10 +353,11 @@ Implement the smallest public surface:
 
 ### Status — first slice implemented, awaiting reviewer
 
-Not blocked by REV-093's pending live-ZFS evidence: that evidence gap sits on
-Phase 3.5's runtime behavior, not on Phase 4's stated dependency, which is
-Phase 3.5's generator-side CODE contract (implementer-complete, no known
-defect per REV-093's own independent-review section). See
+Was not blocked by REV-093's live-ZFS evidence while it was still pending
+(that evidence gap sat on Phase 3.5's runtime behavior, not on Phase 4's
+stated dependency, which is Phase 3.5's generator-side CODE contract); as of
+2026-08-10 REV-093 is CLOSED (see the Phase 3.5 section above), so the point
+is moot regardless. See
 `docs/discussions/REVIEW-PROTOCOL-V3-OWNER-CADENCE-IMPLEMENTER-2026-08-10.md`
 for the worked dependency analysis.
 
