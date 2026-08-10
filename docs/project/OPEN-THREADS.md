@@ -7,5 +7,7 @@ Do not edit. Owner decisions that are not reviews live in
 | REV | State | Whose move | Next action |
 |---|---|---|---|
 | REV-20260810-097 | OPEN | Claude | implement and respond |
+| 9074fe55 Phase 4 slice 1: add-client --profile=NAME, apply_client_profile_choice(), zfsbackup 358/358 | DELIVERED | Reviewer | review it, or open a REV for it |
+| 5df74522 Phase 6 Native CONFIG examples: docs/CONFIG-EXAMPLES.md + 4 generator-validated docs/examples/*.conf (docs only, no graph impact) | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
