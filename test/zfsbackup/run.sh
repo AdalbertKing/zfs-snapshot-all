@@ -4810,7 +4810,13 @@ EOF
 chmod +x "$AP/snapget-capture.sh"
 
 run_ap() {   # <profile-root> -> output; leaves the captured workfile in $AP/cap
-    rm -f "$AP/cap/workfile"
+    # Clear stale working copies first. cmd_activate_client removes its own on
+    # every path it controls, but a die raised INSIDE ensure_cron_config (the
+    # "first activation with no profile" case below) exits before that cleanup,
+    # leaving one behind -- and then the capture stub's `cp` would have two
+    # sources and one non-directory destination, which fails silently and makes
+    # the next assertion look like a code defect.
+    rm -f "$AP/cap/workfile" "$AP/dir"/.zfsbackup-work.*
     ( CLIENTS_DIR="$AP/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
       SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$AP/snapget-capture.sh" \
       PROFILE_ROOT="$1" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
@@ -4891,6 +4897,135 @@ if [ "$rc" -ne 0 ] && case "$out" in *"profile 'prof'"*) true ;; *) false ;; esa
     ok "90 a first activation with no profile still fails loudly at the additive boundary"
 else
     bad "90 a first activation with no profile still fails loudly at the additive boundary" "rc=$rc out=$(printf '%s' "$out" | tail -5)"
+fi
+
+# --- 51. REV-20260810-091: pure reactivation creates/repairs/migrates nothing --
+#
+# REV-090 stopped reactivation from loading the profile and appending its
+# templates, but `ensure_cron_config()` still did two policy things
+# unconditionally: it re-added the CONFIG-WIDE [excluded:] retention floors (F1),
+# and it refused a pre-GFS installed CONFIG outright (F2). Neither is a topology
+# fact, so `needs_profile=0` did not actually mean topology-only.
+#
+# Both are now gated on the same needs_profile the template loop uses. The rule
+# is one sentence: pure topology reactivation does not create, repair, normalize
+# or migrate policy.
+
+# --- F1: a deliberately removed CONFIG-wide [excluded:] stays removed. ---
+# Reuses section 50's fixture, which is already a valid active relationship
+# built by the real generators. run_ap never installs, so $APC is still the
+# installed CONFIG it was.
+if grep -qF "[excluded:vzdump]" "$APC"; then
+    ok "91 F1 precondition: the reserved-prefix floor was installed at CREATE"
+else
+    bad "91 F1 precondition: the reserved-prefix floor was installed at CREATE" "$(grep -c '^\[excluded:' "$APC") excluded section(s)"
+fi
+awk '/^\[excluded:vzdump\]/{skip=1;next} skip&&/^\[/{skip=0} !skip' "$APC" > "$APC.tmp" && mv "$APC.tmp" "$APC"
+out=$(run_ap "$AP/root")
+if [ -f "$AP/cap/workfile" ] \
+        && ! grep -qF "[excluded:vzdump]" "$AP/cap/workfile" \
+        && grep -q "src *= *zfsbackup@10.7.7.9:rpool/data" "$AP/cap/workfile" \
+        && case "$out" in *"added missing reserved-prefix protection"*) false ;; *) true ;; esac; then
+    ok "91 F1: endpoint-only reactivation does not re-add a removed [excluded:] floor"
+else
+    bad "91 F1: endpoint-only reactivation does not re-add a removed [excluded:] floor" \
+        "captured=$([ -f "$AP/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
+fi
+# The floor is not abolished, only moved to the boundary that creates policy: a
+# genuine first activation still installs it. Otherwise F1's fix would have
+# quietly dropped a real safety default instead of relocating it.
+printf '[defaults]\n\thost_label = fltest\n' > "$AP/dir/floor.conf"
+( PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+  ensure_cron_config "$AP/dir/floor.conf" 1 1 ) >/dev/null 2>&1
+if grep -qF "[excluded:vzdump]" "$AP/dir/floor.conf"; then
+    ok "91 F1: a policy-creating call still installs the reserved-prefix floors"
+else
+    bad "91 F1: a policy-creating call still installs the reserved-prefix floors" "$(cat "$AP/dir/floor.conf")"
+fi
+
+# --- F2: a valid pre-GFS CONFIG is refreshed, not forced through migration. ---
+PG="$WORK/pregfs"; mkdir -p "$PG/dir" "$PG/cap"
+PGC="$PG/dir/jobs.conf"
+cat > "$PGC" <<EOF
+[defaults]
+	host_label = pgtest
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly_
+	retain         = 24
+
+[dataset:tank/backups/10.7.7.8/rpool/data]
+	# managed-by: zfs-backup.sh client=apx
+	use_template = standard_hourly
+	src          = zfsbackup@10.7.7.8:rpool/data
+	flags        = -K /dev/null
+	pair_label   = apx
+	notify       = apx-data
+EOF
+# The fixture must be a config the real consumer accepts, or "reactivation got
+# further" would prove nothing about the pre-GFS path specifically.
+if bash "$REPO/gen-cron.sh" -c "$PGC" >/dev/null 2>&1; then
+    ok "91 F2 precondition: the legacy pre-GFS fixture is a config real gen-cron.sh accepts"
+else
+    bad "91 F2 precondition: the legacy pre-GFS fixture is a config real gen-cron.sh accepts" "$(bash "$REPO/gen-cron.sh" -c "$PGC" 2>&1 | tail -3)"
+fi
+# Its OWN clients dir: the section-50 relationship 'apx' already owns this exact
+# path, and the coverage-overlap guard (REV-083/085) would refuse a second
+# relationship claiming it -- correctly, and long before the pre-GFS path this
+# case is about.
+mkdir -p "$PG/clients"
+cat > "$PG/clients/apleg.conf" <<EOF
+CLIENT_NAME=apleg
+PEER_HOST=10.7.7.8
+STATE=active
+ACTIVE_ENDPOINT=lan
+ENDPOINT_LAN_HOST=10.7.7.9
+ENDPOINT_LAN_PORT=22
+MANAGED_DATASETS=tank/backups/10.7.7.8/rpool/data
+CRON_CONFIG=$PGC
+EOF
+# That section's marker names client 'apx', not 'apleg' -- rename it, so this
+# relationship genuinely OWNS what it is about to preserve rather than relying
+# on the MANAGED_DATASETS fallback alone.
+sed -i 's|# managed-by: zfs-backup.sh client=apx|# managed-by: zfs-backup.sh client=apleg|' "$PGC"
+cat > "$PG/snapget-capture.sh" <<EOF
+#!/usr/bin/env bash
+cp -f "$PG/dir"/.zfsbackup-work.* "$PG/cap/workfile" 2>/dev/null
+exit 0
+EOF
+chmod +x "$PG/snapget-capture.sh"
+rm -f "$PG/cap/workfile" "$PG/dir"/.zfsbackup-work.*
+out=$( ( CLIENTS_DIR="$PG/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
+         SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$PG/snapget-capture.sh" \
+         PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+         cmd_activate_client apleg --yes ) 2>&1 )
+if [ -f "$PG/cap/workfile" ] && case "$out" in *"pre-GFS profile"*) false ;; *) true ;; esac; then
+    ok "91 F2: endpoint-only reactivation of a pre-GFS config is not refused"
+else
+    bad "91 F2: endpoint-only reactivation of a pre-GFS config is not refused" \
+        "captured=$([ -f "$PG/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
+fi
+if [ -f "$PG/cap/workfile" ] \
+        && grep -q "src *= *zfsbackup@10.7.7.9:rpool/data" "$PG/cap/workfile" \
+        && grep -q "prune_schedule = 21 \* \* \* \*" "$PG/cap/workfile" \
+        && ! grep -q "profile__" "$PG/cap/workfile"; then
+    ok "91 F2: it refreshes src and leaves the legacy flat-retention policy untouched"
+else
+    bad "91 F2: it refreshes src and leaves the legacy flat-retention policy untouched" \
+        "$([ -f "$PG/cap/workfile" ] && cat "$PG/cap/workfile" || echo '(no workfile captured)')"
+fi
+# The refusal is retained where the hazard is real: a pre-GFS config that must
+# GENERATE a section would be given the GFS ladder on top of its own flat
+# retention -- the double-prune race -- so that path must still refuse.
+out=$( ( PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+         ensure_cron_config "$PGC" 0 1 ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"pre-GFS profile"*) true ;; *) false ;; esac; then
+    ok "91 F2: a policy-generating call on a pre-GFS config still refuses"
+else
+    bad "91 F2: a policy-generating call on a pre-GFS config still refuses" "rc=$rc out=$(printf '%s' "$out" | tail -3)"
 fi
 
 echo "--------------------------------------------"

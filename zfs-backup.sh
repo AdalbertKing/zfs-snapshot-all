@@ -724,7 +724,17 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # working copy, preview, confirmation, read-back -- and reaches this code
     # only after removing the legacy family, at which point the detection above
     # sees a GFS host and this refusal does not fire.
-    if [ "$PROFILE_GFS" -eq 0 ]; then
+    #
+    # REV-20260810-091 F2: gated on needs_profile, because the hazard it guards
+    # is ADDING current-profile policy on top of legacy policy. When nothing is
+    # being generated there is no second ladder to create, no double prune, and
+    # therefore nothing to refuse -- a pre-GFS host's own flat retention keeps
+    # working exactly as it did. Refusing anyway would make an endpoint change
+    # depend on a policy migration, which is precisely what Phase 3 forbids.
+    # Note detect_profile_gfs itself still runs unconditionally: PROFILE_GFS is
+    # read downstream (the prune shape, the activation summary), and only the
+    # REFUSAL is conditional.
+    if [ "$needs_profile" -eq 1 ] && [ "$PROFILE_GFS" -eq 0 ]; then
         die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
     fi
 
@@ -799,16 +809,30 @@ Resolve by hand: give the new relationship's profile a different template identi
     # moment a second client activated. Only ADDS a missing floor: an
     # operator who already set a stronger keep for one of these is never
     # overridden or narrowed.
+    #
+    # REV-20260810-091 F1: and gated on needs_profile, for the same reason the
+    # template loop is. This is CONFIG-WIDE policy scaffolding -- appropriate
+    # when policy is being created or migrated, wrong as a side effect of an
+    # endpoint refresh. After the handoff, native CONFIG v4 is runtime truth,
+    # and endpoint maintenance is not the boundary at which it may be repaired
+    # or normalized: an operator who deliberately removed one of these floors
+    # must not find it silently restored by a set-endpoint follow-up.
     local prefix
-    for prefix in "__replicate_" "vzdump" "__migration__"; do
-        grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
-        {
-            echo
-            echo "[excluded:$prefix]"
-            echo "	keep = 2"
-        } >> "$file" || die "could not append [excluded:$prefix] to $file"
-        log "added missing reserved-prefix protection [excluded:$prefix] (keep=2) to $file"
-    done
+    if [ "$needs_profile" -eq 1 ]; then
+        for prefix in "__replicate_" "vzdump" "__migration__"; do
+            grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
+            {
+                echo
+                echo "[excluded:$prefix]"
+                echo "	keep = 2"
+            } >> "$file" || die "could not append [excluded:$prefix] to $file"
+            log "added missing reserved-prefix protection [excluded:$prefix] (keep=2) to $file"
+        done
+    fi
+    # Explicit: without it this function's exit status would be whatever the
+    # last conditional happened to evaluate to -- the fail-open shape REV-084
+    # was filed for.
+    return 0
 }
 
 # gen-cron.sh --install replaces the ENTIRE managed block (BEGIN/END markers)

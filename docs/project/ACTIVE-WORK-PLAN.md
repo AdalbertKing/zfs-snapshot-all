@@ -140,7 +140,25 @@ Evidence: section 50, six assertions, all crossing the real
 `c5f04ab0…` → **335/339**, the four failures being exactly the new assertions.
 Response: `docs/internal/reviews/responses/REV-20260810-090.md`.
 
-Deferred and explicitly out of scope per both reviews: source-removal /
+**And a third round — REV-20260810-091 (two more P1s), same function again.**
+REV-090 gated the two operations it named, but `ensure_cron_config()` still did
+two more things unconditionally: it re-added the CONFIG-wide `[excluded:]`
+retention floors (F1) and it refused a pre-GFS installed CONFIG outright (F2).
+So `needs_profile=0` still did not actually mean topology-only. Both are now
+behind the same gate. The pre-GFS *detection* still runs unconditionally —
+`PROFILE_GFS` is read downstream by the prune shape and the activation summary —
+only the *refusal* is conditional, and it still fires wherever policy is
+genuinely being generated onto a legacy host.
+
+Evidence: section 51, seven assertions — **346/346**; negative control against
+`e26adc57…` → **343/346**, the three failures being exactly the new
+discriminating assertions. Response:
+`docs/internal/reviews/responses/REV-20260810-091.md`.
+
+The operative rule for this phase, in the reviewer's words: *pure topology
+reactivation does not create, repair, normalize or migrate policy.*
+
+Deferred and explicitly out of scope per all three reviews: source-removal /
 dataset-set reconciliation.
 
 ### Gate 3
