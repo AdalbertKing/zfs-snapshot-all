@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 11:06:44 CEST
-- reviewed main SHA: `b37da1617b989cdc0f0610875d71b20456b3dc5e`
-- latest observed implementer commit event before reviewer writes: `b37da1617b989cdc0f0610875d71b20456b3dc5e` — 2026-08-11 11:03:17 CEST
+- timestamp Europe/Warsaw: 2026-08-11 11:56:00 CEST
+- reviewed main SHA: `ecacb7bd01013e6481ac315ab21b62c3bf58ce23`
+- latest observed implementer commit event before reviewer writes: `ecacb7bd01013e6481ac315ab21b62c3bf58ce23` — 2026-08-11 11:45:26 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `b37da1617b989cdc0f0610875d71b20456b3dc5e`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 CLOSED at 49d547aeb444259225a9aa4f9bae721ca6bf21f4; REV-20260811-104 OPEN -> Claude`
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `ecacb7bd01013e6481ac315ab21b62c3bf58ce23`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-104 CLOSED at 0e29dcd9b1d5e5a2c6a6c7592514208c113c1712`
 - result: reviewed
 
-Review outcome: implementation `49d547aeb444259225a9aa4f9bae721ca6bf21f4` correctly removes the local source-prune `-R` over-reach for the current non-recursive source and corrects REV-103's stale grant/default-ladder premises. REV-103 is approved/closed on that SHA. A distinct P1 remains: SOURCE and TARGET `[prune:]` scopes still reference the same namespaced `keep_*` template identities, so changing a retention value in the candidate changes both sides and violates the owner requirement for independently editable runtime policies. The active design also still contains the unproven shorthand that recursive mode takes a FULL on its first miss; only absence of bookmark fallback after loss of an ordinary common snapshot is established. Formal REV-20260811-104 tracks both. REV-102 remains OPEN for remote composition, migration/audit, and real-ZFS/delegated-SSH evidence. Phase 5 transactional install remains blocked. Generated REVIEW_LEDGER/OPEN-THREADS were checked; reviewer artifacts changed after the implementer's last `reviewctl --generate`, so those generated views require regeneration to reflect the new closure/open REV.
+Review outcome: independently verified REV-20260811-104 implementation `0e29dcd9b1d5e5a2c6a6c7592514208c113c1712` against fresh main. SOURCE and TARGET now have distinct prune-template identities with equal CREATE defaults; targeted evidence covers source-only mutation, target-only mutation, and a shared-family negative control. The recursive design statement is narrowed to the established invariant: no bookmark fallback in recursive mode, with FULL required only after loss of a usable ordinary common snapshot. REV-104 is approved/closed. REV-102 remains OPEN for remote-PULL composition, fail-closed delegated destroy/grant checks, migration/audit, and real-ZFS/live-host evidence including bookmark-unavailable and recursive cases. Generated ledger/OPEN-THREADS need regeneration after this reviewer closure.
