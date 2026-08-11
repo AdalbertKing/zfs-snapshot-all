@@ -849,6 +849,35 @@ capture_client_remote_source_prunes() {   # <file> <name> ; fills SOURCE_PRUNE_P
     unset -f _flush_cap
 }
 
+# The SSH connection flags for a remote source [prune:] scope: the pull's own
+# transport flags minus -b (bandwidth is a transfer cap, not an SSH option, and
+# gen-cron's ssh_flags accepts only -p/-k/-c/-K/-O). Pure function of the loaded
+# endpoint (LOAD_*), so the CREATE emitter and the step-5 retrofit compute it the
+# same way and cannot drift.
+source_prune_sflags() {
+    local s="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+    [ "${LOAD_PORT:-22}" != "22" ] && s="$s -p $LOAD_PORT"
+    printf '%s' "$s"
+}
+
+# Append ONE freshly generated remote source [prune:<scope>] section (the CREATE
+# body: marker, the profile's SOURCE prune fragment, non-recursive scope, ssh_flags,
+# labels). Shared by the step-3 CREATE path and the step-5 retrofit so both write an
+# identical, independent, non-recursive source ladder.
+append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds>
+    local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6"
+    {
+        echo
+        echo "[prune:$scope]"
+        echo "	$marker"
+        emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+        echo "	recursive    = no"
+        echo "	ssh_flags    = $sflags"
+        echo "	pair_label   = $name"
+        echo "	notify       = ${name}-src-$(basename "$ds")"
+    } >> "$wf"
+}
+
 # REV-20260811-102 step 3: the REMOTE source of a pull relationship accumulates the
 # tool-owned automated_ snapshots the pull creates; standard_hourly does not
 # self-prune, so without this the source pool fills (the exact REV-102 defect).
@@ -880,11 +909,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     # prune -- a genuine first CREATE -- is generated from the profile.
     capture_client_remote_source_prunes "$workfile" "$name"
     remove_client_remote_source_prunes "$workfile" "$name"
-    # SSH connection flags for the remote scope: the pull's own transport flags
-    # minus -b (bandwidth is a transfer cap, not an SSH option, and gen-cron's
-    # ssh_flags accepts only -p/-k/-c/-K/-O).
-    local sflags="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
-    [ "${LOAD_PORT:-22}" != "22" ] && sflags="$sflags -p $LOAD_PORT"
+    local sflags; sflags="$(source_prune_sflags)"
     local ds scope
     for ds in "$@"; do
         scope="${LOAD_ACCOUNT:-root}@${LOAD_HOST:-}:${ds}"
@@ -902,19 +927,60 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
             # the policy from the profile.
-            {
-                echo
-                echo "[prune:$scope]"
-                echo "	$marker"
-                emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
-                echo "	recursive    = no"
-                echo "	ssh_flags    = $sflags"
-                echo "	pair_label   = $name"
-                echo "	notify       = ${name}-src-$(basename "$ds")"
-            } >> "$workfile" || return 1
+            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
+}
+
+# REV-20260811-102 step 5 / F4: the NARROW retrofit emitter. Unlike
+# emit_remote_source_prune (which capture/remove/re-emits EVERY source prune to move
+# its endpoint) and unlike emit_client_sections is_new=0 (which also refreshes the
+# [dataset:] src/flags topology), this APPENDS ONLY a fresh source [prune:] for the
+# named SCOPES and touches nothing else -- no [dataset:], no target prune, no
+# existing bounded source prune. That is exactly the migration boundary the finding
+# requires: "add only missing source retention, leave all other policy/topology
+# byte-identical". Each scope is the INSTALLED [dataset:] src verbatim (CONFIG is
+# truth), so the added prune targets exactly the endpoint the relationship pulls
+# from. Records SOURCE_PRUNE_EMITTED_DS for the caller's grant gate.
+emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
+    local workfile="$1" name="$2"; shift 2
+    [ "$#" -gt 0 ] || return 0
+    [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
+    local marker="# managed-by: zfs-backup.sh client=$name"
+    append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
+    local sflags; sflags="$(source_prune_sflags)"
+    local scope ds
+    for scope in "$@"; do
+        ds="${scope##*:}"
+        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" || return 1
+        SOURCE_PRUNE_EMITTED_DS+=("$ds")
+    done
+}
+
+# REV-20260811-102 step 5 / F3: decide whether a source scope has EFFECTIVE bounded
+# retention -- not merely a [prune:] header, but a section that gen-cron.sh actually
+# renders into a bounded delsnaps job. A valid remote source prune always renders a
+# `delsnaps.sh ... "<scope>" ...` line (gen-cron refuses an unbounded/monitor-only
+# remote prune outright), so the presence of that exact-scope delsnaps argument in
+# the rendered crontab is the authoritative test. Reuses gen-cron semantics rather
+# than re-parsing retention. $1 is the rendered-crontab file, $2 the scope.
+source_scope_is_bounded() {   # <rendered-crontab-file> <scope>
+    grep -F 'delsnaps' "$1" 2>/dev/null | grep -qF "\"$2\""
+}
+
+# The `src` value of an installed [dataset:<localpath>] section (account@host:ds), or
+# empty if the section or its src field is absent. The audit keys the SOURCE scope off
+# this -- the installed CONFIG is runtime truth -- not off possibly-stale client state.
+installed_dataset_src() {   # <cronfile> <local dataset path>
+    awk -v h="[dataset:$2]" '
+        $0==h {f=1; next}
+        f && /^\[/ {f=0}
+        f {
+            line=$0; sub(/^[ \t]+/,"",line)
+            if (line ~ /^src[ \t]*=/) { sub(/^src[ \t]*=[ \t]*/,"",line); print line; exit }
+        }
+    ' "$1" 2>/dev/null
 }
 
 # The same extraction, generalized to any CONFIG v4 file and any section
@@ -3585,11 +3651,20 @@ cmd_migrate_profile() {
 # ordinary reactivation must not add source retention as a hidden repair (that would
 # violate CONFIG-is-runtime-truth), so this is the ONE explicit, previewed verb that
 # does it. Read-only by default (audit): scans the installed CONFIG and lists every
-# active pull relationship whose remote source has no bounded [prune:account@host:ds]
-# and the exact sections it WOULD add. With --apply it installs them in the same
-# previewed/confirmed/grant-checked transaction migrate-profile uses -- via
-# emit_client_sections is_new=0, so it PRESERVES all installed policy (REV-089 /
-# REV-107) and ADDS only the missing source prune, reconstructing nothing else.
+# active pull relationship whose remote source has no bounded [prune:account@host:ds].
+#
+# REV-20260811-102 F3: "bounded" is decided by EFFECTIVE retention, not header
+# existence -- the installed config is rendered through the REAL gen-cron.sh once and
+# a source is bounded only if that render emits a delsnaps job for its exact scope. A
+# section header that does not resolve to a bounded delsnaps (e.g. it never validated,
+# or resolves to nothing) is reported as unbounded, not silently accepted.
+#
+# REV-20260811-102 F4: --apply is NARROWER than reactivation. It appends ONLY the
+# missing source [prune:] sections (emit_missing_source_prune) and their templates; it
+# never calls emit_client_sections, so it does not refresh [dataset:] src/flags, move
+# an existing source-prune endpoint, or touch target prune. The migration changes only
+# the intended source-retention material, in the same previewed/confirmed/grant-checked
+# transaction migrate-profile uses.
 cmd_audit_source_retention() {   # [--apply] [--yes]
     local apply=0 yes=0 a
     for a in "$@"; do
@@ -3604,9 +3679,23 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
     local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
 
+    # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
+    # bounded retention is read from this, not from section headers. An installed
+    # config that does not validate cannot be audited safely -- refuse rather than
+    # guess which sources are bounded.
+    local rendered; rendered=$(mktemp) || die "mktemp failed"
+    if ! bash "$GENCRON" -c "$cronfile" >"$rendered" 2>"$rendered.err"; then
+        local gcerr; gcerr=$(cat "$rendered.err" 2>/dev/null)
+        rm -f "$rendered" "$rendered.err"
+        die "installed config $cronfile does not validate through gen-cron.sh -- cannot audit effective source retention until it does:
+$gcerr"
+    fi
+    rm -f "$rendered.err"
+
     # --- read-only audit: which active pull relationships lack a bounded source prune ---
     local f missing=0 total_ds=0
     local -a report=()
+    local -A MISS_SRC=()   # client file -> space-separated missing source SCOPES (account@host:ds)
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
         # shellcheck disable=SC1090
@@ -3615,16 +3704,24 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
         . "$f"
         [ "${STATE:-}" = active ] || continue
         load_client_and_connection "$f"
-        local ds scope
+        local ds localpath src
         for ds in ${PEER_SAVED_DATASETS:-}; do
+            localpath="$(client_local_path "$ds")"
+            # The source scope is the INSTALLED [dataset:] src, not LOAD_*: CONFIG is
+            # truth. A dataset with no installed remote [dataset:] section has nothing
+            # to bound here.
+            src="$(installed_dataset_src "$cronfile" "$localpath")"
+            [ -n "$src" ] || continue
+            case "$src" in *@*:*) ;; *) continue ;; esac
             total_ds=$((total_ds + 1))
-            scope="${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-            if ! grep -qxF "[prune:$scope]" "$cronfile"; then
+            if ! source_scope_is_bounded "$rendered" "$src"; then
                 missing=$((missing + 1))
-                report+=("  $CLIENT_NAME: source '$ds' -> would add [prune:$scope] (delsnaps -G, non-recursive, __src_keep_* ladder, over the pull's pinned SSH)")
+                MISS_SRC["$f"]="${MISS_SRC["$f"]:-} $src"
+                report+=("  $CLIENT_NAME: source '$src' -> would add [prune:$src] (delsnaps -G, non-recursive, __src_keep_* ladder, over the pull's pinned SSH)")
             fi
         done
     done
+    rm -f "$rendered"
 
     echo "Audyt retencji ZRODLA (config: $cronfile)"
     echo "  aktywne pull-datasety:            $total_ds"
@@ -3643,27 +3740,44 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
         return 0
     fi
 
-    # --- --apply: build the workfile via is_new=0 (preserve everything, add only the
-    #     missing source prune), grant-check fail-closed per client, preview, install ---
+    # --- --apply (F4): append ONLY the missing source prune sections, nothing else ---
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
         || die "mktemp failed next to $cronfile"
     chmod 0644 "$workfile" 2>/dev/null || :
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     PROFILE_GFS=1
+    # Initialize the missing source retention from the same preset (default profile
+    # family), once; --apply is a retrofit "from the same preset", not a per-client
+    # profile reapplication.
+    load_active_profile
 
     local name touched=0
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
+        local miss="${MISS_SRC["$f"]:-}"
+        [ -n "${miss// /}" ] || continue
         # shellcheck disable=SC1090
         . "$f"
         [ "${STATE:-}" = active ] || continue
         name="$CLIENT_NAME"
         load_client_and_connection "$f"
-        # is_new=0: preserve installed [dataset:]/[prune:target]/source policy, add
-        # a missing source prune only. NOT migrate-profile's profile-wins is_new=1.
-        emit_client_sections "$workfile" "$name" 0 \
-            || { rm -f "$workfile"; die "could not compute sections for '$name'"; }
+        # F4 fail-closed: the source scope is the INSTALLED [dataset:] src. If the
+        # client's current endpoint disagrees with it, the relationship is in a state
+        # drift the retrofit must NOT paper over -- refuse and tell the operator to
+        # reconcile (re-activate) first, rather than opportunistically "repairing" the
+        # endpoint or grant-checking/pruning the wrong host.
+        local scope ds expected
+        for scope in $miss; do
+            ds="${scope##*:}"
+            expected="${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+            [ "$scope" = "$expected" ] || { rm -f "$workfile"; die "client '$name': installed source endpoint '$scope' disagrees with the current relationship endpoint '$expected' -- reconcile the endpoint (re-activate) before retrofitting source retention; nothing was changed."; }
+        done
+        # NARROW: append only the missing source prune(s) for this client. Records
+        # SOURCE_PRUNE_EMITTED_DS; reset first so the grant gate sees exactly these.
+        SOURCE_PRUNE_EMITTED_DS=()
+        emit_missing_source_prune "$workfile" "$name" $miss \
+            || { rm -f "$workfile"; die "could not emit missing source prune for '$name'"; }
         # fail-closed grant gate for exactly the source datasets this run emitted a
         # source prune for -- same discipline as activate-client/migrate-profile.
         if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
@@ -3684,7 +3798,7 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
         rm -f "$workfile"
         die "could not render the audit preview -- nothing was touched"
     }
-    echo "Dodanie retencji ZRODLA do $missing relacji(-i) bez niej ($touched aktywny(-ch) klient(ow) sprawdzonych)."
+    echo "Dodanie retencji ZRODLA do $missing relacji(-i) bez niej ($touched aktywny(-ch) klient(ow) zmienionych)."
     echo
     if [ "$yes" -ne 1 ]; then
         read -rp "Dodac brakujaca retencje zrodla? [t/N] " ans

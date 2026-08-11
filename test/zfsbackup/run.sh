@@ -5542,8 +5542,11 @@ CLIENT_NAME=c1
 STATE=active
 PEER_SAVED_DATASETS=rpool/data
 PEER_SAVED_MODE=backup
+PEER_SAVED_TARGET=tank/backups
 EOF
-# a config that pulls rpool/data but carries NO source prune for it
+# a config that pulls rpool/data but carries NO source prune for it. The audit keys the
+# source scope off the INSTALLED [dataset:] src, so the header path must match
+# client_local_path = PEER_SAVED_TARGET/LOAD_LABEL/ds = tank/backups/c1/rpool/data.
 cat > "$A5/jobs.conf" <<'EOF'
 [defaults]
 	host_label = h
@@ -5563,12 +5566,28 @@ cat > "$A5/jobs.conf" <<'EOF'
 	pair_label   = c1
 	notify       = c1
 EOF
-audit5() {  # runs the read-only audit against the fixture
-    bash -c "source '$ZFSBACKUP'
+# F3: the audit decides "bounded" from EFFECTIVE retention -- the config rendered
+# through gen-cron -- not from a [prune:] header. A gen-cron stub lets this test
+# control exactly what the render contains for the source scope, so the decision rule
+# (delsnaps-for-scope present?) is exercised directly, including the case where the
+# header exists but resolves to no bounded prune. The real-gen-cron delsnaps ARGUMENT
+# format the audit greps for is separately pinned by section 56.
+GC5="$A5/gencron-stub.sh"
+cat > "$GC5" <<'EOF'
+#!/usr/bin/env bash
+# ignores its -c arg; emits whatever render fixture the test staged
+cat "$GENCRON_RENDER"
+EOF
+chmod +x "$GC5"
+A5_RENDER="$A5/render.crontab"
+audit5() {  # runs the read-only audit against the fixture, render controlled by $A5_RENDER
+    GENCRON_RENDER="$A5_RENDER" bash -c "source '$ZFSBACKUP'
         read_server_conf() { CRON_CONFIG='$A5/jobs.conf'; }
-        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.5.5.5; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; }
-        CLIENTS_DIR='$A5/clients' SCRIPT_DIR='$A5' cmd_audit_source_retention" 2>&1
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.5.5.5; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=c1; }
+        GENCRON='$GC5' CLIENTS_DIR='$A5/clients' SCRIPT_DIR='$A5' cmd_audit_source_retention" 2>&1
 }
+# render fixture WITHOUT a delsnaps for the source scope (unbounded / pre-step-3)
+: > "$A5_RENDER"
 md5_before="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
 out="$(audit5)"; rc=$?
 md5_after="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
@@ -5582,23 +5601,119 @@ if [ "$rc" -eq 0 ] \
 else
     bad "57 step5: audit names the missing source retention and does NOT touch the config" "rc=$rc md5eq=$([ "$md5_before" = "$md5_after" ] && echo y || echo N) out=$out"
 fi
-# 2. once the source prune exists, the audit reports nothing to add (idempotent)
+# 2. F3 NEGATIVE CONTROL: add the exact [prune:<scope>] HEADER to the config, but the
+#    render STILL emits no delsnaps for that scope (header present, effectively
+#    unbounded). The audit must NOT report it safe -- header existence is not proof.
 cat >> "$A5/jobs.conf" <<'EOF'
 [prune:zfsbackup@10.5.5.5:rpool/data]
 	# managed-by: zfs-backup.sh client=c1
 	use_template = profile__default__src_keep_hourly
-	gfs          = yes
-	gfs_pattern  = automated_
 	recursive    = no
 	ssh_flags    = -K /dev/null
 	pair_label   = c1
 	notify       = c1-src-data
 EOF
 out="$(audit5)"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nic do dodania'; then
-    ok "57 step5: audit reports nothing to add once bounded source retention exists (idempotent)"
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+    ok "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe"
 else
-    bad "57 step5: audit reports nothing to add once bounded source retention exists" "rc=$rc out=$out"
+    bad "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe" "rc=$rc out=$out"
+fi
+# 3. once the render DOES carry a bounded delsnaps for the scope, audit reports
+#    nothing to add (idempotent) -- effective retention, in the real arg format.
+printf '30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null "zfsbackup@10.5.5.5:rpool/data" "automated_" -c 24 2>"$e"\n' > "$A5_RENDER"
+out="$(audit5)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nic do dodania'; then
+    ok "57 step5: audit reports nothing to add once the render bounds the source (idempotent)"
+else
+    bad "57 step5: audit reports nothing to add once the render bounds the source" "rc=$rc out=$out"
+fi
+
+# --- 57b. F4/F5: --apply is a NARROW retrofit (add only missing source retention),
+#     proven against a REAL profile + REAL gen-cron, with the grant gate and install
+#     stubbed. Build a valid pre-step-3 "installed" config by generating a full client
+#     config and stripping its source prune, then --apply must re-add ONLY the source
+#     prune while leaving [dataset:] src (topology) and target prune byte-identical. ---
+AP="$WORK/apply5"; mkdir -p "$AP/clients"
+# generate a full valid client config (dataset + target prune + source prune + templates)
+( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+  PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
+  LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.1 LOAD_PORT=22 LOAD_KEYFILE=/dev/null \
+  LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_FLAGS="-K /dev/null" \
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  emit_client_sections "$AP/full.conf" apc 1 ) >/dev/null 2>&1
+( PROFILE_ROOT="$P56" profile_render_templates "$P56/prof" prof "$AP/tpl.conf" ) || true
+# assemble the "installed" config, then STRIP the source prune section + its src_
+# templates to simulate a relationship installed BEFORE step 3
+{ printf '[defaults]\n\thost_label = pve9\n\n'; cat "$AP/tpl.conf"; cat "$AP/full.conf"; } > "$AP/installed.raw"
+awk '
+  /^\[prune:zfsbackup@/{skip=1}
+  /^\[template:profile__prof__src_/{skip=1}
+  /^\[/{ if ($0 !~ /^\[prune:zfsbackup@/ && $0 !~ /^\[template:profile__prof__src_/) skip=0 }
+  !skip{print}
+' "$AP/installed.raw" > "$AP/jobs.conf"
+cat > "$AP/clients/apc.conf" <<'EOF'
+CLIENT_NAME=apc
+STATE=active
+PEER_SAVED_DATASETS=rpool/data
+PEER_SAVED_MODE=backup
+PEER_SAVED_TARGET=tank/backups
+EOF
+inst_src_before="$(awk '/^\[dataset:/{f=1} /^\[prune:/{f=0} f&&/src /' "$AP/jobs.conf")"
+apply5() {  # <grantrc> <loaded-host> : runs --apply with a controllable endpoint + grant
+    local grantrc="$1" loadhost="$2"
+    ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      bash -c "source '$ZFSBACKUP'
+        read_server_conf() { CRON_CONFIG='$AP/jobs.conf'; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=$loadhost; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_FLAGS='-K /dev/null'; LOAD_LABEL=pve9; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET='tank/backups'; }
+        assert_source_prune_grant() { return $grantrc; }
+        show_activation_proposal() { return 0; }
+        assert_cron_config_matches_installed() { return 0; }
+        assert_no_foreign_managed_block() { return 0; }
+        assert_target_block_not_clobbered() { return 0; }
+        assert_config_readable_by_target() { return 0; }
+        atomic_replace_and_install() { cp \"\$2\" \"\$1\"; }
+        GENCRON='$REPO/gen-cron.sh' PROFILE_ROOT='$P56' PROFILE_ACTIVE=prof PROFILE_LOADED='' \
+          CLIENTS_DIR='$AP/clients' SCRIPT_DIR='$AP' cmd_audit_source_retention --apply --yes" 2>&1 )
+}
+# 4. F5 REFUSAL: endpoints agree, but the grant check fails -> non-zero, byte-identical
+md5_ap_before="$(md5sum "$AP/jobs.conf" | awk '{print $1}')"
+out="$(apply5 1 10.7.7.1)"; rc=$?
+md5_ap_after="$(md5sum "$AP/jobs.conf" | awk '{print $1}')"
+if [ "$rc" -ne 0 ] && [ "$md5_ap_before" = "$md5_ap_after" ]; then
+    ok "57b step5 (F5): --apply with a failing grant check installs nothing (config byte-identical)"
+else
+    bad "57b step5 (F5): --apply with a failing grant check installs nothing" "rc=$rc md5eq=$([ "$md5_ap_before" = "$md5_ap_after" ] && echo y || echo N) out=$out"
+fi
+# 5. F4 DISCRIMINATING REGRESSION: the client's current endpoint (10.9.9.9) DIFFERS
+#    from the installed [dataset:] src (10.7.7.1). The retrofit must NOT opportunistically
+#    repair topology -- it refuses, names the mismatch, and changes nothing.
+md5_ap_before="$(md5sum "$AP/jobs.conf" | awk '{print $1}')"
+out="$(apply5 0 10.9.9.9)"; rc=$?
+md5_ap_after="$(md5sum "$AP/jobs.conf" | awk '{print $1}')"
+if [ "$rc" -ne 0 ] \
+        && [ "$md5_ap_before" = "$md5_ap_after" ] \
+        && printf '%s' "$out" | grep -qiE 'disagree|reconcile'; then
+    ok "57b step5 (F4): --apply refuses when client endpoint disagrees with installed src (no topology repair)"
+else
+    bad "57b step5 (F4): --apply refuses when client endpoint disagrees with installed src" "rc=$rc md5eq=$([ "$md5_ap_before" = "$md5_ap_after" ] && echo y || echo N) out=$out"
+fi
+# 6. F4 SUCCESS: endpoints agree, grant OK -> a bounded source prune is ADDED at the
+#    INSTALLED endpoint, and the [dataset:] src (topology) is byte-identical (NOT rewritten)
+out="$(apply5 0 10.7.7.1)"; rc=$?
+inst_src_after="$(awk '/^\[dataset:/{f=1} /^\[prune:/{f=0} f&&/src /' "$AP/jobs.conf")"
+new_render="$(bash "$REPO/gen-cron.sh" -c "$AP/jobs.conf" 2>/dev/null)"
+if [ "$rc" -eq 0 ] \
+        && grep -qF '[prune:zfsbackup@10.7.7.1:rpool/data]' "$AP/jobs.conf" \
+        && printf '%s\n' "$new_render" | grep -q 'delsnaps\.sh.*"zfsbackup@10.7.7.1:rpool/data"' \
+        && [ "$inst_src_after" = "$inst_src_before" ] \
+        && printf '%s' "$inst_src_before" | grep -qF '10.7.7.1'; then
+    ok "57b step5 (F4): --apply adds a bounded source prune and leaves [dataset:] src topology byte-identical"
+else
+    bad "57b step5 (F4): --apply adds a bounded source prune and leaves [dataset:] src topology byte-identical" \
+        "rc=$rc src_before=[$inst_src_before] src_after=[$inst_src_after] hassrcprune=$(grep -cF '[prune:zfsbackup@10.7.7.1:rpool/data]' "$AP/jobs.conf")"
 fi
 
 echo "--------------------------------------------"

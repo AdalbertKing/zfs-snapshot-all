@@ -412,22 +412,48 @@ hold `destroy`.
 The migration path for CONFIGs installed BEFORE step 3 is the new
 `zfs-backup.sh audit-source-retention` verb — the one explicit, previewed way source
 retention is added to an existing relationship (ordinary reactivation never adds it
-as a hidden repair). It matches the Q5 answer:
+as a hidden repair). It matches the Q5 answer. The first cut was rejected on two
+safety defects (REV-102 F3/F4/F5); the shipped design below is the corrected one.
 
-- **read-only by default (audit):** scans the installed CONFIG and, for every active
-  pull relationship, checks whether its remote source `[prune:account@host:ds]` is
-  present. It lists exactly the relationships/datasets that lack it and the section
-  it *would* add, and touches nothing. Reports "nic do dodania" once every relation
-  is bounded (idempotent).
-- **`--apply`:** builds the workfile via `emit_client_sections … is_new=0` for each
-  active client — so it PRESERVES all installed policy and topology (REV-089 /
-  REV-107) and ADDS only the missing source prune, reconstructing nothing else —
-  then runs the same fail-closed source-prune grant gate, `gen-cron.sh` validation,
+- **read-only by default (audit):** renders the installed CONFIG through the REAL
+  `gen-cron.sh` ONCE and, for every active pull relationship, reads the source scope
+  from the INSTALLED `[dataset:]` `src` (CONFIG is truth, not client state). A source
+  is bounded only if that render emits a `delsnaps` job for its exact scope
+  (`source_scope_is_bounded`). It lists exactly the relationships/datasets that lack
+  a bounded source prune and the section it *would* add, and touches nothing. Reports
+  "nic do dodania" once every relation is bounded (idempotent).
+
+  **F3 (effective retention, not header presence):** the earlier cut decided
+  "bounded" with `grep -qxF "[prune:$scope]"` — a section HEADER, which is not proof
+  the section schedules bounded destruction. The fix reuses gen-cron semantics: only
+  a section that gen-cron actually renders into a bounded `delsnaps` counts. A header
+  that resolves to no bounded prune is reported unbounded, not silently accepted
+  (negative control in section 57).
+
+- **`--apply` (NARROW retrofit):** appends ONLY the missing source `[prune:]` sections
+  and their `__src_` templates (`emit_missing_source_prune`), then runs the same
+  fail-closed source-prune grant gate, `gen-cron.sh` validation,
   `show_activation_proposal` preview + confirmation, and `atomic_replace_and_install`
-  read-back that `migrate-profile` uses. No new representation, inheritance, or
-  drift manager; the installed sections stay the source of truth.
+  read-back that `migrate-profile` uses. It does NOT call `emit_client_sections`.
 
-Tests: `test/zfsbackup` section 57 (2 assertions) proves the read-only audit names
-the missing source retention and does NOT touch the config, and reports nothing once
-it exists. The `--apply` transaction reuses the already-tested `migrate-profile`
-machinery and the `emit_client_sections is_new=0` preservation path (section 56/107).
+  **F4 (add only missing, no topology repair):** the earlier cut called
+  `emit_client_sections … is_new=0`, the ordinary reactivation path, which refreshes
+  `[dataset:]` `src`/`flags` and can move an existing source-prune endpoint to the
+  currently-loaded endpoint. That let a retention retrofit perform an unrelated
+  topology refresh. The fix keys the source scope off the installed `[dataset:]` `src`
+  and appends only that; existing `[dataset:]`, target prune, and existing bounded
+  source prunes stay byte-identical. If the client's current endpoint DISAGREES with
+  the installed `src`, the retrofit REFUSES and tells the operator to reconcile
+  (re-activate) first — no opportunistic endpoint repair, no pruning/grant-checking
+  the wrong host.
+
+Tests: `test/zfsbackup` section 57 (6 assertions): read-only audit names the missing
+source retention and leaves the config byte-identical (F3); a `[prune:]` header that
+renders no bounded delsnaps is NOT reported safe (F3 negative control); idempotent
+once the render bounds the source; `--apply` installs nothing on a failing grant
+check (F5, byte-identical); `--apply` REFUSES when the client endpoint disagrees with
+the installed `src` (F4 discriminating regression, byte-identical); `--apply` with
+agreeing endpoints adds a bounded source prune at the installed endpoint and leaves
+`[dataset:]` `src` topology byte-identical (F4 success). The `--apply` transaction is
+exercised end-to-end through a REAL profile + REAL gen-cron with the grant gate and
+install stubbed.
