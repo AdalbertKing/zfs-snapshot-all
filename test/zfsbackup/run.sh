@@ -5363,6 +5363,35 @@ else
         "$([ -f "$PC/cap/workfile" ] && grep -c profile__alt__ "$PC/cap/workfile" || echo '(no candidate captured)')"
 fi
 
+# --- 55. REV-20260811-102 step 3 (owner Q4): assert_source_prune_grant fail-closed ---
+#
+# Before a collector-scheduled REMOTE source prune is installed, the relationship's
+# delegated identity must already hold `destroy` on the source (delsnaps' zfs
+# destroy). This must FAIL CLOSED -- refuse rather than install a job that fails,
+# and never widen the grant. Stub `zfs allow` output over ssh; no real host.
+SPG="$WORK/srcgrant"; mkdir -p "$SPG/bin"
+cat > "$SPG/bin/ssh" <<'EOF'
+#!/bin/sh
+# the remote command is the tail; find which dataset zfs allow was asked about
+case "$*" in
+  *"tank/ok"*)        printf '%b' '---- Permissions on tank/ok ----\nLocal+Descendent permissions:\n\tuser zfsbackup snapshot,destroy,send,hold,release,bookmark\n' ;;
+  *"tank/nodestroy"*) printf '%b' '---- Permissions on tank/nodestroy ----\nLocal+Descendent permissions:\n\tuser zfsbackup snapshot,send,hold,release\n' ;;
+  *"tank/sshfail"*)   exit 255 ;;
+  *) : ;;
+esac
+EOF
+chmod +x "$SPG/bin/ssh"
+spg() { ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22 /dev/null zfs-client-x /dev/null "$@" ) >/dev/null 2>&1; }
+spg tank/ok           && ok "55 grant with destroy on the source passes"        || bad "55 grant with destroy on the source passes" ""
+spg tank/nodestroy    && bad "55 missing destroy FAILS CLOSED" "returned 0"      || ok "55 missing destroy FAILS CLOSED (refuse, no widening)"
+spg tank/sshfail      && bad "55 an ssh/zfs-allow failure FAILS CLOSED" "rc=0"   || ok "55 an ssh/zfs-allow failure FAILS CLOSED"
+spg tank/ok tank/nodestroy && bad "55 one missing-destroy dataset among many FAILS CLOSED" "" || ok "55 one missing-destroy dataset among many FAILS CLOSED"
+# the refusal names 'destroy' and does not propose widening beyond it.
+msg="$( ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22 /dev/null zfs-client-x /dev/null tank/nodestroy ) 2>&1 )"
+{ printf '%s' "$msg" | grep -qi "does not hold 'destroy'" && ! printf '%s' "$msg" | grep -qiw 'mount'; } \
+    && ok "55 the refusal names destroy and proposes no mount/widening" \
+    || bad "55 the refusal names destroy and proposes no mount/widening" "$(printf '%s' "$msg"|tail -1)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

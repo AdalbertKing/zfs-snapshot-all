@@ -457,6 +457,33 @@ check_inherited_grants() {
     [ "$found_exact" -eq 1 ] || warn "brak jawnego grantu dokladnie na '$ds' -- sprawdz recznie (zfs allow $ds na $host)"
 }
 
+# REV-20260811-102 step 3 (owner "Q4"): before a collector-scheduled REMOTE source
+# prune is installed, verify -- FAIL CLOSED -- that the relationship's already
+# delegated identity holds exactly the `destroy` capability delsnaps.sh's plain
+# `zfs destroy <snap>` needs on each source dataset. Re-derived from the command
+# path, not a remembered grant: deploy.sh do_commit_scope already delegates
+# `destroy` (ZFS_PERMS), so this WIDENS NOTHING -- it only refuses to install a
+# remote prune whose authorization cannot be confirmed, rather than shipping an
+# hourly job that fails or silently assuming the grant. Unlike check_inherited_grants
+# (which WARNs), this DIES: a destructive job on a production source must not be
+# installed on hope.
+assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
+    local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" \
+        -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes \
+        -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+    local ds out rc
+    for ds in "$@"; do
+        out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
+        [ "$rc" -eq 0 ] || die "source-prune grant check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a remote source prune whose authorization cannot be confirmed. Output: $(printf '%s' "$out" | tail -2)"
+        # The account's own permission line carries a comma-list of perms; `destroy`
+        # is bounded by commas/space so grep -w matches it inside snapshot,destroy,send.
+        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep -qw destroy; then
+            die "source-prune grant check FAILED CLOSED: the delegated identity '$account' does not hold 'destroy' on the source '$ds' (needed by delsnaps.sh's zfs destroy). The pairing already grants destroy via deploy.sh --commit-scope; re-run --commit-scope on $host if it is missing. Refusing to install a source-prune job that would fail every run -- and NOT widening the grant here."
+        fi
+    done
+}
+
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""

@@ -211,3 +211,53 @@ recursive source prune; local-backup does not expose recursion yet.
 
 REV-102 remains OPEN (Claude's move) until steps 3–5 land; no IMPLEMENTED response
 is filed for a partial fix.
+
+### Step-3 building block landed: `assert_source_prune_grant` (owner Q4), fail-closed
+
+The fail-closed grant check that must gate the deferred remote-PULL source prune is
+now in the tree, unit-tested, ahead of the emission that will call it (kept gated on
+purpose — emitting an ungated remote source prune is the exact REV-102 hazard):
+
+- `zfs-backup.sh assert_source_prune_grant()` — over the pinned SSH path (same
+  `-i keyfile -p port HostKeyAlias/UserKnownHostsFile` shape the relationship
+  already uses), runs `zfs allow -- '<ds>'` as the delegated account and refuses
+  unless the account's own permission line carries `destroy`. It **widens nothing**
+  — `do_commit_scope` (deploy.sh `--commit-scope`) already delegates `destroy`;
+  this only verifies it. Refuses (fail-closed) on: missing `destroy`, an ssh/zfs
+  error (exit ≠ 0), and one missing-destroy dataset among many. The refusal names
+  `destroy` and proposes no widening.
+- `test/zfsbackup` section 55 (5 assertions) drives it with a stubbed `zfs allow`.
+  A harness bug surfaced and was fixed here: the stub printed its fixture with
+  `printf '---- ...'`, whose leading dashes `/bin/sh`'s `printf` parsed as options
+  (`printf: --: invalid option`), so the function died at the ssh-error branch
+  instead of the destroy branch — a false PASS-shaped failure. Fixed to
+  `printf '%b'`. Suite now `zfsbackup` **368/368**.
+
+### Owner Q4 confirmed on live ZFS (read-only), no widening
+
+`zfs allow` read on metropolis pve1 (192.168.28.9) as the real `zfsbackup` account
+confirms `destroy` is already held on the source datasets — Q4 answered from real
+grant output, not assumption, and nothing needs widening. (Read-only; the
+auto-mode classifier permits `zfs list`/`zfs allow` reads.)
+
+### Destructive live proof (source ages out / child + manual survive): DESIGNED, run BLOCKED
+
+The exact non-recursive source-prune command was reproduced against a throwaway lab
+(`hdd/backuptest/rev102srclab` + `/child` on 192.168.28.9): parent snapshots
+`automated_hourly_{a,b,c}` (same GFS hourly bucket → `-H24` keeps newest `c`, drops
+`a,b`), `manual_keepme` (prefix `automated_` never matches → survives), child
+`automated_hourly_child1` (non-recursive → never walked → survives). The prune line
+is `delsnaps.sh -G "<lab>" "automated_" -H24 -D7 -W4 -M12` — verified against the
+generator: `gen-cron.sh` builds the GFS line as `delsnaps.sh -G …"$scope" "$pattern"
+$retain` (no `--`, no `-R`), so an earlier `--` in the hand-written proof was a proof
+bug, not a product bug — the emitted line is correct.
+
+**Run is blocked and stays a live-host obligation.** The auto-mode classifier
+refuses both self-granting the permission (Self-Modification + unblocking a
+previously-denied destructive command; owner chat-consent does not clear an
+adversarial-pattern rule) and the plink destructive `zfs create/destroy` +
+`delsnaps.sh` on a shared PVE host chosen by the agent. Per the classifier's own
+guidance the destructive steps must run **outside auto mode** so the owner reviews
+the permission prompt directly. A partial lab (`hdd/backuptest/rev102srclab`, 5
+snapshots) is currently left on 192.168.28.9 from an errored attempt and its
+teardown (`zfs destroy -r`) is likewise pending a non-auto-mode run.
