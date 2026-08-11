@@ -5469,8 +5469,8 @@ if printf '%s\n' "$s3_render" | grep -q 'delsnaps\.sh.*"zfsbackup@10.7.7.1:rpool
 else
     bad "56 step3: the rendered cron prunes the remote source scope with pattern automated_" "$(printf '%s\n' "$s3_render" | grep delsnaps)"
 fi
-# endpoint switch: full regeneration MOVES the source prune to the new endpoint,
-# leaving no stale [prune:<old account@host>] behind (its scope is topology-derived)
+# endpoint switch MOVES the source prune to the new endpoint (its scope is
+# topology-derived), leaving no stale [prune:<old account@host>] behind.
 out=$(emit_src3 "$S3" s3c 10.7.7.2 0); rc=$?
 if [ "$rc" -eq 0 ] \
         && grep -qxF '[prune:zfsbackup@10.7.7.2:rpool/data]' "$S3" \
@@ -5478,6 +5478,43 @@ if [ "$rc" -eq 0 ] \
     ok "56 step3: an endpoint switch moves the source prune, leaving no stale-endpoint scope"
 else
     bad "56 step3: an endpoint switch moves the source prune, leaving no stale-endpoint scope" "rc=$rc file=$(cat "$S3")"
+fi
+
+# REV-20260811-107: re-activation must MOVE only topology (scope + ssh_flags) and
+# PRESERVE the installed source-retention POLICY -- CONFIG v4 is runtime truth after
+# CREATE, source and target independently editable. Discriminating regression:
+R7="$WORK/step3rev107.conf"; : > "$R7"
+srcsec() { awk -v h="[prune:$1]" '$0==h{f=1;next} /^\[/{f=0} f' "$R7"; }
+emit_src3b() { emit_src3 "$R7" r7c "$1" "$2" >/dev/null 2>&1; }   # writes into $R7
+emit_src3b 10.9.9.1 1   # CREATE at endpoint 1
+# admin edits SOURCE retention ONLY: drop weekly+monthly from the source prune's
+# use_template (a 6H/2D-style shortening), leaving TARGET at the full profile ladder.
+sed -i '/^\[prune:zfsbackup@10.9.9.1:rpool\/data\]/,/^\[/{s/\(use_template = profile__prof__src_keep_hourly,profile__prof__src_keep_daily\),profile__prof__src_keep_weekly,profile__prof__src_keep_monthly/\1/}' "$R7"
+before_src="$(srcsec 'zfsbackup@10.9.9.1:rpool/data' | grep use_template)"
+emit_src3b 10.9.9.2 0   # ordinary endpoint change / re-activation
+after_src="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep use_template)"
+after_sshf="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep ssh_flags)"
+# emit_src3 uses LOAD_LABEL=pve9, so the TARGET prune scope is tank/backups/pve9
+after_tgt="$(srcsec 'tank/backups/pve9' | grep use_template)"
+# 1. the edited SOURCE policy survived the endpoint change (NOT regenerated)
+if [ "$after_src" = "	use_template = profile__prof__src_keep_hourly,profile__prof__src_keep_daily" ]; then
+    ok "56/107: re-activation PRESERVES the edited source retention (policy not regenerated)"
+else
+    bad "56/107: re-activation PRESERVES the edited source retention (policy not regenerated)" "before=[$before_src] after=[$after_src]"
+fi
+# 2. only topology moved: new scope + no stale endpoint + refreshed ssh_flags
+if grep -qxF '[prune:zfsbackup@10.9.9.2:rpool/data]' "$R7" \
+        && ! grep -qF '10.9.9.1' "$R7" \
+        && printf '%s' "$after_sshf" | grep -q 'HostKeyAlias='; then
+    ok "56/107: re-activation moves ONLY topology (scope + ssh_flags) to the new endpoint"
+else
+    bad "56/107: re-activation moves ONLY topology (scope + ssh_flags) to the new endpoint" "$(cat "$R7")"
+fi
+# 3. TARGET retention is untouched throughout
+if [ "$after_tgt" = "	use_template = profile__prof__keep_hourly,profile__prof__keep_daily,profile__prof__keep_weekly,profile__prof__keep_monthly" ]; then
+    ok "56/107: TARGET retention is unchanged by the source edit + re-activation"
+else
+    bad "56/107: TARGET retention is unchanged by the source edit + re-activation" "after=[$after_tgt]"
 fi
 # the flow reads SOURCE_PRUNE_EMITTED_DS to grant-check exactly the emitted datasets
 out=$( ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \

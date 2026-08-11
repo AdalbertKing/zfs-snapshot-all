@@ -601,6 +601,10 @@ PROFILE_PRUNE_FILE=""
 # Source datasets that emit_client_sections wrote a REMOTE [prune:] for this run;
 # the flow grant-checks exactly these before publishing (REV-20260811-102 step 3).
 SOURCE_PRUNE_EMITTED_DS=()
+# Per source dataset, the INSTALLED remote source [prune:] POLICY body captured
+# before removal, so a re-activation preserves an admin's edited source retention
+# and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
+declare -A SOURCE_PRUNE_PRESERVED=()
 
 load_active_profile() {
     [ -n "$PROFILE_LOADED" ] && return 0
@@ -799,6 +803,50 @@ remove_client_remote_source_prunes() {   # <file> <name>
     ' "$file" > "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; die "could not rewrite $file removing source prunes"; }
 }
 
+# Capture, per source dataset, the POLICY body of each INSTALLED remote source
+# [prune:<account@host:ds>] this client owns (marker-verified) into
+# SOURCE_PRUNE_PRESERVED[ds], BEFORE it is removed. The body is every line after
+# the header (marker, use_template, gfs, gfs_pattern, recursive, ssh_flags, labels)
+# -- i.e. the admin's installed policy. A re-activation replays it under the new
+# scope, changing only topology (REV-20260811-107: reactivation must not regenerate
+# installed source policy from the profile). Runs in the CURRENT shell so the
+# associative array is populated (no pipe/subshell).
+capture_client_remote_source_prunes() {   # <file> <name> ; fills SOURCE_PRUNE_PRESERVED
+    SOURCE_PRUNE_PRESERVED=()
+    local file="$1" name="$2" marker="# managed-by: zfs-backup.sh client=$name"
+    local line t cur_ds="" cur_body="" in_sec=0 is_remote=0 seen_content=0 has_marker=0
+    _flush_cap() {
+        [ "$in_sec" -eq 1 ] && [ "$is_remote" -eq 1 ] && [ "$has_marker" -eq 1 ] && [ -n "$cur_ds" ] \
+            && SOURCE_PRUNE_PRESERVED["$cur_ds"]="${cur_body%$'\n'}"
+    }
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            \[*\])
+                _flush_cap
+                cur_body=""; seen_content=0; has_marker=0; is_remote=0; cur_ds=""; in_sec=1
+                case "$line" in
+                    \[prune:*@*:*\])
+                        is_remote=1
+                        cur_ds="${line%\]}"; cur_ds="${cur_ds##*:}"   # source dataset = part after the last ':'
+                        ;;
+                esac
+                ;;
+            *)
+                if [ "$in_sec" -eq 1 ]; then
+                    cur_body+="$line"$'\n'
+                    if [ "$seen_content" -eq 0 ] && [ -n "${line//[[:space:]]/}" ]; then
+                        seen_content=1
+                        t="${line#"${line%%[![:space:]]*}"}"
+                        [ "$t" = "$marker" ] && has_marker=1
+                    fi
+                fi
+                ;;
+        esac
+    done < "$file"
+    _flush_cap
+    unset -f _flush_cap
+}
+
 # REV-20260811-102 step 3: the REMOTE source of a pull relationship accumulates the
 # tool-owned automated_ snapshots the pull creates; standard_hourly does not
 # self-prune, so without this the source pool fills (the exact REV-102 defect).
@@ -818,15 +866,17 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     # published, so the two callers gate the INSTALL and this stays unit-testable
     # without a live host.
     append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
-    # FULL regeneration, unlike the target [prune:]. The source scope embeds the
-    # endpoint (account@host) in its SECTION HEADER, so it is topology-derived just
-    # like the [dataset:] `src` field -- and a header cannot be refreshed in place.
-    # So on every activation we drop ALL of this client's remote source prunes (by
-    # marker, whatever prior endpoint they named) and re-emit at the CURRENT
-    # endpoint for EVERY source dataset. That makes an endpoint switch move the
-    # source prune with it, and it is safe to regenerate because the section
-    # carries no operator-editable policy beyond the profile (its scope and flags
-    # are pure functions of the endpoint).
+    # The source scope embeds the endpoint (account@host) in its SECTION HEADER, so
+    # the scope is topology-derived like the [dataset:] `src` field and cannot be
+    # refreshed in place -- the section must be rebuilt to move it. But the POLICY
+    # inside it is CONFIG-v4 runtime truth after CREATE (REV-20260811-107): a
+    # re-activation must MOVE only topology (scope header + ssh_flags) and PRESERVE
+    # the installed policy body (use_template, gfs, retain), same topology-vs-policy
+    # split REV-089 draws for [dataset:]. So: capture each installed body first,
+    # remove the old sections, then per dataset replay the PRESERVED body under the
+    # new scope (updating only ssh_flags); only a dataset with NO installed source
+    # prune -- a genuine first CREATE -- is generated from the profile.
+    capture_client_remote_source_prunes "$workfile" "$name"
     remove_client_remote_source_prunes "$workfile" "$name"
     # SSH connection flags for the remote scope: the pull's own transport flags
     # minus -b (bandwidth is a transfer cap, not an SSH option, and gen-cron's
@@ -836,16 +886,31 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     local ds scope
     for ds in "$@"; do
         scope="${LOAD_ACCOUNT:-root}@${LOAD_HOST:-}:${ds}"
-        {
-            echo
-            echo "[prune:$scope]"
-            echo "	$marker"
-            emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
-            echo "	recursive    = no"
-            echo "	ssh_flags    = $sflags"
-            echo "	pair_label   = $name"
-            echo "	notify       = ${name}-src-$(basename "$ds")"
-        } >> "$workfile" || return 1
+        if [ -n "${SOURCE_PRUNE_PRESERVED[$ds]:-}" ]; then
+            # RE-ACTIVATION: replay the installed policy body under the new scope,
+            # rewriting only the topology-owned ssh_flags line. use_template, gfs,
+            # gfs_pattern, retain (via the preserved templates) and labels survive an
+            # admin edit exactly as installed.
+            {
+                echo
+                echo "[prune:$scope]"
+                printf '%s\n' "${SOURCE_PRUNE_PRESERVED[$ds]}" \
+                    | sed -E "s|^([[:space:]]*ssh_flags[[:space:]]*=).*|\1 $sflags|"
+            } >> "$workfile" || return 1
+        else
+            # FIRST CREATE: no installed source prune for this dataset -- generate
+            # the policy from the profile.
+            {
+                echo
+                echo "[prune:$scope]"
+                echo "	$marker"
+                emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+                echo "	recursive    = no"
+                echo "	ssh_flags    = $sflags"
+                echo "	pair_label   = $name"
+                echo "	notify       = ${name}-src-$(basename "$ds")"
+            } >> "$workfile" || return 1
+        fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }

@@ -318,21 +318,34 @@ callers — `cmd_activate_client` and the `migrate-profile` rebuild loop — the
 workfile. A missing `destroy` refuses the install (nothing touched). An empty list
 (a preserved re-activation that emitted no source prune) opens no SSH at all.
 
-### DELIBERATE deviation from REV-089: the source prune is REGENERATED, not preserved
+### Re-activation MOVES topology, PRESERVES policy (REV-089 split — corrected per REV-107)
 
-Unlike the target `[prune:]`, whose scope is a stable LOCAL path (so REV-089
-preserves an operator's hand-edits across re-activation), the source prune's scope
-embeds the endpoint (`account@host`) in its SECTION HEADER — it is topology-derived
-exactly like the `[dataset:].src` field, and a header cannot be refreshed in place.
-So on every activation `emit_remote_source_prune` drops ALL of this client's remote
-source prunes (`remove_client_remote_source_prunes`, matched by marker + a remote
-`[prune:*@*:*]` header — foreign/hand-written remote prunes are left untouched) and
-re-emits at the CURRENT endpoint for EVERY source dataset. This makes an endpoint
-switch MOVE the source prune with `src`, at the cost that a hand-edit to a source
-prune's policy is discarded on the next activation. That trade-off is owner-approved
-(2026-08-11): the source prune carries no operator-editable policy beyond the
-profile — its scope and flags are pure functions of the endpoint — so regenerating
-it is safe, and moving it on an endpoint switch is the property that matters.
+An earlier cut of step 3 REGENERATED the remote source prune from the profile on
+every activation, on the reasoning that "the header carries topology, so rebuild the
+whole section." REV-20260811-107 correctly rejected that: it discards an admin's
+edited source retention (e.g. shortening the space-constrained source to 6H/2D) on
+the next endpoint change, re-coupling policy through the profile and breaking the
+REV-102 contract that CONFIG v4 is runtime truth after CREATE. The header-vs-body
+distinction is exactly the one REV-089 already draws for `[dataset:]`: **topology may
+move while installed policy stays authoritative.**
+
+Corrected behaviour: the source prune's scope embeds the endpoint (`account@host`) in
+its header and so cannot be refreshed in place — the section must be rebuilt to move
+it — but only the TOPOLOGY moves. On re-activation `emit_remote_source_prune`:
+
+1. `capture_client_remote_source_prunes` captures each installed source prune's
+   POLICY body (marker-verified), keyed by source dataset, BEFORE removal;
+2. `remove_client_remote_source_prunes` drops the old-scope sections;
+3. per dataset, if an installed body was captured it is REPLAYED under the new scope
+   with only the `ssh_flags` line rewritten — `use_template`, `gfs`, `gfs_pattern`,
+   `recursive` and the retain (via the preserved `__src_keep_*` templates, which
+   `append_source_templates_if_missing` never overwrites) survive an admin edit
+   exactly as installed; only a dataset with NO installed source prune — a genuine
+   first CREATE — is generated from the profile.
+
+So an endpoint switch moves the source prune WITH `src`, and an edited source
+retention survives it. A first CREATE still seeds from the preset; an explicit
+previewed migration (step 5) is the only other way source policy is written.
 
 ### Tests (branch)
 
@@ -386,8 +399,11 @@ stays covered by `test/zfsbackup` section 55 (stubbed `zfs allow` with and witho
 `destroy`) and by the read-only confirmation that the production source datasets
 hold `destroy`.
 
-### Remaining before merge
+### Status after merge
 
-- reviewer sign-off on the branch, in particular the deliberate REV-089 deviation
-  (the source prune is regenerated, not preserved);
-- step 5: migration/audit path for already-installed CONFIGs.
+- merged to main (`d8febbd`); REV-20260811-107 then corrected the reactivation
+  policy from regenerate to preserve (topology moves, installed source policy
+  survives) — the REV-089 split is now honoured, not deviated from;
+- step 5: migration/audit path for already-installed CONFIGs — still remaining;
+- the continuity/bookmark/recursive sub-decision (Q4) — still open, reviewer input
+  requested.
