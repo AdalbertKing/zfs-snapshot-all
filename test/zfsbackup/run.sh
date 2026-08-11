@@ -5529,6 +5529,78 @@ case "$out" in
     *) bad "56 step3: emit records the source datasets for the flow's fail-closed grant check" "$out" ;;
 esac
 
+# --- 57. REV-20260811-102 step 5: audit-source-retention (read-only, no silent repair) ---
+#
+# Relationships installed BEFORE step 3 have a [dataset:]/[prune:target] but no
+# bounded source [prune:account@host:ds]. The audit must, read-only, name exactly
+# those and NOT touch the config; and report nothing once the source prune exists.
+# read_server_conf and load_client_and_connection carry endpoint machinery this unit
+# does not exercise, so they are stubbed to the fixture endpoint.
+A5="$WORK/audit5"; mkdir -p "$A5/clients"
+cat > "$A5/clients/c1.conf" <<'EOF'
+CLIENT_NAME=c1
+STATE=active
+PEER_SAVED_DATASETS=rpool/data
+PEER_SAVED_MODE=backup
+EOF
+# a config that pulls rpool/data but carries NO source prune for it
+cat > "$A5/jobs.conf" <<'EOF'
+[defaults]
+	host_label = h
+[dataset:tank/backups/c1/rpool/data]
+	# managed-by: zfs-backup.sh client=c1
+	use_template = profile__default__standard_hourly
+	src          = zfsbackup@10.5.5.5:rpool/data
+	flags        = -K /dev/null
+	pair_label   = c1
+	notify       = c1-data
+[prune:tank/backups/c1]
+	# managed-by: zfs-backup.sh client=c1
+	use_template = profile__default__keep_hourly
+	gfs          = yes
+	gfs_pattern  = automated_
+	recursive    = yes
+	pair_label   = c1
+	notify       = c1
+EOF
+audit5() {  # runs the read-only audit against the fixture
+    bash -c "source '$ZFSBACKUP'
+        read_server_conf() { CRON_CONFIG='$A5/jobs.conf'; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.5.5.5; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; }
+        CLIENTS_DIR='$A5/clients' SCRIPT_DIR='$A5' cmd_audit_source_retention" 2>&1
+}
+md5_before="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
+out="$(audit5)"; rc=$?
+md5_after="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
+# 1. names the missing source prune, counts it, and is read-only (no mutation)
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && printf '%s' "$out" | grep -qF '[prune:zfsbackup@10.5.5.5:rpool/data]' \
+        && printf '%s' "$out" | grep -qi 'TYLKO-DO-ODCZYTU' \
+        && [ "$md5_before" = "$md5_after" ]; then
+    ok "57 step5: audit names the missing source retention and does NOT touch the config"
+else
+    bad "57 step5: audit names the missing source retention and does NOT touch the config" "rc=$rc md5eq=$([ "$md5_before" = "$md5_after" ] && echo y || echo N) out=$out"
+fi
+# 2. once the source prune exists, the audit reports nothing to add (idempotent)
+cat >> "$A5/jobs.conf" <<'EOF'
+[prune:zfsbackup@10.5.5.5:rpool/data]
+	# managed-by: zfs-backup.sh client=c1
+	use_template = profile__default__src_keep_hourly
+	gfs          = yes
+	gfs_pattern  = automated_
+	recursive    = no
+	ssh_flags    = -K /dev/null
+	pair_label   = c1
+	notify       = c1-src-data
+EOF
+out="$(audit5)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nic do dodania'; then
+    ok "57 step5: audit reports nothing to add once bounded source retention exists (idempotent)"
+else
+    bad "57 step5: audit reports nothing to add once bounded source retention exists" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

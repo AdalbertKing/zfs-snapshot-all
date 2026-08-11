@@ -20,6 +20,7 @@ set -uo pipefail
 #   zfs-backup.sh verify-endpoint NAME
 #   zfs-backup.sh activate-client NAME [--yes] [--verbose]
 #   zfs-backup.sh migrate-profile [--yes]
+#   zfs-backup.sh audit-source-retention [--apply] [--yes]
 #   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
 #   zfs-backup.sh status [NAME]
 #   zfs-backup.sh test NAME
@@ -174,6 +175,7 @@ Usage:
   zfs-backup.sh verify-endpoint NAME
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
   zfs-backup.sh migrate-profile [--yes]
+  zfs-backup.sh audit-source-retention [--apply] [--yes]
   zfs-backup.sh migrate-to-account ACCOUNT [--yes]
   zfs-backup.sh pause-client NAME [--reason=TEXT]
   zfs-backup.sh resume-client NAME
@@ -3578,6 +3580,128 @@ cmd_migrate_profile() {
     log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
 }
 
+# REV-20260811-102 step 5: add SOURCE retention to relationships installed BEFORE
+# step 3, WITHOUT silent repair. Changing the preset only fixes new CREATE; an
+# ordinary reactivation must not add source retention as a hidden repair (that would
+# violate CONFIG-is-runtime-truth), so this is the ONE explicit, previewed verb that
+# does it. Read-only by default (audit): scans the installed CONFIG and lists every
+# active pull relationship whose remote source has no bounded [prune:account@host:ds]
+# and the exact sections it WOULD add. With --apply it installs them in the same
+# previewed/confirmed/grant-checked transaction migrate-profile uses -- via
+# emit_client_sections is_new=0, so it PRESERVES all installed policy (REV-089 /
+# REV-107) and ADDS only the missing source prune, reconstructing nothing else.
+cmd_audit_source_retention() {   # [--apply] [--yes]
+    local apply=0 yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --apply) apply=1 ;;
+            --yes)   yes=1 ;;
+            *) die "audit-source-retention: unknown option $a" ;;
+        esac
+    done
+
+    read_server_conf
+    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
+
+    # --- read-only audit: which active pull relationships lack a bounded source prune ---
+    local f missing=0 total_ds=0
+    local -a report=()
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        # shellcheck disable=SC1090
+        ( . "$f"; [ "${STATE:-}" = active ] ) || continue
+        # shellcheck disable=SC1090
+        . "$f"
+        [ "${STATE:-}" = active ] || continue
+        load_client_and_connection "$f"
+        local ds scope
+        for ds in ${PEER_SAVED_DATASETS:-}; do
+            total_ds=$((total_ds + 1))
+            scope="${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+            if ! grep -qxF "[prune:$scope]" "$cronfile"; then
+                missing=$((missing + 1))
+                report+=("  $CLIENT_NAME: source '$ds' -> would add [prune:$scope] (delsnaps -G, non-recursive, __src_keep_* ladder, over the pull's pinned SSH)")
+            fi
+        done
+    done
+
+    echo "Audyt retencji ZRODLA (config: $cronfile)"
+    echo "  aktywne pull-datasety:            $total_ds"
+    echo "  bez ograniczonej retencji zrodla: $missing"
+    if [ "$missing" -eq 0 ]; then
+        echo "Kazda aktywna relacja pull ma juz ograniczona retencje zrodla -- nic do dodania."
+        return 0
+    fi
+    printf '%s\n' "${report[@]}"
+    echo
+
+    if [ "$apply" -ne 1 ]; then
+        echo "To jest audyt TYLKO-DO-ODCZYTU -- $cronfile NIE zostal ruszony."
+        echo "Aby DODAC brakujaca retencje zrodla (w podgladanej, potwierdzanej, grant-checkowanej"
+        echo "transakcji, ktora ZACHOWUJE cala pozostala polityke): zfs-backup.sh audit-source-retention --apply"
+        return 0
+    fi
+
+    # --- --apply: build the workfile via is_new=0 (preserve everything, add only the
+    #     missing source prune), grant-check fail-closed per client, preview, install ---
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "mktemp failed next to $cronfile"
+    chmod 0644 "$workfile" 2>/dev/null || :
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    PROFILE_GFS=1
+
+    local name touched=0
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        # shellcheck disable=SC1090
+        . "$f"
+        [ "${STATE:-}" = active ] || continue
+        name="$CLIENT_NAME"
+        load_client_and_connection "$f"
+        # is_new=0: preserve installed [dataset:]/[prune:target]/source policy, add
+        # a missing source prune only. NOT migrate-profile's profile-wins is_new=1.
+        emit_client_sections "$workfile" "$name" 0 \
+            || { rm -f "$workfile"; die "could not compute sections for '$name'"; }
+        # fail-closed grant gate for exactly the source datasets this run emitted a
+        # source prune for -- same discipline as activate-client/migrate-profile.
+        if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+            ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+                  "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+                || { rm -f "$workfile"; die "source-prune grant check failed for '$name' -- nothing added or installed."; }
+        fi
+        touched=$((touched + 1))
+    done
+
+    log "validating the audited config (working copy only, nothing real touched yet)..."
+    if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the config with the added source retention -- $cronfile was NOT touched"
+    fi
+
+    show_activation_proposal "$cronfile" "$workfile" || {
+        rm -f "$workfile"
+        die "could not render the audit preview -- nothing was touched"
+    }
+    echo "Dodanie retencji ZRODLA do $missing relacji(-i) bez niej ($touched aktywny(-ch) klient(ow) sprawdzonych)."
+    echo
+    if [ "$yes" -ne 1 ]; then
+        read -rp "Dodac brakujaca retencje zrodla? [t/N] " ans
+        case "$ans" in
+            t|T|y|Y) ;;
+            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
+        esac
+    fi
+
+    assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
+    assert_config_readable_by_target "$cronfile"
+    atomic_replace_and_install "$cronfile" "$workfile"
+    log "source retention added to $missing relationship(s); all other policy preserved."
+}
+
 # ------------------------------------------------------------------------------
 # Host-level jobs: a SECOND tool-owned block in root's crontab.
 #
@@ -4942,6 +5066,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
+        audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         migrate-to-account) shift; cmd_migrate_to_account "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         resume-client)    shift; cmd_resume_client "$@" ;;

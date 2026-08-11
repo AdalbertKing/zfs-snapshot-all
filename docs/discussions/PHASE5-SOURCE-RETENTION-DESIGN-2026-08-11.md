@@ -404,6 +404,30 @@ hold `destroy`.
 - merged to main (`d8febbd`); REV-20260811-107 then corrected the reactivation
   policy from regenerate to preserve (topology moves, installed source policy
   survives) — the REV-089 split is now honoured, not deviated from;
-- step 5: migration/audit path for already-installed CONFIGs — still remaining;
 - the continuity/bookmark/recursive sub-decision (Q4) — still open, reviewer input
   requested.
+
+## Step 5 IMPLEMENTED: `audit-source-retention` (no silent repair)
+
+The migration path for CONFIGs installed BEFORE step 3 is the new
+`zfs-backup.sh audit-source-retention` verb — the one explicit, previewed way source
+retention is added to an existing relationship (ordinary reactivation never adds it
+as a hidden repair). It matches the Q5 answer:
+
+- **read-only by default (audit):** scans the installed CONFIG and, for every active
+  pull relationship, checks whether its remote source `[prune:account@host:ds]` is
+  present. It lists exactly the relationships/datasets that lack it and the section
+  it *would* add, and touches nothing. Reports "nic do dodania" once every relation
+  is bounded (idempotent).
+- **`--apply`:** builds the workfile via `emit_client_sections … is_new=0` for each
+  active client — so it PRESERVES all installed policy and topology (REV-089 /
+  REV-107) and ADDS only the missing source prune, reconstructing nothing else —
+  then runs the same fail-closed source-prune grant gate, `gen-cron.sh` validation,
+  `show_activation_proposal` preview + confirmation, and `atomic_replace_and_install`
+  read-back that `migrate-profile` uses. No new representation, inheritance, or
+  drift manager; the installed sections stay the source of truth.
+
+Tests: `test/zfsbackup` section 57 (2 assertions) proves the read-only audit names
+the missing source retention and does NOT touch the config, and reports nothing once
+it exists. The `--apply` transaction reuses the already-tested `migrate-profile`
+machinery and the `emit_client_sections is_new=0` preservation path (section 56/107).
