@@ -53,6 +53,7 @@ R=REV-20260808-001
 # cases below.
 sha1="$(git -C "$REPO" rev-parse origin/main~2)"
 sha2="$(git -C "$REPO" rev-parse origin/main~1)"
+sha3="$(git -C "$REPO" rev-parse origin/main~3)"
 deadbeef="$(git -C "$REPO" rev-parse origin/main)"
 [ -n "$sha1" ] && [ -n "$sha2" ] && [ -n "$deadbeef" ] || { echo "cannot resolve published commits"; exit 1; }
 
@@ -253,6 +254,35 @@ case "$(threads_txt)" in *DELIVERED*) bad "reviewed-by clears a delivery whose R
 world d7; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
 case "$(threads_txt)" in *DELIVERED*) ok "...and without it the delivery is still open" ;;
   *) bad "...and without it the delivery is still open" "$(threads_txt)" ;; esac
+
+# REV-20260811-099: the full resurface lifecycle. A direct-main delivery is
+# reviewed through a REV whose reviewed-implementation ADVANCES to a cumulative
+# follow-up sha and then CLOSES; after generate the original delivery must be
+# absent from OPEN-THREADS (the reviewed-by fact survives the pointer advance),
+# and the closed REV is not open either. This is exactly the resurface the real
+# Phase 4/5/6 deliveries showed once REV-095/097 advanced their pointers.
+world d8; deliver "$sha1" "phase slice"
+review  $R APPROVED    $sha2
+respond $R IMPLEMENTED $sha2
+closure $R $sha2
+printf '<!-- reviewed-by: %s %s -->\n' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
+txt="$(threads_txt)"
+case "$txt" in *"${sha1:0:8}"*) bad "099: a reviewed delivery is absent from OPEN-THREADS after its REV closes on a cumulative sha" "$txt" ;;
+  *) ok "099: a reviewed delivery is absent from OPEN-THREADS after its REV closes on a cumulative sha" ;; esac
+case "$txt" in *"$R"*) bad "099: the closed REV itself is not open either" "$txt" ;;
+  *) ok "099: the closed REV itself is not open either" ;; esac
+
+# Negative control: in the same closed world, a GENUINELY unreviewed delivery
+# (a third sha no REV or reviewed-by names) must still show as open -- so the
+# retirement is the reviewed-by fact, not "closing a REV silences all deliveries".
+world d9; deliver "$sha1" "reviewed slice"
+review  $R APPROVED    $sha2
+respond $R IMPLEMENTED $sha2
+closure $R $sha2
+printf '<!-- reviewed-by: %s %s -->\n' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
+deliver "$sha3" "an actually unreviewed delivery"
+case "$(threads_txt)" in *"${sha3:0:8}"*DELIVERED*) ok "099: a genuinely unreviewed delivery still shows as open (negative control)" ;;
+  *) bad "099: a genuinely unreviewed delivery still shows as open (negative control)" "$(threads_txt)" ;; esac
 
 # ---- commit ids must be CANONICAL, not merely resolvable (REV-080 F1) -------
 #
