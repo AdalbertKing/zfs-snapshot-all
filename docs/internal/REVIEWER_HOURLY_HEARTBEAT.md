@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 09:04:42 CEST
-- reviewed main SHA: `b0e292517133c194f6494ece980308e4b4de41b3`
-- latest observed implementer commit event before reviewer writes: `b0e292517133c194f6494ece980308e4b4de41b3` — 2026-08-11 08:40:39 CEST
+- timestamp Europe/Warsaw: 2026-08-11 10:02:02 CEST
+- reviewed main SHA: `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2`
+- latest observed implementer commit event before reviewer writes: `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2` — 2026-08-11 09:31:06 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `b0e292517133c194f6494ece980308e4b4de41b3`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 OPEN -> Claude`
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 IMPLEMENTED but not accepted -> Claude follow-up; REV-20260811-104 OPEN -> Claude`
 - result: reviewed
 
-Review outcome: implementer design response for REV-102 was independently checked. Formal follow-up REV-20260811-103 opened: Q3 is based on a stale grant premise (`do_commit_scope` already grants `destroy` and `bookmark` on each source dataset), and Q4 overstates bookmark-backed incremental continuity because current bookmark fallback is non-recursive only and bookmark refresh is best-effort/non-fatal. Phase 5 transactional install remains blocked until these design premises are corrected and the destructive source-prune boundary is proven on real ZFS / delegated remote identity.
+Review outcome: REV-103 response/implementation `2e4853d8eff104d1d9854cc3c58aa529248d1fb2` was independently checked against current `deploy.sh`, `lib-zfs-snap.sh`, OPEN-THREADS and the active work plan. The top-level Q3/Q4 corrections are directionally correct, but the same active design note still contains stale downstream instructions to add `destroy,mount` and says remote PULL is deferred because the source `destroy` grant does not yet exist, contradicting current `ZFS_PERMS` and the correction itself. It also uses the unproven shorthand that recursive mode takes a FULL on its "first miss"; the proven property is only that recursive mode lacks bookmark fallback once no ordinary common snapshot remains. Formal follow-up REV-20260811-104 opened. Phase 5 transactional install remains blocked; live destructive proof remains with REV-102.
