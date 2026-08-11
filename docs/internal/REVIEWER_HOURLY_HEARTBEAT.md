@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 10:02:02 CEST
-- reviewed main SHA: `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2`
-- latest observed implementer commit event before reviewer writes: `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2` — 2026-08-11 09:31:06 CEST
+- timestamp Europe/Warsaw: 2026-08-11 11:06:44 CEST
+- reviewed main SHA: `b37da1617b989cdc0f0610875d71b20456b3dc5e`
+- latest observed implementer commit event before reviewer writes: `b37da1617b989cdc0f0610875d71b20456b3dc5e` — 2026-08-11 11:03:17 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `c37fb3624d0612500ba9b12ecf4c767fbf83dfb2`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 IMPLEMENTED but not accepted -> Claude follow-up; REV-20260811-104 OPEN -> Claude`
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `b37da1617b989cdc0f0610875d71b20456b3dc5e`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 CLOSED at 49d547aeb444259225a9aa4f9bae721ca6bf21f4; REV-20260811-104 OPEN -> Claude`
 - result: reviewed
 
-Review outcome: REV-103 response/implementation `2e4853d8eff104d1d9854cc3c58aa529248d1fb2` was independently checked against current `deploy.sh`, `lib-zfs-snap.sh`, OPEN-THREADS and the active work plan. The top-level Q3/Q4 corrections are directionally correct, but the same active design note still contains stale downstream instructions to add `destroy,mount` and says remote PULL is deferred because the source `destroy` grant does not yet exist, contradicting current `ZFS_PERMS` and the correction itself. It also uses the unproven shorthand that recursive mode takes a FULL on its "first miss"; the proven property is only that recursive mode lacks bookmark fallback once no ordinary common snapshot remains. Formal follow-up REV-20260811-104 opened. Phase 5 transactional install remains blocked; live destructive proof remains with REV-102.
+Review outcome: implementation `49d547aeb444259225a9aa4f9bae721ca6bf21f4` correctly removes the local source-prune `-R` over-reach for the current non-recursive source and corrects REV-103's stale grant/default-ladder premises. REV-103 is approved/closed on that SHA. A distinct P1 remains: SOURCE and TARGET `[prune:]` scopes still reference the same namespaced `keep_*` template identities, so changing a retention value in the candidate changes both sides and violates the owner requirement for independently editable runtime policies. The active design also still contains the unproven shorthand that recursive mode takes a FULL on its first miss; only absence of bookmark fallback after loss of an ordinary common snapshot is established. Formal REV-20260811-104 tracks both. REV-102 remains OPEN for remote composition, migration/audit, and real-ZFS/delegated-SSH evidence. Phase 5 transactional install remains blocked. Generated REVIEW_LEDGER/OPEN-THREADS were checked; reviewer artifacts changed after the implementer's last `reviewctl --generate`, so those generated views require regeneration to reflect the new closure/open REV.
