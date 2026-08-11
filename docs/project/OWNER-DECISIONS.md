@@ -62,19 +62,21 @@ APPROVED verdict"), a `--verify` był czerwony bez naprawy po stronie implemente
 regeneracja ledgera nie czyści twardego błędu, a mój response już wskazywał
 `0e29dcd`, więc nie było do czego wyrównać.
 
-**Decyzja właściciela (2026-08-11, w sesji).** Właściciel WPROST autoryzował
-jednorazowy wyjątek od reguły „nie edytuj plików recenzenta `REV-*.md`": polecił
-poprawić nagłówek `REV-20260811-104.md`, aby ODZWIERCIEDLAŁ determinację recenzenta
-z jego własnego closure — czyli `verdict: APPROVED`, `reviewed-implementation:
-0e29dcd`. To transkrypcja decyzji, którą recenzent już podjął, nie nowa decyzja
-recenzencka. Wykonane w commicie `f149455`.
+**Charakter edycji `f149455` (REV-105, przyjęte kryterium 2).** W sesji właściciel
+polecił poprawić nagłówek, ale — jak słusznie wskazał recenzent w REV-105 —
+zapis takiego polecenia autorstwa implementera NIE jest niezależną, audytowalną
+prowenancją, więc nie powołuję się na niego jako na dowód. Zgodnie z kryterium 2
+finding-u: `f149455` traktuję jako **jednorazową naprawę synchronizacyjną**
+(nagłówek `REV-20260811-104.md` wyrównany do `APPROVED`/`0e29dcd`), której wynik
+SEMANTYCZNY został od tego czasu **niezależnie ratyfikowany przez recenzenta** jego
+własną determinacją closure (`closures/REV-20260811-104.md`, `closed-by 0e29dcd`).
+Nie jest to precedens ani stałe pozwolenie.
 
-**Reguła na przyszłość (REV-105).** To był jednorazowy synchronizacyjny repair, NIE
-stałe pozwolenie. Korekty `verdict`/`reviewed-implementation` w plikach
-`REV-*.md` należą do RECENZENTA; implementer może je edytować wyłącznie przy
-kolejnej, równie jawnej i zapisanej TUTAJ autoryzacji właściciela. Domyślnie taki
-rozjazd (closure bez APPROVED) zostaje zgłoszony recenzentowi do samodzielnej
-naprawy.
+**Reguła na przyszłość (REV-105).** Korekty `verdict`/`reviewed-implementation` w
+plikach `REV-*.md` należą do RECENZENTA; implementer NIE edytuje metadanych werdyktu
+recenzenta bez odrębnego, niezależnie audytowalnego wyjątku właściciela zapisanego
+TUTAJ. Domyślnie taki rozjazd (closure bez APPROVED) zostaje zgłoszony recenzentowi
+do samodzielnej naprawy.
 
 ---
 
