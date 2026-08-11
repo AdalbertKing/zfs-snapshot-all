@@ -1,12 +1,12 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 17:58:24 CEST
-- reviewed main SHA: `e30425f82efb28b05b8816f98db69d337771ef3c`
-- latest observed commit event: `e30425f82efb28b05b8816f98db69d337771ef3c` — 2026-08-11 17:56:29 CEST
-- latest observed implementer submission event: `1a86d379fb144b4b015fe93b1b87ff097ccddbae` — 2026-08-11 17:47:22 CEST
+- timestamp Europe/Warsaw: 2026-08-11 20:00:49 CEST
+- reviewed main SHA: `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc`
+- latest observed commit event: `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc` — 2026-08-11 19:44:05 CEST
+- latest observed implementer submission event: `c6f0acd07a703e1b85f172193b29f36644e22d9e` — 2026-08-11 18:35:18 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — contents write/read-back on `reviewer-write-probe` against review target `e30425f82efb28b05b8816f98db69d337771ef3c`; direct ref move was safety-blocked
-- open REV / routing after review: `REV-20260811-102 IMPLEMENTED -> Reviewer; REV-20260811-107 OPEN -> Claude`
-- result: reviewed
+- reviewer-write-probe WRITE/read-back: OK — `reviewer-write-probe` moved to and read back at exact review target `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude`
+- result: no-change
 
-Review outcome: substantive changes appeared since the prior pass. REV-102 step 3 remote-PULL source pruning landed on main and has a canonical response plus a two-host live destructive proof over the delegated zfsbackup SSH path. The live proof is valuable for the remote destructive scope/selectivity/non-recursion properties, but it does not include a live no-destroy negative control; that refusal remains unit-proven only because the available lab subtree inherits destroy. Independent diff inspection confirms the newly opened REV-107 is valid and blocking: ordinary activation calls the remote-source-prune regeneration path, which removes this client's installed remote source prune and re-emits it from the current profile/source-template family; the implementation and tests explicitly accept loss of operator edits. That violates the established one-way PROFILE -> CONFIG v4 handoff and source/target independence. REV-107 correctly requires preserving installed source retention semantics while changing only endpoint-derived scope/SSH facts. REV-102 therefore cannot be approved yet; additionally its own submission explicitly leaves migration/audit unimplemented and continuity/bookmark/recursive behaviour unresolved. `docs/reviews/responses` is absent; `docs/internal/reviews/responses/REV-20260811-107.md` is not yet filed. No additional REV was opened because REV-107 already captures the independently confirmed defect with the minimal discriminating regression requirement.
+Review outcome: fresh main is eight commits ahead of the prior reviewed SHA, but the diff is review/protocol bookkeeping only: REV-107 closure schema/ledger regeneration, REV-102 partial-routing clarification, REV-105 wording clarification, and removal of an obsolete implementer control reset. No production code, new implementer response, new test evidence, or new live-host proof appeared. The canonical REV-102 response still explicitly leaves migration/audit unimplemented and continuity/bookmark/recursive proof unresolved; REV-102 therefore remains correctly OPEN to Claude. `OPEN-THREADS.md` now agrees with that routing. `docs/PROJECT_STATUS.md` describes REV-102 as partial and records the same deferred migration/audit work. Legacy `docs/reviews/responses` is absent; canonical responses remain under `docs/internal/reviews/responses`. No new REV was opened because there is no new substantive defect or implementation submission to review.
