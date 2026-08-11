@@ -50,6 +50,6 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260811-105 | CLOSED | - | 19758bbdc112a684d98f470c67d3d488d3b46753 | 19758bbdc112a684d98f470c67d3d488d3b46753 | responses/REV-20260811-105.md | - |
 | REV-20260811-106 | CLOSED | - | d13482e5389a57e0df7893e27f3a70a4c4c8d56c | d13482e5389a57e0df7893e27f3a70a4c4c8d56c | responses/REV-20260811-106.md | - |
 | REV-20260811-107 | CLOSED | - | c6f0acd07a703e1b85f172193b29f36644e22d9e | c6f0acd07a703e1b85f172193b29f36644e22d9e | responses/REV-20260811-107.md | - |
-| REV-20260811-108 | IMPLEMENTED | Reviewer | 8b15c61f8786bb299a86b0696cff226afc6525b1 | 5cdc0052e05cceb6b6b0cb1d39115c8cca338eee | responses/REV-20260811-108.md | verify the submitted implementation |
-| REV-20260811-109 | OPEN | Claude | - | 5eca02d065eefa4af553e04dc9bc581113ec924d | - | implement and respond |
-| REV-20260811-110 | OPEN | Claude | - | d747b35c65efd7caa4cb611f3d6101728a53472f | - | implement and respond |
+| REV-20260811-108 | CLOSED | - | 8b15c61f8786bb299a86b0696cff226afc6525b1 | 8b15c61f8786bb299a86b0696cff226afc6525b1 | responses/REV-20260811-108.md | - |
+| REV-20260811-109 | IMPLEMENTED | Reviewer | 22252979a77fac1208939fa2bd7fe7efeb47374d | 5eca02d065eefa4af553e04dc9bc581113ec924d | responses/REV-20260811-109.md | verify the submitted implementation |
+| REV-20260811-110 | IMPLEMENTED | Reviewer | 05c2a08355e2f59abe06a2ac5880ff3948117656 | d747b35c65efd7caa4cb611f3d6101728a53472f | responses/REV-20260811-110.md | verify the submitted implementation |
