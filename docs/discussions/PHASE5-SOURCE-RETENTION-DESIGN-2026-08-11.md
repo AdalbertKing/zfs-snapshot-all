@@ -41,32 +41,66 @@ into `delsnaps.sh -K.. -p.. -O.. "<acct>@<host>:<source>" automated_hourly <ladd
 Same key, same host-key pinning, same identity as the transfer — no new channel,
 no broad root SSH.
 
-## Q3 — the destroy-grant gap (narrowest change)
+## Q3 — grant: NO widening (corrected per REV-103 F1)
 
-Today the pairing (`deploy.sh --join`) delegates the collector account only what a
-PULL needs on the source — `send,hold,snapshot` (and mount for receive on the
-*target*), **not `destroy`**. `delsnaps.sh` needs `destroy` (and `mount`) on the
-source datasets. So the narrowest change: **extend the source-side grant with
-`destroy,mount` for the collector identity**, scoped to exactly the paired source
-datasets, when a relationship opts into collector-owned source pruning. Activation
-must **verify the grant and refuse** (fail closed) rather than install a remote
-prune that fails every hour. This is the "narrow implementation gap" the review
-anticipated: the grammar expresses the prune; the grant must catch up. Local PUSH
-has no gap (same host/account).
+Corrected against the current code. `deploy.sh` `do_commit_scope` already
+delegates, per granted source dataset:
+`snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark`
+(`ZFS_PERMS`, line 146), so `destroy` (and `bookmark`) are ALREADY present at
+exactly the relationship scope. The default source prune is a plain
+`delsnaps.sh` → `zfs destroy <snap>` of `automated_hourly_` snapshots, which needs
+only `destroy` — **already granted**. So there is **no grant gap and no widening**;
+my earlier `destroy,mount` proposal was wrong (stale grant assumption).
 
-## Q4 — incremental base survives source pruning + outage
+Two real edges to pin, derived from the command path, not from a remembered grant:
+- `mount` is needed **only** for `-F` clear-cut (`zfs destroy -R` must unmount a
+  dependent clone, which on Linux requires root regardless of delegation). The
+  collector-owned source prune is deliberately **not** clear-cut, so it stays
+  within the delegated `destroy`;
+- step 3/4 must include a **current-grant negative control**: the delegated
+  identity with `destroy` succeeds; with `destroy` revoked the remote prune fails
+  closed and activation refuses — proving exactly the permission the path needs,
+  no speculative widening.
 
-The per-target **bookmark** machinery (`record_send_bookmark` in lib-zfs-snap.sh)
-is the safety mechanism. On every successful send the source gets a bookmark of
-the sent snapshot; a bookmark is NOT removed by the snapshot prune, so even after
-the source snapshot ages out the next transfer can still be incremental from the
-bookmark. Requirement: the **bookmark-prune age must exceed the source retention
-window** (and any expected outage), so `[prune-bookmarks:]` never removes the base
-the source prune relies on. For an outage longer than both, the correct behavior
-is an explicit full-resend (the engine already falls back when no common base or
-bookmark remains) — never a silent failure. The design pins: source `[prune:]`
+Local PUSH has no grant question (same host/account).
+
+## Q4 — incremental base: bookmark is CONDITIONAL, not a guarantee (corrected per REV-103 F2)
+
+Corrected. The per-target bookmark is only conditionally a base, and the design
+must not claim otherwise:
+- `lib-zfs-snap.sh` implements bookmark fallback **only for single-dataset /
+  non-recursive** transfers; a recursive stream falls through to a FULL send
+  (it would need a bookmark/GUID match on every child);
+- `record_send_bookmark()` is **best-effort**: a failed bookmark refresh logs a
+  warning and does not fail an otherwise-successful transfer.
+
+So source pruning can remove the last common snapshot with no usable bookmark
+behind it. The invariant the source-prune path will enforce, before any real
+pruning:
+
+1. **Non-recursive relationship with a confirmed bookmark** → the base survives
+   the snapshot prune; next transfer stays incremental. This is the only state in
+   which incremental continuity is claimed.
+2. **Recursive relationship, or a relationship whose last bookmark refresh
+   failed/does not exist** → source pruning past the last common snapshot forces a
+   FULL resend. This must be an **explicit product decision surfaced in the
+   preview/status** ("shortening SOURCE retention below your backup gap, or on a
+   recursive relationship, can force a full resend"), never an accidental
+   consequence of a non-fatal bookmark failure.
+
+Concretely: the default source window equals the target ladder (24H/7D/4W/12M),
+generous enough that under normal hourly cadence the last-sent snapshot is always
+inside it, so the base survives by construction. The FULL-resend risk arises only
+when an operator shortens the source window below the transfer gap or on a
+recursive relationship; the preview states that plainly. The source `[prune:]`
 touches only `automated_hourly_` snapshots, never bookmarks (`delsnaps -B` is a
-separate op); and the bookmark age is coordinated with the source window.
+separate op). Whether to (a) hard-refuse collector-owned source pruning on
+recursive relationships or (b) allow it with the explicit FULL-resend warning is
+the one open sub-decision for owner/reviewer; recommend (b) with the warning, since
+a recursive relationship already takes a FULL on its first miss anyway.
+
+Do not change the frozen transfer engines to "guarantee" a recursive bookmark base
+without first proving that is the smallest necessary boundary.
 
 ## Q5 — migration for already-installed CONFIGs (no silent repair)
 
