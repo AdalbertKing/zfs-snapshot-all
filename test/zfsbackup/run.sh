@@ -4112,9 +4112,13 @@ else
     bad "field survival: the [prune:] policy fields come from the profile fragment" "$(cat "$EC_FS")"
 fi
 
-# ...and the relationship still owns what is its: prune recursion is written by
-# the caller, and the profile boundary refuses it, so there is exactly one.
-if [ "$(grep -c 'recursive    = ' "$EC_FS")" = 1 ]; then
+# ...and the relationship still owns what is its: the RECURSIVE target ladder is
+# written by the caller, and the profile boundary refuses it, so there is exactly
+# one `recursive = yes`. (REV-20260811-102 step 3 also emits one NON-recursive
+# `recursive = no` per remote source dataset -- one here for rpool/data -- which is
+# a separate scope and does not double the target ladder.)
+if [ "$(grep -c 'recursive    = yes' "$EC_FS")" = 1 ] \
+        && [ "$(grep -c 'recursive    = no' "$EC_FS")" = 1 ]; then
     ok "field survival: prune recursion is written once, by the relationship"
 else
     bad "field survival: prune recursion is written once, by the relationship" "$(grep -n recursive "$EC_FS")"
@@ -4614,7 +4618,13 @@ fi
 # `recursive` is explicitly profile-owned (REV-073), so pinning it per
 # relationship is a legitimate operator edit, not an abuse of the format.
 sed -i "/^\[dataset:$(printf '%s' "$DS9" | sed 's,/,\\/,g')\]/,/^\[prune:/ s/^\tsrc /\trecursive    = flat\n\tsrc /" "$C9"
-sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_custom_/' "$C9"
+# Customize the TARGET prune's pattern only. The REMOTE source prune
+# (REV-20260811-102 step 3) is deliberately REGENERATED on every re-activation --
+# its scope embeds the endpoint, so it is topology-derived like `src` and is NOT
+# preservation-safe by design -- so a hand-edit to it would (correctly) be
+# discarded on the endpoint switch below and must not be part of this preservation
+# assertion. Scope the sed to the target ladder's own section.
+sed -i "/^\[prune:$(printf '%s' "$PR9" | sed 's,/,\\/,g')\]/,/^\[/ s/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_custom_/" "$C9"
 before_recursive=$(grep -c 'recursive    = flat' "$C9")
 before_pattern=$(grep -c 'gfs_pattern  = automated_custom_' "$C9")
 
@@ -5391,6 +5401,96 @@ msg="$( ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22
 { printf '%s' "$msg" | grep -qi "does not hold 'destroy'" && ! printf '%s' "$msg" | grep -qiw 'mount'; } \
     && ok "55 the refusal names destroy and proposes no mount/widening" \
     || bad "55 the refusal names destroy and proposes no mount/widening" "$(printf '%s' "$msg"|tail -1)"
+
+# --- 56. REV-20260811-102 step 3: REMOTE source prune emission (pull relationship) ---
+#
+# emit_client_sections must also bound the tool-owned automated_ snapshots on the
+# REMOTE source, over the same pinned SSH, with the INDEPENDENT (REV-106) source
+# family, NON-recursive, and fully REGENERATED per activation so an endpoint switch
+# moves it. Uses a FRESH profile dir (NOT the shared P9, which an earlier test
+# deliberately contaminates with `recursive = yes` to prove reactivation ignores a
+# changed profile) + emit9-style harness, with the SSH connection vars set so
+# ssh_flags render realistically and gen-cron accepts the result.
+P56="$WORK/step3prof"; mkdir -p "$P56/prof"
+cp "$REPO/profiles/default/templates.conf" "$P56/prof/templates.conf"
+cp "$REPO/profiles/default/prune.inc"      "$P56/prof/prune.inc"
+cp "$REPO/profiles/default/dataset.inc"    "$P56/prof/dataset.inc"
+emit_src3() {   # <conf> <name> <host> <is_new>
+    ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST="$3" LOAD_PORT=22 LOAD_KEYFILE=/dev/null \
+      LOAD_ALIAS=pve9alias LOAD_ALIAS_KH=/dev/null LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 \
+      MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+      emit_client_sections "$1" "$2" "$4" ) 2>&1
+}
+S3="$WORK/step3.conf"; : > "$S3"
+out=$(emit_src3 "$S3" s3c 10.7.7.1 1); rc=$?
+# emission: remote source [prune:account@host:ds], non-recursive, with ssh_flags
+if [ "$rc" -eq 0 ] \
+        && grep -qxF '[prune:zfsbackup@10.7.7.1:rpool/data]' "$S3" \
+        && awk '/^\[prune:zfsbackup@10.7.7.1:rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$S3" | grep -q 'recursive    = no' \
+        && awk '/^\[prune:zfsbackup@10.7.7.1:rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$S3" | grep -q 'ssh_flags    = -K /dev/null'; then
+    ok "56 step3: a remote source [prune:account@host:ds] is emitted, non-recursive, with ssh_flags"
+else
+    bad "56 step3: a remote source [prune:account@host:ds] is emitted, non-recursive, with ssh_flags" "rc=$rc file=$(cat "$S3")"
+fi
+# the source prune uses the INDEPENDENT src_ family, not the target's
+if awk '/^\[prune:zfsbackup@10.7.7.1:rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$S3" | grep -q 'use_template = profile__prof__src_keep_' \
+        && grep -q '^\[template:profile__prof__src_keep_hourly\]' "$S3"; then
+    ok "56 step3: the source prune references the INDEPENDENT src_ template family"
+else
+    bad "56 step3: the source prune references the INDEPENDENT src_ template family" "$(grep -E '^\[template:|use_template' "$S3")"
+fi
+# the SOURCE templates carry NO monitor_ fields (remote scope: check-snap-age is
+# local-only and gen-cron would reject monitor on a remote scope)
+src_hourly="$(awk '/^\[template:profile__prof__src_keep_hourly\]/{f=1;next} /^\[/{f=0} f' "$S3")"
+if [ -n "$src_hourly" ] && ! printf '%s' "$src_hourly" | grep -q 'monitor_'; then
+    ok "56 step3: the SOURCE template family drops monitor_ fields (valid on a remote scope)"
+else
+    bad "56 step3: the SOURCE template family drops monitor_ fields" "src_hourly=[$src_hourly]"
+fi
+# the COMPLETE config -- [defaults], the profile's rendered target templates, and
+# the emitted stanzas (which already carry the src_ templates + the source prune) --
+# is accepted by the REAL gen-cron.sh AND renders a delsnaps line against the remote
+# source scope. Assembled the same way as the field-survival render test, because
+# emit_client_sections alone does not write [defaults] or the TARGET templates
+# (ensure_cron_config does that first in the real flow).
+( PROFILE_ROOT="$P56" profile_render_templates "$P56/prof" prof "$WORK/s3tpl.conf" ) || true
+{ printf '[defaults]\n\thost_label = pve9\n\n'; cat "$WORK/s3tpl.conf"; cat "$S3"; } > "$WORK/s3full.conf"
+s3_render="$(bash "$REPO/gen-cron.sh" -c "$WORK/s3full.conf" 2>"$WORK/s3.err")"; s3_rc=$?
+if [ "$s3_rc" -eq 0 ]; then
+    ok "56 step3: the complete config with the remote source prune is accepted by the REAL gen-cron.sh"
+else
+    bad "56 step3: the complete config with the remote source prune is accepted by the REAL gen-cron.sh" "$(tail -3 "$WORK/s3.err")"
+fi
+if printf '%s\n' "$s3_render" | grep -q 'delsnaps\.sh.*"zfsbackup@10.7.7.1:rpool/data" "automated_"'; then
+    ok "56 step3: the rendered cron prunes the remote source scope with pattern automated_"
+else
+    bad "56 step3: the rendered cron prunes the remote source scope with pattern automated_" "$(printf '%s\n' "$s3_render" | grep delsnaps)"
+fi
+# endpoint switch: full regeneration MOVES the source prune to the new endpoint,
+# leaving no stale [prune:<old account@host>] behind (its scope is topology-derived)
+out=$(emit_src3 "$S3" s3c 10.7.7.2 0); rc=$?
+if [ "$rc" -eq 0 ] \
+        && grep -qxF '[prune:zfsbackup@10.7.7.2:rpool/data]' "$S3" \
+        && ! grep -qF '[prune:zfsbackup@10.7.7.1:rpool/data]' "$S3"; then
+    ok "56 step3: an endpoint switch moves the source prune, leaving no stale-endpoint scope"
+else
+    bad "56 step3: an endpoint switch moves the source prune, leaving no stale-endpoint scope" "rc=$rc file=$(cat "$S3")"
+fi
+# the flow reads SOURCE_PRUNE_EMITTED_DS to grant-check exactly the emitted datasets
+out=$( ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+         PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
+         LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.3 LOAD_PORT=22 LOAD_KEYFILE=/dev/null \
+         LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_FLAGS="-K /dev/null" \
+         PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE=""
+         emit_client_sections "$WORK/step3b.conf" s3d 1 >/dev/null 2>&1
+         echo "EMITTED=[${SOURCE_PRUNE_EMITTED_DS[*]}]" ) 2>&1 )
+case "$out" in
+    *"EMITTED=[rpool/data]"*) ok "56 step3: emit records the source datasets for the flow's fail-closed grant check" ;;
+    *) bad "56 step3: emit records the source datasets for the flow's fail-closed grant check" "$out" ;;
+esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

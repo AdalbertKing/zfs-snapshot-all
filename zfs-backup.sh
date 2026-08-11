@@ -598,6 +598,9 @@ PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
+# Source datasets that emit_client_sections wrote a REMOTE [prune:] for this run;
+# the flow grant-checks exactly these before publishing (REV-20260811-102 step 3).
+SOURCE_PRUNE_EMITTED_DS=()
 
 load_active_profile() {
     [ -n "$PROFILE_LOADED" ] && return 0
@@ -735,6 +738,115 @@ emit_source_prune_fragment() {   # <rendered prune fragment>
                 ;;
             *) printf '%s\n' "$line" ;;
         esac
+    done
+}
+
+# Append the SOURCE template family to a config file, idempotently -- each source
+# template only if the file does not already carry it. Same additive discipline
+# ensure_cron_config uses for the target family, so a re-activation that preserves
+# an installed source prune never rewrites its templates. Fails closed on a
+# referenced template missing from the rendered set (never a silent shared
+# authority).
+append_source_templates_if_missing() {   # <workfile> <rendered prune fragment>
+    local wf="$1" id src sec
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        src="$(profile_to_src_id "$id")"
+        grep -q "^\[template:$src\]" "$wf" 2>/dev/null && continue
+        sec="$(profile_template_section "$id")"
+        [ -n "$sec" ] || die "remote source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE prune that would silently reuse the TARGET's template authority (REV-20260811-106)"
+        # Drop monitor_warn/monitor_crit: this template drives a REMOTE prune scope,
+        # and check-snap-age.sh is local-only -- gen-cron.sh rejects monitor fields
+        # on a remote scope outright. Source-age monitoring is the source host's own
+        # concern, not the collector's; the collector monitors the TARGET.
+        { printf '\n[template:%s]\n' "$src"
+          printf '%s\n' "$sec" | tail -n +2 | sed -E '/^[[:space:]]*monitor_(warn|crit)[[:space:]]*=/d'
+        } >> "$wf" || die "could not append [template:$src] to $wf"
+    done < <(profile_prune_ref_ids "$2")
+}
+
+# Remove every REMOTE source [prune:<account@host:ds>] this client wrote, whatever
+# endpoint it named, identified by header shape (a prune scope with an '@' -- only
+# a user@host remote scope has one; a dataset name never does) AND this client's
+# own marker as the section's first content line (header text alone is not proof of
+# authorship -- REV-20260802-033 U11). Used to fully regenerate the source prune on
+# each activation so an endpoint switch moves it. A hand-written or foreign remote
+# prune (no matching marker) is left untouched.
+remove_client_remote_source_prunes() {   # <file> <name>
+    local file="$1" name="$2" marker="# managed-by: zfs-backup.sh client=$name"
+    local tmp; tmp=$(mktemp) || die "mktemp failed"
+    awk -v marker="$marker" '
+        function flush(   i) {
+            if (n > 0 && !(is_remote_prune && has_marker))
+                for (i = 1; i <= n; i++) print buf[i]
+            n = 0; is_remote_prune = 0; has_marker = 0; seen_content = 0
+        }
+        /^\[/ {
+            flush()
+            buf[++n] = $0
+            is_remote_prune = ($0 ~ /^\[prune:[^]]*@[^]]*:[^]]*\]$/)
+            next
+        }
+        {
+            buf[++n] = $0
+            if (!seen_content && $0 ~ /[^[:space:]]/) {
+                seen_content = 1
+                t = $0; sub(/^[[:space:]]+/, "", t)
+                if (t == marker) has_marker = 1
+            }
+        }
+        END { flush() }
+    ' "$file" > "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; die "could not rewrite $file removing source prunes"; }
+}
+
+# REV-20260811-102 step 3: the REMOTE source of a pull relationship accumulates the
+# tool-owned automated_ snapshots the pull creates; standard_hourly does not
+# self-prune, so without this the source pool fills (the exact REV-102 defect).
+# Emit a per-source-dataset [prune:<account@host:ds>] that runs delsnaps over the
+# SAME pinned SSH the pull uses, with the INDEPENDENT source retention family
+# (REV-106) and NON-recursive scope (matches the per-dataset pull coverage, never
+# walks into children this relationship does not manage). FAILS CLOSED first: the
+# delegated account must already hold `destroy` on each source (delegated by
+# deploy.sh --commit-scope) -- we verify, we do NOT widen. Only the (re)generated
+# datasets, so a preserved re-activation opens no SSH and rewrites nothing.
+emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
+    local workfile="$1" name="$2" marker="$3"; shift 3
+    [ "$#" -gt 0 ] || return 0
+    [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
+    # Pure config text -- no SSH here. The fail-closed grant check
+    # (assert_source_prune_grant) runs in the FLOW, before the workfile is
+    # published, so the two callers gate the INSTALL and this stays unit-testable
+    # without a live host.
+    append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
+    # FULL regeneration, unlike the target [prune:]. The source scope embeds the
+    # endpoint (account@host) in its SECTION HEADER, so it is topology-derived just
+    # like the [dataset:] `src` field -- and a header cannot be refreshed in place.
+    # So on every activation we drop ALL of this client's remote source prunes (by
+    # marker, whatever prior endpoint they named) and re-emit at the CURRENT
+    # endpoint for EVERY source dataset. That makes an endpoint switch move the
+    # source prune with it, and it is safe to regenerate because the section
+    # carries no operator-editable policy beyond the profile (its scope and flags
+    # are pure functions of the endpoint).
+    remove_client_remote_source_prunes "$workfile" "$name"
+    # SSH connection flags for the remote scope: the pull's own transport flags
+    # minus -b (bandwidth is a transfer cap, not an SSH option, and gen-cron's
+    # ssh_flags accepts only -p/-k/-c/-K/-O).
+    local sflags="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+    [ "${LOAD_PORT:-22}" != "22" ] && sflags="$sflags -p $LOAD_PORT"
+    local ds scope
+    for ds in "$@"; do
+        scope="${LOAD_ACCOUNT:-root}@${LOAD_HOST:-}:${ds}"
+        {
+            echo
+            echo "[prune:$scope]"
+            echo "	$marker"
+            emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+            echo "	recursive    = no"
+            echo "	ssh_flags    = $sflags"
+            echo "	pair_label   = $name"
+            echo "	notify       = ${name}-src-$(basename "$ds")"
+        } >> "$workfile" || return 1
+        SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }
 
@@ -1497,6 +1609,11 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
 emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local workfile="$1" name="$2" ds localpath
     local is_new_relationship="${3:-0}"
+    # Reset per call: which source datasets got a REMOTE [prune:] this run. The
+    # flow reads it after this returns to run the fail-closed grant check for
+    # exactly those (and only those) before publishing -- an empty list on a
+    # preserved re-activation means no SSH is opened at all (REV-20260811-102).
+    SOURCE_PRUNE_EMITTED_DS=()
     # The profile is loaded LAZILY, below, once the plan says something must
     # actually be generated (REV-20260810-090 F1). The emitted sections
     # REFERENCE the profile templates ensure_cron_config appends, so when it IS
@@ -1652,6 +1769,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             fi
         fi
     fi
+
+    # REV-20260811-102 step 3: bound the REMOTE source's tool-owned automated_
+    # snapshots too, over the same pinned SSH, with the INDEPENDENT source family.
+    # FULLY regenerated for EVERY source dataset (not just the ones whose target
+    # section regenerated): the source scope embeds the endpoint, so it must move
+    # with an endpoint switch the way `src` does. The flow then grant-checks
+    # exactly the emitted datasets before publishing. Covers sync and backup alike
+    # -- the remote source path is `ds` in either mode.
+    emit_remote_source_prune "$workfile" "$name" "$marker" ${PEER_SAVED_DATASETS:-} || return 1
     return 0
 }
 
@@ -3199,6 +3325,16 @@ cmd_activate_client() {
         check_inherited_grants "$ds" "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" "$LOAD_KEYFILE" "$LOAD_ALIAS_KH" "$LOAD_ALIAS" "$verbose"
     done
 
+    # REV-20260811-102 step 3: a REMOTE source prune was emitted for these datasets
+    # this run; it must NOT be installed unless the delegated account already holds
+    # `destroy` on each source (delegated by deploy.sh --commit-scope). Verify fail
+    # closed -- we do NOT widen. Empty on a preserved re-activation, so no SSH then.
+    if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+        ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+              "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+            || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
+    fi
+
     echo
     echo "Klient:              $name"
     echo "Peer (LAN parowania): $PEER_HOST"
@@ -3335,6 +3471,14 @@ cmd_migrate_profile() {
         # precisely to move a host off the legacy profile in one decision. This
         # is the one call site where the profile is meant to win.
         emit_client_sections "$workfile" "$name" 1 || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
+        # REV-20260811-102 step 3: same fail-closed source-prune grant gate as
+        # activate-client, per client -- never migrate a config that installs a
+        # remote source prune the delegated account cannot actually run.
+        if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+            ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+                  "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+                || { rm -f "$workfile"; die "source-prune grant check failed for '$name' -- nothing migrated or installed."; }
+        fi
         migrated=$((migrated + 1))
     done
     [ "$migrated" -gt 0 ] || log "no active clients -- migrating the templates only"
