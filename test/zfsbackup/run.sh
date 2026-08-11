@@ -29,6 +29,25 @@ bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC1090
 source "$ZFSBACKUP"
 
+# REV-20260811-109 L0 targeted execution. `--section <id>` runs ONLY the named focused
+# group and skips every unrelated earlier/later assertion, so a narrow REV-102/108/110
+# audit correction can be iterated in seconds instead of the whole suite. No argument
+# runs the FULL regression suite (L1) with equivalent coverage -- the targeted group
+# is self-contained (it builds its own fixtures below) and is ALSO run by the full
+# suite, so there is one source of truth, not a fork. Supported id: `retention` (the
+# REV-102/108/110 source-retention audit group) and numeric aliases.
+ONLY_SECTION=""
+if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
+case "$ONLY_SECTION" in
+    ""|retention|57|58|59|102|108|110) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59)" >&2; exit 2 ;;
+esac
+
+# Everything from here to the retention group is full-suite-only: skipped under a
+# targeted --section run. The retention group (below the matching `fi`) is self-
+# contained and always eligible.
+if [ -z "$ONLY_SECTION" ]; then
+
 # --- 1. client_name_valid ----------------------------------------------------
 for good in pve2 metropolis-pve1 client.1 a_b; do
     if client_name_valid "$good"; then ok "client_name_valid accepts '$good'"; else bad "client_name_valid accepts '$good'" "rejected"; fi
@@ -5529,6 +5548,19 @@ case "$out" in
     *) bad "56 step3: emit records the source datasets for the flow's fail-closed grant check" "$out" ;;
 esac
 
+fi   # === end of full-suite-only sections; the retention group below is L0-targetable ===
+
+# ============================================================================
+# RETENTION GROUP (REV-102 / REV-108 / REV-110 source-retention audit).
+# Self-contained: builds its own profile fixture here, so `--section retention`
+# never depends on state produced by the skipped sections above (REV-109 4.3).
+# Runs both standalone (targeted) and as part of the full suite.
+# ============================================================================
+RP56="$WORK/retprof"; mkdir -p "$RP56/prof"
+cp "$REPO/profiles/default/templates.conf" "$RP56/prof/templates.conf"
+cp "$REPO/profiles/default/prune.inc"      "$RP56/prof/prune.inc"
+cp "$REPO/profiles/default/dataset.inc"    "$RP56/prof/dataset.inc"
+
 # --- 57. REV-20260811-102 step 5: audit-source-retention (read-only, no silent repair) ---
 #
 # Relationships installed BEFORE step 3 have a [dataset:]/[prune:target] but no
@@ -5661,13 +5693,13 @@ fi
 #     prune while leaving [dataset:] src (topology) and target prune byte-identical. ---
 AP="$WORK/apply5"; mkdir -p "$AP/clients"
 # generate a full valid client config (dataset + target prune + source prune + templates)
-( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+( PROFILE_ROOT="$RP56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
   PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
   LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.1 LOAD_PORT=22 LOAD_KEYFILE=/dev/null \
   LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_FLAGS="-K /dev/null" \
   PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
   emit_client_sections "$AP/full.conf" apc 1 ) >/dev/null 2>&1
-( PROFILE_ROOT="$P56" profile_render_templates "$P56/prof" prof "$AP/tpl.conf" ) || true
+( PROFILE_ROOT="$RP56" profile_render_templates "$RP56/prof" prof "$AP/tpl.conf" ) || true
 # assemble the "installed" config, then STRIP the source prune section + its src_
 # templates to simulate a relationship installed BEFORE step 3
 { printf '[defaults]\n\thost_label = pve9\n\n'; cat "$AP/tpl.conf"; cat "$AP/full.conf"; } > "$AP/installed.raw"
@@ -5687,7 +5719,7 @@ EOF
 inst_src_before="$(awk '/^\[dataset:/{f=1} /^\[prune:/{f=0} f&&/src /' "$AP/jobs.conf")"
 apply5() {  # <grantrc> <loaded-host> : runs --apply with a controllable endpoint + grant
     local grantrc="$1" loadhost="$2"
-    ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+    ( PROFILE_ROOT="$RP56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
       bash -c "source '$ZFSBACKUP'
         read_server_conf() { CRON_CONFIG='$AP/jobs.conf'; }
         load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=$loadhost; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_FLAGS='-K /dev/null'; LOAD_LABEL=pve9; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET='tank/backups'; }
@@ -5698,7 +5730,7 @@ apply5() {  # <grantrc> <loaded-host> : runs --apply with a controllable endpoin
         assert_target_block_not_clobbered() { return 0; }
         assert_config_readable_by_target() { return 0; }
         atomic_replace_and_install() { cp \"\$2\" \"\$1\"; }
-        GENCRON='$REPO/gen-cron.sh' PROFILE_ROOT='$P56' PROFILE_ACTIVE=prof PROFILE_LOADED='' \
+        GENCRON='$REPO/gen-cron.sh' PROFILE_ROOT='$RP56' PROFILE_ACTIVE=prof PROFILE_LOADED='' \
           CLIENTS_DIR='$AP/clients' SCRIPT_DIR='$AP' cmd_audit_source_retention --apply --yes" 2>&1 )
 }
 # 4. F5 REFUSAL: endpoints agree, but the grant check fails -> non-zero, byte-identical
@@ -5821,6 +5853,37 @@ if [ "$rc" -eq 0 ] \
     ok "58 REV-108: the same relationship WITHOUT -e is managed and flagged missing (discriminator control)"
 else
     bad "58 REV-108: the same relationship WITHOUT -e is managed and flagged missing" "rc=$rc out=$out"
+fi
+
+# --- 59. REV-20260811-110: managed-prefix lookup must be relationship-EXACT ---
+#
+# managed_source_prefix_for_scope must associate a scope with ITS OWN snapget -m prefix
+# via an exact quoted-argument match, not a substring test. Two neighbouring scopes
+# where one is a textual prefix of the other (rpool/data vs rpool/data2) must not
+# cross-associate -- with the colliding neighbour rendered FIRST, a substring test
+# deterministically picks the wrong prefix. Pure helper-level check (L0).
+R110="$WORK/rev110.render"
+cat > "$R110" <<'EOF'
+0 * * * * /x/snapget.sh -m "other_" -A -L b "zfsbackup@10.5.5.5:rpool/data2" tank/backups/b/rpool/data2
+0 * * * * /x/snapget.sh -m "automated_hourly_" -A -L a "zfsbackup@10.5.5.5:rpool/data" tank/backups/a/rpool/data
+30 * * * * e=$(mktemp); /x/delsnaps.sh -G "zfsbackup@10.5.5.5:rpool/data2" "other_" -H24 2>"$e"
+EOF
+p_data="$( ( source "$ZFSBACKUP"; managed_source_prefix_for_scope "$R110" "zfsbackup@10.5.5.5:rpool/data" ) )"
+p_data2="$( ( source "$ZFSBACKUP"; managed_source_prefix_for_scope "$R110" "zfsbackup@10.5.5.5:rpool/data2" ) )"
+if [ "$p_data" = "automated_hourly_" ] && [ "$p_data2" = "other_" ]; then
+    ok "59 REV-110: each scope is associated with its OWN -m prefix (exact, not substring)"
+else
+    bad "59 REV-110: each scope is associated with its OWN -m prefix (exact, not substring)" "data=[$p_data] data2=[$p_data2]"
+fi
+# evidence #5: a delsnaps that bounds ONLY the neighbour (data2/other_) must NOT make the
+# requested relationship (data/automated_hourly_) safe; data2 itself IS bounded.
+data_bounded=no; data2_bounded=no
+( source "$ZFSBACKUP"; source_scope_is_bounded "$R110" "zfsbackup@10.5.5.5:rpool/data" ) && data_bounded=yes
+( source "$ZFSBACKUP"; source_scope_is_bounded "$R110" "zfsbackup@10.5.5.5:rpool/data2" ) && data2_bounded=yes
+if [ "$data_bounded" = no ] && [ "$data2_bounded" = yes ]; then
+    ok "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe"
+else
+    bad "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe" "data_bounded=$data_bounded data2_bounded=$data2_bounded"
 fi
 
 echo "--------------------------------------------"
