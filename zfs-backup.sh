@@ -958,15 +958,65 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     done
 }
 
+# The high-level default's managed SOURCE snapshot family. The pull relationship
+# creates these on the source (snapget -m <prefix>), and a bounded source prune must
+# cover exactly this family. Used as the fallback when the relationship's own transfer
+# line cannot be found in the render.
+MANAGED_SOURCE_PREFIX_DEFAULT="automated_hourly_"
+
+# The snapshot prefix a pull relationship actually CREATES on its source = the -m
+# argument of its snapget/snapsend transfer line for the scope, read back from the
+# rendered crontab. This is the family a bounded source prune has to cover. Falls back
+# to the high-level default managed prefix if no transfer line names the scope.
+managed_source_prefix_for_scope() {   # <rendered-crontab-file> <scope>
+    local line pfx
+    while IFS= read -r line; do
+        case "$line" in *snapget*|*snapsend*) ;; *) continue ;; esac
+        case "$line" in *"$2"*) ;; *) continue ;; esac
+        case "$line" in
+            *" -m \""*) pfx="${line#*-m \"}"; pfx="${pfx%%\"*}" ;;
+            *" -m "*)   pfx="${line#*-m }";   pfx="${pfx%% *}" ;;
+            *) continue ;;
+        esac
+        [ -n "$pfx" ] && { printf '%s' "$pfx"; return 0; }
+    done < "$1"
+    printf '%s' "$MANAGED_SOURCE_PREFIX_DEFAULT"
+}
+
 # REV-20260811-102 step 5 / F3: decide whether a source scope has EFFECTIVE bounded
-# retention -- not merely a [prune:] header, but a section that gen-cron.sh actually
-# renders into a bounded delsnaps job. A valid remote source prune always renders a
-# `delsnaps.sh ... "<scope>" ...` line (gen-cron refuses an unbounded/monitor-only
-# remote prune outright), so the presence of that exact-scope delsnaps argument in
-# the rendered crontab is the authoritative test. Reuses gen-cron semantics rather
-# than re-parsing retention. $1 is the rendered-crontab file, $2 the scope.
+# retention -- not merely a [prune:] header, and not merely SOME delsnaps naming the
+# scope, but a delsnaps job that actually bounds THIS relationship's managed source
+# snapshot family. Reuses gen-cron's rendered command (no second CONFIG parser) and
+# discriminates the prune semantics the finding requires (REV-102 F3 residual):
+#   * it must be a SNAPSHOT prune, not a bookmark cleanup (`delsnaps -B` deletes
+#     bookmarks, never `automated_hourly_*` snapshots);
+#   * its pattern argument must COVER the managed source prefix -- every managed
+#     snapshot (prefix + suffix) starts with the pattern, i.e. the managed prefix
+#     begins with the pattern (a prune of an unrelated prefix does not bound us);
+#   * it must carry a finite count/GFS retention flag.
+# $1 is the rendered-crontab file, $2 the scope.
 source_scope_is_bounded() {   # <rendered-crontab-file> <scope>
-    grep -F 'delsnaps' "$1" 2>/dev/null | grep -qF "\"$2\""
+    local managed line rest pat
+    managed="$(managed_source_prefix_for_scope "$1" "$2")"
+    while IFS= read -r line; do
+        case "$line" in *delsnaps*) ;; *) continue ;; esac
+        case "$line" in *"\"$2\""*) ;; *) continue ;; esac
+        # a bookmark-cleanup job does not delete snapshots -- never counts as bounding
+        case "$line" in *" -B "*) continue ;; esac
+        # the prune pattern = the quoted token immediately after the scope
+        rest="${line#*\"$2\"}"
+        pat="${rest#*\"}"; pat="${pat%%\"*}"
+        [ -n "$pat" ] || continue
+        # the pattern must cover the managed source family (managed prefix begins with
+        # the pattern), else this prune bounds a different prefix, not ours
+        case "$managed" in "$pat"*) ;; *) continue ;; esac
+        # and it must carry a finite retention flag (GFS -H24 / count -c 24 / -d 30)
+        case "$line" in
+            *-H[0-9]*|*-D[0-9]*|*-W[0-9]*|*-M[0-9]*|*-Y[0-9]*) return 0 ;;
+            *" -c "[0-9]*|*" -d "[0-9]*) return 0 ;;
+        esac
+    done < "$1"
+    return 1
 }
 
 # The `src` value of an installed [dataset:<localpath>] section (account@host:ds), or

@@ -5621,14 +5621,37 @@ if [ "$rc" -eq 0 ] \
 else
     bad "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe" "rc=$rc out=$out"
 fi
-# 3. once the render DOES carry a bounded delsnaps for the scope, audit reports
-#    nothing to add (idempotent) -- effective retention, in the real arg format.
-printf '30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null "zfsbackup@10.5.5.5:rpool/data" "automated_" -c 24 2>"$e"\n' > "$A5_RENDER"
+# 3. F3 RESIDUAL negative control: the render carries a `delsnaps -B` BOOKMARK cleanup
+#    for the exact scope. It mentions delsnaps + the scope but deletes bookmarks, not
+#    the managed automated_hourly_ snapshots -> audit must STILL report missing.
+printf '31 4 * * * e=$(mktemp); /x/delsnaps.sh -B -K /dev/null "zfsbackup@10.5.5.5:rpool/data" "automated_" -d30 2>"$e"\n' > "$A5_RENDER"
+out="$(audit5)"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+    ok "57 step5 (F3res): a bookmark-only (delsnaps -B) job for the scope is NOT bounded"
+else
+    bad "57 step5 (F3res): a bookmark-only (delsnaps -B) job for the scope is NOT bounded" "rc=$rc out=$out"
+fi
+# 4. F3 RESIDUAL negative control: the render prunes an UNRELATED prefix (manual_) at
+#    the exact scope. It bounds a different family, not automated_hourly_ -> still missing.
+printf '30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null -G "zfsbackup@10.5.5.5:rpool/data" "manual_" -H24 2>"$e"\n' > "$A5_RENDER"
+out="$(audit5)"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
+    ok "57 step5 (F3res): a snapshot prune of an unrelated prefix is NOT bounded"
+else
+    bad "57 step5 (F3res): a snapshot prune of an unrelated prefix is NOT bounded" "rc=$rc out=$out"
+fi
+# 5. bounded: a snapshot prune whose pattern COVERS the managed automated_hourly_
+#    family with finite retention -> audit reports nothing to add (idempotent).
+printf '0 * * * * /x/snapget.sh -m "automated_hourly_" -A -L c1 "zfsbackup@10.5.5.5:rpool/data" tank/backups/c1/rpool/data\n30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null -G "zfsbackup@10.5.5.5:rpool/data" "automated_" -H24 -D7 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'nic do dodania'; then
-    ok "57 step5: audit reports nothing to add once the render bounds the source (idempotent)"
+    ok "57 step5: audit reports nothing to add once a managed-prefix bounded prune renders (idempotent)"
 else
-    bad "57 step5: audit reports nothing to add once the render bounds the source" "rc=$rc out=$out"
+    bad "57 step5: audit reports nothing to add once a managed-prefix bounded prune renders" "rc=$rc out=$out"
 fi
 
 # --- 57b. F4/F5: --apply is a NARROW retrofit (add only missing source retention),

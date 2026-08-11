@@ -430,6 +430,18 @@ safety defects (REV-102 F3/F4/F5); the shipped design below is the corrected one
   that resolves to no bounded prune is reported unbounded, not silently accepted
   (negative control in section 57).
 
+  **F3 residual (bound THIS relationship's managed family, not just any prune on the
+  scope):** the first `source_scope_is_bounded` matched any `delsnaps` line naming the
+  scope — which a `[prune-bookmarks:]` `delsnaps -B` job or a snapshot prune of an
+  unrelated prefix both satisfy without deleting a single `automated_hourly_*`
+  snapshot. The fix discriminates the rendered command: a bookmark cleanup (`-B`) is
+  excluded; the prune's pattern must COVER the managed source prefix (the managed
+  prefix begins with the pattern), where that prefix is read back from the
+  relationship's own `snapget -m` transfer line (fallback `automated_hourly_`); and it
+  must carry a finite count/GFS retention flag. Negative controls in section 57:
+  bookmark-only job → still missing; unrelated-prefix prune → still missing;
+  managed-prefix bounded prune → bounded.
+
 - **`--apply` (NARROW retrofit):** appends ONLY the missing source `[prune:]` sections
   and their `__src_` templates (`emit_missing_source_prune`), then runs the same
   fail-closed source-prune grant gate, `gen-cron.sh` validation,
