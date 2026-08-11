@@ -52,6 +52,32 @@ facts cannot settle.
 
 ---
 
+## ROZSTRZYGNIETE 2026-08-11 — jednorazowa autoryzacja edycji nagłówka verdict REV-104 (REV-105)
+
+**Kontekst.** Recenzent zamknął REV-20260811-104 (napisał
+`closures/REV-20260811-104.md`, `closed-by 0e29dcd`), ale nie zmienił nagłówka
+`REV-20260811-104.md` z `CHANGES-REQUIRED`/`49d547a` na `APPROVED`/`0e29dcd`.
+reviewctl policzył wtedy REV-104 jako **INVALID** ("closure without a matching
+APPROVED verdict"), a `--verify` był czerwony bez naprawy po stronie implementera:
+regeneracja ledgera nie czyści twardego błędu, a mój response już wskazywał
+`0e29dcd`, więc nie było do czego wyrównać.
+
+**Decyzja właściciela (2026-08-11, w sesji).** Właściciel WPROST autoryzował
+jednorazowy wyjątek od reguły „nie edytuj plików recenzenta `REV-*.md`": polecił
+poprawić nagłówek `REV-20260811-104.md`, aby ODZWIERCIEDLAŁ determinację recenzenta
+z jego własnego closure — czyli `verdict: APPROVED`, `reviewed-implementation:
+0e29dcd`. To transkrypcja decyzji, którą recenzent już podjął, nie nowa decyzja
+recenzencka. Wykonane w commicie `f149455`.
+
+**Reguła na przyszłość (REV-105).** To był jednorazowy synchronizacyjny repair, NIE
+stałe pozwolenie. Korekty `verdict`/`reviewed-implementation` w plikach
+`REV-*.md` należą do RECENZENTA; implementer może je edytować wyłącznie przy
+kolejnej, równie jawnej i zapisanej TUTAJ autoryzacji właściciela. Domyślnie taki
+rozjazd (closure bez APPROVED) zostaje zgłoszony recenzentowi do samodzielnej
+naprawy.
+
+---
+
 ## ROZSTRZYGNIETE 2026-08-08 — czym jest zabezpieczenie na tym poziomie
 
 Implementer zmierzyl, ze 24 z 29 zadan we flocie tylko snapshotuje, a wszystkie
