@@ -667,6 +667,77 @@ profile_template_section() {   # <namespaced name>
     ' "$PROFILE_TPL_FILE"
 }
 
+# --- SOURCE retention split (REV-20260811-104 F1 / REV-20260811-106 F1) ---------
+# SOURCE and TARGET retention must be independently editable after CREATE, so the
+# SOURCE cron line needs its OWN template identities, byte-copied from the profile's
+# actual prune policy. These are derived from the templates the rendered prune
+# fragment REALLY references (its use_template list), NOT from a `keep_*` naming
+# convention -- so the split works for ANY profile the validator accepts, including
+# one whose prune templates are named e.g. ret_hourly (REV-106 F1: the previous
+# `__keep_` textual rewrite silently left such a profile's SOURCE sharing the
+# TARGET's template authority). One implementation, reused by local PUSH and the
+# remote-PULL source prune under REV-102.
+#
+# Source identity = referenced identity with its LAST `__` turned into `__src_`:
+# the built-in default (profile__default__keep_hourly) stays
+# profile__default__src_keep_hourly -- unchanged from the accepted REV-104 output --
+# while a custom profile__P__ret_hourly becomes profile__P__src_ret_hourly.
+
+# The template identities a rendered prune fragment references via use_template.
+profile_prune_ref_ids() {   # <rendered prune fragment>
+    profile_emit "$1" | awk -F= '
+        /^[[:space:]]*use_template[[:space:]]*=/ {
+            gsub(/[[:space:]]/, "", $2)
+            n = split($2, a, ",")
+            for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+        }'
+}
+
+profile_to_src_id() {   # <template identity>
+    printf '%s' "$1" | sed 's/\(.*\)__/\1__src_/'
+}
+
+# The SOURCE template family: every template the prune fragment references, copied
+# under its source identity. Fails CLOSED if a referenced template is absent from
+# the rendered templates -- never a silent fall-back to the TARGET's authority
+# (REV-106 required property 4). Runs the loop in the current shell (process
+# substitution, not a pipe) so `die` aborts the whole run.
+emit_source_template_family() {   # <rendered prune fragment>
+    local id src section
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        section="$(profile_template_section "$id")"
+        [ -n "$section" ] || die "local-backup source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE retention that would silently reuse the TARGET's template authority (REV-20260811-106)"
+        src="$(profile_to_src_id "$id")"
+        printf '[template:%s]\n' "$src"
+        printf '%s\n' "$section" | tail -n +2
+        echo
+    done < <(profile_prune_ref_ids "$1")
+}
+
+# The SOURCE prune fragment: the normalized prune fragment with each use_template
+# identity rewritten to its source identity (exact, comma-list aware -- never a
+# substring rewrite that could couple ids sharing a prefix).
+emit_source_prune_fragment() {   # <rendered prune fragment>
+    profile_emit "$1" | while IFS= read -r line; do
+        case "$line" in
+            *use_template*=*)
+                local pre val id out oldIFS
+                pre="${line%%use_template*}"
+                val="${line#*=}"; val="${val//[[:space:]]/}"
+                out=""; oldIFS="$IFS"; IFS=,
+                for id in $val; do
+                    [ -n "$id" ] || continue
+                    out="$out,$(profile_to_src_id "$id")"
+                done
+                IFS="$oldIFS"
+                printf '%suse_template = %s\n' "$pre" "${out#,}"
+                ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done
+}
+
 # The same extraction, generalized to any CONFIG v4 file and any section
 # header -- used to read back what is ALREADY on disk so it can be compared
 # against what a template would render now, rather than only checking that
@@ -2154,15 +2225,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
-            # ensure_cron_config already put the target's keep_* templates in the
-            # candidate; here we emit a DISTINCT source family (`__src_keep_*`),
-            # byte-copied from the same values but under its own stable identity,
-            # so editing a source retain in the candidate changes only the source
-            # cron line and target retain only the target. `__keep_` -> `__src_keep_`
-            # is namespace-agnostic (works for any --profile). The awk prints only
-            # the `__keep_` template sections, robust to template ordering.
-            awk '/^\[template:/{p=($0 ~ /__keep_/)} p' "$PROFILE_TPL_FILE" \
-                | sed 's/__keep_/__src_keep_/g'
+            # ensure_cron_config already put the target's prune templates in the
+            # candidate; here we emit a DISTINCT source family, byte-copied from the
+            # same values but under its own stable identity, so editing a source
+            # retain in the candidate changes only the source cron line and target
+            # retain only the target. REV-20260811-106 F1: the family is derived from
+            # the templates the profile's prune fragment ACTUALLY references, not
+            # from a `keep_*` naming convention, and fails closed if one is missing.
+            emit_source_template_family "$PROFILE_PRUNE_FILE"
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
@@ -2170,9 +2240,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # REV-102 F2: source prune scope follows the (non-recursive) source
                 # coverage -- delsnaps without -R, exactly the named dataset, never
                 # walking into children like $r/vm-101 that this job does not back
-                # up. REV-104 F1: use the SOURCE template family so its retention is
-                # independent of the target's.
-                profile_emit "$PROFILE_PRUNE_FILE" | sed 's/__keep_/__src_keep_/g'
+                # up. REV-104 F1 / REV-106 F1: point use_template at the SOURCE
+                # family (profile-agnostic rewrite) so its retention is independent
+                # of the target's for ANY profile.
+                emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
                 echo "	notify       = local-src-$(basename "$r")"
             done
             echo

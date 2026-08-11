@@ -250,6 +250,84 @@ else
         "src=$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')"
 fi
 
+# ---- REV-20260811-106 F1: the source/target split is profile-agnostic ----
+# The split must not depend on a `keep_*` naming convention. Build a VALID custom
+# profile whose prune templates are named ret_* (no `keep_`), by copying the
+# built-in default and renaming keep_ -> ret_ (preserves structure and tabs), then
+# prove the SOURCE family is still derived and distinct.
+mkdir -p "$WORK/profiles/custret"
+sed 's/keep_/ret_/g' "$REPO/profiles/default/templates.conf" > "$WORK/profiles/custret/templates.conf"
+cp "$REPO/profiles/default/dataset.inc"                        "$WORK/profiles/custret/dataset.inc"
+sed 's/keep_/ret_/g' "$REPO/profiles/default/prune.inc"      > "$WORK/profiles/custret/prune.inc"
+run_custret() {  # like run(), but PROFILE_ROOT points at the temp custom profile
+    ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$WORK/profiles" \
+      cmd_local_backup "$@" ) 2>&1
+}
+out="$(run_custret --source=rpool/data --target=hdd/backups --profile=custret --config="$WORK/cust.conf")"; rc=$?
+printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/cust-cand.conf"
+# it must actually have planned (a ret_* profile is valid input)
+{ [ "$rc" -eq 0 ] && grep -q '^\[dataset:rpool/data\]' "$WORK/cust-cand.conf"; } \
+    && ok "106/custom ret_* profile plans successfully" \
+    || bad "106/custom ret_* profile plans successfully" "rc=$rc $(printf '%s' "$out"|tail -1)"
+# distinct identities for a name that does NOT contain keep_: a SOURCE family
+# (__src_ret_*) exists AND the source prune points at it, not at the target's __ret_*.
+if grep -q '^\[template:profile__custret__src_ret_hourly\]' "$WORK/cust-cand.conf" \
+        && grep -q '^\[template:profile__custret__ret_hourly\]' "$WORK/cust-cand.conf" \
+        && grep -q 'use_template = profile__custret__src_ret_' "$WORK/cust-cand.conf" \
+        && grep -q 'use_template = profile__custret__ret_' "$WORK/cust-cand.conf"; then
+    ok "106 F1/custom profile gets DISTINCT source vs target template identities"
+else
+    bad "106 F1/custom profile gets DISTINCT source vs target template identities" \
+        "$(grep -E '^\[template:|use_template' "$WORK/cust-cand.conf" | head)"
+fi
+# equal INITIAL retention on both sides (copied from the profile's actual policy)
+if [ "$(lb_render_retain "$WORK/cust-cand.conf" 'rpool/data')" = "M12" ] \
+        && [ "$(lb_render_retain "$WORK/cust-cand.conf" 'hdd/backups')" = "M12" ]; then
+    ok "106 F1/custom profile: SOURCE and TARGET start from EQUAL retention"
+else
+    bad "106 F1/custom profile: SOURCE and TARGET start from EQUAL retention" \
+        "src=$(lb_render_retain "$WORK/cust-cand.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-cand.conf" 'hdd/backups')"
+fi
+# mutate ONLY the source family -> only the source cron line moves
+awk '/\[template:profile__custret__src_ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
+    "$WORK/cust-cand.conf" > "$WORK/cust-mut-src.conf"
+if [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'rpool/data')" = "M36" ] \
+        && [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'hdd/backups')" = "M12" ]; then
+    ok "106 F1/custom: editing only SOURCE changes SOURCE, TARGET unchanged"
+else
+    bad "106 F1/custom: editing only SOURCE changes SOURCE, TARGET unchanged" \
+        "src=$(lb_render_retain "$WORK/cust-mut-src.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-mut-src.conf" 'hdd/backups')"
+fi
+# mutate ONLY the target family -> the converse
+awk '/\[template:profile__custret__ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M60");f=0} {print}' \
+    "$WORK/cust-cand.conf" > "$WORK/cust-mut-tgt.conf"
+if [ "$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'hdd/backups')" = "M60" ] \
+        && [ "$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'rpool/data')" = "M12" ]; then
+    ok "106 F1/custom: editing only TARGET changes TARGET, SOURCE unchanged"
+else
+    bad "106 F1/custom: editing only TARGET changes TARGET, SOURCE unchanged" \
+        "tgt=$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'hdd/backups') src=$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'rpool/data')"
+fi
+# negative control: the retired `__keep_` textual rewrite is a NO-OP on ret_* names,
+# so under 799bd0d the custom SOURCE would have shared the TARGET's family. Prove
+# the coupling directly: point the source prune back at the target family (what the
+# no-op rewrite leaves) and show one edit moves BOTH sides.
+awk '/^\[template:profile__custret__src_ret_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/cust-cand.conf" \
+    | sed '/use_template/ s/__src_ret_/__ret_/g' > "$WORK/cust-shared.conf"
+old_noop="$(printf 'use_template = profile__custret__ret_hourly\n' | sed 's/__keep_/__src_keep_/g')"
+[ "$old_noop" = 'use_template = profile__custret__ret_hourly' ] \
+    && ok "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" \
+    || bad "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" "$old_noop"
+awk '/\[template:profile__custret__ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
+    "$WORK/cust-shared.conf" > "$WORK/cust-shared-mut.conf"
+if [ "$(lb_render_retain "$WORK/cust-shared-mut.conf" 'rpool/data')" = "M36" ] \
+        && [ "$(lb_render_retain "$WORK/cust-shared-mut.conf" 'hdd/backups')" = "M36" ]; then
+    ok "106 negctl/a shared family couples both sides (why the profile-agnostic split matters)"
+else
+    bad "106 negctl/a shared family couples both sides" \
+        "src=$(lb_render_retain "$WORK/cust-shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-shared-mut.conf" 'hdd/backups')"
+fi
+
 # ---- F2: additive composition over an existing config ----
 cat > "$WORK/existing.conf" <<'EOF'
 [defaults]
