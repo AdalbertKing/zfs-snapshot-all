@@ -29,6 +29,32 @@ Cross-cutting lifecycle invariants are defined in
    low-risk logic and a targeted multi-generation/live test where the state is
    destructive, persistent or operationally dangerous.
 
+## Execution levels
+
+Use three execution levels. They are cost boundaries, not new test categories.
+
+- **L0 — targeted iteration.** While fixing one finding/residual, run the exact
+  reproducer, changed function test or independently runnable logical section.
+  This is the normal inner development loop.
+- **L1 — affected-suite resubmission.** Run the full suite(s) selected by the
+  dependency graph when a coherent REV/package is genuinely ready to be handed
+  back to the reviewer as IMPLEMENTED. A reviewer returning the SAME REV OPEN
+  for a narrow residual does not by itself require another L1 run before the
+  next coherent resubmission is ready.
+- **L2 — integration/live campaign.** Run expensive integration, real-ZFS,
+  destructive or cross-host campaigns once at the acceptance boundary that
+  actually requires them: final REV/Gate/Phase checkpoint, or earlier only when
+  the risk list below says not to defer.
+
+`./test/impact.sh --verify` is a cheap graph-consistency check and may be run
+frequently at any level.
+
+A suite that is too monolithic to provide a useful L0 boundary should be made
+targetable rather than repeatedly paying its full cost. Preserve the no-argument
+full-suite gate. Prefer the smallest extraction/selector that makes the hot
+section independently runnable; do not create a test framework merely to split
+one file.
+
 ## Do not wait — checkpoint now
 
 Run a checkpoint before continuing when the change touches:
@@ -57,8 +83,8 @@ proved.
 
 Report results for the FINAL commit of a package, not copied from earlier
 ones. Per intermediate step, one short block is enough: commit, what it
-touched, suites with counts, open risk, and what was deferred to which
-checkpoint. Full logs only when something failed.
+touched, L0 evidence, open risk, and what was deferred to L1/L2. Full logs only
+when something failed.
 
 For recurring/state-creating functionality, the report must name the lifecycle
 property proved (or explicitly deferred): steady-state bound, cleanup owner,
