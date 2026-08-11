@@ -34,7 +34,7 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/zfs" <<'EOF'
 #!/bin/sh
 for a in "$@"; do ds="$a"; done
-case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db) exit 0 ;;
+case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db|rpool/vmstore|hdd/dokumenty|rpool/a|rpool/a/child) exit 0 ;;
              *) echo "cannot open '$ds': dataset does not exist" >&2; exit 1 ;; esac
 EOF
 # crontab stub: `-l` returns a managed block claiming $WORK/claimed.conf (only
@@ -90,6 +90,48 @@ out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/f1.conf")"; 
 out="$(run --source=rpool/db --target=hdd/backups --profile=default --config="$WORK/f1b.conf")"; rc=$?
 [ "$rc" -eq 0 ] && ok "F1/another existing source also proceeds (gate keys on zfs, not the name)" \
     || bad "F1/another existing source also proceeds" "rc=$rc"
+
+# ---- REV-20260811-101: multi-source WHAT set semantics ----
+# canonical comma-list: two independent [dataset:] entries, and the rendered cron
+# carries both roots (gen-cron merges same-policy datasets into one comma-joined
+# send, the established multi-dataset shape -- see fixtures/tiered.conf golden).
+out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mc.conf")"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
+        && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]' \
+        && printf '%s\n' "$out" | grep -qE 'snapsend\.sh -m "automated_hourly_" "rpool/data,rpool/vmstore" "hdd/backups"'; then
+    ok "101/comma-list: two independent source entries, both in the rendered cron"
+else
+    bad "101/comma-list: two independent source entries, both in the rendered cron" \
+        "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snapsend' | head)"
+fi
+# one missing member in a 3-root request -> hard refuse, NO partial candidate.
+out="$(run --source=rpool/data,rpool/nope,hdd/dokumenty --target=hdd/backups --config="$WORK/m3.conf")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'does not exist' \
+        && ! printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; then
+    ok "101/one missing member refuses the whole request, no partial candidate"
+else
+    bad "101/one missing member refuses the whole request, no partial candidate" "rc=$rc"
+fi
+# parent/child pair in the explicit set -> refuse (no invented precedence).
+out="$(run --source=rpool/a,rpool/a/child --target=hdd/backups --config="$WORK/mpc.conf")"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'overlap'; } \
+    && ok "101/parent-child pair in the set refuses" || bad "101/parent-child pair in the set refuses" "rc=$rc"
+# exact duplicate root -> canonicalized to exactly one entry (no duplicate ownership).
+out="$(run --source=rpool/data,rpool/data --target=hdd/backups --config="$WORK/mdup.conf")"; rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^\[dataset:rpool/data\]')" -eq 1 ]; } \
+    && ok "101/duplicate root canonicalizes to exactly one entry" \
+    || bad "101/duplicate root canonicalizes to exactly one entry" "rc=$rc entries=$(printf '%s\n' "$out" | grep -c '^\[dataset:rpool/data\]')"
+# repeated --source flags -> normalized into the set, NEVER silent last-one-wins.
+# (Discriminating against 9b4a6e5: the old scalar parser kept only the last flag,
+# so rpool/data would be absent here.)
+out="$(run --source=rpool/data --source=rpool/vmstore --target=hdd/backups --config="$WORK/mrep.conf")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
+        && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]'; then
+    ok "101/repeated --source flags normalize into the set (not last-one-wins)"
+else
+    bad "101/repeated --source flags normalize into the set (not last-one-wins)" "rc=$rc"
+fi
 
 # ---- F2: additive composition over an existing config ----
 cat > "$WORK/existing.conf" <<'EOF'

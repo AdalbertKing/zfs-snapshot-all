@@ -2013,10 +2013,11 @@ config_section_overlap() {   # <file> <path>...
 }
 
 cmd_local_backup() {
-    local source="" target="" profile="default" config=""
+    local target="" profile="default" config=""
+    local -a source_flags=()
     for a in "$@"; do
         case "$a" in
-            --source=*)  source="${a#*=}" ;;
+            --source=*)  source_flags+=("${a#*=}") ;;
             --target=*)  target="${a#*=}" ;;
             --profile=*) profile="${a#*=}" ;;
             --config=*)  config="${a#*=}" ;;
@@ -2024,27 +2025,53 @@ cmd_local_backup() {
             *) die "local-backup: unknown option $a" ;;
         esac
     done
-    [ -n "$source" ] || die "local-backup: --source=<dataset> is required (the dataset to back up)"
-    [ -n "$target" ] || die "local-backup: --target=<dataset> is required (where the backup lands)"
-    # Data, not code: this value ends up in a config gen-cron.sh reads, so reject
-    # anything that could carry shell or section syntax. A plain dataset name only.
-    case "$source" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --source='$source' is not a plain dataset name" ;; esac
+    [ "${#source_flags[@]}" -gt 0 ] || die "local-backup: --source=<dataset>[,<dataset>...] is required (the dataset(s) to back up)"
+    [ -n "$target" ] || die "local-backup: --target=<dataset> is required (where the backups land)"
+
+    # REV-20260811-101: one or more explicit roots are the authoritative WHAT
+    # (EXPLICIT-SOURCE-BEATS-DISCOVERY). The canonical form is a comma list in one
+    # --source; repeated --source flags are normalized into the SAME set rather
+    # than the silent last-one-wins the scalar parser had. Split on commas, trim,
+    # and de-duplicate exact repeats into one root list before anything is planned.
+    local -a roots=(); local sv r u seen
+    for sv in "${source_flags[@]}"; do
+        while IFS= read -r r; do
+            [ -n "$r" ] || continue
+            seen=0
+            for u in ${roots[@]+"${roots[@]}"}; do [ "$u" = "$r" ] && { seen=1; break; }; done
+            [ "$seen" -eq 0 ] && roots+=("$r")
+        done < <(printf '%s\n' "$sv" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    done
+    [ "${#roots[@]}" -gt 0 ] || die "local-backup: --source resolved to no dataset name"
+
     case "$target" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --target='$target' is not a plain dataset name" ;; esac
-    case "$source$target" in *:*) die "local-backup is LOCAL only -- neither --source nor --target may name a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
+    case "$target" in *:*) die "local-backup is LOCAL only -- --target='$target' names a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
     case "$profile" in ""|*[!A-Za-z0-9_-]*) die "local-backup: --profile='$profile' is not a valid profile name" ;; esac
 
-    # A backup whose destination overlaps its own source is a self-reference.
-    if local_backup_overlap "$source" "$target"; then
-        die "local-backup: --target='$target' overlaps --source='$source' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up. Pick a target outside the source subtree."
-    fi
+    # Every root: plain name, LOCAL, and it must EXIST (REV-097 F1). One missing
+    # or invalid root refuses the WHOLE request -- no partial candidate for the
+    # valid members.
+    for r in "${roots[@]}"; do
+        case "$r" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --source member '$r' is not a plain dataset name" ;; esac
+        case "$r" in *:*) die "local-backup is LOCAL only -- --source member '$r' names a remote host (contains ':')." ;; esac
+        zfs list -H -o name -- "$r" >/dev/null 2>&1 \
+            || die "local-backup: source '$r' does not exist on this host (zfs list found nothing). Every explicit source must exist -- refusing the whole request, no fallback, no partial plan."
+    done
 
-    # REV-20260810-097 F1: an explicit source is authoritative WHAT and must be
-    # PROVEN to exist on local ZFS before anything is planned. A typo is a missing
-    # source, and the owner contract (EXPLICIT-SOURCE-BEATS-DISCOVERY) is: any
-    # missing explicit source REFUSES the whole operation -- never reinterpreted
-    # as discovery, empty, or a fallback. Read-only; no install.
-    zfs list -H -o name -- "$source" >/dev/null 2>&1 \
-        || die "local-backup: source '$source' does not exist on this host (zfs list found nothing). An explicit source must exist -- refusing the whole operation, no fallback, no partial plan."
+    # Overlap refusals before any composition: no root may land inside the target
+    # (self-reference), and no root may contain or equal another (parent/child in
+    # the explicit set) -- refuse rather than invent precedence.
+    for r in "${roots[@]}"; do
+        local_backup_overlap "$r" "$target" \
+            && die "local-backup: --target='$target' overlaps source '$r' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up."
+    done
+    local i j
+    for ((i=0; i<${#roots[@]}; i++)); do
+        for ((j=i+1; j<${#roots[@]}; j++)); do
+            local_backup_overlap "${roots[i]}" "${roots[j]}" \
+                && die "local-backup: sources '${roots[i]}' and '${roots[j]}' overlap (equal or parent/child) -- refusing; the high-level path will not invent precedence between overlapping roots."
+        done
+    done
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf}"
@@ -2055,15 +2082,10 @@ cmd_local_backup() {
     PROFILE_ACTIVE="$profile"
     load_active_profile
 
-    # REV-20260810-097 F2: the candidate is the ACTUAL ADDITIVE result over the
-    # installed target CONFIG, not a fresh file. Copy the existing config (so the
-    # preview shows old jobs A alongside new job B), or -- if it is missing --
-    # apply the shared fail-closed guard before inventing one. ensure_cron_config
-    # then adds the profile templates/floors idempotently (the same primitive
-    # activate-client uses), so "add B, do not mutate A" is provable and template
-    # reuse/collision and global [excluded:] interactions are exercised against
-    # the real installed file.
-    local marker="# managed-by: zfs-backup.sh local-backup source=$source"
+    # REV-20260810-097 F2 (unchanged): the candidate is the ACTUAL ADDITIVE result
+    # over the installed target CONFIG. Copy the existing config, or -- if missing
+    # -- apply the shared fail-closed guard before inventing one; ensure_cron_config
+    # then adds the profile templates/floors idempotently.
     local cand; cand=$(mktemp) || die "mktemp failed"
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
@@ -2072,36 +2094,36 @@ cmd_local_backup() {
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
-    # Idempotent: templates already present are never rewritten; a pre-GFS config
-    # is REFUSED here rather than handed a second, racing ladder (REV-091).
     ensure_cron_config "$cand" 1 1
 
-    # Refuse a job whose source or target overlaps a section already installed --
+    # Refuse when any root OR the target overlaps a section already installed --
     # "add B, do not mutate A" (Gate 2). Nothing is written on refusal.
-    local conflict; conflict="$(config_section_overlap "$cand" "$source" "$target")"
+    local conflict; conflict="$(config_section_overlap "$cand" ${roots[@]+"${roots[@]}"} "$target")"
     if [ -n "$conflict" ]; then
         rm -f "$cand"
-        die "local-backup: a job for source '$source' / target '$target' would overlap coverage already in $config:$conflict
+        die "local-backup: a job for these sources / target '$target' would overlap coverage already in $config:$conflict
 Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
     fi
 
-    # Append the additive local sections. dst=<target> (no ':') is snapsend.sh's
-    # local-to-local branch; the shape mirrors emit_client_sections' backup-mode
-    # ladder with dst= where the pull path writes src=.
+    # One independent [dataset:] per root (each sending to the target; dst=<target>
+    # with no ':' is snapsend.sh's local-to-local branch), and one recursive
+    # [prune:] ladder over the target covering every root's landing.
     {
-        echo
-        echo "[dataset:$source]"
-        echo "	$marker"
-        profile_emit "$PROFILE_DS_FILE"
-        echo "	dst          = $target"
-        echo "	notify       = local-$(basename "$source")"
+        for r in "${roots[@]}"; do
+            echo
+            echo "[dataset:$r]"
+            echo "	# managed-by: zfs-backup.sh local-backup source=$r"
+            profile_emit "$PROFILE_DS_FILE"
+            echo "	dst          = $target"
+            echo "	notify       = local-$(basename "$r")"
+        done
         if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
             echo
             echo "[prune:$target]"
-            echo "	$marker"
+            echo "	# managed-by: zfs-backup.sh local-backup target=$target"
             profile_emit "$PROFILE_PRUNE_FILE"
             echo "	recursive    = yes"
-            echo "	notify       = local-$(basename "$source")"
+            echo "	notify       = local-$(basename "$target")"
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
 
@@ -2113,11 +2135,12 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 
     echo
     echo "Plan lokalnego backupu (PODGLAD -- nic nie zostalo zainstalowane):"
-    echo "  Zrodlo (WHAT):    $source"
+    echo "  Zrodla (WHAT):    ${roots[*]}"
     echo "  Cel:              $target"
-    if local_backup_same_pool "$source" "$target"; then
-        echo "  Uwaga:            zrodlo i cel dziela pule '${source%%/*}' -- awaria puli dotknie oba kopie (to fakt, nie zakaz)"
-    fi
+    for r in "${roots[@]}"; do
+        local_backup_same_pool "$r" "$target" \
+            && echo "  Uwaga:            zrodlo '$r' i cel dziela pule '${target%%/*}' -- awaria puli dotknie oba (to fakt, nie zakaz)"
+    done
     echo "  Preset:           $profile"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
     echo
