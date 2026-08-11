@@ -118,3 +118,31 @@ The default window is decided as **equal to the current target ladder
 (24H/7D/4W/12M) on both sides, editable**. The only remaining owner choice is
 whether to keep those exact numbers as the shipped default or pick different ones;
 the architecture (bounded + initially equal + independently editable) is fixed.
+
+## Progress — step 2 (local PUSH composition) done; REV-102 stays OPEN
+
+Owner directed implementing step 2 first, grant/migration later. Delivered for the
+**local PUSH** path (`cmd_local_backup`, planning-only, no install):
+
+- per root, alongside the existing `[prune:<target>]` GFS, a `[prune:<root>]`
+  source-retention section from the same `prune.inc` ladder — two independent,
+  separately-editable policies from the same initial values;
+- both rendered as separate `delsnaps.sh -G -R ... "<scope>" "automated_" -H24 -D7
+  -W4 -M12` lines (source scope vs target scope); only `automated_` is matched, so
+  manual/foreign snapshots survive;
+- the preview shows `Retencja ZRODLA` / `Retencja CELU` separately;
+- `test/localbackup` 30/30 (+4); out-of-band control vs the reviewed base
+  `5423518` shows 0 source-prune sections (the unbounded defect) vs 1 now.
+
+**Explicitly deferred (per the agreed sequencing + owner "grant/migration later"):**
+
+- **step 3 — remote PULL** `[prune:<host:source>]` in `emit_client_sections`: NOT
+  emitted yet, on purpose. `emit_client_sections` is the installed `activate-client`
+  path, so composing the remote source prune before the source `destroy` grant
+  exists would install an hourly job that fails — the exact hazard REV-102 warns
+  of. It lands with the grant + fail-closed activation check in step 3;
+- **step 4** real-ZFS end-to-end (local + remote) — live-host obligation;
+- **step 5** migration/audit path for already-installed CONFIGs.
+
+REV-102 remains OPEN (Claude's move) until steps 3–5 land; no IMPLEMENTED response
+is filed for a partial fix.

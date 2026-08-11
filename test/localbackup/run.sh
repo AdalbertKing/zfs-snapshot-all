@@ -133,6 +133,51 @@ else
     bad "101/repeated --source flags normalize into the set (not last-one-wins)" "rc=$rc"
 fi
 
+# ---- REV-20260811-102: bounded, independent SOURCE + TARGET retention ----
+# The default candidate must bound BOTH sides. Source retention = a [prune:<root>]
+# per root; target retention = a [prune:<target>]. Both initialized from the same
+# GFS ladder but rendered as separate, independent sections.
+out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ret.conf")"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s\n' "$out" | grep -q '^\[prune:rpool/data\]' \
+        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups\]'; then
+    ok "102/candidate carries BOTH a source [prune:root] and a target [prune:target]"
+else
+    bad "102/candidate carries BOTH a source [prune:root] and a target [prune:target]" \
+        "rc=$rc $(printf '%s\n' "$out" | grep -E '^\[prune:' | head)"
+fi
+# the rendered cron has two INDEPENDENT delsnaps prune lines -- one on the source
+# scope, one on the target scope -- both carrying the ladder.
+src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"rpool/data" "automated_" -H24 -D7 -W4 -M12')"
+tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"hdd/backups" "automated_" -H24 -D7 -W4 -M12')"
+if [ "$src_prune" -ge 1 ] && [ "$tgt_prune" -ge 1 ]; then
+    ok "102/rendered cron prunes source AND target independently, same ladder"
+else
+    bad "102/rendered cron prunes source AND target independently, same ladder" "src=$src_prune tgt=$tgt_prune"
+fi
+# only the tool-owned pattern is matched -> manual/foreign snapshots survive
+# (the source prune's delsnaps pattern is "automated_", never "*").
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G -R .*"rpool/data" "automated_"' \
+        && ! printf '%s\n' "$out" | grep -qE 'delsnaps\.sh[^\n]*"rpool/data" "\*"'; then
+    ok "102/source prune is bounded to automated_ -- manual snapshots survive"
+else
+    bad "102/source prune is bounded to automated_ -- manual snapshots survive" ""
+fi
+# each root gets its OWN source prune (multi-source), plus one target prune.
+out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/retm.conf")"
+if printf '%s\n' "$out" | grep -q '^\[prune:rpool/data\]' \
+        && printf '%s\n' "$out" | grep -q '^\[prune:rpool/vmstore\]' \
+        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups\]'; then
+    ok "102/each root gets its own source prune, plus one target prune"
+else
+    bad "102/each root gets its own source prune, plus one target prune" \
+        "$(printf '%s\n' "$out" | grep -E '^\[prune:' | tr '\n' ' ')"
+fi
+# negative control: the source [prune:root] is the NEW behaviour. The reviewed
+# base (5423518) emitted only [prune:target]; asserting [prune:rpool/data] is
+# present is therefore discriminating -- an old generator would fail it. (An
+# out-of-band ZB=<old checkout> run confirms the base omits the source prune.)
+
 # ---- F2: additive composition over an existing config ----
 cat > "$WORK/existing.conf" <<'EOF'
 [defaults]

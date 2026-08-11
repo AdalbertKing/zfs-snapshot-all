@@ -2106,8 +2106,15 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     fi
 
     # One independent [dataset:] per root (each sending to the target; dst=<target>
-    # with no ':' is snapsend.sh's local-to-local branch), and one recursive
-    # [prune:] ladder over the target covering every root's landing.
+    # with no ':' is snapsend.sh's local-to-local branch). Then TWO independent
+    # retention policies (REV-20260811-102), both initialized from the same GFS
+    # ladder but rendered as separate, separately-editable sections:
+    #   * SOURCE retention -- one [prune:<root>] per root, bounding the tool-owned
+    #     automated_hourly_ snapshots the send creates ON THE SOURCE (without this
+    #     the source pool fills, since standard_hourly does not self-prune);
+    #   * TARGET retention -- one recursive [prune:<target>] over the store.
+    # Only the tool-owned pattern is matched, so manual/foreign snapshots survive;
+    # source and target are disjoint scopes (validated above), never coupled.
     {
         for r in "${roots[@]}"; do
             echo
@@ -2118,6 +2125,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	notify       = local-$(basename "$r")"
         done
         if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+            for r in "${roots[@]}"; do
+                echo
+                echo "[prune:$r]"
+                echo "	# managed-by: zfs-backup.sh local-backup source-retention=$r"
+                profile_emit "$PROFILE_PRUNE_FILE"
+                echo "	recursive    = yes"
+                echo "	notify       = local-src-$(basename "$r")"
+            done
             echo
             echo "[prune:$target]"
             echo "	# managed-by: zfs-backup.sh local-backup target=$target"
@@ -2142,6 +2157,12 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             && echo "  Uwaga:            zrodlo '$r' i cel dziela pule '${target%%/*}' -- awaria puli dotknie oba (to fakt, nie zakaz)"
     done
     echo "  Preset:           $profile"
+    # REV-102: the two independent retention policies, both from the same preset
+    # ladder at CREATE, editable separately in the candidate before install.
+    local ladder
+    ladder="$(grep -oE 'retain *= *-[HDWMY][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMY][0-9]+' | tr '\n' ' ')"
+    echo "  Retencja ZRODLA:  GFS ${ladder:-(patrz profil)}(na kazdym zrodle -- ogranicza automated_hourly_ na produkcji)"
+    echo "  Retencja CELU:    GFS ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA; edytuj osobno w kandydacie przed instalacja)"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
     echo
     echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
