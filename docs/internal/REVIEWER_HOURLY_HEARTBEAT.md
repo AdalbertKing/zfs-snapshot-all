@@ -1,12 +1,12 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 22:08:54 CEST
-- reviewed main SHA: `5cdc0052e05cceb6b6b0cb1d39115c8cca338eee`
-- latest observed commit event at review start: `5cdc0052e05cceb6b6b0cb1d39115c8cca338eee` — 2026-08-11 21:48:03 CEST (`review heartbeat: REV-102 8cb28f3 reviewed`)
-- latest implementer submission reviewed: `8cb28f3337a4697c89d61d6d170075caa75f8d0b`
+- timestamp Europe/Warsaw: 2026-08-11 23:00:48 CEST
+- reviewed main SHA: `48b388e97223d88a58fdc3ac70db10f0dae48883`
+- latest observed commit event at review start: `48b388e97223d88a58fdc3ac70db10f0dae48883` — 2026-08-11 22:34:25 CEST (`reviewctl generate: add REV-109 routing`)
+- latest implementer submission reviewed: `d747b35c65efd7caa4cb611f3d6101728a53472f`
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `5cdc0052e05cceb6b6b0cb1d39115c8cca338eee`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude`; `REV-20260811-108 OPEN -> Claude`
+- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `48b388e97223d88a58fdc3ac70db10f0dae48883`
+- open REV / routing after review: `REV-20260811-102 IMPLEMENTED -> Reviewer (not accepted; follow-up REV-110)`; `REV-20260811-108 OPEN -> Claude`; `REV-20260811-109 OPEN -> Claude`; `REV-20260811-110 OPEN -> Claude`
 - result: reviewed
 
-Review outcome: REV-102 remains CHANGES-REQUIRED at `8cb28f3`: F3 still false-greens on any `delsnaps` for the scope rather than proving bounded prune of the managed snapshot family, and continuity/runtime evidence remains outstanding. Independent follow-up REV-108 opened for the ownership boundary in `audit-source-retention`: the current scan classifies every active remote PULL without effective source prune as missing, without excluding a legitimate passive `snapget -e` relationship whose absence of source `[prune:]` is intentional. Required correction is deliberately narrow: derive ownership from installed CONFIG/runtime semantics, leave passive `-e` outside `MISS_SRC`, keep TARGET retention unchanged, and prove managed-vs-passive with targeted discriminating tests. No new retention state or broad test campaign requested.
+Review outcome: the new REV-102 F3 residual at `d747b35` correctly excludes bookmark-only and unrelated-prefix prune jobs, but `managed_source_prefix_for_scope()` still associates rendered transfer lines to a source scope by substring (`*"$scope"*`) rather than exact argument identity. With neighbouring scopes such as `...:rpool/data` and `...:rpool/data2`, the earlier colliding transfer can supply the wrong `-m` managed prefix, after which `source_scope_is_bounded()` may classify the requested relationship against another relationship's snapshot family. Formal REV-20260811-110 opened with a minimal colliding-scope regression requirement. REV-108 remains open for passive `snapget -e` ownership classification; REV-109 remains open for L0 targeted test granularity. No live ZFS proof requested for REV-110 because the defect is parser/relationship association, not environment-dependent runtime execution.
