@@ -49,3 +49,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260811-104 | CLOSED | - | 0e29dcd9b1d5e5a2c6a6c7592514208c113c1712 | 0e29dcd9b1d5e5a2c6a6c7592514208c113c1712 | responses/REV-20260811-104.md | - |
 | REV-20260811-105 | CLOSED | - | 19758bbdc112a684d98f470c67d3d488d3b46753 | 19758bbdc112a684d98f470c67d3d488d3b46753 | responses/REV-20260811-105.md | - |
 | REV-20260811-106 | CLOSED | - | d13482e5389a57e0df7893e27f3a70a4c4c8d56c | d13482e5389a57e0df7893e27f3a70a4c4c8d56c | responses/REV-20260811-106.md | - |
+| REV-20260811-107 | OPEN | Claude | - | d8febbdab1487d2590eb00b4feab854bf562a7d2 | - | implement and respond |
