@@ -34,6 +34,27 @@ Unresolved Owner choices are recorded concisely in `docs/project/OWNER-DECISIONS
 
 Do not escalate synchronization failures, wording disagreements, bookkeeping errors, or questions that can be decided by code/tests/evidence.
 
+## Minimal-change / higher-layer-first rule
+
+Implementation speed is valuable, but changes must preserve already-stabilized lower layers whenever the requested behavior can be implemented safely above them.
+
+Before modifying a stable or frozen component, the implementer must briefly identify:
+
+1. the contract that actually needs to change;
+2. the higher layers that depend on that contract;
+3. whether the requested behavior can be implemented at a higher layer without changing lower-layer semantics;
+4. the smallest boundary that must be opened if a lower-layer change is genuinely necessary.
+
+Prefer the highest layer that can correctly own the behavior. A lower-layer change is justified when the behavior originates there or cannot be exposed safely from above, but the change should remain as narrow as possible.
+
+Do not combine a required change with opportunistic refactoring, cleanup, API redesign, renaming, or adjacent modernization. Such work requires a separate justification and reviewable delivery unless it is demonstrably necessary for the requested change.
+
+When a frozen component must be reopened, preserve its existing behavioral contracts unless the Owner explicitly accepts a contract change. Tests must cover the changed boundary and dependency-driven consequences rather than merely proving the local implementation.
+
+Observability features such as progress, status, metrics, or diagnostics should preferentially expose information from the existing execution path without changing the semantics of that path. In particular, adding transfer progress must not become an implicit redesign of snapshot selection, send/receive behavior, retention, SSH, or error handling.
+
+This rule is not a presumption against implementation initiative. Its purpose is to keep implementation fast while making architectural blast radius explicit before code is changed.
+
 ## Git workflow
 
 Normal workflow:
