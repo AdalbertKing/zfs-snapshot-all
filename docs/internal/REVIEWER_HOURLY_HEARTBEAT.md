@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 08:03 CEST
-- reviewed main SHA: `a8f1f5424ce2d579a3a5f7edc9dc6aeaa6510e16`
-- latest observed implementer commit event before reviewer writes: `a8f1f5424ce2d579a3a5f7edc9dc6aeaa6510e16` — 2026-08-11 07:56:18 CEST
+- timestamp Europe/Warsaw: 2026-08-11 09:04:42 CEST
+- reviewed main SHA: `b0e292517133c194f6494ece980308e4b4de41b3`
+- latest observed implementer commit event before reviewer writes: `b0e292517133c194f6494ece980308e4b4de41b3` — 2026-08-11 08:40:39 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `a8f1f5424ce2d579a3a5f7edc9dc6aeaa6510e16`
-- open REV / routing after review: none
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `b0e292517133c194f6494ece980308e4b4de41b3`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-103 OPEN -> Claude`
 - result: reviewed
 
-Review outcome: REV-20260811-101 independently verified at implementation `f27fcc3293828a39c831f255ec69838a0c36a9bf`, APPROVED and CLOSED. Phase 5 slice 2 (transactional install/seed + live-host proof) is the next functional step.
+Review outcome: implementer design response for REV-102 was independently checked. Formal follow-up REV-20260811-103 opened: Q3 is based on a stale grant premise (`do_commit_scope` already grants `destroy` and `bookmark` on each source dataset), and Q4 overstates bookmark-backed incremental continuity because current bookmark fallback is non-recursive only and bookmark refresh is best-effort/non-fatal. Phase 5 transactional install remains blocked until these design premises are corrected and the destructive source-prune boundary is proven on real ZFS / delegated remote identity.
