@@ -88,13 +88,20 @@ pruning:
    recursive relationship, can force a full resend"), never an accidental
    consequence of a non-fatal bookmark failure.
 
-Concretely: the default source window equals the target ladder (24H/7D/4W/12M),
-generous enough that under normal hourly cadence the last-sent snapshot is always
-inside it, so the base survives by construction. The FULL-resend risk arises only
-when an operator shortens the source window below the transfer gap or on a
-recursive relationship; the preview states that plainly. The source `[prune:]`
-touches only `automated_hourly_` snapshots, never bookmarks (`delsnaps -B` is a
-separate op). Whether to (a) hard-refuse collector-owned source pruning on
+The actual invariant (corrected per REV-103 residual F2): **incremental continuity
+is guaranteed only when a usable ordinary common snapshot OR a proven usable
+bookmark remains.** The default equal ladder (24H/7D/4W/12M) *reduces* the risk --
+under normal cadence the last-sent snapshot stays inside the window -- but it does
+**not** by itself prove the base survives every failure sequence. A non-recursive
+relationship can still lose continuity even under the default window if a bookmark
+refresh failed/was absent AND later failed backup attempts created newer snapshots
+that retention keeps while aging out the last successfully transferred one. So the
+risk is NOT limited to operator-shortened windows or recursive mode; the live/
+negative-control campaign (step 4) must include a bookmark-unavailable case with
+later snapshot creation and prune, and prove the chosen fail-closed/degraded
+behaviour (explicit FULL-resend surfaced in status, never a silent broken chain).
+The source `[prune:]` touches only `automated_hourly_` snapshots, never bookmarks
+(`delsnaps -B` is a separate op). Whether to (a) hard-refuse collector-owned source pruning on
 recursive relationships or (b) allow it with the explicit FULL-resend warning is
 the one open sub-decision for owner/reviewer; recommend (b) with the warning, since
 a recursive relationship already takes a FULL on its first miss anyway.
@@ -137,12 +144,16 @@ with read-back. The profile is not consulted again after install.
 2. CREATE-time composition: both `[prune:source]` and `[prune:target]` (local +
    remote), independent, from the same initial ladder — generation tests +
    negative control vs `5423518…`; manual snapshots survive.
-3. Remote grant: `deploy.sh --join` `destroy,mount` on source + fail-closed
-   activation check.
+3. Remote-prune composition + **fail-closed verification of the EXISTING
+   delegated `destroy`** capability and pinned SSH path. NO grant widening
+   (`destroy` is already delegated by `do_commit_scope`); the negative control is
+   *revoke/omit* `destroy` and prove the remote prune refuses/fails.
 4. Real-ZFS proof (local + remote): source ages out, target-only survives,
-   manual survives, next transfer stays incremental (bookmark base). **Live-host
-   obligation — this environment cannot run it; REV stays IMPLEMENTED not CLOSED
-   until executed.**
+   manual/out-of-coverage-child survives, next transfer stays incremental where a
+   usable common snapshot/bookmark remains, AND a bookmark-unavailable + later
+   snapshot/prune case proving the explicit fail-closed/degraded behaviour.
+   **Live-host obligation — this environment cannot run it; REV stays OPEN/
+   IMPLEMENTED not CLOSED until executed.**
 5. Migration/audit path (Q5) settled and proven.
 6. Close REV-102, then resume the Phase 5 install slice.
 
@@ -172,11 +183,26 @@ Owner directed implementing step 2 first, grant/migration later. Delivered for t
 
 - **step 3 — remote PULL** `[prune:<host:source>]` in `emit_client_sections`: NOT
   emitted yet, on purpose. `emit_client_sections` is the installed `activate-client`
-  path, so composing the remote source prune before the source `destroy` grant
-  exists would install an hourly job that fails — the exact hazard REV-102 warns
-  of. It lands with the grant + fail-closed activation check in step 3;
+  path; the remote source prune lands together with its **fail-closed check of the
+  already-delegated `destroy` capability** and the pinned SSH path (no grant
+  widening — `do_commit_scope` already grants `destroy`). Wiring it before that
+  fail-closed check exists would risk installing an hourly job that fails if a
+  particular relationship's grant were incomplete — so composition and the
+  fail-closed verification land as one step;
 - **step 4** real-ZFS end-to-end (local + remote) — live-host obligation;
 - **step 5** migration/audit path for already-installed CONFIGs.
+
+### Step-2 correction (REV-102 F2): source prune scope now matches source coverage
+
+The first step-2 emission made the source `[prune:<root>]` `recursive = yes`, but
+`[dataset:<root>]` is non-recursive (dataset.inc emits no recursion field), so the
+source prune walked into children (`<root>/vm-101`) and could destroy `automated_`
+snapshots owned by another/manual policy outside this relationship's coverage.
+Corrected: the source prune omits `recursive` (CONFIG default = no), pruning
+exactly the named dataset — `delsnaps.sh -G` without `-R`. The target prune stays
+recursive over the store. `test/localbackup` gains a non-recursive assertion + a
+child-survives control. A future flat/atomic source would need a matching
+recursive source prune; local-backup does not expose recursion yet.
 
 REV-102 remains OPEN (Claude's move) until steps 3–5 land; no IMPLEMENTED response
 is filed for a partial fix.

@@ -147,17 +147,33 @@ else
         "rc=$rc $(printf '%s\n' "$out" | grep -E '^\[prune:' | head)"
 fi
 # the rendered cron has two INDEPENDENT delsnaps prune lines -- one on the source
-# scope, one on the target scope -- both carrying the ladder.
-src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"rpool/data" "automated_" -H24 -D7 -W4 -M12')"
+# scope, one on the target scope -- both carrying the ladder. REV-102 F2: the
+# SOURCE prune must match the source coverage. [dataset:rpool/data] is
+# non-recursive (dataset.inc emits no recursion field), so the source prune is
+# NON-recursive too -- delsnaps WITHOUT -R, scoped to exactly rpool/data. A
+# recursive source prune (-R) would walk into children like rpool/data/vm-101 and
+# could destroy automated_ snapshots owned by another/manual policy that this
+# relationship never backs up. The target prune stays recursive over the store.
+src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -P .*"rpool/data" "automated_" -H24 -D7 -W4 -M12')"
+src_recursive="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"rpool/data" "automated_"')"
 tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"hdd/backups" "automated_" -H24 -D7 -W4 -M12')"
 if [ "$src_prune" -ge 1 ] && [ "$tgt_prune" -ge 1 ]; then
     ok "102/rendered cron prunes source AND target independently, same ladder"
 else
     bad "102/rendered cron prunes source AND target independently, same ladder" "src=$src_prune tgt=$tgt_prune"
 fi
+# F2 negative control: the source prune must NOT be recursive, so a child dataset
+# outside this relationship's (non-recursive) coverage carrying tool-owned
+# snapshots is never walked into. If the source line ever renders with -R this
+# fails -- the exact destructive over-reach REV-102 F2 named.
+if [ "$src_recursive" -eq 0 ]; then
+    ok "102 F2/source prune is NON-recursive (children outside coverage survive)"
+else
+    bad "102 F2/source prune is NON-recursive (children outside coverage survive)" "source rendered with -R ($src_recursive)"
+fi
 # only the tool-owned pattern is matched -> manual/foreign snapshots survive
 # (the source prune's delsnaps pattern is "automated_", never "*").
-if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G -R .*"rpool/data" "automated_"' \
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G -P .*"rpool/data" "automated_"' \
         && ! printf '%s\n' "$out" | grep -qE 'delsnaps\.sh[^\n]*"rpool/data" "\*"'; then
     ok "102/source prune is bounded to automated_ -- manual snapshots survive"
 else

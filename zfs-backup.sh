@@ -2130,7 +2130,17 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 echo "[prune:$r]"
                 echo "	# managed-by: zfs-backup.sh local-backup source-retention=$r"
                 profile_emit "$PROFILE_PRUNE_FILE"
-                echo "	recursive    = yes"
+                # REV-20260811-102 F2: SOURCE prune scope must follow the source
+                # coverage, not blanket-recurse. [dataset:$r] is non-recursive
+                # (dataset.inc emits no recursion field), so only $r itself is
+                # sent and only $r carries this tool's snapshots -- a recursive
+                # source prune would walk into children like $r/vm-101 and could
+                # destroy automated_ snapshots owned by another/manual policy that
+                # this relationship never backs up. So the source prune is
+                # non-recursive too (prunes exactly the named dataset). A recursive
+                # (flat/atomic) source would need a matching recursive source prune,
+                # but local-backup does not expose recursion yet. Omitting the
+                # recursive field leaves it at the CONFIG default (no).
                 echo "	notify       = local-src-$(basename "$r")"
             done
             echo
