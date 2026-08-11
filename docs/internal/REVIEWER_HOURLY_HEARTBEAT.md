@@ -1,12 +1,12 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 20:00:49 CEST
-- reviewed main SHA: `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc`
-- latest observed commit event: `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc` — 2026-08-11 19:44:05 CEST
-- latest observed implementer submission event: `c6f0acd07a703e1b85f172193b29f36644e22d9e` — 2026-08-11 18:35:18 CEST
+- timestamp Europe/Warsaw: 2026-08-11 20:25 CEST
+- reviewed main SHA: `f33b70923c257a87384b3e9e66970da564ef2c57`
+- latest observed commit event: `0c78d5cf656623440af30d79d381f353ff83ddad` — 2026-08-11 20:32:29 CEST (reviewer routing regeneration after verdict)
+- latest observed implementer submission event: `9006026898b052e1345f52801672a1f2a0db34d2` — 2026-08-11 20:10:13 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — `reviewer-write-probe` moved to and read back at exact review target `6e45566eb3c07ed9dd3a3c0074140ed4f8301bdc`
+- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `f33b70923c257a87384b3e9e66970da564ef2c57`
 - open REV / routing after review: `REV-20260811-102 OPEN -> Claude`
-- result: no-change
+- result: reviewed
 
-Review outcome: fresh main is eight commits ahead of the prior reviewed SHA, but the diff is review/protocol bookkeeping only: REV-107 closure schema/ledger regeneration, REV-102 partial-routing clarification, REV-105 wording clarification, and removal of an obsolete implementer control reset. No production code, new implementer response, new test evidence, or new live-host proof appeared. The canonical REV-102 response still explicitly leaves migration/audit unimplemented and continuity/bookmark/recursive proof unresolved; REV-102 therefore remains correctly OPEN to Claude. `OPEN-THREADS.md` now agrees with that routing. `docs/PROJECT_STATUS.md` describes REV-102 as partial and records the same deferred migration/audit work. Legacy `docs/reviews/responses` is absent; canonical responses remain under `docs/internal/reviews/responses`. No new REV was opened because there is no new substantive defect or implementation submission to review.
+Review outcome: exact REV-102 submission `9006026898b052e1345f52801672a1f2a0db34d2` was independently inspected and rejected within the same REV. Step 5's read-only audit is directionally correct, but it currently treats the mere presence of `[prune:<remote-source>]` as proof of bounded retention, so a disabled/unbounded section can false-green. The new `--apply` path calls ordinary `emit_client_sections(...,0)` for every active client, which can refresh unrelated `src`/`flags` and remote-prune topology; that violates the retrofit contract "add only missing source retention". Section 57 does not execute the persistent `--apply` transaction itself. The submission also explicitly leaves bookmark-unavailable/recursive/incremental-after-prune evidence open. Reviewer direction: decide recursive allow-with-warning vs hard-refuse from the targeted runtime case; allow-with-warning is acceptable only if loss of the last common snapshot produces a controlled, visible FULL resend while preserving target history. Phase 5 transactional installation remains blocked until REV-102 closes.
