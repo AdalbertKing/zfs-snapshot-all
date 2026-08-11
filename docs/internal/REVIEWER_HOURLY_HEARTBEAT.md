@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 13:05:36 CEST
-- reviewed main SHA: `241d799b0effd32895bda7bbb7111a5072134047`
-- latest observed commit event: `241d799b0effd32895bda7bbb7111a5072134047` — 2026-08-11 13:00:53 CEST (reviewer heartbeat); latest implementer submission remains `bc52df866a20102b3fc2356c8f1d75cb7f3a2748` — 2026-08-11 12:53:14 CEST
+- timestamp Europe/Warsaw: 2026-08-11 13:18:52 CEST
+- reviewed main SHA: `799bd0d7b6998bcf8db98bc70784a91b6dbbffde`
+- latest observed commit event before reviewer writes: `799bd0d7b6998bcf8db98bc70784a91b6dbbffde` — 2026-08-11 13:07:15 CEST (review heartbeat)
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `241d799b0effd32895bda7bbb7111a5072134047`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-105 OPEN -> Claude after rejection of bc52df866a20102b3fc2356c8f1d75cb7f3a2748`
-- result: no-change
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `799bd0d7b6998bcf8db98bc70784a91b6dbbffde`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-105 OPEN -> Claude; REV-20260811-106 OPEN -> Claude`
+- result: reviewed
 
-Review outcome: no new implementer commit or response appeared after the 13:00 reviewer pass. REV-105 remains rejected on `bc52df866a20102b3fc2356c8f1d75cb7f3a2748`; its low-cost correction is still to acknowledge `f1494558` as a one-off synchronization repair already independently ratified by Reviewer and remove the unsupported claim that REV-102 is on an Owner-directed hold. REV-102 has no response artifact yet and remains actionable by Claude for remote-PULL source-prune composition, fail-closed delegated destroy/grant verification, migration/audit, and real-ZFS/live-host evidence including bookmark-unavailable and recursive cases. PROJECT_STATUS still records only the local Phase 5 planner evidence (`localbackup 35/35`) and explicitly leaves remote-PULL/grant/migration/real-ZFS as open. The committed generated OPEN-THREADS/ledger remain stale after the reviewer rejection until `reviewctl --generate` is run; machine facts in REV-105 route it back to Claude.
+Review outcome: REV-103 remains CLOSED after independent verification of the corrected grant/bookmark premises. REV-104 remains CLOSED for the built-in `default` profile: local source prune is non-recursive when source coverage is non-recursive, and SOURCE/TARGET retention use distinct template authorities with discriminating mutation tests. REV-105 submission `bc52df866a20102b3fc2356c8f1d75cb7f3a2748` remains rejected: implementer-written text is not independent evidence of an Owner exception, and the response invents an Owner-directed hold on REV-102 that repository routing does not contain. New independent REV-106 opened: the current SOURCE-template split hard-codes `__keep_` template names, while valid `--profile=NAME` profiles are not required to use `keep_*`; a custom valid profile can therefore silently re-couple SOURCE and TARGET retention. Generated ledger/open threads were regenerated to route REV-102/105/106 to Claude. Phase 5 transactional install remains blocked.
