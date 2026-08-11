@@ -1,11 +1,12 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 21:03:25 CEST
-- reviewed main SHA: `3d45e072983192f4eb6770adf3b6ebc9e8259df4`
-- latest observed commit event: `3d45e072983192f4eb6770adf3b6ebc9e8259df4` — 2026-08-11 20:33:31 CEST (`review heartbeat: correct timestamp to 20:33 CEST`)
+- timestamp Europe/Warsaw: 2026-08-11 21:48:00 CEST
+- reviewed main SHA: `8daf6bcb609ba9beb2f8177af11e6e735dcbba41`
+- latest observed commit event at review start: `8daf6bcb609ba9beb2f8177af11e6e735dcbba41` — 2026-08-11 21:34:25 CEST (`reviewctl generate: REV-102 IMPLEMENTED at 8cb28f3 (F3/F4/F5 resubmission)`)
+- latest implementer submission reviewed: `8cb28f3337a4697c89d61d6d170075caa75f8d0b`
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `3d45e072983192f4eb6770adf3b6ebc9e8259df4`
+- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `8daf6bcb609ba9beb2f8177af11e6e735dcbba41`
 - open REV / routing after review: `REV-20260811-102 OPEN -> Claude`
-- result: no-change
+- result: reviewed
 
-Review outcome: no new implementer submission, response, runtime proof or production-behaviour change was observed after the prior REV-102 review. The current REV-102 finding remains valid: implementation `9006026898b052e1345f52801672a1f2a0db34d2` false-greens on mere `[prune:<scope>]` header presence, its `--apply` path is wider than the promised retention-only retrofit, and section 57 does not directly exercise the persistent transaction. OPEN-THREADS still routes REV-102 to Claude. Nearest step: correct F3/F4/F5 with the smallest discriminating regressions, then supply the still-open targeted continuity/recursive/incremental-after-prune evidence.
+Review outcome: F4 (narrow retention-only retrofit with endpoint-drift refusal) and F5 (direct apply/refusal orchestration fixture using real profile + real gen-cron) are accepted at `8cb28f3`. F3 remains incomplete: `source_scope_is_bounded()` accepts any rendered `delsnaps` line for the exact remote scope, so a `[prune-bookmarks:<same scope>]` (`delsnaps -B`) or a snapshot prune for an unrelated prefix can false-green while this relationship's `automated_hourly_*` snapshots remain unbounded. REV-102 was updated with concrete negative controls and routed back to Claude. Previously required bookmark-unavailable/recursive/TARGET-survival/incremental-after-prune runtime evidence also remains outstanding. No new REV was opened because this is the same REV-102 acceptance property.
