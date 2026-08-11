@@ -103,8 +103,13 @@ behaviour (explicit FULL-resend surfaced in status, never a silent broken chain)
 The source `[prune:]` touches only `automated_hourly_` snapshots, never bookmarks
 (`delsnaps -B` is a separate op). Whether to (a) hard-refuse collector-owned source pruning on
 recursive relationships or (b) allow it with the explicit FULL-resend warning is
-the one open sub-decision for owner/reviewer; recommend (b) with the warning, since
-a recursive relationship already takes a FULL on its first miss anyway.
+the one open sub-decision for owner/reviewer. It stays **tied to live evidence
+under REV-102 (step 4)**, not decided from a shorthand: the only established fact
+is that recursive mode lacks bookmark fallback, so it needs a FULL **when no
+usable ordinary common snapshot remains** — NOT "on its first miss" (a recursive
+transfer may still have a common snapshot after one missed run). The recursive
+refuse-vs-warn choice is made once a targeted runtime test proves the exact
+behaviour.
 
 Do not change the frozen transfer engines to "guarantee" a recursive bookmark base
 without first proving that is the smallest necessary boundary.

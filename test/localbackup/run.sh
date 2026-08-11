@@ -194,6 +194,62 @@ fi
 # present is therefore discriminating -- an old generator would fail it. (An
 # out-of-band ZB=<old checkout> run confirms the base omits the source prune.)
 
+# ---- REV-20260811-104 F1: source and target retention are INDEPENDENT policies ----
+# Two [prune:] scopes are not enough; they must reference DISTINCT prune-template
+# identities so editing one side does not change the other. Extract the candidate
+# CONFIG from the plan, then prove independent editing.
+out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ind.conf")"
+printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/ind-cand.conf"
+# distinct template identities: a source family (__src_keep_*) AND a target family
+# (__keep_*), both present.
+if grep -q '^\[template:profile__default__src_keep_hourly\]' "$WORK/ind-cand.conf" \
+        && grep -q '^\[template:profile__default__keep_hourly\]' "$WORK/ind-cand.conf" \
+        && grep -q 'use_template = profile__default__src_keep_' "$WORK/ind-cand.conf" \
+        && grep -q 'use_template = profile__default__keep_' "$WORK/ind-cand.conf"; then
+    ok "104 F1/source and target reference DISTINCT prune-template identities"
+else
+    bad "104 F1/source and target reference DISTINCT prune-template identities" \
+        "$(grep -E '^\[template:|use_template' "$WORK/ind-cand.conf" | head)"
+fi
+# render helper: retain shown on the source (rpool/data) vs target (hdd/backups) line.
+lb_render_retain() {  # <config> <scope> -> the -M value on that scope's prune line
+    env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
+        bash "$GEN" -c "$1" 2>/dev/null | grep -oE "\"$2\" \"automated_\" -H24 -D7 -W4 -M[0-9]+" | grep -oE 'M[0-9]+' | head -1
+}
+GEN="$REPO/gen-cron.sh"
+# mutate ONLY the source family's monthly retain -M12 -> -M36
+awk '/\[template:profile__default__src_keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-src.conf"
+if [ "$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data')" = "M36" ] \
+        && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups')" = "M12" ]; then
+    ok "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged"
+else
+    bad "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged" \
+        "src=$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups')"
+fi
+# mutate ONLY the target family's monthly retain -> the converse
+awk '/\[template:profile__default__keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M60");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-tgt.conf"
+if [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups')" = "M60" ] \
+        && [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')" = "M12" ]; then
+    ok "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged"
+else
+    bad "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged" \
+        "tgt=$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups') src=$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')"
+fi
+# negative control: prove the distinctness is load-bearing -- if BOTH scopes shared
+# one template family (the 49d547ae shape), the src mutation above would also move
+# the target. Build a valid shared-shape config: drop the __src_keep_ template
+# definitions and point the source prune at the target's __keep_ family.
+awk '/^\[template:profile__default__src_keep_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/ind-cand.conf" \
+    | sed '/^\tuse_template/ s/__src_keep_/__keep_/g' > "$WORK/shared.conf"
+awk '/\[template:profile__default__keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/shared.conf" > "$WORK/shared-mut.conf"
+if [ "$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data')" = "M36" ] \
+        && [ "$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')" = "M36" ]; then
+    ok "104 F1/negctl: a SHARED template family couples both sides (why distinct identities matter)"
+else
+    bad "104 F1/negctl: a SHARED template family couples both sides" \
+        "src=$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')"
+fi
+
 # ---- F2: additive composition over an existing config ----
 cat > "$WORK/existing.conf" <<'EOF'
 [defaults]

@@ -2125,22 +2125,27 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	notify       = local-$(basename "$r")"
         done
         if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+            # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
+            # editable after CREATE, not two scopes sharing one template authority.
+            # ensure_cron_config already put the target's keep_* templates in the
+            # candidate; here we emit a DISTINCT source family (`__src_keep_*`),
+            # byte-copied from the same values but under its own stable identity,
+            # so editing a source retain in the candidate changes only the source
+            # cron line and target retain only the target. `__keep_` -> `__src_keep_`
+            # is namespace-agnostic (works for any --profile). The awk prints only
+            # the `__keep_` template sections, robust to template ordering.
+            awk '/^\[template:/{p=($0 ~ /__keep_/)} p' "$PROFILE_TPL_FILE" \
+                | sed 's/__keep_/__src_keep_/g'
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
                 echo "	# managed-by: zfs-backup.sh local-backup source-retention=$r"
-                profile_emit "$PROFILE_PRUNE_FILE"
-                # REV-20260811-102 F2: SOURCE prune scope must follow the source
-                # coverage, not blanket-recurse. [dataset:$r] is non-recursive
-                # (dataset.inc emits no recursion field), so only $r itself is
-                # sent and only $r carries this tool's snapshots -- a recursive
-                # source prune would walk into children like $r/vm-101 and could
-                # destroy automated_ snapshots owned by another/manual policy that
-                # this relationship never backs up. So the source prune is
-                # non-recursive too (prunes exactly the named dataset). A recursive
-                # (flat/atomic) source would need a matching recursive source prune,
-                # but local-backup does not expose recursion yet. Omitting the
-                # recursive field leaves it at the CONFIG default (no).
+                # REV-102 F2: source prune scope follows the (non-recursive) source
+                # coverage -- delsnaps without -R, exactly the named dataset, never
+                # walking into children like $r/vm-101 that this job does not back
+                # up. REV-104 F1: use the SOURCE template family so its retention is
+                # independent of the target's.
+                profile_emit "$PROFILE_PRUNE_FILE" | sed 's/__keep_/__src_keep_/g'
                 echo "	notify       = local-src-$(basename "$r")"
             done
             echo
