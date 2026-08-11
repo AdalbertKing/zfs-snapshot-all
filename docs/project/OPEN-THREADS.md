@@ -4,6 +4,8 @@
 Do not edit. Owner decisions that are not reviews live in
 `docs/project/OWNER-DECISIONS.md`.
 
-No open reviews.
+| REV | State | Whose move | Next action |
+|---|---|---|---|
+| REV-20260811-101 | OPEN | Claude | implement and respond |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
