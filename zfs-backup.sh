@@ -1019,18 +1019,36 @@ source_scope_is_bounded() {   # <rendered-crontab-file> <scope>
     return 1
 }
 
-# The `src` value of an installed [dataset:<localpath>] section (account@host:ds), or
-# empty if the section or its src field is absent. The audit keys the SOURCE scope off
-# this -- the installed CONFIG is runtime truth -- not off possibly-stale client state.
-installed_dataset_src() {   # <cronfile> <local dataset path>
-    awk -v h="[dataset:$2]" '
+# One field value of an installed [dataset:<localpath>] section, or empty if the
+# section or the field is absent. Reads back what is ALREADY on disk -- the installed
+# CONFIG is runtime truth -- not possibly-stale client state.
+installed_dataset_field() {   # <cronfile> <local dataset path> <field>
+    awk -v h="[dataset:$2]" -v fld="$3" '
         $0==h {f=1; next}
         f && /^\[/ {f=0}
         f {
             line=$0; sub(/^[ \t]+/,"",line)
-            if (line ~ /^src[ \t]*=/) { sub(/^src[ \t]*=[ \t]*/,"",line); print line; exit }
+            if (line ~ ("^" fld "[ \t]*=")) { sub(("^" fld "[ \t]*=[ \t]*"),"",line); print line; exit }
         }
     ' "$1" 2>/dev/null
+}
+
+# The `src` value of an installed [dataset:<localpath>] section (account@host:ds). The
+# audit keys the SOURCE scope off this.
+installed_dataset_src() {   # <cronfile> <local dataset path>
+    installed_dataset_field "$1" "$2" src
+}
+
+# REV-20260811-108: is this installed pull relationship a PASSIVE external-snapshot
+# source? A passive relationship transfers with `snapget -e`: it consumes an
+# already-existing, externally-owned snapshot and this package does NOT own the source
+# snapshot lifecycle, so it legitimately carries no source `[prune:]`. The audit must
+# read this off the installed transfer `flags` (runtime truth) and never propose taking
+# destructive source-retention ownership of it -- no new state token, just the flag
+# that is already there.
+installed_dataset_is_passive() {   # <cronfile> <local dataset path>
+    local flags; flags="$(installed_dataset_field "$1" "$2" flags)"
+    case " $flags " in *" -e "*) return 0 ;; *) return 1 ;; esac
 }
 
 # The same extraction, generalized to any CONFIG v4 file and any section
@@ -3743,8 +3761,8 @@ $gcerr"
     rm -f "$rendered.err"
 
     # --- read-only audit: which active pull relationships lack a bounded source prune ---
-    local f missing=0 total_ds=0
-    local -a report=()
+    local f missing=0 total_ds=0 passive=0
+    local -a report=() passive_report=()
     local -A MISS_SRC=()   # client file -> space-separated missing source SCOPES (account@host:ds)
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
@@ -3763,6 +3781,17 @@ $gcerr"
             src="$(installed_dataset_src "$cronfile" "$localpath")"
             [ -n "$src" ] || continue
             case "$src" in *@*:*) ;; *) continue ;; esac
+            # REV-20260811-108: a PASSIVE external-snapshot relationship (installed
+            # transfer flags carry -e) consumes externally-owned snapshots and this
+            # package does not own the source snapshot lifecycle. It legitimately has
+            # no source [prune:]; adding one would take destructive ownership of
+            # snapshots we did not create. Never enter it into MISS_SRC -- report it as
+            # intentionally outside source-retention ownership instead.
+            if installed_dataset_is_passive "$cronfile" "$localpath"; then
+                passive=$((passive + 1))
+                passive_report+=("  $CLIENT_NAME: source '$src' -> pasywne (-e): poza wlasnoscia retencji zrodla, pomijam")
+                continue
+            fi
             total_ds=$((total_ds + 1))
             if ! source_scope_is_bounded "$rendered" "$src"; then
                 missing=$((missing + 1))
@@ -3774,8 +3803,12 @@ $gcerr"
     rm -f "$rendered"
 
     echo "Audyt retencji ZRODLA (config: $cronfile)"
-    echo "  aktywne pull-datasety:            $total_ds"
-    echo "  bez ograniczonej retencji zrodla: $missing"
+    echo "  aktywne pull-datasety (zarzadzane): $total_ds"
+    echo "  pasywne (-e, poza wlasnoscia):      $passive"
+    echo "  bez ograniczonej retencji zrodla:   $missing"
+    if [ "$passive" -gt 0 ]; then
+        printf '%s\n' "${passive_report[@]}"
+    fi
     if [ "$missing" -eq 0 ]; then
         echo "Kazda aktywna relacja pull ma juz ograniczona retencje zrodla -- nic do dodania."
         return 0

@@ -5593,7 +5593,7 @@ out="$(audit5)"; rc=$?
 md5_after="$(md5sum "$A5/jobs.conf" | awk '{print $1}')"
 # 1. names the missing source prune, counts it, and is read-only (no mutation)
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
         && printf '%s' "$out" | grep -qF '[prune:zfsbackup@10.5.5.5:rpool/data]' \
         && printf '%s' "$out" | grep -qi 'TYLKO-DO-ODCZYTU' \
         && [ "$md5_before" = "$md5_after" ]; then
@@ -5615,7 +5615,7 @@ cat >> "$A5/jobs.conf" <<'EOF'
 EOF
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
         && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
     ok "57 step5 (F3): a [prune:] header that renders no bounded delsnaps is NOT reported safe"
 else
@@ -5627,7 +5627,7 @@ fi
 printf '31 4 * * * e=$(mktemp); /x/delsnaps.sh -B -K /dev/null "zfsbackup@10.5.5.5:rpool/data" "automated_" -d30 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
         && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
     ok "57 step5 (F3res): a bookmark-only (delsnaps -B) job for the scope is NOT bounded"
 else
@@ -5638,7 +5638,7 @@ fi
 printf '30 * * * * e=$(mktemp); /x/delsnaps.sh -K /dev/null -G "zfsbackup@10.5.5.5:rpool/data" "manual_" -H24 2>"$e"\n' > "$A5_RENDER"
 out="$(audit5)"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla: 1' \
+        && printf '%s' "$out" | grep -qE 'bez ograniczonej retencji zrodla: +1' \
         && ! printf '%s' "$out" | grep -qi 'nic do dodania'; then
     ok "57 step5 (F3res): a snapshot prune of an unrelated prefix is NOT bounded"
 else
@@ -5737,6 +5737,90 @@ if [ "$rc" -eq 0 ] \
 else
     bad "57b step5 (F4): --apply adds a bounded source prune and leaves [dataset:] src topology byte-identical" \
         "rc=$rc src_before=[$inst_src_before] src_after=[$inst_src_after] hassrcprune=$(grep -cF '[prune:zfsbackup@10.7.7.1:rpool/data]' "$AP/jobs.conf")"
+fi
+
+# --- 58. REV-20260811-108: the audit must NOT take source-retention ownership of a
+#     PASSIVE external-snapshot relationship (installed transfer flags carry -e). Such a
+#     relationship consumes externally-owned snapshots; adding a source prune would take
+#     destructive ownership. It must be reported as intentionally outside ownership,
+#     never entered into the "missing" set, and --apply must leave it byte-identical
+#     with no destroy-grant requirement. ---
+A8="$WORK/audit8"; mkdir -p "$A8/clients"
+cat > "$A8/clients/p1.conf" <<'EOF'
+CLIENT_NAME=p1
+STATE=active
+PEER_SAVED_DATASETS=rpool/data
+PEER_SAVED_MODE=backup
+PEER_SAVED_TARGET=tank/backups
+EOF
+GC8="$A8/gencron-stub.sh"; cp "$GC5" "$GC8" 2>/dev/null || { printf '#!/usr/bin/env bash\ncat "$GENCRON_RENDER"\n' > "$GC8"; }
+chmod +x "$GC8"
+A8_RENDER="$A8/render.crontab"; : > "$A8_RENDER"   # no source delsnaps rendered
+# passive [dataset:] -- transfer flags carry -e -- and NO source prune
+write_a8() {  # <flags line value>
+    cat > "$A8/jobs.conf" <<EOF
+[defaults]
+	host_label = h
+[dataset:tank/backups/p1/rpool/data]
+	# managed-by: zfs-backup.sh client=p1
+	use_template = profile__default__standard_hourly
+	src          = zfsbackup@10.6.6.6:rpool/data
+	flags        = $1
+	pair_label   = p1
+	notify       = p1-data
+[prune:tank/backups/p1]
+	# managed-by: zfs-backup.sh client=p1
+	use_template = profile__default__keep_hourly
+	gfs          = yes
+	gfs_pattern  = automated_
+	recursive    = yes
+	pair_label   = p1
+	notify       = p1
+EOF
+}
+audit8() {  # <--apply?> : runs the audit against the passive fixture
+    GENCRON_RENDER="$A8_RENDER" bash -c "source '$ZFSBACKUP'
+        read_server_conf() { CRON_CONFIG='$A8/jobs.conf'; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.6.6.6; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=p1; }
+        assert_source_prune_grant() { echo GRANT-CALLED >&2; return 0; }
+        GENCRON='$GC8' CLIENTS_DIR='$A8/clients' SCRIPT_DIR='$A8' cmd_audit_source_retention ${1:-}" 2>&1
+}
+# 1. passive (-e) relationship is reported outside ownership, NOT missing, read-only
+write_a8 "-e -K /dev/null"
+md5_before="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
+out="$(audit8)"; rc=$?
+md5_after="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'pasywne (-e, poza wlasnoscia):      1' \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla:   0' \
+        && printf '%s' "$out" | grep -qi 'poza wlasnoscia retencji zrodla' \
+        && [ "$md5_before" = "$md5_after" ]; then
+    ok "58 REV-108: a passive (-e) source is reported outside ownership, not missing (read-only)"
+else
+    bad "58 REV-108: a passive (-e) source is reported outside ownership, not missing" "rc=$rc md5eq=$([ "$md5_before" = "$md5_after" ] && echo y || echo N) out=$out"
+fi
+# 2. --apply on a passive-only config touches nothing and never invokes the grant check
+md5_before="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
+out="$(audit8 --apply)"; rc=$?
+md5_after="$(md5sum "$A8/jobs.conf" | awk '{print $1}')"
+if [ "$rc" -eq 0 ] \
+        && [ "$md5_before" = "$md5_after" ] \
+        && ! printf '%s' "$out" | grep -q 'GRANT-CALLED'; then
+    ok "58 REV-108: --apply leaves a passive relationship byte-identical, no destroy-grant check"
+else
+    bad "58 REV-108: --apply leaves a passive relationship byte-identical, no destroy-grant check" "rc=$rc md5eq=$([ "$md5_before" = "$md5_after" ] && echo y || echo N) out=$out"
+fi
+# 3. NEGATIVE CONTROL (evidence #4): the SAME fixture WITHOUT -e is a managed relationship
+#    and IS flagged missing -- proving the -e flag is the discriminator, not the shape.
+write_a8 "-K /dev/null"
+out="$(audit8)"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'pasywne (-e, poza wlasnoscia):      0' \
+        && printf '%s' "$out" | grep -q 'bez ograniczonej retencji zrodla:   1' \
+        && printf '%s' "$out" | grep -qF '[prune:zfsbackup@10.6.6.6:rpool/data]'; then
+    ok "58 REV-108: the same relationship WITHOUT -e is managed and flagged missing (discriminator control)"
+else
+    bad "58 REV-108: the same relationship WITHOUT -e is managed and flagged missing" "rc=$rc out=$out"
 fi
 
 echo "--------------------------------------------"

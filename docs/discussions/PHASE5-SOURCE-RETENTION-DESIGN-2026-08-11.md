@@ -442,6 +442,17 @@ safety defects (REV-102 F3/F4/F5); the shipped design below is the corrected one
   bookmark-only job → still missing; unrelated-prefix prune → still missing;
   managed-prefix bounded prune → bounded.
 
+  **REV-108 (passive `-e` sources are not ours to prune):** a relationship whose
+  installed transfer `flags` carry `-e` consumes an externally-owned snapshot — this
+  package does not own the source snapshot lifecycle, so it legitimately has no source
+  `[prune:]`. The audit reads that off the installed `[dataset:] flags`
+  (`installed_dataset_is_passive`) and reports such a relationship under a distinct
+  "passive, outside ownership" count, never entering it into the missing set; `--apply`
+  therefore leaves it byte-identical and never requests its remote `destroy` grant. No
+  new state token — just the transfer flag that is already there. This guard runs
+  before the F3 effective-retention test, so a more precise F3 does not widen the set
+  of relationships the audit acts on.
+
 - **`--apply` (NARROW retrofit):** appends ONLY the missing source `[prune:]` sections
   and their `__src_` templates (`emit_missing_source_prune`), then runs the same
   fail-closed source-prune grant gate, `gen-cron.sh` validation,
