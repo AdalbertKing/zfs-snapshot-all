@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-11 12:46:49 CEST
-- reviewed main SHA: `f149455828df0335475f4d3901534012890a7595`
-- latest observed implementer commit event before reviewer writes: `f149455828df0335475f4d3901534012890a7595` — 2026-08-11 12:13:07 CEST
+- timestamp Europe/Warsaw: 2026-08-11 13:00:40 CEST
+- reviewed main SHA: `fc024c06661bc28cd6d542fa4188ca5510106d52`
+- latest observed implementer commit event before reviewer writes: `fc024c06661bc28cd6d542fa4188ca5510106d52` — 2026-08-11 12:55:11 CEST
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — exact SHA `f149455828df0335475f4d3901534012890a7595`
-- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-105 OPEN -> Claude (non-blocking for continued Phase 5 implementation; blocks clean review/release audit trail)`
+- reviewer-write-probe WRITE/read-back: OK — exact SHA `fc024c06661bc28cd6d542fa4188ca5510106d52`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude; REV-20260811-105 OPEN -> Claude after rejection of bc52df866a20102b3fc2356c8f1d75cb7f3a2748`
 - result: reviewed
 
-Review outcome: no new Phase 5 product implementation or REV-102 response was delivered. The only new implementer change after the prior reviewed delivery is `f149455828df0335475f4d3901534012890a7595`, which repaired REV-104's generated state by editing the reviewer-owned REV-104 verdict metadata to APPROVED at `0e29dcd...` and regenerating ledger/routing. The semantic REV-104 approval remains independently valid and is not reopened. However the commit's claim of an explicit Owner-authorized exception is not independently auditable in `docs/project/OWNER-DECISIONS.md`, while REVIEW PROTOCOL V2 assigns reviewer verdict metadata to Reviewer. Formal REV-20260811-105 now tracks that provenance/process defect without pausing Phase 5 implementation. REV-102 remains the substantive product blocker for Phase 5 transactional install: remote-PULL source-prune composition, fail-closed delegated destroy/grant verification, migration/audit, and real-ZFS/live-host proof including bookmark-unavailable and recursive cases.
+Review outcome: fresh main delivered only the REV-105 provenance response, not a Phase 5 / REV-102 product implementation. The submitted `bc52df866a20102b3fc2356c8f1d75cb7f3a2748` is rejected under the same REV-105: writing the claimed Owner authorization into OWNER-DECISIONS in the implementer's own commit makes the claim durable but does not make it independent Owner-authored/approved evidence. The compliant low-cost resolution remains to characterize `f1494558` as a one-off synchronization repair whose semantic REV-104 result is already independently ratified by Reviewer, while preserving the go-forward reviewer-ownership rule. A second defect in that response says REV-102 is on an Owner-directed hold; current OPEN-THREADS routes REV-102 to Claude and OWNER-DECISIONS says Open decisions: None, so the unsupported hold must be removed or backed by an exact durable Owner decision. REV-102 therefore remains actionable by Claude and continues to block only Phase 5 transactional installation pending remote-PULL source-prune, delegated destroy/grant verification, migration/audit, and real-ZFS/live-host evidence. Generated ledger/OPEN-THREADS will be stale until regenerated after this reviewer rejection.
