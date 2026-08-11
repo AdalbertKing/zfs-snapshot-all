@@ -968,11 +968,16 @@ MANAGED_SOURCE_PREFIX_DEFAULT="automated_hourly_"
 # argument of its snapget/snapsend transfer line for the scope, read back from the
 # rendered crontab. This is the family a bounded source prune has to cover. Falls back
 # to the high-level default managed prefix if no transfer line names the scope.
+#
+# REV-20260811-110: the scope must match as an EXACT quoted argument ("<scope>"), the
+# same identity level source_scope_is_bounded uses -- a substring test would let a
+# neighbouring scope whose text CONTAINS this one (rpool/data vs rpool/data2, or a
+# parent/child pair) hand this relationship the WRONG relationship's -m prefix.
 managed_source_prefix_for_scope() {   # <rendered-crontab-file> <scope>
     local line pfx
     while IFS= read -r line; do
         case "$line" in *snapget*|*snapsend*) ;; *) continue ;; esac
-        case "$line" in *"$2"*) ;; *) continue ;; esac
+        case "$line" in *"\"$2\""*) ;; *) continue ;; esac
         case "$line" in
             *" -m \""*) pfx="${line#*-m \"}"; pfx="${pfx%%\"*}" ;;
             *" -m "*)   pfx="${line#*-m }";   pfx="${pfx%% *}" ;;
