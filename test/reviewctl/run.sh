@@ -255,34 +255,44 @@ world d7; deliver "$sha1" "stage three"; review $R CHANGES-REQUIRED $sha2
 case "$(threads_txt)" in *DELIVERED*) ok "...and without it the delivery is still open" ;;
   *) bad "...and without it the delivery is still open" "$(threads_txt)" ;; esac
 
-# REV-20260811-099: the full resurface lifecycle. A direct-main delivery is
-# reviewed through a REV whose reviewed-implementation ADVANCES to a cumulative
-# follow-up sha and then CLOSES; after generate the original delivery must be
-# absent from OPEN-THREADS (the reviewed-by fact survives the pointer advance),
-# and the closed REV is not open either. This is exactly the resurface the real
-# Phase 4/5/6 deliveries showed once REV-095/097 advanced their pointers.
+# REV-20260811-099 / REV-20260811-100 F1: the full resurface lifecycle, walked
+# STATE BY STATE rather than asserted only in its final shape. The historical
+# failure is temporal, so a fixture that starts already-retired stays green even
+# if the transition or its bookkeeping breaks. Each step generates and asserts
+# before the next.
 world d8; deliver "$sha1" "phase slice"
-review  $R APPROVED    $sha2
-respond $R IMPLEMENTED $sha2
-closure $R $sha2
-printf '<!-- reviewed-by: %s %s -->\n' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
+# 1. a direct-main delivery starts as reviewer-owned DELIVERED work.
+case "$(threads_txt)" in *"${sha1:0:8}"*DELIVERED*) ok "099L step1: a fresh direct-main delivery starts open/DELIVERED" ;;
+  *) bad "099L step1: a fresh direct-main delivery starts open/DELIVERED" "$(threads_txt)" ;; esac
+# 2. a REV opened AT the delivery sha replaces the DELIVERED row with the REV row.
+review $R CHANGES-REQUIRED $sha1
 txt="$(threads_txt)"
-case "$txt" in *"${sha1:0:8}"*) bad "099: a reviewed delivery is absent from OPEN-THREADS after its REV closes on a cumulative sha" "$txt" ;;
-  *) ok "099: a reviewed delivery is absent from OPEN-THREADS after its REV closes on a cumulative sha" ;; esac
-case "$txt" in *"$R"*) bad "099: the closed REV itself is not open either" "$txt" ;;
-  *) ok "099: the closed REV itself is not open either" ;; esac
+case "$txt" in *DELIVERED*) bad "099L step2: opening the REV at the delivery sha clears the DELIVERED row" "$txt" ;;
+  *) ok "099L step2: opening the REV at the delivery sha clears the DELIVERED row" ;; esac
+case "$txt" in *"$R"*) ok "099L step2: ...and the REV row stands in its place" ;;
+  *) bad "099L step2: ...and the REV row stands in its place" "$txt" ;; esac
+# 3. a follow-up ADVANCES the SAME review's pointer to a later cumulative sha.
+#    Without a durable fact the original delivery resurfaces HERE -- the exact
+#    historical failure this mechanism exists to remove.
+review $R APPROVED $sha2; respond $R IMPLEMENTED $sha2
+case "$(threads_txt)" in *"${sha1:0:8}"*DELIVERED*) ok "099L step3: advancing the pointer resurfaces the original delivery until it is retired" ;;
+  *) bad "099L step3: advancing the pointer resurfaces the original delivery until it is retired" "$(threads_txt)" ;; esac
+# 4. record the durable reviewed-by fact for the ORIGINAL delivery sha.
+printf '<!-- reviewed-by: %s %s -->\n' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
+# 5. close at the cumulative sha; the original delivery AND the closed REV are gone.
+closure $R $sha2
+txt="$(threads_txt)"
+case "$txt" in *"${sha1:0:8}"*) bad "099L step5: after the advance + closure the retired delivery stays absent" "$txt" ;;
+  *) ok "099L step5: after the advance + closure the retired delivery stays absent" ;; esac
+case "$txt" in *"$R"*) bad "099L step5: the closed REV is not open either" "$txt" ;;
+  *) ok "099L step5: the closed REV is not open either" ;; esac
 
-# Negative control: in the same closed world, a GENUINELY unreviewed delivery
+# Negative control: in that same closed world, a GENUINELY unreviewed delivery
 # (a third sha no REV or reviewed-by names) must still show as open -- so the
 # retirement is the reviewed-by fact, not "closing a REV silences all deliveries".
-world d9; deliver "$sha1" "reviewed slice"
-review  $R APPROVED    $sha2
-respond $R IMPLEMENTED $sha2
-closure $R $sha2
-printf '<!-- reviewed-by: %s %s -->\n' "$sha1" "$R" >> "$W/docs/project/DELIVERIES.md"
 deliver "$sha3" "an actually unreviewed delivery"
-case "$(threads_txt)" in *"${sha3:0:8}"*DELIVERED*) ok "099: a genuinely unreviewed delivery still shows as open (negative control)" ;;
-  *) bad "099: a genuinely unreviewed delivery still shows as open (negative control)" "$(threads_txt)" ;; esac
+case "$(threads_txt)" in *"${sha3:0:8}"*DELIVERED*) ok "099L control: a genuinely unreviewed delivery still shows as open" ;;
+  *) bad "099L control: a genuinely unreviewed delivery still shows as open" "$(threads_txt)" ;; esac
 
 # ---- commit ids must be CANONICAL, not merely resolvable (REV-080 F1) -------
 #
