@@ -2963,6 +2963,9 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
     # half-built namespace it did not make.
     local failure="" created_root=""
     local parent="${landing%/*}"
+    # The highest thing this run could ever legitimately create is the restore
+    # namespace itself. Everything else on the way up already existed.
+    local ns_root="${landing%%/*}/restore"
     if ! zfs list -H -o name "$parent" >/dev/null 2>&1; then
         local probe="$parent" up
         created_root="$parent"
@@ -2972,6 +2975,17 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
             zfs list -H -o name "$up" >/dev/null 2>&1 && break # first existing ancestor
             created_root="$up"; probe="$up"
         done
+        # CLAMP -- and this is not defensive decoration. The walk stops at the
+        # first ancestor `zfs list` reports as existing, so anything that makes
+        # that query fail (a permission error, a transient) marches the walk all
+        # the way up to the POOL, and cleanup would then try to destroy it. Found
+        # by a stub that did not model the pool as existing; on a live host the
+        # walk stops correctly, which is exactly why it would never have shown up
+        # there. Nothing outside the restore namespace is ever this run's to remove.
+        case "$created_root" in
+            "$ns_root"|"$ns_root"/*) ;;
+            *) die "restore: internal guard -- the cleanup root was computed as '$created_root', which is outside the restore namespace '$ns_root'. Refusing to create or remove anything. This means a 'zfs list' of an ancestor failed; fix that first." ;;
+        esac
         zfs create -p "$parent" || die "restore: could not create the restore namespace '$parent' -- nothing was received, nothing was left behind"
     fi
 
