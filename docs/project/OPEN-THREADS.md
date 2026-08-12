@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| _(nothing open)_ | - | - | - |
+| REV-20260812-116 | OPEN | Claude | implement and respond |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
