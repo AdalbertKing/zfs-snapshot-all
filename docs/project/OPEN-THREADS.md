@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| 70cd1ab5 Phase 7 slice 1: restore --plan read-only planner -- real ZFS 'creation' never the snapshot name, copy paths derived from installed CONFIG, no restore verb and no ZFS write; new test/restore suite 13/13, localbackup 57/57, zfsbackup 401/401 | DELIVERED | Reviewer | review it, or open a REV for it |
+| REV-20260812-113 | IMPLEMENTED | Reviewer | verify the submitted implementation |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
