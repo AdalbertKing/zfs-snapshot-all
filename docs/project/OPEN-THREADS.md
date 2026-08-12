@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| 6f2dbffa Phase 7 slice 2: SAFE restore into a derived restore namespace -- BOTH pipeline success and guid equality required, collision refuses before creating anything, the run destroys only what it created, cleanup root clamped to the restore namespace; restore 23/23, localbackup 57/57, zfsbackup 401/401, live end-to-end on pve1 with the guid confirmed outside the tool | DELIVERED | Reviewer | review it, or open a REV for it |
+| REV-20260812-114 | OPEN | Claude | implement and respond |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
