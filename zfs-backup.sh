@@ -506,6 +506,40 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
     done
 }
 
+# REV-20260812-111 B: the other way a managed relationship can be born without
+# continuity insurance -- not a missing grant, a transfer MODE that has no
+# bookmark at all.
+#
+# Measured 2026-08-12 (REV-102 campaign, leg B3): an atomic `-r` relationship
+# carries zero bookmarks, because both engines gate the whole bookmark path on
+# `RECURSIVE -ne 1` -- they neither record one after a transfer nor consult one
+# when the common base is gone. Managed source retention is precisely the thing
+# that eventually removes that common base. The two together describe a
+# relationship that is GUARANTEED to stop permanently and need a destructive
+# re-seed; leg B4 measured that ending (explicit refusal, exit 1, TARGET tree
+# preserved -- safe, but stopped).
+#
+# The high-level layer never emits `recursive = atomic`: every [dataset:] section
+# it generates carries `recursive = no`. So this combination can only arrive from
+# a hand-edited CONFIG -- which is exactly why the check reads the CANDIDATE about
+# to be installed rather than trusting what this run generated.
+#
+# Deliberately NOT rewritten to `flat` (-R), which DOES keep per-dataset bookmarks
+# (leg B5). atomic and flat are different transfer modes with different ordering
+# and crash semantics; silently converting one into the other to satisfy a safety
+# check is the "helpful repair" this project refuses everywhere else. Refuse, name
+# both options, let a human choose.
+assert_no_atomic_with_source_retention() {   # <configfile> <local dataset path>...
+    local cfg="$1"; shift
+    local lp rec
+    for lp in "$@"; do
+        rec="$(installed_dataset_field "$cfg" "$lp" recursive)"
+        rec="$(printf '%s' "$rec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        [ "$rec" = atomic ] || continue
+        die "source-retention/recursion conflict on '[dataset:$lp]': it declares 'recursive = atomic' (one atomic -r stream for the whole subtree), and this run would install managed SOURCE retention on that relationship. An atomic relationship keeps NO bookmark -- the engines neither record nor consult one under -r -- so once retention ages out the last ordinary common snapshot there is nothing left to anchor an incremental, and the relationship stops permanently until someone performs a destructive re-seed. Refusing to install source retention on it. Resolve it deliberately: either set 'recursive = flat' (per-dataset -R, which does keep bookmark insurance -- but it is a DIFFERENT transfer mode, so change it because you want that mode, not because this message mentioned it), or leave source retention off for this relationship. Nothing was changed."
+    done
+}
+
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""
@@ -3556,6 +3590,14 @@ cmd_activate_client() {
     # `destroy` on each source (delegated by deploy.sh --commit-scope). Verify fail
     # closed -- we do NOT widen. Empty on a preserved re-activation, so no SSH then.
     if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+        # REV-20260812-111 B: cheapest gate first -- this one is a file read, the
+        # grant check below costs an ssh round trip per source.
+        local -a atomic_paths=(); local ads
+        for ads in ${PEER_SAVED_DATASETS:-}; do atomic_paths+=("$(client_local_path "$ads")"); done
+        if [ "${#atomic_paths[@]}" -gt 0 ]; then
+            ( assert_no_atomic_with_source_retention "$workfile" "${atomic_paths[@]}" ) \
+                || { rm -f "$workfile"; die "atomic-recursion guard refused -- $cronfile was NOT touched, nothing installed."; }
+        fi
         ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
               "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
             || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
@@ -3701,6 +3743,13 @@ cmd_migrate_profile() {
         # activate-client, per client -- never migrate a config that installs a
         # remote source prune the delegated account cannot actually run.
         if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+            # REV-20260812-111 B, same gate as activate-client, per client.
+            local -a atomic_paths=(); local ads
+            for ads in ${PEER_SAVED_DATASETS:-}; do atomic_paths+=("$(client_local_path "$ads")"); done
+            if [ "${#atomic_paths[@]}" -gt 0 ]; then
+                ( assert_no_atomic_with_source_retention "$workfile" "${atomic_paths[@]}" ) \
+                    || { rm -f "$workfile"; die "atomic-recursion guard refused for '$name' -- nothing migrated or installed."; }
+            fi
             ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
                   "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
                 || { rm -f "$workfile"; die "source-prune grant check failed for '$name' -- nothing migrated or installed."; }
@@ -3889,6 +3938,16 @@ $gcerr"
         # fail-closed grant gate for exactly the source datasets this run emitted a
         # source prune for -- same discipline as activate-client/migrate-profile.
         if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
+            # REV-20260812-111 B: the retrofit path must refuse the same
+            # combination it would otherwise silently create on an existing host.
+            # Local paths come from the scopes this retrofit is about, not from
+            # the whole client -- --apply is narrow by construction (F4).
+            local -a atomic_paths=(); local ascope
+            for ascope in $miss; do atomic_paths+=("$(client_local_path "${ascope##*:}")"); done
+            if [ "${#atomic_paths[@]}" -gt 0 ]; then
+                ( assert_no_atomic_with_source_retention "$workfile" "${atomic_paths[@]}" ) \
+                    || { rm -f "$workfile"; die "atomic-recursion guard refused for '$name' -- nothing added or installed."; }
+            fi
             ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
                   "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
                 || { rm -f "$workfile"; die "source-prune grant check failed for '$name' -- nothing added or installed."; }
