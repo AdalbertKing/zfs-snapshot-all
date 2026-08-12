@@ -3077,15 +3077,25 @@ cmd_restore() {
     [ -r "$config" ] || die "restore --plan: cannot read $config"
 
     # Collect (source, copy-location, kind) triples from the installed CONFIG.
-    local -a src=() copy=() kind=()
-    local ds d dst s
+    local -a src=() copy=() kind=() cons=()
+    local ds d dst s rec
     for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
         d="$(installed_dataset_field "$config" "$ds" dst)"
         s="$(installed_dataset_field "$config" "$ds" src)"
+        # Consistency comes from the installed CONFIG and from nothing else. The
+        # recovery contract forbids inferring it from snapshot names, prefixes,
+        # hierarchy shape or close creation times, and the reason is measured: on
+        # pve2 two datasets in different subtrees share the name
+        # automated_hourly_2026-08-11_23-37-01 while their creation times differ by
+        # a second. They were never one atomic event. A planner that read names
+        # would have announced a recovery point that never existed.
+        rec="$(installed_dataset_field "$config" "$ds" recursive)"
+        rec="$(printf '%s' "$rec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        [ "$rec" = atomic ] && rec=atomic || rec=independent
         if [ -n "$d" ]; then
-            src+=("$ds"); copy+=("${d}/${ds}"); kind+=("local push -> $d")
+            src+=("$ds"); copy+=("${d}/${ds}"); kind+=("local push -> $d"); cons+=("$rec")
         elif [ -n "$s" ]; then
-            src+=("$s"); copy+=("$ds"); kind+=("remote pull <- $s")
+            src+=("$s"); copy+=("$ds"); kind+=("remote pull <- $s"); cons+=("$rec")
         fi
     done
     [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
@@ -3112,14 +3122,24 @@ cmd_restore() {
         # the only one I can measure, and the finding is about depending on a default
         # at the planner's core lookup. Naming the depth costs nothing and removes the
         # version-dependence instead of re-measuring it on every upgrade.
-        snaps=$(zfs list -H -p -t snapshot -o name,creation -s creation -d 1 "${copy[$i]}" 2>/dev/null) || snaps=""
+        # guid rides the SAME list call rather than a `zfs get` per snapshot --
+        # verified live on zfs-2.1.9: name,creation,guid returns three tab-separated
+        # fields, rc=0. One process per dataset instead of one per recovery point.
+        snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "${copy[$i]}" 2>/dev/null) || snaps=""
         if [ -z "$snaps" ]; then
             echo "  Snapshoty:  BRAK -- ta kopia nie istnieje albo nie ma snapshotow. Nie ma z czego odtwarzac."
             continue
         fi
+        if [ "${cons[$i]}" = atomic ]; then
+            echo "  Spojnosc:   ATOMIC (punkt odtworzenia) -- z CONFIG 'recursive = atomic'."
+            echo "              Wszyscy wybrani czlonkowie musza isc z TEGO SAMEGO punktu."
+        else
+            echo "  Spojnosc:   INDEPENDENT (frontier, NIE punkt w czasie) -- kazdy dataset ma"
+            echo "              wlasny najnowszy snapshot; czasy ponizej moga sie roznic i to nie jest blad."
+        fi
         echo "  Snapshoty (czas z wlasciwosci ZFS 'creation', nie z nazwy):"
-        local line sname screat nts human flag
-        while IFS=$'\t' read -r sname screat; do
+        local line sname screat sguid nts human flag
+        while IFS=$'\t' read -r sname screat sguid; do
             [ -n "$sname" ] || continue
             human=$(date -d "@$screat" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$screat")
             flag=""
@@ -3128,7 +3148,7 @@ cmd_restore() {
                 local delta=$(( nts > screat ? nts - screat : screat - nts ))
                 [ "$delta" -gt 120 ] && flag="   <-- UWAGA: nazwa mowi $(date -d "@$nts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null), ZFS mowi $human"
             fi
-            printf '    %s  %s%s\n' "$human" "${sname#*@}" "$flag"
+            printf '    %s  guid=%-22s %s%s\n' "$human" "${sguid:--}" "${sname#*@}" "$flag"
         done <<< "$snaps"
         echo "  Odtworzenie wyladowaloby jako: ${src[$i]} (sciezka zrodlowa), przez osobny czasownik -- ten wycinek go nie ma."
     done
