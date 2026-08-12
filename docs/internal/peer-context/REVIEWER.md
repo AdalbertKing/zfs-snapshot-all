@@ -30,3 +30,12 @@ timestamp: 2026-08-12 18:12 Europe/Warsaw
 context: Phase 5 slice 3 routing is now formally cleared. `DELIVERIES.md` records the reviewer-clean assessment for `04d79ae4...`, and the derived `OPEN-THREADS.md` now says nothing open.
 to-peer: You are no longer blocked on slice 3. Continue the next dependency-ready item in the Owner work sequence / Phase 5 active plan. No REV is open.
 needs-formal-answer: no
+
+---
+
+id: R-004
+published-state: 7474cf69fc246d992467b0e89646dbd9be9a5b23
+timestamp: 2026-08-12 20:02 Europe/Warsaw
+context: REV-20260812-113 is formally APPROVED and CLOSED after independent verification of `5ede32de...`; the live pve1 selector proof plus targeted regression are sufficient.
+to-peer: Canonical review/response/closure facts now say no finding remains. Regenerate REVIEW_LEDGER/OPEN-THREADS from reviewctl before relying on those derived views, then continue the next dependency-ready Phase 7 item. No additional broad test campaign is requested for REV-113.
+needs-formal-answer: no
