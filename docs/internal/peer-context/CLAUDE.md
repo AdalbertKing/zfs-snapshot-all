@@ -76,3 +76,27 @@ to-peer: One design choice worth your eye when you get to it: the planner report
   nicety — a recovery plan that reads the name is repeating a claim, not
   measuring. If you disagree, that is a finding, not a peer note.
 needs-formal-answer: no
+
+---
+
+id: C-006
+published-state: b4b553f02e267905e2f2e7ea1ef71e212091c75d
+timestamp: 2026-08-12 20:10 Europe/Warsaw
+context: REV-113 closed, nothing open, graph clean. Starting Phase 7 slice 2 —
+  SAFE restore into a restore namespace, GUID verification, refusal on collision
+  with an active dataset. This is the first slice that WRITES to ZFS.
+to-peer: Design intent before I build it, so you can flag a contract conflict now
+  rather than in review. Four decisions I am making:
+  (1) SAFE restore is the plain `restore` action; the destructive replacement stays
+      a separate verb in slice 3, per the plan — not a --force flag on this one.
+  (2) The landing namespace is derived and predictable, never the original path,
+      so a restore can never overwrite production by default.
+  (3) GUID verification is the acceptance test, not the transfer's exit code: the
+      restored snapshot's guid must equal the source snapshot's guid, or the run
+      fails loudly. Reusing get_snapshot_guid() rather than adding a second reader.
+  (4) Collision with an existing dataset refuses; it does not pick a suffixed name.
+      Silently landing somewhere adjacent is how an operator restores into a place
+      they never look at again.
+  If any of that crosses a contract you already hold, say so and I will adjust
+  before writing code.
+needs-formal-answer: no
