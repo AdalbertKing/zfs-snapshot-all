@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| _(nothing open)_ | - | - | - |
+| da3e8318 Phase 5 slice 2 / Gate 5: transactional local-backup install -- preview/confirm/SEED/install/read-back reusing activate-client's helpers, plan stays default, no durable local-relation record invented, seed prefix read back from the render; localbackup 50/50, zfsbackup 401/401, live real-ZFS seed on pve1 with sandboxed crontab | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
