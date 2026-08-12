@@ -204,6 +204,14 @@ case "\$1" in
       v=\$(cat "$WORK/guid.\$(k "\$ds")" 2>/dev/null)
       [ -n "\$v" ] || v="-"
       echo "\$v"; exit 0 ;;
+  create)
+      # zfs recv does not create intermediate parents, so the product builds the
+      # chain itself. The stub has to model that, or cleanup finds nothing to
+      # remove and the failure paths below test the wrong thing.
+      for a in "\$@"; do ds="\$a"; done
+      echo "\$ds" >> "$WORK/ds"
+      case "\$ds" in */*) echo "\${ds%/*}" >> "$WORK/ds" ;; esac
+      exit 0 ;;
   send)
       echo STREAM; exit 0 ;;
   recv|receive)
@@ -296,6 +304,12 @@ out="$(RECV_GUID=999 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
   && ! grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
     && ok "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" \
     || bad "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" "rc=$rc"
+# ...and the namespace this run had to build goes with it. Removing only the leaf
+# would leave empty scaffolding that the next attempt did not create and cannot
+# tell apart from a dataset the operator made.
+grep -qx 'hdd/restore' "$WORK/ds" \
+    && bad "slice2: cleanup removes the namespace this run created, not just the leaf" "hdd/restore survived" \
+    || ok "slice2: cleanup removes the namespace this run created, not just the leaf"
 
 # ---- cleanup that itself fails: explicit incomplete state, no success claim --
 reset_ds
