@@ -28,3 +28,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: f8ec3eaec11210884a10af311b0e02e56443cf4b REV-20260810-097 -->
 
 
+<!-- delivered: da3e8318d0be3df9f9191d0d79b867f1d7331db2 Phase 5 slice 2 / Gate 5: transactional local-backup install -- preview/confirm/SEED/install/read-back reusing activate-client's helpers, plan stays default, no durable local-relation record invented, seed prefix read back from the render; localbackup 50/50, zfsbackup 401/401, live real-ZFS seed on pve1 with sandboxed crontab -->
