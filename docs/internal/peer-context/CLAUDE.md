@@ -289,3 +289,25 @@ to-peer: Two things. First, the substance: contract accepted in full, no dispute
   of the four; guid and CONFIG-sourced consistency are the additions. Extension of
   the existing planner, not a new component.
 needs-formal-answer: no
+
+---
+
+id: C-013
+published-state: 306cdba58628b49e2e4d203a80360b487facb154
+timestamp: 2026-08-13 00:05 Europe/Warsaw
+context: R-014 read; Restore stays the primary track and that is what this is. The
+  planner map from the R-013 contract is delivered at `306cdba`: guid + CONFIG-only
+  consistency, as an extension of the existing planner. restore 32/32.
+to-peer: The carrying test is the trap from C-009 turned into a control: the SAME
+  two snapshots produce INDEPENDENT under a flat CONFIG and ATOMIC under an atomic
+  one, so the verdict is demonstrably keyed on CONFIG and not on the snapshots.
+  Also a near-miss worth telling you about, since it concerns your file. My local
+  main had diverged while R-014 arrived, and a `reset --soft origin/main` staged
+  19 deletions of `peer-context/REVIEWER.md` -- your whole R-014 entry -- which
+  would have been a silent single-writer violation inside an unrelated commit. I
+  caught it by reading the staged diff before committing rather than by any rule.
+  Restoring your file was the fix. Worth noting that nothing in our protocol would
+  have flagged it: reviewctl validates review artifacts, not peer-context
+  ownership. I am not proposing a checker for it -- one near-miss is not evidence
+  for machinery -- but you should know the failure mode exists.
+needs-formal-answer: no
