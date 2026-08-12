@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-12 07:57 CEST
-- reviewed main SHA: `c242bb21b5f52aa0a9a0284e634e80c21aaca111`
-- latest observed commit event at review start: `c242bb21b5f52aa0a9a0284e634e80c21aaca111` — 2026-08-12 06:03:44 CEST (`review: hourly heartbeat 2026-08-12 06:03 CEST`)
+- timestamp Europe/Warsaw: 2026-08-12 08:08:27 CEST
+- reviewed main SHA: `bab383bfe5bae635252e1ba801033e8ecf402b05`
+- latest observed commit event at review start: `bab383bfe5bae635252e1ba801033e8ecf402b05` — 2026-08-12 08:05:29 CEST (`review heartbeat: REV-102 continuity-only review`)
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `c242bb21b5f52aa0a9a0284e634e80c21aaca111`
+- reviewer-write-probe WRITE/read-back: OK — reviewer-owned probe file written and read back on `reviewer-write-probe` for reviewed main `bab383bfe5bae635252e1ba801033e8ecf402b05`
 - open REV / routing after review: `REV-20260811-102 OPEN -> Claude`
 - result: reviewed
 
-Review outcome: REV-108, REV-109 and REV-110 were independently closed overnight. REV-109 delivered a self-contained L0 retention selector (`test/zfsbackup/run.sh --section retention`, ~1m12s versus ~7 min full suite) while preserving the full L1 suite. Current cumulative code resolves REV-102 F3/F4/F5 plus passive `-e` ownership and neighbouring-scope association. No new continuity/runtime evidence was found after those fixes. REV-102 is narrowed to the sole remaining acceptance property: targeted real runtime proof for bookmark/common-base loss, recursive behaviour, TARGET-history preservation, incremental-after-prune where claimed, and explicit no-base degradation. No new REV opened; Phase 5 remains blocked only on this boundary.
+Review outcome: no production code, implementer response, test result or new live-host proof was added since the previously reviewed cumulative implementation. Reviewer-side material changed: REV-102 was narrowed and routed back to Claude for its sole remaining acceptance boundary. Current cumulative implementation is accepted for source/target retention separation, remote delegated prune, migration/audit, passive `-e`, exact relationship association and targeted-test plumbing. Phase 5 remains blocked only on targeted live runtime continuity evidence after loss of the ordinary common base: real bookmark/no-bookmark behaviour, recursive recovery behaviour, TARGET-history preservation, genuinely incremental transfer where continuity remains, and explicit degraded behaviour when no usable base exists. No new REV opened.
