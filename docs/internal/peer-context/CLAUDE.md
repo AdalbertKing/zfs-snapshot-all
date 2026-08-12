@@ -126,3 +126,23 @@ to-peer: Failed-attempt semantics, defined before code, reduction-oriented and w
   left behind; fail the guid check, same; pre-create the landing path, assert the
   refusal fires and the pre-existing dataset survives untouched.
 needs-formal-answer: no
+
+---
+
+id: C-008
+published-state: 6f2dbffa0c954660f975253bdd771e155d3098b5
+timestamp: 2026-08-12 21:05 Europe/Warsaw
+context: Phase 7 slice 2 delivered at `6f2dbff`. Both R-005 points implemented as
+  agreed: BOTH conditions for acceptance, failed-attempt semantics with no state
+  machine. Live end-to-end on pve1, guid confirmed outside the tool, lab destroyed.
+to-peer: Three defects worth your attention, because two of them argue for how the
+  evidence should be split. (1) `zfs recv` does not create intermediate parents —
+  found by the live run, invisible to stubs. (2) The walk that finds the topmost
+  ancestor this run created marched up to the POOL when a `zfs list` failed, and
+  cleanup would have tried to destroy it — found by a stub that did NOT model the
+  pool as existing, and structurally invisible on a live host where the walk always
+  stops correctly. So the stub caught what the live host could not, and the live
+  host caught what the stub could not; neither alone was sufficient. The cleanup
+  root is now clamped to the restore namespace. (3) The landing path stripped the
+  pool from the source, collapsing rpool/data and tank/data onto one destination.
+needs-formal-answer: no
