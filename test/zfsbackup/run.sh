@@ -5444,6 +5444,51 @@ msg="$( ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22
     && ok "55 REV-111: the refusal names bookmark, points at --commit-scope, widens nothing" \
     || bad "55 REV-111: the refusal names bookmark, points at --commit-scope, widens nothing" "$(printf '%s' "$msg"|tail -1)"
 
+# --- 55c. REV-20260812-111 B: atomic -r + managed source retention is refused ---
+#
+# An atomic (-r) relationship keeps NO bookmark -- both engines gate the bookmark
+# path on RECURSIVE -ne 1 -- so combining it with managed source retention builds a
+# relationship guaranteed to stop permanently once retention outruns the target
+# (measured, REV-102 campaign legs B3/B4). The high-level layer never emits
+# `recursive = atomic`, so the check reads the CANDIDATE about to be installed
+# rather than trusting what this run generated.
+ATOM="$WORK/atomicrec"; mkdir -p "$ATOM"
+cat > "$ATOM/cand.conf" <<'EOF'
+[dataset:tank/bk/plain]
+	src          = zfsbackup@10.0.0.9:tank/plain
+	recursive    = no
+
+[dataset:tank/bk/flat]
+	src          = zfsbackup@10.0.0.9:tank/flat
+	recursive    = flat
+
+[dataset:tank/bk/atomic]
+	src          = zfsbackup@10.0.0.9:tank/atomic
+	recursive    = atomic
+
+[dataset:tank/bk/silent]
+	src          = zfsbackup@10.0.0.9:tank/silent
+EOF
+ana() { ( assert_no_atomic_with_source_retention "$ATOM/cand.conf" "$@" ) >/dev/null 2>&1; }
+ana tank/bk/plain  && ok "55c REV-111B: recursive = no passes"        || bad "55c REV-111B: recursive = no passes" ""
+ana tank/bk/silent && ok "55c REV-111B: an absent recursive field passes (default no)" \
+                   || bad "55c REV-111B: an absent recursive field passes (default no)" ""
+# The discriminating control: flat is ALSO recursive, and it is explicitly allowed
+# because -R keeps per-dataset bookmarks (measured, leg B5). A guard that refused
+# "any recursion" would fail this and would be wrong.
+ana tank/bk/flat   && ok "55c REV-111B: recursive = flat passes -- -R keeps bookmark insurance" \
+                   || bad "55c REV-111B: recursive = flat passes -- -R keeps bookmark insurance" ""
+ana tank/bk/atomic && bad "55c REV-111B: recursive = atomic FAILS CLOSED" "returned 0" \
+                   || ok "55c REV-111B: recursive = atomic FAILS CLOSED"
+ana tank/bk/plain tank/bk/atomic && bad "55c REV-111B: one atomic among many FAILS CLOSED" "" \
+                                 || ok "55c REV-111B: one atomic among many FAILS CLOSED"
+msg="$( ( assert_no_atomic_with_source_retention "$ATOM/cand.conf" tank/bk/atomic ) 2>&1 )"
+{ printf '%s' "$msg" | grep -qi "recursive = atomic" \
+  && printf '%s' "$msg" | grep -qi "recursive = flat" \
+  && printf '%s' "$msg" | grep -qi "nothing was changed"; } \
+    && ok "55c REV-111B: the refusal names the conflict, both resolutions, and that nothing changed" \
+    || bad "55c REV-111B: the refusal names the conflict, both resolutions, and that nothing changed" "$(printf '%s' "$msg"|tail -1)"
+
 # --- 56. REV-20260811-102 step 3: REMOTE source prune emission (pull relationship) ---
 #
 # emit_client_sections must also bound the tool-owned automated_ snapshots on the
