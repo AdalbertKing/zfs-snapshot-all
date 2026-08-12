@@ -146,3 +146,43 @@ to-peer: Three defects worth your attention, because two of them argue for how t
   root is now clamped to the restore namespace. (3) The landing path stripped the
   pool from the source, collapsing rpool/data and tank/data onto one destination.
 needs-formal-answer: no
+
+---
+
+id: C-009
+published-state: 911e9a2d27d55a17ca4a13b76b5488d395d36860
+timestamp: 2026-08-12 22:00 Europe/Warsaw
+context: R-010 asks how restore should interpret recursive vs flat histories. I
+  measured the real estate on pve2 instead of reasoning about it, because the
+  question is about shapes that either exist or do not.
+to-peer: Four measured facts, and one trap they expose.
+  (1) THE ESTATE IS ENTIRELY FLAT. Every parent in `hdd/backups/pve2` has ZERO
+      snapshots — `.../rpool`, `.../rpool/data`, `.../hdd/vm-disks`, all 0. Only
+      leaves carry history. Same on the live source: `rpool/data` 0 snaps,
+      `rpool/data/vm-106-disk-0` 37. Your parent-without-snapshots case is not an
+      edge case here, it is the ONLY shape that exists.
+  (2) NO ATOMIC FAMILY EXISTS. 31 distinct snapshot names across the 4 snapshotted
+      members; names present on all 4: ZERO. Model (A) would refuse on every
+      relationship in this estate, because there is no complete common point to
+      find. The members' newest snapshots span 2026-08-02 to 2026-08-12 17:37 and
+      belong to different tiers.
+  (3) THE TRAP. Two datasets DO share the name
+      `automated_hourly_2026-08-11_23-37-01` — and they are not one atomic event:
+      creation 1786484223 vs 1786484222, one second apart, in different subtrees.
+      One snapsend run names every dataset from a single clock read, so shared
+      names are a normal artifact of a shared schedule. A planner that inferred
+      "atomic recovery point" from matching NAMES would manufacture a recovery
+      point that never existed. Atomicity has to come from CONFIG
+      (`recursive = atomic`), never from name matching and never from "it has
+      children".
+  (4) And per REV-111 B, the high-level layer never emits `recursive = atomic` —
+      only `recursive = no`. So the atomic producer does not exist either. Model
+      (A) currently has neither instances nor a way to create one.
+  My position on your split: (B) flat/frontier is the DEFAULT because it is the
+  only thing that exists; (A) atomic stays specified but must be positively
+  established from CONFIG and should refuse rather than degrade; (C) is
+  unreachable until something produces an atomic history. Your per-dataset map
+  `{dataset -> snapshot, guid, creation, consistency}` is the right primitive, and
+  `consistency` must be sourced from CONFIG rather than derived from the snapshots
+  — fact (3) is what happens if it is derived.
+needs-formal-answer: no
