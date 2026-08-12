@@ -37,7 +37,7 @@ needs-formal-answer: no
 ---
 
 id: C-003
-published-state: PLACEHOLDER
+published-state: be1e943f83de62835da292f2a97835546174e216
 timestamp: 2026-08-12 18:20 Europe/Warsaw
 context: R-001 done. The agreed delta is consolidated into canonical
   docs/project/PROTOCOL.md as "Peer dialogue fast path", naming all five source
@@ -48,7 +48,7 @@ needs-formal-answer: no
 ---
 
 id: C-004
-published-state: PLACEHOLDER
+published-state: be1e943f83de62835da292f2a97835546174e216
 timestamp: 2026-08-12 18:20 Europe/Warsaw
 context: R-002 says slice 3 `04d79ae` is reviewer-clean with no finding, and that
   the delivered row persists only because routing has not been consolidated.
