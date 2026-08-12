@@ -14,6 +14,7 @@ set -uo pipefail
 #
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
+#   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
 #   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
 #   zfs-backup.sh seed NAME [--yes]
 #   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
@@ -175,6 +176,10 @@ Usage:
                                     without --install: plans and previews, installs nothing
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
+  zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
+                                    READ-ONLY. What could be restored, from where, and when
+                                    each snapshot was REALLY taken -- ZFS 'creation', never
+                                    the name. Restoring itself is a separate, later verb.
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
@@ -2844,6 +2849,116 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 }
 
 # ------------------------------------------------------------------------------
+# Phase 7 slice 1 -- `restore --plan`. READ-ONLY. Touches nothing but `zfs list`.
+#
+# The plan's own justification for shipping this alone: "dziś nikt nie wie, co by
+# się odtworzyło" -- today nobody knows what would be restored. So this answers
+# exactly that and stops: which dataset, which snapshots exist for it, when they
+# were REALLY taken, and where a restore would land.
+#
+# "Really" is the load-bearing word. The timestamp shown is ZFS's own `creation`
+# property, never the one embedded in the snapshot NAME. Those two can disagree --
+# a renamed snapshot, a manually created one following the automated naming
+# convention, a clock that was wrong when the name was built -- and a restore plan
+# that reads the name is telling the operator a story rather than a fact. Where
+# they disagree by more than a couple of minutes this says so out loud, because
+# that disagreement is itself something the operator needs to know before choosing
+# a recovery point.
+#
+# Backup locations are derived from the INSTALLED CONFIG, which is runtime truth
+# here as everywhere else in this tool:
+#   * local push  `[dataset:S]` + `dst = T`  -> the copy of S lives at T/S
+#     (snapsend recreates the source path under the target, as slice 2's live
+#     proof showed: hdd/backuptest/p5src -> hdd/backuptest/p5store/hdd/backuptest/p5src)
+#   * remote pull `[dataset:L]` + `src = acct@host:R` -> L already IS the local copy
+#
+# No restore verb, no namespace creation, no ZFS write of any kind: those are
+# slices 2 and 3 of Phase 7 and they are deliberately not started here.
+restore_name_timestamp() {   # <snapshot name> -> epoch, or nothing
+    # The convention every generated prefix uses: ..._YYYY-MM-DD_HH-MM-SS
+    local n="$1" stamp
+    stamp=$(printf '%s' "$n" | sed -n -E 's/.*_([0-9]{4}-[0-9]{2}-[0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2}).*/\1 \2:\3:\4/p')
+    [ -n "$stamp" ] || return 0
+    date -d "$stamp" +%s 2>/dev/null || true
+}
+
+cmd_restore() {
+    local plan=0 dataset="" config=""
+    for a in "$@"; do
+        case "$a" in
+            --plan)      plan=1 ;;
+            --dataset=*) dataset="${a#*=}" ;;
+            --config=*)  config="${a#*=}" ;;
+            *) die "restore: unknown option $a" ;;
+        esac
+    done
+    # Slice 1 is the planner and nothing else. Refusing rather than defaulting to
+    # --plan keeps the eventual restore verb free to mean what it says.
+    [ "$plan" -eq 1 ] || die "restore: only --plan is implemented (Phase 7 slice 1, read-only). Actually restoring is a later, separate verb."
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || die "restore --plan: no cron config known -- pass --config=FILE or run setup-server"
+    [ -r "$config" ] || die "restore --plan: cannot read $config"
+
+    # Collect (source, copy-location, kind) triples from the installed CONFIG.
+    local -a src=() copy=() kind=()
+    local ds d dst s
+    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
+        d="$(installed_dataset_field "$config" "$ds" dst)"
+        s="$(installed_dataset_field "$config" "$ds" src)"
+        if [ -n "$d" ]; then
+            src+=("$ds"); copy+=("${d}/${ds}"); kind+=("local push -> $d")
+        elif [ -n "$s" ]; then
+            src+=("$s"); copy+=("$ds"); kind+=("remote pull <- $s")
+        fi
+    done
+    [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
+
+    echo
+    echo "Plan odtworzenia (TYLKO ODCZYT -- nic nie zostalo zmienione):"
+    echo "  Config:     $config"
+    [ -n "$dataset" ] && echo "  Filtr:      $dataset"
+    local i shown=0
+    for i in "${!src[@]}"; do
+        if [ -n "$dataset" ]; then
+            [ "${src[$i]}" = "$dataset" ] || [ "${copy[$i]}" = "$dataset" ] || continue
+        fi
+        shown=$((shown + 1))
+        echo
+        echo "  Zrodlo:     ${src[$i]}"
+        echo "  Relacja:    ${kind[$i]}"
+        echo "  Kopia:      ${copy[$i]}"
+        local snaps
+        snaps=$(zfs list -H -p -t snapshot -o name,creation -s creation "${copy[$i]}" 2>/dev/null) || snaps=""
+        if [ -z "$snaps" ]; then
+            echo "  Snapshoty:  BRAK -- ta kopia nie istnieje albo nie ma snapshotow. Nie ma z czego odtwarzac."
+            continue
+        fi
+        echo "  Snapshoty (czas z wlasciwosci ZFS 'creation', nie z nazwy):"
+        local line sname screat nts human flag
+        while IFS=$'\t' read -r sname screat; do
+            [ -n "$sname" ] || continue
+            human=$(date -d "@$screat" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$screat")
+            flag=""
+            nts=$(restore_name_timestamp "${sname#*@}")
+            if [ -n "$nts" ]; then
+                local delta=$(( nts > screat ? nts - screat : screat - nts ))
+                [ "$delta" -gt 120 ] && flag="   <-- UWAGA: nazwa mowi $(date -d "@$nts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null), ZFS mowi $human"
+            fi
+            printf '    %s  %s%s\n' "$human" "${sname#*@}" "$flag"
+        done <<< "$snaps"
+        echo "  Odtworzenie wyladowaloby jako: ${src[$i]} (sciezka zrodlowa), przez osobny czasownik -- ten wycinek go nie ma."
+    done
+    if [ "$shown" -eq 0 ]; then
+        echo
+        echo "  Nic nie pasuje do filtra '$dataset' w tym configu."
+    fi
+    echo
+    echo "To jest wylacznie plan odczytu. Zaden dataset, snapshot ani cron nie zostal dotkniety."
+}
+
+# ------------------------------------------------------------------------------
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
@@ -5507,6 +5622,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # logic, but an operator is never required to learn it.
         --source=*|--target=*) cmd_local_backup "$@" ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
+        restore)          shift; cmd_restore "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         final-catchup)    shift; cmd_final_catchup "$@" ;;
