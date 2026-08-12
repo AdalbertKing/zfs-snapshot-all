@@ -2953,7 +2953,28 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
         || die "restore: could not read the guid of '${copy}@${snap}' -- refusing to start a restore whose result could not be verified"
 
     # (2)(3) From here on, anything left behind was created by THIS run.
-    local failure=""
+    #
+    # `zfs recv` does NOT create intermediate parents -- found by the live proof,
+    # not by the stubs: the first real run died on "cannot open
+    # 'hdd/restore/hdd/backuptest': dataset does not exist". So the parent chain is
+    # created here, and the TOPMOST dataset this run had to create is remembered,
+    # because that is what cleanup must remove. Removing only the landing would
+    # leave the empty scaffolding behind and the next attempt would then find a
+    # half-built namespace it did not make.
+    local failure="" created_root=""
+    local parent="${landing%/*}"
+    if ! zfs list -H -o name "$parent" >/dev/null 2>&1; then
+        local probe="$parent" up
+        created_root="$parent"
+        while :; do
+            up="${probe%/*}"
+            [ "$up" = "$probe" ] && break                      # reached the pool name
+            zfs list -H -o name "$up" >/dev/null 2>&1 && break # first existing ancestor
+            created_root="$up"; probe="$up"
+        done
+        zfs create -p "$parent" || die "restore: could not create the restore namespace '$parent' -- nothing was received, nothing was left behind"
+    fi
+
     if ! zfs send "${copy}@${snap}" | zfs recv -u "$landing"; then
         failure="the send/receive pipeline failed"
     fi
@@ -2969,12 +2990,15 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
 
     if [ -n "$failure" ]; then
         warn "restore FAILED: $failure"
-        if zfs list -H -o name "$landing" >/dev/null 2>&1; then
-            if zfs destroy -r "$landing" 2>/dev/null; then
-                die "restore failed ($failure). The partial restore this run created was removed, so re-running is clean. Nothing else was touched."
+        # Remove from the topmost dataset this run created, so the scaffolding goes
+        # with the leaf. If no ancestor had to be created, that is just the landing.
+        local victim="${created_root:-$landing}"
+        if zfs list -H -o name "$victim" >/dev/null 2>&1; then
+            if zfs destroy -r "$victim" 2>/dev/null; then
+                die "restore failed ($failure). Everything this run created ('$victim' and below) was removed, so re-running is clean. Nothing that existed before was touched."
             fi
             # (4) explicit incomplete state, named
-            die "restore failed ($failure) AND the partial restore could not be removed. '$landing' is still there and is NOT a valid restore -- deal with it by hand before re-running, because the next attempt will refuse while it exists."
+            die "restore failed ($failure) AND what this run created could not be removed. '$victim' is still there and is NOT a valid restore -- deal with it by hand before re-running, because the next attempt will refuse while it exists."
         fi
         die "restore failed ($failure). Nothing was left behind."
     fi
