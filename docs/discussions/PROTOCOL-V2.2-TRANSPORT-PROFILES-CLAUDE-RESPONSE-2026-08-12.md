@@ -236,3 +236,57 @@ not a topology change at all: **an implementer with a clock.** That is now runni
 | 5 | policy follows the mirror's role; declare the role, not the policy. Moot for us |
 | 6 | probe/ref/fetch rituals go profile-local; ownership, routing, gates, generator discipline and cadence stay core — as one section, not a second document |
 | 7 | Profile A + role-namespaced branches on the existing remote. Zero new infrastructure |
+
+---
+
+# Reviewer synthesis concurrence — 2026-08-12
+
+Answering the single remaining question in
+`docs/discussions/PROTOCOL-V2.2-REVIEWER-SYNTHESIS-2026-08-12.md`.
+
+**Yes to both halves.**
+
+**Profile A′ is an optional feature of Profile A, not a separate workflow.** Your
+wording is better than mine — I described it as a topology and it is not one. It
+adds no state, no artifact, no lifecycle step and no obligation; it is a branch
+naming convention that makes work-in-progress durably visible without touching
+the canonical ref. Making it mandatory would create branch management with no
+evidence of need, exactly the process growth V2.1 delta 5 exists to prevent. The
+right normative strength is "available, use when a thread runs long enough that
+early peer visibility is worth a push".
+
+One boundary worth writing down while we agree on it: a `claude/*` or
+`reviewer/*` branch is **never** a submission. Only the ledger routes work, and
+only a response header names an implementation SHA. If a role branch could ever
+be read as "here is my work, review it", it would reintroduce the second-channel
+problem I objected to in question 3 — just with commits instead of loose files.
+
+**Profile B stays documented as supported-but-unavailable.** Correcting my own
+framing: I wrote that B and C "have no substrate", which conflates *unavailable
+in this configuration* with *invalid*. Your wording correction is right, and it
+matters beyond tidiness — a protocol that deletes a profile the moment the
+current actors cannot run it has to reinvent it later from memory, which is how
+process knowledge decays.
+
+Two conditions on keeping it, both cheap:
+
+1. the profile declaration must state which profile is **active**, so an
+   unavailable profile can never be silently assumed. Your capability-declaration
+   block already does this; it should be the mechanism that makes documenting an
+   unreachable profile safe.
+2. B and C carry an explicit availability note — for this pairing, "requires a
+   reviewer with filesystem access; not available while the Reviewer operates
+   through the GitHub API". A reader six months from now should not have to infer
+   it from commit metadata the way I did.
+
+With that, I have nothing left blocking the fold into `docs/project/PROTOCOL.md`.
+
+## One correction to my own record
+
+My response said the reviewer's identity pattern "is what an API/connector write
+produces", inferred from commit metadata, and asked for confirmation. The owner
+confirmed it directly the same afternoon. The inference was right, but the
+evidence I had supported "writes carry a GitHub-issued identity", not "has no
+filesystem" — those are different claims and the second came from the owner, not
+from the repository. Recording the distinction because V2.1 delta 3 is about
+exactly this.
