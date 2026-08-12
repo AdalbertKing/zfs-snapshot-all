@@ -695,6 +695,86 @@ Prefer deterministic tooling when the task can be proved mechanically.
 
 If a safe, available runtime measurement can decide a technical question, run the measurement instead of parking the question on the other lead's opinion. Escalation is appropriate when measurement is unavailable, materially disproportionate, requires Owner-gated production-destructive action, or the result still leaves an irreducible product/risk choice.
 
+## Peer dialogue fast path
+
+Agreed bilaterally 2026-08-12 (proposal `8983820`, Claude response `4b91504`,
+Reviewer synthesis `14493a7`, Claude concurrence `866f604`, Reviewer concurrence
+`b3768f1`). Consolidated here from those five artifacts; they remain the record of
+how it was reached.
+
+**Peer dialogue first; formal artifacts by exception.**
+
+### The channel
+
+Two files, one writer each, peer reads and never edits:
+
+```text
+docs/internal/peer-context/CLAUDE.md      Claude writes, Reviewer reads
+docs/internal/peer-context/REVIEWER.md    Reviewer writes, Claude reads
+```
+
+Not a transcript and never private reasoning. Rolling and compact — entries may be
+replaced or dropped. Updates are event-driven, not per commit. Entry shape:
+
+```text
+id: C-00n / R-00n
+published-state: <sha>
+timestamp: <Europe/Warsaw>
+context: <one or two lines>
+to-peer: <question / observation / suggestion>
+needs-formal-answer: no
+```
+
+`published-state` is required, not decorative: an advisory entry whose position
+relative to published state is unknown cannot be safely acted on, and nothing else
+will catch a stale read.
+
+### What it may and may not carry
+
+Peer dialogue may influence implementation choices, investigation order and local
+WIP, provided the acting lead owns the decision and treats neither the peer's
+message nor the peer's silence as authorization, approval or proof.
+
+A durable artifact is required when acting on the statement would (a) change formal
+routing; (b) change a durable project/architecture/contract truth; (c) claim
+approval or closure, or change what either lead formally reports as verified;
+(d) satisfy a required evidence boundary; (e) require the peer's authorization or
+assent before proceeding; or (f) escalate an unresolved disagreement to the Owner.
+
+The mechanical test, applied at the moment of writing:
+
+```text
+Can I make this engineering decision under my existing role authority,
+and would it still be valid if the peer note disappeared tomorrow?
+
+YES -> peer dialogue is sufficient coordination.
+NO  -> formal artifact required.
+```
+
+It tests durability rather than subject matter, so it cannot be argued around by
+reclassifying the topic.
+
+### Three rules that hold each other up
+
+1. **Silence carries no meaning.** No response is not assent, not objection, not
+   acknowledgement, and not evidence the entry was read. Any step whose correctness
+   depends on the peer *not* objecting requires a formal artifact.
+2. **Rolling deletion is safe only because rule 1 holds.** Entries may vanish; that
+   is tolerable precisely because nothing may depend on one having been seen. Do not
+   relax rule 1 without noticing what it is carrying.
+3. **`needs-formal-answer: yes` is a pointer, never a queue.** It is valid only when
+   the entry names an already-existing formal artifact that carries the answer.
+   Create the artifact first, then point at it. An entry requesting a formal answer
+   without naming one is not a valid entry.
+
+### What it does not change
+
+Peer dialogue does not change actor cadence: pickup latency remains the
+infrastructure property described below. It creates no second ledger, inbox or
+routing table — `REVIEW_LEDGER.md` and `OPEN-THREADS.md` stay canonical. It does not
+replace the hourly heartbeat, which remains mandatory until the Owner changes that
+requirement explicitly.
+
 ## Liveness and parking
 
 A blocked thread stays honestly incomplete. Waiting on unavailable live evidence, an external dependency, the Owner or the peer lead does not block dependency-independent planned work; the current actor selects the next dependency-ready item unless there is a demonstrated project-level dependency blocker or an Owner-set priority prevents it.
