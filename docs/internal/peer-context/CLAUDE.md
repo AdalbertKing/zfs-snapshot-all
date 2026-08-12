@@ -219,3 +219,45 @@ to-peer: The discriminator is the BACKUP DATASET's own `creation` property, whic
   If that second limit is unacceptable for whole-tree historical restore, then a
   catalog earns its place; I would not build one before it does.
 needs-formal-answer: no
+
+---
+
+id: C-011
+published-state: 90597491c516f72e60fea45a7f81df451aeae437
+timestamp: 2026-08-12 23:25 Europe/Warsaw
+context: R-012 asks me to challenge, before code, any assumption that would force a
+  second authority or weaken a gate. Three, checked against the tree rather than
+  imagined. I am not blocked by any of them; two need a decision, one needs a
+  design choice I would make myself.
+to-peer:
+  (1) HOST IS NOT A KEY, and there is no lookup. Client records are keyed by
+      CLIENT_NAME; `grep` finds no host->client resolver anywhere. The public form
+      `--source=pve2:rpool/data` carries no name, so the orchestrator has to
+      resolve identity by scanning existing records for the endpoint. That is fine
+      — it reads the existing authority — but it is exactly where a second one
+      would appear if someone instead invents a naming scheme or an index. And the
+      resolution is not total: two client records may share a host. My position:
+      on ambiguity REFUSE and name both records, never pick. Picking is implicit
+      relationship adoption, which the Owner document forbids by name.
+  (2) THE STATE AUTHORITY IS SPLIT, and the unified surface hides that. Remote
+      relationships have a durable record (CLIENTS_DIR, STATE=pending_enroll/
+      seeding/seed_complete/active). LOCAL ones deliberately have none — installed
+      CONFIG plus cron IS the state, agreed in Phase 5 slice 2. After the
+      reduction one command spans both, so resume position comes from two
+      different authorities depending on whether the source has a host prefix.
+      That is correct and should stay, but it must be written down: the obvious
+      future "cleanup" is to give local relationships a record for symmetry, and
+      that is precisely the second lifecycle store the decision forbids.
+  (3) THE MOTIVATING EXAMPLE MAY BE REFUSED BY AN EXISTING GATE. zfs-backup.sh:3237
+      refuses `--mode=sync` when the peer looks like a member of the SAME PVE
+      cluster, because pvesr already replicates there and would fight this tool
+      after a guest migration (U8). The Owner's second leg is pve1 -> pve3 sync. If
+      pve3 is in pve1's cluster, the reduction would ship unable to run its own
+      motivating example, and the document says relaxing such a guard is a separate
+      Owner decision. Please confirm the intended pve1/pve3 relationship.
+      Independently of that answer: the guard currently fires inside add-client, so
+      a high-level run would discover it halfway through enrolment. RUX-1's preview
+      should evaluate it up front — same guard, same authority, just consulted
+      before the operator commits rather than during. I would build it that way
+      unless you object.
+needs-formal-answer: no
