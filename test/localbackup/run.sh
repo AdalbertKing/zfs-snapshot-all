@@ -545,6 +545,17 @@ out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --targe
     && ok "slice2: two sources seed twice and install once" \
     || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
+# ---- REV-20260812-112 F1: the Usage text must advertise the install verb -----
+# The delivered command grew --install/--yes while the top-level Usage still
+# described it as plan/preview only. Help that contradicts the tool is a defect
+# in the public contract, so the contract is asserted, not just the behaviour.
+usage_txt="$(usage 2>&1)"
+{ printf '%s' "$usage_txt" | grep -q -- '--install'   && printf '%s' "$usage_txt" | grep -qE -- '--yes\|?-y|-y'; }     && ok "112 F1: Usage advertises --install and --yes/-y"     || bad "112 F1: Usage advertises --install and --yes/-y" "$(printf '%s' "$usage_txt" | grep -i 'source=DATASET' )"
+# and it must no longer claim the command only plans -- the discriminating half:
+# a Usage that merely LISTS --install while still saying "plan/preview only"
+# would pass the assertion above and still mislead.
+printf '%s' "$usage_txt" | grep -qi 'plan/preview only'     && bad "112 F1: Usage no longer claims the command is plan/preview only" "still says plan/preview only"     || ok "112 F1: Usage no longer claims the command is plan/preview only"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
