@@ -32,3 +32,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- reviewed-by: da3e8318d0be3df9f9191d0d79b867f1d7331db2 REV-20260812-112 -->
 <!-- delivered: 04d79ae4de60c228e058e661ef311641925a8291 Phase 5 slice 3: propose a target when --target is omitted -- propose_backup_target() extracted from setup-server and shared, provenance default vs heuristic, a guessed target refuses --yes, ambiguous pools refuse terminally; localbackup 57/57, zfsbackup 401/401 -->
 <!-- reviewed-by: 04d79ae4de60c228e058e661ef311641925a8291 reviewer-clean-no-finding -->
+<!-- delivered: 70cd1ab5b78782382533ab38e2ac9f919203c8bd Phase 7 slice 1: restore --plan read-only planner -- real ZFS 'creation' never the snapshot name, copy paths derived from installed CONFIG, no restore verb and no ZFS write; new test/restore suite 13/13, localbackup 57/57, zfsbackup 401/401 -->
