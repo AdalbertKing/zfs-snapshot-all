@@ -44,7 +44,7 @@ cat > "$WORK/bin/crontab" <<EOF
 #!/bin/sh
 case " \$* " in
   *" -l "*) printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n1 * * * * /bin/true\n# END zfs-backup-managed\n' "$WORK" ;;
-  *) echo "WRITE \$*" >> "$WORK/crontab-writes" ;;
+  *) echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
 esac
 exit 0
 EOF
@@ -422,6 +422,94 @@ if [ ! -e "$WORK/crontab-writes" ]; then
 else
     bad "installs-nothing: crontab was never written across every plan above" "$(cat "$WORK/crontab-writes")"
 fi
+
+# ==============================================================================
+# Slice 2 -- the transactional install (--install). Everything above pins the
+# read-only planner; from here the same command is asked to actually install.
+#
+# The seed is stubbed, not real: what is under test is the ORDER and the
+# transaction boundary, not snapsend's own behaviour, which its own suite and
+# the real-ZFS proof cover. $SNAPSEND is an absolute path, so it is overridden
+# in the environment rather than through PATH.
+# ==============================================================================
+mkdir -p "$WORK/seedbin"
+cat > "$WORK/seedbin/snapsend-ok" <<EOF
+#!/bin/sh
+echo "SEED \$*" >> "$WORK/seed-calls"
+echo SEED >> "$WORK/order"
+exit 0
+EOF
+cat > "$WORK/seedbin/snapsend-fail" <<EOF
+#!/bin/sh
+echo "SEED \$*" >> "$WORK/seed-calls"
+echo SEED >> "$WORK/order"
+echo "seed exploded" >&2
+exit 1
+EOF
+chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
+
+runi() {   # <snapsend stub> <stdin answer> args...
+    local stub="$1" answer="$2"; shift 2
+    ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+      SNAPSEND="$WORK/seedbin/$stub" \
+      cmd_local_backup "$@" ) <<< "$answer" 2>&1
+}
+
+# The crontab stub claims $WORK/claimed.conf, so that is the only config path an
+# install can legitimately target here (assert_cron_config_matches_installed).
+CFG="$WORK/claimed.conf"
+
+# ---- slice-1 compatibility: without --install the command still only plans ----
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ [ ! -e "$WORK/order" ] && [ ! -e "$CFG" ] && printf '%s' "$out" | grep -q -- '--install'; } \
+    && ok "slice2: no --install still plans only, and says how to install" \
+    || bad "slice2: no --install still plans only, and says how to install" "order=$(cat "$WORK/order" 2>/dev/null)"
+
+# ---- declined confirmation: nothing seeded, nothing installed ----------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$CFG"
+out="$(runi snapsend-ok "n" --install --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ [ ! -e "$WORK/order" ] && [ ! -e "$CFG" ]; } \
+    && ok "slice2: a declined confirmation seeds nothing and installs nothing" \
+    || bad "slice2: a declined confirmation seeds nothing and installs nothing" "order=$(cat "$WORK/order" 2>/dev/null)"
+
+# ---- failed seed: no cron installed, config untouched, retryable -------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$CFG"
+out="$(runi snapsend-fail "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ grep -q SEED "$WORK/order" 2>/dev/null && ! grep -q INSTALL "$WORK/order" 2>/dev/null && [ ! -e "$CFG" ]; } \
+    && ok "slice2: a FAILED seed installs no cron and leaves the config untouched" \
+    || bad "slice2: a FAILED seed installs no cron and leaves the config untouched" "order=$(cat "$WORK/order" 2>/dev/null)"
+printf '%s' "$out" | grep -qi 'NIC nie zainstalowano' \
+    && ok "slice2: the failed-seed refusal says plainly that nothing was installed" \
+    || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
+
+# ---- happy path: seed BEFORE install, and the order is the contract ----------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$CFG"
+out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+[ -f "$CFG" ] && ok "slice2: a successful run installs the config" \
+              || bad "slice2: a successful run installs the config" "$(printf '%s' "$out" | tail -3)"
+# THE ordering property: seed must be established before any cron becomes
+# eligible. A run that installed first and seeded after would still produce both
+# lines -- only their order distinguishes the safe implementation from the unsafe
+# one, which is why this asserts the sequence and not the presence.
+[ "$(tr -d ' \n' < "$WORK/order" 2>/dev/null)" = "SEEDINSTALL" ] \
+    && ok "slice2: the seed runs BEFORE the cron install (order, not presence)" \
+    || bad "slice2: the seed runs BEFORE the cron install (order, not presence)" "order=[$(tr '\n' ',' < "$WORK/order" 2>/dev/null)]"
+
+# ---- the seed prefix comes from the RENDER, not from a second constant -------
+# The profile's own template decides it. A hardcoded copy in the install path
+# would pass every test above and silently create a snapshot family the
+# installed prune never matches, so the prefix itself is asserted.
+grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
+    && ok "slice2: the seed uses the prefix read back out of the rendered cron line" \
+    || bad "slice2: the seed uses the prefix read back out of the rendered cron line" "$(cat "$WORK/seed-calls" 2>/dev/null)"
+
+# ---- multi-root: one seed per source, still one install ----------------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$CFG"
+out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --target=hdd/backups --config="$CFG")"
+{ [ "$(grep -c SEED "$WORK/seed-calls" 2>/dev/null)" -eq 2 ] && [ "$(grep -c INSTALL "$WORK/order" 2>/dev/null)" -ge 1 ]; } \
+    && ok "slice2: two sources seed twice and install once" \
+    || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

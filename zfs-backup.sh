@@ -95,6 +95,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
+SNAPSEND="$SCRIPT_DIR/snapsend.sh"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
 LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
@@ -2498,6 +2499,9 @@ config_section_overlap() {   # <file> <path>...
 
 cmd_local_backup() {
     local target="" profile="default" config=""
+    # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
+    # yesterday gets byte-identical behaviour today; installing is an explicit verb.
+    local do_install=0 assume_yes=0
     local -a source_flags=()
     for a in "$@"; do
         case "$a" in
@@ -2505,7 +2509,9 @@ cmd_local_backup() {
             --target=*)  target="${a#*=}" ;;
             --profile=*) profile="${a#*=}" ;;
             --config=*)  config="${a#*=}" ;;
-            --plan)      ;;   # accepted and implied; the install verb is a later slice
+            --plan)      do_install=0 ;;   # explicit form of the default
+            --install)   do_install=1 ;;
+            --yes|-y)    assume_yes=1 ;;
             *) die "local-backup: unknown option $a" ;;
         esac
     done
@@ -2669,11 +2675,105 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     echo
     echo "--- wygenerowany blok crona (gen-cron.sh -c, pelny) ---"
     bash "$GENCRON" -c "$cand"
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        rm -f "$cand"
+        return 0
+    fi
+
+    # ---- slice 2: the transactional install -------------------------------------
+    #
+    # Order is the whole contract here: preview -> confirm -> SEED -> install.
+    # The seed runs BEFORE any cron is installed, because the acceptance property
+    # is that a failed or declined seed leaves no newly eligible managed cron and
+    # stays retryable. Installing first and seeding after would leave an hourly
+    # job pointing at a relationship that was never established -- the failure
+    # mode this ordering exists to prevent.
+    #
+    # No new orchestration: preview, the four pre-install assertions and the
+    # atomic swap are the SAME helpers activate-client uses. No durable local
+    # relationship record is written either -- CLIENTS_DIR holds remote client
+    # records, there is no local equivalent, and the installed CONFIG plus the
+    # installed cron block already ARE the state (CONFIG is runtime truth
+    # everywhere else in this tool). "active" is therefore a derived description,
+    # not a stored token; inventing one for this slice is exactly what the plan
+    # says not to do.
+    show_activation_proposal "$config" "$cand" || {
+        rm -f "$cand"
+        die "gen-cron.sh could not render the proposed config -- nothing was touched"
+    }
+
+    if [ "$assume_yes" -ne 1 ]; then
+        local ans
+        read -rp "Zainstalowac ten backup lokalny? [t/N] " ans
+        case "$ans" in
+            t|T|tak|TAK) ;;
+            *) rm -f "$cand"; die "not confirmed -- $config was NOT touched, nothing installed" ;;
+        esac
+    fi
+
+    # SEED: one real first send per root, through the same engine and the same
+    # argument shape the generated cron line uses. A dry-run would not establish
+    # the relationship, and the boundary asks for an established seed, not a
+    # rehearsal. Failure here is terminal for this run and changes nothing --
+    # re-running the identical command is the retry.
+    # The snapshot prefix is NOT a constant here. It belongs to the profile's
+    # template, and hardcoding a second copy of it is how the seed would silently
+    # drift from the cron line it is supposed to establish. Read it back out of
+    # the rendered candidate -- the same render the operator just approved -- and
+    # fail closed if the line cannot be found, rather than seeding with a guess
+    # that would create a snapshot family the installed job never prunes.
+    local seed_prefix rendered_send
+    rendered_send="$(bash "$GENCRON" -c "$cand" 2>/dev/null | grep -F 'snapsend.sh' | grep -F -- "$target" | head -1)"
+    # `[^"]*` rather than `.*` before -m: sed is greedy, so a leading `.*` would
+    # bind to the LAST -m on the line. Refusing to cross a quote anchors this to
+    # the send's own -m, which is the first quoted token on a generated line.
+    seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/[^"]*-m[ ]*"\([^"]*\)".*/\1/p')"
+    [ -n "$seed_prefix" ] || { rm -f "$cand"; die "could not read the snapshot prefix back out of the rendered cron line -- refusing to seed with a guessed prefix; $config was NOT touched"; }
+
+    log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
+    local seed_failed=0 sr
+    for sr in "${roots[@]}"; do
+        if bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$sr" "$target"; then
+            log "  OK: $sr -> $target"
+        else
+            warn "  FAILED: $sr -> $target"
+            seed_failed=$((seed_failed + 1))
+        fi
+    done
+    if [ "$seed_failed" -ne 0 ]; then
+        rm -f "$cand"
+        die "$seed_failed zrodlo/zrodla nie przeszly seeda -- NIC nie zainstalowano, $config nietkniety. Napraw przyczyne i powtorz to samo polecenie."
+    fi
+
+    # Same pre-install assertions as activate-client, in the same order: a config
+    # that disagrees with what is installed, a managed block belonging to another
+    # config, a clobbered foreign block, or a config the cron target cannot read
+    # each abort before the swap.
+    assert_cron_config_matches_installed "$config"
+    assert_no_foreign_managed_block "$cand"
+    assert_target_block_not_clobbered "$cand"
+    assert_config_readable_by_target "$config"
+    atomic_replace_and_install "$config" "$cand"
+
+    # Read-back: the installed crontab must actually contain the managed block for
+    # this target. atomic_replace_and_install already restores on an --install
+    # failure, so this catches the remaining case -- install reported success and
+    # the block still is not there.
+    local installed_block
+    installed_block="$(crontab_for_target 2>/dev/null | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p')"
+    printf '%s' "$installed_block" | grep -qF -- "$target" \
+        || die "instalacja zglosila sukces, ale odczyt zwrotny nie znalazl '$target' w zainstalowanym bloku -- sprawdz crontab recznie zanim uznasz backup za dzialajacy"
+
     echo
-    echo "To jest wylacznie plan. Instalacja transakcyjna (seed + atomowy zapis"
-    echo "crona z odczytem zwrotnym) przyjdzie w kolejnym wycinku Fazy 5 -- ten"
-    echo "wycinek celowo nie dotyka zadnego crontaba ani configu produkcyjnego."
-    rm -f "$cand"
+    echo "Backup lokalny AKTYWNY."
+    echo "  Zrodla:  ${roots[*]}"
+    echo "  Cel:     $target"
+    echo "  Config:  $config"
+    echo "  Seed:    OK (${#roots[@]} zrodlo/zrodel wyslane)"
+    echo "  Cron:    zainstalowany i odczytany zwrotnie"
 }
 
 # ------------------------------------------------------------------------------
