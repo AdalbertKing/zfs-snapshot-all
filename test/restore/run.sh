@@ -173,18 +173,22 @@ else
 fi
 
 # ==============================================================================
-# Phase 7 slice 2 -- the SAFE restore. This one WRITES, so the assertions are
-# about what survives a failure, not only about the happy path.
+# Phase 7 slice 2 -- the SAFE restore, after REV-20260812-114.
 #
-# Failed-attempt semantics under test (agreed in peer-context R-005/C-007):
-# collision refuses BEFORE creating anything; whatever exists after a failed
-# attempt was created by this run and is destroyed by it; a pre-existing dataset
-# is never a cleanup candidate; a cleanup that itself fails must not report
-# success and must name the dataset.
+# Ownership is a fact, not an inference. The receive lands in a per-attempt
+# staging dataset; only a verified result is promoted to the public path with
+# `zfs rename`, which refuses an existing destination (proved live on pve1:
+# rc=1, source kept, destination untouched). So the destructive TOCTOU is gone:
+# cleanup can only ever target this attempt's own staging name.
+#
+# Two contract reversals from the first cut, both deliberate:
+#   * the early collision check is now only an ergonomic short-circuit. It proves
+#     nothing and nothing depends on it.
+#   * namespace ancestors are created and NOT removed. The first cut destroyed its
+#     own scaffolding to keep retries clean; staging keeps them clean anyway, and
+#     ancestor removal is exactly the case where ownership cannot be proven.
 # ==============================================================================
 mkdir -p "$WORK/bin2"
-# A scriptable zfs: $WORK/ds holds existing dataset names, $WORK/guid.<key> their
-# snapshot guids. FAIL_RECV / FAIL_DESTROY / RECV_GUID inject the failures.
 cat > "$WORK/bin2/zfs" <<ZSTUB
 #!/bin/sh
 echo "\$*" >> "$WORK/zfs-calls2"
@@ -205,9 +209,6 @@ case "\$1" in
       [ -n "\$v" ] || v="-"
       echo "\$v"; exit 0 ;;
   create)
-      # zfs recv does not create intermediate parents, so the product builds the
-      # chain itself. The stub has to model that, or cleanup finds nothing to
-      # remove and the failure paths below test the wrong thing.
       for a in "\$@"; do ds="\$a"; done
       echo "\$ds" >> "$WORK/ds"
       case "\$ds" in */*) echo "\${ds%/*}" >> "$WORK/ds" ;; esac
@@ -221,6 +222,23 @@ case "\$1" in
       echo "\$ds" >> "$WORK/ds"
       echo "\$ds@s1" >> "$WORK/ds"
       printf '%s' "\${RECV_GUID:-111}" > "$WORK/guid.\$(k "\$ds@s1")"
+      # INJECT_LANDING models ANOTHER actor creating the final landing path after
+      # this run's collision check has already passed -- the REV-114 race.
+      if [ -n "\${INJECT_LANDING:-}" ]; then
+        echo "\${INJECT_LANDING}" >> "$WORK/ds"
+        echo "\${INJECT_LANDING}@foreign" >> "$WORK/ds"
+      fi
+      exit 0 ;;
+  rename)
+      src=\$2; dst=\$3
+      if grep -qx "\$dst" "$WORK/ds" 2>/dev/null; then
+        echo "cannot rename '\$src': dataset already exists" >&2; exit 1
+      fi
+      grep -v "^\$src" "$WORK/ds" > "$WORK/ds.n" 2>/dev/null || :
+      mv "$WORK/ds.n" "$WORK/ds"
+      echo "\$dst" >> "$WORK/ds"
+      echo "\$dst@s1" >> "$WORK/ds"
+      printf '%s' "\$(cat "$WORK/guid.\$(k "\$src@s1")" 2>/dev/null)" > "$WORK/guid.\$(k "\$dst@s1")"
       exit 0 ;;
   destroy)
       if [ -n "\${FAIL_DESTROY:-}" ]; then echo "destroy refused" >&2; exit 1; fi
@@ -234,12 +252,9 @@ chmod +x "$WORK/bin2/zfs"
 
 scfg="$WORK/safe.conf"
 mkcfg "$scfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n'
+LAND=hdd/restore/rpool/data
 reset_ds() {
-    # The POOL exists, as it does on any real host. Leaving it out of the fixture
-    # is what surfaced the cleanup-root walk marching all the way up to the pool
-    # name -- a latent hazard the live host could never have shown, because there
-    # the walk stops at the first existing ancestor. The product now clamps that
-    # root to the restore namespace; the fixture models reality again.
+    # The pool exists, as on any real host.
     printf 'hdd\nhdd/store/rpool/data\nhdd/store/rpool/data@s1\n' > "$WORK/ds"
     printf '111' > "$WORK/guid.hdd_store_rpool_data_s1"
     rm -f "$WORK/zfs-calls2"
@@ -250,13 +265,9 @@ runs() {
 }
 
 # ---- the landing path -------------------------------------------------------
-# The full source path is kept, pool included. An earlier cut stripped the pool,
-# which collapsed rpool/data and tank/data onto ONE landing path -- two different
-# recoveries racing for the same destination, the second refused for a reason
-# that would have looked like a bug.
 a=$(restore_landing_path hdd/store/rpool/data rpool/data)
 b=$(restore_landing_path hdd/store/tank/data  tank/data)
-{ [ "$a" = "hdd/restore/rpool/data" ] && [ "$b" != "$a" ]; } \
+{ [ "$a" = "$LAND" ] && [ "$b" != "$a" ]; } \
     && ok "slice2: the landing path keeps the full source path, so two sources cannot collide" \
     || bad "slice2: the landing path keeps the full source path, so two sources cannot collide" "a=$a b=$b"
 
@@ -274,59 +285,85 @@ out="$(runs --dataset=rpool/data --snapshot=nosuch --yes)"; rc=$?
     && ok "slice2: a snapshot that is not on the copy refuses" \
     || bad "slice2: a snapshot that is not on the copy refuses" "rc=$rc"
 
-# ---- collision refuses BEFORE anything is created ---------------------------
+# ---- the early collision check still short-circuits -------------------------
 reset_ds
-echo 'hdd/restore/rpool/data' >> "$WORK/ds"
+echo "$LAND" >> "$WORK/ds"
 out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'already exists' \
-  && grep -qx 'hdd/restore/rpool/data' "$WORK/ds" \
-  && ! grep -q '^destroy' "$WORK/zfs-calls2" 2>/dev/null; } \
-    && ok "slice2: a pre-existing landing dataset refuses, survives, and is never a cleanup candidate" \
-    || bad "slice2: a pre-existing landing dataset refuses, survives, and is never a cleanup candidate" "rc=$rc"
+  && grep -qx "$LAND" "$WORK/ds" \
+  && ! grep -q '^destroy' "$WORK/zfs-calls2" 2>/dev/null \
+  && ! grep -q '^send' "$WORK/zfs-calls2" 2>/dev/null; } \
+    && ok "slice2: a landing that already exists refuses before transferring anything, and survives" \
+    || bad "slice2: a landing that already exists refuses before transferring anything, and survives" "rc=$rc"
 
-# ---- happy path --------------------------------------------------------------
+# ---- happy path: staged, verified, promoted ---------------------------------
 reset_ds
 out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'Odtworzenie OK' \
-  && grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
-    && ok "slice2: a good restore lands in the namespace and reports the verified guid" \
-    || bad "slice2: a good restore lands in the namespace and reports the verified guid" "rc=$rc $(printf '%s' "$out"|tail -2)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'Odtworzenie OK' && grep -qx "$LAND" "$WORK/ds"; } \
+    && ok "slice2: a good restore is promoted to the public landing path" \
+    || bad "slice2: a good restore is promoted to the public landing path" "rc=$rc $(printf '%s' "$out"|tail -2)"
+grep -q 'restore-staging-' "$WORK/ds" \
+    && bad "slice2: no staging dataset survives a successful restore" "$(grep 'restore-staging-' "$WORK/ds")" \
+    || ok "slice2: no staging dataset survives a successful restore"
+grep -q '^rename ' "$WORK/zfs-calls2" \
+    && ok "slice2: promotion goes through zfs rename, whose refusal is ZFS's own atomicity" \
+    || bad "slice2: promotion goes through zfs rename, whose refusal is ZFS's own atomicity" ""
 
-# ---- a failed receive leaves NOTHING behind ---------------------------------
+# ---- THE REV-114 RACE CONTROL ------------------------------------------------
+# Another actor creates the final landing AFTER this run's collision check has
+# passed. The old implementation would have destroyed it. Required: the restore
+# fails, the injected dataset survives, and no destroy targets it or an ancestor
+# containing it.
+reset_ds
+out="$(INJECT_LANDING="$LAND" runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+race_ok=1
+[ "$rc" -ne 0 ] || race_ok=0
+printf '%s' "$out" | grep -qi 'appeared while this restore was running' || race_ok=0
+grep -qx "$LAND" "$WORK/ds" || race_ok=0
+# no destroy may name the landing, nor any ancestor that contains it
+while read -r c; do
+    case "$c" in
+        destroy*" $LAND"|destroy*" hdd/restore"|destroy*" hdd/restore/rpool"|destroy*" hdd") race_ok=0 ;;
+    esac
+done < "$WORK/zfs-calls2"
+[ "$race_ok" -eq 1 ] \
+    && ok "slice2 REV-114: a landing created by another actor mid-run survives, and is never a destroy target" \
+    || bad "slice2 REV-114: a landing created by another actor mid-run survives, and is never a destroy target" \
+           "rc=$rc destroys=[$(grep '^destroy' "$WORK/zfs-calls2" | tr '\n' ';')]"
+# and this run's own staging is still cleaned up, because THAT one it owns
+grep -q 'restore-staging-' "$WORK/ds" \
+    && bad "slice2 REV-114: the lost race still cleans up this attempt's own staging" "$(grep 'restore-staging-' "$WORK/ds")" \
+    || ok "slice2 REV-114: the lost race still cleans up this attempt's own staging"
+
+# ---- a failed receive leaves NOTHING of this attempt behind -----------------
 reset_ds
 out="$(FAIL_RECV=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
-{ [ "$rc" -ne 0 ] && ! grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
-    && ok "slice2: a failed receive leaves nothing behind, so a retry is not stranded" \
-    || bad "slice2: a failed receive leaves nothing behind, so a retry is not stranded" "rc=$rc ds=$(cat "$WORK/ds")"
+{ [ "$rc" -ne 0 ] && ! grep -q 'restore-staging-' "$WORK/ds" && ! grep -qx "$LAND" "$WORK/ds"; } \
+    && ok "slice2: a failed receive leaves no staging and no landing, so a retry is not stranded" \
+    || bad "slice2: a failed receive leaves no staging and no landing, so a retry is not stranded" "rc=$rc ds=$(cat "$WORK/ds")"
 
-# ---- GUID mismatch is a failure even though the pipeline succeeded ----------
-# The pair the reviewer asked for: BOTH conditions, never one. The pipeline exits
-# 0 here and only the guid disagrees; an implementation trusting the exit code
-# alone would call this a successful recovery.
+# ---- GUID mismatch fails even though the pipeline succeeded -----------------
 reset_ds
 out="$(RECV_GUID=999 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'guid mismatch' \
-  && ! grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
-    && ok "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" \
-    || bad "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" "rc=$rc"
-# ...and the namespace this run had to build goes with it. Removing only the leaf
-# would leave empty scaffolding that the next attempt did not create and cannot
-# tell apart from a dataset the operator made.
+  && ! grep -q 'restore-staging-' "$WORK/ds" && ! grep -qx "$LAND" "$WORK/ds"; } \
+    && ok "slice2: a clean pipeline with the WRONG guid still fails, and never reaches the public path" \
+    || bad "slice2: a clean pipeline with the WRONG guid still fails, and never reaches the public path" "rc=$rc"
+
+# ---- ancestors are deliberately NOT removed ---------------------------------
+# The reversal from the first cut. Removing scaffolding is the one cleanup whose
+# ownership cannot be proven, and staging already keeps retries clean.
 grep -qx 'hdd/restore' "$WORK/ds" \
-    && bad "slice2: cleanup removes the namespace this run created, not just the leaf" "hdd/restore survived" \
-    || ok "slice2: cleanup removes the namespace this run created, not just the leaf"
+    && ok "slice2: namespace ancestors survive a failed attempt -- unprovable ownership is not cleaned up" \
+    || bad "slice2: namespace ancestors survive a failed attempt -- unprovable ownership is not cleaned up" "hdd/restore was destroyed"
 
 # ---- cleanup that itself fails: explicit incomplete state, no success claim --
 reset_ds
-# The receive must SUCCEED here, or there is nothing for cleanup to fail on:
-# a failed recv creates nothing, and "nothing was left behind" is then the
-# correct answer. The realistic shape is a dataset that landed and then failed
-# verification, with the removal itself refused.
 out="$(RECV_GUID=999 FAIL_DESTROY=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'could not be removed' \
-  && printf '%s' "$out" | grep -q 'hdd/restore/rpool/data'; } \
-    && ok "slice2: a cleanup that fails names the dataset and never claims success" \
-    || bad "slice2: a cleanup that fails names the dataset and never claims success" "rc=$rc $(printf '%s' "$out"|tail -1)"
+  && printf '%s' "$out" | grep -q 'restore-staging-'; } \
+    && ok "slice2: a cleanup that fails names this attempt's staging dataset and never claims success" \
+    || bad "slice2: a cleanup that fails names this attempt's staging dataset and never claims success" "rc=$rc $(printf '%s' "$out"|tail -1)"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
