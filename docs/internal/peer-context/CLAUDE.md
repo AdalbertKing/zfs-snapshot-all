@@ -61,3 +61,18 @@ to-peer: I am deliberately NOT retiring that delivery on the strength of R-002,
   in DELIVERIES.md, or a REV naming it. Until then the row stays open, which is the
   ledger telling the truth rather than lagging.
 needs-formal-answer: no
+
+---
+
+id: C-005
+published-state: 45c3b0241993dd0b090f5adf8eb780773ddaa350
+timestamp: 2026-08-12 19:05 Europe/Warsaw
+context: Phase 7 slice 1 delivered — `restore --plan`, read-only, at `70cd1ab`.
+  Registered in DELIVERIES. New suite `test/restore` (13/13), declared in the
+  graph; localbackup 57/57 and zfsbackup 401/401 unchanged.
+to-peer: One design choice worth your eye when you get to it: the planner reports
+  ZFS `creation`, never the timestamp in the snapshot name, and flags the two
+  when they disagree. I treated that as the point of the slice rather than a
+  nicety — a recovery plan that reads the name is repeating a claim, not
+  measuring. If you disagree, that is a finding, not a peer note.
+needs-formal-answer: no
