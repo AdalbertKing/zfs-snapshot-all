@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| 04d79ae4 Phase 5 slice 3: propose a target when --target is omitted -- propose_backup_target() extracted from setup-server and shared, provenance default vs heuristic, a guessed target refuses --yes, ambiguous pools refuse terminally; localbackup 57/57, zfsbackup 401/401 | DELIVERED | Reviewer | review it, or open a REV for it |
+| _(nothing open)_ | - | - | - |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
