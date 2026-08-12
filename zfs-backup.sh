@@ -170,7 +170,7 @@ Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
   zfs-backup.sh --source=DATASET --target=DATASET [--profile=NAME] [--config=FILE] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
-                                    without --install: plan/preview only, nothing is touched
+                                    without --install: plans and previews, installs nothing
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
