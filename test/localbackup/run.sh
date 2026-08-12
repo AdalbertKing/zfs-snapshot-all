@@ -44,7 +44,7 @@ cat > "$WORK/bin/crontab" <<EOF
 #!/bin/sh
 case " \$* " in
   *" -l "*) printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n1 * * * * /bin/true\n# END zfs-backup-managed\n' "$WORK" ;;
-  *) echo "WRITE \$*" >> "$WORK/crontab-writes" ;;
+  *) echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
 esac
 exit 0
 EOF
@@ -422,6 +422,128 @@ if [ ! -e "$WORK/crontab-writes" ]; then
 else
     bad "installs-nothing: crontab was never written across every plan above" "$(cat "$WORK/crontab-writes")"
 fi
+
+# ==============================================================================
+# Slice 2 -- the transactional install (--install). Everything above pins the
+# read-only planner; from here the same command is asked to actually install.
+#
+# The seed is stubbed, not real: what is under test is the ORDER and the
+# transaction boundary, not snapsend's own behaviour, which its own suite and
+# the real-ZFS proof cover. $SNAPSEND is an absolute path, so it is overridden
+# in the environment rather than through PATH.
+# ==============================================================================
+mkdir -p "$WORK/seedbin" "$WORK/bin2"
+# The shared crontab stub returns a managed block containing a foreign job line.
+# The pre-install guard correctly refuses to delete it -- right behaviour, wrong
+# fixture for exercising the install itself. These runs get a stub whose managed
+# block still CLAIMS the config (so the claim and consistency guards are really
+# exercised) but describes no job the new config would drop.
+# It also has to STORE what it is given. gen-cron writes the crontab and then
+# reads it back, refusing to report success if the two differ -- so a stub that
+# accepts a write and keeps returning the old content makes the tool correctly
+# refuse. That refusal is the product working; emulating a real crontab is the
+# only way to test past it.
+cat > "$WORK/bin2/crontab" <<EOF
+#!/bin/sh
+STORE="$WORK/crontab-store"
+case " \$* " in
+  *" -l "*) if [ -f "\$STORE" ]; then cat "\$STORE"
+            else printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n# END zfs-backup-managed\n' "$WORK"; fi ;;
+  *) for a in "\$@"; do f="\$a"; done
+     [ -f "\$f" ] && cp "\$f" "\$STORE"
+     echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/bin2/crontab"
+cat > "$WORK/seedbin/snapsend-ok" <<EOF
+#!/bin/sh
+echo "SEED \$*" >> "$WORK/seed-calls"
+echo SEED >> "$WORK/order"
+exit 0
+EOF
+cat > "$WORK/seedbin/snapsend-fail" <<EOF
+#!/bin/sh
+echo "SEED \$*" >> "$WORK/seed-calls"
+echo SEED >> "$WORK/order"
+echo "seed exploded" >&2
+exit 1
+EOF
+chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
+
+runi() {   # <snapsend stub> <stdin answer> args...
+    local stub="$1" answer="$2"; shift 2
+    ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+      SNAPSEND="$WORK/seedbin/$stub" \
+      cmd_local_backup "$@" ) <<< "$answer" 2>&1
+}
+
+# The crontab stub claims $WORK/claimed.conf, so that is the only config path an
+# install can legitimately target here (assert_cron_config_matches_installed).
+CFG="$WORK/claimed.conf"
+# A pre-existing, VALID config -- not an empty file. An empty one has no
+# [defaults] host_label, which gen-cron rejects, and that would test the
+# scaffolding rather than the install. Writing the minimum by hand also keeps
+# the additive property honest: this block must survive the install untouched.
+seed_cfg() { printf '[defaults]
+	host_label = testhost
+' > "$CFG"; }
+seed_cfg
+
+# ---- slice-1 compatibility: without --install the command still only plans ----
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ [ ! -e "$WORK/order" ] && [ "$(wc -l < "$CFG")" -eq 2 ] && printf '%s' "$out" | grep -q -- '--install'; } \
+    && ok "slice2: no --install still plans only, and says how to install" \
+    || bad "slice2: no --install still plans only, and says how to install" "order=$(cat "$WORK/order" 2>/dev/null)"
+
+# ---- declined confirmation: nothing seeded, nothing installed ----------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "n" --install --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ [ ! -e "$WORK/order" ] && [ "$(wc -l < "$CFG")" -eq 2 ]; } \
+    && ok "slice2: a declined confirmation seeds nothing and installs nothing" \
+    || bad "slice2: a declined confirmation seeds nothing and installs nothing" "order=$(cat "$WORK/order" 2>/dev/null)"
+
+# ---- failed seed: no cron installed, config untouched, retryable -------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-fail "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ grep -q SEED "$WORK/order" 2>/dev/null && ! grep -q INSTALL "$WORK/order" 2>/dev/null && [ "$(wc -l < "$CFG")" -eq 2 ]; } \
+    && ok "slice2: a FAILED seed installs no cron and leaves the config untouched" \
+    || bad "slice2: a FAILED seed installs no cron and leaves the config untouched" "order=$(cat "$WORK/order" 2>/dev/null)"
+printf '%s' "$out" | grep -qi 'NIC nie zainstalowano' \
+    && ok "slice2: the failed-seed refusal says plainly that nothing was installed" \
+    || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
+
+# ---- happy path: seed BEFORE install, and the order is the contract ----------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
+{ [ "$(wc -l < "$CFG")" -gt 2 ] && grep -q "host_label = testhost" "$CFG"; } \
+    && ok "slice2: a successful run installs the config and preserves the pre-existing block" \
+              || bad "slice2: a successful run installs the config and preserves the pre-existing block" "$(printf '%s' "$out" | tail -3)"
+# THE ordering property: seed must be established before any cron becomes
+# eligible. A run that installed first and seeded after would still produce both
+# lines -- only their order distinguishes the safe implementation from the unsafe
+# one, which is why this asserts the sequence and not the presence.
+[ "$(tr -d ' \n' < "$WORK/order" 2>/dev/null)" = "SEEDINSTALL" ] \
+    && ok "slice2: the seed runs BEFORE the cron install (order, not presence)" \
+    || bad "slice2: the seed runs BEFORE the cron install (order, not presence)" "order=[$(tr '\n' ',' < "$WORK/order" 2>/dev/null)]"
+
+# ---- the seed prefix comes from the RENDER, not from a second constant -------
+# The profile's own template decides it. A hardcoded copy in the install path
+# would pass every test above and silently create a snapshot family the
+# installed prune never matches, so the prefix itself is asserted.
+grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
+    && ok "slice2: the seed uses the prefix read back out of the rendered cron line" \
+    || bad "slice2: the seed uses the prefix read back out of the rendered cron line" "$(cat "$WORK/seed-calls" 2>/dev/null)"
+
+# ---- multi-root: one seed per source, still one install ----------------------
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --target=hdd/backups --config="$CFG")"
+# `grep -c` prints 0 AND exits 1 on no match, so an `|| echo 0` fallback appends
+# a SECOND zero and the arithmetic test dies on "0\n0". Count the lines instead.
+{ [ "$({ grep -c SEED "$WORK/seed-calls" 2>/dev/null; true; } | head -1)" = 2 ] && grep -q INSTALL "$WORK/order" 2>/dev/null; } \
+    && ok "slice2: two sources seed twice and install once" \
+    || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
