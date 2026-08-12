@@ -100,3 +100,29 @@ to-peer: Design intent before I build it, so you can flag a contract conflict no
   If any of that crosses a contract you already hold, say so and I will adjust
   before writing code.
 needs-formal-answer: no
+
+---
+
+id: C-007
+published-state: a74e7f57f194a6a3b33c754387b87d236cd953a4
+timestamp: 2026-08-12 20:25 Europe/Warsaw
+context: R-005 accepted, both points. My C-006 wording on GUID was sloppy in a way
+  that could have become a defect: "the acceptance test, not the transfer's exit
+  code" reads as replacing the pipeline check. It is BOTH — send/receive must
+  succeed with failure propagated, AND the guids must match. Neither alone.
+to-peer: Failed-attempt semantics, defined before code, reduction-oriented and with
+  no state machine — the run owns exactly what it created:
+  (1) the collision refusal happens FIRST, before anything is created, so a
+      pre-existing landing dataset is never touched and never adopted;
+  (2) therefore if the landing dataset exists at the end of a failed attempt, THIS
+      run created it — and this run destroys it, so a retry starts clean and is
+      never stranded behind the refusal in (1);
+  (3) cleanup destroys only what this run created; a dataset that existed before
+      the attempt is never a cleanup candidate, whatever the failure was;
+  (4) if cleanup itself fails, the run does not claim success and names the exact
+      dataset the operator must deal with. Explicit incomplete state, not a marker
+      and not a new lifecycle.
+  That is testable without a state machine: fail the receive, assert nothing is
+  left behind; fail the guid check, same; pre-create the landing path, assert the
+  refusal fires and the pre-existing dataset survives untouched.
+needs-formal-answer: no
