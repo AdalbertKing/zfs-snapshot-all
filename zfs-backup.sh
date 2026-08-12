@@ -2992,8 +2992,13 @@ restore_landing_path() {   # <copy dataset> <original source> -> landing path
     # must never be able to overwrite production by default. It lands beside the
     # copy, under a fixed `restore` namespace, carrying the source path so an
     # operator can see at a glance what it is.
+    # The FULL source path is kept, pool included. Stripping the pool collapsed
+    # rpool/data and tank/data onto one landing path -- two different recoveries
+    # racing for the same destination, and the second one refused for a reason
+    # that would look like a bug. Caught by reading the derivation's output, not
+    # by a test, which is why the suite now pins it.
     local copy="$1" src="$2"
-    printf '%s/restore/%s\n' "${copy%%/*}" "${src#*/}"
+    printf '%s/restore/%s\n' "${copy%%/*}" "$src"
 }
 
 cmd_restore() {

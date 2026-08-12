@@ -168,6 +168,139 @@ else
     ok "read-only: every zfs call across every plan was a list"
 fi
 
+# ==============================================================================
+# Phase 7 slice 2 -- the SAFE restore. This one WRITES, so the assertions are
+# about what survives a failure, not only about the happy path.
+#
+# Failed-attempt semantics under test (agreed in peer-context R-005/C-007):
+# collision refuses BEFORE creating anything; whatever exists after a failed
+# attempt was created by this run and is destroyed by it; a pre-existing dataset
+# is never a cleanup candidate; a cleanup that itself fails must not report
+# success and must name the dataset.
+# ==============================================================================
+mkdir -p "$WORK/bin2"
+# A scriptable zfs: $WORK/ds holds existing dataset names, $WORK/guid.<key> their
+# snapshot guids. FAIL_RECV / FAIL_DESTROY / RECV_GUID inject the failures.
+cat > "$WORK/bin2/zfs" <<ZSTUB
+#!/bin/sh
+echo "\$*" >> "$WORK/zfs-calls2"
+k() { printf '%s' "\$1" | tr '/@' '__'; }
+case "\$1" in
+  list)
+      for a in "\$@"; do ds="\$a"; done
+      case " \$* " in
+        *" -t snapshot "*)
+            grep -q "^\$ds@" "$WORK/ds" 2>/dev/null || exit 1
+            grep "^\$ds@" "$WORK/ds"; exit 0 ;;
+        *)  grep -qx "\$ds" "$WORK/ds" 2>/dev/null || exit 1
+            echo "\$ds"; exit 0 ;;
+      esac ;;
+  get)
+      for a in "\$@"; do ds="\$a"; done
+      v=\$(cat "$WORK/guid.\$(k "\$ds")" 2>/dev/null)
+      [ -n "\$v" ] || v="-"
+      echo "\$v"; exit 0 ;;
+  send)
+      echo STREAM; exit 0 ;;
+  recv|receive)
+      cat >/dev/null
+      if [ -n "\${FAIL_RECV:-}" ]; then echo "recv exploded" >&2; exit 1; fi
+      for a in "\$@"; do ds="\$a"; done
+      echo "\$ds" >> "$WORK/ds"
+      echo "\$ds@s1" >> "$WORK/ds"
+      printf '%s' "\${RECV_GUID:-111}" > "$WORK/guid.\$(k "\$ds@s1")"
+      exit 0 ;;
+  destroy)
+      if [ -n "\${FAIL_DESTROY:-}" ]; then echo "destroy refused" >&2; exit 1; fi
+      for a in "\$@"; do ds="\$a"; done
+      grep -v "^\$ds" "$WORK/ds" > "$WORK/ds.n" 2>/dev/null || :
+      mv "$WORK/ds.n" "$WORK/ds"; exit 0 ;;
+esac
+exit 0
+ZSTUB
+chmod +x "$WORK/bin2/zfs"
+
+scfg="$WORK/safe.conf"
+mkcfg "$scfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n'
+reset_ds() {
+    printf 'hdd/store/rpool/data\nhdd/store/rpool/data@s1\n' > "$WORK/ds"
+    printf '111' > "$WORK/guid.hdd_store_rpool_data_s1"
+    rm -f "$WORK/zfs-calls2"
+}
+runs() {
+    ( PATH="$WORK/bin2:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+      cmd_restore --config="$scfg" "$@" ) 2>&1
+}
+
+# ---- the landing path -------------------------------------------------------
+# The full source path is kept, pool included. An earlier cut stripped the pool,
+# which collapsed rpool/data and tank/data onto ONE landing path -- two different
+# recoveries racing for the same destination, the second refused for a reason
+# that would have looked like a bug.
+a=$(restore_landing_path hdd/store/rpool/data rpool/data)
+b=$(restore_landing_path hdd/store/tank/data  tank/data)
+{ [ "$a" = "hdd/restore/rpool/data" ] && [ "$b" != "$a" ]; } \
+    && ok "slice2: the landing path keeps the full source path, so two sources cannot collide" \
+    || bad "slice2: the landing path keeps the full source path, so two sources cannot collide" "a=$a b=$b"
+
+# ---- the verb refuses what it does not do -----------------------------------
+reset_ds
+out="$(runs --dataset=rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'separate verb'; } \
+    && ok "slice2: no --plan and no --snapshot refuses and names the separate verb" \
+    || bad "slice2: no --plan and no --snapshot refuses and names the separate verb" "rc=$rc"
+out="$(runs --snapshot=s1)"; rc=$?
+[ "$rc" -ne 0 ] && ok "slice2: --snapshot without --dataset refuses" \
+                || bad "slice2: --snapshot without --dataset refuses" "rc=$rc"
+out="$(runs --dataset=rpool/data --snapshot=nosuch --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'does not exist'; } \
+    && ok "slice2: a snapshot that is not on the copy refuses" \
+    || bad "slice2: a snapshot that is not on the copy refuses" "rc=$rc"
+
+# ---- collision refuses BEFORE anything is created ---------------------------
+reset_ds
+echo 'hdd/restore/rpool/data' >> "$WORK/ds"
+out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'already exists' \
+  && grep -qx 'hdd/restore/rpool/data' "$WORK/ds" \
+  && ! grep -q '^destroy' "$WORK/zfs-calls2" 2>/dev/null; } \
+    && ok "slice2: a pre-existing landing dataset refuses, survives, and is never a cleanup candidate" \
+    || bad "slice2: a pre-existing landing dataset refuses, survives, and is never a cleanup candidate" "rc=$rc"
+
+# ---- happy path --------------------------------------------------------------
+reset_ds
+out="$(runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'Odtworzenie OK' \
+  && grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
+    && ok "slice2: a good restore lands in the namespace and reports the verified guid" \
+    || bad "slice2: a good restore lands in the namespace and reports the verified guid" "rc=$rc $(printf '%s' "$out"|tail -2)"
+
+# ---- a failed receive leaves NOTHING behind ---------------------------------
+reset_ds
+out="$(FAIL_RECV=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && ! grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
+    && ok "slice2: a failed receive leaves nothing behind, so a retry is not stranded" \
+    || bad "slice2: a failed receive leaves nothing behind, so a retry is not stranded" "rc=$rc ds=$(cat "$WORK/ds")"
+
+# ---- GUID mismatch is a failure even though the pipeline succeeded ----------
+# The pair the reviewer asked for: BOTH conditions, never one. The pipeline exits
+# 0 here and only the guid disagrees; an implementation trusting the exit code
+# alone would call this a successful recovery.
+reset_ds
+out="$(RECV_GUID=999 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'guid mismatch' \
+  && ! grep -qx 'hdd/restore/rpool/data' "$WORK/ds"; } \
+    && ok "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" \
+    || bad "slice2: a clean pipeline with the WRONG guid still fails, and is cleaned up" "rc=$rc"
+
+# ---- cleanup that itself fails: explicit incomplete state, no success claim --
+reset_ds
+out="$(FAIL_RECV=1 FAIL_DESTROY=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'could not be removed' \
+  && printf '%s' "$out" | grep -q 'hdd/restore/rpool/data'; } \
+    && ok "slice2: a cleanup that fails names the dataset and never claims success" \
+    || bad "slice2: a cleanup that fails names the dataset and never claims success" "rc=$rc $(printf '%s' "$out"|tail -1)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
