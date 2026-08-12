@@ -438,11 +438,20 @@ mkdir -p "$WORK/seedbin" "$WORK/bin2"
 # fixture for exercising the install itself. These runs get a stub whose managed
 # block still CLAIMS the config (so the claim and consistency guards are really
 # exercised) but describes no job the new config would drop.
+# It also has to STORE what it is given. gen-cron writes the crontab and then
+# reads it back, refusing to report success if the two differ -- so a stub that
+# accepts a write and keeps returning the old content makes the tool correctly
+# refuse. That refusal is the product working; emulating a real crontab is the
+# only way to test past it.
 cat > "$WORK/bin2/crontab" <<EOF
 #!/bin/sh
+STORE="$WORK/crontab-store"
 case " \$* " in
-  *" -l "*) printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n# END zfs-backup-managed\n' "$WORK" ;;
-  *) echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
+  *" -l "*) if [ -f "\$STORE" ]; then cat "\$STORE"
+            else printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n# END zfs-backup-managed\n' "$WORK"; fi ;;
+  *) for a in "\$@"; do f="\$a"; done
+     [ -f "\$f" ] && cp "\$f" "\$STORE"
+     echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
 esac
 exit 0
 EOF
@@ -482,21 +491,21 @@ seed_cfg() { printf '[defaults]
 seed_cfg
 
 # ---- slice-1 compatibility: without --install the command still only plans ----
-rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG")"
 { [ ! -e "$WORK/order" ] && [ "$(wc -l < "$CFG")" -eq 2 ] && printf '%s' "$out" | grep -q -- '--install'; } \
     && ok "slice2: no --install still plans only, and says how to install" \
     || bad "slice2: no --install still plans only, and says how to install" "order=$(cat "$WORK/order" 2>/dev/null)"
 
 # ---- declined confirmation: nothing seeded, nothing installed ----------------
-rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "n" --install --source=rpool/data --target=hdd/backups --config="$CFG")"
 { [ ! -e "$WORK/order" ] && [ "$(wc -l < "$CFG")" -eq 2 ]; } \
     && ok "slice2: a declined confirmation seeds nothing and installs nothing" \
     || bad "slice2: a declined confirmation seeds nothing and installs nothing" "order=$(cat "$WORK/order" 2>/dev/null)"
 
 # ---- failed seed: no cron installed, config untouched, retryable -------------
-rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-fail "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
 { grep -q SEED "$WORK/order" 2>/dev/null && ! grep -q INSTALL "$WORK/order" 2>/dev/null && [ "$(wc -l < "$CFG")" -eq 2 ]; } \
     && ok "slice2: a FAILED seed installs no cron and leaves the config untouched" \
@@ -506,7 +515,7 @@ printf '%s' "$out" | grep -qi 'NIC nie zainstalowano' \
     || bad "slice2: the failed-seed refusal says plainly that nothing was installed" "$(printf '%s' "$out" | tail -2)"
 
 # ---- happy path: seed BEFORE install, and the order is the contract ----------
-rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
 { [ "$(wc -l < "$CFG")" -gt 2 ] && grep -q "host_label = testhost" "$CFG"; } \
     && ok "slice2: a successful run installs the config and preserves the pre-existing block" \
@@ -528,7 +537,7 @@ grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
     || bad "slice2: the seed uses the prefix read back out of the rendered cron line" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
 # ---- multi-root: one seed per source, still one install ----------------------
-rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --target=hdd/backups --config="$CFG")"
 # `grep -c` prints 0 AND exits 1 on no match, so an `|| echo 0` fallback appends
 # a SECOND zero and the arithmetic test dies on "0\n0". Count the lines instead.
