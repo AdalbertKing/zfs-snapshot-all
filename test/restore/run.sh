@@ -53,8 +53,13 @@ run() {   # <config> args...
 }
 
 mkcfg() {   # <file> <body...>
-    printf '[defaults]\n\thost_label = t\n' > "$1"; shift
-    printf '%b' "$@" >> "$1"
+    # Capture the path BEFORE shifting: after the shift $1 is the body, and
+    # writing to "$1" then means writing to a file named by the config text.
+    # That bug made several assertions below pass for the wrong reason before it
+    # was caught -- fixtures need the same suspicion as product code.
+    local f="$1"; shift
+    printf '[defaults]\n\thost_label = t\n' > "$f"
+    printf '%b' "$@" >> "$f"
 }
 
 # ---- the verb is deliberately narrow -----------------------------------------
