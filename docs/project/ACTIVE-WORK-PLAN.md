@@ -439,9 +439,11 @@ Slice 3: target discovery/proposal when omitted.
 
 ### Gate 5
 
-Basic local backup deployment is one coherent operator workflow. Reached when
-slice 2's transactional install lands and is live-verified; slice 1 is the
-read-only planning half.
+Basic local backup deployment is one coherent operator workflow. **REACHED
+2026-08-12**: slice 2's transactional install landed (`da3e831`), was live-verified
+on pve1 against real ZFS, and was reviewed and closed through REV-20260812-112
+(usage contract, corrected at `0697f01`). Slice 3 — target discovery/proposal when
+`--target` is omitted — is therefore unblocked.
 
 ---
 
@@ -471,10 +473,14 @@ exact command to re-validate. Gate-safe under operating rule 1 (documentation,
 crosses no earlier gate). Linked from `README.md`. Registered as an unreviewed
 direct-main delivery in `docs/project/DELIVERIES.md`.
 
-**Known test-hygiene gap:** the four example configs are not yet pinned by a
-suite, so generator changes could let them rot. Deferred as a follow-up (a small
-`test/` golden that renders each `docs/examples/*.conf`) rather than expanding
-this documentation slice.
+**Test-hygiene gap CLOSED** (`58f67f6`, REV-20260810-094). `test/configexamples/`
+pins the four example configs in two layers: every `docs/examples/*.conf` must
+render through the real `gen-cron.sh -c`, and each is additionally pinned to the
+semantic line properties it exists to teach, so an example that renders the WRONG
+shape is caught instead of passing on exit 0. Two coverage negative controls guard
+the registry itself (a new example with no entry; an entry with no file). 24/24,
+declared in `test/deps.conf`. This paragraph described the gap as still deferred
+for two days after it was closed.
 
 Documentation is the intended escape hatch for bespoke policy; the CLI must not absorb every expert exception.
 
