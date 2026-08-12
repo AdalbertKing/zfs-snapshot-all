@@ -1,17 +1,24 @@
-# REVIEW PROTOCOL V2
+# REVIEW PROTOCOL V2.1
 ## Claude + Reviewer + Owner workflow
 
-Status: **AGREED DESIGN — implementation/cutover pending**
+Status: **ACTIVE — V2.1 agreed and in use**
 
-Date: 2026-08-07
+Revision date: 2026-08-12
+Original V2 agreement: 2026-08-07
 
 This document consolidates:
 
 - the Owner's REVIEW PROTOCOL V2 proposal;
 - Claude's initial protocol proposal (`47a0af0`);
-- Claude's amendments (`716bcd3`).
+- Claude's amendments (`716bcd3`);
+- operational lessons collected through 2026-08-12;
+- the Reviewer V2.1 proposal (`de3315b`);
+- Claude's V2.1 response (`71147eb`), which accepted all nine proposed deltas, five with amendments and none rejected;
+- the Reviewer's independent verification of the evidence behind those amendments.
 
-## Resolution of Claude's amendments
+Where the V2.1 operational amendments below are more specific than earlier V2 wording, V2.1 controls. The four-state review FSM and role ownership of review/response/closure artifacts are unchanged.
+
+## Resolution of Claude's original V2 amendments
 
 All three amendments are resolved.
 
@@ -67,7 +74,10 @@ The protocol shall guarantee:
 - deterministic next-action ownership;
 - machine-verifiable consistency;
 - separate reviewer/implementer authorship;
-- minimal process overhead.
+- minimal process overhead;
+- work release without requiring the Owner to relay messages between leads;
+- impact-driven evidence rather than ritual full-suite execution;
+- continued progress on dependency-independent work when one thread is blocked.
 
 ---
 
@@ -188,14 +198,14 @@ Never:
 
 Responsibilities:
 
-- priorities;
-- architecture/product decisions;
-- accepted operational risk;
-- deferred work;
-- release/deployment decisions;
+- priorities and changes to already-set scope/priority;
+- architecture/product decisions between technically valid alternatives;
+- accepted operational risk or explicit defer-versus-fix decisions;
+- intentional compatibility breaks;
+- production deployment/rollout decisions;
 - decisions explicitly routed to Owner.
 
-Owner silence is never approval or risk acceptance.
+Owner silence is never approval or risk acceptance. It is also not required to start ordinary already-routed work that stays inside accepted scope and the safety boundary below.
 
 ---
 
@@ -341,9 +351,9 @@ No manually assigned state token is needed in the source artifacts.
 
 ---
 
-# Principle 7 — Deterministic next owner
+# Principle 7 — Deterministic next owner and work release
 
-The ledger also derives exactly one next owner.
+The ledger derives exactly one next owner.
 
 Default mapping:
 
@@ -363,6 +373,10 @@ nonimplementation work:
 There is never more than one next owner.
 
 Generated rows with missing or duplicated ownership are invalid.
+
+A fresh row routed to a lead is **standing authorisation to begin that already-scoped work**. `OPEN | Claude` does not require a new Owner message before implementation/evidence begins; `IMPLEMENTED | Reviewer` and `APPROVED | Reviewer` do not require a new Owner message before review/closure begins.
+
+Routing authorises work; it does not imply that an actor is continuously running or that an external dependency is currently available. The lead remains responsible for the routed thread and may continue dependency-independent work under the liveness rule below.
 
 ---
 
@@ -394,6 +408,8 @@ Never infer active work from:
 - latest `main`;
 - `PROJECT_STATUS.md`;
 - `OPEN-THREADS.md`.
+
+The same rule applies symmetrically to process claims: claims about whether the other lead had work, refreshed state, ran a test or observed a failure are checked against repository or measured evidence before becoming a process conclusion.
 
 ---
 
@@ -493,6 +509,8 @@ not as a growing pile of prose-specific checkers:
 Parser errors, missing dependencies and malformed rows fail closed. They never
 produce a silent PASS.
 
+Before either lead publishes a review, response or closure artifact, `./test/reviewctl.sh --generate` (or the current equivalent transactional generator) must succeed on the resulting facts. This requirement exists because a malformed role-owned header can otherwise freeze routing for unrelated reviews. It is an invariant, not a requirement for a particular Git hook implementation.
+
 ---
 
 # Principle 13 — Legal lifecycle facts
@@ -546,25 +564,40 @@ artifact(s), regenerates derived views, and verifies before completion.
 
 ---
 
-# Principle 15 — Evidence requirements remain unchanged
+# Principle 15 — Evidence and impact-driven test discipline
 
-V2 changes coordination, not review quality.
+Review quality is evidence-driven, not suite-count-driven.
+
+`./test/impact.sh` remains the source of required automated and manual obligations for the actual diff. The default is to run the suites selected by dependency/impact analysis plus explicit live/manual obligations. The entire repository suite is not mandatory merely because a review exists.
+
+Escalate beyond the impact-selected set when:
+
+- the changed contract has uncertain blast radius;
+- dependency mapping is incomplete or suspect;
+- a release/migration gate explicitly requires a broader campaign;
+- an observed regression suggests coupling missing from the graph;
+- the reviewer names a concrete additional risk and the additional test addresses that risk.
+
+`Nothing in the graph is affected` is a valid result when the diff genuinely lies outside mapped product dependencies; it does not waive explicit protocol, live, manual, security or environment-specific obligations.
+
+If a relevant suite reveals a regression that impact analysis should have selected but did not, treat that as a dependency-graph defect. Repair the graph in the same logical delivery when the mapping defect is local and clear; otherwise track the graph repair explicitly before relying on that mapping to close the affected risk.
 
 Still required where applicable:
 
 - contract + required tests before implementation;
 - actual diff inspection;
 - negative controls with both changed and unchanged case counts;
-- `test/impact.sh` obligations;
 - real-host proof;
 - delegated-account proof for account/permission/crontab paths;
 - exact test commands/results;
 - explicit tests not run;
 - no silent fixture blessing or weakened safety checks.
 
+Green tests prove only the exercised contract. They never substitute for required remote, delegated-account, destructive, real-ZFS or live-cron evidence.
+
 ---
 
-# Principle 16 — Lightweight documentation/process findings
+# Principle 16 — Lightweight documentation/process findings and process economy
 
 Documentation-only findings normally receive a concise one-paragraph response,
 not another design document.
@@ -573,8 +606,9 @@ A finding exclusively about the review protocol does not recursively create a
 full REV cycle unless it exposes product/release risk. Record it as a compact
 protocol note/decision and amend this document explicitly.
 
-This adopts Claude's token-cost observation and prevents reviews about reviews
-from becoming the dominant workload.
+Protocol machinery must remove repeated work rather than become a second product. Before adding a checker, ledger field, status file, handoff document or workflow state, prefer eliminating the manually maintained derived state that caused the inconsistency. When two artifacts express the same current fact, one must be derived from the other or removed.
+
+A proposed process mechanism should be able to answer: **what repeated human/model work does this remove?** The routing-generator pre-publication invariant in Principle 12 passes this test because repeated stale-header incidents froze unrelated routing.
 
 ---
 
@@ -595,26 +629,103 @@ Protocol correctness and product correctness are separate gates.
 
 ---
 
+# V2.1 operational amendments
+
+These rules capture the agreed lessons from live use of V2 without adding workflow states.
+
+## Simplicity / reuse existing semantics
+
+Before adding a profile, state, marker, config concept, workflow artifact or special mode, first test whether the required behavior is already expressed safely and unambiguously by the existing contract.
+
+Prefer omission, composition or an existing engine semantic when equivalent and safe. A new distinction is warranted when materially different operator intents would otherwise be indistinguishable in configuration or observable behavior and that distinction matters to operation, validation, safety or recovery. It is not warranted merely to label a state already unambiguous from existing semantics, such as the absence of an optional section.
+
+## Owner gate — closed list
+
+Inside already-accepted scope, ordinary implementation, review, read-only inspection, tests, evidence campaigns, documentation and isolated throwaway-lab work do not require a new Owner message.
+
+Owner decision is required for:
+
+1. destructive/state-changing action against existing production datasets, production configuration, cron or other non-throwaway live state;
+2. intentional compatibility break;
+3. deployment/rollout of a change to live production use;
+4. changing Owner-set scope, priority or sequencing when the change is material — ordinary selection of the next dependency-ready item inside an accepted phase is not an escalation;
+5. accepting/defering a known risk instead of fixing or proving it.
+
+Isolated disposable test artifacts on real hosts are not automatically production state merely because the host is live; they remain bounded by the project's explicit test safety rules and namespaces.
+
+## Evidence hierarchy
+
+Neither lead accepts the other lead's statement that work is done, tests pass, a branch is current, behavior is safe, or a process failure occurred without checking the relevant facts.
+
+For review/process decisions, evidence priority is:
+
+1. fresh published repository state and exact SHA;
+2. exact diff and contract;
+3. reproducible automated or live measurement;
+4. durable role-owned artifacts;
+5. model prose, delegated-worker self-report, commit-message summary or chat memory.
+
+A delegated worker's report about its own work is model prose until the accountable lead verifies it against repository or measured facts.
+
+The safe GitHub read/write-probe checks tool/channel integrity where write capability matters. It does not substitute for inspecting implementation evidence.
+
+## Minimal-change / higher-layer-first
+
+Before reopening a stable lower layer, identify:
+
+1. the contract that actually needs to change;
+2. higher-layer dependencies;
+3. whether the behavior can be implemented safely above the stable layer;
+4. the smallest boundary that must be reopened if not.
+
+Do not combine the required change with opportunistic refactoring, renaming, cleanup or redesign. Observability/progress/status features should first expose information from the existing execution path rather than redesigning execution semantics.
+
+## Delegation
+
+Lead models may delegate bounded mechanical work to subagents, cheaper models or deterministic tooling: searches, inventories, test execution, fixture comparison, log extraction, dependency extraction and candidate-test generation are normal examples.
+
+Delegate execution, not responsibility. The Implementer Lead remains accountable for code/evidence produced by delegated workers. The Reviewer Lead remains accountable for review conclusions and personally verifies load-bearing evidence. High-reasoning lead judgment remains required for architecture, contract changes, ambiguous failures, review verdicts, security/destructive risk and Owner escalation.
+
+Prefer deterministic tooling when the task can be proved mechanically.
+
+## Measurement before opinion
+
+If a safe, available runtime measurement can decide a technical question, run the measurement instead of parking the question on the other lead's opinion. Escalation is appropriate when measurement is unavailable, materially disproportionate, requires Owner-gated production-destructive action, or the result still leaves an irreducible product/risk choice.
+
+## Liveness and parking
+
+A blocked thread stays honestly incomplete. Waiting on unavailable live evidence, an external dependency, the Owner or the peer lead does not block dependency-independent planned work; the current actor selects the next dependency-ready item unless there is a demonstrated project-level dependency blocker or an Owner-set priority prevents it.
+
+Parking must state what the thread waits for. The normal reason vocabulary is `owner`, `peer-lead`, `live-evidence` or `external`. This is evidence metadata, **not a fifth FSM state** and not a second routing table. The ledger's owner remains responsible for resumption when the dependency becomes available.
+
+A thread is never made to look complete merely because it is parked, and a blocker on one dependency chain is never bypassed on that same chain.
+
+## Execution cadence is an infrastructure fact
+
+Protocol routing is immediately valid and authorises the routed work, but protocol text cannot make an actor run in the background.
+
+Current topology must therefore be described honestly: an actor that only exists during an interactive session may not pick up newly routed work until its next session. A scheduler, heartbeat or notification mechanism may reduce that latency, but absence of such infrastructure does not change ledger ownership and must not be represented as though continuous execution were occurring.
+
+Choosing or changing the external execution/scheduling topology is an infrastructure decision; the protocol defines the semantics that any such mechanism must preserve, not a requirement for one specific scheduler.
+
+---
+
 # Migration from legacy workflow
 
-Cut over deliberately; do not mix models indefinitely.
+V2 cutover is complete for the active review lifecycle. Legacy artifacts remain historical and are not renamed merely for aesthetics.
+
+The migration rules retained for historical repair are:
 
 1. Inventory existing REV, response and closure artifacts.
 2. Detect duplicate IDs and descriptive-suffix duplicates.
-3. Parse legacy state only in a migration tool; production V2 generator never
-   guesses legacy prose.
+3. Parse legacy state only in a migration tool; production V2/V2.1 generator never guesses legacy prose.
 4. Resolve ambiguous legacy mappings explicitly.
-5. Generate the initial `REVIEW_LEDGER.md` from canonicalized facts.
-6. Freeze legacy filenames; do not rename history merely for aesthetics.
-7. Require canonical fixed names for every new V2 REV.
+5. Generate state from canonicalized facts.
+6. Freeze legacy filenames.
+7. Require canonical fixed names for every new REV.
 8. Generate `OPEN-THREADS.md` from the ledger.
-9. Remove obsolete `ledger_coherence`, review-head and other checkers whose
-   only job was policing manually maintained review prose/tables.
-10. Keep independent `impact.sh` project/production checks.
-11. Make `impact.sh --verify` invoke V2 protocol verification.
-12. Update any remaining documentation that says `OPEN-THREADS.md` is manually
-   edited or defines a competing state list.
-13. Run positive and negative controls against real legacy drift cases.
+9. Keep independent `impact.sh` project/production checks.
+10. Require `impact.sh --verify` to invoke protocol verification.
 
 Legacy state mapping for migration only:
 
@@ -648,15 +759,18 @@ DEFERRED / withdrawn / accepted-risk          -> CLOSED + resolution metadata
 | malformed machine header | FAIL closed |
 | regenerated ledger differs from committed ledger | FAIL |
 | regenerated OPEN-THREADS differs from committed file | FAIL |
+| routed in-scope work waits only for a new Owner message | PROCESS DEFECT |
+| unrelated dependency-ready work freezes because one thread is parked | PROCESS DEFECT |
+| relevant unselected regression exposes missing dependency mapping | GRAPH DEFECT |
 
 Negative controls must include at least one real state accepted by the old
-mechanism and rejected by V2.
+mechanism and rejected by V2/V2.1.
 
 ---
 
 # Expected result
 
-The protocol eliminates:
+The protocol eliminates or bounds:
 
 - duplicated reviews;
 - duplicated responses/follow-ups;
@@ -664,18 +778,21 @@ The protocol eliminates:
 - stale workflow documents;
 - contradictory state models;
 - repeated synchronization;
-- unnecessary token consumption.
+- unnecessary token consumption;
+- Owner-as-message-router latency;
+- ritual full-suite execution for narrow changes;
+- idle dependency-independent work while one thread is blocked.
 
 The normal loop becomes:
 
 ```text
 ./test/impact.sh --verify
     -> read generated REVIEW_LEDGER
-    -> act only on work routed to your role
+    -> act on work routed to your role without waiting for a new Owner message
+    -> if blocked, record why and continue dependency-independent work
     -> update exactly one role-owned durable artifact
     -> regenerate REVIEW_LEDGER + OPEN-THREADS
     -> ./test/impact.sh --verify
 ```
 
-Claude, Reviewer and Owner then cooperate from deterministic repository facts,
-not from chat memory.
+Claude, Reviewer and Owner then cooperate from deterministic repository facts and measured evidence, not from chat memory or model claims.
