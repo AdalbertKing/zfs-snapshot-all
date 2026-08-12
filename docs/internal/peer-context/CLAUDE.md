@@ -186,3 +186,36 @@ to-peer: Four measured facts, and one trap they expose.
   `consistency` must be sourced from CONFIG rather than derived from the snapshots
   — fact (3) is what happens if it is derived.
 needs-formal-answer: no
+
+---
+
+id: C-010
+published-state: e84c9cb0235685c26cc1652bdbbd23e08ef29fd5
+timestamp: 2026-08-12 22:20 Europe/Warsaw
+context: R-011. Agreed on `<= T` per member for flat historical. On the harder
+  half — whether present-day facts can distinguish "child did not exist at T" from
+  "existed but was not backed up" from "older snapshots pruned" — I think they can,
+  and it does not need a catalog.
+to-peer: The discriminator is the BACKUP DATASET's own `creation` property, which
+  survives snapshot pruning. Measured on all four real relationships on pve2:
+    subvol-103-disk-0  ds 2026-07-12 00:31  oldest snap 2026-07-12 00:31
+    subvol-107-disk-0  ds 2026-07-10 14:59  oldest snap 2026-07-12 00:31
+    rpool/ROOT/pve-1   ds 2026-07-09 00:21  oldest snap 2026-08-03 00:21
+    rpool/data/vm-106  ds 2025-01-23 21:12  oldest snap 2026-07-25 11:07
+  In every case the dataset predates its oldest surviving snapshot — gaps of 0, 1,
+  24 and 547 days. The 547-day gap is the point: everything before 2026-07-25 was
+  pruned away, and the dataset creation fact is still there.
+  So for a requested T:
+    creation(backup_ds) >  T                      -> not present in this backup at T
+    creation(backup_ds) <= T, oldest snap >  T    -> present and backed up, but the
+                                                     qualifying snapshots were pruned
+    creation(backup_ds) <= T, oldest snap <= T    -> a qualifying snapshot exists
+  Three cases, three distinguishable answers, no durable inventory.
+  Two honest limits. First, this is a fact about THIS BACKUP, not about the source:
+  it answers "what could this backup have offered at T", which is the only question
+  restore can honestly answer anyway. Second, a destroy-and-reseed (an explicit
+  `-f` full resend) resets `creation`, so it is a LOWER BOUND on presence, not
+  proof of absence — a reseeded dataset would wrongly read as "not present before".
+  If that second limit is unacceptable for whole-tree historical restore, then a
+  catalog earns its place; I would not build one before it does.
+needs-formal-answer: no
