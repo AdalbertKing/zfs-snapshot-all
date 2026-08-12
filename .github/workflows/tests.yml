@@ -48,6 +48,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # REV-20260812-115 F1. This job is the ONLY one that needs history.
+          # `--verify` runs reviewctl, which deliberately checks that every
+          # commit-bearing review/delivery header names a SHA that exists and is
+          # reachable from the published branch -- the REV-067 property that keeps
+          # an orphan or never-pushed SHA from passing as evidence. actions/checkout
+          # defaults to fetch-depth 1, so in CI those historical commits were simply
+          # absent and every one of REV-065..114 reported "not a commit in this
+          # repository". The gate was therefore measuring checkout depth, not the
+          # repository, and its permanent red masked any real drift it might later
+          # catch. Fetch the history instead of weakening the check.
+          fetch-depth: 0
       # --verify is the anti-drift assertion: every tracked shell file must be
       # declared in test/deps.conf, every declared suite must exist and be
       # executable, contract membership must be symmetric. An unregistered new
