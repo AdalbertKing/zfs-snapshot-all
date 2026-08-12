@@ -494,7 +494,8 @@ printf '%s' "$out" | grep -qi 'NIC nie zainstalowano' \
 # ---- happy path: seed BEFORE install, and the order is the contract ----------
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
 out="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --config="$CFG")"
-{ [ "$(wc -l < "$CFG")" -gt 2 ] && grep -q "host_label = testhost" "$CFG"; } \n    && ok "slice2: a successful run installs the config and preserves the pre-existing block" \
+{ [ "$(wc -l < "$CFG")" -gt 2 ] && grep -q "host_label = testhost" "$CFG"; } \
+    && ok "slice2: a successful run installs the config and preserves the pre-existing block" \
               || bad "slice2: a successful run installs the config and preserves the pre-existing block" "$(printf '%s' "$out" | tail -3)"
 # THE ordering property: seed must be established before any cron becomes
 # eligible. A run that installed first and seeded after would still produce both
