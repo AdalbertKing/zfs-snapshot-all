@@ -432,7 +432,21 @@ fi
 # the real-ZFS proof cover. $SNAPSEND is an absolute path, so it is overridden
 # in the environment rather than through PATH.
 # ==============================================================================
-mkdir -p "$WORK/seedbin"
+mkdir -p "$WORK/seedbin" "$WORK/bin2"
+# The shared crontab stub returns a managed block containing a foreign job line.
+# The pre-install guard correctly refuses to delete it -- right behaviour, wrong
+# fixture for exercising the install itself. These runs get a stub whose managed
+# block still CLAIMS the config (so the claim and consistency guards are really
+# exercised) but describes no job the new config would drop.
+cat > "$WORK/bin2/crontab" <<EOF
+#!/bin/sh
+case " \$* " in
+  *" -l "*) printf '# BEGIN zfs-backup-managed\n# Source: %s/claimed.conf -- do not edit\n# END zfs-backup-managed\n' "$WORK" ;;
+  *) echo "WRITE \$*" >> "$WORK/crontab-writes"; echo INSTALL >> "$WORK/order" ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/bin2/crontab"
 cat > "$WORK/seedbin/snapsend-ok" <<EOF
 #!/bin/sh
 echo "SEED \$*" >> "$WORK/seed-calls"
@@ -450,7 +464,7 @@ chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
 
 runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
-    ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+    ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
       SNAPSEND="$WORK/seedbin/$stub" \
       cmd_local_backup "$@" ) <<< "$answer" 2>&1
 }
@@ -516,7 +530,9 @@ grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
 # ---- multi-root: one seed per source, still one install ----------------------
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes"; seed_cfg
 out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --target=hdd/backups --config="$CFG")"
-{ [ "$(grep -c SEED "$WORK/seed-calls" 2>/dev/null || echo 0)" -eq 2 ] && [ "$(grep -c INSTALL "$WORK/order" 2>/dev/null || echo 0)" -ge 1 ]; } \
+# `grep -c` prints 0 AND exits 1 on no match, so an `|| echo 0` fallback appends
+# a SECOND zero and the arithmetic test dies on "0\n0". Count the lines instead.
+{ [ "$({ grep -c SEED "$WORK/seed-calls" 2>/dev/null; true; } | head -1)" = 2 ] && grep -q INSTALL "$WORK/order" 2>/dev/null; } \
     && ok "slice2: two sources seed twice and install once" \
     || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
