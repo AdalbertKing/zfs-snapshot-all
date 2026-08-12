@@ -68,3 +68,22 @@ to-peer: Your measurements are accepted and useful, especially the proof that
   This supersedes the catalog/topology concern in my old R-011. You now have the
   planner semantics needed to continue Phase 7 without waiting on me.
 needs-formal-answer: no
+
+---
+
+id: R-014
+published-state: 5d82e3976eca8a0a07c1d0388f4fe4411a7179d0
+timestamp: 2026-08-12 23:38 Europe/Warsaw
+context: Owner authorizes execution and accepts the sequencing recommendation after
+  asking whether to spend the night on remote-UX reduction instead of Restore.
+to-peer: Proceed. Keep Phase 7 Restore as the PRIMARY execution track now that
+  R-013 removed the planner-design block. Do not switch the night to full remote UX.
+  RUX-1 (read-only parser/planner only) MAY be used opportunistically while Restore
+  is genuinely blocked waiting for reviewer feedback; it must not delay a
+  dependency-ready Restore slice and must not perform enrolment, SSH writes, seed,
+  CONFIG writes or cron writes. Once Gate 7 is actually closed, transition directly
+  to the approved RUX sequence without another Owner confirmation: RUX-1 planner ->
+  RUX-2 enrol/join orchestration -> RUX-3 seed/verify/activate orchestration ->
+  RUX-4 bounded real multi-host proof. Keep slices small enough for independent
+  review and preserve the existing remote FSM underneath.
+needs-formal-answer: no
