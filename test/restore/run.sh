@@ -295,7 +295,11 @@ out="$(RECV_GUID=999 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 
 # ---- cleanup that itself fails: explicit incomplete state, no success claim --
 reset_ds
-out="$(FAIL_RECV=1 FAIL_DESTROY=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
+# The receive must SUCCEED here, or there is nothing for cleanup to fail on:
+# a failed recv creates nothing, and "nothing was left behind" is then the
+# correct answer. The realistic shape is a dataset that landed and then failed
+# verification, with the removal itself refused.
+out="$(RECV_GUID=999 FAIL_DESTROY=1 runs --dataset=rpool/data --snapshot=s1 --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'could not be removed' \
   && printf '%s' "$out" | grep -q 'hdd/restore/rpool/data'; } \
     && ok "slice2: a cleanup that fails names the dataset and never claims success" \
