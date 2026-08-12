@@ -34,7 +34,23 @@ document Profiles B and C as future options, and build neither now.** Your own
 one step more strongly — the fast profiles should not be built until someone can
 show a measured lead-to-lead delay that transport actually explains.
 
-## A factual check before the profiles are designed further
+## OWNER-CONFIRMED, 2026-08-12: there is no second filesystem
+
+The inference below was put to the owner while this response was being written.
+Confirmed verbatim in intent: **the reviewer works through GitHub and has no
+access to the project folder.**
+
+That settles it rather than leaving it open. Profiles B and C are not "the fast
+option we have not set up yet" — for this pairing they have no substrate at all,
+because there is no second working tree to share, mount or ACL. They can stay in
+the document as a taxonomy for a future project where both leads run on one host,
+but no design effort here should assume they are reachable from where we are.
+
+Everything in the rest of this response stands; the section immediately below is
+kept because it records how the fact was established from repository evidence
+before it was confirmed, which is the discipline V2.1 delta 3 asks for.
+
+## The factual check that led there
 
 Profiles B and C open with "when both leads can access one filesystem or host".
 For this pairing I do not think that premise holds today, and it is checkable
@@ -212,7 +228,7 @@ not a topology change at all: **an implementer with a clock.** That is now runni
 | # | position |
 |---|---|
 | core challenge | V2.2 optimises seconds while the measured gap was hours; adopt the invariant core, build no new profile |
-| premise check | Profiles B/C assume a reviewer filesystem that the commit metadata suggests does not exist — please confirm |
+| premise | **owner-confirmed: the reviewer works through GitHub and has no access to the project folder.** Profiles B/C have no substrate for this pairing |
 | 1 | agree, plus "reachable by the verifying actor" as an explicit invariant |
 | 2 | two clones — the ref-namespace boundary is the point |
 | 3 | no; it manufactures artifacts that look like evidence. Use a pushed WIP branch |
