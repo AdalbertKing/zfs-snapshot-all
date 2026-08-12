@@ -1,7 +1,7 @@
-# REVIEW PROTOCOL V2.1
+# REVIEW PROTOCOL V2.2
 ## Claude + Reviewer + Owner workflow
 
-Status: **ACTIVE — V2.1 agreed and in use**
+Status: **ACTIVE — V2.2 agreed and in use**
 
 Revision date: 2026-08-12
 Original V2 agreement: 2026-08-07
@@ -14,9 +14,11 @@ This document consolidates:
 - operational lessons collected through 2026-08-12;
 - the Reviewer V2.1 proposal (`de3315b`);
 - Claude's V2.1 response (`71147eb`), which accepted all nine proposed deltas, five with amendments and none rejected;
-- the Reviewer's independent verification of the evidence behind those amendments.
+- the Reviewer's independent verification of the evidence behind those amendments;
+- the Reviewer V2.2 transport-profile proposal (`92af86c`);
+- Claude's V2.2 response (`0b25373`), Reviewer synthesis (`8953d86`) and Claude concurrence (`b2aecee`).
 
-Where the V2.1 operational amendments below are more specific than earlier V2 wording, V2.1 controls. The four-state review FSM and role ownership of review/response/closure artifacts are unchanged.
+Where the V2.1 operational amendments or V2.2 transport/workspace rules below are more specific than earlier V2 wording, the newer rule controls. The four-state review FSM and role ownership of review/response/closure artifacts are unchanged.
 
 ## Resolution of Claude's original V2 amendments
 
@@ -77,7 +79,8 @@ The protocol shall guarantee:
 - minimal process overhead;
 - work release without requiring the Owner to relay messages between leads;
 - impact-driven evidence rather than ritual full-suite execution;
-- continued progress on dependency-independent work when one thread is blocked.
+- continued progress on dependency-independent work when one thread is blocked;
+- transport-independent semantics so the same review protocol can run over GitHub, shared Git or a controlled shared workspace without redefining the lifecycle.
 
 ---
 
@@ -710,6 +713,126 @@ Choosing or changing the external execution/scheduling topology is an infrastruc
 
 ---
 
+# V2.2 transport/workspace profiles
+
+V2.2 separates **protocol semantics** from the **transport/workspace profile** used by the two leads. The profile changes how an exact Git checkpoint is published and reached; it does not change roles, the REV FSM, artifact ownership, ledger semantics, evidence quality or Owner gates.
+
+A project declares one **active profile**. Other documented profiles are capabilities, not implicit fallbacks. Profile selection is configuration, not a workflow state.
+
+## Transport-independent publication invariants
+
+Every profile must satisfy all of these:
+
+1. Durable workflow evidence is Git history. Loose or uncommitted peer files are never sufficient review/submission evidence.
+2. Exactly one canonical published project state/ref is named by the active profile.
+3. A submitted/reviewed SHA must be exact **and reachable by the actor who must verify it** from that profile's published vantage point.
+4. Single-writer role ownership remains unchanged.
+5. Published routing releases work exactly as in Principle 7.
+6. Transport may expose extra WIP visibility, but WIP is advisory until a canonical artifact names a reachable SHA.
+7. No profile creates a second hand-maintained inbox, ledger or routing table.
+8. Canonical publication is compare-and-swap against the published state the actor actually verified. If the ref moved, refresh and re-evaluate before publishing.
+9. A commit containing generated output such as `REVIEW_LEDGER.md` or `OPEN-THREADS.md` is **not replayed/rebased/merged forward as derived state** after losing a publication race. Integrate the peer's new canonical facts first, regenerate derived output from those facts, then commit the regenerated result.
+
+The last rule follows from an observed V2 failure mode: Git can correctly replay a stale generated file even though the underlying facts changed. Generated output has no independent truth; its correct value is the value regenerated from current canonical facts.
+
+## Profile health-check contract
+
+The protocol core asks only:
+
+1. can the actor read the exact canonical published state?
+2. can the actor perform its authorised publication action?
+3. can the actor read back/resolve the result to the expected exact SHA?
+
+The concrete probe is profile-specific.
+
+## Profile A — GitHub published state
+
+**Active for the current `zfs-snapshot-all` project.**
+
+```text
+transport-profile: github-published
+published-ref: GitHub main
+reviewer-filesystem-access: none
+```
+
+GitHub `main` is the canonical published state and transport. Fresh GitHub read plus the safe reviewer write/read-back probe remain Profile-A health checks. The current Owner-approved direct-main exception remains unchanged.
+
+GitHub is not being removed or downgraded in this project.
+
+### Profile A′ — optional role-branch fast lane
+
+A′ is an optional feature of Profile A, not a separate lifecycle/profile state:
+
+```text
+refs/heads/claude/*     Claude WIP publication
+refs/heads/reviewer/*   Reviewer WIP publication
+main                    canonical published state
+```
+
+Role branches may be used when a long-running thread benefits from early durable peer visibility without advancing `main`. They are not mandatory.
+
+**A role branch is never a submission.** Its existence, freshness or latest commit does not route work. A submission/review boundary exists only when the canonical role-owned artifact/ledger names the exact reachable SHA required by the protocol.
+
+This prevents branch WIP from becoming a second informal communication channel.
+
+## Profile B — shared Git + separate actor clones
+
+Supported for environments where both leads can access a common Git remote/filesystem/host. **Unavailable in the current pairing while the Reviewer operates through the GitHub API without project-filesystem access.**
+
+Preferred topology:
+
+```text
+             shared bare Git remote
+             /                  \
+      Claude clone          Reviewer clone
+          RW own               RW own
+             \                  /
+              canonical published ref
+                        |
+                 optional GitHub mirror
+```
+
+Use **two independent clones**, not one shared working tree. Separate clones preserve independent ref/worktree boundaries and make publication an explicit Git operation.
+
+The profile must name one canonical published ref (for example `main` or `published`). Non-forced publication protects the canonical ref from stale-parent overwrite; after a rejection the actor refreshes and re-evaluates before retrying.
+
+GitHub may remain a synchronous or gated mirror for off-site recovery, CI, audit or release integration according to the role assigned to that mirror. Mirror policy does not change review semantics.
+
+## Profile C — shared workspace visibility + Git checkpoints
+
+Supported only where both leads genuinely have filesystem access. **Unavailable in the current pairing for the same reason as Profile B.**
+
+If enabled, each actor writes only its own area and the peer may receive read-only visibility:
+
+```text
+                     Claude    Reviewer
+Claude workspace       RW         R
+Reviewer workspace      R        RW
+```
+
+Filesystem ACLs are defense-in-depth for the existing single-writer rule; they do not replace Git publication/ref safety.
+
+Peer working-tree visibility is **never evidence** and should not be enabled merely because it is technically possible. Prefer a WIP commit/role branch when early visibility can be expressed durably. If a project nevertheless enables shared-workspace visibility for measured latency/inspection value, all verdicts and submissions still cross the reachable-commit boundary.
+
+## Profile migration
+
+Changing profile must preserve history and protocol semantics:
+
+```text
+freeze/record old published SHA
+        -> establish new transport
+        -> prove the same Git object graph / exact SHA is reachable there
+        -> prove role publication/read boundaries
+        -> declare the new active profile
+        -> continue the existing ledger lifecycle
+```
+
+No REV state migration is required merely because transport changes.
+
+Profile B/C remain documented even when unavailable to the current actors; `unavailable here` is not the same as `invalid`. The active-profile declaration prevents an unavailable profile from being assumed silently.
+
+---
+
 # Migration from legacy workflow
 
 V2 cutover is complete for the active review lifecycle. Legacy artifacts remain historical and are not renamed merely for aesthetics.
@@ -718,7 +841,7 @@ The migration rules retained for historical repair are:
 
 1. Inventory existing REV, response and closure artifacts.
 2. Detect duplicate IDs and descriptive-suffix duplicates.
-3. Parse legacy state only in a migration tool; production V2/V2.1 generator never guesses legacy prose.
+3. Parse legacy state only in a migration tool; production V2/V2.1/V2.2 generator never guesses legacy prose.
 4. Resolve ambiguous legacy mappings explicitly.
 5. Generate state from canonicalized facts.
 6. Freeze legacy filenames.
@@ -762,9 +885,12 @@ DEFERRED / withdrawn / accepted-risk          -> CLOSED + resolution metadata
 | routed in-scope work waits only for a new Owner message | PROCESS DEFECT |
 | unrelated dependency-ready work freezes because one thread is parked | PROCESS DEFECT |
 | relevant unselected regression exposes missing dependency mapping | GRAPH DEFECT |
+| submitted SHA is not reachable by the verifying actor under the active profile | FAIL |
+| role/WIP branch is treated as submission without canonical artifact routing | PROCESS DEFECT |
+| generated workflow output is replayed after peer facts changed instead of regenerated | PROCESS DEFECT |
 
 Negative controls must include at least one real state accepted by the old
-mechanism and rejected by V2/V2.1.
+mechanism and rejected by V2/V2.1/V2.2.
 
 ---
 
@@ -781,18 +907,19 @@ The protocol eliminates or bounds:
 - unnecessary token consumption;
 - Owner-as-message-router latency;
 - ritual full-suite execution for narrow changes;
-- idle dependency-independent work while one thread is blocked.
+- idle dependency-independent work while one thread is blocked;
+- hard-coding GitHub-specific transport behavior into the universal review semantics.
 
 The normal loop becomes:
 
 ```text
-./test/impact.sh --verify
+verify active-profile published state + ./test/impact.sh --verify
     -> read generated REVIEW_LEDGER
     -> act on work routed to your role without waiting for a new Owner message
     -> if blocked, record why and continue dependency-independent work
     -> update exactly one role-owned durable artifact
     -> regenerate REVIEW_LEDGER + OPEN-THREADS
-    -> ./test/impact.sh --verify
+    -> publish through the active profile and verify exact reachable SHA
 ```
 
-Claude, Reviewer and Owner then cooperate from deterministic repository facts and measured evidence, not from chat memory or model claims.
+Claude, Reviewer and Owner then cooperate from deterministic repository facts and measured evidence, not from chat memory, model claims or a transport-specific assumption.
