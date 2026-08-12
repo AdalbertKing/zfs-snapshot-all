@@ -556,6 +556,73 @@ usage_txt="$(usage 2>&1)"
 # would pass the assertion above and still mislead.
 printf '%s' "$usage_txt" | grep -qi 'plan/preview only'     && bad "112 F1: Usage no longer claims the command is plan/preview only" "still says plan/preview only"     || ok "112 F1: Usage no longer claims the command is plan/preview only"
 
+# ==============================================================================
+# Slice 3 -- target discovery when --target is omitted.
+#
+# Two provenances with deliberately different power: a target recorded in
+# server.conf is an operator decision and behaves like one they typed; a target
+# guessed from the pool layout may be proposed and shown, but never installed
+# with nobody looking.
+# ==============================================================================
+cat > "$WORK/bin2/zpool" <<'EOF'
+#!/bin/sh
+# candidate pools are whatever POOLS says; default is one non-rpool pool
+printf '%s\n' ${POOLS:-rpool hdd}
+EOF
+chmod +x "$WORK/bin2/zpool"
+cp "$WORK/bin/zfs" "$WORK/bin2/zfs" 2>/dev/null || :
+
+rund() {   # <server.conf or -> <POOLS> args... ; discovery runs, no install
+    local sc="$1" pools="$2"; shift 2
+    ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$sc" POOLS="$pools" \
+      PROFILE_ROOT="$REPO/profiles" cmd_local_backup "$@" ) 2>&1
+}
+
+printf 'DEFAULT_TARGET=hdd/store\nCRON_CONFIG=%s/d.conf\n' "$WORK" > "$WORK/server.conf"
+
+# ---- provenance: default (server.conf) ----
+out="$(rund "$WORK/server.conf" "rpool hdd" --source=rpool/data --config="$WORK/d1.conf")"
+{ printf '%s' "$out" | grep -q 'configured default' && printf '%s\n' "$out" | grep -q 'hdd/store'; } \
+    && ok "slice3: an omitted --target uses server.conf's DEFAULT_TARGET and says so" \
+    || bad "slice3: an omitted --target uses server.conf's DEFAULT_TARGET and says so" "$(printf '%s' "$out"|head -3)"
+
+# ---- provenance: heuristic (one candidate pool) ----
+out="$(rund "$WORK/none.conf" "rpool hdd" --source=rpool/data --config="$WORK/d2.conf")"
+{ printf '%s' "$out" | grep -q 'PROPOSING' && printf '%s' "$out" | grep -q 'hdd/backups'; } \
+    && ok "slice3: with no default, one candidate pool is PROPOSED and labelled a guess" \
+    || bad "slice3: with no default, one candidate pool is PROPOSED and labelled a guess" "$(printf '%s' "$out"|head -3)"
+
+# ---- ambiguity refuses, and the refusal must actually STOP the run ----
+# die() inside the helper runs in a command-substitution subshell, so a caller
+# that ignored the status would sail past it with an empty target. This asserts
+# the refusal is terminal, not just printed.
+out="$(rund "$WORK/none.conf" "rpool hdd tank" --source=rpool/data --config="$WORK/d3.conf")"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'multiple candidate pools' \
+  && ! printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; } \
+    && ok "slice3: ambiguous pools refuse terminally -- no plan is produced" \
+    || bad "slice3: ambiguous pools refuse terminally -- no plan is produced" "rc=$rc $(printf '%s' "$out"|head -2)"
+
+# ---- a GUESSED target must not install under --yes ----
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/none.conf" POOLS="rpool hdd" \
+          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
+          cmd_local_backup --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
+{ printf '%s' "$out" | grep -qi 'cannot confirm a target this run GUESSED' && [ ! -e "$WORK/order" ]; } \
+    && ok "slice3: --yes refuses a guessed target and installs nothing" \
+    || bad "slice3: --yes refuses a guessed target and installs nothing" "order=$(cat "$WORK/order" 2>/dev/null)"
+
+# ---- discriminating control: the block keys on PROVENANCE, not on omission ----
+# Same omitted --target, same --yes -- only the provenance differs. A guard that
+# simply refused "--yes when --target was omitted" would fail this.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+printf 'DEFAULT_TARGET=hdd/backups\n' > "$WORK/server2.conf"
+out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/server2.conf" POOLS="rpool hdd" \
+          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
+          cmd_local_backup --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
+{ [ "$(tr -d ' \n' < "$WORK/order" 2>/dev/null)" = "SEEDINSTALL" ]; } \
+    && ok "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" \
+    || bad "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" "order=[$(tr '\n' ',' < "$WORK/order" 2>/dev/null)] $(printf '%s' "$out"|tail -2)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
