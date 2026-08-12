@@ -77,10 +77,14 @@ mkcfg() {   # <file> <body...>
 cfg="$WORK/basic.conf"
 mkcfg "$cfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n'
 
+# Slice 2 changed this message on purpose: the verb now also does a safe restore,
+# so bare `restore` points at BOTH ways in. What must not change is that it never
+# silently defaults to doing something -- it refuses and makes the planner
+# discoverable.
 out="$(run "$cfg")"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'only --plan is implemented'; } \
-    && ok "restore without --plan refuses and names the later verb" \
-    || bad "restore without --plan refuses and names the later verb" "rc=$rc"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--plan'; } \
+    && ok "bare restore refuses and points at --plan rather than doing something" \
+    || bad "bare restore refuses and points at --plan rather than doing something" "rc=$rc"
 
 out="$(run "$cfg" --plan --bogus)"; rc=$?
 [ "$rc" -ne 0 ] && ok "an unknown option refuses" || bad "an unknown option refuses" "rc=$rc"
