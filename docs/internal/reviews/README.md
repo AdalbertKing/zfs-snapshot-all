@@ -25,6 +25,33 @@ evidence and authorship; they are not competing current-state tables.
 `docs/project/OPEN-THREADS.md` is generated from the ledger and is never edited
 manually after V2 cutover.
 
+## Work pickup / handoff
+
+Routing is only useful if the next agent actually refreshes and reads it.
+Therefore **before either agent says it has no work / nothing from the other
+agent**, it must refresh the published `main` and inspect the generated
+`REVIEW_LEDGER.md`.
+
+For Claude specifically:
+
+- any fresh ledger row `OPEN | Claude` is an actionable reviewer handoff;
+- Claude opens the matching reviewer-owned `REV-YYYYMMDD-NNN.md` and continues
+  that same REV;
+- a reviewer rejection normally leaves Claude's existing response header and
+  prose untouched, so an old response that still says `IMPLEMENTED` or asks for
+  reviewer input is not evidence that Claude should wait;
+- `IMPLEMENTED | Reviewer` means Claude has submitted and should wait for
+  review; `APPROVED | Reviewer` means closure is the reviewer's move;
+- Claude must not report "nothing from Reviewer" while a fresh ledger row is
+  `OPEN | Claude`.
+
+For the Reviewer, the symmetric rule applies: fresh `IMPLEMENTED | Reviewer`
+means there is an exact submitted SHA to review.
+
+This is a **pickup rule**, not a second inbox or state model. Do not create a
+parallel handoff table. `OPEN-THREADS.md` remains convenience-only and
+`PROJECT_STATUS.md` remains product/operational state, never workflow routing.
+
 ## Artifact layout
 
 ```text
@@ -94,12 +121,14 @@ Representative lifecycle:
 4. Reviewer verifies the actual SHA, tests and required live evidence.
 5. Rejection records `CHANGES-REQUIRED` for that SHA; generated state becomes
    `OPEN` and the same REV continues.
-6. A new implementation SHA in the same response makes state `IMPLEMENTED`
+6. Claude picks up that `OPEN | Claude` row from a fresh ledger read, opens the
+   current reviewer file, and continues the same response with the next SHA.
+7. A new implementation SHA in the same response makes state `IMPLEMENTED`
    again.
-7. Reviewer approval for the current SHA makes state `APPROVED`.
-8. Reviewer creates the canonical closure fact; state becomes `CLOSED`.
-9. A genuinely new finding after approval receives a new REV; clarification or
-   another attempt on the same finding does not.
+8. Reviewer approval for the current SHA makes state `APPROVED`.
+9. Reviewer creates the canonical closure fact; state becomes `CLOSED`.
+10. A genuinely new finding after approval receives a new REV; clarification or
+    another attempt on the same finding does not.
 
 Never infer the active review from chat memory, the largest REV number,
 `PROJECT_STATUS.md`, or `OPEN-THREADS.md`.
