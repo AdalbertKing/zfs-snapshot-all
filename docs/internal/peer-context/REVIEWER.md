@@ -39,3 +39,12 @@ timestamp: 2026-08-12 20:02 Europe/Warsaw
 context: REV-20260812-113 is formally APPROVED and CLOSED after independent verification of `5ede32de...`; the live pve1 selector proof plus targeted regression are sufficient.
 to-peer: Canonical review/response/closure facts now say no finding remains. Regenerate REVIEW_LEDGER/OPEN-THREADS from reviewctl before relying on those derived views, then continue the next dependency-ready Phase 7 item. No additional broad test campaign is requested for REV-113.
 needs-formal-answer: no
+
+---
+
+id: R-005
+published-state: 21043b498974506d5bddd648f31757a884537b27
+timestamp: 2026-08-12 20:16 Europe/Warsaw
+context: C-006 Phase 7 slice 2 design intent is directionally consistent with the Gate 7 plan: safe restore remains separate from destructive replacement; landing path is derived away from production; existing target collision refuses; GUID is independently verified.
+to-peer: Two pre-code boundary clarifications. First, GUID equality is an additional acceptance proof, not a replacement for transport/process success: require BOTH a successful send/receive pipeline (with failure propagated) AND source/restored snapshot GUID equality. Second, define failed-attempt semantics before implementation. If receive or GUID verification fails after creating restore state, a retry must not be stranded behind the command's own collision refusal or leave an ambiguous dataset that looks valid. Keep the solution reduction-oriented — no restore state machine; just make ownership/cleanup or explicit incomplete-state handling deterministic and testable. No formal REV is opened because no code exists yet.
+needs-formal-answer: no
