@@ -461,8 +461,10 @@ check_inherited_grants() {
 
 # REV-20260811-102 step 3 (owner "Q4"): before a collector-scheduled REMOTE source
 # prune is installed, verify -- FAIL CLOSED -- that the relationship's already
-# delegated identity holds exactly the `destroy` capability delsnaps.sh's plain
-# `zfs destroy <snap>` needs on each source dataset. Re-derived from the command
+# delegated identity holds the capabilities managed source retention depends on:
+# `destroy`, which delsnaps.sh's plain `zfs destroy <snap>` needs on each source
+# dataset, and (REV-20260812-111) `bookmark`, without which the continuity anchor
+# that survives retention cannot be written. Re-derived from the command
 # path, not a remembered grant: deploy.sh do_commit_scope already delegates
 # `destroy` (ZFS_PERMS), so this WIDENS NOTHING -- it only refuses to install a
 # remote prune whose authorization cannot be confirmed, rather than shipping an
@@ -482,6 +484,24 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
         # is bounded by commas/space so grep -w matches it inside snapshot,destroy,send.
         if ! printf '%s\n' "$out" | grep -F -- "$account" | grep -qw destroy; then
             die "source-prune grant check FAILED CLOSED: the delegated identity '$account' does not hold 'destroy' on the source '$ds' (needed by delsnaps.sh's zfs destroy). The pairing already grants destroy via deploy.sh --commit-scope; re-run --commit-scope on $host if it is missing. Refusing to install a source-prune job that would fail every run -- and NOT widening the grant here."
+        fi
+        # REV-20260812-111 A: the SECOND capability managed source retention
+        # depends on, checked on the SAME `zfs allow` output -- no extra round
+        # trip. Once retention ages out the ordinary common snapshot, the only
+        # thing that still anchors an incremental is the per-target bookmark
+        # record_send_bookmark() refreshes after every non-recursive transfer.
+        # That refresh is deliberately best-effort: measured live 2026-08-12 on
+        # a source delegated everything EXCEPT `bookmark`, the transfer logged
+        # "cannot create bookmark ...: permission denied" plus a non-fatal
+        # warning and still returned 0. So the relationship activates looking
+        # healthy, carries no insurance, and stops permanently the first time
+        # the common base is lost -- the failure REV-102's campaign exposed and
+        # REV-111 exists to prevent at activation time instead of at 03:00.
+        # Same discipline as `destroy` above: deploy.sh --commit-scope already
+        # delegates `bookmark` (ZFS_PERMS / do_commit_scope), so this VERIFIES
+        # and never widens.
+        if ! printf '%s\n' "$out" | grep -F -- "$account" | grep -qw bookmark; then
+            die "source-prune grant check FAILED CLOSED: the delegated identity '$account' holds 'destroy' but NOT 'bookmark' on the source '$ds'. Managed source retention will eventually age out the ordinary common snapshot, and the bookmark that would still anchor the next incremental cannot be created -- the transfer keeps exiting 0 while carrying no continuity insurance, then refuses permanently once the common base is gone. deploy.sh --commit-scope already grants bookmark; re-run --commit-scope on $host if it is missing. Refusing to install source retention on a relationship whose continuity cannot be maintained -- and NOT widening the grant here."
         fi
     done
 }

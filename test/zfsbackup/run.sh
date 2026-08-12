@@ -5405,6 +5405,10 @@ cat > "$SPG/bin/ssh" <<'EOF'
 case "$*" in
   *"tank/ok"*)        printf '%b' '---- Permissions on tank/ok ----\nLocal+Descendent permissions:\n\tuser zfsbackup snapshot,destroy,send,hold,release,bookmark\n' ;;
   *"tank/nodestroy"*) printf '%b' '---- Permissions on tank/nodestroy ----\nLocal+Descendent permissions:\n\tuser zfsbackup snapshot,send,hold,release\n' ;;
+  # REV-20260812-111 A: everything the source prune itself needs, but no
+  # `bookmark` -- the shape deploy.sh warns about and the shape measured live
+  # on 2026-08-12, where the transfer still exits 0 and only warns.
+  *"tank/nobookmark"*) printf '%b' '---- Permissions on tank/nobookmark ----\nLocal+Descendent permissions:\n\tuser zfsbackup snapshot,destroy,send,hold,release\n' ;;
   *"tank/sshfail"*)   exit 255 ;;
   *) : ;;
 esac
@@ -5420,6 +5424,25 @@ msg="$( ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22
 { printf '%s' "$msg" | grep -qi "does not hold 'destroy'" && ! printf '%s' "$msg" | grep -qiw 'mount'; } \
     && ok "55 the refusal names destroy and proposes no mount/widening" \
     || bad "55 the refusal names destroy and proposes no mount/widening" "$(printf '%s' "$msg"|tail -1)"
+
+# REV-20260812-111 A: `destroy` alone is not enough. A source the identity can
+# prune but cannot bookmark activates looking healthy and carries no continuity
+# insurance -- refuse at activation, not at 03:00 on the night the common base
+# ages out. Discriminating pair: the ONLY difference between tank/ok and
+# tank/nobookmark is the bookmark permission, so a check that ignored it would
+# pass both.
+spg tank/nobookmark && bad "55 REV-111: destroy without bookmark FAILS CLOSED" "returned 0" \
+                    || ok "55 REV-111: destroy without bookmark FAILS CLOSED"
+spg tank/ok         && ok "55 REV-111: the same source WITH bookmark still passes (control)" \
+                    || bad "55 REV-111: the same source WITH bookmark still passes (control)" ""
+spg tank/ok tank/nobookmark && bad "55 REV-111: one un-bookmarkable source among many FAILS CLOSED" "" \
+                            || ok "55 REV-111: one un-bookmarkable source among many FAILS CLOSED"
+msg="$( ( PATH="$SPG/bin:$PATH"; assert_source_prune_grant zfsbackup 10.0.0.9 22 /dev/null zfs-client-x /dev/null tank/nobookmark ) 2>&1 )"
+{ printf '%s' "$msg" | grep -qi "NOT 'bookmark'" \
+  && printf '%s' "$msg" | grep -qi 'commit-scope' \
+  && ! printf '%s' "$msg" | grep -qi 'zfs allow -u'; } \
+    && ok "55 REV-111: the refusal names bookmark, points at --commit-scope, widens nothing" \
+    || bad "55 REV-111: the refusal names bookmark, points at --commit-scope, widens nothing" "$(printf '%s' "$msg"|tail -1)"
 
 # --- 56. REV-20260811-102 step 3: REMOTE source prune emission (pull relationship) ---
 #
