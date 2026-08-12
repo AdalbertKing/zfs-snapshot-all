@@ -2930,7 +2930,14 @@ cmd_restore() {
         echo "  Relacja:    ${kind[$i]}"
         echo "  Kopia:      ${copy[$i]}"
         local snaps
-        snaps=$(zfs list -H -p -t snapshot -o name,creation -s creation "${copy[$i]}" 2>/dev/null) || snaps=""
+        # `-d 1` is explicit on purpose (REV-20260812-113 F1). Measured on
+        # zfs-2.1.9-pve1 the default already behaves identically -- it returns this
+        # dataset's own snapshots, does NOT leak a child's, and works with the pool's
+        # `listsnapshots=off` -- so nothing was broken. But that is one ZFS version,
+        # the only one I can measure, and the finding is about depending on a default
+        # at the planner's core lookup. Naming the depth costs nothing and removes the
+        # version-dependence instead of re-measuring it on every upgrade.
+        snaps=$(zfs list -H -p -t snapshot -o name,creation -s creation -d 1 "${copy[$i]}" 2>/dev/null) || snaps=""
         if [ -z "$snaps" ]; then
             echo "  Snapshoty:  BRAK -- ta kopia nie istnieje albo nie ma snapshotow. Nie ma z czego odtwarzac."
             continue

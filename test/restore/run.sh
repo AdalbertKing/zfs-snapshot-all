@@ -36,6 +36,17 @@ case " \$1 " in
   " list ") ;;
   *) echo "stub: refusing non-list zfs call: \$*" >&2; exit 9 ;;
 esac
+# REV-20260812-113 F1: the stub now REQUIRES the explicit depth selector. The
+# permissive version answered any listing shape, which is what let an unproven
+# selector reach a live host in the first place. Drop \`-d 1\` from the planner and
+# every snapshot assertion below goes red instead of silently passing.
+case " \$* " in
+  *" -t snapshot "*)
+      case " \$* " in
+        *" -d 1 "*) ;;
+        *) echo "stub: snapshot listing without an explicit depth selector: \$*" >&2; exit 1 ;;
+      esac ;;
+esac
 for a in "\$@"; do ds="\$a"; done
 key=\$(printf '%s' "\$ds" | tr '/' '_')
 if [ -f "$WORK/snaps.\$key" ]; then cat "$WORK/snaps.\$key"; exit 0; fi
