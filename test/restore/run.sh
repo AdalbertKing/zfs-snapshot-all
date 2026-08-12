@@ -235,7 +235,12 @@ chmod +x "$WORK/bin2/zfs"
 scfg="$WORK/safe.conf"
 mkcfg "$scfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n'
 reset_ds() {
-    printf 'hdd/store/rpool/data\nhdd/store/rpool/data@s1\n' > "$WORK/ds"
+    # The POOL exists, as it does on any real host. Leaving it out of the fixture
+    # is what surfaced the cleanup-root walk marching all the way up to the pool
+    # name -- a latent hazard the live host could never have shown, because there
+    # the walk stops at the first existing ancestor. The product now clamps that
+    # root to the restore namespace; the fixture models reality again.
+    printf 'hdd\nhdd/store/rpool/data\nhdd/store/rpool/data@s1\n' > "$WORK/ds"
     printf '111' > "$WORK/guid.hdd_store_rpool_data_s1"
     rm -f "$WORK/zfs-calls2"
 }
