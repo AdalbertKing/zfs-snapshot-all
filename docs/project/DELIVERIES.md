@@ -35,3 +35,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: 70cd1ab5b78782382533ab38e2ac9f919203c8bd Phase 7 slice 1: restore --plan read-only planner -- real ZFS 'creation' never the snapshot name, copy paths derived from installed CONFIG, no restore verb and no ZFS write; new test/restore suite 13/13, localbackup 57/57, zfsbackup 401/401 -->
 <!-- reviewed-by: 70cd1ab5b78782382533ab38e2ac9f919203c8bd REV-20260812-113 -->
 <!-- delivered: 6f2dbffa0c954660f975253bdd771e155d3098b5 Phase 7 slice 2: SAFE restore into a derived restore namespace -- BOTH pipeline success and guid equality required, collision refuses before creating anything, the run destroys only what it created, cleanup root clamped to the restore namespace; restore 23/23, localbackup 57/57, zfsbackup 401/401, live end-to-end on pve1 with the guid confirmed outside the tool -->
+<!-- reviewed-by: 6f2dbffa0c954660f975253bdd771e155d3098b5 REV-20260812-114 -->
