@@ -77,15 +77,23 @@ jobs:
         suite: [gencron, impact, quiesce, tune, statekey, join, selfupdate]
     steps:
       - uses: actions/checkout@v4
-        with:
-          # REV-20260812-115 F1, second instance of the same defect. The `impact`
-          # suite asserts "the REAL deps.conf is consistent with the REAL tree" by
-          # running impact.sh --verify, which reaches reviewctl's reachability
-          # check -- so it fails on a shallow checkout for exactly the reason the
-          # graph job did. Measured, not assumed: 58/58 with full history, and the
-          # CI log fails on that one assertion. Only this leg of the matrix gets
-          # history; the other six do not need it and are left at the default.
-          fetch-depth: ${{ matrix.suite == 'impact' && 0 || 1 }}
+      # REV-20260812-115 F1, second instance of the same defect. The `impact` suite
+      # asserts "the REAL deps.conf is consistent with the REAL tree" by running
+      # impact.sh --verify, which reaches reviewctl's reachability check -- so it
+      # fails on a shallow checkout for exactly the reason the graph job did.
+      # Measured: 58/58 with full history, and the CI log fails on that one
+      # assertion out of 58.
+      #
+      # Done as a conditional STEP, not a conditional fetch-depth. The obvious
+      # `fetch-depth: ${{ matrix.suite == 'impact' && 0 || 1 }}` cannot work: in
+      # GitHub expressions `&&`/`||` return an operand, and 0 is FALSY, so
+      # `true && 0` yields 0, `0 || 1` then yields 1, and the impact leg silently
+      # stayed shallow. The CI log said `fetch-depth: 1` on the very run that was
+      # supposed to fix it. Only this suite unshallows; the other six do not
+      # resolve review SHAs and stay at the default.
+      - name: Fetch history (impact resolves durable review SHAs)
+        if: matrix.suite == 'impact'
+        run: git fetch --prune --unshallow
       - name: Run
         run: |
           case "${{ matrix.suite }}" in
