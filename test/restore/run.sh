@@ -118,7 +118,7 @@ out="$(run "$pull" --plan)"
 
 # ---- THE PAIR: creation, never the name --------------------------------------
 # name says 2026-01-01 03:00:00, ZFS creation says 2026-06-15 12:00:00.
-printf 'hdd/store/rpool/data@automated_hourly_2026-01-01_03-00-00\t%s\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
+printf 'hdd/store/rpool/data@automated_hourly_2026-01-01_03-00-00\t%s\t7771\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
 { printf '%s' "$out" | grep -q '2026-06-15 12:00:00' \
@@ -128,7 +128,7 @@ out="$(run "$cfg" --plan)"
 
 # negative control: name and creation agree -> the same code path must stay quiet.
 # Without this, an implementation that flagged every snapshot would pass above.
-printf 'hdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
+printf 'hdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\t7772\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
 { printf '%s' "$out" | grep -q '2026-06-15 12:00:00' \
@@ -137,7 +137,7 @@ out="$(run "$cfg" --plan)"
     || bad "a snapshot whose name agrees with creation is NOT flagged (control)" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
 
 # a snapshot carrying no timestamp in its name at all must not be flagged either.
-printf 'hdd/store/rpool/data@manual-before-upgrade\t%s\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
+printf 'hdd/store/rpool/data@manual-before-upgrade\t%s\t7773\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
     > "$WORK/snaps.hdd_store_rpool_data"
 out="$(run "$cfg" --plan)"
 { printf '%s' "$out" | grep -q 'manual-before-upgrade' && ! printf '%s' "$out" | grep -qi 'UWAGA'; } \
@@ -171,6 +171,64 @@ if [ -f "$WORK/zfs-calls" ] && grep -qv '^list ' "$WORK/zfs-calls" 2>/dev/null; 
 else
     ok "read-only: every zfs call across every plan was a list"
 fi
+
+# ==============================================================================
+# Planner map: guid + consistency (OWNER-RECOVERY-FLAT-ATOMIC-SEMANTICS-2026-08-12)
+#
+# The planner must emit {dataset -> snapshot, guid, creation, consistency}, and
+# consistency must come from the installed CONFIG and from nothing else.
+# ==============================================================================
+printf 'hdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\t991\n' "$(date -d '2026-06-15 12:00:00' +%s)" \
+    > "$WORK/snaps.hdd_store_rpool_data"
+
+out="$(run "$cfg" --plan)"
+printf '%s' "$out" | grep -q 'guid=991' \
+    && ok "planner: the recovery point carries its guid" \
+    || bad "planner: the recovery point carries its guid" "$(printf '%s' "$out"|grep -A2 Snapshoty)"
+
+# ---- consistency comes from CONFIG: flat ------------------------------------
+{ printf '%s' "$out" | grep -qi 'INDEPENDENT' && printf '%s' "$out" | grep -qi 'frontier' \
+  && ! printf '%s' "$out" | grep -qi 'ATOMIC'; } \
+    && ok "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" \
+    || bad "planner: a CONFIG without recursive=atomic reports an INDEPENDENT frontier" "$(printf '%s' "$out"|grep -i spojnosc)"
+
+# ---- consistency comes from CONFIG: atomic ----------------------------------
+acfg="$WORK/atomic.conf"
+mkcfg "$acfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
+out="$(run "$acfg" --plan)"
+{ printf '%s' "$out" | grep -qi 'ATOMIC' && printf '%s' "$out" | grep -qi 'punkt odtworzenia'; } \
+    && ok "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" \
+    || bad "planner: recursive = atomic in CONFIG reports an ATOMIC recovery point" "$(printf '%s' "$out"|grep -i spojnosc)"
+
+# ---- THE MEASURED TRAP, encoded ---------------------------------------------
+# On pve2 two datasets in different subtrees share the snapshot name
+# automated_hourly_2026-08-11_23-37-01 while their creation times differ by one
+# second: one snapsend run names every dataset from a single clock read. A planner
+# that inferred atomicity from matching names would announce a recovery point that
+# never existed. Here two relationships carry the SAME snapshot name under a FLAT
+# CONFIG; the verdict must stay INDEPENDENT for both.
+tcfg="$WORK/twin.conf"
+mkcfg "$tcfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\n[dataset:rpool/db]\n\tdst          = hdd/store\n'
+printf 'hdd/store/rpool/data@automated_hourly_2026-08-11_23-37-01\t1786484223\t111\n' > "$WORK/snaps.hdd_store_rpool_data"
+printf 'hdd/store/rpool/db@automated_hourly_2026-08-11_23-37-01\t1786484222\t222\n'   > "$WORK/snaps.hdd_store_rpool_db"
+out="$(run "$tcfg" --plan)"
+{ [ "$(printf '%s\n' "$out" | grep -ci 'INDEPENDENT')" -eq 2 ] \
+  && ! printf '%s' "$out" | grep -qi 'ATOMIC' \
+  && printf '%s' "$out" | grep -q 'guid=111' && printf '%s' "$out" | grep -q 'guid=222'; } \
+    && ok "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
+    || bad "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
+           "$(printf '%s' "$out"|grep -iE 'spojnosc|guid=')"
+
+# and the same pair under an ATOMIC config must report atomic -- so the verdict is
+# demonstrably keyed on CONFIG, not on the snapshots, which are identical here.
+tacfg="$WORK/twinatomic.conf"
+mkcfg "$tacfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n\n[dataset:rpool/db]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
+out="$(run "$tacfg" --plan)"
+{ [ "$(printf '%s\n' "$out" | grep -ci 'ATOMIC')" -ge 2 ] && ! printf '%s' "$out" | grep -qi 'INDEPENDENT'; } \
+    && ok "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
+    || bad "planner: the SAME snapshots under an atomic CONFIG report atomic (verdict keyed on CONFIG)" \
+           "$(printf '%s' "$out"|grep -i spojnosc)"
+rm -f "$WORK/snaps.hdd_store_rpool_db"
 
 # ==============================================================================
 # Phase 7 slice 2 -- the SAFE restore, after REV-20260812-114.
