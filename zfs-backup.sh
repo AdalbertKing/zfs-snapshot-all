@@ -168,8 +168,10 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh --source=DATASET --target=DATASET [--profile=NAME] [--config=FILE] [--install] [--yes|-y]
+  zfs-backup.sh --source=DATASET [--target=DATASET] [--profile=NAME] [--config=FILE] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
+                                    --target omitted:  proposed (server.conf default, else the pool layout)
+                                                       and shown; a GUESSED target will not install under --yes
                                     without --install: plans and previews, installs nothing
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
@@ -543,6 +545,33 @@ assert_no_atomic_with_source_retention() {   # <configfile> <local dataset path>
         [ "$rec" = atomic ] || continue
         die "source-retention/recursion conflict on '[dataset:$lp]': it declares 'recursive = atomic' (one atomic -r stream for the whole subtree), and this run would install managed SOURCE retention on that relationship. An atomic relationship keeps NO bookmark -- the engines neither record nor consult one under -r -- so once retention ages out the last ordinary common snapshot there is nothing left to anchor an incremental, and the relationship stops permanently until someone performs a destructive re-seed. Refusing to install source retention on it. Resolve it deliberately: either set 'recursive = flat' (per-dataset -R, which does keep bookmark insurance -- but it is a DIFFERENT transfer mode, so change it because you want that mode, not because this message mentioned it), or leave source retention off for this relationship. Nothing was changed."
     done
+}
+
+# Phase 5 slice 3: propose a backup target when the operator did not name one.
+# Extracted verbatim from cmd_setup_server rather than reimplemented -- the two
+# callers must not drift into two different ideas of "where backups go".
+#
+# Echoes "<target>\t<provenance>" where provenance is `default` (an explicit
+# earlier operator decision recorded in server.conf) or `heuristic` (this
+# function guessed from the pool layout). Callers are expected to treat those
+# two very differently: a guess may be proposed and shown, never acted on
+# without a human looking at it.
+#
+# read_server_conf must have run first, exactly as in cmd_setup_server.
+propose_backup_target() {
+    if [ -n "${DEFAULT_TARGET:-}" ]; then
+        printf '%s\t%s\n' "$DEFAULT_TARGET" default
+        return 0
+    fi
+    local pools candidates
+    pools=$(zpool list -H -o name 2>/dev/null) || die "zpool list failed"
+    candidates=$(printf '%s\n' "$pools" | grep -v '^rpool$')
+    case "$(printf '%s\n' "$candidates" | grep -c .)" in
+        0) warn "only 'rpool' exists -- proposing rpool/backups. Confirm this is really where you want backups (rpool is usually the OS/VM pool)."
+           printf '%s\t%s\n' "rpool/backups" heuristic ;;
+        1) printf '%s\t%s\n' "${candidates}/backups" heuristic ;;
+        *) die "multiple candidate pools found ($(printf '%s' "$candidates" | tr '\n' ' ')) -- pass --target=POOL/PATH explicitly" ;;
+    esac
 }
 
 read_server_conf() {
@@ -2398,19 +2427,18 @@ cmd_setup_server() {
 
     read_server_conf
     if [ -z "$target" ]; then
-        if [ -n "$DEFAULT_TARGET" ]; then
-            target="$DEFAULT_TARGET"
-        else
-            local pools candidates
-            pools=$(zpool list -H -o name 2>/dev/null) || die "zpool list failed"
-            candidates=$(printf '%s\n' "$pools" | grep -v '^rpool$')
-            case "$(printf '%s\n' "$candidates" | grep -c .)" in
-                0) target="rpool/backups"
-                   warn "only 'rpool' exists -- proposing $target. Confirm this is really where you want backups (rpool is usually the OS/VM pool)." ;;
-                1) target="${candidates}/backups" ;;
-                *) die "multiple candidate pools found ($(printf '%s' "$candidates" | tr '\n' ' ')) -- pass --target=POOL/PATH explicitly" ;;
-            esac
-        fi
+        # Slice 3 extracted this into propose_backup_target(); behaviour here is
+        # unchanged, the logic simply now has one home shared with local-backup.
+        #
+        # Captured with `|| die`, NOT piped: the helper's own `die` (multiple
+        # candidate pools) runs inside the command substitution's subshell, so it
+        # cannot terminate this function. Without propagating the status, the
+        # ambiguous-pool refusal would fail OPEN and setup-server would continue
+        # with an empty target -- the exact shape of defect this project has been
+        # bitten by before.
+        local proposal
+        proposal=$(propose_backup_target) || die "could not determine a backup target -- see the reason above"
+        target="${proposal%%$'\t'*}"
     fi
     if [ -z "$config" ]; then
         if [ -n "$CRON_CONFIG" ]; then
@@ -2520,7 +2548,34 @@ cmd_local_backup() {
         esac
     done
     [ "${#source_flags[@]}" -gt 0 ] || die "local-backup: --source=<dataset>[,<dataset>...] is required (the dataset(s) to back up)"
-    [ -n "$target" ] || die "local-backup: --target=<dataset> is required (where the backups land)"
+
+    # Slice 3: --target may be omitted. Propose one through the SAME helper
+    # setup-server uses, then make the proposal visible and correctable. Two
+    # provenances, treated differently on purpose:
+    #
+    #   default    -- server.conf's DEFAULT_TARGET, i.e. a decision the operator
+    #                 already made deliberately by running setup-server;
+    #   heuristic  -- this run guessed it from the pool layout.
+    #
+    # A guess may be proposed and shown; it may not be acted on with nobody
+    # looking. So --yes does NOT cover a guessed target: the operator either names
+    # the target or confirms it interactively. That keeps "do not silently choose a
+    # destructive destination" a property of the code and not of the wording.
+    local target_from=""
+    if [ -z "$target" ]; then
+        read_server_conf
+        local proposal
+        # `|| die`, never a pipe: the helper's own die() for ambiguous pools runs
+        # in this substitution's subshell and cannot stop us by itself.
+        proposal=$(propose_backup_target) || die "local-backup: no --target given and no target could be proposed -- see the reason above, or pass --target=POOL/PATH"
+        target="${proposal%%$'\t'*}"
+        target_from="${proposal##*$'\t'}"
+        [ -n "$target" ] || die "local-backup: --target=<dataset> is required (where the backups land)"
+        case "$target_from" in
+            default)   log "no --target given -- using the configured default '$target' (server.conf DEFAULT_TARGET; pass --target= to override)" ;;
+            heuristic) log "no --target given -- PROPOSING '$target', guessed from the pool layout (pass --target= to choose another)" ;;
+        esac
+    fi
 
     # REV-20260811-101: one or more explicit roots are the authoritative WHAT
     # (EXPLICIT-SOURCE-BEATS-DISCOVERY). The canonical form is a comma list in one
@@ -2708,6 +2763,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         rm -f "$cand"
         die "gen-cron.sh could not render the proposed config -- nothing was touched"
     }
+
+    # Slice 3's one hard rule: a GUESSED target never installs unattended. An
+    # operator who named the target, or recorded one with setup-server, may use
+    # --yes; a pool-layout guess has to be looked at by a human.
+    if [ "$target_from" = heuristic ] && [ "$assume_yes" -eq 1 ]; then
+        rm -f "$cand"
+        die "local-backup: --yes cannot confirm a target this run GUESSED ('$target', from the pool layout). Name it with --target=$target if that is what you meant, or record it once with setup-server. Nothing was touched."
+    fi
 
     if [ "$assume_yes" -ne 1 ]; then
         local ans
