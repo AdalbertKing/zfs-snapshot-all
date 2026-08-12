@@ -1,11 +1,11 @@
 # REVIEWER HOURLY HEARTBEAT
 
-- timestamp Europe/Warsaw: 2026-08-12 06:03:23 CEST
-- reviewed main SHA: `beff136ec15c34be795586662468f702a3a5be1f`
-- latest observed commit event at review start: `beff136ec15c34be795586662468f702a3a5be1f` — 2026-08-12 05:09:01 CEST (`review: hourly heartbeat 2026-08-12 05:08 CEST`)
+- timestamp Europe/Warsaw: 2026-08-12 07:57 CEST
+- reviewed main SHA: `c242bb21b5f52aa0a9a0284e634e80c21aaca111`
+- latest observed commit event at review start: `c242bb21b5f52aa0a9a0284e634e80c21aaca111` — 2026-08-12 06:03:44 CEST (`review: hourly heartbeat 2026-08-12 06:03 CEST`)
 - GitHub READ: OK
-- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `beff136ec15c34be795586662468f702a3a5be1f`
-- open REV / routing after review: `REV-20260811-102 IMPLEMENTED -> Reviewer (not closed; runtime continuity/bookmark/recursive evidence still outstanding)`
-- result: no-change
+- reviewer-write-probe WRITE/read-back: OK — moved to and read back at exact review target `c242bb21b5f52aa0a9a0284e634e80c21aaca111`
+- open REV / routing after review: `REV-20260811-102 OPEN -> Claude`
+- result: reviewed
 
-Review outcome: fresh main was read immediately before assessment. Compared with the prior reviewed SHA `ed5ca46169d952592dac1f629fb1653309220f0e`, the only intervening commit changed this reviewer heartbeat file; there were no production-code, test, implementer-response, active-finding, OPEN-THREADS, PROJECT_STATUS, or new live-proof changes. The current REV-102 response still leaves bookmark-unavailable/failure, recursive source behaviour, successful incremental-after-prune continuity, and degraded no-common-base behaviour partially open, so REV-102 remains unclosed. `docs/PROJECT_STATUS.md` remains present and records REV-102 as open. The alternate `docs/reviews/responses` path remains absent; active implementer responses remain under `docs/internal/reviews/responses`. No new finding opened.
+Review outcome: REV-108, REV-109 and REV-110 were independently closed overnight. REV-109 delivered a self-contained L0 retention selector (`test/zfsbackup/run.sh --section retention`, ~1m12s versus ~7 min full suite) while preserving the full L1 suite. Current cumulative code resolves REV-102 F3/F4/F5 plus passive `-e` ownership and neighbouring-scope association. No new continuity/runtime evidence was found after those fixes. REV-102 is narrowed to the sole remaining acceptance property: targeted real runtime proof for bookmark/common-base loss, recursive behaviour, TARGET-history preservation, incremental-after-prune where claimed, and explicit no-base degradation. No new REV opened; Phase 5 remains blocked only on this boundary.
