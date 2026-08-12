@@ -2882,19 +2882,184 @@ restore_name_timestamp() {   # <snapshot name> -> epoch, or nothing
     date -d "$stamp" +%s 2>/dev/null || true
 }
 
+# Phase 7 slice 2 -- the SAFE restore. Writes to ZFS, and every guard below exists
+# because of that.
+#
+# Failed-attempt semantics, agreed with the reviewer before this was written
+# (peer-context R-005/C-007). No state machine, no marker, no lifecycle: the run
+# owns exactly what it created.
+#
+#   1. the collision refusal runs FIRST, before anything is created, so a
+#      pre-existing landing dataset is never touched and never adopted;
+#   2. therefore a landing dataset present at the end of a failed attempt was
+#      created by THIS run -- and this run destroys it, so a retry starts clean
+#      instead of being stranded behind the refusal in (1);
+#   3. cleanup destroys only what this run created. A dataset that existed before
+#      the attempt is never a cleanup candidate, whatever the failure was;
+#   4. if cleanup itself fails the run does not claim success, and names the exact
+#      dataset the operator has to deal with.
+#
+# Acceptance is BOTH conditions, never one: the send/receive pipeline must succeed
+# with its failure propagated, AND the restored snapshot's guid must equal the
+# source's. A matching guid after a failed pipeline is not a restore, and a clean
+# exit code with a different guid is not the data that was asked for.
+cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
+    local want_ds="$1" snap="$2" config="$3" yes="$4"
+    [ -n "$want_ds" ] || die "restore: --snapshot needs --dataset=<source or copy> so there is no doubt which relationship is being restored"
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || die "restore: no cron config known -- pass --config=FILE or run setup-server"
+    [ -r "$config" ] || die "restore: cannot read $config"
+
+    # Same derivation as the planner, deliberately: one idea of where copies live.
+    local ds d s src="" copy=""
+    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
+        d="$(installed_dataset_field "$config" "$ds" dst)"
+        s="$(installed_dataset_field "$config" "$ds" src)"
+        if [ -n "$d" ]; then
+            if [ "$ds" = "$want_ds" ] || [ "${d}/${ds}" = "$want_ds" ]; then src="$ds"; copy="${d}/${ds}"; break; fi
+        elif [ -n "$s" ]; then
+            if [ "$ds" = "$want_ds" ] || [ "$s" = "$want_ds" ]; then src="${s#*:}"; copy="$ds"; break; fi
+        fi
+    done
+    [ -n "$copy" ] || die "restore: '$want_ds' is not a source or a copy in $config -- run 'restore --plan' to see what is restorable"
+
+    zfs list -H -o name -t snapshot -d 1 "$copy" 2>/dev/null | grep -qFx -- "${copy}@${snap}" \
+        || die "restore: '${copy}@${snap}' does not exist. Run 'restore --plan --dataset=$want_ds' for the recovery points that actually exist."
+
+    local landing; landing="$(restore_landing_path "$copy" "$src")"
+
+    # (1) COLLISION FIRST. Nothing has been created at this point, so a refusal
+    # here leaves the system exactly as it was found.
+    if zfs list -H -o name "$landing" >/dev/null 2>&1; then
+        die "restore: '$landing' already exists. Refusing -- this command never overwrites and never picks a different name for you, because a restore that quietly lands somewhere adjacent is a restore nobody looks at again. Inspect it, then remove or rename it and re-run."
+    fi
+
+    echo
+    echo "Bezpieczne odtworzenie (do namespace restore -- produkcja NIE jest dotykana):"
+    echo "  Kopia:      ${copy}@${snap}"
+    echo "  Zrodlo:     $src   (oryginalna sciezka -- NIE jest celem)"
+    echo "  Wyladuje w: $landing"
+    echo
+    if [ "$yes" -ne 1 ]; then
+        local ans
+        read -rp "Odtworzyc? [t/N] " ans
+        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing was created" ;; esac
+    fi
+
+    local src_guid; src_guid="$(zfs get -H -o value guid "${copy}@${snap}" 2>/dev/null)"
+    [ -n "$src_guid" ] && [ "$src_guid" != "-" ] \
+        || die "restore: could not read the guid of '${copy}@${snap}' -- refusing to start a restore whose result could not be verified"
+
+    # (2)(3) From here on, anything left behind was created by THIS run.
+    #
+    # `zfs recv` does NOT create intermediate parents -- found by the live proof,
+    # not by the stubs: the first real run died on "cannot open
+    # 'hdd/restore/hdd/backuptest': dataset does not exist". So the parent chain is
+    # created here, and the TOPMOST dataset this run had to create is remembered,
+    # because that is what cleanup must remove. Removing only the landing would
+    # leave the empty scaffolding behind and the next attempt would then find a
+    # half-built namespace it did not make.
+    local failure="" created_root=""
+    local parent="${landing%/*}"
+    # The highest thing this run could ever legitimately create is the restore
+    # namespace itself. Everything else on the way up already existed.
+    local ns_root="${landing%%/*}/restore"
+    if ! zfs list -H -o name "$parent" >/dev/null 2>&1; then
+        local probe="$parent" up
+        created_root="$parent"
+        while :; do
+            up="${probe%/*}"
+            [ "$up" = "$probe" ] && break                      # reached the pool name
+            zfs list -H -o name "$up" >/dev/null 2>&1 && break # first existing ancestor
+            created_root="$up"; probe="$up"
+        done
+        # CLAMP -- and this is not defensive decoration. The walk stops at the
+        # first ancestor `zfs list` reports as existing, so anything that makes
+        # that query fail (a permission error, a transient) marches the walk all
+        # the way up to the POOL, and cleanup would then try to destroy it. Found
+        # by a stub that did not model the pool as existing; on a live host the
+        # walk stops correctly, which is exactly why it would never have shown up
+        # there. Nothing outside the restore namespace is ever this run's to remove.
+        case "$created_root" in
+            "$ns_root"|"$ns_root"/*) ;;
+            *) die "restore: internal guard -- the cleanup root was computed as '$created_root', which is outside the restore namespace '$ns_root'. Refusing to create or remove anything. This means a 'zfs list' of an ancestor failed; fix that first." ;;
+        esac
+        zfs create -p "$parent" || die "restore: could not create the restore namespace '$parent' -- nothing was received, nothing was left behind"
+    fi
+
+    if ! zfs send "${copy}@${snap}" | zfs recv -u "$landing"; then
+        failure="the send/receive pipeline failed"
+    fi
+
+    if [ -z "$failure" ]; then
+        local got_guid; got_guid="$(zfs get -H -o value guid "${landing}@${snap}" 2>/dev/null)"
+        if [ -z "$got_guid" ] || [ "$got_guid" = "-" ]; then
+            failure="the restored snapshot '${landing}@${snap}' has no readable guid"
+        elif [ "$got_guid" != "$src_guid" ]; then
+            failure="guid mismatch -- source $src_guid, restored $got_guid; this is NOT the data that was asked for"
+        fi
+    fi
+
+    if [ -n "$failure" ]; then
+        warn "restore FAILED: $failure"
+        # Remove from the topmost dataset this run created, so the scaffolding goes
+        # with the leaf. If no ancestor had to be created, that is just the landing.
+        local victim="${created_root:-$landing}"
+        if zfs list -H -o name "$victim" >/dev/null 2>&1; then
+            if zfs destroy -r "$victim" 2>/dev/null; then
+                die "restore failed ($failure). Everything this run created ('$victim' and below) was removed, so re-running is clean. Nothing that existed before was touched."
+            fi
+            # (4) explicit incomplete state, named
+            die "restore failed ($failure) AND what this run created could not be removed. '$victim' is still there and is NOT a valid restore -- deal with it by hand before re-running, because the next attempt will refuse while it exists."
+        fi
+        die "restore failed ($failure). Nothing was left behind."
+    fi
+
+    echo
+    echo "Odtworzenie OK."
+    echo "  Powstalo:   $landing"
+    echo "  Snapshot:   ${landing}@${snap}"
+    echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
+    echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu to osobny czasownik, ktorego jeszcze nie ma."
+}
+
+restore_landing_path() {   # <copy dataset> <original source> -> landing path
+    # Derived, predictable, and deliberately NOT the original path: a safe restore
+    # must never be able to overwrite production by default. It lands beside the
+    # copy, under a fixed `restore` namespace, carrying the source path so an
+    # operator can see at a glance what it is.
+    # The FULL source path is kept, pool included. Stripping the pool collapsed
+    # rpool/data and tank/data onto one landing path -- two different recoveries
+    # racing for the same destination, and the second one refused for a reason
+    # that would look like a bug. Caught by reading the derivation's output, not
+    # by a test, which is why the suite now pins it.
+    local copy="$1" src="$2"
+    printf '%s/restore/%s\n' "${copy%%/*}" "$src"
+}
+
 cmd_restore() {
-    local plan=0 dataset="" config=""
+    local plan=0 dataset="" config="" snapshot="" yes=0
     for a in "$@"; do
         case "$a" in
-            --plan)      plan=1 ;;
-            --dataset=*) dataset="${a#*=}" ;;
-            --config=*)  config="${a#*=}" ;;
+            --plan)       plan=1 ;;
+            --dataset=*)  dataset="${a#*=}" ;;
+            --snapshot=*) snapshot="${a#*=}" ;;
+            --config=*)   config="${a#*=}" ;;
+            --yes|-y)     yes=1 ;;
             *) die "restore: unknown option $a" ;;
         esac
     done
-    # Slice 1 is the planner and nothing else. Refusing rather than defaulting to
-    # --plan keeps the eventual restore verb free to mean what it says.
-    [ "$plan" -eq 1 ] || die "restore: only --plan is implemented (Phase 7 slice 1, read-only). Actually restoring is a later, separate verb."
+    # Phase 7 slice 2: a SAFE restore is the plain verb. Destructive replacement of
+    # a live dataset stays a SEPARATE verb (slice 3), never a flag on this one --
+    # a --force that turns a safe command into a destructive one is exactly the
+    # shape the plan refuses.
+    if [ "$plan" -ne 1 ]; then
+        [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Replacing a live dataset is a separate verb that does not exist yet."
+        cmd_restore_safe "$dataset" "$snapshot" "$config" "$yes"
+        return
+    fi
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-}"
