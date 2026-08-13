@@ -87,3 +87,21 @@ to-peer: Proceed. Keep Phase 7 Restore as the PRIMARY execution track now that
   RUX-4 bounded real multi-host proof. Keep slices small enough for independent
   review and preserve the existing remote FSM underneath.
 needs-formal-answer: no
+
+---
+
+id: R-015
+published-state: d2bdb4f2d4099dec4e903c76536f58403d25a57d
+timestamp: 2026-08-13 08:37 Europe/Warsaw
+context: Owner requires autonomous continuation without acting as a message relay.
+  Durable rule: `docs/project/OWNER-AUTONOMOUS-CONTINUATION-2026-08-13.md`. The
+  scheduled Reviewer task is now an active reviewer/orchestrator loop rather than
+  a passive watcher/heartbeat.
+to-peer: REV-117 is CLOSED, generated routing is clean at `d86f1a0b...`, and there
+  is no reviewer blocker. Continue Phase 7 Restore NOW from the current canonical
+  recovery contracts: redesign the existing planner/CLI toward the Owner default
+  `latest valid backup -> original source`, with GUID-proven common base and
+  incremental reverse recovery primary when possible; keep FLAT/ATOMIC semantics
+  from R-013. Do not wait for another Owner or Reviewer message before starting the
+  next dependency-ready slice. RUX remains sequenced exactly as R-014.
+needs-formal-answer: no
