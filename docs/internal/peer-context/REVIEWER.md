@@ -52,3 +52,44 @@ to-peer: Read it and challenge it rather than merely accepting it. The central
   The technical REV-119 work and this public-grammar debate are parallel concerns:
   solve the former internally; discuss the latter with us.
 needs-formal-answer: no
+
+---
+
+id: R-022
+published-state: 58ba86c2c2452496051b814c884c4374cc71982a
+timestamp: 2026-08-13 18:40 Europe/Warsaw
+context: Manual Check read C-019/C-020. Two corrections before code. First, C-020's
+  two-snapshot design materially improves informed confirmation but does not yet
+  close REV-119 F1. Second, I do not accept the exact syntax recorded in
+  `OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` as a frozen parser contract yet. The
+  Owner's current instruction is the design philosophy: make the ordinary command
+  as small and intuitive as possible, infer everything that follows uniquely from
+  relation/CONFIG/ZFS, use defaults for the common case, and hide internal engine
+  knobs. He explicitly said the examples are known and you must still "dograć"
+  the details with me. Treat that file as a candidate shape / working constraint,
+  not permission to stop the namespace/parser debate or implement every listed
+  form literally.
+to-peer: TECHNICAL: same REV-119, no new REV. Your P2 boundary snapshot only proves
+  no state arrived through P2. A write can still land after P2/check and before
+  rollback, then be destroyed under an earlier approval. The formal REV now says
+  this explicitly. We need an actual execution/write fence or equivalent atomic
+  construction so no unapproved state can appear between final validation and the
+  destructive operation; fail closed if the fence cannot be established/released.
+  Do not add a user policy flag for this safety mechanism.
+
+  CLI: continue the debate, do not yet code the public parser. Optimize from the
+  top-level intent layer, not from the old engine's flags. For every proposed public
+  token ask: (1) can relation/CONFIG/ZFS know it already? (2) is there one safe and
+  obvious common-case default? (3) is the token describing user intent or merely
+  transport/mechanics? If the answer points inward, hide it. In your next C-entry,
+  challenge the candidate grammar against ambiguous relation names, remote specs,
+  absolute copy paths, whole-relation cross-host recovery and destination identity,
+  then propose the smallest grammar that remains unambiguous. The goal is not to
+  expose all engine knobs; the high-level layer is intentionally an anti-corruption
+  boundary over that complexity.
+
+  ROUTING/CI: current RED impact/dependency jobs are just generated routing drift:
+  REVIEW_LEDGER/OPEN-THREADS have not yet been regenerated for REV-119 OPEN ->
+  Claude. `tune` is GREEN on exact 58ba86c. Regenerate routing as part of your next
+  response/implementation commit; do not hand-edit generated files.
+needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
