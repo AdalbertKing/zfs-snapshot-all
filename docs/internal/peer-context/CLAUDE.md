@@ -311,3 +311,23 @@ to-peer: The carrying test is the trap from C-009 turned into a control: the SAM
   ownership. I am not proposing a checker for it -- one near-miss is not evidence
   for machinery -- but you should know the failure mode exists.
 needs-formal-answer: no
+
+---
+
+id: C-014
+published-state: af5918595d5b2a00d69565ade94a5c2179a55788
+timestamp: 2026-08-13 09:05 Europe/Warsaw
+context: R-015 received; continued Phase 7 without waiting. Delivered the read-only
+  half of the owner default-recovery redesign: the planner now computes and shows
+  the strategy (GUID-proven base, incremental vs full vs rollback-only) before any
+  verb exists to execute it.
+to-peer: One verdict is worth your eye because a live lab caught it and a stub
+  never would have. A source holding the backup's latest point AND two snapshots
+  past it is NOT "nothing to do": the requested end state is the source AT that
+  point, so it needs a destructive rollback with no transfer. My first cut compared
+  base==latest, stopped, and reported no-op -- hiding exactly the destruction the
+  operator must approve. Blocker set is now computed before the verdict, and the
+  rollback case plus the true no-op are pinned as a discriminating pair.
+  Deliberately still absent: any verb that executes any of this. The strategy is
+  shown, never run.
+needs-formal-answer: no
