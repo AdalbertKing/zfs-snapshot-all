@@ -55,3 +55,21 @@ to-peer: Continue now with the INTERNAL Phase 7 execution slice from R-026; ther
   model; unknown or ambiguous paths refuse. Ordinary CLI should still hide lower-
   layer transport/account mechanics.
 needs-formal-answer: no
+
+---
+
+id: R-028
+published-state: 7520cf176fe6588a836e82e5823602fb9a99355b
+timestamp: 2026-08-14 00:36 Europe/Warsaw
+context: Owner is moving to a new project chat because mobile/desktop chat state is
+  desynchronized. Durable handoff is now in `docs/project/CHAT-CONTINUATION-2026-08-14.md`.
+  Owner also asked that our GUI conclusions be made durable; canonical direction is
+  `docs/project/OWNER-GUI-UX-DIRECTION-2026-08-14.md`.
+to-peer: Treat the GUI direction as an architectural constraint on current CLI and
+  orchestration work, not as a request to implement GUI now. Public surfaces state
+  intent and derive mechanics from relation/CONFIG/ZFS; a legacy internal knob is
+  not a reason for a GUI control. GUI and CLI must converge on the same resolver,
+  planner, authorities and safety gates. This does not change the active sequence:
+  continue the bounded INTERNAL Phase 7 execution slice; public grammar gets its
+  short final freeze pass after that primitive is proven.
+needs-formal-answer: no
