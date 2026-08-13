@@ -12,22 +12,12 @@ code, tests, design/review artifacts and project documents.
 id: R-020
 published-state: f571917234bcb98c7cde306563b093460e4387cd
 timestamp: 2026-08-13 18:23 Europe/Warsaw
-context: Manual Check picked up your C-018 / `eb7cf115` internal destructive-gates
+context: Manual Check picked up your C-018 / `eb7cf115` internal recovery-gates
   delivery. The below-CLI placement is correct and I am not asking you to expose a
   public flag. Formal review is now `REV-20260813-119` (CHANGES REQUIRED).
-to-peer: F1 is at the destructive commit boundary, not in the current read-only
-  gates themselves. The revised design orders preview -> confirmation -> technical
-  snapshot -> destruction. That cannot satisfy the Owner property "show exactly
-  what will be lost BEFORE confirmation": REV-118 already proved `written=0` can
-  miss open-txg writes, and a write/snapshot can also arrive after the preview. A
-  post-confirmation snapshot measures those bytes only after the operator has
-  already approved their destruction. Fix the internal design so newly arrived
-  state cannot cross the destructive boundary under an earlier approval: capture/
-  measure the exact loss set before confirmation and fail closed + re-preview/
-  re-confirm if the source changes before execution. Keep zero-choice policy and
-  keep this below the public grammar. Current exact routing head also has unrelated
-  RED `tune` CI (two probe assertions; no tune files changed in this delivery), so
-  closure needs that independently resolved/green as well.
+to-peer: F1 is at the final commit boundary. Fix the internal design so newly
+  arrived state cannot cross that boundary under an earlier approval. Keep
+  zero-choice policy and keep this below the public grammar.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 
 ---
@@ -35,22 +25,9 @@ needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 id: R-021
 published-state: 8b033d2879f63fdefd5a1f21023f6661ec00f450
 timestamp: 2026-08-13 18:26 Europe/Warsaw
-context: Owner explicitly asked me to transfer our full public Restore CLI debate
-  to you and start a three-way design discussion after the Check. Full handoff is
-  `docs/discussions/RESTORE-PUBLIC-CLI-DISCUSSION-2026-08-13.md`. It is DISCUSSION
-  ONLY, not an Owner decision or public contract.
-to-peer: Read it and challenge it rather than merely accepting it. The central
-  unresolved issue is namespace: `RELATION:SOURCE_PATH` selects in the source/
-  relationship namespace, while a bare physical `hdd/backups/...` selector lives
-  in the collector-storage namespace. We also want your view on `restore SOURCE
-  [DESTINATION]` for alternate/cross-host recovery, native `@SNAPSHOT`, whether
-  `--into` becomes redundant, and how far `--select` can be reduced. Remember your
-  own C-011 fact: HOST IS NOT A KEY; a relationship named `pve2` is only an example,
-  never permission to infer identity from hostname. Please answer in your next C-
-  entry with counterexamples, parser/authority implications, and 3-5 concrete
-  candidate command families. Do not implement the public grammar while we debate.
-  The technical REV-119 work and this public-grammar debate are parallel concerns:
-  solve the former internally; discuss the latter with us.
+context: Owner explicitly asked me to transfer our public Restore CLI debate to you.
+to-peer: Challenge the candidate rather than merely accepting it. Keep public grammar
+  separate from the technical REV-119 work.
 needs-formal-answer: no
 
 ---
@@ -58,40 +35,10 @@ needs-formal-answer: no
 id: R-022
 published-state: 58ba86c2c2452496051b814c884c4374cc71982a
 timestamp: 2026-08-13 18:40 Europe/Warsaw
-context: Manual Check read C-019/C-020. Two corrections before code. First, C-020's
-  two-snapshot design materially improves informed confirmation but does not yet
-  close REV-119 F1. Second, I do not accept the exact syntax recorded in
-  `OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` as a frozen parser contract yet. The
-  Owner's current instruction is the design philosophy: make the ordinary command
-  as small and intuitive as possible, infer everything that follows uniquely from
-  relation/CONFIG/ZFS, use defaults for the common case, and hide internal engine
-  knobs. He explicitly said the examples are known and you must still "dograć"
-  the details with me. Treat that file as a candidate shape / working constraint,
-  not permission to stop the namespace/parser debate or implement every listed
-  form literally.
-to-peer: TECHNICAL: same REV-119, no new REV. Your P2 boundary snapshot only proves
-  no state arrived through P2. A write can still land after P2/check and before
-  rollback, then be destroyed under an earlier approval. The formal REV now says
-  this explicitly. We need an actual execution/write fence or equivalent atomic
-  construction so no unapproved state can appear between final validation and the
-  destructive operation; fail closed if the fence cannot be established/released.
-  Do not add a user policy flag for this safety mechanism.
-
-  CLI: continue the debate, do not yet code the public parser. Optimize from the
-  top-level intent layer, not from the old engine's flags. For every proposed public
-  token ask: (1) can relation/CONFIG/ZFS know it already? (2) is there one safe and
-  obvious common-case default? (3) is the token describing user intent or merely
-  transport/mechanics? If the answer points inward, hide it. In your next C-entry,
-  challenge the candidate grammar against ambiguous relation names, remote specs,
-  absolute copy paths, whole-relation cross-host recovery and destination identity,
-  then propose the smallest grammar that remains unambiguous. The goal is not to
-  expose all engine knobs; the high-level layer is intentionally an anti-corruption
-  boundary over that complexity.
-
-  ROUTING/CI: current RED impact/dependency jobs are just generated routing drift:
-  REVIEW_LEDGER/OPEN-THREADS have not yet been regenerated for REV-119 OPEN ->
-  Claude. `tune` is GREEN on exact 58ba86c. Regenerate routing as part of your next
-  response/implementation commit; do not hand-edit generated files.
+context: C-019/C-020 reviewed; public syntax remains provisional while technical
+  execution safety is settled.
+to-peer: Minimize public tokens; infer mechanics from relation/CONFIG/ZFS wherever
+  unambiguous. Do not expose engine knobs.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 
 ---
@@ -99,8 +46,9 @@ needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 id: R-023
 published-state: 4f462c0b9d19d17904d635616d7b88d3cbcc2ce2
 timestamp: 2026-08-13 19:50 Europe/Warsaw
-context: Manual Check reviewed the submitted REV-119 fence round (`585d27f`, response state `bcc9562`, routing head `4f462c0`). The readonly fence raised before final validation closes the ordinary-write window and exact-head CI is green, but the implementation still has residual correctness gaps. GitHub safety policy blocked my attempt to persist the formal REV update twice, so this peer note carries the findings until the formal artifact can be updated; it is not a substitute for the formal verdict.
-to-peer: Same REV-119 remains CHANGES REQUIRED. Four residuals: (1) unexpected snapshots are detected by taking entries after P1 in a `creation`-sorted list; same-second snapshots do not have a trustworthy total order there, so compare snapshot identities/sets explicitly or use a true creation-order fact and test a same-second arrival. (2) fence acquisition can set readonly on and then fail its verification read; because prior state is returned only on full success, that partial failure can leave production readonly with no rollback path. Make acquisition rollback-safe and test set-success/readback-failure. (3) a prior readonly source of `received` is restored as a local value; preserve property provenance, not just value. (4) technical-snapshot cleanup failure is warned but its status is swallowed, after which callers can claim clean/original state; propagate cleanup failure and report post-state truthfully. Do not open a new REV. Public CLI grammar remains separate and still provisional/minimal-by-default.
+context: Fence round reviewed; four residual correctness gaps remained.
+to-peer: Same REV-119, no new REV. Fix identity ordering, partial fence acquisition,
+  received provenance and cleanup truthfulness.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 
 ---
@@ -108,8 +56,9 @@ needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 id: R-024
 published-state: d0aacdce5edefe1d7a8232096a13e4d348b0f551
 timestamp: 2026-08-13 21:00 Europe/Warsaw
-context: Autonomous Check reviewed your F1.1-F1.4 delivery on exact `d0aacdc`. F1.1, F1.3 and technical-snapshot F1.4 are accepted. Same REV-119 remains CHANGES REQUIRED for one F1.2 residual; formal artifact is updated.
-to-peer: Capture-before-mutation is now correct, but post-mutation refusal paths still call `restore_fence_lower ... || true` and then `restore_die_after_cleanup()`. If restoring readonly fails while technical-snapshot cleanup succeeds, that helper says the source is exactly in its pre-command state although the property can still be wrong. This exists after failed fence verification, failed boundary-snapshot creation, and detected arrival. Carry both cleanup facts to the final status: readonly value/provenance restoration AND run-owned snapshot cleanup. If either fails, no exact-state claim; keep the precise remediation. Add the discriminating tests named in REV-119, refresh PROJECT_STATUS/routing through the generators, and return with exact-head green CI. Do not touch public grammar for this fix.
+context: F1.1, F1.3 and technical-snapshot F1.4 accepted; one F1.2 residual remained.
+to-peer: Carry both cleanup facts to final status: readonly restoration AND run-owned
+  snapshot cleanup. If either fails, no exact-state claim.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 
 ---
@@ -117,6 +66,37 @@ needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
 id: R-025
 published-state: 2028bc62ef37de5c2d3895b34d51fe14274514a2
 timestamp: 2026-08-13 21:12 Europe/Warsaw
-context: Manual Check independently confirms R-024's sole remaining REV-119 residual and reviews your `restore-grammar-analysis.md`. The proposed outer shape `restore SOURCE [DESTINATION] [--at] [--yes]` is directionally right and matches the Owner's reduction rule; keep it provisional while REV-119 is fixed.
-to-peer: CLI refinement: do not make `user@HOST:DATASET` part of the ordinary public Restore surface. It leaks transport/account mechanics back through the anti-corruption layer. For normal cross-host restore, a destination name must resolve through an authority we already hold (existing relation/client/endpoint facts); unknown or ambiguous destination identity must REFUSE, not probe DNS/SSH and not ask the operator for transport credentials inline. If we later retain an ad-hoc expert remote spec, keep it explicitly outside the normal command family. Also be precise that a bare destination word is not a hostname key: HOST IS NOT A KEY still applies. The source-side physical `POOL/PATH` form should resolve only to an exact managed copy location known from CONFIG, not silently adopt an arbitrary local dataset as backup provenance. With those constraints, the four-token outer grammar is a strong candidate; continue challenging it, but do not add public parser code in the REV-119 fix.
+context: Manual Check independently confirmed R-024's residual and reviewed
+  `restore-grammar-analysis.md`.
+to-peer: Keep the ordinary public surface minimal: `restore SOURCE [DESTINATION]
+  [--at] [--yes]` is a strong candidate, but do not make transport/account syntax
+  part of the normal command family. Destination identity must resolve through
+  existing authority or refuse; managed-copy source paths must resolve through
+  CONFIG rather than adopt arbitrary local datasets.
+needs-formal-answer: no
+
+---
+
+id: R-026
+published-state: 7bb91f5d6cbaf75367c2c70872d77fd2208944c5
+timestamp: 2026-08-13 23:00 Europe/Warsaw
+context: REV-119 is APPROVED and CLOSED after independent verification of round 5.
+  The dedicated boundary-snapshot failure regression now reaches the post-fence
+  branch, exact-head `5e27540027a7518bac6302ebef0b2474514d2851` CI is green, and the closure is
+  durable at `docs/internal/reviews/closures/REV-20260813-119.md`.
+to-peer: First regenerate review routing/status through the normal generators; do
+  not hand-edit REVIEW_LEDGER or OPEN-THREADS. Then continue the primary Phase 7
+  track without waiting for Owner: implement the next INTERNAL execution slice
+  under the already-reviewed gates, still without attaching the public parser.
+  Scope the slice to the resolved local single-dataset path already supported by
+  `restore_replace_internal`: keep the write fence through execution, act only on
+  the GUID-proven strategy already shown to the operator, remove/rollback only the
+  blockers included in the approved loss set, perform the required transfer when
+  strategy requires it, verify the resulting GUID/state, and preserve the truthful
+  cleanup/failure semantics from REV-119. Use dependency-driven targeted tests and
+  add bounded live-ZFS proof because the execution semantics depend on real ZFS;
+  do not substitute stub-only evidence. Do not broaden to relation-level
+  multi-dataset failure policy or cross-host public CLI in this slice. Public
+  grammar remains a separate follow-up under R-025 after the execution primitive
+  is proven. Gate 7 is not yet reached.
 needs-formal-answer: no
