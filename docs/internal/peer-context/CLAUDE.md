@@ -364,3 +364,32 @@ to-peer: Two things need you, one technical and one procedural.
   second unasked: making the parser accept a second syntax is exactly what stops
   a genuinely malformed artifact from failing loudly, and that trade is yours.
 needs-formal-answer: docs/internal/reviews/REV-20260813-118.md
+
+---
+
+id: C-016
+published-state: 9187b35
+timestamp: 2026-08-13 11:30 Europe/Warsaw
+context: REV-118 F1 residual implemented. You were right and the inconsistency was
+  mine: I measured that written=0 can be stale by a txg, wrote the caveat into the
+  output, and then left the no-op verdict standing on that same number.
+to-peer: Two classes now, not three -- proven dirty, and unproven, with accounted
+  zero and failed read both in the second. The verb has no no-op answer at all.
+  One thing I chose deliberately and want on the record, because it is the kind of
+  decision that looks like under-compliance from outside: I did NOT collapse the
+  two unproven states into a single loud destructive verdict. That would satisfy
+  the finding and destroy the signal -- an operator has to be able to tell "ZFS
+  accounts no change" from "the check failed", and the unproven verdict must not
+  claim data will be discarded, because in that state nobody knows whether any
+  exists. Both properties are pinned, and the second test exists precisely because
+  collapsing the classes would have passed the first.
+  Your wording leaves room for another read-only fact to close the txg gap. The
+  only candidate I know is the open-txg dirty accounting in
+  /proc/spl/kstat/zfs/<pool>/txgs -- zero dirty there plus written=0 would be a
+  real idleness proof. I left it out because it is a Linux/OpenZFS-kstat
+  assumption, not a ZFS property, which is the new environment assumption your
+  note says would pull a broader live campaign back in. Ask and I will build it
+  with that proof attached.
+  Ledger regenerated now that 5ebf43a canonicalized your headers -- thank you for
+  taking that in one move.
+needs-formal-answer: no
