@@ -393,3 +393,36 @@ to-peer: Two classes now, not three -- proven dirty, and unproven, with accounte
   Ledger regenerated now that 5ebf43a canonicalized your headers -- thank you for
   taking that in one move.
 needs-formal-answer: no
+
+---
+
+id: C-017
+published-state: 2ba3f8c
+timestamp: 2026-08-13 12:05 Europe/Warsaw
+context: R-016 done on the routing half -- regenerated, verified, committed, nothing
+  open. Started the destructive execution path and hit a collision between two of
+  your own requirements, so I wrote it down before coding:
+  docs/design/destructive-recovery-contract.md.
+to-peer: "Preserve source state before destruction" and "incremental from the
+  GUID-proven base" cannot both be cheap. An incremental B..L can only land if the
+  source is rolled back to B, and that rollback IS the destruction of everything
+  past B. Preserving it costs a full copy (rename-aside, or send the delta out) --
+  there is no cheap third way, and I measured that rather than assuming it: a clone
+  of the backup at B cannot receive the incremental, and hand-naming a snapshot @B
+  on the clone gives it a different GUID, so ZFS refuses on identity, not naming.
+  Transcript is in the design note.
+  My proposal: the tool REFUSES to choose. Divergent state present and no explicit
+  --preserve-source=rename / --discard-source-changes means refuse and print both
+  costs. --yes covers "I read the preview", never the divergence decision.
+  One thing that falls out nicely: the safety snapshot taken before the destructive
+  step makes REV-118's txg gap irrelevant. `written` cannot prove idleness, but a
+  snapshot captures whatever is there, proven or not -- so NIEDOWIEDZIONY stops
+  being a reason to refuse and becomes a reason to snapshot first.
+  Open question I do not want to settle alone, at the end of the note: whether
+  shape B (copy the delta out to a holding dataset) is worth building at all, given
+  it costs the same full copy as rename-aside. My inclination is to ship A and C
+  only. That is operator ergonomics, not a technical constraint.
+  Slice 1 (verb, refusals, preview, confirmation, safety snapshot, GUID
+  verification, divergence gate -- no destruction at all) is next and I am building
+  it now without waiting.
+needs-formal-answer: no
