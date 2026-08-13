@@ -332,7 +332,7 @@ b=$(restore_landing_path hdd/store/tank/data  tank/data)
 # ---- the verb refuses what it does not do -----------------------------------
 reset_ds
 out="$(runs --dataset=rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'separate verb'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--replace' && printf '%s' "$out" | grep -q -- '--snapshot'; } \
     && ok "slice2: no --plan and no --snapshot refuses and names the separate verb" \
     || bad "slice2: no --plan and no --snapshot refuses and names the separate verb" "rc=$rc"
 out="$(runs --snapshot=s1)"; rc=$?
@@ -612,79 +612,96 @@ printf '%s' "$out" | grep -qi 'ZDALNE' \
 # ==============================================================================
 runrepl() {   # <config> extra-args...
     local c="$1"; shift
-    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf"       cmd_restore --config="$c" --replace "$@" ) 2>&1
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+      cmd_restore --config="$c" --replace "$@" ) 2>&1
 }
 
-printf 'hdd/store/rpool/data@s1	100	11
-hdd/store/rpool/data@s2	200	22
-' > "$WORK/rows.$COPY"
-printf 'rpool/data@s1	100	11
-' > "$WORK/rows.$SRC"
-printf 'hdd/store
-hdd/store/rpool/data
-rpool/data
-' > "$WORK/exists"
+printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
 
-# The gates that must fire BEFORE anything is computed.
+# The gates that must fire before anything is computed.
 out="$(runrepl "$stcfg")"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--dataset'; }     && ok "replace: refuses without --dataset instead of guessing the relationship"     || bad "replace: refuses without --dataset instead of guessing the relationship" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--dataset'; } \
+    && ok "replace: refuses without --dataset instead of guessing the relationship" \
+    || bad "replace: refuses without --dataset instead of guessing the relationship" "$out"
 
 out="$(runrepl "$stcfg" --dataset=rpool/nowhere)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie wystepuje w zadnej relacji'; }     && ok "replace: a dataset outside every relationship is refused, not invented"     || bad "replace: a dataset outside every relationship is refused, not invented" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie wystepuje w zadnej relacji'; } \
+    && ok "replace: a dataset outside every relationship is refused, not invented" \
+    || bad "replace: a dataset outside every relationship is refused, not invented" "$out"
 
 # --snapshot is refused rather than honoured: the recovery point is policy, not a
 # parameter. A verb that accepted it would quietly re-open a decision the owner
-# already made.
+# has already made.
 out="$(runrepl "$stcfg" --dataset=rpool/data --snapshot=s1)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'snapshot is not accepted'; }     && ok "replace: --snapshot is refused because the recovery point is policy"     || bad "replace: --snapshot is refused because the recovery point is policy" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'snapshot is not accepted'; } \
+    && ok "replace: --snapshot is refused because the recovery point is policy" \
+    || bad "replace: --snapshot is refused because the recovery point is policy" "$out"
 
 out="$(runrepl "$stcfg" --dataset=rpool/data --plan)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different verbs'; }     && ok "replace: --plan and --replace together are refused, not silently ordered"     || bad "replace: --plan and --replace together are refused, not silently ordered" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different verbs'; } \
+    && ok "replace: --plan and --replace together are refused, not silently ordered" \
+    || bad "replace: --plan and --replace together are refused, not silently ordered" "$out"
 
 # The relationship resolves BOTH ways, source path or copy path, because an
-# operator reaching for recovery may know either.
+# operator reaching for recovery may know either one.
 for name in rpool/data hdd/store/rpool/data; do
     out="$(runrepl "$stcfg" --dataset="$name")"; rc=$?
-    { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje'       && printf '%s' "$out" | grep -q 'INKREMENT'; }         && ok "replace: '$name' resolves to the relationship and previews before refusing"         || bad "replace: '$name' resolves to the relationship and previews before refusing" "$out"
+    { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
+      && printf '%s' "$out" | grep -q 'INKREMENT'; } \
+        && ok "replace: '$name' resolves to the relationship and previews before refusing" \
+        || bad "replace: '$name' resolves to the relationship and previews before refusing" "$out"
 done
 
 # The preview an operator confirms and the decision the code takes must be ONE
-# computation. This asserts the strategy facts the verb branches on are the ones
-# the printed preview came from.
-( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf"   cmd_restore --config="$stcfg" --replace --dataset=rpool/data >/dev/null 2>&1
-  printf '%s|%s|%s
-' "$RESTORE_STRATEGY" "$RESTORE_BASE_GUID" "$RESTORE_TARGET_SNAP" > "$WORK/facts" ) || true
-[ "$(cat "$WORK/facts" 2>/dev/null)" = 'increment|11|s2' ]     && ok "replace: branches on the same computed facts the preview printed"     || bad "replace: branches on the same computed facts the preview printed" "$(cat "$WORK/facts" 2>/dev/null)"
+# computation. This asserts the verb branches on the facts the printed preview
+# came from.
+#
+# Captured from an EXIT trap, because the verb ends in `die` and die exits the
+# subshell: a plain line after the call never runs. The first version of this
+# test wrote nothing at all, so it failed for that reason rather than the one it
+# was written to catch.
+( trap 'printf "%s|%s|%s" "$RESTORE_STRATEGY" "$RESTORE_BASE_GUID" "$RESTORE_TARGET_SNAP" > "$WORK/facts"' EXIT
+  PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+  cmd_restore --config="$stcfg" --replace --dataset=rpool/data >/dev/null 2>&1 ) || true
+[ "$(cat "$WORK/facts" 2>/dev/null)" = 'increment|11|s2' ] \
+    && ok "replace: branches on the same computed facts the preview printed" \
+    || bad "replace: branches on the same computed facts the preview printed" "$(cat "$WORK/facts" 2>/dev/null)"
 
-# No GUID-proven base -> full replacement, which is a different mechanism. It must
-# be refused by name, never quietly attempted as an incremental.
-printf 'rpool/data@x1	50	99
-' > "$WORK/rows.$SRC"
+# No GUID-proven base -> full replacement, which is a different mechanism with
+# different risk. It must be refused by name, never quietly attempted as an
+# incremental.
+printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
 out="$(runrepl "$stcfg" --dataset=rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'PELNE zastapienie'   && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; }     && ok "replace: no proven base is refused as full replacement, not run as an increment"     || bad "replace: no proven base is refused as full replacement, not run as an increment" "$out"
-printf 'rpool/data@s1	100	11
-' > "$WORK/rows.$SRC"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'PELNE zastapienie' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+    && ok "replace: no proven base is refused as full replacement, not run as an increment" \
+    || bad "replace: no proven base is refused as full replacement, not run as an increment" "$out"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 
 # A remote source is refused here too. The planner merely declines to guess; the
-# destructive verb must decline to ACT, and for a stated reason.
+# destructive verb must decline to ACT, and say why.
 out="$(runrepl "$rcfg" --dataset=hdd/mirror)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; }     && ok "replace: a remote source is refused by the destructive verb"     || bad "replace: a remote source is refused by the destructive verb" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; } \
+    && ok "replace: a remote source is refused by the destructive verb" \
+    || bad "replace: a remote source is refused by the destructive verb" "$out"
 
 # An ATOMIC relationship is a subtree recovered as one point in time; recovering
 # one dataset out of it would silently downgrade that property.
 atcfg="$WORK/atomic.conf"
-mkcfg "$atcfg" '
-[dataset:rpool/data]
-	dst          = hdd/store
-	recursive    = atomic
-'
+mkcfg "$atcfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
 out="$(runrepl "$atcfg" --dataset=rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ATOMIC'; }     && ok "replace: an atomic relationship is refused rather than recovered one dataset at a time"     || bad "replace: an atomic relationship is refused rather than recovered one dataset at a time" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ATOMIC'; } \
+    && ok "replace: an atomic relationship is refused rather than recovered one dataset at a time" \
+    || bad "replace: an atomic relationship is refused rather than recovered one dataset at a time" "$out"
 
-# A copy with no snapshots at all: refuse, and say which side is empty.
+# A copy with no snapshots at all: refuse, and name which side is empty.
 printf '' > "$WORK/rows.$COPY"
 out="$(runrepl "$stcfg" --dataset=rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ani jednego snapshota'; }     && ok "replace: a copy with no snapshots is refused"     || bad "replace: a copy with no snapshots is refused" "$out"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ani jednego snapshota'; } \
+    && ok "replace: a copy with no snapshots is refused" \
+    || bad "replace: a copy with no snapshots is refused" "$out"
 
 # And the property the whole slice rests on: none of the above wrote anything.
 # The stub fails any zfs subcommand other than list/get, so a mutation would have
@@ -694,6 +711,7 @@ if grep -qvE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null; then
 else
     ok "replace: the whole slice only ever reads"
 fi
+
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
