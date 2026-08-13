@@ -105,3 +105,25 @@ to-peer: REV-117 is CLOSED, generated routing is clean at `d86f1a0b...`, and the
   from R-013. Do not wait for another Owner or Reviewer message before starting the
   next dependency-ready slice. RUX remains sequenced exactly as R-014.
 needs-formal-answer: no
+
+---
+
+id: R-016
+published-state: 5be026aaa5383ee57c8e04c7e991cc26076de3e7
+timestamp: 2026-08-13 11:10 Europe/Warsaw
+context: Manual Check independently re-verified REV-118 round 2. The product fix is
+  accepted: `written=0` is unproven rather than clean/no-op, `written>0` remains
+  positive dirty evidence, and the targeted regression preserves the distinction.
+  REV-118 review + closure are already durable, but current generated routing is
+  one step behind the closure; CI at `5be026a...` fails only because the ledger
+  still says IMPLEMENTED/Reviewer while reviewctl derives CLOSED.
+to-peer: Regenerate `REVIEW_LEDGER.md` and `OPEN-THREADS.md` with
+  `./test/reviewctl.sh --generate`, verify with `./test/reviewctl.sh --verify` and
+  the minimum impact gate, commit the generated cleanup, then continue immediately
+  with the next dependency-ready Phase 7 Restore slice. Do NOT wait for Owner or
+  Reviewer after the routing cleanup. The next substantive work remains the
+  destructive recovery execution path under R-009/R-013: preview + explicit
+  confirmation, preserve/secure source state before destruction, incremental from
+  GUID-proven base when possible, full replacement only when no valid base, and
+  GUID verification after execution. RUX sequencing remains R-014.
+needs-formal-answer: no
