@@ -3049,6 +3049,103 @@ restore_landing_path() {   # <copy dataset> <original source> -> landing path
     printf '%s/restore/%s\n' "${copy%%/*}" "$src"
 }
 
+# Phase 7 -- the DEFAULT recovery strategy, computed and shown, never executed here.
+#
+# The Owner's default recovery intent (OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12) is
+# "restore the LATEST valid backup recovery point back into the ORIGINAL source
+# path", and the operator is explicitly not supposed to choose ZFS transport
+# mechanics. Something therefore has to decide between incremental and full, and
+# that decision has to be visible BEFORE anything destructive exists to run it --
+# which is what this does. Read-only: `zfs list` only, no writes, no verb.
+#
+# The base is proven by GUID, never by name: policy step 2 says so, and the
+# measured reason is the same one that governs consistency -- one snapsend run
+# names every dataset from a single clock read, so equal names across datasets
+# prove nothing about identity.
+restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows>
+    local copy="$1" srcpath="$2" snaps="$3"
+
+    # A pull relationship's original source lives on another host. Determining its
+    # strategy needs that host, which is an SSH read this read-only slice does not
+    # take. Say so rather than implying the local answer applies.
+    case "$srcpath" in
+        *:*) echo "  Strategia:  (zrodlo '$srcpath' jest ZDALNE -- ustalenie strategii wymaga odpytania tamtego hosta; ten wycinek tego nie robi)"
+             return 0 ;;
+    esac
+
+    local latest latest_guid
+    latest="$(printf '%s' "$snaps" | tail -1 | cut -f1)"
+    latest_guid="$(printf '%s' "$snaps" | tail -1 | cut -f3)"
+    echo "  Punkt docelowy (domyslna polityka: NAJNOWSZY -> oryginalna sciezka):"
+    echo "    ${latest#*@}  guid=$latest_guid"
+
+    if ! zfs list -H -o name "$srcpath" >/dev/null 2>&1; then
+        echo "  Strategia:  FULL -- zrodlo '$srcpath' nie istnieje, wiec nie ma czego niszczyc"
+        echo "              ani z czym robic przyrostu. Odtworzenie stworzy je od zera."
+        return 0
+    fi
+
+    # The common base is the NEWEST backup snapshot whose guid also exists on the
+    # source. Everything on the source newer than it is what blocks an incremental
+    # receive -- and is exactly what the destructive step would have to remove.
+    local srcguids base_snap="" base_guid="" sguid
+    srcguids="$(zfs list -H -p -t snapshot -o guid -d 1 "$srcpath" 2>/dev/null)"
+    local sname screat sg
+    while IFS=$'\t' read -r sname screat sg; do
+        [ -n "$sg" ] || continue
+        printf '%s\n' "$srcguids" | grep -qxF -- "$sg" && { base_snap="$sname"; base_guid="$sg"; }
+    done <<< "$snaps"
+
+    if [ -z "$base_guid" ]; then
+        echo "  Strategia:  FULL na ISTNIEJACE zrodlo -- zaden snapshot kopii nie ma guida"
+        echo "              obecnego na '$srcpath'. Wspolnej bazy NIE MA, wiec przyrost jest"
+        echo "              niemozliwy, a pelne odtworzenie zastapiloby zywe zrodlo. To jest"
+        echo "              operacja niszczaca i nalezy do osobnego czasownika, ktorego nie ma."
+        return 0
+    fi
+
+    echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
+    echo "    ${base_snap#*@}  guid=$base_guid"
+
+    # What stands in the way, named precisely. `written@` is not consulted here:
+    # the policy asks which SNAPSHOTS block the receive, and that is a set, not a
+    # byte count.
+    #
+    # This is computed BEFORE deciding the strategy, and the live lab is why. An
+    # earlier cut checked base==latest first and reported "nothing to do" for a
+    # source carrying two snapshots NEWER than the backup's latest point. That was
+    # wrong: the requested end state is the source AT that point, and a source that
+    # has moved past it is not in that state. No data needs transferring, but the
+    # source still has to be rolled back -- which is destructive, and calling it
+    # "nothing to do" would have hidden exactly the destruction the operator must
+    # approve.
+    local blockers
+    blockers="$(zfs list -H -p -t snapshot -o name,guid -s creation -d 1 "$srcpath" 2>/dev/null \
+                | awk -v b="$base_guid" 'f{print} $2==b{f=1}' | cut -f1)"
+
+    if [ "$base_guid" = "$latest_guid" ]; then
+        if [ -z "$blockers" ]; then
+            echo "  Strategia:  NIC DO ZROBIENIA -- zrodlo jest juz dokladnie w zadanym punkcie."
+            return 0
+        fi
+        echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
+        echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
+        echo "              snapshoty zrodla musza zniknac. Nic sie nie przesyla."
+    else
+        echo "  Strategia:  INKREMENT od wspolnej bazy do najnowszego punktu."
+    fi
+
+    if [ -n "$blockers" ]; then
+        echo "  BLOKUJE / DO USUNIECIA (snapshoty zrodla NOWSZE niz wspolna baza):"
+        printf '%s\n' "$blockers" | sed 's/.*@/    /'
+        echo "  To jest operacja NISZCZACA dla powyzszych snapshotow zrodla i wymaga jawnego"
+        echo "  potwierdzenia. Czasownik, ktory ja wykonuje, jeszcze nie istnieje."
+    else
+        echo "  Nic po stronie zrodla nie blokuje przyrostu -- zaden snapshot zrodla nie jest"
+        echo "  nowszy niz wspolna baza."
+    fi
+}
+
 cmd_restore() {
     local plan=0 dataset="" config="" snapshot="" yes=0
     for a in "$@"; do
@@ -3150,7 +3247,7 @@ cmd_restore() {
             fi
             printf '    %s  guid=%-22s %s%s\n' "$human" "${sguid:--}" "${sname#*@}" "$flag"
         done <<< "$snaps"
-        echo "  Odtworzenie wyladowaloby jako: ${src[$i]} (sciezka zrodlowa), przez osobny czasownik -- ten wycinek go nie ma."
+        restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$snaps"
     done
     if [ "$shown" -eq 0 ]; then
         echo

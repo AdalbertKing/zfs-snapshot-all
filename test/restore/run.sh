@@ -423,6 +423,111 @@ out="$(RECV_GUID=999 FAIL_DESTROY=1 runs --dataset=rpool/data --snapshot=s1 --ye
     && ok "slice2: a cleanup that fails names this attempt's staging dataset and never claims success" \
     || bad "slice2: a cleanup that fails names this attempt's staging dataset and never claims success" "rc=$rc $(printf '%s' "$out"|tail -1)"
 
+# ==============================================================================
+# The default recovery STRATEGY, computed read-only
+# (OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12: latest backup point -> original path).
+#
+# The stub below projects columns per the requested -o, instead of returning one
+# fixed shape. The strategy code asks for `-o guid` and `-o name,guid` as well as
+# `-o name,creation,guid`, so a stub that ignored -o would feed the parser fields
+# from the wrong positions and prove nothing about it.
+# ==============================================================================
+mkdir -p "$WORK/bin3"
+cat > "$WORK/bin3/zfs" <<ZS3
+#!/bin/sh
+echo "\$*" >> "$WORK/zfs-calls3"
+[ "\$1" = list ] || { echo "stub3: refusing non-list: \$*" >&2; exit 9; }
+cols=""; want_snap=0
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "-o" ] && cols="\$a"
+  [ "\$a" = "snapshot" ] && want_snap=1
+  prev="\$a"
+  ds="\$a"
+done
+key=\$(printf '%s' "\$ds" | tr '/' '_')
+if [ "\$want_snap" -eq 1 ]; then
+  [ -f "$WORK/rows.\$key" ] || exit 1
+  # canonical row: name<TAB>creation<TAB>guid ; project the requested columns
+  awk -F'\t' -v c="\$cols" '{
+      n=split(c,f,","); out=""
+      for(i=1;i<=n;i++){
+        v = (f[i]=="name")?\$1 : (f[i]=="creation")?\$2 : (f[i]=="guid")?\$3 : "-"
+        out = (i==1)? v : out "\t" v
+      }
+      print out
+  }' "$WORK/rows.\$key"
+  exit 0
+fi
+grep -qx "\$ds" "$WORK/exists" 2>/dev/null || exit 1
+echo "\$ds"; exit 0
+ZS3
+chmod +x "$WORK/bin3/zfs"
+
+runstrat() {
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+      cmd_restore --config="$1" --plan ) 2>&1
+}
+stcfg="$WORK/strat.conf"
+mkcfg "$stcfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n'
+COPY=hdd_store_rpool_data
+SRC=rpool_data
+
+# ---- source absent -> FULL, nothing to destroy ------------------------------
+printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'hdd/store\nhdd/store/rpool/data\n' > "$WORK/exists"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'Strategia:  FULL' && printf '%s' "$out" | grep -qi 'nie istnieje'; } \
+    && ok "strategy: an absent source is FULL with nothing to destroy" \
+    || bad "strategy: an absent source is FULL with nothing to destroy" "$(printf '%s' "$out"|grep -i strategia)"
+
+# ---- source exists, no shared guid -> FULL over a live source ---------------
+printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
+printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'FULL na ISTNIEJACE' && printf '%s' "$out" | grep -qi 'niszczaca'; } \
+    && ok "strategy: a live source with no common guid is FULL and flagged destructive" \
+    || bad "strategy: a live source with no common guid is FULL and flagged destructive" "$(printf '%s' "$out"|grep -i strategia)"
+
+# ---- backup ahead of source -> incremental, nothing blocking ----------------
+printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'INKREMENT' && printf '%s' "$out" | grep -q 'guid=11' \
+  && printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje'; } \
+    && ok "strategy: a backup ahead of the source is an incremental from the proven base" \
+    || bad "strategy: a backup ahead of the source is an incremental from the proven base" "$(printf '%s' "$out"|grep -iE 'strategia|baza')"
+
+# ---- THE CASE THE LIVE LAB CAUGHT -------------------------------------------
+# The source holds the backup's latest point AND two snapshots past it. No data
+# needs transferring, but the source is NOT in the requested end state, so this is
+# a rollback -- destructive. An implementation comparing base==latest first and
+# stopping would call this "nothing to do" and hide the destruction.
+printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\nrpool/data@s2\t200\t22\nrpool/data@s3\t300\t33\n' > "$WORK/rows.$SRC"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'SAM ROLLBACK' \
+  && printf '%s' "$out" | grep -qE '^    s2$' && printf '%s' "$out" | grep -qE '^    s3$' \
+  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA'; } \
+    && ok "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" \
+    || bad "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" "$(printf '%s' "$out"|grep -iE 'strategia|^    s')"
+
+# ---- and the true no-op, so the control above is discriminating -------------
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' && ! printf '%s' "$out" | grep -q 'ROLLBACK'; } \
+    && ok "strategy: a source exactly at the point IS a no-op (control)" \
+    || bad "strategy: a source exactly at the point IS a no-op (control)" "$(printf '%s' "$out"|grep -i strategia)"
+
+# ---- a remote source is not guessed at --------------------------------------
+rcfg="$WORK/stratremote.conf"
+mkcfg "$rcfg" '\n[dataset:hdd/mirror]\n\tsrc          = zfsbackup@10.0.0.9:tank/x\n'
+printf 'hdd/mirror@s1\t100\t11\n' > "$WORK/rows.hdd_mirror"
+out="$(runstrat "$rcfg")"
+printf '%s' "$out" | grep -qi 'ZDALNE' \
+    && ok "strategy: a remote source says so instead of applying the local answer" \
+    || bad "strategy: a remote source says so instead of applying the local answer" "$(printf '%s' "$out"|grep -i strategia)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
