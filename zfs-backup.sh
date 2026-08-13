@@ -3268,6 +3268,47 @@ restore_relations() {   # <config>
 # them seconds earlier -- so ownership is a fact here rather than an inference
 # from ordering. A failure to remove one is reported and never silently swallowed;
 # a leftover snapshot on a production source is somebody's confusing evening.
+# The write fence (REV-119, second round).
+#
+# The commit-boundary snapshot proves nothing ARRIVED up to the moment it was
+# taken. It says nothing about the window between that check and the destructive
+# step, and a write landing there would be destroyed under an approval that never
+# covered it. Closing that window needs the source to be incapable of accepting
+# writes, not merely observed not to have taken any.
+#
+# `readonly=on` is the ZFS mechanism for exactly that: the dataset rejects writes
+# while it is set, for filesystems and ZVOLs alike, and it does NOT block the
+# snapshot, rollback or receive this path needs -- those are not userland writes.
+#
+# It is a property change on a production dataset, so it is captured and restored
+# precisely: a value that was inherited goes back to inherited, not to a local
+# copy that happens to have the same value today.
+restore_fence_raise() {   # <dataset> -> prints "<value> <source>" to restore later
+    local ds="$1" val srcp
+    val="$(zfs get -H -o value readonly "$ds" 2>/dev/null)"
+    srcp="$(zfs get -H -o source readonly "$ds" 2>/dev/null)"
+    case "$val" in on|off) ;; *) return 1 ;; esac
+    [ -n "$srcp" ] || return 1
+    zfs set readonly=on "$ds" 2>/dev/null || return 1
+    # Verify rather than trust the exit code: the whole point of a fence is that
+    # it is UP, and `set` reporting success is not the same statement.
+    [ "$(zfs get -H -o value readonly "$ds" 2>/dev/null)" = on ] || return 1
+    printf '%s %s' "$val" "$srcp"
+}
+
+restore_fence_lower() {   # <dataset> <previous value> <previous source>
+    local ds="$1" val="$2" srcp="$3" rc=0
+    case "$srcp" in
+        local|received) zfs set readonly="$val" "$ds" 2>/dev/null || rc=1 ;;
+        *)              zfs inherit readonly "$ds" 2>/dev/null || rc=1 ;;
+    esac
+    [ "$rc" -eq 0 ] || {
+        echo "UWAGA: nie udalo sie zdjac blokady zapisu z '$ds' -- dataset jest nadal readonly=on. Przywroc recznie: zfs set readonly=$val $ds (albo zfs inherit readonly $ds)" >&2
+        return 1
+    }
+    return 0
+}
+
 restore_drop_tech_snapshots() {   # <source dataset> <snapshot names...>
     local src="$1"; shift
     local s
@@ -3424,8 +3465,21 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # The check is snapshot-to-snapshot: `written` between two COMMITTED points
     # does not lag the way the live read does, so a non-zero answer here is proof
     # of arrival rather than a hint. Anything unreadable counts as arrival too.
+    # The fence goes up FIRST. Raising it after the check would leave the same
+    # window open one step further along: the check would prove nothing arrived,
+    # and a write could still land before the fence. With the fence up first, the
+    # check below covers the only window that remains -- preview to fence -- and
+    # nothing can be added after it.
+    local fence_state fence_val fence_src
+    fence_state="$(restore_fence_raise "$src")" || {
+        restore_drop_tech_snapshots "$src" "$preview_snap"
+        die "restore (odtworzenie niszczace): nie udalo sie zablokowac zapisu na '$src' (readonly=on). Bez tej blokady nie umiem zagwarantowac, ze miedzy sprawdzeniem a zniszczeniem nikt nic nie dopisze, a niszczenie niezatwierdzonego stanu jest dokladnie tym, czego ta sciezka ma nie robic. Nic nie zniszczono."
+    }
+    fence_val="${fence_state%% *}"; fence_src="${fence_state##* }"
+
     zfs snapshot "${src}@${commit_snap}" 2>/dev/null \
-        || { restore_drop_tech_snapshots "$src" "$preview_snap"
+        || { restore_fence_lower "$src" "$fence_val" "$fence_src" || true
+             restore_drop_tech_snapshots "$src" "$preview_snap"
              die "restore (odtworzenie niszczace): nie udalo sie zamknac granicy zatwierdzenia na '$src'. Nic nie zniszczono."; }
 
     local arrived unexpected
@@ -3436,6 +3490,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 
     case "$arrived" in ''|*[!0-9]*) arrived=ARRIVED ;; esac
     if [ "$arrived" != 0 ] || [ -n "$unexpected" ]; then
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || true
         restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap"
         echo "  PO ZATWIERDZENIU stan zrodla sie ZMIENIL:" >&2
         [ "$arrived" != 0 ] && echo "    nowe dane: ${arrived} B zapisane po podgladzie" >&2
@@ -3444,6 +3499,13 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     fi
 
     # ---- execution would go here -------------------------------------------
+    # The fence comes down LAST, after the destructive step would have run. A
+    # failure to lower it is loud and fatal: a production dataset silently left
+    # readonly is a different outage from the one this path was called to fix.
+    restore_fence_lower "$src" "$fence_val" "$fence_src" || {
+        restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap"
+        die "restore (odtworzenie niszczace): blokada zapisu ZOSTALA na '$src'. Nic nie zniszczono, ale dataset jest teraz readonly=on i trzeba to cofnac recznie."
+    }
     restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap"
     die "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Zbior strat zostal zmierzony i zatwierdzony, granica zatwierdzenia trzymala, a techniczne snapshoty tego przebiegu zostaly usuniete. '$src' jest dokladnie w stanie sprzed tego polecenia."
 }

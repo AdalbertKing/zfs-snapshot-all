@@ -445,6 +445,8 @@ if [ "\$1" = get ]; then
   case "\$*" in
     "get -Hp -o value written "*) prop=written ;;
     "get -Hp -o value used "*)    prop=used ;;
+    "get -H -o value readonly "*) cat "$WORK/ro.value" 2>/dev/null || echo off; exit 0 ;;
+    "get -H -o source readonly "*) cat "$WORK/ro.source" 2>/dev/null || echo default; exit 0 ;;
     *) echo "stub3: unexpected get: \$*" >&2; exit 9 ;;
   esac
   for a in "\$@"; do ds="\$a"; done
@@ -468,6 +470,24 @@ fi
 # ---- the two mutations this path is allowed to make -------------------------
 # Both are recorded, so a test can assert not just THAT the path snapshots but
 # that it removes what it made.
+# ---- the write fence --------------------------------------------------------
+# The stub MODELS the fence rather than pretending: `set readonly=on` changes what
+# the next `get` returns, so a path that never set it, or that lowered it early,
+# reads back the wrong value and the assertions notice.
+if [ "\$1" = set ]; then
+  case "\$2" in
+    readonly=*) [ -f "$WORK/fencefail" ] && { echo "cannot set readonly" >&2; exit 1; }
+                printf '%s' "\${2#readonly=}" > "$WORK/ro.value"
+                printf 'local' > "$WORK/ro.source"
+                exit 0 ;;
+  esac
+  echo "stub3: unexpected set: \$*" >&2; exit 9
+fi
+if [ "\$1" = inherit ]; then
+  [ -f "$WORK/unfencefail" ] && { echo "cannot inherit" >&2; exit 1; }
+  printf 'off' > "$WORK/ro.value"; printf 'default' > "$WORK/ro.source"
+  exit 0
+fi
 if [ "\$1" = snapshot ]; then
   full="\$2"; dsp=\${full%@*}
   key=\$(printf '%s' "\$dsp" | tr '/' '_')
@@ -670,7 +690,9 @@ runrepl() {   # <config> [dataset] [yes]
 srccount() { grep -c . "$WORK/rows.$SRC" 2>/dev/null || echo 0; }
 
 reset_src() {
-    rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" "$WORK/snapfail" "$WORK/destroyfail"
+    rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" \
+          "$WORK/snapfail" "$WORK/destroyfail" \
+          "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -855,7 +877,14 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 # 9. Every zfs call the whole section made was a read, a technical snapshot of
 #    this run, or the destroy of one of those -- checked from the stub's own log
 #    rather than from a comment. Nothing else may appear.
-strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' || true)"
+# The allowed set is enumerated rather than loosened: reads, this run's own
+# technical snapshots, and the write fence -- which is `readonly` on the source
+# dataset and nothing else. `zfs set` in general is NOT allowed here; a path that
+# started changing other properties would show up as a stray.
+strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
+          | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' \
+          | grep -vE '^set readonly=(on|off) rpool/data$' \
+          | grep -vE '^inherit readonly rpool/data$' || true)"
 [ -z "$strays" ] \
     && ok "replace: the section only reads, or touches technical snapshots it made itself" \
     || bad "replace: the section only reads, or touches technical snapshots it made itself" "$strays"
@@ -867,6 +896,76 @@ gone="$(grep -cE '^destroy rpool/data@restore-' "$WORK/zfs-calls3" 2>/dev/null |
     && ok "replace: every technical snapshot created was destroyed again ($made made, $gone destroyed)" \
     || bad "replace: every technical snapshot created was destroyed again" "made=$made destroyed=$gone"
 
+
+
+# ==============================================================================
+# REV-119 round 2 -- the WRITE FENCE.
+#
+# The commit snapshot proves nothing arrived UP TO the check. It says nothing
+# about the window between the check and the destructive step. A write landing
+# there would be destroyed under an approval that never covered it, so the source
+# has to be incapable of accepting writes rather than merely observed not to have.
+# ==============================================================================
+
+# 11. The fence goes up, and it goes up BEFORE the boundary snapshot. Ordering,
+#     because a fence raised after the check leaves the same hole one step later.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"
+fence_line=$(grep -n '^set readonly=on rpool/data$' "$WORK/zfs-calls3" | tail -1 | cut -d: -f1)
+commit_line=$(grep -n '^snapshot rpool/data@restore-commit-' "$WORK/zfs-calls3" | tail -1 | cut -d: -f1)
+{ [ -n "$fence_line" ] && [ -n "$commit_line" ] && [ "$fence_line" -lt "$commit_line" ]; } \
+    && ok "REV-119 fence: readonly=on is set BEFORE the commit boundary snapshot" \
+    || bad "REV-119 fence: readonly=on is set BEFORE the commit boundary snapshot" "fence=$fence_line commit=$commit_line"
+
+# 12. ...and it comes back down. The dataset must not be left readonly by a run
+#     that completed.
+[ "$(cat "$WORK/ro.value" 2>/dev/null)" = off ] \
+    && ok "REV-119 fence: the fence is lowered again when the run finishes" \
+    || bad "REV-119 fence: the fence is lowered again when the run finishes" "readonly is now: $(cat "$WORK/ro.value" 2>/dev/null)"
+
+# 13. A dataset that was ALREADY readonly=on locally must be left readonly=on --
+#     restoring "off" because that is the common case would silently change a
+#     deliberate setting. This is the discriminating pair for the restore logic.
+reset_src
+printf 'on' > "$WORK/ro.value"; printf 'local' > "$WORK/ro.source"
+out="$(runrepl "$stcfg" rpool/data)"
+[ "$(cat "$WORK/ro.value" 2>/dev/null)" = on ] \
+    && ok "REV-119 fence: a source that was already readonly stays readonly afterwards" \
+    || bad "REV-119 fence: a source that was already readonly stays readonly afterwards" "readonly is now: $(cat "$WORK/ro.value" 2>/dev/null)"
+
+# 14. An INHERITED value goes back to inherited, not to a local copy that happens
+#     to read the same today. `zfs inherit` must appear in the log, `zfs set
+#     readonly=off` must not.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"
+{ grep -q '^inherit readonly rpool/data$' "$WORK/zfs-calls3" \
+  && ! grep -q '^set readonly=off rpool/data$' "$WORK/zfs-calls3"; } \
+    && ok "REV-119 fence: an inherited readonly is restored by inherit, not by a local set" \
+    || bad "REV-119 fence: an inherited readonly is restored by inherit, not by a local set" "$(grep -E '^(set|inherit) readonly' "$WORK/zfs-calls3" | tail -4)"
+
+# 15. If the fence cannot be raised, refuse. Proceeding without it would mean
+#     destroying state that nothing prevented from arriving.
+reset_src
+touch "$WORK/fencefail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie udalo sie zablokowac zapisu' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+    && ok "REV-119 fence: a fence that cannot be raised refuses the run" \
+    || bad "REV-119 fence: a fence that cannot be raised refuses the run" "$out"
+[ "$(srccount)" = 1 ] \
+    && ok "REV-119 fence: that refusal also removes the technical snapshot" \
+    || bad "REV-119 fence: that refusal also removes the technical snapshot" "$(cat "$WORK/rows.$SRC")"
+
+# 16. If the fence cannot be LOWERED, say so loudly and fail. A production
+#     dataset left readonly is a different outage from the one being fixed, and
+#     an operator who is not told will debug the wrong thing.
+reset_src
+touch "$WORK/unfencefail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'blokada zapisu ZOSTALA' \
+  && printf '%s' "$out" | grep -q 'readonly'; } \
+    && ok "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" \
+    || bad "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" "$out"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
