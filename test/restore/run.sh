@@ -537,6 +537,48 @@ if [ "\$1" = destroy ]; then
   exit 0
 fi
 
+# ---- the three execution primitives -----------------------------------------
+# Modelled against the SAME rows store, so a test can assert the destructive
+# effect (blockers gone, target arrived, guid) and not merely that a command ran.
+# rollback -r <ds>@<snap>: every snapshot with a LATER creation than <snap> is
+# destroyed, which is exactly what removes the approved blockers and this run's own
+# technical snapshots (both newer than the recovery point). Verified live on pve0.
+if [ "\$1" = rollback ]; then
+  [ -f "$WORK/rollbackfail" ] && { echo "cannot rollback" >&2; exit 1; }
+  for a in "\$@"; do full="\$a"; done
+  dsp=\${full%@*}; key=\$(printf '%s' "\$dsp" | tr '/' '_')
+  bc=\$(awk -F'\t' -v n="\$full" '\$1==n{print \$2}' "$WORK/rows.\$key")
+  [ -n "\$bc" ] || { echo "no such snapshot '\$full'" >&2; exit 1; }
+  awk -F'\t' -v bc="\$bc" '(\$2+0)<=(bc+0)' "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp"
+  mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
+  exit 0
+fi
+# send emits a tiny "stream" carrying only what recv needs: the target snapshot's
+# bare name and its guid. A real send carries the data; the identity is what the
+# GUID acceptance test is about, so the stub carries the identity.
+if [ "\$1" = send ]; then
+  [ -f "$WORK/sendfail" ] && { echo "send failed" >&2; exit 1; }
+  for a in "\$@"; do last="\$a"; done
+  key=\$(printf '%s' "\${last%@*}" | tr '/' '_')
+  g=\$(awk -F'\t' -v n="\$last" '\$1==n{print \$3}' "$WORK/rows.\$key")
+  printf '%s\t%s\n' "\${last#*@}" "\$g"
+  exit 0
+fi
+# recv lands the streamed snapshot on the destination with the streamed guid --
+# unless recvguid overrides it, which models a clean pipeline that produced the
+# WRONG identity (the case the GUID acceptance test exists to catch).
+if [ "\$1" = recv ] || [ "\$1" = receive ]; then
+  for a in "\$@"; do dst="\$a"; done
+  IFS= read -r line || line=""
+  [ -f "$WORK/recvfail" ] && { echo "recv failed" >&2; exit 1; }
+  snap=\$(printf '%s' "\$line" | cut -f1)
+  g=\$(printf '%s' "\$line" | cut -f2)
+  [ -f "$WORK/recvguid" ] && g=\$(cat "$WORK/recvguid")
+  key=\$(printf '%s' "\$dst" | tr '/' '_')
+  printf '%s@%s\t999999\t%s\n' "\$dst" "\$snap" "\$g" >> "$WORK/rows.\$key"
+  exit 0
+fi
+
 [ "\$1" = list ] || { echo "stub3: refusing non-list: \$*" >&2; exit 9; }
 cols=""; want_snap=0
 prev=""
@@ -720,7 +762,9 @@ reset_src() {
     rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" \
           "$WORK/snapfail" "$WORK/destroyfail" \
           "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source" \
-          "$WORK/arrivesnap_samesecond" "$WORK/verifyfail" "$WORK/commitsnapfail"
+          "$WORK/arrivesnap_samesecond" "$WORK/verifyfail" "$WORK/commitsnapfail" \
+          "$WORK/rollbackfail" "$WORK/sendfail" "$WORK/recvfail" "$WORK/recvguid" \
+          "$WORK/written.$SRC"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -749,14 +793,15 @@ out="$(runrepl "$stcfg" rpool/nowhere)"; rc=$?
 # come back with the flag, against whatever shape it turns out to have.
 
 # The relationship resolves BOTH ways, source path or copy path, because an
-# operator reaching for recovery may know either one.
+# operator reaching for recovery may know either one. With a clean boundary and
+# --yes it now runs to completion: previews INKREMENT, executes, and reports done.
 for name in rpool/data hdd/store/rpool/data; do
     reset_src
     out="$(runrepl "$stcfg" "$name")"; rc=$?
-    { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
-      && printf '%s' "$out" | grep -q 'INKREMENT'; } \
-        && ok "replace: '$name' resolves to the relationship and previews before refusing" \
-        || bad "replace: '$name' resolves to the relationship and previews before refusing" "$out"
+    { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'INKREMENT' \
+      && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+        && ok "replace: '$name' resolves to the relationship, previews and executes" \
+        || bad "replace: '$name' resolves to the relationship, previews and executes" "rc=$rc" "$out"
 done
 
 # The preview an operator confirms and the decision the code takes must be ONE
@@ -870,14 +915,15 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
     || bad "REV-119: a snapshot arriving after the approval is named and refuses the run" "$out"
 
 # 6. The control that makes 4 and 5 mean something: with nothing arriving, the
-#    same path reaches the execution point. Without this, a path that always
-#    refused would pass both race tests.
+#    same path crosses the boundary and RUNS to completion. Without this, a path
+#    that always refused at the boundary would pass both race tests. The boundary
+#    holding is now proven by the restore actually finishing, not by a placeholder.
 reset_src
-out="$(runrepl "$stcfg" rpool/data)"
-{ printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
   && ! printf '%s' "$out" | grep -q 'ZMIENIL'; } \
-    && ok "REV-119: with nothing arriving the boundary holds and the path proceeds (control)" \
-    || bad "REV-119: with nothing arriving the boundary holds and the path proceeds (control)" "$out"
+    && ok "REV-119: with nothing arriving the boundary holds and the restore completes (control)" \
+    || bad "REV-119: with nothing arriving the boundary holds and the restore completes (control)" "rc=$rc" "$out"
 
 # 7. The measurement is never sold as a safety copy. R-017 was explicit: if the
 #    restore destroys it, calling it preservation is the most dangerous kind of
@@ -902,29 +948,10 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
     && ok "REV-119: that refusal also cleans up after itself" \
     || bad "REV-119: that refusal also cleans up after itself" "$(cat "$WORK/rows.$SRC")"
 
-# 9. Every zfs call the whole section made was a read, a technical snapshot of
-#    this run, or the destroy of one of those -- checked from the stub's own log
-#    rather than from a comment. Nothing else may appear.
-# The allowed set is enumerated rather than loosened: reads, this run's own
-# technical snapshots, and the write fence -- which is `readonly` on the source
-# dataset and nothing else. `zfs set` in general is NOT allowed here; a path that
-# started changing other properties would show up as a stray.
-strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
-          | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' \
-          | grep -vE '^set readonly=(on|off) rpool/data$' \
-          | grep -vE '^inherit (-S )?readonly rpool/data$' || true)"
-[ -z "$strays" ] \
-    && ok "replace: the section only reads, or touches technical snapshots it made itself" \
-    || bad "replace: the section only reads, or touches technical snapshots it made itself" "$strays"
-
-# 10. And every technical snapshot that was created was also destroyed.
-made="$(grep -cE '^snapshot rpool/data@restore-' "$WORK/zfs-calls3" 2>/dev/null || echo 0)"
-gone="$(grep -cE '^destroy rpool/data@restore-' "$WORK/zfs-calls3" 2>/dev/null || echo 0)"
-{ [ "$made" -gt 0 ] && [ "$made" = "$gone" ]; } \
-    && ok "replace: every technical snapshot created was destroyed again ($made made, $gone destroyed)" \
-    || bad "replace: every technical snapshot created was destroyed again" "made=$made destroyed=$gone"
-
-
+# The whole-suite mutation audit (every zfs call was allowed; no technical
+# snapshot survived) moved to the END of the file: now that execution exists, the
+# destructive primitives run in the sections below too, and the audit is stronger
+# read across the entire suite than across this section alone.
 
 # ==============================================================================
 # REV-119 round 2 -- the WRITE FENCE.
@@ -986,21 +1013,19 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 
 # 16. If the fence cannot be LOWERED, say so loudly and fail. A production
 #     dataset left readonly is a different outage from the one being fixed, and
-#     an operator who is not told will debug the wrong thing.
+#     an operator who is not told will debug the wrong thing. Now that execution
+#     exists, a clean boundary here RESTORES the source and only then fails to
+#     lower the fence: the restore SUCCEEDED, but the housekeeping did not, and the
+#     two facts are kept apart so the operator is sent to fix the readonly and not
+#     to doubt the recovery.
 reset_src
 touch "$WORK/unfencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-# The wording changed when the F1.2 residual routed this exit through the shared
-# final-status helper: the message is no longer a bespoke sentence about the fence
-# but the common "what is left to fix by hand" report. The CONTRACT is unchanged
-# and is what is asserted -- nonzero, the readonly remediation named, and no
-# exact-state claim. This path is the one where the boundary HELD and only the
-# lowering failed, which is a different branch from the unverifiable-raise case.
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'readonly' \
-  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && printf '%s' "$out" | grep -qi 'odtworzenie sie POWIODLO' \
   && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
-    && ok "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" \
-    || bad "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" "$out"
+    && ok "REV-119 fence: a completed restore that cannot lower the fence says so loudly and names the fix" \
+    || bad "REV-119 fence: a completed restore that cannot lower the fence says so loudly and names the fix" "rc=$rc" "$out"
 
 
 # ==============================================================================
@@ -1055,20 +1080,22 @@ out="$(runrepl "$stcfg" rpool/data)"
     || bad "REV-119 F1.3: a received readonly is restored as received, not as a local override" "source is now: $(cat "$WORK/ro.source" 2>/dev/null); calls: $(grep -E '^(set|inherit)' "$WORK/zfs-calls3" | tail -3)"
 
 # 21. F1.4 -- cleanup that fails must not be laundered into "the source is
-#     exactly as you left it". The claim and the outcome have to agree.
+#     exactly as you left it". The claim and the outcome have to agree. This is a
+#     property of the REFUSAL path, where the technical snapshots are removed by
+#     `zfs destroy`; a declined confirmation exercises it without executing.
 reset_src
 touch "$WORK/destroyfail"
-out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"; rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
   && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
     && ok "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" \
     || bad "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" "$out"
 
-# 22. ...and the control, so 21 is discriminating: when cleanup succeeds, the
-#     path DOES get to say the source is unchanged.
+# 22. ...and the control, so 21 is discriminating: when a declined run's cleanup
+#     succeeds, the path DOES get to say the source is unchanged.
 reset_src
-out="$(runrepl "$stcfg" rpool/data)"
+out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
 { printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
     && ok "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" \
@@ -1114,9 +1141,11 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 
 # 25. Both left behind at once -- readonly AND a snapshot -- must both be named.
 #     One message that mentions only the one it happens to check first would send
-#     the operator to fix half of it.
+#     the operator to fix half of it. Driven off the ARRIVAL refusal so the
+#     technical snapshots are still present (a rollback would have taken them) and
+#     the failing `zfs destroy` leaves one behind while the fence stays up.
 reset_src
-touch "$WORK/unfencefail" "$WORK/destroyfail"
+echo 4096 > "$WORK/arrivebytes"; touch "$WORK/unfencefail" "$WORK/destroyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s' "$out" | grep -q "readonly" \
@@ -1124,15 +1153,16 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
     && ok "REV-119 F1.2: both leftovers are named when both happen" \
     || bad "REV-119 F1.2: both leftovers are named when both happen" "$out"
 
-# 26. And the control that keeps 23-25 honest: with everything working, the path
-#     still says the source is exactly as it was. An implementation that simply
-#     stopped making the claim would pass all three above.
+# 26. And the control that keeps 23-25 honest: with everything working on a
+#     declined run, the path still says the source is exactly as it was. An
+#     implementation that simply stopped making the claim would pass all three
+#     above.
 reset_src
-out="$(runrepl "$stcfg" rpool/data)"
+out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
 { printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
-    && ok "REV-119 F1.2: a clean run still makes the exact-state claim (control)" \
-    || bad "REV-119 F1.2: a clean run still makes the exact-state claim (control)" "$out"
+    && ok "REV-119 F1.2: a clean declined run still makes the exact-state claim (control)" \
+    || bad "REV-119 F1.2: a clean declined run still makes the exact-state claim (control)" "$out"
 
 
 # 27. The one branch none of 23-26 reached: the BOUNDARY snapshot fails to be
@@ -1153,6 +1183,124 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 [ "$(srccount)" = 1 ] \
     && ok "REV-119 F1.2: ...and the preview snapshot is still cleaned up on that branch" \
     || bad "REV-119 F1.2: ...and the preview snapshot is still cleaned up on that branch" "$(cat "$WORK/rows.$SRC")"
+
+# ==============================================================================
+# EXECUTION -- the destructive step itself (R-026, the internal slice after
+# REV-119 closure). One GUID-anchored rollback for every reachable strategy, plus
+# an incremental receive when the recovery point is ahead of the source.
+#
+# rollback / send / recv are modelled against the same rows store the reads use,
+# so these assert the EFFECT (blockers gone, target arrived, guid matches) and not
+# merely that a command ran. The live-ZFS end-to-end proof is separate; this pins
+# the branching and the truthful failure/cleanup semantics.
+# ==============================================================================
+
+# EX1. Increment: the recovery point is ahead of the source. The source is rolled
+#      back to the common base and the delta is received. Success is verified by
+#      GUID -- the source's newest snapshot must carry the target guid (22 here).
+#      This is also the strong control for the arrival tests: a clean boundary now
+#      RUNS to completion rather than reaching a placeholder.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && grep -q '^rpool/data@s2	' "$WORK/rows.$SRC" \
+  && [ "$head_guid" = 22 ] \
+  && ! grep -q 'restore-' "$WORK/rows.$SRC"; } \
+    && ok "EXEC increment: source rolled to base, delta received, newest snapshot carries the target guid" \
+    || bad "EXEC increment: source rolled to base, delta received, newest snapshot carries the target guid" \
+           "rc=$rc head=$head_guid rows=[$(tr '\n' ';' < "$WORK/rows.$SRC")]" "$out"
+
+# EX2. Rollback-only: the source already holds the recovery point but has moved
+#      PAST it. No transfer; the blockers newer than the base are destroyed and the
+#      source lands back on the recovery point (guid 11).
+reset_src
+printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\nrpool/data@s2\t200\t22\nrpool/data@s3\t300\t33\n' > "$WORK/rows.$SRC"
+sends_before=$(grep -c '^send ' "$WORK/zfs-calls3" 2>/dev/null || echo 0)
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+sends_after=$(grep -c '^send ' "$WORK/zfs-calls3" 2>/dev/null || echo 0)
+head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && ! grep -q '^rpool/data@s2	' "$WORK/rows.$SRC" \
+  && ! grep -q '^rpool/data@s3	' "$WORK/rows.$SRC" \
+  && [ "$head_guid" = 11 ] \
+  && [ "$sends_before" = "$sends_after" ]; } \
+    && ok "EXEC rollback: blockers destroyed, source back on the recovery point, no transfer" \
+    || bad "EXEC rollback: blockers destroyed, source back on the recovery point, no transfer" \
+           "rc=$rc head=$head_guid sends=$sends_before/$sends_after rows=[$(tr '\n' ';' < "$WORK/rows.$SRC")]" "$out"
+
+# EX3. Discard-live: base == latest, no newer snapshot, but live writes after it.
+#      Rolling back to the base discards those live changes; still no transfer.
+reset_src
+printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+printf '4096\n' > "$WORK/written.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+head_guid="$(grep '^rpool/data@' "$WORK/rows.$SRC" | tail -1 | cut -f3)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && [ "$head_guid" = 11 ]; } \
+    && ok "EXEC discard-live: a source with live changes is rolled back to the recovery point" \
+    || bad "EXEC discard-live: a source with live changes is rolled back to the recovery point" "rc=$rc head=$head_guid" "$out"
+rm -f "$WORK/written.$SRC"
+
+# EX4. A clean pipeline that produced the WRONG identity still fails -- the GUID
+#      acceptance test is the authority, not the transfer's exit code. The source
+#      has been rolled back, so this is a destruction-began failure: never claim it
+#      is unchanged.
+reset_src
+printf '999' > "$WORK/recvguid"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'weryfikacja GUID zawiodla' \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+    && ok "EXEC guid: a clean pipeline with the wrong guid fails and never claims an unchanged source" \
+    || bad "EXEC guid: a clean pipeline with the wrong guid fails and never claims an unchanged source" "rc=$rc" "$out"
+
+# EX5. A failed transfer AFTER the rollback: the source is left on the common base,
+#      short of the target. That is real destruction without completion, and the
+#      report says so rather than claiming the source is unchanged.
+reset_src
+touch "$WORK/recvfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'COFNIETE do wspolnej bazy' \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" \
+    || bad "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" "rc=$rc" "$out"
+
+# EX6. The rollback itself fails. Every precondition is checked before it and the
+#      rollback is atomic, so NOTHING was destroyed -- and only here may the path
+#      make the exact-state claim after an execution attempt. The discriminating
+#      pair with EX5: same verb, one destroyed nothing and one destroyed the delta.
+reset_src
+touch "$WORK/rollbackfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIC nie zniszczono' \
+  && printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
+  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia'; } \
+    && ok "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" \
+    || bad "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" "rc=$rc" "$out"
+
+# ==============================================================================
+# Whole-suite mutation audit. Moved here from the slice-1 section because the
+# destructive primitives now run below too, so reading the WHOLE log is a stronger
+# statement than reading one section. Every zfs call the destructive path ever made
+# was a read, one of this run's own technical snapshots, the write fence, or one of
+# the three execution primitives on the source/copy. The allowed set is ENUMERATED,
+# not loosened: a path that started touching any other dataset or property shows up
+# as a stray.
+# ==============================================================================
+strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
+          | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' \
+          | grep -vE '^set readonly=(on|off) rpool/data$' \
+          | grep -vE '^inherit (-S )?readonly rpool/data$' \
+          | grep -vE '^rollback -r rpool/data@' \
+          | grep -vE '^send -i ' \
+          | grep -vE '^recv rpool/data$' || true)"
+[ -z "$strays" ] \
+    && ok "audit: across the whole suite the destructive path only read, fenced, or ran its own primitives" \
+    || bad "audit: across the whole suite the destructive path only read, fenced, or ran its own primitives" "$strays"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

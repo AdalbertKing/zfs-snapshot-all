@@ -498,6 +498,30 @@ Order:
 4. Real ZFS end-to-end evidence.
 5. Destructive replacement as a **separate verb**, with explicit confirmation and mandatory pre-restore snapshot.
 
+### Status — planner, safe restore, strategy, gates, and now EXECUTION (internal)
+
+Steps 1–4 landed across REV-113/114/116/118. The destructive path was then built
+gate-first (REV-119, five rounds): resolution, refusals, a loss set measured from
+a technical snapshot before the confirmation, the write fence, and the commit
+boundary — all internal, no execution, no public grammar.
+
+**The execution step itself is now implemented** (R-026, the internal slice after
+REV-119 closure), still below the CLI grammar the owner is settling
+(`OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md`). `restore_execute()` performs one
+GUID-anchored rollback for every reachable strategy (rollback / discard-live /
+unproven land the recovery point directly; increment rebuilds the delta with one
+incremental receive), accepts by GUID rather than by exit code, and separates
+"nothing destroyed" (atomic rollback failed before touching anything) from
+"partially changed" (a broken transfer after the rollback) so the truthful
+cleanup/failure semantics from REV-119 carry through. Proven end-to-end on real
+ZFS (pve0/zfs-2.1.9): increment, rollback and discard-live each verified by GUID
+out of band, the fence up through execution and down after, no run-owned snapshot
+left behind. `test/restore` 88/88; delivered direct-main pending a REV.
+
+Out of this slice, per R-026: relation-level multi-dataset failure policy and the
+public cross-host CLI. Those follow under R-025 once the execution primitive is
+reviewed. Gate 7 is not yet reached.
+
 ### Gate 7
 
 The product can both create a backup and restore it through a deliberately safe workflow.

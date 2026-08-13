@@ -3075,10 +3075,13 @@ RESTORE_BASE_GUID=""     # the GUID-proven common base, empty when there is none
 RESTORE_TARGET_SNAP=""   # the recovery point: the backup's latest snapshot, bare name
 RESTORE_TARGET_GUID=""
 RESTORE_BLOCKERS=""      # source snapshots newer than the base, full names, one per line
+RESTORE_COPY_BASE_SNAP="" # the base snapshot on the COPY (full name), the increment's `from`
+RESTORE_SRC_BASE_SNAP=""  # the base snapshot on the SOURCE (full name), the rollback target
 restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows>
     local copy="$1" srcpath="$2" snaps="$3"
     RESTORE_STRATEGY=""; RESTORE_BASE_GUID=""; RESTORE_TARGET_SNAP=""
     RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""
+    RESTORE_COPY_BASE_SNAP=""; RESTORE_SRC_BASE_SNAP=""
 
     # A pull relationship's original source lives on another host. Determining its
     # strategy needs that host, which is an SSH read this read-only slice does not
@@ -3124,6 +3127,14 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     fi
 
     RESTORE_BASE_GUID="$base_guid"
+    # The destructive step must ACT on this base, not re-derive it. Publish both
+    # sides as facts: the COPY's base snapshot is the increment's `from`; the
+    # SOURCE's base snapshot (found by the SAME guid, never by name) is the
+    # rollback target. Resolving them here rather than in the executor is what
+    # keeps the loss set the operator confirmed and the command the code runs the
+    # one same computation.
+    RESTORE_COPY_BASE_SNAP="$base_snap"
+    RESTORE_SRC_BASE_SNAP="$(zfs list -H -p -t snapshot -o name,guid -d 1 "$srcpath" 2>/dev/null | awk -v g="$base_guid" '$2==g{print $1; exit}')"
     echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
     echo "    ${base_snap#*@}  guid=$base_guid"
 
@@ -3389,31 +3400,124 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
 
-# Phase 7, the destructive recovery path -- gates only, and INTERNAL ONLY.
+# Phase 7 -- the destructive execution step itself, INTERNAL ONLY.
+#
+# Everything before this has proven the strategy, measured and confirmed the loss
+# set, raised the write fence and shown the commit boundary held. This is the one
+# place that actually destroys and rebuilds source state. It runs with the fence
+# already UP, which is safe and verified live (pve0, zfs-2.1.9): neither
+# `zfs rollback` nor incremental `zfs recv` is a userland write, so readonly=on
+# does not block them -- it only blocks the ordinary writers the fence exists to
+# keep out.
+#
+# One GUID-anchored rollback is the primitive for every reachable strategy:
+#
+#   rollback / discard-live / unproven -- the recovery point ALREADY exists on the
+#       source (base guid == target guid), so rolling the source back to it IS the
+#       whole operation. `-r` discards the approved blockers and any live writes in
+#       one atomic step, and takes this run's own technical snapshots with them
+#       (both are newer than the base), so cleanup afterwards is normally a no-op.
+#
+#   increment -- the same rollback lands the source exactly on the common base;
+#       one incremental receive base..target then rebuilds it to the recovery
+#       point. The source is at the base and fenced, so a plain `recv` applies
+#       cleanly (verified live).
+#
+# Acceptance is by GUID, never by exit code (C-006/C-007): the source's newest
+# snapshot must carry RESTORE_TARGET_GUID afterwards, or the run FAILED however
+# cleanly the commands returned. A partial incremental leaves the source rolled
+# back to the base but short of the target -- that is real destruction without
+# completion, and the caller says so rather than claiming a clean source.
+#
+# Three outcomes, so the caller can be exact about what the operator is holding:
+#   0 -- GUID-verified success.
+#   1 -- failed with NOTHING destroyed. Every precondition is checked before the
+#        rollback, and the rollback is atomic, so a 1 means the source is still
+#        exactly as it was found; the caller may make the unchanged-source claim.
+#   2 -- failed AFTER destruction began (a broken incremental, or a post-transfer
+#        GUID mismatch). The source is not as it was found and the caller never
+#        claims it is.
+# A diagnosis is printed to stderr. The caller owns the fence and the
+# technical-snapshot cleanup.
+restore_execute() {   # <src> <copy>
+    local src="$1" copy="$2"
+
+    # Preconditions FIRST, all before the rollback, so a failure here is a clean 1.
+    [ -n "$RESTORE_SRC_BASE_SNAP" ] || {
+        echo "restore-exec: brak snapshotu bazowego na zrodle '$src' -- nie wiem, do ktorego punktu cofnac. Nic nie zmieniono." >&2
+        return 1
+    }
+    if [ "$RESTORE_STRATEGY" = increment ]; then
+        [ -n "$RESTORE_COPY_BASE_SNAP" ] && [ -n "$RESTORE_TARGET_SNAP" ] || {
+            echo "restore-exec: brak nazwy snapshotu bazy kopii lub punktu docelowego -- nie moge zlozyc przyrostu. Nic nie zmieniono." >&2
+            return 1
+        }
+    fi
+
+    # The single destructive primitive, shared by every reachable strategy. `-r`
+    # removes exactly what is newer than the base: the approved blockers plus this
+    # run's own technical snapshots. Rollback is atomic, so a failure here leaves
+    # the source as it was found -- a clean 1.
+    # ZFS's own stderr is deliberately NOT suppressed on the three execution
+    # primitives, unlike the read/probe calls above. This is the one place where a
+    # failure is both destructive and hard to diagnose, and "rollback failed" without
+    # ZFS's reason ("dataset is busy", "out of space") sends the operator debugging
+    # blind at the worst possible moment.
+    if ! zfs rollback -r "$RESTORE_SRC_BASE_SNAP"; then
+        echo "restore-exec: rollback zrodla do '$RESTORE_SRC_BASE_SNAP' nie powiodl sie. Rollback jest atomowy, wiec zrodlo pozostaje w stanie sprzed niego. Nic nie zniszczono." >&2
+        return 1
+    fi
+
+    # Past this line the source HAS been rolled back -- any failure is a 2.
+    # increment: the rollback landed the source on the common base; rebuild it up
+    # to the recovery point with one incremental receive.
+    if [ "$RESTORE_STRATEGY" = increment ]; then
+        if ! zfs send -i "$RESTORE_COPY_BASE_SNAP" "${copy}@${RESTORE_TARGET_SNAP}" | zfs recv "$src"; then
+            echo "restore-exec: przyrostowy transfer '${RESTORE_COPY_BASE_SNAP} .. ${copy}@${RESTORE_TARGET_SNAP}' -> '$src' nie powiodl sie. Zrodlo zostalo COFNIETE do wspolnej bazy, ale NIE doprowadzone do punktu docelowego." >&2
+            return 2
+        fi
+    fi
+
+    # Acceptance test: the newest source snapshot must carry the target GUID. This
+    # is the authority, not the exit codes above -- a broken transfer that still
+    # returned 0 shows up here as a mismatch. The rollback already happened, so a
+    # mismatch is a 2.
+    local head_guid
+    head_guid="$(zfs list -H -p -t snapshot -o guid -s creation -d 1 "$src" 2>/dev/null | tail -1)"
+    if [ "$head_guid" != "$RESTORE_TARGET_GUID" ]; then
+        echo "restore-exec: weryfikacja GUID zawiodla -- najnowszy snapshot zrodla ma guid '${head_guid:-<brak>}', oczekiwano '$RESTORE_TARGET_GUID'. Stan zrodla NIE jest potwierdzony jako punkt docelowy." >&2
+        return 2
+    fi
+    return 0
+}
+
+# Phase 7, the destructive recovery path -- resolves, gates, measures, confirms,
+# fences, and now EXECUTES. INTERNAL ONLY.
 #
 # The owner's default recovery is "latest valid backup -> the original source
-# path", which means destroying source state. This builds every gate in front of
-# that and not the step itself: it resolves the relationship, refuses everything
-# it cannot prove it understands, prints the same preview `--plan` prints, and
-# stops.
+# path", which means destroying source state. This resolves the relationship,
+# refuses everything it cannot prove it understands, prints the same preview
+# `--plan` prints, measures and confirms the loss set, fences the source, checks
+# the commit boundary held, and then -- via restore_execute -- performs the
+# destructive step and verifies the result by GUID.
 #
-# NOT REACHABLE FROM THE CLI, on purpose (R-018/R-019). The owner is still
+# NOT REACHABLE FROM THE CLI, on purpose (R-018/R-019/R-026). The owner is still
 # deciding the public restore selector/destination grammar, so committing a flag
 # now would freeze a surface that is not theirs yet -- and a public flag is much
-# harder to withdraw than to add. The gates and their tests are settled and can
-# be built underneath it; the door on top gets hung when the owner has decided
-# what shape it is. The suite calls this function directly.
+# harder to withdraw than to add. The internal primitive and its tests are settled
+# and can be built underneath it; the door on top gets hung when the owner has
+# decided what shape it is. The suite calls this function directly.
 #
-# There is deliberately no confirmation prompt yet. Asking an operator to approve
-# a destruction that cannot happen is theatre, and a prompt nobody can answer
-# meaningfully teaches them to answer prompts without reading. It lands together
-# with the execution it guards.
+# The confirmation is real now that the destruction it guards exists: it is shown
+# the ZMIERZONY loss set (measured from a technical snapshot, per REV-119 F1) and
+# then asked, unless --yes was given.
 #
-# REV-119 F1 changed what "mutates" means here. The gates below still touch
-# nothing, but the confirmation boundary that follows them MUST take a technical
-# snapshot before it can state the loss set exactly -- see the block further down.
-# Every such snapshot is removed again on every exit path, so a refusal still
-# leaves the source byte-identical to how it was found.
+# REV-119 F1: the confirmation boundary MUST take a technical snapshot before it
+# can state the loss set exactly -- see the block further down. Every technical
+# snapshot is removed again on every exit path (the destructive rollback destroys
+# them itself, being newer than the recovery point), so a refusal still leaves the
+# source byte-identical to how it was found and a success leaves nothing of this
+# run behind.
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -3600,15 +3704,61 @@ restore_replace_internal() {   # <dataset> <config> <yes>
             "$preview_snap" "$commit_snap"
     fi
 
-    # ---- execution would go here -------------------------------------------
-    # The fence comes down LAST, after the destructive step would have run. A
-    # failure to lower it is loud and fatal: a production dataset silently left
-    # readonly is a different outage from the one this path was called to fix.
+    # ---- execution ---------------------------------------------------------
+    # The fence is UP and the commit boundary held. Perform the destructive step.
+    # The fence comes down LAST, after execution, whichever way it went -- a
+    # production dataset silently left readonly is a different outage from the one
+    # this path was called to fix.
+    restore_execute "$src" "$copy"; local erc=$?
+
+    if [ "$erc" -eq 1 ]; then
+        # Nothing was destroyed: every precondition is checked before the rollback,
+        # and the rollback is atomic. This is an ordinary refusal, so once the fence
+        # is down and this run's technical snapshots are gone, the source is exactly
+        # as it was found -- and restore_die_after_cleanup makes that claim only when
+        # both are true.
+        fence_after=ok
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
+        restore_die_after_cleanup "$src" "$fence_after" \
+            "restore (odtworzenie niszczace): krok wykonawczy nie ruszyl (szczegoly wyzej) -- NIC nie zniszczono." \
+            "$preview_snap" "$commit_snap"
+    fi
+
+    if [ "$erc" -ne 0 ]; then
+        # erc == 2: destruction has begun, so the source is NOT as it was found and
+        # the exact-state claim is never made on this path. Bring the fence down and
+        # clean this run's snapshots (a partial rollback may have left them), then
+        # report honestly and stop.
+        fence_after=ok
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
+        local snaps_left=ok
+        restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || snaps_left=dirty
+        local extra=""
+        [ "$fence_after" = dirty ] && extra=" Ponadto nie udalo sie zdjac blokady zapisu (readonly) ze zrodla -- komenda naprawcza wyzej."
+        [ "$snaps_left" = dirty ] && extra="${extra} Techniczne snapshoty tego przebiegu pozostaly (wypisane wyzej)."
+        die "restore (odtworzenie niszczace): krok WYKONAWCZY nie zakonczyl sie sukcesem (szczegoly wyzej). Zrodlo '$src' zostalo czesciowo zmienione i NIE jest w stanie sprzed polecenia -- sprawdz jego snapshoty i biezacy stan zanim ponowisz.${extra}"
+    fi
+
+    # Success. The rollback/receive already destroyed this run's technical
+    # snapshots (both were newer than the recovery point), so cleanup is normally a
+    # no-op -- but it still reports honestly if anything survived, and the fence
+    # still has to come down.
     fence_after=ok
     restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
-    restore_die_after_cleanup "$src" "$fence_after" \
-        "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Zbior strat zostal zmierzony i zatwierdzony, a granica zatwierdzenia trzymala." \
-        "$preview_snap" "$commit_snap"
+    local snaps_left=ok
+    restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || snaps_left=dirty
+
+    echo
+    echo "ODTWORZENIE ZAKONCZONE: '$src' odtworzono do punktu '${RESTORE_TARGET_SNAP}' (guid ${RESTORE_TARGET_GUID}), potwierdzone GUID-em najnowszego snapshotu zrodla."
+    if [ "$fence_after" = ok ] && [ "$snaps_left" = ok ]; then
+        echo "Blokada zapisu zdjeta; technicznych snapshotow tego przebiegu nie pozostalo."
+        return 0
+    fi
+    # The restore succeeded; housekeeping did not fully. Keep the two facts apart --
+    # a single sentence would send the operator to fix only half of it.
+    [ "$fence_after" = dirty ] && echo "UWAGA: odtworzenie sie POWIODLO, ale nie udalo sie zdjac blokady zapisu (readonly=on) ze zrodla '$src' -- komenda naprawcza wyzej. To osobna awaria od tej, ktora naprawiales." >&2
+    [ "$snaps_left" = dirty ] && echo "UWAGA: odtworzenie sie POWIODLO, ale techniczny snapshot tego przebiegu pozostal (wypisany wyzej) -- usun go recznie." >&2
+    return 3
 }
 
 cmd_restore() {
