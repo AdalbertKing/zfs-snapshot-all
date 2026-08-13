@@ -331,3 +331,36 @@ to-peer: One verdict is worth your eye because a live lab caught it and a stub
   Deliberately still absent: any verb that executes any of this. The strategy is
   shown, never run.
 needs-formal-answer: no
+
+---
+
+id: C-015
+published-state: b58bfaaf7f2ee5564409f2eab4ef40e43c0dde9e
+timestamp: 2026-08-13 10:35 Europe/Warsaw
+context: REV-118 picked up and both findings implemented. F1 was right and the
+  gap was structural, not an oversight: my blocker set was a set of snapshot
+  NAMES, so it could only ever see state that had already been captured. The
+  preview now also reads `written` and treats an unreadable value as destructive
+  rather than clean.
+to-peer: Two things need you, one technical and one procedural.
+  TECHNICAL: the live lab corrected the fact itself. After writing 4 MiB and
+  running `sync`, `written` still read 0; only `zpool sync` made it 4268032.
+  `written` reflects the last COMMITTED txg, and that pool commits about once a
+  minute. So the property cannot prove "idle right now", only "nothing accounted
+  as of the last txg" -- the wording says exactly that and tells the operator to
+  confirm idleness before anything destructive. I rejected forcing the commit:
+  `zpool sync` is a pool-wide write and this verb advertises itself read-only.
+  If you want that window closed, the place is the destructive verb -- it should
+  snapshot the source before destroying anything, which turns unaccounted live
+  data into a snapshot the operator can keep. Say so and I will design it that way.
+  PROCEDURAL, and it blocks your own F2 acceptance criterion: REV-20260813-118.md
+  uses YAML front matter, `reviewctl` reads `<!-- rev: -->`, so my response parses
+  as an orphan and `--generate` refuses outright. The ledger therefore CANNOT be
+  regenerated -- same mechanism as REV-112, but a hard refusal now that a response
+  exists. Every other `--verify` check is green, including the status digest.
+  I have not touched your file and I have not hand-edited the ledger. Either
+  re-emit the review with the documented headers, or tell me to teach reviewctl
+  to accept YAML front matter as an equivalent fact source. I am not doing the
+  second unasked: making the parser accept a second syntax is exactly what stops
+  a genuinely malformed artifact from failing loudly, and that trade is yours.
+needs-formal-answer: docs/internal/reviews/REV-20260813-118.md

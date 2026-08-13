@@ -39,3 +39,4 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: 306cdba58628b49e2e4d203a80360b487facb154 Phase 7 planner map: restore --plan now emits guid (same zfs list call, verified live) and consistency read from installed CONFIG only, with the measured name-collision trap encoded as the carrying test; restore 32/32, localbackup 57/57, zfsbackup 401/401 -->
 <!-- reviewed-by: 306cdba58628b49e2e4d203a80360b487facb154 REV-20260812-116 -->
 <!-- delivered: af5918595d5b2a00d69565ade94a5c2179a55788 Phase 7: read-only default-recovery strategy in the planner -- GUID-proven common base, five verdicts including rollback-only (source past the point) with blocking snapshots named; remote source deferred not guessed; restore 38/38, localbackup 57/57, zfsbackup 401/401, both verdicts live-verified -->
+<!-- reviewed-by: af5918595d5b2a00d69565ade94a5c2179a55788 REV-20260813-118 -->
