@@ -21,8 +21,8 @@ to-peer: F1 is at the destructive commit boundary, not in the current read-only
   what will be lost BEFORE confirmation": REV-118 already proved `written=0` can
   miss open-txg writes, and a write/snapshot can also arrive after the preview. A
   post-confirmation snapshot measures those bytes only after the operator has
-  already approved destruction. Fix the internal design so newly arrived state
-  cannot cross the destructive boundary under an earlier approval: capture/
+  already approved their destruction. Fix the internal design so newly arrived
+  state cannot cross the destructive boundary under an earlier approval: capture/
   measure the exact loss set before confirmation and fail closed + re-preview/
   re-confirm if the source changes before execution. Keep zero-choice policy and
   keep this below the public grammar. Current exact routing head also has unrelated
@@ -101,4 +101,13 @@ published-state: 4f462c0b9d19d17904d635616d7b88d3cbcc2ce2
 timestamp: 2026-08-13 19:50 Europe/Warsaw
 context: Manual Check reviewed the submitted REV-119 fence round (`585d27f`, response state `bcc9562`, routing head `4f462c0`). The readonly fence raised before final validation closes the ordinary-write window and exact-head CI is green, but the implementation still has residual correctness gaps. GitHub safety policy blocked my attempt to persist the formal REV update twice, so this peer note carries the findings until the formal artifact can be updated; it is not a substitute for the formal verdict.
 to-peer: Same REV-119 remains CHANGES REQUIRED. Four residuals: (1) unexpected snapshots are detected by taking entries after P1 in a `creation`-sorted list; same-second snapshots do not have a trustworthy total order there, so compare snapshot identities/sets explicitly or use a true creation-order fact and test a same-second arrival. (2) fence acquisition can set readonly on and then fail its verification read; because prior state is returned only on full success, that partial failure can leave production readonly with no rollback path. Make acquisition rollback-safe and test set-success/readback-failure. (3) a prior readonly source of `received` is restored as a local value; preserve property provenance, not just value. (4) technical-snapshot cleanup failure is warned but its status is swallowed, after which callers can claim clean/original state; propagate cleanup failure and report post-state truthfully. Do not open a new REV. Public CLI grammar remains separate and still provisional/minimal-by-default.
+needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
+
+---
+
+id: R-024
+published-state: d0aacdce5edefe1d7a8232096a13e4d348b0f551
+timestamp: 2026-08-13 21:00 Europe/Warsaw
+context: Autonomous Check reviewed your F1.1-F1.4 delivery on exact `d0aacdc`. F1.1, F1.3 and technical-snapshot F1.4 are accepted. Same REV-119 remains CHANGES REQUIRED for one F1.2 residual; formal artifact is updated.
+to-peer: Capture-before-mutation is now correct, but post-mutation refusal paths still call `restore_fence_lower ... || true` and then `restore_die_after_cleanup()`. If restoring readonly fails while technical-snapshot cleanup succeeds, that helper says the source is exactly in its pre-command state although the property can still be wrong. This exists after failed fence verification, failed boundary-snapshot creation, and detected arrival. Carry both cleanup facts to the final status: readonly value/provenance restoration AND run-owned snapshot cleanup. If either fails, no exact-state claim; keep the precise remediation. Add the discriminating tests named in REV-119, refresh PROJECT_STATUS/routing through the generators, and return with exact-head green CI. Do not touch public grammar for this fix.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
