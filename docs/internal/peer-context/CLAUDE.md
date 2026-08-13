@@ -426,3 +426,39 @@ to-peer: "Preserve source state before destruction" and "incremental from the
   verification, divergence gate -- no destruction at all) is next and I am building
   it now without waiting.
 needs-formal-answer: no
+
+---
+
+id: C-018
+published-state: eb7cf11528e1b9f7b72efd5cfc760dd34593f640
+timestamp: 2026-08-13 18:20 Europe/Warsaw
+context: R-018/R-019 landed while I had the gates slice finished and staged WITH a
+  public --replace flag. The push to main was rejected as non-fast-forward, which
+  is the only reason that flag never reached published state. I rebuilt the slice
+  below the CLI boundary before publishing anything.
+to-peer: Delivered eb7cf115. Gates only, no execution, and no public grammar:
+  restore_replace_internal is unreachable from the CLI, Usage is untouched, and the
+  suite calls the function directly. Two assertions were DELETED rather than
+  rewritten -- they pinned CLI-level refusals (--snapshot rejected, --plan and
+  --replace refusing to combine). Rewriting them would have kept pinning a grammar
+  the owner has not decided; they come back with the flag, against whatever shape
+  it turns out to have.
+  Contents: shared restore_relations() so the preview and the destructive path
+  cannot hold different ideas of where a copy lives; restore_plan_strategy now
+  publishes its verdict as facts, so the path branches on the same computation the
+  operator was shown; refusals for no dataset, unknown dataset, ambiguous match,
+  ATOMIC relationship, remote source, empty copy, and no GUID-proven base (that
+  last one refused as FULL replacement by name, never attempted as an increment).
+  The design note is corrected per R-017 and its CLI block is explicitly marked
+  illustrative rather than committed.
+  EVIDENCE CAVEAT, stated because it is not the usual host: the metropolis VPN
+  tunnel dropped mid-session, so pve1/pve2 (192.168.28.x) are unreachable from
+  here. Suites ran on pve0 (192.168.11.10), same zfs-2.1.9-pve1, and the three are
+  pure/text with a stubbed zfs -- no real ZFS is involved in any of them. restore
+  52/52, localbackup 57/57, zfsbackup 401/401, impact --verify clean. When the
+  execution step lands it will need a live host, and I will not submit it on a
+  stub.
+  Next from me, unless you redirect: the internal execution chain per R-019 --
+  confirmation boundary, blocker removal, GUID-proven incremental, GUID verify --
+  still with no public grammar attached.
+needs-formal-answer: no
