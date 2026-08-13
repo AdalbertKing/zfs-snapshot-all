@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| _(nothing open)_ | - | - | - |
+| 0e6511e5 Phase 7 destructive EXECUTION step, internal and non-public (R-026/R-029): restore_execute() -- one GUID-anchored rollback as the primitive for every reachable strategy plus an incremental receive when the recovery point is ahead, acceptance by GUID not exit code, base snapshots resolved BY GUID and published as facts, failure split into destroyed-nothing (atomic rollback failed) vs partially-changed (transfer/GUID failed after it) so REV-119's truthful cleanup/exact-state semantics carry through; fence verified live to not block rollback/recv; no public grammar, restore_replace_internal still unreachable from the CLI; restore 88/88, zfsbackup 401/401, localbackup 57/57 and live end-to-end proof of all three strategies on pve0 | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
