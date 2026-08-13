@@ -983,8 +983,15 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 reset_src
 touch "$WORK/unfencefail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'blokada zapisu ZOSTALA' \
-  && printf '%s' "$out" | grep -q 'readonly'; } \
+# The wording changed when the F1.2 residual routed this exit through the shared
+# final-status helper: the message is no longer a bespoke sentence about the fence
+# but the common "what is left to fix by hand" report. The CONTRACT is unchanged
+# and is what is asserted -- nonzero, the readonly remediation named, and no
+# exact-state claim. This path is the one where the boundary HELD and only the
+# lowering failed, which is a different branch from the unverifiable-raise case.
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'readonly' \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
     && ok "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" \
     || bad "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" "$out"
 
@@ -1059,6 +1066,66 @@ out="$(runrepl "$stcfg" rpool/data)"
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
     && ok "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" \
     || bad "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" "$out"
+
+
+# ==============================================================================
+# REV-119 F1.2 residual -- a failed fence restoration must reach the final claim.
+#
+# Two independent things can be left behind on the source: the readonly property
+# and the technical snapshots. An earlier version knew about the second only, so
+# a run that failed to put readonly back but did remove its snapshots told the
+# operator the source was exactly as they had left it.
+# ==============================================================================
+
+# 23. Fence set succeeds, verification fails, restoration ALSO fails, snapshot
+#     cleanup succeeds. Nonzero exit, the readonly remediation is printed, and
+#     the exact-state claim must NOT appear.
+reset_src
+touch "$WORK/verifyfail" "$WORK/unfencefail"
+printf 'off' > "$WORK/ro.value"; printf 'default' > "$WORK/ro.source"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] \
+  && printf '%s' "$out" | grep -q "NIE jest w stanie sprzed polecenia" \
+  && printf '%s' "$out" | grep -q "readonly" \
+  && printf '%s' "$out" | grep -q 'zfs inherit readonly rpool/data' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "REV-119 F1.2: a failed fence restoration blocks the exact-state claim and names the fix" \
+    || bad "REV-119 F1.2: a failed fence restoration blocks the exact-state claim and names the fix" "$out"
+
+# 24. The same on the ARRIVAL refusal path, which is the one an operator is most
+#     likely to hit for real: state showed up, we refuse -- and if putting the
+#     fence back failed too, that has to reach the final message as well.
+reset_src
+touch "$WORK/arrivebytes_x"; echo 4096 > "$WORK/arrivebytes"; touch "$WORK/unfencefail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] \
+  && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
+  && printf '%s' "$out" | grep -q "NIE jest w stanie sprzed polecenia" \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "REV-119 F1.2: the arrival refusal also reports a failed fence restoration" \
+    || bad "REV-119 F1.2: the arrival refusal also reports a failed fence restoration" "$out"
+
+# 25. Both left behind at once -- readonly AND a snapshot -- must both be named.
+#     One message that mentions only the one it happens to check first would send
+#     the operator to fix half of it.
+reset_src
+touch "$WORK/unfencefail" "$WORK/destroyfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] \
+  && printf '%s' "$out" | grep -q "readonly" \
+  && printf '%s' "$out" | grep -q "techniczne snapshoty"; } \
+    && ok "REV-119 F1.2: both leftovers are named when both happen" \
+    || bad "REV-119 F1.2: both leftovers are named when both happen" "$out"
+
+# 26. And the control that keeps 23-25 honest: with everything working, the path
+#     still says the source is exactly as it was. An implementation that simply
+#     stopped making the claim would pass all three above.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"
+{ printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
+  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
+    && ok "REV-119 F1.2: a clean run still makes the exact-state claim (control)" \
+    || bad "REV-119 F1.2: a clean run still makes the exact-state claim (control)" "$out"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

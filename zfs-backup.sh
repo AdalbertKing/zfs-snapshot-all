@@ -3364,12 +3364,29 @@ restore_drop_tech_snapshots() {   # <source dataset> <snapshot names...>
 # One exit point for every refusal after the technical snapshots exist, so that
 # "nothing was destroyed" and "the source is exactly as you left it" are two
 # separate claims and the second is only made when it is true.
-restore_die_after_cleanup() {   # <source> <message> <snapshot names...>
-    local src="$1" msg="$2"; shift 2
-    if restore_drop_tech_snapshots "$src" "$@"; then
+#
+# REV-119 F1.2 residual: there are TWO independent things that can be left behind,
+# and the first version of this helper only knew about one. A failed `readonly`
+# restoration was swallowed with `|| true` at the call site, and then this function
+# -- seeing that the snapshots had gone -- told the operator the source was exactly
+# as they had left it, while it sat there read-only. That is the same laundering
+# defect F1.4 fixed for snapshots, committed again one layer up.
+#
+# So the exact-state claim now requires BOTH facts, and the caller has to state
+# what happened to the fence rather than being allowed to forget.
+restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot names...>
+    local src="$1" fence="$2" msg="$3"; shift 3
+    local snaps=ok
+    restore_drop_tech_snapshots "$src" "$@" || snaps=dirty
+
+    if [ "$fence" = ok ] && [ "$snaps" = ok ]; then
         die "$msg Zrodlo '$src' jest dokladnie w stanie sprzed tego polecenia."
     fi
-    die "$msg UWAGA: nie udalo sie usunac wszystkich technicznych snapshotow tego przebiegu (wypisane wyzej), wiec '$src' NIE jest w stanie sprzed polecenia -- usun je recznie."
+
+    local left=""
+    [ "$fence" = dirty ] && left="wlasciwosc 'readonly' (szczegoly i komenda naprawcza wyzej)"
+    [ "$snaps" = dirty ] && left="${left:+$left oraz }techniczne snapshoty tego przebiegu (wypisane wyzej)"
+    die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
 
 # Phase 7, the destructive recovery path -- gates only, and INTERNAL ONLY.
@@ -3504,7 +3521,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     else
         # Refuse rather than show a set with a hole in it. An operator cannot give
         # informed consent to "everything above, plus an unknown amount".
-        restore_die_after_cleanup "$src" \
+        restore_die_after_cleanup "$src" ok \
             "restore (odtworzenie niszczace): nie udalo sie zmierzyc danych zapisanych po ostatnim snapshocie '$src'. Nie pokaze zbioru strat z dziura w srodku. Nic nie zniszczono." \
             "$preview_snap"
     fi
@@ -3516,7 +3533,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
         read -rp "Zniszczyc powyzsze i odtworzyc '$src' z kopii? [t/N] " ans
         case "$ans" in
             t|T|tak|TAK) ;;
-            *) restore_die_after_cleanup "$src" \
+            *) restore_die_after_cleanup "$src" ok \
                    "restore (odtworzenie niszczace): niepotwierdzone -- nic nie zniszczono." \
                    "$preview_snap" ;;
         esac
@@ -3538,9 +3555,9 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # REV-119 F1.2: capture BEFORE mutating. Everything after this line has enough
     # saved state to put the property back, including the path where the fence
     # went up but could not be verified.
-    local fence_state fence_val fence_src
+    local fence_state fence_val fence_src fence_after=ok
     fence_state="$(restore_fence_capture "$src")" || {
-        restore_die_after_cleanup "$src" \
+        restore_die_after_cleanup "$src" ok \
             "restore (odtworzenie niszczace): nie udalo sie odczytac wlasciwosci 'readonly' na '$src', wiec nie umiem jej pozniej przywrocic i nie zaczne jej zmieniac. Nic nie zniszczono." \
             "$preview_snap"
     }
@@ -3549,15 +3566,17 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     if ! restore_fence_raise "$src"; then
         # The set may have gone through and only the verification failed, so the
         # undo is attempted unconditionally rather than guessed at.
-        restore_fence_lower "$src" "$fence_val" "$fence_src" || true
-        restore_die_after_cleanup "$src" \
+        fence_after=ok
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
+        restore_die_after_cleanup "$src" "$fence_after" \
             "restore (odtworzenie niszczace): nie udalo sie zablokowac zapisu na '$src' (readonly=on). Bez tej blokady nie umiem zagwarantowac, ze miedzy sprawdzeniem a zniszczeniem nikt nic nie dopisze. Nic nie zniszczono." \
             "$preview_snap"
     fi
 
     zfs snapshot "${src}@${commit_snap}" 2>/dev/null || {
-        restore_fence_lower "$src" "$fence_val" "$fence_src" || true
-        restore_die_after_cleanup "$src" \
+        fence_after=ok
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
+        restore_die_after_cleanup "$src" "$fence_after" \
             "restore (odtworzenie niszczace): nie udalo sie zamknac granicy zatwierdzenia na '$src'. Nic nie zniszczono." \
             "$preview_snap"
     }
@@ -3571,11 +3590,12 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 
     case "$arrived" in ''|*[!0-9]*) arrived=ARRIVED ;; esac
     if [ "$arrived" != 0 ] || [ -n "$unexpected" ]; then
-        restore_fence_lower "$src" "$fence_val" "$fence_src" || true
+        fence_after=ok
+        restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
         echo "  PO ZATWIERDZENIU stan zrodla sie ZMIENIL:" >&2
         [ "$arrived" != 0 ] && echo "    nowe dane: ${arrived} B zapisane po podgladzie" >&2
         [ -n "$unexpected" ] && printf '    nowy snapshot: %s\n' "${unexpected#*@}" >&2
-        restore_die_after_cleanup "$src" \
+        restore_die_after_cleanup "$src" "$fence_after" \
             "restore (odtworzenie niszczace): zatwierdziles zbior strat, ktory juz nie opisuje zrodla. NIC nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim." \
             "$preview_snap" "$commit_snap"
     fi
@@ -3584,11 +3604,9 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # The fence comes down LAST, after the destructive step would have run. A
     # failure to lower it is loud and fatal: a production dataset silently left
     # readonly is a different outage from the one this path was called to fix.
-    if ! restore_fence_lower "$src" "$fence_val" "$fence_src"; then
-        restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || true
-        die "restore (odtworzenie niszczace): blokada zapisu ZOSTALA na '$src'. Nic nie zniszczono, ale dataset jest teraz readonly=on i trzeba to cofnac recznie."
-    fi
-    restore_die_after_cleanup "$src" \
+    fence_after=ok
+    restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
+    restore_die_after_cleanup "$src" "$fence_after" \
         "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Zbior strat zostal zmierzony i zatwierdzony, a granica zatwierdzenia trzymala." \
         "$preview_snap" "$commit_snap"
 }
