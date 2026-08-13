@@ -6,6 +6,6 @@ Do not edit. Owner decisions that are not reviews live in
 
 | REV | State | Whose move | Next action |
 |---|---|---|---|
-| _(nothing open)_ | - | - | - |
+| eb7cf115 Phase 7 destructive-recovery GATES, internal and non-public -- shared restore_relations(), strategy published as facts, refusals for no dataset/unknown/ambiguous/ATOMIC/remote/empty copy/no GUID-proven base; no CLI flag while the owner decides the restore grammar (R-018/R-019); nothing mutates; restore 52/52, localbackup 57/57, zfsbackup 401/401 | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
