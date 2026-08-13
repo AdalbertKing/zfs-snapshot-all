@@ -3262,6 +3262,23 @@ restore_relations() {   # <config>
     done
 }
 
+# The technical snapshots this path takes are removed on EVERY exit, including
+# every refusal. Destroying them is provably safe in the sense REV-114 settled for
+# the staging dataset: they carry a name unique to this run, and this run created
+# them seconds earlier -- so ownership is a fact here rather than an inference
+# from ordering. A failure to remove one is reported and never silently swallowed;
+# a leftover snapshot on a production source is somebody's confusing evening.
+restore_drop_tech_snapshots() {   # <source dataset> <snapshot names...>
+    local src="$1"; shift
+    local s
+    for s in "$@"; do
+        [ -n "$s" ] || continue
+        zfs list -H -o name -t snapshot "${src}@${s}" >/dev/null 2>&1 || continue
+        zfs destroy "${src}@${s}" >/dev/null 2>&1 \
+            || echo "UWAGA: nie udalo sie usunac technicznego snapshota '${src}@${s}' -- usun go recznie" >&2
+    done
+}
+
 # Phase 7, the destructive recovery path -- gates only, and INTERNAL ONLY.
 #
 # The owner's default recovery is "latest valid backup -> the original source
@@ -3282,9 +3299,11 @@ restore_relations() {   # <config>
 # meaningfully teaches them to answer prompts without reading. It lands together
 # with the execution it guards.
 #
-# Nothing here mutates anything -- not even the pre-destruction snapshot, which
-# belongs to the execution step. A path that snapshotted and then refused would
-# leave litter behind on every attempt.
+# REV-119 F1 changed what "mutates" means here. The gates below still touch
+# nothing, but the confirmation boundary that follows them MUST take a technical
+# snapshot before it can state the loss set exactly -- see the block further down.
+# Every such snapshot is removed again on every exit path, so a refusal still
+# leaves the source byte-identical to how it was found.
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -3335,7 +3354,98 @@ restore_replace_internal() {   # <dataset> <config> <yes>
         *)  die "restore (odtworzenie niszczace): nie ustalono strategii dla '$src' -- odmawiam dzialania na nieokreslonym stanie" ;;
     esac
 
-    die "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Powyzszy podglad jest kompletny i policzony na zywym stanie, ale nic nie zostalo zrobione: nie powstal zaden snapshot, nic nie zniszczono, '$src' jest dokladnie w stanie sprzed tego polecenia."
+    # ---- REV-119 F1: the confirmation has to be INFORMED -------------------
+    #
+    # The read-only preview above cannot state the live loss exactly, and REV-118
+    # is the proof: `written` on a live dataset reflects the last committed txg,
+    # so a write made seconds ago is invisible to it. Asking for approval on that
+    # basis asks the operator to approve a set nobody has measured.
+    #
+    # A snapshot is a committed point, so taking one BEFORE the loss set is shown
+    # turns the estimate into a fact. That is a mutation, and it reverses this
+    # path's earlier "not even a snapshot" rule -- deliberately: the mutation is
+    # what buys the property, and there is no read-only way to buy it.
+    #
+    # It is NOT preservation and must never be described as such. The rollback
+    # this path leads to destroys it. It is a measurement, and the operator text
+    # says measurement.
+    local stamp="$$-$(date +%s)-${RANDOM}"
+    local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
+
+    zfs snapshot "${src}@${preview_snap}" 2>/dev/null \
+        || die "restore (odtworzenie niszczace): nie udalo sie zrobic technicznego snapshota '${src}@${preview_snap}'. Bez niego nie umiem podac DOKLADNEGO zbioru strat, a pytanie o zgode na niezmierzony zbior nie jest zgoda swiadoma. Nic nie zmieniono."
+
+    local live_exact
+    live_exact="$(zfs get -Hp -o value written "${src}@${preview_snap}" 2>/dev/null)"
+    case "$live_exact" in ''|*[!0-9]*) live_exact="" ;; esac
+
+    echo "  DO ZNISZCZENIA -- zbior ZMIERZONY, nie oszacowany:"
+    local b used total=0
+    if [ -n "$RESTORE_BLOCKERS" ]; then
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            used="$(zfs get -Hp -o value used "$b" 2>/dev/null)"
+            case "$used" in ''|*[!0-9]*) used=0 ;; esac
+            printf '    snapshot  %-40s %s B\n' "${b#*@}" "$used"
+            total=$((total + used))
+        done <<< "$RESTORE_BLOCKERS"
+    fi
+    if [ -n "$live_exact" ]; then
+        printf '    dane zapisane po ostatnim snapshocie zrodla:   %s B\n' "$live_exact"
+        total=$((total + live_exact))
+        echo "      (zamrozone w '${preview_snap}' -- to POMIAR, nie kopia bezpieczenstwa:"
+        echo "       odtworzenie niszczy rowniez ten snapshot)"
+    else
+        # Refuse rather than show a set with a hole in it. An operator cannot give
+        # informed consent to "everything above, plus an unknown amount".
+        restore_drop_tech_snapshots "$src" "$preview_snap"
+        die "restore (odtworzenie niszczace): nie udalo sie zmierzyc danych zapisanych po ostatnim snapshocie '$src'. Nie pokaze zbioru strat z dziura w srodku. Nic nie zmieniono."
+    fi
+    printf '    RAZEM: %s B\n' "$total"
+    echo
+
+    if [ "$yes" -ne 1 ]; then
+        local ans
+        read -rp "Zniszczyc powyzsze i odtworzyc '$src' z kopii? [t/N] " ans
+        case "$ans" in
+            t|T|tak|TAK) ;;
+            *) restore_drop_tech_snapshots "$src" "$preview_snap"
+               die "restore (odtworzenie niszczace): niepotwierdzone -- nic nie zniszczono, techniczny snapshot usuniety" ;;
+        esac
+    fi
+
+    # ---- the commit boundary -----------------------------------------------
+    #
+    # An accurate preview at T1 does not stay true. A write or a snapshot can
+    # arrive between the preview and the destructive step, and destroying it
+    # would destroy state nobody approved -- the same TOCTOU shape REV-114 found
+    # in the safe path, in a place where the consequence is worse.
+    #
+    # The check is snapshot-to-snapshot: `written` between two COMMITTED points
+    # does not lag the way the live read does, so a non-zero answer here is proof
+    # of arrival rather than a hint. Anything unreadable counts as arrival too.
+    zfs snapshot "${src}@${commit_snap}" 2>/dev/null \
+        || { restore_drop_tech_snapshots "$src" "$preview_snap"
+             die "restore (odtworzenie niszczace): nie udalo sie zamknac granicy zatwierdzenia na '$src'. Nic nie zniszczono."; }
+
+    local arrived unexpected
+    arrived="$(zfs get -Hp -o value written "${src}@${commit_snap}" 2>/dev/null)"
+    unexpected="$(zfs list -H -t snapshot -o name -s creation -d 1 "$src" 2>/dev/null \
+                  | awk -v p="${src}@${preview_snap}" 'f{print} $0==p{f=1}' \
+                  | grep -v -x -F "${src}@${commit_snap}")"
+
+    case "$arrived" in ''|*[!0-9]*) arrived=ARRIVED ;; esac
+    if [ "$arrived" != 0 ] || [ -n "$unexpected" ]; then
+        restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap"
+        echo "  PO ZATWIERDZENIU stan zrodla sie ZMIENIL:" >&2
+        [ "$arrived" != 0 ] && echo "    nowe dane: ${arrived} B zapisane po podgladzie" >&2
+        [ -n "$unexpected" ] && printf '    nowy snapshot: %s\n' "${unexpected#*@}" >&2
+        die "restore (odtworzenie niszczace): zatwierdziles zbior strat, ktory juz nie opisuje zrodla. NIC nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim."
+    fi
+
+    # ---- execution would go here -------------------------------------------
+    restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap"
+    die "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Zbior strat zostal zmierzony i zatwierdzony, granica zatwierdzenia trzymala, a techniczne snapshoty tego przebiegu zostaly usuniete. '$src' jest dokladnie w stanie sprzed tego polecenia."
 }
 
 cmd_restore() {

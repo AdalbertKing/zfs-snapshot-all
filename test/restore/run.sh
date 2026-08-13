@@ -437,22 +437,59 @@ mkdir -p "$WORK/bin3"
 cat > "$WORK/bin3/zfs" <<ZS3
 #!/bin/sh
 echo "\$*" >> "$WORK/zfs-calls3"
-# The live-state read. Strict about the shape: an implementation that asked for a
-# human-formatted value, or for a different property, would be a different fact.
+
+# ---- property reads ---------------------------------------------------------
+# Strict about the shape: an implementation that asked for a human-formatted
+# value, or for a different property, would be reading a different fact.
 if [ "\$1" = get ]; then
   case "\$*" in
-    "get -Hp -o value written "*) ;;
+    "get -Hp -o value written "*) prop=written ;;
+    "get -Hp -o value used "*)    prop=used ;;
     *) echo "stub3: unexpected get: \$*" >&2; exit 9 ;;
   esac
   for a in "\$@"; do ds="\$a"; done
-  wkey=\$(printf '%s' "\$ds" | tr '/' '_')
-  if [ -f "$WORK/written.\$wkey" ]; then
-    v=\$(cat "$WORK/written.\$wkey")
-    [ "\$v" = FAIL ] && { echo "cannot open '\$ds': dataset does not exist" >&2; exit 1; }
+  # Two injection points for the REV-119 race. The technical snapshot names carry
+  # a pid/epoch/random stamp, so a test cannot pre-seed a file per name; it seeds
+  # behaviour per KIND of technical snapshot instead.
+  case "\$ds" in
+    *@restore-preview-*) [ "\$prop" = written ] && [ -f "$WORK/livebytes" ] && { cat "$WORK/livebytes"; exit 0; } ;;
+    *@restore-commit-*)  [ "\$prop" = written ] && [ -f "$WORK/arrivebytes" ] && { cat "$WORK/arrivebytes"; exit 0; } ;;
+  esac
+  wkey=\$(printf '%s' "\$ds" | tr '/@' '__')
+  if [ -f "$WORK/\$prop.\$wkey" ]; then
+    v=\$(cat "$WORK/\$prop.\$wkey")
+    [ "\$v" = FAIL ] && { echo "cannot open '\$ds'" >&2; exit 1; }
     echo "\$v"; exit 0
   fi
+  [ "\$prop" = used ] && { echo 1024; exit 0; }
   echo 0; exit 0
 fi
+
+# ---- the two mutations this path is allowed to make -------------------------
+# Both are recorded, so a test can assert not just THAT the path snapshots but
+# that it removes what it made.
+if [ "\$1" = snapshot ]; then
+  full="\$2"; dsp=\${full%@*}
+  key=\$(printf '%s' "\$dsp" | tr '/' '_')
+  [ -f "$WORK/snapfail" ] && { echo "cannot create snapshot '\$full'" >&2; exit 1; }
+  n=\$(cat "$WORK/snapn" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$WORK/snapn"
+  printf '%s\t%s\t%s\n' "\$full" "\$((9000+n))" "\$((9900+n))" >> "$WORK/rows.\$key"
+  # Another actor snapshotting the source right after our preview snapshot: the
+  # exact window the commit boundary exists to close.
+  case "\$full" in
+    *@restore-preview-*) [ -f "$WORK/arrivesnap" ] && printf '%s@intruder\t9500\t9500\n' "\$dsp" >> "$WORK/rows.\$key" ;;
+  esac
+  exit 0
+fi
+if [ "\$1" = destroy ]; then
+  full="\$2"; dsp=\${full%@*}
+  key=\$(printf '%s' "\$dsp" | tr '/' '_')
+  [ -f "$WORK/destroyfail" ] && { echo "cannot destroy '\$full'" >&2; exit 1; }
+  grep -v "^\$full	" "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp" 2>/dev/null
+  mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
+  exit 0
+fi
+
 [ "\$1" = list ] || { echo "stub3: refusing non-list: \$*" >&2; exit 9; }
 cols=""; want_snap=0
 prev=""
@@ -462,9 +499,16 @@ for a in "\$@"; do
   prev="\$a"
   ds="\$a"
 done
+case "\$ds" in
+  *@*)  # existence check for ONE snapshot, not a listing
+        dsp=\${ds%@*}
+        key=\$(printf '%s' "\$dsp" | tr '/' '_')
+        grep -q "^\$ds	" "$WORK/rows.\$key" 2>/dev/null || exit 1
+        echo "\$ds"; exit 0 ;;
+esac
 key=\$(printf '%s' "\$ds" | tr '/' '_')
 if [ "\$want_snap" -eq 1 ]; then
-  [ -f "$WORK/rows.\$key" ] || exit 1
+  [ -s "$WORK/rows.\$key" ] || exit 1
   # canonical row: name<TAB>creation<TAB>guid ; project the requested columns
   awk -F'\t' -v c="\$cols" '{
       n=split(c,f,","); out=""
@@ -615,15 +659,27 @@ printf '%s' "$out" | grep -qi 'ZDALNE' \
 # that is the point: the owner is still deciding the public restore grammar, so
 # the gates are built and tested underneath it rather than behind a flag that
 # would have to be withdrawn later (R-018/R-019).
-runrepl() {   # <config> [dataset]
-    local c="$1" d="${2-}"
+runrepl() {   # <config> [dataset] [yes]
+    local c="$1" d="${2-}" y="${3-1}"
     ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
-      restore_replace_internal "$d" "$c" 0 ) 2>&1
+      restore_replace_internal "$d" "$c" "$y" ) 2>&1
 }
 
-printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
-printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
-printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
+# How many snapshots the source has right now. The whole REV-119 slice is judged
+# on this number being the same before and after every run, whatever the run did.
+srccount() { grep -c . "$WORK/rows.$SRC" 2>/dev/null || echo 0; }
+
+reset_src() {
+    rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" "$WORK/snapfail" "$WORK/destroyfail"
+    printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
+    printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+    printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
+    # The call log is deliberately NOT truncated here. Assertions 9 and 10 below
+    # judge the whole section, and an earlier version of this helper reset it on
+    # every fixture -- which left those two checks looking at the last run only
+    # and reporting "1 made, 1 destroyed" as if that were the section's total.
+}
+reset_src
 
 # The gates that must fire before anything is computed.
 out="$(runrepl "$stcfg")"; rc=$?
@@ -645,6 +701,7 @@ out="$(runrepl "$stcfg" rpool/nowhere)"; rc=$?
 # The relationship resolves BOTH ways, source path or copy path, because an
 # operator reaching for recovery may know either one.
 for name in rpool/data hdd/store/rpool/data; do
+    reset_src
     out="$(runrepl "$stcfg" "$name")"; rc=$?
     { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
       && printf '%s' "$out" | grep -q 'INKREMENT'; } \
@@ -653,16 +710,17 @@ for name in rpool/data hdd/store/rpool/data; do
 done
 
 # The preview an operator confirms and the decision the code takes must be ONE
-# computation. This asserts the verb branches on the facts the printed preview
+# computation. This asserts the path branches on the facts the printed preview
 # came from.
 #
-# Captured from an EXIT trap, because the verb ends in `die` and die exits the
+# Captured from an EXIT trap, because the path ends in `die` and die exits the
 # subshell: a plain line after the call never runs. The first version of this
 # test wrote nothing at all, so it failed for that reason rather than the one it
 # was written to catch.
+reset_src
 ( trap 'printf "%s|%s|%s" "$RESTORE_STRATEGY" "$RESTORE_BASE_GUID" "$RESTORE_TARGET_SNAP" > "$WORK/facts"' EXIT
   PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
-  restore_replace_internal rpool/data "$stcfg" 0 >/dev/null 2>&1 ) || true
+  restore_replace_internal rpool/data "$stcfg" 1 >/dev/null 2>&1 ) || true
 [ "$(cat "$WORK/facts" 2>/dev/null)" = 'increment|11|s2' ] \
     && ok "replace: branches on the same computed facts the preview printed" \
     || bad "replace: branches on the same computed facts the preview printed" "$(cat "$WORK/facts" 2>/dev/null)"
@@ -670,20 +728,21 @@ done
 # No GUID-proven base -> full replacement, which is a different mechanism with
 # different risk. It must be refused by name, never quietly attempted as an
 # incremental.
+reset_src
 printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'PELNE zastapienie' \
   && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
     && ok "replace: no proven base is refused as full replacement, not run as an increment" \
     || bad "replace: no proven base is refused as full replacement, not run as an increment" "$out"
-printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 
 # A remote source is refused here too. The planner merely declines to guess; the
-# destructive verb must decline to ACT, and say why.
+# destructive path must decline to ACT, and say why.
+reset_src
 out="$(runrepl "$rcfg" hdd/mirror)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; } \
-    && ok "replace: a remote source is refused by the destructive verb" \
-    || bad "replace: a remote source is refused by the destructive verb" "$out"
+    && ok "replace: a remote source is refused by the destructive path" \
+    || bad "replace: a remote source is refused by the destructive path" "$out"
 
 # An ATOMIC relationship is a subtree recovered as one point in time; recovering
 # one dataset out of it would silently downgrade that property.
@@ -695,20 +754,118 @@ out="$(runrepl "$atcfg" rpool/data)"; rc=$?
     || bad "replace: an atomic relationship is refused rather than recovered one dataset at a time" "$out"
 
 # A copy with no snapshots at all: refuse, and name which side is empty.
+reset_src
 printf '' > "$WORK/rows.$COPY"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ani jednego snapshota'; } \
     && ok "replace: a copy with no snapshots is refused" \
     || bad "replace: a copy with no snapshots is refused" "$out"
 
-# And the property the whole slice rests on: none of the above wrote anything.
-# The stub fails any zfs subcommand other than list/get, so a mutation would have
-# shown up as a failed assertion above -- this checks the recording directly.
-if grep -qvE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null; then
-    bad "replace: the whole slice only ever reads" "$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" | head -3)"
-else
-    ok "replace: the whole slice only ever reads"
-fi
+# ==============================================================================
+# REV-20260813-119 F1 -- the confirmation has to be INFORMED, and it has to stay
+# true until the destructive boundary.
+# ==============================================================================
+
+# 1. The loss set is EXACT, and it is exact because the technical snapshot was
+#    taken first. The stub answers `written` on a restore-preview-* snapshot with
+#    this number; an implementation that read the LIVE dataset instead (the
+#    REV-118 value that lags a txg) gets 0 and prints 0.
+reset_src
+echo 7777 > "$WORK/livebytes"
+out="$(runrepl "$stcfg" rpool/data)"
+{ printf '%s' "$out" | grep -q 'zbior ZMIERZONY' \
+  && printf '%s' "$out" | grep -q '7777 B'; } \
+    && ok "REV-119: the loss set is measured from the technical snapshot, not from the live read" \
+    || bad "REV-119: the loss set is measured from the technical snapshot, not from the live read" "$out"
+
+# 2. ...and it is shown BEFORE the question is asked. Ordering, not presence:
+#    the confirmation refusal must come after the measured set in the output.
+reset_src
+echo 7777 > "$WORK/livebytes"
+out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"
+set_line=$(printf '%s\n' "$out" | grep -n 'zbior ZMIERZONY' | head -1 | cut -d: -f1)
+ask_line=$(printf '%s\n' "$out" | grep -n 'niepotwierdzone' | head -1 | cut -d: -f1)
+{ [ -n "$set_line" ] && [ -n "$ask_line" ] && [ "$set_line" -lt "$ask_line" ]; } \
+    && ok "REV-119: the measured loss set is shown BEFORE the confirmation is resolved" \
+    || bad "REV-119: the measured loss set is shown BEFORE the confirmation is resolved" "set=$set_line ask=$ask_line" "$out"
+
+# 3. An unconfirmed run leaves the source exactly as it was found -- the
+#    technical snapshot is removed, not left as litter.
+[ "$(srccount)" = 1 ] \
+    && ok "REV-119: an unconfirmed run removes its own technical snapshot" \
+    || bad "REV-119: an unconfirmed run removes its own technical snapshot" "snapshots now: $(cat "$WORK/rows.$SRC")"
+
+# 4. THE RACE, bytes arm: data lands after the approval. The path must refuse and
+#    destroy nothing -- destroying it would destroy state nobody approved.
+reset_src
+echo 4096 > "$WORK/arrivebytes"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
+  && printf '%s' "$out" | grep -q 'nowe dane: 4096 B' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+    && ok "REV-119: data arriving after the approval refuses instead of being destroyed" \
+    || bad "REV-119: data arriving after the approval refuses instead of being destroyed" "$out"
+[ "$(srccount)" = 1 ] \
+    && ok "REV-119: the refused race still cleans up both technical snapshots" \
+    || bad "REV-119: the refused race still cleans up both technical snapshots" "$(cat "$WORK/rows.$SRC")"
+
+# 5. THE RACE, snapshot arm: another actor snapshots the source in the same
+#    window. Named individually, because "something changed" is not actionable.
+reset_src
+touch "$WORK/arrivesnap"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
+  && printf '%s' "$out" | grep -q 'nowy snapshot: intruder'; } \
+    && ok "REV-119: a snapshot arriving after the approval is named and refuses the run" \
+    || bad "REV-119: a snapshot arriving after the approval is named and refuses the run" "$out"
+
+# 6. The control that makes 4 and 5 mean something: with nothing arriving, the
+#    same path reaches the execution point. Without this, a path that always
+#    refused would pass both race tests.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"
+{ printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
+  && ! printf '%s' "$out" | grep -q 'ZMIENIL'; } \
+    && ok "REV-119: with nothing arriving the boundary holds and the path proceeds (control)" \
+    || bad "REV-119: with nothing arriving the boundary holds and the path proceeds (control)" "$out"
+
+# 7. The measurement is never sold as a safety copy. R-017 was explicit: if the
+#    restore destroys it, calling it preservation is the most dangerous kind of
+#    wrong -- an operator who believes it thinks a mistake is reversible.
+reset_src
+echo 7777 > "$WORK/livebytes"
+out="$(runrepl "$stcfg" rpool/data)"
+{ printf '%s' "$out" | grep -qi 'to POMIAR, nie kopia bezpieczenstwa' \
+  && ! printf '%s' "$out" | grep -qi 'zachowan'; } \
+    && ok "REV-119: the technical snapshot is described as a measurement, never as preservation" \
+    || bad "REV-119: the technical snapshot is described as a measurement, never as preservation" "$out"
+
+# 8. A loss set with a hole in it is not a loss set. If the live delta cannot be
+#    measured, refuse rather than ask for consent to "the above, plus unknown".
+reset_src
+echo FAIL > "$WORK/livebytes"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'z dziura w srodku'; } \
+    && ok "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" \
+    || bad "REV-119: an unmeasurable live delta refuses instead of showing a partial loss set" "$out"
+[ "$(srccount)" = 1 ] \
+    && ok "REV-119: that refusal also cleans up after itself" \
+    || bad "REV-119: that refusal also cleans up after itself" "$(cat "$WORK/rows.$SRC")"
+
+# 9. Every zfs call the whole section made was a read, a technical snapshot of
+#    this run, or the destroy of one of those -- checked from the stub's own log
+#    rather than from a comment. Nothing else may appear.
+strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' || true)"
+[ -z "$strays" ] \
+    && ok "replace: the section only reads, or touches technical snapshots it made itself" \
+    || bad "replace: the section only reads, or touches technical snapshots it made itself" "$strays"
+
+# 10. And every technical snapshot that was created was also destroyed.
+made="$(grep -cE '^snapshot rpool/data@restore-' "$WORK/zfs-calls3" 2>/dev/null || echo 0)"
+gone="$(grep -cE '^destroy rpool/data@restore-' "$WORK/zfs-calls3" 2>/dev/null || echo 0)"
+{ [ "$made" -gt 0 ] && [ "$made" = "$gone" ]; } \
+    && ok "replace: every technical snapshot created was destroyed again ($made made, $gone destroyed)" \
+    || bad "replace: every technical snapshot created was destroyed again" "made=$made destroyed=$gone"
 
 
 echo "--------------------------------------------"
