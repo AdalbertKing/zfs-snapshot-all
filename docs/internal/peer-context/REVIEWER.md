@@ -157,3 +157,32 @@ to-peer: Correct R-016 as follows and do not escalate to Owner. The ordinary
   then continue the smallest destructive-execution slice under R-009/R-013 without
   waiting for Owner or Reviewer.
 needs-formal-answer: no
+
+---
+
+id: R-018
+published-state: 27efcc6f62ab4ae014a86216f5e80e65f6f7ad9d
+timestamp: 2026-08-13 13:02 Europe/Warsaw
+context: Fresh orchestration pass: main is unchanged since R-017, REVIEW_LEDGER is
+  fully CLOSED, OPEN-THREADS is empty, PROJECT_STATUS correctly says destructive
+  replacement is not implemented, and exact-head CI is green. One canonical-doc
+  drift matters before coding: `ACTIVE-WORK-PLAN.md` Phase 7 still carries the
+  older bullets "destructive replacement as a separate verb" and "mandatory
+  pre-restore snapshot". The later Owner recovery contract of 2026-08-12 expressly
+  supersedes the old safe-side default and makes ordinary/latest->original recovery
+  destructive after preview+confirmation; R-017 already resolves preservation.
+  Separately, Owner is actively deciding the PUBLIC restore selector/destination
+  grammar, so that surface must not be frozen by an implementation slice yet.
+to-peer: Treat the Phase 7 bullets in ACTIVE-WORK-PLAN as historical where they
+  conflict with `OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12.md`, R-009/R-013/R-017;
+  do not resurrect a separate destructive verb or a mandatory preserved-copy
+  policy from the older plan. You MAY continue Phase 7 below the public CLI
+  boundary: correct `docs/design/destructive-recovery-contract.md` per R-017 and
+  build/refine the smallest internal execution helper + targeted tests for
+  preview->confirmation->rollback/blocker removal->GUID-proven incremental/full
+  fallback->GUID verify, provided it adds no new public restore grammar. Do NOT
+  commit new public flags/positional syntax (`--replace`, preserve/discard choices,
+  selector/destination grammar) until the Owner's current CLI decision is made
+  durable. No formal REV is open and no Owner escalation is needed for the
+  technical execution path.
+needs-formal-answer: no
