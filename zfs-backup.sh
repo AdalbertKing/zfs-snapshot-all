@@ -3134,6 +3134,14 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # hold writes that a destructive recovery would discard; the snapshot set above
     # cannot see them.
     #
+    # Measured limitation, pve1 / zfs-2.1.9: `written` reflects the last COMMITTED
+    # txg. 4 MiB written to a lab dataset still read written=0 until the txg landed
+    # (that pool commits roughly once a minute, not the 5s default), so a write made
+    # seconds before the preview can be invisible to it. The clean wording therefore
+    # states the qualification instead of promising an idle source. Forcing a commit
+    # to close the window was rejected: `zpool sync` is a pool-wide write and this
+    # verb advertises itself as read-only.
+    #
     # A failed or non-numeric read is NOT treated as clean. If the live state cannot
     # be proven read-only, the preview says so and keeps the operation classified as
     # destructive -- silence here would be the false-safe answer this whole block
@@ -3149,8 +3157,8 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     if [ "$base_guid" = "$latest_guid" ]; then
         if [ -z "$blockers" ] && [ "$live_state" = clean ]; then
             echo "  Strategia:  NIC DO ZROBIENIA -- zrodlo jest juz dokladnie w zadanym punkcie:"
-            echo "              zaden snapshot nie jest nowszy niz baza, a ZFS rozlicza written=0,"
-            echo "              wiec po niej nic nie zapisano."
+            echo "              zaden snapshot nie jest nowszy niz baza, a ZFS rozlicza written=0"
+            echo "              wedlug ostatniego zatwierdzonego txg."
             return 0
         fi
         if [ -z "$blockers" ] && [ "$live_state" = dirty ]; then
@@ -3191,8 +3199,9 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
         clean)
             [ -n "$blockers" ] || {
                 echo "  Nic po stronie zrodla nie blokuje przyrostu -- zaden snapshot zrodla nie"
-                echo "  jest nowszy niz wspolna baza, a ZFS rozlicza written=0, wiec po ostatnim"
-                echo "  snapshocie zrodla nic nie zapisano."
+                echo "  jest nowszy niz wspolna baza, a ZFS rozlicza written=0 wedlug ostatniego"
+                echo "  zatwierdzonego txg. Zapisy z ostatnich sekund moga byc jeszcze"
+                echo "  nierozliczone; przed operacja niszczaca potwierdz, ze zrodlo jest bezczynne."
             } ;;
     esac
 }
