@@ -479,13 +479,23 @@ if [ "\$1" = set ]; then
     readonly=*) [ -f "$WORK/fencefail" ] && { echo "cannot set readonly" >&2; exit 1; }
                 printf '%s' "\${2#readonly=}" > "$WORK/ro.value"
                 printf 'local' > "$WORK/ro.source"
+                # verifyfail models REV-119 F1.2: the property change GOES
+                # THROUGH and the read-back afterwards does not agree with it.
+                [ -f "$WORK/verifyfail" ] && printf 'off' > "$WORK/ro.value"
                 exit 0 ;;
   esac
   echo "stub3: unexpected set: \$*" >&2; exit 9
 fi
 if [ "\$1" = inherit ]; then
   [ -f "$WORK/unfencefail" ] && { echo "cannot inherit" >&2; exit 1; }
-  printf 'off' > "$WORK/ro.value"; printf 'default' > "$WORK/ro.source"
+  # `-S` reverts to the RECEIVED value, which is a different destination state
+  # from plain inherit. The stub models both, so a path that used the wrong one
+  # restores the wrong provenance and the assertion sees it.
+  if [ "\$2" = "-S" ]; then
+    printf 'off' > "$WORK/ro.value"; printf 'received' > "$WORK/ro.source"
+  else
+    printf 'off' > "$WORK/ro.value"; printf 'default' > "$WORK/ro.source"
+  fi
   exit 0
 fi
 if [ "\$1" = snapshot ]; then
@@ -497,7 +507,17 @@ if [ "\$1" = snapshot ]; then
   # Another actor snapshotting the source right after our preview snapshot: the
   # exact window the commit boundary exists to close.
   case "\$full" in
-    *@restore-preview-*) [ -f "$WORK/arrivesnap" ] && printf '%s@intruder\t9500\t9500\n' "\$dsp" >> "$WORK/rows.\$key" ;;
+    *@restore-commit-*)
+      # Injected when the COMMIT snapshot is taken, i.e. after the preview
+      # snapshot and after the before-set was captured. That is what "arrived
+      # after the approval" means; injecting at preview time would have put the
+      # intruder INTO the before-set, and the check would rightly ignore it.
+      [ -f "$WORK/arrivesnap" ] && printf '%s@intruder\t9500\t9500\n' "\$dsp" >> "$WORK/rows.\$key"
+      # Same wall-clock creation second as the preview snapshot, and a name that
+      # sorts BEFORE it -- the exact case a position-in-a-sorted-list check loses
+      # (REV-119 F1.1). The creation column is deliberately a duplicate.
+      [ -f "$WORK/arrivesnap_samesecond" ] && printf '%s@intruder-samesec\t9001\t9600\n' "\$dsp" >> "$WORK/rows.\$key"
+      ;;
   esac
   exit 0
 fi
@@ -692,7 +712,8 @@ srccount() { grep -c . "$WORK/rows.$SRC" 2>/dev/null || echo 0; }
 reset_src() {
     rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" \
           "$WORK/snapfail" "$WORK/destroyfail" \
-          "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source"
+          "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source" \
+          "$WORK/arrivesnap_samesecond" "$WORK/verifyfail"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -884,7 +905,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
           | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' \
           | grep -vE '^set readonly=(on|off) rpool/data$' \
-          | grep -vE '^inherit readonly rpool/data$' || true)"
+          | grep -vE '^inherit (-S )?readonly rpool/data$' || true)"
 [ -z "$strays" ] \
     && ok "replace: the section only reads, or touches technical snapshots it made itself" \
     || bad "replace: the section only reads, or touches technical snapshots it made itself" "$strays"
@@ -966,6 +987,78 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
   && printf '%s' "$out" | grep -q 'readonly'; } \
     && ok "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" \
     || bad "REV-119 fence: a fence that cannot be lowered fails loudly and names the manual fix" "$out"
+
+
+# ==============================================================================
+# REV-119 round 3 -- the four residuals.
+# ==============================================================================
+
+# 17. F1.1 -- an intruder snapshot created in the SAME wall-clock second as the
+#     preview snapshot. Under the old position-in-a-sorted-list logic it could
+#     sort BEFORE the preview snapshot and vanish from the "newer" set; a set
+#     difference has no ordering in it to get wrong.
+reset_src
+touch "$WORK/arrivesnap_samesecond"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
+  && printf '%s' "$out" | grep -q 'nowy snapshot: intruder-samesec'; } \
+    && ok "REV-119 F1.1: a same-second intruder snapshot is still caught" \
+    || bad "REV-119 F1.1: a same-second intruder snapshot is still caught" "$out"
+
+# 18. F1.2 -- the fence property change succeeds and the VERIFICATION fails. The
+#     old shape returned failure with nothing saved, leaving the source
+#     read-only. The undo must be attempted with the captured state.
+reset_src
+touch "$WORK/verifyfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie udalo sie zablokowac zapisu'; } \
+    && ok "REV-119 F1.2: an unverifiable fence refuses the run" \
+    || bad "REV-119 F1.2: an unverifiable fence refuses the run" "$out"
+[ "$(cat "$WORK/ro.value" 2>/dev/null)" = off ] \
+    && ok "REV-119 F1.2: ...and the source is NOT left read-only by that path" \
+    || bad "REV-119 F1.2: ...and the source is NOT left read-only by that path" "readonly is now: $(cat "$WORK/ro.value" 2>/dev/null)"
+
+# 19. F1.2, the other half: the property is never touched at all until the old
+#     state is in hand. An unreadable readonly means refuse before mutating.
+reset_src
+printf 'garbage' > "$WORK/ro.value"
+before=$({ grep -c '^set readonly=on rpool/data$' "$WORK/zfs-calls3"; true; } | head -1)
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+after=$({ grep -c '^set readonly=on rpool/data$' "$WORK/zfs-calls3"; true; } | head -1)
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "nie umiem jej pozniej przywrocic" \
+  && [ "$before" = "$after" ]; } \
+    && ok "REV-119 F1.2: an unreadable readonly refuses BEFORE the property is touched" \
+    || bad "REV-119 F1.2: an unreadable readonly refuses BEFORE the property is touched" "$out"
+
+# 20. F1.3 -- a RECEIVED property goes back to received, not to a local override
+#     with the same value. `zfs inherit -S` is the only mechanism that does that.
+reset_src
+printf 'off' > "$WORK/ro.value"; printf 'received' > "$WORK/ro.source"
+out="$(runrepl "$stcfg" rpool/data)"
+{ grep -q '^inherit -S readonly rpool/data$' "$WORK/zfs-calls3" \
+  && [ "$(cat "$WORK/ro.source" 2>/dev/null)" = received ]; } \
+    && ok "REV-119 F1.3: a received readonly is restored as received, not as a local override" \
+    || bad "REV-119 F1.3: a received readonly is restored as received, not as a local override" "source is now: $(cat "$WORK/ro.source" 2>/dev/null); calls: $(grep -E '^(set|inherit)' "$WORK/zfs-calls3" | tail -3)"
+
+# 21. F1.4 -- cleanup that fails must not be laundered into "the source is
+#     exactly as you left it". The claim and the outcome have to agree.
+reset_src
+touch "$WORK/destroyfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" \
+    || bad "REV-119 F1.4: a failed cleanup is reported, never called an unchanged source" "$out"
+
+# 22. ...and the control, so 21 is discriminating: when cleanup succeeds, the
+#     path DOES get to say the source is unchanged.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"
+{ printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
+  && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
+    && ok "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" \
+    || bad "REV-119 F1.4: a successful cleanup may say the source is unchanged (control)" "$out"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
