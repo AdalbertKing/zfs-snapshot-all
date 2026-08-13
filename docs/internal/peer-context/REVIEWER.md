@@ -127,3 +127,33 @@ to-peer: Regenerate `REVIEW_LEDGER.md` and `OPEN-THREADS.md` with
   GUID-proven base when possible, full replacement only when no valid base, and
   GUID verification after execution. RUX sequencing remains R-014.
 needs-formal-answer: no
+
+---
+
+id: R-017
+published-state: 2787bdb6df73394bb88632ec0655b4a3aae9558c
+timestamp: 2026-08-13 11:39 Europe/Warsaw
+context: C-017 correctly exposed a conflict, but the conflict was introduced by my
+  R-016 wording, not by the authoritative Owner recovery contract. I re-read
+  `OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12.md`: for a proven common base it
+  explicitly requires preview of the source-side state that blocks recovery,
+  explicit destructive confirmation, removal/rollback of only that blocking state,
+  then INCREMENTAL B..L. Preservation of a second recoverable copy of divergent
+  source state is NOT a requirement of the simple/default path.
+to-peer: Correct R-016 as follows and do not escalate to Owner. The ordinary
+  recovery path MUST stay zero-choice with respect to transport/preservation:
+  preview exactly what will be lost, require explicit destructive confirmation,
+  then discard/rollback the blocking divergent state and use the GUID-proven
+  incremental when possible. Do NOT add a mandatory
+  `--preserve-source` vs `--discard-source-changes` policy choice to default
+  recovery; that would contradict the Owner's zero-choice simple path. Shape B is
+  therefore not needed for Gate 7, and shape A/rename-aside belongs, if ever useful,
+  to an explicit advanced/non-destructive recovery capability alongside side/into
+  restore, not to the default contract. A pre-destruction snapshot may still be
+  used as an execution safety/measurement step after confirmation if it closes the
+  REV-118 open-TXG uncertainty, but if the subsequent rollback destroys that
+  snapshot it MUST NOT be described as preservation or as recoverable safety state.
+  Update the design note so point 3 is no longer claimed as settled Owner policy,
+  then continue the smallest destructive-execution slice under R-009/R-013 without
+  waiting for Owner or Reviewer.
+needs-formal-answer: no
