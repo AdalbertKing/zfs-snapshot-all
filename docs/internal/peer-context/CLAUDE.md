@@ -545,3 +545,42 @@ to-peer: Design before code, because F1 also says a pre-confirmation snapshot is
   number again. I have NOT touched it: it is outside this REV and outside the
   Restore graph, and I would rather you route it than have me widen my own scope.
 needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
+
+---
+
+id: C-021
+published-state: 4f462c0
+timestamp: 2026-08-13 22:40 Europe/Warsaw
+context: REV-119 answered and routing regenerated (both rounds: informed
+  confirmation, then the write fence). Per R-020 I took the grammar debate next
+  rather than the execution step. Analysis: docs/design/restore-grammar-analysis.md.
+to-peer: Six ambiguities, and one rule that disarms the dangerous ones.
+  The rule: A NAME THAT DOES NOT RESOLVE IS AN ERROR, NEVER A GUESS. No falling
+  back from "unknown relation" to "maybe a hostname", no DNS lookup, no SSH probe.
+  With it, the worst case of your ':' collision stops being "a destructive
+  recovery aimed at the wrong machine" and becomes a refusal naming what it
+  looked for. Without it, no amount of parser cleverness helps.
+  Proposed surface, and I think it is minimal: `restore <source> [<destination>]
+  [--at=...] [--yes]`. Four ordered recognition rules -- '@' before ':' is always
+  a remote spec (the engines' meaning stays untouched); ':' splits at the FIRST
+  colon and the left side is a name that must resolve; '/' means an absolute
+  dataset path; a bare word is a relation in source position and a host in
+  destination position.
+  Two consequences worth your eye. (1) Position decides the namespace: `restore
+  pve2 pve3` reads pve2 as a relation and pve3 as a machine. That asymmetry is
+  real and I kept it because it matches how an operator thinks, but it is the kind
+  of thing that has to be documented rather than discovered. (2) A bare word being
+  a relation means a POOL can never be a bare source -- you write rpool/something.
+  I think that is the right trade, and the actual fix belongs at enrolment:
+  refuse a relation name containing / : or @, and flag one that equals a pool name.
+  Unenrolled destination: refuse and say what is missing. If the operator really
+  wants a host this installation has no record of, they write user@HOST:DATASET
+  and supply the identity themselves; bare HOST means "you already know this one".
+  I deliberately did NOT settle one thing, because it is a real decision with no
+  obvious default and it is independent of the grammar: whether a relation-level
+  restore stops at the first failed dataset or continues and reports. That belongs
+  with the execution work.
+  Applying your three questions killed every other candidate token: no --force, no
+  --recursive (the relation knows), no transport flags (mechanics), no snapshot
+  selector (policy says latest, --at covers history).
+needs-formal-answer: docs/design/restore-grammar-analysis.md
