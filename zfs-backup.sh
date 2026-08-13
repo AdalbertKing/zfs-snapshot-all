@@ -3107,9 +3107,13 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
     echo "    ${base_snap#*@}  guid=$base_guid"
 
-    # What stands in the way, named precisely. `written@` is not consulted here:
-    # the policy asks which SNAPSHOTS block the receive, and that is a set, not a
-    # byte count.
+    # What stands in the way, named precisely. Two different kinds of source-side
+    # state can be destroyed by a recovery, and the preview has to know both before
+    # it picks a verdict:
+    #
+    #   1. snapshots newer than the common base -- a set, named individually below;
+    #   2. writes made after the source's newest snapshot, which live in no snapshot
+    #      at all and are therefore invisible to (1).
     #
     # This is computed BEFORE deciding the strategy, and the live lab is why. An
     # earlier cut checked base==latest first and reported "nothing to do" for a
@@ -3123,14 +3127,45 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     blockers="$(zfs list -H -p -t snapshot -o name,guid -s creation -d 1 "$srcpath" 2>/dev/null \
                 | awk -v b="$base_guid" 'f{print} $2==b{f=1}' | cut -f1)"
 
+    # Kind (2): live, unsnapshotted state. `written` is ZFS's own accounting of the
+    # space written to the dataset since its most recent snapshot, so this is a
+    # native ZFS fact and not a second state authority invented here. A source can
+    # sit exactly on the common base, carry no newer snapshot whatsoever, and still
+    # hold writes that a destructive recovery would discard; the snapshot set above
+    # cannot see them.
+    #
+    # A failed or non-numeric read is NOT treated as clean. If the live state cannot
+    # be proven read-only, the preview says so and keeps the operation classified as
+    # destructive -- silence here would be the false-safe answer this whole block
+    # exists to prevent.
+    local live_written live_state
+    live_written="$(zfs get -Hp -o value written "$srcpath" 2>/dev/null)"
+    case "$live_written" in
+        ''|*[!0-9]*) live_state=unknown ;;
+        0)           live_state=clean   ;;
+        *)           live_state=dirty   ;;
+    esac
+
     if [ "$base_guid" = "$latest_guid" ]; then
-        if [ -z "$blockers" ]; then
-            echo "  Strategia:  NIC DO ZROBIENIA -- zrodlo jest juz dokladnie w zadanym punkcie."
+        if [ -z "$blockers" ] && [ "$live_state" = clean ]; then
+            echo "  Strategia:  NIC DO ZROBIENIA -- zrodlo jest juz dokladnie w zadanym punkcie:"
+            echo "              zaden snapshot nie jest nowszy niz baza, a ZFS rozlicza written=0,"
+            echo "              wiec po niej nic nie zapisano."
             return 0
         fi
-        echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
-        echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
-        echo "              snapshoty zrodla musza zniknac. Nic sie nie przesyla."
+        if [ -z "$blockers" ] && [ "$live_state" = dirty ]; then
+            echo "  Strategia:  ODRZUCENIE ZYWYCH ZMIAN, bez transferu -- zrodlo stoi na zadanym"
+            echo "              punkcie i nie ma nowszych snapshotow, ale po nim zapisano dane."
+            echo "              Powrot do zadanego stanu oznacza ich utrate. Nic sie nie przesyla."
+        elif [ -z "$blockers" ]; then
+            echo "  Strategia:  NIEUSTALONA, traktowana jako NISZCZACA -- zrodlo stoi na zadanym"
+            echo "              punkcie i nie ma nowszych snapshotow, ale zywego stanu nie udalo"
+            echo "              sie odczytac, wiec 'nic do zrobienia' bylaby odpowiedzia na wiare."
+        else
+            echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
+            echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
+            echo "              snapshoty zrodla musza zniknac. Nic sie nie przesyla."
+        fi
     else
         echo "  Strategia:  INKREMENT od wspolnej bazy do najnowszego punktu."
     fi
@@ -3140,10 +3175,26 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
         printf '%s\n' "$blockers" | sed 's/.*@/    /'
         echo "  To jest operacja NISZCZACA dla powyzszych snapshotow zrodla i wymaga jawnego"
         echo "  potwierdzenia. Czasownik, ktory ja wykonuje, jeszcze nie istnieje."
-    else
-        echo "  Nic po stronie zrodla nie blokuje przyrostu -- zaden snapshot zrodla nie jest"
-        echo "  nowszy niz wspolna baza."
     fi
+
+    case "$live_state" in
+        dirty)
+            echo "  ZYWE ZMIANY PO OSTATNIM SNAPSHOCIE ZRODLA: ZFS rozlicza written=$live_written B"
+            echo "  zapisanych na '$srcpath' po jego najnowszym snapshocie. Tych danych NIE MA w"
+            echo "  zadnym snapshocie, wiec nie da sie ich odzyskac po fakcie -- odtworzenie"
+            echo "  niszczace je ODRZUCI. Ten stan sam w sobie czyni operacje niszczaca, nawet"
+            echo "  gdyby zaden snapshot nie blokowal." ;;
+        unknown)
+            echo "  STAN ZYWY NIEUSTALONY: odczyt wlasciwosci 'written' dla '$srcpath' nie dal"
+            echo "  liczby. NIE twierdze, ze nic nie blokuje -- traktuj operacje jako niszczaca"
+            echo "  do czasu, az stan zywy zostanie potwierdzony." ;;
+        clean)
+            [ -n "$blockers" ] || {
+                echo "  Nic po stronie zrodla nie blokuje przyrostu -- zaden snapshot zrodla nie"
+                echo "  jest nowszy niz wspolna baza, a ZFS rozlicza written=0, wiec po ostatnim"
+                echo "  snapshocie zrodla nic nie zapisano."
+            } ;;
+    esac
 }
 
 cmd_restore() {

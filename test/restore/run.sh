@@ -436,6 +436,22 @@ mkdir -p "$WORK/bin3"
 cat > "$WORK/bin3/zfs" <<ZS3
 #!/bin/sh
 echo "\$*" >> "$WORK/zfs-calls3"
+# The live-state read. Strict about the shape: an implementation that asked for a
+# human-formatted value, or for a different property, would be a different fact.
+if [ "\$1" = get ]; then
+  case "\$*" in
+    "get -Hp -o value written "*) ;;
+    *) echo "stub3: unexpected get: \$*" >&2; exit 9 ;;
+  esac
+  for a in "\$@"; do ds="\$a"; done
+  wkey=\$(printf '%s' "\$ds" | tr '/' '_')
+  if [ -f "$WORK/written.\$wkey" ]; then
+    v=\$(cat "$WORK/written.\$wkey")
+    [ "\$v" = FAIL ] && { echo "cannot open '\$ds': dataset does not exist" >&2; exit 1; }
+    echo "\$v"; exit 0
+  fi
+  echo 0; exit 0
+fi
 [ "\$1" = list ] || { echo "stub3: refusing non-list: \$*" >&2; exit 9; }
 cols=""; want_snap=0
 prev=""
@@ -515,9 +531,47 @@ out="$(runstrat "$stcfg")"
 # ---- and the true no-op, so the control above is discriminating -------------
 printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' && ! printf '%s' "$out" | grep -q 'ROLLBACK'; } \
+{ printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' && ! printf '%s' "$out" | grep -q 'ROLLBACK' \
+  && printf '%s' "$out" | grep -q 'written=0'; } \
     && ok "strategy: a source exactly at the point IS a no-op (control)" \
     || bad "strategy: a source exactly at the point IS a no-op (control)" "$(printf '%s' "$out"|grep -i strategia)"
+
+# ---- REV-118 F1: snapshots are not the only destructible source state --------
+# Same fixture as the no-op control immediately above -- identical snapshot sets,
+# GUID-proven base equal to the latest backup point, NOTHING newer on the source.
+# The only difference is live data written after that snapshot. A preview that
+# defines "blocked" as "has newer snapshots" cannot see this state and answers
+# "nothing to do", hiding data loss that no snapshot can undo.
+printf '4096\n' > "$WORK/written.$SRC"
+out="$(runstrat "$stcfg")"
+{ ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' \
+  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje' \
+  && printf '%s' "$out" | grep -q 'ODRZUCENIE ZYWYCH ZMIAN' \
+  && printf '%s' "$out" | grep -q 'written=4096' \
+  && printf '%s' "$out" | grep -qi 'ODRZUCI'; } \
+    && ok "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" \
+    || bad "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" "$out"
+
+# The same state must not be swallowed by the incremental verdict either: there
+# the transfer is genuinely possible, so the temptation to call it clean is real.
+printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'INKREMENT' \
+  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje' \
+  && printf '%s' "$out" | grep -q 'written=4096'; } \
+    && ok "strategy: an incremental over a dirty source still declares the live changes" \
+    || bad "strategy: an incremental over a dirty source still declares the live changes" "$out"
+
+# An unreadable live state is not a clean one. Fail-safe, per REV-118 option 2.
+printf 'FAIL\n' > "$WORK/written.$SRC"
+printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'STAN ZYWY NIEUSTALONY' \
+  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' \
+  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje'; } \
+    && ok "strategy: an unprovable live state is classified destructive, not clean" \
+    || bad "strategy: an unprovable live state is classified destructive, not clean" "$out"
+rm -f "$WORK/written.$SRC"
 
 # ---- a remote source is not guessed at --------------------------------------
 rcfg="$WORK/stratremote.conf"
