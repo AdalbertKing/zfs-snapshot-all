@@ -502,6 +502,13 @@ if [ "\$1" = snapshot ]; then
   full="\$2"; dsp=\${full%@*}
   key=\$(printf '%s' "\$dsp" | tr '/' '_')
   [ -f "$WORK/snapfail" ] && { echo "cannot create snapshot '\$full'" >&2; exit 1; }
+  # Fails ONLY the boundary snapshot. Deliberately not folded into snapfail:
+  # failing the preview snapshot exercises a pre-mutation property (nothing has
+  # been touched yet), while failing this one is the first failure that happens
+  # with the fence already up.
+  case "\$full" in
+    *@restore-commit-*) [ -f "$WORK/commitsnapfail" ] && { echo "cannot create snapshot '\$full'" >&2; exit 1; } ;;
+  esac
   n=\$(cat "$WORK/snapn" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$WORK/snapn"
   printf '%s\t%s\t%s\n' "\$full" "\$((9000+n))" "\$((9900+n))" >> "$WORK/rows.\$key"
   # Another actor snapshotting the source right after our preview snapshot: the
@@ -713,7 +720,7 @@ reset_src() {
     rm -f "$WORK/livebytes" "$WORK/arrivebytes" "$WORK/arrivesnap" \
           "$WORK/snapfail" "$WORK/destroyfail" \
           "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source" \
-          "$WORK/arrivesnap_samesecond" "$WORK/verifyfail"
+          "$WORK/arrivesnap_samesecond" "$WORK/verifyfail" "$WORK/commitsnapfail"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -1126,6 +1133,26 @@ out="$(runrepl "$stcfg" rpool/data)"
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie'; } \
     && ok "REV-119 F1.2: a clean run still makes the exact-state claim (control)" \
     || bad "REV-119 F1.2: a clean run still makes the exact-state claim (control)" "$out"
+
+
+# 27. The one branch none of 23-26 reached: the BOUNDARY snapshot fails to be
+#     created, with the fence already up, and putting the fence back fails too.
+#     Deliberately not folded into the generic snapfail: failing the PREVIEW
+#     snapshot proves a pre-mutation property (nothing has been touched yet),
+#     while this is the first failure that happens with the property changed.
+reset_src
+touch "$WORK/commitsnapfail" "$WORK/unfencefail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ printf '%s' "$out" | grep -q 'nie udalo sie zamknac granicy zatwierdzenia' \
+  && [ "$rc" -ne 0 ] \
+  && printf '%s' "$out" | grep -q 'readonly' \
+  && printf '%s' "$out" | grep -q 'zfs inherit readonly rpool/data' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "REV-119 F1.2: a failed boundary snapshot reports the fence it could not put back" \
+    || bad "REV-119 F1.2: a failed boundary snapshot reports the fence it could not put back" "$out"
+[ "$(srccount)" = 1 ] \
+    && ok "REV-119 F1.2: ...and the preview snapshot is still cleaned up on that branch" \
+    || bad "REV-119 F1.2: ...and the preview snapshot is still cleaned up on that branch" "$(cat "$WORK/rows.$SRC")"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
