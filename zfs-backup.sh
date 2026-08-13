@@ -3135,40 +3135,39 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # cannot see them.
     #
     # Measured limitation, pve1 / zfs-2.1.9: `written` reflects the last COMMITTED
-    # txg. 4 MiB written to a lab dataset still read written=0 until the txg landed
-    # (that pool commits roughly once a minute, not the 5s default), so a write made
-    # seconds before the preview can be invisible to it. The clean wording therefore
-    # states the qualification instead of promising an idle source. Forcing a commit
-    # to close the window was rejected: `zpool sync` is a pool-wide write and this
-    # verb advertises itself as read-only.
+    # txg. 4 MiB written to a lab dataset still read written=0 -- through a
+    # sync(1) -- until the txg landed (that pool commits roughly once a minute, not
+    # the 5s default). Forcing a commit to close the window was rejected: `zpool
+    # sync` is a pool-wide write and this verb advertises itself as read-only.
     #
-    # A failed or non-numeric read is NOT treated as clean. If the live state cannot
-    # be proven read-only, the preview says so and keeps the operation classified as
-    # destructive -- silence here would be the false-safe answer this whole block
-    # exists to prevent.
+    # REV-118 F1 residual draws the consequence I had stopped one step short of:
+    # if written=0 can be stale, then written=0 PROVES NOTHING about the current
+    # state, and a no-op verdict resting on it is a guess wearing a fact's clothes.
+    # So there are only two honest classes here -- proven dirty, and unproven --
+    # and both an accounted-zero and a failed read fall in the second. The verb
+    # therefore has no no-op answer at all: it can say "nothing is accounted", never
+    # "nothing is there". Closing the gap needs a fact this read cannot supply
+    # (the pool's open-txg dirty accounting via kstat would, at the cost of a
+    # Linux/OpenZFS-specific assumption); until one is chosen, conservative is the
+    # only defensible direction.
     local live_written live_state
     live_written="$(zfs get -Hp -o value written "$srcpath" 2>/dev/null)"
     case "$live_written" in
-        ''|*[!0-9]*) live_state=unknown ;;
-        0)           live_state=clean   ;;
-        *)           live_state=dirty   ;;
+        ''|*[!0-9]*) live_state=unreadable  ;;
+        0)           live_state=unaccounted ;;
+        *)           live_state=dirty       ;;
     esac
 
     if [ "$base_guid" = "$latest_guid" ]; then
-        if [ -z "$blockers" ] && [ "$live_state" = clean ]; then
-            echo "  Strategia:  NIC DO ZROBIENIA -- zrodlo jest juz dokladnie w zadanym punkcie:"
-            echo "              zaden snapshot nie jest nowszy niz baza, a ZFS rozlicza written=0"
-            echo "              wedlug ostatniego zatwierdzonego txg."
-            return 0
-        fi
         if [ -z "$blockers" ] && [ "$live_state" = dirty ]; then
             echo "  Strategia:  ODRZUCENIE ZYWYCH ZMIAN, bez transferu -- zrodlo stoi na zadanym"
             echo "              punkcie i nie ma nowszych snapshotow, ale po nim zapisano dane."
             echo "              Powrot do zadanego stanu oznacza ich utrate. Nic sie nie przesyla."
         elif [ -z "$blockers" ]; then
-            echo "  Strategia:  NIEUSTALONA, traktowana jako NISZCZACA -- zrodlo stoi na zadanym"
-            echo "              punkcie i nie ma nowszych snapshotow, ale zywego stanu nie udalo"
-            echo "              sie odczytac, wiec 'nic do zrobienia' bylaby odpowiedzia na wiare."
+            echo "  Strategia:  STAN ZRODLA NIEDOWIEDZIONY, traktowany jako potencjalnie NISZCZACY"
+            echo "              -- zrodlo stoi na zadanym punkcie i nie ma nowszych snapshotow, ale"
+            echo "              biezacego stanu zywego nie da sie tu dowiesc (szczegol nizej)."
+            echo "              'Nic do zrobienia' byloby odpowiedzia na wiare, wiec jej nie ma."
         else
             echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
             echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
@@ -3192,17 +3191,18 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
             echo "  zadnym snapshocie, wiec nie da sie ich odzyskac po fakcie -- odtworzenie"
             echo "  niszczace je ODRZUCI. Ten stan sam w sobie czyni operacje niszczaca, nawet"
             echo "  gdyby zaden snapshot nie blokowal." ;;
-        unknown)
-            echo "  STAN ZYWY NIEUSTALONY: odczyt wlasciwosci 'written' dla '$srcpath' nie dal"
+        unreadable)
+            echo "  STAN ZYWY NIEDOWIEDZIONY: odczyt wlasciwosci 'written' dla '$srcpath' nie dal"
             echo "  liczby. NIE twierdze, ze nic nie blokuje -- traktuj operacje jako niszczaca"
             echo "  do czasu, az stan zywy zostanie potwierdzony." ;;
-        clean)
-            [ -n "$blockers" ] || {
-                echo "  Nic po stronie zrodla nie blokuje przyrostu -- zaden snapshot zrodla nie"
-                echo "  jest nowszy niz wspolna baza, a ZFS rozlicza written=0 wedlug ostatniego"
-                echo "  zatwierdzonego txg. Zapisy z ostatnich sekund moga byc jeszcze"
-                echo "  nierozliczone; przed operacja niszczaca potwierdz, ze zrodlo jest bezczynne."
-            } ;;
+        unaccounted)
+            echo "  STAN ZYWY NIEDOWIEDZIONY: ZFS nie rozlicza zadnych zmian zapisanych po"
+            echo "  ostatnim snapshocie zrodla (written=0)."
+            echo "  To NIE jest dowod stanu biezacego: 'written' pokazuje ostatni ZATWIERDZONY"
+            echo "  txg. Zmierzone (pve1, zfs-2.1.9): 4 MiB zapisane i przepuszczone przez"
+            echo "  sync(1) dalej pokazywaly written=0, az do commitu txg -- na tej puli okolo"
+            echo "  minuty pozniej. Zapis sprzed chwili jest wiec dla tego odczytu niewidoczny."
+            echo "  Przed operacja niszczaca potwierdz, ze zrodlo jest bezczynne." ;;
     esac
 }
 

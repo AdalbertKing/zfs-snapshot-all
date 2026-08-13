@@ -505,12 +505,11 @@ out="$(runstrat "$stcfg")"
     && ok "strategy: a live source with no common guid is FULL and flagged destructive" \
     || bad "strategy: a live source with no common guid is FULL and flagged destructive" "$(printf '%s' "$out"|grep -i strategia)"
 
-# ---- backup ahead of source -> incremental, nothing blocking ----------------
+# ---- backup ahead of source -> incremental from the GUID-proven base ---------
 printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
 printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'INKREMENT' && printf '%s' "$out" | grep -q 'guid=11' \
-  && printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje'; } \
+{ printf '%s' "$out" | grep -q 'INKREMENT' && printf '%s' "$out" | grep -q 'guid=11'; } \
     && ok "strategy: a backup ahead of the source is an incremental from the proven base" \
     || bad "strategy: a backup ahead of the source is an incremental from the proven base" "$(printf '%s' "$out"|grep -iE 'strategia|baza')"
 
@@ -528,13 +527,21 @@ out="$(runstrat "$stcfg")"
     && ok "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" \
     || bad "strategy: a source PAST the latest backup point is a destructive rollback, not 'nothing to do'" "$(printf '%s' "$out"|grep -iE 'strategia|^    s')"
 
-# ---- and the true no-op, so the control above is discriminating -------------
+# ---- REV-118 F1 residual: accounted-zero is UNPROVEN, never a no-op ----------
+# The same fixture that used to be "the true no-op". The live lab showed written
+# can read 0 while 4 MiB sits in an uncommitted txg, so a verdict resting on
+# written=0 is a guess wearing a fact's clothes. This case therefore pins the
+# ABSENCE of the comfortable answer, plus the reason being stated rather than the
+# state merely being hedged.
 printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
-out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' && ! printf '%s' "$out" | grep -q 'ROLLBACK' \
-  && printf '%s' "$out" | grep -q 'written=0'; } \
-    && ok "strategy: a source exactly at the point IS a no-op (control)" \
-    || bad "strategy: a source exactly at the point IS a no-op (control)" "$(printf '%s' "$out"|grep -i strategia)"
+zero_out="$(runstrat "$stcfg")"
+{ ! printf '%s' "$zero_out" | grep -q 'NIC DO ZROBIENIA' \
+  && ! printf '%s' "$zero_out" | grep -q 'ROLLBACK' \
+  && printf '%s' "$zero_out" | grep -q 'STAN ZRODLA NIEDOWIEDZIONY' \
+  && printf '%s' "$zero_out" | grep -q 'written=0' \
+  && printf '%s' "$zero_out" | grep -q 'txg'; } \
+    && ok "strategy: written=0 is unproven, not a no-op, and says why" \
+    || bad "strategy: written=0 is unproven, not a no-op, and says why" "$zero_out"
 
 # ---- REV-118 F1: snapshots are not the only destructible source state --------
 # Same fixture as the no-op control immediately above -- identical snapshot sets,
@@ -545,32 +552,45 @@ out="$(runstrat "$stcfg")"
 printf '4096\n' > "$WORK/written.$SRC"
 out="$(runstrat "$stcfg")"
 { ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' \
-  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje' \
   && printf '%s' "$out" | grep -q 'ODRZUCENIE ZYWYCH ZMIAN' \
   && printf '%s' "$out" | grep -q 'written=4096' \
   && printf '%s' "$out" | grep -qi 'ODRZUCI'; } \
     && ok "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" \
     || bad "strategy: live unsnapshotted source data is named and never reads as 'nothing to do'" "$out"
 
+# Unproven is not the same answer as proven-dirty, and collapsing the two would
+# be the lazy way to satisfy the residual: declare everything destructive and
+# stop distinguishing. The zero case must NOT claim data will be discarded, and
+# the dirty case must.
+{ printf '%s' "$out" | grep -q 'ODRZUCI' \
+  && ! printf '%s' "$zero_out" | grep -q 'ODRZUCI' \
+  && ! printf '%s' "$zero_out" | grep -q 'ODRZUCENIE ZYWYCH ZMIAN'; } \
+    && ok "strategy: unproven and proven-dirty stay distinct verdicts" \
+    || bad "strategy: unproven and proven-dirty stay distinct verdicts" "$zero_out"
+
 # The same state must not be swallowed by the incremental verdict either: there
 # the transfer is genuinely possible, so the temptation to call it clean is real.
 printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
 out="$(runstrat "$stcfg")"
 { printf '%s' "$out" | grep -q 'INKREMENT' \
-  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje' \
-  && printf '%s' "$out" | grep -q 'written=4096'; } \
+  && printf '%s' "$out" | grep -q 'written=4096' \
+  && printf '%s' "$out" | grep -qi 'ODRZUCI'; } \
     && ok "strategy: an incremental over a dirty source still declares the live changes" \
     || bad "strategy: an incremental over a dirty source still declares the live changes" "$out"
 
-# An unreadable live state is not a clean one. Fail-safe, per REV-118 option 2.
+# An unreadable live state is unproven too -- but for a different reason, and the
+# preview has to say which. Two unprovable states with one indistinguishable
+# message would leave the operator unable to tell "ZFS says nothing changed" from
+# "the read failed".
 printf 'FAIL\n' > "$WORK/written.$SRC"
 printf 'hdd/store/rpool/data@s1\t100\t11\n' > "$WORK/rows.$COPY"
 out="$(runstrat "$stcfg")"
-{ printf '%s' "$out" | grep -q 'STAN ZYWY NIEUSTALONY' \
-  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA' \
-  && ! printf '%s' "$out" | grep -qi 'Nic po stronie zrodla nie blokuje'; } \
-    && ok "strategy: an unprovable live state is classified destructive, not clean" \
-    || bad "strategy: an unprovable live state is classified destructive, not clean" "$out"
+{ printf '%s' "$out" | grep -q 'STAN ZYWY NIEDOWIEDZIONY' \
+  && printf '%s' "$out" | grep -q "nie dal" \
+  && ! printf '%s' "$out" | grep -q 'written=0' \
+  && ! printf '%s' "$out" | grep -q 'NIC DO ZROBIENIA'; } \
+    && ok "strategy: an unreadable live state is unproven for its own stated reason" \
+    || bad "strategy: an unreadable live state is unproven for its own stated reason" "$out"
 rm -f "$WORK/written.$SRC"
 
 # ---- a remote source is not guessed at --------------------------------------
