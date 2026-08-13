@@ -332,9 +332,10 @@ b=$(restore_landing_path hdd/store/tank/data  tank/data)
 # ---- the verb refuses what it does not do -----------------------------------
 reset_ds
 out="$(runs --dataset=rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'separate verb'; } \
-    && ok "slice2: no --plan and no --snapshot refuses and names the separate verb" \
-    || bad "slice2: no --plan and no --snapshot refuses and names the separate verb" "rc=$rc"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--plan' && printf '%s' "$out" | grep -q -- '--snapshot' \
+  && printf '%s' "$out" | grep -q 'no public grammar yet'; } \
+    && ok "slice2: bare --dataset refuses, names the two real ways in, and does not invent a third" \
+    || bad "slice2: bare --dataset refuses, names the two real ways in, and does not invent a third" "rc=$rc" "$out"
 out="$(runs --snapshot=s1)"; rc=$?
 [ "$rc" -ne 0 ] && ok "slice2: --snapshot without --dataset refuses" \
                 || bad "slice2: --snapshot without --dataset refuses" "rc=$rc"
@@ -601,6 +602,114 @@ out="$(runstrat "$rcfg")"
 printf '%s' "$out" | grep -qi 'ZDALNE' \
     && ok "strategy: a remote source says so instead of applying the local answer" \
     || bad "strategy: a remote source says so instead of applying the local answer" "$(printf '%s' "$out"|grep -i strategia)"
+
+# ==============================================================================
+# `restore --replace` -- the DESTRUCTIVE verb, slice 1: all gates, no execution.
+#
+# Everything below asserts a refusal, which is the point: this slice can only
+# refuse. The stub from the strategy section is reused unchanged, so any zfs call
+# outside `list`/`get` would fail the run loudly -- that is how "it mutated
+# nothing" is asserted rather than described.
+# ==============================================================================
+# Calls the internal function DIRECTLY. There is no CLI flag to go through, and
+# that is the point: the owner is still deciding the public restore grammar, so
+# the gates are built and tested underneath it rather than behind a flag that
+# would have to be withdrawn later (R-018/R-019).
+runrepl() {   # <config> [dataset]
+    local c="$1" d="${2-}"
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+      restore_replace_internal "$d" "$c" 0 ) 2>&1
+}
+
+printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
+
+# The gates that must fire before anything is computed.
+out="$(runrepl "$stcfg")"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nazwij co odtwarzac'; } \
+    && ok "replace: refuses without a dataset instead of guessing the relationship" \
+    || bad "replace: refuses without a dataset instead of guessing the relationship" "$out"
+
+out="$(runrepl "$stcfg" rpool/nowhere)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie wystepuje w zadnej relacji'; } \
+    && ok "replace: a dataset outside every relationship is refused, not invented" \
+    || bad "replace: a dataset outside every relationship is refused, not invented" "$out"
+
+# Two assertions were dropped here rather than rewritten: they pinned CLI-level
+# refusals (--snapshot rejected because the recovery point is policy; --plan and
+# --replace refusing to combine). Both belong to a public grammar the owner has
+# not settled, so pinning them now would freeze a decision that is not mine. They
+# come back with the flag, against whatever shape it turns out to have.
+
+# The relationship resolves BOTH ways, source path or copy path, because an
+# operator reaching for recovery may know either one.
+for name in rpool/data hdd/store/rpool/data; do
+    out="$(runrepl "$stcfg" "$name")"; rc=$?
+    { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'krok WYKONAWCZY jeszcze nie istnieje' \
+      && printf '%s' "$out" | grep -q 'INKREMENT'; } \
+        && ok "replace: '$name' resolves to the relationship and previews before refusing" \
+        || bad "replace: '$name' resolves to the relationship and previews before refusing" "$out"
+done
+
+# The preview an operator confirms and the decision the code takes must be ONE
+# computation. This asserts the verb branches on the facts the printed preview
+# came from.
+#
+# Captured from an EXIT trap, because the verb ends in `die` and die exits the
+# subshell: a plain line after the call never runs. The first version of this
+# test wrote nothing at all, so it failed for that reason rather than the one it
+# was written to catch.
+( trap 'printf "%s|%s|%s" "$RESTORE_STRATEGY" "$RESTORE_BASE_GUID" "$RESTORE_TARGET_SNAP" > "$WORK/facts"' EXIT
+  PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
+  restore_replace_internal rpool/data "$stcfg" 0 >/dev/null 2>&1 ) || true
+[ "$(cat "$WORK/facts" 2>/dev/null)" = 'increment|11|s2' ] \
+    && ok "replace: branches on the same computed facts the preview printed" \
+    || bad "replace: branches on the same computed facts the preview printed" "$(cat "$WORK/facts" 2>/dev/null)"
+
+# No GUID-proven base -> full replacement, which is a different mechanism with
+# different risk. It must be refused by name, never quietly attempted as an
+# incremental.
+printf 'rpool/data@x1\t50\t99\n' > "$WORK/rows.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'PELNE zastapienie' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY'; } \
+    && ok "replace: no proven base is refused as full replacement, not run as an increment" \
+    || bad "replace: no proven base is refused as full replacement, not run as an increment" "$out"
+printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
+
+# A remote source is refused here too. The planner merely declines to guess; the
+# destructive verb must decline to ACT, and say why.
+out="$(runrepl "$rcfg" hdd/mirror)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; } \
+    && ok "replace: a remote source is refused by the destructive verb" \
+    || bad "replace: a remote source is refused by the destructive verb" "$out"
+
+# An ATOMIC relationship is a subtree recovered as one point in time; recovering
+# one dataset out of it would silently downgrade that property.
+atcfg="$WORK/atomic.conf"
+mkcfg "$atcfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
+out="$(runrepl "$atcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ATOMIC'; } \
+    && ok "replace: an atomic relationship is refused rather than recovered one dataset at a time" \
+    || bad "replace: an atomic relationship is refused rather than recovered one dataset at a time" "$out"
+
+# A copy with no snapshots at all: refuse, and name which side is empty.
+printf '' > "$WORK/rows.$COPY"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ani jednego snapshota'; } \
+    && ok "replace: a copy with no snapshots is refused" \
+    || bad "replace: a copy with no snapshots is refused" "$out"
+
+# And the property the whole slice rests on: none of the above wrote anything.
+# The stub fails any zfs subcommand other than list/get, so a mutation would have
+# shown up as a failed assertion above -- this checks the recording directly.
+if grep -qvE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null; then
+    bad "replace: the whole slice only ever reads" "$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" | head -3)"
+else
+    ok "replace: the whole slice only ever reads"
+fi
+
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

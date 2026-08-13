@@ -10,16 +10,24 @@ From `OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12.md` and R-009/R-013/R-016:
 
 1. default recovery point is the **latest valid backup**, default destination is
    the **original source path**;
-2. preview first, then **explicit confirmation** — the operator chooses recovery
-   intent, never transport mechanics;
-3. **preserve or secure source state before destroying it**;
-4. **incremental from the GUID-proven base when one exists**; full replacement
-   only when no valid base exists;
-5. **GUID verification after execution** — a clean exit code is not a restore.
+2. preview first — naming exactly what will be lost — then **explicit destructive
+   confirmation**. The operator chooses recovery intent, never transport
+   mechanics;
+3. **remove/roll back only the blocking divergent state**, then **incremental
+   from the GUID-proven base** when one exists; full replacement only when no
+   valid base exists;
+4. **GUID verification after execution** — a clean exit code is not a restore.
 
-Points 3 and 4 are the ones that collide, and the collision is not a coding
-detail. It has to be decided by whoever owns the data, so the tool must not
-resolve it quietly.
+> **Correction, R-017 (2026-08-13).** An earlier draft of this note listed
+> "preserve or secure source state before destruction" as a settled requirement
+> and built a mandatory operator choice on top of it. That requirement came from
+> R-016's wording, not from `OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12.md`, and
+> the reviewer withdrew it after re-reading the owner contract. **The default
+> path is zero-choice**: keeping a second recoverable copy of divergent source
+> state is not part of it. The analysis below is kept because it is what makes
+> that answer correct rather than merely convenient — it shows there was no cheap
+> way to have both, so the owner's simple path is not giving anything up that was
+> ever available for free.
 
 ## The collision
 
@@ -65,59 +73,67 @@ The second half is the part worth having measured: naming a snapshot `@B` does n
 make it `B`. The clone inherits the origin's *data*, not its snapshot identity, so
 the cheap-preservation idea fails on ZFS's own terms and not on a naming detail.
 
-Shape C's "snapshot the source first" is worth keeping even though the rollback
-then destroys that snapshot: it is what makes the txg-visibility gap irrelevant.
-`written` cannot prove a source is idle (REV-118), but a snapshot taken before the
-destructive step captures whatever was there, proven or not — so the preview's
-`STAN ZRODLA NIEDOWIEDZIONY` stops being a reason to refuse. It converts an
-unprovable question into a captured fact, and only then throws it away on the
-operator's explicit instruction.
+Shape C is the default path. B is not built. A, if it is ever wanted, belongs to
+an explicit advanced/non-destructive capability next to the existing side-restore,
+not to this verb (R-017).
 
-## Proposed contract
+## The pre-destruction snapshot: a measurement, not a safety net
 
-**The tool refuses to choose.** A destructive recovery whose source has divergent
-state requires the operator to name what happens to it:
+Taking `<src>@restore-<epoch>` immediately before the rollback is worth doing, and
+it is important to be exact about why, because the obvious description of it is
+wrong.
+
+It is **not preservation**. The rollback that follows destroys it along with every
+other snapshot past `B`. Calling it a safety copy would be a lie of the most
+dangerous kind — an operator who believed it would think a mistake was reversible.
+
+What it actually buys: REV-118 established that `written` cannot prove a source is
+idle, because it reflects the last committed txg. Snapshotting the source **forces
+the divergent state into a named, measurable object** — its `used` is then the
+exact byte count that is about to be destroyed, not an estimate that may be a
+minute stale. So the report after the fact can say what was destroyed instead of
+approximating it, and the incremental has a deterministic tip to work from.
+
+Measurement, then. The note says so, the code comment says so, and the operator
+output must never call it anything else.
+
+## Contract
+
+Zero-choice, per the owner's simple path.
+
+**The public grammar below is illustrative, not committed** (R-018/R-019). The
+owner is deciding the restore selector/destination syntax, so the implementation
+builds this chain as an internal function and the CLI door gets hung afterwards.
+A public flag is much harder to withdraw than to add, and a slice that shipped one
+would be deciding the owner's question by squatting on it.
 
 ```
-zfs-backup.sh restore --replace --dataset=<source> --preserve-source=rename
-zfs-backup.sh restore --replace --dataset=<source> --discard-source-changes
+<internal>  restore_replace_internal <source-or-copy dataset> <config> <yes>
 ```
 
-- neither flag given, and divergent state exists → **refuse**, print the preview,
-  name both options and their costs. This is the default and it does nothing;
-- no divergent state at all → still requires confirmation, but neither flag,
-  because there is nothing to decide about;
-- `--yes` skips the interactive confirmation. It does **not** substitute for the
-  divergence decision: `--yes` means "I have read the preview", not "pick for me".
-
-Sequence, once the decision exists:
-
-1. compute the strategy read-only (existing code) and print it;
-2. confirm — interactively, or `--yes`;
-3. secure the source: `zfs snapshot <src>@restore-safety-<epoch>`, always, both
-   shapes. Named outside every managed prefix so retention never touches it;
-4. execute the chosen shape;
-5. verify: the source's snapshot GUID at `L` must equal the backup's GUID at `L`.
-   Mismatch is a hard failure, loudly, whatever the exit codes said;
-6. report what still exists and what was destroyed, by name.
+1. resolve the relationship from the installed CONFIG; refuse anything the verb
+   cannot prove it understands (unknown dataset, remote source, no backup
+   snapshots, no GUID-proven base);
+2. print the preview — the same strategy computation as `--plan`, which already
+   names the blocking snapshots individually;
+3. require **explicit destructive confirmation**; `--yes` means "I have read the
+   preview";
+4. snapshot the source (measurement, above);
+5. roll back / discard exactly the blocking divergent state, then receive the
+   incremental `B..L`;
+6. verify the source's GUID at `L` equals the backup's GUID at `L`. A mismatch is
+   a hard failure however clean the exit codes were;
+7. report what was destroyed, by name and by size.
 
 ## Slicing
 
-- **Slice 1** — everything above except the transfer shapes: verb, refusals,
-  preview, confirmation, safety snapshot, GUID verification, and the divergence
-  decision gate. No destruction yet; the execution point is a single refusal.
-- **Slice 2** — shape C (discard), the cheap path, on a throwaway live lab.
-- **Slice 3** — shape A (rename aside), which needs the mountpoint consequence
-  handled rather than mentioned.
+- **Slice 1** — steps 1–3 and nothing else. The verb resolves, refuses everything
+  it cannot prove, previews, confirms, and then stops at a single explicit "the
+  execution step does not exist yet" refusal. **Nothing is mutated, so not even
+  the snapshot of step 4 is taken** — a verb that snapshots and then refuses would
+  leave litter behind on every dry run.
+- **Slice 2** — steps 4–7 for the incremental case, proved on a throwaway live lab.
+- **Slice 3** — full replacement when no valid base exists.
 
-Slice 1 is safe to land and review on its own: it can refuse, and that is all it
-can do.
-
-## Open question for the reviewer
-
-Is shape B worth building at all? It costs a full copy like A, preserves the same
-data, and unlike A leaves the original path untouched — but it needs somewhere to
-put a second full copy, which on these hosts is the same pool that already holds
-the backup. My inclination is to skip it and offer A and C only. That is a
-judgement about operator ergonomics, not a technical constraint, so it should not
-be mine alone.
+Slice 1 is safe to land and review on its own: refusing is the only thing it can
+do.

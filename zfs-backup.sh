@@ -179,7 +179,11 @@ Usage:
   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
                                     READ-ONLY. What could be restored, from where, and when
                                     each snapshot was REALLY taken -- ZFS 'creation', never
-                                    the name. Restoring itself is a separate, later verb.
+                                    the name, plus the recovery STRATEGY and what it would
+                                    destroy on the source.
+  zfs-backup.sh restore --dataset=D --snapshot=S [--yes]
+                                    SAFE restore into the derived restore namespace. The
+                                    original path is never the target.
   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
   zfs-backup.sh seed NAME [--yes]
   zfs-backup.sh final-catchup NAME [--yes]
@@ -3062,24 +3066,38 @@ restore_landing_path() {   # <copy dataset> <original source> -> landing path
 # measured reason is the same one that governs consistency -- one snapsend run
 # names every dataset from a single clock read, so equal names across datasets
 # prove nothing about identity.
+# Prints the strategy, and publishes it as facts for a caller that has to ACT on
+# it rather than show it. The destructive verb reads these instead of re-deriving
+# the same answer, so the preview an operator confirms and the decision the code
+# takes cannot drift apart -- they are the same computation, run once.
+RESTORE_STRATEGY=""      # remote | full-absent | full-live | increment | rollback | discard-live | unproven
+RESTORE_BASE_GUID=""     # the GUID-proven common base, empty when there is none
+RESTORE_TARGET_SNAP=""   # the recovery point: the backup's latest snapshot, bare name
+RESTORE_TARGET_GUID=""
+RESTORE_BLOCKERS=""      # source snapshots newer than the base, full names, one per line
 restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows>
     local copy="$1" srcpath="$2" snaps="$3"
+    RESTORE_STRATEGY=""; RESTORE_BASE_GUID=""; RESTORE_TARGET_SNAP=""
+    RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""
 
     # A pull relationship's original source lives on another host. Determining its
     # strategy needs that host, which is an SSH read this read-only slice does not
     # take. Say so rather than implying the local answer applies.
     case "$srcpath" in
         *:*) echo "  Strategia:  (zrodlo '$srcpath' jest ZDALNE -- ustalenie strategii wymaga odpytania tamtego hosta; ten wycinek tego nie robi)"
+             RESTORE_STRATEGY=remote
              return 0 ;;
     esac
 
     local latest latest_guid
     latest="$(printf '%s' "$snaps" | tail -1 | cut -f1)"
     latest_guid="$(printf '%s' "$snaps" | tail -1 | cut -f3)"
+    RESTORE_TARGET_SNAP="${latest#*@}"; RESTORE_TARGET_GUID="$latest_guid"
     echo "  Punkt docelowy (domyslna polityka: NAJNOWSZY -> oryginalna sciezka):"
     echo "    ${latest#*@}  guid=$latest_guid"
 
     if ! zfs list -H -o name "$srcpath" >/dev/null 2>&1; then
+        RESTORE_STRATEGY=full-absent
         echo "  Strategia:  FULL -- zrodlo '$srcpath' nie istnieje, wiec nie ma czego niszczyc"
         echo "              ani z czym robic przyrostu. Odtworzenie stworzy je od zera."
         return 0
@@ -3097,6 +3115,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     done <<< "$snaps"
 
     if [ -z "$base_guid" ]; then
+        RESTORE_STRATEGY=full-live
         echo "  Strategia:  FULL na ISTNIEJACE zrodlo -- zaden snapshot kopii nie ma guida"
         echo "              obecnego na '$srcpath'. Wspolnej bazy NIE MA, wiec przyrost jest"
         echo "              niemozliwy, a pelne odtworzenie zastapiloby zywe zrodlo. To jest"
@@ -3104,6 +3123,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
         return 0
     fi
 
+    RESTORE_BASE_GUID="$base_guid"
     echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
     echo "    ${base_snap#*@}  guid=$base_guid"
 
@@ -3126,6 +3146,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     local blockers
     blockers="$(zfs list -H -p -t snapshot -o name,guid -s creation -d 1 "$srcpath" 2>/dev/null \
                 | awk -v b="$base_guid" 'f{print} $2==b{f=1}' | cut -f1)"
+    RESTORE_BLOCKERS="$blockers"
 
     # Kind (2): live, unsnapshotted state. `written` is ZFS's own accounting of the
     # space written to the dataset since its most recent snapshot, so this is a
@@ -3160,20 +3181,24 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
 
     if [ "$base_guid" = "$latest_guid" ]; then
         if [ -z "$blockers" ] && [ "$live_state" = dirty ]; then
+            RESTORE_STRATEGY=discard-live
             echo "  Strategia:  ODRZUCENIE ZYWYCH ZMIAN, bez transferu -- zrodlo stoi na zadanym"
             echo "              punkcie i nie ma nowszych snapshotow, ale po nim zapisano dane."
             echo "              Powrot do zadanego stanu oznacza ich utrate. Nic sie nie przesyla."
         elif [ -z "$blockers" ]; then
+            RESTORE_STRATEGY=unproven
             echo "  Strategia:  STAN ZRODLA NIEDOWIEDZIONY, traktowany jako potencjalnie NISZCZACY"
             echo "              -- zrodlo stoi na zadanym punkcie i nie ma nowszych snapshotow, ale"
             echo "              biezacego stanu zywego nie da sie tu dowiesc (szczegol nizej)."
             echo "              'Nic do zrobienia' byloby odpowiedzia na wiare, wiec jej nie ma."
         else
+            RESTORE_STRATEGY=rollback
             echo "  Strategia:  SAM ROLLBACK, bez transferu -- zrodlo MA juz najnowszy punkt kopii,"
             echo "              ale przeszlo poza niego. Zeby wrocic do zadanego stanu, ponizsze"
             echo "              snapshoty zrodla musza zniknac. Nic sie nie przesyla."
         fi
     else
+        RESTORE_STRATEGY=increment
         echo "  Strategia:  INKREMENT od wspolnej bazy do najnowszego punktu."
     fi
 
@@ -3206,6 +3231,113 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     esac
 }
 
+# Every backup relationship the installed CONFIG describes, one per line:
+#
+#   <original source> <TAB> <copy location> <TAB> <kind> <TAB> <consistency>
+#
+# One authority, because there are now two callers. `--plan` builds its table from
+# this and the destructive path resolves a single dataset through it; a second copy of the
+# derivation would be a second idea of where a backup lives, and the destructive
+# verb is the last place that should disagree with the preview.
+restore_relations() {   # <config>
+    local config="$1" ds d s rec
+    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
+        d="$(installed_dataset_field "$config" "$ds" dst)"
+        s="$(installed_dataset_field "$config" "$ds" src)"
+        # Consistency comes from the installed CONFIG and from nothing else. The
+        # recovery contract forbids inferring it from snapshot names, prefixes,
+        # hierarchy shape or close creation times, and the reason is measured: on
+        # pve2 two datasets in different subtrees share the name
+        # automated_hourly_2026-08-11_23-37-01 while their creation times differ by
+        # a second. They were never one atomic event. A planner that read names
+        # would have announced a recovery point that never existed.
+        rec="$(installed_dataset_field "$config" "$ds" recursive)"
+        rec="$(printf '%s' "$rec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        [ "$rec" = atomic ] && rec=atomic || rec=independent
+        if [ -n "$d" ]; then
+            printf '%s\t%s\t%s\t%s\n' "$ds" "${d}/${ds}" "local push -> $d" "$rec"
+        elif [ -n "$s" ]; then
+            printf '%s\t%s\t%s\t%s\n' "$s" "$ds" "remote pull <- $s" "$rec"
+        fi
+    done
+}
+
+# Phase 7, the destructive recovery path -- gates only, and INTERNAL ONLY.
+#
+# The owner's default recovery is "latest valid backup -> the original source
+# path", which means destroying source state. This builds every gate in front of
+# that and not the step itself: it resolves the relationship, refuses everything
+# it cannot prove it understands, prints the same preview `--plan` prints, and
+# stops.
+#
+# NOT REACHABLE FROM THE CLI, on purpose (R-018/R-019). The owner is still
+# deciding the public restore selector/destination grammar, so committing a flag
+# now would freeze a surface that is not theirs yet -- and a public flag is much
+# harder to withdraw than to add. The gates and their tests are settled and can
+# be built underneath it; the door on top gets hung when the owner has decided
+# what shape it is. The suite calls this function directly.
+#
+# There is deliberately no confirmation prompt yet. Asking an operator to approve
+# a destruction that cannot happen is theatre, and a prompt nobody can answer
+# meaningfully teaches them to answer prompts without reading. It lands together
+# with the execution it guards.
+#
+# Nothing here mutates anything -- not even the pre-destruction snapshot, which
+# belongs to the execution step. A path that snapshotted and then refused would
+# leave litter behind on every attempt.
+restore_replace_internal() {   # <dataset> <config> <yes>
+    local dataset="$1" config="$2" yes="$3"
+    [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || die "restore (odtworzenie niszczace): no cron config known -- pass --config=FILE or run setup-server"
+    [ -r "$config" ] || die "restore (odtworzenie niszczace): cannot read $config"
+
+    local a b c d src="" copy="" kind="" cons="" hits=0
+    while IFS=$'\t' read -r a b c d; do
+        [ -n "$a" ] || continue
+        if [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ]; then
+            src="$a"; copy="$b"; kind="$c"; cons="$d"; hits=$((hits+1))
+        fi
+    done <<< "$(restore_relations "$config")"
+    [ "$hits" -ne 0 ] || die "restore (odtworzenie niszczace): '$dataset' nie wystepuje w zadnej relacji backupu w $config -- 'restore --plan' pokaze te, ktore istnieja"
+    # More than one match is not something to resolve by picking the first. Two
+    # relationships naming the same path mean the CONFIG disagrees with itself
+    # about where that data lives, and guessing which one to restore FROM is the
+    # last guess anybody wants made on their behalf.
+    [ "$hits" -eq 1 ] || die "restore (odtworzenie niszczace): '$dataset' pasuje do $hits relacji w $config -- nie zgaduje ktora; nazwij dokladny dataset zrodla albo kopii"
+
+    # An atomic relationship is a SUBTREE recovered as one point in time. This
+    # verb recovers one dataset, so running it against an atomic relationship
+    # would silently turn a point-in-time recovery into a per-dataset one -- the
+    # exact confusion R-013 made the planner spell out.
+    [ "$cons" != atomic ] || die "restore (odtworzenie niszczace): '$src' jest w relacji ATOMIC (spojne poddrzewo w jednym punkcie czasu), a ten czasownik odtwarza pojedynczy dataset. Odtworzenie tylko jego zlamaloby wlasnosc, dla ktorej ta relacja jest atomowa. Odtwarzanie poddrzew nie istnieje."
+
+    local snaps
+    snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null) || snaps=""
+    [ -n "$snaps" ] || die "restore (odtworzenie niszczace): kopia '$copy' nie ma ani jednego snapshota, wiec nie ma z czego odtwarzac"
+
+    echo
+    echo "ODTWORZENIE NISZCZACE -- podglad. Nic nie zostalo jeszcze zmienione."
+    echo "  Zrodlo:     $src   (CEL odtworzenia: to jego stan zostanie zmieniony)"
+    echo "  Kopia:      $copy  (zrodlo danych)"
+    echo "  Relacja:    $kind"
+    restore_plan_strategy "$copy" "$src" "$snaps"
+    echo
+
+    case "$RESTORE_STRATEGY" in
+        remote)
+            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE. Ten czasownik dziala tylko lokalnie -- odtworzenie na zdalny host wymaga decyzji o tym, kto wykonuje zniszczenie po tamtej stronie, a tej decyzji nie ma." ;;
+        full-absent|full-live)
+            die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost. Nie istnieje w tym wycinku i nie bedzie udawane przyrostem." ;;
+        increment|rollback|discard-live|unproven) ;;
+        *)  die "restore (odtworzenie niszczace): nie ustalono strategii dla '$src' -- odmawiam dzialania na nieokreslonym stanie" ;;
+    esac
+
+    die "restore (odtworzenie niszczace): krok WYKONAWCZY jeszcze nie istnieje (nastepny wycinek). Powyzszy podglad jest kompletny i policzony na zywym stanie, ale nic nie zostalo zrobione: nie powstal zaden snapshot, nic nie zniszczono, '$src' jest dokladnie w stanie sprzed tego polecenia."
+}
+
 cmd_restore() {
     local plan=0 dataset="" config="" snapshot="" yes=0
     for a in "$@"; do
@@ -3223,7 +3355,7 @@ cmd_restore() {
     # a --force that turns a safe command into a destructive one is exactly the
     # shape the plan refuses.
     if [ "$plan" -ne 1 ]; then
-        [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Replacing a live dataset is a separate verb that does not exist yet."
+        [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Destructive recovery of the original path has no public grammar yet -- the owner is still deciding it."
         cmd_restore_safe "$dataset" "$snapshot" "$config" "$yes"
         return
     fi
@@ -3235,26 +3367,11 @@ cmd_restore() {
 
     # Collect (source, copy-location, kind) triples from the installed CONFIG.
     local -a src=() copy=() kind=() cons=()
-    local ds d dst s rec
-    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
-        d="$(installed_dataset_field "$config" "$ds" dst)"
-        s="$(installed_dataset_field "$config" "$ds" src)"
-        # Consistency comes from the installed CONFIG and from nothing else. The
-        # recovery contract forbids inferring it from snapshot names, prefixes,
-        # hierarchy shape or close creation times, and the reason is measured: on
-        # pve2 two datasets in different subtrees share the name
-        # automated_hourly_2026-08-11_23-37-01 while their creation times differ by
-        # a second. They were never one atomic event. A planner that read names
-        # would have announced a recovery point that never existed.
-        rec="$(installed_dataset_field "$config" "$ds" recursive)"
-        rec="$(printf '%s' "$rec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-        [ "$rec" = atomic ] && rec=atomic || rec=independent
-        if [ -n "$d" ]; then
-            src+=("$ds"); copy+=("${d}/${ds}"); kind+=("local push -> $d"); cons+=("$rec")
-        elif [ -n "$s" ]; then
-            src+=("$s"); copy+=("$ds"); kind+=("remote pull <- $s"); cons+=("$rec")
-        fi
-    done
+    local a b c d
+    while IFS=$'\t' read -r a b c d; do
+        [ -n "$a" ] || continue
+        src+=("$a"); copy+=("$b"); kind+=("$c"); cons+=("$d")
+    done <<< "$(restore_relations "$config")"
     [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
 
     echo
