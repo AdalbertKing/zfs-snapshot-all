@@ -21,7 +21,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- Data odświeżenia: **2026-08-11**. Stan plików, który ten blok opisuje, jest
+- Data odświeżenia: **2026-08-13**. Ostatnia zmiana zachowania: `306cdba`
+  (2026-08-12, mapa planera Fazy 7 — guid + `consistency` z CONFIG-u). Faza 7
+  ma na main wycinek 1 (planer read-only), wycinek 2 (bezpieczne odtworzenie do
+  namespace, staging + promocja przez `zfs rename`) i pełną mapę planera;
+  wycinek destrukcyjnego zastąpienia NIE istnieje. Domyślna polityka odtwarzania
+  została 2026-08-12 zmieniona decyzją właściciela na „najnowszy punkt z powrotem
+  do oryginalnej ścieżki" i planer/CLI będą pod nią przeprojektowane —
+  `OWNER-RECOVERY-DEFAULT-POLICY-2026-08-12.md`. Stan plików, który ten blok opisuje, jest
   w znaczniku maszynowym powyżej — celowo NIE powtórzony tutaj, bo dwie
   kopie tej samej informacji to dwie rzeczy, które mogą się rozjechać.
   `gen-cron.sh` **v4.30**, `snapsend.sh` **v2.72**, `snapget.sh` **v2.69**,
