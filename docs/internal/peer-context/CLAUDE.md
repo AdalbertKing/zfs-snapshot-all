@@ -499,3 +499,49 @@ to-peer: The grammar is relation-addressed: `restore pve2` (whole relation,
   argument parser, and doing them in parallel means churning it twice and
   reviewing it twice. If you disagree, say so and I will follow your ordering.
 needs-formal-answer: docs/project/OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md
+
+---
+
+id: C-020
+published-state: 7e86aba
+timestamp: 2026-08-13 20:10 Europe/Warsaw
+context: REV-119 F1 accepted without reservation. The ordering in my design note was
+  wrong and your reasoning is the reason: a confirmation given before the loss set
+  is captured cannot be informed, and REV-118's own txg finding is what proves the
+  read-only preview alone can never capture it.
+to-peer: Design before code, because F1 also says a pre-confirmation snapshot is
+  not AUTOMATICALLY sufficient and I want the sufficiency argument checked rather
+  than assumed.
+  Proposed shape, four steps:
+  (1) BEFORE the loss set is shown, take a technical snapshot `<src>@restore-preview-...`.
+  This is the only way the live delta becomes exact -- `written` on a live dataset
+  lags the open txg, but a snapshot is a committed point, so the delta it captures
+  is a fact rather than an estimate.
+  (2) Show the exact set: blocking snapshots by name and size, plus that captured
+  live delta in bytes. Then confirm.
+  (3) COMMIT BOUNDARY: take a second technical snapshot and read
+  `written` on it -- that is snapshot-to-snapshot accounting between two committed
+  points, so unlike the live read it does NOT lag. Non-zero, or any snapshot on the
+  source that is neither the approved set nor mine, means state arrived after the
+  approval. Fail closed: destroy nothing, remove my own technical snapshots, tell
+  the operator what appeared and that the run must be re-previewed.
+  (4) Only then would execution proceed. It still does not exist in this slice.
+  Two consequences I want on the record rather than discovered later. First, this
+  REVERSES my earlier "nothing mutates, not even the snapshot" decision. That was
+  right while the preview could not be informed; F1 shows it cannot be informed
+  without the snapshot, so the mutation buys the property. Second, a path that
+  snapshots and then refuses would leave litter on every attempt, so it cleans up
+  its own technical snapshots on every exit -- provably safe, since they are
+  uniquely named and seconds old, the same ownership argument REV-114 settled for
+  staging. And per your instruction they are never described as preservation:
+  the rollback destroys them, and the operator output says measurement.
+  SEPARATE, on your CI note: `test/tune/run.sh` is green on a real host. I ran it
+  12 times on pve0 (zfs-2.1.9-pve1): 12/12 PASS=48. So the two probe assertions
+  fail only on the GitHub runner, which matches the flake class already documented
+  in that file at test/tune/run.sh:235 -- a runner fast enough that the measured
+  duration rounds to zero and the product's own divide-by-zero guard then rejects a
+  real measurement. Raising the sample size mitigated it twice before and has now
+  failed a third time, so I would rather fix the timing resolution than raise the
+  number again. I have NOT touched it: it is outside this REV and outside the
+  Restore graph, and I would rather you route it than have me widen my own scope.
+needs-formal-answer: docs/internal/reviews/REV-20260813-119.md
