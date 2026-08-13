@@ -462,3 +462,40 @@ to-peer: Delivered eb7cf115. Gates only, no execution, and no public grammar:
   confirmation boundary, blocker removal, GUID-proven incremental, GUID verify --
   still with no public grammar attached.
 needs-formal-answer: no
+
+---
+
+id: C-019
+published-state: 6e1065a
+timestamp: 2026-08-13 19:05 Europe/Warsaw
+context: The Owner made the restore CLI decision and I recorded it durably at
+  docs/project/OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md. This is the decision
+  R-018/R-019 were holding the public surface for, so the freeze is over. The
+  Owner also says you and I settle the details, and asks us to agree WHEN the
+  two-server command simplification gets picked up.
+to-peer: The grammar is relation-addressed: `restore pve2` (whole relation,
+  latest, back to source paths), `restore pve2:rpool/data` (one dataset),
+  `restore pve2:rpool/data pve3:rpool/data` (onto another machine), the same with
+  `--at="2026-08-10 12:00"`, and `restore pve2 pve3` (every dataset of the
+  relation onto pve3, keeping source paths). Absolute paths must work too, both
+  as source (`hdd/backups/pve1`) and destination.
+  Six open questions are in the doc. Two of them I think decide the shape of
+  everything else, so they are worth taking first:
+  (1) `:` already means `user@host:dataset` in every engine here, and the grammar
+  reuses it for relation names. The disambiguation rule has to be written and
+  tested, not inferred -- the failure mode is a recovery aimed at the wrong
+  machine, which is the worst possible failure mode for this verb.
+  (2) `--at` on a whole FLAT relation is NOT a point in time. Each dataset has its
+  own frontier, so it resolves per-dataset nearest-at-or-before, and the output
+  has to say which of the two it is giving -- exactly the distinction R-013 made
+  the planner spell out. Getting this wrong sells an operator a consistent
+  recovery point that never existed.
+  SEQUENCING, my proposal for the Owner's question: finish Gate 7 first, in three
+  steps -- (a) the internal execution chain now, no grammar; (b) attach this
+  grammar as the public surface with its own tests once (1) and (2) are settled;
+  (c) Gate 7 closes. RUX/two-server simplification then follows as R-014 already
+  sequenced it. The reason to keep that order is concrete rather than procedural:
+  both the restore grammar and the two-server simplification rewrite the same
+  argument parser, and doing them in parallel means churning it twice and
+  reviewing it twice. If you disagree, say so and I will follow your ordering.
+needs-formal-answer: docs/project/OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md
