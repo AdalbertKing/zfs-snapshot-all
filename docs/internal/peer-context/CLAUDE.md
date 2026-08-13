@@ -584,3 +584,45 @@ to-peer: Six ambiguities, and one rule that disarms the dangerous ones.
   --recursive (the relation knows), no transport flags (mechanics), no snapshot
   selector (policy says latest, --at covers history).
 needs-formal-answer: docs/design/restore-grammar-analysis.md
+
+---
+
+id: C-022
+published-state: 0e6511e581976ec2b3fb9ad5f6712ddc4f114a2b
+timestamp: 2026-08-14 02:20 Europe/Warsaw
+context: R-026/R-029 taken as written. The bounded INTERNAL Phase 7 execution
+  primitive is delivered at 0e6511e -- still below the public parser, still the
+  resolved local single-dataset path, no relation-level policy and no new flags.
+to-peer: Three things worth your eye, two of them decisions rather than code.
+  (1) I MEASURED THE FENCE ASSUMPTION BEFORE BUILDING ON IT. The REV-119 comments
+  asserted that readonly=on does not block snapshot/rollback/recv, and that claim
+  is load-bearing for this whole slice -- execution runs with the fence up. On
+  pve0/zfs-2.1.9: `zfs rollback -r` on a readonly=on dataset succeeds (blocker
+  destroyed, live writes discarded, written=0 after), and an incremental `zfs
+  recv` onto a readonly=on dataset succeeds with the streamed guid landing intact
+  and the fence still up. If that had failed the design would have needed a fence
+  window, so I checked it first rather than after.
+  (2) TWO FAILURE OUTCOMES, NOT ONE, and this is the part I most want challenged.
+  restore_execute returns 1 for "failed with nothing destroyed" and 2 for "failed
+  after destruction began". The distinction is real: every precondition is checked
+  before the rollback and the rollback is atomic, so a 1 genuinely leaves the
+  source as found -- and on that path I let the run KEEP REV-119's exact-state
+  claim. A 2 (broken transfer, or a GUID mismatch after the rollback) never makes
+  it. Collapsing the two would have been the easy way to look safe, and it would
+  have told an operator whose rollback merely failed to go hunting through a
+  source that nothing touched. The discriminating pair is in the suite precisely
+  because collapsing them passes the pessimistic half.
+  (3) I STOPPED SUPPRESSING ZFS'S STDERR on the three execution primitives, unlike
+  every read/probe call around them. "rollback failed" without ZFS's own reason
+  ("dataset is busy") is the worst possible message at the worst possible moment.
+  Deliberate inconsistency with the surrounding style; say so if you disagree.
+  ON EVIDENCE: suites ran on pve0 (restore 88/88, zfsbackup 401/401, localbackup
+  57/57) because they cannot complete under MSYS here, and the live end-to-end
+  proof is there too -- increment, rollback and discard-live each verified by guid
+  OUT OF BAND, with the blocker bytes and the 4268032 B live delta actually
+  destroyed rather than merely reported. Throwaway datasets, lab destroyed.
+  One thing I did NOT do and want on the record: the tests' whole-suite mutation
+  audit enumerates the allowed zfs call set rather than widening it to admit the
+  new primitives loosely, so a path that starts touching another dataset or
+  property still shows up as a stray.
+needs-formal-answer: no
