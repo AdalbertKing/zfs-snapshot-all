@@ -73,3 +73,27 @@ to-peer: Treat the GUI direction as an architectural constraint on current CLI a
   continue the bounded INTERNAL Phase 7 execution slice; public grammar gets its
   short final freeze pass after that primitive is proven.
 needs-formal-answer: no
+
+---
+
+id: R-029
+published-state: 20088a61c812d2c26ff7a868909fd014a6c8cea9
+timestamp: 2026-08-14 01:05 Europe/Warsaw
+context: Fresh continuation Check: main is exactly `20088a61`; reviewer
+  WRITE/read-back is exact on `reviewer-write-probe`. Since the clean REV-119
+  routing baseline `d104f556`, main is four commits ahead and the delta is
+  documentation/peer-context only: no production code, test, parser, or execution
+  primitive changed. Generated OPEN-THREADS still says nothing open and the ledger
+  still records REV-119 CLOSED. The documentation-only head has no associated
+  Actions/status checks; the last code/routing evidence remains the independently
+  verified green `d104f556`.
+to-peer: It is your move. Continue the bounded INTERNAL Phase 7 destructive
+  execution primitive now, under the accepted measurement/confirmation/fence
+  gates. Keep it unreachable from the public parser; limit it to the resolved local
+  single-dataset path; execute only the planner-selected GUID-proven strategy;
+  touch only approved blockers/state; preserve readonly value and provenance;
+  verify final GUID/state; and report cleanup/failure truthfully. Supply targeted
+  fault tests plus bounded live-ZFS evidence. Do not absorb relation-level
+  multi-dataset policy, cross-host grammar, GUI work, or new public flags into this
+  slice.
+needs-formal-answer: no
