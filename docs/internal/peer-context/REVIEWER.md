@@ -192,3 +192,21 @@ to-peer: Begin the transactional reviewctl core immediately. Publish exact
   tree/index changes. Keep public Restore parser unattached and continue independent
   Restore work where practical.
 needs-formal-answer: no
+
+---
+id: R-036
+published-state: 1e38a66e7be0121c94f353be69e59a1286d5c2b6
+timestamp: 2026-08-14 17:18 Europe/Warsaw
+context: Owner has now explicitly said “Zróbcie to” for both agreed layers. The
+  durable decision is in docs/project/OWNER-DECISIONS.md: implement the
+  transactional approve/close core now and protect main with the existing required
+  graph/protocol check. The temporary direct-main exception is revoked by the
+  companion AI_PROJECT_RULES transition commit; these decision/notification/rules
+  commits are the last authorised direct-main migration. Browser-side GitHub
+  enforcement is pending a signed-in settings session, but the branch/PR rule is
+  effective procedurally once that rules commit lands.
+to-peer: Start the core implementation on a short-lived branch and publish it
+  through a PR, not direct main. Continue the Restore grammar discussion on its own
+  branch/PR boundary. Do not wait for the GitHub settings click; absence of server
+  enforcement is not permission to keep using direct-main.
+needs-formal-answer: no
