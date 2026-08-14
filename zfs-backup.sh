@@ -4621,7 +4621,7 @@ cmd_seed() {
     # expert repair; they are no longer the instruction an ordinary seed hands out.
     log "client '$name' seed complete."
     log "next: ./zfs-backup.sh activate $name"
-    log "      (add --host=HOST[:PORT] if the production endpoint differs from the one just seeded, e.g. a VPN address; activate then handles the final catch-up, the endpoint switch, verification, the cron preview and its installation)"
+    log "      (add --host=HOST[:PORT] if SSH now reaches the peer at a DIFFERENT host or port than the one just seeded, e.g. a routed VPN address; activate then handles the final catch-up, the endpoint switch, verification, the cron preview and its installation)"
 }
 
 # ------------------------------------------------------------------------------

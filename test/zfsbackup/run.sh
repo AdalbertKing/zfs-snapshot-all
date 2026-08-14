@@ -3580,11 +3580,20 @@ mode_rc() { ( cmd_add_client "modeclient" --lan=10.0.0.1 "$@" ) >/dev/null 2>&1;
 # administrator invent or repeat an address that did not change"). Pinned as
 # a source grep because completing a real seed needs a live deploy.sh --pair
 # (see file header) -- this only pins the wording, not the seed flow itself.
-if grep -q 'skip straight to verify-endpoint' "$ZFSBACKUP" \
-   && ! grep -q 'then set-endpoint/verify-endpoint' "$ZFSBACKUP"; then
-    ok "seed: the next-step hint no longer presents set-endpoint as mandatory"
+# REWRITTEN for issue #9, not loosened. The old assertion pinned the improved
+# WORDING of a hint that recited the low-level sequence: it checked that
+# set-endpoint was presented as conditional rather than mandatory. Issue #9
+# removes that sequence from the ordinary path altogether, so a hint phrased
+# "conditionally" is no longer the contract -- naming exactly ONE next command is.
+# The property is therefore stated positively (the hint names `activate`) AND
+# negatively (it recites none of the expert verbs), because a hint that added
+# `activate` while still listing the others would satisfy either half alone.
+seed_hint="$(sed -n "/client '\$name' seed complete/,/^}/p" "$ZFSBACKUP")"
+if printf '%s' "$seed_hint" | grep -q 'activate \$name' \
+   && ! printf '%s' "$seed_hint" | grep -qE 'set-endpoint|verify-endpoint|final-catchup|activate-client'; then
+    ok "seed: the next-step hint names exactly one next command and recites no expert verbs"
 else
-    bad "seed: the next-step hint no longer presents set-endpoint as mandatory" "old wording still present or new wording missing"
+    bad "seed: the next-step hint names exactly one next command and recites no expert verbs" "old wording still present or new wording missing"
 fi
 
 # 38b. verify-endpoint used to discard snapget.sh's stderr (2>/dev/null),
@@ -3845,8 +3854,13 @@ fi
 # Pinned as source greps (like 38a) because exercising these end to end
 # needs a live seed/final-catchup/verify-endpoint cycle -- see file header.
 
-if grep -q 'If SSH now reaches the peer at a DIFFERENT host or port' "$ZFSBACKUP" \
-   && ! grep -q 'If SSH now reaches the source at a DIFFERENT host or port' "$ZFSBACKUP"; then
+# Same rewrite, same reason: the VOCABULARY rule survives issue #9 even though the
+# sentence carrying it did not. Pinning a whole sentence made the rule hostage to
+# any rewording; pinning the words keeps the property that actually matters -- a
+# reader who has just been told about "the collector" must not meet "the source"
+# and have to guess which machine it means.
+if printf '%s' "$seed_hint" | grep -q 'the peer' \
+   && ! printf '%s' "$seed_hint" | grep -q 'the source'; then
     ok "seed hint: the far end is named 'the peer', not 'the source'"
 else
     bad "seed hint: the far end is named 'the peer', not 'the source'" "old wording still present or new wording missing"
