@@ -286,6 +286,36 @@ Minimum:
 `CLOSED` therefore differs from `APPROVED` by an objective file fact, as Claude
 required.
 
+## Writing those facts — `approve` and `close`
+
+Since 2026-08-14 the lifecycle facts have a writer, and hand-editing them is a
+last resort rather than the normal path:
+
+```text
+./test/reviewctl.sh approve REV --implementation FULL_SHA  --expected-parent FULL_SHA
+./test/reviewctl.sh close   REV --approval-commit FULL_SHA --expected-parent FULL_SHA
+```
+
+Two operations, never one — `approve` refuses `--approval-commit` and `close`
+refuses `--implementation`, because a combined request is what published
+REV-120/121 with prose saying CLOSED over headers saying CHANGES-REQUIRED.
+
+`close` requires an approval commit that already exists on the publication ref and
+that **provably carried the approval**: the review file read at that commit must
+itself say `APPROVED`. A merely reachable SHA proves nothing.
+
+`--expected-parent` must equal the publication ref's current tip. A request
+computed against a state that has since moved loses rather than publishing on top
+of facts it never saw.
+
+Every write is a transaction: snapshot, mutate, regenerate both views, verify, and
+restore every byte on any failure. The index is never touched, so a refusal cannot
+leave a half-prepared commit.
+
+**This does not gate canonical `main`.** Nothing stops a caller from hand-editing
+and pushing. That gate is GitHub branch protection with the graph check required;
+until it and its negative control are measured, the invariant is not enforced.
+
 ---
 
 # Principle 6 — Deterministic state derivation
