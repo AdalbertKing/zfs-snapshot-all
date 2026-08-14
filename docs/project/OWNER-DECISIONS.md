@@ -246,3 +246,35 @@ Obowiazuje redukcja zamiast kompletnego modelowania wszystkich wyjatkow:
 preset tworzy nowy fragment, CONFIG v4 jest prawda po instalacji, a bespoke
 policy pozostaje wspierane przez native CONFIG + dokumentacje zamiast przez
 profile inheritance/drift/precedence framework.
+
+---
+
+## ROZSTRZYGNIĘTE 2026-08-14 — transakcyjna publikacja i ochrona `main`
+
+**Decyzja Ownera:** „Zróbcie to.”
+
+Owner zatwierdza oba uzgodnione elementy:
+
+1. natychmiastową implementację transportowo niezależnego, transakcyjnego rdzenia
+   `reviewctl approve` / `reviewctl close`, zgodnie z konsensusem
+   `docs/discussions/PROTOCOL-TRANSACTIONAL-PUBLICATION-2026-08-14-CONSENSUS.md`;
+2. GitHub branch protection dla `main`, z wymaganym istniejącym checkiem
+   graph/protocol przed scaleniem.
+
+Tym samym tymczasowy wyjątek direct-main z `docs/AI_PROJECT_RULES.md` zostaje
+odwołany. Przejście jest skuteczne od publikacji towarzyszącej zmiany reguł; commity
+zapisujące tę decyzję, powiadomienie ról i samą zmianę reguł są ostatnią
+autoryzowaną migracją direct-main.
+
+Po przejściu:
+
+- implementacje, review i zmiany protokołu trafiają przez krótkie gałęzie i PR-y;
+- `main` przesuwa się dopiero po wymaganej weryfikacji;
+- nikt nie obchodzi ochrony administracyjnym bypass-em w zwykłej pracy;
+- techniczna konfiguracja branch protection ma zostać wykonana przy najbliższej
+  dostępnej zalogowanej sesji GitHub; do tego czasu reguła proceduralna obowiązuje,
+  choć GitHub nie wymusza jej jeszcze serwerowo;
+- brak aktywnej ochrony jest stanem przejściowym, nie przywróceniem wyjątku.
+
+Nie zmienia to zakresu produktu ani Restore CLI. Rdzeń protokołu i finalny pass
+Restore mogą postępować równolegle.
