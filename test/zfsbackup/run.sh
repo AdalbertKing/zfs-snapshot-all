@@ -6163,6 +6163,11 @@ fi
 # pointed at its own empty directory, so "left nothing behind" is `ls` on that
 # directory and cannot be confused by another process's temporary files. mktemp
 # honours TMPDIR, which is what makes the isolation real.
+#
+# TMPDIR is EXPORTED, not merely assigned. mktemp is an external binary and reads
+# it from the environment, so a plain `TMPDIR=...` in the subshell leaves it
+# writing to the real /tmp and every case here passes for the wrong reason. The
+# positive control below is what caught that while this section was written.
 LK="$WORK/leak"
 mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
 cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
@@ -6185,7 +6190,7 @@ lk_conf() { printf '[defaults]\n\thost_label = lktest\n' > "$1"; }
 # 1. the ordinary path: one load, one emission, nothing left behind.
 lk_conf "$LK/one.conf"
 n="$(rm -rf "$LK/tmp/one"; mkdir -p "$LK/tmp/one"
-     ( TMPDIR="$LK/tmp/one"; lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     ( export TMPDIR="$LK/tmp/one"; lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/one" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
     ok "60: a profile-loading run leaves no file in TMPDIR"
@@ -6196,7 +6201,7 @@ fi
 # 2. POSITIVE CONTROL. The same body with the release defeated must leave the
 #    three files -- otherwise case 1 proves only that the check cannot see.
 n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
-     ( TMPDIR="$LK/tmp/ctl"
+     ( export TMPDIR="$LK/tmp/ctl"
        profile_release_tmp() { :; }; _profile_arm_release() { :; }
        lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
@@ -6211,7 +6216,7 @@ fi
 #    load_active_profile does before it re-renders.
 lk_conf "$LK/two.conf"
 n="$(rm -rf "$LK/tmp/two"; mkdir -p "$LK/tmp/two"
-     ( TMPDIR="$LK/tmp/two"
+     ( export TMPDIR="$LK/tmp/two"
        lk_env "$LK/root/prof" prof ensure_cron_config "$LK/two.conf" 1 1
        lk_env "$LK/root/prof" prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/two" -mindepth 1 | wc -l | tr -d ' ')"
@@ -6225,7 +6230,7 @@ fi
 #    allocated, so a delete at the end of the happy path would not have been a
 #    fix at all. `die` exits, which is what the EXIT trap is for.
 n="$(rm -rf "$LK/tmp/die"; mkdir -p "$LK/tmp/die"
-     ( TMPDIR="$LK/tmp/die"
+     ( export TMPDIR="$LK/tmp/die"
        lk_env "$LK/root/prof" prof load_active_profile
        die "simulated post-load failure" ) >/dev/null 2>&1
      find "$LK/tmp/die" -mindepth 1 | wc -l | tr -d ' ')"
@@ -6239,7 +6244,7 @@ fi
 #    validation -- the branch where a leak would be easiest to miss, because the
 #    run is already on its way to dying.
 n="$(rm -rf "$LK/tmp/inv"; mkdir -p "$LK/tmp/inv"
-     ( TMPDIR="$LK/tmp/inv"
+     ( export TMPDIR="$LK/tmp/inv"
        lk_env "$LK/root/bad" bad load_active_profile ) >/dev/null 2>&1
      find "$LK/tmp/inv" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
@@ -6272,7 +6277,7 @@ fi
 # 7. Refusing to clobber somebody else's EXIT trap. Sourcing consumers own their
 #    own cleanup; silently replacing it would trade this leak for a worse one.
 #    The refusal has to NAME the files, or it is a silent leak with extra steps.
-out="$( ( TMPDIR="$LK/tmp/trap"; mkdir -p "$LK/tmp/trap"
+out="$( ( export TMPDIR="$LK/tmp/trap"; mkdir -p "$LK/tmp/trap"
           trap 'echo FOREIGN-TRAP-RAN' EXIT
           lk_env "$LK/root/prof" prof load_active_profile ) 2>&1 )"
 if printf '%s' "$out" | grep -q 'FOREIGN-TRAP-RAN' \
