@@ -1217,6 +1217,28 @@ assert_config_not_claimed_if_missing() {   # <file> ; dies if a live block claim
     die "refusing to create $1: the installed crontab block says it was generated FROM that file, and it is missing. Creating it would produce a config describing no jobs at all, and the next --install would replace $jobs live cron line(s) with nothing. Find or rebuild the real config first (the installed block is still the record of what should be in it: crontab -l), then re-run. Nothing has been changed."
 }
 
+# The one place that knows what a BRAND NEW cron config must contain before
+# gen-cron.sh will look at it. There is exactly one required fact -- host_label,
+# which every notification text is built from -- and it is defaultable from the
+# host itself, so nothing about a fresh collector should ever require an operator
+# to hand-write a config stanza.
+#
+# It is a function rather than two copies because it had two callers and only one
+# of them did it. cmd_activate_client builds a WORKING COPY of the config, and
+# when the collector has no config yet it created that copy EMPTY -- so
+# ensure_cron_config, which seeds the defaults only when the file does not exist,
+# saw a file that mktemp had already created and skipped the seeding. The result
+# was a config carrying datasets and no [defaults], gen-cron refusing it, and the
+# ordinary four-command enrolment stopping dead on a fresh two-server setup with
+# "[defaults] must set host_label" -- a config repair the operator was told to do
+# by hand. Measured live on pve1 -> pve2, 2026-08-14.
+write_fresh_config_defaults() {   # <file>
+    {
+        echo "[defaults]"
+        echo "	host_label = $(hostname -s)"
+    } > "$1"
+}
+
 ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profile=1] [global_policy_mode=auto]
     local file="$1"
     # REV-20260809-088 F1: the collision check below must fire ONLY at the
@@ -1269,10 +1291,7 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
         # local-backup planning.)
         assert_config_not_claimed_if_missing "$file"
         mkdir -p "$(dirname "$file")" || die "could not create $(dirname "$file")"
-        {
-            echo "[defaults]"
-            echo "	host_label = $(hostname -s)"
-        } > "$file" || die "could not create $file"
+        write_fresh_config_defaults "$file" || die "could not create $file"
         log "created new cron config $file"
     fi
     # Adding a GFS [prune:] section on top of a pre-GFS config would prune the
@@ -5041,7 +5060,14 @@ cmd_activate_client() {
     if [ -f "$cronfile" ]; then
         cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile to a working copy"; }
     else
-        : > "$workfile" || die "could not create working copy $workfile"
+        # A collector with no config yet -- the ordinary first enrolment. This
+        # used to leave the working copy EMPTY, and because mktemp had already
+        # created the file, ensure_cron_config's "seed a brand new config" branch
+        # never ran: it only fires when the file does not exist. The run then
+        # built datasets on top of nothing, gen-cron refused the result for a
+        # missing [defaults] host_label, and the four-command flow stopped on a
+        # fresh two-server setup telling the operator to repair a config by hand.
+        write_fresh_config_defaults "$workfile" || { rm -f "$workfile"; die "could not create working copy $workfile"; }
     fi
     # mktemp makes it 0600, and `cp -p` would carry the original's mode over.
     # Both the PREVIEW and the install read this file as the collector account,
