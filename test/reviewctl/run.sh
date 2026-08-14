@@ -534,6 +534,56 @@ idx_after="$(git -C "$REPO" diff --cached --name-only | sort)"
     && ok "a refused write leaves the git index exactly as it found it" \
     || bad "a refused write leaves the git index exactly as it found it" "the index changed"
 
+
+# ---- REV-122 F2 and F4 -------------------------------------------------------
+
+# T13. F2: an APPROVED verdict at the named commit is not enough -- it must have
+#      approved the implementation the response submits NOW. Otherwise the closure
+#      cements approval of something since superseded, which is REV-120's defect
+#      wearing a closure's clothes.
+#
+#      Uses a REAL approval from this repository's history: 211d378 carries
+#      `verdict: APPROVED` for REV-20260814-120 against implementation 46c13a6.
+#      The world's response is then pointed at a DIFFERENT implementation, so the
+#      only thing under test is the implementation comparison.
+R120=REV-20260814-120
+APPROVAL=211d378628886c0683f817af31454f442dc3ada7
+APPROVED_IMPL=46c13a6c132f8ff7428876e6806ee2fd5709a583
+world t13
+printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
+    "$R120" "$APPROVED_IMPL" "$R120" > "$W/docs/internal/reviews/$R120.md"
+respond "$R120" IMPLEMENTED "$TIP"
+if tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP"; then
+    bad "closure refuses when the approval covered a superseded implementation" "it succeeded"
+else
+    grep -q 'no longer on the table' "$TMPD/out" \
+        && ok "closure refuses when the approval covered a superseded implementation" \
+        || bad "closure refuses when the approval covered a superseded implementation" "$(head -1 "$TMPD/out")"
+fi
+
+# T13b. CONTROL: the same approval closes cleanly when the response still submits
+#       exactly what was approved. Without this, a close that refused everything
+#       would pass T13.
+respond "$R120" IMPLEMENTED "$APPROVED_IMPL"
+tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP" \
+    && ok "the same approval closes cleanly when the implementation still matches (control)" \
+    || bad "the same approval closes cleanly when the implementation still matches (control)" "$(cat "$TMPD/out")"
+
+# T14. F4: replaying an approval must still VERIFY, not return early. The first cut
+#      answered "nothing to do" over a tree whose derived views had been damaged.
+txworld t14
+tx approve "$R" --implementation="$sha1" --expected-parent="$TIP"
+echo 'tampered' >> "$W/docs/project/OPEN-THREADS.md"
+if tx approve "$R" --implementation="$sha1" --expected-parent="$TIP"; then
+    grep -q 'derived views verified' "$TMPD/out" \
+        && ok "an idempotent replay repairs and verifies rather than returning early" \
+        || bad "an idempotent replay repairs and verifies rather than returning early" "$(cat "$TMPD/out")"
+else
+    bad "an idempotent replay repairs and verifies rather than returning early" "$(cat "$TMPD/out")"
+fi
+REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1 \
+    && ok "...and the tampered view is no longer accepted afterwards" \
+    || bad "...and the tampered view is no longer accepted afterwards" ""
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
