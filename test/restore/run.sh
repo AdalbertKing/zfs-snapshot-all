@@ -1643,6 +1643,71 @@ tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -
            "rc=$rc tie_guid=$tie_guid rows=[$(tr '\n' ';' < "$WORK/rows.$SRC")]" "$out"
 
 # ==============================================================================
+# REV-20260814-121 -- the DEFAULT recovery point must be a fact, not a list
+# position.
+#
+# Same unsound rule as REV-120 F2, one step earlier and with worse consequences:
+# F2 decided whether the restore had landed, this decides WHERE it lands. The axis
+# stays `creation` (capture time, which is what the owner's policy means); what
+# changes is that a shared maximum refuses instead of resolving by whatever order
+# ZFS happened to print.
+# ==============================================================================
+
+# RP1. Two copy snapshots share the maximum creation, adverse names. Refuse, name
+#      both candidates, and do it in the PREVIEW -- before any mutation, fence or
+#      confirmation.
+reset_src
+printf 'hdd/store/rpool/data@aa-one\t500\t71\nhdd/store/rpool/data@zz-two\t500\t72\n' > "$WORK/rows.$COPY"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY' \
+  && printf '%s' "$out" | grep -q 'aa-one' && printf '%s' "$out" | grep -q 'zz-two' \
+  && ! printf '%s' "$out" | grep -q 'DO ZNISZCZENIA' \
+  && ! grep -q 'restore-preview-' "$WORK/rows.$SRC" \
+  && [ "$(srccount)" = 1 ]; } \
+    && ok "REV-121: a tied maximum creation refuses, names both candidates, and mutates nothing" \
+    || bad "REV-121: a tied maximum creation refuses, names both candidates, and mutates nothing" "rc=$rc" "$out"
+
+# RP2. CONTROL: a unique maximum still selects the expected GUID and runs. Without
+#      this, an implementation that refused whenever a copy had more than one
+#      snapshot would pass RP1.
+reset_src
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'guid=22' \
+  && ! printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY' \
+  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+    && ok "REV-121: a unique maximum creation still selects the expected recovery point (control)" \
+    || bad "REV-121: a unique maximum creation still selects the expected recovery point (control)" "rc=$rc" "$out"
+
+# RP3. The tie only matters at the MAXIMUM. Two older snapshots sharing a second,
+#      with a unique newest above them, is not ambiguous -- refusing there would be
+#      a verb that stops working on any busy backup.
+reset_src
+printf 'hdd/store/rpool/data@aa-old\t100\t81\nhdd/store/rpool/data@zz-old\t100\t82\nhdd/store/rpool/data@newest\t900\t83\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@aa-old\t100\t81\t100\n' > "$WORK/rows.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'guid=83' \
+  && ! printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY'; } \
+    && ok "REV-121: a tie BELOW the maximum is not an ambiguity (control)" \
+    || bad "REV-121: a tie BELOW the maximum is not an ambiguity (control)" "rc=$rc" "$out"
+
+# RP4. Unreadable capture times are an ambiguity too, not an empty maximum. Same
+#      fail-closed direction as the unproven loss set.
+reset_src
+printf 'hdd/store/rpool/data@s1\tnotatime\t11\n' > "$WORK/rows.$COPY"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIEJEDNOZNACZNY'; } \
+    && ok "REV-121: a copy whose capture times cannot be read refuses instead of picking one" \
+    || bad "REV-121: a copy whose capture times cannot be read refuses instead of picking one" "rc=$rc" "$out"
+
+# RP5. The rule is gone from the source, not just from the behaviour: no `tail -1`
+#      may remain in recovery-target selection. Asserted on the code, because the
+#      next person to add a listing there will reach for it again.
+sel="$(sed -n '/^restore_plan_strategy()/,/^}/p' "$ZB" | grep -v '^[[:space:]]*#' | grep -n 'tail -1' || true)"
+[ -z "$sel" ] \
+    && ok "REV-121: no tail -1 over a creation-ordered listing remains in the planner" \
+    || bad "REV-121: no tail -1 over a creation-ordered listing remains in the planner" "$sel"
+
+# ==============================================================================
 # Whole-suite mutation audit. Moved here from the slice-1 section because the
 # destructive primitives now run below too, so reading the WHOLE log is a stronger
 # statement than reading one section. Every zfs call the destructive path ever made

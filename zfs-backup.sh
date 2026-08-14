@@ -3096,9 +3096,47 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
              return 0 ;;
     esac
 
-    local latest latest_guid
-    latest="$(printf '%s' "$snaps" | tail -1 | cut -f1)"
-    latest_guid="$(printf '%s' "$snaps" | tail -1 | cut -f3)"
+    # REV-121: the DEFAULT recovery point is the newest capture time, and "newest"
+    # has to be a fact rather than a list position.
+    #
+    # `creation` stays the axis on purpose. It is the operator-meaningful thing --
+    # when this data was captured -- and the owner's policy is written in those
+    # terms. `createtxg` is not a substitute: on a backup copy every snapshot
+    # arrived by receive, so local transaction order is ARRIVAL order, and silently
+    # switching to it would change the policy from "latest capture" to "last
+    # delivered" without anyone deciding that.
+    #
+    # What changes is what happens when the axis does not decide. `creation` has
+    # one-second resolution and this project has now measured duplicates on real
+    # hosts, so `tail -1` over that ordering answers "which equal row did ZFS print
+    # last", which is not an administrator's intent. When the maximum is shared,
+    # the verb refuses and names the candidates instead of picking one -- the same
+    # fail-closed direction the rest of this path takes: where the program cannot
+    # derive the intent, it must not invent one.
+    local maxc tied ntied latest latest_guid
+    maxc="$(printf '%s\n' "$snaps" | awk -F'\t' 'NF>=3 && $2 ~ /^[0-9]+$/ {if(($2+0)>(m+0)) m=$2} END{print m+0}')"
+    tied="$(printf '%s\n' "$snaps" | awk -F'\t' -v m="$maxc" 'NF>=3 && $2 ~ /^[0-9]+$/ && ($2+0)==(m+0){print $1"\t"$3}')"
+    ntied="$(printf '%s\n' "$tied" | grep -c .)"
+    if [ "$ntied" -ne 1 ]; then
+        RESTORE_STRATEGY=ambiguous
+        echo "  Punkt docelowy: NIEJEDNOZNACZNY -- nie wybieram."
+        if [ "$ntied" -eq 0 ]; then
+            echo "    Zaden snapshot kopii '$copy' nie ma czytelnego czasu powstania, wiec nie ma"
+            echo "    z czego wyznaczyc najnowszego punktu."
+        else
+            echo "    $ntied snapshotow kopii dzieli ten sam czas powstania (creation=$maxc):"
+            printf '%s\n' "$tied" | while IFS="$(printf '\t')" read -r tn tg; do
+                [ -n "$tn" ] && echo "      ${tn#*@}  guid=$tg"
+            done
+            echo "    'creation' ma rozdzielczosc jednej sekundy, wiec ktory z nich jest"
+            echo "    NAJNOWSZY nie wynika z niczego poza przypadkowa kolejnoscia listy. Wybor"
+            echo "    zgadniety tutaj wyznaczylby punkt, do ktorego cofnieto by zrodlo, wiec nie"
+            echo "    jest zgadywany. Rozstrzygnij po stronie kopii albo wskaz punkt jawnie."
+        fi
+        return 0
+    fi
+    latest="${tied%%	*}"
+    latest_guid="${tied##*	}"
     RESTORE_TARGET_SNAP="${latest#*@}"; RESTORE_TARGET_GUID="$latest_guid"
     echo "  Punkt docelowy (domyslna polityka: NAJNOWSZY -> oryginalna sciezka):"
     echo "    ${latest#*@}  guid=$latest_guid"
@@ -3788,6 +3826,8 @@ restore_replace_internal() {   # <dataset> <config> <yes>
             die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE. Ten czasownik dziala tylko lokalnie -- odtworzenie na zdalny host wymaga decyzji o tym, kto wykonuje zniszczenie po tamtej stronie, a tej decyzji nie ma." ;;
         full-absent|full-live)
             die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost. Nie istnieje w tym wycinku i nie bedzie udawane przyrostem." ;;
+        ambiguous)
+            die "restore (odtworzenie niszczace): punkt docelowy na kopii '$copy' jest NIEJEDNOZNACZNY (szczegoly wyzej). Ten czasownik cofa zrodlo do jednego punktu, wiec zgadniecie ktorego zniszczyloby stan pod decyzje, ktorej nikt nie podjal. Nic nie zmieniono." ;;
         increment|rollback|discard-live|unproven) ;;
         *)  die "restore (odtworzenie niszczace): nie ustalono strategii dla '$src' -- odmawiam dzialania na nieokreslonym stanie" ;;
     esac

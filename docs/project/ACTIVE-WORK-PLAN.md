@@ -525,8 +525,22 @@ planner never enumerated them; an unreadable listing leaves the set unproven rat
 than empty, and the set is re-measured for exact equality immediately before the
 destructive command. The acceptance test resolves the recovery point by identity
 and then requires nothing newer than it, instead of asking whether the last row of
-a `creation`-sorted listing carried the target GUID. `test/restore` 99/99;
-delivered direct-main pending the REV-120 verdict.
+a `creation`-sorted listing carried the target GUID.
+
+Round 2 closed the residual F1 race the reviewer refused to accept: measuring the
+set immediately before `zfs rollback -r` narrows the window but cannot close it,
+because `-r` decides for itself what is newer than the base. Destruction is now
+carried by the shape of the commands -- `zfs destroy` naming the approved objects
+explicitly, then a NON-recursive rollback whose own semantics refuse when anything
+newer exists. Execution cannot widen the approved set by construction; the price,
+stated rather than hidden, is that a late arrival is now a partial failure instead
+of a clean refusal.
+
+REV-121, opened from a residual this response flagged, made the default recovery
+point fail closed: `creation` remains the axis, but a shared maximum refuses and
+names the tied candidates instead of resolving by list order.
+
+`test/restore` 108/108; delivered direct-main pending the REV-120/121 verdicts.
 
 Out of this slice, per R-026: relation-level multi-dataset failure policy and the
 public cross-host CLI. Those follow under R-025 once the execution primitive is
