@@ -405,7 +405,21 @@ Keep the already-agreed rules:
 - same-pool target may be allowed with one factual preview note, not policy judgement;
 - decline/failed seed leaves retryable state and no production cron.
 
-### Status — slice 1 (planning/preview) implementer-complete, awaiting reviewer
+### Status — ALL THREE SLICES DELIVERED, Gate 5 REACHED
+
+Slice 1 (planning/preview), slice 2 (transactional install, `da3e831`) and slice 3
+(target proposal when `--target` is omitted, `04d79ae`) are on `main`.
+REV-20260810-097, REV-20260811-098, REV-20260811-101 and REV-20260812-112 are
+CLOSED; slice 3 was cleared by the reviewer with no finding. `test/localbackup`
+57/57, live-verified on pve1 2026-08-12.
+
+One residual is named rather than closed: the cron transaction has never been run
+against a **real crontab spool**, because on both live hosts that would mean
+writing a production crontab. The helpers are the ones `activate-client` uses in
+production daily. Closing it properly needs a host whose crontab is expendable.
+
+The paragraphs below describe the slice sequence as it was planned and are kept
+for that history. They are NOT current status — this heading is.
 
 Design + slice plan: `docs/discussions/PHASE5-LOCAL-BACKUP-DESIGN-2026-08-10.md`.
 
