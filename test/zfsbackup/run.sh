@@ -6178,8 +6178,9 @@ cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" 
 cp "$LK/root/prof"/* "$LK/root/bad/"
 printf 'src = zfsbackup@nope:x\n' >> "$LK/root/bad/dataset.inc"
 
-lk_env() {   # profile root + the env emit_client_sections/ensure_cron_config need
-    PROFILE_ROOT="$1" PROFILE_ACTIVE="$2" PROFILE_LOADED="" GENCRON="$REPO/gen-cron.sh" \
+lk_env() {   # <profile name> <command...>  -- PROFILE_ROOT is always $LK/root
+    local prof="$1"; shift
+    PROFILE_ROOT="$LK/root" PROFILE_ACTIVE="$prof" PROFILE_LOADED="" GENCRON="$REPO/gen-cron.sh" \
     PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
     LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
     PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
@@ -6187,10 +6188,24 @@ lk_env() {   # profile root + the env emit_client_sections/ensure_cron_config ne
 }
 lk_conf() { printf '[defaults]\n\thost_label = lktest\n' > "$1"; }
 
+# Guard the harness itself. Every case below hides the body's output, so a body
+# that never ran would leave an empty TMPDIR and pass -- which is exactly what
+# the first version of this section did (lk_env passed the profile root on to
+# the command as an argument, so nothing was ever emitted). Prove ONCE, loudly,
+# that this env really drives a profile load and a real emission.
+lk_conf "$LK/probe.conf"
+lk_env prof emit_client_sections "$LK/probe.conf" lkp 1 >/dev/null 2>&1
+if grep -q 'profile__prof__' "$LK/probe.conf"; then
+    ok "60: harness control -- lk_env really loads the profile and emits from it"
+else
+    bad "60: harness control -- lk_env really loads the profile and emits from it" \
+        "no profile__prof__ section in the emitted config; every case below would pass vacuously"
+fi
+
 # 1. the ordinary path: one load, one emission, nothing left behind.
 lk_conf "$LK/one.conf"
 n="$(rm -rf "$LK/tmp/one"; mkdir -p "$LK/tmp/one"
-     ( export TMPDIR="$LK/tmp/one"; lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     ( export TMPDIR="$LK/tmp/one"; lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/one" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
     ok "60: a profile-loading run leaves no file in TMPDIR"
@@ -6203,7 +6218,7 @@ fi
 n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
      ( export TMPDIR="$LK/tmp/ctl"
        profile_release_tmp() { :; }; _profile_arm_release() { :; }
-       lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+       lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 3 ]; then
     ok "60: control -- with the release defeated the same run leaks exactly 3 (the check discriminates)"
@@ -6217,8 +6232,8 @@ fi
 lk_conf "$LK/two.conf"
 n="$(rm -rf "$LK/tmp/two"; mkdir -p "$LK/tmp/two"
      ( export TMPDIR="$LK/tmp/two"
-       lk_env "$LK/root/prof" prof ensure_cron_config "$LK/two.conf" 1 1
-       lk_env "$LK/root/prof" prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
+       lk_env prof ensure_cron_config "$LK/two.conf" 1 1
+       lk_env prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/two" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
     ok "60: two loads in one shell leave nothing (the re-render releases the first set)"
@@ -6231,7 +6246,7 @@ fi
 #    fix at all. `die` exits, which is what the EXIT trap is for.
 n="$(rm -rf "$LK/tmp/die"; mkdir -p "$LK/tmp/die"
      ( export TMPDIR="$LK/tmp/die"
-       lk_env "$LK/root/prof" prof load_active_profile
+       lk_env prof load_active_profile
        die "simulated post-load failure" ) >/dev/null 2>&1
      find "$LK/tmp/die" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
@@ -6245,33 +6260,57 @@ fi
 #    run is already on its way to dying.
 n="$(rm -rf "$LK/tmp/inv"; mkdir -p "$LK/tmp/inv"
      ( export TMPDIR="$LK/tmp/inv"
-       lk_env "$LK/root/bad" bad load_active_profile ) >/dev/null 2>&1
+       lk_env bad load_active_profile ) >/dev/null 2>&1
      find "$LK/tmp/inv" -mindepth 1 | wc -l | tr -d ' ')"
 if [ "$n" = 0 ]; then
     ok "60: a profile REFUSED by the boundary leaves no schema dump behind (lib-profile.sh)"
 else
     bad "60: a profile REFUSED by the boundary leaves no schema dump behind" "$n entr(ies) left: $(ls -1 "$LK/tmp/inv" | tr '\n' ' ')"
 fi
-# and the refusal is the reason it stopped, not some unrelated failure
-out="$( ( PROFILE_ROOT="$LK/root/bad" PROFILE_ACTIVE=bad PROFILE_LOADED="" \
-          GENCRON="$REPO/gen-cron.sh" load_active_profile ) 2>&1 )"
+# and the refusal is the reason it stopped, not some unrelated failure. Without
+# this, a typo in the fixture path makes case 5 pass by dying at the
+# completeness check, before lib-profile.sh's mktemp is ever reached -- which is
+# how the first version of it passed.
+out="$( ( lk_env bad load_active_profile ) 2>&1 )"
 if printf '%s' "$out" | grep -q "relationship-owned"; then
     ok "60: control -- that profile is refused for the boundary reason, not an unrelated one"
 else
     bad "60: control -- that profile is refused for the boundary reason" "out=$out"
 fi
 
-# 6. A real EXECUTED invocation, not a sourced function: same process lifetime a
-#    host actually sees.
-n="$(rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
-     TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=bad \
-       CRON_CONFIG="$LK/one.conf" CLIENTS_DIR="$LK/clients" \
-       bash "$ZFSBACKUP" migrate-profile --yes >/dev/null 2>&1
-     find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
-if [ "$n" = 0 ]; then
-    ok "60: an executed zfs-backup.sh invocation leaves nothing in TMPDIR"
+# 6. A real EXECUTED invocation, not a sourced function: the process lifetime a
+#    host actually sees, ending the way most of this script's failures end --
+#    in die().
+#
+#    migrate-profile on a LEGACY config (standard_hourly still carrying
+#    prune_schedule) is the cheap one: it loads the profile, and with stdin at
+#    /dev/null the confirmation prompt reads EOF and it dies, well before
+#    anything installs. No --yes, so it cannot reach a crontab.
+mkdir -p "$LK/clients"
+cat > "$LK/legacy.conf" <<'EOF'
+[defaults]
+	host_label = lktest
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+EOF
+rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
+xout="$(TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=prof \
+        CRON_CONFIG="$LK/legacy.conf" CLIENTS_DIR="$LK/clients" SERVER_CONF="$LK/no-such.conf" \
+        bash "$ZFSBACKUP" migrate-profile </dev/null 2>&1)"
+n="$(find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
+# the discriminator: it must have ENTERED the migration, not returned early on
+# "already on the standard GFS profile" with no profile ever loaded.
+if [ "$n" = 0 ] && ! printf '%s' "$xout" | grep -q 'already on the standard GFS profile'; then
+    ok "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR"
 else
-    bad "60: an executed zfs-backup.sh invocation leaves nothing in TMPDIR" "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')"
+    bad "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')" "out=$xout"
 fi
 
 # 7. Refusing to clobber somebody else's EXIT trap. Sourcing consumers own their
@@ -6279,7 +6318,7 @@ fi
 #    The refusal has to NAME the files, or it is a silent leak with extra steps.
 out="$( ( export TMPDIR="$LK/tmp/trap"; mkdir -p "$LK/tmp/trap"
           trap 'echo FOREIGN-TRAP-RAN' EXIT
-          lk_env "$LK/root/prof" prof load_active_profile ) 2>&1 )"
+          lk_env prof load_active_profile ) 2>&1 )"
 if printf '%s' "$out" | grep -q 'FOREIGN-TRAP-RAN' \
         && printf '%s' "$out" | grep -q 'EXIT trap belonging to something else' \
         && printf '%s' "$out" | grep -qF "$LK/tmp/trap/"; then
@@ -6291,18 +6330,30 @@ fi
 # 8. The release reports a failure it cannot fix instead of swallowing it
 #    (REV-20260813-119 F1.4): a file it cannot remove must be named and must
 #    make the helper return non-zero.
-if [ "$(id -u)" -eq 0 ]; then
-    ok "60: SKIPPED as root -- an unremovable file cannot be staged (root ignores directory mode)"
+#
+#    Staged as a non-empty DIRECTORY rather than a mode-protected file: `rm -f`
+#    refuses a directory for root and non-root alike, and for the same reason on
+#    every filesystem, so this exercises the reporting branch in the suite's real
+#    environment (the PVE hosts run these as root) instead of skipping there --
+#    and it does not depend on chmod meaning anything, which it does not under
+#    Git Bash on Windows.
+UD="$LK/undel"; mkdir -p "$UD/keeps-it-non-empty"
+out="$( PROFILE_TPL_FILE="$UD" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "$UD" && [ -d "$UD" ]; then
+    ok "60: a removal it cannot do is reported with the path and returns non-zero"
 else
-    UD="$LK/undel"; mkdir -p "$UD"; : > "$UD/stuck"; chmod 0500 "$UD"
-    out="$( PROFILE_TPL_FILE="$UD/stuck" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
-            profile_release_tmp 2>&1 )"; rc=$?
-    chmod 0700 "$UD"
-    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "$UD/stuck"; then
-        ok "60: a removal it cannot do is reported with the path and returns non-zero"
-    else
-        bad "60: a removal it cannot do is reported with the path and returns non-zero" "rc=$rc out=$out"
-    fi
+    bad "60: a removal it cannot do is reported with the path and returns non-zero" "rc=$rc out=$out"
+fi
+# control: the same helper on a removable file is silent and succeeds -- so the
+# assertion above is about the failure, not about the helper always complaining.
+: > "$LK/removable"
+out="$( PROFILE_TPL_FILE="$LK/removable" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -e "$LK/removable" ]; then
+    ok "60: control -- a removable file is removed silently with status 0"
+else
+    bad "60: control -- a removable file is removed silently with status 0" "rc=$rc out=$out exists=$([ -e "$LK/removable" ] && echo y || echo n)"
 fi
 
 echo "--------------------------------------------"
