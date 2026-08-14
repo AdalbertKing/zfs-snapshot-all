@@ -528,6 +528,25 @@ tx_regenerate_and_verify() {
         || tx_die "generated views do not agree with the artifacts after the write -- refusing to leave a state that --verify would reject"
 }
 
+# REV-122 F3, accepted and answered honestly rather than papered over.
+#
+# --expected-parent was a preflight observation: checked once at the start, so the
+# branch could move while the tool worked and the result would be published on top
+# of facts it never saw. Re-checking at the end closes most of that window -- but
+# NOT all of it, and the remainder cannot be closed here at all.
+#
+# This tool writes files. It does not publish. The real compare-and-swap is the
+# push: `git push` without --force is refused when the remote ref has moved, which
+# is an atomic test-and-set performed by the server. So the honest design is that
+# this narrows the window and the push holds the property, and the tool says so
+# instead of claiming a CAS it cannot perform.
+tx_reconfirm_parent() {   # <sha>
+    local sha="$1" g ref tip
+    g="$(gitrepo)"; ref="$(pubref)"
+    tip="$(git -C "$g" rev-parse "$ref" 2>/dev/null)"
+    [ "$tip" = "$sha" ] || tx_die "$ref moved from $sha to ${tip:-<unknown>} while this transition was being written -- nothing is published, and the write has been rolled back; recompute against the new head"
+}
+
 tx_begin() {
     TXDIR="$(mktemp -d)" || { echo "reviewctl: mktemp failed" >&2; exit 1; }
     TX_FILES=()
@@ -551,10 +570,18 @@ tx_approve() {   # <rev> <impl-sha> <expected-parent>
     [ -n "$pimpl" ] || tx_die "$rev: the response carries no implementation header -- nothing has been submitted to approve"
     [ "$pimpl" = "$impl" ] || tx_die "$rev: --implementation is $impl but the response currently submits $pimpl -- approve what was submitted, or ask for a resubmission"
 
-    # Idempotent replay: the same approval twice is a no-op success, not a second
-    # write and not an error.
+    # Idempotent replay: the same approval twice is a no-op WRITE -- but never a
+    # no-op check.
+    #
+    # REV-122 F4: the first cut returned success here before regenerating or
+    # verifying anything, so a replay over a tree whose derived views had since
+    # been damaged reported "nothing to do" and left the damage in place. Replay
+    # must be idempotent in its effect, not blind to the state it is replaying
+    # onto. So the write is skipped and the verification is not.
     if [ "$(hdr "$rfile" verdict)" = "APPROVED" ] && [ "$(hdr "$rfile" reviewed-implementation)" = "$impl" ]; then
-        echo "reviewctl: $rev is already APPROVED at $impl -- nothing to do"
+        tx_guard "$LEDGER" "$THREADS"
+        tx_regenerate_and_verify
+        echo "reviewctl: $rev is already APPROVED at $impl -- no write needed; derived views verified"
         return 0
     fi
 
@@ -572,7 +599,9 @@ tx_approve() {   # <rev> <impl-sha> <expected-parent>
     fi
 
     tx_regenerate_and_verify
+    tx_reconfirm_parent "$parent"
     echo "reviewctl: $rev APPROVED at $impl (parent $parent)"
+    echo "reviewctl: nothing is published yet -- the compare-and-swap is the push, which the server refuses if $(pubref) has moved."
     echo 'reviewctl: commit the result -- "close" will require that commit id.'
 }
 
@@ -590,12 +619,27 @@ tx_close() {   # <rev> <approval-commit> <expected-parent>
     # The named commit must PROVABLY be the approval: at that commit the review
     # already said APPROVED for the implementation it still names. A closure that
     # merely points at some reachable commit proves nothing.
-    local g shown
+    local g shown approved_impl
     g="$(gitrepo)"
     shown="$(git -C "$g" show "$acommit:docs/internal/reviews/$rev.md" 2>/dev/null \
              | sed -n 's|^<!-- verdict: *\([^ ][^>]*[^ ]\) *-->$|\1|p' | head -1)"
     [ "$shown" = "APPROVED" ] \
         || tx_die "$rev: --approval-commit $acommit does not carry an APPROVED verdict for this review (it says '${shown:-<no header>}') -- name the commit that published the approval"
+
+    # REV-122 F2: an APPROVED verdict at that commit is not enough. It must have
+    # approved THE SAME implementation the response submits now, or the closure
+    # cements an approval of something else -- which is REV-120's defect wearing a
+    # closure's clothes. The response is re-read here rather than trusted from the
+    # review file, because reviewed-implementation is a moving pointer and the
+    # question is what is on the table now.
+    approved_impl="$(git -C "$g" show "$acommit:docs/internal/reviews/$rev.md" 2>/dev/null \
+                     | sed -n 's|^<!-- reviewed-implementation: *\([^ ][^>]*[^ ]\) *-->$|\1|p' | head -1)"
+    local rpath rimpl
+    rpath="$(hdr "$rfile" response)"
+    rimpl="$(hdr "$REPO/$rpath" implementation)"
+    [ -n "$rimpl" ] || tx_die "$rev: the response carries no implementation header, so there is nothing a closure can be checked against"
+    [ "$approved_impl" = "$rimpl" ] \
+        || tx_die "$rev: --approval-commit $acommit approved implementation '${approved_impl:-<none>}', but the response submits '$rimpl' -- closing here would record approval of something that is no longer on the table; approve the current implementation first"
 
     local cdir="$RDIR/closures" cfile="$RDIR/closures/$rev.md"
     if [ -f "$cfile" ] && [ "$(hdr "$cfile" closed-by)" = "$acommit" ]; then
@@ -617,7 +661,9 @@ tx_close() {   # <rev> <approval-commit> <expected-parent>
     } > "$cfile"
 
     tx_regenerate_and_verify
+    tx_reconfirm_parent "$parent"
     echo "reviewctl: $rev CLOSED by $acommit (parent $parent)"
+    echo "reviewctl: nothing is published yet -- the compare-and-swap is the push, which the server refuses if $(pubref) has moved."
 }
 
 # ---- argument parsing for the writers ---------------------------------------
