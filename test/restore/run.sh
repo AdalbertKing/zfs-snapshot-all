@@ -534,11 +534,40 @@ if [ "\$1" = snapshot ]; then
   exit 0
 fi
 if [ "\$1" = destroy ]; then
-  full="\$2"; dsp=\${full%@*}
-  key=\$(printf '%s' "\$dsp" | tr '/' '_')
+  full="\$2"
   [ -f "$WORK/destroyfail" ] && { echo "cannot destroy '\$full'" >&2; exit 1; }
-  grep -v "^\$full	" "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp" 2>/dev/null
-  mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
+  # setdestroyfail fails ONLY the approved-set call, which is the one carrying a
+  # comma list, and leaves the single-name cleanup destroys working. Folding it
+  # into destroyfail would make the cleanup fail too, and the assertion would then
+  # be about litter rather than about where "nothing was destroyed" ends.
+  case "\$full" in
+    *,*) [ -f "$WORK/setdestroyfail" ] && { echo "cannot destroy '\$full': dataset is busy" >&2; exit 1; } ;;
+  esac
+  # REV-120 round 2 models BOTH real shapes, and the difference matters:
+  #   ds@a,b,c  -- one atomic call removing several snapshots (measured: works)
+  #   ds#name   -- one bookmark at a time (measured: the comma form is
+  #                snapshot-only, `bookmark 'ds#b1,b2' does not exist`)
+  case "\$full" in
+    *#*) dsp=\${full%#*}; key=\$(printf '%s' "\$dsp" | tr '/' '_')
+         case "\${full#*#}" in
+           *,*) echo "bookmark '\$full' does not exist." >&2; exit 1 ;;
+         esac
+         grep -q "^\$full	" "$WORK/bmarks.\$key" 2>/dev/null || { echo "bookmark '\$full' does not exist." >&2; exit 1; }
+         grep -v "^\$full	" "$WORK/bmarks.\$key" > "$WORK/bmarks.\$key.tmp" 2>/dev/null
+         mv "$WORK/bmarks.\$key.tmp" "$WORK/bmarks.\$key"
+         exit 0 ;;
+  esac
+  dsp=\${full%@*}; key=\$(printf '%s' "\$dsp" | tr '/' '_')
+  list=\${full#*@}
+  # All or none, like the real call: verify every name first.
+  IFS=','; for n in \$list; do
+    grep -q "^\$dsp@\$n	" "$WORK/rows.\$key" 2>/dev/null || {
+      unset IFS; echo "could not find any snapshots to destroy; check snapshot names." >&2; exit 1; }
+  done; unset IFS
+  IFS=','; for n in \$list; do
+    grep -v "^\$dsp@\$n	" "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp" 2>/dev/null
+    mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
+  done; unset IFS
   exit 0
 fi
 
@@ -555,20 +584,31 @@ fi
 # createtxg 42609087 and 42609088, and a rollback to @s1 with #bm1/#bm2/#bm3 present
 # left exactly #bm1 -- the one whose createtxg equals the target's.
 if [ "\$1" = rollback ]; then
+  # REV-120 round 2: the contract is a NON-recursive rollback. \`-r\` is refused
+  # outright rather than modelled, so reintroducing it turns every destructive
+  # assertion red instead of quietly restoring the race this REV removed.
+  for a in "\$@"; do
+    [ "\$a" = "-r" ] || [ "\$a" = "-R" ] && { echo "stub3: recursive rollback is not part of this contract: \$*" >&2; exit 9; }
+    full="\$a"
+  done
   [ -f "$WORK/rollbackfail" ] && { echo "cannot rollback" >&2; exit 1; }
-  for a in "\$@"; do full="\$a"; done
   dsp=\${full%@*}; key=\$(printf '%s' "\$dsp" | tr '/' '_')
   bc=\$(awk -F'\t' -v n="\$full" '\$1==n{print (\$4!=""?\$4:\$2)}' "$WORK/rows.\$key")
   [ -n "\$bc" ] || { echo "no such snapshot '\$full'" >&2; exit 1; }
-  awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)<=(bc+0)' "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp"
-  mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
-  # rollbackleak models the C-006/C-007 class the GUID acceptance test exists for:
-  # the command returns 0 and the state is still wrong. Here one blocker survives.
-  if [ -f "$WORK/rollbackleak" ]; then cat "$WORK/rollbackleak" >> "$WORK/rows.\$key"; fi
-  if [ -f "$WORK/bmarks.\$key" ]; then
-    awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)<=(bc+0)' "$WORK/bmarks.\$key" > "$WORK/bmarks.\$key.tmp"
-    mv "$WORK/bmarks.\$key.tmp" "$WORK/bmarks.\$key"
+  # ZFS's own guard, measured on 2.1.9 and 2.2.2: anything newer than the target
+  # -- snapshot OR bookmark -- and the command refuses, names it, and destroys
+  # NOTHING, live data included.
+  newer=\$( { awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)>(bc+0){print \$1}' "$WORK/rows.\$key"
+             [ -f "$WORK/bmarks.\$key" ] && awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)>(bc+0){print \$1}' "$WORK/bmarks.\$key"; } )
+  if [ -n "\$newer" ]; then
+    echo "cannot rollback to '\$full': more recent snapshots or bookmarks exist" >&2
+    echo "use '-r' to force deletion of the following snapshots and bookmarks:" >&2
+    printf '%s\n' "\$newer" >&2
+    exit 1
   fi
+  # rollbackleak models the C-006/C-007 class the acceptance test exists for:
+  # the command returns 0 and the state is still wrong. Here one blocker appears.
+  if [ -f "$WORK/rollbackleak" ]; then cat "$WORK/rollbackleak" >> "$WORK/rows.\$key"; fi
   exit 0
 fi
 # send emits a tiny "stream" carrying only what recv needs: the target snapshot's
@@ -665,6 +705,17 @@ if [ "\$want_bm" -eq 1 ]; then
   if [ -f "$WORK/latebm" ] && [ "\$cols" = name ]; then
     lc=\$(cat "$WORK/latebmn" 2>/dev/null || echo 0); lc=\$((lc+1)); echo "\$lc" > "$WORK/latebmn"
     [ "\$lc" -eq 2 ] && printf '%s#late-bm\t9800\t9810\t9800\n' "\$ds" >> "$WORK/bmarks.\$key"
+  fi
+  # execbm goes one window further in, and it is the window REV-120 round 2 is
+  # about: AFTER the executor's own exact-set validation and BEFORE the
+  # destructive commands. Nothing can detect it any more -- the only thing that
+  # can save the object is a command shape incapable of consuming it. The
+  # \`name,createtxg\` reads are, in order: the planner (1), the executor's
+  # exact-set check (2), the final verification (3). Injecting after 2 puts the
+  # bookmark exactly where no check will ever look again.
+  if [ -f "$WORK/execbm" ] && [ "\$cols" = name,createtxg ]; then
+    ec=\$(cat "$WORK/execbmn" 2>/dev/null || echo 0); ec=\$((ec+1)); echo "\$ec" > "$WORK/execbmn"
+    [ "\$ec" -eq 2 ] && printf '%s#exec-bm\t9900\t9910\t9900\n' "\$ds" >> "$WORK/bmarks.\$key"
   fi
   exit 0
 fi
@@ -830,7 +881,8 @@ reset_src() {
           "$WORK/rollbackfail" "$WORK/sendfail" "$WORK/recvfail" "$WORK/recvguid" \
           "$WORK/written.$SRC" \
           "$WORK/bmarks.$SRC" "$WORK/bmarks.$COPY" "$WORK/bmarkfail" \
-          "$WORK/arrivebm" "$WORK/latebm" "$WORK/latebmn" "$WORK/rollbackleak"
+          "$WORK/arrivebm" "$WORK/latebm" "$WORK/latebmn" "$WORK/rollbackleak" \
+          "$WORK/execbm" "$WORK/execbmn" "$WORK/setdestroyfail"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -1335,18 +1387,38 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
     && ok "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" \
     || bad "EXEC transfer-fail: a broken receive after the rollback reports partial destruction, not a clean source" "rc=$rc" "$out"
 
-# EX6. The rollback itself fails. Every precondition is checked before it and the
-#      rollback is atomic, so NOTHING was destroyed -- and only here may the path
-#      make the exact-state claim after an execution attempt. The discriminating
-#      pair with EX5: same verb, one destroyed nothing and one destroyed the delta.
+# EX6a/EX6b. Where "nothing was destroyed" now ends, exactly.
+#
+# This pair used to be one assertion, and REV-120 round 2 moved the line it
+# tested. The destructive step is no longer a single atomic rollback, so "the
+# rollback failed" no longer implies "nothing was destroyed". Rewritten to the new
+# contract rather than loosened -- the boundary is still asserted, it just sits
+# somewhere else, and that somewhere is worth pinning precisely because it is the
+# price this REV paid for the safety property.
+#
+# EX6a: the ONE call that removes the approved snapshots fails. It is all-or-none,
+#       and it is the first destructive act, so nothing was destroyed and the
+#       exact-state claim is still allowed.
 reset_src
-touch "$WORK/rollbackfail"
+touch "$WORK/setdestroyfail"
 out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIC nie zniszczono' \
   && printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia'; } \
-    && ok "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" \
-    || bad "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" "rc=$rc" "$out"
+    && ok "EXEC set-destroy-fail: the all-or-none destroy of the approved set fails, destroys nothing, and may claim an unchanged source" \
+    || bad "EXEC set-destroy-fail: the all-or-none destroy of the approved set fails, destroys nothing, and may claim an unchanged source" "rc=$rc" "$out"
+rm -f "$WORK/setdestroyfail"
+
+# EX6b: the rollback fails AFTER those destroys. The approved objects are gone, so
+#       this is a partial failure and the exact-state claim is forbidden. Same verb
+#       as EX6a, opposite claim -- which is the whole discrimination.
+reset_src
+touch "$WORK/rollbackfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "EXEC rollback-fail: a rollback failing after the approved destroys is a PARTIAL failure, never an unchanged source" \
+    || bad "EXEC rollback-fail: a rollback failing after the approved destroys is a PARTIAL failure, never an unchanged source" "rc=$rc" "$out"
 
 # ==============================================================================
 # REV-20260814-120 F1 -- BOOKMARKS are part of what the rollback destroys, so they
@@ -1453,6 +1525,48 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
     && ok "REV-120 F1: a bookmark arriving after the boundary is caught before destruction, and nothing is destroyed" \
     || bad "REV-120 F1: a bookmark arriving after the boundary is caught before destruction, and nothing is destroyed" "rc=$rc" "$out"
 
+# BM7b. REV-120 ROUND 2, the required discrimination. The bookmark arrives one
+#       window further in: AFTER the executor's own exact-set validation and
+#       BEFORE the destructive commands. No check can see it any more, so the
+#       only thing that can save it is a command shape incapable of consuming it.
+#
+#       Required result: the late bookmark SURVIVES, the run fails truthfully, and
+#       it never claims an approved destructive completion. It is a partial
+#       failure and says so -- the approved objects were destroyed by name before
+#       the rollback refused, and pretending otherwise would be the same
+#       laundering REV-119 F1.4 removed.
+#
+#       Against the round-1 implementation (`zfs rollback -r`) the bookmark is
+#       silently destroyed and the run reports success, which is the whole point.
+reset_src
+touch "$WORK/execbm"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] \
+  && grep -q '^rpool/data#exec-bm	' "$WORK/bmarks.$SRC" \
+  && printf '%s' "$out" | grep -q 'NIE usunieto' \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && ! printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia'; } \
+    && ok "REV-120 r2: a bookmark arriving after the LAST validation survives, and the run fails truthfully" \
+    || bad "REV-120 r2: a bookmark arriving after the LAST validation survives, and the run fails truthfully" \
+           "rc=$rc bookmarks=[$(tr '\n' ';' < "$WORK/bmarks.$SRC")]" "$out"
+
+# BM7c. The same run's other half: the approved objects WERE destroyed. Without
+#       this the assertion above would also pass an implementation that refused
+#       before touching anything, which is a different (and unattainable) contract.
+{ ! grep -q 'restore-preview-' "$WORK/rows.$SRC" && ! grep -q 'restore-commit-' "$WORK/rows.$SRC"; } \
+    && ok "REV-120 r2: ...and the approved objects had already been destroyed, which is why it is a PARTIAL failure" \
+    || bad "REV-120 r2: ...and the approved objects had already been destroyed, which is why it is a PARTIAL failure" "$(cat "$WORK/rows.$SRC")"
+
+# BM7d. The shape itself is the guarantee, so it is asserted directly: no call in
+#       the whole suite may be a recursive rollback. The stub refuses `-r` outright,
+#       so this is belt and braces on the call log -- the property REV-120 round 2
+#       exists to establish is "execution cannot widen the approved set", and that
+#       is a statement about which commands are issued, not about their timing.
+grep -q '^rollback -r ' "$WORK/zfs-calls3" \
+    && bad "REV-120 r2: no recursive rollback is ever issued" "$(grep '^rollback -r ' "$WORK/zfs-calls3" | head -2)" \
+    || ok "REV-120 r2: no recursive rollback is ever issued"
+
 # BM8. The read-only plan shows it too, so an operator sees the bookmark loss while
 #      still deciding, not only inside the destructive verb.
 bmfixture
@@ -1538,10 +1652,11 @@ tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -
 # as a stray.
 # ==============================================================================
 strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
-          | grep -vE '^(snapshot|destroy) rpool/data@restore-(preview|commit)-' \
+          | grep -vE '^snapshot rpool/data@restore-(preview|commit)-' \
+          | grep -vE '^destroy rpool/data[@#]' \
           | grep -vE '^set readonly=(on|off) rpool/data$' \
           | grep -vE '^inherit (-S )?readonly rpool/data$' \
-          | grep -vE '^rollback -r rpool/data@' \
+          | grep -vE '^rollback rpool/data@' \
           | grep -vE '^send -i ' \
           | grep -vE '^recv rpool/data$' || true)"
 [ -z "$strays" ] \

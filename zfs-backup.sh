@@ -3273,10 +3273,10 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     if [ -n "$bookmarks" ]; then
         echo "  BLOKUJE / DO USUNIECIA (BOOKMARKI zrodla NOWSZE niz wspolna baza):"
         printf '%s\n' "$bookmarks" | sed 's/.*#/    /'
-        echo "  Bookmark nie zajmuje miejsca, wiec nie widac go w bajtach -- ale 'zfs rollback -r'"
-        echo "  kasuje rowniez bookmarki nowsze od punktu docelowego (zmierzone, pve0/zfs-2.1.9),"
-        echo "  a bookmark jest punktem zaczepienia przyszlego wysylania przyrostowego. Jego strata"
-        echo "  jest nieodwracalna tak samo jak strata snapshota."
+        echo "  Bookmark nie zajmuje miejsca, wiec nie widac go w bajtach -- ale jest NOWSZY niz"
+        echo "  punkt docelowy, wiec odtworzenie musi go usunac (dopoki istnieje, ZFS odmawia"
+        echo "  cofniecia zrodla). Bookmark jest punktem zaczepienia przyszlego wysylania"
+        echo "  przyrostowego, wiec jego strata jest nieodwracalna tak samo jak strata snapshota."
     fi
     if [ -n "$blockers" ] || [ -n "$bookmarks" ]; then
         echo "  To jest operacja NISZCZACA dla powyzszych obiektow zrodla i wymaga jawnego"
@@ -3478,18 +3478,25 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 # does not block them -- it only blocks the ordinary writers the fence exists to
 # keep out.
 #
-# One GUID-anchored rollback is the primitive for every reachable strategy:
+# The primitive for every reachable strategy is: destroy exactly the approved
+# objects, then a NON-recursive rollback to the base.
 #
 #   rollback / discard-live / unproven -- the recovery point ALREADY exists on the
-#       source (base guid == target guid), so rolling the source back to it IS the
-#       whole operation. `-r` discards the approved blockers and any live writes in
-#       one atomic step, and takes this run's own technical snapshots with them
-#       (both are newer than the base), so cleanup afterwards is normally a no-op.
+#       source (base guid == target guid), so landing the source back on it IS the
+#       whole operation. The approved blockers and this run's own technical
+#       snapshots are destroyed by name, the approved bookmarks likewise, and the
+#       rollback then discards the live writes. Cleanup afterwards is a no-op.
 #
-#   increment -- the same rollback lands the source exactly on the common base;
+#   increment -- the same sequence lands the source exactly on the common base;
 #       one incremental receive base..target then rebuilds it to the recovery
 #       point. The source is at the base and fenced, so a plain `recv` applies
 #       cleanly (verified live).
+#
+# It used to be one `zfs rollback -r`, which was atomic and convenient and wrong:
+# `-r` decides for itself what is newer than the base, so it could consume an
+# object that appeared after the operator approved the set (REV-120, both rounds).
+# Naming the objects gives that up for a property worth more than atomicity --
+# execution cannot widen the approved set, by construction rather than by timing.
 #
 # Acceptance is by GUID, never by exit code (C-006/C-007): the snapshot carrying
 # RESTORE_TARGET_GUID must exist on the source afterwards and nothing may be newer
@@ -3507,13 +3514,15 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 # print last. Nothing here infers order from `creation` any more.
 #
 # Three outcomes, so the caller can be exact about what the operator is holding:
-#   0 -- GUID-verified success.
-#   1 -- failed with NOTHING destroyed. Every precondition is checked before the
-#        rollback, and the rollback is atomic, so a 1 means the source is still
-#        exactly as it was found; the caller may make the unchanged-source claim.
-#   2 -- failed AFTER destruction began (a broken incremental, or a post-transfer
-#        GUID mismatch). The source is not as it was found and the caller never
-#        claims it is.
+#   0 -- verified success.
+#   1 -- failed with NOTHING destroyed: every precondition and the exact-set
+#        measurement come first, and the one call that removes the approved
+#        snapshots removes all of them or none. The caller may make the
+#        unchanged-source claim.
+#   2 -- failed AFTER destruction began. Since REV-120 round 2 this includes a
+#        late unapproved object making the non-recursive rollback refuse: the
+#        approved objects are gone, the late one is untouched, and the source is
+#        NOT as it was found. Also a broken incremental or a failed final check.
 # A diagnosis is printed to stderr. The caller owns the fence and the
 # technical-snapshot cleanup.
 restore_execute() {   # <src> <copy> <this run's own technical snapshots, full names...>
@@ -3575,18 +3584,76 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
         return 1
     fi
 
-    # The single destructive primitive, shared by every reachable strategy. `-r`
-    # removes exactly what is newer than the base: the approved blockers and
-    # bookmarks plus this run's own technical snapshots -- the set just proven equal
-    # to the approved one. Rollback is atomic, so a failure here leaves the source
-    # as it was found -- a clean 1.
-    # ZFS's own stderr is deliberately NOT suppressed on the three execution
-    # primitives, unlike the read/probe calls above. This is the one place where a
-    # failure is both destructive and hard to diagnose, and "rollback failed" without
-    # ZFS's reason ("dataset is busy", "out of space") sends the operator debugging
-    # blind at the worst possible moment.
-    if ! zfs rollback -r "$RESTORE_SRC_BASE_SNAP"; then
-        echo "restore-exec: rollback zrodla do '$RESTORE_SRC_BASE_SNAP' nie powiodl sie. Rollback jest atomowy, wiec zrodlo pozostaje w stanie sprzed niego. Nic nie zniszczono." >&2
+    # ---- destruction, shaped so that it CANNOT reach an unapproved object -----
+    #
+    # REV-120 round 2. The measurement above narrows the window; it cannot close
+    # it. `zfs rollback -r` decides for itself what is newer than the base, so a
+    # bookmark created in the microseconds after the measurement was destroyed
+    # unapproved -- and no amount of re-reading fixes that, because the read and
+    # the destruction are still two separate moments. The shape of the commands
+    # has to carry the property instead of the timing.
+    #
+    # Every destructive call below is therefore one of exactly two kinds:
+    #
+    #   * `zfs destroy` naming the approved objects EXPLICITLY. It can only ever
+    #     touch what it names, whatever arrives meanwhile.
+    #   * a NON-recursive `zfs rollback`, whose own semantics refuse when any
+    #     newer snapshot or bookmark exists. ZFS itself is the guard, evaluated
+    #     inside the command rather than before it.
+    #
+    # Measured on zfs-2.1.9 and zfs-2.2.2: the non-recursive refusal names the
+    # offending objects, destroys nothing, and leaves live data in place.
+    #
+    # The snapshots go in ONE call -- `zfs destroy ds@a,b,c` removes them together,
+    # so the bulk of the loss set keeps the atomicity the recursive rollback had,
+    # and the most likely failure (a hold, a busy dataset) still happens before
+    # anything is destroyed. Bookmarks cannot join it: measured, the comma form is
+    # snapshot-only (`bookmark 'ds#b1,b2' does not exist`), so they go one by one.
+    #
+    # The price is honest and named in the response: destruction now begins before
+    # the rollback, so a late arrival is a partial failure (2) rather than a clean
+    # refusal (1). Approved objects are destroyed; unapproved ones cannot be. That
+    # is the trade the previous shape had backwards.
+    #
+    # ZFS's own stderr is deliberately NOT suppressed on the execution primitives,
+    # unlike the read/probe calls above. This is the one place where a failure is
+    # both destructive and hard to diagnose, and "it failed" without ZFS's reason
+    # ("dataset is busy", "more recent snapshots or bookmarks exist") sends the
+    # operator debugging blind at the worst possible moment.
+    local snapnames="" b
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        snapnames="${snapnames:+$snapnames,}${b#*@}"
+    done <<< "$(printf '%s\n%s' "$RESTORE_BLOCKERS" "$own" | grep -v '^$')"
+
+    local destroyed=0
+    if [ -n "$snapnames" ]; then
+        if ! zfs destroy "${src}@${snapnames}"; then
+            echo "restore-exec: nie udalo sie usunac zatwierdzonych snapshotow zrodla ('${src}@${snapnames}'). To jedno wywolanie obejmujace caly zbior, wiec albo zniknely wszystkie, albo zaden -- ZFS zglosil blad, czyli nie zniknal zaden. Nic nie zniszczono." >&2
+            return 1
+        fi
+        destroyed=1
+    fi
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        if ! zfs destroy "$b"; then
+            echo "restore-exec: nie udalo sie usunac zatwierdzonego bookmarka '$b'. Bookmarkow nie da sie usunac jednym wywolaniem (skladnia z przecinkiem dziala tylko dla snapshotow), wiec czesc zatwierdzonego zbioru moze byc juz usunieta." >&2
+            [ "$destroyed" -eq 1 ] && return 2
+            return 1
+        fi
+        destroyed=1
+    done <<< "$RESTORE_BLOCK_BOOKMARKS"
+
+    # The recovery point is now the newest snapshot on the source, so a plain
+    # rollback is legal -- and it is the guard: if anything newer than the base
+    # appeared after the measurement above, ZFS refuses here and destroys nothing,
+    # including the late object.
+    if ! zfs rollback "$RESTORE_SRC_BASE_SNAP"; then
+        if [ "$destroyed" -eq 1 ]; then
+            echo "restore-exec: ZFS odmowil cofniecia zrodla do '$RESTORE_SRC_BASE_SNAP' (powod wyzej) -- na zrodle jest cos NOWSZEGO niz punkt docelowy, czego nie bylo w zatwierdzonym zbiorze. Tego obiektu NIE usunieto i nie zostanie usuniety. Zatwierdzony zbior zostal juz jednak usuniety, wiec zrodlo NIE jest w stanie sprzed polecenia." >&2
+            return 2
+        fi
+        echo "restore-exec: cofniecie zrodla do '$RESTORE_SRC_BASE_SNAP' nie powiodlo sie (powod wyzej). Nic nie zniszczono." >&2
         return 1
     fi
 
@@ -3671,10 +3738,10 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 #
 # REV-119 F1: the confirmation boundary MUST take a technical snapshot before it
 # can state the loss set exactly -- see the block further down. Every technical
-# snapshot is removed again on every exit path (the destructive rollback destroys
-# them itself, being newer than the recovery point), so a refusal still leaves the
-# source byte-identical to how it was found and a success leaves nothing of this
-# run behind.
+# snapshot is removed again on every exit path (the execution step destroys them
+# by name, as part of the approved set), so a refusal still leaves the source
+# byte-identical to how it was found and a success leaves nothing of this run
+# behind.
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -3746,9 +3813,9 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # path's earlier "not even a snapshot" rule -- deliberately: the mutation is
     # what buys the property, and there is no read-only way to buy it.
     #
-    # It is NOT preservation and must never be described as such. The rollback
-    # this path leads to destroys it. It is a measurement, and the operator text
-    # says measurement.
+    # It is NOT preservation and must never be described as such: it is part of
+    # the set the execution step destroys by name. It is a measurement, and the
+    # operator text says measurement.
     local stamp="$$-$(date +%s)-${RANDOM}"
     local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
 
@@ -3799,8 +3866,9 @@ restore_replace_internal() {   # <dataset> <config> <yes>
             [ -n "$b" ] || continue
             printf '    bookmark  %-40s %s B\n' "${b#*#}" 0
         done <<< "$RESTORE_BLOCK_BOOKMARKS"
-        echo "      (bookmark nie zajmuje miejsca, ale 'zfs rollback -r' kasuje rowniez jego --"
-        echo "       tracisz punkt zaczepienia przyszlego wysylania przyrostowego, bezpowrotnie)"
+        echo "      (bookmark nie zajmuje miejsca, ale jest nowszy niz punkt docelowy, wiec"
+        echo "       zostanie usuniety -- tracisz punkt zaczepienia przyszlego wysylania"
+        echo "       przyrostowego, bezpowrotnie)"
     fi
     if [ -n "$live_exact" ]; then
         printf '    dane zapisane po ostatnim snapshocie zrodla:   %s B\n' "$live_exact"
@@ -3904,9 +3972,10 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     restore_execute "$src" "$copy" "${src}@${preview_snap}" "${src}@${commit_snap}"; local erc=$?
 
     if [ "$erc" -eq 1 ]; then
-        # Nothing was destroyed: every precondition is checked before the rollback,
-        # and the rollback is atomic. This is an ordinary refusal, so once the fence
-        # is down and this run's technical snapshots are gone, the source is exactly
+        # Nothing was destroyed: every precondition and the exact-set measurement
+        # come first, and the one call that removes the approved snapshots removes
+        # all of them or none. This is an ordinary refusal, so once the fence is
+        # down and this run's technical snapshots are gone, the source is exactly
         # as it was found -- and restore_die_after_cleanup makes that claim only when
         # both are true.
         fence_after=ok
@@ -3931,10 +4000,9 @@ restore_replace_internal() {   # <dataset> <config> <yes>
         die "restore (odtworzenie niszczace): krok WYKONAWCZY nie zakonczyl sie sukcesem (szczegoly wyzej). Zrodlo '$src' zostalo czesciowo zmienione i NIE jest w stanie sprzed polecenia -- sprawdz jego snapshoty i biezacy stan zanim ponowisz.${extra}"
     fi
 
-    # Success. The rollback/receive already destroyed this run's technical
-    # snapshots (both were newer than the recovery point), so cleanup is normally a
-    # no-op -- but it still reports honestly if anything survived, and the fence
-    # still has to come down.
+    # Success. The execution step already destroyed this run's technical snapshots
+    # by name, so cleanup is normally a no-op -- but it still reports honestly if
+    # anything survived, and the fence still has to come down.
     fence_after=ok
     restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
     local snaps_left=ok
