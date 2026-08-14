@@ -366,6 +366,174 @@ REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1 \
     && bad "an abbreviated reviewed-by is refused" \
     || ok "an abbreviated reviewed-by is refused"
 
+
+# ==============================================================================
+# TRANSACTIONAL WRITERS -- `approve` and `close` (consensus of 2026-08-14).
+#
+# Every case here is a shape that actually happened, or one the reviewer named as
+# a required negative control. The REV-120/121 publication put prose saying
+# APPROVED/CLOSED on canonical main while the headers said CHANGES-REQUIRED
+# against a superseded implementation, and wrote a person's name where a commit id
+# belongs. The writer has to make each of those unspellable.
+# ==============================================================================
+
+TIP="$(git -C "$REPO" rev-parse origin/main)"
+OLD="$(git -C "$REPO" rev-parse origin/main~3)"
+
+# a world holding one submitted-but-unreviewed REV
+txworld() {   # <name>
+    world "$1"
+    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
+        "$R" "$OLD" "$R" > "$W/docs/internal/reviews/$R.md"
+    respond "$R" IMPLEMENTED "$sha1"
+}
+tx()      { REVIEWCTL_REPO="$W" "$CTL" "$@" >"$TMPD/out" 2>&1; }
+revfile() { cat "$W/docs/internal/reviews/$R.md"; }
+
+# A refusal is asserted by its REASON, never by a non-zero exit alone. Without
+# this every case below also passes against a build that has no writer at all --
+# it refuses the unknown subcommand and looks like a working guard. The negative
+# control across an older reviewctl is what exposed that, so the fix is here
+# rather than a note admitting it.
+refuses() {   # <name> <expected phrase> <args...>
+    local name="$1" phrase="$2"; shift 2
+    if tx "$@"; then
+        bad "$name" "it succeeded"
+    elif grep -qF -- "$phrase" "$TMPD/out"; then
+        ok "$name"
+    else
+        bad "$name" "refused for the wrong reason: $(head -1 "$TMPD/out")"
+    fi
+}
+
+# T1. The happy path has to exist, or every refusal below proves nothing.
+txworld t1
+if tx approve "$R" --implementation="$sha1" --expected-parent="$TIP" \
+   && grep -q '^<!-- verdict: APPROVED -->$' "$W/docs/internal/reviews/$R.md" \
+   && grep -q "^<!-- reviewed-implementation: $sha1 -->$" "$W/docs/internal/reviews/$R.md"; then
+    ok "approve sets the verdict and the reviewed implementation together"
+else
+    bad "approve sets the verdict and the reviewed implementation together" "$(cat "$TMPD/out")"
+fi
+
+# T2. Replay is idempotent: the same approval twice is a no-op success.
+if tx approve "$R" --implementation="$sha1" --expected-parent="$TIP" && grep -q 'already APPROVED' "$TMPD/out"; then
+    ok "replaying the same approval is an idempotent no-op"
+else
+    bad "replaying the same approval is an idempotent no-op" "$(cat "$TMPD/out")"
+fi
+
+# T3. THE REV-120/121 SHAPE: approval must name what the response actually submits.
+txworld t3
+before="$(revfile)"
+if tx approve "$R" --implementation="$OLD" --expected-parent="$TIP"; then
+    bad "approving a superseded implementation refuses" "it succeeded"
+elif [ "$(revfile)" = "$before" ] && grep -q "but the response currently submits" "$TMPD/out"; then
+    ok "approving a superseded implementation refuses, and the artifact is byte-identical"
+else
+    bad "approving a superseded implementation refuses" "the artifact was modified"
+fi
+
+# T4. A combined approve+close request has no spelling at all.
+txworld t4
+refuses "approve refuses --approval-commit, so the two cannot be one request" \
+        "approve does not take --approval-commit" \
+        approve "$R" --approval-commit="$sha1" --expected-parent="$TIP"
+refuses "close refuses --implementation, so the two cannot be one request" \
+        "close does not take --implementation" \
+        close "$R" --implementation="$sha1" --expected-parent="$TIP"
+
+# T5. closed-by naming a person cannot be produced: the writer only ever writes a
+#     validated SHA, and a name is refused at the boundary.
+txworld t5
+if tx close "$R" --approval-commit="ChatGPT reviewer" --expected-parent="$TIP"; then
+    bad "a human name as the approval commit refuses" ""
+else
+    grep -q 'not a lowercase 40-character commit id' "$TMPD/out" \
+        && ok "a human name as the approval commit refuses, by the canonical-SHA rule" \
+        || bad "a human name as the approval commit refuses, by the canonical-SHA rule" "$(cat "$TMPD/out")"
+fi
+
+# T6. Abbreviated, uppercase and non-existent commit ids all refuse.
+refuses "an abbreviated approval commit refuses" "abbreviated commit id" \
+        close "$R" --approval-commit="$short1" --expected-parent="$TIP"
+refuses "an uppercase approval commit refuses" "not a lowercase 40-character commit id" \
+        close "$R" --approval-commit="$(printf '%s' "$sha1" | tr 'a-f' 'A-F')" --expected-parent="$TIP"
+refuses "an approval commit that is not a commit refuses" "is not a commit in this repository" \
+        close "$R" --approval-commit="0123456789012345678901234567890123456789" --expected-parent="$TIP"
+
+# T7. Closure requires an approval that PROVABLY happened: the named commit must
+#     itself carry the APPROVED verdict for this review. A merely reachable commit
+#     proves nothing, and that is what left the REV-120 closure underivable.
+txworld t7
+tx approve "$R" --implementation="$sha1" --expected-parent="$TIP"
+if tx close "$R" --approval-commit="$TIP" --expected-parent="$TIP"; then
+    bad "closure refuses a commit that did not carry the approval" "it succeeded"
+else
+    grep -q 'does not carry an APPROVED verdict' "$TMPD/out" \
+        && ok "closure refuses a commit that did not carry the approval" \
+        || bad "closure refuses a commit that did not carry the approval" "$(cat "$TMPD/out")"
+fi
+[ -f "$W/docs/internal/reviews/closures/$R.md" ] \
+    && bad "that refusal leaves no closure artifact behind" "" \
+    || ok "that refusal leaves no closure artifact behind"
+
+# T8. Closing an unapproved review refuses.
+txworld t8
+refuses "closing a review whose verdict is not APPROVED refuses" "not APPROVED" \
+        close "$R" --approval-commit="$sha1" --expected-parent="$TIP"
+
+# T9. THE COMPARE-AND-SWAP: a stale expected parent loses and changes nothing.
+txworld t9
+before="$(revfile)"
+if tx approve "$R" --implementation="$sha1" --expected-parent="$OLD"; then
+    bad "a stale expected parent loses the CAS" "it succeeded"
+elif [ "$(revfile)" = "$before" ] && grep -q "the published state moved" "$TMPD/out"; then
+    ok "a stale expected parent loses the CAS and leaves the artifact untouched"
+else
+    bad "a stale expected parent loses the CAS" "the artifact was modified"
+fi
+
+# T10. Malformed canonical facts -- the response the review names is not there.
+txworld t10
+rm -f "$W/docs/internal/reviews/responses/$R.md"
+before="$(revfile)"
+if tx approve "$R" --implementation="$sha1" --expected-parent="$TIP"; then
+    bad "an approval with no response artifact refuses" "it succeeded"
+elif [ "$(revfile)" = "$before" ] && grep -q "there is nothing to approve" "$TMPD/out"; then
+    ok "an approval with no response artifact refuses and mutates nothing"
+else
+    bad "an approval with no response artifact refuses" "the artifact was modified"
+fi
+
+# T11. First review makes the delivery acknowledgement PERMANENT, and advancing
+#      reviewed-implementation later does not resurrect it. That header is a
+#      moving pointer, so a delivery cleared only by it reappears as unreviewed
+#      the moment the thread moves on.
+txworld t11
+deliver "$sha1" "the submitted delivery"
+tx approve "$R" --implementation="$sha1" --expected-parent="$TIP"
+grep -q "^<!-- reviewed-by: $sha1" "$W/docs/project/DELIVERIES.md" \
+    && ok "first approval writes a permanent reviewed-by for the delivery" \
+    || bad "first approval writes a permanent reviewed-by for the delivery" "$(cat "$W/docs/project/DELIVERIES.md")"
+respond "$R" IMPLEMENTED "$TIP"
+tx approve "$R" --implementation="$TIP" --expected-parent="$TIP"
+REVIEWCTL_REPO="$W" "$CTL" --generate >/dev/null 2>&1
+grep -q "$sha1" "$W/docs/project/OPEN-THREADS.md" \
+    && bad "advancing the thread does not resurrect the earlier delivery" "it is open again" \
+    || ok "advancing the thread does not resurrect the earlier delivery"
+
+# T12. Nothing is ever staged. A refusal cannot leave a half-prepared commit
+#      because the writer never touches the index -- asserted against the REAL
+#      repository index, which is the one a caller would be about to commit.
+idx_before="$(git -C "$REPO" diff --cached --name-only | sort)"
+txworld t12
+tx approve "$R" --implementation="$OLD" --expected-parent="$TIP"
+idx_after="$(git -C "$REPO" diff --cached --name-only | sort)"
+[ "$idx_before" = "$idx_after" ] \
+    && ok "a refused write leaves the git index exactly as it found it" \
+    || bad "a refused write leaves the git index exactly as it found it" "the index changed"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

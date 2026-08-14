@@ -398,10 +398,259 @@ render_threads() {
     echo "Closed reviews are in \`docs/internal/reviews/REVIEW_LEDGER.md\`."
 }
 
+# =============================================================================
+# TRANSACTIONAL LIFECYCLE WRITERS (consensus of 2026-08-14)
+#
+# REV-120/121 ended with prose on canonical main saying APPROVED and CLOSED while
+# the machine headers said CHANGES-REQUIRED against a superseded implementation,
+# and with `closed-by` naming a person. The parser refused to derive from that --
+# correctly, and far too late, because the contradiction was already published.
+#
+# --generate cannot prevent it: by the time it runs, someone has already
+# hand-edited the facts. So the facts get a writer, and the writer is the only
+# thing that has to be right.
+#
+# The shape is deliberately narrow:
+#
+#   approve REV --implementation SHA  --expected-parent SHA
+#   close   REV --approval-commit SHA --expected-parent SHA
+#
+# Two operations, never one. A single approve+close call is what produced the
+# REV-120/121 state, so the tool cannot express it: `close` requires an approval
+# commit that ALREADY exists on the published branch and that provably carried the
+# approval, which a combined operation could not have.
+#
+# Every write is a transaction. Files are snapshotted, mutated, the derived views
+# are regenerated and verified by re-invoking this script's own tested paths, and
+# any failure restores every byte. The index is never touched at all -- this
+# stages nothing, so a refusal cannot leave a half-prepared commit either.
+#
+# What this does NOT do, and must not be described as doing: it does not gate
+# canonical main. Nothing stops a caller from hand-editing and pushing exactly as
+# before. That gate is the GitHub branch protection the Owner has yet to enable,
+# and until it is measured nobody may call the invariant enforced.
+# =============================================================================
+
+TXDIR=""
+tx_cleanup() { [ -n "$TXDIR" ] && rm -rf "$TXDIR"; TXDIR=""; }
+tx_die() {   # <message...>
+    tx_restore
+    echo "reviewctl: $*" >&2
+    tx_cleanup
+    exit 1
+}
+
+# Snapshot before touching. A file that does not exist yet is recorded as absent,
+# so restoring means deleting it -- a refusal must not leave a closure artifact
+# lying around any more than it may leave a half-written one.
+declare -a TX_FILES=()
+tx_guard() {   # <file...>
+    local f
+    for f in "$@"; do
+        TX_FILES+=("$f")
+        if [ -f "$f" ]; then
+            mkdir -p "$TXDIR/present/$(dirname "${f#$REPO/}")"
+            cp -p "$f" "$TXDIR/present/${f#$REPO/}"
+        else
+            mkdir -p "$TXDIR/absent"
+            printf '%s\n' "$f" >> "$TXDIR/absent/list"
+        fi
+    done
+}
+tx_restore() {
+    [ -n "$TXDIR" ] || return 0
+    local f
+    for f in "${TX_FILES[@]:-}"; do
+        [ -n "$f" ] || continue
+        if [ -f "$TXDIR/present/${f#$REPO/}" ]; then
+            cp -p "$TXDIR/present/${f#$REPO/}" "$f"
+        elif [ -f "$TXDIR/absent/list" ] && grep -qxF "$f" "$TXDIR/absent/list"; then
+            rm -f "$f"
+        fi
+    done
+}
+
+tx_sha_ok() {   # <label> <value> -- canonical AND reachable, or refuse
+    local label="$1" sha="$2" g ref
+    case "$sha" in
+        '') tx_die "$label is required and must be a full 40-character commit id" ;;
+        *[!0-9a-f]*) tx_die "$label names '$sha', which is not a lowercase 40-character commit id -- protocol headers are durable audit facts and must be canonical" ;;
+    esac
+    [ "${#sha}" -eq 40 ] || tx_die "$label names '$sha', an abbreviated commit id (${#sha} chars) -- write the full 40-character SHA, or state equality cannot be decided"
+    g="$(gitrepo)"
+    git -C "$g" rev-parse --show-toplevel >/dev/null 2>&1 \
+        || tx_die "$label names $sha but there is no git repository to resolve it against; refusing to write an unverifiable commit reference"
+    git -C "$g" cat-file -e "${sha}^{commit}" 2>/dev/null \
+        || tx_die "$label names $sha, which is not a commit in this repository"
+    ref="$(pubref)"
+    git -C "$g" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null \
+        || tx_die "$label names $sha, which is a commit but is not reachable from $ref -- unpushed, or rewritten and orphaned"
+}
+
+# The compare-and-swap half. `--expected-parent` is the caller's statement of the
+# published state it computed its request against; if the branch has moved, the
+# request was computed against facts that no longer hold and it loses.
+tx_expect_parent() {   # <sha>
+    local sha="$1" g ref tip
+    tx_sha_ok "--expected-parent" "$sha"
+    g="$(gitrepo)"; ref="$(pubref)"
+    tip="$(git -C "$g" rev-parse "$ref" 2>/dev/null)"
+    [ "$tip" = "$sha" ] || tx_die "--expected-parent names $sha but $ref is at ${tip:-<unknown>} -- the published state moved after this request was computed; recompute it against the current head rather than publishing against a stale one"
+}
+
+tx_rev_id() {   # <rev>
+    case "$1" in
+        REV-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9]) ;;
+        *) tx_die "'$1' is not a REV id (expected REV-YYYYMMDD-NNN)" ;;
+    esac
+}
+
+# Replace exactly one machine header in place, or refuse. Never touches prose:
+# the sed is anchored to the whole header line, so nothing else in the file can
+# match, and a missing header is a refusal rather than an append.
+tx_set_header() {   # <file> <field> <value>
+    local f="$1" field="$2" val="$3" tmp
+    grep -q "^<!-- $field: .* -->$" "$f" \
+        || tx_die "$f has no '$field' machine header to set -- refusing to invent one in a role artifact"
+    tmp="$TXDIR/h.$$"
+    sed "s|^<!-- $field: .* -->$|<!-- $field: $val -->|" "$f" > "$tmp" || tx_die "could not rewrite $field in $f"
+    cat "$tmp" > "$f"
+}
+
+# Regenerate and verify through this script's own tested paths, in a child
+# process so nothing here inherits half-collected state.
+tx_regenerate_and_verify() {
+    local out
+    if ! out="$("$0" --generate 2>&1)"; then
+        tx_die "the transition does not derive cleanly, so it is not published: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"
+    fi
+    "$0" --verify >/dev/null 2>&1 \
+        || tx_die "generated views do not agree with the artifacts after the write -- refusing to leave a state that --verify would reject"
+}
+
+tx_begin() {
+    TXDIR="$(mktemp -d)" || { echo "reviewctl: mktemp failed" >&2; exit 1; }
+    TX_FILES=()
+}
+
+tx_approve() {   # <rev> <impl-sha> <expected-parent>
+    local rev="$1" impl="$2" parent="$3"
+    tx_rev_id "$rev"
+    local rfile="$RDIR/$rev.md"
+    [ -f "$rfile" ] || tx_die "$rev: no review artifact at ${rfile#$REPO/}"
+    tx_sha_ok "--implementation" "$impl"
+    tx_expect_parent "$parent"
+
+    # Approval names the response's CURRENT implementation, never an older one.
+    # This is the REV-120 failure in one line: the closure prose approved 46c13a6
+    # while the header still pointed at the round-1 SHA.
+    local pfile pimpl
+    pfile="$REPO/$(hdr "$rfile" response)"
+    [ -f "$pfile" ] || tx_die "$rev: the review names response '$(hdr "$rfile" response)', which does not exist -- there is nothing to approve"
+    pimpl="$(hdr "$pfile" implementation)"
+    [ -n "$pimpl" ] || tx_die "$rev: the response carries no implementation header -- nothing has been submitted to approve"
+    [ "$pimpl" = "$impl" ] || tx_die "$rev: --implementation is $impl but the response currently submits $pimpl -- approve what was submitted, or ask for a resubmission"
+
+    # Idempotent replay: the same approval twice is a no-op success, not a second
+    # write and not an error.
+    if [ "$(hdr "$rfile" verdict)" = "APPROVED" ] && [ "$(hdr "$rfile" reviewed-implementation)" = "$impl" ]; then
+        echo "reviewctl: $rev is already APPROVED at $impl -- nothing to do"
+        return 0
+    fi
+
+    tx_guard "$rfile" "$DELIVERIES" "$LEDGER" "$THREADS"
+    tx_set_header "$rfile" verdict APPROVED
+    tx_set_header "$rfile" reviewed-implementation "$impl"
+
+    # First review makes the delivery acknowledgement PERMANENT. reviewed-implementation
+    # is a moving pointer, so a delivery cleared only by it reappears as unreviewed
+    # the moment the thread advances -- the defect REV-20260809-080 already fixed
+    # for the reader. The writer must not recreate it.
+    if [ -f "$DELIVERIES" ] && grep -q "^<!-- delivered: $impl " "$DELIVERIES" \
+       && ! grep -q "^<!-- reviewed-by: $impl" "$DELIVERIES"; then
+        printf '<!-- reviewed-by: %s reviewed under %s -->\n' "$impl" "$rev" >> "$DELIVERIES"
+    fi
+
+    tx_regenerate_and_verify
+    echo "reviewctl: $rev APPROVED at $impl (parent $parent)"
+    echo 'reviewctl: commit the result -- "close" will require that commit id.'
+}
+
+tx_close() {   # <rev> <approval-commit> <expected-parent>
+    local rev="$1" acommit="$2" parent="$3"
+    tx_rev_id "$rev"
+    local rfile="$RDIR/$rev.md"
+    [ -f "$rfile" ] || tx_die "$rev: no review artifact at ${rfile#$REPO/}"
+    tx_sha_ok "--approval-commit" "$acommit"
+    tx_expect_parent "$parent"
+
+    [ "$(hdr "$rfile" verdict)" = "APPROVED" ] \
+        || tx_die "$rev: verdict is '$(hdr "$rfile" verdict)', not APPROVED -- a closure without an approval is exactly the state that made REV-120/121 underivable"
+
+    # The named commit must PROVABLY be the approval: at that commit the review
+    # already said APPROVED for the implementation it still names. A closure that
+    # merely points at some reachable commit proves nothing.
+    local g shown
+    g="$(gitrepo)"
+    shown="$(git -C "$g" show "$acommit:docs/internal/reviews/$rev.md" 2>/dev/null \
+             | sed -n 's|^<!-- verdict: *\([^ ][^>]*[^ ]\) *-->$|\1|p' | head -1)"
+    [ "$shown" = "APPROVED" ] \
+        || tx_die "$rev: --approval-commit $acommit does not carry an APPROVED verdict for this review (it says '${shown:-<no header>}') -- name the commit that published the approval"
+
+    local cdir="$RDIR/closures" cfile="$RDIR/closures/$rev.md"
+    if [ -f "$cfile" ] && [ "$(hdr "$cfile" closed-by)" = "$acommit" ]; then
+        echo "reviewctl: $rev is already closed by $acommit -- nothing to do"
+        return 0
+    fi
+    [ -f "$cfile" ] && tx_die "$rev: a closure already exists naming $(hdr "$cfile" closed-by) -- refusing to overwrite a published closure with a different one"
+
+    tx_guard "$cfile" "$LEDGER" "$THREADS"
+    mkdir -p "$cdir"
+    {
+        printf '<!-- rev: %s -->\n' "$rev"
+        printf '<!-- closed-by: %s -->\n' "$acommit"
+        printf '\n# Closure — %s\n\n' "$rev"
+        printf 'APPROVED and CLOSED. The approval is commit `%s`; the implementation it\n' "$acommit"
+        printf 'approved is `%s`.\n\n' "$(hdr "$rfile" reviewed-implementation)"
+        printf 'Written by `reviewctl close`. Reviewer prose may be added below this line;\n'
+        printf 'the machine headers above are the durable facts.\n'
+    } > "$cfile"
+
+    tx_regenerate_and_verify
+    echo "reviewctl: $rev CLOSED by $acommit (parent $parent)"
+}
+
+# ---- argument parsing for the writers ---------------------------------------
+# Foreign flags are refused rather than ignored, and the two operations cannot be
+# combined: `approve` does not accept --approval-commit and `close` does not
+# accept --implementation, so the request that produced REV-120/121 has no
+# spelling here.
+if [ "${1:-}" = "approve" ] || [ "${1:-}" = "close" ]; then
+    tx_op="$1"; shift
+    tx_rev="${1:-}"; shift || true
+    [ -n "$tx_rev" ] || { echo "usage: $0 $tx_op REV --implementation|--approval-commit SHA --expected-parent SHA" >&2; exit 1; }
+    tx_impl=""; tx_acommit=""; tx_parent=""
+    tx_begin
+    for a in "$@"; do
+        case "$a" in
+            --implementation=*)   [ "$tx_op" = approve ] || tx_die "close does not take --implementation; closure names the approval commit, not the implementation"
+                                  tx_impl="${a#*=}" ;;
+            --approval-commit=*)  [ "$tx_op" = close ]   || tx_die "approve does not take --approval-commit; approval and closure are separate publications"
+                                  tx_acommit="${a#*=}" ;;
+            --expected-parent=*)  tx_parent="${a#*=}" ;;
+            *) tx_die "unknown option '$a'" ;;
+        esac
+    done
+    if [ "$tx_op" = approve ]; then tx_approve "$tx_rev" "$tx_impl" "$tx_parent"
+    else                            tx_close   "$tx_rev" "$tx_acommit" "$tx_parent"; fi
+    tx_cleanup
+    exit 0
+fi
+
 MODE=""
 case "${1:-}" in
     --generate|--verify|--migrate) MODE="${1#--}" ;;
-    *) echo "usage: $0 --generate | --verify | --migrate" >&2; exit 1 ;;
+    *) echo "usage: $0 --generate | --verify | --migrate | approve REV ... | close REV ..." >&2; exit 1 ;;
 esac
 
 collect
