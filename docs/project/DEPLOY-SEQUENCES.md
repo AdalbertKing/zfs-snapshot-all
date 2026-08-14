@@ -1,35 +1,38 @@
-# Deployment command sequences — today vs after profiles
+# Deployment command sequences
 
 Owner asked for the complete set, 2026-08-09. Taken from the tools' own help and
 code, not from memory. **Marked throughout: what runs today, what is proposed.**
 
-## A) Two hosts — TODAY (shipped)
+## A) Two hosts — normal path
 
 Collector `pve1`, target `hdd/backups`; source `pve2`, `rpool/data`.
 
 ```bash
 # --- on pve1 (collector) ---
-./zfs-backup.sh setup-server --target=hdd/backups
-./zfs-backup.sh add-client pve2 --lan=192.168.28.8:22 --mode=backup
+./zfs-backup.sh add-client pve2 --host=192.168.28.8:22 --target=hdd/backups
 
 # --- on pve2 (source), from its console ---
-./deploy.sh --join=/path/to/package.tgz     # account + key, ZERO zfs permissions
-./deploy.sh --draft-scope=pve1              # proposal from real ZFS
-#   ... edit the scope file ...
-./deploy.sh --commit-scope=pve1             # only now are zfs grants issued
+./deploy.sh --join=/path/to/package.tgz     # account/key + guided scope + grant
 
 # --- back on pve1 ---
 ./zfs-backup.sh seed pve2
-./zfs-backup.sh verify-endpoint pve2
-./zfs-backup.sh activate-client pve2        # cron is installed only here
+./zfs-backup.sh activate pve2               # verify + preview + cron install
 ```
 
 State: `pending_enroll -> seeding -> seed_complete -> endpoint_verified ->
 active`. **Cron exists only from `endpoint_verified`** — the same invariant
 REV-20260808-075 made me carry into the single-host path.
 
-Seeding over LAN and running over VPN adds `set-endpoint pve2 --host=<vpn>` and
-`final-catchup` between the seed and activation.
+Seeding over LAN and running over VPN changes only the final command:
+
+```bash
+./zfs-backup.sh activate pve2 --host=<vpn-host:port>
+```
+
+It owns the final catch-up, endpoint switch, verification and activation.
+`--draft-scope`, `--commit-scope`, `final-catchup`, `set-endpoint`,
+`verify-endpoint` and `activate-client` remain expert/resume primitives; they
+are not required on the normal path.
 
 ## B) One host — TODAY
 
@@ -58,14 +61,11 @@ same direction as the future orchestrator is the least it must do.
 Six steps, including writing a config from memory and a hand-run seed with no
 gate between it and the installed cron.
 
-## A) Two hosts — AFTER PROFILES (proposed)
+## A) Two hosts — profiles
 
-```bash
-./zfs-backup.sh add-client pve2 --lan=192.168.28.8:22 --mode=backup --profile=default
-```
-
-One flag. **Everything else is unchanged** — the profile replaces the hardcoded
-schedule/retention policy, not the enrolment flow.
+The default profile is implicit in the normal four-command path above. A named
+profile is still one optional argument on `add-client`; it does not create a
+second procedure.
 
 ## B) One host — AFTER PROFILES (proposed)
 
@@ -79,12 +79,9 @@ propose from the whole host), `--target` remembered after the first call.
 
 ## The number worth looking at
 
-Two-host changes by **one flag** after profiles, because the orchestration
-already exists. Single-host changes from **six manual steps to two**, because
-there is no orchestration there at all.
-
-That is the measure of what is left to build: not the profiles — the single-host
-layer.
+Two-host setup is four public commands, with the source-side choice contained
+inside the guided `--join`. The expert verbs remain available without being
+part of the ordinary procedure.
 
 ## Execution account is independent from the profile — owner-requested UX note
 
