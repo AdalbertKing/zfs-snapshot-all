@@ -72,29 +72,33 @@ Recommended branch names:
 - implementation: `fix/REV-YYYYMMDD-NNN-short-title`
 - maintenance not originating from a review: `maintenance/short-title`
 
-### Temporary owner-approved direct-main mode
+### Owner-approved branch-protected mode
 
-Active from **2026-07-29 until the owner explicitly revokes it**.
+Active from **2026-08-14**. The Owner explicitly revoked the temporary direct-main
+exception and approved both the transactional review publication core and GitHub
+branch protection for `main`.
 
-The owner has temporarily authorized Claude and ChatGPT to commit directly to `main` because:
+The normal workflow above is mandatory:
 
-1. four live test servers pull `main` every hour;
-2. the owner operates Claude Code and ChatGPT remotely from a smartphone and cannot reliably perform the manual Git and Pull Request steps.
+- every implementation, review publication and protocol change uses a short-lived
+  branch and Pull Request;
+- `main` advances only after the required graph/protocol verification succeeds;
+- approval and closure remain two separate publication boundaries;
+- ordinary work must not use administrator bypass, force-push or direct-main;
+- auto-merge may be used after required checks and review conditions pass;
+- phone operation is supported by automation around branches/PRs, not by weakening
+  the canonical-state gate.
 
-During this exception:
+The GitHub branch-protection setting may lag this rule briefly while a signed-in
+settings session is arranged. That is a deployment gap, not an extension of the
+old exception: agents must follow branch/PR publication immediately.
 
-- a branch and Pull Request are preferred when practical but are not required;
-- `main` is the live integration channel and the owner accepts the associated moving-main risk;
-- every commit must still be one reviewable logical change;
-- relevant tests must be run before push when the environment permits;
-- GitHub Actions on push is post-delivery evidence, not a pre-merge gate;
-- review findings and implementer responses must still be written under `docs/internal/reviews/`;
-- workflow state must follow `docs/project/PROTOCOL.md` and, after V2 cutover, the generated `REVIEW_LEDGER.md`;
-- the implementer must not approve or close own findings; the reviewer owns technical approval/closure;
-- no force-push, history rewrite, silent fixture blessing, or weakening of safety checks is permitted;
-- any direct-main change that fails review must be corrected by a new forward commit, never by rewriting published history.
-
-This exception changes delivery mechanics only. It does not waive testing, evidence, review, or safety requirements.
+Historical note: direct-main was temporarily authorised from 2026-07-29 through
+2026-08-14 because four live test servers pulled `main` hourly and the Owner
+operated the agents remotely from a smartphone. It was revoked after REV-120/121
+proved that post-push CI can diagnose an inconsistent review transition but cannot
+prevent its publication. The transition decision is recorded in
+`docs/project/OWNER-DECISIONS.md`.
 
 ## Review artifacts and workflow state
 
