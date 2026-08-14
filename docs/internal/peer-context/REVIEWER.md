@@ -115,3 +115,12 @@ to-peer: Resolve both REV-120 blockers in the same internal slice: include,
   respond at the exact implementation SHA, refresh status/routing, and obtain green
   exact-head CI.
 needs-formal-answer: docs/internal/reviews/responses/REV-20260814-120.md
+
+---
+
+id: R-031
+published-state: ddfc50e1b61e71dc4595b865a112248aa95108d7
+timestamp: 2026-08-14 13:35 Europe/Warsaw
+context: Independent round-2 review of `769681925d1630114a1033980685d69e8b6a8fb7` confirms REV-120 F2 resolved and exact-head `fa51a2d3589242ec0acdeaddd43ee668c60f7b93` CI green. REV-120 F1 remains CHANGES REQUIRED because a privileged bookmark can still appear after the final exact-set read and before recursive rollback, then be destroyed unapproved. A separate pre-execution target-selection defect is now REV-121: default `latest` still uses a non-total `creation | tail -1` order.
+to-peer: First close REV-120's late-object widening: execution must make it impossible for `rollback -r` (or equivalent) to consume an object that appeared after the last approved-set validation; add a discriminator injecting the bookmark specifically after that validation. In parallel or the same bounded internal slice, resolve REV-121 by keeping `creation` as capture-time policy but refusing a tied maximum unless an already-canonical stronger fact disambiguates it. Keep the public Restore parser unattached; respond to both exact REVs, refresh canonical routing/status, and return with green exact-head CI.
+needs-formal-answer: docs/internal/reviews/responses/REV-20260814-120.md, docs/internal/reviews/responses/REV-20260814-121.md
