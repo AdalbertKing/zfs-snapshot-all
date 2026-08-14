@@ -6152,6 +6152,154 @@ else
     bad "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe" "data_bounded=$data_bounded data2_bounded=$data2_bounded"
 fi
 
+# --- 60. rendered profile artifacts must not be left in $TMPDIR ---------------
+#
+# load_active_profile allocates three mktemp files and, until this section
+# existed, never removed them. Measured on pve0 2026-08-14: 1824 rendered-profile
+# copies in /tmp, ~1800 per full run of THIS suite, because the suite drives its
+# profile loads inside `( ... )` subshells and each one leaked its three.
+#
+# The check is hermetic rather than a /tmp diff: every case runs with TMPDIR
+# pointed at its own empty directory, so "left nothing behind" is `ls` on that
+# directory and cannot be confused by another process's temporary files. mktemp
+# honours TMPDIR, which is what makes the isolation real.
+LK="$WORK/leak"
+mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
+cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
+   "$REPO/profiles/default/prune.inc" "$LK/root/prof/"
+# A profile that is COMPLETE (so it gets past the completeness check and reaches
+# lib-profile.sh's own mktemp'd schema dump) but INVALID: `src` is
+# relationship-owned and refused at the profile boundary.
+cp "$LK/root/prof"/* "$LK/root/bad/"
+printf 'src = zfsbackup@nope:x\n' >> "$LK/root/bad/dataset.inc"
+
+lk_env() {   # profile root + the env emit_client_sections/ensure_cron_config need
+    PROFILE_ROOT="$1" PROFILE_ACTIVE="$2" PROFILE_LOADED="" GENCRON="$REPO/gen-cron.sh" \
+    PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+    LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+    PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+    PROFILE_GFS=1 "$@"
+}
+lk_conf() { printf '[defaults]\n\thost_label = lktest\n' > "$1"; }
+
+# 1. the ordinary path: one load, one emission, nothing left behind.
+lk_conf "$LK/one.conf"
+n="$(rm -rf "$LK/tmp/one"; mkdir -p "$LK/tmp/one"
+     ( TMPDIR="$LK/tmp/one"; lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/one" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile-loading run leaves no file in TMPDIR"
+else
+    bad "60: a profile-loading run leaves no file in TMPDIR" "$n entr(ies) left: $(ls -1 "$LK/tmp/one" | tr '\n' ' ')"
+fi
+
+# 2. POSITIVE CONTROL. The same body with the release defeated must leave the
+#    three files -- otherwise case 1 proves only that the check cannot see.
+n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
+     ( TMPDIR="$LK/tmp/ctl"
+       profile_release_tmp() { :; }; _profile_arm_release() { :; }
+       lk_env "$LK/root/prof" prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 3 ]; then
+    ok "60: control -- with the release defeated the same run leaks exactly 3 (the check discriminates)"
+else
+    bad "60: control -- with the release defeated the same run leaks exactly 3" "left=$n (expected the pre-fix leak)"
+fi
+
+# 3. TWO loads in one shell. A trap alone cannot fix this: it fires once, on the
+#    LAST allocation, and the first three would survive. Pins the release that
+#    load_active_profile does before it re-renders.
+lk_conf "$LK/two.conf"
+n="$(rm -rf "$LK/tmp/two"; mkdir -p "$LK/tmp/two"
+     ( TMPDIR="$LK/tmp/two"
+       lk_env "$LK/root/prof" prof ensure_cron_config "$LK/two.conf" 1 1
+       lk_env "$LK/root/prof" prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/two" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: two loads in one shell leave nothing (the re-render releases the first set)"
+else
+    bad "60: two loads in one shell leave nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/two" | tr '\n' ' ')"
+fi
+
+# 4. The `die` path. zfs-backup.sh dies in several places after these files are
+#    allocated, so a delete at the end of the happy path would not have been a
+#    fix at all. `die` exits, which is what the EXIT trap is for.
+n="$(rm -rf "$LK/tmp/die"; mkdir -p "$LK/tmp/die"
+     ( TMPDIR="$LK/tmp/die"
+       lk_env "$LK/root/prof" prof load_active_profile
+       die "simulated post-load failure" ) >/dev/null 2>&1
+     find "$LK/tmp/die" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a die() after the profile is loaded still leaves nothing"
+else
+    bad "60: a die() after the profile is loaded still leaves nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/die" | tr '\n' ' ')"
+fi
+
+# 5. lib-profile.sh's own mktemp'd schema dump, on the path that FAILS
+#    validation -- the branch where a leak would be easiest to miss, because the
+#    run is already on its way to dying.
+n="$(rm -rf "$LK/tmp/inv"; mkdir -p "$LK/tmp/inv"
+     ( TMPDIR="$LK/tmp/inv"
+       lk_env "$LK/root/bad" bad load_active_profile ) >/dev/null 2>&1
+     find "$LK/tmp/inv" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile REFUSED by the boundary leaves no schema dump behind (lib-profile.sh)"
+else
+    bad "60: a profile REFUSED by the boundary leaves no schema dump behind" "$n entr(ies) left: $(ls -1 "$LK/tmp/inv" | tr '\n' ' ')"
+fi
+# and the refusal is the reason it stopped, not some unrelated failure
+out="$( ( PROFILE_ROOT="$LK/root/bad" PROFILE_ACTIVE=bad PROFILE_LOADED="" \
+          GENCRON="$REPO/gen-cron.sh" load_active_profile ) 2>&1 )"
+if printf '%s' "$out" | grep -q "relationship-owned"; then
+    ok "60: control -- that profile is refused for the boundary reason, not an unrelated one"
+else
+    bad "60: control -- that profile is refused for the boundary reason" "out=$out"
+fi
+
+# 6. A real EXECUTED invocation, not a sourced function: same process lifetime a
+#    host actually sees.
+n="$(rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
+     TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=bad \
+       CRON_CONFIG="$LK/one.conf" CLIENTS_DIR="$LK/clients" \
+       bash "$ZFSBACKUP" migrate-profile --yes >/dev/null 2>&1
+     find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: an executed zfs-backup.sh invocation leaves nothing in TMPDIR"
+else
+    bad "60: an executed zfs-backup.sh invocation leaves nothing in TMPDIR" "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')"
+fi
+
+# 7. Refusing to clobber somebody else's EXIT trap. Sourcing consumers own their
+#    own cleanup; silently replacing it would trade this leak for a worse one.
+#    The refusal has to NAME the files, or it is a silent leak with extra steps.
+out="$( ( TMPDIR="$LK/tmp/trap"; mkdir -p "$LK/tmp/trap"
+          trap 'echo FOREIGN-TRAP-RAN' EXIT
+          lk_env "$LK/root/prof" prof load_active_profile ) 2>&1 )"
+if printf '%s' "$out" | grep -q 'FOREIGN-TRAP-RAN' \
+        && printf '%s' "$out" | grep -q 'EXIT trap belonging to something else' \
+        && printf '%s' "$out" | grep -qF "$LK/tmp/trap/"; then
+    ok "60: an existing EXIT trap is preserved and the un-released files are named"
+else
+    bad "60: an existing EXIT trap is preserved and the un-released files are named" "out=$out"
+fi
+
+# 8. The release reports a failure it cannot fix instead of swallowing it
+#    (REV-20260813-119 F1.4): a file it cannot remove must be named and must
+#    make the helper return non-zero.
+if [ "$(id -u)" -eq 0 ]; then
+    ok "60: SKIPPED as root -- an unremovable file cannot be staged (root ignores directory mode)"
+else
+    UD="$LK/undel"; mkdir -p "$UD"; : > "$UD/stuck"; chmod 0500 "$UD"
+    out="$( PROFILE_TPL_FILE="$UD/stuck" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+            profile_release_tmp 2>&1 )"; rc=$?
+    chmod 0700 "$UD"
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "$UD/stuck"; then
+        ok "60: a removal it cannot do is reported with the path and returns non-zero"
+    else
+        bad "60: a removal it cannot do is reported with the path and returns non-zero" "rc=$rc out=$out"
+    fi
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

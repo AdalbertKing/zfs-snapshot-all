@@ -713,8 +713,68 @@ SOURCE_PRUNE_EMITTED_DS=()
 # and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
 declare -A SOURCE_PRUNE_PRESERVED=()
 
+# Remove the rendered artifacts and REPORT what it could not remove.
+#
+# A cleanup that cannot admit its own failure launders the leftover
+# (REV-20260813-119 F1.4), so this verifies the removal instead of trusting
+# `rm -f`'s status -- `rm -f` is silent about a file it never had to touch and
+# about one an unreadable-directory mode leaves in place. The warning names the
+# exact surviving paths, because "some temporary file leaked" is not something
+# an operator can act on.
+#
+# It does NOT turn a successful run into a failed one. Nothing this tool tells
+# the operator -- what was installed, what was pruned, what the peer now holds
+# -- becomes untrue because a scratch file in $TMPDIR survived. Flipping the
+# status would report the transaction as failed when it succeeded, which is the
+# larger lie. The warning is the report.
+profile_release_tmp() {
+    local f left=""
+    for f in "$PROFILE_TPL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
+        [ -n "$f" ] || continue
+        rm -f "$f" 2>/dev/null
+        [ -e "$f" ] && left="$left $f"
+    done
+    PROFILE_TPL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
+    if [ -n "$left" ]; then
+        warn "could not remove the rendered profile file(s):$left -- they are still in place"
+        return 1
+    fi
+    return 0
+}
+
+# The EXIT trap preserves the status the shell was already exiting with: the
+# leak is a scratch-file problem, not a verdict on the run.
+_profile_release_on_exit() { local rc=$?; profile_release_tmp; return "$rc"; }
+
+# Arm the trap in THIS shell, at load time -- not at file scope.
+#
+# Bash resets traps in a subshell, so a file-scope trap would never fire for a
+# profile loaded inside `( ... )`, and that is exactly where the measured leak
+# came from: test/zfsbackup/run.sh drives its profile loads in subshells, and
+# 2026-08-14 found 1824 rendered-profile copies in pve0's /tmp from two days of
+# suite runs. Arming here covers every shell that actually renders a profile --
+# the real invocation, and each subshell.
+#
+# zfs-backup.sh installs no other EXIT trap anywhere, so there is nothing to
+# chain. If a future consumer sources this file and brings its own, this refuses
+# to overwrite it and says so with the paths: silently replacing another owner's
+# cleanup would trade this leak for a worse one.
+_profile_arm_release() {
+    local cur; cur="$(trap -p EXIT)"
+    case "$cur" in
+        "") trap _profile_release_on_exit EXIT ;;
+        *_profile_release_on_exit*) : ;;
+        *) warn "an EXIT trap belonging to something else is already installed here, so the rendered profile files will not be removed by this script: $PROFILE_TPL_FILE $PROFILE_DS_FILE $PROFILE_PRUNE_FILE" ;;
+    esac
+}
+
 load_active_profile() {
     [ -n "$PROFILE_LOADED" ] && return 0
+    # A caller that cleared PROFILE_LOADED to re-render is about to overwrite
+    # these three variables; the files they point at have to go first or the
+    # trap can only ever reach the LAST set. The suite reloads inside one
+    # subshell, so this is a live path, not a defensive nicety.
+    profile_release_tmp
     local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
     # Validate before rendering. A profile that carries relationship-owned
     # fields must never reach a config, and finding that out from gen-cron
@@ -723,6 +783,7 @@ load_active_profile() {
     PROFILE_TPL_FILE=$(mktemp)   || die "mktemp failed"
     PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
     PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"
+    _profile_arm_release
     profile_render_templates "$dir" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     profile_render_fragment "$dir/dataset.inc" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     profile_render_fragment "$dir/prune.inc" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
