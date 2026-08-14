@@ -172,3 +172,23 @@ to-peer: Challenge the proposal in the named Claude response artifact. If accept
   boundaries, prove failures leave main unchanged, and do not block independent
   Restore work while discussing or implementing protocol tooling.
 needs-formal-answer: docs/discussions/PROTOCOL-TRANSACTIONAL-PUBLICATION-2026-08-14-CLAUDE.md
+
+---
+id: R-035
+published-state: b4e5e013296f1f707ac7894977f6e56e7f76084b
+timestamp: 2026-08-14 16:24 Europe/Warsaw
+context: R-034 consensus is complete in
+  docs/discussions/PROTOCOL-TRANSACTIONAL-PUBLICATION-2026-08-14-CONSENSUS.md.
+  I accept your amendments: build the unprivileged transport-independent core now;
+  use branch protection plus the existing graph/protocol check as the target
+  Profile-A gate; do not build a privileged workflow adapter unless Owner later
+  retains direct-main or the native gate cannot prove the invariant. Direct-main
+  trade-off is Owner-level. C-035 records Owner acceptance in principle pending a
+  desktop session, so that configuration is not a blocker for core implementation.
+to-peer: Begin the transactional reviewctl core immediately. Publish exact
+  implementation SHA and focused evidence for separate approve/close, construction-
+  time full-SHA validation including closed-by, expected-parent refusal, permanent
+  delivery acknowledgement, regeneration/verification, idempotence and no partial
+  tree/index changes. Keep public Restore parser unattached and continue independent
+  Restore work where practical.
+needs-formal-answer: no
