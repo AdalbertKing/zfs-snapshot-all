@@ -705,6 +705,10 @@ PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
+# BASHPID of the shell whose EXIT trap holds the release. Inherited by a
+# subshell like any other variable, which is the point: the comparison against
+# the subshell's own BASHPID is what tells it the trap is NOT armed there.
+PROFILE_TRAP_PID=""
 # Source datasets that emit_client_sections wrote a REMOTE [prune:] for this run;
 # the flow grant-checks exactly these before publishing (REV-20260811-102 step 3).
 SOURCE_PRUNE_EMITTED_DS=()
@@ -755,17 +759,28 @@ _profile_release_on_exit() { local rc=$?; profile_release_tmp; return "$rc"; }
 # suite runs. Arming here covers every shell that actually renders a profile --
 # the real invocation, and each subshell.
 #
-# zfs-backup.sh installs no other EXIT trap anywhere, so there is nothing to
-# chain. If a future consumer sources this file and brings its own, this refuses
-# to overwrite it and says so with the paths: silently replacing another owner's
-# cleanup would trade this leak for a worse one.
+# BASHPID, not `trap -p`, decides whether this shell is already armed. Measured
+# on bash 5.1.4: inside a subshell `trap -p EXIT` REPORTS an ancestor's action
+# string even though that trap is not armed there and will not run there. A
+# first version asked `trap -p` whether somebody else owned EXIT, read the
+# suite's own parent trap in every subshell, concluded it should keep its hands
+# off, and armed nothing -- the leak survived the fix and only the positive
+# control caught it. BASHPID differs in every subshell, so keying on it asks the
+# question that can actually be answered: did *this* shell arm it.
+#
+# That same measurement is why the foreign trap is REPLACED rather than chained.
+# Chaining would mean re-running a reported action that may belong to an
+# ancestor -- in the suite's case `rm -rf "$WORK"`, executed inside every
+# subshell, destroying the fixtures of a run still in progress. Replacing is the
+# lesser failure and it is bounded: zfs-backup.sh installs no EXIT trap of its
+# own anywhere, so nothing inside this program is ever displaced. A consumer
+# that SOURCES this file and loads a profile in its own shell owns the
+# composition, and calls profile_release_tmp from its own trap; the one such
+# consumer, test/zfsbackup/run.sh, does exactly that.
 _profile_arm_release() {
-    local cur; cur="$(trap -p EXIT)"
-    case "$cur" in
-        "") trap _profile_release_on_exit EXIT ;;
-        *_profile_release_on_exit*) : ;;
-        *) warn "an EXIT trap belonging to something else is already installed here, so the rendered profile files will not be removed by this script: $PROFILE_TPL_FILE $PROFILE_DS_FILE $PROFILE_PRUNE_FILE" ;;
-    esac
+    [ "${PROFILE_TRAP_PID:-}" = "$BASHPID" ] && return 0
+    trap _profile_release_on_exit EXIT
+    PROFILE_TRAP_PID="$BASHPID"
 }
 
 load_active_profile() {

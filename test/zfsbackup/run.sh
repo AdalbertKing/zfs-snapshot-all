@@ -19,7 +19,12 @@ ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# profile_release_tmp: this suite SOURCES zfs-backup.sh, so any profile it loads
+# in this very shell (rather than in one of the `( ... )` subshells below) is
+# this shell's to release -- zfs-backup.sh arms its own EXIT trap only in the
+# shell that rendered the profile, and will not displace the trap of a consumer
+# that sourced it. Defined later in the file; by EXIT it exists.
+trap 'profile_release_tmp; rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
@@ -6313,18 +6318,35 @@ else
         "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')" "out=$xout"
 fi
 
-# 7. Refusing to clobber somebody else's EXIT trap. Sourcing consumers own their
-#    own cleanup; silently replacing it would trade this leak for a worse one.
-#    The refusal has to NAME the files, or it is a silent leak with extra steps.
-out="$( ( export TMPDIR="$LK/tmp/trap"; mkdir -p "$LK/tmp/trap"
-          trap 'echo FOREIGN-TRAP-RAN' EXIT
-          lk_env prof load_active_profile ) 2>&1 )"
-if printf '%s' "$out" | grep -q 'FOREIGN-TRAP-RAN' \
-        && printf '%s' "$out" | grep -q 'EXIT trap belonging to something else' \
-        && printf '%s' "$out" | grep -qF "$LK/tmp/trap/"; then
-    ok "60: an existing EXIT trap is preserved and the un-released files are named"
+# 7. Arming is decided by BASHPID, never by `trap -p`.
+#
+#    Measured on bash 5.1.4: inside a subshell `trap -p EXIT` reports an
+#    ANCESTOR's action string although that trap is not armed there. The first
+#    version of the fix used `trap -p` to avoid clobbering a foreign owner,
+#    therefore read this suite's own parent trap in every subshell, declined to
+#    arm, and leaked exactly as before. This pins the discriminator: a subshell
+#    running under an ancestor EXIT trap must STILL release.
+n="$(rm -rf "$LK/tmp/anc"; mkdir -p "$LK/tmp/anc"
+     ( export TMPDIR="$LK/tmp/anc"
+       trap 'echo ancestor-action >/dev/null' EXIT   # armed in THIS shell...
+       ( lk_env prof load_active_profile )           # ...but not in this one
+     ) >/dev/null 2>&1
+     find "$LK/tmp/anc" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)"
 else
-    bad "60: an existing EXIT trap is preserved and the un-released files are named" "out=$out"
+    bad "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/anc" | tr '\n' ' ')"
+fi
+# and the ancestor's own trap is untouched: it is still what runs at ITS exit,
+# not something the profile load replaced.
+out="$( ( trap 'echo ANCESTOR-RAN' EXIT
+          ( export TMPDIR="$LK/tmp/anc"; lk_env prof load_active_profile ) >/dev/null 2>&1
+          : ) 2>&1 )"
+if [ "$out" = "ANCESTOR-RAN" ]; then
+    ok "60: control -- the ancestor's EXIT trap still runs at its own exit"
+else
+    bad "60: control -- the ancestor's EXIT trap still runs at its own exit" "out=$out"
 fi
 
 # 8. The release reports a failure it cannot fix instead of swallowing it
