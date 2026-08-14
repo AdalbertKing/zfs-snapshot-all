@@ -56,6 +56,141 @@ for bad_name in "" "pve2/x" "pve2 x" 'pve2;rm' "pve2\`id\`"; do
     if client_name_valid "$bad_name"; then bad "client_name_valid rejects '$bad_name'" "accepted"; else ok "client_name_valid rejects '$bad_name'"; fi
 done
 
+# --- 1b. simple two-server public flow ---------------------------------------
+# add-client's ordinary form accepts --host and injects mode=backup itself.
+# This drives the real command function with only deploy.sh stubbed: no root,
+# network or ZFS, but the exact package-building arguments and durable client
+# record are observed.
+SF="$WORK/simpleflow"; mkdir -p "$SF/clients" "$SF/relationships" "$SF/pve-nodes"
+SF_DEPLOY="$SF/deploy-stub.sh"
+cat > "$SF_DEPLOY" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SIMPLE_FLOW_PAIR_LOG"
+exit 0
+EOF
+chmod +x "$SF_DEPLOY"
+export SIMPLE_FLOW_PAIR_LOG="$SF/pair.log"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$SF/clients"
+    RELATIONSHIPS_DIR="$SF/relationships"
+    PVE_NODES_DIR="$SF/pve-nodes"
+    DEPLOY="$SF_DEPLOY"
+    cmd_add_client pve2 --host=192.168.28.8:22 --target=hdd/backups
+) 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && grep -q -- '--peer=192.168.28.8' "$SF/pair.log" \
+        && grep -q -- '--mode=backup' "$SF/pair.log" \
+        && grep -q '^STATE=pending_enroll$' "$SF/clients/pve2.conf" \
+        && grep -qF 'ACTIVE_ENDPOINT=192.168.28.8:22' "$SF/clients/pve2.conf"; then
+    ok "simple flow: add-client --host defaults to backup and writes pending relationship"
+else
+    bad "simple flow: add-client --host defaults to backup and writes pending relationship" "rc=$rc out=$out pair=$(cat "$SF/pair.log" 2>/dev/null) record=$(cat "$SF/clients/pve2.conf" 2>/dev/null)"
+fi
+
+pair_lines_before=$(wc -l < "$SF/pair.log")
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$SF/clients-invalid"
+    DEPLOY="$SF_DEPLOY"
+    cmd_add_client badhost --host='bad;host' --target=hdd/backups
+) 2>&1)"; rc=$?
+pair_lines_after=$(wc -l < "$SF/pair.log")
+if [ "$rc" -ne 0 ] && [ "$pair_lines_before" = "$pair_lines_after" ] \
+        && printf '%s' "$out" | grep -q 'invalid endpoint host'; then
+    ok "simple flow: an unsafe --host fails before pairing (no command-substitution fail-open)"
+else
+    bad "simple flow: an unsafe --host fails before pairing (no command-substitution fail-open)" "rc=$rc before=$pair_lines_before after=$pair_lines_after out=$out"
+fi
+
+# Stub only the child-process boundary used by cmd_activate. Each simulated
+# low-level command commits the same durable state fact as its real counterpart,
+# so the orchestrator must choose the correct next step by rereading the file.
+simple_flow_activate() {   # <client-file> <requested-host?>
+    local record="$1" host="${2:-}" logf="$3"
+    (
+        CLIENTS_DIR="$(dirname "$record")"
+        activation_step() {
+            local resume="$1"; shift
+            printf '%s\n' "$*" >> "$logf"
+            local cmd="$1"; shift
+            local STATE="" ACTIVE_ENDPOINT=""; . "$record"
+            case "$cmd" in
+                final-catchup)
+                    printf 'FINAL_CATCHUP_ENDPOINT=%s\nFINAL_CATCHUP_EPOCH=%s\n' \
+                        "$ACTIVE_ENDPOINT" "$(date '+%s')" >> "$record" ;;
+                set-endpoint)
+                    local arg new=""
+                    for arg in "$@"; do case "$arg" in --host=*) new="${arg#*=}" ;; esac; done
+                    printf 'ACTIVE_ENDPOINT=%s\nSTATE=seed_complete\n' "$new" >> "$record" ;;
+                verify-endpoint)
+                    printf 'STATE=endpoint_verified\nENDPOINT_VERIFIED_FOR=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
+                activate-client)
+                    printf 'STATE=active\nINSTALLED_ENDPOINT=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
+                *) return 99 ;;
+            esac
+        }
+        if [ -n "$host" ]; then
+            cmd_activate pve2 --host="$host" --yes
+        else
+            cmd_activate pve2 --yes
+        fi
+    )
+}
+
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=seed_complete
+EOF
+: > "$SF/activate-lan-vpn.log"
+out="$(simple_flow_activate "$SF/clients/pve2.conf" vpn.example:2222 "$SF/activate-lan-vpn.log" 2>&1)"; rc=$?
+want=$'final-catchup pve2 --yes\nset-endpoint pve2 --host=vpn.example:2222\nverify-endpoint pve2\nactivate-client pve2 --yes'
+got="$(cat "$SF/activate-lan-vpn.log")"
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ] \
+        && grep -q '^STATE=active$' "$SF/clients/pve2.conf" \
+        && grep -q '^INSTALLED_ENDPOINT=vpn.example:2222$' "$SF/clients/pve2.conf"; then
+    ok "simple flow: activate LAN-to-VPN owns catch-up, switch, verify and install"
+else
+    bad "simple flow: activate LAN-to-VPN owns catch-up, switch, verify and install" "rc=$rc got=[$got] out=$out record=$(cat "$SF/clients/pve2.conf")"
+fi
+
+before="$(cat "$SF/activate-lan-vpn.log")"
+out="$(simple_flow_activate "$SF/clients/pve2.conf" vpn.example:2222 "$SF/activate-lan-vpn.log" 2>&1)"; rc=$?
+after="$(cat "$SF/activate-lan-vpn.log")"
+if [ "$rc" -eq 0 ] && [ "$before" = "$after" ]; then
+    ok "simple flow: repeating completed activate is a no-op (no duplicate steps)"
+else
+    bad "simple flow: repeating completed activate is a no-op (no duplicate steps)" "rc=$rc before=[$before] after=[$after] out=$out"
+fi
+
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=seed_complete
+EOF
+: > "$SF/activate-same.log"
+out="$(simple_flow_activate "$SF/clients/pve2.conf" "" "$SF/activate-same.log" 2>&1)"; rc=$?
+got="$(cat "$SF/activate-same.log")"
+want=$'verify-endpoint pve2\nactivate-client pve2 --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "simple flow: same-endpoint activate skips catch-up/switch and completes"
+else
+    bad "simple flow: same-endpoint activate skips catch-up/switch and completes" "rc=$rc got=[$got] out=$out"
+fi
+
+if activation_is_new_relationship endpoint_verified "" \
+        && ! activation_is_new_relationship endpoint_verified "192.168.28.8:22" \
+        && ! activation_is_new_relationship active "192.168.28.8:22"; then
+    ok "simple flow: endpoint re-verification does not regenerate installed policy as a new relationship"
+else
+    bad "simple flow: endpoint re-verification does not regenerate installed policy as a new relationship" "new/reactivation discriminator is wrong"
+fi
+
 # --- 2. peer_label matches deploy.sh's own -----------------------------------
 # deploy.sh's peer_label() is `tr -c 'A-Za-z0-9._-' '-'` on $PEER_HOST -- this
 # is the exact string this repo grep-checked in deploy.sh; kept identical here
@@ -3427,9 +3562,8 @@ mode_rc() { ( cmd_add_client "modeclient" --lan=10.0.0.1 "$@" ) >/dev/null 2>&1;
 [ "$(mode_rc --mode=sync --target=tank/y)" != 0 ] \
     && ok "add-client: --mode=sync refuses an explicit --target" \
     || bad "add-client: --mode=sync refuses an explicit --target" "accepted both"
-[ "$(mode_rc)" != 0 ] \
-    && ok "add-client: neither --datasets nor --mode is refused" \
-    || bad "add-client: neither --datasets nor --mode is refused" "accepted neither"
+# Omitted mode/datasets is the normal backup path now; section 1b drives that
+# accepted case through a stubbed deploy.sh and asserts --mode=backup exactly.
 
 # --- 38. endpoint model (REV-20260802-033 slice 7 / F4) ---------------------
 #

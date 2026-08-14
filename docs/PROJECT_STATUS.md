@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8c1b87847b8f9085 -->
+<!-- status-covers-digest: ca041deb637fab36 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,8 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- Bieżąca dostawa dla issue #9: **prosty przepływ dwuserwerowy** — `add-client --host` (domyślny backup), jeden prowadzony `deploy.sh --join` na źródle, jawny `seed` i jeden `activate` na kolektorze. Join odkrywa ZFS, pokazuje zakres, pozwala zaakceptować/edytować i nadaje grant; activate składa końcowy catch-up, opcjonalną zmianę adresu, weryfikację oraz podgląd i transakcyjną instalację crona. Retry wznawia z trwałego stanu; ukończona aktywacja jest no-op. Lokalne dowody: guided join 14/14, zfsbackup 406/406. Dowód na dwóch żywych hostach/ZFS pozostaje obowiązkiem przed merge.
 
 - Data odświeżenia: **2026-08-14**. Ostatnia zmiana zachowania: **REV-120 runda 2 + REV-121 — zniszczenie nie może poszerzyć zatwierdzonego zbioru, a punkt docelowy nie może być zgadnięty.** Runda 1 mierzyła zbiór tuż przed zniszczeniem i dalej wołała `zfs rollback -r`; pomiar zwęża okno, ale go nie zamyka, bo odczyt i zniszczenie to nadal dwie chwile, a `-r` sam decyduje, co jest nowsze od bazy. Teraz własność niesie KSZTAŁT poleceń: każde wywołanie niszczące to albo `zfs destroy` nazywające zatwierdzone obiekty WPROST (nie tknie niczego innego, cokolwiek by w międzyczasie przyszło), albo **nierekurencyjny** `zfs rollback`, który sam odmawia, gdy istnieje cokolwiek nowszego — ZFS sprawdza to wewnątrz polecenia, nie my przed nim. Zmierzone identycznie na 2.1.9 i 2.2.2: `zfs destroy ds@a,b,c` usuwa wiele snapshotów jednym wywołaniem, składnia z przecinkiem NIE działa dla bookmarków, a nierekurencyjny rollback przy nowszym bookmarku odmawia, wymienia winowajców i nie niszczy niczego — łącznie z danymi żywymi. Cena jest nazwana wprost: zniszczenie zaczyna się teraz PRZED rollbackiem, więc spóźniony obiekt to porażka częściowa (2), a nie czysta odmowa (1). **REV-121:** domyślny punkt docelowy nie jest już ostatnim wierszem listy sortowanej po `creation` — oś zostaje `creation` (to czas powstania danych, czyli sens polityki właściciela), ale gdy maksimum dzieli kilka snapshotów, czasownik ODMAWIA i wymienia kandydatów zamiast wybierać po przypadkowej kolejności. Poprzednia zmiana zachowania: **REV-120 runda 1 —
   zbiór niszczony i test końcowy liczone przez `createtxg` i tożsamość, a
@@ -1206,28 +1208,34 @@ Pakiet `sudo` instaluje **wyłącznie** ta funkcja, czyli tylko przy
 
 ## 3b. Profil wdrożeniowy (`zfs-backup.sh`) — stan bieżący
 
-Wysokopoziomowy przepływ ukrywa `pair`/`join`:
+Wysokopoziomowy przepływ ukrywa wewnętrzne kroki parowania, zakresu i aktywacji:
 
 ```
-setup-server → add-client → seed → verify-endpoint → activate-client
-             → status / test / migrate-profile / remove-client
+add-client → deploy.sh --join (na źródle) → seed → activate
+                                                → status / test / remove-client
 ```
 
-**Dwa sposoby wyboru datasetów w `add-client` (REV-033 plasterek 6).**
-`--datasets="A B"` (jak dotąd) nazywa je z góry, tu, na kolektorze.
-`--mode=backup|sync` odsuwa wybór na źródło: `add-client` przekazuje
-`--mode=` do `deploy.sh --pair` zamiast `--peer-datasets`, a peer wybiera
-przez `--draft-scope`/edycję/`--commit-scope` na SOBIE (plik zakresu,
-`lib-scope.sh` — patrz wpis "REV-20260802-033 plasterek 4" w historii
-wyżej). Każda następna
-komenda (`seed`, `verify-endpoint`, `activate-client`, `migrate-profile`)
-wygląda identycznie dla obu ścieżek — `load_client_and_connection` woła
+Normalne `add-client NAME --host=... --target=...` domyślnie wybiera tryb
+`backup`; operator kolektora nie podaje ani `--mode=backup`, ani datasetów
+źródła. Prowadzony `deploy.sh --join=PAKIET` na źródle tworzy konto i klucz,
+odkrywa realny układ ZFS, pokazuje aktywny zakres i daje wybór: zaakceptuj albo
+edytuj. Dopiero akceptacja waliduje zakres i nadaje grant. Przerwanie kończy
+się jedną komendą ponowienia całego `--join`; ponowienie po sukcesie rozpoznaje
+zgodny scope+sha256 i niczego nie dubluje.
+
+`--datasets="A B"`, jawne `--mode=backup|sync`, `--draft-scope` i
+`--commit-scope` pozostają ścieżką ekspercką. Dla klienta trybowego
+`load_client_and_connection` woła
 `resolve_mode_datasets`, które dla klienta trybowego pobiera committed
 scope peera przez ssh, weryfikuje sha256 (T3) i wylicza realną listę
 liści przez zdalne `zfs list -r`, wypełniając `PEER_SAVED_DATASETS`
 dokładnie tak, jak zrobiłby to ręcznie podany `--peer-datasets`. Wynikiem
-`activate-client` jest zawsze GOTOWY config, od razu instalowany po
-potwierdzeniu — nie kandydaci do ręcznej selekcji.
+`activate NAME [--host=NOWY]` jest GOTOWY config i cron: komenda bierze
+odpowiedzialność za końcowy catch-up przed zmianą adresu, `set-endpoint` gdy
+adres rzeczywiście się zmienia, `verify-endpoint`, podgląd configu/crona i
+transakcyjne `activate-client`. Po każdym podkroku ponownie czyta rekord
+relacji; dlatego retry wznawia, a powtórzenie już aktywnej relacji jest no-op.
+Niskopoziomowe czasowniki pozostają narzędziami diagnostycznymi i naprawczymi.
 
 **Jedna kadencja wysyłki, jedna drabina.** Na klienta generuje się: jedna linia
 `snapget` per dataset (co godzinę o :01), jedna

@@ -225,6 +225,20 @@ RESUME_UPDATES=0
 # Where an unpacked package lives while it is being checked. Global so the
 # EXIT trap can still see it; see do_join.
 JOIN_WORKDIR=""
+# While a guided --join is in progress, every non-zero exit ends with one
+# stable command that resumes the whole operation. Low-level diagnostics may
+# explain the cause, but the operator never has to reconstruct which internal
+# subcommand comes next.
+JOIN_RERUN_NEEDED=0
+JOIN_RERUN_COMMAND=""
+deploy_exit_cleanup() {
+    local rc=$?
+    rm -rf "${JOIN_WORKDIR:-}"
+    if [ "$rc" -ne 0 ] && [ "${JOIN_RERUN_NEEDED:-0}" -eq 1 ]; then
+        printf '\nPONOW DOKLADNIE: %s\n' "$JOIN_RERUN_COMMAND" >&2
+    fi
+    return "$rc"
+}
 PEER_ROLE="pull"
 PEER_HOST=""
 PEER_DATASETS=""
@@ -401,9 +415,11 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             received data, and refuses while a cron line
                             still uses the pairing key.
   --join=PACKAGE          consume a wsad produced by --pair on the OTHER host
-                          (run on the second host, once, from its console).
-                          Creates the account and installs the key with ZERO
-                          zfs permissions -- see --commit-scope below.
+                          (run on the second host, from its console). For a
+                          delegated pull it completes the normal enrolment in
+                          one guided run: account/key, ZFS discovery, scope
+                          preview with accept/edit choice, validation and grant.
+                          Safe to re-run after an interruption.
   --draft-scope=LABEL     generate /etc/zfs-snapshot-all/peers/LABEL.scope
                           from THIS host's real ZFS inventory: an active
                           section (non-system datasets one level below each
@@ -746,7 +762,7 @@ prepare_package() {
     # GLOBAL, not local: the trap below runs at shell exit, by which time a
     # function-local variable is out of scope -- under `set -u` the trap then
     # dies on an unbound variable and removes nothing at all.
-    trap 'rm -rf "${JOIN_WORKDIR:-}"' EXIT
+    trap deploy_exit_cleanup EXIT
 
     local copy="$JOIN_WORKDIR/wsad.tgz"
     # install, not cp: mode and ownership are set as the file is created, so
@@ -1177,7 +1193,7 @@ do_draft_scope() {
         die "could not write $sfile"
     fi
     log "drafted $sfile: ${#active[@]} active dataset(s) from ${#pools[@]} pool(s)"
-    log "edit it, then run: deploy.sh --commit-scope=$label"
+    log "scope draft is ready for review"
 }
 
 # do_join_check -- everything --join does to a package before it is willing to
@@ -1755,6 +1771,9 @@ fi
 # and let do_join use it later instead of parsing a second, independent copy.
 if [ "$JOIN_MODE" -eq 1 ]; then
     [ -n "$JOIN_PACKAGE" ] || die "--join needs a package path"
+    printf -v JOIN_RERUN_COMMAND './deploy.sh --join=%q' "$JOIN_PACKAGE"
+    JOIN_RERUN_NEEDED=1
+    trap deploy_exit_cleanup EXIT
     prepare_package "$JOIN_PACKAGE"
     log "package preflight OK (sha256 ${PKG_SHA256:-?}) -- continuing with deployment phases"
 fi
@@ -4249,9 +4268,16 @@ do_join() {
     # the same label, not a rotation. Refuse rather than guess. A matching
     # account/target with a different key is treated as a legitimate rotation
     # driven by --rotate on the other side. ----
+    local prior_granted_datasets=""
     if [ -r "$mpath" ]; then
         # shellcheck disable=SC1090
         . "$mpath"
+        # A guided --join rerun may arrive after scope commit. Preserve the
+        # relationship-owned grant inventory when republishing the manifest;
+        # otherwise the byte-identical scope/hash would correctly skip a
+        # redundant grant, but the next narrowing would forget what this
+        # relationship is allowed to revoke.
+        prior_granted_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
         if [ -n "${PEER_JOIN_FINGERPRINT:-}" ] && [ "$PEER_JOIN_FINGERPRINT" != "$new_fp" ]; then
             if [ "${PEER_JOIN_ACCOUNT:-}" != "$PEER_CONF_ACCOUNT" ] || [ "${PEER_JOIN_TARGET:-}" != "$PEER_CONF_TARGET" ]; then
                 die "manifest for label '$label' already exists with a DIFFERENT account/target ($PEER_JOIN_ACCOUNT/$PEER_JOIN_TARGET vs $PEER_CONF_ACCOUNT/$PEER_CONF_TARGET) -- this looks like a label collision between two unrelated peers, not a rotation. Resolve by hand, do not re-run blindly."
@@ -4386,6 +4412,7 @@ PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
 PEER_JOIN_ACCOUNT_UID="$account_uid"
 PEER_JOIN_FINGERPRINT="$new_fp"
+PEER_JOIN_GRANTED_DATASETS="$prior_granted_datasets"
 $remote_fields
 EOF
     then
@@ -4415,12 +4442,11 @@ EOF
     log "Join zakonczony dla peera '$label' (konto: $account, rola: $PEER_CONF_ROLE)."
     [ "$PEER_CONF_REMOTE_JOIN" = "yes" ] && log "Wpis utworzony ZDALNIE z kolektora '$label' (--join-remotely) -- zapisane w manifescie."
     if [ "$PEER_CONF_AS" != "root" ] && [ "$PEER_CONF_ROLE" = "pull" ]; then
-        if [ -n "$PEER_CONF_MODE" ]; then
-            log "Tryb '$PEER_CONF_MODE' -- brak listy datasetow w paczce (F1: wybor po stronie zrodla)."
-        fi
-        log "Brak grantow ZFS -- utworz $(peer_scope_path "$label"), edytuj, potem: ./deploy.sh --commit-scope=$label"
+        [ -n "$PEER_CONF_MODE" ] \
+            && log "Tryb '$PEER_CONF_MODE' -- wybor datasetow odbywa sie teraz na tym hoście."
+        guided_join_scope "$label"
     fi
-    log "Zadne linie crona NIE zostaly dodane -- to pozostaje reczne, jak w Czesci 5."
+    log "Join i uprawnienia sa gotowe. Cron zostanie pokazany i zainstalowany przez 'zfs-backup.sh activate' na kolektorze."
     log "===================================================================="
 }
 
@@ -4610,6 +4636,68 @@ do_commit_scope() {
     mv -f "$htmp" "$hpath" || die "could not write $hpath"
 
     log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_clean[@]} revoked, ${#revoke_held[@]} held back, ${#revoke_gone[@]} already gone"
+}
+
+# True only when the exact bytes currently visible in LABEL.scope are the bytes
+# most recently granted. This is the durable resume point for guided --join:
+# a completed rerun must not reopen an editor or re-grant merely because the
+# package was submitted again.
+join_scope_is_committed() {   # <label>
+    local label="$1" sfile hfile want got
+    sfile=$(peer_scope_path "$label")
+    hfile=$(peer_scope_granted_hash_path "$label")
+    [ -r "$sfile" ] && [ -r "$hfile" ] || return 1
+    want=$(awk 'NR==1 {print; exit}' "$hfile" 2>/dev/null)
+    got=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
+    [ -n "$want" ] && [ "$want" = "$got" ]
+}
+
+# Normal source-side enrolment after do_join publishes the manifest. The old
+# --draft-scope/--commit-scope verbs stay available for expert repair, but the
+# ordinary operator does not have to discover or sequence them. The proposed
+# ACTIVE portion is always shown before the single accept/edit decision.
+guided_join_scope() {   # <label>
+    local label="$1" sfile choice editor
+    sfile=$(peer_scope_path "$label")
+
+    if join_scope_is_committed "$label"; then
+        log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
+        return 0
+    fi
+    if [ ! -e "$sfile" ]; then
+        do_draft_scope "$label"
+    fi
+
+    while :; do
+        echo
+        echo "Proponowany zakres backupu dla '$label':"
+        echo "------------------------------------------------------------"
+        awk '/^# ==========================================================/{exit} {print}' "$sfile"
+        echo "------------------------------------------------------------"
+        read -rp "Zaakceptowac ten zakres? [t]ak / [e]dytuj / [n]przerwij: " choice \
+            || die "join interrupted before scope acceptance"
+        case "$choice" in
+            t|T|tak|TAK|y|Y|yes|YES)
+                do_commit_scope "$label"
+                join_scope_is_committed "$label" \
+                    || die "scope grant finished without a matching hash read-back"
+                log "scope accepted and committed for '$label'"
+                return 0
+                ;;
+            e|E|edit|EDIT)
+                editor="${VISUAL:-${EDITOR:-vi}}"
+                $editor "$sfile" \
+                    || die "editor '$editor' failed; scope was not committed"
+                do_commit_scope_check "$label"
+                ;;
+            n|N|nie|NIE|q|Q)
+                die "scope was not accepted; no ZFS grant was committed"
+                ;;
+            *)
+                warn "choose t (accept), e (edit), or n (stop)"
+                ;;
+        esac
+    done
 }
 
 # ==============================================================================
@@ -5688,6 +5776,7 @@ if [ "$PAIR_MODE" -eq 1 ]; then
 fi
 if [ "$JOIN_MODE" -eq 1 ]; then
     do_join
+    JOIN_RERUN_NEEDED=0
     exit 0
 fi
 if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
