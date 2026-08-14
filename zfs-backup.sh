@@ -4613,7 +4613,15 @@ cmd_seed() {
     # moves, and this message already used it once for the collector two
     # sentences earlier, so reusing it here for the peer would say "moved"
     # about the wrong end again in a subtler way (slice 10, REV-20260802-033).
-    log "client '$name' seed complete. Next: if this collector relocates, run final-catchup first over the still-working link. If SSH now reaches the peer at a DIFFERENT host or port afterward, run set-endpoint with the new value; if the same host:port still works (e.g. a routed VPN), skip straight to verify-endpoint. Then activate-client."
+    # Issue #9: the ordinary path is four commands, so the third one names the
+    # fourth and nothing else. This used to recite the low-level sequence --
+    # final-catchup, set-endpoint, verify-endpoint, activate-client -- which is
+    # exactly the sequencing the operator is not supposed to have to know, and it
+    # said it even when none of it applied. Those verbs remain available for
+    # expert repair; they are no longer the instruction an ordinary seed hands out.
+    log "client '$name' seed complete."
+    log "next: ./zfs-backup.sh activate $name"
+    log "      (add --host=HOST[:PORT] if the production endpoint differs from the one just seeded, e.g. a VPN address; activate then handles the final catch-up, the endpoint switch, verification, the cron preview and its installation)"
 }
 
 # ------------------------------------------------------------------------------

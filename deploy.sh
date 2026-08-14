@@ -1153,9 +1153,29 @@ do_draft_scope() {
         echo "# This file is transferred and read as DATA -- never executed. Malformed"
         echo "# or ambiguous input fails --commit-scope closed; nothing here runs a shell."
         echo
+        # `include_parent = no` describes a BRANCH: back up what is under this
+        # path, not the path itself. That is the right default for a container
+        # like hdd/vm-disks, and it selects NOTHING for a dataset that has no
+        # children -- the draft then commits to an empty grant and the operator
+        # meets "selects nothing that exists on this host". Correct (it fails
+        # closed) and useless as a starting point, because the obvious reading of
+        # a stanza naming a leaf is "back up this".
+        #
+        # Measured live on pve2, 2026-08-14: a freshly created leaf dataset
+        # drafted this way, and the guided join refused until the line was
+        # changed by hand -- on the very path issue #9 says needs no hand editing.
+        #
+        # So the draft states the intent that matches the shape: a dataset with
+        # children keeps the branch default, a leaf includes itself. Both remain
+        # editable, and neither is inferred at commit time -- the file still says
+        # exactly what will be granted.
         for ds in "${active[@]}"; do
             printf '[dataset:%s]\n' "$ds"
-            echo "include_parent = no"
+            if zfs list -H -o name -r -- "$ds" 2>/dev/null | grep -qv "^${ds}$"; then
+                echo "include_parent = no"
+            else
+                echo "include_parent = yes"
+            fi
             echo "include_children = yes"
             echo
         done

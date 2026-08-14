@@ -68,6 +68,13 @@ case "$fields" in
         case "$pool" in
             rpool) printf 'rpool\nrpool/olds\nrpool/data\nrpool/ROOT\n' ;;
             hdd)   printf 'hdd\nhdd/swap\nhdd/LXC\n' ;;
+            # A leaf answers with only itself; a container answers with its
+            # children too. That difference is exactly what the draft reads to
+            # decide include_parent, so the stub has to make it.
+            rpool/data) printf 'rpool/data\n' ;;
+            rpool/olds) printf 'rpool/olds\n' ;;
+            hdd/LXC)    printf 'hdd/LXC\nhdd/LXC/subvol-100-disk-0\n' ;;
+            *) : ;;
         esac
         ;;
     name,type,used,refer,mountpoint)
@@ -127,8 +134,17 @@ check "A9 pool roots are not active stanzas" "0" \
       "$(grep -cE '^\[dataset:(rpool|hdd)\]$' "$sfile")"
 
 # Each active stanza carries the F2 owner-decision defaults exactly.
-check "A10 include_parent = no appears once per active stanza" "3" \
-      "$(grep -c '^include_parent = no$' "$sfile")"
+# include_parent states the intent that matches the dataset's SHAPE. The branch
+# default selects nothing at all for a leaf, so the guided join refuses with
+# "selects nothing that exists on this host" and the operator has to hand-edit one
+# line -- on the very path issue #9 says needs no hand editing. Measured live on
+# pve2, 2026-08-14. A container keeps the branch default; a leaf includes itself.
+# Asserted as a PAIR, because a draft that wrote `yes` everywhere would be just as
+# wrong and would pass a single-sided check.
+check "A10 a leaf drafts include_parent = yes (rpool/data)" "1" \
+      "$(awk '/^\[dataset:rpool\/data\]$/{f=1;next} /^\[dataset:/{f=0} f&&/^include_parent = yes$/{c++} END{print c+0}' "$sfile")"
+check "A10b a container keeps include_parent = no (hdd/LXC)" "1" \
+      "$(awk '/^\[dataset:hdd\/LXC\]$/{f=1;next} /^\[dataset:/{f=0} f&&/^include_parent = no$/{c++} END{print c+0}' "$sfile")"
 check "A11 include_children = yes appears once per active stanza" "3" \
       "$(grep -c '^include_children = yes$' "$sfile")"
 
