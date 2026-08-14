@@ -510,7 +510,7 @@ if [ "\$1" = snapshot ]; then
     *@restore-commit-*) [ -f "$WORK/commitsnapfail" ] && { echo "cannot create snapshot '\$full'" >&2; exit 1; } ;;
   esac
   n=\$(cat "$WORK/snapn" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$WORK/snapn"
-  printf '%s\t%s\t%s\n' "\$full" "\$((9000+n))" "\$((9900+n))" >> "$WORK/rows.\$key"
+  printf '%s\t%s\t%s\t%s\n' "\$full" "\$((9000+n))" "\$((9900+n))" "\$((9000+n))" >> "$WORK/rows.\$key"
   # Another actor snapshotting the source right after our preview snapshot: the
   # exact window the commit boundary exists to close.
   case "\$full" in
@@ -519,11 +519,16 @@ if [ "\$1" = snapshot ]; then
       # snapshot and after the before-set was captured. That is what "arrived
       # after the approval" means; injecting at preview time would have put the
       # intruder INTO the before-set, and the check would rightly ignore it.
-      [ -f "$WORK/arrivesnap" ] && printf '%s@intruder\t9500\t9500\n' "\$dsp" >> "$WORK/rows.\$key"
+      [ -f "$WORK/arrivesnap" ] && printf '%s@intruder\t9500\t9500\t9500\n' "\$dsp" >> "$WORK/rows.\$key"
       # Same wall-clock creation second as the preview snapshot, and a name that
       # sorts BEFORE it -- the exact case a position-in-a-sorted-list check loses
       # (REV-119 F1.1). The creation column is deliberately a duplicate.
-      [ -f "$WORK/arrivesnap_samesecond" ] && printf '%s@intruder-samesec\t9001\t9600\n' "\$dsp" >> "$WORK/rows.\$key"
+      [ -f "$WORK/arrivesnap_samesecond" ] && printf '%s@intruder-samesec\t9001\t9600\t9501\n' "\$dsp" >> "$WORK/rows.\$key"
+      # REV-120 F1: a BOOKMARK arriving in the same window. \`zfs bookmark\` is not a
+      # userland write, so readonly=on does not keep it out -- and \`zfs rollback -r\`
+      # destroys it. It must be caught by the confirmation boundary, exactly like an
+      # intruding snapshot.
+      [ -f "$WORK/arrivebm" ] && printf '%s#intruder-bm\t9500\t9700\t9502\n' "\$dsp" >> "$WORK/bmarks.\$key"
       ;;
   esac
   exit 0
@@ -540,51 +545,75 @@ fi
 # ---- the three execution primitives -----------------------------------------
 # Modelled against the SAME rows store, so a test can assert the destructive
 # effect (blockers gone, target arrived, guid) and not merely that a command ran.
-# rollback -r <ds>@<snap>: every snapshot with a LATER creation than <snap> is
-# destroyed, which is exactly what removes the approved blockers and this run's own
-# technical snapshots (both newer than the recovery point). Verified live on pve0.
+# rollback -r <ds>@<snap>: every snapshot AND BOOKMARK whose createtxg is greater
+# than <snap>'s is destroyed. That is what removes the approved blockers and this
+# run's own technical snapshots -- and, until REV-120, also removed bookmarks nobody
+# had been shown.
+#
+# createtxg, not creation, because that is what ZFS itself compares. Measured on
+# pve0 (zfs-2.1.9): @s1 and @s2 created in the same wall-clock second carry
+# createtxg 42609087 and 42609088, and a rollback to @s1 with #bm1/#bm2/#bm3 present
+# left exactly #bm1 -- the one whose createtxg equals the target's.
 if [ "\$1" = rollback ]; then
   [ -f "$WORK/rollbackfail" ] && { echo "cannot rollback" >&2; exit 1; }
   for a in "\$@"; do full="\$a"; done
   dsp=\${full%@*}; key=\$(printf '%s' "\$dsp" | tr '/' '_')
-  bc=\$(awk -F'\t' -v n="\$full" '\$1==n{print \$2}' "$WORK/rows.\$key")
+  bc=\$(awk -F'\t' -v n="\$full" '\$1==n{print (\$4!=""?\$4:\$2)}' "$WORK/rows.\$key")
   [ -n "\$bc" ] || { echo "no such snapshot '\$full'" >&2; exit 1; }
-  awk -F'\t' -v bc="\$bc" '(\$2+0)<=(bc+0)' "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp"
+  awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)<=(bc+0)' "$WORK/rows.\$key" > "$WORK/rows.\$key.tmp"
   mv "$WORK/rows.\$key.tmp" "$WORK/rows.\$key"
+  # rollbackleak models the C-006/C-007 class the GUID acceptance test exists for:
+  # the command returns 0 and the state is still wrong. Here one blocker survives.
+  if [ -f "$WORK/rollbackleak" ]; then cat "$WORK/rollbackleak" >> "$WORK/rows.\$key"; fi
+  if [ -f "$WORK/bmarks.\$key" ]; then
+    awk -F'\t' -v bc="\$bc" '((\$4!=""?\$4:\$2)+0)<=(bc+0)' "$WORK/bmarks.\$key" > "$WORK/bmarks.\$key.tmp"
+    mv "$WORK/bmarks.\$key.tmp" "$WORK/bmarks.\$key"
+  fi
   exit 0
 fi
 # send emits a tiny "stream" carrying only what recv needs: the target snapshot's
-# bare name and its guid. A real send carries the data; the identity is what the
-# GUID acceptance test is about, so the stub carries the identity.
+# bare name, its guid and its CREATION. A real send carries the data; identity and
+# creation are what the acceptance test is about, so the stub carries those.
 if [ "\$1" = send ]; then
   [ -f "$WORK/sendfail" ] && { echo "send failed" >&2; exit 1; }
   for a in "\$@"; do last="\$a"; done
   key=\$(printf '%s' "\${last%@*}" | tr '/' '_')
   g=\$(awk -F'\t' -v n="\$last" '\$1==n{print \$3}' "$WORK/rows.\$key")
-  printf '%s\t%s\n' "\${last#*@}" "\$g"
+  c=\$(awk -F'\t' -v n="\$last" '\$1==n{print \$2}' "$WORK/rows.\$key")
+  printf '%s\t%s\t%s\n' "\${last#*@}" "\$g" "\$c"
   exit 0
 fi
 # recv lands the streamed snapshot on the destination with the streamed guid --
 # unless recvguid overrides it, which models a clean pipeline that produced the
 # WRONG identity (the case the GUID acceptance test exists to catch).
+#
+# The received row keeps the STREAM's creation and gets a fresh local createtxg.
+# That is real ZFS behaviour and it is the reason REV-120 F2 matters: a received
+# snapshot's creation comes from the sending host's clock, so it can tie with a
+# local snapshot's second while their transaction order is not in doubt at all.
 if [ "\$1" = recv ] || [ "\$1" = receive ]; then
   for a in "\$@"; do dst="\$a"; done
   IFS= read -r line || line=""
   [ -f "$WORK/recvfail" ] && { echo "recv failed" >&2; exit 1; }
   snap=\$(printf '%s' "\$line" | cut -f1)
   g=\$(printf '%s' "\$line" | cut -f2)
+  c=\$(printf '%s' "\$line" | cut -f3)
+  [ -n "\$c" ] || c=999999
   [ -f "$WORK/recvguid" ] && g=\$(cat "$WORK/recvguid")
+  t=\$(cat "$WORK/txgn" 2>/dev/null || echo 990000); t=\$((t+1)); echo "\$t" > "$WORK/txgn"
   key=\$(printf '%s' "\$dst" | tr '/' '_')
-  printf '%s@%s\t999999\t%s\n' "\$dst" "\$snap" "\$g" >> "$WORK/rows.\$key"
+  printf '%s@%s\t%s\t%s\t%s\n' "\$dst" "\$snap" "\$c" "\$g" "\$t" >> "$WORK/rows.\$key"
   exit 0
 fi
 
 [ "\$1" = list ] || { echo "stub3: refusing non-list: \$*" >&2; exit 9; }
-cols=""; want_snap=0
+cols=""; want_snap=0; want_bm=0; sorted=0
 prev=""
 for a in "\$@"; do
   [ "\$prev" = "-o" ] && cols="\$a"
+  [ "\$prev" = "-s" ] && [ "\$a" = creation ] && sorted=1
   [ "\$a" = "snapshot" ] && want_snap=1
+  [ "\$a" = "bookmark" ] && want_bm=1
   prev="\$a"
   ds="\$a"
 done
@@ -596,17 +625,52 @@ case "\$ds" in
         echo "\$ds"; exit 0 ;;
 esac
 key=\$(printf '%s' "\$ds" | tr '/' '_')
-if [ "\$want_snap" -eq 1 ]; then
-  [ -s "$WORK/rows.\$key" ] || exit 1
-  # canonical row: name<TAB>creation<TAB>guid ; project the requested columns
+# Canonical row for both stores: name<TAB>creation<TAB>guid<TAB>createtxg.
+# createtxg falls back to creation when the fixture does not say -- the two agree
+# for ordinary locally-made snapshots, and the fixtures that care about the
+# difference state it.
+project() {   # <file>
   awk -F'\t' -v c="\$cols" '{
       n=split(c,f,","); out=""
       for(i=1;i<=n;i++){
-        v = (f[i]=="name")?\$1 : (f[i]=="creation")?\$2 : (f[i]=="guid")?\$3 : "-"
+        v = (f[i]=="name")?\$1 : (f[i]=="creation")?\$2 : (f[i]=="guid")?\$3 \
+            : (f[i]=="createtxg")?((\$4!="")?\$4:\$2) : "-"
         out = (i==1)? v : out "\t" v
       }
       print out
-  }' "$WORK/rows.\$key"
+  }' "\$1"
+}
+# \`-s creation\` is HONOURED, and its tie-break is deliberate. Real ZFS gives no
+# order at all to rows sharing a creation second; the stub picks one (name,
+# ascending) so a fixture can put the adverse row last on purpose. Code that
+# concludes anything from the last line of this listing is then provably wrong
+# rather than accidentally right (REV-120 F2).
+order() {   # <file> -> stdout
+  if [ "\$sorted" -eq 1 ]; then sort -t'	' -k2,2n -k1,1 "\$1"; else cat "\$1"; fi
+}
+if [ "\$want_bm" -eq 1 ]; then
+  # bmarkfail models a listing that cannot be read -- which must never be treated
+  # as "there are no bookmarks".
+  [ -f "$WORK/bmarkfail" ] && { echo "cannot list bookmarks" >&2; exit 1; }
+  # Measured on pve0 (zfs-2.1.9): a dataset with no bookmarks lists EMPTY and
+  # exits 0. So absence is a successful empty answer, not a failure.
+  if [ -s "$WORK/bmarks.\$key" ]; then
+    order "$WORK/bmarks.\$key" > "$WORK/o.\$\$"; project "$WORK/o.\$\$"; rm -f "$WORK/o.\$\$"
+  fi
+  # latebm models a bookmark appearing AFTER the confirmation boundary has read the
+  # bookmark set and BEFORE the destructive command -- the one window the boundary
+  # cannot cover. The boundary makes exactly two \`-o name\` reads (the before-set and
+  # the after-set), so injecting right after the SECOND leaves the executor's own
+  # re-measurement as the only thing that can still catch it.
+  if [ -f "$WORK/latebm" ] && [ "\$cols" = name ]; then
+    lc=\$(cat "$WORK/latebmn" 2>/dev/null || echo 0); lc=\$((lc+1)); echo "\$lc" > "$WORK/latebmn"
+    [ "\$lc" -eq 2 ] && printf '%s#late-bm\t9800\t9810\t9800\n' "\$ds" >> "$WORK/bmarks.\$key"
+  fi
+  exit 0
+fi
+if [ "\$want_snap" -eq 1 ]; then
+  [ -s "$WORK/rows.\$key" ] || exit 1
+  order "$WORK/rows.\$key" > "$WORK/o.\$\$"; project "$WORK/o.\$\$"; rm -f "$WORK/o.\$\$"
   exit 0
 fi
 grep -qx "\$ds" "$WORK/exists" 2>/dev/null || exit 1
@@ -764,7 +828,9 @@ reset_src() {
           "$WORK/fencefail" "$WORK/unfencefail" "$WORK/ro.value" "$WORK/ro.source" \
           "$WORK/arrivesnap_samesecond" "$WORK/verifyfail" "$WORK/commitsnapfail" \
           "$WORK/rollbackfail" "$WORK/sendfail" "$WORK/recvfail" "$WORK/recvguid" \
-          "$WORK/written.$SRC"
+          "$WORK/written.$SRC" \
+          "$WORK/bmarks.$SRC" "$WORK/bmarks.$COPY" "$WORK/bmarkfail" \
+          "$WORK/arrivebm" "$WORK/latebm" "$WORK/latebmn" "$WORK/rollbackleak"
     printf 'hdd/store/rpool/data@s1\t100\t11\nhdd/store/rpool/data@s2\t200\t22\n' > "$WORK/rows.$COPY"
     printf 'rpool/data@s1\t100\t11\n' > "$WORK/rows.$SRC"
     printf 'hdd/store\nhdd/store/rpool/data\nrpool/data\n' > "$WORK/exists"
@@ -1281,6 +1347,186 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
   && ! printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia'; } \
     && ok "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" \
     || bad "EXEC rollback-fail: an atomic rollback that fails destroys nothing and may claim an unchanged source" "rc=$rc" "$out"
+
+# ==============================================================================
+# REV-20260814-120 F1 -- BOOKMARKS are part of what the rollback destroys, so they
+# are part of what the operator approves.
+#
+# `zfs rollback -r` applies its newer-than-target test to snapshots AND bookmarks:
+# measured on pve0 (zfs-2.1.9), rolling back to @s1 with #bm1/#bm2/#bm3 present left
+# only #bm1, the one whose createtxg equals the target's. The planner enumerated
+# snapshots only, so the primitive could destroy a bookmark that never appeared in
+# the measured loss set -- silently widening the approved destructive set, which is
+# the property REV-119's confirmation boundary exists to hold.
+#
+# A bookmark costs no space, so none of this shows up in the byte total. What it
+# costs is the anchor for a future incremental send, which is exactly the kind of
+# loss an operator has to be asked about rather than told about afterwards.
+# ==============================================================================
+
+# bmnew is newer than the base by createtxg (250 > 100) and bmold is older (50).
+# Both exist for every assertion below, so "names the right one" and "leaves the
+# other alone" are the same run rather than two fixtures.
+bmfixture() {
+    reset_src
+    printf 'rpool/data#bmnew\t250\t77\t250\nrpool/data#bmold\t50\t66\t50\n' > "$WORK/bmarks.$SRC"
+}
+
+# BM1. The measured loss set NAMES the newer bookmark, before the question is asked,
+#      and does not name the older one. This is the acceptance boundary: the set the
+#      operator approves has to be the set the rollback destroys.
+bmfixture
+out="$(runrepl "$stcfg" rpool/data 0 </dev/null)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'bookmark  bmnew' \
+  && ! printf '%s' "$out" | grep -q 'bmold'; } \
+    && ok "REV-120 F1: the measured loss set names the newer bookmark and not the older one" \
+    || bad "REV-120 F1: the measured loss set names the newer bookmark and not the older one" "rc=$rc" "$out"
+
+# BM2. Declining leaves it intact. A bookmark shown as "to be destroyed" and then
+#      destroyed anyway on a refusal would be the worst of both.
+grep -q '^rpool/data#bmnew	' "$WORK/bmarks.$SRC" \
+    && ok "REV-120 F1: declining the confirmation leaves the bookmark intact" \
+    || bad "REV-120 F1: declining the confirmation leaves the bookmark intact" "$(cat "$WORK/bmarks.$SRC")"
+
+# BM3. Confirmed: the approved bookmark is gone and the older one survives. This is
+#      the EFFECT, not the wording -- the stub models what ZFS was measured doing.
+bmfixture
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && ! grep -q '^rpool/data#bmnew	' "$WORK/bmarks.$SRC" \
+  && grep -q '^rpool/data#bmold	' "$WORK/bmarks.$SRC"; } \
+    && ok "REV-120 F1: an approved run destroys the newer bookmark and keeps the older one" \
+    || bad "REV-120 F1: an approved run destroys the newer bookmark and keeps the older one" \
+           "rc=$rc bookmarks=[$(tr '\n' ';' < "$WORK/bmarks.$SRC")]" "$out"
+
+# BM4. CONTROL. A source whose only bookmark is NOT newer than the base must not be
+#      told it is losing one. Without this, an implementation that listed every
+#      bookmark unconditionally would pass BM1 and BM3.
+reset_src
+printf 'rpool/data#bmold\t50\t66\t50\n' > "$WORK/bmarks.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'BOOKMARKI' \
+  && ! printf '%s' "$out" | grep -q 'bookmark  bmold' \
+  && grep -q '^rpool/data#bmold	' "$WORK/bmarks.$SRC"; } \
+    && ok "REV-120 F1: a bookmark older than the base is neither announced nor destroyed (control)" \
+    || bad "REV-120 F1: a bookmark older than the base is neither announced nor destroyed (control)" \
+           "rc=$rc bookmarks=[$(tr '\n' ';' < "$WORK/bmarks.$SRC")]" "$out"
+
+# BM5. FAIL CLOSED. A bookmark listing that cannot be read is not "no bookmarks".
+#      Both are an empty string in a shell variable and opposite facts to an
+#      operator about to destroy data, so the run refuses before its first mutation.
+reset_src
+touch "$WORK/bmarkfail"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'pelnego zbioru snapshotow i bookmarkow' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY' \
+  && [ "$(srccount)" = 1 ]; } \
+    && ok "REV-120 F1: an unreadable bookmark listing refuses instead of reading as 'none'" \
+    || bad "REV-120 F1: an unreadable bookmark listing refuses instead of reading as 'none'" "rc=$rc" "$out"
+
+# BM6. A bookmark arriving after the approval, inside the window the commit boundary
+#      covers. readonly=on does not keep it out -- `zfs bookmark` is no more a
+#      userland write than `zfs snapshot` is -- so the boundary has to see it.
+reset_src
+touch "$WORK/arrivebm"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'stan zrodla sie ZMIENIL' \
+  && printf '%s' "$out" | grep -q 'nowy bookmark: intruder-bm' \
+  && ! printf '%s' "$out" | grep -q 'krok WYKONAWCZY' \
+  && grep -q 'intruder-bm' "$WORK/bmarks.$SRC"; } \
+    && ok "REV-120 F1: a bookmark arriving after the approval is caught by the commit boundary and survives" \
+    || bad "REV-120 F1: a bookmark arriving after the approval is caught by the commit boundary and survives" "rc=$rc" "$out"
+
+# BM7. ...and one arriving AFTER the boundary, in the last window before the
+#      destructive command, is caught by the executor's own re-measurement: the set
+#      about to be destroyed is compared for exact equality against the approved one.
+#      Nothing is destroyed, so the exact-state claim is still allowed.
+reset_src
+touch "$WORK/latebm"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'NIE jest tym zatwierdzonym' \
+  && printf '%s' "$out" | grep -q 'late-bm' \
+  && printf '%s' "$out" | grep -q 'NIC nie zniszczono' \
+  && printf '%s' "$out" | grep -q 'jest dokladnie w stanie sprzed tego polecenia' \
+  && grep -q 'late-bm' "$WORK/bmarks.$SRC" \
+  && [ "$(srccount)" = 1 ]; } \
+    && ok "REV-120 F1: a bookmark arriving after the boundary is caught before destruction, and nothing is destroyed" \
+    || bad "REV-120 F1: a bookmark arriving after the boundary is caught before destruction, and nothing is destroyed" "rc=$rc" "$out"
+
+# BM8. The read-only plan shows it too, so an operator sees the bookmark loss while
+#      still deciding, not only inside the destructive verb.
+bmfixture
+out="$(runstrat "$stcfg")"
+{ printf '%s' "$out" | grep -q 'BOOKMARKI' && printf '%s' "$out" | grep -q 'bmnew' \
+  && ! printf '%s' "$out" | grep -q 'bmold'; } \
+    && ok "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" \
+    || bad "REV-120 F1: the read-only plan announces the bookmarks a recovery would destroy" "$out"
+
+# ==============================================================================
+# REV-20260814-120 F2 -- the final check is anchored on IDENTITY, never on the last
+# row of a creation-sorted listing.
+#
+# `creation` is a wall-clock second and this project keeps measuring duplicates of
+# it -- including on pve0 while gathering the evidence for this very review, where
+# @s1 and @s2 came back with the same creation and createtxg 42609087/42609088. So
+# `-s creation | tail -1` is not a statement about which snapshot is the head; it is
+# a statement about which of two equal rows ZFS happened to print last.
+#
+# The stub therefore HONOURS `-s creation` with a documented tie-break, and the
+# fixtures below put the adverse row last on purpose. Both cases are correct
+# restores that the old check would have reported as failures.
+# ==============================================================================
+
+# GX1. ROLLBACK strategy. The source holds a peer snapshot made in the same second
+#      as the recovery point but one transaction earlier, and its name sorts after.
+reset_src
+printf 'hdd/store/rpool/data@aa-base\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@aa-base\t100\t11\t100\nrpool/data@zz-peer\t100\t55\t90\nrpool/data@s9\t300\t33\t300\n' > "$WORK/rows.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+# The tie is read from the FINAL state, which is what the acceptance test judges:
+# the last row of a creation-sorted listing is the PEER, not the recovery point.
+tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -s creation -d 1 rpool/data ) | tail -1 | cut -f2)"
+{ [ "$tie_guid" = 55 ] && [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && grep -q '^rpool/data@zz-peer	' "$WORK/rows.$SRC" \
+  && ! grep -q '^rpool/data@s9	' "$WORK/rows.$SRC"; } \
+    && ok "REV-120 F2: rollback -- a same-second peer sorting last does not turn a correct restore into a failure" \
+    || bad "REV-120 F2: rollback -- a same-second peer sorting last does not turn a correct restore into a failure" \
+           "tie_guid=$tie_guid rc=$rc rows=[$(tr '\n' ';' < "$WORK/rows.$SRC")]" "$out"
+
+# GX2. CONTROL on the same fixture: the check must verify the whole required final
+#      state, not merely that the target is present somewhere. rollbackleak models a
+#      rollback that returns 0 and leaves a newer snapshot behind -- the C-006/C-007
+#      class. Without this, "does the target guid exist" would pass GX1 too.
+reset_src
+printf 'hdd/store/rpool/data@aa-base\t100\t11\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@aa-base\t100\t11\t100\nrpool/data@zz-peer\t100\t55\t90\nrpool/data@s9\t300\t33\t300\n' > "$WORK/rows.$SRC"
+printf 'rpool/data@leak\t400\t44\t400\n' > "$WORK/rollbackleak"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'weryfikacja stanu koncowego zawiodla' \
+  && printf '%s' "$out" | grep -q 'leak' \
+  && printf '%s' "$out" | grep -q 'NIE jest w stanie sprzed polecenia' \
+  && ! printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE'; } \
+    && ok "REV-120 F2: a rollback that returns 0 and leaves something newer is a post-destruction failure" \
+    || bad "REV-120 F2: a rollback that returns 0 and leaves something newer is a post-destruction failure" "rc=$rc" "$out"
+
+# GX3. INCREMENT strategy, same defect, different route. `zfs recv` preserves the
+#      stream's creation and assigns a fresh local createtxg, so a received recovery
+#      point carries the SENDING host's clock. Tying with a local snapshot's second
+#      is therefore ordinary rather than exotic -- and here the local peer (itself
+#      received by an earlier recovery, which is why its creation and createtxg do
+#      not agree in order) sorts last and carries a different guid.
+reset_src
+printf 'hdd/store/rpool/data@aa-base\t100\t11\nhdd/store/rpool/data@bb-target\t500\t22\n' > "$WORK/rows.$COPY"
+printf 'rpool/data@aa-base\t100\t11\t100\nrpool/data@zz-peer\t500\t55\t90\n' > "$WORK/rows.$SRC"
+out="$(runrepl "$stcfg" rpool/data)"; rc=$?
+tie_guid="$( ( PATH="$WORK/bin3:$PATH" zfs list -H -p -t snapshot -o name,guid -s creation -d 1 rpool/data ) | tail -1 | cut -f2)"
+{ [ "$rc" -eq 0 ] && [ "$tie_guid" = 55 ] \
+  && printf '%s' "$out" | grep -q 'ODTWORZENIE ZAKONCZONE' \
+  && grep -q '^rpool/data@bb-target	' "$WORK/rows.$SRC"; } \
+    && ok "REV-120 F2: increment -- a received recovery point tying on creation is still verified by identity" \
+    || bad "REV-120 F2: increment -- a received recovery point tying on creation is still verified by identity" \
+           "rc=$rc tie_guid=$tie_guid rows=[$(tr '\n' ';' < "$WORK/rows.$SRC")]" "$out"
 
 # ==============================================================================
 # Whole-suite mutation audit. Moved here from the slice-1 section because the

@@ -516,7 +516,17 @@ incremental receive), accepts by GUID rather than by exit code, and separates
 cleanup/failure semantics from REV-119 carry through. Proven end-to-end on real
 ZFS (pve0/zfs-2.1.9): increment, rollback and discard-live each verified by GUID
 out of band, the fence up through execution and down after, no run-owned snapshot
-left behind. `test/restore` 88/88; delivered direct-main pending a REV.
+left behind.
+
+REV-120 then found two P1 defects in that primitive, both now fixed. The approved
+destructive set is computed by `createtxg` — the order `zfs rollback` itself uses —
+and it covers **bookmarks**, which `rollback -r` was measured to destroy while the
+planner never enumerated them; an unreadable listing leaves the set unproven rather
+than empty, and the set is re-measured for exact equality immediately before the
+destructive command. The acceptance test resolves the recovery point by identity
+and then requires nothing newer than it, instead of asking whether the last row of
+a `creation`-sorted listing carried the target GUID. `test/restore` 99/99;
+delivered direct-main pending the REV-120 verdict.
 
 Out of this slice, per R-026: relation-level multi-dataset failure policy and the
 public cross-host CLI. Those follow under R-025 once the execution primitive is

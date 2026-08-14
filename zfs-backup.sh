@@ -3075,13 +3075,17 @@ RESTORE_BASE_GUID=""     # the GUID-proven common base, empty when there is none
 RESTORE_TARGET_SNAP=""   # the recovery point: the backup's latest snapshot, bare name
 RESTORE_TARGET_GUID=""
 RESTORE_BLOCKERS=""      # source snapshots newer than the base, full names, one per line
+RESTORE_BLOCK_BOOKMARKS="" # source BOOKMARKS newer than the base, full names, one per line
 RESTORE_COPY_BASE_SNAP="" # the base snapshot on the COPY (full name), the increment's `from`
 RESTORE_SRC_BASE_SNAP=""  # the base snapshot on the SOURCE (full name), the rollback target
+RESTORE_SRC_BASE_TXG=""   # its createtxg -- the ONE order `zfs rollback` itself uses
+RESTORE_SET_STATE=unproven # ok once the complete newer-than-base set is proven
 restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows>
     local copy="$1" srcpath="$2" snaps="$3"
     RESTORE_STRATEGY=""; RESTORE_BASE_GUID=""; RESTORE_TARGET_SNAP=""
-    RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""
-    RESTORE_COPY_BASE_SNAP=""; RESTORE_SRC_BASE_SNAP=""
+    RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""; RESTORE_BLOCK_BOOKMARKS=""
+    RESTORE_COPY_BASE_SNAP=""; RESTORE_SRC_BASE_SNAP=""; RESTORE_SRC_BASE_TXG=""
+    RESTORE_SET_STATE=unproven
 
     # A pull relationship's original source lives on another host. Determining its
     # strategy needs that host, which is an SSH read this read-only slice does not
@@ -3134,7 +3138,26 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # keeps the loss set the operator confirmed and the command the code runs the
     # one same computation.
     RESTORE_COPY_BASE_SNAP="$base_snap"
-    RESTORE_SRC_BASE_SNAP="$(zfs list -H -p -t snapshot -o name,guid -d 1 "$srcpath" 2>/dev/null | awk -v g="$base_guid" '$2==g{print $1; exit}')"
+    # REV-120 F2: the base is resolved by guid, and its `createtxg` comes back with
+    # it. Everything downstream -- the loss set, the pre-destruction revalidation and
+    # the final acceptance test -- is anchored on that number rather than on position
+    # in a list sorted by `creation`. Two snapshots of one dataset cannot share a
+    # createtxg (ZFS refuses to make two in one transaction group), while `creation`
+    # is a wall-clock second that the project has repeatedly measured as duplicated.
+    # It is also the exact order `zfs rollback` uses internally to decide what it
+    # destroys, so the set this code approves and the set ZFS acts on are computed
+    # from the same fact.
+    #
+    # Exactly one row may carry the base guid. Zero means the base vanished between
+    # two reads; more than one is impossible on a healthy pool -- either way the
+    # answer is "unproven", never "pick the first".
+    local srcbase
+    srcbase="$(zfs list -H -p -t snapshot -o name,guid,createtxg -d 1 "$srcpath" 2>/dev/null \
+               | awk -F'\t' -v g="$base_guid" '$2==g{print $1"\t"$3}')"
+    if [ "$(printf '%s\n' "$srcbase" | grep -c .)" -eq 1 ]; then
+        RESTORE_SRC_BASE_SNAP="${srcbase%%	*}"
+        RESTORE_SRC_BASE_TXG="${srcbase##*	}"
+    fi
     echo "  Wspolna baza (dowiedziona GUID-em, nie nazwa):"
     echo "    ${base_snap#*@}  guid=$base_guid"
 
@@ -3154,10 +3177,40 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     # source still has to be rolled back -- which is destructive, and calling it
     # "nothing to do" would have hidden exactly the destruction the operator must
     # approve.
-    local blockers
-    blockers="$(zfs list -H -p -t snapshot -o name,guid -s creation -d 1 "$srcpath" 2>/dev/null \
-                | awk -v b="$base_guid" 'f{print} $2==b{f=1}' | cut -f1)"
+    # REV-120 F1/F2: the set is derived by createtxg comparison, and it covers
+    # BOOKMARKS as well as snapshots.
+    #
+    # Two defects lived in the previous derivation, and both are the same mistake
+    # made about different objects:
+    #
+    #   * it walked a list sorted by `creation` and took everything positioned after
+    #     the base. Equal creation seconds are real here, so a genuinely newer
+    #     snapshot could sort BEFORE the base and never enter the loss set -- while
+    #     `zfs rollback -r`, which compares createtxg, would destroy it anyway.
+    #   * it never looked at bookmarks at all. `zfs rollback -r` destroys newer
+    #     bookmarks too: its check and its destroy pass both iterate snapshots AND
+    #     bookmarks. Measured on pve0 (zfs-2.1.9): rolling back to @s1 with #bm1/#bm2/
+    #     #bm3 present left only #bm1, the one whose createtxg equals the base's.
+    #     A bookmark holds no bytes, so its loss never showed up in the byte total --
+    #     but it is the anchor for a future incremental send, and destroying one under
+    #     an approval that never mentioned it is exactly the widening REV-119's
+    #     confirmation boundary exists to forbid.
+    #
+    # A listing that fails leaves the set UNPROVEN rather than empty. "I could not
+    # read it" and "there is nothing there" are the same value in a shell variable
+    # and opposite facts to an operator about to destroy data.
+    local blockers="" bookmarks="" setstate=ok snaprows bmrows
+    if [ -n "$RESTORE_SRC_BASE_TXG" ]; then
+        snaprows="$(zfs list -H -p -t snapshot -o name,createtxg -d 1 "$srcpath" 2>/dev/null)" || setstate=unproven
+        bmrows="$(zfs list -H -p -t bookmark -o name,createtxg -d 1 "$srcpath" 2>/dev/null)"  || setstate=unproven
+        blockers="$(printf '%s\n' "$snaprows" | awk -F'\t' -v t="$RESTORE_SRC_BASE_TXG" 'NF>=2 && ($2+0)>(t+0){print $1}')"
+        bookmarks="$(printf '%s\n' "$bmrows"  | awk -F'\t' -v t="$RESTORE_SRC_BASE_TXG" 'NF>=2 && ($2+0)>(t+0){print $1}')"
+    else
+        setstate=unproven
+    fi
     RESTORE_BLOCKERS="$blockers"
+    RESTORE_BLOCK_BOOKMARKS="$bookmarks"
+    RESTORE_SET_STATE="$setstate"
 
     # Kind (2): live, unsnapshotted state. `written` is ZFS's own accounting of the
     # space written to the dataset since its most recent snapshot, so this is a
@@ -3216,8 +3269,23 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     if [ -n "$blockers" ]; then
         echo "  BLOKUJE / DO USUNIECIA (snapshoty zrodla NOWSZE niz wspolna baza):"
         printf '%s\n' "$blockers" | sed 's/.*@/    /'
-        echo "  To jest operacja NISZCZACA dla powyzszych snapshotow zrodla i wymaga jawnego"
+    fi
+    if [ -n "$bookmarks" ]; then
+        echo "  BLOKUJE / DO USUNIECIA (BOOKMARKI zrodla NOWSZE niz wspolna baza):"
+        printf '%s\n' "$bookmarks" | sed 's/.*#/    /'
+        echo "  Bookmark nie zajmuje miejsca, wiec nie widac go w bajtach -- ale 'zfs rollback -r'"
+        echo "  kasuje rowniez bookmarki nowsze od punktu docelowego (zmierzone, pve0/zfs-2.1.9),"
+        echo "  a bookmark jest punktem zaczepienia przyszlego wysylania przyrostowego. Jego strata"
+        echo "  jest nieodwracalna tak samo jak strata snapshota."
+    fi
+    if [ -n "$blockers" ] || [ -n "$bookmarks" ]; then
+        echo "  To jest operacja NISZCZACA dla powyzszych obiektow zrodla i wymaga jawnego"
         echo "  potwierdzenia. Czasownik, ktory ja wykonuje, jeszcze nie istnieje."
+    fi
+    if [ "$setstate" != ok ]; then
+        echo "  ZBIOR STRAT NIEDOWIEDZIONY: nie udalo sie ustalic pelnej listy snapshotow i"
+        echo "  bookmarkow zrodla nowszych niz wspolna baza. Powyzsza lista moze byc NIEPELNA;"
+        echo "  operacja niszczaca na tym stanie jest niedopuszczalna."
     fi
 
     case "$live_state" in
@@ -3423,11 +3491,20 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 #       point. The source is at the base and fenced, so a plain `recv` applies
 #       cleanly (verified live).
 #
-# Acceptance is by GUID, never by exit code (C-006/C-007): the source's newest
-# snapshot must carry RESTORE_TARGET_GUID afterwards, or the run FAILED however
-# cleanly the commands returned. A partial incremental leaves the source rolled
-# back to the base but short of the target -- that is real destruction without
-# completion, and the caller says so rather than claiming a clean source.
+# Acceptance is by GUID, never by exit code (C-006/C-007): the snapshot carrying
+# RESTORE_TARGET_GUID must exist on the source afterwards and nothing may be newer
+# than it, or the run FAILED however cleanly the commands returned. A partial
+# incremental leaves the source rolled back to the base but short of the target --
+# that is real destruction without completion, and the caller says so rather than
+# claiming a clean source.
+#
+# REV-120 F2: the acceptance test resolves the target by IDENTITY and then checks
+# the required final state around it. It used to read `-s creation | tail -1` and
+# call that the head, which is a guess whenever two snapshots share a creation
+# second -- the boundary condition this project keeps measuring in the wild. A
+# correct restore could be reported as a partial failure, or an incorrect one
+# accepted, depending on which of two equal-valued rows `zfs list` happened to
+# print last. Nothing here infers order from `creation` any more.
 #
 # Three outcomes, so the caller can be exact about what the operator is holding:
 #   0 -- GUID-verified success.
@@ -3439,12 +3516,18 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 #        claims it is.
 # A diagnosis is printed to stderr. The caller owns the fence and the
 # technical-snapshot cleanup.
-restore_execute() {   # <src> <copy>
-    local src="$1" copy="$2"
+restore_execute() {   # <src> <copy> <this run's own technical snapshots, full names...>
+    local src="$1" copy="$2"; shift 2
+    local own="" s
+    for s in "$@"; do [ -n "$s" ] && own="${own}${s}"$'\n'; done
 
     # Preconditions FIRST, all before the rollback, so a failure here is a clean 1.
-    [ -n "$RESTORE_SRC_BASE_SNAP" ] || {
+    [ -n "$RESTORE_SRC_BASE_SNAP" ] && [ -n "$RESTORE_SRC_BASE_TXG" ] || {
         echo "restore-exec: brak snapshotu bazowego na zrodle '$src' -- nie wiem, do ktorego punktu cofnac. Nic nie zmieniono." >&2
+        return 1
+    }
+    [ "$RESTORE_SET_STATE" = ok ] || {
+        echo "restore-exec: zbior obiektow nowszych niz baza na '$src' nie zostal dowiedziony, wiec nie wiem, co ten rollback zniszczy. Nic nie zmieniono." >&2
         return 1
     }
     if [ "$RESTORE_STRATEGY" = increment ]; then
@@ -3454,10 +3537,49 @@ restore_execute() {   # <src> <copy>
         }
     fi
 
+    # REV-120 F1: the last thing before the destructive command is a re-measurement
+    # of what it will actually destroy, compared for EXACT EQUALITY against what the
+    # operator approved.
+    #
+    # The confirmation boundary above proves the source had not changed as of the
+    # commit snapshot. This closes the only window left after it, and it is the
+    # window where a bookmark can still appear: `readonly=on` fences userland
+    # writes, and `zfs bookmark` is not one -- no more than `zfs snapshot` is. So
+    # the fence cannot be the argument here; a measurement can.
+    #
+    # The approved set is the blockers and bookmarks the operator saw, plus this
+    # run's own technical snapshots, which are newer than the base and which the
+    # rollback therefore also takes. Anything else present, or anything approved
+    # that has since disappeared, means the destructive set is no longer the
+    # approved one -- refuse, before destroying anything, and let the operator
+    # re-run against the state that actually exists.
+    local approved observed exsnap exbm
+    approved="$(printf '%s\n%s\n%s' "$RESTORE_BLOCKERS" "$RESTORE_BLOCK_BOOKMARKS" "$own" | grep -v '^$' | sort)"
+    exsnap="$(zfs list -H -p -t snapshot -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
+        echo "restore-exec: nie udalo sie odczytac snapshotow '$src' tuz przed zniszczeniem -- nie potwierdze, ze zbior do zniszczenia jest tym zatwierdzonym. Nic nie zmieniono." >&2
+        return 1
+    }
+    exbm="$(zfs list -H -p -t bookmark -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
+        echo "restore-exec: nie udalo sie odczytac bookmarkow '$src' tuz przed zniszczeniem -- 'zfs rollback -r' kasuje rowniez je, wiec bez tej listy nie znam zbioru strat. Nic nie zmieniono." >&2
+        return 1
+    }
+    observed="$(printf '%s\n%s\n' "$exsnap" "$exbm" \
+                | awk -F'\t' -v t="$RESTORE_SRC_BASE_TXG" 'NF>=2 && ($2+0)>(t+0){print $1}' | sort)"
+    if [ "$approved" != "$observed" ]; then
+        echo "restore-exec: zbior do zniszczenia NIE jest tym zatwierdzonym -- stan zrodla '$src' zmienil sie po potwierdzeniu." >&2
+        printf '%s\n' "$observed" | grep -v '^$' | grep -F -x -v -f <(printf '%s\n' "$approved") \
+            | sed 's/^/    doszlo (NIE zatwierdzone, zostaloby zniszczone): /' >&2
+        printf '%s\n' "$approved" | grep -v '^$' | grep -F -x -v -f <(printf '%s\n' "$observed") \
+            | sed 's/^/    zniklo (zatwierdzone, juz go nie ma): /' >&2
+        echo "restore-exec: nic nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim." >&2
+        return 1
+    fi
+
     # The single destructive primitive, shared by every reachable strategy. `-r`
-    # removes exactly what is newer than the base: the approved blockers plus this
-    # run's own technical snapshots. Rollback is atomic, so a failure here leaves
-    # the source as it was found -- a clean 1.
+    # removes exactly what is newer than the base: the approved blockers and
+    # bookmarks plus this run's own technical snapshots -- the set just proven equal
+    # to the approved one. Rollback is atomic, so a failure here leaves the source
+    # as it was found -- a clean 1.
     # ZFS's own stderr is deliberately NOT suppressed on the three execution
     # primitives, unlike the read/probe calls above. This is the one place where a
     # failure is both destructive and hard to diagnose, and "rollback failed" without
@@ -3478,14 +3600,49 @@ restore_execute() {   # <src> <copy>
         fi
     fi
 
-    # Acceptance test: the newest source snapshot must carry the target GUID. This
-    # is the authority, not the exit codes above -- a broken transfer that still
-    # returned 0 shows up here as a mismatch. The rollback already happened, so a
-    # mismatch is a 2.
-    local head_guid
-    head_guid="$(zfs list -H -p -t snapshot -o guid -s creation -d 1 "$src" 2>/dev/null | tail -1)"
-    if [ "$head_guid" != "$RESTORE_TARGET_GUID" ]; then
-        echo "restore-exec: weryfikacja GUID zawiodla -- najnowszy snapshot zrodla ma guid '${head_guid:-<brak>}', oczekiwano '$RESTORE_TARGET_GUID'. Stan zrodla NIE jest potwierdzony jako punkt docelowy." >&2
+    # Acceptance test (REV-120 F2). Two facts, both required, neither inferred from
+    # ordering:
+    #
+    #   1. the snapshot carrying RESTORE_TARGET_GUID EXISTS on the source -- looked
+    #      up by identity, and exactly one row may carry it;
+    #   2. nothing on the source is newer than it -- no snapshot, no bookmark --
+    #      measured by createtxg against that row's own createtxg.
+    #
+    # Together those are the required final state. The old check asked whether the
+    # LAST row of a creation-sorted listing carried the target guid, which answers
+    # neither question when two rows share a creation second: a correct restore
+    # could be reported as a partial failure because the peer sorted last, and the
+    # verdict would depend on ZFS's incidental tie ordering rather than on identity.
+    #
+    # Everything here runs after the rollback, so every failure is a 2 -- including
+    # a read that fails. An unverifiable final state is not a success.
+    local vsnap vbm tline tcount ttxg newer
+    vsnap="$(zfs list -H -p -t snapshot -o name,guid,createtxg -d 1 "$src" 2>/dev/null)" || {
+        echo "restore-exec: nie udalo sie odczytac snapshotow '$src' po operacji -- stanu koncowego NIE potwierdzono. Zrodlo zostalo juz zmienione." >&2
+        return 2
+    }
+    vbm="$(zfs list -H -p -t bookmark -o name,createtxg -d 1 "$src" 2>/dev/null)" || {
+        echo "restore-exec: nie udalo sie odczytac bookmarkow '$src' po operacji -- stanu koncowego NIE potwierdzono. Zrodlo zostalo juz zmienione." >&2
+        return 2
+    }
+    tline="$(printf '%s\n' "$vsnap" | awk -F'\t' -v g="$RESTORE_TARGET_GUID" '$2==g{print $1"\t"$3}')"
+    tcount="$(printf '%s\n' "$tline" | grep -c .)"
+    if [ "$tcount" -ne 1 ]; then
+        if [ "$tcount" -eq 0 ]; then
+            echo "restore-exec: weryfikacja GUID zawiodla -- na '$src' NIE MA snapshotu o guidzie '$RESTORE_TARGET_GUID' (punkt docelowy '${RESTORE_TARGET_SNAP}'). Stan zrodla NIE jest potwierdzony jako punkt docelowy." >&2
+        else
+            echo "restore-exec: weryfikacja GUID zawiodla -- guid '$RESTORE_TARGET_GUID' wystepuje na '$src' $tcount razy, wiec tozsamosc punktu docelowego jest niejednoznaczna. Stan zrodla NIE jest potwierdzony." >&2
+        fi
+        return 2
+    fi
+    ttxg="${tline##*	}"
+    newer="$( { printf '%s\n' "$vsnap" | awk -F'\t' 'NF>=3{print $1"\t"$3}'
+                printf '%s\n' "$vbm"   | awk -F'\t' 'NF>=2{print $1"\t"$2}'; } \
+              | awk -F'\t' -v t="$ttxg" 'NF>=2 && ($2+0)>(t+0){print $1}')"
+    if [ -n "$newer" ]; then
+        echo "restore-exec: weryfikacja stanu koncowego zawiodla -- punkt docelowy '$RESTORE_TARGET_SNAP' (guid $RESTORE_TARGET_GUID) jest na '$src', ale cos jest od niego NOWSZE:" >&2
+        printf '%s\n' "$newer" | sed 's/^/    /' >&2
+        echo "restore-exec: zrodlo NIE stoi na zadanym punkcie. Zostalo juz zmienione." >&2
         return 2
     fi
     return 0
@@ -3568,6 +3725,15 @@ restore_replace_internal() {   # <dataset> <config> <yes>
         *)  die "restore (odtworzenie niszczace): nie ustalono strategii dla '$src' -- odmawiam dzialania na nieokreslonym stanie" ;;
     esac
 
+    # REV-120 F1: the loss set has to be COMPLETE before it can be shown, and its
+    # completeness is a fact the planner either established or did not. Refuse here,
+    # before the first mutation, rather than presenting a list that may be missing
+    # the very object this run would destroy.
+    [ -n "$RESTORE_SRC_BASE_SNAP" ] && [ -n "$RESTORE_SRC_BASE_TXG" ] \
+        || die "restore (odtworzenie niszczace): nie udalo sie jednoznacznie wskazac snapshotu bazowego na '$src' po guidzie $RESTORE_BASE_GUID. Bez niego nie wiem, do ktorego punktu cofnac ani co jest od niego nowsze. Nic nie zmieniono."
+    [ "$RESTORE_SET_STATE" = ok ] \
+        || die "restore (odtworzenie niszczace): nie udalo sie ustalic pelnego zbioru snapshotow i bookmarkow '$src' nowszych niz wspolna baza. 'zfs rollback -r' kasuje jedne i drugie, wiec bez tej listy pytanie o zgode dotyczyloby zbioru, ktorego nikt nie zna. Nic nie zmieniono."
+
     # ---- REV-119 F1: the confirmation has to be INFORMED -------------------
     #
     # The read-only preview above cannot state the live loss exactly, and REV-118
@@ -3599,8 +3765,14 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     #
     # A set difference has no ordering in it at all, so there is nothing to get
     # wrong.
-    local snapset_before
+    #
+    # REV-120 F1: the same capture covers BOOKMARKS. The fence does not keep them
+    # out -- `zfs bookmark` is no more a userland write than `zfs snapshot` is --
+    # and `zfs rollback -r` destroys the newer ones, so a bookmark arriving after
+    # the approval is state that would be destroyed without ever having been shown.
+    local snapset_before bmset_before
     snapset_before="$(zfs list -H -t snapshot -o name -d 1 "$src" 2>/dev/null | sort)"
+    bmset_before="$(zfs list -H -t bookmark -o name -d 1 "$src" 2>/dev/null | sort)"
 
     local live_exact
     live_exact="$(zfs get -Hp -o value written "${src}@${preview_snap}" 2>/dev/null)"
@@ -3616,6 +3788,19 @@ restore_replace_internal() {   # <dataset> <config> <yes>
             printf '    snapshot  %-40s %s B\n' "${b#*@}" "$used"
             total=$((total + used))
         done <<< "$RESTORE_BLOCKERS"
+    fi
+    # REV-120 F1: bookmarks are part of the destructive set, so they are part of the
+    # set the operator approves. They contribute 0 B by construction -- a bookmark is
+    # a createtxg and a guid, nothing more -- so the byte total stays exact; what is
+    # lost is the ability to send incrementally from that point ever again, which the
+    # line says instead of pretending the loss is measured in bytes.
+    if [ -n "$RESTORE_BLOCK_BOOKMARKS" ]; then
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            printf '    bookmark  %-40s %s B\n' "${b#*#}" 0
+        done <<< "$RESTORE_BLOCK_BOOKMARKS"
+        echo "      (bookmark nie zajmuje miejsca, ale 'zfs rollback -r' kasuje rowniez jego --"
+        echo "       tracisz punkt zaczepienia przyszlego wysylania przyrostowego, bezpowrotnie)"
     fi
     if [ -n "$live_exact" ]; then
         printf '    dane zapisane po ostatnim snapshocie zrodla:   %s B\n' "$live_exact"
@@ -3685,20 +3870,24 @@ restore_replace_internal() {   # <dataset> <config> <yes>
             "$preview_snap"
     }
 
-    local arrived unexpected snapset_after
+    local arrived unexpected unexpected_bm snapset_after bmset_after
     arrived="$(zfs get -Hp -o value written "${src}@${commit_snap}" 2>/dev/null)"
     snapset_after="$(zfs list -H -t snapshot -o name -d 1 "$src" 2>/dev/null | sort)"
+    bmset_after="$(zfs list -H -t bookmark -o name -d 1 "$src" 2>/dev/null | sort)"
     unexpected="$(printf '%s\n' "$snapset_after" \
                   | grep -F -x -v -f <(printf '%s\n' "$snapset_before") \
                   | grep -v -x -F "${src}@${commit_snap}")"
+    unexpected_bm="$(printf '%s\n' "$bmset_after" \
+                     | grep -F -x -v -f <(printf '%s\n' "$bmset_before"))"
 
     case "$arrived" in ''|*[!0-9]*) arrived=ARRIVED ;; esac
-    if [ "$arrived" != 0 ] || [ -n "$unexpected" ]; then
+    if [ "$arrived" != 0 ] || [ -n "$unexpected" ] || [ -n "$unexpected_bm" ]; then
         fence_after=ok
         restore_fence_lower "$src" "$fence_val" "$fence_src" || fence_after=dirty
         echo "  PO ZATWIERDZENIU stan zrodla sie ZMIENIL:" >&2
         [ "$arrived" != 0 ] && echo "    nowe dane: ${arrived} B zapisane po podgladzie" >&2
         [ -n "$unexpected" ] && printf '    nowy snapshot: %s\n' "${unexpected#*@}" >&2
+        [ -n "$unexpected_bm" ] && printf '    nowy bookmark: %s\n' "${unexpected_bm#*#}" >&2
         restore_die_after_cleanup "$src" "$fence_after" \
             "restore (odtworzenie niszczace): zatwierdziles zbior strat, ktory juz nie opisuje zrodla. NIC nie zniszczono. Uruchom ponownie -- zobaczysz aktualny zbior i zdecydujesz na nim." \
             "$preview_snap" "$commit_snap"
@@ -3709,7 +3898,10 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # The fence comes down LAST, after execution, whichever way it went -- a
     # production dataset silently left readonly is a different outage from the one
     # this path was called to fix.
-    restore_execute "$src" "$copy"; local erc=$?
+    # This run's own technical snapshots are handed over rather than re-derived: the
+    # executor's exact-set check has to tell them apart from an intruder, and the
+    # only authority on which ones are ours is the code that created them.
+    restore_execute "$src" "$copy" "${src}@${preview_snap}" "${src}@${commit_snap}"; local erc=$?
 
     if [ "$erc" -eq 1 ]; then
         # Nothing was destroyed: every precondition is checked before the rollback,
@@ -3749,7 +3941,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     restore_drop_tech_snapshots "$src" "$preview_snap" "$commit_snap" || snaps_left=dirty
 
     echo
-    echo "ODTWORZENIE ZAKONCZONE: '$src' odtworzono do punktu '${RESTORE_TARGET_SNAP}' (guid ${RESTORE_TARGET_GUID}), potwierdzone GUID-em najnowszego snapshotu zrodla."
+    echo "ODTWORZENIE ZAKONCZONE: '$src' odtworzono do punktu '${RESTORE_TARGET_SNAP}' (guid ${RESTORE_TARGET_GUID}). Potwierdzone tozsamoscia: snapshot o tym GUID-zie jest na zrodle i nic na zrodle nie jest od niego nowsze."
     if [ "$fence_after" = ok ] && [ "$snaps_left" = ok ]; then
         echo "Blokada zapisu zdjeta; technicznych snapshotow tego przebiegu nie pozostalo."
         return 0
