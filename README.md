@@ -17,6 +17,36 @@ No package to install beyond the scripts themselves and their runtime dependenci
 > The reference below documents the individual tools; the guide documents the
 > procedure.
 
+## Simple two-server backup
+
+The normal path is four commands. The collector creates the relationship and
+package; the source consumes that package in one guided run; the collector
+seeds and activates it:
+
+```bash
+# collector
+./zfs-backup.sh add-client pve2 --host=192.168.28.8:22 --target=hdd/backups
+
+# source (the join shows the discovered ZFS scope: accept it or edit it)
+./deploy.sh --join=/path/to/pve2-package.tgz
+
+# collector
+./zfs-backup.sh seed pve2
+./zfs-backup.sh activate pve2
+```
+
+If the production/VPN address differs from the seed address, name it only on
+the last command:
+
+```bash
+./zfs-backup.sh activate pve2 --host=vpn.example:2222
+```
+
+`activate` owns the final catch-up, endpoint switch, verification, cron preview
+and transactional installation. Re-running the same command resumes from the
+durable state and does not duplicate completed work. The older low-level verbs
+remain available for diagnosis and repair.
+
 ## Table of contents
 
 - [Components at a glance](#components-at-a-glance)
