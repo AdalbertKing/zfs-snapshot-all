@@ -5249,7 +5249,15 @@ unpair_assert_no_cron_users() {
         printf '%s\n' "$hits" | while IFS= read -r line; do warn "    $line"; done
     done
     [ "$found" -eq 0 ] && return 0
-    die "refusing to unpair '$PEER_HOST' while the lines above still run. Remove the [dataset:] section from the gen-cron config and re-run gen-cron.sh --install first, then --unpair. (Removing only the crontab line leaves the config to put it back on the next generate.)"
+    # The remedy is stated as an ORDER, because the obvious order does not work
+    # and the previous wording prescribed it. Removing the crontab line first is
+    # useless -- the config puts it straight back on the next generate -- and
+    # stripping the config section then running gen-cron --install fails whenever
+    # that section was the last rule, since gen-cron rightly refuses to install a
+    # config with no send/prune/monitor rules at all. That is the ordinary shape
+    # for a collector tearing down its only client, and following the old text led
+    # in a circle (measured live, pve1<->pve2, 2026-08-14).
+    die "refusing to unpair '$PEER_HOST' while the lines above still run. Use 'zfs-backup.sh remove-client <name>', which removes this client's sections from the config AND reinstalls the crontab in that order. If you are doing it by hand: strip the sections from the gen-cron config FIRST, then remove the managed block from the crontab -- and note that if those were the config's last rules, 'gen-cron.sh --install' will refuse to render an empty ruleset, so the crontab block has to go directly. Removing only the crontab line leaves the config to put it back on the next generate."
 }
 
 # Revoking the grant this pairing made does NOT mean the account lost access.
