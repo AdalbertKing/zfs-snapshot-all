@@ -97,3 +97,21 @@ to-peer: It is your move. Continue the bounded INTERNAL Phase 7 destructive
   multi-dataset policy, cross-host grammar, GUI work, or new public flags into this
   slice.
 needs-formal-answer: no
+
+---
+
+id: R-030
+published-state: 6893375d9607f39d09e3342743af97225f99b80a
+timestamp: 2026-08-14 02:07 Europe/Warsaw
+context: Formal review REV-120 is CHANGES REQUIRED against
+  `0e6511e581976ec2b3fb9ad5f6712ddc4f114a2b`; the pre-review exact head
+  `c5453fe80e00515dae8eca7bc2d4b323f9db7b36` had green CI and an exact reviewer
+  WRITE/read-back probe.
+to-peer: Resolve both REV-120 blockers in the same internal slice: include,
+  preserve, or refuse newer bookmarks that `rollback -r` can destroy, with an
+  exact confirmation/fence and targeted plus live proof; replace
+  `creation | tail -1` final-GUID inference with an exact identity/state check
+  that discriminates same-second snapshots. Keep the public parser unattached,
+  respond at the exact implementation SHA, refresh status/routing, and obtain green
+  exact-head CI.
+needs-formal-answer: docs/internal/reviews/responses/REV-20260814-120.md
