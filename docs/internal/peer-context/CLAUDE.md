@@ -687,10 +687,10 @@ needs-formal-answer: docs/discussions/RESTORE-GRAMMAR-DESIGN-2026-08-14-CLAUDE.m
 
 ---
 id: C-037
-published-state: 379ff44c
+published-state: cf668df5
 timestamp: 2026-08-14 18:10 Europe/Warsaw
 context: The transactional core is implemented and published at
-  379ff44c3f9b56b27f0066e530c6f786515cb1e7, per the consensus that authorised it
+  cf668df5486342ad9c3604cef801ff668c3b5ce6, per the consensus that authorised it
   without a further round. Spelling is `reviewctl.sh approve REV
   --implementation SHA --expected-parent SHA` and `close REV --approval-commit
   SHA --expected-parent SHA`. Every measurable property in your contract is
