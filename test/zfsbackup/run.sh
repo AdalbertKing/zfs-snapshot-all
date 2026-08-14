@@ -468,6 +468,56 @@ else
     bad "remove_managed_sections refuses a header match whose marker names a different client" "rc=$rc out=$out"
 fi
 
+# --- 5b. teardown must also strip the REMOTE source prune -------------------
+# Found live (pve1<->pve2, 2026-08-14). remove-client stripped the client's
+# [dataset:] and target [prune:] sections but left the remote source prune --
+# a [prune:<account@host:ds>] section it had written itself. MANAGED_DATASETS and
+# MANAGED_PRUNE_SCOPE both record TARGET paths, and a source scope is an endpoint,
+# so remove_managed_sections was never told about it.
+#
+# The consequence was not a leftover line but a LOOP: the next step regenerated
+# cron from the uncleaned config and reinstalled the job, then --unpair refused
+# because of the line the removal had just recreated. The documented remedy could
+# not be followed either -- strip the section, and if it was the last rule,
+# gen-cron refuses to install an empty ruleset.
+#
+# Pinned as a PAIR: the client's own remote prune goes, a foreign one stays. A
+# teardown that removed every remote prune would pass the first half and quietly
+# delete another client's source retention.
+CF5B="$WORK/jobs.srcprune.conf"
+cat > "$CF5B" <<'EOF'
+[defaults]
+	host_label = x
+
+[dataset:hdd/backups/pve2/rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
+	src = zfsbackup-pve2@10.0.0.2:rpool/data
+
+[prune:hdd/backups/pve2]
+	# managed-by: zfs-backup.sh client=pve2
+	pattern = automated_
+	retain = 24
+
+[prune:zfsbackup-pve2@10.0.0.2:rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
+	pattern = automated_
+	retain = 24
+
+[prune:zfsbackup-other@10.0.0.9:tank/x]
+	# managed-by: zfs-backup.sh client=other
+	pattern = automated_
+	retain = 24
+EOF
+remove_managed_sections "$CF5B" "pve2" "hdd/backups/pve2/rpool/data" "hdd/backups/pve2"
+remove_client_remote_source_prunes "$CF5B" "pve2"
+if ! grep -q '^\[prune:zfsbackup-pve2@10.0.0.2:rpool/data\]$' "$CF5B" \
+   && grep -q '^\[prune:zfsbackup-other@10.0.0.9:tank/x\]$' "$CF5B" \
+   && ! grep -q '^\[dataset:hdd/backups/pve2/rpool/data\]$' "$CF5B"; then
+    ok "teardown strips the client's own remote source prune and leaves a foreign one"
+else
+    bad "teardown strips the client's own remote source prune and leaves a foreign one" "$(grep '^\[' "$CF5B" | tr '\n' ' ')"
+fi
+
 # --- 6. assert_cron_config_matches_installed --------------------------------
 # REAL incident, live on pve0, 2026-07-30: activate-client installed from a
 # NEW config file while the host's crontab was already managed by a

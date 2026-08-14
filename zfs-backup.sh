@@ -884,7 +884,17 @@ append_source_templates_if_missing() {   # <workfile> <rendered prune fragment>
 # each activation so an endpoint switch moves it. A hand-written or foreign remote
 # prune (no matching marker) is left untouched.
 remove_client_remote_source_prunes() {   # <file> <name>
-    local file="$1" name="$2" marker="# managed-by: zfs-backup.sh client=$name"
+    # Split deliberately. `local a="$1" b="$2" c="...$b"` does NOT build c from
+    # the b being assigned here: bash expands every word of the command before
+    # performing any of its assignments, so `$b` is the CALLER's b. This function
+    # therefore built its ownership marker from whatever `name` happened to exist
+    # in the enclosing scope, and only worked because its one caller had a `name`
+    # holding the same value. A caller whose `name` differed would have removed
+    # sections belonging to a different client, or none -- and under `set -u` with
+    # no enclosing `name` at all it dies outright, which is how this surfaced: a
+    # unit test called it directly for the first time.
+    local file="$1" name="$2"
+    local marker="# managed-by: zfs-backup.sh client=$name"
     local tmp; tmp=$(mktemp) || die "mktemp failed"
     awk -v marker="$marker" '
         function flush(   i) {
@@ -920,7 +930,13 @@ remove_client_remote_source_prunes() {   # <file> <name>
 # associative array is populated (no pipe/subshell).
 capture_client_remote_source_prunes() {   # <file> <name> ; fills SOURCE_PRUNE_PRESERVED
     SOURCE_PRUNE_PRESERVED=()
-    local file="$1" name="$2" marker="# managed-by: zfs-backup.sh client=$name"
+    # Same split, same reason as remove_client_remote_source_prunes above: a
+    # marker built inside one `local` command reads the CALLER's `name`, not the
+    # parameter being assigned beside it. This one is the capture half of the same
+    # pair, so a wrong marker here would preserve another client's policy across a
+    # re-activation instead of its own.
+    local file="$1" name="$2"
+    local marker="# managed-by: zfs-backup.sh client=$name"
     local line t cur_ds="" cur_body="" in_sec=0 is_remote=0 seen_content=0 has_marker=0
     _flush_cap() {
         [ "$in_sec" -eq 1 ] && [ "$is_remote" -eq 1 ] && [ "$has_marker" -eq 1 ] && [ -n "$cur_ds" ] \
@@ -6932,6 +6948,23 @@ cmd_remove_client() {
         chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086
         remove_managed_sections "$workfile" "$name" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
+        # The REMOTE source prune too. It is a [prune:<account@host:ds>] section
+        # this client wrote, and it is not in MANAGED_DATASETS or
+        # MANAGED_PRUNE_SCOPE -- both of those record TARGET paths, and the source
+        # scope is an endpoint, so remove_managed_sections was never told about it.
+        #
+        # Measured live (pve1<->pve2, 2026-08-14): removal left that one section
+        # behind, the very next step regenerated cron FROM the uncleaned config and
+        # reinstalled the line, and --unpair then refused because of the line the
+        # removal had just recreated. The documented remedy -- strip the section
+        # and re-run gen-cron --install -- cannot be followed either, because a
+        # config whose last rule was that section has no rules left and gen-cron
+        # rightly refuses to install nothing.
+        #
+        # Same helper activation already uses to move the source prune across an
+        # endpoint switch, so the ownership rule is unchanged: marker-verified,
+        # and a hand-written or foreign remote prune is left alone.
+        remove_client_remote_source_prunes "$workfile" "$name"
         if grep -qE '^\[(dataset|prune):' "$workfile"; then
             if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
                 rm -f "$workfile"
