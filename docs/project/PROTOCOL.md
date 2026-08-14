@@ -565,6 +565,43 @@ artifact(s), regenerates derived views, and verifies before completion.
 `reviewctl close` creates the canonical closure fact. It does not merely type
 `CLOSED` into a table.
 
+## Approval/closure publication boundary
+
+Approval and closure are **two separate publication boundaries**. They must not be
+collapsed into one "approve and close" write:
+
+1. The approval publication updates the reviewer artifact to
+   `verdict: APPROVED` and sets `reviewed-implementation` to the current full
+   response SHA. It regenerates and verifies the derived views. The resulting
+   reviewer approval commit must be reachable from the active published ref.
+2. Only a later closure publication may create the closure artifact. Its
+   `closed-by` field names the full 40-character SHA of that already-published
+   approval commit. It then regenerates and verifies the derived views again.
+
+This split is not ceremony: a closure commit cannot truthfully name its own SHA
+without circularity. If the active transport cannot execute the transactional
+generator or publish all facts and derived views coherently, stop at
+`APPROVED | Reviewer`; do not handwrite a closure and do not claim CLOSED in
+prose.
+
+A direct-main delivery must also receive its permanent
+`<!-- reviewed-by: <delivered-sha> ... -->` marker in the same publication that
+first reviews it. Do not rely only on a REV's moving
+`reviewed-implementation` pointer: later rounds advance that pointer and would
+make the historical delivery reappear as unreviewed.
+
+### Incident that fixed this rule
+
+On 2026-08-14 REV-120 and REV-121 were described as approved and closed while
+their reviewer headers still said `CHANGES-REQUIRED`; both closures used the
+text `ChatGPT reviewer` instead of a canonical commit SHA, and delivery
+`0e6511e...` resurfaced because its first-review fact had not been made
+permanent. `reviewctl` correctly refused generation. Forward repair
+`211d378628886c0683f817af31454f442dc3ada7` restored the four machine facts,
+the delivery marker and both generated views atomically. The incident was a
+publication-procedure failure, not permission for either role to edit the
+other's artifacts or bypass fail-closed generation.
+
 ---
 
 # Principle 15 — Evidence and impact-driven test discipline
