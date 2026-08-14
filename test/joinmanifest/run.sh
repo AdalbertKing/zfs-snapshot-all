@@ -159,6 +159,90 @@ else
     bad "a legacy manifest with no PEER_JOIN_ACCOUNT_UID field verifies when no uid was expected" "expected success"
 fi
 
+# ---------------------------------------------------------------------------
+# Simple join orchestration: a single --join owns draft -> preview/edit ->
+# commit, while a byte-identical completed scope makes a rerun a no-op.
+# Extract only the two orchestration helpers; account/key/ZFS mutations remain
+# outside this root-free suite and are represented by the existing stubs.
+# ---------------------------------------------------------------------------
+eval "$(sed -n '/^join_scope_is_committed() {/,/^}/p' "$DEPLOY_SRC")"
+eval "$(sed -n '/^guided_join_scope() {/,/^}/p' "$DEPLOY_SRC")"
+eval "$(sed -n '/^deploy_exit_cleanup() {/,/^}/p' "$DEPLOY_SRC")"
+if ! declare -F join_scope_is_committed >/dev/null || ! declare -F guided_join_scope >/dev/null; then
+    echo "FATAL: could not extract guided join helpers from $DEPLOY_SRC" >&2
+    exit 1
+fi
+
+out="$( (
+    JOIN_WORKDIR="$TMPD/cleanup-work"; mkdir -p "$JOIN_WORKDIR"
+    JOIN_RERUN_NEEDED=1
+    JOIN_RERUN_COMMAND='./deploy.sh --join=/root/pve1-package.tgz'
+    trap deploy_exit_cleanup EXIT
+    false
+) 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] \
+        && [ "$(printf '%s\n' "$out" | grep -c '^PONOW DOKLADNIE:')" -eq 1 ] \
+        && printf '%s' "$out" | grep -qF 'PONOW DOKLADNIE: ./deploy.sh --join=/root/pve1-package.tgz' \
+        && [ ! -e "$TMPD/cleanup-work" ]; then
+    ok "guided join: an interrupted run prints exactly one full rerun command and cleans its workdir"
+else
+    bad "guided join: an interrupted run prints exactly one full rerun command and cleans its workdir" "rc=$rc out=$out"
+fi
+
+GUIDED="$TMPD/guided"; mkdir -p "$GUIDED"
+GUIDED_CALLS="$GUIDED/calls"; : > "$GUIDED_CALLS"
+peer_scope_path() { echo "$GUIDED/$1.scope"; }
+peer_scope_granted_hash_path() { echo "$GUIDED/$1.scope.sha256"; }
+log() { printf 'LOG %s\n' "$*"; }
+warn() { printf 'WARN %s\n' "$*" >&2; }
+die() { printf 'FATAL %s\n' "$*" >&2; return 1; }
+do_draft_scope() {
+    printf '[dataset:tank/data]\ninclude_parent = no\ninclude_children = yes\n' > "$(peer_scope_path "$1")"
+    printf 'draft\n' >> "$GUIDED_CALLS"
+}
+do_commit_scope_check() { printf 'check\n' >> "$GUIDED_CALLS"; return 0; }
+do_commit_scope() {
+    local s; s=$(peer_scope_path "$1")
+    sha256sum -- "$s" | awk '{print $1}' > "$(peer_scope_granted_hash_path "$1")"
+    printf 'commit\n' >> "$GUIDED_CALLS"
+}
+
+SCOPE="$(peer_scope_path pve1)"; HASH="$(peer_scope_granted_hash_path pve1)"
+printf '[dataset:tank/data]\ninclude_parent = no\ninclude_children = yes\n' > "$SCOPE"
+sha256sum -- "$SCOPE" | awk '{print $1}' > "$HASH"
+: > "$GUIDED_CALLS"
+out="$(guided_join_scope pve1 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$GUIDED_CALLS" ] && printf '%s' "$out" | grep -q 'already committed'; then
+    ok "guided join: a completed byte-identical scope makes package resubmission a no-op"
+else
+    bad "guided join: a completed byte-identical scope makes package resubmission a no-op" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
+fi
+
+rm -f "$SCOPE" "$HASH"; : > "$GUIDED_CALLS"
+out="$(guided_join_scope pve1 <<< 't' 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$GUIDED_CALLS")" = $'draft\ncommit' ] \
+        && join_scope_is_committed pve1; then
+    ok "guided join: one acceptance drafts and commits the proposed source scope"
+else
+    bad "guided join: one acceptance drafts and commits the proposed source scope" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
+fi
+
+rm -f "$HASH"; : > "$GUIDED_CALLS"
+EDITOR_STUB="$GUIDED/editor.sh"
+cat > "$EDITOR_STUB" <<'EOF'
+#!/bin/bash
+printf '# edited\n' >> "$1"
+printf 'edit\n' >> "$GUIDED_CALLS"
+EOF
+chmod +x "$EDITOR_STUB"; export GUIDED_CALLS
+out="$(VISUAL="$EDITOR_STUB" guided_join_scope pve1 <<< $'e\nt' 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$GUIDED_CALLS")" = $'edit\ncheck\ncommit' ] \
+        && grep -qF '# edited' "$SCOPE" && join_scope_is_committed pve1; then
+    ok "guided join: edit returns to preview/accept, validates, then commits"
+else
+    bad "guided join: edit returns to preview/accept, validates, then commits" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
