@@ -15,8 +15,9 @@ set -uo pipefail
 # Commands:
 #   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
 #   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
-#   zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
+#   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
 #   zfs-backup.sh seed NAME [--yes]
+#   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
 #   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
 #   zfs-backup.sh verify-endpoint NAME
 #   zfs-backup.sh activate-client NAME [--yes] [--verbose]
@@ -184,8 +185,15 @@ Usage:
   zfs-backup.sh restore --dataset=D --snapshot=S [--yes]
                                     SAFE restore into the derived restore namespace. The
                                     original path is never the target.
-  zfs-backup.sh add-client NAME --lan=HOST[:PORT] (--datasets="A B" | --mode=backup|sync) [--target=X] [--bandwidth=N] [--profile=NAME] [--join-remotely]
+  zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
+                                    Default: backup mode; source datasets are discovered
+                                    and accepted by deploy.sh --join on the source host.
+                                    --lan, --mode and --datasets remain expert options.
   zfs-backup.sh seed NAME [--yes]
+  zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
+                                    Finish the relationship in one command: optional final
+                                    catch-up and endpoint switch, endpoint verification,
+                                    config/cron preview and transactional installation.
   zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT] [--skip-final-catchup] [--allow-stale-catchup]
   zfs-backup.sh verify-endpoint NAME
@@ -4161,10 +4169,14 @@ cmd_restore() {
 cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile=""
+    local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
     for a in "$@"; do
         case "$a" in
-            --lan=*)       lan="${a#*=}" ;;
+            --host=*|--lan=*)
+                           [ -z "$endpoint_option" ] \
+                               || die "add-client: pass exactly one endpoint option (--host is the normal form; --lan is the legacy alias)"
+                           endpoint_option="${a%%=*}"
+                           lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
@@ -4182,7 +4194,15 @@ cmd_add_client() {
     [ -n "$profile" ] || profile="default"
     profile_validate_dir "$PROFILE_ROOT/$profile" "$GENCRON" \
         || die "add-client: --profile='$profile': $PROFILE_ERR"
-    [ -n "$lan" ] || die "add-client requires --lan=HOST[:PORT] (the LAN address to seed over)"
+    [ -n "$lan" ] || die "add-client requires --host=HOST[:PORT] (the address used for the initial seed)"
+    # The ordinary product path is backup. Dataset discovery belongs to the
+    # source-side guided --join, so the collector no longer has to spell out
+    # either an internal mode name or datasets it cannot be expected to know.
+    # Explicit --datasets remains the expert/legacy path and explicit sync
+    # remains available for the deliberately different same-path semantics.
+    if [ -z "$mode" ] && [ -z "$datasets" ]; then
+        mode=backup
+    fi
     # REV-20260802-033 slice 6: --mode is the alternative to --datasets --
     # dataset selection deferred to the source's own scope file
     # (--draft-scope/--commit-scope on the peer) instead of named here.
@@ -4223,7 +4243,9 @@ cmd_add_client() {
         fi
     fi
 
-    local lan_host lan_port; read -r lan_host lan_port <<< "$(parse_endpoint_arg "$lan")"
+    local parsed_endpoint lan_host lan_port
+    parsed_endpoint=$(parse_endpoint_arg "$lan") || return 1
+    read -r lan_host lan_port <<< "$parsed_endpoint"
 
     # REV-20260802-033 slice 8 / U8: sync writes to the SAME path a live
     # guest might occupy; inside a shared PVE cluster that path can ALSO be
@@ -4951,6 +4973,10 @@ If the peer has a genuinely new address, record it: $0 set-endpoint $name --host
 }
 
 # ------------------------------------------------------------------------------
+activation_is_new_relationship() {   # <state> <installed-endpoint>
+    [ "$1" = endpoint_verified ] && [ -z "$2" ]
+}
+
 cmd_activate_client() {
     local name="${1:-}"; shift || true
     local yes=0 verbose=0
@@ -4983,7 +5009,13 @@ cmd_activate_client() {
     # already-installed policy must not be re-validated against whatever
     # the active profile currently renders.
     local is_new_relationship=0
-    [ "${STATE:-}" = "endpoint_verified" ] && is_new_relationship=1
+    # An endpoint change also passes through endpoint_verified, but it already
+    # has an installed endpoint/config. Treating every endpoint_verified state
+    # as CREATE would regenerate policy during a transport-only change. The
+    # durable installed-endpoint fact distinguishes first activation from a
+    # resumed re-activation without adding another state.
+    activation_is_new_relationship "${STATE:-}" "${INSTALLED_ENDPOINT:-}" \
+        && is_new_relationship=1
     case "${STATE:-}" in
         endpoint_verified|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- activate-client requires endpoint_verified (run seed, then verify-endpoint first). Fail-closed: no cron entry exists before this gate." ;;
@@ -5149,6 +5181,137 @@ cmd_activate_client() {
     chmod 0600 "$cpath"
 
     log "client '$name' active (cron runs over endpoint '$(endpoint_display)')."
+}
+
+# ------------------------------------------------------------------------------
+# Run one existing low-level command in a child process. Keeping the child
+# boundary is deliberate: the low-level commands use die()/exit for failures;
+# the high-level orchestrator must catch that exit and finish with ONE stable
+# resume instruction instead of disappearing halfway through the sequence.
+activation_step() {   # <resume-command> <low-level command...>
+    local resume="$1"; shift
+    if ! bash "$SCRIPT_DIR/zfs-backup.sh" "$@"; then
+        die "activation stopped during '$1'. Fix the reported cause, then run exactly: $resume"
+    fi
+}
+
+# The normal completion path for a seeded two-host relationship. It composes
+# the already-tested state-machine verbs; no transfer, grant or cron semantics
+# are reimplemented here. Safe retries are obtained from durable state after
+# every step: a fresh final catch-up is reused, an already-selected endpoint is
+# not switched again, a verified endpoint is not probed twice, and an active
+# relationship with the requested endpoint is a no-op success.
+cmd_activate() {
+    local name="${1:-}"; shift || true
+    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    local requested_host="" yes=0 verbose=0 a
+    for a in "$@"; do
+        case "$a" in
+            --host=*) requested_host="${a#*=}" ;;
+            --yes) yes=1 ;;
+            --verbose) verbose=1 ;;
+            *) die "activate: unknown option $a" ;;
+        esac
+    done
+
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
+
+    local resume="./zfs-backup.sh activate $name"
+    [ -n "$requested_host" ] && resume="$resume --host=$requested_host"
+    [ "$yes" -eq 1 ] && resume="$resume --yes"
+    [ "$verbose" -eq 1 ] && resume="$resume --verbose"
+
+    local STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
+    local FINAL_CATCHUP_ENDPOINT="" FINAL_CATCHUP_EPOCH="" PEER_HOST=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    case "${STATE:-}" in
+        pending_enroll|seeding)
+            die "client '$name' is not seeded yet. Run: ./zfs-backup.sh seed $name" ;;
+        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
+        *) die "client '$name' has unknown state '${STATE:-}' -- refusing to guess" ;;
+    esac
+
+    local current_host current_port current_endpoint
+    read -r current_host current_port <<< "$(active_endpoint_host_port)"
+    current_endpoint="$current_host:$current_port"
+
+    local requested_endpoint="$current_endpoint" requested_port
+    if [ -n "$requested_host" ]; then
+        local parsed_endpoint
+        parsed_endpoint=$(parse_endpoint_arg "$requested_host") || return 1
+        read -r requested_host requested_port <<< "$parsed_endpoint"
+        requested_endpoint="$requested_host:$requested_port"
+    fi
+
+    # Fully completed retry: no transfer, probe or cron rewrite.
+    if [ "${STATE:-}" = active ] \
+            && [ "$requested_endpoint" = "$current_endpoint" ] \
+            && [ "${INSTALLED_ENDPOINT:-}" = "${ACTIVE_ENDPOINT:-}" ]; then
+        log "client '$name' is already active on '$current_endpoint' -- nothing to do."
+        return 0
+    fi
+
+    if [ "$requested_endpoint" != "$current_endpoint" ]; then
+        local catchup_fresh=0 now age
+        case "${FINAL_CATCHUP_EPOCH:-}" in
+            ''|*[!0-9]*) ;;
+            *)
+                now=$(date '+%s')
+                age=$(( now - FINAL_CATCHUP_EPOCH ))
+                [ "${FINAL_CATCHUP_ENDPOINT:-}" = "$current_endpoint" ] \
+                    && [ "$age" -ge 0 ] && [ "$age" -le "$CATCHUP_MAX_AGE" ] \
+                    && catchup_fresh=1
+                ;;
+        esac
+        if [ "$catchup_fresh" -eq 1 ]; then
+            log "reusing the fresh final catch-up already recorded for '$current_endpoint'"
+        else
+            local -a catchup=(final-catchup "$name")
+            [ "$yes" -eq 1 ] && catchup+=(--yes)
+            activation_step "$resume" "${catchup[@]}"
+        fi
+        activation_step "$resume" set-endpoint "$name" --host="$requested_endpoint"
+    fi
+
+    # Reload after any catch-up/switch; the file is the state machine's source
+    # of truth and makes an interrupted run resume at the next unfinished step.
+    STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    read -r current_host current_port <<< "$(active_endpoint_host_port)"
+    current_endpoint="$current_host:$current_port"
+
+    if [ "${STATE:-}" != endpoint_verified ] \
+            || [ "${ENDPOINT_VERIFIED_FOR:-}" != "$current_endpoint" ]; then
+        case "${STATE:-}" in
+            seed_complete|endpoint_change_pending|endpoint_verified)
+                activation_step "$resume" verify-endpoint "$name" ;;
+            active)
+                die "client '$name' is active, but its installed/current endpoint record is inconsistent. Re-run exactly: $resume" ;;
+            *) die "activate cannot verify client '$name' from state '${STATE:-unknown}'. Re-run exactly: $resume" ;;
+        esac
+    else
+        log "endpoint '$current_endpoint' was already verified -- continuing"
+    fi
+
+    STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    if [ "${STATE:-}" != active ]; then
+        local -a install=(activate-client "$name")
+        [ "$yes" -eq 1 ] && install+=(--yes)
+        [ "$verbose" -eq 1 ] && install+=(--verbose)
+        activation_step "$resume" "${install[@]}"
+    fi
+
+    STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    [ "${STATE:-}" = active ] && [ "${INSTALLED_ENDPOINT:-}" = "${ACTIVE_ENDPOINT:-}" ] \
+        || die "activation returned without a matching active/install record. Re-run exactly: $resume"
+    log "client '$name' is active; endpoint and installed cron both use '${ACTIVE_ENDPOINT}'."
 }
 
 # ------------------------------------------------------------------------------
@@ -6824,6 +6987,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         restore)          shift; cmd_restore "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
+        activate)         shift; cmd_activate "$@" ;;
         final-catchup)    shift; cmd_final_catchup "$@" ;;
         set-endpoint)     shift; cmd_set_endpoint "$@" ;;
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
