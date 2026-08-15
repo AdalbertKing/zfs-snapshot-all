@@ -6378,6 +6378,96 @@ else
     bad "60: control -- a removable file is removed silently with status 0" "rc=$rc out=$out exists=$([ -e "$LK/removable" ] && echo y || echo n)"
 fi
 
+# 9. A PARTIAL allocation must leave nothing (REV PR#15 F1).
+#
+#    Arming after the third mktemp meant a failure at allocation 2 or 3 exited
+#    with everything already allocated still on disk and no trap to reach it.
+#    Measured on the reviewed head: failing the second render allocation left one
+#    file behind.
+#
+#    The counter lives in a FILE and outside TMPDIR: each allocation happens in
+#    its own $( ) subshell, so a shell variable resets every call and the
+#    injection would silently never fire -- a 0-file result that proves nothing.
+cat > "$LK/partial.sh" <<'EOF'
+source "$ZB" 2>/dev/null
+mktemp() {
+    local n
+    n=$(( $(cat "$NFILE") + 1 ))
+    echo "$n" > "$NFILE"
+    # allocation 3 overall = the second RENDER allocation, after lib-profile.sh's
+    # validation dump. That is where the leak was measured.
+    [ "$n" = 3 ] && return 1
+    command mktemp -p "$TMPDIR"
+}
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile
+EOF
+rm -rf "$LK/tmp/part"; mkdir -p "$LK/tmp/part"; echo 0 > "$LK/partn"
+pout="$(TMPDIR="$LK/tmp/part" NFILE="$LK/partn" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+        bash "$LK/partial.sh" 2>&1)"; prc=$?
+n="$(find "$LK/tmp/part" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a failed allocation part-way through leaves nothing behind"
+else
+    bad "60: a failed allocation part-way through leaves nothing behind" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/part" | tr '\n' ' ')"
+fi
+# control: the injection really fired and really stopped the load. Without this,
+# a fixture that never reaches three allocations passes the case vacuously.
+if [ "$(cat "$LK/partn")" = 3 ] && [ "$prc" -ne 0 ]; then
+    ok "60: control -- the allocation failure was injected and did stop the load"
+else
+    bad "60: control -- the allocation failure was injected and did stop the load" \
+        "calls=$(cat "$LK/partn") rc=$prc out=$pout"
+fi
+
+# 10/11. Sourcing must not silently delete the CALLER's own EXIT trap (F2).
+#
+#    Case 7 above pins the subshell direction: an ancestor's reported trap must
+#    not stop a subshell from arming. This is the other direction, and replacing
+#    unconditionally got it wrong -- a consumer that sources this file and loads
+#    a profile in its OWN shell had its cleanup discarded. In the host shell the
+#    `trap -p` report IS authoritative (that is what PROFILE_HOST_PID decides),
+#    so the foreign action can be composed rather than clobbered.
+cat > "$LK/hosttrap.sh" <<'EOF'
+trap 'echo FOREIGN-RAN' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+echo BODY-DONE
+EOF
+rm -rf "$LK/tmp/host"; mkdir -p "$LK/tmp/host"
+out="$(TMPDIR="$LK/tmp/host" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hosttrap.sh" 2>&1)"
+n="$(find "$LK/tmp/host" -mindepth 1 | wc -l | tr -d ' ')"
+if printf '%s' "$out" | grep -q 'FOREIGN-RAN' && [ "$n" = 0 ]; then
+    ok "60: sourcing keeps the caller's own EXIT trap AND still releases"
+else
+    bad "60: sourcing keeps the caller's own EXIT trap AND still releases" \
+        "out=$out left=$n"
+fi
+
+#    An action containing a single quote is the case a naive un-escape corrupts.
+#    `trap -p` prints the action single-quoted with embedded quotes written as
+#    '\'', and undoing that is a pattern context where a lone backslash escapes
+#    the next character instead of matching one. Getting it wrong hands the shell
+#    an unbalanced string and the caller's handler dies at exit with
+#    "unexpected EOF" -- worse than the loss it was meant to prevent.
+cat > "$LK/hostquote.sh" <<'EOF'
+trap 'echo "it'"'"'s-here"' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+EOF
+rm -rf "$LK/tmp/hq"; mkdir -p "$LK/tmp/hq"
+out="$(TMPDIR="$LK/tmp/hq" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hostquote.sh" 2>&1)"
+if [ "$out" = "it's-here" ]; then
+    ok "60: a caller action containing a quote is composed back intact"
+else
+    bad "60: a caller action containing a quote is composed back intact" "out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
