@@ -50,4 +50,17 @@ set -- -sS -X "$method" \
     -H "X-GitHub-Api-Version: 2022-11-28"
 [ -n "$body" ] && set -- "$@" -d @"$body"
 
+# Follow redirects on reads only. The job-log endpoint answers 302 to a signed
+# URL on a different host, and without this the wrapper returned an empty body --
+# which reads as "the log is empty", not as "the log was never fetched". That is
+# the difference between diagnosing a CI failure from its own output and
+# reproducing it blind on the wrong platform, which is how a Linux-only failure
+# was first mistaken for a Windows artifact.
+#
+# GET only, and deliberately not --location-trusted: curl drops the
+# Authorization header when a redirect crosses to another host, and that is the
+# behaviour we want -- the signed URL carries its own credentials and this token
+# must not follow it anywhere.
+[ "$method" = GET ] && set -- "$@" -L
+
 curl "$@" "$url"

@@ -24,6 +24,18 @@ REPO="$(cd "$DIR/../.." && pwd)"
 ZB="${ZB:-$REPO/zfs-backup.sh}"
 [ -r "$ZB" ] || { echo "cannot find zfs-backup.sh at $ZB" >&2; exit 1; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+
+# The transactional install below runs the REAL gen-cron.sh --install, which
+# refuses unless the shared lock directory exists and is writable -- a path
+# deploy.sh provisions on a real host (2775 root:zfsalert). Nothing here creates
+# it, so slice 2 failed on any machine that had not been deployed to: measured on
+# a CI runner and on the developer box alike, while deps.conf still declared this
+# suite `needs = nothing`.
+#
+# CRON_LOCK_DIR is the override lib-cron.sh already honours, so pointing it into
+# the fixture makes the claim true instead of relaxing the guard: the install
+# still takes a real lock, in a directory this suite owns and cleans up.
+export CRON_LOCK_DIR="$WORK/locks"; mkdir -p "$CRON_LOCK_DIR"
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }

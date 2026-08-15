@@ -415,8 +415,34 @@ r=$(bash "$TD/deploy.sh" --revoke-quiesce 'bad;name' >/dev/null 2>&1; echo $?)
 # sourced (it would run the whole provisioning body), and the point here is to
 # fail at each stage in turn, which needs control over its dependencies.
 TX="$WORK/tx"; mkdir -p "$TX/bin"
-sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" > "$TX/fn.sh"
+# Extract the function AND the helpers it calls. Extracting only
+# install_quiesce_grant is what broke this section: a later change added a call
+# to quiesce_allow_dir_empty, defined elsewhere in deploy.sh, so the sandbox
+# raised "command not found" in the middle of a transaction test -- and the suite
+# reported that as a product failure, which it was not.
+#
+# The helper set is DERIVED from the naming convention rather than listed here,
+# because a hand-kept list of dependencies is the same defect one level up.
+{
+    sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh"
+    sed -n '/^quiesce_[a-z_]*() {/,/^}$/p'       "$REPO/deploy.sh"
+} > "$TX/fn.sh"
 [ -s "$TX/fn.sh" ] || bad "tx: could not extract install_quiesce_grant" "empty"
+
+# Guard the extraction itself. Every quiesce_* helper the extracted code CALLS
+# must also be DEFINED in what was extracted; otherwise the first symptom is a
+# "command not found" deep inside a rollback assertion, which reads as the
+# product losing a transaction. Fail here instead, naming the missing helper.
+tx_missing=""
+for fn in $(grep -oE '\bquiesce_[a-z_]+\b' "$TX/fn.sh" | sort -u); do
+    grep -q "^$fn() {" "$TX/fn.sh" || tx_missing="$tx_missing $fn"
+done
+if [ -z "$tx_missing" ]; then
+    ok "tx: the extracted grant code carries every quiesce_* helper it calls"
+else
+    bad "tx: the extracted grant code carries every quiesce_* helper it calls" \
+        "not extracted:$tx_missing -- widen the sed above"
+fi
 
 tx_stub_sudo() {   # tx_stub_sudo <visudo-rc>
     # The visudo stub logs what it was asked to validate. That log is the only
