@@ -598,6 +598,24 @@ cat > "$CF5B" <<'EOF'
 	pattern = automated_
 	retain = 24
 EOF
+
+# The capture half had the same same-statement `local ... marker=...$name`
+# defect as removal, but its ordinary caller also had `name=pve2` in scope and
+# therefore hid it. Deliberately give the CALLER the wrong name: only the
+# function argument may choose which policy is preserved.
+name="other"
+capture_client_remote_source_prunes "$CF5B" "pve2"
+unset name
+if [ -n "${SOURCE_PRUNE_PRESERVED[rpool/data]+present}" ] \
+   && [ -z "${SOURCE_PRUNE_PRESERVED[tank/x]+present}" ] \
+   && printf '%s\n' "${SOURCE_PRUNE_PRESERVED[rpool/data]}" \
+        | grep -qF '# managed-by: zfs-backup.sh client=pve2'; then
+    ok "capture source prune uses its argument, not a different caller-scope name"
+else
+    bad "capture source prune uses its argument, not a different caller-scope name" \
+        "keys=${!SOURCE_PRUNE_PRESERVED[*]}"
+fi
+
 remove_managed_sections "$CF5B" "pve2" "hdd/backups/pve2/rpool/data" "hdd/backups/pve2"
 remove_client_remote_source_prunes "$CF5B" "pve2"
 if ! grep -q '^\[prune:zfsbackup-pve2@10.0.0.2:rpool/data\]$' "$CF5B" \
@@ -708,6 +726,20 @@ if printf '%s' "$out" | grep -q 'is not a valid account name' && [ ! -f "$BB/pai
     ok "Batch B: an invalid account name refuses before pairing"
 else
     bad "Batch B: an invalid account name refuses before pairing" "$(printf '%s' "$out" | tail -1)"
+fi
+
+# PR #14 F1. The expert fallback is conditional because every client shares one
+# managed cron block. An unconditional "then remove the block" stops the jobs of
+# every client whose rules remain in the config.
+unpair_body=$(awk '/^unpair_assert_no_cron_users\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$REPO/deploy.sh")
+if printf '%s\n' "$unpair_body" | grep -qF "On the collector, use 'zfs-backup.sh remove-client <name>'" \
+   && printf '%s\n' "$unpair_body" | grep -qF "If any dataset/prune/monitor rules remain" \
+   && printf '%s\n' "$unpair_body" | grep -qF "Only if zero rules remain" \
+   && ! printf '%s\n' "$unpair_body" | grep -qF "FIRST, then remove the managed block"; then
+    ok "unpair remedy reinstalls remaining clients and removes the whole block only at zero rules"
+else
+    bad "unpair remedy reinstalls remaining clients and removes the whole block only at zero rules" \
+        "$(printf '%s\n' "$unpair_body" | tail -12)"
 fi
 
 # --- 6. assert_cron_config_matches_installed --------------------------------
@@ -2155,6 +2187,105 @@ if printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""' && printf '%s\n' "$rsc" | grep
     ok "read_server_conf: resets before sourcing, so where it is called matters"
 else
     bad "read_server_conf: resets before sourcing, so where it is called matters" "$rsc"
+fi
+
+# PR #14 F2. Exercise the PUBLIC command, not its helpers in isolation. This is
+# deliberately a multi-client config: removing pve2 must delete all three shapes
+# it owns (dataset, target prune, remote source prune), publish the surviving
+# config, and reinstall a cron representation that still contains other.
+RMC="$WORK/removeclient-multiclient"; mkdir -p "$RMC/clients" "$RMC/relationships/pve2"
+cat > "$RMC/jobs.conf" <<'EOF'
+[defaults]
+	host_label = collector
+
+[dataset:hdd/backups/pve2/rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
+	use_template = standard_hourly
+
+[prune:hdd/backups/pve2]
+	# managed-by: zfs-backup.sh client=pve2
+	use_template = standard_hourly
+
+[prune:zfsbackup-pve2@10.0.0.2:rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
+	use_template = source_standard_hourly
+
+[dataset:hdd/backups/other/tank/x]
+	# managed-by: zfs-backup.sh client=other
+	use_template = standard_hourly
+
+[prune:hdd/backups/other]
+	# managed-by: zfs-backup.sh client=other
+	use_template = standard_hourly
+
+[prune:zfsbackup-other@10.0.0.3:tank/x]
+	# managed-by: zfs-backup.sh client=other
+	use_template = source_standard_hourly
+EOF
+printf 'STATE=active\nPEER_HOST=10.0.0.2\nMANAGED_DATASETS="hdd/backups/pve2/rpool/data"\nMANAGED_PRUNE_SCOPE="hdd/backups/pve2"\nCRON_CONFIG=%s/jobs.conf\n' "$RMC" \
+    > "$RMC/clients/pve2.conf"
+cat > "$RMC/gen-cron-ok.sh" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+cat > "$RMC/deploy-marker.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$RMC/deploy.calls"
+exit 0
+EOF
+chmod +x "$RMC/gen-cron-ok.sh" "$RMC/deploy-marker.sh"
+
+out=$( bash -c "
+    source '$ZFSBACKUP'
+    CLIENTS_DIR='$RMC/clients'; RELATIONSHIPS_DIR='$RMC/relationships'
+    GENCRON='$RMC/gen-cron-ok.sh'; DEPLOY='$RMC/deploy-marker.sh'
+    read_server_conf() { LOCAL_USER=''; }
+    assert_cron_config_matches_installed() { :; }
+    assert_no_foreign_managed_block() { :; }
+    atomic_replace_and_install() {
+        local realfile=\"\$1\" workfile=\"\$2\"
+        awk '/^\\[(dataset|prune):/{print \"JOB \" \$0}' \"\$workfile\" > '$RMC/installed.jobs'
+        /bin/mv -f \"\$workfile\" \"\$realfile\"
+    }
+    cmd_remove_client pve2
+" 2>&1 ); rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    ok "remove-client public command: multi-client teardown completes"
+else
+    bad "remove-client public command: multi-client teardown completes" "rc=$rc out=$out"
+fi
+if ! grep -qF 'client=pve2' "$RMC/jobs.conf" \
+   && ! grep -qE '^\[(dataset|prune):.*pve2' "$RMC/jobs.conf"; then
+    ok "remove-client public command: own dataset, target prune, and remote source prune are gone"
+else
+    bad "remove-client public command: own dataset, target prune, and remote source prune are gone" \
+        "$(grep -E '^\[|managed-by:' "$RMC/jobs.conf")"
+fi
+if grep -qF '[dataset:hdd/backups/other/tank/x]' "$RMC/jobs.conf" \
+   && grep -qF '[prune:hdd/backups/other]' "$RMC/jobs.conf" \
+   && grep -qF '[prune:zfsbackup-other@10.0.0.3:tank/x]' "$RMC/jobs.conf" \
+   && grep -qF 'client=other' "$RMC/jobs.conf"; then
+    ok "remove-client public command: foreign config survives"
+else
+    bad "remove-client public command: foreign config survives" \
+        "$(grep -E '^\[|managed-by:' "$RMC/jobs.conf")"
+fi
+if grep -qF 'JOB [dataset:hdd/backups/other/tank/x]' "$RMC/installed.jobs" \
+   && grep -qF 'JOB [prune:hdd/backups/other]' "$RMC/installed.jobs" \
+   && grep -qF 'JOB [prune:zfsbackup-other@10.0.0.3:tank/x]' "$RMC/installed.jobs" \
+   && ! grep -qF 'pve2' "$RMC/installed.jobs"; then
+    ok "remove-client public command: reinstall retains only the foreign jobs"
+else
+    bad "remove-client public command: reinstall retains only the foreign jobs" \
+        "$(cat "$RMC/installed.jobs" 2>/dev/null)"
+fi
+if grep -qxF -- '--unpair --peer=10.0.0.2' "$RMC/deploy.calls" \
+   && grep -q '^STATE=removed$' "$RMC/clients/pve2.conf"; then
+    ok "remove-client public command: unpairs and records removal only after publish"
+else
+    bad "remove-client public command: unpairs and records removal only after publish" \
+        "deploy=$(cat "$RMC/deploy.calls" 2>/dev/null) record=$(tr '\n' ' ' < "$RMC/clients/pve2.conf")"
 fi
 
 
