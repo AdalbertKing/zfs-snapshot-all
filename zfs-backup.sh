@@ -712,6 +712,16 @@ PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
+# BASHPID of the shell whose EXIT trap holds the release. Inherited by a
+# subshell like any other variable, which is the point: the comparison against
+# the subshell's own BASHPID is what tells it the trap is NOT armed there.
+PROFILE_TRAP_PID=""
+# BASHPID of the shell that sourced or executed this file, recorded at file
+# scope because that is the one moment at which the answer is certain. It is
+# what makes `trap -p EXIT` usable: in THIS shell the report is authoritative,
+# in any other shell it may be an inherited string for a trap that is not armed
+# there. See _profile_arm_release.
+PROFILE_HOST_PID="$BASHPID"
 # Source datasets that emit_client_sections wrote a REMOTE [prune:] for this run;
 # the flow grant-checks exactly these before publishing (REV-20260811-102 step 3).
 SOURCE_PRUNE_EMITTED_DS=()
@@ -720,13 +730,135 @@ SOURCE_PRUNE_EMITTED_DS=()
 # and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
 declare -A SOURCE_PRUNE_PRESERVED=()
 
+# Remove the rendered artifacts and REPORT what it could not remove.
+#
+# A cleanup that cannot admit its own failure launders the leftover
+# (REV-20260813-119 F1.4), so this verifies the removal instead of trusting
+# `rm -f`'s status -- `rm -f` is silent about a file it never had to touch and
+# about one an unreadable-directory mode leaves in place. The warning names the
+# exact surviving paths, because "some temporary file leaked" is not something
+# an operator can act on.
+#
+# It does NOT turn a successful run into a failed one. Nothing this tool tells
+# the operator -- what was installed, what was pruned, what the peer now holds
+# -- becomes untrue because a scratch file in $TMPDIR survived. Flipping the
+# status would report the transaction as failed when it succeeded, which is the
+# larger lie. The warning is the report.
+profile_release_tmp() {
+    local f left=""
+    for f in "$PROFILE_TPL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
+        [ -n "$f" ] || continue
+        rm -f "$f" 2>/dev/null
+        [ -e "$f" ] && left="$left $f"
+    done
+    PROFILE_TPL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
+    if [ -n "$left" ]; then
+        warn "could not remove the rendered profile file(s):$left -- they are still in place"
+        return 1
+    fi
+    return 0
+}
+
+# The EXIT trap preserves the status the shell was already exiting with: the
+# leak is a scratch-file problem, not a verdict on the run.
+_profile_release_on_exit() { local rc=$?; profile_release_tmp; return "$rc"; }
+
+# Arm the trap in THIS shell, at load time -- not at file scope.
+#
+# Bash resets traps in a subshell, so a file-scope trap would never fire for a
+# profile loaded inside `( ... )`, and that is exactly where the measured leak
+# came from: test/zfsbackup/run.sh drives its profile loads in subshells, and
+# 2026-08-14 found 1824 rendered-profile copies in pve0's /tmp from two days of
+# suite runs. Arming here covers every shell that actually renders a profile --
+# the real invocation, and each subshell.
+#
+# BASHPID, not `trap -p`, decides whether this shell is already armed. Measured
+# on bash 5.1.4: inside a subshell `trap -p EXIT` REPORTS an ancestor's action
+# string even though that trap is not armed there and will not run there. A
+# first version asked `trap -p` whether somebody else owned EXIT, read the
+# suite's own parent trap in every subshell, concluded it should keep its hands
+# off, and armed nothing -- the leak survived the fix and only the positive
+# control caught it. BASHPID differs in every subshell, so keying on it asks the
+# question that can actually be answered: did *this* shell arm it.
+#
+# The same measurement says a foreign trap must NOT be chained blindly: chaining
+# a merely-reported action would re-run something that may belong to an ancestor
+# -- in the suite's case `rm -rf "$WORK"`, executed inside every subshell,
+# destroying the fixtures of a run still in progress.
+#
+# But replacing unconditionally was wrong in the other direction, and measurably
+# so: `source ./zfs-backup.sh` followed by a profile load in the SAME shell
+# deleted that shell's own EXIT trap. This file is sourceable by design (guarded
+# dispatch; the suite sources it), so that is a consumer's cleanup silently
+# discarded, not an internal detail.
+#
+# What separates the two cases is knowing which shell we are in, which is why
+# PROFILE_HOST_PID is recorded at file scope:
+#
+#   BASHPID == PROFILE_HOST_PID  we are the shell that sourced/executed this
+#                                file. Anything `trap -p EXIT` reports here is
+#                                genuinely armed HERE, so ownership is decidable
+#                                and a foreign action can be COMPOSED with --
+#                                release first, then run what the caller armed.
+#                                It would have run anyway; we only precede it.
+#
+#   otherwise                    a subshell. The report may be an inherited
+#                                string for a trap that will never fire here, so
+#                                it is not usable evidence and the ancestor
+#                                hazard above applies. Replace, and stay bounded:
+#                                this program installs no EXIT trap of its own,
+#                                so nothing internal is displaced. A consumer
+#                                that arms a trap inside its OWN subshell and
+#                                then renders a profile there owns that
+#                                composition.
+_profile_arm_release() {
+    [ "${PROFILE_TRAP_PID:-}" = "$BASHPID" ] && return 0
+    # `bs` is a DOUBLED backslash on purpose: the replacement below is a pattern
+    # context, where a backslash escapes the next character. A single one would
+    # turn the '\'' we are looking for into three plain quotes, match nothing,
+    # and hand the shell an unbalanced action string -- measured as
+    # "unexpected EOF while looking for matching `'`" from the composed trap.
+    local prev="" action="" q="'" bs='\\'
+    # Only ask in the host shell, where the answer means something.
+    [ "$BASHPID" = "${PROFILE_HOST_PID:-}" ] && prev="$(trap -p EXIT)"
+    if [ -n "$prev" ]; then
+        # `trap -p` prints a re-usable command: trap -- 'ACTION' EXIT, with any
+        # embedded single quote written as '\''. Undo exactly that, in that
+        # order; the quote case is not hypothetical, it is any handler that
+        # quotes a path.
+        action="${prev#trap -- }"
+        action="${action% EXIT}"
+        action="${action#$q}"
+        action="${action%$q}"
+        action="${action//$q$bs$q$q/$q}"
+        # _profile_release_on_exit restores $?, so the caller's own handler sees
+        # the status the shell was exiting with rather than our cleanup's.
+        trap "_profile_release_on_exit; $action" EXIT
+    else
+        trap _profile_release_on_exit EXIT
+    fi
+    PROFILE_TRAP_PID="$BASHPID"
+}
+
 load_active_profile() {
     [ -n "$PROFILE_LOADED" ] && return 0
+    # A caller that cleared PROFILE_LOADED to re-render is about to overwrite
+    # these three variables; the files they point at have to go first or the
+    # trap can only ever reach the LAST set. The suite reloads inside one
+    # subshell, so this is a live path, not a defensive nicety.
+    profile_release_tmp
     local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
     # Validate before rendering. A profile that carries relationship-owned
     # fields must never reach a config, and finding that out from gen-cron
     # afterwards would mean it already had.
     profile_validate_dir "$dir" "$GENCRON" || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    # Arm BEFORE the first allocation, not after the last. Arming afterwards
+    # left a window in which allocation 2 or 3 could fail, `die` could exit, and
+    # everything already allocated survived with no trap to reach it -- measured:
+    # failing the second render allocation left the first file behind. The
+    # handler skips empty variables, so arming this early costs nothing and
+    # covers every failure path without one release call per path.
+    _profile_arm_release
     PROFILE_TPL_FILE=$(mktemp)   || die "mktemp failed"
     PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
     PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"

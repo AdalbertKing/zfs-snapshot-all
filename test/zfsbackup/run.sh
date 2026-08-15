@@ -19,7 +19,12 @@ ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# profile_release_tmp: this suite SOURCES zfs-backup.sh, so any profile it loads
+# in this very shell (rather than in one of the `( ... )` subshells below) is
+# this shell's to release -- zfs-backup.sh arms its own EXIT trap only in the
+# shell that rendered the profile, and will not displace the trap of a consumer
+# that sourced it. Defined later in the file; by EXIT it exists.
+trap 'profile_release_tmp; rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
@@ -6475,6 +6480,317 @@ if [ "$data_bounded" = no ] && [ "$data2_bounded" = yes ]; then
     ok "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe"
 else
     bad "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe" "data_bounded=$data_bounded data2_bounded=$data2_bounded"
+fi
+
+# --- 60. rendered profile artifacts must not be left in $TMPDIR ---------------
+#
+# load_active_profile allocates three mktemp files and, until this section
+# existed, never removed them. Measured on pve0 2026-08-14: 1824 rendered-profile
+# copies in /tmp, ~1800 per full run of THIS suite, because the suite drives its
+# profile loads inside `( ... )` subshells and each one leaked its three.
+#
+# The check is hermetic rather than a /tmp diff: every case runs with TMPDIR
+# pointed at its own empty directory, so "left nothing behind" is `ls` on that
+# directory and cannot be confused by another process's temporary files. mktemp
+# honours TMPDIR, which is what makes the isolation real.
+#
+# TMPDIR is EXPORTED, not merely assigned. mktemp is an external binary and reads
+# it from the environment, so a plain `TMPDIR=...` in the subshell leaves it
+# writing to the real /tmp and every case here passes for the wrong reason. The
+# positive control below is what caught that while this section was written.
+LK="$WORK/leak"
+mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
+cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
+   "$REPO/profiles/default/prune.inc" "$LK/root/prof/"
+# A profile that is COMPLETE (so it gets past the completeness check and reaches
+# lib-profile.sh's own mktemp'd schema dump) but INVALID: `src` is
+# relationship-owned and refused at the profile boundary.
+cp "$LK/root/prof"/* "$LK/root/bad/"
+printf 'src = zfsbackup@nope:x\n' >> "$LK/root/bad/dataset.inc"
+
+lk_env() {   # <profile name> <command...>  -- PROFILE_ROOT is always $LK/root
+    local prof="$1"; shift
+    PROFILE_ROOT="$LK/root" PROFILE_ACTIVE="$prof" PROFILE_LOADED="" GENCRON="$REPO/gen-cron.sh" \
+    PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+    LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+    PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+    PROFILE_GFS=1 "$@"
+}
+lk_conf() { printf '[defaults]\n\thost_label = lktest\n' > "$1"; }
+
+# Guard the harness itself. Every case below hides the body's output, so a body
+# that never ran would leave an empty TMPDIR and pass -- which is exactly what
+# the first version of this section did (lk_env passed the profile root on to
+# the command as an argument, so nothing was ever emitted). Prove ONCE, loudly,
+# that this env really drives a profile load and a real emission.
+lk_conf "$LK/probe.conf"
+lk_env prof emit_client_sections "$LK/probe.conf" lkp 1 >/dev/null 2>&1
+if grep -q 'profile__prof__' "$LK/probe.conf"; then
+    ok "60: harness control -- lk_env really loads the profile and emits from it"
+else
+    bad "60: harness control -- lk_env really loads the profile and emits from it" \
+        "no profile__prof__ section in the emitted config; every case below would pass vacuously"
+fi
+
+# 1. the ordinary path: one load, one emission, nothing left behind.
+lk_conf "$LK/one.conf"
+n="$(rm -rf "$LK/tmp/one"; mkdir -p "$LK/tmp/one"
+     ( export TMPDIR="$LK/tmp/one"; lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/one" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile-loading run leaves no file in TMPDIR"
+else
+    bad "60: a profile-loading run leaves no file in TMPDIR" "$n entr(ies) left: $(ls -1 "$LK/tmp/one" | tr '\n' ' ')"
+fi
+
+# 2. POSITIVE CONTROL. The same body with the release defeated must leave the
+#    three files -- otherwise case 1 proves only that the check cannot see.
+n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
+     ( export TMPDIR="$LK/tmp/ctl"
+       profile_release_tmp() { :; }; _profile_arm_release() { :; }
+       lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 3 ]; then
+    ok "60: control -- with the release defeated the same run leaks exactly 3 (the check discriminates)"
+else
+    bad "60: control -- with the release defeated the same run leaks exactly 3" "left=$n (expected the pre-fix leak)"
+fi
+
+# 3. TWO loads in one shell. A trap alone cannot fix this: it fires once, on the
+#    LAST allocation, and the first three would survive. Pins the release that
+#    load_active_profile does before it re-renders.
+lk_conf "$LK/two.conf"
+n="$(rm -rf "$LK/tmp/two"; mkdir -p "$LK/tmp/two"
+     ( export TMPDIR="$LK/tmp/two"
+       lk_env prof ensure_cron_config "$LK/two.conf" 1 1
+       lk_env prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/two" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: two loads in one shell leave nothing (the re-render releases the first set)"
+else
+    bad "60: two loads in one shell leave nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/two" | tr '\n' ' ')"
+fi
+
+# 4. The `die` path. zfs-backup.sh dies in several places after these files are
+#    allocated, so a delete at the end of the happy path would not have been a
+#    fix at all. `die` exits, which is what the EXIT trap is for.
+n="$(rm -rf "$LK/tmp/die"; mkdir -p "$LK/tmp/die"
+     ( export TMPDIR="$LK/tmp/die"
+       lk_env prof load_active_profile
+       die "simulated post-load failure" ) >/dev/null 2>&1
+     find "$LK/tmp/die" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a die() after the profile is loaded still leaves nothing"
+else
+    bad "60: a die() after the profile is loaded still leaves nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/die" | tr '\n' ' ')"
+fi
+
+# 5. lib-profile.sh's own mktemp'd schema dump, on the path that FAILS
+#    validation -- the branch where a leak would be easiest to miss, because the
+#    run is already on its way to dying.
+n="$(rm -rf "$LK/tmp/inv"; mkdir -p "$LK/tmp/inv"
+     ( export TMPDIR="$LK/tmp/inv"
+       lk_env bad load_active_profile ) >/dev/null 2>&1
+     find "$LK/tmp/inv" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile REFUSED by the boundary leaves no schema dump behind (lib-profile.sh)"
+else
+    bad "60: a profile REFUSED by the boundary leaves no schema dump behind" "$n entr(ies) left: $(ls -1 "$LK/tmp/inv" | tr '\n' ' ')"
+fi
+# and the refusal is the reason it stopped, not some unrelated failure. Without
+# this, a typo in the fixture path makes case 5 pass by dying at the
+# completeness check, before lib-profile.sh's mktemp is ever reached -- which is
+# how the first version of it passed.
+out="$( ( lk_env bad load_active_profile ) 2>&1 )"
+if printf '%s' "$out" | grep -q "relationship-owned"; then
+    ok "60: control -- that profile is refused for the boundary reason, not an unrelated one"
+else
+    bad "60: control -- that profile is refused for the boundary reason" "out=$out"
+fi
+
+# 6. A real EXECUTED invocation, not a sourced function: the process lifetime a
+#    host actually sees, ending the way most of this script's failures end --
+#    in die().
+#
+#    migrate-profile on a LEGACY config (standard_hourly still carrying
+#    prune_schedule) is the cheap one: it loads the profile, and with stdin at
+#    /dev/null the confirmation prompt reads EOF and it dies, well before
+#    anything installs. No --yes, so it cannot reach a crontab.
+mkdir -p "$LK/clients"
+cat > "$LK/legacy.conf" <<'EOF'
+[defaults]
+	host_label = lktest
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+EOF
+rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
+xout="$(TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=prof \
+        CRON_CONFIG="$LK/legacy.conf" CLIENTS_DIR="$LK/clients" SERVER_CONF="$LK/no-such.conf" \
+        bash "$ZFSBACKUP" migrate-profile </dev/null 2>&1)"
+n="$(find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
+# the discriminator: it must have ENTERED the migration, not returned early on
+# "already on the standard GFS profile" with no profile ever loaded.
+if [ "$n" = 0 ] && ! printf '%s' "$xout" | grep -q 'already on the standard GFS profile'; then
+    ok "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR"
+else
+    bad "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')" "out=$xout"
+fi
+
+# 7. Arming is decided by BASHPID, never by `trap -p`.
+#
+#    Measured on bash 5.1.4: inside a subshell `trap -p EXIT` reports an
+#    ANCESTOR's action string although that trap is not armed there. The first
+#    version of the fix used `trap -p` to avoid clobbering a foreign owner,
+#    therefore read this suite's own parent trap in every subshell, declined to
+#    arm, and leaked exactly as before. This pins the discriminator: a subshell
+#    running under an ancestor EXIT trap must STILL release.
+n="$(rm -rf "$LK/tmp/anc"; mkdir -p "$LK/tmp/anc"
+     ( export TMPDIR="$LK/tmp/anc"
+       trap 'echo ancestor-action >/dev/null' EXIT   # armed in THIS shell...
+       ( lk_env prof load_active_profile )           # ...but not in this one
+     ) >/dev/null 2>&1
+     find "$LK/tmp/anc" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)"
+else
+    bad "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/anc" | tr '\n' ' ')"
+fi
+# and the ancestor's own trap is untouched: it is still what runs at ITS exit,
+# not something the profile load replaced.
+out="$( ( trap 'echo ANCESTOR-RAN' EXIT
+          ( export TMPDIR="$LK/tmp/anc"; lk_env prof load_active_profile ) >/dev/null 2>&1
+          : ) 2>&1 )"
+if [ "$out" = "ANCESTOR-RAN" ]; then
+    ok "60: control -- the ancestor's EXIT trap still runs at its own exit"
+else
+    bad "60: control -- the ancestor's EXIT trap still runs at its own exit" "out=$out"
+fi
+
+# 8. The release reports a failure it cannot fix instead of swallowing it
+#    (REV-20260813-119 F1.4): a file it cannot remove must be named and must
+#    make the helper return non-zero.
+#
+#    Staged as a non-empty DIRECTORY rather than a mode-protected file: `rm -f`
+#    refuses a directory for root and non-root alike, and for the same reason on
+#    every filesystem, so this exercises the reporting branch in the suite's real
+#    environment (the PVE hosts run these as root) instead of skipping there --
+#    and it does not depend on chmod meaning anything, which it does not under
+#    Git Bash on Windows.
+UD="$LK/undel"; mkdir -p "$UD/keeps-it-non-empty"
+out="$( PROFILE_TPL_FILE="$UD" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "$UD" && [ -d "$UD" ]; then
+    ok "60: a removal it cannot do is reported with the path and returns non-zero"
+else
+    bad "60: a removal it cannot do is reported with the path and returns non-zero" "rc=$rc out=$out"
+fi
+# control: the same helper on a removable file is silent and succeeds -- so the
+# assertion above is about the failure, not about the helper always complaining.
+: > "$LK/removable"
+out="$( PROFILE_TPL_FILE="$LK/removable" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -e "$LK/removable" ]; then
+    ok "60: control -- a removable file is removed silently with status 0"
+else
+    bad "60: control -- a removable file is removed silently with status 0" "rc=$rc out=$out exists=$([ -e "$LK/removable" ] && echo y || echo n)"
+fi
+
+# 9. A PARTIAL allocation must leave nothing (REV PR#15 F1).
+#
+#    Arming after the third mktemp meant a failure at allocation 2 or 3 exited
+#    with everything already allocated still on disk and no trap to reach it.
+#    Measured on the reviewed head: failing the second render allocation left one
+#    file behind.
+#
+#    The counter lives in a FILE and outside TMPDIR: each allocation happens in
+#    its own $( ) subshell, so a shell variable resets every call and the
+#    injection would silently never fire -- a 0-file result that proves nothing.
+cat > "$LK/partial.sh" <<'EOF'
+source "$ZB" 2>/dev/null
+mktemp() {
+    local n
+    n=$(( $(cat "$NFILE") + 1 ))
+    echo "$n" > "$NFILE"
+    # allocation 3 overall = the second RENDER allocation, after lib-profile.sh's
+    # validation dump. That is where the leak was measured.
+    [ "$n" = 3 ] && return 1
+    command mktemp -p "$TMPDIR"
+}
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile
+EOF
+rm -rf "$LK/tmp/part"; mkdir -p "$LK/tmp/part"; echo 0 > "$LK/partn"
+pout="$(TMPDIR="$LK/tmp/part" NFILE="$LK/partn" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+        bash "$LK/partial.sh" 2>&1)"; prc=$?
+n="$(find "$LK/tmp/part" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a failed allocation part-way through leaves nothing behind"
+else
+    bad "60: a failed allocation part-way through leaves nothing behind" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/part" | tr '\n' ' ')"
+fi
+# control: the injection really fired and really stopped the load. Without this,
+# a fixture that never reaches three allocations passes the case vacuously.
+if [ "$(cat "$LK/partn")" = 3 ] && [ "$prc" -ne 0 ]; then
+    ok "60: control -- the allocation failure was injected and did stop the load"
+else
+    bad "60: control -- the allocation failure was injected and did stop the load" \
+        "calls=$(cat "$LK/partn") rc=$prc out=$pout"
+fi
+
+# 10/11. Sourcing must not silently delete the CALLER's own EXIT trap (F2).
+#
+#    Case 7 above pins the subshell direction: an ancestor's reported trap must
+#    not stop a subshell from arming. This is the other direction, and replacing
+#    unconditionally got it wrong -- a consumer that sources this file and loads
+#    a profile in its OWN shell had its cleanup discarded. In the host shell the
+#    `trap -p` report IS authoritative (that is what PROFILE_HOST_PID decides),
+#    so the foreign action can be composed rather than clobbered.
+cat > "$LK/hosttrap.sh" <<'EOF'
+trap 'echo FOREIGN-RAN' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+echo BODY-DONE
+EOF
+rm -rf "$LK/tmp/host"; mkdir -p "$LK/tmp/host"
+out="$(TMPDIR="$LK/tmp/host" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hosttrap.sh" 2>&1)"
+n="$(find "$LK/tmp/host" -mindepth 1 | wc -l | tr -d ' ')"
+if printf '%s' "$out" | grep -q 'FOREIGN-RAN' && [ "$n" = 0 ]; then
+    ok "60: sourcing keeps the caller's own EXIT trap AND still releases"
+else
+    bad "60: sourcing keeps the caller's own EXIT trap AND still releases" \
+        "out=$out left=$n"
+fi
+
+#    An action containing a single quote is the case a naive un-escape corrupts.
+#    `trap -p` prints the action single-quoted with embedded quotes written as
+#    '\'', and undoing that is a pattern context where a lone backslash escapes
+#    the next character instead of matching one. Getting it wrong hands the shell
+#    an unbalanced string and the caller's handler dies at exit with
+#    "unexpected EOF" -- worse than the loss it was meant to prevent.
+cat > "$LK/hostquote.sh" <<'EOF'
+trap 'echo "it'"'"'s-here"' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+EOF
+rm -rf "$LK/tmp/hq"; mkdir -p "$LK/tmp/hq"
+out="$(TMPDIR="$LK/tmp/hq" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hostquote.sh" 2>&1)"
+if [ "$out" = "it's-here" ]; then
+    ok "60: a caller action containing a quote is composed back intact"
+else
+    bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
 echo "--------------------------------------------"
