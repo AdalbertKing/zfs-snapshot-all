@@ -550,6 +550,20 @@ EOF
             if [ "$aptrc" -eq 2 ]; then tx_stub_sudo "$vrc"; return 0; fi
             return "$aptrc"
         }
+        # apt-rc 1 and 2 both MEAN "visudo is not on this host". Saying so is the
+        # sandbox's job, and PATH cannot say it: _find_visudo probes
+        # /usr/sbin/visudo and /sbin/visudo by absolute path, which exist on any
+        # real Linux box. So on a runner the dependency stage was simply never
+        # entered -- the grant installed cleanly, and the two cases asserting
+        # what happens when it CANNOT be installed compared against a run that
+        # never tried. They passed only on a machine with no sudo package at all,
+        # which is why Git Bash was green and Linux was not.
+        if [ "$aptrc" -ne 0 ]; then
+            command() {
+                case "$*" in *visudo*) return 1 ;; esac
+                builtin command "$@"
+            }
+        fi
         # shellcheck disable=SC1090
         . "$TX/fn.sh"
         # Redirect the three absolute paths into the sandbox.
