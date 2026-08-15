@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 22c4a1d8dfdb0120 -->
+<!-- status-covers-digest: 15ea7c18d9dcac92 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -36,6 +36,36 @@
   na `main`; 22 martwe gałęzie ucięte. **GitHub chroni `main` rulesetem
   `main-protection`** (id 20887546): PR + **10 wymaganych checków** + rozwiązane
   wątki; bezpośredni push (i `HEAD:main`) odrzucony po stronie serwera.
+
+- **RUX — ujednolicony zdalny deploy, IMPLEMENTED 2026-08-16, oczekuje żywego
+  dowodu (RUX-4).** Decyzja właściciela
+  `docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md` (MUST DO) była
+  niezaimplementowana — `deploy NAZWA --host=X` istniał, ale nie trzymał
+  ustalonej gramatyki `--source=/--target=/--mode=`. Teraz ten sam bare entrypoint
+  co lokalny backup obsługuje też źródło zdalne:
+  `zfs-backup.sh --source=HOST:DATASET --target=DATASET [--install] [--yes]`
+  (backup) i `--source=HOST:DATASET --mode=sync` (identity mapping, bez
+  `--target`). `rux_entry` w dispatcherze rozstrzyga lokalne/zdalne PRZED tym,
+  jak `--source` trafi do jakiegokolwiek parsera — lokalna ścieżka
+  (`cmd_local_backup`) jest bit-w-bit nietknięta. Zdalna ścieżka **nie jest
+  nowym silnikiem**: składa ISTNIEJĄCY cykl `add-client → seed → activate`
+  (wydzielony do współdzielonej `deploy_continue_lifecycle`, używanej też przez
+  `cmd_deploy`) i istniejące potwierdzenie zakresu przy `--join`. Nazwa relacji
+  domyślnie wyprowadzana z hosta (`peer_label`, `--name=` tylko przy
+  niejednoznaczności — zero dodatkowego argumentu w zwykłym przypadku, zgodnie
+  z decyzją). `rux_verify_requested_scope` NIE jest drugim mechanizmem grantu —
+  tylko SPRAWDZA po `--join`, że to, co źródło faktycznie przyznało, pokrywa to,
+  co poproszono, i odmawia z dokładnym powodem zamiast cicho zaakceptować inne
+  źródło. Powtórne wywołanie tej samej komendy: rozpoznaje istniejącą relację i
+  wznawia (żadnego drugiego `add-client`); sprzeczne fakty (ten sam host, inny
+  target/mode) odmawiają zamiast cicho mutować; relacja NIE założona przez RUX
+  (brak `RUX_SOURCE`) odmawia zamiast cicho przejąć. Dowód: `test/rux/run.sh`
+  21/21 (parser, planner, orkiestracja, konflikt, weryfikacja zakresu — wszystko
+  z zaślepionym `deploy.sh`/`seed`/`activate`, bez sieci/ZFS), `zfsbackup`
+  442/442 bez regresji, `localbackup` 55/56 (jedyny fail: `flock` nieobecny w
+  tym środowisku Windows/Git-Bash — środowiskowe, niezwiązane z tą zmianą).
+  **RUX-4 (żywy łańcuch trzech hostów z prawdziwym `--join` po SSH) jeszcze NIE
+  wykonany** — zadeklarowany jako `manual:rux-live-chain` w `test/deps.conf`.
 
 - **`deploy` — jednokomendowe wdrożenie dwuhostowe, LIVE-PROVEN 2026-08-15.**
   `zfs-backup.sh deploy NAZWA --host=ŹRÓDŁO [--target=X] [--profile=P] [--yes]
