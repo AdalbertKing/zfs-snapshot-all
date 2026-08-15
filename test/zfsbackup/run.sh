@@ -546,9 +546,17 @@ chmod +x "$BB/deploy.sh"
 # invalid-name case never reached the code it was written to exercise, and the
 # override case lost its quoting too. The two failures that caught this were mine,
 # in the harness, not in the product.
+# Each case below is an independent "command one" on a fresh collector, so the
+# collector is reset here rather than in individual cases. Sharing one client name
+# across the four without resetting is what made cases 2 and 5 fail: case 1 created
+# bbc, so every later case died on "client 'bbc' already exists" long before it
+# reached the account logic it was written to exercise -- and cases 3/3b passed only
+# because case 3 happened to clear the directory first. That is a harness fault that
+# reports as a product fault, which is the expensive kind.
 bb_add() {   # <stub LOCAL_USER value> [extra add-client args...]
     local acct="$1"; shift
     rm -f "$BB/pair.log"
+    rm -rf "$BB/clients"
     BB_PAIRLOG="$BB/pair.log" bash -c '
         source "$1" 2>/dev/null
         DEPLOY="$2"; CLIENTS_DIR="$3"
@@ -580,7 +588,6 @@ fi
 # 3. NO ACCOUNT RESOLVABLE: refuse at command one, name the corrective command,
 #    and create nothing. This is the case that used to produce root-run jobs from
 #    a warning nobody had to answer.
-rm -rf "$BB/clients"
 out="$(bb_add "")"
 if printf '%s' "$out" | grep -q 'no delegated backup account configured' \
    && printf '%s' "$out" | grep -q 'setup-server --local-user=NAME' \
