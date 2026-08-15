@@ -539,17 +539,23 @@ exit 0
 EOF
 chmod +x "$BB/deploy.sh"
 
+# Extra arguments are passed as ARGUMENTS to bash -c, not spliced into its script
+# text. Splicing looked equivalent and was not: an argument like
+# `--local-user=2bad; rm -rf /` -- which is precisely one of the cases under test
+# -- stops being one word the moment it is pasted into a script body, so the
+# invalid-name case never reached the code it was written to exercise, and the
+# override case lost its quoting too. The two failures that caught this were mine,
+# in the harness, not in the product.
 bb_add() {   # <stub LOCAL_USER value> [extra add-client args...]
     local acct="$1"; shift
     rm -f "$BB/pair.log"
-    BB_PAIRLOG="$BB/pair.log" DEPLOY="$BB/deploy.sh" CLIENTS_DIR="$BB/clients" \
-    bash -c '
-        source "'"$ZFSBACKUP"'" 2>/dev/null
-        DEPLOY="'"$BB/deploy.sh"'"
-        CLIENTS_DIR="'"$BB/clients"'"
-        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="'"$acct"'"; }
-        cmd_add_client bbc --host=10.9.9.9:22 --target=tank/bb '"$*"'
-    ' 2>&1
+    BB_PAIRLOG="$BB/pair.log" bash -c '
+        source "$1" 2>/dev/null
+        DEPLOY="$2"; CLIENTS_DIR="$3"
+        acct="$4"; shift 4
+        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="$acct"; }
+        cmd_add_client bbc --host=10.9.9.9:22 --target=tank/bb "$@"
+    ' _ "$ZFSBACKUP" "$BB/deploy.sh" "$BB/clients" "$acct" "$@" 2>&1
 }
 
 # 1. CONFIGURED DEFAULT: bare add-client takes the collector's account and hands
@@ -3932,7 +3938,7 @@ fi
 # member of the SAME PVE cluster (U8) -- checked via PVE_NODES_DIR, overridden
 # here instead of the real /etc/pve/nodes so this needs no real cluster.
 U8="$WORK/u8nodes"; mkdir -p "$U8/pve2"
-out=$( ( PVE_NODES_DIR="$U8"; cmd_add_client u8client --lan=pve2 --mode=sync ) 2>&1 ); rc=$?
+out=$( ( PVE_NODES_DIR="$U8"; read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }; cmd_add_client u8client --lan=pve2 --mode=sync ) 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"SAME PVE cluster"*) true ;; *) false ;; esac; then
     ok "add-client --mode=sync refuses a peer that looks like a same-cluster node (U8)"
 else
@@ -3966,6 +3972,7 @@ EOF
 chmod +x "$JRDEPLOY"
 
 out=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+         read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
          cmd_add_client jrtest --lan=10.7.7.7 --datasets="tank/a" --target=tank/backups --join-remotely ) 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && grep -qF -- "--join-remotely" "$JR/args.out"; then
     ok "add-client --join-remotely: forwarded to deploy.sh --pair"
@@ -3974,6 +3981,7 @@ else
 fi
 
 out2=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+          read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
           cmd_add_client jrtest2 --lan=10.7.7.8 --datasets="tank/a" --target=tank/backups ) 2>&1 ); rc2=$?
 if [ "$rc2" -eq 0 ] && ! grep -qF -- "--join-remotely" "$JR/args.out"; then
     ok "add-client without --join-remotely: deploy.sh --pair is not passed the flag"
@@ -5470,7 +5478,7 @@ fi
 # marker, same technique used for remove-client above) rather than asserting
 # the write_client_field call was reached.
 P53="$WORK/profile53"; mkdir -p "$P53/clients"
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$P53" > "$P53/server.conf"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=zfsbackup\n' "$P53" > "$P53/server.conf"
 cat > "$P53/deploy_marker.sh" <<'EOF'
 #!/bin/bash
 exit 0
