@@ -2,7 +2,35 @@
   "permissions": {
     "allow": [
       "Bash(\"/c/Program Files/PuTTY/plink.exe\" -batch root@192.168.28.9 \"zfs destroy hdd/backuptest/rev093/create@2026-08-10_14-16-59\")",
-      "Bash(\"/c/Program Files/PuTTY/plink.exe\" -batch root@192.168.28.9 \"sudo -u zfsbackup bash -c 'cd /home/zfsbackup/zfs-snapshot-all && ./snapsend.sh -m \\\"\\\" hdd/backuptest/rev093/create hdd/backuptest_targets'\")"
+      "Bash(\"/c/Program Files/PuTTY/plink.exe\" -batch root@192.168.28.9 \"sudo -u zfsbackup bash -c 'cd /home/zfsbackup/zfs-snapshot-all && ./snapsend.sh -m \\\"\\\" hdd/backuptest/rev093/create hdd/backuptest_targets'\")",
+      "Bash(git fetch *)",
+      "Bash(git show *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git rev-parse *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git merge --ff-only *)",
+      "Bash(git push origin HEAD:*)",
+      "Bash(./test/impact.sh *)",
+      "Bash(./test/impact.sh)",
+      "Bash(./test/reviewctl.sh --generate)",
+      "Bash(./test/reviewctl.sh --verify)",
+      "Bash(./test/remote-suite.sh *)",
+      "Bash(./test/gh-api.sh *)"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push origin main*)",
+      "Bash(git reset --hard *)",
+      "Bash(crontab *)",
+      "Bash(*plink* crontab *)",
+      "Bash(*plink* zpool *)",
+      "Bash(*plink* zfs destroy *)"
     ]
   }
 }
