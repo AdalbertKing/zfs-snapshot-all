@@ -546,24 +546,34 @@ EOF
         REPO_DIR="$REPO"
         log()  { echo ">>> $*"; }
         warn() { echo "!!! $*" >&2; }
-        apt_install_with_fallback() {
-            if [ "$aptrc" -eq 2 ]; then tx_stub_sudo "$vrc"; return 0; fi
-            return "$aptrc"
-        }
         # apt-rc 1 and 2 both MEAN "visudo is not on this host". Saying so is the
         # sandbox's job, and PATH cannot say it: _find_visudo probes
         # /usr/sbin/visudo and /sbin/visudo by absolute path, which exist on any
-        # real Linux box. So on a runner the dependency stage was simply never
-        # entered -- the grant installed cleanly, and the two cases asserting
-        # what happens when it CANNOT be installed compared against a run that
-        # never tried. They passed only on a machine with no sudo package at all,
-        # which is why Git Bash was green and Linux was not.
+        # real Linux box. So on a runner the dependency stage was never entered --
+        # the grant installed cleanly, and the cases asserting what happens when
+        # it CANNOT be installed compared against a run that never tried. They
+        # passed only on a machine with no sudo package at all, which is why Git
+        # Bash was green and Linux was not.
+        #
+        # The absence is a STATE, not a constant: under apt-rc 2 the package is
+        # supplied mid-run, so visudo must be missing before that call and
+        # present after it. A flag file carries that, because the probe happens
+        # in the function under test, not here.
         if [ "$aptrc" -ne 0 ]; then
+            : > "$TX/no-visudo"
             command() {
-                case "$*" in *visudo*) return 1 ;; esac
+                case "$*" in *visudo*) [ -e "$TX/no-visudo" ] && return 1 ;; esac
                 builtin command "$@"
             }
         fi
+        apt_install_with_fallback() {
+            if [ "$aptrc" -eq 2 ]; then
+                tx_stub_sudo "$vrc"
+                rm -f "$TX/no-visudo"   # apt really did supply it
+                return 0
+            fi
+            return "$aptrc"
+        }
         # shellcheck disable=SC1090
         . "$TX/fn.sh"
         # Redirect the three absolute paths into the sandbox.
