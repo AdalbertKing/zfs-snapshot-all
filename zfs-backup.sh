@@ -185,6 +185,13 @@ Usage:
   zfs-backup.sh restore --dataset=D --snapshot=S [--yes]
                                     SAFE restore into the derived restore namespace. The
                                     original path is never the target.
+  zfs-backup.sh deploy NAME --host=SOURCE[:PORT] [--target=X] [--profile=NAME] [--yes]
+                                    ONE-COMMAND two-host setup. Runs the whole lifecycle
+                                    add-client -> seed -> activate and pairs the source
+                                    over SSH from here (no manual 'deploy.sh --join' on
+                                    the peer; --manual-join for the explicit two-sided
+                                    form). Resumable: re-run the same line to finish an
+                                    interrupted one.
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
@@ -705,6 +712,16 @@ PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
+# BASHPID of the shell whose EXIT trap holds the release. Inherited by a
+# subshell like any other variable, which is the point: the comparison against
+# the subshell's own BASHPID is what tells it the trap is NOT armed there.
+PROFILE_TRAP_PID=""
+# BASHPID of the shell that sourced or executed this file, recorded at file
+# scope because that is the one moment at which the answer is certain. It is
+# what makes `trap -p EXIT` usable: in THIS shell the report is authoritative,
+# in any other shell it may be an inherited string for a trap that is not armed
+# there. See _profile_arm_release.
+PROFILE_HOST_PID="$BASHPID"
 # Source datasets that emit_client_sections wrote a REMOTE [prune:] for this run;
 # the flow grant-checks exactly these before publishing (REV-20260811-102 step 3).
 SOURCE_PRUNE_EMITTED_DS=()
@@ -713,13 +730,135 @@ SOURCE_PRUNE_EMITTED_DS=()
 # and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
 declare -A SOURCE_PRUNE_PRESERVED=()
 
+# Remove the rendered artifacts and REPORT what it could not remove.
+#
+# A cleanup that cannot admit its own failure launders the leftover
+# (REV-20260813-119 F1.4), so this verifies the removal instead of trusting
+# `rm -f`'s status -- `rm -f` is silent about a file it never had to touch and
+# about one an unreadable-directory mode leaves in place. The warning names the
+# exact surviving paths, because "some temporary file leaked" is not something
+# an operator can act on.
+#
+# It does NOT turn a successful run into a failed one. Nothing this tool tells
+# the operator -- what was installed, what was pruned, what the peer now holds
+# -- becomes untrue because a scratch file in $TMPDIR survived. Flipping the
+# status would report the transaction as failed when it succeeded, which is the
+# larger lie. The warning is the report.
+profile_release_tmp() {
+    local f left=""
+    for f in "$PROFILE_TPL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
+        [ -n "$f" ] || continue
+        rm -f "$f" 2>/dev/null
+        [ -e "$f" ] && left="$left $f"
+    done
+    PROFILE_TPL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
+    if [ -n "$left" ]; then
+        warn "could not remove the rendered profile file(s):$left -- they are still in place"
+        return 1
+    fi
+    return 0
+}
+
+# The EXIT trap preserves the status the shell was already exiting with: the
+# leak is a scratch-file problem, not a verdict on the run.
+_profile_release_on_exit() { local rc=$?; profile_release_tmp; return "$rc"; }
+
+# Arm the trap in THIS shell, at load time -- not at file scope.
+#
+# Bash resets traps in a subshell, so a file-scope trap would never fire for a
+# profile loaded inside `( ... )`, and that is exactly where the measured leak
+# came from: test/zfsbackup/run.sh drives its profile loads in subshells, and
+# 2026-08-14 found 1824 rendered-profile copies in pve0's /tmp from two days of
+# suite runs. Arming here covers every shell that actually renders a profile --
+# the real invocation, and each subshell.
+#
+# BASHPID, not `trap -p`, decides whether this shell is already armed. Measured
+# on bash 5.1.4: inside a subshell `trap -p EXIT` REPORTS an ancestor's action
+# string even though that trap is not armed there and will not run there. A
+# first version asked `trap -p` whether somebody else owned EXIT, read the
+# suite's own parent trap in every subshell, concluded it should keep its hands
+# off, and armed nothing -- the leak survived the fix and only the positive
+# control caught it. BASHPID differs in every subshell, so keying on it asks the
+# question that can actually be answered: did *this* shell arm it.
+#
+# The same measurement says a foreign trap must NOT be chained blindly: chaining
+# a merely-reported action would re-run something that may belong to an ancestor
+# -- in the suite's case `rm -rf "$WORK"`, executed inside every subshell,
+# destroying the fixtures of a run still in progress.
+#
+# But replacing unconditionally was wrong in the other direction, and measurably
+# so: `source ./zfs-backup.sh` followed by a profile load in the SAME shell
+# deleted that shell's own EXIT trap. This file is sourceable by design (guarded
+# dispatch; the suite sources it), so that is a consumer's cleanup silently
+# discarded, not an internal detail.
+#
+# What separates the two cases is knowing which shell we are in, which is why
+# PROFILE_HOST_PID is recorded at file scope:
+#
+#   BASHPID == PROFILE_HOST_PID  we are the shell that sourced/executed this
+#                                file. Anything `trap -p EXIT` reports here is
+#                                genuinely armed HERE, so ownership is decidable
+#                                and a foreign action can be COMPOSED with --
+#                                release first, then run what the caller armed.
+#                                It would have run anyway; we only precede it.
+#
+#   otherwise                    a subshell. The report may be an inherited
+#                                string for a trap that will never fire here, so
+#                                it is not usable evidence and the ancestor
+#                                hazard above applies. Replace, and stay bounded:
+#                                this program installs no EXIT trap of its own,
+#                                so nothing internal is displaced. A consumer
+#                                that arms a trap inside its OWN subshell and
+#                                then renders a profile there owns that
+#                                composition.
+_profile_arm_release() {
+    [ "${PROFILE_TRAP_PID:-}" = "$BASHPID" ] && return 0
+    # `bs` is a DOUBLED backslash on purpose: the replacement below is a pattern
+    # context, where a backslash escapes the next character. A single one would
+    # turn the '\'' we are looking for into three plain quotes, match nothing,
+    # and hand the shell an unbalanced action string -- measured as
+    # "unexpected EOF while looking for matching `'`" from the composed trap.
+    local prev="" action="" q="'" bs='\\'
+    # Only ask in the host shell, where the answer means something.
+    [ "$BASHPID" = "${PROFILE_HOST_PID:-}" ] && prev="$(trap -p EXIT)"
+    if [ -n "$prev" ]; then
+        # `trap -p` prints a re-usable command: trap -- 'ACTION' EXIT, with any
+        # embedded single quote written as '\''. Undo exactly that, in that
+        # order; the quote case is not hypothetical, it is any handler that
+        # quotes a path.
+        action="${prev#trap -- }"
+        action="${action% EXIT}"
+        action="${action#$q}"
+        action="${action%$q}"
+        action="${action//$q$bs$q$q/$q}"
+        # _profile_release_on_exit restores $?, so the caller's own handler sees
+        # the status the shell was exiting with rather than our cleanup's.
+        trap "_profile_release_on_exit; $action" EXIT
+    else
+        trap _profile_release_on_exit EXIT
+    fi
+    PROFILE_TRAP_PID="$BASHPID"
+}
+
 load_active_profile() {
     [ -n "$PROFILE_LOADED" ] && return 0
+    # A caller that cleared PROFILE_LOADED to re-render is about to overwrite
+    # these three variables; the files they point at have to go first or the
+    # trap can only ever reach the LAST set. The suite reloads inside one
+    # subshell, so this is a live path, not a defensive nicety.
+    profile_release_tmp
     local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
     # Validate before rendering. A profile that carries relationship-owned
     # fields must never reach a config, and finding that out from gen-cron
     # afterwards would mean it already had.
     profile_validate_dir "$dir" "$GENCRON" || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    # Arm BEFORE the first allocation, not after the last. Arming afterwards
+    # left a window in which allocation 2 or 3 could fail, `die` could exit, and
+    # everything already allocated survived with no trap to reach it -- measured:
+    # failing the second render allocation left the first file behind. The
+    # handler skips empty variables, so arming this early costs nothing and
+    # covers every failure path without one release call per path.
+    _profile_arm_release
     PROFILE_TPL_FILE=$(mktemp)   || die "mktemp failed"
     PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
     PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"
@@ -4205,6 +4344,10 @@ cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
+    # Batch B: the account is a DECISION, never a silent default. Empty here means
+    # "not stated on the command line"; the resolution below decides what that
+    # means, and refuses rather than guessing.
+    local local_user="" local_user_given=0
     for a in "$@"; do
         case "$a" in
             --host=*|--lan=*)
@@ -4218,6 +4361,7 @@ cmd_add_client() {
             --bandwidth=*) bandwidth="${a#*=}" ;;
             --profile=*)   profile="${a#*=}" ;;
             --join-remotely) join_remotely=1 ;;
+            --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
@@ -4271,6 +4415,43 @@ cmd_add_client() {
     [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
 
     read_server_conf
+    # ---- Batch B: the account the jobs will run as, decided here or not at all
+    #
+    # Every artifact this command produces is keyed to an account: the pairing key
+    # and the pinned host key are written readable by it, the generated config
+    # names it, the cron block is installed into ITS crontab, and the read-back
+    # looks there. So getting it wrong is not a late error -- it is a relationship
+    # whose jobs cannot open their own key.
+    #
+    # It used to be: pass --local-user only when server.conf happened to set
+    # LOCAL_USER, and otherwise say "delegated to nobody, jobs will run as root"
+    # and carry on. On an estate migrated to a delegated account that produced
+    # root-run jobs out of a warning nobody had to answer -- measured live on pve1,
+    # where the collector had no server.conf at all.
+    #
+    # The Owner's Batch B contract replaces that with a decision:
+    #
+    #   --local-user=NAME   explicit expert override, always wins
+    #   --local-user=root   explicit, and therefore allowed: root is a choice here,
+    #                       not a fallback
+    #   otherwise           the collector's configured account (server.conf)
+    #   nothing resolvable  refuse, naming the one command that fixes it
+    #
+    # The refusal keys off the resolved VALUE rather than the presence of a file,
+    # because "configured with no account" and "never configured" both end here and
+    # both need the same answer -- and because a check against a path on disk is
+    # untestable, which is how an earlier attempt at this guard broke six unrelated
+    # assertions without proving anything.
+    if [ "$local_user_given" -eq 1 ]; then
+        case "$local_user" in
+            root) ;;
+            *[!a-z0-9_-]* | "" | [!a-z_]*)
+                die "add-client: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
+        esac
+    else
+        local_user="${LOCAL_USER:-}"
+        [ -n "$local_user" ] || die "add-client: this collector has no delegated backup account configured, so there is no account to run '$name' jobs as -- and defaulting to root would decide that for you silently. Run 'zfs-backup.sh setup-server --local-user=NAME' first, or pass --local-user=root here to state root deliberately. Nothing was created."
+    fi
     if [ "$mode" != sync ]; then
         if [ -z "$target" ]; then
             target="$DEFAULT_TARGET"
@@ -4324,7 +4505,10 @@ cmd_add_client() {
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
-    [ -n "${LOCAL_USER:-}" ] && pair_args+=(--local-user="$LOCAL_USER")
+    # root is expressed to deploy.sh by OMITTING the flag, which is its existing
+    # contract (setup-server maps --local-user=root to the same thing). Resolved
+    # above either way, so nothing here decides anything.
+    [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
     # REV-20260802-033 slice 9 / U10: pass-through only -- this file does not
     # reimplement the remote scp/ssh/editor flow, deploy.sh --pair does it
     # (see do_pair). Off by default; --lan= alone still ends with the same
@@ -7039,6 +7223,74 @@ cmd_remove_client() {
 }
 
 # ------------------------------------------------------------------------------
+# deploy -- the one-command two-host path. It adds NO backup logic of its own:
+# it drives the existing, individually reviewed lifecycle
+#   add-client (with remote --join) -> seed -> activate
+# to completion in a single call. It is resumable -- re-running the identical
+# 'deploy' line reads the recorded STATE and performs only the steps still
+# outstanding, so an interrupted enrolment is finished by repeating the same
+# command rather than by knowing which sub-command to reach for next.
+cmd_deploy() {
+    local name="${1:-}"; shift || true
+    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    local host="" target="" profile="" yes=0 verbose=0 manual_join=0 a
+    for a in "$@"; do
+        case "$a" in
+            --host=*)      host="${a#*=}" ;;
+            --target=*)    target="${a#*=}" ;;
+            --profile=*)   profile="${a#*=}" ;;
+            --manual-join) manual_join=1 ;;
+            --yes|-y)      yes=1 ;;
+            --verbose)     verbose=1 ;;
+            *) die "deploy: unknown option $a" ;;
+        esac
+    done
+
+    local cpath; cpath=$(client_conf_path "$name")
+
+    # STATE drives resumption. A brand-new relationship has no conf yet; an
+    # interrupted one carries the state it stopped in, so we start add-client
+    # only when nothing exists and otherwise continue from that point.
+    local state=""
+    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+
+    if [ -z "$state" ]; then
+        [ -n "$host" ] || die "deploy requires --host=HOST[:PORT] (the source to back up)"
+        local -a add_args=("$name" --host="$host")
+        [ -n "$target" ]  && add_args+=(--target="$target")
+        [ -n "$profile" ] && add_args+=(--profile="$profile")
+        # The one-command promise: pair the source over SSH from here by
+        # default, so no manual 'deploy.sh --join' is needed on the peer.
+        # --manual-join opts back into the explicit two-sided form.
+        [ "$manual_join" -eq 1 ] || add_args+=(--join-remotely)
+        log "deploy: enrolling '$name' (add-client)"
+        cmd_add_client "${add_args[@]}"
+        state=$( . "$cpath"; echo "${STATE:-}" )
+    else
+        log "deploy: resuming '$name' from state '$state'"
+    fi
+
+    case "$state" in
+        pending_enroll|seeding)
+            log "deploy: seeding '$name'"
+            local -a seed_args=("$name")
+            [ "$yes" -eq 1 ] && seed_args+=(--yes)
+            cmd_seed "${seed_args[@]}"
+            ;;
+        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
+        *) die "deploy: client '$name' is in unexpected state '$state' -- resolve with the lifecycle commands (status/seed/activate) before retrying" ;;
+    esac
+
+    log "deploy: activating '$name'"
+    local -a act_args=("$name")
+    [ "$yes" -eq 1 ]     && act_args+=(--yes)
+    [ "$verbose" -eq 1 ] && act_args+=(--verbose)
+    cmd_activate "${act_args[@]}"
+
+    log "deploy: '$name' is active."
+}
+
+# ------------------------------------------------------------------------------
 # Guarded (same idiom as update-control.sh) so test/zfsbackup/run.sh can
 # `source` this file to reach the pure helper functions without also running
 # the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
@@ -7052,6 +7304,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         --source=*|--target=*) cmd_local_backup "$@" ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         restore)          shift; cmd_restore "$@" ;;
+        deploy)           shift; cmd_deploy "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         activate)         shift; cmd_activate "$@" ;;

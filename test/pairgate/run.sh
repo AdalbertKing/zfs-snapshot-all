@@ -33,11 +33,27 @@ REL="$WORK/relationships"
 mkdir -p "$REL/alpha" "$REL/beta"
 LOG="$WORK/gate.log"
 
+# Force the FILE sink for every decision the assertions below read.
+#
+# The gate prefers syslog and falls back to a file. On any host where `logger`
+# works -- which is every Linux runner -- the gate correctly writes to syslog and
+# never creates $LOG, so the decision-log assertion greps a file that is not
+# there. This suite passed only on machines WITHOUT `logger`: measured 75/0 under
+# Git Bash on Windows and FAIL on CI, same commit, the moment the suite was added
+# to the matrix. The environment was the variable, not the code.
+#
+# A stub that always fails makes the fallback deterministic on both platforms.
+# The sink-SELECTION tests further down install their own stubs on top of this
+# and are unaffected -- they are the ones that own the "syslog wins" contract.
+NOLOGGER="$WORK/nologger"; mkdir -p "$NOLOGGER"
+printf '#!/bin/sh\nexit 1\n' > "$NOLOGGER/logger"; chmod +x "$NOLOGGER/logger"
+
 # run_gate <label> <request> -- returns rc, output in $OUT
 OUT=""
 ERR=""
 run_gate() {
     OUT=$(SSH_ORIGINAL_COMMAND="${2-}" RELATIONSHIPS_DIR="$REL" GATE_LOG="$LOG" \
+          PATH="$NOLOGGER:$PATH" \
           bash "$GATE" "$1" 2>"$WORK/stderr"); local rc=$?
     ERR=$(cat "$WORK/stderr")
     OUT="$OUT$ERR"

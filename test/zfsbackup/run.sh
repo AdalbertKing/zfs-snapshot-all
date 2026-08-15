@@ -19,7 +19,12 @@ ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# profile_release_tmp: this suite SOURCES zfs-backup.sh, so any profile it loads
+# in this very shell (rather than in one of the `( ... )` subshells below) is
+# this shell's to release -- zfs-backup.sh arms its own EXIT trap only in the
+# shell that rendered the profile, and will not displace the trap of a consumer
+# that sourced it. Defined later in the file; by EXIT it exists.
+trap 'profile_release_tmp; rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
@@ -72,7 +77,7 @@ chmod +x "$SF_DEPLOY"
 export SIMPLE_FLOW_PAIR_LOG="$SF/pair.log"
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients"
     RELATIONSHIPS_DIR="$SF/relationships"
     PVE_NODES_DIR="$SF/pve-nodes"
@@ -92,7 +97,7 @@ fi
 pair_lines_before=$(wc -l < "$SF/pair.log")
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients-invalid"
     DEPLOY="$SF_DEPLOY"
     cmd_add_client badhost --host='bad;host' --target=hdd/backups
@@ -189,6 +194,96 @@ if activation_is_new_relationship endpoint_verified "" \
     ok "simple flow: endpoint re-verification does not regenerate installed policy as a new relationship"
 else
     bad "simple flow: endpoint re-verification does not regenerate installed policy as a new relationship" "new/reactivation discriminator is wrong"
+fi
+
+# --- 1c. deploy facade routing -----------------------------------------------
+# `deploy` adds no backup logic: it drives the reviewed lifecycle
+# add-client -> seed -> activate to completion and is resumable from the
+# recorded STATE. Stub the three lifecycle commands -- each commits the same
+# durable STATE fact its real counterpart would -- and assert the orchestrator
+# calls exactly the outstanding steps, in order, with the correct per-command
+# flags: add-client is paired remotely by default and NEVER receives --yes (it
+# has no such option); seed/activate do. No peer, pool or network is touched.
+DP="$WORK/deployroute"; mkdir -p "$DP/clients"
+dp_run() {   # dp_run <logfile> <deploy args...>  -- prints combined output, sets $?
+    local logf="$1"; shift
+    ( CLIENTS_DIR="$DP/clients"
+      cmd_add_client() { printf 'add-client %s\n' "$*" >> "$logf"; echo "STATE=pending_enroll" > "$DP/clients/$1.conf"; }
+      cmd_seed()       { printf 'seed %s\n'       "$*" >> "$logf"; echo "STATE=seed_complete"  > "$DP/clients/$1.conf"; }
+      cmd_activate()   { printf 'activate %s\n'   "$*" >> "$logf"; }
+      log() { :; }
+      cmd_deploy "$@"
+    ) 2>&1
+}
+
+# case 1: a brand-new relationship runs the whole chain in order.
+: > "$DP/log1"
+out="$(dp_run "$DP/log1" relA --host=192.168.28.8 --target=hdd/backups --yes)"; rc=$?
+got="$(cat "$DP/log1")"
+want=$'add-client relA --host=192.168.28.8 --target=hdd/backups --join-remotely\nseed relA --yes\nactivate relA --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "deploy: fresh relationship runs add-client(remote join) -> seed -> activate in order"
+else
+    bad "deploy: fresh relationship runs add-client(remote join) -> seed -> activate in order" "rc=$rc got=[$got] out=$out"
+fi
+# the same log proves add-client never carried --yes (it would die on it).
+if ! grep '^add-client ' "$DP/log1" | grep -q -- '--yes'; then
+    ok "deploy: add-client is not passed --yes (only seed/activate are)"
+else
+    bad "deploy: add-client is not passed --yes (only seed/activate are)" "$(grep '^add-client ' "$DP/log1")"
+fi
+
+# case 2: resuming an already-seeded relationship skips add-client AND seed.
+echo "STATE=seed_complete" > "$DP/clients/relB.conf"
+: > "$DP/log2"
+out="$(dp_run "$DP/log2" relB --yes)"; rc=$?
+got="$(cat "$DP/log2")"
+if [ "$rc" -eq 0 ] && [ "$got" = "activate relB --yes" ]; then
+    ok "deploy: resume from seed_complete runs only activate (add-client/seed skipped)"
+else
+    bad "deploy: resume from seed_complete runs only activate (add-client/seed skipped)" "rc=$rc got=[$got] out=$out"
+fi
+
+# case 3: an interrupted seed is retried, without re-running add-client.
+echo "STATE=seeding" > "$DP/clients/relC.conf"
+: > "$DP/log3"
+out="$(dp_run "$DP/log3" relC --yes)"; rc=$?
+got="$(cat "$DP/log3")"
+want=$'seed relC --yes\nactivate relC --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "deploy: resume from seeding retries seed then activates, no second add-client"
+else
+    bad "deploy: resume from seeding retries seed then activates, no second add-client" "rc=$rc got=[$got] out=$out"
+fi
+
+# case 4: a fresh deploy with no --host refuses before touching anything.
+: > "$DP/log4"
+out="$(dp_run "$DP/log4" relD)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$DP/log4" ] && printf '%s' "$out" | grep -q 'deploy requires --host'; then
+    ok "deploy: a new relationship with no --host refuses before any lifecycle step"
+else
+    bad "deploy: a new relationship with no --host refuses before any lifecycle step" "rc=$rc log=[$(cat "$DP/log4")] out=$out"
+fi
+
+# case 5: --manual-join opts out of the automatic remote pairing.
+: > "$DP/log5"
+out="$(dp_run "$DP/log5" relE --host=1.2.3.4 --manual-join --yes)"; rc=$?
+addline="$(grep '^add-client ' "$DP/log5")"
+if [ "$rc" -eq 0 ] && printf '%s' "$addline" | grep -q -- '--host=1.2.3.4' \
+        && ! printf '%s' "$addline" | grep -q -- '--join-remotely'; then
+    ok "deploy: --manual-join drops --join-remotely (explicit two-sided form)"
+else
+    bad "deploy: --manual-join drops --join-remotely (explicit two-sided form)" "rc=$rc addline=[$addline] out=$out"
+fi
+
+# case 6: an unexpected recorded state refuses rather than guessing a next step.
+echo "STATE=weird" > "$DP/clients/relF.conf"
+: > "$DP/log6"
+out="$(dp_run "$DP/log6" relF)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$DP/log6" ] && printf '%s' "$out" | grep -q 'unexpected state'; then
+    ok "deploy: an unexpected recorded state refuses instead of guessing"
+else
+    bad "deploy: an unexpected recorded state refuses instead of guessing" "rc=$rc log=[$(cat "$DP/log6")] out=$out"
 fi
 
 # --- 2. peer_label matches deploy.sh's own -----------------------------------
@@ -534,6 +629,108 @@ if ! grep -q '^\[prune:zfsbackup-pve2@10.0.0.2:rpool/data\]$' "$CF5B" \
     ok "teardown strips the client's own remote source prune and leaves a foreign one"
 else
     bad "teardown strips the client's own remote source prune and leaves a foreign one" "$(grep '^\[' "$CF5B" | tr '\n' ' ')"
+fi
+
+# --- Batch B: the account is resolved deterministically, never defaulted -----
+#
+# Owner contract (issue #9, Batch B): bare `add-client` uses the collector's
+# configured delegated account, carries it through every artifact, and NEVER
+# silently falls back to root. If no account resolves, command one fails with a
+# single corrective public command. --local-user survives as an expert override.
+#
+# The four cases are the four ways this can go, and they are asserted as a set
+# because any three of them pass for an implementation that is wrong in the
+# fourth: a build that always refuses passes 'missing' and 'invalid'; one that
+# always defaults passes 'configured' and 'override'.
+BB="$WORK/batchb"; mkdir -p "$BB"
+cat > "$BB/deploy.sh" <<'EOF'
+#!/bin/bash
+# Records what add-client asked deploy.sh --pair for, so the ACCOUNT that reaches
+# the pairing (keys, host key, target delegation) is asserted rather than assumed.
+printf '%s\n' "$*" > "$BB_PAIRLOG"
+exit 0
+EOF
+chmod +x "$BB/deploy.sh"
+
+# Extra arguments are passed as ARGUMENTS to bash -c, not spliced into its script
+# text. Splicing looked equivalent and was not: an argument like
+# `--local-user=2bad; rm -rf /` -- which is precisely one of the cases under test
+# -- stops being one word the moment it is pasted into a script body, so the
+# invalid-name case never reached the code it was written to exercise, and the
+# override case lost its quoting too. The two failures that caught this were mine,
+# in the harness, not in the product.
+# Each case below is an independent "command one" on a fresh collector, so the
+# collector is reset here rather than in individual cases. Sharing one client name
+# across the four without resetting is what made cases 2 and 5 fail: case 1 created
+# bbc, so every later case died on "client 'bbc' already exists" long before it
+# reached the account logic it was written to exercise -- and cases 3/3b passed only
+# because case 3 happened to clear the directory first. That is a harness fault that
+# reports as a product fault, which is the expensive kind.
+bb_add() {   # <stub LOCAL_USER value> [extra add-client args...]
+    local acct="$1"; shift
+    rm -f "$BB/pair.log"
+    rm -rf "$BB/clients"
+    BB_PAIRLOG="$BB/pair.log" bash -c '
+        source "$1" 2>/dev/null
+        DEPLOY="$2"; CLIENTS_DIR="$3"
+        acct="$4"; shift 4
+        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="$acct"; }
+        cmd_add_client bbc --host=10.9.9.9:22 --target=tank/bb "$@"
+    ' _ "$ZFSBACKUP" "$BB/deploy.sh" "$BB/clients" "$acct" "$@" 2>&1
+}
+
+# 1. CONFIGURED DEFAULT: bare add-client takes the collector's account and hands
+#    it to the pairing, so keys and delegation are written for that account.
+out="$(bb_add zfsbackup)"
+if grep -q -- '--local-user=zfsbackup' "$BB/pair.log" 2>/dev/null; then
+    ok "Batch B: bare add-client carries the collector's configured account into pairing"
+else
+    bad "Batch B: bare add-client carries the collector's configured account into pairing" \
+        "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
+fi
+
+# 2. EXPLICIT OVERRIDE beats the configured value -- the expert escape hatch the
+#    contract keeps.
+out="$(bb_add zfsbackup --local-user=otheracct)"
+if grep -q -- '--local-user=otheracct' "$BB/pair.log" 2>/dev/null; then
+    ok "Batch B: --local-user overrides the configured account"
+else
+    bad "Batch B: --local-user overrides the configured account" "pair args: $(cat "$BB/pair.log" 2>/dev/null)"
+fi
+
+# 3. NO ACCOUNT RESOLVABLE: refuse at command one, name the corrective command,
+#    and create nothing. This is the case that used to produce root-run jobs from
+#    a warning nobody had to answer.
+out="$(bb_add "")"
+if printf '%s' "$out" | grep -q 'no delegated backup account configured' \
+   && printf '%s' "$out" | grep -q 'setup-server --local-user=NAME' \
+   && ! printf '%s' "$out" | grep -q 'delegated to nobody' \
+   && [ ! -d "$BB/clients" ]; then
+    ok "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing"
+else
+    bad "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing" \
+        "$(printf '%s' "$out" | tail -2)"
+fi
+
+# 3b. ROOT IS STILL REACHABLE, but only by saying so. Without this the guard above
+#     would be indistinguishable from "root is now forbidden", which is not the
+#     contract -- root must stop being a DEFAULT, not stop being possible.
+out="$(bb_add "" --local-user=root)"
+if [ -f "$BB/pair.log" ] && ! grep -q -- '--local-user=' "$BB/pair.log"; then
+    ok "Batch B: --local-user=root is accepted and passes no account through (root by choice)"
+else
+    bad "Batch B: --local-user=root is accepted and passes no account through (root by choice)" \
+        "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
+fi
+
+# 4. INVALID ACCOUNT NAME refuses on the spot rather than reaching deploy.sh with
+#    something that cannot be a user.
+rm -f "$BB/pair.log"
+out="$(bb_add zfsbackup --local-user='2bad; rm -rf /')"
+if printf '%s' "$out" | grep -q 'is not a valid account name' && [ ! -f "$BB/pair.log" ]; then
+    ok "Batch B: an invalid account name refuses before pairing"
+else
+    bad "Batch B: an invalid account name refuses before pairing" "$(printf '%s' "$out" | tail -1)"
 fi
 
 # PR #14 F1. The expert fallback is conditional because every client shares one
@@ -3974,7 +4171,7 @@ fi
 # member of the SAME PVE cluster (U8) -- checked via PVE_NODES_DIR, overridden
 # here instead of the real /etc/pve/nodes so this needs no real cluster.
 U8="$WORK/u8nodes"; mkdir -p "$U8/pve2"
-out=$( ( PVE_NODES_DIR="$U8"; cmd_add_client u8client --lan=pve2 --mode=sync ) 2>&1 ); rc=$?
+out=$( ( PVE_NODES_DIR="$U8"; read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }; cmd_add_client u8client --lan=pve2 --mode=sync ) 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"SAME PVE cluster"*) true ;; *) false ;; esac; then
     ok "add-client --mode=sync refuses a peer that looks like a same-cluster node (U8)"
 else
@@ -4008,6 +4205,7 @@ EOF
 chmod +x "$JRDEPLOY"
 
 out=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+         read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
          cmd_add_client jrtest --lan=10.7.7.7 --datasets="tank/a" --target=tank/backups --join-remotely ) 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && grep -qF -- "--join-remotely" "$JR/args.out"; then
     ok "add-client --join-remotely: forwarded to deploy.sh --pair"
@@ -4016,6 +4214,7 @@ else
 fi
 
 out2=$( ( CLIENTS_DIR="$JR/clients" DEPLOY="$JRDEPLOY"
+          read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
           cmd_add_client jrtest2 --lan=10.7.7.8 --datasets="tank/a" --target=tank/backups ) 2>&1 ); rc2=$?
 if [ "$rc2" -eq 0 ] && ! grep -qF -- "--join-remotely" "$JR/args.out"; then
     ok "add-client without --join-remotely: deploy.sh --pair is not passed the flag"
@@ -5512,7 +5711,7 @@ fi
 # marker, same technique used for remove-client above) rather than asserting
 # the write_client_field call was reached.
 P53="$WORK/profile53"; mkdir -p "$P53/clients"
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$P53" > "$P53/server.conf"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=zfsbackup\n' "$P53" > "$P53/server.conf"
 cat > "$P53/deploy_marker.sh" <<'EOF'
 #!/bin/bash
 exit 0
@@ -6281,6 +6480,317 @@ if [ "$data_bounded" = no ] && [ "$data2_bounded" = yes ]; then
     ok "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe"
 else
     bad "59 REV-110: a prune bounding only the neighbour does not make the requested relationship safe" "data_bounded=$data_bounded data2_bounded=$data2_bounded"
+fi
+
+# --- 60. rendered profile artifacts must not be left in $TMPDIR ---------------
+#
+# load_active_profile allocates three mktemp files and, until this section
+# existed, never removed them. Measured on pve0 2026-08-14: 1824 rendered-profile
+# copies in /tmp, ~1800 per full run of THIS suite, because the suite drives its
+# profile loads inside `( ... )` subshells and each one leaked its three.
+#
+# The check is hermetic rather than a /tmp diff: every case runs with TMPDIR
+# pointed at its own empty directory, so "left nothing behind" is `ls` on that
+# directory and cannot be confused by another process's temporary files. mktemp
+# honours TMPDIR, which is what makes the isolation real.
+#
+# TMPDIR is EXPORTED, not merely assigned. mktemp is an external binary and reads
+# it from the environment, so a plain `TMPDIR=...` in the subshell leaves it
+# writing to the real /tmp and every case here passes for the wrong reason. The
+# positive control below is what caught that while this section was written.
+LK="$WORK/leak"
+mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
+cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
+   "$REPO/profiles/default/prune.inc" "$LK/root/prof/"
+# A profile that is COMPLETE (so it gets past the completeness check and reaches
+# lib-profile.sh's own mktemp'd schema dump) but INVALID: `src` is
+# relationship-owned and refused at the profile boundary.
+cp "$LK/root/prof"/* "$LK/root/bad/"
+printf 'src = zfsbackup@nope:x\n' >> "$LK/root/bad/dataset.inc"
+
+lk_env() {   # <profile name> <command...>  -- PROFILE_ROOT is always $LK/root
+    local prof="$1"; shift
+    PROFILE_ROOT="$LK/root" PROFILE_ACTIVE="$prof" PROFILE_LOADED="" GENCRON="$REPO/gen-cron.sh" \
+    PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
+    LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
+    PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+    PROFILE_GFS=1 "$@"
+}
+lk_conf() { printf '[defaults]\n\thost_label = lktest\n' > "$1"; }
+
+# Guard the harness itself. Every case below hides the body's output, so a body
+# that never ran would leave an empty TMPDIR and pass -- which is exactly what
+# the first version of this section did (lk_env passed the profile root on to
+# the command as an argument, so nothing was ever emitted). Prove ONCE, loudly,
+# that this env really drives a profile load and a real emission.
+lk_conf "$LK/probe.conf"
+lk_env prof emit_client_sections "$LK/probe.conf" lkp 1 >/dev/null 2>&1
+if grep -q 'profile__prof__' "$LK/probe.conf"; then
+    ok "60: harness control -- lk_env really loads the profile and emits from it"
+else
+    bad "60: harness control -- lk_env really loads the profile and emits from it" \
+        "no profile__prof__ section in the emitted config; every case below would pass vacuously"
+fi
+
+# 1. the ordinary path: one load, one emission, nothing left behind.
+lk_conf "$LK/one.conf"
+n="$(rm -rf "$LK/tmp/one"; mkdir -p "$LK/tmp/one"
+     ( export TMPDIR="$LK/tmp/one"; lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/one" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile-loading run leaves no file in TMPDIR"
+else
+    bad "60: a profile-loading run leaves no file in TMPDIR" "$n entr(ies) left: $(ls -1 "$LK/tmp/one" | tr '\n' ' ')"
+fi
+
+# 2. POSITIVE CONTROL. The same body with the release defeated must leave the
+#    three files -- otherwise case 1 proves only that the check cannot see.
+n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
+     ( export TMPDIR="$LK/tmp/ctl"
+       profile_release_tmp() { :; }; _profile_arm_release() { :; }
+       lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 3 ]; then
+    ok "60: control -- with the release defeated the same run leaks exactly 3 (the check discriminates)"
+else
+    bad "60: control -- with the release defeated the same run leaks exactly 3" "left=$n (expected the pre-fix leak)"
+fi
+
+# 3. TWO loads in one shell. A trap alone cannot fix this: it fires once, on the
+#    LAST allocation, and the first three would survive. Pins the release that
+#    load_active_profile does before it re-renders.
+lk_conf "$LK/two.conf"
+n="$(rm -rf "$LK/tmp/two"; mkdir -p "$LK/tmp/two"
+     ( export TMPDIR="$LK/tmp/two"
+       lk_env prof ensure_cron_config "$LK/two.conf" 1 1
+       lk_env prof emit_client_sections "$LK/two.conf" lkc 1 ) >/dev/null 2>&1
+     find "$LK/tmp/two" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: two loads in one shell leave nothing (the re-render releases the first set)"
+else
+    bad "60: two loads in one shell leave nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/two" | tr '\n' ' ')"
+fi
+
+# 4. The `die` path. zfs-backup.sh dies in several places after these files are
+#    allocated, so a delete at the end of the happy path would not have been a
+#    fix at all. `die` exits, which is what the EXIT trap is for.
+n="$(rm -rf "$LK/tmp/die"; mkdir -p "$LK/tmp/die"
+     ( export TMPDIR="$LK/tmp/die"
+       lk_env prof load_active_profile
+       die "simulated post-load failure" ) >/dev/null 2>&1
+     find "$LK/tmp/die" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a die() after the profile is loaded still leaves nothing"
+else
+    bad "60: a die() after the profile is loaded still leaves nothing" "$n entr(ies) left: $(ls -1 "$LK/tmp/die" | tr '\n' ' ')"
+fi
+
+# 5. lib-profile.sh's own mktemp'd schema dump, on the path that FAILS
+#    validation -- the branch where a leak would be easiest to miss, because the
+#    run is already on its way to dying.
+n="$(rm -rf "$LK/tmp/inv"; mkdir -p "$LK/tmp/inv"
+     ( export TMPDIR="$LK/tmp/inv"
+       lk_env bad load_active_profile ) >/dev/null 2>&1
+     find "$LK/tmp/inv" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a profile REFUSED by the boundary leaves no schema dump behind (lib-profile.sh)"
+else
+    bad "60: a profile REFUSED by the boundary leaves no schema dump behind" "$n entr(ies) left: $(ls -1 "$LK/tmp/inv" | tr '\n' ' ')"
+fi
+# and the refusal is the reason it stopped, not some unrelated failure. Without
+# this, a typo in the fixture path makes case 5 pass by dying at the
+# completeness check, before lib-profile.sh's mktemp is ever reached -- which is
+# how the first version of it passed.
+out="$( ( lk_env bad load_active_profile ) 2>&1 )"
+if printf '%s' "$out" | grep -q "relationship-owned"; then
+    ok "60: control -- that profile is refused for the boundary reason, not an unrelated one"
+else
+    bad "60: control -- that profile is refused for the boundary reason" "out=$out"
+fi
+
+# 6. A real EXECUTED invocation, not a sourced function: the process lifetime a
+#    host actually sees, ending the way most of this script's failures end --
+#    in die().
+#
+#    migrate-profile on a LEGACY config (standard_hourly still carrying
+#    prune_schedule) is the cheap one: it loads the profile, and with stdin at
+#    /dev/null the confirmation prompt reads EOF and it dies, well before
+#    anything installs. No --yes, so it cannot reach a crontab.
+mkdir -p "$LK/clients"
+cat > "$LK/legacy.conf" <<'EOF'
+[defaults]
+	host_label = lktest
+
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+EOF
+rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
+xout="$(TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=prof \
+        CRON_CONFIG="$LK/legacy.conf" CLIENTS_DIR="$LK/clients" SERVER_CONF="$LK/no-such.conf" \
+        bash "$ZFSBACKUP" migrate-profile </dev/null 2>&1)"
+n="$(find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
+# the discriminator: it must have ENTERED the migration, not returned early on
+# "already on the standard GFS profile" with no profile ever loaded.
+if [ "$n" = 0 ] && ! printf '%s' "$xout" | grep -q 'already on the standard GFS profile'; then
+    ok "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR"
+else
+    bad "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')" "out=$xout"
+fi
+
+# 7. Arming is decided by BASHPID, never by `trap -p`.
+#
+#    Measured on bash 5.1.4: inside a subshell `trap -p EXIT` reports an
+#    ANCESTOR's action string although that trap is not armed there. The first
+#    version of the fix used `trap -p` to avoid clobbering a foreign owner,
+#    therefore read this suite's own parent trap in every subshell, declined to
+#    arm, and leaked exactly as before. This pins the discriminator: a subshell
+#    running under an ancestor EXIT trap must STILL release.
+n="$(rm -rf "$LK/tmp/anc"; mkdir -p "$LK/tmp/anc"
+     ( export TMPDIR="$LK/tmp/anc"
+       trap 'echo ancestor-action >/dev/null' EXIT   # armed in THIS shell...
+       ( lk_env prof load_active_profile )           # ...but not in this one
+     ) >/dev/null 2>&1
+     find "$LK/tmp/anc" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)"
+else
+    bad "60: a subshell under an ancestor EXIT trap still releases (BASHPID, not trap -p)" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/anc" | tr '\n' ' ')"
+fi
+# and the ancestor's own trap is untouched: it is still what runs at ITS exit,
+# not something the profile load replaced.
+out="$( ( trap 'echo ANCESTOR-RAN' EXIT
+          ( export TMPDIR="$LK/tmp/anc"; lk_env prof load_active_profile ) >/dev/null 2>&1
+          : ) 2>&1 )"
+if [ "$out" = "ANCESTOR-RAN" ]; then
+    ok "60: control -- the ancestor's EXIT trap still runs at its own exit"
+else
+    bad "60: control -- the ancestor's EXIT trap still runs at its own exit" "out=$out"
+fi
+
+# 8. The release reports a failure it cannot fix instead of swallowing it
+#    (REV-20260813-119 F1.4): a file it cannot remove must be named and must
+#    make the helper return non-zero.
+#
+#    Staged as a non-empty DIRECTORY rather than a mode-protected file: `rm -f`
+#    refuses a directory for root and non-root alike, and for the same reason on
+#    every filesystem, so this exercises the reporting branch in the suite's real
+#    environment (the PVE hosts run these as root) instead of skipping there --
+#    and it does not depend on chmod meaning anything, which it does not under
+#    Git Bash on Windows.
+UD="$LK/undel"; mkdir -p "$UD/keeps-it-non-empty"
+out="$( PROFILE_TPL_FILE="$UD" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "$UD" && [ -d "$UD" ]; then
+    ok "60: a removal it cannot do is reported with the path and returns non-zero"
+else
+    bad "60: a removal it cannot do is reported with the path and returns non-zero" "rc=$rc out=$out"
+fi
+# control: the same helper on a removable file is silent and succeeds -- so the
+# assertion above is about the failure, not about the helper always complaining.
+: > "$LK/removable"
+out="$( PROFILE_TPL_FILE="$LK/removable" PROFILE_DS_FILE="" PROFILE_PRUNE_FILE="" \
+        profile_release_tmp 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -e "$LK/removable" ]; then
+    ok "60: control -- a removable file is removed silently with status 0"
+else
+    bad "60: control -- a removable file is removed silently with status 0" "rc=$rc out=$out exists=$([ -e "$LK/removable" ] && echo y || echo n)"
+fi
+
+# 9. A PARTIAL allocation must leave nothing (REV PR#15 F1).
+#
+#    Arming after the third mktemp meant a failure at allocation 2 or 3 exited
+#    with everything already allocated still on disk and no trap to reach it.
+#    Measured on the reviewed head: failing the second render allocation left one
+#    file behind.
+#
+#    The counter lives in a FILE and outside TMPDIR: each allocation happens in
+#    its own $( ) subshell, so a shell variable resets every call and the
+#    injection would silently never fire -- a 0-file result that proves nothing.
+cat > "$LK/partial.sh" <<'EOF'
+source "$ZB" 2>/dev/null
+mktemp() {
+    local n
+    n=$(( $(cat "$NFILE") + 1 ))
+    echo "$n" > "$NFILE"
+    # allocation 3 overall = the second RENDER allocation, after lib-profile.sh's
+    # validation dump. That is where the leak was measured.
+    [ "$n" = 3 ] && return 1
+    command mktemp -p "$TMPDIR"
+}
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile
+EOF
+rm -rf "$LK/tmp/part"; mkdir -p "$LK/tmp/part"; echo 0 > "$LK/partn"
+pout="$(TMPDIR="$LK/tmp/part" NFILE="$LK/partn" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+        bash "$LK/partial.sh" 2>&1)"; prc=$?
+n="$(find "$LK/tmp/part" -mindepth 1 | wc -l | tr -d ' ')"
+if [ "$n" = 0 ]; then
+    ok "60: a failed allocation part-way through leaves nothing behind"
+else
+    bad "60: a failed allocation part-way through leaves nothing behind" \
+        "$n entr(ies) left: $(ls -1 "$LK/tmp/part" | tr '\n' ' ')"
+fi
+# control: the injection really fired and really stopped the load. Without this,
+# a fixture that never reaches three allocations passes the case vacuously.
+if [ "$(cat "$LK/partn")" = 3 ] && [ "$prc" -ne 0 ]; then
+    ok "60: control -- the allocation failure was injected and did stop the load"
+else
+    bad "60: control -- the allocation failure was injected and did stop the load" \
+        "calls=$(cat "$LK/partn") rc=$prc out=$pout"
+fi
+
+# 10/11. Sourcing must not silently delete the CALLER's own EXIT trap (F2).
+#
+#    Case 7 above pins the subshell direction: an ancestor's reported trap must
+#    not stop a subshell from arming. This is the other direction, and replacing
+#    unconditionally got it wrong -- a consumer that sources this file and loads
+#    a profile in its OWN shell had its cleanup discarded. In the host shell the
+#    `trap -p` report IS authoritative (that is what PROFILE_HOST_PID decides),
+#    so the foreign action can be composed rather than clobbered.
+cat > "$LK/hosttrap.sh" <<'EOF'
+trap 'echo FOREIGN-RAN' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+echo BODY-DONE
+EOF
+rm -rf "$LK/tmp/host"; mkdir -p "$LK/tmp/host"
+out="$(TMPDIR="$LK/tmp/host" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hosttrap.sh" 2>&1)"
+n="$(find "$LK/tmp/host" -mindepth 1 | wc -l | tr -d ' ')"
+if printf '%s' "$out" | grep -q 'FOREIGN-RAN' && [ "$n" = 0 ]; then
+    ok "60: sourcing keeps the caller's own EXIT trap AND still releases"
+else
+    bad "60: sourcing keeps the caller's own EXIT trap AND still releases" \
+        "out=$out left=$n"
+fi
+
+#    An action containing a single quote is the case a naive un-escape corrupts.
+#    `trap -p` prints the action single-quoted with embedded quotes written as
+#    '\'', and undoing that is a pattern context where a lone backslash escapes
+#    the next character instead of matching one. Getting it wrong hands the shell
+#    an unbalanced string and the caller's handler dies at exit with
+#    "unexpected EOF" -- worse than the loss it was meant to prevent.
+cat > "$LK/hostquote.sh" <<'EOF'
+trap 'echo "it'"'"'s-here"' EXIT
+source "$ZB" 2>/dev/null
+PROFILE_ROOT="$PR" PROFILE_ACTIVE=prof PROFILE_LOADED="" GENCRON="$GC" \
+    load_active_profile >/dev/null 2>&1
+EOF
+rm -rf "$LK/tmp/hq"; mkdir -p "$LK/tmp/hq"
+out="$(TMPDIR="$LK/tmp/hq" ZB="$ZFSBACKUP" PR="$LK/root" GC="$REPO/gen-cron.sh" \
+       bash "$LK/hostquote.sh" 2>&1)"
+if [ "$out" = "it's-here" ]; then
+    ok "60: a caller action containing a quote is composed back intact"
+else
+    bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
 echo "--------------------------------------------"
