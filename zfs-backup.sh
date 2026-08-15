@@ -4205,6 +4205,10 @@ cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
+    # Batch B: the account is a DECISION, never a silent default. Empty here means
+    # "not stated on the command line"; the resolution below decides what that
+    # means, and refuses rather than guessing.
+    local local_user="" local_user_given=0
     for a in "$@"; do
         case "$a" in
             --host=*|--lan=*)
@@ -4218,6 +4222,7 @@ cmd_add_client() {
             --bandwidth=*) bandwidth="${a#*=}" ;;
             --profile=*)   profile="${a#*=}" ;;
             --join-remotely) join_remotely=1 ;;
+            --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
@@ -4271,6 +4276,43 @@ cmd_add_client() {
     [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
 
     read_server_conf
+    # ---- Batch B: the account the jobs will run as, decided here or not at all
+    #
+    # Every artifact this command produces is keyed to an account: the pairing key
+    # and the pinned host key are written readable by it, the generated config
+    # names it, the cron block is installed into ITS crontab, and the read-back
+    # looks there. So getting it wrong is not a late error -- it is a relationship
+    # whose jobs cannot open their own key.
+    #
+    # It used to be: pass --local-user only when server.conf happened to set
+    # LOCAL_USER, and otherwise say "delegated to nobody, jobs will run as root"
+    # and carry on. On an estate migrated to a delegated account that produced
+    # root-run jobs out of a warning nobody had to answer -- measured live on pve1,
+    # where the collector had no server.conf at all.
+    #
+    # The Owner's Batch B contract replaces that with a decision:
+    #
+    #   --local-user=NAME   explicit expert override, always wins
+    #   --local-user=root   explicit, and therefore allowed: root is a choice here,
+    #                       not a fallback
+    #   otherwise           the collector's configured account (server.conf)
+    #   nothing resolvable  refuse, naming the one command that fixes it
+    #
+    # The refusal keys off the resolved VALUE rather than the presence of a file,
+    # because "configured with no account" and "never configured" both end here and
+    # both need the same answer -- and because a check against a path on disk is
+    # untestable, which is how an earlier attempt at this guard broke six unrelated
+    # assertions without proving anything.
+    if [ "$local_user_given" -eq 1 ]; then
+        case "$local_user" in
+            root) ;;
+            *[!a-z0-9_-]* | "" | [!a-z_]*)
+                die "add-client: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
+        esac
+    else
+        local_user="${LOCAL_USER:-}"
+        [ -n "$local_user" ] || die "add-client: this collector has no delegated backup account configured, so there is no account to run '$name' jobs as -- and defaulting to root would decide that for you silently. Run 'zfs-backup.sh setup-server --local-user=NAME' first, or pass --local-user=root here to state root deliberately. Nothing was created."
+    fi
     if [ "$mode" != sync ]; then
         if [ -z "$target" ]; then
             target="$DEFAULT_TARGET"
@@ -4324,7 +4366,10 @@ cmd_add_client() {
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
-    [ -n "${LOCAL_USER:-}" ] && pair_args+=(--local-user="$LOCAL_USER")
+    # root is expressed to deploy.sh by OMITTING the flag, which is its existing
+    # contract (setup-server maps --local-user=root to the same thing). Resolved
+    # above either way, so nothing here decides anything.
+    [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
     # REV-20260802-033 slice 9 / U10: pass-through only -- this file does not
     # reimplement the remote scp/ssh/editor flow, deploy.sh --pair does it
     # (see do_pair). Off by default; --lan= alone still ends with the same

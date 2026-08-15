@@ -72,7 +72,7 @@ chmod +x "$SF_DEPLOY"
 export SIMPLE_FLOW_PAIR_LOG="$SF/pair.log"
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients"
     RELATIONSHIPS_DIR="$SF/relationships"
     PVE_NODES_DIR="$SF/pve-nodes"
@@ -92,7 +92,7 @@ fi
 pair_lines_before=$(wc -l < "$SF/pair.log")
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients-invalid"
     DEPLOY="$SF_DEPLOY"
     cmd_add_client badhost --host='bad;host' --target=hdd/backups
@@ -516,6 +516,95 @@ if ! grep -q '^\[prune:zfsbackup-pve2@10.0.0.2:rpool/data\]$' "$CF5B" \
     ok "teardown strips the client's own remote source prune and leaves a foreign one"
 else
     bad "teardown strips the client's own remote source prune and leaves a foreign one" "$(grep '^\[' "$CF5B" | tr '\n' ' ')"
+fi
+
+# --- Batch B: the account is resolved deterministically, never defaulted -----
+#
+# Owner contract (issue #9, Batch B): bare `add-client` uses the collector's
+# configured delegated account, carries it through every artifact, and NEVER
+# silently falls back to root. If no account resolves, command one fails with a
+# single corrective public command. --local-user survives as an expert override.
+#
+# The four cases are the four ways this can go, and they are asserted as a set
+# because any three of them pass for an implementation that is wrong in the
+# fourth: a build that always refuses passes 'missing' and 'invalid'; one that
+# always defaults passes 'configured' and 'override'.
+BB="$WORK/batchb"; mkdir -p "$BB"
+cat > "$BB/deploy.sh" <<'EOF'
+#!/bin/bash
+# Records what add-client asked deploy.sh --pair for, so the ACCOUNT that reaches
+# the pairing (keys, host key, target delegation) is asserted rather than assumed.
+printf '%s\n' "$*" > "$BB_PAIRLOG"
+exit 0
+EOF
+chmod +x "$BB/deploy.sh"
+
+bb_add() {   # <stub LOCAL_USER value> [extra add-client args...]
+    local acct="$1"; shift
+    rm -f "$BB/pair.log"
+    BB_PAIRLOG="$BB/pair.log" DEPLOY="$BB/deploy.sh" CLIENTS_DIR="$BB/clients" \
+    bash -c '
+        source "'"$ZFSBACKUP"'" 2>/dev/null
+        DEPLOY="'"$BB/deploy.sh"'"
+        CLIENTS_DIR="'"$BB/clients"'"
+        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="'"$acct"'"; }
+        cmd_add_client bbc --host=10.9.9.9:22 --target=tank/bb '"$*"'
+    ' 2>&1
+}
+
+# 1. CONFIGURED DEFAULT: bare add-client takes the collector's account and hands
+#    it to the pairing, so keys and delegation are written for that account.
+out="$(bb_add zfsbackup)"
+if grep -q -- '--local-user=zfsbackup' "$BB/pair.log" 2>/dev/null; then
+    ok "Batch B: bare add-client carries the collector's configured account into pairing"
+else
+    bad "Batch B: bare add-client carries the collector's configured account into pairing" \
+        "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
+fi
+
+# 2. EXPLICIT OVERRIDE beats the configured value -- the expert escape hatch the
+#    contract keeps.
+out="$(bb_add zfsbackup --local-user=otheracct)"
+if grep -q -- '--local-user=otheracct' "$BB/pair.log" 2>/dev/null; then
+    ok "Batch B: --local-user overrides the configured account"
+else
+    bad "Batch B: --local-user overrides the configured account" "pair args: $(cat "$BB/pair.log" 2>/dev/null)"
+fi
+
+# 3. NO ACCOUNT RESOLVABLE: refuse at command one, name the corrective command,
+#    and create nothing. This is the case that used to produce root-run jobs from
+#    a warning nobody had to answer.
+rm -rf "$BB/clients"
+out="$(bb_add "")"
+if printf '%s' "$out" | grep -q 'no delegated backup account configured' \
+   && printf '%s' "$out" | grep -q 'setup-server --local-user=NAME' \
+   && ! printf '%s' "$out" | grep -q 'delegated to nobody' \
+   && [ ! -d "$BB/clients" ]; then
+    ok "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing"
+else
+    bad "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing" \
+        "$(printf '%s' "$out" | tail -2)"
+fi
+
+# 3b. ROOT IS STILL REACHABLE, but only by saying so. Without this the guard above
+#     would be indistinguishable from "root is now forbidden", which is not the
+#     contract -- root must stop being a DEFAULT, not stop being possible.
+out="$(bb_add "" --local-user=root)"
+if [ -f "$BB/pair.log" ] && ! grep -q -- '--local-user=' "$BB/pair.log"; then
+    ok "Batch B: --local-user=root is accepted and passes no account through (root by choice)"
+else
+    bad "Batch B: --local-user=root is accepted and passes no account through (root by choice)" \
+        "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
+fi
+
+# 4. INVALID ACCOUNT NAME refuses on the spot rather than reaching deploy.sh with
+#    something that cannot be a user.
+rm -f "$BB/pair.log"
+out="$(bb_add zfsbackup --local-user='2bad; rm -rf /')"
+if printf '%s' "$out" | grep -q 'is not a valid account name' && [ ! -f "$BB/pair.log" ]; then
+    ok "Batch B: an invalid account name refuses before pairing"
+else
+    bad "Batch B: an invalid account name refuses before pairing" "$(printf '%s' "$out" | tail -1)"
 fi
 
 # --- 6. assert_cron_config_matches_installed --------------------------------
