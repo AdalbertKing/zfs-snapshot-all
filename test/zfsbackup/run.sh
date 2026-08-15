@@ -191,6 +191,96 @@ else
     bad "simple flow: endpoint re-verification does not regenerate installed policy as a new relationship" "new/reactivation discriminator is wrong"
 fi
 
+# --- 1c. deploy facade routing -----------------------------------------------
+# `deploy` adds no backup logic: it drives the reviewed lifecycle
+# add-client -> seed -> activate to completion and is resumable from the
+# recorded STATE. Stub the three lifecycle commands -- each commits the same
+# durable STATE fact its real counterpart would -- and assert the orchestrator
+# calls exactly the outstanding steps, in order, with the correct per-command
+# flags: add-client is paired remotely by default and NEVER receives --yes (it
+# has no such option); seed/activate do. No peer, pool or network is touched.
+DP="$WORK/deployroute"; mkdir -p "$DP/clients"
+dp_run() {   # dp_run <logfile> <deploy args...>  -- prints combined output, sets $?
+    local logf="$1"; shift
+    ( CLIENTS_DIR="$DP/clients"
+      cmd_add_client() { printf 'add-client %s\n' "$*" >> "$logf"; echo "STATE=pending_enroll" > "$DP/clients/$1.conf"; }
+      cmd_seed()       { printf 'seed %s\n'       "$*" >> "$logf"; echo "STATE=seed_complete"  > "$DP/clients/$1.conf"; }
+      cmd_activate()   { printf 'activate %s\n'   "$*" >> "$logf"; }
+      log() { :; }
+      cmd_deploy "$@"
+    ) 2>&1
+}
+
+# case 1: a brand-new relationship runs the whole chain in order.
+: > "$DP/log1"
+out="$(dp_run "$DP/log1" relA --host=192.168.28.8 --target=hdd/backups --yes)"; rc=$?
+got="$(cat "$DP/log1")"
+want=$'add-client relA --host=192.168.28.8 --target=hdd/backups --join-remotely\nseed relA --yes\nactivate relA --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "deploy: fresh relationship runs add-client(remote join) -> seed -> activate in order"
+else
+    bad "deploy: fresh relationship runs add-client(remote join) -> seed -> activate in order" "rc=$rc got=[$got] out=$out"
+fi
+# the same log proves add-client never carried --yes (it would die on it).
+if ! grep '^add-client ' "$DP/log1" | grep -q -- '--yes'; then
+    ok "deploy: add-client is not passed --yes (only seed/activate are)"
+else
+    bad "deploy: add-client is not passed --yes (only seed/activate are)" "$(grep '^add-client ' "$DP/log1")"
+fi
+
+# case 2: resuming an already-seeded relationship skips add-client AND seed.
+echo "STATE=seed_complete" > "$DP/clients/relB.conf"
+: > "$DP/log2"
+out="$(dp_run "$DP/log2" relB --yes)"; rc=$?
+got="$(cat "$DP/log2")"
+if [ "$rc" -eq 0 ] && [ "$got" = "activate relB --yes" ]; then
+    ok "deploy: resume from seed_complete runs only activate (add-client/seed skipped)"
+else
+    bad "deploy: resume from seed_complete runs only activate (add-client/seed skipped)" "rc=$rc got=[$got] out=$out"
+fi
+
+# case 3: an interrupted seed is retried, without re-running add-client.
+echo "STATE=seeding" > "$DP/clients/relC.conf"
+: > "$DP/log3"
+out="$(dp_run "$DP/log3" relC --yes)"; rc=$?
+got="$(cat "$DP/log3")"
+want=$'seed relC --yes\nactivate relC --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "deploy: resume from seeding retries seed then activates, no second add-client"
+else
+    bad "deploy: resume from seeding retries seed then activates, no second add-client" "rc=$rc got=[$got] out=$out"
+fi
+
+# case 4: a fresh deploy with no --host refuses before touching anything.
+: > "$DP/log4"
+out="$(dp_run "$DP/log4" relD)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$DP/log4" ] && printf '%s' "$out" | grep -q 'deploy requires --host'; then
+    ok "deploy: a new relationship with no --host refuses before any lifecycle step"
+else
+    bad "deploy: a new relationship with no --host refuses before any lifecycle step" "rc=$rc log=[$(cat "$DP/log4")] out=$out"
+fi
+
+# case 5: --manual-join opts out of the automatic remote pairing.
+: > "$DP/log5"
+out="$(dp_run "$DP/log5" relE --host=1.2.3.4 --manual-join --yes)"; rc=$?
+addline="$(grep '^add-client ' "$DP/log5")"
+if [ "$rc" -eq 0 ] && printf '%s' "$addline" | grep -q -- '--host=1.2.3.4' \
+        && ! printf '%s' "$addline" | grep -q -- '--join-remotely'; then
+    ok "deploy: --manual-join drops --join-remotely (explicit two-sided form)"
+else
+    bad "deploy: --manual-join drops --join-remotely (explicit two-sided form)" "rc=$rc addline=[$addline] out=$out"
+fi
+
+# case 6: an unexpected recorded state refuses rather than guessing a next step.
+echo "STATE=weird" > "$DP/clients/relF.conf"
+: > "$DP/log6"
+out="$(dp_run "$DP/log6" relF)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$DP/log6" ] && printf '%s' "$out" | grep -q 'unexpected state'; then
+    ok "deploy: an unexpected recorded state refuses instead of guessing"
+else
+    bad "deploy: an unexpected recorded state refuses instead of guessing" "rc=$rc log=[$(cat "$DP/log6")] out=$out"
+fi
+
 # --- 2. peer_label matches deploy.sh's own -----------------------------------
 # deploy.sh's peer_label() is `tr -c 'A-Za-z0-9._-' '-'` on $PEER_HOST -- this
 # is the exact string this repo grep-checked in deploy.sh; kept identical here

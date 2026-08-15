@@ -185,6 +185,13 @@ Usage:
   zfs-backup.sh restore --dataset=D --snapshot=S [--yes]
                                     SAFE restore into the derived restore namespace. The
                                     original path is never the target.
+  zfs-backup.sh deploy NAME --host=SOURCE[:PORT] [--target=X] [--profile=NAME] [--yes]
+                                    ONE-COMMAND two-host setup. Runs the whole lifecycle
+                                    add-client -> seed -> activate and pairs the source
+                                    over SSH from here (no manual 'deploy.sh --join' on
+                                    the peer; --manual-join for the explicit two-sided
+                                    form). Resumable: re-run the same line to finish an
+                                    interrupted one.
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
@@ -7084,6 +7091,74 @@ cmd_remove_client() {
 }
 
 # ------------------------------------------------------------------------------
+# deploy -- the one-command two-host path. It adds NO backup logic of its own:
+# it drives the existing, individually reviewed lifecycle
+#   add-client (with remote --join) -> seed -> activate
+# to completion in a single call. It is resumable -- re-running the identical
+# 'deploy' line reads the recorded STATE and performs only the steps still
+# outstanding, so an interrupted enrolment is finished by repeating the same
+# command rather than by knowing which sub-command to reach for next.
+cmd_deploy() {
+    local name="${1:-}"; shift || true
+    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    local host="" target="" profile="" yes=0 verbose=0 manual_join=0 a
+    for a in "$@"; do
+        case "$a" in
+            --host=*)      host="${a#*=}" ;;
+            --target=*)    target="${a#*=}" ;;
+            --profile=*)   profile="${a#*=}" ;;
+            --manual-join) manual_join=1 ;;
+            --yes|-y)      yes=1 ;;
+            --verbose)     verbose=1 ;;
+            *) die "deploy: unknown option $a" ;;
+        esac
+    done
+
+    local cpath; cpath=$(client_conf_path "$name")
+
+    # STATE drives resumption. A brand-new relationship has no conf yet; an
+    # interrupted one carries the state it stopped in, so we start add-client
+    # only when nothing exists and otherwise continue from that point.
+    local state=""
+    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+
+    if [ -z "$state" ]; then
+        [ -n "$host" ] || die "deploy requires --host=HOST[:PORT] (the source to back up)"
+        local -a add_args=("$name" --host="$host")
+        [ -n "$target" ]  && add_args+=(--target="$target")
+        [ -n "$profile" ] && add_args+=(--profile="$profile")
+        # The one-command promise: pair the source over SSH from here by
+        # default, so no manual 'deploy.sh --join' is needed on the peer.
+        # --manual-join opts back into the explicit two-sided form.
+        [ "$manual_join" -eq 1 ] || add_args+=(--join-remotely)
+        log "deploy: enrolling '$name' (add-client)"
+        cmd_add_client "${add_args[@]}"
+        state=$( . "$cpath"; echo "${STATE:-}" )
+    else
+        log "deploy: resuming '$name' from state '$state'"
+    fi
+
+    case "$state" in
+        pending_enroll|seeding)
+            log "deploy: seeding '$name'"
+            local -a seed_args=("$name")
+            [ "$yes" -eq 1 ] && seed_args+=(--yes)
+            cmd_seed "${seed_args[@]}"
+            ;;
+        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
+        *) die "deploy: client '$name' is in unexpected state '$state' -- resolve with the lifecycle commands (status/seed/activate) before retrying" ;;
+    esac
+
+    log "deploy: activating '$name'"
+    local -a act_args=("$name")
+    [ "$yes" -eq 1 ]     && act_args+=(--yes)
+    [ "$verbose" -eq 1 ] && act_args+=(--verbose)
+    cmd_activate "${act_args[@]}"
+
+    log "deploy: '$name' is active."
+}
+
+# ------------------------------------------------------------------------------
 # Guarded (same idiom as update-control.sh) so test/zfsbackup/run.sh can
 # `source` this file to reach the pure helper functions without also running
 # the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
@@ -7097,6 +7172,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         --source=*|--target=*) cmd_local_backup "$@" ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         restore)          shift; cmd_restore "$@" ;;
+        deploy)           shift; cmd_deploy "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         activate)         shift; cmd_activate "$@" ;;
