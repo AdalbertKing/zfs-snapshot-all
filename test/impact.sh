@@ -277,6 +277,31 @@ verify() {
         fi
     done
 
+    echo "== CI runs every suite that needs nothing but bash"
+    # The workflow used to name its suites inline, under a comment asserting the
+    # list equalled the `needs = nothing` set. It did not -- 7 against 29 -- and
+    # no check existed, so the gap was invisible for as long as nobody counted.
+    # The 22 missing suites still had to run; they ran by hand, serially, at
+    # 13-25 minutes each against seconds on a runner.
+    #
+    # The fix was to DERIVE the matrix, so what is verified here is that it is
+    # still derived. Checking "the inline list matches the field" would only
+    # restore the duplicate this removed.
+    local wf="$REPO/.github/workflows/tests.yml"
+    if [ ! -f "$wf" ]; then
+        echo "  .github/workflows/tests.yml is missing"; rc=1
+    else
+        grep -q 'ci-suites.sh --json' "$wf" \
+            || { echo "  tests.yml no longer derives its matrix from ./test/ci-suites.sh"; rc=1; }
+        # A re-introduced literal list is the exact regression this guards.
+        grep -qE '^[[:space:]]*suite:[[:space:]]*\[' "$wf" \
+            && { echo "  tests.yml hardcodes a suite list again -- the matrix must come from ci-suites.sh"; rc=1; }
+        local ci_n
+        ci_n="$(bash "$REPO/test/ci-suites.sh" 2>/dev/null | grep -c .)"
+        [ "${ci_n:-0}" -gt 0 ] \
+            || { echo "  test/ci-suites.sh derived no suites -- deps.conf parse is broken"; rc=1; }
+    fi
+
     echo "== every suite referenced by a file is declared"
     for name in $(sections_of_kind file); do
         while read -r s; do

@@ -415,8 +415,34 @@ r=$(bash "$TD/deploy.sh" --revoke-quiesce 'bad;name' >/dev/null 2>&1; echo $?)
 # sourced (it would run the whole provisioning body), and the point here is to
 # fail at each stage in turn, which needs control over its dependencies.
 TX="$WORK/tx"; mkdir -p "$TX/bin"
-sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" > "$TX/fn.sh"
+# Extract the function AND the helpers it calls. Extracting only
+# install_quiesce_grant is what broke this section: a later change added a call
+# to quiesce_allow_dir_empty, defined elsewhere in deploy.sh, so the sandbox
+# raised "command not found" in the middle of a transaction test -- and the suite
+# reported that as a product failure, which it was not.
+#
+# The helper set is DERIVED from the naming convention rather than listed here,
+# because a hand-kept list of dependencies is the same defect one level up.
+{
+    sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh"
+    sed -n '/^quiesce_[a-z_]*() {/,/^}$/p'       "$REPO/deploy.sh"
+} > "$TX/fn.sh"
 [ -s "$TX/fn.sh" ] || bad "tx: could not extract install_quiesce_grant" "empty"
+
+# Guard the extraction itself. Every quiesce_* helper the extracted code CALLS
+# must also be DEFINED in what was extracted; otherwise the first symptom is a
+# "command not found" deep inside a rollback assertion, which reads as the
+# product losing a transaction. Fail here instead, naming the missing helper.
+tx_missing=""
+for fn in $(grep -oE '\bquiesce_[a-z_]+\b' "$TX/fn.sh" | sort -u); do
+    grep -q "^$fn() {" "$TX/fn.sh" || tx_missing="$tx_missing $fn"
+done
+if [ -z "$tx_missing" ]; then
+    ok "tx: the extracted grant code carries every quiesce_* helper it calls"
+else
+    bad "tx: the extracted grant code carries every quiesce_* helper it calls" \
+        "not extracted:$tx_missing -- widen the sed above"
+fi
 
 tx_stub_sudo() {   # tx_stub_sudo <visudo-rc>
     # The visudo stub logs what it was asked to validate. That log is the only
@@ -520,8 +546,32 @@ EOF
         REPO_DIR="$REPO"
         log()  { echo ">>> $*"; }
         warn() { echo "!!! $*" >&2; }
+        # apt-rc 1 and 2 both MEAN "visudo is not on this host". Saying so is the
+        # sandbox's job, and PATH cannot say it: _find_visudo probes
+        # /usr/sbin/visudo and /sbin/visudo by absolute path, which exist on any
+        # real Linux box. So on a runner the dependency stage was never entered --
+        # the grant installed cleanly, and the cases asserting what happens when
+        # it CANNOT be installed compared against a run that never tried. They
+        # passed only on a machine with no sudo package at all, which is why Git
+        # Bash was green and Linux was not.
+        #
+        # The absence is a STATE, not a constant: under apt-rc 2 the package is
+        # supplied mid-run, so visudo must be missing before that call and
+        # present after it. A flag file carries that, because the probe happens
+        # in the function under test, not here.
+        if [ "$aptrc" -ne 0 ]; then
+            : > "$TX/no-visudo"
+            command() {
+                case "$*" in *visudo*) [ -e "$TX/no-visudo" ] && return 1 ;; esac
+                builtin command "$@"
+            }
+        fi
         apt_install_with_fallback() {
-            if [ "$aptrc" -eq 2 ]; then tx_stub_sudo "$vrc"; return 0; fi
+            if [ "$aptrc" -eq 2 ]; then
+                tx_stub_sudo "$vrc"
+                rm -f "$TX/no-visudo"   # apt really did supply it
+                return 0
+            fi
             return "$aptrc"
         }
         # shellcheck disable=SC1090

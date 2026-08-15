@@ -66,15 +66,31 @@ jobs:
       # script fails here, which is one of F5's acceptance criteria.
       - run: ./test/impact.sh --verify
 
+  discover:
+    name: which suites need nothing but bash
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.list.outputs.suites }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "suites=$(./test/ci-suites.sh --json)" >> "$GITHUB_OUTPUT"
+
   suites:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
+    needs: discover
     strategy:
       fail-fast: false
       matrix:
-        # Exactly the suites whose deps.conf entry says `needs = nothing`.
-        # Keep this list and that field in step.
-        suite: [gencron, impact, quiesce, tune, statekey, join, selfupdate]
+        # DERIVED from deps.conf, never listed here. This used to be seven names
+        # inline under a comment claiming they were "exactly the suites whose
+        # deps.conf entry says needs = nothing". They were not -- twenty-nine
+        # qualify -- and nothing checked it. The twenty-two that fell out did not
+        # stop being run; they moved onto the implementer's machine, serially,
+        # where a suite costs 13-25 minutes against seconds on a runner. See
+        # test/ci-suites.sh, which is now the only list.
+        suite: ${{ fromJSON(needs.discover.outputs.suites) }}
     steps:
       - uses: actions/checkout@v4
       # REV-20260812-115 F1, second instance of the same defect. The `impact` suite
