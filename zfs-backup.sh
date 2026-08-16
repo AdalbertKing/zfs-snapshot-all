@@ -177,6 +177,23 @@ Usage:
                                     without --install: plans and previews, installs nothing
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
+  zfs-backup.sh --source=HOST:DATASET --target=DATASET [--port=N] [--profile=NAME]
+                [--name=NAME] [--install] [--yes|-y] [--verbose]
+                                    REMOTE backup: pull DATASET from HOST into the local
+                                    target. Composes the existing add-client -> seed ->
+                                    activate lifecycle -- one command, resumable by re-
+                                    running it identically after any interruption.
+                                    --name omitted:    derived from HOST; only needed when
+                                                       more than one relationship already
+                                                       points at the same host
+                                    without --install: read-only plan, touches neither host
+                                    --install:          enrol (remote --join over SSH), seed,
+                                                       verify endpoint, activate
+  zfs-backup.sh --source=HOST:DATASET --mode=sync [--port=N] [--profile=NAME]
+                [--name=NAME] [--install] [--yes|-y]
+                                    REMOTE sync: reproduce HOST:DATASET at the SAME path on
+                                    this host (no --target -- the mapping is the identity).
+                                    Same lifecycle and resumability as remote backup above.
   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
                                     READ-ONLY. What could be restored, from where, and when
                                     each snapshot was REALLY taken -- ZFS 'creation', never
@@ -7223,6 +7240,42 @@ cmd_remove_client() {
 }
 
 # ------------------------------------------------------------------------------
+# deploy_continue_lifecycle NAME YES VERBOSE
+#
+# Shared tail of the one-command two-host path: given a client record that
+# already exists (any STATE), drive it to ACTIVE using the existing,
+# individually reviewed lifecycle -- seed -> activate -- and nothing else.
+# Extracted out of cmd_deploy so the RUX unified entry point (rux_remote_
+# install) can reach the identical continuation after its OWN enrolment step,
+# instead of a second copy of this state dispatch. Precondition: the caller
+# has already ensured a client record for NAME exists (enrolled it just now,
+# or is resuming one found on disk) -- this function only drives forward from
+# whatever STATE is currently recorded.
+deploy_continue_lifecycle() {
+    local name="$1" yes="$2" verbose="$3"
+    local cpath; cpath=$(client_conf_path "$name")
+    local state; state=$( . "$cpath"; echo "${STATE:-}" )
+
+    case "$state" in
+        pending_enroll|seeding)
+            log "deploy: seeding '$name'"
+            local -a seed_args=("$name")
+            [ "$yes" -eq 1 ] && seed_args+=(--yes)
+            cmd_seed "${seed_args[@]}"
+            ;;
+        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
+        *) die "deploy: client '$name' is in unexpected state '$state' -- resolve with the lifecycle commands (status/seed/activate) before retrying" ;;
+    esac
+
+    log "deploy: activating '$name'"
+    local -a act_args=("$name")
+    [ "$yes" -eq 1 ]     && act_args+=(--yes)
+    [ "$verbose" -eq 1 ] && act_args+=(--verbose)
+    cmd_activate "${act_args[@]}"
+
+    log "deploy: '$name' is active."
+}
+
 # deploy -- the one-command two-host path. It adds NO backup logic of its own:
 # it drives the existing, individually reviewed lifecycle
 #   add-client (with remote --join) -> seed -> activate
@@ -7265,29 +7318,274 @@ cmd_deploy() {
         [ "$manual_join" -eq 1 ] || add_args+=(--join-remotely)
         log "deploy: enrolling '$name' (add-client)"
         cmd_add_client "${add_args[@]}"
-        state=$( . "$cpath"; echo "${STATE:-}" )
     else
         log "deploy: resuming '$name' from state '$state'"
     fi
 
-    case "$state" in
-        pending_enroll|seeding)
-            log "deploy: seeding '$name'"
-            local -a seed_args=("$name")
-            [ "$yes" -eq 1 ] && seed_args+=(--yes)
-            cmd_seed "${seed_args[@]}"
+    deploy_continue_lifecycle "$name" "$yes" "$verbose"
+}
+
+# ------------------------------------------------------------------------------
+# RUX -- unified remote deployment UX.
+#
+# Owner decision, docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md
+# (status: OWNER DECISION / MUST DO). One grammar for local AND remote:
+#
+#   --source=DATASET             local source       (unchanged: cmd_local_backup)
+#   --source=HOST:DATASET        remote source, pulled by THIS host
+#   --target=DATASET             local destination root (backup mode)
+#   --mode=sync                  identity-preserving mapping; no --target
+#   --install / (absent)         execute the reviewed plan / preview only
+#
+# This is a UX reduction, not a new engine: it composes the EXISTING add-
+# client -> seed -> activate lifecycle (deploy_continue_lifecycle, shared with
+# cmd_deploy above) and the existing --join scope/grant confirmation. It adds
+# no second grant mechanism and no second state machine -- the non-goals in
+# the design doc are the boundary of this feature.
+
+# rux_is_remote_source <source value> -> rc 0 when it names HOST:DATASET (a
+# local dataset name never legally contains ':' in this tool's own remote
+# syntax -- see qcap_is_remote's identical convention above).
+rux_is_remote_source() {
+    case "$1" in *:*) return 0 ;; esac
+    return 1
+}
+
+# rux_split_source <source> -> prints "HOST<TAB>DATASET" or refuses. HOST here
+# never carries an embedded port (mirrors --peer=HOST --port=N elsewhere in
+# this file) -- a non-default port is --port=N, separately.
+rux_split_source() {
+    local s="$1" host="${1%%:*}" dataset="${1#*:}"
+    [ -n "$host" ] && [ -n "$dataset" ] \
+        || die "rux: --source='$s' is not a valid HOST:DATASET remote source"
+    printf '%s\t%s\n' "$host" "$dataset"
+}
+
+# rux_resolve_name <host> <explicit name, may be empty> -> prints the
+# relationship name to use. The common one-relationship-per-peer case needs no
+# naming argument at all (Owner doc, "Relationship identity"): derive it from
+# the peer, the same way deploy.sh's own peer_label() already names its keys
+# and manifests. Only refuses to guess when more than one existing
+# relationship already points at this host.
+rux_resolve_name() {
+    local host="$1" explicit="$2"
+    if [ -n "$explicit" ]; then
+        client_name_valid "$explicit" \
+            || die "rux: --name='$explicit' is not a valid client name (letters, digits, dot, dash, underscore only)"
+        printf '%s\n' "$explicit"
+        return 0
+    fi
+    local -a matches=()
+    if [ -d "$CLIENTS_DIR" ]; then
+        local f
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -e "$f" ] || continue
+            local CLIENT_NAME="" PEER_HOST=""
+            # shellcheck disable=SC1090
+            . "$f"
+            [ "$PEER_HOST" = "$host" ] && matches+=("$CLIENT_NAME")
+        done
+    fi
+    case "${#matches[@]}" in
+        0)
+            local derived; derived=$(peer_label "$host")
+            client_name_valid "$derived" \
+                || die "rux: could not derive a valid client name from host '$host' -- pass --name=NAME explicitly"
+            printf '%s\n' "$derived"
             ;;
-        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
-        *) die "deploy: client '$name' is in unexpected state '$state' -- resolve with the lifecycle commands (status/seed/activate) before retrying" ;;
+        1) printf '%s\n' "${matches[0]}" ;;
+        *) die "rux: more than one existing relationship already points at '$host' (${matches[*]}) -- pass --name=NAME to say which one. Refusing to guess." ;;
     esac
+}
 
-    log "deploy: activating '$name'"
-    local -a act_args=("$name")
-    [ "$yes" -eq 1 ]     && act_args+=(--yes)
-    [ "$verbose" -eq 1 ] && act_args+=(--verbose)
-    cmd_activate "${act_args[@]}"
+# rux_check_conflict <client conf path> <host> <dataset> <target> <mode>
+# A relationship found by host match must have been created by THIS entry
+# point (RUX_SOURCE recorded) and must match the CURRENT request exactly, or
+# this refuses rather than silently mutating/adopting it (Owner doc, retry/
+# idempotence contract).
+rux_check_conflict() {
+    local cpath="$1" host="$2" dataset="$3" target="$4" mode="$5"
+    local RUX_SOURCE="" RUX_TARGET="" RUX_MODE="" CLIENT_NAME=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    [ -n "$RUX_SOURCE" ] \
+        || die "rux: a relationship for '$host' already exists ('$CLIENT_NAME') but was not created through this unified entry point -- use the expert lifecycle commands (status/seed/activate/remove-client) to inspect or resolve it. Nothing was changed."
+    local want_source="$host:$dataset"
+    if [ "$RUX_SOURCE" != "$want_source" ] || [ "${RUX_TARGET:-}" != "$target" ] || [ "${RUX_MODE:-}" != "$mode" ]; then
+        die "rux: the existing relationship '$CLIENT_NAME' already requests source='$RUX_SOURCE' target='${RUX_TARGET:-}' mode='${RUX_MODE:-backup}', which conflicts with this request (source='$want_source' target='$target' mode='${mode:-backup}'). Refusing to silently mutate or adopt it -- resolve by hand (status/remove-client), or re-run with the ORIGINAL request to resume it."
+    fi
+}
 
-    log "deploy: '$name' is active."
+# rux_verify_requested_scope <client conf path> <requested dataset>
+# The source side still has to validate/confirm/grant the exact scope before
+# a seed is allowed (Owner doc, "Scope and explicit source") -- this does not
+# invent a second grant mechanism, it only checks that what --join actually
+# came back with covers what the operator asked for, and refuses with the
+# exact reason instead of silently seeding a different source. A no-op until
+# the peer manifest exists (join not yet complete -- the seed step below
+# reports that on its own terms).
+rux_verify_requested_scope() {
+    local cpath="$1" requested="$2"
+    local PEER_HOST=""
+    # shellcheck disable=SC1090
+    . "$cpath"
+    [ -n "$PEER_HOST" ] || return 0
+    local mpath; mpath=$(peer_manifest_path "$(peer_label "$PEER_HOST")")
+    [ -r "$mpath" ] || return 0
+    local PEER_SAVED_DATASETS=""
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ -n "$PEER_SAVED_DATASETS" ] || return 0
+    local ds covered=0
+    for ds in $PEER_SAVED_DATASETS; do
+        case "$requested" in "$ds"|"$ds"/*) covered=1; break ;; esac
+    done
+    [ "$covered" -eq 1 ] \
+        || die "rux: requested source '$requested' is not covered by what '$PEER_HOST' actually granted (granted: $PEER_SAVED_DATASETS) -- the source-side scope differs from what was asked. Fix the scope on the source (commit-scope) or re-run naming the dataset that was actually granted. Nothing was seeded."
+}
+
+# rux_remote_plan <host> <port> <dataset> <target> <mode> <profile> <name>
+# READ-ONLY. No enrolment, SSH write, seed, CONFIG write or cron write --
+# shows what is already known locally and what installing would still need to
+# establish remotely.
+rux_remote_plan() {
+    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" explicit_name="$7"
+    [ -n "$profile" ] || profile="default"
+
+    local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
+    local cpath; cpath=$(client_conf_path "$name")
+    local state="(none -- fresh relationship)"
+    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-unknown}" )
+
+    echo "RUX plan (read-only -- nothing on either host is touched without --install)"
+    echo "  relationship name:            $name"
+    if [ -n "$port" ] && [ "$port" != 22 ]; then
+        echo "  remote source:                 $host:$dataset (port $port)"
+    else
+        echo "  remote source:                 $host:$dataset"
+    fi
+    if [ "$mode" = sync ]; then
+        echo "  mode:                          sync (identity-preserving -- lands at '$dataset' on this host)"
+    else
+        echo "  mode:                          backup"
+        echo "  local target:                  $target"
+    fi
+    echo "  preset (CREATE-time only):     $profile"
+    echo "  current lifecycle position:    $state"
+    case "$state" in
+        "(none -- fresh relationship)")
+            echo "  stages that would run:         add-client (enrol + attempt remote join) -> seed -> activate"
+            echo "  remote join:                    attempted automatically over SSH from this host; on failure, one manual join command is printed and re-running this SAME command resumes"
+            ;;
+        pending_enroll|seeding)
+            echo "  stages that would run:         seed -> activate"
+            ;;
+        seed_complete|endpoint_verified|endpoint_change_pending)
+            echo "  stages that would run:         activate"
+            ;;
+        active)
+            echo "  stages that would run:         (already active -- re-running is a clean no-op/refresh check)"
+            ;;
+        *)
+            echo "  stages that would run:         unknown state '$state' -- resolve with status/seed/activate before installing"
+            ;;
+    esac
+}
+
+# rux_remote_install <host> <port> <dataset> <target> <mode> <profile> <yes> <verbose> <name>
+# Orchestrates the existing lifecycle to ACTIVE. Safe to re-run after
+# interruption at any stage (Owner doc, "Critical retry/idempotence
+# contract") -- progress is derived from the client record already on disk,
+# never a second state store.
+rux_remote_install() {
+    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9"
+
+    local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
+    local cpath; cpath=$(client_conf_path "$name")
+    local state=""
+    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+
+    if [ -z "$state" ]; then
+        local hostarg="$host"
+        [ -n "$port" ] && [ "$port" != 22 ] && hostarg="$host:$port"
+        local -a add_args=("$name" --host="$hostarg")
+        if [ "$mode" = sync ]; then
+            add_args+=(--mode=sync)
+        else
+            add_args+=(--datasets="$dataset")
+            [ -n "$target" ] && add_args+=(--target="$target")
+        fi
+        [ -n "$profile" ] && add_args+=(--profile="$profile")
+        # The one-command promise applies here too: attempt the remote join
+        # over SSH from this host by default (Owner doc, "Join behavior").
+        add_args+=(--join-remotely)
+        log "rux: enrolling '$name' (source=$host:$dataset, mode=${mode:-backup})"
+        cmd_add_client "${add_args[@]}"
+        {
+            write_client_field RUX_SOURCE "$host:$dataset"
+            write_client_field RUX_TARGET "$target"
+            write_client_field RUX_MODE   "$mode"
+        } >> "$cpath"
+    else
+        log "rux: resuming '$name' from state '$state'"
+        rux_check_conflict "$cpath" "$host" "$dataset" "$target" "$mode"
+    fi
+
+    rux_verify_requested_scope "$cpath" "$dataset"
+
+    deploy_continue_lifecycle "$name" "$yes" "$verbose"
+}
+
+# rux_entry -- the dispatcher's --source=*/--target=* case reaches this
+# instead of cmd_local_backup directly, so it can decide local vs remote
+# BEFORE any argument reaches an entrypoint that would refuse ':' in --source.
+# Local behaviour is byte-for-byte unchanged: cmd_local_backup is called with
+# the ORIGINAL, unmodified argument vector.
+rux_entry() {
+    local source="" a
+    for a in "$@"; do
+        case "$a" in --source=*) source="${a#*=}" ;; esac
+    done
+    if ! rux_is_remote_source "${source:-}"; then
+        cmd_local_backup "$@"
+        return $?
+    fi
+
+    local target="" mode="" profile="" port="" name=""
+    local do_install=0 assume_yes=0 verbose=0
+    for a in "$@"; do
+        case "$a" in
+            --source=*)  : ;;
+            --target=*)  target="${a#*=}" ;;
+            --mode=*)    mode="${a#*=}" ;;
+            --profile=*) profile="${a#*=}" ;;
+            --port=*)    port="${a#*=}" ;;
+            --name=*)    name="${a#*=}" ;;
+            --install)   do_install=1 ;;
+            --plan)      do_install=0 ;;
+            --yes|-y)    assume_yes=1 ;;
+            --verbose)   verbose=1 ;;
+            *) die "rux: unknown option $a" ;;
+        esac
+    done
+    if [ -n "$mode" ] && [ "$mode" != sync ]; then
+        die "rux: --mode must be 'sync' for a remote source (the ordinary backup case needs no --mode at all)"
+    fi
+    if [ "$mode" = sync ] && [ -n "$target" ]; then
+        die "rux: --mode=sync reproduces the source path at the same path on this host -- do not also pass --target"
+    fi
+    if [ "$mode" != sync ] && [ -z "$target" ]; then
+        die "rux: --target=DATASET is required for a backup-mode remote source (or pass --mode=sync to reproduce the source path)"
+    fi
+
+    local host dataset
+    IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
+
+    if [ "$do_install" -eq 1 ]; then
+        rux_remote_install "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$assume_yes" "$verbose" "$name"
+    else
+        rux_remote_plan "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$name"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -7297,11 +7595,14 @@ cmd_deploy() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         setup-server)     shift; cmd_setup_server "$@" ;;
-        # REV-20260810-097 F3: the canonical public LOCAL entrypoint is the bare
+        # REV-20260810-097 F3: the canonical public entrypoint is the bare
         # high-level form `zfs-backup.sh --source=X --target=Y` (ACTIVE-WORK-PLAN
-        # Phase 5). `local-backup` stays as an internal alias reaching the same
-        # logic, but an operator is never required to learn it.
-        --source=*|--target=*) cmd_local_backup "$@" ;;
+        # Phase 5). RUX (docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md)
+        # extends the SAME form to a remote source (--source=HOST:DATASET):
+        # rux_entry decides local vs remote before either entrypoint sees the
+        # arguments, so a local --source is still byte-for-byte cmd_local_backup.
+        # `local-backup` stays a LOCAL-only internal alias, unchanged.
+        --source=*|--target=*) rux_entry "$@" ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         restore)          shift; cmd_restore "$@" ;;
         deploy)           shift; cmd_deploy "$@" ;;
