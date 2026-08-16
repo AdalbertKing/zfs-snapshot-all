@@ -417,6 +417,46 @@ else
         "rc=$rc out=$out order=$(cat "$WORK/18/order" 2>/dev/null)"
 fi
 
+# 19. --local-user=NAME is threaded through to add-client on a fresh
+#     enrolment (found live, 2026-08-16: a collector with no server.conf
+#     LOCAL_USER had no way to name a delegated account through RUX at all).
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/19/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/19/relationships"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=zfsbackup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG"; then
+    ok "19. --local-user=NAME is threaded through to add-client on fresh enrolment"
+else
+    bad "19. --local-user=NAME is threaded through to add-client on fresh enrolment" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
+# 20. Without --local-user, a collector with no server.conf account still
+#     refuses cleanly (add-client's own Batch B guard, reached unchanged --
+#     RUX must not paper over it by defaulting to root).
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/20/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20/relationships"
+    DEPLOY="$INST_DEPLOY"
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'no delegated backup account configured' && [ ! -s "$INST_PAIR_LOG" ]; then
+    ok "20. no --local-user and no server.conf account: add-client's own refusal reaches the operator unchanged"
+else
+    bad "20. no --local-user and no server.conf account: add-client's own refusal reaches the operator unchanged" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
