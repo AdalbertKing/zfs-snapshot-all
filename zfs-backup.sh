@@ -178,7 +178,7 @@ Usage:
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
   zfs-backup.sh --source=HOST:DATASET --target=DATASET [--port=N] [--profile=NAME]
-                [--name=NAME] [--install] [--yes|-y] [--verbose]
+                [--name=NAME] [--local-user=NAME] [--install] [--yes|-y] [--verbose]
                                     REMOTE backup: pull DATASET from HOST into the local
                                     target. Composes the existing add-client -> seed ->
                                     activate lifecycle -- one command, resumable by re-
@@ -186,11 +186,16 @@ Usage:
                                     --name omitted:    derived from HOST; only needed when
                                                        more than one relationship already
                                                        points at the same host
+                                    --local-user=NAME: CREATE-time only, same contract as
+                                                       add-client's own flag -- omit it and
+                                                       the collector's configured account
+                                                       (server.conf) is used, or add-client
+                                                       refuses if none is configured
                                     without --install: read-only plan, touches neither host
                                     --install:          enrol (remote --join over SSH), seed,
                                                        verify endpoint, activate
   zfs-backup.sh --source=HOST:DATASET --mode=sync [--port=N] [--profile=NAME]
-                [--name=NAME] [--install] [--yes|-y]
+                [--name=NAME] [--local-user=NAME] [--install] [--yes|-y]
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
                                     this host (no --target -- the mapping is the identity).
                                     Same lifecycle and resumability as remote backup above.
@@ -7498,7 +7503,7 @@ rux_remote_plan() {
 # contract") -- progress is derived from the client record already on disk,
 # never a second state store.
 rux_remote_install() {
-    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9"
+    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}"
 
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
     local cpath; cpath=$(client_conf_path "$name")
@@ -7516,6 +7521,7 @@ rux_remote_install() {
             [ -n "$target" ] && add_args+=(--target="$target")
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
+        [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join
         # over SSH from this host by default (Owner doc, "Join behavior").
         add_args+=(--join-remotely)
@@ -7551,7 +7557,7 @@ rux_entry() {
         return $?
     fi
 
-    local target="" mode="" profile="" port="" name=""
+    local target="" mode="" profile="" port="" name="" local_user=""
     local do_install=0 assume_yes=0 verbose=0
     for a in "$@"; do
         case "$a" in
@@ -7561,6 +7567,7 @@ rux_entry() {
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
+            --local-user=*) local_user="${a#*=}" ;;
             --install)   do_install=1 ;;
             --plan)      do_install=0 ;;
             --yes|-y)    assume_yes=1 ;;
@@ -7582,7 +7589,7 @@ rux_entry() {
     IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
 
     if [ "$do_install" -eq 1 ]; then
-        rux_remote_install "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$assume_yes" "$verbose" "$name"
+        rux_remote_install "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$assume_yes" "$verbose" "$name" "$local_user"
     else
         rux_remote_plan "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$name"
     fi
