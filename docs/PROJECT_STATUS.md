@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d3501da65d409621 -->
+<!-- status-covers-digest: c7b34622270c3986 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,6 +97,26 @@
   odtworzonego == źródło, GUID zgodny**. Restore **destruktywny „w miejsce"
   nadal NIE istnieje publicznie** (Faza 7; gramatyka CLI po stronie właściciela)
   — bezpieczny restore mówi to wprost.
+
+- **Restore WYDZIELONY do `zfs-restore.sh` (2026-08-17, decyzja właściciela).**
+  Restore to jedyna operacja, której strona aktywna pisze po produkcji —
+  odwrotność każdego innego czasownika — więc ta granica zaufania jest teraz
+  granicą PLIKU: `zfs-backup.sh` nigdy nie niszczy danych klienta i jest
+  odtąd **feature-stable** („wstępnie domknięty" — bugfixy tak, nowa
+  funkcjonalność nie; historia review recenzenta pozostaje ważna, bo plik,
+  którego dotyczyła, przestał się ruszać). Kod Fazy 7 przeniesiony VERBATIM
+  (13 funkcji, linie 3073–4376 starego pliku): planner `--plan`, bezpieczny
+  side-restore, wewnętrzny silnik niszczący (nadal bez publicznych drzwi —
+  gramatyka CLI i grant kliencki to wiszące decyzje właściciela,
+  `docs/design/client-granted-restore.md`). Wspólne helpery (warn/die,
+  `SERVER_CONF`+`read_server_conf`, `installed_dataset_field`) przeniesione
+  do **`lib-backup-common.sh`** — przeniesione, nie zduplikowane; cięcie
+  biegnie po UŻYCIU, nie po nazwach (`managed_source_prefix_for_scope`/
+  `source_scope_is_bounded` zostają w zfs-backup.sh — ścieżka audytu).
+  Publiczna powierzchnia NIEZMIENIONA: `zfs-backup.sh restore …` forwarduje
+  przez `exec` do `zfs-restore.sh`, oba wejścia dowiedzione bajt w bajt
+  identyczne. `test/restore` źródłuje odtąd `zfs-restore.sh`; macierz CI
+  wyprowadza się z `deps.conf`, więc suita zostaje w CI bez zmian workflow.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
