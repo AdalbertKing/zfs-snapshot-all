@@ -4099,7 +4099,28 @@ cmd_activate_client() {
         LOCAL_USER="$PEER_SAVED_LOCAL_USER"
         log "activate: no LOCAL_USER in server.conf -- using the pairing's delegated account '$LOCAL_USER' for the cron install (make it permanent for this host with setup-server --local-user=$LOCAL_USER)"
     fi
-    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
+    # Resolution order: recorded CRON_CONFIG -> the Source line of the block
+    # ALREADY INSTALLED in the target account's crontab -> only then the /etc
+    # default. The middle step is what the lab3 final run proved necessary:
+    # once the install goes to the ACCOUNT's crontab (F3), that crontab may
+    # already carry a production block generated from a different file, and a
+    # crontab has ONE managed block -- installing from a freshly-defaulted path
+    # would DELETE every job the installed file describes. The 2026-07-30
+    # incident guard caught exactly that and refused; this makes the refusal
+    # unnecessary by adopting the installed truth, same as setup-server already
+    # does. New sections MERGE into the host's one config, which is the
+    # single-writer design, not a workaround.
+    local cronfile="${CRON_CONFIG:-}"
+    if [ -z "$cronfile" ]; then
+        local existing_src
+        existing_src=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+        if [ -n "$existing_src" ]; then
+            cronfile=$(normalize_cron_source "$existing_src")
+            log "activate: adopting the installed managed block's config '$existing_src' (resolved: $cronfile) -- one crontab, one managed block, one source file"
+        else
+            cronfile="$(default_cron_config)"
+        fi
+    fi
 
     # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
     # COPY of the config -- the real file is never touched until validation,
