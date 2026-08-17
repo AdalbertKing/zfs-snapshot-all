@@ -2127,6 +2127,40 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local sync_mode=0
     [ "${PEER_SAVED_MODE:-}" = sync ] && sync_mode=1
 
+    # F7 (owner decision 2026-08-17, lab3): a sync relationship NEVER starts a
+    # second snapshot family. If the source dataset already carries automated_*
+    # snapshots, someone else is producing that family -- most importantly the
+    # chained case, where the "source" is itself another collector's COPY. The
+    # lab measured what two writers into one family do: pve9's UTC-named
+    # snapshots landed in the same GFS creation-time bucket as link A's, the
+    # copy's prune kept the wrong one, and BOTH links lost their common base
+    # within 80 minutes -- the chain destroyed itself with every engine
+    # individually working as designed. So a sync dataset whose source already
+    # has the family becomes PASSIVE: snapget -e consumes the newest existing
+    # snapshot, creates nothing on the source, and no remote source-prune is
+    # emitted (the family's owner keeps sole retention authority). The audit
+    # already understands this shape (installed_dataset_is_passive).
+    # Per dataset, not per client: a mixed scope stays correct dataset by
+    # dataset. Detection is one snapshot listing over the already-loaded
+    # channel; `zfs list` needs no delegation, so this works pre-grant too.
+    local -a passive_ds=()
+    sync_ds_is_passive() {   # <source dataset> -> 0 if its family already exists
+        case " ${passive_ds[*]:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+    }
+    if [ "$sync_mode" -eq 1 ]; then
+        local pds
+        for pds in $PEER_SAVED_DATASETS; do
+            if ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+                   -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+                   -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+                   "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot -d 1 -o name -- '$pds'" 2>/dev/null \
+                 | grep -q '@automated_'; then
+                passive_ds+=("$pds")
+                log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
+            fi
+        done
+    fi
+
     managed=()
     for ds in $PEER_SAVED_DATASETS; do
         managed+=("$(client_local_path "$ds")")
@@ -2196,8 +2230,32 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             echo "[dataset:$localpath]"
             echo "	$marker"
             profile_emit "$PROFILE_DS_FILE"
-            echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-            echo "	flags        = $LOAD_FLAGS"
+            if sync_ds_is_passive "$ds"; then
+                # Dataset-level fields beat the template's (resolve_field), so
+                # these four lines are the whole passive shape:
+                #   -e            consume the newest EXISTING snapshot;
+                #   prefix        the generic family, not one tier's -- the
+                #                 owner's newest snapshot is the right one
+                #                 whichever tier produced it;
+                #   :31 schedule  offset off the owner's :01 -- pulling at the
+                #                 same minute as the producer races it and
+                #                 reproduces the same-minute bucket collision
+                #                 the lab measured;
+                #   3h/5h         thresholds sized to the CHAIN's cadence (the
+                #                 copy is one hop behind the family's own
+                #                 cadence; 90m thresholds would false-alarm on
+                #                 a healthy chain -- the threshold-vs-cadence
+                #                 lesson, third occurrence on this estate).
+                echo "	prefix       = automated_"
+                echo "	send_schedule = 31 * * * *"
+                echo "	monitor_warn = 3h"
+                echo "	monitor_crit = 5h"
+                echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+                echo "	flags        = $LOAD_FLAGS -e"
+            else
+                echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+                echo "	flags        = $LOAD_FLAGS"
+            fi
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
@@ -2276,7 +2334,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # with an endpoint switch the way `src` does. The flow then grant-checks
     # exactly the emitted datasets before publishing. Covers sync and backup alike
     # -- the remote source path is `ds` in either mode.
-    emit_remote_source_prune "$workfile" "$name" "$marker" ${PEER_SAVED_DATASETS:-} || return 1
+    # Passive datasets are EXCLUDED from remote source retention by definition:
+    # this client does not own that family, so it does not prune it. The lab
+    # measured the alternative -- link B's src-src prune fighting link A's own
+    # retention over the same middle dataset.
+    local -a prune_src=()
+    for ds in ${PEER_SAVED_DATASETS:-}; do
+        sync_ds_is_passive "$ds" || prune_src+=("$ds")
+    done
+    emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
     return 0
 }
 
@@ -4132,6 +4198,15 @@ cmd_activate_client() {
     else
         echo "Profil:              legacy (plaska retencja per tier -- ten host ma config"
         echo "                     sprzed podzialu profilu)"
+    fi
+    # F7: name the passive shape out loud BEFORE consent -- a silent non-passive
+    # choice on a chained middle dataset is exactly what the lab watched destroy
+    # both links' common bases in 80 minutes.
+    if grep -qE '^\s*flags\s*=.*\s-e(\s|$)' "$workfile" 2>/dev/null; then
+        echo "Tryb pasywny:        TAK dla czesci/calosci zakresu -- ta relacja KONSUMUJE"
+        echo "                     istniejaca rodzine snapshotow zrodla (snapget -e):"
+        echo "                     zadnych nowych snapshotow na zrodle, zadnego prune"
+        echo "                     zrodla; retencja rodziny zostaje u jej wlasciciela."
     fi
     echo "Spojnosc snapshotu:  crash-consistent -- quiesce NIE jest wlaczony w tym profilu."
     echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"

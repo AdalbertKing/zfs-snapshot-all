@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 620d2f110c62d3fd -->
+<!-- status-covers-digest: f19f91760324bf01 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -70,7 +70,16 @@
   `rux` 27/27 (+4: kolejność grant→verify→seed pinowana jako KOLEJNOŚĆ, nie
   obecność; default bez flagi bez kroku grantu; autorytet weryfikacji po
   grancie — niedopasowany commit odmawia przed seedem; odmowa nadpisania
-  cudzego draftu).
+  cudzego draftu). **F7 ROZSTRZYGNIĘTE I ZAIMPLEMENTOWANE** (właściciel:
+  „Działaj"): sync NIGDY nie zakłada drugiej rodziny snapshotów — dataset,
+  którego źródło już niesie rodzinę `automated_*`, staje się PASYWNY
+  (`snapget -e`): zero nowych snapshotów na źródle, zero prune'a źródła,
+  retencja rodziny u jej właściciela; prefix generyczny `automated_`,
+  harmonogram przesunięty na :31 (pull w tej samej minucie co producent =
+  zmierzona kolizja kubełka GFS), progi monitora 3h/5h pod kadencję
+  ŁAŃCUCHA (lekcja próg-vs-kadencja, trzecie wystąpienie); wykrycie per
+  dataset przy aktywacji (jedno `zfs list` po załadowanym kanale, działa
+  przed grantem), podgląd aktywacji mówi o pasywności GŁOŚNO przed zgodą.
 
 - **REŻIM ZMIENIONY 2026-08-15 — `HANDOFF.md` jest nadrzędny nad `CLAUDE.md`.**
   Recenzenta NIE MA; suity NIE są bramką; testy na żywych hostach dozwolone
