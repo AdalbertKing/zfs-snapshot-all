@@ -1823,11 +1823,13 @@ assert_no_foreign_managed_block() {   # <config whose render is about to be inst
 }
 
 # gen-cron.sh runs AS the dedicated account, so that account has to be able to
-# READ the config. The default location is $SCRIPT_DIR/jobs.<host>.conf, which
-# on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
+# READ the config. The default location used to be $SCRIPT_DIR/jobs.<host>.conf,
+# which on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
 # metropolis pve1, 2026-08-01: the account could not open the file at all, so
 # --local-user with the default path would have failed at install time, after
-# the preview had already been shown and accepted.
+# the preview had already been shown and accepted. Since 2026-08-17 the default
+# is /etc/zfs-snapshot-all (default_cron_config), but a RECORDED path can still
+# point anywhere, so this check stays.
 #
 # Checked as the account itself rather than by reasoning about modes: group
 # membership, ACLs and every parent directory on the path all get a vote, and
@@ -2125,6 +2127,40 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local sync_mode=0
     [ "${PEER_SAVED_MODE:-}" = sync ] && sync_mode=1
 
+    # F7 (owner decision 2026-08-17, lab3): a sync relationship NEVER starts a
+    # second snapshot family. If the source dataset already carries automated_*
+    # snapshots, someone else is producing that family -- most importantly the
+    # chained case, where the "source" is itself another collector's COPY. The
+    # lab measured what two writers into one family do: pve9's UTC-named
+    # snapshots landed in the same GFS creation-time bucket as link A's, the
+    # copy's prune kept the wrong one, and BOTH links lost their common base
+    # within 80 minutes -- the chain destroyed itself with every engine
+    # individually working as designed. So a sync dataset whose source already
+    # has the family becomes PASSIVE: snapget -e consumes the newest existing
+    # snapshot, creates nothing on the source, and no remote source-prune is
+    # emitted (the family's owner keeps sole retention authority). The audit
+    # already understands this shape (installed_dataset_is_passive).
+    # Per dataset, not per client: a mixed scope stays correct dataset by
+    # dataset. Detection is one snapshot listing over the already-loaded
+    # channel; `zfs list` needs no delegation, so this works pre-grant too.
+    local -a passive_ds=()
+    sync_ds_is_passive() {   # <source dataset> -> 0 if its family already exists
+        case " ${passive_ds[*]:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+    }
+    if [ "$sync_mode" -eq 1 ]; then
+        local pds
+        for pds in $PEER_SAVED_DATASETS; do
+            if ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+                   -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+                   -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+                   "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot -d 1 -o name -- '$pds'" 2>/dev/null \
+                 | grep -q '@automated_'; then
+                passive_ds+=("$pds")
+                log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
+            fi
+        done
+    fi
+
     managed=()
     for ds in $PEER_SAVED_DATASETS; do
         managed+=("$(client_local_path "$ds")")
@@ -2194,8 +2230,32 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             echo "[dataset:$localpath]"
             echo "	$marker"
             profile_emit "$PROFILE_DS_FILE"
-            echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-            echo "	flags        = $LOAD_FLAGS"
+            if sync_ds_is_passive "$ds"; then
+                # Dataset-level fields beat the template's (resolve_field), so
+                # these four lines are the whole passive shape:
+                #   -e            consume the newest EXISTING snapshot;
+                #   prefix        the generic family, not one tier's -- the
+                #                 owner's newest snapshot is the right one
+                #                 whichever tier produced it;
+                #   :31 schedule  offset off the owner's :01 -- pulling at the
+                #                 same minute as the producer races it and
+                #                 reproduces the same-minute bucket collision
+                #                 the lab measured;
+                #   3h/5h         thresholds sized to the CHAIN's cadence (the
+                #                 copy is one hop behind the family's own
+                #                 cadence; 90m thresholds would false-alarm on
+                #                 a healthy chain -- the threshold-vs-cadence
+                #                 lesson, third occurrence on this estate).
+                echo "	prefix       = automated_"
+                echo "	send_schedule = 31 * * * *"
+                echo "	monitor_warn = 3h"
+                echo "	monitor_crit = 5h"
+                echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+                echo "	flags        = $LOAD_FLAGS -e"
+            else
+                echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+                echo "	flags        = $LOAD_FLAGS"
+            fi
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
@@ -2274,7 +2334,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # with an endpoint switch the way `src` does. The flow then grant-checks
     # exactly the emitted datasets before publishing. Covers sync and backup alike
     # -- the remote source path is `ds` in either mode.
-    emit_remote_source_prune "$workfile" "$name" "$marker" ${PEER_SAVED_DATASETS:-} || return 1
+    # Passive datasets are EXCLUDED from remote source retention by definition:
+    # this client does not own that family, so it does not prune it. The lab
+    # measured the alternative -- link B's src-src prune fighting link A's own
+    # retention over the same middle dataset.
+    local -a prune_src=()
+    for ds in ${PEER_SAVED_DATASETS:-}; do
+        sync_ds_is_passive "$ds" || prune_src+=("$ds")
+    done
+    emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
     return 0
 }
 
@@ -2324,6 +2392,18 @@ client_local_path() {   # <source dataset> -> where it lands locally
 # stays the only sender of the daily mail. digest_script=none is how that block
 # opts out.
 cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
+
+# The default cron-config location for THIS host, used only when nothing has
+# recorded one yet (no server.conf CRON_CONFIG, no client record, no installed
+# managed block to read a Source line from). /etc/zfs-snapshot-all is the
+# fleet's convention and is readable by the delegated account.
+#
+# It used to be $SCRIPT_DIR/jobs.<host>.conf, which fails twice over: on a
+# Proxmox host $SCRIPT_DIR is under /root (0700 -- the account cannot read it;
+# found live on metropolis pve1, 2026-08-01), and it puts operator state INSIDE
+# the git checkout that hourly self-updates (found live 2026-08-17, lab3: a
+# fresh RUX install wrote its config next to the code it came from).
+default_cron_config() { echo "/etc/zfs-snapshot-all/jobs.$(hostname -s 2>/dev/null || hostname).conf"; }
 
 # `crontab -l` for whoever owns the jobs. Root can read another account's
 # crontab with -u; as that account itself, -u is refused, so it is only added
@@ -2653,7 +2733,7 @@ cmd_setup_server() {
                 config=$(normalize_cron_source "$existing")
                 log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
             else
-                config="$SCRIPT_DIR/jobs.$(hostname -s).conf"
+                config="$(default_cron_config)"
             fi
         fi
     fi
@@ -2826,7 +2906,7 @@ cmd_local_backup() {
     done
 
     read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf}"
+    [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -3311,10 +3391,15 @@ cmd_add_client() {
 #
 # Called from load_client_and_connection, which every caller above already
 # invokes first -- not a new step operators need to remember.
-resolve_mode_datasets() {
-    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
-    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
-
+# fetch_committed_scope <local outfile> -- fetch the peer's COMMITTED scope
+# file over the already-loaded connection (LOAD_*), enforcing T3: the sha256
+# sidecar only exists after --commit-scope, and the fetched file must match it.
+# Dies, with whose-move-it-is instructions, when the draft is missing, the
+# commit has not happened, or the file was edited since the commit. Shared by
+# resolve_mode_datasets (sync) and rux_verify_requested_scope (backup) -- one
+# implementation of "what did the source actually sign", not two.
+fetch_committed_scope() {
+    local outfile="$1"
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
         -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
@@ -3325,28 +3410,41 @@ resolve_mode_datasets() {
     sfile_remote=$(peer_scope_path "$COLLECTOR_LABEL")
     hfile_remote=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
 
-    local scope_tmp hash_tmp
-    scope_tmp=$(mktemp) || die "mktemp failed"
-    hash_tmp=$(mktemp) || { rm -f "$scope_tmp"; die "mktemp failed"; }
-    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$scope_tmp" 2>/dev/null \
-       || [ ! -s "$scope_tmp" ]; then
-        rm -f "$scope_tmp" "$hash_tmp"
+    local hash_tmp
+    hash_tmp=$(mktemp) || die "mktemp failed"
+    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$outfile" 2>/dev/null \
+       || [ ! -s "$outfile" ]; then
+        rm -f "$hash_tmp"
         die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- has --draft-scope run there yet?"
     fi
     if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
        || [ ! -s "$hash_tmp" ]; then
-        rm -f "$scope_tmp" "$hash_tmp"
-        die "could not fetch the granted-scope hash from $LOAD_HOST ($hfile_remote) -- has --commit-scope run there yet? (--draft-scope alone grants nothing)"
+        rm -f "$hash_tmp"
+        die "the source $LOAD_HOST has GRANTED nothing yet: the scope draft exists there, but the grant (--commit-scope) is deliberately a source-side decision and never runs remotely. Whose move it is: on $LOAD_HOST, review the draft and run:
+    deploy.sh --commit-scope=$COLLECTOR_LABEL
+then re-run the exact command that printed this -- it resumes from where it stopped. (--draft-scope alone grants nothing.)"
     fi
 
     local want_hash got_hash
     want_hash=$(tr -d ' \t\r\n' < "$hash_tmp")
-    got_hash=$(sha256sum -- "$scope_tmp" 2>/dev/null | awk '{print $1}')
+    got_hash=$(sha256sum -- "$outfile" 2>/dev/null | awk '{print $1}')
     rm -f "$hash_tmp"
     if [ -z "$got_hash" ] || [ "$want_hash" != "$got_hash" ]; then
-        rm -f "$scope_tmp"
         die "the scope file on $LOAD_HOST does not match the hash --commit-scope last recorded there -- it was edited since the last commit (or committed differently) and never re-committed. Run --commit-scope on $LOAD_HOST first, then retry."
     fi
+}
+
+resolve_mode_datasets() {
+    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
+    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+
+    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+
+    local scope_tmp
+    scope_tmp=$(mktemp) || die "mktemp failed"
+    fetch_committed_scope "$scope_tmp"
 
     scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
     rm -f "$scope_tmp"
@@ -3976,7 +4074,19 @@ cmd_activate_client() {
 
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    # Without a server.conf LOCAL_USER this activation used to fall back to
+    # ROOT's crontab even when the pairing was built around a delegated
+    # account (--local-user at add-client time records it in the manifest as
+    # PEER_SAVED_LOCAL_USER, and every generated job's -K points at that
+    # account's pairing key). Found live 2026-08-17 (lab3): the whole fleet
+    # runs account-based crontabs, and the one RUX-deployed host silently
+    # became the exception. server.conf still wins when it pins LOCAL_USER --
+    # this only fills the gap the manifest can already answer.
+    if [ -z "${LOCAL_USER:-}" ] && [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
+        LOCAL_USER="$PEER_SAVED_LOCAL_USER"
+        log "activate: no LOCAL_USER in server.conf -- using the pairing's delegated account '$LOCAL_USER' for the cron install (make it permanent for this host with setup-server --local-user=$LOCAL_USER)"
+    fi
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
 
     # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
     # COPY of the config -- the real file is never touched until validation,
@@ -4089,10 +4199,35 @@ cmd_activate_client() {
         echo "Profil:              legacy (plaska retencja per tier -- ten host ma config"
         echo "                     sprzed podzialu profilu)"
     fi
+    # F7: name the passive shape out loud BEFORE consent -- a silent non-passive
+    # choice on a chained middle dataset is exactly what the lab watched destroy
+    # both links' common bases in 80 minutes.
+    if grep -qE '^\s*flags\s*=.*\s-e(\s|$)' "$workfile" 2>/dev/null; then
+        echo "Tryb pasywny:        TAK dla czesci/calosci zakresu -- ta relacja KONSUMUJE"
+        echo "                     istniejaca rodzine snapshotow zrodla (snapget -e):"
+        echo "                     zadnych nowych snapshotow na zrodle, zadnego prune"
+        echo "                     zrodla; retencja rodziny zostaje u jej wlasciciela."
+    fi
     echo "Spojnosc snapshotu:  crash-consistent -- quiesce NIE jest wlaczony w tym profilu."
     echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"
     echo "                      zfs-quiesce-helper, wymaga --allow-quiesce przy parowaniu)"
     echo "Test:                OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
+    # Snapshot NAMES embed local wall-clock time; ZFS `creation` is the truth,
+    # but every human and every filename sorts by the name. Found live
+    # 2026-08-17 (lab3): a fresh cloud VM defaulted to UTC while the rest of
+    # the estate runs CEST, and the chain's snapshots disagreed by two hours
+    # with their own names' timestamps -- exactly the name-vs-creation trap
+    # restore --plan flags. Warn-only: clocks are host policy, not this
+    # tool's, and the transfer itself is unaffected.
+    local peer_tz local_tz
+    local_tz=$(date +%z)
+    peer_tz=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+        "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
+    if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
+        warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
+    fi
     echo
 
     show_activation_proposal "$cronfile" "$workfile" || {
@@ -4291,7 +4426,7 @@ cmd_migrate_profile() {
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
     if ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule"; then
@@ -4417,7 +4552,7 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
 
     # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
@@ -6136,16 +6271,32 @@ rux_verify_requested_scope() {
     [ -n "$PEER_HOST" ] || return 0
     local mpath; mpath=$(peer_manifest_path "$(peer_label "$PEER_HOST")")
     [ -r "$mpath" ] || return 0
-    local PEER_SAVED_DATASETS=""
+    local PEER_SAVED_MODE=""
     # shellcheck disable=SC1090
     . "$mpath"
-    [ -n "$PEER_SAVED_DATASETS" ] || return 0
-    local ds covered=0
-    for ds in $PEER_SAVED_DATASETS; do
-        case "$requested" in "$ds"|"$ds"/*) covered=1; break ;; esac
-    done
-    [ "$covered" -eq 1 ] \
-        || die "rux: requested source '$requested' is not covered by what '$PEER_HOST' actually granted (granted: $PEER_SAVED_DATASETS) -- the source-side scope differs from what was asked. Fix the scope on the source (commit-scope) or re-run naming the dataset that was actually granted. Nothing was seeded."
+    # Sync relationships defer their dataset list to the source's scope file;
+    # resolve_mode_datasets enforces T3 for them inside load_client_and_
+    # connection, so a second fetch here would only duplicate the same check.
+    [ "${PEER_SAVED_MODE:-}" = sync ] && return 0
+
+    # Backup (dataset-addressed) path. The manifest's own PEER_SAVED_DATASETS
+    # is written at --pair time FROM THE REQUEST (--datasets=...), so checking
+    # the request against it proves nothing -- it compares the request with
+    # itself. Found live 2026-08-17 (lab3): the check passed, the seed ran
+    # against a source whose operator had never committed the scope, and died
+    # with a raw 'cannot create snapshots: permission denied' instead of
+    # naming whose move it is. The grant's only proof is the source-side scope
+    # file plus the sha256 sidecar that ONLY --commit-scope writes (T3), so
+    # that is what this verifies against -- fetched over the pairing channel,
+    # via the same fetch_committed_scope the sync path uses. This verifies,
+    # it never widens: nothing here creates or edits anything on the source.
+    load_client_and_connection "$cpath"
+    local scope_tmp; scope_tmp=$(mktemp) || die "mktemp failed"
+    fetch_committed_scope "$scope_tmp"
+    scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
+    rm -f "$scope_tmp"
+    scope_includes "$requested" \
+        || die "rux: requested source '$requested' is not covered by the scope '$PEER_HOST' actually COMMITTED (active roots: ${SCOPE_ROOTS[*]:-none}) -- the source-side grant differs from what was asked. Fix the scope on the source (edit + deploy.sh --commit-scope) or re-run naming a dataset the source actually granted. Nothing was seeded."
 }
 
 # rux_remote_plan <host> <port> <dataset> <target> <mode> <profile> <name>
@@ -6201,8 +6352,105 @@ rux_remote_plan() {
 # interruption at any stage (Owner doc, "Critical retry/idempotence
 # contract") -- progress is derived from the client record already on disk,
 # never a second state store.
+# ------------------------------------------------------------------------------
+# --grant-remotely (owner decision 2026-08-17, docs/discussions/
+# ZFSBACKUP-ONLY-DEPLOYMENT-2026-08-17.md accepted verbatim). One narrow
+# consent: commit, on the source, a scope EQUAL TO THE REQUEST -- over the
+# operator's own root-ssh channel, the same one --join-remotely already used
+# to create the delegated account there. It amends REV-20260802-033 U10's
+# "the grant never runs remotely" with an explicit, audited opt-in; the
+# DEFAULT path stays two-touch and U10-shaped.
+#
+# Properties held to exactly:
+#   * the committed scope is by construction the requested dataset, never
+#     wider -- the stanza is generated here from the command line, not taken
+#     from whatever happens to lie on the source;
+#   * a pre-existing draft that selects something DIFFERENT refuses -- an
+#     operator prepared that file, and force is not permission to overwrite
+#     another person's pending decision;
+#   * no root channel -> refuse EARLY, before any state changes, with the
+#     exact trust to establish;
+#   * the source keeps an audit fact (GRANTED_REMOTELY_BY in the join
+#     manifest) saying the consent came from outside and from whom;
+#   * verification stays the same authority as ever: after this returns, the
+#     ordinary fetch+hash+includes check (rux_verify_requested_scope /
+#     resolve_mode_datasets) still runs and still decides.
+#
+# All remote work here rides root-ssh, deliberately including the
+# already-committed probe: the account channel would recurse into
+# resolve_mode_datasets' own T3 fetch for sync-mode clients -- the very check
+# this function exists to satisfy first.
+rux_root_ssh() {   # <host> <port> <command...>
+    local host="$1" port="$2"; shift 2
+    ssh -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts \
+        -o StrictHostKeyChecking=yes -p "${port:-22}" "root@$host" "$@"
+}
+
+rux_grant_remotely() {   # <host> <port> <requested dataset>
+    local host="$1" port="$2" requested="$3"
+    local sfile hfile
+    sfile=$(peer_scope_path "$COLLECTOR_LABEL")
+    hfile=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
+
+    if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
+        die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
+    fi
+
+    if rux_root_ssh "$host" "$port" "test -s '$hfile'" >/dev/null 2>&1; then
+        log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' -- nothing to grant, the ordinary verification below decides whether it covers the request"
+        return 0
+    fi
+
+    local remote_repo="" d
+    for d in "$SCRIPT_DIR" /root/scripts/zfs-snapshot-all /root/zfs-snapshot-all; do
+        if rux_root_ssh "$host" "$port" "test -x '$d/deploy.sh'" >/dev/null 2>&1; then remote_repo="$d"; break; fi
+    done
+    [ -n "$remote_repo" ] || die "--grant-remotely: could not find deploy.sh on $host (tried $SCRIPT_DIR, /root/scripts/zfs-snapshot-all, /root/zfs-snapshot-all) -- is the package deployed there?"
+
+    # The scope this flag is allowed to sign: exactly the request.
+    local want
+    want=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$requested")
+
+    local existing_active
+    existing_active=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null" \
+        | awk '/^# ==========/{exit} /^\[dataset:/{print}')
+    if [ -n "$existing_active" ] && [ "$existing_active" != "[dataset:$requested]" ]; then
+        die "--grant-remotely: $host already carries a DRAFT scope for '$COLLECTOR_LABEL' selecting something different:
+$existing_active
+than the request ([dataset:$requested]). An operator prepared that file, and this flag is not permission to overwrite their pending decision. Either commit it locally there (deploy.sh --commit-scope=$COLLECTOR_LABEL), align it with the request, or remove it and re-run. Nothing was changed."
+    fi
+
+    local stamp; stamp="root@$(hostname -s 2>/dev/null || hostname) $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    log "--grant-remotely: writing the request-shaped scope and committing it on $host (audited)"
+    {
+        printf '# Scope for peer %s -- GENERATED BY --grant-remotely from %s.\n' "$COLLECTOR_LABEL" "$stamp"
+        printf '# Equal to the request by construction; widen only by editing here and re-running --commit-scope locally.\n'
+        printf '%s\n' "$want"
+    } | rux_root_ssh "$host" "$port" "cat > '$sfile'" \
+        || die "--grant-remotely: could not write the scope file on $host -- nothing was committed"
+
+    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4 \
+        || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was written; finish or inspect locally there."
+
+    local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
+    rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp' >> '$mfile'" \
+        || warn "--grant-remotely: the grant is committed but the audit line could not be appended to $mfile on $host -- add it by hand"
+    log "--grant-remotely: committed on $host as '$COLLECTOR_LABEL', audit recorded"
+}
+
 rux_remote_install() {
-    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}"
+    local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}" grant_remotely="${11:-0}"
+
+    # Accepted semantics: --local-user names the account this relationship
+    # runs as; on a fresh host it does not exist yet, and creating it is a
+    # LOCAL root action (the operator running this is already root here).
+    # The one-command promise folds it in with a loud line instead of
+    # stopping to tell the operator to run the same thing by hand.
+    if [ -n "$local_user" ] && ! id -u "$local_user" >/dev/null 2>&1; then
+        log "rux: local account '$local_user' does not exist -- creating it now (deploy.sh --backup-user=$local_user)"
+        bash "$DEPLOY" --backup-user="$local_user" \
+            || die "rux: deploy.sh --backup-user=$local_user failed -- see above; nothing was enrolled"
+    fi
 
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
     local cpath; cpath=$(client_conf_path "$name")
@@ -6236,6 +6484,10 @@ rux_remote_install() {
         rux_check_conflict "$cpath" "$host" "$dataset" "$target" "$mode"
     fi
 
+    # The grant step runs BEFORE the verification and never replaces it: what
+    # --grant-remotely wrote is proven the same way a hand-committed scope is.
+    [ "$grant_remotely" -eq 1 ] && rux_grant_remotely "$host" "$port" "$dataset"
+
     rux_verify_requested_scope "$cpath" "$dataset"
 
     deploy_continue_lifecycle "$name" "$yes" "$verbose"
@@ -6257,7 +6509,7 @@ rux_entry() {
     fi
 
     local target="" mode="" profile="" port="" name="" local_user=""
-    local do_install=0 assume_yes=0 verbose=0
+    local do_install=0 assume_yes=0 verbose=0 grant_remotely=0
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
@@ -6267,6 +6519,7 @@ rux_entry() {
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
             --local-user=*) local_user="${a#*=}" ;;
+            --grant-remotely) grant_remotely=1 ;;
             --install)   do_install=1 ;;
             --plan)      do_install=0 ;;
             --yes|-y)    assume_yes=1 ;;
@@ -6288,8 +6541,9 @@ rux_entry() {
     IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
 
     if [ "$do_install" -eq 1 ]; then
-        rux_remote_install "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$assume_yes" "$verbose" "$name" "$local_user"
+        rux_remote_install "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$assume_yes" "$verbose" "$name" "$local_user" "$grant_remotely"
     else
+        [ "$grant_remotely" -eq 1 ] && log "rux: --grant-remotely is noted, but --plan is read-only -- nothing is granted without --install"
         rux_remote_plan "$host" "$port" "$dataset" "$target" "$mode" "$profile" "$name"
     fi
 }
