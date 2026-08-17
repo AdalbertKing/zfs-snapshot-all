@@ -3009,8 +3009,22 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     rendered_send="$(bash "$GENCRON" -c "$cand" 2>/dev/null | grep -F 'snapsend.sh' | grep -F -- "$target" | head -1)"
     # `[^"]*` rather than `.*` before -m: sed is greedy, so a leading `.*` would
     # bind to the LAST -m on the line. Refusing to cross a quote anchors this to
-    # the send's own -m, which is the first quoted token on a generated line.
-    seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/[^"]*-m[ ]*"\([^"]*\)".*/\1/p')"
+    # the send's own -m.
+    #
+    # Anchored at the engine's own name since 2026-08-17. This used to rely on
+    # the send's -m being the FIRST quoted token on a generated line, which the
+    # ZFS-JOB BEGIN marker ended: its label is now quoted and comes first, so the
+    # match could no longer start at column 0. `s///` only replaces what it
+    # matched, so everything left of the match survived into the result and the
+    # prefix came back as
+    #   `7 * * * * echo "$(date -Is) ZFS-JOB BEGIN h hourly backup"automated_`
+    # -- non-empty, so the fail-closed guard below waved it through, and the seed
+    # would have created a snapshot family the installed prune never matches.
+    # Anchoring on `snapsend.sh` states the real invariant (the -m that belongs
+    # to the send is the first one AFTER the send's own script name) instead of
+    # an incidental fact about column order, and keeps the no-crossing-a-quote
+    # property that stops it binding to a later -m.
+    seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/^.*snapsend\.sh[^"]*-m[ ]*"\([^"]*\)".*/\1/p')"
     [ -n "$seed_prefix" ] || { rm -f "$cand"; die "could not read the snapshot prefix back out of the rendered cron line -- refusing to seed with a guessed prefix; $config was NOT touched"; }
 
     log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."

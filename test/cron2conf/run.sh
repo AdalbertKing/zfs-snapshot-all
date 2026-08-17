@@ -62,6 +62,57 @@ for cf in "$DIR"/fixtures/*.crontab; do
     rm -f "$conf"
 done
 
+# ---- legacy round-trip: crontabs written BEFORE the ZFS-JOB markers ---------
+#
+# fixtures/ carries the shape gen-cron.sh emits today. fixtures-legacy/ carries
+# the shape it emitted before 2026-08-17, and that is not history: deployment is
+# an hourly `git pull`, so a host keeps its old-shape managed block until
+# something runs --install there. Every host in the estate is in that state
+# right now.
+#
+# This tool exists to rebuild a config that has been lost (pve2 needed exactly
+# that once), so failing on the shape a host actually has would break it in the
+# only situation it is for. The comparison strips the markers from the rendered
+# side rather than requiring them absent: what must round-trip is the set of
+# JOBS, and the markers are witness, not configuration.
+strip_markers() {
+    sed -E -e 's/^([^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+) echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*" >>[^;]*; /\1 /' \
+           -e 's/e=\$\(mktemp 2>\/dev\/null\) \|\| e=[^;]*;/e=$(mktemp);/' \
+           -e 's/; echo "\$\(date -Is\) ZFS-JOB END [^"]*" >>[^;]*;/;/'
+}
+
+for cf in "$DIR"/fixtures-legacy/*.crontab; do
+    [ -e "$cf" ] || continue
+    name="$(basename "$cf" .crontab)"
+    conf="$(mktemp)"
+    out="$(bash "$C2C" -f "$cf" -o "$conf" 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL legacy/$name (cron2conf.sh exited $rc on a pre-marker crontab)"
+        printf '  %s\n' "$out"; fail=$((fail+1)); rm -f "$conf"; continue
+    fi
+    rendered="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
+                bash "$GEN" -c "$conf" 2>&1)"
+    want="$(extract_block < "$cf")"
+    got="$(printf '%s\n' "$rendered" | strip_markers | extract_block)"
+    if [ "$want" = "$got" ]; then
+        echo "PASS legacy/$name"; pass=$((pass+1))
+    else
+        echo "FAIL legacy/$name (a pre-marker crontab no longer round-trips)"
+        diff <(printf '%s\n' "$want") <(printf '%s\n' "$got")
+        fail=$((fail+1))
+    fi
+    rm -f "$conf"
+done
+
+# The legacy corpus must actually BE legacy -- a marker leaking into it would
+# turn every check above into a comparison of the new shape with itself.
+if grep -l 'ZFS-JOB' "$DIR"/fixtures-legacy/*.crontab >/dev/null 2>&1; then
+    echo "FAIL legacy/corpus-is-pre-marker (a fixtures-legacy crontab carries ZFS-JOB markers)"
+    fail=$((fail+1))
+else
+    echo "PASS legacy/corpus-is-pre-marker"; pass=$((pass+1))
+fi
+
 # ---- negative (fatal, rc=1) ----
 for cf in "$DIR"/negative/*.crontab; do
     [ -e "$cf" ] || continue

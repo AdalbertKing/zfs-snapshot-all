@@ -1578,7 +1578,12 @@ EOF
 # (inherited from the sourced zfs-backup.sh) sends gen-cron a SIGPIPE and the
 # substitution comes back empty -- which reads exactly like "the generator
 # emitted nothing" and cost a debugging round to tell apart.
-gencron_base=$(bash "$REPO/gen-cron.sh" -c "$WORK/parity.conf" 2>/dev/null | awk '/snapget/{sub(/ 2>.*/,""); n=split($0,a,"\""); print a[n-1]; exit}')
+# Truncate at the ENGINE's own redirect, not at the first ' 2>' on the line:
+# since the ZFS-JOB markers landed, the wrapper carries an earlier
+# ' 2>/dev/null' inside e=$(mktemp ...), and cutting there leaves the BEGIN
+# label as the last quoted field -- so this read the notify label as the local
+# base and compared it against a dataset path.
+gencron_base=$(bash "$REPO/gen-cron.sh" -c "$WORK/parity.conf" 2>/dev/null | awk '/snapget/{sub(/ 2>"[$]e".*/,""); n=split($0,a,"\""); print a[n-1]; exit}')
 if [ -n "$gencron_base" ] && [ "$wrapper_base" = "$gencron_base" ]; then
     ok "snapget-base: the wrapper and gen-cron agree on the local base"
 else

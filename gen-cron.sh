@@ -1808,10 +1808,41 @@ emit_send() {
 # a job's lines now land in cron.log as one contiguous block when it finishes,
 # instead of streaming while it runs -- which also means two overlapping jobs no
 # longer interleave their output there.
+#
+# BEGIN/END markers (added 2026-08-17 after a live finding). On 2026-08-09 the
+# weekly job for pve2's CT 103 fired, exited in under a second and left NO trace
+# in ANY of this project's three instruments at once: nothing in cron.log (the
+# script never reached its first `log` call), no record in the stats log (it
+# never reached `emit_stats`, which fires even for skipped_lock/skipped_paused),
+# and no failure mail (rc was never non-zero). The dataset went 14 days without
+# a weekly copy and the only reason anyone ever learned of it was check-snap-age
+# escalating to CRITICAL five days later.
+#
+# The structural cause is that every instrument lives INSIDE the engine, so a
+# run that dies before the engine really starts is invisible to all of them
+# simultaneously. The only place that can witness such a death is the cron line
+# itself, which is why the markers belong here and not in snapsend/delsnaps.
+#
+# BEGIN without a matching END is the signature of exactly that class, and it is
+# greppable: `grep ZFS-JOB cron.log`. Two lines per run is a deliberate cost --
+# one line carrying only the exit code would still have recorded nothing on
+# 2026-08-09, because the failure happened before any exit code existed.
+#
+# `date -Is` rather than a `date +FORMAT`: cron treats an unescaped `%` in a
+# command as end-of-command plus stdin, so a format string here would silently
+# truncate every job line in the crontab.
+#
+# The mktemp fallback closes the one concrete silent-death mechanism identified
+# while investigating: bare `e=$(mktemp)` leaves `$e` EMPTY when mktemp fails, an
+# empty redirect target makes `2>"$e"` fail, and a failed redirection means the
+# command never runs at all -- silently, with no output to carry the reason. The
+# fallback lands beside the cron log instead, which is normally a different
+# filesystem from TMPDIR, so a full /tmp can no longer swallow a backup whole.
 job_cron_line() {
     local schedule="$1" cmd="$2" notify="$3"
-    printf '%s e=$(mktemp); %s 2>"$e"; rc=$?; cat "$e" >>%s; [ $rc -ne 0 ] && %s "%s" "$(tail -n %s "$e")" 2>>%s; rm -f "$e"' \
-        "$schedule" "$cmd" "$CRON_LOG" "$NOTIFY_SCRIPT" "$notify" "$DETAIL_LINES" "$CRON_LOG"
+    printf '%s echo "$(date -Is) ZFS-JOB BEGIN %s" >>%s; e=$(mktemp 2>/dev/null) || e=%s.err.$$; %s 2>"$e"; rc=$?; cat "$e" >>%s; echo "$(date -Is) ZFS-JOB END %s rc=$rc" >>%s; [ $rc -ne 0 ] && %s "%s" "$(tail -n %s "$e")" 2>>%s; rm -f "$e"' \
+        "$schedule" "$notify" "$CRON_LOG" "$CRON_LOG" "$cmd" "$CRON_LOG" \
+        "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT" "$notify" "$DETAIL_LINES" "$CRON_LOG"
 }
 
 # Inline prune: one delsnaps line per (schedule,pattern,retain,recursive) group,

@@ -908,6 +908,121 @@ case "$out" in
     *) bad "W3 a missing lock directory refuses and names deploy.sh" "$out" ;;
 esac
 
+# ---- X. the emitted job line witnesses its own run --------------------------
+#
+# Found live 2026-08-17. On 2026-08-09 pve2's weekly job for CT 103 fired and
+# left NO trace in ANY of this project's three instruments at once: nothing in
+# cron.log, no record in the stats log (so it never reached emit_stats, which
+# fires even for skipped_lock/skipped_paused), and no failure mail (rc was never
+# non-zero). The dataset went 14 days without a weekly copy; check-snap-age
+# going CRITICAL five days later was the only reason anyone found out.
+#
+# Every instrument lives INSIDE the engine, so a run that dies before the engine
+# starts is invisible to all of them simultaneously. Only the cron line itself
+# can witness that, which is what section X pins.
+
+X_CONF="$TMPD/x.conf"
+cat > "$X_CONF" <<'EOF'
+[defaults]
+	host_label = x
+[template:hourly]
+	send_schedule  = 7 * * * *
+	prefix         = automated_
+	prune_schedule = 9 * * * *
+	pattern        = automated_
+	retain         = -H24
+	tier_label     = hourly
+	monitor_warn   = 90m
+	monitor_crit   = 3h
+[dataset:tank/x]
+	use_template = hourly
+EOF
+
+X_OUT=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L \
+        "$GEN" -c "$X_CONF" 2>/dev/null)
+
+# X0: this config emits exactly two engine lines (one backup, one prune). Pinned
+# as a LITERAL, because every other assertion in this section is a count and a
+# count of nothing satisfies most of them: an empty $X_OUT has no missing
+# markers, no bare mktemp and no stray '%', so X1/X4/X5 all go green while
+# proving nothing whatsoever. That is not hypothetical -- running section X
+# against an older gen-cron.sh through $GEN did exactly this, and the four
+# spurious passes looked identical to real ones.
+x_jobs=$(printf '%s\n' "$X_OUT" | grep -cE '(snapsend|snapget|delsnaps)\.sh')
+check "X0 the probe config really did emit its engine lines" "2" "$x_jobs"
+
+# X1: every line that RUNS an engine carries both markers. Counted, not grepped
+# for presence: a single marker on one of two job lines would pass a presence
+# check and still leave the other mute.
+x_begin=$(printf '%s\n' "$X_OUT" | grep -c 'ZFS-JOB BEGIN')
+x_end=$(printf '%s\n' "$X_OUT" | grep -c 'ZFS-JOB END')
+check "X1 every engine job line records BEGIN and END" \
+      "jobs=2 begin=2 end=2" \
+      "jobs=$x_jobs begin=$x_begin end=$x_end"
+
+# X2: the END marker carries the exit code. Without rc the marker proves the
+# line finished but not whether the backup did anything.
+case "$X_OUT" in
+    *'ZFS-JOB END x hourly backup rc=$rc'*) ok "X2 the END marker carries the exit code" ;;
+    *) bad "X2 the END marker carries the exit code" "no 'END ... rc=\$rc' in the emitted block" ;;
+esac
+
+# X3: the monitor line is deliberately NOT marked. It runs every 15 minutes and
+# already reports its own state through the rc arms; marking it would add ~192
+# lines a day per dataset to cron.log and drown the signal X1 exists to give.
+x_mon=$(printf '%s\n' "$X_OUT" | grep 'check-snap-age' | grep -c 'ZFS-JOB')
+check "X3 the monitor line is deliberately left unmarked" "0" "$x_mon"
+
+# X4: no bare `e=$(mktemp);`. When mktemp fails that leaves $e EMPTY, an empty
+# redirect target makes `2>"$e"` fail, and a failed redirection means the engine
+# never runs at all -- silently. That is a mechanism which reproduces the
+# 2026-08-09 signature exactly (proved in X6 below).
+case "$X_OUT" in
+    *'e=$(mktemp);'*) bad "X4 mktemp failure cannot silently swallow the run" "bare 'e=\$(mktemp);' is back" ;;
+    *) ok "X4 mktemp failure cannot silently swallow the run" ;;
+esac
+
+# X5: no unescaped '%' anywhere in the block. cron reads '%' as end-of-command
+# plus stdin, so one stray format string truncates the job it appears in -- and
+# the truncated line still installs cleanly and still looks right in `crontab -l`
+# to anyone not counting characters.
+x_pct=$(printf '%s\n' "$X_OUT" | grep -v '^#' | grep -c '%')
+check "X5 no unescaped % in the emitted block" "0" "$x_pct"
+
+# X6: the property itself, executed rather than pattern-matched -- and executed
+# against a mktemp that fails, since a probe run under a WORKING mktemp passes
+# for both the old and the new shape and so proves nothing.
+X_W="$TMPD/x-work"; mkdir -p "$X_W/bin"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$X_W/bin/mktemp"; chmod +x "$X_W/bin/mktemp"
+printf '#!/usr/bin/env bash\necho "engine ran" >&2\nexit 0\n' > "$X_W/engine.sh"; chmod +x "$X_W/engine.sh"
+X_LOG="$X_W/cron.log"
+
+# Take the REAL emitted line, drop the 5 schedule fields, and swap ONLY the
+# engine path -- so this tests what gen-cron.sh actually writes, not a
+# paraphrase. Swapping the whole `snapsend.sh ... 2>"$e"` span instead would
+# take the redirect out with it and the probe would measure my sed, not the
+# emitted line (it did, the first time).
+x_line=$(printf '%s\n' "$X_OUT" | grep 'snapsend.sh' | head -1 |
+         sed -e 's|^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* ||' \
+             -e "s|/R/snapsend.sh|$X_W/engine.sh|" \
+             -e "s|/L|$X_LOG|g")
+: > "$X_LOG"
+( PATH="$X_W/bin:$PATH"; eval "$x_line" ) >/dev/null 2>&1
+x_ran=$(grep -c 'engine ran' "$X_LOG" 2>/dev/null); x_ran="${x_ran:-0}"
+x_marks=$(grep -c 'ZFS-JOB' "$X_LOG" 2>/dev/null); x_marks="${x_marks:-0}"
+check "X6 a failing mktemp no longer swallows the run" \
+      "engine=1 markers=2" "engine=$x_ran markers=$x_marks"
+
+# X7: the positive control. The OLD shape under the IDENTICAL failure must come
+# out mute -- engine never run, log empty. Without this X6 could be green
+# because the stub engine is easy to run, not because the fallback works.
+X_OLDLOG="$X_W/old.log"; : > "$X_OLDLOG"
+x_old='e=$(mktemp); '"$X_W"'/engine.sh 2>"$e"; rc=$?; cat "$e" >>'"$X_OLDLOG"'; rm -f "$e"'
+( PATH="$X_W/bin:$PATH"; eval "$x_old" ) >/dev/null 2>&1
+x_old_ran=$(grep -c 'engine ran' "$X_OLDLOG" 2>/dev/null); x_old_ran="${x_old_ran:-0}"
+check "X7 control: the old shape IS mute under the same failure" \
+      "engine=0" "engine=$x_old_ran"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

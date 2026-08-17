@@ -156,11 +156,50 @@ extract_block() {
 # exact inverse of the printf '"%s"' quoting emit_* uses to build them.
 qsplit() { local -n __out="$1"; IFS='"' read -ra __out <<< "$2"; }
 
+# Since 2026-08-17 job_cron_line() wraps every send/prune line in ZFS-JOB
+# BEGIN/END markers, so that a run dying before the engine starts still leaves a
+# trace (see gen-cron.sh for the live finding that prompted it).
+#
+# Installed crontabs across the estate carry BOTH shapes at once -- the markers
+# only appear on a host after its next --install -- and this tool exists
+# precisely to recover a config from a crontab whose config file is gone, so
+# refusing the shape it has not seen before would break it exactly when it is
+# needed. Normalise to the classic envelope and parse that.
+#
+# Nothing is recovered FROM the markers: the label they carry is already
+# recovered from the notify arguments, and the cron log path from the redirect.
+# They are witness, not configuration, so dropping them loses nothing that
+# regenerating the config would need.
+strip_witness_markers() {
+    local line="$1"
+    local B=' echo "$(date -Is) ZFS-JOB BEGIN '
+    [[ "$line" == *"$B"* ]] || { printf '%s' "$line"; return 0; }
+
+    local sched="${line%%"$B"*}" rest="${line#*"$B"}"
+    rest="${rest#*\" >>}"                 # drop LABEL", leaving CRONLOG; e=...
+    rest="${rest#*; }"                    # drop the cron log path
+
+    local M='e=$(mktemp 2>/dev/null) || e='
+    [[ "$rest" == "$M"* ]] || { printf '%s' "$line"; return 0; }
+    rest="${rest#"$M"}"                   # drop the fallback path, leaving ...; CMD
+    rest="${rest#*; }"                    # now at CMD
+
+    local E='; echo "$(date -Is) ZFS-JOB END '
+    if [[ "$rest" == *"$E"* ]]; then
+        local head="${rest%%"$E"*}" tail="${rest#*"$E"}"
+        tail="${tail#*\" >>}"             # drop LABEL rc=$rc", leaving CRONLOG; [ $rc...
+        tail="${tail#*; }"                # drop the cron log path
+        rest="$head; $tail"
+    fi
+    printf '%s e=$(mktemp); %s' "$sched" "$rest"
+}
+
 # parse_job_envelope LINE -- the common wrapper job_cron_line() puts around
 # every send/prune line. Sets SCHED/CMD/CRONLOG/NOTIFYSCRIPT/NOTIFY/DETAIL on
 # success, returns 1 (leaves nothing set) if LINE does not match the shape.
 parse_job_envelope() {
-    local line="$1"
+    local line
+    line="$(strip_witness_markers "$1")"
     local D1=' e=$(mktemp); ' D2=' 2>"$e"; rc=$?; cat "$e" >>' D3='; [ $rc -ne 0 ] && ' D4=' "' D5='" "$(tail -n '
     [[ "$line" == *"$D1"* ]] || return 1
     SCHED="${line%%"$D1"*}"; local rest="${line#*"$D1"}"
