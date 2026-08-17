@@ -37,8 +37,8 @@
   `main-protection`** (id 20887546): PR + **10 wymaganych checków** + rozwiązane
   wątki; bezpośredni push (i `HEAD:main`) odrzucony po stronie serwera.
 
-- **RUX — ujednolicony zdalny deploy, IMPLEMENTED 2026-08-16, oczekuje żywego
-  dowodu (RUX-4).** Decyzja właściciela
+- **RUX — ujednolicony zdalny deploy, LIVE-PROVEN 2026-08-16 (RUX-4 zamknięty).**
+  Decyzja właściciela
   `docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md` (MUST DO) była
   niezaimplementowana — `deploy NAZWA --host=X` istniał, ale nie trzymał
   ustalonej gramatyki `--source=/--target=/--mode=`. Teraz ten sam bare entrypoint
@@ -60,12 +60,18 @@
   wznawia (żadnego drugiego `add-client`); sprzeczne fakty (ten sam host, inny
   target/mode) odmawiają zamiast cicho mutować; relacja NIE założona przez RUX
   (brak `RUX_SOURCE`) odmawia zamiast cicho przejąć. Dowód: `test/rux/run.sh`
-  21/21 (parser, planner, orkiestracja, konflikt, weryfikacja zakresu — wszystko
-  z zaślepionym `deploy.sh`/`seed`/`activate`, bez sieci/ZFS), `zfsbackup`
-  442/442 bez regresji, `localbackup` 55/56 (jedyny fail: `flock` nieobecny w
-  tym środowisku Windows/Git-Bash — środowiskowe, niezwiązane z tą zmianą).
-  **RUX-4 (żywy łańcuch trzech hostów z prawdziwym `--join` po SSH) jeszcze NIE
-  wykonany** — zadeklarowany jako `manual:rux-live-chain` w `test/deps.conf`.
+  23/23 (parser, planner, orkiestracja, konflikt, weryfikacja zakresu — wszystko
+  z zaślepionym `deploy.sh`/`seed`/`activate`, bez sieci/ZFS; +2 przypadki
+  `--local-user=` znalezione na żywym RUX-4), `zfsbackup` 442/442 bez regresji,
+  `localbackup` 55/56 (jedyny fail: `flock` nieobecny w tym środowisku
+  Windows/Git-Bash — środowiskowe, niezwiązane z tą zmianą).
+  **RUX-4 — żywy dowód WYKONANY 2026-08-16.** Literalny łańcuch trzech hostów
+  jest na tej infrastrukturze nieosiągalny (dwa klastry, osobne VPN, brak trasy
+  między nimi — potwierdzone `ping`/`ssh`), więc zamiast niego dwa niezależne
+  dowody dwuhostowe na throwaway datasetach, oba md5-zgodne i w całości
+  posprzątane: backup (pve2-metropolis ← pve1-metropolis) i sync (pve0 ←
+  pve1 11.x). Szczegóły i znaleziska w wierszu `rux` tabeli suit niżej;
+  `manual:rux-live-chain` w `test/deps.conf` niesie wynik, nie deklarację.
 
 - **`deploy` — jednokomendowe wdrożenie dwuhostowe, LIVE-PROVEN 2026-08-15.**
   `zfs-backup.sh deploy NAZWA --host=ŹRÓDŁO [--target=X] [--profile=P] [--yes]
