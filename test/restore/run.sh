@@ -18,8 +18,12 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
-ZB="${ZB:-$REPO/zfs-backup.sh}"
-[ -r "$ZB" ] || { echo "cannot find zfs-backup.sh at $ZB" >&2; exit 1; }
+# Since the 2026-08-17 split the restore code lives in zfs-restore.sh; the ZB
+# override is kept (same spelling) so negative controls against an older tree
+# still work. zfs-backup.sh forwards `restore` here, so this suite exercising
+# zfs-restore.sh directly covers both public spellings.
+ZB="${ZB:-$REPO/zfs-restore.sh}"
+[ -r "$ZB" ] || { echo "cannot find zfs-restore.sh at $ZB" >&2; exit 1; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }

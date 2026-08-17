@@ -13,6 +13,8 @@
 !.github/**
 !lib-zfs-snap.sh
 !lib-profile.sh
+!lib-backup-common.sh
+!zfs-restore.sh
 !snapsend.sh
 !snapget.sh
 !delsnaps.sh
