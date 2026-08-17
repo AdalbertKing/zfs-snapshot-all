@@ -6463,9 +6463,26 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
     existing_active=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null" \
         | awk '/^# ==========/{exit} /^\[dataset:/{print}')
     if [ -n "$existing_active" ] && [ "$existing_active" != "[dataset:$requested]" ]; then
-        die "--grant-remotely: $host already carries a DRAFT scope for '$COLLECTOR_LABEL' selecting something different:
+        # The pending-decision guard protects a HUMAN's choice -- and the lab3
+        # final run tripped it on a file no human ever touched: a sync-mode
+        # join carries no dataset list, so the join's own remote scope stage
+        # auto-drafts the full branch inventory seconds before this check, and
+        # a fresh sync enrolment under --grant-remotely would refuse EVERY
+        # time. A draft is provably the enrolment's own automatic one when
+        # BOTH hold on the source: no commit-hash sidecar exists (nothing was
+        # ever signed from it), and the file is not older than the join this
+        # manifest records (both timestamps read on the SOURCE's clock, so
+        # skew between hosts cannot fake it). That file is ours to replace
+        # with the request. Anything else -- edited, committed, or predating
+        # the join -- keeps the refusal below.
+        local mfile_r; mfile_r=$(peer_manifest_path "$COLLECTOR_LABEL")
+        if rux_root_ssh "$host" "$port" "test ! -s '$hfile' && j=\$(sed -n 's/^PEER_JOIN_REMOTE_AT=\"\\(.*\\)\"/\\1/p' '$mfile_r' | tail -1) && [ -n \"\$j\" ] && [ \"\$(stat -c %Y -- '$sfile')\" -ge \"\$(date -d \"\$j\" +%s)\" ]" >/dev/null 2>&1; then
+            log "--grant-remotely: the draft on $host is this enrolment's own auto-draft (no commit, not older than the join) -- replacing it with the request"
+        else
+            die "--grant-remotely: $host already carries a DRAFT scope for '$COLLECTOR_LABEL' selecting something different:
 $existing_active
 than the request ([dataset:$requested]). An operator prepared that file, and this flag is not permission to overwrite their pending decision. Either commit it locally there (deploy.sh --commit-scope=$COLLECTOR_LABEL), align it with the request, or remove it and re-run. Nothing was changed."
+        fi
     fi
 
     local stamp; stamp="root@$(hostname -s 2>/dev/null || hostname) $(date '+%Y-%m-%d %H:%M:%S %Z')"

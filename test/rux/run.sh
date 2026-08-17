@@ -582,6 +582,7 @@ out="$( (
             *"test -s"*) return 1 ;;                       # nothing committed yet
             *"test -x"*) return 0 ;;                       # deploy.sh found
             *"cat -- "*) printf '[dataset:rpool/SOMETHING_ELSE]\ninclude_parent = no\ninclude_children = yes\n'; return 0 ;;
+            *"stat -c"*) return 1 ;;                       # NOT this enrolment's auto-draft
             *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
         esac
     }
@@ -591,6 +592,40 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "not permission to overwrite"
     ok "24. --grant-remotely refuses to replace a differing pre-existing draft"
 else
     bad "24. --grant-remotely refuses to replace a differing pre-existing draft" "rc=$rc out=$out"
+fi
+
+# 24b. The same differing draft, but provably THIS enrolment's own auto-draft
+#      (no commit sidecar + not older than the join the manifest records) --
+#      found on the lab3 final run: a sync-mode join auto-drafts the full
+#      inventory seconds before the grant step, so without this distinction a
+#      fresh sync enrolment under --grant-remotely refused every time. The
+#      guard protects a human's pending choice, not the enrolment's own
+#      automation. Pinned: the request-shaped scope is WRITTEN and the commit
+#      runs (order), the refusal does not fire.
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() {   # <host> <port> <cmd...>
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"test -s"*) return 1 ;;
+            *"test -x"*) return 0 ;;
+            *"cat -- "*) printf '[dataset:rpool/SOMETHING_ELSE]\ninclude_parent = no\ninclude_children = yes\n'; return 0 ;;
+            *"stat -c"*) return 0 ;;                       # IS the enrolment's auto-draft
+            *"cat > "*) cat >/dev/null; echo "WROTE-SCOPE" >> "$WORK/24b/order"; return 0 ;;
+            *"--commit-scope"*) echo "COMMITTED" >> "$WORK/24b/order"; return 0 ;;
+            *"printf 'GRANTED_REMOTELY_BY"*|*GRANTED_REMOTELY_BY*) echo "AUDIT" >> "$WORK/24b/order"; return 0 ;;
+            *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+        esac
+    }
+    mkdir -p "$WORK/24b"
+    rux_grant_remotely pve2 22 rpool/data
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$WORK/24b/order" 2>/dev/null)" = "$(printf 'WROTE-SCOPE\nCOMMITTED\nAUDIT')" ]; then
+    ok "24b. the enrolment's own auto-draft is replaced with the request and committed, in order"
+else
+    bad "24b. the enrolment's own auto-draft is replaced with the request and committed, in order" \
+        "rc=$rc out=$out order=$(cat "$WORK/24b/order" 2>/dev/null)"
 fi
 
 echo "----"
