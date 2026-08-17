@@ -90,9 +90,11 @@ Weryfikacja ogniwa A:
 ```bash
 # na pve1:
 md5sum /hdd/lab3backups/192.168.28.8/hdd/lab3/src/dane.bin   # == md5 źródła
-zfs get -H -o value guid hdd/lab3backups/192.168.28.8/hdd/lab3/src@<snap>
-# na pve2 ten sam snapshot — GUID identyczny:
-zfs get -H -o value guid hdd/lab3/src@<snap>
+zfs list -H -t snapshot -o name -r hdd/lab3backups/192.168.28.8/hdd/lab3/src
+# przykładowy wynik: ...@automated_hourly_2026-08-17_22-01-01 — użyj go poniżej:
+zfs get -H -o value guid "hdd/lab3backups/192.168.28.8/hdd/lab3/src@automated_hourly_2026-08-17_22-01-01"
+# na pve2 ten sam snapshot — GUID musi być IDENTYCZNY:
+zfs get -H -o value guid "hdd/lab3/src@automated_hourly_2026-08-17_22-01-01"
 ```
 
 ## 2. Ogniwo B — dublet (jedna komenda na drugim kolektorze)
@@ -130,18 +132,46 @@ widać w logu po markerach:
 grep ZFS-JOB /home/zfsbackup/cron.log | tail    # BEGIN/END rc=… per przebieg
 ```
 
-## 3. Demontaż (kolejność ma znaczenie)
+## 3. Demontaż (kolejność ma znaczenie — dokładne komendy z labu)
+
+Nazwa klienta = adres źródła (tak nazwał ją RUX bez `--name=`); etykieta po
+stronie źródła = krótki hostname kolektora.
 
 ```bash
-# kolektor (dla każdego ogniwa):
-zfs-backup.sh remove-client <NAZWA>       # czyści też blok crona i rekord parowania
-rm -f /etc/zfs-snapshot-all/clients/<NAZWA>.conf
-rm -rf /var/lib/zfs-snapshot-all/relationships/<NAZWA>
-# źródło:
-deploy.sh --leave=<etykieta-kolektora>    # konto delegowane, granty, manifest, scope
-rm -rf /var/lib/zfs-snapshot-all/relationships/<etykieta>   # luka --leave, patrz TODO
-# datasety laboratoryjne: zfs destroy -r …
+# --- ogniwo B najpierw (dublet przestaje ciągnąć, zanim zniknie jego źródło) ---
+# na pve9 (kolektor ogniwa B):
+/root/scripts/zfs-snapshot-all/zfs-backup.sh remove-client 192.168.28.9
+rm -f /etc/zfs-snapshot-all/clients/192.168.28.9.conf
+rm -rf /var/lib/zfs-snapshot-all/relationships/192.168.28.9
+
+# na pve1 (źródło ogniwa B):
+/root/scripts/zfs-snapshot-all/deploy.sh --leave=pve9
+rm -rf /var/lib/zfs-snapshot-all/relationships/pve9   # luka --leave, patrz TODO
+
+# --- potem ogniwo A ---
+# na pve1 (kolektor ogniwa A):
+/root/scripts/zfs-snapshot-all/zfs-backup.sh remove-client 192.168.28.8
+rm -f /etc/zfs-snapshot-all/clients/192.168.28.8.conf
+rm -rf /var/lib/zfs-snapshot-all/relationships/192.168.28.8
+
+# na pve2 (źródło ogniwa A):
+/root/scripts/zfs-snapshot-all/deploy.sh --leave=pve1
+rm -rf /var/lib/zfs-snapshot-all/relationships/pve1
+
+# --- datasety laboratoryjne (dane!) ---
+# na pve1:
+zfs destroy -r hdd/lab3backups
+# na pve9:
+zfs destroy -r hdd/lab3backups
+# na pve2 (źródłowe dane testowe):
+zfs destroy -r hdd/lab3
 ```
+
+`remove-client` sam usuwa sekcje z crontaba i rekord parowania kolektora;
+`--leave` na źródle usuwa konto delegowane (`zfsbackup-pve1`/`zfsbackup-pve9`),
+granty `zfs allow`, manifest joina i pliki scope. Jeśli `--leave` odmówi z
+powodu niedomkniętego `zfs unallow` (stary grant ręczny), wykonaj wskazany w
+komunikacie `zfs unallow -u <uid> <dataset>` i ponów tę samą komendę.
 
 ## 4. Co poszło nie tak w kampanii i jak jest naprawione
 
