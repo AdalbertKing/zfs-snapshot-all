@@ -2192,7 +2192,10 @@ fi
 
 # And the guard behind that reasoning: read_server_conf really does clear the
 # two variables before sourcing, so "it would be harmless there" is false.
-rsc=$(awk '/^read_server_conf\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+# Since the 2026-08-17 restore split the function BODY lives in
+# lib-backup-common.sh (shared with zfs-restore.sh) -- the property guarded here
+# is unchanged, only its address moved, so the extraction follows it.
+rsc=$(awk '/^read_server_conf\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$(dirname "$ZFSBACKUP")/lib-backup-common.sh")
 if printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""' && printf '%s\n' "$rsc" | grep -q 'CRON_CONFIG=""'; then
     ok "read_server_conf: resets before sourcing, so where it is called matters"
 else
