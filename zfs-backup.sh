@@ -1689,7 +1689,21 @@ normalize_cron_source() {
 # dropped-line detection and by the tests. Duplicating this sed was the obvious
 # way to write it and the obvious way for the three to drift apart.
 job_identity() {   # cron job lines on stdin -> identity-stripped lines on stdout
+    # The ZFS-JOB BEGIN/END markers (gen-cron, 2026-08-17) are WITNESS, not
+    # identity: they record that a run happened, they do not change what job it
+    # is. Left in, they made every pre-marker installed block differ from every
+    # post-marker render in this guard's verbatim comparison -- the lab3 final
+    # run watched a legitimate re-activation refuse with "12 job line(s) would
+    # be DELETED" whose only difference was the decoration. Stripped here, on
+    # the one seam BOTH sides of the comparison already pass through, so old
+    # and new shapes compare by the job they run. cron2conf.sh carries its own
+    # copy of this normalization (strip_witness_markers) -- it is deployed
+    # standalone and cannot source this file; a change to the marker shape must
+    # visit both, and test/cron pins the emitted shape itself.
     sed -E \
+        -e 's#^([0-9*][^ ]* [^ ]+ [^ ]+ [^ ]+ [^ ]+) echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*" >>[^;]*; #\1 #' \
+        -e 's#e=\$\(mktemp 2>/dev/null\) \|\| e=[^;]*;#e=$(mktemp);#' \
+        -e 's#; echo "\$\(date -Is\) ZFS-JOB END [^"]*" >>[^;]*;#;#' \
         -e 's#/[^ ;)"]*/(snapsend|snapget|delsnaps|check-snap-age|notify-fail|notify-warn|alert-digest)\.sh#\1.sh#g' \
         -e 's#/[^ ;)"]*/cron\.log#cron.log#g'
 }
