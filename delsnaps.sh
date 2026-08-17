@@ -355,6 +355,27 @@ destroy_one() {
     fi
 }
 
+# One hint per failure CAUSE, chosen from zfs's own stderr -- not one hint for
+# every failure. The old unconditional clone hint sent a live investigation
+# down the wrong path (2026-08-17, lab3): the real error was 'cannot destroy
+# snapshots: permission denied' (delegated account missing the `mount` ability
+# that zfs-allow(8) requires for destroy), and the hint said "dependent
+# clones". The raw error is printed either way; the hint only adds a next step
+# when it recognises the cause, and stays silent when it does not.
+destroy_failure_hint() {   # <zfs stderr text>
+    local err="$1"
+    case "$err" in
+        *clone*|*dependent*)
+            if [ "$CLEARCUT" = false ]; then
+                echo "  Hint: the snapshot has dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
+            else
+                echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
+            fi ;;
+        *"permission denied"*)
+            echo "  Hint: destroying a snapshot via 'zfs allow' delegation needs BOTH 'destroy' and 'mount' abilities (zfs-allow(8)). Check: zfs allow <dataset> -- and re-run deploy.sh --commit-scope on the source if 'mount' is missing from the grant." >&2 ;;
+    esac
+}
+
 # True if $snap carries a hold tagged HOLD_TAG -- i.e. snapsend.sh/snapget.sh
 # currently has it in flight (or a stuck resume still depends on it). Checked
 # BEFORE attempting destroy_one, rather than parsing zfs's (locale-dependent)
@@ -629,15 +650,14 @@ delete_snapshots() {
                     deleted_count=$((deleted_count + 1))
                 else
                     echo "Deleting snapshot: ${snapshot}" >&2
-                    if destroy_one "${snapshot}" "$ruser" "$rhost"; then
+                    destroy_err=$(destroy_one "${snapshot}" "$ruser" "$rhost" 2>&1)
+                    if [ $? -eq 0 ]; then
+                        [ -n "$destroy_err" ] && printf '%s\n' "$destroy_err" >&2
                         deleted_count=$((deleted_count + 1))
                     else
+                        printf '%s\n' "$destroy_err" >&2
                         echo "Error deleting snapshot: ${snapshot}" >&2
-                        if [ "$CLEARCUT" = false ]; then
-                            echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
-                        else
-                            echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
-                        fi
+                        destroy_failure_hint "$destroy_err"
                         EXIT_CODE=1
                         ds_failed=1
                     fi
@@ -754,15 +774,14 @@ delete_snapshots() {
                     deleted_count=$((deleted_count + 1))
                 else
                     echo "Deleting snapshot: ${snapshot}" >&2
-                    if destroy_one "${snapshot}" "$ruser" "$rhost"; then
+                    destroy_err=$(destroy_one "${snapshot}" "$ruser" "$rhost" 2>&1)
+                    if [ $? -eq 0 ]; then
+                        [ -n "$destroy_err" ] && printf '%s\n' "$destroy_err" >&2
                         deleted_count=$((deleted_count + 1))
                     else
+                        printf '%s\n' "$destroy_err" >&2
                         echo "Error deleting snapshot: ${snapshot}" >&2
-                        if [ "$CLEARCUT" = false ]; then
-                            echo "  Hint: the snapshot may have dependent clones; a plain destroy refuses to remove those. Re-run with -F to clear-cut clones and descendants, or remove the clone manually first." >&2
-                        else
-                            echo "  Hint: -F must unmount any dependent clone before destroying it. On Linux, non-root users cannot unmount filesystem datasets even with full 'zfs allow' delegation -- if the clone is mounted (e.g. a live Proxmox VM/CT disk), -F requires root." >&2
-                        fi
+                        destroy_failure_hint "$destroy_err"
                         EXIT_CODE=1
                         ds_failed=1
                     fi

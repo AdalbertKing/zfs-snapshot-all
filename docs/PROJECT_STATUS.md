@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c7b34622270c3986 -->
+<!-- status-covers-digest: c5f0b35bd743f955 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,45 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Kampania lab3 (2026-08-17): łańcuch trzech hostów pve2→(backup)→pve1→(sync)→pve9
+  ZBUDOWANY I DOWIEDZIONY na żywo** — pve9 to świeża VM (Debian 12 cloud, VM 109
+  na pve2, 192.168.28.99, pula `hdd` 40G), md5+GUID zgodne przez cały łańcuch,
+  przyrost (`data2.bin`) przeniesiony wygenerowanymi liniami crona uruchomionymi
+  przez prawdziwy cron — z markerami `ZFS-JOB` (pierwsze bojowe użycie; F8 niżej
+  został ZAUWAŻONY dzięki nim). Hosty metropolii wyczyszczone ze WSZYSTKICH
+  pozostałości testowych przed startem (taksonomia śmieci → wiedza pod
+  `clean_all`). Wyłowione i naprawione tą samą kampanią:
+  **F1** `rux_verify_requested_scope` porównywał żądanie z manifestem, który sam
+  zapisuje żądanie (`PEER_SAVED_DATASETS` powstaje przy `--pair` z `--datasets`)
+  — czek nie mógł obleć; teraz weryfikuje względem scope'u ZACOMMITOWANEGO na
+  źródle (fetch + sidecar sha256 przez współdzielony `fetch_committed_scope`;
+  brak sidecara = odmowa nazywająca czyj ruch: `deploy.sh --commit-scope=…` na
+  źródle). Granica „grant nigdy zdalnie" (REV-033 U10) NIETKNIĘTA — odmowa robi
+  ją czytelną. **F2** draft scope proponował WSZYSTKIE gałęzie hosta (produkcja
+  włącznie), gdy kolektor prosił o jeden dataset — ACTIVE domyślnie = dokładnie
+  `PEER_JOIN_DATASETS` z manifestu joina, inwentarz zostaje komentarzem-menu.
+  **F3** bez server.conf aktywacja instalowała do crontaba ROOTA i pisała config
+  W checkoutcie gita — teraz konto z `PEER_SAVED_LOCAL_USER` manifestu (server.conf
+  dalej wygrywa, gdy przypina), a domyślna ścieżka configu to
+  `/etc/zfs-snapshot-all/jobs.<host>.conf` (`default_cron_config`, 5 miejsc).
+  **F5** tabela zależności nie znała `crontab` — świeży obraz cloud NIE MA crona,
+  a "all dependencies present" przechodziło; dodane jako required. **F6**
+  ostrzeżenie przy aktywacji, gdy strefy czasowe kolektora i źródła się różnią
+  (pve9=UTC vs flota=CEST → nazwy snapshotów kłamią o czasie). **F8** grant
+  commit-scope nie zawierał `mount`, a delegacja ZFS wymaga go do DESTROY
+  snapshotu (zfs-allow(8)) — źródłowy prune padał co godzinę z `permission
+  denied`, które delsnaps ubierał w mylną podpowiedź o klonach; `mount` dodany do
+  grantu i unallow przy `--leave`, a hint delsnaps wybierany z PRAWDZIWEGO stderr
+  (klony vs delegacja), nigdy bezwarunkowo. Suita `rux` 23/23 po przepisaniu
+  testów 17/18 na nowy kontrakt (fetch stubowany PLIKIEM scope, porównanie przez
+  prawdziwe `scope_read`/`scope_includes` z lib-scope). **OTWARTE z kampanii:**
+  F7 — pve9 tworzy własne snapshoty na datasecie KOPII pve1 (kolektor środkowego
+  ogniwa), przeplatając dwie rodziny nazw w jednym prefiksie `automated_`; GFS na
+  kopii skasował świeży snapshot ogniwa A trzymając równoległy z ogniwa B —
+  topologia łańcuchowa wymaga decyzji projektowej (dyskusja z właścicielem);
+  plus dedukcja „wdrożenie WYŁĄCZNIE przez zfs-backup.sh" (bez schodzenia do
+  deploy.sh) — analiza wariantu remote-force w toku.
 
 - **REŻIM ZMIENIONY 2026-08-15 — `HANDOFF.md` jest nadrzędny nad `CLAUDE.md`.**
   Recenzenta NIE MA; suity NIE są bramką; testy na żywych hostach dozwolone

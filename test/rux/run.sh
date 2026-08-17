@@ -357,9 +357,19 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 17. rux_verify_requested_scope: the source-side granted scope is checked
-#     against the requested dataset before seeding. A mismatch refuses with
-#     the exact reason and never reaches cmd_seed.
+# 17. rux_verify_requested_scope: the request is checked against the scope the
+#     source actually COMMITTED, fetched over the pairing channel -- never
+#     against the collector-side manifest. The manifest's PEER_SAVED_DATASETS
+#     records the REQUEST (written at --pair time from --datasets), so the old
+#     shape of this test compared the request with itself and could not fail
+#     for the reason it claimed to pin. Found live 2026-08-17 (lab3): the check
+#     passed while the source had granted NOTHING, and the seed died on a raw
+#     'cannot create snapshots: permission denied'. The grant-missing branch
+#     itself (no sha256 sidecar -> refuse naming deploy.sh --commit-scope) lives
+#     in fetch_committed_scope and was proven live on pve1<->pve2 the same day;
+#     here the fetch is stubbed with a scope FILE, so what this pins is the
+#     comparison semantics: lib-scope's real scope_read/scope_includes against
+#     the fetched content, and the refusal happening BEFORE cmd_seed.
 mkdir -p "$WORK/17/clients" "$WORK/17/peers"
 cat > "$WORK/17/clients/pve2.conf" <<EOF
 CLIENT_NAME=pve2
@@ -370,27 +380,36 @@ RUX_TARGET=hdd/backup
 RUX_MODE=
 EOF
 label=$(peer_label pve2)
+# The manifest exists (join ran) and, as in the real defect, records the
+# REQUEST -- the check must NOT be able to satisfy itself from it.
 cat > "$WORK/17/peers/$label.conf" <<EOF
-PEER_SAVED_DATASETS="rpool/other"
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+cat > "$WORK/17/committed.scope" <<EOF
+[dataset:rpool/other]
+include_parent = yes
+include_children = yes
 EOF
 out="$( (
     CLIENTS_DIR="$WORK/17/clients"
     PEER_STATE_DIR="$WORK/17/peers"
+    load_client_and_connection() { LOAD_HOST=pve2; }
+    fetch_committed_scope() { cat "$WORK/17/committed.scope" > "$1"; }
     cmd_seed()     { echo "SEED $*" >> "$WORK/17/order"; }
     cmd_activate() { echo "ACTIVATE $*" >> "$WORK/17/order"; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -ne 0 ] \
-        && printf '%s' "$out" | grep -q "not covered by what 'pve2' actually granted" \
+        && printf '%s' "$out" | grep -q "not covered by the scope 'pve2' actually COMMITTED" \
         && [ ! -e "$WORK/17/order" ]; then
-    ok "17. requested dataset not covered by the source's granted scope refuses before seeding"
+    ok "17. request outside the COMMITTED scope refuses before seeding (manifest echo cannot satisfy it)"
 else
-    bad "17. requested dataset not covered by the source's granted scope refuses before seeding" \
+    bad "17. request outside the COMMITTED scope refuses before seeding (manifest echo cannot satisfy it)" \
         "rc=$rc out=$out order=$(cat "$WORK/17/order" 2>/dev/null)"
 fi
 
-# 18. Same fixture, but the granted scope DOES cover the requested dataset
-#     (exact match, and a parent covering it) -- seeding proceeds.
+# 18. Same fixture, but the COMMITTED scope covers the request via a parent
+#     stanza -- seeding proceeds.
 mkdir -p "$WORK/18/clients" "$WORK/18/peers"
 cat > "$WORK/18/clients/pve2.conf" <<EOF
 CLIENT_NAME=pve2
@@ -401,19 +420,26 @@ RUX_TARGET=hdd/backup
 RUX_MODE=
 EOF
 cat > "$WORK/18/peers/$label.conf" <<EOF
-PEER_SAVED_DATASETS="rpool"
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+cat > "$WORK/18/committed.scope" <<EOF
+[dataset:rpool]
+include_parent = yes
+include_children = yes
 EOF
 out="$( (
     CLIENTS_DIR="$WORK/18/clients"
     PEER_STATE_DIR="$WORK/18/peers"
+    load_client_and_connection() { LOAD_HOST=pve2; }
+    fetch_committed_scope() { cat "$WORK/18/committed.scope" > "$1"; }
     cmd_seed()     { echo "SEED $*" >> "$WORK/18/order"; }
     cmd_activate() { echo "ACTIVATE $*" >> "$WORK/18/order"; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$WORK/18/order")" = "$(printf 'SEED pve2 --yes\nACTIVATE pve2 --yes')" ]; then
-    ok "18. requested dataset covered by a parent in the granted scope proceeds to seed/activate"
+    ok "18. request covered by a parent stanza in the COMMITTED scope proceeds to seed/activate"
 else
-    bad "18. requested dataset covered by a parent in the granted scope proceeds to seed/activate" \
+    bad "18. request covered by a parent stanza in the COMMITTED scope proceeds to seed/activate" \
         "rc=$rc out=$out order=$(cat "$WORK/18/order" 2>/dev/null)"
 fi
 

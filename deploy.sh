@@ -1119,16 +1119,44 @@ do_draft_scope() {
         < <(zpool list -H -o name 2>/dev/null | sort)
     [ "${#pools[@]}" -gt 0 ] || die "no ZFS pools found on this host -- nothing to draft"
 
+    # The consent document must default to the REQUEST, not to the estate.
+    # Found live 2026-08-17 (lab3): the collector asked for exactly one
+    # dataset (--datasets=hdd/lab3/src), yet the draft's ACTIVE section
+    # proposed every top-level branch on this host -- production VM disks
+    # included. An operator who signs that draft as-is grants far more than
+    # was ever requested, and the whole point of the source-side commit is
+    # that what gets signed is what was meant. The join manifest already
+    # records what the collector asked for (PEER_JOIN_DATASETS), so when it
+    # names datasets, the ACTIVE section is exactly those -- still editable,
+    # still committed by the operator, with the full inventory kept below as
+    # the menu for widening BY HAND. Mode-based (sync) joins carry no dataset
+    # list, and a pre-join --draft-scope has no manifest: both keep the
+    # branch-inventory default, which is the correct "nobody asked for
+    # anything specific yet" answer.
     local -a active=()
     local pool ds
-    for pool in "${pools[@]}"; do
-        while IFS= read -r ds; do
-            [ -n "$ds" ] || continue
-            [ "$ds" = "$pool" ] && continue
-            draft_scope_is_system "$ds" && continue
+    local mpath_draft PEER_JOIN_DATASETS=""
+    mpath_draft=$(peer_manifest_path "$label")
+    if [ -r "$mpath_draft" ]; then
+        # shellcheck disable=SC1090
+        . "$mpath_draft"
+    fi
+    if [ -n "$PEER_JOIN_DATASETS" ]; then
+        for ds in $PEER_JOIN_DATASETS; do
+            zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
+                || die "the collector requested '$ds' (PEER_JOIN_DATASETS in $mpath_draft), but no such dataset exists on this host -- refusing to draft a scope around a request that cannot be satisfied"
             active+=("$ds")
-        done < <(zfs list -H -o name -r -d 1 -- "$pool" 2>/dev/null | sort)
-    done
+        done
+    else
+        for pool in "${pools[@]}"; do
+            while IFS= read -r ds; do
+                [ -n "$ds" ] || continue
+                [ "$ds" = "$pool" ] && continue
+                draft_scope_is_system "$ds" && continue
+                active+=("$ds")
+            done < <(zfs list -H -o name -r -d 1 -- "$pool" 2>/dev/null | sort)
+        done
+    fi
     [ "${#active[@]}" -gt 0 ] \
         || die "every dataset found is a pool root or a known system dataset (${DRAFT_SCOPE_SYSTEM_NAMES}) -- nothing to activate by default. Edit $sfile's inventory section by hand once it exists, or check this host's pool layout."
 
@@ -2352,6 +2380,12 @@ check_dep() {
 }
 
 check_dep git      git              required    "cloning and auto-updating this repo"
+# Found live 2026-08-17 on a fresh Debian genericcloud VM: the image ships with
+# NO cron at all, this table said "all dependencies present", and activation
+# then died mid-flight on "could not read the live crontab". Everything this
+# package orchestrates runs FROM cron -- its absence is as fatal as a missing
+# zfs, it just fails later and more confusingly.
+check_dep crontab  cron             required    "every generated job runs from cron; minimal/cloud images ship without it"
 check_dep flock    util-linux       required    "single-instance locking in all send/prune scripts"
 check_dep mbuffer  mbuffer          required    "snapsend.sh/snapget.sh refuse to start without it, even without -z"
 check_dep hostname hostname         required    "validate_remote_host uses 'hostname -f' to refuse loopback replication"
@@ -4586,7 +4620,13 @@ do_commit_scope() {
     [ "${#revoke_held[@]}" -gt 0 ] && log "  left granted, in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG): ${revoke_held[*]}"
     [ "${#revoke_gone[@]}" -gt 0 ] && log "  already gone from this host, dropping from the record: ${revoke_gone[*]}"
 
-    local perms="snapshot,destroy,send,hold,release,bookmark"
+    # `mount` is in this list for a non-obvious reason: ZFS delegation requires
+    # the mount ability to DESTROY a snapshot (zfs-allow(8): "destroy ... Must
+    # also have the mount ability"), not to mount anything. Found live
+    # 2026-08-17 (lab3): the delegated source prune failed every run with
+    # 'cannot destroy snapshots: permission denied' while `zfs allow` showed
+    # destroy plainly granted -- the missing letter was mount.
+    local perms="snapshot,destroy,mount,send,hold,release,bookmark"
     for ds in "${granted[@]}"; do
         zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
         log "delegated ($perms) on $ds to $account"
@@ -5478,7 +5518,9 @@ do_leave() {
             die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
         fi
 
-        local perms="snapshot,destroy,send,hold,release,bookmark"
+        # Mirror of do_commit_scope's grant list, `mount` included -- revoke
+        # exactly what was granted, or a leave leaves a permission behind.
+        local perms="snapshot,destroy,mount,send,hold,release,bookmark"
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
             if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then

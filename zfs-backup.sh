@@ -1823,11 +1823,13 @@ assert_no_foreign_managed_block() {   # <config whose render is about to be inst
 }
 
 # gen-cron.sh runs AS the dedicated account, so that account has to be able to
-# READ the config. The default location is $SCRIPT_DIR/jobs.<host>.conf, which
-# on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
+# READ the config. The default location used to be $SCRIPT_DIR/jobs.<host>.conf,
+# which on a Proxmox host means /root/scripts/... -- and /root is 0700. Found on
 # metropolis pve1, 2026-08-01: the account could not open the file at all, so
 # --local-user with the default path would have failed at install time, after
-# the preview had already been shown and accepted.
+# the preview had already been shown and accepted. Since 2026-08-17 the default
+# is /etc/zfs-snapshot-all (default_cron_config), but a RECORDED path can still
+# point anywhere, so this check stays.
 #
 # Checked as the account itself rather than by reasoning about modes: group
 # membership, ACLs and every parent directory on the path all get a vote, and
@@ -2325,6 +2327,18 @@ client_local_path() {   # <source dataset> -> where it lands locally
 # opts out.
 cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
 
+# The default cron-config location for THIS host, used only when nothing has
+# recorded one yet (no server.conf CRON_CONFIG, no client record, no installed
+# managed block to read a Source line from). /etc/zfs-snapshot-all is the
+# fleet's convention and is readable by the delegated account.
+#
+# It used to be $SCRIPT_DIR/jobs.<host>.conf, which fails twice over: on a
+# Proxmox host $SCRIPT_DIR is under /root (0700 -- the account cannot read it;
+# found live on metropolis pve1, 2026-08-01), and it puts operator state INSIDE
+# the git checkout that hourly self-updates (found live 2026-08-17, lab3: a
+# fresh RUX install wrote its config next to the code it came from).
+default_cron_config() { echo "/etc/zfs-snapshot-all/jobs.$(hostname -s 2>/dev/null || hostname).conf"; }
+
 # `crontab -l` for whoever owns the jobs. Root can read another account's
 # crontab with -u; as that account itself, -u is refused, so it is only added
 # when it is actually needed.
@@ -2653,7 +2667,7 @@ cmd_setup_server() {
                 config=$(normalize_cron_source "$existing")
                 log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
             else
-                config="$SCRIPT_DIR/jobs.$(hostname -s).conf"
+                config="$(default_cron_config)"
             fi
         fi
     fi
@@ -2826,7 +2840,7 @@ cmd_local_backup() {
     done
 
     read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf}"
+    [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -3311,10 +3325,15 @@ cmd_add_client() {
 #
 # Called from load_client_and_connection, which every caller above already
 # invokes first -- not a new step operators need to remember.
-resolve_mode_datasets() {
-    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
-    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
-
+# fetch_committed_scope <local outfile> -- fetch the peer's COMMITTED scope
+# file over the already-loaded connection (LOAD_*), enforcing T3: the sha256
+# sidecar only exists after --commit-scope, and the fetched file must match it.
+# Dies, with whose-move-it-is instructions, when the draft is missing, the
+# commit has not happened, or the file was edited since the commit. Shared by
+# resolve_mode_datasets (sync) and rux_verify_requested_scope (backup) -- one
+# implementation of "what did the source actually sign", not two.
+fetch_committed_scope() {
+    local outfile="$1"
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
         -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
@@ -3325,28 +3344,41 @@ resolve_mode_datasets() {
     sfile_remote=$(peer_scope_path "$COLLECTOR_LABEL")
     hfile_remote=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
 
-    local scope_tmp hash_tmp
-    scope_tmp=$(mktemp) || die "mktemp failed"
-    hash_tmp=$(mktemp) || { rm -f "$scope_tmp"; die "mktemp failed"; }
-    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$scope_tmp" 2>/dev/null \
-       || [ ! -s "$scope_tmp" ]; then
-        rm -f "$scope_tmp" "$hash_tmp"
+    local hash_tmp
+    hash_tmp=$(mktemp) || die "mktemp failed"
+    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$outfile" 2>/dev/null \
+       || [ ! -s "$outfile" ]; then
+        rm -f "$hash_tmp"
         die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- has --draft-scope run there yet?"
     fi
     if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
        || [ ! -s "$hash_tmp" ]; then
-        rm -f "$scope_tmp" "$hash_tmp"
-        die "could not fetch the granted-scope hash from $LOAD_HOST ($hfile_remote) -- has --commit-scope run there yet? (--draft-scope alone grants nothing)"
+        rm -f "$hash_tmp"
+        die "the source $LOAD_HOST has GRANTED nothing yet: the scope draft exists there, but the grant (--commit-scope) is deliberately a source-side decision and never runs remotely. Whose move it is: on $LOAD_HOST, review the draft and run:
+    deploy.sh --commit-scope=$COLLECTOR_LABEL
+then re-run the exact command that printed this -- it resumes from where it stopped. (--draft-scope alone grants nothing.)"
     fi
 
     local want_hash got_hash
     want_hash=$(tr -d ' \t\r\n' < "$hash_tmp")
-    got_hash=$(sha256sum -- "$scope_tmp" 2>/dev/null | awk '{print $1}')
+    got_hash=$(sha256sum -- "$outfile" 2>/dev/null | awk '{print $1}')
     rm -f "$hash_tmp"
     if [ -z "$got_hash" ] || [ "$want_hash" != "$got_hash" ]; then
-        rm -f "$scope_tmp"
         die "the scope file on $LOAD_HOST does not match the hash --commit-scope last recorded there -- it was edited since the last commit (or committed differently) and never re-committed. Run --commit-scope on $LOAD_HOST first, then retry."
     fi
+}
+
+resolve_mode_datasets() {
+    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
+    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+
+    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+
+    local scope_tmp
+    scope_tmp=$(mktemp) || die "mktemp failed"
+    fetch_committed_scope "$scope_tmp"
 
     scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
     rm -f "$scope_tmp"
@@ -3976,7 +4008,19 @@ cmd_activate_client() {
 
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    # Without a server.conf LOCAL_USER this activation used to fall back to
+    # ROOT's crontab even when the pairing was built around a delegated
+    # account (--local-user at add-client time records it in the manifest as
+    # PEER_SAVED_LOCAL_USER, and every generated job's -K points at that
+    # account's pairing key). Found live 2026-08-17 (lab3): the whole fleet
+    # runs account-based crontabs, and the one RUX-deployed host silently
+    # became the exception. server.conf still wins when it pins LOCAL_USER --
+    # this only fills the gap the manifest can already answer.
+    if [ -z "${LOCAL_USER:-}" ] && [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
+        LOCAL_USER="$PEER_SAVED_LOCAL_USER"
+        log "activate: no LOCAL_USER in server.conf -- using the pairing's delegated account '$LOCAL_USER' for the cron install (make it permanent for this host with setup-server --local-user=$LOCAL_USER)"
+    fi
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
 
     # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
     # COPY of the config -- the real file is never touched until validation,
@@ -4093,6 +4137,22 @@ cmd_activate_client() {
     echo "                     (zdalny quiesce w trybie pull istnieje: snapget -q przez"
     echo "                      zfs-quiesce-helper, wymaga --allow-quiesce przy parowaniu)"
     echo "Test:                OK ($( printf '%s' "$PEER_SAVED_DATASETS" | wc -w ) dataset(s))"
+    # Snapshot NAMES embed local wall-clock time; ZFS `creation` is the truth,
+    # but every human and every filename sorts by the name. Found live
+    # 2026-08-17 (lab3): a fresh cloud VM defaulted to UTC while the rest of
+    # the estate runs CEST, and the chain's snapshots disagreed by two hours
+    # with their own names' timestamps -- exactly the name-vs-creation trap
+    # restore --plan flags. Warn-only: clocks are host policy, not this
+    # tool's, and the transfer itself is unaffected.
+    local peer_tz local_tz
+    local_tz=$(date +%z)
+    peer_tz=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+        "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
+    if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
+        warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
+    fi
     echo
 
     show_activation_proposal "$cronfile" "$workfile" || {
@@ -4291,7 +4351,7 @@ cmd_migrate_profile() {
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
     if ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule"; then
@@ -4417,7 +4477,7 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$SCRIPT_DIR/jobs.$(hostname -s).conf}"
+    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
 
     # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
@@ -6136,16 +6196,32 @@ rux_verify_requested_scope() {
     [ -n "$PEER_HOST" ] || return 0
     local mpath; mpath=$(peer_manifest_path "$(peer_label "$PEER_HOST")")
     [ -r "$mpath" ] || return 0
-    local PEER_SAVED_DATASETS=""
+    local PEER_SAVED_MODE=""
     # shellcheck disable=SC1090
     . "$mpath"
-    [ -n "$PEER_SAVED_DATASETS" ] || return 0
-    local ds covered=0
-    for ds in $PEER_SAVED_DATASETS; do
-        case "$requested" in "$ds"|"$ds"/*) covered=1; break ;; esac
-    done
-    [ "$covered" -eq 1 ] \
-        || die "rux: requested source '$requested' is not covered by what '$PEER_HOST' actually granted (granted: $PEER_SAVED_DATASETS) -- the source-side scope differs from what was asked. Fix the scope on the source (commit-scope) or re-run naming the dataset that was actually granted. Nothing was seeded."
+    # Sync relationships defer their dataset list to the source's scope file;
+    # resolve_mode_datasets enforces T3 for them inside load_client_and_
+    # connection, so a second fetch here would only duplicate the same check.
+    [ "${PEER_SAVED_MODE:-}" = sync ] && return 0
+
+    # Backup (dataset-addressed) path. The manifest's own PEER_SAVED_DATASETS
+    # is written at --pair time FROM THE REQUEST (--datasets=...), so checking
+    # the request against it proves nothing -- it compares the request with
+    # itself. Found live 2026-08-17 (lab3): the check passed, the seed ran
+    # against a source whose operator had never committed the scope, and died
+    # with a raw 'cannot create snapshots: permission denied' instead of
+    # naming whose move it is. The grant's only proof is the source-side scope
+    # file plus the sha256 sidecar that ONLY --commit-scope writes (T3), so
+    # that is what this verifies against -- fetched over the pairing channel,
+    # via the same fetch_committed_scope the sync path uses. This verifies,
+    # it never widens: nothing here creates or edits anything on the source.
+    load_client_and_connection "$cpath"
+    local scope_tmp; scope_tmp=$(mktemp) || die "mktemp failed"
+    fetch_committed_scope "$scope_tmp"
+    scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
+    rm -f "$scope_tmp"
+    scope_includes "$requested" \
+        || die "rux: requested source '$requested' is not covered by the scope '$PEER_HOST' actually COMMITTED (active roots: ${SCOPE_ROOTS[*]:-none}) -- the source-side grant differs from what was asked. Fix the scope on the source (edit + deploy.sh --commit-scope) or re-run naming a dataset the source actually granted. Nothing was seeded."
 }
 
 # rux_remote_plan <host> <port> <dataset> <target> <mode> <profile> <name>
