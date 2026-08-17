@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c5f0b35bd743f955 -->
+<!-- status-covers-digest: 620d2f110c62d3fd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -58,7 +58,19 @@
   kopii skasował świeży snapshot ogniwa A trzymając równoległy z ogniwa B —
   topologia łańcuchowa wymaga decyzji projektowej (dyskusja z właścicielem);
   plus dedukcja „wdrożenie WYŁĄCZNIE przez zfs-backup.sh" (bez schodzenia do
-  deploy.sh) — analiza wariantu remote-force w toku.
+  deploy.sh) — ROZSTRZYGNIĘTA: właściciel zaakceptował semantykę
+  **`--grant-remotely`** (`docs/project/OWNER-GRANT-REMOTELY-2026-08-17.md`,
+  poprawka do U10). Jawna, audytowana zgoda operatora na commit scope'u NA
+  ŹRÓDLE tym samym kanałem root-ssh, którego join już użył; scope = ŻĄDANIE
+  z konstrukcji, nigdy szerzej; różniący się draft odmawia nawet pod flagą;
+  brak kanału odmawia WCZEŚNIE, przed jakąkolwiek zmianą; ślad
+  `GRANTED_REMOTELY_BY` w manifeście źródła; weryfikacja (fetch+hash+includes)
+  zachowuje swój autorytet PO grancie; default zostaje dwudotykowy.
+  `--local-user` przy braku konta tworzy je lokalnie z głośną linią. Suita
+  `rux` 27/27 (+4: kolejność grant→verify→seed pinowana jako KOLEJNOŚĆ, nie
+  obecność; default bez flagi bez kroku grantu; autorytet weryfikacji po
+  grancie — niedopasowany commit odmawia przed seedem; odmowa nadpisania
+  cudzego draftu).
 
 - **REŻIM ZMIENIONY 2026-08-15 — `HANDOFF.md` jest nadrzędny nad `CLAUDE.md`.**
   Recenzenta NIE MA; suity NIE są bramką; testy na żywych hostach dozwolone

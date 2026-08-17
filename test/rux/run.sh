@@ -483,6 +483,116 @@ else
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 
+# ------------------------------------------------------------------------------
+# 21-24. --grant-remotely (OWNER-GRANT-REMOTELY-2026-08-17). Pure/text: the
+# root-ssh-touching internals are stubbed; what is pinned is the ORCHESTRATION
+# CONTRACT -- when the grant step runs, what stops it, and that verification
+# still runs afterwards with its own authority.
+
+# 21. With the flag, the grant step runs BEFORE verification and before the
+#     lifecycle -- order, not presence (a grant after seed would be the
+#     unsafe implementation that still shows both lines).
+mkdir -p "$WORK/21/clients" "$WORK/21/peers"
+cat > "$WORK/21/clients/pve2.conf" <<EOF
+CLIENT_NAME=pve2
+PEER_HOST=pve2
+STATE=pending_enroll
+RUX_SOURCE=pve2:rpool/data
+RUX_TARGET=hdd/backup
+RUX_MODE=
+EOF
+cat > "$WORK/21/peers/$label.conf" <<EOF
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+out="$( (
+    CLIENTS_DIR="$WORK/21/clients"
+    PEER_STATE_DIR="$WORK/21/peers"
+    rux_grant_remotely() { echo "GRANT $3" >> "$WORK/21/order"; }
+    load_client_and_connection() { LOAD_HOST=pve2; }
+    fetch_committed_scope() { printf '[dataset:rpool/data]\ninclude_parent = yes\ninclude_children = yes\n' > "$1"; }
+    cmd_seed()     { echo "SEED $*" >> "$WORK/21/order"; }
+    cmd_activate() { echo "ACTIVATE $*" >> "$WORK/21/order"; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --grant-remotely --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$WORK/21/order")" = "$(printf 'GRANT rpool/data\nSEED pve2 --yes\nACTIVATE pve2 --yes')" ]; then
+    ok "21. --grant-remotely: grant runs first, then seed/activate -- order pinned"
+else
+    bad "21. --grant-remotely: grant runs first, then seed/activate -- order pinned" \
+        "rc=$rc out=$out order=$(cat "$WORK/21/order" 2>/dev/null)"
+fi
+
+# 22. WITHOUT the flag the grant step never runs -- the default path stays
+#     two-touch (U10-shaped), byte-for-byte the pre-flag behaviour.
+mkdir -p "$WORK/22/clients" "$WORK/22/peers"
+cp "$WORK/21/clients/pve2.conf" "$WORK/22/clients/pve2.conf"
+cp "$WORK/21/peers/$label.conf" "$WORK/22/peers/$label.conf"
+out="$( (
+    CLIENTS_DIR="$WORK/22/clients"
+    PEER_STATE_DIR="$WORK/22/peers"
+    rux_grant_remotely() { echo "GRANT $3" >> "$WORK/22/order"; }
+    load_client_and_connection() { LOAD_HOST=pve2; }
+    fetch_committed_scope() { printf '[dataset:rpool/data]\ninclude_parent = yes\ninclude_children = yes\n' > "$1"; }
+    cmd_seed()     { echo "SEED $*" >> "$WORK/22/order"; }
+    cmd_activate() { echo "ACTIVATE $*" >> "$WORK/22/order"; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$WORK/22/order")" = "$(printf 'SEED pve2 --yes\nACTIVATE pve2 --yes')" ]; then
+    ok "22. without --grant-remotely no grant step runs -- the default stays two-touch"
+else
+    bad "22. without --grant-remotely no grant step runs -- the default stays two-touch" \
+        "rc=$rc out=$out order=$(cat "$WORK/22/order" 2>/dev/null)"
+fi
+
+# 23. A remote grant does NOT bypass verification: the fetched committed
+#     scope still decides, and a grant that somehow committed something else
+#     is refused AFTER the grant step, BEFORE seeding.
+mkdir -p "$WORK/23/clients" "$WORK/23/peers"
+cp "$WORK/21/clients/pve2.conf" "$WORK/23/clients/pve2.conf"
+cp "$WORK/21/peers/$label.conf" "$WORK/23/peers/$label.conf"
+out="$( (
+    CLIENTS_DIR="$WORK/23/clients"
+    PEER_STATE_DIR="$WORK/23/peers"
+    rux_grant_remotely() { echo "GRANT $3" >> "$WORK/23/order"; }
+    load_client_and_connection() { LOAD_HOST=pve2; }
+    fetch_committed_scope() { printf '[dataset:rpool/OTHER]\ninclude_parent = yes\ninclude_children = yes\n' > "$1"; }
+    cmd_seed()     { echo "SEED $*" >> "$WORK/23/order"; }
+    cmd_activate() { echo "ACTIVATE $*" >> "$WORK/23/order"; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --grant-remotely --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] \
+        && printf '%s' "$out" | grep -q "not covered by the scope 'pve2' actually COMMITTED" \
+        && [ "$(cat "$WORK/23/order")" = "GRANT rpool/data" ]; then
+    ok "23. verification keeps its authority after a remote grant -- a mismatched commit still refuses before seed"
+else
+    bad "23. verification keeps its authority after a remote grant -- a mismatched commit still refuses before seed" \
+        "rc=$rc out=$out order=$(cat "$WORK/23/order" 2>/dev/null)"
+fi
+
+# 24. rux_grant_remotely itself: a pre-existing draft selecting something
+#     DIFFERENT refuses even under the flag -- force is not permission to
+#     overwrite another operator's pending decision. Root-ssh is stubbed at
+#     the rux_root_ssh seam; the probe order (channel, committed?, repo,
+#     draft) is the real function's.
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() {   # <host> <port> <cmd...>
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"test -s"*) return 1 ;;                       # nothing committed yet
+            *"test -x"*) return 0 ;;                       # deploy.sh found
+            *"cat -- "*) printf '[dataset:rpool/SOMETHING_ELSE]\ninclude_parent = no\ninclude_children = yes\n'; return 0 ;;
+            *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+        esac
+    }
+    rux_grant_remotely pve2 22 rpool/data
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "not permission to overwrite" ; then
+    ok "24. --grant-remotely refuses to replace a differing pre-existing draft"
+else
+    bad "24. --grant-remotely refuses to replace a differing pre-existing draft" "rc=$rc out=$out"
+fi
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
