@@ -2608,9 +2608,22 @@ show_activation_proposal() {   # <current config> <proposed config>
     # digest line while the install produced the account's. A preview that is
     # not the install is worse than none: it is a promise made in the wrong
     # environment (REV-20260801-015's own acceptance criterion).
-    if ! gencron_as_target -c "$workfile" 2>/dev/null | _strip_source > "$after"; then
-        rm -f "$before" "$after"; return 1
+    # The workfile is created by mktemp (0600, root-owned) next to the real
+    # config, and the render below runs AS THE ACCOUNT -- which therefore
+    # cannot open it. Found live 2026-08-17 (lab3 final run): the first
+    # account-rendered activation on a fresh collector died as "could not
+    # render", for a file-mode reason no message named. 0644 matches what the
+    # atomic swap sets on the real config anyway.
+    chmod 0644 "$workfile" 2>/dev/null || :
+    # Render stderr goes to a file, not /dev/null: "could not render" with the
+    # reason discarded cost a live debugging round on the very next line.
+    local render_err; render_err=$(mktemp) || { rm -f "$before" "$after"; return 1; }
+    if ! gencron_as_target -c "$workfile" 2>"$render_err" | _strip_source > "$after"; then
+        warn "gen-cron.sh (as $(cron_target_user)) refused the proposed config:"
+        sed 's/^/    /' "$render_err" >&2
+        rm -f "$before" "$after" "$render_err"; return 1
     fi
+    rm -f "$render_err"
 
     echo "--- proponowany config: $cronfile ---"
     if [ -f "$cronfile" ]; then
