@@ -2,7 +2,7 @@
 
 <!-- frozen: snapsend.sh 100755 aff7b28d5ce0b8d0332ad74793c07538920c5870 -->
 <!-- frozen: snapget.sh 100755 898fe0ebd903ca5322201d139928f5448836483d -->
-<!-- frozen: delsnaps.sh 100755 3a7dd5f07af8fc886737928ac141e1b73700e688 -->
+<!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 59dda7e685f8f2d39dea638b95ee9341313fbfb1 -->
 <!-- frozen: lib-zfs-snap.sh 100644 902b307cbcac9fbedf7c3f076334a801884f3666 -->
 <!-- unfreeze: - -->
@@ -42,6 +42,24 @@ after it. That is the whole point: the engines are the code every relationship
 in the fleet executes nightly, they now have 619 assertions of live evidence
 behind them, and the cheapest way to lose that is a small edit that seemed
 obvious.
+
+## Authorization under the post-2026-08-15 regime
+
+The reviewer and the REV pipeline were removed by the owner on 2026-08-15
+(`HANDOFF.md`), so points 1-3 below describe machinery that can no longer be
+exercised as written. The freeze itself stays -- its value (no frozen engine
+changes in passing) does not depend on who the authority is. The authority is
+now the OWNER: a frozen file changes only on an explicit owner direction, the
+change is recorded here in prose with the date and the direction it answers,
+and `--refreeze` re-pins the baseline as part of the same change.
+
+Owner-authorized refreezes:
+
+- **2026-08-17** -- `delsnaps.sh`: failure-cause-specific destroy hints
+  (lab3 campaign, owner direction "napraw błędy"). The unconditional
+  "dependent clones" hint sent a live investigation the wrong way while the
+  real error was a missing `mount` ability in the delegation; the hint is now
+  chosen from zfs's actual stderr. No retention semantics changed.
 
 ## How it is enforced
 

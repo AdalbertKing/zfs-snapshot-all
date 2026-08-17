@@ -3911,7 +3911,9 @@ EOF
 }
 mds_ssh_nohash
 out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"has --commit-scope run"*) true ;; *) false ;; esac; then
+# Wording changed 2026-08-17 (lab3 F1): the refusal now names whose move it is
+# and gives the exact source-side command, instead of only asking a question.
+if [ "$rc" -ne 0 ] && case "$out" in *"GRANTED nothing yet"*"--commit-scope"*) true ;; *) false ;; esac; then
     ok "resolve_mode_datasets: refuses when --commit-scope has not run yet on the peer"
 else
     bad "resolve_mode_datasets: refuses when --commit-scope has not run yet on the peer" "rc=$rc out=$out"
