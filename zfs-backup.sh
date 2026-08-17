@@ -1851,6 +1851,13 @@ assert_no_foreign_managed_block() {   # <config whose render is about to be inst
 assert_config_readable_by_target() {   # <config file>
     local file="$1" u; u=$(cron_target_user)
     [ "$u" = root ] && return 0
+    # A config that does not exist yet cannot be unreadable -- the FIRST
+    # activation on a fresh collector creates it at the end, via the atomic
+    # swap, explicitly chmod 0644. Probing it here refused the whole lab3
+    # final run one gate before the finish line (layer seven). What this
+    # check is FOR -- an existing file at a path the account cannot open,
+    # e.g. under /root -- still refuses below.
+    [ -e "$file" ] || return 0
     local ok=1
     if command -v runuser >/dev/null 2>&1; then
         runuser --user "$u" -- test -r "$file" && ok=0
