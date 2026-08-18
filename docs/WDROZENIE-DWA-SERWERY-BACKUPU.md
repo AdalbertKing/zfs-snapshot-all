@@ -66,13 +66,15 @@ md5sum /hdd/lab3/src/dane.bin        # zanotuj: ab0c4933…
 /root/scripts/zfs-snapshot-all/zfs-backup.sh \
     --source=192.168.28.8:hdd/lab3/src \
     --target=hdd/lab3backups \
-    --local-user=zfsbackup \
     --grant-remotely --yes --install
 ```
 
 Co robi ta jedna komenda (wszystko w niej):
 
-1. tworzy konto `zfsbackup`, jeśli go nie ma (głośna linia w logu);
+1. wybiera konto, z którego pochodzą zadania, i tworzy je, jeśli go nie ma
+   (głośna linia w logu). Bez flagi: konto skonfigurowane na tym kolektorze
+   (`server.conf`), a gdy żadnego nie ma — `zfsbackup`. Nadpisanie:
+   `--local-user=NAZWA`, a `--local-user=root` znaczy „świadomie z roota";
 2. paruje + wykonuje join na źródle (konto delegowane `zfsbackup-pve1`,
    klucz, bramka) kanałem root-ssh;
 3. **`--grant-remotely`**: zapisuje na źródle scope RÓWNY ŻĄDANIU i wykonuje
@@ -104,7 +106,6 @@ zfs get -H -o value guid "hdd/lab3/src@automated_hourly_2026-08-17_22-01-01"
 /root/scripts/zfs-snapshot-all/zfs-backup.sh \
     --source=192.168.28.9:hdd/lab3backups/192.168.28.8/hdd/lab3/src \
     --mode=sync \
-    --local-user=zfsbackup \
     --grant-remotely --yes --install
 ```
 

@@ -464,9 +464,14 @@ else
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 
-# 20. Without --local-user, a collector with no server.conf account still
-#     refuses cleanly (add-client's own Batch B guard, reached unchanged --
-#     RUX must not paper over it by defaulting to root).
+# 20. Without --local-user and with no server.conf account, RUX resolves the
+#     account itself (RUX_DEFAULT_LOCAL_USER) instead of refusing, and says so.
+#     Earlier contract: add-client's Batch B guard reached the operator and the
+#     command stopped. That guard still exists for the expert path -- what
+#     changed is that the one-command form no longer needs a flag whose only
+#     sensible value was the default. Pinned on the ARGUMENT add-client
+#     receives, not on the log line: a default that is only announced would
+#     leave the relationship keyed to nobody.
 : > "$INST_PAIR_LOG"
 out="$( (
     profile_validate_dir() { return 0; }
@@ -474,12 +479,62 @@ out="$( (
     CLIENTS_DIR="$WORK/20/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20/relationships"
     DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
 ) 2>&1 )"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'no delegated backup account configured' && [ ! -s "$INST_PAIR_LOG" ]; then
-    ok "20. no --local-user and no server.conf account: add-client's own refusal reaches the operator unchanged"
+if [ "$rc" -eq 0 ] \
+        && grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
+        && printf '%s' "$out" | grep -q "no --local-user given and no account configured"; then
+    ok "20. no --local-user and no server.conf account: the jobs are keyed to the default account, announced"
 else
-    bad "20. no --local-user and no server.conf account: add-client's own refusal reaches the operator unchanged" \
+    bad "20. no --local-user and no server.conf account: the jobs are keyed to the default account, announced" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
+# 20b. The default is the LAST resort: a collector that HAS a configured
+#      account gets that account, not 'zfsbackup'. Without this, the change
+#      above would silently re-key every host whose operator chose a different
+#      name -- the failure would be invisible until a job could not open its
+#      own key.
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="backupsvc"; }
+    CLIENTS_DIR="$WORK/20b/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20b/relationships"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && grep -q -- '--local-user=backupsvc' "$INST_PAIR_LOG" \
+        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG"; then
+    ok "20b. a configured server.conf account outranks the built-in default"
+else
+    bad "20b. a configured server.conf account outranks the built-in default" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
+# 20c. --local-user=root still states root deliberately: the default must not
+#      overwrite an explicit expert choice, and add-client's own contract maps
+#      root to "no delegated account" rather than passing it through.
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/20c/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20c/relationships"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=root --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG"; then
+    ok "20c. --local-user=root is honoured, the default does not overwrite it"
+else
+    bad "20c. --local-user=root is honoured, the default does not overwrite it" \
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 

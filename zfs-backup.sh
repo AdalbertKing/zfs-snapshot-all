@@ -194,11 +194,12 @@ Usage:
                                     --name omitted:    derived from HOST; only needed when
                                                        more than one relationship already
                                                        points at the same host
-                                    --local-user=NAME: CREATE-time only, same contract as
-                                                       add-client's own flag -- omit it and
-                                                       the collector's configured account
-                                                       (server.conf) is used, or add-client
-                                                       refuses if none is configured
+                                    --local-user=NAME: CREATE-time only. Omit it and the
+                                                       collector's configured account
+                                                       (server.conf) is used, or 'zfsbackup'
+                                                       when none is configured -- created
+                                                       here if it does not exist yet. Pass
+                                                       --local-user=root to state root.
                                     without --install: read-only plan, touches neither host
                                     --install:          enrol (remote --join over SSH), seed,
                                                        verify endpoint, activate
@@ -6314,6 +6315,13 @@ cmd_deploy() {
 # no second grant mechanism and no second state machine -- the non-goals in
 # the design doc are the boundary of this feature.
 
+# The account a RUX-enrolled relationship runs as when nothing else answers
+# the question. Not a policy invention: every host this product deploys ends
+# up with exactly this account, so requiring the operator to name it was one
+# flag of ceremony for a value that had no alternative in practice. It is the
+# LAST resort -- explicit --local-user and server.conf both outrank it.
+RUX_DEFAULT_LOCAL_USER="zfsbackup"
+
 # rux_is_remote_source <source value> -> rc 0 when it names HOST:DATASET (a
 # local dataset name never legally contains ':' in this tool's own remote
 # syntax -- see qcap_is_remote's identical convention above).
@@ -6590,6 +6598,34 @@ than the request ([dataset:$requested]). An operator prepared that file, and thi
 rux_remote_install() {
     local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}" grant_remotely="${11:-0}"
 
+    local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
+    local cpath; cpath=$(client_conf_path "$name")
+    local state=""
+    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+
+    # Which account the generated jobs run as, resolved HERE so the one-command
+    # form does not carry a flag whose only sensible value is the default:
+    #
+    #   --local-user=NAME   explicit, always wins (root included -- stating root
+    #                       deliberately is still a choice, not a fallback)
+    #   otherwise           this collector's configured account (server.conf)
+    #   otherwise           RUX_DEFAULT_LOCAL_USER
+    #
+    # Only the FRESH path resolves it. On a resume the account is already fixed
+    # in the client record and the manifest; defaulting there would create an
+    # account this relationship never uses. add-client's own refusal for an
+    # unresolvable account is untouched and still guards the expert path.
+    if [ -z "$state" ] && [ -z "$local_user" ]; then
+        read_server_conf
+        if [ -n "${LOCAL_USER:-}" ]; then
+            local_user="$LOCAL_USER"
+            log "rux: no --local-user given -- the jobs will run as this collector's configured account '$local_user' (server.conf)"
+        else
+            local_user="$RUX_DEFAULT_LOCAL_USER"
+            log "rux: no --local-user given and no account configured -- the jobs will run as '$local_user' (pass --local-user=root to state root instead)"
+        fi
+    fi
+
     # Accepted semantics: --local-user names the account this relationship
     # runs as; on a fresh host it does not exist yet, and creating it is a
     # LOCAL root action (the operator running this is already root here).
@@ -6600,11 +6636,6 @@ rux_remote_install() {
         bash "$DEPLOY" --backup-user="$local_user" \
             || die "rux: deploy.sh --backup-user=$local_user failed -- see above; nothing was enrolled"
     fi
-
-    local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
-    local cpath; cpath=$(client_conf_path "$name")
-    local state=""
-    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
 
     if [ -z "$state" ]; then
         local hostarg="$host"
