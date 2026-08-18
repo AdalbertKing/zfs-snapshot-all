@@ -195,11 +195,12 @@ Usage:
                                                        more than one relationship already
                                                        points at the same host
                                     --local-user=NAME: CREATE-time only. Omit it and the
-                                                       collector's configured account
-                                                       (server.conf) is used, or 'zfsbackup'
-                                                       when none is configured -- created
-                                                       here if it does not exist yet. Pass
-                                                       --local-user=root to state root.
+                                                       account is resolved: server.conf, else
+                                                       the delegated account this host already
+                                                       has, else 'zfsbackup' (created here).
+                                                       A resolved account is recorded in
+                                                       server.conf so the host keeps ONE
+                                                       decision. --local-user=root states root.
                                     without --install: read-only plan, touches neither host
                                     --install:          enrol (remote --join over SSH), seed,
                                                        verify endpoint, activate
@@ -6319,8 +6320,76 @@ cmd_deploy() {
 # the question. Not a policy invention: every host this product deploys ends
 # up with exactly this account, so requiring the operator to name it was one
 # flag of ceremony for a value that had no alternative in practice. It is the
-# LAST resort -- explicit --local-user and server.conf both outrank it.
+# LAST resort -- explicit --local-user, server.conf, and an account this host
+# demonstrably already uses all outrank it.
 RUX_DEFAULT_LOCAL_USER="zfsbackup"
+
+# How a host is asked which delegated account it ALREADY has. Deliberately the
+# same rule deploy.sh maintains accounts by (Phase 8, deploy.sh:5883): the owner
+# of a home directory that contains the account's own checkout. Overridable so
+# the rule itself can be exercised against a tree instead of /home.
+RUX_ACCOUNT_SCAN_GLOB="${RUX_ACCOUNT_SCAN_GLOB:-/home/*/zfs-snapshot-all}"
+
+# rux_detect_local_user -> prints the account this host already treats as its
+# delegated one, or nothing (rc 1).
+#
+# Without this, "no account configured" meant the built-in default, and a host
+# whose delegated account is named something else -- but which never had
+# setup-server run on it -- would get a SECOND account created next to the one
+# deploy.sh is already maintaining, with the new relationship keyed to the
+# newcomer. The refusal this replaced did not have that hole because it made the
+# operator name the account that was already there.
+#
+# Ownership, not directory name: the account is whoever owns the home, which is
+# what deploy.sh reads too.
+rux_detect_local_user() {
+    local cand owner
+    for cand in $RUX_ACCOUNT_SCAN_GLOB; do
+        [ -d "$cand" ] || continue
+        owner=$(stat -c %U "$(dirname "$cand")" 2>/dev/null) || continue
+        [ -n "$owner" ] || continue
+        if id "$owner" >/dev/null 2>&1; then printf '%s' "$owner"; return 0; fi
+    done
+    return 1
+}
+
+# rux_record_local_user <account>
+#
+# Writes the account RUX resolved for itself into server.conf, which is what
+# setup-server would have written had the operator been made to run it. The
+# point is that the host then carries ONE recorded decision: activation reads
+# LOCAL_USER from here, and server.conf outranks the per-relationship value in
+# the manifest ("$PEER_SAVED_LOCAL_USER", zfs-backup.sh:4124). Leave it unwritten
+# and every relationship re-derives the account independently -- agreeing today,
+# and diverging the moment someone runs setup-server with a different name, at
+# which point re-activating an existing relationship moves its cron block to an
+# account that cannot read the key the jobs still point at.
+#
+# Only for accounts RUX resolved ITSELF. An explicit --local-user is a choice
+# about THIS relationship and is not promoted to a host-wide default.
+#
+# Non-fatal: the relationship works without it (the manifest fallback answers),
+# so a failure here is a warning about a future divergence, not a reason to
+# abandon an enrolment mid-flight.
+rux_record_local_user() {
+    local user="$1" dir tmp
+    dir=$(dirname "$SERVER_CONF")
+    mkdir -p "$dir" || { warn "rux: could not create $dir -- '$user' is not recorded in $SERVER_CONF, so this host has no host-wide account decision yet (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
+    tmp=$(mktemp "$dir/.zfs-backup-conf.XXXXXX") || { warn "rux: mktemp failed in $dir -- '$user' is not recorded in $SERVER_CONF (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
+    if [ -e "$SERVER_CONF" ]; then
+        # Only the account line is replaced; DEFAULT_TARGET/CRON_CONFIG and any
+        # hand-added line survive. grep exits 1 on an empty result, which is a
+        # legitimate outcome here (a conf holding nothing else).
+        grep -v '^LOCAL_USER=' "$SERVER_CONF" > "$tmp" || :
+    else
+        echo "# zfs-backup.sh server config -- edit by hand if needed, or re-run setup-server" > "$tmp"
+    fi
+    echo "LOCAL_USER=$user" >> "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$SERVER_CONF" || { rm -f "$tmp"; warn "rux: could not write $SERVER_CONF -- '$user' is not recorded there (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
+    LOCAL_USER="$user"
+    log "rux: recorded '$user' as this host's backup account in $SERVER_CONF -- one decision for the host, so later relationships and activations agree with this one"
+}
 
 # rux_is_remote_source <source value> -> rc 0 when it names HOST:DATASET (a
 # local dataset name never legally contains ':' in this tool's own remote
@@ -6609,7 +6678,11 @@ rux_remote_install() {
     #   --local-user=NAME   explicit, always wins (root included -- stating root
     #                       deliberately is still a choice, not a fallback)
     #   otherwise           this collector's configured account (server.conf)
+    #   otherwise           the account this host already has (rux_detect_local_user)
     #   otherwise           RUX_DEFAULT_LOCAL_USER
+    #
+    # The last two both RECORD what they resolved, because they are the cases
+    # where nothing on the host had written the decision down yet.
     #
     # Only the FRESH path resolves it. On a resume the account is already fixed
     # in the client record and the manifest; defaulting there would create an
@@ -6620,9 +6693,13 @@ rux_remote_install() {
         if [ -n "${LOCAL_USER:-}" ]; then
             local_user="$LOCAL_USER"
             log "rux: no --local-user given -- the jobs will run as this collector's configured account '$local_user' (server.conf)"
+        elif local_user=$(rux_detect_local_user); then
+            log "rux: no --local-user given and none configured -- adopting the delegated account this host already has, '$local_user' (the owner of its checkout, which is how deploy.sh finds it too)"
+            rux_record_local_user "$local_user"
         else
             local_user="$RUX_DEFAULT_LOCAL_USER"
-            log "rux: no --local-user given and no account configured -- the jobs will run as '$local_user' (pass --local-user=root to state root instead)"
+            log "rux: no --local-user given and no delegated account on this host -- the jobs will run as '$local_user' (pass --local-user=root to state root instead)"
+            rux_record_local_user "$local_user"
         fi
     fi
 

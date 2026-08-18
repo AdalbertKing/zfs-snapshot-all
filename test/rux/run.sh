@@ -39,6 +39,16 @@ bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC1090
 source "$ZB"
 
+# No case in this suite may touch the real host. Two paths reach outside the
+# work tree: SERVER_CONF, where a resolved account is RECORDED, and the account
+# scan, which reads /home. Both are redirected here, GLOBALLY, rather than only
+# in the cases that exercise them -- a case that forgot the override would write
+# /etc/zfs-snapshot-all on any machine running this suite as root, and a pure
+# suite must be incapable of that rather than merely careful about it.
+SERVER_CONF="$WORK/etc-guard/zfs-backup.conf"
+RUX_ACCOUNT_SCAN_GLOB="$WORK/nohomes-guard/*/zfs-snapshot-all"
+mkdir -p "$WORK/etc-guard" "$WORK/nohomes-guard"
+
 # ------------------------------------------------------------------------------
 # 1. Local --source is untouched: rux_entry must reach cmd_local_backup with
 #    the ORIGINAL argument vector for anything without ':' in --source.
@@ -472,12 +482,20 @@ fi
 #     sensible value was the default. Pinned on the ARGUMENT add-client
 #     receives, not on the log line: a default that is only announced would
 #     leave the relationship keyed to nobody.
+#     The RECORDING is asserted with it. A resolved-but-unrecorded account
+#     leaves the decision living per-relationship in each manifest, agreeing
+#     today and diverging the day someone runs setup-server with another name
+#     -- server.conf outranks the manifest at activation, so the cron block
+#     would move to an account that cannot read the key the jobs point at.
 : > "$INST_PAIR_LOG"
+mkdir -p "$WORK/20/etc" "$WORK/20/nohomes"
 out="$( (
     profile_validate_dir() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
     CLIENTS_DIR="$WORK/20/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20/relationships"
+    SERVER_CONF="$WORK/20/etc/zfs-backup.conf"
+    RUX_ACCOUNT_SCAN_GLOB="$WORK/20/nohomes/*/zfs-snapshot-all"
     DEPLOY="$INST_DEPLOY"
     cmd_seed()     { :; }
     cmd_activate() { :; }
@@ -485,24 +503,28 @@ out="$( (
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
         && grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
-        && printf '%s' "$out" | grep -q "no --local-user given and no account configured"; then
-    ok "20. no --local-user and no server.conf account: the jobs are keyed to the default account, announced"
+        && grep -qx 'LOCAL_USER=zfsbackup' "$WORK/20/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "20. no --local-user, nothing configured, no account present: the default is used AND recorded"
 else
-    bad "20. no --local-user and no server.conf account: the jobs are keyed to the default account, announced" \
-        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+    bad "20. no --local-user, nothing configured, no account present: the default is used AND recorded" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
 # 20b. The default is the LAST resort: a collector that HAS a configured
 #      account gets that account, not 'zfsbackup'. Without this, the change
 #      above would silently re-key every host whose operator chose a different
 #      name -- the failure would be invisible until a job could not open its
-#      own key.
+#      own key. Nothing is recorded either: the decision is already on disk,
+#      and rewriting it would be this command editing a config it only read.
 : > "$INST_PAIR_LOG"
+mkdir -p "$WORK/20b/etc" "$WORK/20b/nohomes"
 out="$( (
     profile_validate_dir() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="backupsvc"; }
     CLIENTS_DIR="$WORK/20b/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20b/relationships"
+    SERVER_CONF="$WORK/20b/etc/zfs-backup.conf"
+    RUX_ACCOUNT_SCAN_GLOB="$WORK/20b/nohomes/*/zfs-snapshot-all"
     DEPLOY="$INST_DEPLOY"
     cmd_seed()     { :; }
     cmd_activate() { :; }
@@ -510,32 +532,102 @@ out="$( (
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
         && grep -q -- '--local-user=backupsvc' "$INST_PAIR_LOG" \
-        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG"; then
-    ok "20b. a configured server.conf account outranks the built-in default"
+        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
+        && [ ! -e "$WORK/20b/etc/zfs-backup.conf" ]; then
+    ok "20b. a configured server.conf account outranks the built-in default, and is not rewritten"
 else
-    bad "20b. a configured server.conf account outranks the built-in default" \
-        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+    bad "20b. a configured server.conf account outranks the built-in default, and is not rewritten" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20b/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
 # 20c. --local-user=root still states root deliberately: the default must not
 #      overwrite an explicit expert choice, and add-client's own contract maps
 #      root to "no delegated account" rather than passing it through.
+#      Not recorded either -- an explicit flag is a choice about THIS
+#      relationship, and promoting it to a host-wide default would silently
+#      re-key every later relationship on the host.
 : > "$INST_PAIR_LOG"
+mkdir -p "$WORK/20c/etc" "$WORK/20c/nohomes"
 out="$( (
     profile_validate_dir() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
     CLIENTS_DIR="$WORK/20c/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20c/relationships"
+    SERVER_CONF="$WORK/20c/etc/zfs-backup.conf"
+    RUX_ACCOUNT_SCAN_GLOB="$WORK/20c/nohomes/*/zfs-snapshot-all"
     DEPLOY="$INST_DEPLOY"
     cmd_seed()     { :; }
     cmd_activate() { :; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=root --install --yes
 ) 2>&1 )"; rc=$?
-if [ "$rc" -eq 0 ] && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG"; then
-    ok "20c. --local-user=root is honoured, the default does not overwrite it"
+if [ "$rc" -eq 0 ] \
+        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
+        && [ ! -e "$WORK/20c/etc/zfs-backup.conf" ]; then
+    ok "20c. --local-user=root is honoured, neither overwritten nor promoted to a host default"
 else
-    bad "20c. --local-user=root is honoured, the default does not overwrite it" \
-        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+    bad "20c. --local-user=root is honoured, neither overwritten nor promoted to a host default" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20c/etc/zfs-backup.conf" 2>/dev/null)"
+fi
+
+# 20d. A host that ALREADY has a delegated account, but no server.conf, gets
+#      THAT account -- not a second one created beside it.
+#
+#      This is the hole the removed refusal did not have: its message made the
+#      operator name the account that was already there. deploy.sh finds it by
+#      scanning for a home directory carrying the account's own checkout
+#      (Phase 8); RUX now asks the same question the same way, so one host
+#      cannot end up with deploy.sh maintaining one account while a new
+#      relationship runs as another.
+#
+#      Asserted on the OWNER of the home, not its name: the directory below is
+#      called 'backupsvc' and the expected account is whoever runs this suite,
+#      which is exactly the distinction between reading ownership and reading a
+#      path. Framed as "the built-in default did not win" so it holds whatever
+#      that account turns out to be.
+: > "$INST_PAIR_LOG"
+mkdir -p "$WORK/20d/etc" "$WORK/20d/homes/backupsvc/zfs-snapshot-all"
+DETECTED="$(stat -c %U "$WORK/20d/homes/backupsvc" 2>/dev/null)"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/20d/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20d/relationships"
+    SERVER_CONF="$WORK/20d/etc/zfs-backup.conf"
+    RUX_ACCOUNT_SCAN_GLOB="$WORK/20d/homes/*/zfs-snapshot-all"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -n "$DETECTED" ] \
+        && printf '%s' "$out" | grep -q "adopting the delegated account this host already has, '$DETECTED'" \
+        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
+        && grep -qx "LOCAL_USER=$DETECTED" "$WORK/20d/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "20d. an existing delegated account is adopted (by home ownership) instead of creating a second one"
+else
+    bad "20d. an existing delegated account is adopted (by home ownership) instead of creating a second one" \
+        "rc=$rc detected='$DETECTED' out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20d/etc/zfs-backup.conf" 2>/dev/null)"
+fi
+
+# 20e. Recording preserves the rest of server.conf. A conf that already carries
+#      DEFAULT_TARGET/CRON_CONFIG but no account must come back with both intact
+#      -- rewriting the file wholesale would silently drop the target and the
+#      cron config path this host was set up with.
+mkdir -p "$WORK/20e/etc" "$WORK/20e/nohomes"
+printf '%s\n' '# header' 'DEFAULT_TARGET=tank/backups' 'CRON_CONFIG=/etc/zfs-snapshot-all/jobs.conf' 'LOCAL_USER=' > "$WORK/20e/etc/zfs-backup.conf"
+out="$( (
+    SERVER_CONF="$WORK/20e/etc/zfs-backup.conf"
+    rux_record_local_user zfsbackup
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && grep -qx 'DEFAULT_TARGET=tank/backups' "$WORK/20e/etc/zfs-backup.conf" \
+        && grep -qx 'CRON_CONFIG=/etc/zfs-snapshot-all/jobs.conf' "$WORK/20e/etc/zfs-backup.conf" \
+        && [ "$(grep -c '^LOCAL_USER=' "$WORK/20e/etc/zfs-backup.conf")" -eq 1 ] \
+        && grep -qx 'LOCAL_USER=zfsbackup' "$WORK/20e/etc/zfs-backup.conf"; then
+    ok "20e. recording the account replaces only the account line, leaving the rest of server.conf intact"
+else
+    bad "20e. recording the account replaces only the account line, leaving the rest of server.conf intact" \
+        "rc=$rc out=$out conf=$(cat "$WORK/20e/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
 # ------------------------------------------------------------------------------

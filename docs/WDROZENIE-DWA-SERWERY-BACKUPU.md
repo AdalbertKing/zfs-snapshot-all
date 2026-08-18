@@ -72,9 +72,15 @@ md5sum /hdd/lab3/src/dane.bin        # zanotuj: ab0c4933…
 Co robi ta jedna komenda (wszystko w niej):
 
 1. wybiera konto, z którego pochodzą zadania, i tworzy je, jeśli go nie ma
-   (głośna linia w logu). Bez flagi: konto skonfigurowane na tym kolektorze
-   (`server.conf`), a gdy żadnego nie ma — `zfsbackup`. Nadpisanie:
-   `--local-user=NAZWA`, a `--local-user=root` znaczy „świadomie z roota";
+   (głośna linia w logu). Bez flagi, w tej kolejności: konto zapisane w
+   `server.conf` → konto delegowane, które ten host **już ma** (rozpoznawane
+   po właścicielu katalogu domowego z checkoutem, tą samą regułą, którą
+   utrzymuje je `deploy.sh`) → `zfsbackup`. Konto rozstrzygnięte w dwóch
+   ostatnich przypadkach zostaje **zapisane w `server.conf`**, żeby host miał
+   JEDNĄ decyzję — inaczej mieszkałaby osobno w manifeście każdej relacji i
+   rozjechałaby się przy pierwszym `setup-server` z inną nazwą. Nadpisanie:
+   `--local-user=NAZWA` (wybór dla TEJ relacji, nie zapisywany jako domyślny
+   hosta), a `--local-user=root` znaczy „świadomie z roota";
 2. paruje + wykonuje join na źródle (konto delegowane `zfsbackup-pve1`,
    klucz, bramka) kanałem root-ssh;
 3. **`--grant-remotely`**: zapisuje na źródle scope RÓWNY ŻĄDANIU i wykonuje
