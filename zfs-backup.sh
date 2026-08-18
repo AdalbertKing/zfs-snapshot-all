@@ -2414,6 +2414,11 @@ client_local_path() {   # <source dataset> -> where it lands locally
 # opts out.
 cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
 
+# The receive-side delegation set. Mirrors deploy.sh's ZFS_PERMS (what --pair
+# grants on a backup-mode target root) -- kept in step by test/zfsbackup's
+# parity pin, not by sourcing deploy.sh (no source edge, see deps.conf).
+ZFS_PERMS_LOCAL_RECEIVE="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
+
 # The default cron-config location for THIS host, used only when nothing has
 # recorded one yet (no server.conf CRON_CONFIG, no client record, no installed
 # managed block to read a Source line from). /etc/zfs-snapshot-all is the
@@ -4120,6 +4125,32 @@ cmd_activate_client() {
         LOCAL_USER="$PEER_SAVED_LOCAL_USER"
         log "activate: no LOCAL_USER in server.conf -- using the pairing's delegated account '$LOCAL_USER' for the cron install (make it permanent for this host with setup-server --local-user=$LOCAL_USER)"
     fi
+
+    # Sync mode: the RECEIVE-side delegation that backup mode gets at --pair
+    # time (deploy.sh grants ZFS_PERMS on target/label) has no counterpart,
+    # because at --pair time a sync relationship's dataset list is still
+    # deferred to the source -- there is nothing to grant on yet. Found live
+    # 2026-08-17 (lab3): the seed (root) passed, and the first cron run as the
+    # account died with 'cannot receive incremental stream: permission denied'.
+    # HERE the list is resolved, so this is where the grant belongs: on each
+    # dataset's local landing path (sync = the same path, so the parent must
+    # exist to carry the delegation; zfs receive -p creates children under it).
+    # Idempotent -- zfs allow re-applied is a no-op -- and skipped for root.
+    if [ "${PEER_SAVED_MODE:-}" = sync ] && [ -n "${LOCAL_USER:-}" ] && [ "$LOCAL_USER" != root ]; then
+        local sync_ds sync_parent
+        for sync_ds in $PEER_SAVED_DATASETS; do
+            sync_parent="${sync_ds%/*}"
+            [ "$sync_parent" != "$sync_ds" ] || sync_parent="$sync_ds"
+            if ! zfs list -H -o name -- "$sync_parent" >/dev/null 2>&1; then
+                zfs create -p -- "$sync_parent" \
+                    || die "activate: could not create the local landing parent '$sync_parent' for sync dataset '$sync_ds'"
+                log "activate: created local landing parent $sync_parent (sync reproduces the source path here)"
+            fi
+            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$sync_parent" \
+                || die "activate: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on $sync_parent for '$LOCAL_USER' failed"
+        done
+        log "activate: sync receive delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on the local landing parent(s)"
+    fi
     # Resolution order: recorded CRON_CONFIG -> the Source line of the block
     # ALREADY INSTALLED in the target account's crontab -> only then the /etc
     # default. The middle step is what the lab3 final run proved necessary:
@@ -4196,12 +4227,58 @@ cmd_activate_client() {
     fi
 
     log "dry-run test of each dataset (snapget.sh -n)..."
+    # The dry-run must rehearse THE LINE THAT WILL RUN, not a stripped-down
+    # cousin of it. It used to call snapget with no -m, no -e, and -- for a
+    # sync client -- an EMPTY-STRING base argument where the generated line
+    # has none at all. On the lab3 chain that combination made snapget exit 1
+    # while the real installed line was perfectly healthy: the gate rejected
+    # a working deployment by testing a different one. The prefix and the
+    # passive -e are read back from the WORKFILE's own [dataset:] section --
+    # the same sections the install is about to publish -- and the base
+    # argument is OMITTED (not passed empty) exactly when the generated line
+    # omits it.
     local failed=0
     local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
         localpath=$(client_local_path "$ds")
+        local dr_prefix dr_flags
+        dr_prefix=$(installed_dataset_field "$workfile" "$localpath" prefix)
+        dr_flags=$(installed_dataset_field "$workfile" "$localpath" flags)
+        case " $dr_flags " in
+        *" -e "*)
+            # PASSIVE dataset: `snapget -n -e` is the wrong rehearsal. On an
+            # already-up-to-date pair it exits 1 with no message ("nothing to
+            # transfer" is indistinguishable from failure at the exit-code
+            # level), which refused the lab3 chain one gate before the finish
+            # line. What a passive line needs to work is exactly two things,
+            # both testable without moving data: the newest snapshot of the
+            # family is REACHABLE over the account's own channel, and the
+            # local landing exists or its parent is delegated. The engine's
+            # silent rc=1 is a separate finding (frozen file; TODO).
+            local newest
+            newest=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+                -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+                -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+                "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+                "zfs list -H -t snapshot -d 1 -o name,creation -p -- '$ds' 2>/dev/null | grep '@${dr_prefix:-automated_}' | sort -k2,2n | tail -1 | cut -f1")
+            if [ -n "$newest" ]; then
+                log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: ${newest#*@}"
+            else
+                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel"
+                failed=$((failed + 1))
+            fi
+            continue ;;
+        esac
+        local -a dr_args=(-n)
+        [ -n "$dr_prefix" ] && dr_args+=(-m "$dr_prefix")
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if [ -n "$base" ]; then
+            set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"
+        else
+            set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+        fi
+        # shellcheck disable=SC2086
+        if bash "$SNAPGET" "${dr_args[@]}" $LOAD_FLAGS "$@"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
