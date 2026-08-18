@@ -59,6 +59,53 @@ dd if=/dev/urandom of=/hdd/lab3/src/dane.bin bs=1M count=64
 md5sum /hdd/lab3/src/dane.bin        # zanotuj: ab0c4933…
 ```
 
+## 0b. Konto, z którego chodzą zadania — na całym łańcuchu
+
+Dotyczy **kolektorów**: pve1 (ogniwo A) i pve9 (ogniwo B). Konto po stronie
+ŹRÓDŁA (`zfsbackup-pve1` itd.) zakłada `--join` i nie steruje nim żadna z tych
+flag.
+
+**Wariant delegowany (zalecany).** Raz na kolektorze, przed ogniwami:
+
+```bash
+# na pve1:
+/root/scripts/zfs-snapshot-all/zfs-backup.sh setup-server \
+    --target=hdd/lab3backups \
+    --local-user=zfsbackup
+
+# na pve9 analogicznie, ze swoim targetem:
+/root/scripts/zfs-snapshot-all/zfs-backup.sh setup-server \
+    --target=hdd/lab3sync \
+    --local-user=zfsbackup
+```
+
+Od tej chwili każda relacja na tym hoście bierze to konto i komendy ogniw nie
+niosą już żadnej flagi konta.
+
+**Wariant root.** To samo, tylko:
+
+```bash
+# na pve1 i na pve9:
+/root/scripts/zfs-snapshot-all/zfs-backup.sh setup-server \
+    --target=hdd/lab3backups \
+    --local-user=root
+```
+
+`--local-user=root` jest teraz **zapisywane dosłownie** (`LOCAL_USER=root`) i
+obowiązuje na całym dalszym łańcuchu: cron idzie do crontaba roota, żadne konto
+delegowane nie powstaje, a komendy ogniw nie muszą powtarzać flagi. Wcześniej
+root był zwijany do wartości pustej i gubił się przy pierwszej relacji.
+
+**Bez `setup-server`.** Komendy ogniw rozstrzygną konto same: konto delegowane,
+które host już ma (po właścicielu katalogu domowego z checkoutem), a jeśli
+żadnego nie ma — `zfsbackup`; wynik zostaje zapisany w `server.conf`.
+
+**Stan sprzed tej wersji.** Host, na którym `server.conf` istnieje, ale nie
+nazywa konta, dostanie **odmowę** z nazwaniem obu komend naprawczych. Ta wartość
+znaczyła kiedyś jednocześnie „administrator wybrał roota" i „nikt nie
+decydował", a te dwa wymagają przeciwnych odpowiedzi. Naprawa to jedno
+`setup-server` z jawnym `--local-user=`, po czym komenda ogniwa wznawia.
+
 ## 1. Ogniwo A — backup (jedna komenda na kolektorze)
 
 ```bash
@@ -66,13 +113,21 @@ md5sum /hdd/lab3/src/dane.bin        # zanotuj: ab0c4933…
 /root/scripts/zfs-snapshot-all/zfs-backup.sh \
     --source=192.168.28.8:hdd/lab3/src \
     --target=hdd/lab3backups \
-    --local-user=zfsbackup \
     --grant-remotely --yes --install
 ```
 
 Co robi ta jedna komenda (wszystko w niej):
 
-1. tworzy konto `zfsbackup`, jeśli go nie ma (głośna linia w logu);
+1. wybiera konto, z którego pochodzą zadania, i tworzy je, jeśli go nie ma
+   (głośna linia w logu). Bez flagi, w tej kolejności: konto zapisane w
+   `server.conf` → konto delegowane, które ten host **już ma** (rozpoznawane
+   po właścicielu katalogu domowego z checkoutem, tą samą regułą, którą
+   utrzymuje je `deploy.sh`) → `zfsbackup`. Konto rozstrzygnięte w dwóch
+   ostatnich przypadkach zostaje **zapisane w `server.conf`**, żeby host miał
+   JEDNĄ decyzję — inaczej mieszkałaby osobno w manifeście każdej relacji i
+   rozjechałaby się przy pierwszym `setup-server` z inną nazwą. Nadpisanie:
+   `--local-user=NAZWA` (wybór dla TEJ relacji, nie zapisywany jako domyślny
+   hosta), a `--local-user=root` znaczy „świadomie z roota";
 2. paruje + wykonuje join na źródle (konto delegowane `zfsbackup-pve1`,
    klucz, bramka) kanałem root-ssh;
 3. **`--grant-remotely`**: zapisuje na źródle scope RÓWNY ŻĄDANIU i wykonuje
@@ -104,7 +159,6 @@ zfs get -H -o value guid "hdd/lab3/src@automated_hourly_2026-08-17_22-01-01"
 /root/scripts/zfs-snapshot-all/zfs-backup.sh \
     --source=192.168.28.9:hdd/lab3backups/192.168.28.8/hdd/lab3/src \
     --mode=sync \
-    --local-user=zfsbackup \
     --grant-remotely --yes --install
 ```
 

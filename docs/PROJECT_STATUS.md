@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f09cfbdca32eab9a -->
+<!-- status-covers-digest: bec4811273b730f2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -186,7 +186,52 @@
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
-- Data odświeżenia: **2026-08-15**. Ostatnia zmiana zachowania: **wyrenderowane
+- Data odświeżenia: **2026-08-18**. Ostatnia zmiana zachowania: **konto zadań
+  jest rozstrzygane przez jednokomendową formę zdalną, a każda odpowiedź jest
+  zapisywana.** `zfs-backup.sh --source=HOST:DATASET` wymagał `--local-user=`,
+  bo bez niego `add-client` odmawiał — a flaga miała w praktyce jedną sensowną
+  wartość, skoro każdy host wdrażany tym produktem i tak kończy z kontem
+  `zfsbackup`. Kolejność jest teraz: jawne `--local-user` (z `root` włącznie) →
+  `LOCAL_USER` z `server.conf` → konto delegowane, które host **już ma** →
+  `zfsbackup`. Rozstrzygnięcie następuje wyłącznie przy ZAKŁADANIU relacji; przy
+  wznowieniu konto jest już związane w rekordzie klienta i manifeście, a
+  domyślanie założyłoby konto, którego relacja nigdy nie użyje. Trzy dziury
+  domknięte razem ze zmianą, nie po niej. **(1)** `deploy.sh` rozpoznaje konto
+  hosta skanem katalogów domowych z checkoutem (Faza 8) — to jest to, co czyni
+  gołe `bash deploy.sh` poprawnym na całej flocie. Sztywna nazwa tego pytania
+  nie zadaje: na hoście z kontem o innej nazwie, na którym nigdy nie puszczono
+  `setup-server`, powstałoby DRUGIE konto obok tego, które `deploy.sh`
+  utrzymuje, a nowa relacja chodziłaby z przybysza. `rux_detect_local_user`
+  pyta tą samą regułą, po WŁAŚCICIELU katalogu domowego, nie po jego nazwie.
+  **(2)** Odmowa była też jedyną rzeczą wymuszającą zapisanie decyzji. Bez niej
+  decyzja mieszka per relacja w manifeście — zgodna dziś, rozjeżdżająca się w
+  dniu, w którym ktoś uruchomi `setup-server` z inną nazwą, bo przy aktywacji
+  `server.conf` bije `PEER_SAVED_LOCAL_USER`: blok crona przeniósłby się do
+  konta, które nie umie odczytać klucza, na który zadania dalej wskazują.
+  `rux_record_local_user` dopisuje rozstrzygnięcie do `server.conf`, podmieniając
+  WYŁĄCZNIE linię konta (`DEFAULT_TARGET`/`CRON_CONFIG` przeżywają), niefatalnie
+  — fallback z manifestu dalej odpowiada, więc porażka zapisu jest ostrzeżeniem
+  o przyszłym rozjeździe, a nie powodem porzucenia wdrożenia w locie. Jawne
+  `--local-user` NIE jest zapisywane: to wybór o jednej relacji, a awans na
+  domyślną hosta przepiąłby po cichu każdą następną. **(3)**
+  `setup-server --local-user=root` zwijał roota do wartości PUSTEJ, na
+  uzasadnieniu, że „znaczy to samo co pominięcie flagi, więc można ją zapisać w
+  runbooku bez zmiany zachowania". To było prawdą tylko dopóki pustej wartości
+  nikt nie czytał jako zaproszenia do wyboru — a punkt (1) właśnie tak ją czyta.
+  Administrator, który świadomie napisał `root`, dostawał konto delegowane przy
+  pierwszej relacji. Root jest teraz zapisywany dosłownie (`LOCAL_USER=root`) i
+  przenosi się na cały łańcuch wdrożenia; pusta wartość zostaje wyłącznie
+  delegacji (`--backup-user` nie jest dla roota wołane). Wartość pusta w
+  ISTNIEJĄCYM `server.conf` jest odtąd stanem nieustalonym — znaczyła
+  jednocześnie „wybrano roota" i „nie decydowano" — więc forma zdalna **odmawia**
+  i nazywa obie komendy naprawcze, zamiast zgadywać; odmawia dokładnie tam,
+  gdzie odmawiał kod sprzed RUX, więc nic działającego nie przestaje działać.
+  Zmierzone: `test/rux` **33/33** (28/0 na bazie), `test/zfsbackup` +3 przypadki
+  (`61a/b/c`: root zapisany, żadne konto dla niego nie bootstrapowane, gołe
+  `setup-server` dalej nie zapisuje nic). Na żywo NIEDOWIEDZIONE — brak dostępu
+  do klastra metropolis w czasie tej zmiany; ścieżka rozstrzygania jest pokryta
+  wyłącznie tekstowo, a łańcuch lab3 dowiedziony 2026-08-17/18 szedł tą samą
+  ścieżką z flagą wypisaną ręcznie. Poprzednia zmiana zachowania: **wyrenderowane
   artefakty profilu są ZWALNIANE (maintenance, poza REV-120/121).**
   `load_active_profile()` alokowało trzy pliki `mktemp` i nie usuwał ich żaden
   przebieg — trzy pliki na KAŻDE wywołanie ładujące profil, na stałe. Zmierzone
