@@ -609,6 +609,44 @@ else
         "rc=$rc detected='$DETECTED' out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20d/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
+# 20f. A server.conf that EXISTS but records no account is the one state this
+#      command refuses to resolve. It is where a deliberate
+#      'setup-server --local-user=root' and a setup-server that never decided
+#      both used to land, and they need opposite answers -- root, or a delegated
+#      account. Both guesses are silent and the wrong one is invisible until a
+#      job runs as the wrong identity.
+#
+#      Nothing may be enrolled: a refusal that has already called deploy.sh has
+#      left the host changed while telling the operator it did not.
+: > "$INST_PAIR_LOG"
+mkdir -p "$WORK/20f/etc" "$WORK/20f/homes/backupsvc/zfs-snapshot-all"
+printf '%s\n' '# header' 'DEFAULT_TARGET=tank/backups' 'LOCAL_USER=' > "$WORK/20f/etc/zfs-backup.conf"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/20f/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20f/relationships"
+    SERVER_CONF="$WORK/20f/etc/zfs-backup.conf"
+    # An account IS present, so this also pins that the refusal outranks the
+    # adoption in 20d -- a recorded non-decision is not overridden by a lucky
+    # guess from the filesystem.
+    RUX_ACCOUNT_SCAN_GLOB="$WORK/20f/homes/*/zfs-snapshot-all"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] \
+        && printf '%s' "$out" | grep -q 'exists but records no account' \
+        && printf '%s' "$out" | grep -q 'setup-server --local-user=root' \
+        && [ ! -s "$INST_PAIR_LOG" ] \
+        && [ ! -e "$WORK/20f/clients/pve2.conf" ]; then
+    ok "20f. a server.conf that records no account refuses, names both fixes, and enrols nothing"
+else
+    bad "20f. a server.conf that records no account refuses, names both fixes, and enrols nothing" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
 # 20e. Recording preserves the rest of server.conf. A conf that already carries
 #      DEFAULT_TARGET/CRON_CONFIG but no account must come back with both intact
 #      -- rewriting the file wholesale would silently drop the target and the

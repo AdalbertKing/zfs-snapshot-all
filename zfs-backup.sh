@@ -2732,19 +2732,38 @@ cmd_setup_server() {
         esac
     done
     # Opt-in, by owner decision: an existing collector keeps running its jobs as
-    # root until someone asks otherwise. `--local-user=root` is accepted and
-    # means the same as omitting it, so the flag can be written down in a runbook
-    # without it changing behaviour.
-    [ "$local_user" = root ] && local_user=""
-    if [ -n "$local_user" ]; then
-        case "$local_user" in
+    # root until someone asks otherwise, so OMITTING the flag records nothing.
+    #
+    # `--local-user=root` used to be folded into that same empty value, on the
+    # reasoning that it "means the same as omitting it, so the flag can be
+    # written down in a runbook without it changing behaviour". That held only
+    # while nothing could ever read an empty LOCAL_USER as an invitation to
+    # choose. RUX now does: with no account recorded it adopts the host's
+    # delegated account or creates one. So an administrator who deliberately
+    # typed root got a delegated account at the next enrolment, silently --
+    # the flag stopped being free the moment the empty value stopped being
+    # inert.
+    #
+    # root is therefore written down as itself. It is a DECISION and survives
+    # as one: cron_target_user() already resolves it (${LOCAL_USER:-root}),
+    # add-client resolves it and then expresses it to deploy.sh by OMITTING
+    # --local-user (its existing contract), activation sees a non-empty value
+    # and so does not fall back to the pairing's account, and RUX sees an
+    # answer and neither scans nor defaults.
+    #
+    # Only the DELEGATION is empty for root: there is no delegated account to
+    # bootstrap, validate or create.
+    local delegate="$local_user"
+    [ "$delegate" = root ] && delegate=""
+    if [ -n "$delegate" ]; then
+        case "$delegate" in
             *[!a-z0-9_-]* | "" | [!a-z_]*)
-                die "setup-server: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit)" ;;
+                die "setup-server: --local-user='$delegate' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit)" ;;
         esac
     fi
 
-    if [ -n "$local_user" ]; then
-        bash "$DEPLOY" --backup-user="$local_user" || die "deploy.sh bootstrap failed -- fix that before continuing"
+    if [ -n "$delegate" ]; then
+        bash "$DEPLOY" --backup-user="$delegate" || die "deploy.sh bootstrap failed -- fix that before continuing"
     else
         bash "$DEPLOY" || die "deploy.sh bootstrap failed -- fix that before continuing"
     fi
@@ -6693,6 +6712,23 @@ rux_remote_install() {
         if [ -n "${LOCAL_USER:-}" ]; then
             local_user="$LOCAL_USER"
             log "rux: no --local-user given -- the jobs will run as this collector's configured account '$local_user' (server.conf)"
+        elif [ -e "$SERVER_CONF" ]; then
+            # A conf that exists but names no account is the one state this
+            # command must not resolve. Before root became writable (above) it
+            # was where BOTH "the administrator deliberately chose root" and
+            # "setup-server ran without deciding" ended up, and they need
+            # opposite answers: root, or a delegated account. Guessing either
+            # way is silent, and the wrong guess is invisible until a job runs
+            # as the wrong identity.
+            #
+            # Presence is legitimate evidence HERE, unlike the earlier attempt
+            # at add-client's guard (:3280): there, presence was standing in
+            # for a question the VALUE could answer. Here presence and value
+            # are different facts -- the file says a decision was recorded, the
+            # empty value says it was recorded before root could be written
+            # down. This also refuses exactly where the pre-RUX code refused,
+            # so nothing that works today stops working.
+            die "rux: $SERVER_CONF exists but records no account, which since this version is ambiguous: it is what BOTH a deliberate 'setup-server --local-user=root' and a setup-server that never decided used to write. Say which one this host is -- 'zfs-backup.sh setup-server --local-user=root' to keep the jobs running as root, or 'zfs-backup.sh setup-server --local-user=NAME' to delegate them -- then re-run this command; it resumes. Nothing was enrolled."
         elif local_user=$(rux_detect_local_user); then
             log "rux: no --local-user given and none configured -- adopting the delegated account this host already has, '$local_user' (the owner of its checkout, which is how deploy.sh finds it too)"
             rux_record_local_user "$local_user"

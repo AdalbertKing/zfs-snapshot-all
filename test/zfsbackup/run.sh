@@ -6803,6 +6803,75 @@ else
     bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
+# --- 61. setup-server records root as root -----------------------------------
+#
+# `--local-user=root` was folded into the same empty LOCAL_USER that a
+# setup-server which never decided writes, on the reasoning that root and
+# "unset" behave alike. They stopped behaving alike: with no account recorded,
+# the one-command remote form adopts the host's delegated account or creates
+# one, so an administrator who deliberately typed root would get a delegated
+# account at the next enrolment without being asked.
+#
+# Two halves, asserted together because either alone passes a wrong build: root
+# is WRITTEN (a build that still erases it fails 61a), and no delegated account
+# is bootstrapped for it (a build that writes root by also passing
+# --backup-user=root to deploy.sh -- creating an account named root -- fails
+# 61b).
+SS="$WORK/setupserver"; mkdir -p "$SS/bin" "$SS/etc"
+cat > "$SS/bin/zfs" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$SS/bin/zfs"
+cat > "$SS/deploy.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$SS/deploy.log"
+exit 0
+EOF
+chmod +x "$SS/deploy.sh"
+: > "$SS/deploy.log"
+out=$( PATH="$SS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$SS/etc/zfs-backup.conf'
+    DEPLOY='$SS/deploy.sh'
+    ensure_cron_config() { :; }
+    assert_config_readable_by_target() { :; }
+    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=root
+" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=root' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61a: setup-server --local-user=root records root, instead of erasing it to an empty value"
+else
+    bad "61a: setup-server --local-user=root records root, instead of erasing it to an empty value" \
+        "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
+fi
+if ! grep -q -- '--backup-user' "$SS/deploy.log" 2>/dev/null; then
+    ok "61b: root is a decision, not a delegation -- no account is bootstrapped for it"
+else
+    bad "61b: root is a decision, not a delegation -- no account is bootstrapped for it" \
+        "deploy args: $(cat "$SS/deploy.log" 2>/dev/null)"
+fi
+
+# 61c. Omitting the flag still records nothing. The owner's opt-in rule is that
+#      an existing collector keeps running as root until someone asks otherwise;
+#      writing root here would turn every bare setup-server into a decision the
+#      operator did not make, and would pin hosts to root against the migration
+#      the fleet has already been through.
+rm -f "$SS/etc/zfs-backup.conf"; : > "$SS/deploy.log"
+out=$( PATH="$SS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    SERVER_CONF='$SS/etc/zfs-backup.conf'
+    DEPLOY='$SS/deploy.sh'
+    ensure_cron_config() { :; }
+    assert_config_readable_by_target() { :; }
+    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf'
+" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61c: bare setup-server still records no account -- root is written only when it is asked for"
+else
+    bad "61c: bare setup-server still records no account -- root is written only when it is asked for" \
+        "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
