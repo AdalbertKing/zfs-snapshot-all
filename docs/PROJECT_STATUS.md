@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cca2645b22c40438 -->
+<!-- status-covers-digest: 9b00e5fe00c941a6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`--source=HOST:` (deferred scope) zbudowany; czasownik `deploy` zretirowany (2026-08-19).**
+  Sprzątanie narośli komend. `deploy NAME --host=` i `--source=HOST:DATASET` robiły
+  ten sam lifecycle (`deploy_continue_lifecycle`, wspólny), ale `deploy` był formą
+  **deferred-scope** (źródło proponuje draft, operator wybiera), a `--source=`
+  wymagał jawnego datasetu. Teraz `--source=HOST:` (pusty dataset) robi deferred:
+  `rux_split_source` dopuszcza pusty dataset, `rux_remote_install` pomija
+  `--datasets` (add-client defer-uje do draftu), dodane `--manual-join`. `deploy`
+  (funkcja `cmd_deploy` + dispatch + usage) **usunięty** — `deploy.sh` (skrypt
+  bootstrapu pakietów: pigz/exim/mbuffer/apt/konta) NIETKNIĘTY, to inny byt.
+  `test/rux` przepisany: sekcja 20 na model konta z #48 (dług, który #48 zostawił —
+  rux nie jest required-check), + testy deferred (11b–e). **Zredukowano warstwę
+  jednopoleceniową z dwóch form do jednej.**
 
 - **Konto to jawny wybór per-relacja; bez `--local-user` = root (2026-08-19).**
   Owner decision + refaktor. Usunięta cała magia rozwiązywania konta: adopcja

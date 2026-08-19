@@ -6249,9 +6249,11 @@ cmd_remove_client() {
 # Shared tail of the one-command two-host path: given a client record that
 # already exists (any STATE), drive it to ACTIVE using the existing,
 # individually reviewed lifecycle -- seed -> activate -- and nothing else.
-# Extracted out of cmd_deploy so the RUX unified entry point (rux_remote_
-# install) can reach the identical continuation after its OWN enrolment step,
-# instead of a second copy of this state dispatch. Precondition: the caller
+# A standalone continuation so the RUX unified entry point (rux_remote_install)
+# reaches an identical seed->activate after its OWN enrolment step, instead of a
+# second copy of this state dispatch. (It was extracted from the former `deploy`
+# verb, retired 2026-08-19 in favour of --source=HOST: for the deferred form.)
+# Precondition: the caller
 # has already ensured a client record for NAME exists (enrolled it just now,
 # or is resuming one found on disk) -- this function only drives forward from
 # whatever STATE is currently recorded.
@@ -6293,8 +6295,8 @@ deploy_continue_lifecycle() {
 #   --install / (absent)         execute the reviewed plan / preview only
 #
 # This is a UX reduction, not a new engine: it composes the EXISTING add-
-# client -> seed -> activate lifecycle (deploy_continue_lifecycle, shared with
-# cmd_deploy above) and the existing --join scope/grant confirmation. It adds
+# client -> seed -> activate lifecycle (deploy_continue_lifecycle) and the
+# existing --join scope/grant confirmation. It adds
 # no second grant mechanism and no second state machine -- the non-goals in
 # the design doc are the boundary of this feature.
 
