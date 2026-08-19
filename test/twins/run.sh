@@ -205,6 +205,28 @@ for fn in $TWINS; do
     fi
 done
 
+# ---- D. both engines bound their ssh against a dead peer -------------------
+# Not a twinned FUNCTION, but a property the twins must share for the same
+# reason they exist: push and pull each build SSH_OPTS and shell out to a peer
+# that can be down. Without a ConnectTimeout a bare connect blocks ~130s on the
+# kernel SYN timeout (measured: ssh to a black-holed 10.x returns 255 after
+# 129.6s); ServerAlive* covers one that dies mid-transfer. Both are present today
+# (snapsend.sh:1830, snapget.sh:1813), but the suite that would exercise them
+# needs root+zfs, so nothing in CI keeps a refactor from dropping one on ONE side
+# only -- exactly the asymmetry this whole suite exists to catch. Counted, so a
+# drop trips it.
+for _eng in "$SNAPSEND" "$SNAPGET"; do
+    _n=$(basename "$_eng")
+    _ct=$(grep -c -- '-o ConnectTimeout' "$_eng")
+    _sa=$(grep -c -- '-o ServerAliveInterval' "$_eng")
+    if [ "$_ct" -ge 1 ] && [ "$_sa" -ge 1 ]; then
+        ok "D $_n bounds its ssh against a dead peer (ConnectTimeout + ServerAlive)"
+    else
+        bad "D $_n bounds its ssh against a dead peer (ConnectTimeout + ServerAlive)" \
+            "ConnectTimeout=$_ct ServerAlive=$_sa in $_n -- a dead peer would hang the transfer ~130s"
+    fi
+done
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
