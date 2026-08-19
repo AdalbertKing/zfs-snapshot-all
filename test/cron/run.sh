@@ -642,11 +642,10 @@ check "S4 a multi-lock that cannot complete: refused" "1" "$rc"
 h1=$([ -n "${CRON_LOCK_FD[aaa-user]:-}" ] && echo 1 || echo 0)
 check "S5 ...and the one it DID get is released, not leaked" "0" "$h1"
 
-# ---- T. cron_replace_all: the whole-crontab primitive for F3 ---------------
+# ---- T. cron_replace_all: the whole-crontab primitive -----------------------
 #
-# migrate-to-account's intermediate states are not one named block -- "root's
-# whole crontab minus its collector block" and "the account's whole crontab
-# restored to what it was" -- so it needs a primitive that replaces
+# Some intermediate states are not one named block -- e.g. "a whole crontab
+# minus one collector block" -- so the tool needs a primitive that replaces
 # everything, still through the shared lock and the shared read-back, and
 # still refusing a target whose markers are malformed (F4): installing an
 # already-broken layout would make the FIRST ordinary block write after it

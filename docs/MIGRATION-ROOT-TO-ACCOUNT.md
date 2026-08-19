@@ -1,17 +1,25 @@
 # Migracja zarządzanego bloku cron z roota na konto dedykowane
 
+> **WYCOFANE (2026-08-19).** Czasownik `zfs-backup.sh migrate-to-account`
+> został usunięty. Flota została zmigrowana root -> konto 2026-08-01, a nowe
+> wdrożenia wybierają konto wykonawcze już przy `add-client --local-user=`, więc
+> jedna-transakcja-host-wide przestała pasować do modelu per-relacja. Relację
+> root-owned, która i tak wymaga przeniesienia, obsługuje się per relacja:
+> `remove-client NAME`, potem ponowne dodanie pod kontem. Ten dokument zostaje
+> jako **dowód inżynierski** z 2026-08-01; nie jest już instrukcją obsługi.
+
 Stan: **dowód inżynierski, nie instrukcja obsługi** (REV-20260801-020 F1).
 Spisany 2026-08-01 na podstawie suchego przebiegu na metropolis pve1;
 rozdziały 2 i 3 zapisują to, co preflight **zmierzył** na żywym hoście.
 
-> **Operacyjną odpowiedzią jest jedna komenda, nie ten dokument.**
+> **Operacyjną odpowiedzią BYŁA jedna komenda (już usunięta), nie ten dokument.**
 >
 > ```
 > zfs-backup.sh migrate-to-account <konto> --preflight    # tylko odczyt
 > zfs-backup.sh migrate-to-account <konto>                # jedna transakcja
 > ```
 >
-> Robi ona wewnętrznie wszystko, co niżej rozpisane jest ręcznie: znajduje
+> Robiła ona wewnętrznie wszystko, co niżej rozpisane jest ręcznie: znajdowała
 > właściciela i żywy blok, wykrywa config z linii `# Source:`, sprawdza checkout
 > konta, delegację ZFS na **wszystkich** datasetach z configu, grant quiesce
 > (o ile blok używa `-q`), pokazuje jeden łączny podgląd i wykonuje jedno

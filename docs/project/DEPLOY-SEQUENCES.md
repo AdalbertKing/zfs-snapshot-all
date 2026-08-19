@@ -182,12 +182,14 @@ uses `${LOCAL_USER:-root}` as the cron target; and a delegated account gets its
 own checkout because `/root/scripts/...` is not readable through `/root` on a
 normal Proxmox host.
 
-### Migration remains an expert/transition path
+### Migration is no longer a one-command verb
 
-An existing root-owned installation does not need to be rebuilt just to adopt a
-dedicated account. The existing `migrate-to-account ACCOUNT` verb remains the
-explicit migration path. That is separate from the clean-install happy path
-above.
+The fleet was migrated root -> account on 2026-08-01, and new installs pick the
+execution account at `add-client` time (`--local-user`), so the one-shot
+`migrate-to-account ACCOUNT` transaction verb was retired. An existing
+root-owned relationship that still needs to move to an account is handled per
+relationship: `remove-client NAME`, then re-add it under the account. That is
+separate from the clean-install happy path above.
 
 ### UX invariant to preserve while local orchestration is implemented
 
