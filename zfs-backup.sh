@@ -261,6 +261,13 @@ Inspection / teardown:
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
 
+Naming: a verb ending in '-client' acts on the RELATIONSHIP RECORD -- create
+it, change its state, install its cron, delete it. A bare verb acts on the LINK
+or the DATA: a transfer, an endpoint, a probe. Two deliberate exceptions:
+'status' reads records but is host-wide when given no name, and 'activate' is
+the composite that drives a record to active -- it keeps the short name because
+it is the normal way to finish a relationship, and it is what you re-run.
+
 pause-client/resume-client: LOGICAL pause of one relationship (REV-045).
 Managed jobs and labeled manual runs skip before any snapshot/SSH work;
 other clients are untouched, cron/config/grants/keys are never edited.
