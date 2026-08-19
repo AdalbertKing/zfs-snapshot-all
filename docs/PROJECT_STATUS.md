@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1d129766bd4ebe8e -->
+<!-- status-covers-digest: cca2645b22c40438 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Konto to jawny wybór per-relacja; bez `--local-user` = root (2026-08-19).**
+  Owner decision + refaktor. Usunięta cała magia rozwiązywania konta: adopcja
+  (`rux_detect_local_user`), zapis host-wide do `server.conf` (`rux_record_local_user`,
+  `RUX_DEFAULT_LOCAL_USER=zfsbackup`) i odmowa „puste conf = dwuznaczne". Nowa
+  reguła: `--local-user=NAME` deleguje na DOWOLNE konto (root/zfsbackup/bkp,
+  tworzone jeśli brak), **pominięcie = root**, koniec. Decyzja jedzie Z RELACJĄ
+  (manifest `PEER_SAVED_LOCAL_USER` + nowe pole `LOCAL_USER` w rekordzie klienta),
+  więc activate/remove ją odczytują, nie zgadują. `server.conf` traci pole konta
+  (zostają `DEFAULT_TARGET`+`CRON_CONFIG`, wyprowadzalne); `setup-server --local-user`
+  tylko tworzy konto (bootstrap), nic nie zapisuje. `zfs-backup.sh` −123 linie.
+  Suita `zfsbackup` 446/446 (żywe pve0), Batch B + sekcja 61 przepisane na nową
+  semantykę.
 
 - **`remove-client` rozbiera relacje na hoście bez server.conf (2026-08-19).**
   Znalezione na żywo przy teardownie lab3 pve9 (sync/passive, brak server.conf):
