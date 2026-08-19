@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 71ee519a63fce39d -->
+<!-- status-covers-digest: 2e76b7c1db2aa6dd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Pola harmonogramu walidowane składniowo (2026-08-20).**
+  `send_schedule`, `prune_schedule`, `monitor_schedule` i `schedule`
+  w `[prune-bookmarks:]` szły dotąd do crontaba niesprawdzone. `send_schedule = 0 2 *`
+  dawało rc=0 i generowało `0 2 * echo "$(date -Is) ZFS-JOB BEGIN ..."` — cron
+  czyta pierwsze tokeny komendy jako pola miesiąca i dnia tygodnia. SZEŚĆ pól jest
+  gorsze niż trzy: komenda zaczyna się wtedy od gołej `*`, którą shell rozwija po
+  plikach w katalogu roboczym joba i uruchamia to, co dostanie. Jedyną bramką był
+  `crontab(1)` przy `--install` — najpóźniejszy możliwy moment, po drugiej stronie
+  granicy hosta, i odrzuca CAŁY crontab, więc jedna zła linia kładzie dobre.
+  Teraz: dokładnie 5 pól, każde w zakresie. Skróty `@daily`/`@reboot` celowo
+  NIEPRZYJMOWANE — `cron2conf.sh` i `job_identity` czytają wygenerowaną linię
+  zakładając pięciopolowy prefiks. Kontrola per pole jest permisywna wobec
+  STRUKTURY (listy, zakresy, kroki, trzyliterowe nazwy miesięcy i dni przechodzą)
+  i ścisła tylko wobec alfabetu i zakresów liczbowych — walidator, który wymyśliłby
+  ograniczenie nieistniejące w cronie, odrzucałby działający config, co jest gorszą
+  awarią niż dziura, którą zamyka. Zasięg: 6 produkcyjnych configów v4 + 4 przykłady
+  bez zmian. Fixture'y: `test/negative/cron-field-count`, `test/negative/cron-out-of-range`.
 - **Pola yes/no na `[prune:]`/`[prune-bookmarks:]` czytane ściśle (2026-08-20).**
   `recursive`, `clear_cut`, `gfs` i `prune` były porównywane z literałem `"yes"`
   po trim+lowercase, więc KAŻDA inna pisownia — łącznie z literówką i wartością

@@ -45,6 +45,15 @@ set -o pipefail
 #     notify wording fields and 'flags' are per-tier and stop at the template --
 #     writing them here is refused rather than silently ignored (2026-08-20).
 #
+#   Every schedule field (send_schedule, prune_schedule, monitor_schedule and
+#   [prune-bookmarks:]'s 'schedule') must be exactly 5 crontab fields, with each
+#   field in range. Nothing checked this until 2026-08-20: "0 2 *" generated
+#   cleanly and shifted the command into the time fields, and the only thing
+#   that ever objected was crontab(1) at --install time -- which rejects the
+#   whole crontab, so one bad line takes the good ones with it. The @daily-style
+#   shorthands are not accepted: cron2conf.sh and job_identity both read the
+#   generated line assuming a five-field prefix.
+#
 #   Unknown field names are REJECTED, in every section type. Until 2026-07-29
 #   they were stored and never looked at, so a typo -- or a field that never
 #   existed, as deploy.sh's --draft-config emitted for months -- produced a
@@ -1127,6 +1136,79 @@ notify_text() {
     fi
 }
 
+# lint_cron_schedule SPEC CTX FIELD -- a crontab time specification, checked at
+# generate time.
+#
+# Nothing checked these until 2026-08-20. send_schedule = "0 2 *" generated with
+# rc=0 and emitted
+#
+#   0 2 * echo "$(date -Is) ZFS-JOB BEGIN ..." >>/root/scripts/cron.log; ...
+#
+# where cron reads the command's own first tokens as the month and day-of-week
+# fields. SIX fields is worse than three: the command then starts with a bare
+# '*', which the shell glob-expands against the job's working directory before
+# running whatever comes back. The only gate was crontab(1) itself at --install
+# time -- the latest possible moment, on the far side of the host boundary, and
+# it rejects the WHOLE crontab rather than the line at fault.
+#
+# Exactly five fields. The @daily/@reboot shorthands are deliberately NOT
+# accepted even though cron takes them: cron2conf.sh parses the generated line's
+# shape back into config and job_identity keys off it, and both assume a
+# five-field prefix. "0 0 * * *" costs nothing and keeps one grammar.
+#
+# The per-field check is permissive about STRUCTURE -- lists, ranges, steps and
+# the three-letter month/day names all pass -- and strict only about the
+# alphabet and the numeric ranges. A validator that invented a restriction cron
+# does not have would reject a working config, which is a worse failure than the
+# hole it closes.
+_cron_num_ok() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+# _cron_field_ok FIELD LO HI NAMES_ALTERNATION
+_cron_field_ok() {
+    local f="$1" lo="$2" hi="$3" names="$4" item base step a b x
+    [ -n "$f" ] || return 1
+    local -a items=()
+    # read -ra rather than word-splitting an unquoted expansion: a bare '*' is a
+    # legal cron field and would be pathname-expanded against the working
+    # directory, which is how a validator ends up passing or failing on what
+    # happens to be sitting next to the script.
+    IFS=',' read -ra items <<< "$f"
+    for item in ${items[@]+"${items[@]}"}; do
+        [ -n "$item" ] || return 1
+        base="${item%%/*}"
+        if [ "$base" != "$item" ]; then
+            step="${item#*/}"
+            _cron_num_ok "$step" 1 "$hi" || return 1
+        fi
+        [ "$base" = '*' ] && continue
+        if [ "${base#*-}" != "$base" ]; then
+            a="${base%%-*}"; b="${base#*-}"
+        else
+            a="$base"; b="$base"
+        fi
+        for x in "$a" "$b"; do
+            if [ -n "$names" ] && printf '%s' "$x" | grep -qiE "^($names)$"; then continue; fi
+            _cron_num_ok "$x" "$lo" "$hi" || return 1
+        done
+    done
+    return 0
+}
+lint_cron_schedule() {
+    local spec="$1" ctx="$2" field="$3"
+    local -a f=()
+    read -ra f <<< "$spec"
+    [ "${#f[@]}" -eq 5 ] || die "$ctx: $field = '$spec' -- a crontab time specification is exactly 5 fields (minute hour day-of-month month day-of-week), this has ${#f[@]}. Too few shifts the command into the time fields; too many leaves the command starting with a leftover field. cron would only reject it at install time, and then it rejects the whole crontab."
+    _cron_field_ok "${f[0]}" 0 59 ""                                    || die "$ctx: $field = '$spec' -- minute field '${f[0]}' is not valid (0-59, with * , - and / )"
+    _cron_field_ok "${f[1]}" 0 23 ""                                    || die "$ctx: $field = '$spec' -- hour field '${f[1]}' is not valid (0-23, with * , - and / )"
+    _cron_field_ok "${f[2]}" 1 31 ""                                    || die "$ctx: $field = '$spec' -- day-of-month field '${f[2]}' is not valid (1-31, with * , - and / )"
+    _cron_field_ok "${f[3]}" 1 12 "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec" \
+                                                                        || die "$ctx: $field = '$spec' -- month field '${f[3]}' is not valid (1-12 or jan..dec, with * , - and / )"
+    _cron_field_ok "${f[4]}" 0 7  "sun|mon|tue|wed|thu|fri|sat" \
+                                                                        || die "$ctx: $field = '$spec' -- day-of-week field '${f[4]}' is not valid (0-7 where both 0 and 7 are Sunday, or sun..sat, with * , - and / )"
+}
+
 # duration_seconds STR CTX -- converts "<N>m/h/d" (same shorthand check-snap-age.sh
 # itself parses) to seconds, or dies with CTX prefixed. Validated here too so a
 # malformed threshold fails at generate time, not silently at 3am in cron.log.
@@ -1201,6 +1283,7 @@ resolve_monitor() {
     crit_sec="$(duration_seconds "$MONITOR_CRIT" "$ctx: monitor_crit")"
     [ "$crit_sec" -ge "$warn_sec" ] || die "$ctx: monitor_crit ($MONITOR_CRIT) must be >= monitor_warn ($MONITOR_WARN)"
     MONITOR_SCHEDULE="$(resolve_field monitor_schedule "$ds" "$tmpl" defaults)" || MONITOR_SCHEDULE="$MONITOR_SCHEDULE_DEFAULT"
+    lint_cron_schedule "$MONITOR_SCHEDULE" "$ctx" monitor_schedule
     return 0
 }
 ###############################################################################
@@ -1369,6 +1452,7 @@ build_dataset() {
         local tier_created_prefix="" tier_creates=0
         local send_schedule
         if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
+            lint_cron_schedule "$send_schedule" "[dataset:$ds_path] tier=$tier" send_schedule
             local dst src prefix flags label raw_notify word notify direction remote_spec
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
             src="$(resolve_field src "$ds" "$tmpl" defaults)" || src=""
@@ -1451,6 +1535,7 @@ build_dataset() {
         # prune_schedule is the deliberate "yes, prune this dataset" signal.
         local prune_schedule
         if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
+            lint_cron_schedule "$prune_schedule" "[dataset:$ds_path] tier=$tier" prune_schedule
             local pattern retain_flag plabel praw pnotify
             pattern="$(require_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve (missing, or set but blank)"
             # A tier that creates AND prunes must be able to prune what it
@@ -1598,6 +1683,7 @@ build_prune_section() {
                 die "[prune:$scope] tier=$tier: this tier feeds the gfs ladder but its 'pattern' ('$pattern') does not start with 'gfs_pattern' ('$gfs_pattern') -- delsnaps.sh matches by prefix, so the ladder never sees this tier's snapshots. Its retention count would be spent on whatever gfs_pattern does match, and '$pattern' snapshots would be pruned by nothing while their monitor stays green. Make 'gfs_pattern' a common prefix of every tier in use_template (e.g. 'automated_' for automated_hourly/automated_daily), or omit it entirely for a prefixless ladder."
             fi
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            lint_cron_schedule "$prune_schedule" "[prune:$scope] tier=$tier" prune_schedule
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
             # gfs mode only takes count-based single-letter flags -- -G itself
@@ -1615,6 +1701,7 @@ build_prune_section() {
             [ -z "$gfs_schedule" ] && gfs_schedule="$prune_schedule"
         elif [ "$emit_prune" -eq 1 ]; then
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            lint_cron_schedule "$prune_schedule" "[prune:$scope] tier=$tier" prune_schedule
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
@@ -1676,6 +1763,7 @@ build_bookmark_prune_section() {
     ini_has "$sec" schedule || die "[prune-bookmarks:$scope] has no 'schedule'"
     local schedule
     schedule="$(ini_get "$sec" schedule)"
+    lint_cron_schedule "$schedule" "[prune-bookmarks:$scope]" schedule
 
     ini_has "$sec" age || die "[prune-bookmarks:$scope] has no 'age' (raw delsnaps.sh age flags, e.g. \"-d30\")"
     local age
