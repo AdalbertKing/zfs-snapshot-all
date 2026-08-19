@@ -6840,20 +6840,16 @@ else
     bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
-# --- 61. setup-server records root as root -----------------------------------
+# --- 61. setup-server records no account -- the account is per-relationship --
 #
-# `--local-user=root` was folded into the same empty LOCAL_USER that a
-# setup-server which never decided writes, on the reasoning that root and
-# "unset" behave alike. They stopped behaving alike: with no account recorded,
-# the one-command remote form adopts the host's delegated account or creates
-# one, so an administrator who deliberately typed root would get a delegated
-# account at the next enrolment without being asked.
-#
-# Two halves, asserted together because either alone passes a wrong build: root
-# is WRITTEN (a build that still erases it fails 61a), and no delegated account
-# is bootstrapped for it (a build that writes root by also passing
-# --backup-user=root to deploy.sh -- creating an account named root -- fails
-# 61b).
+# Owner decision (2026-08-19): the account a relationship's jobs run as is stated
+# on the command at add-client/deploy (--local-user, else root) and travels with
+# the relationship. setup-server therefore writes only DEFAULT_TARGET and
+# CRON_CONFIG -- NEVER LOCAL_USER, whatever --local-user it was handed.
+# --local-user here is only a convenience that pre-CREATES a delegated account
+# while bootstrapping the host; it records nothing. This replaced the earlier
+# "setup-server records the host's one account" contract, whose recording is
+# exactly what the account refactor removed.
 SS="$WORK/setupserver"; mkdir -p "$SS/bin" "$SS/etc"
 cat > "$SS/bin/zfs" <<'EOF'
 #!/bin/bash
@@ -6875,10 +6871,10 @@ out=$( PATH="$SS/bin:$PATH" bash -c "
     assert_config_readable_by_target() { :; }
     cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=root
 " 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=root' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61a: setup-server --local-user=root records root, instead of erasing it to an empty value"
+if [ "$rc" -eq 0 ] && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact"
 else
-    bad "61a: setup-server --local-user=root records root, instead of erasing it to an empty value" \
+    bad "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact" \
         "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 if ! grep -q -- '--backup-user' "$SS/deploy.log" 2>/dev/null; then
@@ -6888,11 +6884,9 @@ else
         "deploy args: $(cat "$SS/deploy.log" 2>/dev/null)"
 fi
 
-# 61c. Omitting the flag still records nothing. The owner's opt-in rule is that
-#      an existing collector keeps running as root until someone asks otherwise;
-#      writing root here would turn every bare setup-server into a decision the
-#      operator did not make, and would pin hosts to root against the migration
-#      the fleet has already been through.
+# 61c. --local-user=NAME pre-creates a delegated account (deploy --backup-user)
+#      as a bootstrap convenience, but STILL records no host-wide account -- who
+#      runs a relationship's jobs is that relationship's choice, not a file's.
 rm -f "$SS/etc/zfs-backup.conf"; : > "$SS/deploy.log"
 out=$( PATH="$SS/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
@@ -6900,13 +6894,14 @@ out=$( PATH="$SS/bin:$PATH" bash -c "
     DEPLOY='$SS/deploy.sh'
     ensure_cron_config() { :; }
     assert_config_readable_by_target() { :; }
-    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf'
+    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=bkp
 " 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61c: bare setup-server still records no account -- root is written only when it is asked for"
+if [ "$rc" -eq 0 ] && grep -q -- '--backup-user=bkp' "$SS/deploy.log" 2>/dev/null \
+   && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account"
 else
-    bad "61c: bare setup-server still records no account -- root is written only when it is asked for" \
-        "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
+    bad "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account" \
+        "rc=$rc deploy=$(cat "$SS/deploy.log" 2>/dev/null) conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
 echo "--------------------------------------------"
