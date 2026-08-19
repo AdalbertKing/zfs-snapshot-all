@@ -1,0 +1,1 @@
+has 'flags', which gen-cron.sh does not read in a [prune:] section

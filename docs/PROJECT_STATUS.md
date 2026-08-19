@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4b5444687e6cb69b -->
+<!-- status-covers-digest: 80aa8a924bf94056 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,33 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Allow-list pól `gen-cron.sh` zgodzona z rzeczywistymi miejscami odczytu (2026-08-20).**
+  Nagłówek sekcji allow-listy od początku deklarował „the lists mirror the
+  resolve_field/require_field/ini_has call sites" — i to było nieprawdą w OBIE
+  strony. **Przyjmowane, nieczytane:** cały `POLICY_FIELDS` szedł hurtem do każdego
+  rodzaju sekcji, a realne lookupy są węższe. `monitor_warn`/`monitor_crit`
+  w `[defaults]` dawało rc=0 i ZERO linii `check-snap-age` (`resolve_monitor`
+  czyta sekcja→template i kończy) — operator pisał „pilnuj wszystkiego" na górze
+  pliku i nie dostawał żadnego monitoringu, czego z definicji nic nie zgłosi, bo
+  brakującym elementem JEST zgłaszanie. `flags` w `[defaults]` gubione tak samo,
+  więc `flags = -w` na górze pliku po cichu nie zmieniało tego, co leci po drucie.
+  Gwardia „nieznane pole" tego nie łapie — nazwa jest poprawna, nieczytana jest
+  POZYCJA. **Czytane, nieprzyjmowane:** `build_prune_section` rozwiązuje
+  `gfs_pattern` z warstwą `defaults`, ale allow-list odrzucała tam to pole, więc
+  ta warstwa była kodem nieosiągalnym; teraz działa (host z jedną drabiną na kilka
+  sekcji `[prune:]` pisze prefiks raz). Listy rozbite per rodzaj sekcji; usunięte
+  pozycje: `[defaults]` — keep/retain/tier_label/notify*/monitor_warn/monitor_crit/
+  flags; `[dataset:]` — notify_word/notify_raw_prune (czytane tylko z template);
+  `[prune:]` — send_schedule/prefix/dst/src/autotune/quiesce/flags/notify_raw
+  (sekcja prune nigdy nie wysyła; połączenie zdalnego scope konfiguruje `ssh_flags`).
+  Listy zostają RĘCZNE i jest napisane dlaczego: scraper wymiaru „warstwa" musiałby
+  wiedzieć, w której funkcji-builderze siedzi call site, a pomyłka dawałaby FAŁSZYWE
+  odrzucenie działającego configu. Zasięg zmierzony: wszystkie 6 produkcyjnych
+  configów v4, wszystkie 4 przykłady z `docs/examples/`, cały golden set i pola
+  emitowane przez `zfs-backup.sh` — bez zmian.
+  Fixture'y: `test/negative/defaults-monitor`, `test/negative/prune-transfer-field`,
+  golden `test/fixtures/gfs-pattern-defaults` (dowodzi, że dziedziczona wartość
+  faktycznie dociera do linii `-G`, nie tylko że config się parsuje).
 - **`gen-cron.sh` odmawia drabiny GFS, która nie widzi zasilających ją tierów (2026-08-20).**
   Druga dziura z tej samej rodziny co niżej, w `[prune:]` z `gfs = yes`. Każdy
   tier z `use_template` oddaje drabinie literę kubełka i licznik (`-H24 -D7 -W4`),

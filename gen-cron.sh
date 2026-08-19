@@ -38,6 +38,12 @@ set -o pipefail
 #                       this way, since deploy.sh gives such an account its own
 #                       notify-fail/notify-warn but deliberately not the digest.
 #       cron_log      = /home/zfsbackup/cron.log           # default: /root/scripts/cron.log
+#     Beyond those, [defaults] carries only the policy fields whose lookup
+#     actually reaches it: send_schedule, prune_schedule, prefix, pattern, dst,
+#     src, autotune, quiesce, monitor_schedule and gfs_pattern. Retention
+#     (keep/retain), the staleness thresholds (monitor_warn/monitor_crit), the
+#     notify wording fields and 'flags' are per-tier and stop at the template --
+#     writing them here is refused rather than silently ignored (2026-08-20).
 #
 #   Unknown field names are REJECTED, in every section type. Until 2026-07-29
 #   they were stored and never looked at, so a typo -- or a field that never
@@ -130,7 +136,10 @@ set -o pipefail
 #                                          # Section-scope only: never inherited
 #                                          # from a template or [defaults].
 #       ...any template field can be overridden here (dst, send_schedule,
-#          prune_schedule, keep, retain, notify_raw, notify_raw_prune)
+#          prune_schedule, keep, retain, notify_raw) EXCEPT the two the
+#          synthesized text takes from the tier itself: notify_word and
+#          notify_raw_prune are read from the [template:] only, so setting them
+#          on a dataset is refused rather than quietly doing nothing.
 #     A dataset section runs scoped to ITS OWN path, or -- if 'recursive' says
 #     so -- to its whole subtree:
 #       create(+send)  if its tiers resolve send_schedule
@@ -213,9 +222,17 @@ set -o pipefail
 #                                          # satisfies it. See delsnaps.sh's own
 #                                          # header ("GFS LADDER") for the full
 #                                          # mechanism.
+#                                          # Inheritable from [defaults], so a
+#                                          # host running one ladder prefix
+#                                          # across several [prune:] sections
+#                                          # writes it once.
 #       notify       = <short label>
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
+#     A [prune:] never sends, so the transfer-side fields are refused here
+#     (2026-08-20): send_schedule, prefix, dst, src, autotune, quiesce, flags
+#     and notify_raw belong to a [dataset:]/[template:], and 'ssh_flags' -- not
+#     'flags' -- is how a remote scope's connection is configured.
 #     monitor_warn/monitor_crit are REJECTED on a remote (host:dataset) scope --
 #     check-snap-age.sh is local-only by design (see its own header), so a monitor
 #     riding a remote scope would run `zfs list` locally against a string like
@@ -828,20 +845,56 @@ ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
 # for it looks. Verified against every live v4 config and every fixture before
 # it was turned on -- see PROJECT notes; the v3 files (prune_root) are not live
 # and are not expected to pass.
+#
+# That mirroring was stated here from the start but was not actually true, in
+# BOTH directions, until 2026-08-20:
+#
+#   granted but never read -- the whole of POLICY_FIELDS was handed to every
+#   kind wholesale, while the real lookups are narrower. `monitor_warn` and
+#   `monitor_crit` in [defaults] generated rc=0 and produced ZERO monitor
+#   lines: resolve_monitor reads ds->tmpl and stops. `flags` in [defaults] was
+#   dropped the same way, so `flags = -w` at the top of a file silently changed
+#   nothing about what went over the wire. This is the exact failure the
+#   paragraph above describes -- config that generates cleanly and does not do
+#   what it says -- except reached with a KNOWN field in a position nobody
+#   reads, which the unknown-field guard by definition cannot catch.
+#
+#   read but never granted -- build_prune_section resolves `gfs_pattern` with
+#   `defaults` as its last layer, but the allow-list refused the field there,
+#   so that layer was unreachable code.
+#
+# The lists below are therefore split per kind rather than sharing one blanket
+# set. They remain HAND-maintained: scraping the layer dimension out of the
+# call sites means knowing which builder function each call sits in, and a
+# scraper that guessed wrong would produce a FALSE rejection of a working
+# config -- the one failure mode this file cannot trade for tidiness. Adding a
+# lookup at a new layer means adding the field to that kind's list here.
 declare -A FIELD_OK=()
 _allow_fields() {
     local kind="$1"; shift
     local f; for f in "$@"; do FIELD_OK["${kind}${SEP}${f}"]=1; done
 }
-# Everything a [template:] can carry, and therefore everything a [dataset:] or
-# [prune:] may override on itself.
+# Everything a [template:] can carry. A template is a pure policy carrier and
+# every one of these is read from the template layer, so this list and the
+# template allow-list are the same set by construction.
 POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                tier_label notify notify_raw notify_raw_prune notify_word
                monitor_warn monitor_crit monitor_schedule
                dst src autotune quiesce flags"
+# The subset whose lookup actually reaches [defaults] as its last layer.
+# Deliberately absent: keep/retain and monitor_warn/monitor_crit (per-tier by
+# nature -- resolve_keep_retain and resolve_monitor stop at the template), the
+# notify_* wording fields and tier_label (per-tier display text), and flags
+# (its tiered lookup stops at the template too -- naming that helper in prose
+# here would be read as a field by the allow-list test in test/run.sh, which
+# scrapes "<helper> <word>" out of this file and does not know comments from
+# code). gfs_pattern is here and NOT in POLICY_FIELDS: only [prune:] reads it,
+# but it does read it from defaults.
+DEFAULTS_POLICY_FIELDS="send_schedule prune_schedule prefix pattern
+                        dst src autotune quiesce monitor_schedule gfs_pattern"
 # shellcheck disable=SC2086
 _allow_fields defaults  host_label repo_dir notify_script warn_script \
-                        digest_script cron_log $POLICY_FIELDS
+                        digest_script cron_log $DEFAULTS_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
 # pair_label names the RELATIONSHIP (zfs-backup.sh client) a section belongs
@@ -853,11 +906,27 @@ _allow_fields template  $POLICY_FIELDS
 # absence stop. Deliberately NOT in POLICY_FIELDS: no template/defaults
 # inheritance -- a label that silently spread to unrelated sections would
 # make one pause skip a stranger's backup.
+# A [dataset:] reads all of POLICY_FIELDS off itself except the two wording
+# fields build_dataset deliberately takes from the TEMPLATE only: notify_word
+# (the noun in the synthesized text, a property of the tier) and
+# notify_raw_prune (the prune line's literal text, likewise).
+DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
+                       tier_label notify notify_raw
+                       monitor_warn monitor_crit monitor_schedule
+                       dst src autotune quiesce flags"
+# A [prune:] section does not send. send_schedule, prefix, dst, src, autotune,
+# quiesce and flags are transfer-side fields build_prune_section never looks at,
+# so accepting them here only ever meant a line that does nothing. notify_raw is
+# the SEND line's literal text; the prune line's is notify_raw_prune, which is
+# read. notify_word is template-only here as well.
+PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
+                     tier_label notify notify_raw_prune
+                     monitor_warn monitor_crit monitor_schedule"
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label recursive $POLICY_FIELDS
+_allow_fields dataset   use_template pair_label recursive $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
-                        gfs gfs_pattern pair_label $POLICY_FIELDS
+                        gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify
 _allow_fields excluded  keep
 
