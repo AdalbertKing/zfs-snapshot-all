@@ -66,6 +66,22 @@ OUT="$(run_impact "$FIX/basic.conf" -f brand-new.sh)"
 check "an undeclared shell file is reported, not silently ignored" "1" \
       "$(echo "$OUT" | grep -c 'NOT IN THE GRAPH')"
 
+# --- --suites: the machine-readable form the CI gate consumes ----------------
+# The gate greps this output for its own matrix name, so the contract is: bare
+# suite names, one per line, and nothing else. A stray heading would be matched
+# by grep -x and run a suite the change never touched; worse, a missing __ALL__
+# on an unresolved file would SKIP one it did. Both are pinned here.
+OUT="$(run_impact "$FIX/basic.conf" --suites -f snapsend.sh)"
+check "--suites prints the bare suite name" "snapsend" "$OUT"
+check "--suites emits no human headings (manual/contract excluded too)" "0" \
+      "$(echo "$OUT" | grep -cE 'CHANGED|SUITES TO RUN|MANUAL|CONTRACT|manual-thing|a-contract')"
+
+OUT="$(run_impact "$FIX/basic.conf" --suites -f README.md)"
+check "--suites prints nothing for a file carrying no suite obligation" "" "$OUT"
+
+OUT="$(run_impact "$FIX/basic.conf" --suites -f brand-new.sh)"
+check "--suites falls back to __ALL__ on an undeclared shell file (never a silent skip)" "__ALL__" "$OUT"
+
 # --- parsing -----------------------------------------------------------------
 # A wrapped prose line containing '=' (e.g. "canmount=on") must extend the
 # previous field, not start a new one. Getting this wrong truncates exactly the

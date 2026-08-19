@@ -20,7 +20,7 @@
 
 set -o pipefail
 
-VERSION='v1.0'
+VERSION='v1.1'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONF="${IMPACT_CONF:-$SCRIPT_DIR/deps.conf}"
@@ -756,6 +756,7 @@ emit_graph() {
 # ---------------------------------------------------------------------------
 MODE="diff"
 RANGE=""
+SUITES_ONLY=0
 declare -a EXPLICIT_FILES=()
 
 while [ $# -gt 0 ]; do
@@ -765,6 +766,13 @@ while [ $# -gt 0 ]; do
         --verify) MODE="verify" ;;
         --refresh-status) MODE="refresh-status" ;;
         --refreeze) MODE="refreeze" ;;
+        # --suites: machine-readable output for the CI gate. Prints the impacted
+        # suite names, one per line, instead of the human plan. Emits the sentinel
+        # __ALL__ (and nothing else) when the change cannot be selected safely --
+        # a file that is not in the graph -- so a caller that greps for its own
+        # name also matches __ALL__ and runs. Orthogonal to the input mode: pair
+        # it with a range (`--suites origin/main...HEAD`) or with -f.
+        --suites) SUITES_ONLY=1 ;;
         -f)       shift; [ $# -gt 0 ] || die "-f needs a file"; EXPLICIT_FILES+=("$1"); MODE="files" ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
         -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
@@ -803,14 +811,28 @@ case "$MODE" in
 esac
 
 if [ ${#CHANGED[@]} -eq 0 ]; then
+    [ "$SUITES_ONLY" = 1 ] && exit 0    # machine mode: nothing changed -> nothing to run
     echo "No changed files${RANGE:+ in $RANGE}."
+    exit 0
+fi
+
+for f in "${CHANGED[@]}"; do add_file "$f"; done
+
+if [ "$SUITES_ONLY" = 1 ]; then
+    # A file the graph does not know about cannot be selected against: fall back
+    # to __ALL__ so the CI gate runs every suite rather than silently skipping the
+    # coverage of an untracked change. (--verify separately makes such a file fail
+    # the graph job, but the gate must be safe on its own, in the same run.)
+    if [ ${#UNKNOWN_FILES[@]} -gt 0 ]; then
+        echo "__ALL__"
+    elif [ ${#NEED_SUITE[@]} -gt 0 ]; then
+        printf '%s\n' "${!NEED_SUITE[@]}" | sort
+    fi
     exit 0
 fi
 
 bold "CHANGED (${#CHANGED[@]})"
 printf '  %s\n' "${CHANGED[@]}"
 echo
-
-for f in "${CHANGED[@]}"; do add_file "$f"; done
 print_plan
 exit 0

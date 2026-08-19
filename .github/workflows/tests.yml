@@ -92,25 +92,54 @@ jobs:
         # test/ci-suites.sh, which is now the only list.
         suite: ${{ fromJSON(needs.discover.outputs.suites) }}
     steps:
+      # fetch-depth: 0 for two reasons at once. (1) The gate below diffs
+      # base...HEAD to decide whether this suite's layer was touched. (2) The
+      # `impact` suite runs impact.sh --verify, which reaches reviewctl's SHA
+      # reachability check and fails on a shallow checkout (REV-20260812-115 F1).
+      # Full history serves both, and replaces the old conditional unshallow step
+      # whose `fetch-depth: ${{ ... && 0 || 1 }}` form silently stayed shallow
+      # because 0 is falsy in a GitHub expression.
       - uses: actions/checkout@v4
-      # REV-20260812-115 F1, second instance of the same defect. The `impact` suite
-      # asserts "the REAL deps.conf is consistent with the REAL tree" by running
-      # impact.sh --verify, which reaches reviewctl's reachability check -- so it
-      # fails on a shallow checkout for exactly the reason the graph job did.
-      # Measured: 58/58 with full history, and the CI log fails on that one
-      # assertion out of 58.
+        with:
+          fetch-depth: 0
+      # Impact gate: run this suite's body only when the change actually reaches
+      # its layer. The matrix of NAMES stays full (every required check still
+      # posts), but an untouched suite exits 0 in seconds instead of spending a
+      # runner. Selection is the SAME graph impact.sh --verify keeps honest, so a
+      # skip here can never disagree with the declared dependency edges.
       #
-      # Done as a conditional STEP, not a conditional fetch-depth. The obvious
-      # `fetch-depth: ${{ matrix.suite == 'impact' && 0 || 1 }}` cannot work: in
-      # GitHub expressions `&&`/`||` return an operand, and 0 is FALSY, so
-      # `true && 0` yields 0, `0 || 1` then yields 1, and the impact leg silently
-      # stayed shallow. The CI log said `fetch-depth: 1` on the very run that was
-      # supposed to fix it. Only this suite unshallows; the other six do not
-      # resolve review SHAs and stay at the default.
-      - name: Fetch history (impact resolves durable review SHAs)
-        if: matrix.suite == 'impact'
-        run: git fetch --prune --unshallow
+      # Fail SAFE, never silently narrow coverage: a push to main or a manual
+      # dispatch runs everything; a change to the graph or CI plumbing or a hub
+      # library runs everything; a file the graph does not know about makes
+      # impact.sh emit __ALL__, which also runs everything.
+      - name: Gate on impact
+        id: gate
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+            echo "event ${{ github.event_name }} -> full battery"; exit 0
+          fi
+          base='${{ github.event.pull_request.base.sha }}'
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "run=1" >> "$GITHUB_OUTPUT"; echo "no base sha -> full"; exit 0
+          fi
+          changed="$(git diff --name-only "$base"...HEAD)"
+          echo "changed files:"; printf '  %s\n' $changed
+          if printf '%s\n' "$changed" | grep -qE '^(test/deps\.conf|test/impact\.sh|test/ci-suites\.sh|\.github/workflows/tests\.yml|lib-zfs-snap\.sh|lib-cron\.sh|lib-scope\.sh)$'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"; echo "graph/hub/plumbing change -> full"; exit 0
+          fi
+          suites="$(./test/impact.sh --suites "$base"...HEAD)" || { echo "run=1" >> "$GITHUB_OUTPUT"; echo "impact.sh failed -> full"; exit 0; }
+          if printf '%s\n' "$suites" | grep -qx '__ALL__'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"; echo "unknown file in graph -> full"; exit 0
+          fi
+          if printf '%s\n' "$suites" | grep -qx '${{ matrix.suite }}'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"; echo "${{ matrix.suite }} is impacted -> run"
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"; echo "${{ matrix.suite }} not impacted by this diff -> skip body (reports green)"
+          fi
       - name: Run
+        if: steps.gate.outputs.run == '1'
         run: |
           case "${{ matrix.suite }}" in
             gencron) ./test/run.sh ;;
