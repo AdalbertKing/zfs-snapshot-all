@@ -120,10 +120,10 @@ for bad_source in ":rpool/data" "pve2:rpool/data:extra"; do
             fi
             ;;
         *)
-            if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not a valid HOST:DATASET'; then
-                ok "5. --source='$bad_source' refuses (empty host or dataset)"
+            if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not a valid remote source'; then
+                ok "5. --source='$bad_source' refuses (empty host)"
             else
-                bad "5. --source='$bad_source' refuses (empty host or dataset)" "rc=$rc out=$out"
+                bad "5. --source='$bad_source' refuses (empty host)" "rc=$rc out=$out"
             fi
             ;;
     esac
@@ -539,198 +539,75 @@ else
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 
-# 20. Without --local-user and with no server.conf account, RUX resolves the
-#     account itself (RUX_DEFAULT_LOCAL_USER) instead of refusing, and says so.
-#     Earlier contract: add-client's Batch B guard reached the operator and the
-#     command stopped. That guard still exists for the expert path -- what
-#     changed is that the one-command form no longer needs a flag whose only
-#     sensible value was the default. Pinned on the ARGUMENT add-client
-#     receives, not on the log line: a default that is only announced would
-#     leave the relationship keyed to nobody.
-#     The RECORDING is asserted with it. A resolved-but-unrecorded account
-#     leaves the decision living per-relationship in each manifest, agreeing
-#     today and diverging the day someone runs setup-server with another name
-#     -- server.conf outranks the manifest at activation, so the cron block
-#     would move to an account that cannot read the key the jobs point at.
-: > "$INST_PAIR_LOG"
-mkdir -p "$WORK/20/etc" "$WORK/20/nohomes"
+# ------------------------------------------------------------------------------
+# 20. Account resolution is explicit-or-root (Owner decision 2026-08-19). Without
+#     --local-user the jobs run as ROOT: add-client is passed NO --local-user
+#     (root is deploy.sh's default), and nothing is written to server.conf --
+#     no host-wide account, no adopted account, no guessing. Replaces the earlier
+#     adopt/record/refuse contract the account refactor removed.
+: > "$INST_PAIR_LOG"; mkdir -p "$WORK/20/etc"
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/20/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20/relationships"
     SERVER_CONF="$WORK/20/etc/zfs-backup.conf"
-    RUX_ACCOUNT_SCAN_GLOB="$WORK/20/nohomes/*/zfs-snapshot-all"
     DEPLOY="$INST_DEPLOY"
-    cmd_seed()     { :; }
-    cmd_activate() { :; }
+    cmd_seed() { :; }; cmd_activate() { :; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
-        && grep -qx 'LOCAL_USER=zfsbackup' "$WORK/20/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "20. no --local-user, nothing configured, no account present: the default is used AND recorded"
+        && ! grep -q -- '--local-user=' "$INST_PAIR_LOG" \
+        && [ ! -e "$WORK/20/etc/zfs-backup.conf" ]; then
+    ok "20. no --local-user: jobs run as root, add-client gets no --local-user, server.conf untouched"
 else
-    bad "20. no --local-user, nothing configured, no account present: the default is used AND recorded" \
+    bad "20. no --local-user: jobs run as root, add-client gets no --local-user, server.conf untouched" \
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
-# 20b. The default is the LAST resort: a collector that HAS a configured
-#      account gets that account, not 'zfsbackup'. Without this, the change
-#      above would silently re-key every host whose operator chose a different
-#      name -- the failure would be invisible until a job could not open its
-#      own key. Nothing is recorded either: the decision is already on disk,
-#      and rewriting it would be this command editing a config it only read.
-: > "$INST_PAIR_LOG"
-mkdir -p "$WORK/20b/etc" "$WORK/20b/nohomes"
+# 20b. --local-user=bkp (any account) is threaded through to add-client, created
+#      if absent, and nothing is recorded host-wide -- the choice lives with the
+#      relationship, not with a file.
+: > "$INST_PAIR_LOG"; mkdir -p "$WORK/20b/etc"
 out="$( (
     profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="backupsvc"; }
+    read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/20b/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20b/relationships"
     SERVER_CONF="$WORK/20b/etc/zfs-backup.conf"
-    RUX_ACCOUNT_SCAN_GLOB="$WORK/20b/nohomes/*/zfs-snapshot-all"
     DEPLOY="$INST_DEPLOY"
-    cmd_seed()     { :; }
-    cmd_activate() { :; }
-    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+    cmd_seed() { :; }; cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=bkp --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && grep -q -- '--local-user=backupsvc' "$INST_PAIR_LOG" \
-        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
+        && grep -q -- '--local-user=bkp' "$INST_PAIR_LOG" \
         && [ ! -e "$WORK/20b/etc/zfs-backup.conf" ]; then
-    ok "20b. a configured server.conf account outranks the built-in default, and is not rewritten"
+    ok "20b. --local-user=bkp delegates to an arbitrary account, records nothing host-wide"
 else
-    bad "20b. a configured server.conf account outranks the built-in default, and is not rewritten" \
-        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20b/etc/zfs-backup.conf" 2>/dev/null)"
-fi
-
-# 20c. --local-user=root still states root deliberately: the default must not
-#      overwrite an explicit expert choice, and add-client's own contract maps
-#      root to "no delegated account" rather than passing it through.
-#      Not recorded either -- an explicit flag is a choice about THIS
-#      relationship, and promoting it to a host-wide default would silently
-#      re-key every later relationship on the host.
-: > "$INST_PAIR_LOG"
-mkdir -p "$WORK/20c/etc" "$WORK/20c/nohomes"
-out="$( (
-    profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
-    CLIENTS_DIR="$WORK/20c/clients"; mkdir -p "$CLIENTS_DIR"
-    RELATIONSHIPS_DIR="$WORK/20c/relationships"
-    SERVER_CONF="$WORK/20c/etc/zfs-backup.conf"
-    RUX_ACCOUNT_SCAN_GLOB="$WORK/20c/nohomes/*/zfs-snapshot-all"
-    DEPLOY="$INST_DEPLOY"
-    cmd_seed()     { :; }
-    cmd_activate() { :; }
-    rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=root --install --yes
-) 2>&1 )"; rc=$?
-if [ "$rc" -eq 0 ] \
-        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
-        && [ ! -e "$WORK/20c/etc/zfs-backup.conf" ]; then
-    ok "20c. --local-user=root is honoured, neither overwritten nor promoted to a host default"
-else
-    bad "20c. --local-user=root is honoured, neither overwritten nor promoted to a host default" \
-        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20c/etc/zfs-backup.conf" 2>/dev/null)"
-fi
-
-# 20d. A host that ALREADY has a delegated account, but no server.conf, gets
-#      THAT account -- not a second one created beside it.
-#
-#      This is the hole the removed refusal did not have: its message made the
-#      operator name the account that was already there. deploy.sh finds it by
-#      scanning for a home directory carrying the account's own checkout
-#      (Phase 8); RUX now asks the same question the same way, so one host
-#      cannot end up with deploy.sh maintaining one account while a new
-#      relationship runs as another.
-#
-#      Asserted on the OWNER of the home, not its name: the directory below is
-#      called 'backupsvc' and the expected account is whoever runs this suite,
-#      which is exactly the distinction between reading ownership and reading a
-#      path. Framed as "the built-in default did not win" so it holds whatever
-#      that account turns out to be.
-: > "$INST_PAIR_LOG"
-mkdir -p "$WORK/20d/etc" "$WORK/20d/homes/backupsvc/zfs-snapshot-all"
-DETECTED="$(stat -c %U "$WORK/20d/homes/backupsvc" 2>/dev/null)"
-out="$( (
-    profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
-    CLIENTS_DIR="$WORK/20d/clients"; mkdir -p "$CLIENTS_DIR"
-    RELATIONSHIPS_DIR="$WORK/20d/relationships"
-    SERVER_CONF="$WORK/20d/etc/zfs-backup.conf"
-    RUX_ACCOUNT_SCAN_GLOB="$WORK/20d/homes/*/zfs-snapshot-all"
-    DEPLOY="$INST_DEPLOY"
-    cmd_seed()     { :; }
-    cmd_activate() { :; }
-    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
-) 2>&1 )"; rc=$?
-if [ "$rc" -eq 0 ] && [ -n "$DETECTED" ] \
-        && printf '%s' "$out" | grep -q "adopting the delegated account this host already has, '$DETECTED'" \
-        && ! grep -q -- '--local-user=zfsbackup' "$INST_PAIR_LOG" \
-        && grep -qx "LOCAL_USER=$DETECTED" "$WORK/20d/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "20d. an existing delegated account is adopted (by home ownership) instead of creating a second one"
-else
-    bad "20d. an existing delegated account is adopted (by home ownership) instead of creating a second one" \
-        "rc=$rc detected='$DETECTED' out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) conf=$(cat "$WORK/20d/etc/zfs-backup.conf" 2>/dev/null)"
-fi
-
-# 20f. A server.conf that EXISTS but records no account is the one state this
-#      command refuses to resolve. It is where a deliberate
-#      'setup-server --local-user=root' and a setup-server that never decided
-#      both used to land, and they need opposite answers -- root, or a delegated
-#      account. Both guesses are silent and the wrong one is invisible until a
-#      job runs as the wrong identity.
-#
-#      Nothing may be enrolled: a refusal that has already called deploy.sh has
-#      left the host changed while telling the operator it did not.
-: > "$INST_PAIR_LOG"
-mkdir -p "$WORK/20f/etc" "$WORK/20f/homes/backupsvc/zfs-snapshot-all"
-printf '%s\n' '# header' 'DEFAULT_TARGET=tank/backups' 'LOCAL_USER=' > "$WORK/20f/etc/zfs-backup.conf"
-out="$( (
-    profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
-    CLIENTS_DIR="$WORK/20f/clients"; mkdir -p "$CLIENTS_DIR"
-    RELATIONSHIPS_DIR="$WORK/20f/relationships"
-    SERVER_CONF="$WORK/20f/etc/zfs-backup.conf"
-    # An account IS present, so this also pins that the refusal outranks the
-    # adoption in 20d -- a recorded non-decision is not overridden by a lucky
-    # guess from the filesystem.
-    RUX_ACCOUNT_SCAN_GLOB="$WORK/20f/homes/*/zfs-snapshot-all"
-    DEPLOY="$INST_DEPLOY"
-    cmd_seed()     { :; }
-    cmd_activate() { :; }
-    rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
-) 2>&1 )"; rc=$?
-if [ "$rc" -ne 0 ] \
-        && printf '%s' "$out" | grep -q 'exists but records no account' \
-        && printf '%s' "$out" | grep -q 'setup-server --local-user=root' \
-        && [ ! -s "$INST_PAIR_LOG" ] \
-        && [ ! -e "$WORK/20f/clients/pve2.conf" ]; then
-    ok "20f. a server.conf that records no account refuses, names both fixes, and enrols nothing"
-else
-    bad "20f. a server.conf that records no account refuses, names both fixes, and enrols nothing" \
+    bad "20b. --local-user=bkp delegates to an arbitrary account, records nothing host-wide" \
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 
-# 20e. Recording preserves the rest of server.conf. A conf that already carries
-#      DEFAULT_TARGET/CRON_CONFIG but no account must come back with both intact
-#      -- rewriting the file wholesale would silently drop the target and the
-#      cron config path this host was set up with.
-mkdir -p "$WORK/20e/etc" "$WORK/20e/nohomes"
-printf '%s\n' '# header' 'DEFAULT_TARGET=tank/backups' 'CRON_CONFIG=/etc/zfs-snapshot-all/jobs.conf' 'LOCAL_USER=' > "$WORK/20e/etc/zfs-backup.conf"
+# 20c. --local-user=root states root: add-client is passed no --local-user (root
+#      is deploy.sh's default) and nothing is recorded.
+: > "$INST_PAIR_LOG"; mkdir -p "$WORK/20c/etc"
 out="$( (
-    SERVER_CONF="$WORK/20e/etc/zfs-backup.conf"
-    rux_record_local_user zfsbackup
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; }
+    CLIENTS_DIR="$WORK/20c/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/20c/relationships"
+    SERVER_CONF="$WORK/20c/etc/zfs-backup.conf"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed() { :; }; cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup --local-user=root --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
-        && grep -qx 'DEFAULT_TARGET=tank/backups' "$WORK/20e/etc/zfs-backup.conf" \
-        && grep -qx 'CRON_CONFIG=/etc/zfs-snapshot-all/jobs.conf' "$WORK/20e/etc/zfs-backup.conf" \
-        && [ "$(grep -c '^LOCAL_USER=' "$WORK/20e/etc/zfs-backup.conf")" -eq 1 ] \
-        && grep -qx 'LOCAL_USER=zfsbackup' "$WORK/20e/etc/zfs-backup.conf"; then
-    ok "20e. recording the account replaces only the account line, leaving the rest of server.conf intact"
+        && ! grep -q -- '--local-user=' "$INST_PAIR_LOG" \
+        && [ ! -e "$WORK/20c/etc/zfs-backup.conf" ]; then
+    ok "20c. --local-user=root is honoured as root (no --local-user to deploy, nothing recorded)"
 else
-    bad "20e. recording the account replaces only the account line, leaving the rest of server.conf intact" \
-        "rc=$rc out=$out conf=$(cat "$WORK/20e/etc/zfs-backup.conf" 2>/dev/null)"
+    bad "20c. --local-user=root is honoured as root (no --local-user to deploy, nothing recorded)" \
+        "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
 fi
 
 # ------------------------------------------------------------------------------
