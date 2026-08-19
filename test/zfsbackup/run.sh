@@ -541,7 +541,7 @@ cat > "$CF5" <<'EOF'
 	use_template = custom
 	notify       = someone
 EOF
-out=$( PATH="$PATH" bash -c "source '$ZFSBACKUP'; remove_managed_sections '$CF5' newclient tank/handwritten" 2>&1 ); rc=$?
+out=$( MANAGED_DATASETS='' MANAGED_PRUNE_SCOPE='' remove_managed_sections "$CF5" newclient tank/handwritten 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"looks hand-written"*) true ;; *) false ;; esac \
    && grep -qF '[dataset:tank/handwritten]' "$CF5"; then
     ok "remove_managed_sections refuses a header match with no marker and no prior record"
@@ -559,7 +559,7 @@ cat > "$CF6" <<'EOF'
 	use_template = standard_hourly
 	notify       = pve2-data
 EOF
-out=$( bash -c "source '$ZFSBACKUP'; MANAGED_DATASETS='tank/legacy/pve2/data'; remove_managed_sections '$CF6' pve2 tank/legacy/pve2/data" 2>&1 ); rc=$?
+out=$( MANAGED_DATASETS='tank/legacy/pve2/data' MANAGED_PRUNE_SCOPE='' remove_managed_sections "$CF6" pve2 tank/legacy/pve2/data 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -qF '[dataset:tank/legacy/pve2/data]' "$CF6"; then
     ok "remove_managed_sections removes a marker-less section already recorded in MANAGED_DATASETS (legacy client)"
 else
@@ -575,7 +575,7 @@ cat > "$CF7" <<'EOF'
 	# managed-by: zfs-backup.sh client=otherclient
 	notify = x
 EOF
-out=$( bash -c "source '$ZFSBACKUP'; remove_managed_sections '$CF7' thisclient tank/shared" 2>&1 ); rc=$?
+out=$( MANAGED_DATASETS='' MANAGED_PRUNE_SCOPE='' remove_managed_sections "$CF7" thisclient tank/shared 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"looks hand-written"*) true ;; *) false ;; esac; then
     ok "remove_managed_sections refuses a header match whose marker names a different client"
 else
@@ -792,14 +792,14 @@ chmod +x "$STUBDIR/crontab"
 # must catch it. A relative name in the crontab's own '# Source:' line (the
 # real, common shape) resolves against $SCRIPT_DIR, so the SAME relative
 # name used as the target must pass.
-out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '$REPO/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
+out="$( PATH="$STUBDIR:$PATH" assert_cron_config_matches_installed "$REPO/jobs.pve0.v4.conf" 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ]; then
     ok "assert_cron_config_matches_installed: same file, relative source resolved against \$SCRIPT_DIR, passes"
 else
     bad "assert_cron_config_matches_installed: same file, relative source resolved against \$SCRIPT_DIR, passes" "rc=$rc out=$out"
 fi
 
-out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/root/other/jobs.pve0.v4.conf'" 2>&1)"; rc=$?
+out="$( PATH="$STUBDIR:$PATH" assert_cron_config_matches_installed "/root/other/jobs.pve0.v4.conf" 2>&1 )"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi "different file would DELETE"; then
     ok "assert_cron_config_matches_installed: DIFFERENT real file with the SAME basename still refuses"
 else
@@ -811,7 +811,7 @@ cat > "$STUBDIR/crontab" <<'EOF'
 [ "$1" = "-l" ] && exit 1
 EOF
 chmod +x "$STUBDIR/crontab"
-out="$(PATH="$STUBDIR:$PATH" bash -c "source '$ZFSBACKUP'; assert_cron_config_matches_installed '/anything.conf'" 2>&1)"; rc=$?
+out="$( PATH="$STUBDIR:$PATH" assert_cron_config_matches_installed "/anything.conf" 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ]; then
     ok "assert_cron_config_matches_installed: no existing managed block at all passes (first-ever install)"
 else
@@ -833,14 +833,14 @@ fi
 # be used to locate the source pinned-key file.
 KHDIR="$WORK/pairing"; mkdir -p "$KHDIR"
 printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/192.168.11.11_known_hosts"
-alias_out=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts 192.168.11.11 '' 22 zfs-client-pve2")
+alias_out=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 22 zfs-client-pve2 )
 if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"; then
     ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, not the address-derived label"
 else
     bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
 fi
 
-alias_out2=$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts 192.168.11.11 '' 2222 zfs-client-pve2")
+alias_out2=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 2222 zfs-client-pve2 )
 if [ -f "$alias_out2" ] && grep -q '^\[zfs-client-pve2\]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out2"; then
     ok "ensure_alias_known_hosts (non-default port) uses bracket:port notation"
 else
@@ -848,7 +848,7 @@ else
 fi
 
 rc=0
-out="$(PEER_KEY_DIR="$KHDIR" bash -c "source '$ZFSBACKUP'; PEER_KEY_DIR='$KHDIR' ensure_alias_known_hosts nosuchclient '' 22 zfs-client-nope" 2>&1)" || rc=$?
+out="$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts nosuchclient '' 22 zfs-client-nope 2>&1 )" || rc=$?
 if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
     ok "ensure_alias_known_hosts fails (no output) when there is no pinned key to derive from"
 else
@@ -911,7 +911,7 @@ line="$(write_client_field TESTVAL "$inj")"
     || bad "write_client_field survives a command-substitution payload" "line=$line"
 rm -f "/tmp/zfsbackup-pwned-$$"
 
-out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn ENDPOINT_VPN_HOST=10.8.0.11 ENDPOINT_VPN_PORT=2222; active_endpoint_host_port" 2>&1)"
+out="$( ACTIVE_ENDPOINT=vpn ENDPOINT_VPN_HOST=10.8.0.11 ENDPOINT_VPN_PORT=2222; active_endpoint_host_port 2>&1 )"
 if [ "$out" = "10.8.0.11 2222" ]; then
     ok "active_endpoint_host_port resolves a LEGACY (slot-named) endpoint's host/port"
 else
@@ -921,20 +921,20 @@ fi
 # REV-20260802-033 U9: a new-shape record carries the literal "host:port" in
 # ACTIVE_ENDPOINT directly, no slot indirection -- distinguished from the
 # legacy shape purely by the presence of ':' (never valid in a bare hostname).
-out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=10.8.0.11:2222; active_endpoint_host_port" 2>&1)"
+out="$( ACTIVE_ENDPOINT=10.8.0.11:2222; active_endpoint_host_port 2>&1 )"
 if [ "$out" = "10.8.0.11 2222" ]; then
     ok "active_endpoint_host_port resolves a NEW-shape (literal host:port) endpoint (U9)"
 else
     bad "active_endpoint_host_port resolves a NEW-shape (literal host:port) endpoint (U9)" "out=$out"
 fi
 
-out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=10.8.0.11:2222 LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display" 2>&1)"
+out="$( ACTIVE_ENDPOINT=10.8.0.11:2222 LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display 2>&1 )"
 if [ "$out" = "10.8.0.11:2222" ]; then
     ok "endpoint_display shows a bare host:port for a new-shape record (nothing extra to add)"
 else
     bad "endpoint_display shows a bare host:port for a new-shape record" "out=$out"
 fi
-out="$(bash -c "source '$ZFSBACKUP'; ACTIVE_ENDPOINT=vpn LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display" 2>&1)"
+out="$( ACTIVE_ENDPOINT=vpn LOAD_HOST=10.8.0.11 LOAD_PORT=2222; endpoint_display 2>&1 )"
 if [ "$out" = "vpn (10.8.0.11:2222)" ]; then
     ok "endpoint_display shows 'slot (host:port)' for a legacy record"
 else
@@ -1540,7 +1540,7 @@ echo "# END zfs-backup-managed"
 EOF
 chmod +x "$SRC/bin/crontab"
 
-out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; ensure_cron_config '$SRC/gone.conf'" 2>&1 ); rc=$?
+out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" ensure_cron_config "$SRC/gone.conf" 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && [ ! -e "$SRC/gone.conf" ]    && case "$out" in *"replace 2 live cron line"*) true ;; *) false ;; esac; then
     ok "src-guard: refuses to create the config the installed block came from, and counts what is at stake"
 else
@@ -1549,7 +1549,7 @@ fi
 
 # A DIFFERENT path is not the claimed one, so creating it stays allowed --
 # otherwise a host could never gain a second config at all.
-out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; ensure_cron_config '$SRC/other.conf'" 2>&1 ); rc=$?
+out=$( PATH="$SRC/bin:$PATH" LOCAL_USER="" ensure_cron_config "$SRC/other.conf" 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && [ -e "$SRC/other.conf" ]; then
     ok "src-guard: an unrelated config path is still created normally"
 else
@@ -1791,11 +1791,11 @@ out=$( PATH="$DUP/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
 # it does. Retention flags in particular have to survive: if two different
 # ladders fingerprinted the same, a real difference would read as a duplicate.
 ja=$(printf '%s\n' '9 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H24 2>>/root/scripts/cron.log' \
-     | bash -c "source '$ZFSBACKUP'; job_identity")
+     | job_identity)
 jb=$(printf '%s\n' '9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H24 2>>/home/zfsbackup/cron.log' \
-     | bash -c "source '$ZFSBACKUP'; job_identity")
+     | job_identity)
 jc=$(printf '%s\n' '9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh "t/a" "p" -H48 2>>/home/zfsbackup/cron.log' \
-     | bash -c "source '$ZFSBACKUP'; job_identity")
+     | job_identity)
 [ "$ja" = "$jb" ] && ok "job-identity: the same job under two owners fingerprints identically" \
                   || bad "job-identity: the same job under two owners fingerprints identically" "a=$ja b=$jb"
 [ "$ja" != "$jc" ] && ok "job-identity: a different retention flag is a different job" \
@@ -1818,7 +1818,7 @@ EOF
 chmod +x "$RD/bin/runuser"
 mkdir -p "$RD/ok"; : > "$RD/ok/reachable.conf"; : > "$RD/unreachable.conf"
 
-out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/unreachable.conf'" 2>&1 ); rc=$?
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" assert_config_readable_by_target "$RD/unreachable.conf" 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"cannot read"*) true ;; *) false ;; esac \
    && case "$out" in *"/etc/zfs-snapshot-all/"*) true ;; *) false ;; esac; then
     ok "readable: an unreadable config is refused, and a working location is named"
@@ -1826,12 +1826,12 @@ else
     bad "readable: an unreadable config is refused, and a working location is named" "rc=$rc out=$out"
 fi
 
-out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/ok/reachable.conf'" 2>&1 ); rc=$?
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="zfsbackup" assert_config_readable_by_target "$RD/ok/reachable.conf" 2>&1 ); rc=$?
 [ "$rc" -eq 0 ] && ok "readable: a config the account can open passes" \
                 || bad "readable: a config the account can open passes" "rc=$rc out=$out"
 
 # As root the question does not arise, and the check must not invent one.
-out=$( PATH="$RD/bin:$PATH" LOCAL_USER="" bash -c "source '$ZFSBACKUP'; assert_config_readable_by_target '$RD/unreachable.conf'" 2>&1 ); rc=$?
+out=$( PATH="$RD/bin:$PATH" LOCAL_USER="" assert_config_readable_by_target "$RD/unreachable.conf" 2>&1 ); rc=$?
 [ "$rc" -eq 0 ] && ok "readable: root is not asked whether it can read its own config" \
                 || bad "readable: root is not asked whether it can read its own config" "rc=$rc out=$out"
 
@@ -2124,7 +2124,7 @@ echo root
 EOF
 chmod +x "$MIG/bin/crontab" "$MIG/bin/getent" "$MIG/bin/id"
 mkdir -p "$MIG/home/zfs-snapshot-all"; : > "$MIG/home/zfs-snapshot-all/gen-cron.sh"
-out=$( PATH="$MIG/bin:$PATH" bash -c "source '$ZFSBACKUP'; runuser_test_r() { return 0; }; runuser_test_x() { return 0; }; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+out=$( PATH="$MIG/bin:$PATH"; runuser_test_r() { return 0; }; runuser_test_x() { return 0; }; cmd_migrate_to_account zfsbackup --yes 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"ALREADY has a managed block"*) true ;; *) false ;; esac; then
     ok "migrate-to-account: refuses an account that already runs a managed block"
 else
@@ -3143,7 +3143,7 @@ cat > "$CD/jobs.conf" <<'EOF'
 [prune-bookmarks:tank/six]
 	schedule = 0 4 * * *
 EOF
-got=$( bash -c "source '$ZFSBACKUP'; config_datasets '$CD/jobs.conf'" | tr '\n' ' ' )
+got=$( config_datasets "$CD/jobs.conf" | tr '\n' ' ' )
 check_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want[$3] got[$2]"; }
 # sort -u, so the order is lexicographic: five before four.
 check_eq "commas: every dataset in a comma list is its own entry" \
@@ -3154,7 +3154,7 @@ check_eq "commas: every dataset in a comma list is its own entry" \
 # name as an option. Asserted by counting entries that still contain a space,
 # which is the thing that would actually break, rather than by matching a
 # position in the joined string.
-dirty=$( bash -c "source '$ZFSBACKUP'; config_datasets '$CD/jobs.conf'" | grep -c '[[:space:]]' )
+dirty=$( config_datasets "$CD/jobs.conf" | grep -c '[[:space:]]' )
 check_eq "commas: no entry carries leftover whitespace" "$dirty" "0"
 
 # prune-bookmarks is deliberately NOT a source of delegation checks today (it
@@ -3316,7 +3316,7 @@ cat > "$CAPB/block.txt" <<'EOF'
 */15 * * * * d=$(/home/z/zfs-snapshot-all/check-snap-age.sh "tank/a" "automated_hourly" 90m 3h 2>&1); rc=$?
 # END zfs-backup-managed
 EOF
-caps=$( bash -c "source '$ZFSBACKUP'; block_capabilities '$CAPB/block.txt'" )
+caps=$( block_capabilities "$CAPB/block.txt" )
 capof() { printf '%s\n' "$caps" | awk -F'\t' -v d="$1" '$1==d{print $2}'; }
 
 # A LOCAL receive target -- the thing that was never asked about.
@@ -3504,7 +3504,7 @@ qs_run() {   # <helper path> -> the scope check, with runuser/sudo collapsed awa
         done" 2>&1
 }
 
-scope=$( bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/block.txt'" | tr '\n' ' ' )
+scope=$( block_quiesce_scope "$QS/block.txt" | tr '\n' ' ' )
 check_eq "qscope: only the -q job's sources are in scope" \
          "$scope" "tank/vm-100-disk-0 tank/vm-102-disk-0 "
 
@@ -3567,7 +3567,7 @@ echo "$last"
 echo "$last/vm-108-disk-0"
 STUB
 chmod +x "$QS/bin/zfs"
-rscope=$( PATH="$QS/bin:$PATH" bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/rec.txt'" | tr '\n' ' ' )
+rscope=$( PATH="$QS/bin:$PATH" block_quiesce_scope "$QS/rec.txt" | tr '\n' ' ' )
 case "$rscope" in
     *vm-108-disk-0*) ok "qscope: -r expands to the children, where the guests are" ;;
     *) bad "qscope: -r expands to the children, where the guests are" "$rscope" ;;
@@ -3580,10 +3580,10 @@ cat > "$QS/rem.txt" <<'EOF'
 5 * * * * /home/z/zfs-snapshot-all/snapget.sh -m "p_" -q auto "far:tank/x" "tank/pulled" 2>>/dev/null
 # END zfs-backup-managed
 EOF
-bash -c "source '$ZFSBACKUP'; block_has_remote_quiesce '$QS/rem.txt'" \
+block_has_remote_quiesce "$QS/rem.txt" \
     && ok "qscope: a remote -q job is recognised as remote" \
     || bad "qscope: a remote -q job is recognised as remote" "nie rozpoznane"
-remscope=$( bash -c "source '$ZFSBACKUP'; block_quiesce_scope '$QS/rem.txt'" )
+remscope=$( block_quiesce_scope "$QS/rem.txt" )
 check_eq "qscope: ...and contributes no LOCAL dataset to check" "$remscope" ""
 
 # The guest-id mapping is COPIED from lib-zfs-snap.sh rather than sourced, so it
@@ -3592,7 +3592,7 @@ LIBQ="$REPO/lib-zfs-snap.sh"
 drift=0
 for n in hdd/data/vm-107-disk-2 hdd/lxc/subvol-102-disk-0 rpool/data/nested/vm-100-disk-0 \
          vm-101-disk-0 rpool/data/vm-12345-disk-0 rpool/data hdd/mssql hdd/data/vm-107-disk; do
-    a=$( bash -c "source '$ZFSBACKUP'; qscope_guest_id '$n' || echo NONE" )
+    a=$( qscope_guest_id "$n" || echo NONE )
     b=$( bash -c "VERBOSE=0; SSH_OPTS=(); source '$LIBQ' 2>/dev/null; quiesce_guest_id '$n' || echo NONE" )
     [ "$a" = "$b" ] || { drift=1; echo "     drift: $n -> [$a] vs [$b]"; }
 done
@@ -3763,7 +3763,7 @@ echo "# zfs-snapshot-all: PAUSED by deploy.sh --pause at 2026-01-01 00:00:00 UTC
 exit 0
 EOF
 chmod +x "$PM/bin/crontab"
-out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+out=$( PATH="$PM/bin:$PATH" cmd_migrate_to_account zfsbackup --yes 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"currently paused"*"deploy.sh --resume"*) true ;; *) false ;; esac; then
     ok "migrate-to-account: refuses while root is --fullcron paused"
 else
@@ -3784,7 +3784,7 @@ echo "# END zfs-backup-managed"
 exit 0
 EOF
 chmod +x "$PM/bin/crontab"
-out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ); rc=$?
+out=$( PATH="$PM/bin:$PATH" cmd_migrate_to_account zfsbackup --yes 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"currently paused"*"deploy.sh --resume"*) true ;; *) false ;; esac; then
     ok "migrate-to-account: refuses while root's managed block is (block-mode) paused"
 else
@@ -3806,7 +3806,7 @@ echo "# END zfs-backup-managed"
 exit 0
 EOF
 chmod +x "$PM/bin/crontab"
-out=$( PATH="$PM/bin:$PATH" bash -c "source '$ZFSBACKUP'; cmd_migrate_to_account zfsbackup --yes" 2>&1 ) || :
+out=$( PATH="$PM/bin:$PATH" cmd_migrate_to_account zfsbackup --yes 2>&1 ) || :
 case "$out" in
     *"currently paused"*) bad "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" "$out" ;;
     *) ok "migrate-to-account: an ordinary (unpaused) managed block is not refused by the pause check" ;;
@@ -3906,7 +3906,7 @@ fi
 # the last --commit-scope, or committed differently) must refuse, not
 # silently generate jobs for a scope nobody actually granted from.
 printf 'notthehash\n' > "$MDS/hash"
-out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"does not match the hash"*) true ;; *) false ;; esac; then
     ok "resolve_mode_datasets: refuses on a scope/hash mismatch (T3)"
 else
@@ -3929,7 +3929,7 @@ EOF
     chmod +x "$MDS/bin/ssh"
 }
 mds_ssh_nohash
-out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
 # Wording changed 2026-08-17 (lab3 F1): the refusal now names whose move it is
 # and gives the exact source-side command, instead of only asking a question.
 if [ "$rc" -ne 0 ] && case "$out" in *"GRANTED nothing yet"*"--commit-scope"*) true ;; *) false ;; esac; then
@@ -3948,7 +3948,7 @@ EOF
     chmod +x "$MDS/bin/ssh"
 }
 mds_ssh_noscope
-out=$( PATH="$MDS/bin:$PATH" bash -c "source '$ZFSBACKUP'; $mds_env PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''; resolve_mode_datasets" 2>&1 ); rc=$?
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"has --draft-scope run"*) true ;; *) false ;; esac; then
     ok "resolve_mode_datasets: refuses when --draft-scope has not run yet on the peer"
 else
@@ -4189,7 +4189,7 @@ cat > "$CF7" <<'EOF'
 [dataset:hdd/LXC/103]
 	notify = b
 EOF
-out=$( bash -c "source '$ZFSBACKUP'; MANAGED_PRUNE_SCOPE='rpool/data/vm-100-disk-0 hdd/LXC/103'; remove_managed_sections '$CF7' synctest rpool/data/vm-100-disk-0 hdd/LXC/103" 2>&1 ); rc=$?
+out=$( MANAGED_DATASETS='' MANAGED_PRUNE_SCOPE='rpool/data/vm-100-disk-0 hdd/LXC/103' remove_managed_sections "$CF7" synctest rpool/data/vm-100-disk-0 hdd/LXC/103 2>&1 ); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -qF '[dataset:rpool/data/vm-100-disk-0]' "$CF7" && ! grep -qF '[dataset:hdd/LXC/103]' "$CF7"; then
     ok "is_previously_managed: a multi-entry MANAGED_PRUNE_SCOPE is read as a list (sync back-compat)"
 else
