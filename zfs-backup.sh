@@ -6143,6 +6143,24 @@ cmd_remove_client() {
     # today a guard turned a defect into a message instead of an incident.
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
+    # read_server_conf leaves LOCAL_USER empty on a host with no server.conf (a
+    # RUX-deployed collector), and cron_target_user then falls back to root -- so
+    # the cron-block removal below would target root's crontab while the managed
+    # jobs live in the delegated account's, clear nothing, and deploy.sh --unpair
+    # would then refuse on the very lines this failed to remove. cmd_activate_client
+    # resolves the same gap from the manifest's PEER_SAVED_LOCAL_USER; remove-client
+    # has no manifest, so it adopts the account the host already has the same way
+    # RUX and deploy.sh do (owner of the checkout). server.conf still wins when it
+    # pins one. Found live 2026-08-19 (lab3 pve9, sync/passive): remove-client
+    # dispatched to --unpair, which refused on a block it had removed for the wrong
+    # user -- teardown could not undo what activation had installed as the account.
+    if [ -z "${LOCAL_USER:-}" ]; then
+        if [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
+            LOCAL_USER="$PEER_SAVED_LOCAL_USER"
+        else
+            LOCAL_USER="$(rux_detect_local_user || true)"
+        fi
+    fi
     [ "${STATE:-}" = "removed" ] && die "client '$name' is already removed"
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
