@@ -785,11 +785,10 @@ cron_block_merge_render() {   # <curfile> <name> <linesfile> <outfile> [begin_ta
 
 # Replace <user>'s ENTIRE crontab with <infile>, verified.
 #
-# For transactions that move ownership BETWEEN two crontabs at once
-# (migrate-to-account) and cannot be expressed as one named block's
-# replace/remove -- the intermediate states are "root's whole crontab minus
-# its collector block" and "the account's whole crontab restored to what it
-# was", neither of which is a single block.
+# The whole-crontab primitive, for a change that cannot be expressed as one
+# named block's replace/remove -- e.g. an intermediate state like "a whole
+# crontab minus one collector block", which is not itself a single named
+# block.
 #
 # Still goes through the shared lock and the shared write/read-back path, and
 # still refuses a target whose markers are malformed (F4): installing an

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 26d7804991c4b376 -->
+<!-- status-covers-digest: 2e7cdcb37706c10b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,20 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Czasownik `migrate-to-account` USUNIĘTY (2026-08-19).** Sprzątanie narośli
+  komend. Był to jednotransakcyjny root→konto **host-wide** przenoszący cały blok
+  crona hosta na jedno konto (5 faz REV-020). Zadanie spełnione — flota zmigrowana
+  2026-08-01, zero operacyjnych callerów — i **semantycznie niespójny** z modelem
+  per-relacja z #48: przenosił crontab host-wide, ale nie tykał `LOCAL_USER` w
+  rekordach klientów, więc następny `activate` cofnąłby migrację. Usunięto: verb +
+  dispatch + usage, cały **podsystem capability-survey** (`capability_survey`,
+  `capability_remediation` i 7 building-blocków `qcap_*`/`block_*`/`qscope_*`/
+  `target_can_*` — istniał wyłącznie dla preflightu migrate), oraz 13 sekcji
+  `test/zfsbackup`. Prymityw `cron_replace_all` (lib-cron) ZOSTAJE (generyczny,
+  stracił jedynego callera — flaga: caller-less). Guard `assert_no_foreign_managed_block`
+  ZOSTAJE, jego komunikat przekierowany na ścieżkę per-relacja (`remove-client` +
+  redeploy) zamiast na usuwaną komendę. Historyczny runbook
+  `docs/MIGRATION-ROOT-TO-ACCOUNT.md` oznaczony WYCOFANE.
 - **`--source=HOST:` (deferred scope) zbudowany; czasownik `deploy` zretirowany (2026-08-19).**
   Sprzątanie narośli komend. `deploy NAME --host=` i `--source=HOST:DATASET` robiły
   ten sam lifecycle (`deploy_continue_lifecycle`, wspólny), ale `deploy` był formą
