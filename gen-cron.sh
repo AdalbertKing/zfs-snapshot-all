@@ -203,9 +203,16 @@ set -o pipefail
 #                                          # from each tier's own 'pattern',
 #                                          # since the ladder has to see every
 #                                          # contributing tier's snapshots to
-#                                          # bucket them by elapsed time. See
-#                                          # delsnaps.sh's own header ("GFS
-#                                          # LADDER") for the full mechanism.
+#                                          # bucket them by elapsed time. That
+#                                          # requirement is ENFORCED: every
+#                                          # contributing tier's 'pattern' must
+#                                          # start with gfs_pattern, or
+#                                          # generation refuses. Omitting the
+#                                          # field is the prefixless ladder ("",
+#                                          # matches everything) and always
+#                                          # satisfies it. See delsnaps.sh's own
+#                                          # header ("GFS LADDER") for the full
+#                                          # mechanism.
 #       notify       = <short label>
 #     For scopes you do NOT create locally: a backup store receiving pushes from
 #     other hosts, foreign/received subtrees. Emits one delsnaps line per tier.
@@ -1464,6 +1471,27 @@ build_prune_section() {
             || die "[prune:$scope] tier=$tier: 'pattern' did not resolve (missing, or set but blank)"
 
         if [ "$emit_prune" -eq 1 ] && [ "$gfs" -eq 1 ]; then
+            # This tier is about to hand the ladder a bucket letter and a count.
+            # For that to mean anything the ladder has to be able to SEE this
+            # tier's snapshots -- delsnaps.sh matches by literal prefix, so the
+            # tier's 'pattern' must start with 'gfs_pattern'. Otherwise the
+            # count is applied to whichever family gfs_pattern DOES match, and
+            # this tier's own family is pruned by nothing at all while its
+            # monitor -- which keeps using its own 'pattern' -- stays green
+            # because fresh snapshots do keep arriving. Same silent shape as the
+            # create/prune disagreement guarded in build_dataset.
+            #
+            # An omitted gfs_pattern (Phase 3.5 prefixless ladder) is the empty
+            # string, which is a prefix of everything, so it passes here without
+            # a special case -- correctly: an empty pattern matches every
+            # snapshot on the scope, which is exactly what prefixless means.
+            #
+            # Only CONTRIBUTING tiers are checked. A prune=no tier is a monitor
+            # carrier that gives the ladder nothing, so its pattern is its own
+            # business.
+            if [ "${pattern:0:${#gfs_pattern}}" != "$gfs_pattern" ]; then
+                die "[prune:$scope] tier=$tier: this tier feeds the gfs ladder but its 'pattern' ('$pattern') does not start with 'gfs_pattern' ('$gfs_pattern') -- delsnaps.sh matches by prefix, so the ladder never sees this tier's snapshots. Its retention count would be spent on whatever gfs_pattern does match, and '$pattern' snapshots would be pruned by nothing while their monitor stays green. Make 'gfs_pattern' a common prefix of every tier in use_template (e.g. 'automated_' for automated_hourly/automated_daily), or omit it entirely for a prefixless ladder."
+            fi
             prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
