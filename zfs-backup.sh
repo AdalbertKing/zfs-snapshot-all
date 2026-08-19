@@ -12,20 +12,11 @@ set -uo pipefail
 # avoid touching the just-verified self-update/rollback control plane
 # (REV-20260730-001/002).
 #
-# Commands:
-#   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-#   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
-#   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
-#   zfs-backup.sh seed NAME [--yes]
-#   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
-#   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT]
-#   zfs-backup.sh verify-endpoint NAME
-#   zfs-backup.sh activate-client NAME [--yes] [--verbose]
-#   zfs-backup.sh migrate-profile [--yes]
-#   zfs-backup.sh audit-source-retention [--apply] [--yes]
-#   zfs-backup.sh status [NAME]
-#   zfs-backup.sh test NAME
-#   zfs-backup.sh remove-client NAME
+# Commands: see usage() below (or run with no arguments) for the authoritative,
+# grouped list. Deliberately NOT duplicated here -- this header used to carry a
+# second hand-maintained copy that drifted (it had lost final-catchup, pause/
+# resume and disable/enable, and gave set-endpoint a stale signature). One list,
+# one place.
 #
 # State machine (REV-20260730-004): pending_enroll -> seeding -> seed_complete
 # -> endpoint_verified -> active. Cron is installed ONLY from endpoint_verified
