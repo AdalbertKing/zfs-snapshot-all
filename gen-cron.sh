@@ -1246,6 +1246,11 @@ build_dataset() {
         ntier="$(resolve_field tier_label "$ds" "$tmpl" "")" || ntier="$tier"
 
         # ---- send ----
+        # Captured for the create/prune agreement check below. Reset PER TIER:
+        # 'prefix' is declared inside the send branch, so a tier that does not
+        # send would otherwise still see the previous tier's value and be
+        # checked against a family it never creates.
+        local tier_created_prefix="" tier_creates=0
         local send_schedule
         if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
             local dst src prefix flags label raw_notify word notify direction remote_spec
@@ -1279,6 +1284,7 @@ build_dataset() {
             # snapget.sh as an explicit -m "" (identical to -m never given).
             # A key that IS present but blank is still refused, unchanged.
             prefix="$(resolve_field_or_omit prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: 'prefix' resolved to a blank value -- omit the field entirely for no-prefix, do not set it to nothing"
+            tier_created_prefix="$prefix"; tier_creates=1
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
@@ -1331,6 +1337,28 @@ build_dataset() {
         if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
             local pattern retain_flag plabel praw pnotify
             pattern="$(require_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve (missing, or set but blank)"
+            # A tier that creates AND prunes must be able to prune what it
+            # creates. delsnaps.sh matches by prefix, so the created name has to
+            # START WITH the pruned prefix; otherwise this tier's own snapshots
+            # are unreachable by its own retention -- they accumulate without
+            # bound while every send and every prune still reports success, and
+            # the rule instead consumes whichever family DOES match. Same silent
+            # shape as REV-20260807-054, caught at generate time.
+            #
+            # Only when this tier actually creates a NAMED family: prefixless
+            # (Phase 3.5) resolves prefix to "" for a bare-timestamp create or an
+            # -e passive pickup, where the names come from upstream and 'pattern'
+            # is rightly unrelated to anything we stamp.
+            #
+            # Compared as a LITERAL substring, not with `case ... in "$pattern"*)`:
+            # a case arm GLOBS the pattern, so a 'pattern' carrying * ? or [
+            # would satisfy the check while delsnaps.sh -- which matches
+            # literally -- still matches nothing. That would pass exactly the
+            # configs this guard exists to catch.
+            if [ "$tier_creates" -eq 1 ] && [ -n "$tier_created_prefix" ] \
+               && [ "${tier_created_prefix:0:${#pattern}}" != "$pattern" ]; then
+                die "[dataset:$ds_path] tier=$tier: this tier creates snapshots named '${tier_created_prefix}...' but prunes ones matching '${pattern}' -- delsnaps.sh matches by prefix, so nothing this tier creates is ever pruned by this tier, and the created family grows without bound. Make 'pattern' a prefix of 'prefix' (usually they are equal); if this tier is deliberately meant to prune ANOTHER family, give it its own [prune:] section instead."
+            fi
             resolve_keep_retain "$ds" "$tmpl" "$tier" || die "[dataset:$ds_path] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""

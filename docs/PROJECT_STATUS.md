@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ea1e0acd9f0fcc7b -->
+<!-- status-covers-digest: afd96ce8d06a5b26 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,25 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`gen-cron.sh` odmawia tieru, który tworzy jedną rodzinę snapshotów a kasuje inną (2026-08-19).**
+  Czyszczenie semantyki warstwy konfiguracyjnej. Tier mający JEDNOCZEŚNIE
+  `send_schedule` i `prune_schedule` musi umieć skasować to, co tworzy:
+  `delsnaps.sh` dopasowuje po PREFIKSIE, więc `prefix` musi zaczynać się od
+  `pattern`. Dotąd `prefix = automated_daily_` przy `pattern = automated_hourly_`
+  przechodziło z rc=0 — każdy send zielony, każdy prune zielony, tyle że prune
+  zjadał CUDZĄ rodzinę, a własna rosła bez ograniczenia aż do zapełnienia pool-a.
+  To ten sam cichy kształt co REV-20260807-054 i realnie powstaje przez
+  copy-paste między tierami (zmieniony `prefix`, niezmieniony `pattern`).
+  Teraz twardy błąd w czasie generowania. Guard jest **per-tier** (flaga zerowana
+  na każdy tier, bo `prefix` żyje w gałęzi send) i **nie** dotyczy przypadku
+  prefixless z Fazy 3.5 (`prefix` → `""`: nazwy pochodzą z góry, `-e`/bare
+  timestamp), ani sekcji `[prune:]`, które z definicji sprzątają cudzą rodzinę.
+  Porównanie literalne (`${p:0:${#pattern}}`), nie `case`-em — arm `case`
+  globuje wzorzec i przepuściłby dokładnie te configi, których guard pilnuje.
+  Sprawdzone przeciw wszystkim 6 produkcyjnym configom v4 (`jobs.11.11`,
+  `jobs.pve0` ×2, `jobs.pve1`, `jobs.pve2`, `lab.pve0-remote-dst`) — wszystkie
+  nadal rc=0; kontrola pozytywna: zmutowany `jobs.pve1.v4.conf` jest odrzucany.
+  Fixture: `test/negative/prefix-pattern-mismatch`.
 - **Martwy wrapper `cron_replace_all` usunięty (2026-08-19).** Po usunięciu migrate stracił jedynego callera. `cron_replace_all_impl` (realna praca: read/F4-markers/write) ZOSTAJE — `deploy.sh` woła go wprost w trybie batch (wiele bloków pod jednym lockiem). Wrapper dodawał tylko lock/unlock. Test `cron` sekcja T repointowana na `_impl` (pełne pokrycie T1-T9 zachowane; lock testowany osobno w sekcji U).
 - **Czasownik `migrate-to-account` USUNIĘTY (2026-08-19).** Sprzątanie narośli
   komend. Był to jednotransakcyjny root→konto **host-wide** przenoszący cały blok
