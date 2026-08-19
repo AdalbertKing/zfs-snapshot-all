@@ -102,8 +102,9 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Ambiguous/invalid source syntax refuses.
-for bad_source in "pve2:" ":rpool/data" "pve2:rpool/data:extra"; do
+# 5. Ambiguous/invalid source syntax refuses. NOTE: "pve2:" (empty dataset) is NOT
+#    here -- it is the valid DEFERRED-scope form, asserted in its own block below.
+for bad_source in ":rpool/data" "pve2:rpool/data:extra"; do
     out="$( ( CLIENTS_DIR="$WORK/5/clients"
         rux_entry --source="$bad_source" --target=hdd/backup
     ) 2>&1 )"; rc=$?
@@ -237,6 +238,70 @@ if [ "$rc" -eq 0 ] \
 else
     bad "11. fresh remote sync relationship: add-client(--mode=sync), no --datasets/--target" \
         "rc=$rc out=$out pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) record=$(cat "$WORK/11/clients/pve1.conf" 2>/dev/null)"
+fi
+
+# 11b. DEFERRED scope backup (--source=HOST: with no dataset): add-client gets NO
+#      --datasets, so the source proposes its own scope; --target and --join-
+#      remotely still flow. This is exactly what the retired `deploy` verb did.
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; }
+    CLIENTS_DIR="$WORK/11b/clients"; mkdir -p "$CLIENTS_DIR"
+    RELATIONSHIPS_DIR="$WORK/11b/relationships"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { echo "SEED $*" >> "$WORK/11b/order"; }
+    cmd_activate() { echo "ACTIVATE $*" >> "$WORK/11b/order"; }
+    rux_entry --source=pve2: --target=hdd/backup --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && ! grep -q -- '--peer-datasets=' "$INST_PAIR_LOG" \
+        && ! grep -q -- '--datasets=' "$INST_PAIR_LOG" \
+        && grep -q -- '--target=hdd/backup' "$INST_PAIR_LOG" \
+        && grep -q -- '--join-remotely' "$INST_PAIR_LOG" \
+        && grep -q -- '--peer=pve2' "$INST_PAIR_LOG" \
+        && grep -qF 'RUX_SOURCE=pve2:' "$WORK/11b/clients/pve2.conf" \
+        && [ "$(cat "$WORK/11b/order")" = "$(printf 'SEED pve2 --yes\nACTIVATE pve2 --yes')" ]; then
+    ok "11b. deferred backup (--source=HOST:) enrols WITHOUT --datasets, then seed -> activate"
+else
+    bad "11b. deferred backup (--source=HOST:) enrols WITHOUT --datasets, then seed -> activate" \
+        "rc=$rc pair=$(cat "$INST_PAIR_LOG" 2>/dev/null) record=$(cat "$WORK/11b/clients/pve2.conf" 2>/dev/null) order=$(cat "$WORK/11b/order" 2>/dev/null)"
+fi
+
+# 11c. --manual-join opts the deferred form out of the automatic remote pairing.
+: > "$INST_PAIR_LOG"
+( profile_validate_dir() { return 0; }
+  read_server_conf() { DEFAULT_TARGET=""; }
+  CLIENTS_DIR="$WORK/11c/clients"; mkdir -p "$CLIENTS_DIR"
+  RELATIONSHIPS_DIR="$WORK/11c/relationships"; DEPLOY="$INST_DEPLOY"
+  cmd_seed() { :; }; cmd_activate() { :; }
+  rux_entry --source=pve2: --target=hdd/backup --manual-join --install --yes ) >/dev/null 2>&1
+if grep -q -- '--peer=pve2' "$INST_PAIR_LOG" && ! grep -q -- '--join-remotely' "$INST_PAIR_LOG"; then
+    ok "11c. --manual-join drops --join-remotely on the deferred form (explicit two-sided pairing)"
+else
+    bad "11c. --manual-join drops --join-remotely on the deferred form" "pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+
+# 11d. Deferred scope is backup-only: --source=HOST: --mode=sync refuses (sync
+#      reproduces a NAMED path, so it must be told which).
+out="$( ( CLIENTS_DIR="$WORK/11d/clients"
+    rux_entry --source=pve2: --mode=sync ) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'deferred scope) is backup-mode only'; then
+    ok "11d. --source=HOST: --mode=sync refuses (deferred is backup-only)"
+else
+    bad "11d. --source=HOST: --mode=sync refuses (deferred is backup-only)" "rc=$rc out=$out"
+fi
+
+# 11e. Deferred plan (no --install) parses, notes DEFERRED scope, touches nothing.
+out="$( ( CLIENTS_DIR="$WORK/11e/clients"
+    rux_entry --source=pve2: ) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] \
+        && printf '%s' "$out" | grep -q 'scope:.*DEFERRED' \
+        && printf '%s' "$out" | grep -q 'mode:.*backup' \
+        && [ ! -d "$WORK/11e/clients" ]; then
+    ok "11e. deferred plan (--source=HOST: no --install) notes DEFERRED scope, touches nothing"
+else
+    bad "11e. deferred plan (--source=HOST: no --install) notes DEFERRED scope, touches nothing" "rc=$rc out=$out"
 fi
 
 # 12. Relationship name derives from the host (peer_label) when --name is
