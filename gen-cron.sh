@@ -233,6 +233,11 @@ set -o pipefail
 #     (2026-08-20): send_schedule, prefix, dst, src, autotune, quiesce, flags
 #     and notify_raw belong to a [dataset:]/[template:], and 'ssh_flags' -- not
 #     'flags' -- is how a remote scope's connection is configured.
+#     The yes/no fields here and on [prune-bookmarks:] (recursive, clear_cut,
+#     gfs, prune) accept ONLY 'yes' or 'no', any case. Until 2026-08-20 they
+#     were compared against the literal "yes", so 'ture' -- or a blank value --
+#     silently meant no: a declared subtree sweep became a single dataset, and a
+#     declared cascading ladder became flat per-tier lines, both at rc=0.
 #     monitor_warn/monitor_crit are REJECTED on a remote (host:dataset) scope --
 #     check-snap-age.sh is local-only by design (see its own header), so a monitor
 #     riding a remote scope would run `zfs list` locally against a string like
@@ -1141,6 +1146,41 @@ duration_seconds() {
 # resolved -- both, or neither: exactly one is an error). Returns 1 if neither
 # resolved (tier not monitored, not an error). Must be called WITHOUT $(...)
 # command substitution -- see resolve_keep_retain's comment for why.
+# resolve_bool_field FIELD SECTION TEMPLATE CONTEXT DEFAULT(0|1)
+# A yes/no field, read strictly, answered in $BOOL_FIELD.
+#
+# These were all `= "yes"` after a trim+lowercase, which means every OTHER
+# spelling -- a typo included -- meant "no", silently, with rc=0. On these
+# sections that is not a harmless default:
+#
+#   recursive = ture   on a [prune:] turns a declared subtree sweep into a
+#                      single dataset. Every child stops being pruned, and the
+#                      only visible difference is a delsnaps line without -R.
+#   gfs       = ture   turns one cascading ladder into N flat per-tier lines,
+#                      which is a different retention shape, not a smaller one.
+#
+# [dataset:]'s own 'recursive' has been fatal-on-unknown since REV-20260807-054
+# -- "an unrecognised value is fatal rather than falsy... precisely the
+# fail-open this whole review exists to remove" -- and these are the sections
+# that reform did not reach.
+#
+# Communicates via a global and must be called WITHOUT $(...), for the reason
+# spelled out at lint_autotune: die() inside a command substitution kills only
+# the subshell, leaving the script running at rc=0 with the value quietly
+# dropped. A validator that can be silently skipped is worse than none.
+BOOL_FIELD=0
+resolve_bool_field() {
+    local field="$1" sec="$2" tmpl="$3" ctx="$4" raw
+    BOOL_FIELD="$5"
+    raw="$(resolve_field "$field" "$sec" "$tmpl" "")" || return 0
+    case "$(trim "$raw" | tr '[:upper:]' '[:lower:]')" in
+        yes) BOOL_FIELD=1 ;;
+        no)  BOOL_FIELD=0 ;;
+        '')  die "$ctx: '$field' is blank -- a blank field is not a default, it is a question nobody answered (say yes or no)" ;;
+        *)   die "$ctx: $field = '$raw' -- expected 'yes' or 'no'. Until 2026-08-20 every other spelling silently meant 'no', which is how a one-letter typo turned a declared policy into its opposite while generation still reported success." ;;
+    esac
+}
+
 MONITOR_WARN=""
 MONITOR_CRIT=""
 MONITOR_SCHEDULE=""
@@ -1462,11 +1502,9 @@ build_prune_section() {
     local tier_list
     tier_list="$(resolve_field use_template "$sec" "" "")" || die "[prune:$scope] has no use_template"
 
-    local recursive clearcut rec_raw cc_raw
-    rec_raw="$(resolve_field recursive "$sec" "" "")" || rec_raw="no"
-    cc_raw="$(resolve_field clear_cut "$sec" "" "")" || cc_raw="no"
-    [ "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && recursive=1 || recursive=0
-    [ "$(trim "$cc_raw"  | tr '[:upper:]' '[:lower:]')" = "yes" ] && clearcut=1  || clearcut=0
+    local recursive clearcut
+    resolve_bool_field recursive "$sec" "" "[prune:$scope]" 0; recursive="$BOOL_FIELD"
+    resolve_bool_field clear_cut "$sec" "" "[prune:$scope]" 0; clearcut="$BOOL_FIELD"
 
     local ssh_flags
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
@@ -1494,9 +1532,8 @@ build_prune_section() {
     # shared prefix the COMBINED ladder call matches against, which is a
     # different, wider net by design (it has to see snapshots from every
     # contributing tier to bucket them by elapsed time).
-    local gfs_raw gfs=0 gfs_pattern="" gfs_retain_parts="" gfs_schedule=""
-    gfs_raw="$(resolve_field gfs "$sec" "" "")" || gfs_raw="no"
-    [ "$(trim "$gfs_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && gfs=1
+    local gfs gfs_pattern="" gfs_retain_parts="" gfs_schedule=""
+    resolve_bool_field gfs "$sec" "" "[prune:$scope]" 0; gfs="$BOOL_FIELD"
     if [ "$gfs" -eq 1 ]; then
         # Phase 3.5: 'gfs_pattern' omitted across the section/defaults chain
         # is now the deliberate prefixless-ladder case -- resolves to "",
@@ -1519,7 +1556,7 @@ build_prune_section() {
         local ntier
         ntier="$(resolve_field tier_label "$sec" "$tmpl" "")" || ntier="$tier"
 
-        local prune_schedule pattern retain_flag plabel praw pnotify prune_raw emit_prune
+        local prune_schedule pattern retain_flag plabel praw pnotify emit_prune
         # prune=no: this section is a MONITOR carrier only. The monitor derives
         # from a (scope,pattern) pair that a prune already needed, which is
         # normally exactly right -- but a leaf sitting under a recursive
@@ -1532,8 +1569,7 @@ build_prune_section() {
         # pve2, 63 times in one day, two alerts landing in the same second.
         # (delsnaps' own lock cannot prevent it -- it is keyed on the dataset
         # list, and these two lines legitimately have different lists.)
-        prune_raw="$(resolve_field prune "$sec" "$tmpl" "")" || prune_raw="yes"
-        [ "$(trim "$prune_raw" | tr '[:upper:]' '[:lower:]')" = "no" ] && emit_prune=0 || emit_prune=1
+        resolve_bool_field prune "$sec" "$tmpl" "[prune:$scope] tier=$tier" 1; emit_prune="$BOOL_FIELD"
 
         plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
         pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
@@ -1660,9 +1696,8 @@ build_bookmark_prune_section() {
     pattern="$(ini_get "$sec" pattern)"
     if ! ini_has "$sec" pattern || [ -z "$pattern" ]; then pattern="tgt-"; fi
 
-    local rec_raw recursive
-    rec_raw="$(resolve_field recursive "$sec" "" "")" || rec_raw="no"
-    [ "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" = "yes" ] && recursive=1 || recursive=0
+    local recursive
+    resolve_bool_field recursive "$sec" "" "[prune-bookmarks:$scope]" 0; recursive="$BOOL_FIELD"
 
     local label notify
     label="$(resolve_field notify "$sec" "" "")" || label=""

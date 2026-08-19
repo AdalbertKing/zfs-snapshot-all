@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 80aa8a924bf94056 -->
+<!-- status-covers-digest: 71ee519a63fce39d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Pola yes/no na `[prune:]`/`[prune-bookmarks:]` czytane ściśle (2026-08-20).**
+  `recursive`, `clear_cut`, `gfs` i `prune` były porównywane z literałem `"yes"`
+  po trim+lowercase, więc KAŻDA inna pisownia — łącznie z literówką i wartością
+  pustą — po cichu znaczyła „nie", przy rc=0 i wyglądającym sensownie bloku.
+  `recursive = ture` zamieniało zadeklarowany sweep poddrzewa w pojedynczy
+  dataset: wszystkie dzieci przestawały być kasowane, a jedynym śladem była linia
+  `delsnaps` bez `-R`. `gfs = ture` zamieniało jedną kaskadową drabinę w N płaskich
+  linii per tier — to inny kształt retencji, nie mniejszy. `[dataset:] recursive`
+  jest fatal-on-unknown od REV-20260807-054 („an unrecognised value is fatal
+  rather than falsy"); to są sekcje, do których tamta reforma nie dotarła.
+  Teraz dozwolone wyłącznie `yes`/`no` (dowolna wielkość liter), puste = błąd.
+  Walidator komunikuje się globalną i jest wołany BEZ `$(...)` — `die` w
+  podstawieniu poleceń ubija tylko podpowłokę i zostawia skrypt na rc=0 z cicho
+  porzuconą wartością (ta sama pułapka, którą opisuje komentarz przy
+  `lint_autotune`). Zasięg: 6 produkcyjnych configów v4 + 4 przykłady z
+  `docs/examples/` bez zmian.
+  Fixture'y: `test/negative/bool-typo`, `test/negative/bool-blank`.
 - **Allow-list pól `gen-cron.sh` zgodzona z rzeczywistymi miejscami odczytu (2026-08-20).**
   Nagłówek sekcji allow-listy od początku deklarował „the lists mirror the
   resolve_field/require_field/ini_has call sites" — i to było nieprawdą w OBIE
