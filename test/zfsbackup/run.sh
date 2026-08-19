@@ -19,6 +19,25 @@ ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
+
+# Hermetic ssh. This suite's header promises "no network", but several SUT
+# functions shell out to `ssh`, and the fixtures point them at unroutable
+# addresses (peer.example, 10.x, 192.168.x). A bare ssh to one of those does not
+# fail fast: on a CI runner the SYN goes nowhere and the call blocks on the
+# kernel's connect timeout (~127s each, since most call sites carry no explicit
+# ConnectTimeout). That is what made this leg take 34 minutes on CI while it
+# finishes in a few on a laptop, where ssh to the same dead address returns
+# almost at once. A global stub makes any UNSTUBBED ssh fail immediately with
+# 255 -- "could not connect", the exact result an unreachable host produces,
+# only without the wait. Tests that need ssh to behave differently prepend their
+# own stub (13 of them do), which still wins on PATH; nothing here can rely on a
+# bare ssh SUCCEEDING, because no fixture address is reachable. Exported so the
+# `( ... )` subshells and `bash -c` re-sources below inherit it.
+_GLOBAL_STUBBIN="$WORK/_ssh_stub"; mkdir -p "$_GLOBAL_STUBBIN"
+printf '#!/bin/sh\nexit 255\n' > "$_GLOBAL_STUBBIN/ssh"
+chmod +x "$_GLOBAL_STUBBIN/ssh"
+export PATH="$_GLOBAL_STUBBIN:$PATH"
+
 # profile_release_tmp: this suite SOURCES zfs-backup.sh, so any profile it loads
 # in this very shell (rather than in one of the `( ... )` subshells below) is
 # this shell's to release -- zfs-backup.sh arms its own EXIT trap only in the
