@@ -208,13 +208,14 @@ Usage:
                                     --name omitted:    derived from HOST; only needed when
                                                        more than one relationship already
                                                        points at the same host
-                                    --local-user=NAME: CREATE-time only. Omit it and the
-                                                       account is resolved: server.conf, else
-                                                       the delegated account this host already
-                                                       has, else 'zfsbackup' (created here).
-                                                       A resolved account is recorded in
-                                                       server.conf so the host keeps ONE
-                                                       decision. --local-user=root states root.
+                                    --local-user=NAME: CREATE-time only. The account the
+                                                       generated jobs run as (root, or any
+                                                       delegated user -- created if absent).
+                                                       OMIT IT AND THEY RUN AS ROOT. No host-
+                                                       wide default, no guessing: name an
+                                                       account to delegate. The choice is
+                                                       recorded WITH the relationship, so
+                                                       activate/remove read it back.
                                     without --install: read-only plan, touches neither host
                                     --install:          enrol (remote --join over SSH), seed,
                                                        verify endpoint, activate
@@ -2745,28 +2746,11 @@ cmd_setup_server() {
             *) die "setup-server: unknown option $a" ;;
         esac
     done
-    # Opt-in, by owner decision: an existing collector keeps running its jobs as
-    # root until someone asks otherwise, so OMITTING the flag records nothing.
-    #
-    # `--local-user=root` used to be folded into that same empty value, on the
-    # reasoning that it "means the same as omitting it, so the flag can be
-    # written down in a runbook without it changing behaviour". That held only
-    # while nothing could ever read an empty LOCAL_USER as an invitation to
-    # choose. RUX now does: with no account recorded it adopts the host's
-    # delegated account or creates one. So an administrator who deliberately
-    # typed root got a delegated account at the next enrolment, silently --
-    # the flag stopped being free the moment the empty value stopped being
-    # inert.
-    #
-    # root is therefore written down as itself. It is a DECISION and survives
-    # as one: cron_target_user() already resolves it (${LOCAL_USER:-root}),
-    # add-client resolves it and then expresses it to deploy.sh by OMITTING
-    # --local-user (its existing contract), activation sees a non-empty value
-    # and so does not fall back to the pairing's account, and RUX sees an
-    # answer and neither scans nor defaults.
-    #
-    # Only the DELEGATION is empty for root: there is no delegated account to
-    # bootstrap, validate or create.
+    # setup-server no longer records a host-wide account: who runs a relationship's
+    # jobs is decided per-relationship at add-client/deploy time (--local-user,
+    # else root) and travels with that relationship. --local-user here is only a
+    # convenience to PRE-CREATE a delegated account while bootstrapping the host;
+    # it writes nothing to server.conf. root names no account to create.
     local delegate="$local_user"
     [ "$delegate" = root ] && delegate=""
     if [ -n "$delegate" ]; then
@@ -2819,7 +2803,6 @@ cmd_setup_server() {
         echo "# zfs-backup.sh server config -- edit by hand if needed, or re-run setup-server"
         echo "DEFAULT_TARGET=$target"
         echo "CRON_CONFIG=$config"
-        echo "LOCAL_USER=$local_user"
     } > "$SERVER_CONF" || die "could not write $SERVER_CONF"
     chmod 0644 "$SERVER_CONF"
 
@@ -3324,8 +3307,10 @@ cmd_add_client() {
                 die "add-client: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
         esac
     else
-        local_user="${LOCAL_USER:-}"
-        [ -n "$local_user" ] || die "add-client: this collector has no delegated backup account configured, so there is no account to run '$name' jobs as -- and defaulting to root would decide that for you silently. Run 'zfs-backup.sh setup-server --local-user=NAME' first, or pass --local-user=root here to state root deliberately. Nothing was created."
+        # No --local-user: the jobs run as root. There is no host-wide account to
+        # read and nothing to guess -- name an account to delegate them instead.
+        local_user=""
+        log "add-client: no --local-user -- '$name' jobs will run as root; pass --local-user=NAME to delegate them to an account"
     fi
     if [ "$mode" != sync ]; then
         if [ -z "$target" ]; then
@@ -3380,10 +3365,11 @@ cmd_add_client() {
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
-    # root is expressed to deploy.sh by OMITTING the flag, which is its existing
-    # contract (setup-server maps --local-user=root to the same thing). Resolved
-    # above either way, so nothing here decides anything.
-    [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
+    # root is expressed to deploy.sh by OMITTING the flag, its existing contract.
+    # Both an explicit 'root' AND an empty local_user (no --local-user given at
+    # all -- the new default) mean exactly that: run as root, delegate nothing.
+    # Only a real account name is passed through.
+    [ -n "$local_user" ] && [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
     # REV-20260802-033 slice 9 / U10: pass-through only -- this file does not
     # reimplement the remote scp/ssh/editor flow, deploy.sh --pair does it
     # (see do_pair). Off by default; --lan= alone still ends with the same
@@ -4121,6 +4107,7 @@ cmd_activate_client() {
     # installed crontab/config orphaned with no record of where it lives.
     # Captured here, before that reset, and restored after it.
     local recorded_cron_config="${CRON_CONFIG:-}"
+    local recorded_local_user="${LOCAL_USER:-}"
     # REV-20260809-088 F1: STATE here is still whatever it was BEFORE this
     # call -- 'endpoint_verified' means this relationship has never reached
     # 'active' before, i.e. this really is the moment a NEW relationship is
@@ -4148,18 +4135,15 @@ cmd_activate_client() {
 
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    # Without a server.conf LOCAL_USER this activation used to fall back to
-    # ROOT's crontab even when the pairing was built around a delegated
-    # account (--local-user at add-client time records it in the manifest as
-    # PEER_SAVED_LOCAL_USER, and every generated job's -K points at that
-    # account's pairing key). Found live 2026-08-17 (lab3): the whole fleet
-    # runs account-based crontabs, and the one RUX-deployed host silently
-    # became the exception. server.conf still wins when it pins LOCAL_USER --
-    # this only fills the gap the manifest can already answer.
-    if [ -z "${LOCAL_USER:-}" ] && [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
-        LOCAL_USER="$PEER_SAVED_LOCAL_USER"
-        log "activate: no LOCAL_USER in server.conf -- using the pairing's delegated account '$LOCAL_USER' for the cron install (make it permanent for this host with setup-server --local-user=$LOCAL_USER)"
-    fi
+    # The account the jobs run as is a fact of the RELATIONSHIP: chosen once at
+    # create (--local-user, else root), carried in the manifest as
+    # PEER_SAVED_LOCAL_USER, and -- from this activation on -- in the client
+    # record too. read_server_conf just reset LOCAL_USER, so resolve it: the
+    # record if a prior activation wrote it, else the manifest, else empty (root,
+    # via cron_target_user). No server.conf account, no host-wide guess. Record it
+    # back below so remove-client and any re-activation read the same answer.
+    LOCAL_USER="${recorded_local_user:-${PEER_SAVED_LOCAL_USER:-}}"
+    log "activate: jobs run as ${LOCAL_USER:-root} (recorded with the relationship below)"
 
     # Sync mode: the RECEIVE-side delegation that backup mode gets at --pair
     # time (deploy.sh grants ZFS_PERMS on target/label) has no counterpart,
@@ -4434,6 +4418,10 @@ cmd_activate_client() {
         # without touching the installed job, and `status` has to be able to
         # tell the operator which is which.
         write_client_field INSTALLED_ENDPOINT "$ACTIVE_ENDPOINT"
+        # The account the jobs run as, recorded with the relationship so
+        # remove-client (and any re-activation) reads it back rather than
+        # re-deriving it from a host-wide file. Empty means root.
+        write_client_field LOCAL_USER       "${LOCAL_USER:-}"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
 
@@ -6133,6 +6121,7 @@ cmd_remove_client() {
     # the reset, and restored after it -- same defect and same fix shape as
     # cmd_activate_client's re-activation case.
     local recorded_cron_config="${CRON_CONFIG:-}"
+    local recorded_local_user="${LOCAL_USER:-}"
     # Without this, LOCAL_USER is unset here and every crontab operation below
     # silently targets ROOT -- on a collector with a dedicated account that
     # means reading the wrong crontab, comparing against the wrong '# Source:',
@@ -6143,24 +6132,16 @@ cmd_remove_client() {
     # today a guard turned a defect into a message instead of an incident.
     read_server_conf
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    # read_server_conf leaves LOCAL_USER empty on a host with no server.conf (a
-    # RUX-deployed collector), and cron_target_user then falls back to root -- so
-    # the cron-block removal below would target root's crontab while the managed
-    # jobs live in the delegated account's, clear nothing, and deploy.sh --unpair
-    # would then refuse on the very lines this failed to remove. cmd_activate_client
-    # resolves the same gap from the manifest's PEER_SAVED_LOCAL_USER; remove-client
-    # has no manifest, so it adopts the account the host already has the same way
-    # RUX and deploy.sh do (owner of the checkout). server.conf still wins when it
-    # pins one. Found live 2026-08-19 (lab3 pve9, sync/passive): remove-client
-    # dispatched to --unpair, which refused on a block it had removed for the wrong
-    # user -- teardown could not undo what activation had installed as the account.
-    if [ -z "${LOCAL_USER:-}" ]; then
-        if [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
-            LOCAL_USER="$PEER_SAVED_LOCAL_USER"
-        else
-            LOCAL_USER="$(rux_detect_local_user || true)"
-        fi
-    fi
+    # The account the managed jobs run as is a fact of the RELATIONSHIP, not the
+    # host: it was decided once at create (--local-user, else root) and recorded
+    # in the client record. read_server_conf has just reset LOCAL_USER, so restore
+    # it from the record; fall back to the manifest's PEER_SAVED_LOCAL_USER for a
+    # relationship enrolled before the record carried the field. Empty means root,
+    # which is exactly what cron_target_user then resolves. Without this the block
+    # removal below would target root's crontab while the jobs live in the
+    # delegated account's, clear nothing, and --unpair would refuse on the lines it
+    # failed to remove (found live 2026-08-19, lab3 pve9 sync/passive).
+    LOCAL_USER="${recorded_local_user:-${PEER_SAVED_LOCAL_USER:-}}"
     [ "${STATE:-}" = "removed" ] && die "client '$name' is already removed"
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
@@ -6366,81 +6347,6 @@ cmd_deploy() {
 # cmd_deploy above) and the existing --join scope/grant confirmation. It adds
 # no second grant mechanism and no second state machine -- the non-goals in
 # the design doc are the boundary of this feature.
-
-# The account a RUX-enrolled relationship runs as when nothing else answers
-# the question. Not a policy invention: every host this product deploys ends
-# up with exactly this account, so requiring the operator to name it was one
-# flag of ceremony for a value that had no alternative in practice. It is the
-# LAST resort -- explicit --local-user, server.conf, and an account this host
-# demonstrably already uses all outrank it.
-RUX_DEFAULT_LOCAL_USER="zfsbackup"
-
-# How a host is asked which delegated account it ALREADY has. Deliberately the
-# same rule deploy.sh maintains accounts by (Phase 8, deploy.sh:5883): the owner
-# of a home directory that contains the account's own checkout. Overridable so
-# the rule itself can be exercised against a tree instead of /home.
-RUX_ACCOUNT_SCAN_GLOB="${RUX_ACCOUNT_SCAN_GLOB:-/home/*/zfs-snapshot-all}"
-
-# rux_detect_local_user -> prints the account this host already treats as its
-# delegated one, or nothing (rc 1).
-#
-# Without this, "no account configured" meant the built-in default, and a host
-# whose delegated account is named something else -- but which never had
-# setup-server run on it -- would get a SECOND account created next to the one
-# deploy.sh is already maintaining, with the new relationship keyed to the
-# newcomer. The refusal this replaced did not have that hole because it made the
-# operator name the account that was already there.
-#
-# Ownership, not directory name: the account is whoever owns the home, which is
-# what deploy.sh reads too.
-rux_detect_local_user() {
-    local cand owner
-    for cand in $RUX_ACCOUNT_SCAN_GLOB; do
-        [ -d "$cand" ] || continue
-        owner=$(stat -c %U "$(dirname "$cand")" 2>/dev/null) || continue
-        [ -n "$owner" ] || continue
-        if id "$owner" >/dev/null 2>&1; then printf '%s' "$owner"; return 0; fi
-    done
-    return 1
-}
-
-# rux_record_local_user <account>
-#
-# Writes the account RUX resolved for itself into server.conf, which is what
-# setup-server would have written had the operator been made to run it. The
-# point is that the host then carries ONE recorded decision: activation reads
-# LOCAL_USER from here, and server.conf outranks the per-relationship value in
-# the manifest ("$PEER_SAVED_LOCAL_USER", zfs-backup.sh:4124). Leave it unwritten
-# and every relationship re-derives the account independently -- agreeing today,
-# and diverging the moment someone runs setup-server with a different name, at
-# which point re-activating an existing relationship moves its cron block to an
-# account that cannot read the key the jobs still point at.
-#
-# Only for accounts RUX resolved ITSELF. An explicit --local-user is a choice
-# about THIS relationship and is not promoted to a host-wide default.
-#
-# Non-fatal: the relationship works without it (the manifest fallback answers),
-# so a failure here is a warning about a future divergence, not a reason to
-# abandon an enrolment mid-flight.
-rux_record_local_user() {
-    local user="$1" dir tmp
-    dir=$(dirname "$SERVER_CONF")
-    mkdir -p "$dir" || { warn "rux: could not create $dir -- '$user' is not recorded in $SERVER_CONF, so this host has no host-wide account decision yet (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
-    tmp=$(mktemp "$dir/.zfs-backup-conf.XXXXXX") || { warn "rux: mktemp failed in $dir -- '$user' is not recorded in $SERVER_CONF (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
-    if [ -e "$SERVER_CONF" ]; then
-        # Only the account line is replaced; DEFAULT_TARGET/CRON_CONFIG and any
-        # hand-added line survive. grep exits 1 on an empty result, which is a
-        # legitimate outcome here (a conf holding nothing else).
-        grep -v '^LOCAL_USER=' "$SERVER_CONF" > "$tmp" || :
-    else
-        echo "# zfs-backup.sh server config -- edit by hand if needed, or re-run setup-server" > "$tmp"
-    fi
-    echo "LOCAL_USER=$user" >> "$tmp"
-    chmod 0644 "$tmp"
-    mv -f "$tmp" "$SERVER_CONF" || { rm -f "$tmp"; warn "rux: could not write $SERVER_CONF -- '$user' is not recorded there (fix with: zfs-backup.sh setup-server --local-user=$user)"; return 0; }
-    LOCAL_USER="$user"
-    log "rux: recorded '$user' as this host's backup account in $SERVER_CONF -- one decision for the host, so later relationships and activations agree with this one"
-}
 
 # rux_is_remote_source <source value> -> rc 0 when it names HOST:DATASET (a
 # local dataset name never legally contains ':' in this tool's own remote
@@ -6724,52 +6630,21 @@ rux_remote_install() {
     local state=""
     [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
 
-    # Which account the generated jobs run as, resolved HERE so the one-command
-    # form does not carry a flag whose only sensible value is the default:
+    # Which account the generated jobs run as. Decided ONCE, here, at create:
     #
-    #   --local-user=NAME   explicit, always wins (root included -- stating root
-    #                       deliberately is still a choice, not a fallback)
-    #   otherwise           this collector's configured account (server.conf)
-    #   otherwise           the account this host already has (rux_detect_local_user)
-    #   otherwise           RUX_DEFAULT_LOCAL_USER
+    #   --local-user=NAME   names the account -- root, or any delegated user
+    #                       (created below if it does not exist yet). Always wins.
+    #   omitted             root. There is no host-wide guess, no adopted account,
+    #                       no server.conf lookup: the job runs as whoever you did
+    #                       NOT delegate it to. Want a delegated account? Name it.
+    #                       That is the whole rule.
     #
-    # The last two both RECORD what they resolved, because they are the cases
-    # where nothing on the host had written the decision down yet.
-    #
-    # Only the FRESH path resolves it. On a resume the account is already fixed
-    # in the client record and the manifest; defaulting there would create an
-    # account this relationship never uses. add-client's own refusal for an
-    # unresolvable account is untouched and still guards the expert path.
+    # The decision then travels WITH THE RELATIONSHIP -- the manifest's
+    # PEER_SAVED_LOCAL_USER and the client record's LOCAL_USER field -- so activate
+    # and remove read it back rather than re-deriving it. A resume ($state set)
+    # never re-resolves. An empty local_user reaches cron_target_user as root.
     if [ -z "$state" ] && [ -z "$local_user" ]; then
-        read_server_conf
-        if [ -n "${LOCAL_USER:-}" ]; then
-            local_user="$LOCAL_USER"
-            log "rux: no --local-user given -- the jobs will run as this collector's configured account '$local_user' (server.conf)"
-        elif [ -e "$SERVER_CONF" ]; then
-            # A conf that exists but names no account is the one state this
-            # command must not resolve. Before root became writable (above) it
-            # was where BOTH "the administrator deliberately chose root" and
-            # "setup-server ran without deciding" ended up, and they need
-            # opposite answers: root, or a delegated account. Guessing either
-            # way is silent, and the wrong guess is invisible until a job runs
-            # as the wrong identity.
-            #
-            # Presence is legitimate evidence HERE, unlike the earlier attempt
-            # at add-client's guard (:3280): there, presence was standing in
-            # for a question the VALUE could answer. Here presence and value
-            # are different facts -- the file says a decision was recorded, the
-            # empty value says it was recorded before root could be written
-            # down. This also refuses exactly where the pre-RUX code refused,
-            # so nothing that works today stops working.
-            die "rux: $SERVER_CONF exists but records no account, which since this version is ambiguous: it is what BOTH a deliberate 'setup-server --local-user=root' and a setup-server that never decided used to write. Say which one this host is -- 'zfs-backup.sh setup-server --local-user=root' to keep the jobs running as root, or 'zfs-backup.sh setup-server --local-user=NAME' to delegate them -- then re-run this command; it resumes. Nothing was enrolled."
-        elif local_user=$(rux_detect_local_user); then
-            log "rux: no --local-user given and none configured -- adopting the delegated account this host already has, '$local_user' (the owner of its checkout, which is how deploy.sh finds it too)"
-            rux_record_local_user "$local_user"
-        else
-            local_user="$RUX_DEFAULT_LOCAL_USER"
-            log "rux: no --local-user given and no delegated account on this host -- the jobs will run as '$local_user' (pass --local-user=root to state root instead)"
-            rux_record_local_user "$local_user"
-        fi
+        log "rux: no --local-user -- the generated jobs will run as root; pass --local-user=NAME to delegate them to an account instead"
     fi
 
     # Accepted semantics: --local-user names the account this relationship

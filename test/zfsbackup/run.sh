@@ -650,17 +650,19 @@ else
     bad "teardown strips the client's own remote source prune and leaves a foreign one" "$(grep '^\[' "$CF5B" | tr '\n' ' ')"
 fi
 
-# --- Batch B: the account is resolved deterministically, never defaulted -----
+# --- Batch B: the account is an explicit per-relationship choice -------------
 #
-# Owner contract (issue #9, Batch B): bare `add-client` uses the collector's
-# configured delegated account, carries it through every artifact, and NEVER
-# silently falls back to root. If no account resolves, command one fails with a
-# single corrective public command. --local-user survives as an expert override.
+# Owner decision (2026-08-19): the account a relationship's jobs run as is stated
+# on the command, not resolved from a host-wide file. --local-user=NAME delegates
+# to any account (root, zfsbackup, bkp, ...); OMITTING it means root. There is no
+# server.conf account, no adopted account, no guessing -- the choice travels WITH
+# the relationship (manifest + client record). This replaced the earlier
+# "resolve/adopt/refuse" contract, whose magic was exactly what the account
+# refactor removed.
 #
-# The four cases are the four ways this can go, and they are asserted as a set
-# because any three of them pass for an implementation that is wrong in the
-# fourth: a build that always refuses passes 'missing' and 'invalid'; one that
-# always defaults passes 'configured' and 'override'.
+# The cases assert the rule as a set: root by default, any account by name, root
+# by name, and an invalid name refused -- because a build that only handles one
+# of them passes some and fails the rest.
 BB="$WORK/batchb"; mkdir -p "$BB"
 cat > "$BB/deploy.sh" <<'EOF'
 #!/bin/bash
@@ -698,13 +700,14 @@ bb_add() {   # <stub LOCAL_USER value> [extra add-client args...]
     ' _ "$ZFSBACKUP" "$BB/deploy.sh" "$BB/clients" "$acct" "$@" 2>&1
 }
 
-# 1. CONFIGURED DEFAULT: bare add-client takes the collector's account and hands
-#    it to the pairing, so keys and delegation are written for that account.
+# 1. NO --local-user: the jobs run as ROOT. Bare add-client passes NO account to
+#    the pairing whatever a server.conf might hold -- root is the honest default,
+#    named nowhere and guessed nowhere -- and still creates the client.
 out="$(bb_add zfsbackup)"
-if grep -q -- '--local-user=zfsbackup' "$BB/pair.log" 2>/dev/null; then
-    ok "Batch B: bare add-client carries the collector's configured account into pairing"
+if [ -f "$BB/pair.log" ] && ! grep -q -- '--local-user=' "$BB/pair.log" 2>/dev/null && [ -d "$BB/clients" ]; then
+    ok "Batch B: bare add-client runs as root (no --local-user passed) and still creates the client"
 else
-    bad "Batch B: bare add-client carries the collector's configured account into pairing" \
+    bad "Batch B: bare add-client runs as root (no --local-user passed) and still creates the client" \
         "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
 fi
 
@@ -717,18 +720,15 @@ else
     bad "Batch B: --local-user overrides the configured account" "pair args: $(cat "$BB/pair.log" 2>/dev/null)"
 fi
 
-# 3. NO ACCOUNT RESOLVABLE: refuse at command one, name the corrective command,
-#    and create nothing. This is the case that used to produce root-run jobs from
-#    a warning nobody had to answer.
-out="$(bb_add "")"
-if printf '%s' "$out" | grep -q 'no delegated backup account configured' \
-   && printf '%s' "$out" | grep -q 'setup-server --local-user=NAME' \
-   && ! printf '%s' "$out" | grep -q 'delegated to nobody' \
-   && [ ! -d "$BB/clients" ]; then
-    ok "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing"
+# 3. ARBITRARY account: any name is delegated and passed through (created if new).
+#    The package is not limited to one blessed account -- this is what makes
+#    --local-user=NAME a real choice rather than a root/zfsbackup toggle.
+out="$(bb_add "" --local-user=bkp)"
+if grep -q -- '--local-user=bkp' "$BB/pair.log" 2>/dev/null && [ -d "$BB/clients" ]; then
+    ok "Batch B: --local-user=bkp delegates the jobs to an arbitrary account"
 else
-    bad "Batch B: an unresolvable account refuses at command one, names the fix, creates nothing" \
-        "$(printf '%s' "$out" | tail -2)"
+    bad "Batch B: --local-user=bkp delegates the jobs to an arbitrary account" \
+        "pair args: $(cat "$BB/pair.log" 2>/dev/null) out: $(printf '%s' "$out" | tail -1)"
 fi
 
 # 3b. ROOT IS STILL REACHABLE, but only by saying so. Without this the guard above
@@ -2155,9 +2155,10 @@ echo "# END zfs-backup-managed"
 exit 0
 EOF
 chmod +x "$RC/bin/crontab"
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=zfsbackup\n' "$RC" > "$RC/server.conf"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\n' "$RC" > "$RC/server.conf"
 : > "$RC/jobs.conf"
-printf 'STATE=active\nMANAGED_DATASETS="tank/a"\nCRON_CONFIG=%s/jobs.conf\n' "$RC" > "$RC/clients/c1.conf"
+# The account is a field of the RELATIONSHIP record now, not server.conf.
+printf 'STATE=active\nMANAGED_DATASETS="tank/a"\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=zfsbackup\n' "$RC" > "$RC/clients/c1.conf"
 : > "$RC/calls"
 
 out=$( PATH="$RC/bin:$PATH" bash -c "
@@ -2173,26 +2174,27 @@ else
     bad "remove-client: a config that does not match the installed block still stops it" "rc=$rc out=$out"
 fi
 
-# The point of the test: which crontab it asked. Every call must name the
-# account; a bare '-l' here would be root's.
+# The point of the test: which crontab it asked. The account comes from the
+# RELATIONSHIP record (LOCAL_USER=zfsbackup); every call must name it, a bare
+# '-l' would be root's.
 if grep -q -- '-u zfsbackup -l' "$RC/calls" && ! grep -qx -- '-l' "$RC/calls"; then
-    ok "remove-client: the configured account's crontab is the one consulted"
+    ok "remove-client: the relationship's recorded account is the crontab consulted"
 else
-    bad "remove-client: the configured account's crontab is the one consulted" "$(cat "$RC/calls")"
+    bad "remove-client: the relationship's recorded account is the crontab consulted" "$(cat "$RC/calls")"
 fi
 
-# With no LOCAL_USER in the server config the same run must target root, and
-# must not invent an account from somewhere else.
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\nLOCAL_USER=\n' "$RC" > "$RC/server.conf"
+# A relationship recorded with NO account (root) targets root's crontab, and
+# invents no account from server.conf or anywhere else.
+printf 'STATE=active\nMANAGED_DATASETS="tank/a"\nCRON_CONFIG=%s/jobs.conf\n' "$RC" > "$RC/clients/c1.conf"
 : > "$RC/calls"
 out=$( PATH="$RC/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
     SERVER_CONF='$RC/server.conf'; CLIENTS_DIR='$RC/clients'
     cmd_remove_client c1" 2>&1 ) || :
 if grep -qx -- '-l' "$RC/calls" && ! grep -q -- '-u ' "$RC/calls"; then
-    ok "remove-client: with no dedicated account it targets root, as before"
+    ok "remove-client: a relationship recorded as root targets root, inventing no account"
 else
-    bad "remove-client: with no dedicated account it targets root, as before" "$(cat "$RC/calls")"
+    bad "remove-client: a relationship recorded as root targets root, inventing no account" "$(cat "$RC/calls")"
 fi
 
 # The other half of the same review note: final-catchup must NOT have gained a
@@ -6838,20 +6840,16 @@ else
     bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
-# --- 61. setup-server records root as root -----------------------------------
+# --- 61. setup-server records no account -- the account is per-relationship --
 #
-# `--local-user=root` was folded into the same empty LOCAL_USER that a
-# setup-server which never decided writes, on the reasoning that root and
-# "unset" behave alike. They stopped behaving alike: with no account recorded,
-# the one-command remote form adopts the host's delegated account or creates
-# one, so an administrator who deliberately typed root would get a delegated
-# account at the next enrolment without being asked.
-#
-# Two halves, asserted together because either alone passes a wrong build: root
-# is WRITTEN (a build that still erases it fails 61a), and no delegated account
-# is bootstrapped for it (a build that writes root by also passing
-# --backup-user=root to deploy.sh -- creating an account named root -- fails
-# 61b).
+# Owner decision (2026-08-19): the account a relationship's jobs run as is stated
+# on the command at add-client/deploy (--local-user, else root) and travels with
+# the relationship. setup-server therefore writes only DEFAULT_TARGET and
+# CRON_CONFIG -- NEVER LOCAL_USER, whatever --local-user it was handed.
+# --local-user here is only a convenience that pre-CREATES a delegated account
+# while bootstrapping the host; it records nothing. This replaced the earlier
+# "setup-server records the host's one account" contract, whose recording is
+# exactly what the account refactor removed.
 SS="$WORK/setupserver"; mkdir -p "$SS/bin" "$SS/etc"
 cat > "$SS/bin/zfs" <<'EOF'
 #!/bin/bash
@@ -6873,10 +6871,10 @@ out=$( PATH="$SS/bin:$PATH" bash -c "
     assert_config_readable_by_target() { :; }
     cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=root
 " 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=root' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61a: setup-server --local-user=root records root, instead of erasing it to an empty value"
+if [ "$rc" -eq 0 ] && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact"
 else
-    bad "61a: setup-server --local-user=root records root, instead of erasing it to an empty value" \
+    bad "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact" \
         "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 if ! grep -q -- '--backup-user' "$SS/deploy.log" 2>/dev/null; then
@@ -6886,11 +6884,9 @@ else
         "deploy args: $(cat "$SS/deploy.log" 2>/dev/null)"
 fi
 
-# 61c. Omitting the flag still records nothing. The owner's opt-in rule is that
-#      an existing collector keeps running as root until someone asks otherwise;
-#      writing root here would turn every bare setup-server into a decision the
-#      operator did not make, and would pin hosts to root against the migration
-#      the fleet has already been through.
+# 61c. --local-user=NAME pre-creates a delegated account (deploy --backup-user)
+#      as a bootstrap convenience, but STILL records no host-wide account -- who
+#      runs a relationship's jobs is that relationship's choice, not a file's.
 rm -f "$SS/etc/zfs-backup.conf"; : > "$SS/deploy.log"
 out=$( PATH="$SS/bin:$PATH" bash -c "
     source '$ZFSBACKUP'
@@ -6898,13 +6894,14 @@ out=$( PATH="$SS/bin:$PATH" bash -c "
     DEPLOY='$SS/deploy.sh'
     ensure_cron_config() { :; }
     assert_config_readable_by_target() { :; }
-    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf'
+    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=bkp
 " 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && grep -qx 'LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61c: bare setup-server still records no account -- root is written only when it is asked for"
+if [ "$rc" -eq 0 ] && grep -q -- '--backup-user=bkp' "$SS/deploy.log" 2>/dev/null \
+   && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
+    ok "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account"
 else
-    bad "61c: bare setup-server still records no account -- root is written only when it is asked for" \
-        "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
+    bad "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account" \
+        "rc=$rc deploy=$(cat "$SS/deploy.log" 2>/dev/null) conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
 echo "--------------------------------------------"
