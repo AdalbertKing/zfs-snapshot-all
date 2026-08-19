@@ -237,25 +237,35 @@ Usage:
                                     before install. Backup-mode only; --target optional
                                     (proposed at pick time). --manual-join opts into the
                                     explicit two-sided form. Same resumability as above.
+Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
                                     --lan, --mode and --datasets remain expert options.
-  zfs-backup.sh seed NAME [--yes]
+  zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
                                     catch-up and endpoint switch, endpoint verification,
                                     config/cron preview and transactional installation.
-  zfs-backup.sh final-catchup NAME [--yes]
+
+  Steps 'activate' runs for you -- invoke directly only to recover a stuck
+  activation. 'activate' is idempotent and resumable, so prefer re-running it:
   zfs-backup.sh set-endpoint NAME --host=HOST[:PORT] [--skip-final-catchup] [--allow-stale-catchup]
   zfs-backup.sh verify-endpoint NAME
+  zfs-backup.sh final-catchup NAME [--yes]
   zfs-backup.sh activate-client NAME [--yes] [--verbose]
-  zfs-backup.sh migrate-profile [--yes]
-  zfs-backup.sh audit-source-retention [--apply] [--yes]
+
+Client state control:
   zfs-backup.sh pause-client NAME [--reason=TEXT]
   zfs-backup.sh resume-client NAME
   zfs-backup.sh disable-client NAME [--reason=TEXT]
   zfs-backup.sh enable-client NAME
+
+Config maintenance:
+  zfs-backup.sh migrate-profile [--yes]
+  zfs-backup.sh audit-source-retention [--apply] [--yes]
+
+Inspection / teardown:
   zfs-backup.sh status [NAME]
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
