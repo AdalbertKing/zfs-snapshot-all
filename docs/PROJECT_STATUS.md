@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52d6459eb6a5ed03 -->
+<!-- status-covers-digest: 1d129766bd4ebe8e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`remove-client` rozbiera relacje na hoście bez server.conf (2026-08-19).**
+  Znalezione na żywo przy teardownie lab3 pve9 (sync/passive, brak server.conf):
+  `cmd_remove_client` po `read_server_conf` zostawiał `LOCAL_USER` puste, więc
+  `cron_target_user` spadał na roota — a bloki managed żyją w crontabie konta
+  delegowanego. `cron_block_remove` czyścił więc crontab ROOTA (no-op), blok
+  zfsbackup przeżywał, i `deploy.sh --unpair` odmawiał „dopóki linie działają" —
+  kołowo, teardown nie mógł cofnąć tego, co aktywacja zainstalowała jako konto.
+  `cmd_activate_client` (strona zapisu) rozwiązywał to z manifestu
+  (`PEER_SAVED_LOCAL_USER`); remove-client nie ma manifestu, więc teraz **adoptuje
+  konto, które host już ma** (`rux_detect_local_user` = właściciel checkoutu, ta
+  sama reguła co deploy.sh/RUX). server.conf dalej wygrywa, gdy przypina; host bez
+  konta delegowanego dalej spada na roota. LIVE-PROVEN: pve9 rozebrany czysto —
+  managed usunięty z konta, blok `zfs-backup-host` roota (auto-pull) nietknięty,
+  klient `removed`, `--unpair` przeszedł.
 
 - **ssh do martwego peera już nie wisi ~130 s (2026-08-19).** ZMIERZONE na żywym
   Linuksie (pve0): `ssh -o BatchMode=yes 10.5.5.5 true` na nierutowalny adres
