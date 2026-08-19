@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: afd96ce8d06a5b26 -->
+<!-- status-covers-digest: 4b5444687e6cb69b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`gen-cron.sh` odmawia drabiny GFS, która nie widzi zasilających ją tierów (2026-08-20).**
+  Druga dziura z tej samej rodziny co niżej, w `[prune:]` z `gfs = yes`. Każdy
+  tier z `use_template` oddaje drabinie literę kubełka i licznik (`-H24 -D7 -W4`),
+  ale drabina dopasowuje po JEDNYM `gfs_pattern` — a `delsnaps.sh` matchuje po
+  prefiksie. Dotąd `gfs_pattern = zabbix_` przy tierach `automated_*` przechodziło
+  z rc=0: licznik tierów szedł na cudzą rodzinę, `automated_*` nie kasował nikt,
+  a monitor każdego tieru — czytający dalej swój własny, wąski `pattern` — świecił
+  na zielono, bo świeże snapshoty faktycznie przychodziły. Wersja za wąska
+  (`gfs_pattern = automated_hourly` przy tierach hourly/daily/weekly) tak samo.
+  Teraz: `pattern` KAŻDEGO zasilającego tieru musi zaczynać się od `gfs_pattern`.
+  Sprawdzane tylko dla tierów, które realnie zasilają drabinę — `prune = no` niesie
+  sam monitor i drabinie nic nie oddaje. Pominięty `gfs_pattern` (drabina
+  prefixless z Fazy 3.5) to `""`, prefiks wszystkiego, więc przechodzi bez
+  przypadku szczególnego. Produkcyjny `[prune:hdd/backups]` na pve2 (`gfs_pattern
+  = automated_`, jedyna żywa drabina we flocie) przechodzi; kontrola pozytywna:
+  ten sam plik ze zwężonym `gfs_pattern` jest odrzucany.
+  Fixture: `test/negative/gfs-pattern-blind`.
 - **`gen-cron.sh` odmawia tieru, który tworzy jedną rodzinę snapshotów a kasuje inną (2026-08-19).**
   Czyszczenie semantyki warstwy konfiguracyjnej. Tier mający JEDNOCZEŚNIE
   `send_schedule` i `prune_schedule` musi umieć skasować to, co tworzy:
