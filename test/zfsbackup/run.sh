@@ -26,8 +26,13 @@ WORK="$(mktemp -d)"
 # that sourced it. Defined later in the file; by EXIT it exists.
 trap 'profile_release_tmp; rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
-ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
-bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
+# PROFILING (throwaway branch): flag any assertion whose preceding work took >=3s.
+# EPOCHSECONDS is a bash builtin -> no fork, so the probe cannot itself distort
+# the measurement. The gap is charged to the assertion it precedes.
+_PL=${EPOCHSECONDS:-0}
+_lap() { local d=$(( ${EPOCHSECONDS:-0} - _PL )); [ "$d" -ge 3 ] && echo "[[SLOW +${d}s]] $1"; _PL=${EPOCHSECONDS:-0}; }
+ok()  { _lap "$1"; echo "PASS $1"; PASS=$((PASS+1)); }
+bad() { _lap "$1"; echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
 # Source, not exec: guarded by the same BASH_SOURCE==$0 idiom update-control.sh
 # uses, so this reaches the helper functions without running the dispatch.
