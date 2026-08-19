@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 952c477560786543 -->
+<!-- status-covers-digest: 46ef77939d294d1c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,7 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Martwy wrapper `cron_replace_all` usunięty (2026-08-19).** Po usunięciu migrate stracił jedynego callera. `cron_replace_all_impl` (realna praca: read/F4-markers/write) ZOSTAJE — `deploy.sh` woła go wprost w trybie batch (wiele bloków pod jednym lockiem). Wrapper dodawał tylko lock/unlock. Test `cron` sekcja T repointowana na `_impl` (pełne pokrycie T1-T9 zachowane; lock testowany osobno w sekcji U).
 - **Czasownik `migrate-to-account` USUNIĘTY (2026-08-19).** Sprzątanie narośli
   komend. Był to jednotransakcyjny root→konto **host-wide** przenoszący cały blok
   crona hosta na jedno konto (5 faz REV-020). Zadanie spełnione — flota zmigrowana
