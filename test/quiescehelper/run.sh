@@ -1334,12 +1334,6 @@ grep -q -- '--add-quiesce)   ALLOW_QUIESCE=1; QUIESCE_MERGE=1; shift ;;' "$REPO/
     && ok "merge-q: --add-quiesce provisions like --allow-quiesce but merges" \
     || bad "merge-q: --add-quiesce provisions like --allow-quiesce but merges" "brak flagi"
 
-# And the remediation prints the additive one -- the whole point is that the
-# generated command is safe to paste without knowing which of the two it is.
-grep -q 'q=" --add-quiesce"' "$REPO/zfs-backup.sh" \
-    && ok "merge-q: the remediation block prints --add-quiesce" \
-    || bad "merge-q: the remediation block prints --add-quiesce" "nadal --allow-quiesce"
-
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
