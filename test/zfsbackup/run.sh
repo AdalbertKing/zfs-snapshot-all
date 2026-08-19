@@ -3909,9 +3909,23 @@ sed -i "/^\[dataset:$(printf '%s' "$DS9" | sed 's,/,\\/,g')\]/,/^\[prune:/ s/^\t
 # preservation-safe by design -- so a hand-edit to it would (correctly) be
 # discarded on the endpoint switch below and must not be part of this preservation
 # assertion. Scope the sed to the target ladder's own section.
-sed -i "/^\[prune:$(printf '%s' "$PR9" | sed 's,/,\\/,g')\]/,/^\[/ s/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_custom_/" "$C9"
+#
+# The customized value is NOT an arbitrary marker string. Step 6b below feeds
+# the result to the REAL gen-cron.sh, which requires every contributing tier's
+# 'pattern' to start with 'gfs_pattern' -- otherwise the ladder cannot see the
+# snapshots whose retention counts it was handed. The profile's keep_* tiers all
+# use pattern = automated_hourly, so narrowing the ladder to that same series is
+# both a realistic operator edit and a legal one. It is still plainly distinct
+# from the profile default (automated_) and from the drift marker
+# (automated_PROFILEDRIFT_), which is all the preservation assertion needs.
+# A marker chosen only for looking custom (this was automated_custom_ until
+# 2026-08-20) describes a ladder blind to its own tiers, and step 6b would be
+# asserting that gen-cron.sh accepts a config that silently prunes nothing.
+# Step 7's sync marker stays arbitrary on purpose: that config is never handed
+# to gen-cron.sh, so nothing there depends on it describing a coherent ladder.
+sed -i "/^\[prune:$(printf '%s' "$PR9" | sed 's,/,\\/,g')\]/,/^\[/ s/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_hourly/" "$C9"
 before_recursive=$(grep -c 'recursive    = flat' "$C9")
-before_pattern=$(grep -c 'gfs_pattern  = automated_custom_' "$C9")
+before_pattern=$(grep -c 'gfs_pattern  = automated_hourly' "$C9")
 
 # STEP 3 -- a real endpoint change, then a real re-activation.
 out=$(emit9 "$C9" c9 10.9.9.2 0); rc=$?
@@ -3927,12 +3941,12 @@ fi
 # STEP 5 -- the customized/policy fields did NOT.
 if [ "$(grep -c 'recursive    = flat' "$C9")" = "$before_recursive" ] \
         && [ "$before_recursive" -ge 1 ] \
-        && [ "$(grep -c 'gfs_pattern  = automated_custom_' "$C9")" = "$before_pattern" ] \
+        && [ "$(grep -c 'gfs_pattern  = automated_hourly' "$C9")" = "$before_pattern" ] \
         && [ "$before_pattern" -ge 1 ]; then
     ok "89 step 5: re-activation preserves the hand-customized dataset and prune policy"
 else
     bad "89 step 5: re-activation preserves the hand-customized dataset and prune policy" \
-        "recursive before=$before_recursive after=$(grep -c 'recursive    = flat' "$C9") pattern before=$before_pattern after=$(grep -c 'gfs_pattern  = automated_custom_' "$C9") file=$(cat "$C9")"
+        "recursive before=$before_recursive after=$(grep -c 'recursive    = flat' "$C9") pattern before=$before_pattern after=$(grep -c 'gfs_pattern  = automated_hourly' "$C9") file=$(cat "$C9")"
 fi
 
 # The section must not have grown a second copy of itself either.
@@ -3952,7 +3966,7 @@ sed -i 's/^gfs_pattern *=.*/gfs_pattern = automated_PROFILEDRIFT_/' "$P9/prof/pr
 out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
         && grep -q 'recursive    = flat' "$C9" \
-        && grep -q 'gfs_pattern  = automated_custom_' "$C9" \
+        && grep -q 'gfs_pattern  = automated_hourly' "$C9" \
         && grep -q "src *= *zfsbackup@10.9.9.3:rpool/data" "$C9"; then
     ok "89 step 6: a profile edited after CREATE does not reach an installed relationship"
 else
@@ -4000,7 +4014,7 @@ fi
 # from the profile is that command's entire purpose.
 out=$(emit9 "$C9" c9 10.9.9.5 1); rc=$?
 if [ "$rc" -eq 0 ] && grep -q "gfs_pattern *= *automated_PROFILEDRIFT_" "$C9" \
-        && ! grep -q 'gfs_pattern  = automated_custom_' "$C9"; then
+        && ! grep -q 'gfs_pattern  = automated_hourly' "$C9"; then
     ok "89 first-activation/migrate path still regenerates from the profile"
 else
     bad "89 first-activation/migrate path still regenerates from the profile" "rc=$rc out=$out file=$(cat "$C9")"
