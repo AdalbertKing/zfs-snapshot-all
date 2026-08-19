@@ -783,27 +783,19 @@ cron_block_merge_render() {   # <curfile> <name> <linesfile> <outfile> [begin_ta
     return $rc
 }
 
-# Replace <user>'s ENTIRE crontab with <infile>, verified.
+# Replace <user>'s ENTIRE crontab with <infile>, verified. The whole-crontab
+# primitive, for a change that cannot be expressed as one named block's
+# replace/remove -- e.g. "a whole crontab minus one collector block".
 #
-# The whole-crontab primitive, for a change that cannot be expressed as one
-# named block's replace/remove -- e.g. an intermediate state like "a whole
-# crontab minus one collector block", which is not itself a single named
-# block.
+# UNLOCKED: the caller holds the cron lock. deploy.sh installs several blocks
+# under ONE lock, calling this once per block, so a later block's failure can
+# never leave a half-written crontab behind an already-released lock.
 #
-# Still goes through the shared lock and the shared write/read-back path, and
-# still refuses a target whose markers are malformed (F4): installing an
-# already-broken layout would make the FIRST ordinary block write after it
-# guess where somebody else's lines start. This is therefore also the
-# guardrail against installing a rendered crontab that itself violates the
-# one-block-per-name invariant -- a bug in the CALLER's renderer, not a race,
-# but the same check either way.
-cron_replace_all() {   # <user> <infile>  -> 0 ok, 1 refused/failed (CRON_ERR set)
-    local who="$1"
-    cron_lock_acquire "$who" || return 1
-    cron_replace_all_impl "$@"; local rc=$?
-    cron_lock_release "$who"
-    return "$rc"
-}
+# Refuses a target whose markers are malformed (F4): installing an already-
+# broken layout would make the FIRST ordinary block write after it guess where
+# somebody else's lines start -- the guardrail against a rendered crontab that
+# itself violates the one-block-per-name invariant, a bug in the CALLER's
+# renderer. Goes through the same write/read-back path as every other write.
 cron_replace_all_impl() {
     local who="$1" in="$2"
     CRON_ERR=""
