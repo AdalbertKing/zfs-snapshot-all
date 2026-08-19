@@ -4631,6 +4631,22 @@ else
     bad "43 verify-endpoint tells a disabled relationship apart from an unreachable address" "the PAIR_DISABLED discrimination is missing"
 fi
 
+# 7a. Every ssh in zfs-backup.sh must be bounded on BOTH failure modes a dead
+# peer produces: ConnectTimeout for one that never answers the SYN (measured:
+# ~130s to a black-holed address, and the reason a single leaked fixture ssh
+# turned this very suite's leg into 34 minutes), and ServerAlive* for one that
+# goes silent AFTER connecting. Counted per option, so a NEW ssh added without
+# either trips it. Fails on the pre-fix tree (9 BatchMode vs 1 ConnectTimeout).
+_bm=$(grep -c 'o BatchMode=yes' "$ZFSBACKUP")
+_ct=$(grep -c 'o ConnectTimeout=' "$ZFSBACKUP")
+_sa=$(grep -c 'o ServerAliveInterval=' "$ZFSBACKUP")
+if [ "$_bm" -gt 0 ] && [ "$_bm" -eq "$_ct" ] && [ "$_bm" -eq "$_sa" ]; then
+    ok "every BatchMode ssh in zfs-backup.sh carries ConnectTimeout + ServerAlive ($_bm groups)"
+else
+    bad "every BatchMode ssh in zfs-backup.sh carries ConnectTimeout + ServerAlive" \
+        "BatchMode=$_bm ConnectTimeout=$_ct ServerAlive=$_sa -- an unbounded ssh hangs on a dead peer"
+fi
+
 # 7. An unreachable peer is never read as "active": peer_pair_state must fail
 #    rather than default to a comfortable answer.
 out=$( ( pair_control() { return 255; }; peer_pair_state; echo "rc=$?; state=[${PEER_PAIR_STATE:-}]" ) 2>&1 )

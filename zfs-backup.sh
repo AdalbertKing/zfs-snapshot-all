@@ -143,6 +143,20 @@ source "$LIBPROFILE"
 PEER_STATE_DIR="/etc/zfs-snapshot-all/peers"
 PEER_KEY_DIR="/root/.ssh/pairing"
 
+# Every ssh below reaches a peer that may be down. With no bound the connect
+# blocks on the kernel's SYN timeout (~130s to a black-holed address) before it
+# fails -- long enough to stall a cron run on a dead peer, and, measured, the
+# thing that turned the zfsbackup test leg into 34 minutes. ConnectTimeout caps
+# the connect; ServerAlive* caps a peer that goes SILENT mid-command (connected,
+# then the link dies) -- without it a short control command could still hang for
+# as long as TCP takes to notice. These mirror the data-plane engine's own values
+# (snapsend.sh/snapget.sh SSH_OPTS), so both planes fail a dead peer the same way.
+# One ceiling for every call site; env-overridable, and deliberately not readonly
+# (this file is sourced, sometimes more than once in a shell).
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-15}"
+SSH_SERVER_ALIVE_INTERVAL="${SSH_SERVER_ALIVE_INTERVAL:-15}"
+SSH_SERVER_ALIVE_COUNT="${SSH_SERVER_ALIVE_COUNT:-4}"
+
 # REV-20260804-037: how the PEER names files ABOUT this collector -- the
 # scope file/hash sidecar deploy.sh's do_pair/do_join write under
 # peer_scope_path() on the peer live at <label>.scope, where <label> is
@@ -498,7 +512,7 @@ endpoint_display() {
 # the same account; the raw per-level dump is shown only when verbose=1.
 check_inherited_grants() {
     local ds="$1" account="$2" host="$3" port="$4" keyfile="$5" alias_kh="$6" alias="$7" verbose="$8"
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
     local path="" seg out found_exact=0 ancestors=""
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
@@ -538,7 +552,7 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
     local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
     local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" \
         -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes \
-        -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+        -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
     local ds out rc
     for ds in "$@"; do
         out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
@@ -2175,7 +2189,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         for pds in $PEER_SAVED_DATASETS; do
             if ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
                    -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-                   -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+                   -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
                    "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot -d 1 -o name -- '$pds'" 2>/dev/null \
                  | grep -q '@automated_'; then
                 passive_ds+=("$pds")
@@ -3462,7 +3476,7 @@ fetch_committed_scope() {
     local outfile="$1"
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
     # REV-20260804-037: NOT $LOAD_LABEL (see $COLLECTOR_LABEL's own comment
     # at its declaration for why these two are different labels, and why
     # using the wrong one here was invisible to every prior local test).
@@ -3500,7 +3514,7 @@ resolve_mode_datasets() {
 
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no)
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
 
     local scope_tmp
     scope_tmp=$(mktemp) || die "mktemp failed"
@@ -4279,7 +4293,7 @@ cmd_activate_client() {
             local newest
             newest=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
                 -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-                -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+                -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
                 "${LOAD_ACCOUNT}@${LOAD_HOST}" \
                 "zfs list -H -t snapshot -d 1 -o name,creation -p -- '$ds' 2>/dev/null | grep '@${dr_prefix:-automated_}' | sort -k2,2n | tail -1 | cut -f1")
             if [ -n "$newest" ]; then
@@ -4376,7 +4390,7 @@ cmd_activate_client() {
     local_tz=$(date +%z)
     peer_tz=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
         "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
     if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
         warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
@@ -5780,7 +5794,7 @@ pair_control() {   # <verb> -> prints the gate's reply, non-zero on failure
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
         -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null \
-        -o CheckHostIP=no -o ConnectTimeout=15)
+        -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
     ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "PAIR-CONTROL $verb"
 }
 
@@ -6611,7 +6625,8 @@ rux_remote_plan() {
 rux_root_ssh() {   # <host> <port> <command...>
     local host="$1" port="$2"; shift 2
     ssh -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts \
-        -o StrictHostKeyChecking=yes -p "${port:-22}" "root@$host" "$@"
+        -o StrictHostKeyChecking=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
+        -p "${port:-22}" "root@$host" "$@"
 }
 
 rux_grant_remotely() {   # <host> <port> <requested dataset>
