@@ -635,6 +635,102 @@ out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/server2.conf" POO
     && ok "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" \
     || bad "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" "order=[$(tr '\n' ',' < "$WORK/order" 2>/dev/null)] $(printf '%s' "$out"|tail -2)"
 
+# ===========================================================================
+# gen-cron.sh --uninstall -- taking back what a local deployment installed.
+#
+# Found by running the deployment matrix on pve9, 2026-08-20: a LOCAL backup
+# (one host, --source/--target, no peer) installs a managed block that nothing
+# could then remove. remove-client needs a relationship; clean-relationships.sh
+# correctly reports that a local backup is not one; and emptying the config is
+# refused with "no send/prune/monitor rules resolved". The package could build
+# something it could not take apart.
+#
+# Its own STATEFUL crontab stub, because the shared one above always answers
+# `-l` with a block -- and the property here is precisely that the block stops
+# being there. A stub that cannot represent "gone" cannot test a removal.
+# ===========================================================================
+# The crontab writer locks with flock. Where there is none -- Git Bash on
+# Windows, where much of this tree is edited -- these five cases would fail for
+# the environment rather than for the code, which is how a suite gets muted.
+# Skipped loudly instead; CI runs on Linux and exercises them for real.
+if ! command -v flock >/dev/null 2>&1; then
+    echo "SKIP uninstall cases (no flock on this machine -- the crontab writer needs it)"
+else
+UWORK="$WORK/uninstall"; mkdir -p "$UWORK/bin" "$UWORK/locks"
+printf '# BEGIN zfs-backup-managed\n# Source: /etc/x.conf -- do not edit\n1 * * * * /bin/true\n# END zfs-backup-managed\n7 7 * * * /root/mine.sh\n' > "$UWORK/tab"
+# lib-cron writes with `crontab <file>` -- a FILENAME argument, not stdin. A
+# stub that reads stdin instead silently stores an empty crontab, the writer's
+# read-back correctly refuses, and the failure looks like the tool's. CI caught
+# exactly that; this machine had skipped the cases for want of flock.
+cat > "$UWORK/bin/crontab" <<EOF
+#!/bin/sh
+last=""
+for a in "\$@"; do last="\$a"; done
+case " \$* " in
+  *" -l "*) cat "$UWORK/tab" ;;
+  *) if [ -n "\$last" ] && [ -f "\$last" ]; then cat "\$last" > "$UWORK/tab"; else cat > "$UWORK/tab"; fi ;;
+esac
+exit 0
+EOF
+chmod +x "$UWORK/bin/crontab"
+
+out=$( PATH="$UWORK/bin:$PATH" CRON_LOCK_DIR="$UWORK/locks" \
+       bash "$REPO/gen-cron.sh" --uninstall 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -q 'BEGIN zfs-backup-managed' "$UWORK/tab" \
+   && grep -q '7 7 \* \* \* /root/mine.sh' "$UWORK/tab"; then
+    ok "uninstall: the managed block goes, and a human's own line survives"
+else
+    bad "uninstall: the managed block goes, and a human's own line survives" \
+        "rc=$rc out=$out tab=[$(cat "$UWORK/tab")]"
+fi
+
+# It says what it did NOT do. "Uninstalled" next to a target dataset that still
+# holds every backup is the sentence an operator would misread, so the removal
+# names the boundary out loud rather than leaving it implied.
+if grep -q 'removed the SCHEDULE, not the backups' <<<"$out"; then
+    ok "uninstall: says it removed the schedule and not the data"
+else
+    bad "uninstall: says it removed the schedule and not the data" "$out"
+fi
+
+# Idempotent, and honest about it: a second run is not an error and does not
+# claim to have removed something.
+out2=$( PATH="$UWORK/bin:$PATH" CRON_LOCK_DIR="$UWORK/locks" \
+        bash "$REPO/gen-cron.sh" --uninstall 2>&1 ); rc2=$?
+if [ "$rc2" -eq 0 ] && grep -q 'nothing to remove' <<<"$out2"; then
+    ok "uninstall: running it twice is a no-op that says so"
+else
+    bad "uninstall: running it twice is a no-op that says so" "rc=$rc2 out=$out2"
+fi
+
+# NO CONFIG REQUIRED -- the usual reason to reach for this is that the config is
+# already gone, so demanding one would refuse exactly when it is most needed.
+if ! grep -q 'config file not found' <<<"$out"; then
+    ok "uninstall: needs no config, since a missing config is why you want it"
+else
+    bad "uninstall: needs no config, since a missing config is why you want it" "$out"
+fi
+
+# Opposites refuse rather than resolving in some order the caller cannot see.
+out3=$( PATH="$UWORK/bin:$PATH" CRON_LOCK_DIR="$UWORK/locks" \
+        bash "$REPO/gen-cron.sh" --install --uninstall 2>&1 ); rc3=$?
+if [ "$rc3" -ne 0 ] && grep -qi 'opposites' <<<"$out3"; then
+    ok "uninstall: --install --uninstall together is refused"
+else
+    bad "uninstall: --install --uninstall together is refused" "rc=$rc3 out=$out3"
+fi
+fi   # flock present
+
+# This one needs no flock: the refusal happens during argument checking, before
+# any lock is taken, and it is the one case that must hold everywhere.
+out4=$( bash "$REPO/gen-cron.sh" --install --uninstall 2>&1 ); rc4=$?
+if [ "$rc4" -ne 0 ] && grep -qi 'opposites' <<<"$out4"; then
+    ok "uninstall: --install --uninstall is refused before any lock is attempted"
+else
+    bad "uninstall: --install --uninstall is refused before any lock is attempted" "rc=$rc4 out=$out4"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
