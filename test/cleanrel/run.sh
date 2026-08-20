@@ -395,7 +395,51 @@ else
     bad "without zfs the data check says so rather than reporting nothing" "$out"
 fi
 
-# 22. Sandbox integrity: the suite must be incapable of touching a real path.
+# ---------------------------------------------------------------------------
+# 22-23. THE DELEGATED ACCOUNT'S OWN KEYS, and orphan addresses.
+#
+# Measured on pve1 2026-08-20, building a relationship the production way
+# (--local-user): the account keeps its pairing keys in
+# /home/<acct>/.ssh/pairing-<addr>_* -- a PREFIX, where root uses a directory.
+# This tool scanned only root's, so on a production host it was reporting the
+# half nobody uses. One of the five files there was
+# `pairing-192.168.28.190_alias_known_hosts`: an address named by no config and
+# no cron line, exactly what this tool exists to surface.
+#
+# The second half is worse and older: SEEN_ADDR was collected and never
+# reported, so ANY key file whose client record had already been deleted was
+# invisible -- in root's directory too.
+# ---------------------------------------------------------------------------
+T="$WORK/t22"; build_tree "$T"
+mkdir -p "$T/home/zfsbackup/.ssh"
+# keys for the LIVE relationship, in the account's own naming
+touch "$T/home/zfsbackup/.ssh/pairing-10.0.0.8_ed25519" \
+      "$T/home/zfsbackup/.ssh/pairing-10.0.0.8_alias_known_hosts"
+# and a key for an address nothing else on the host mentions at all
+touch "$T/home/zfsbackup/.ssh/pairing-10.0.0.190_alias_known_hosts"
+out=$(run_cr "$T")
+if grep -q 'pairing-10.0.0.8_ed25519' <<<"$out"; then
+    ok "the delegated account's own key directory is scanned, not just root's"
+else
+    bad "the delegated account's own key directory is scanned, not just root's" "$out"
+fi
+if grep -q '10.0.0.190' <<<"$out" && grep -q 'pairing-10.0.0.190_alias_known_hosts' <<<"$out"; then
+    ok "an address with no client record left is reported, not silently dropped"
+else
+    bad "an address with no client record left is reported, not silently dropped" "$out"
+fi
+
+# 24. ...and the live relationship still appears ONCE. It now has two identities
+#     that both resolve (its name and its address), and reporting both would
+#     double every live entry on a real host.
+if [ "$(grep -c 'live-one  \[' <<<"$out")" -eq 1 ] \
+   && ! grep -qE '^  10\.0\.0\.8  \[' <<<"$out"; then
+    ok "a live relationship is still listed once, under its name and not also its address"
+else
+    bad "a live relationship is still listed once, under its name and not also its address" "$out"
+fi
+
+# 25. Sandbox integrity: the suite must be incapable of touching a real path.
 #     Asserted against the source, because this is a property of the tool's
 #     defaults rather than of any single run.
 #     Every writable path is listed, and so is the root-check's own list --
