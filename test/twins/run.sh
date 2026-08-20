@@ -74,6 +74,30 @@ done
 # The twinned set. Every function defined under the same name in both scripts.
 # Keep this list exhaustive rather than curated: a name that exists in both and
 # is NOT watched here is the one place drift gets to happen unobserved.
+#
+# It was NOT exhaustive until 2026-08-20. Twelve functions are defined under the
+# same name in both scripts; eight were listed. The four that were missing --
+# translate_long_options, opt_takes_arg, cluster_needs_next, declare_recursion --
+# are byte-identical today (46/3/11/4 lines, zero diff), which is both why they
+# were easy to overlook and why a later divergence in them would be hard to see.
+#
+# They differ IN KIND from the other eight, and that is worth stating rather
+# than leaving to be rediscovered. The eight carry DIRECTION: push reads locally
+# and writes remotely, pull the reverse, so their bodies legitimately disagree
+# and the baseline pins each side separately. These four carry none -- they
+# parse an option string and declare recursion.
+#
+# That does NOT make them candidates for lib-zfs-snap.sh. Merging the engines
+# was considered and REJECTED on 2026-08-04 (docs/PROJECT_STATUS.md, and the
+# twin-functions contract in test/deps.conf): the direction parameter a merge
+# needs fails OPEN on common-base detection, and test/snapsend is LOCAL MODE
+# ONLY by design, so the suite that would catch it structurally cannot. This
+# suite is the alarm that decision chose INSTEAD of merging -- a gap in the
+# alarm is a hole in that decision, not an argument against it.
+#
+# translate_long_options is the one to feel embarrassed about: its own comment
+# argues that "a hand-kept list is a list that drifts, and a drift here is
+# silent" -- while being a hand-kept second copy that nothing watched.
 TWINS="
 get_sorted_snapshots
 find_conflicting_snapshots
@@ -83,6 +107,10 @@ find_common_snapshot
 create_snapshot
 transfer_data
 process_dataset
+translate_long_options
+opt_takes_arg
+cluster_needs_next
+declare_recursion
 "
 
 # Space-separated form of the same list, for membership tests. $TWINS is
