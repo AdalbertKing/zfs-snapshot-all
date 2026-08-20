@@ -658,10 +658,21 @@ engine_freeze() {
 
     rev="$(freeze_authorised_by)"
     if [ "$rev" = "-" ]; then
+        # The message used to send the reader to the reviewer route -- "name
+        # that review in the unfreeze: marker" -- which has been unusable since
+        # the owner removed the reviewer on 2026-08-15. A gate that refuses you
+        # and then points at a process that does not exist is worse than no
+        # gate: it reads as a bug in the tool rather than a question about the
+        # change. Names the live route instead (2026-08-20).
         echo "  FROZEN.$moved changed, and nothing authorises it."
-        echo "  A frozen engine file changes only after a review asks for it."
-        echo "  Name that review in the unfreeze: marker of $FREEZE_FILE,"
-        echo "  or run ./test/impact.sh --refreeze if the change is already reviewed and closed."
+        echo "  A frozen engine is the code every relationship in the fleet runs nightly."
+        echo "  If the change is intended:"
+        echo "    1. ./test/impact.sh --refreeze     (re-pins the baseline)"
+        echo "    2. add an entry to the 'Owner-authorized refreezes' list in $FREEZE_FILE"
+        echo "       -- date, files, what changed, and whether it was directed beforehand."
+        echo "  Step 2 is the mechanism. Anyone can run step 1, so the baseline reset is"
+        echo "  not what makes the change visible; the entry is. A refreeze with no entry"
+        echo "  is the silent engine edit this freeze exists to prevent."
         return 1
     fi
     if [ ! -f "$RDIR_FREEZE/$rev.md" ] && ! ls "$RDIR_FREEZE/$rev"-*.md >/dev/null 2>&1; then
