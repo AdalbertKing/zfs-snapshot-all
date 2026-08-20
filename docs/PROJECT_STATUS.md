@@ -97,6 +97,24 @@
   u jedynego wołającego; stawką jest klucz cache, więc zły klucz przechodzi
   między pulami. Semantyka transferu nietknięta.
   `test/quiesce` +11 testów, sprawdzonych jako padające na zamrożonej bazie.
+- **`gen-cron.sh --uninstall` — właściciel bloku umie go wreszcie zdjąć (2026-08-20).**
+  Znalezione przy przechodzeniu macierzy wdrożeń na pve9: backup **lokalny**
+  (jeden host, `--source`/`--target`, bez peera) instaluje blok zarządzany,
+  którego **nic nie potrafiło usunąć**. `remove-client` wymaga relacji;
+  `clean-relationships.sh` słusznie mówi, że to nie relacja; opróżniony config
+  jest odrzucany (`no send/prune/monitor rules resolved`); `cron_block_remove`
+  istnieje w bibliotece, ale osiągalne jest wyłącznie przez `remove-client`.
+  Pakiet potrafił zbudować coś, czego nie potrafił rozebrać.
+  Czasownik nie wymaga `-c`, i to jest sedno: typowym powodem sięgnięcia po
+  niego jest to, że config **już zniknął** albo jest zły — żądanie configu
+  odmawiałoby dokładnie wtedy, gdy jest najbardziej potrzebny. Zakres to blok
+  i nic więcej: config i datasety są **nazwane i zostawione**, ta sama postawa
+  co `remove-client` wobec `known_hosts` i `clean-relationships.sh` wobec danych.
+  Komunikat mówi wprost „removed the SCHEDULE, not the backups", bo „odinstalowane"
+  obok datasetu pełnego kopii to zdanie, które operator odczyta źle.
+  Dołożony brakujący strażnik `flock`: bez niego brak programu wychodził
+  z biblioteki jako „another writer is holding it", czyli wysyłał operatora
+  na poszukiwanie procesu, którego nie ma. `test/localbackup` +6.
 - **NOWE NARZĘDZIE: `clean-relationships.sh` — audyt i usuwanie śladów po
   relacjach (2026-08-20).** Powstało z dzisiejszej rozbiórki: dwa istniejące
   czasowniki (`remove-client`, `deploy.sh --leave`) robią swoje dobrze, ale
