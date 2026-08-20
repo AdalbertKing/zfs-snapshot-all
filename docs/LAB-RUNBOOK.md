@@ -46,6 +46,27 @@ manifesty w `peers/`).
 Bez `--install` to czysty odczyt. Pokazuje nazwę relacji, tryb, etapy.
 **Przeczytaj i dopiero potem instaluj.**
 
+## 3a. DROGA KRÓTKA — jedna komenda zamiast czterech
+
+Jeśli masz kanał root-ssh z kolektora na źródło, `--grant-remotely` robi całość
+naraz: zakłada konto, **przyznaje zakres na źródle** i aktywuje.
+
+```bash
+[kolektor]  bash zfs-backup.sh --source=192.168.28.99:hdd/lab4/src2 \
+                               --target=hdd/lab4direct --name=lab4-direct \
+                               --grant-remotely --install --yes
+```
+
+Sprawdzone na żywo 2026-08-20: od zera do `STATE=active` w jednym przebiegu,
+md5 zgodne. Czego ta flaga **nie** robi: nie przyznaje niczego szerszego niż
+żądanie (zakres budowany z linii poleceń), nie nadpisze cudzego oczekującego
+szkicu (odmawia), i bez kanału root-ssh odmawia **zanim** cokolwiek zmieni.
+Źródło zapisuje `GRANTED_REMOTELY_BY`, czyli od kogo przyszła zgoda.
+
+Domyślnie jest wyłączona, bo przyznanie zakresu to decyzja strony źródłowej.
+Krok 3 niżej to ta domyślna, dwustronna droga — użyj jej, gdy nie chcesz albo
+nie możesz decydować za źródło.
+
 ## 3. Instalacja — zatrzyma się na grancie
 
 ```bash
@@ -129,6 +150,43 @@ Zadania laba idą do crontaba **roota** i osobnego configu (`jobs.<host>.conf`),
 produkcja zostaje na koncie `zfsbackup` i swoim configu (`jobs.<host>.v4.conf`).
 Konta labowe nazywają się `zfsbackup-<peer>` — jeśli któreś pojawi się w wyniku
 punktu 1, coś jest nie tak.
+
+## 7. Obserwacja przez kilka cykli — czy to naprawdę chodzi
+
+Jednorazowy przebieg dowodzi, że **da się** zrobić kopię. Nie dowodzi, że
+harmonogram działa. To sprawdza się dopiero po kilku godzinach:
+
+```bash
+[kolektor]  zfs list -H -t snapshot -o name,creation -s creation -r <cel>
+            grep -c 'ZFS-JOB' /root/scripts/cron.log
+            cd /root/scripts/zfs-snapshot-all
+            ./check-snap-age.sh -R -L <relacja> "<cel>" "automated_hourly" 90m 150m; echo $?
+```
+
+Czego szukasz: **jeden snapshot na godzinę o `:01`**, monitor `rc=0`, markery
+`ZFS-JOB` parami BEGIN/END. Zmierzone 2026-08-20: 15:01, 16:01, 17:01 — równo.
+
+**Jeśli monitor pójdzie na WARN, to nie musi być awaria.** Przy zepsutej
+wysyłce monitor POWINIEN ostrzec po ~90 minutach; to dowód, że działa. Rozróżnij
+„nie ma nowych snapshotów, monitor milczy" (źle) od „nie ma nowych snapshotów,
+monitor krzyczy" (dobrze).
+
+## 8. Strefy czasowe — sprawdź, zanim uznasz coś za opóźnienie
+
+Nazwę snapshotu nadaje **kolektor**, a `creation` zapisuje **źródło**. Jeśli
+hosty są w różnych strefach, na źródle nazwa i `creation` się rozjadą:
+
+```bash
+[źródło]  zfs list -H -t snapshot -o name,creation -r <dataset> | tail -3
+```
+
+Zmierzone: pve9 w `+0000`, kolektory w `+0200` — snapshot nazwany
+`..._17-01-01` ma na pve9 `creation` 15:01. **Z kolektora tego nie widać**, bo
+tam obie wartości są w tej samej strefie. Monitor to nie dotyczy (czyta
+`creation`), ale `restore --plan` zgłosi rozjazd nazwa↔`creation`.
+
+`zfs-backup.sh` ostrzega o tym przy enrolmencie. Wyrównaj `timedatectl
+set-timezone` na obu hostach albo świadomie to zaakceptuj.
 
 ## Zatrzymania, które są POPRAWNE
 
