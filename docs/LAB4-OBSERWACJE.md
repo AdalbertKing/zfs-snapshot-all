@@ -414,6 +414,61 @@ kodzie sprzed poprawki** (2 i 4 błędy odpowiednio) i przechodzą po niej. `rux
 jest kontrolą pozytywną — ta sama bramka przepuszcza peera, który dołączył, bo
 bramka, która nigdy nie otwiera, niczego nie dowodzi.
 
+## O18. PRZYCZYNA O10: rekurencyjny `chgrp` rozbrajał twardą pauzę na całej flocie — NAPRAWIONE
+
+O10 naprawiło **komunikat**. Przyczyna została, i wróciła przy pierwszej
+okazji: po odbudowie laba `disable-client lab4-direct` padł dokładnie tak samo.
+
+Katalog stanu bramy znów miał złą grupę — na **obu** świeżych joinach:
+
+```
+2775 root:zfsalert  /var/lib/zfs-snapshot-all/relationships/pve1
+2775 root:zfsalert  /var/lib/zfs-snapshot-all/relationships/pve2
+```
+
+`chown` uruchomiony ręcznie działa (rc=0), a `install_pair_gate` tworzy konto
+**przed** bramą, więc nie chodziło o kolejność. Sprawdziłem eksperymentem
+zamiast dalej zgadywać:
+
+```
+1. ustawione poprawnie:  root:zfsbackup-pve1
+   (zwykly `bash deploy.sh`, bez zadnych flag)
+2. PO deploy.sh:         root:zfsalert
+```
+
+Przyczyna to `deploy.sh:3173`:
+
+```bash
+chgrp -R "$ALERT_GROUP" "$ALERT_SHARED_DIR"
+```
+
+Rekurencyjny zamiatacz grupy na `/var/lib/zfs-snapshot-all` przechodzi przez
+`relationships/<etykieta>/` — katalog, który **celowo** ma grupę konta danej
+relacji, żeby tylko ono mogło założyć i zdjąć swój marker.
+
+**Skala: każde uruchomienie `deploy.sh` rozbraja twardą pauzę wszystkich
+relacji na hoście.** A `deploy.sh` chodzi nie tylko przy wdrożeniu — także
+przy `--join`, `--leave`, `--commit-scope` i samoaktualizacji. Naprawa ręczna
+trzymała się więc do najbliższego przebiegu. To gorsze niż brak mechanizmu:
+operator jest przekonany, że go ma.
+
+Poprawka: zamiatacz zachowuje swoje zadanie (stare pliki alertów sprzed bitu
+setgid nadal potrzebują grupy) i przestaje wchodzić w poddrzewo, którego nie
+jest właścicielem — `find ... -path "$excluded" -prune -o -exec chgrp`.
+Wyodrębnione jako `alert_dir_chgrp`, żeby dało się to przetestować
+własnościami plików, a nie czytaniem źródła.
+
+Przy okazji: `PAIR_GATE_STATE_DIR` przeniesione do sekcji stałych na górze, bo
+faza 4 potrzebuje go setki linii przed miejscem, gdzie był definiowany — ten
+sam błąd, który ten plik już raz popełnił z `ALERT_SHARED_DIR` i opisał
+komentarzem tuż obok.
+
+Testy: `test/pairgate` +3, w tym kontrakt **przez nieobecność** — powrót
+gołego `chgrp -R` na drzewie alertów jest odrzucany. Kontrakt pomija
+komentarze, bo wyjaśnienie samej poprawki cytuje felerną linię dosłownie,
+a kontrakt, który nie odróżnia kodu od komentarza o kodzie, strzela w zmianę,
+która go spełnia.
+
 ## O16. Obie drogi z O14 dowiedzione na żywo — ZMIERZONE
 
 Na parze **naprawdę niesparowanej** (pve1↔pve9; `lab4-direct` rozebrane

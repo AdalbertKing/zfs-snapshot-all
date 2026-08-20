@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: eb2a179cc7169b5d -->
+<!-- status-covers-digest: 047d6d8791fb728c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -49,6 +49,24 @@
   źródle; skutek ogranicza drabinka GFS, ale twierdzenie było fałszywe.
   Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O17, procedura w
   `docs/LAB-RUNBOOK.md` §9.
+- **PRZYCZYNA twardej pauzy znaleziona i usunięta: rekurencyjny `chgrp`
+  rozbrajał ją na całej flocie (2026-08-20).** Wcześniejsza poprawka dotyczyła
+  **komunikatu**; przyczyna została i wróciła przy pierwszej odbudowie relacji.
+  `deploy.sh:3173` robiło `chgrp -R "$ALERT_GROUP" "$ALERT_SHARED_DIR"`, czyli
+  zamiatało grupę rekurencyjnie po `/var/lib/zfs-snapshot-all` — w tym po
+  `relationships/<etykieta>/`, które celowo ma grupę konta danej relacji.
+  Zmierzone eksperymentem, nie wywnioskowane: ustawiam katalog poprawnie,
+  uruchamiam **zwykły** `bash deploy.sh` bez flag, po nim grupa to znów
+  `zfsalert`. **Każde** uruchomienie `deploy.sh` — również przy `--join`,
+  `--leave`, `--commit-scope` i samoaktualizacji — rozbrajało twardą pauzę
+  wszystkich relacji na hoście, więc naprawa ręczna trzymała się do najbliższego
+  przebiegu. To gorsze niż brak mechanizmu: operator jest przekonany, że go ma.
+  Zamiatacz zachowuje swoje zadanie i przestaje wchodzić w poddrzewo, którego
+  nie jest właścicielem (`alert_dir_chgrp`, `find -prune`). `test/pairgate` +3,
+  w tym kontrakt przez nieobecność gołego `chgrp -R`.
+  **Wymaga jednorazowej naprawy na hostach z istniejącymi relacjami** —
+  `chown root:zfsbackup-<peer> /var/lib/zfs-snapshot-all/relationships/<label>`;
+  po tej zmianie naprawa jest już trwała.
 - **Odmowa bramy przestała udawać awarię wdrożenia — i fałszywy alarm o puli
   zniknął (2026-08-20).** Silnik dostawał wprost `PAIR_DISABLED: relationship
   ... is disabled by administrator`, a raportował „exit 93 — e.g. no 'zfs' in
