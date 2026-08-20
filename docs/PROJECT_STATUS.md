@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **ENGINE-FREEZE nazwane tym, czym jest: pieczęcią, nie zamkiem (2026-08-20,
+  decyzja właściciela).** Bramka pilnuje pięciu plików silnika, porównując wpis
+  indeksu z linią bazową. Jedyną żywą furtką jest `--refreeze`, którą może
+  uruchomić każdy — ścieżka „autoryzująca recenzja" wymaga recenzenta, a tego
+  zniesiono 2026-08-15. Rozważono zaostrzenie (reset, którego implementer nie
+  może scommitować) i **odrzucono**: widoczność jest tym, co realnie płaci —
+  obie dzisiejsze zmiany silników zostały w PR-ach nazwane zmianami silnika,
+  słowami „contract narrowing on a frozen file", **dokładnie dlatego, że ta
+  bramka kazała to powiedzieć**.
+  Zmienione: (1) dokument prowadzi teraz żywą ścieżką (kierunek właściciela +
+  `--refreeze` + **wpis na liście**), a wersja recenzencka jest oznaczona jako
+  uśpiona maszyneria, nie usunięta; (2) komunikat odmowy w `impact.sh` przestał
+  odsyłać do nieistniejącego procesu — bramka, która odmawia i wskazuje na
+  proces, którego nie ma, czyta się jak błąd narzędzia, nie jak pytanie o zmianę.
+  **Wpisem jest mechanizm, nie resetem.** `--refreeze` to jedna komenda, więc to
+  nie ona czyni zmianę widoczną — czyni ją wpis. Refreeze bez wpisu to dokładnie
+  ta cicha zmiana silnika, której bramka ma zapobiegać.
+  Uzupełnione uczciwie: **moje dwa dzisiejsze refreeze nie były na liście**.
+  Dopisane, z zaznaczeniem, że ŻADEN nie był autoryzowany z góry — #61
+  (zawężenie kontraktu `check-snap-age.sh`) wyszedł z przemiału sprzątającego
+  z mojej inicjatywy, właściciel dowiedział się w tej samej wiadomości, która
+  go dowoziła. Lista jest nic niewarta, jeśli notuje tylko wygodne przypadki —
+  tym bardziej że `check-snap-age.sh` trafił na listę zamrożonych właśnie za
+  zawężenie zatwierdzonego kontraktu (REV-20260808-070 F1).
 - **Mapa redukcji domknięta: reszta to duplikacja ŚWIADOMA, brakowało jej opisu (2026-08-20).**
   Trzy pozycje ze skanu duplikacji NIE nadają się do scalenia i nigdy nie
   nadawały — brakowało im wyłącznie uzasadnienia w miejscu, którego wymaga własna

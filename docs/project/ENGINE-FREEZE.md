@@ -60,6 +60,24 @@ Owner-authorized refreezes:
   "dependent clones" hint sent a live investigation the wrong way while the
   real error was a missing `mount` ability in the delegation; the hint is now
   chosen from zfs's actual stderr. No retention semantics changed.
+- **2026-08-20** -- `check-snap-age.sh`: an empty pattern is refused (PR #61).
+  A CONTRACT NARROWING, and recorded as one. The match is a literal prefix, so
+  an empty pattern matched every snapshot on the dataset -- measured live on
+  pve2 at one instant: `automated_hourly` gave age 3h, empty gave
+  `__replicate_107-0_...` age 2h. A monitor scoped that wide reports the
+  freshness of whatever else touches the pool and can never go red for this
+  project's own family.
+  **NOT pre-authorised.** It came out of a cleanup sweep on my own initiative;
+  the owner was told in the message that shipped it, not before. Written down
+  that way because this list is worth nothing if it records only the
+  comfortable cases -- and because this file is the one that gained
+  `check-snap-age.sh` in the first place for narrowing an approved contract
+  (REV-20260808-070 F1).
+- **2026-08-20** -- `snapsend.sh` + `snapget.sh`: a `THE TWIN` header pointing
+  at the 2026-08-04 decision NOT to merge the engines (PR #66). COMMENTS ONLY:
+  44 lines added, count of changed non-comment lines zero, and the twins
+  baseline confirmed the pinned function hashes did not move. Also not
+  pre-authorised, same batch of work.
 
 ## How it is enforced
 
@@ -67,7 +85,31 @@ Owner-authorized refreezes:
 and object id, the same primitive REV-20260807-068 arrived at — against the
 baseline recorded above. A difference is refused, naming the file.
 
-The refusal lifts only when **all** of these hold:
+There are two ways past that refusal. Only the second one is live.
+
+### The operative route: owner direction + `--refreeze`
+
+```text
+# 1. the owner directs the change (or is told, in the same breath, that it
+#    happened -- see the honest entries in the list above)
+# 2. implement, stage, verify
+# 3. re-take the baseline, which also resets unfreeze: back to -
+./test/impact.sh --refreeze
+# 4. ADD AN ENTRY TO THE LIST ABOVE: date, files, what changed, and whether it
+#    was directed beforehand. This step is the whole mechanism.
+```
+
+Step 4 is not paperwork. `--refreeze` is one command and anyone can run it, so
+the baseline reset is not what makes the change visible -- the ENTRY is. A
+refreeze with no entry is exactly the silent engine edit this document exists to
+prevent, performed by the person the document was written for.
+
+### The dormant route: an authorising review
+
+Still implemented in `test/impact.sh`, and it cannot be exercised: it needs a
+reviewer, and the owner removed that role on 2026-08-15 (`HANDOFF.md`). Kept
+rather than deleted because the machinery is small, correct, and would work
+again if the role came back. The refusal lifts when **all** of:
 
 1. `unfreeze:` names a review that exists;
 2. that review is not CLOSED — a closed review was answered and the answer was
@@ -81,25 +123,27 @@ edit through — weaker than what this document claimed. The marker is written b
 the reviewer, in the review artifact, because authorisation is theirs to give.
 Never inferred from prose.
 
-The sequence for an authorised engine change:
-
-```text
-# 1. the reviewer opens REV-YYYYMMDD-NNN asking for the change
-# 2. record the authorisation
-#    edit the unfreeze: marker to name that REV
-# 3. implement, stage, verify, commit as usual
-# 4. after the review closes, re-take the baseline:
-./test/impact.sh --refreeze
-#    which also resets unfreeze: back to -
-```
-
 ## What this does not do
 
 It is **not** tamper-proof, and pretending otherwise would be the same error as
 a verdict that claims more than it measured. Anyone can run `--refreeze` and
 commit. What it removes is the *silent* case: an engine edit can no longer land
-without either a named authorising review or a visible baseline reset sitting in
-the diff, where a reviewer reads it.
+without a visible baseline reset sitting in the diff.
+
+Owner decision, 2026-08-20: **that is what it is for, and the document now says
+so instead of describing a lock.** It is a seal, not a bolt -- the scissors are
+tied to it on a string. It does not stop the box being opened; it makes an
+opened box impossible to mistake for a closed one. The alternative considered
+and declined was a gate the implementer genuinely cannot open (a reset only the
+owner may commit), on the grounds that the visibility is what has actually been
+paying: both engine changes on 2026-08-20 were stated as engine changes in their
+pull requests, in the words "contract narrowing on a frozen file", precisely
+because this gate made them say it.
+
+The failure mode to watch is therefore not someone forcing the seal. It is a
+refreeze whose entry never gets written -- at which point the diff shows a
+baseline moving for no stated reason, and nobody knows whether that was a
+comment or a change of behaviour.
 
 It also cannot judge whether the change is a good one. It answers "was this
 authorised", not "was this wise". That is review, not tooling.
