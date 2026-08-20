@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3c308faa5c394e46 -->
+<!-- status-covers-digest: 8cf171be483d4b5f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,38 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Trzy pauzy przetestowane na żywo; twarda pauza była NIEMOŻLIWA (2026-08-20).**
+  Pauza zadania (`deploy.sh --pause`), miękka pauza relacji (`pause-client`)
+  i twarda pauza relacji (`disable-client`) sprawdzone po kolei na metropolis.
+  Wszystkie trzy działają — ale dopiero po naprawie, bo `disable-client` padał:
+  katalog stanu u peera odziedziczył grupę `zfsalert` przez bit setgid rodzica
+  zamiast dostać grupę konta bramy, więc zapis `disabled.new` kończył się
+  `Permission denied`. Udowodnione z kontrolą pozytywną (`touch` jako
+  `zfsbackup-pve1` → odmowa, jako `zfsbackup` → rc=0) i domknięte naprawą:
+  po `chown root:zfsbackup-<peer>` twarda pauza przeszła od razu, a ręczny
+  `snapget` **bez** `-L` wrócił `PAIR_DISABLED`.
+  **Właściwe znalezisko jest jednak w kodzie, nie w uprawnieniach.**
+  `gate_state_dir_ok` wykrywał ten stan poprawnie, ale komunikat opisywał
+  **odwrotną** konsekwencję — „disable still WORKS ... enable will refuse" —
+  a to na tym przekonaniu opierała się decyzja, żeby tylko ostrzec i pozwolić
+  enrolmentowi dojść do końca. Oba czasowniki piszą do **katalogu** (disable
+  tworzy marker, enable go kasuje), więc katalog bez prawa zapisu kosztuje całą
+  bramę, nie samo zdjęcie blokady. Komentarz odnotowuje, że ten sam objaw
+  widziano na pve2 w 2026-08-06: powtórzył się, był ostrzegany, a ostrzeżenie
+  zaniżało wagę. Komunikat mówi teraz prawdziwą konsekwencję.
+  Poprawione przy tej samej okazji: `status` nie pokazywał blokady u peera
+  i wprost zapewniał, że nieoznaczone komendy nie są blokowane — nieprawda
+  w momencie, gdy peer odmawiał wszystkiego; teraz odpytuje bramę i raportuje
+  `DISABLED`/`NIEZNANA` osobno od pauzy lokalnej. `pause-client` mówił „managed
+  jobs now exit SKIPPED", choć retencja jest zarządzana i **chodzi dalej** —
+  linie `delsnaps` nie mają `-L` (silnik nie zna tej flagi), także ta tnąca po
+  źródle; skutek ogranicza drabinka GFS, ale twierdzenie było fałszywe.
+  Otwarte, bo wymaga decyzji: `--pause`/`--resume` wykonują najpierw **dziewięć
+  faz pełnego wdrożenia** i wypisują dwa fałszywe `!!!` (łącznie z „this host
+  would stop picking up updates") osiem linii przed poprawnym wznowieniem;
+  oraz `snapget` opisał `PAIR_DISABLED` jako „brak zfs w PATH", czego nie
+  naprawiam sam, bo silnik jest zamrożony. Szczegóły: `docs/LAB4-OBSERWACJE.md`
+  O8–O12, procedura w `docs/LAB-RUNBOOK.md` §9.
 - **`--grant-remotely` i `--join-remotely` dopisane do pomocy; enrolment z 4 komend na 1 (2026-08-20).**
   Przemiał przełączników objął `deploy.sh` i `gen-cron.sh`, a **pominął
   `zfs-backup.sh`** — moje niedopatrzenie. Kryły się tam dwie działające flagi

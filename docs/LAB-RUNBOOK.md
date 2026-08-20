@@ -188,6 +188,56 @@ tam obie wartości są w tej samej strefie. Monitor to nie dotyczy (czyta
 `zfs-backup.sh` ostrzega o tym przy enrolmencie. Wyrównaj `timedatectl
 set-timezone` na obu hostach albo świadomie to zaakceptuj.
 
+## 9. Trzy pauzy — którą wybrać
+
+Nie są wariantami tej samej rzeczy. Różnią się tym, **co** zatrzymują i **kto**
+może to cofnąć.
+
+```bash
+# a) PAUZA ZADANIA -- caly host, na czas prac sprzetowych
+[host]  bash deploy.sh --pause          # komentuje ciala blokow w OBU crontabach
+        bash deploy.sh --resume         # odkomentowuje
+
+# b) MIEKKA PAUZA RELACJI -- jedna relacja, decyzja lokalna
+[kolektor]  bash zfs-backup.sh pause-client <nazwa> --reason="..."
+            bash zfs-backup.sh resume-client <nazwa>
+
+# c) TWARDA PAUZA RELACJI -- peer odmawia, tez komend bez -L
+[kolektor]  bash zfs-backup.sh disable-client <nazwa> --reason="..."
+            bash zfs-backup.sh enable-client <nazwa>
+```
+
+Czego się spodziewać, zmierzone 2026-08-20:
+
+- **(a) nie da się zawęzić do jednego użytkownika.** `pause_targets` zawsze
+  zwraca roota **i** konto delegowane. Na hoście, gdzie lab siedzi w crontabie
+  roota a produkcja na koncie, `--pause` zatrzyma jedno i drugie. Testuj tam,
+  gdzie nie ma produkcji.
+- **(a) robi po drodze pełne wdrożenie** i przy `--resume` wypisuje dwa `!!!`
+  o linijkach crona, których nie mógł zapisać — łącznie z „this host would stop
+  picking up updates". To fałszywy alarm, wznowienie osiem linii niżej działa.
+- **(b) nie rusza crontaba w ogóle** (sprawdzone `diff`-em: identyczny) i **nie
+  zatrzymuje retencji** — linie `delsnaps` nie mają `-L` i chodzą dalej, także
+  ta kasująca po źródle. Monitor za to milczy z uzasadnieniem, nie zalewa.
+- **(c) wymaga sprawnego katalogu stanu u peera.** Jeśli
+  `/var/lib/zfs-snapshot-all/relationships/<label>/` nie ma grupy konta bramy,
+  `disable` **poległ** — nie `enable`, jak twierdziły starsze komunikaty:
+
+```bash
+[peer]  stat -c '%a %U:%G' /var/lib/zfs-snapshot-all/relationships/<label>
+        # ma byc: 2775 root:zfsbackup-<peer>, NIE root:zfsalert
+        chown root:zfsbackup-<peer> /var/lib/zfs-snapshot-all/relationships/<label>
+        chmod 0775 /var/lib/zfs-snapshot-all/relationships/<label>
+```
+
+Sprawdzenie, że twarda pauza naprawdę trzyma — uruchom ręcznie **bez** `-L`,
+musi wrócić `PAIR_DISABLED`:
+
+```bash
+[kolektor]  ./snapget.sh -m "test_manual_" -K <klucz> ... "<konto>@<peer>:<zrodlo>" "<cel>"
+            # oczekiwane: PAIR_DISABLED: relationship ... is disabled by administrator
+```
+
 ## Zatrzymania, które są POPRAWNE
 
 | komunikat | co znaczy |

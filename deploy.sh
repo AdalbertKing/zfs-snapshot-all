@@ -4120,22 +4120,30 @@ install_pair_gate() {
     if [ "$account" != root ]; then
         chown "root:$account" "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
         chmod 0775 "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null || :
-        # VERIFY, do not assume. Seen live on metropolis pve2 (2026-08-06):
-        # the chown did not take on the first join of a freshly created
-        # account -- and because this only warned, the relationship came out
-        # of enrolment looking complete while `enable` through the gate could
-        # never work. The operator would have discovered that at the worst
-        # possible moment: while trying to lift a block.
+        # VERIFY, do not assume. Seen live on metropolis pve2 (2026-08-06) and
+        # again on pve9 (2026-08-20): the chown did not take, the directory
+        # kept the group it inherited from the parent's setgid bit, and
+        # because this only warned the relationship came out of enrolment
+        # looking complete. The operator discovers it at the worst possible
+        # moment -- while trying to engage a block.
         #
-        # Not fatal to the join, deliberately: the account and key are
-        # already created by this point, the gate still ENFORCES (a disable
-        # is honoured), and root on the peer can always clear a marker. What
-        # is lost is the remote enable path, so that is what the message has
-        # to say, precisely, instead of a vague "check this".
+        # WHICH verb breaks was stated backwards here until 2026-08-20, and
+        # the error mattered because the warn-but-continue decision rested on
+        # it. Measured, not reasoned: `disable-client` is what fails. Both
+        # verbs write to this DIRECTORY -- disable creates the marker, enable
+        # unlinks it -- so a directory the account cannot write costs the
+        # whole gate, not just the lift. The live failure reads:
+        #     zfs-pair-gate: .../relationships/<label>/disabled.new:
+        #     Permission denied
+        # Kept non-fatal to the join, now for a reason that survives the
+        # correction: the account and key exist by this point, the join is
+        # otherwise sound, and root on the peer can repair it in two commands
+        # without redoing enrolment. What is lost until then is the hard pause
+        # in BOTH directions, so that is what the message has to say.
         local st; st=$(stat -c '%a %G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null) || st=""
         if ! gate_state_dir_ok "$st" "$account"; then
             warn "$PAIR_GATE_STATE_DIR/$label is not group-writable by '$account' (now: $(stat -c '%a %U:%G' "$PAIR_GATE_STATE_DIR/$label" 2>/dev/null))"
-            warn "  consequence: disable still WORKS and is enforced, but 'enable' through the gate will refuse -- re-enabling would need root on this host."
+            warn "  consequence: the hard pause is UNUSABLE for this relationship -- 'disable-client' cannot write the marker and 'enable-client' cannot remove it. The gate still refuses whatever is ALREADY marked disabled; what you cannot do is engage or lift a block without root here."
             warn "  fix here, then re-run --join (it is a safe no-op reconfirmation):"
             warn "    chown root:$account $PAIR_GATE_STATE_DIR/$label && chmod 0775 $PAIR_GATE_STATE_DIR/$label"
         fi
