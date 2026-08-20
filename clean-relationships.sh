@@ -318,10 +318,30 @@ purge_one() {
     # 1. The source's own verb, only when its map is still there.
     if [ -s "$PEER_STATE_DIR/$id.conf" ] && [ -x "$DEPLOY" ]; then
         log "  deploy.sh --leave=$id (its manifest is present, so the tool can still do this properly)"
-        if bash "$DEPLOY" --leave="$id" </dev/null >/dev/null 2>&1; then
+        local lout lrc
+        lout=$(bash "$DEPLOY" --leave="$id" </dev/null 2>&1); lrc=$?
+        if [ "$lrc" -eq 0 ]; then
             log "  --leave succeeded"
         else
             warn "  --leave failed or refused -- continuing with the explicit list, and saying so rather than pretending it worked"
+            printf '%s\n' "$lout" | grep -E '^FATAL' | sed 's/^/      /' >&2
+            # One refusal deserves naming, because its wording is honest but
+            # its most common cause is not what it describes. --leave refuses
+            # while a `zfssnapall_inflight` hold exists and says "retry once
+            # the transfer completes" -- correct when a transfer is running,
+            # and a dead end when the hold was LEAKED by one that died. Seen
+            # live on 2026-08-20: the hold sat on a snapshot whose successor
+            # had already been received, so nothing was ever going to complete,
+            # and on the receiving side an interrupted `zfs receive` had left a
+            # `%recv` stub that was failing the hourly retention as well.
+            case "$lout" in
+                *zfssnapall_inflight*)
+                    warn "      ^ that refusal assumes a transfer is RUNNING. If none is, the hold leaked and nothing will ever complete it. Check, in this order:"
+                    warn "          ps -eo args | grep '[z]fs send'                    # is one actually running?"
+                    warn "          zfs holds <the snapshot named above>               # who holds it"
+                    warn "          on the RECEIVER: zfs list -t all -r <target> | grep %recv"
+                    warn "        A leftover %recv also fails that target's retention every run. Clear with 'zfs receive -A <target>' there, then 'zfs release zfssnapall_inflight <snapshot>' here, then re-run this." ;;
+            esac
         fi
     elif id "zfsbackup-$id" >/dev/null 2>&1; then
         warn "  account zfsbackup-$id exists but its join manifest does not: --leave cannot run. This is the stranded case -- the account is removed below by hand, which is the only route left."

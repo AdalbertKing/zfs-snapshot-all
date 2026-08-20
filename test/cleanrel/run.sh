@@ -234,7 +234,54 @@ else
         "peers/10.0.0.55.conf appears $dupes times" "$out"
 fi
 
-# 14. Sandbox integrity: the suite must be incapable of touching a real path.
+# ---------------------------------------------------------------------------
+# 14. When --leave refuses because of an in-flight hold, say what that refusal
+#     assumes. Measured 2026-08-20: the hold had LEAKED from a transfer that
+#     died, its snapshot's successor had already been received, and --leave's
+#     own "retry once the transfer completes" was therefore a dead end. On the
+#     receiving side the same interrupted transfer had left a %recv stub that
+#     was failing the hourly retention -- two hours of silent breakage from one
+#     event, and neither message mentioned the other.
+# ---------------------------------------------------------------------------
+T="$WORK/t14"; build_tree "$T"
+FAKE="$WORK/fake-deploy.sh"
+cat > "$FAKE" <<'EOD'
+#!/bin/bash
+echo "FATAL: refusing --leave='oldpeer': hdd/x has an in-flight transfer hold (zfssnapall_inflight) -- revoking access now would strand that resume."
+exit 1
+EOD
+chmod +x "$FAKE"
+out=$(CLIENTS_DIR="$T/clients" PEER_STATE_DIR="$T/peers" REL_STATE_DIR="$T/rel" \
+      PEER_KEY_DIR="$T/keys" PAIRING_DIR="$T/pairing" HOME_ROOT="$T/home" \
+      DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
+if grep -q 'assumes a transfer is RUNNING' <<<"$out" \
+   && grep -q '%recv' <<<"$out" \
+   && grep -q 'zfs release zfssnapall_inflight' <<<"$out" \
+   && grep -q "FATAL: refusing --leave" <<<"$out"; then
+    ok "an in-flight-hold refusal is quoted AND its most common cause named"
+else
+    bad "an in-flight-hold refusal is quoted AND its most common cause named" "$out"
+fi
+
+# 15. A refusal for any OTHER reason must not get that advice -- guessing the
+#     cause is the failure mode this whole day was spent removing.
+T="$WORK/t15"; build_tree "$T"
+cat > "$FAKE" <<'EOD'
+#!/bin/bash
+echo "FATAL: refusing --leave='oldpeer': something else entirely"
+exit 1
+EOD
+chmod +x "$FAKE"
+out=$(CLIENTS_DIR="$T/clients" PEER_STATE_DIR="$T/peers" REL_STATE_DIR="$T/rel" \
+      PEER_KEY_DIR="$T/keys" PAIRING_DIR="$T/pairing" HOME_ROOT="$T/home" \
+      DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
+if ! grep -q 'assumes a transfer is RUNNING' <<<"$out" && grep -q 'something else entirely' <<<"$out"; then
+    ok "a refusal with a different cause is quoted, and gets no invented advice"
+else
+    bad "a refusal with a different cause is quoted, and gets no invented advice" "$out"
+fi
+
+# 16. Sandbox integrity: the suite must be incapable of touching a real path.
 #     Asserted against the source, because this is a property of the tool's
 #     defaults rather than of any single run.
 if grep -qE '^CLIENTS_DIR="\$\{CLIENTS_DIR:-' "$CR" \
