@@ -368,6 +368,48 @@ Kierunki poprawki (do decyzji właściciela — dotyka granicy bezpieczeństwa):
 Skłaniam się do (1) **plus** (2): pierwsze usuwa zawieszenie, drugie sprawia, że
 komenda mówi prawdę o swoim zakresie stosowalności, zanim cokolwiek zrobi.
 
+**Poprawka (1) została zmierzona, nie tylko wyrozumowana.** Drugi skok
+uruchomiłem z zamkniętym wejściem (`</dev/null`) i własnym limitem czasu.
+Zdalny `--join` dostał EOF zamiast czekać w nieskończoność i **istniejący tor
+awaryjny włączył się dokładnie tak, jak zaprojektowano**:
+
+```
+FATAL: join interrupted before scope acceptance
+!!! --join-remotely could not complete automatically -- falling back to the
+    manual steps below.
+>>> Wsad gotowy: /root/scripts/pairing/pve1-to-192.168.28.8.tgz
+```
+
+Czyli kod na to zawieszenie **już ma odpowiedź** — brakuje wyłącznie tego, żeby
+ją mógł osiągnąć. To najtańsza możliwa poprawka: ograniczyć czas i zamknąć
+wejście, nic więcej.
+
+## O15. Wdrożenie od zera bez błędów — OSIĄGNIĘTE
+
+Po pełnej rozbiórce (O13) i na sterylnych hostach zbudowany cały łańcuch
+`pve9 → pve2 → pve1`, celowo **tymi samymi nazwami co poprzednio** — gdyby
+rozbiórka była niepełna, domyślna nazwa rozbiłaby się o terminalny stan
+`removed`. Nie rozbiła się.
+
+```
+pve9  hdd/lab4/src              4024852c...  b5c0189a...   <- odniesienie
+pve2  hdd/lab4backups/...       4024852c...  b5c0189a...   zgodne
+pve1  hdd/lab4chain/...         4024852c...  b5c0189a...   zgodne
+```
+
+Drugi skok: `rc=0`, **zero linii `!!!` i zero `FATAL`**, `STATE=active`.
+
+Produkcja nietknięta na obu kolektorach — crontab konta `zfsbackup`
+identyczny bajt w bajt, zero grantów na `hdd/vm-disks`, `hdd/backups`,
+`rpool/data`, `rpool/ROOT`, a granty labowe wyłącznie na własnym liściu.
+Zadania rozdzielone tak jak mają być: lab w crontabie roota z
+`jobs.<host>.conf`, produkcja na koncie z `jobs.<host>.v4.conf`.
+
+Jedyne zatrzymanie po drodze było **poprawne**: grant jest decyzją strony
+źródłowej, więc `--commit-scope=pve1` trzeba było wykonać na pve2. Przed
+przyznaniem obejrzany szkic — dokładnie jedna sekcja `[dataset:]`, kopia
+labowa, zero produkcji.
+
 ## O12. `snapget` opisuje odmowę bramy jako „brak zfs w PATH" — DO DECYZJI
 
 Ten sam przebieg co wyżej. Silnik dostał odpowiedź, która sama się nazywa:
