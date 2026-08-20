@@ -414,6 +414,72 @@ kodzie sprzed poprawki** (2 i 4 błędy odpowiednio) i przechodzą po niej. `rux
 jest kontrolą pozytywną — ta sama bramka przepuszcza peera, który dołączył, bo
 bramka, która nigdy nie otwiera, niczego nie dowodzi.
 
+## O16. Obie drogi z O14 dowiedzione na żywo — ZMIERZONE
+
+Na parze **naprawdę niesparowanej** (pve1↔pve9; `lab4-direct` rozebrane
+i nieodbudowane, pve1 bez kluczy do `.99`, pve9 bez manifestu `pve1`).
+
+**Droga 2** — `--grant-remotely` na tej parze:
+
+```
+rc=1   czas=1s
+FATAL: --grant-remotely: 192.168.28.99 has not joined 'pve1' yet ...
+       Nothing was changed anywhere -- no client record, no keys, no package.
+```
+
+Jedna sekunda zamiast sześciu minut. I sprawdzone, że zdanie „Nothing was
+changed anywhere" jest **prawdziwe**, a nie tylko napisane: `clients`, klucze,
+`pairing`, `peers`, crontab i md5 produkcji identyczne po obu stronach.
+
+**Droga 1** — ten sam enrolment bez tej flagi, gdzie join **jest** podejmowany:
+
+```
+rc=1   calosc=11s
+!!! --join-remotely could not complete automatically -- falling back to the
+    manual steps below.
+FATAL: join interrupted before scope acceptance
+```
+
+Jedenaście sekund i poprawne zatrzymanie na grancie, zamiast wiszenia bez końca.
+Tor awaryjny włączył się sam, bez mojego `</dev/null` — czyli to, co wcześniej
+wymuszałem ręcznie, robi teraz kod.
+
+| | przed | po |
+|---|---|---|
+| `--grant-remotely`, para niesparowana | wisi bez końca | **1 s**, odmowa, zero zmian |
+| zwykły enrolment, join podejmowany | wisi bez końca | **11 s**, tor awaryjny |
+
+Uboczne, wartościowe: join zdążył utworzyć manifest, konto i szkic zakresu na
+źródle **zanim** doszedł do pytania — więc „interrupted before scope acceptance"
+zostawia stan użyteczny, a nie połowiczny śmieć.
+
+## O17. Sam popsułem sobie rozbiórkę kolejnością — WNIOSEK
+
+Dwie pomyłki własne, obie warte zapisania, bo obie są łatwe do powtórzenia.
+
+**Kolejność.** Skasowałem `peers/pve9.conf` ręczną whitelistą, a dopiero potem
+uruchomiłem `deploy.sh --leave=pve9`. Manifest jest mapą, z której `--leave`
+czyta, co cofnąć — bez niego odmawia:
+
+```
+FATAL: no join manifest for 'pve9' ... -- nothing to leave
+```
+
+Odmowa jest poprawna, narzędzie nie zgaduje. Ale konto zostało wtedy **poza
+zasięgiem narzędzia** i musiałem usunąć je ręcznie — czyli zrobić dokładnie to,
+czego reguła whitelisty ma unikać. `--leave` idzie PRZED sprzątaniem ręcznym.
+
+**Źródło listy.** Wyprowadziłem listę `--leave` z topologii łańcucha, który sam
+budowałem, i przegapiłem konto `zfsbackup-pve9` na pve1 — pozostałość po
+starszym labie, w którym pve1 było źródłem. Żywe konto, klucz i powłoka, przy
+zerze grantów ZFS, zerze linii crona i zerze odwołań w konfiguracji; klucz
+bramkowany przez `zfs-pair-gate pve9`, więc zasięg był ograniczony. Usunięte,
+z zapisem `passwd` i klucza odłożonym na wypadek cofnięcia.
+
+Pytanie do zadania brzmi **„jakie konta `zfsbackup-*` są na tym hoście i czym
+każde jest uzasadnione"**, nie „jakie relacje ja budowałem". To trzeci powód dla
+reguły whitelisty — obok recyklingu UID z O13.
+
 ## O15. Wdrożenie od zera bez błędów — OSIĄGNIĘTE
 
 Po pełnej rozbiórce (O13) i na sterylnych hostach zbudowany cały łańcuch
