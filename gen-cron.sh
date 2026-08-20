@@ -463,6 +463,20 @@ Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
   -V          Print version and exit
   -h          Print this help
 
+  --reconcile          READ-ONLY: compare what the config backs up against what
+                       actually exists on this host, and exit non-zero if a
+                       dataset has no SEND job. "Covered" means a send job
+                       exists -- a dataset with only a prune rule is being
+                       trimmed, not backed up. Answers a real failure: a guest
+                       created after the config was written ran with zero
+                       automated snapshots because nothing ever compared those
+                       two facts. Needs zfs on this host. Edits nothing.
+  --migrate-recursion  Rewrite a pre-v4.27 config that spelled recursion as
+                       -r/-R inside a free-form `flags` into the section's own
+                       `recursive =`, and show the before/after crontab so the
+                       result can be diffed before it is installed. One-off
+                       migration, not a routine mode.
+
 Section types (header split on first ':'):
   [defaults]              host_label, optional dst
   [template:<tier>]       a tier's cadence + retention policy

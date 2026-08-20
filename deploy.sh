@@ -490,6 +490,41 @@ untouched cron would hand pvesr foreign snapshots to contend with:
                           (resolve it by hand instead of silently discarding
                           it); a paused block instead keeps any line added
                           during the window that doesn't look like its own.
+
+Updating this checkout, and undoing an update:
+  --self-update           fast-forward the checkout to origin and record the
+                          revision it came FROM, so --rollback has somewhere to
+                          go. Refuses while updates are HELD, and refuses if
+                          the update-control state looks tampered with (a
+                          symlink where a plain file belongs). This is what the
+                          hourly timer runs.
+  --rollback              return the checkout to the revision --self-update
+                          recorded, and HOLD updates so the next timer run does
+                          not immediately undo it. Fails loudly when nothing
+                          was recorded rather than guessing a target.
+  --resume-updates        release that hold, so --self-update runs again.
+
+                          These three also live in update-control.sh, deployed
+                          OUTSIDE the checkout for the obvious reason: a
+                          rollback of the repository must not roll back the
+                          thing performing it. The copies here are the
+                          bootstrap path for a host that has never deployed the
+                          wrapper yet.
+
+Enrolment helpers:
+  --join-check=PACKAGE    read a pairing package and print what --join WOULD do
+                          with it -- checksum, keys, datasets, paths -- and
+                          change nothing. Use it before --join on a host whose
+                          state you are unsure of.
+  --add-quiesce           provision the quiesce grant for an account that
+                          already exists, MERGING into the current whitelist
+                          instead of replacing it. --join deliberately
+                          overwrites, because re-running it with a narrower
+                          dataset list is supposed to drop what was removed;
+                          this is the remediation variant, for when the caller
+                          knows only the datasets one config needs and the file
+                          may also carry grants from another config or an older
+                          deployment. Idempotent.
 USAGE
             exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 884f6fc481af4fcb -->
+<!-- status-covers-digest: 8af0d2c1d6130e97 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,31 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Siedem działających przełączników dopisanych do `--help` (2026-08-20).**
+  Przemiał przełączników przed labem. Znalezione: dziewięć flag jest parsowanych
+  i w pełni działa, a nie ma ich w pomocy — czyli jedynym sposobem, żeby je
+  znaleźć, było przeczytanie źródła.
+  `deploy.sh`: `--self-update`, `--rollback`, `--resume-updates` (maszyna stanu
+  aktualizacji; `--rollback` na produkcyjnym hoście *musi* być w pomocy),
+  `--join-check` (podgląd tego, co zrobiłby `--join`, bez zmiany czegokolwiek),
+  `--add-quiesce` (wariant scalający grant quiesce zamiast nadpisującego — bo
+  `--join` nadpisuje świadomie).
+  `gen-cron.sh`: `--reconcile` (READ-ONLY porównanie „co config backupuje" vs
+  „co istnieje"; odpowiada na realną awarię — gość utworzony po napisaniu configu
+  chodził z zerem snapshotów) i `--migrate-recursion` (jednorazowa migracja
+  starego zapisu rekursji w `flags`).
+  `--dump-fields` i `--internal-legacy-render` **zostają ukryte** — są ukryte
+  celowo i mają to opisane w kodzie.
+  To odwrotność redukcji i tak było zamierzone: przełącznik, który działa, ale
+  jest niewidoczny, jest gorszy niż jego brak — istnieje i czeka, aż ktoś go
+  odkryje. Suity: gencron 78/78, join 83/83, selfupdate 28/28, reconcile 47/47.
+  **Reszty przełączników NIE ruszam przed labem.** Zmierzone: w 82 liniach
+  wygenerowanych z czterech produkcyjnych configów silniki dostają sześć flag
+  (`-m -v -q -u -r -e`) z ~35. To nie znaczy „29 do wyrzucenia", tylko
+  „29 nieprzećwiczonych przez obecną flotę" — te configi są w większości lokalne,
+  więc `-A` (dokładane tylko dla zdalnego dst), `-L`, opcje SSH i filtry nie mają
+  jak się pojawić. Lab z pullem, relacjami i zdalnymi ścieżkami jest tym, co je
+  przećwiczy; cięcie teraz byłoby cięciem w ciemno.
 - **ENGINE-FREEZE nazwane tym, czym jest: pieczęcią, nie zamkiem (2026-08-20,
   decyzja właściciela).** Bramka pilnuje pięciu plików silnika, porównując wpis
   indeksu z linią bazową. Jedyną żywą furtką jest `--refreeze`, którą może
