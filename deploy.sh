@@ -264,6 +264,13 @@ PEER_UNPAIR=0
 # safe (finalize stays local always; rides the pin already established by
 # ssh-keyscan above; the peer's manifest records the remote origin).
 PEER_JOIN_REMOTELY=0
+# Ceiling on each remote step of --join-remotely (the scp and the ssh). Not a
+# performance figure: the transfer is a small tarball and the remote --join is
+# short, so anything this large means something is stuck rather than slow. It
+# exists so a stall cannot outlive the operator's patience, and it is generous
+# on purpose -- a bound that fires during normal work would be worse than none,
+# because the first thing anyone does with a flaky timeout is remove it.
+PEER_REMOTE_JOIN_TIMEOUT="${PEER_REMOTE_JOIN_TIMEOUT:-300}"
 # The LOCAL account that will actually run the generated jobs. Independent of
 # --as, which names the account on the PEER: one is who we log in as there, the
 # other is who runs cron here. Empty means root runs the jobs.
@@ -4435,9 +4442,34 @@ EOF
     local remote_scope; remote_scope=$(peer_scope_path "$my_label")
     if [ "$PEER_JOIN_REMOTELY" -eq 1 ]; then
         log "--join-remotely: delivering the wsad and running --join on $PEER_HOST over the pin just established..."
-        if scp -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+        # BOUNDED, and stdin CLOSED. `--join` asks for scope acceptance and
+        # deliberately has no --yes; run from here it has no terminal, so the
+        # question can never be answered. Measured on metropolis 2026-08-20:
+        # the peer sat in `wchan=pipe_read stdin=pipe:` for over six minutes,
+        # silent, and would have sat there forever.
+        #
+        # The sting was that this branch ALREADY handles a failed join -- the
+        # else arm below prints the manual steps and the caller carries on.
+        # That recovery simply could not be reached, because the call never
+        # returned. A design that survives failure is defeated by a call that
+        # cannot fail.
+        #
+        # `ssh -n` is the fix that matters: the remote read gets EOF at once
+        # and --join exits with its own "join interrupted before scope
+        # acceptance", which is precisely the failure the else arm was written
+        # for. Confirmed live before this change by running the same path with
+        # stdin closed by hand -- the fallback fired exactly as designed.
+        #
+        # `timeout` is the second bound, for a stall that is NOT about stdin (a
+        # wedged link, a peer paging). Its own absence is safe rather than
+        # clever: no `timeout` binary means the command fails, which lands in
+        # the same else arm instead of hanging. coreutils is already a hard
+        # dependency here (md5sum), so this is not a new one in practice.
+        if timeout "$PEER_REMOTE_JOIN_TIMEOUT" \
+               scp -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
                -P "$PEER_PORT" "$pkg" "root@$PEER_HOST:/root/" \
-           && ssh -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+           && timeout "$PEER_REMOTE_JOIN_TIMEOUT" \
+               ssh -n -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
                   -p "$PEER_PORT" "root@$PEER_HOST" \
                   "cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"; then
             remote_ok=1
@@ -4449,7 +4481,15 @@ EOF
                 [ "$scope_rc" -ne 0 ] && warn "the remote scope stage on $PEER_HOST did not finish cleanly (see above) -- see the exact recovery step below"
             fi
         else
-            warn "--join-remotely could not complete automatically (see any ssh/scp error above) -- falling back to the manual steps below."
+            # 124 is timeout(1)'s "I killed it". Name that case separately: a
+            # peer that stalled is a different problem from a peer that
+            # refused, and collapsing them sends the operator looking for an
+            # ssh error message that was never printed.
+            if [ "$?" -eq 124 ]; then
+                warn "--join-remotely gave up after ${PEER_REMOTE_JOIN_TIMEOUT}s -- the peer accepted the connection but the remote step did not finish. Nothing here is half-done: --join commits nothing before scope acceptance. Falling back to the manual steps below."
+            else
+                warn "--join-remotely could not complete automatically (see any ssh/scp error above) -- falling back to the manual steps below."
+            fi
         fi
     fi
 

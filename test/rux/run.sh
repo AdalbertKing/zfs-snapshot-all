@@ -755,6 +755,82 @@ else
         "rc=$rc out=$out order=$(cat "$WORK/24b/order" 2>/dev/null)"
 fi
 
+# 25. rux_grant_remotely_preflight: a peer that has NOT joined this collector
+#     is refused BEFORE anything is built. Found live 2026-08-20 -- the flag's
+#     promise is one command instead of four, and it cannot keep it on an
+#     unjoined pair, because the grant goes to the account the JOIN creates.
+#     Discovering that mid-run left a half-built client to clean up first.
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() {   # <host> <port> <cmd...>
+        shift 2
+        case "$*" in
+            true) return 0 ;;                              # channel is fine...
+            *"test -s"*) return 1 ;;                        # ...but no join manifest
+            *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+        esac
+    }
+    rux_grant_remotely_preflight pve2 22
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] \
+   && printf '%s' "$out" | grep -q "has not joined" \
+   && printf '%s' "$out" | grep -q "Nothing was changed anywhere" \
+   && printf '%s' "$out" | grep -q "deploy.sh --join="; then
+    ok "25. --grant-remotely refuses an unjoined peer up front, and names the two-sided path"
+else
+    bad "25. --grant-remotely refuses an unjoined peer up front, and names the two-sided path" "rc=$rc out=$out"
+fi
+
+# 26. POSITIVE CONTROL for 25. A gate that never opens proves nothing, and this
+#     one guards the flag's whole reason to exist -- so prove it passes a peer
+#     that HAS joined, over the identical stub with one answer flipped.
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() {   # <host> <port> <cmd...>
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"test -s"*) return 0 ;;                        # the join manifest IS there
+            *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+        esac
+    }
+    rux_grant_remotely_preflight pve2 22
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    ok "26. the same gate passes a peer that has joined (positive control), silently"
+else
+    bad "26. the same gate passes a peer that has joined (positive control), silently" "rc=$rc out=$out"
+fi
+
+# 27. No root channel is still refused, and now from the EARLY seat: the
+#     function documents "refuse EARLY, before any state changes", which was
+#     true of the message and not of the placement -- the old check ran after
+#     cmd_add_client had already made the client, the keys and the package.
+out="$( (
+    COLLECTOR_LABEL=colhost
+    rux_root_ssh() { return 1; }                            # no channel at all
+    rux_grant_remotely_preflight pve2 22
+) 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "no root ssh channel"; then
+    ok "27. no root channel is refused by the early gate too"
+else
+    bad "27. no root channel is refused by the early gate too" "rc=$rc out=$out"
+fi
+
+# 28. The gate is WIRED where it claims to be: ahead of every line in rux_deploy
+#     that changes something. Asserted against the source because placement is
+#     the whole finding -- the old checks existed and ran too late.
+_pf=$(grep -n 'rux_grant_remotely_preflight "\$host"' "$ZB" | head -1 | cut -d: -f1)
+_acct=$(grep -n 'deploy.sh --backup-user=\$local_user' "$ZB" | head -1 | cut -d: -f1)
+_add=$(grep -n 'cmd_add_client "\${add_args\[@\]}"' "$ZB" | head -1 | cut -d: -f1)
+if [ -n "$_pf" ] && [ -n "$_acct" ] && [ -n "$_add" ] \
+   && [ "$_pf" -lt "$_acct" ] && [ "$_pf" -lt "$_add" ]; then
+    ok "28. the preflight runs before both the account creation and cmd_add_client"
+else
+    bad "28. the preflight runs before both the account creation and cmd_add_client" \
+        "preflight=$_pf account=$_acct add_client=$_add"
+fi
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

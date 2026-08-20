@@ -5788,6 +5788,47 @@ rux_root_ssh() {   # <host> <port> <command...>
         -p "${port:-22}" "root@$host" "$@"
 }
 
+# rux_grant_remotely_preflight <host> <port>
+#
+# Everything --grant-remotely needs BEFORE the first byte of state is written,
+# because the function that used to ask these questions runs after
+# cmd_add_client -- so the "refuse EARLY, before any state changes" property
+# above was documented but not delivered. By the time the old checks fired, the
+# client record, the keypair and the pairing package already existed and the
+# join had already been attempted.
+#
+# Two questions, and the second is the one 2026-08-20 found the hard way. This
+# flag's whole promise is "one command instead of four", and it can only keep
+# that promise on a pair that is ALREADY joined: the grant is committed to the
+# account `zfsbackup-<label>`, and it is the JOIN that creates that account on
+# the source. On an unjoined pair there is nothing to grant to, so the flag
+# cannot deliver -- and finding that out mid-run leaves a half-built client to
+# clean up before the operator can take the ordinary path anyway.
+#
+# Refusing is therefore the kinder answer, not the stricter one. Nothing here
+# is a security decision: the default two-sided path remains fully available
+# and is printed verbatim.
+rux_grant_remotely_preflight() {   # <host> <port>
+    local host="$1" port="$2"
+    if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
+        die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
+    fi
+    local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
+    if ! rux_root_ssh "$host" "$port" "test -s '$mfile'" >/dev/null 2>&1; then
+        die "--grant-remotely: $host has not joined '$COLLECTOR_LABEL' yet (no $mfile there), so there is no delegated account to grant to and this flag cannot do the whole enrolment in one command. Nothing was changed anywhere -- no client record, no keys, no package.
+
+Use the ordinary two-sided path instead; it ends in the same place:
+  1. here:        $0 --source=... --target=... --install --yes
+                  (stops and prints a package plus the exact command for $host)
+  2. on $host:    deploy.sh --join=<package>      <- accepts the scope, asks
+  3. on $host:    deploy.sh --commit-scope=$COLLECTOR_LABEL
+  4. here:        re-run the exact command from step 1 -- it resumes
+
+Add --grant-remotely again on a LATER relationship with $host: once the pair is
+joined it does step 3 for you."
+    fi
+}
+
 rux_grant_remotely() {   # <host> <port> <requested dataset>
     local host="$1" port="$2" requested="$3"
     local sfile hfile
@@ -5880,6 +5921,17 @@ rux_remote_install() {
     # never re-resolves. An empty local_user reaches cron_target_user as root.
     if [ -z "$state" ] && [ -z "$local_user" ]; then
         log "rux: no --local-user -- the generated jobs will run as root; pass --local-user=NAME to delegate them to an account instead"
+    fi
+
+    # --grant-remotely's preconditions are asked HERE, ahead of the first thing
+    # that changes anything -- the account creation just below, then the client
+    # record, keys and package. Only for a NEW relationship: a resume has
+    # already paid those costs, and rux_grant_remotely's own checks still guard
+    # the grant itself either way.
+    # Spelled as an `if`, not a `&&` chain, on purpose: this is a gate, and a
+    # gate must not depend on nobody ever adding `set -e` to this file.
+    if [ "$grant_remotely" -eq 1 ] && [ -z "$state" ]; then
+        rux_grant_remotely_preflight "$host" "$port"
     fi
 
     # Accepted semantics: --local-user names the account this relationship

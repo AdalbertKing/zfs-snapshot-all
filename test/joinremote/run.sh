@@ -234,6 +234,49 @@ else
         "the old 'cd /root && ./deploy.sh --join=' shape is still present, or fewer than 6 'cd \$REPO_DIR' lines found (got $repo_cd_count)"
 fi
 
+# ---------------------------------------------------------------------------
+# 8. Structural pin, found live on metropolis 2026-08-20: the automated
+#    --join-remotely ssh had no bound and inherited stdin. `--join` asks for
+#    scope acceptance and deliberately has no --yes, so driven from here it
+#    can never be answered -- the peer sat in `wchan=pipe_read stdin=pipe:`
+#    for over six minutes and would have sat there forever.
+#
+#    What makes it worth pinning rather than just fixing: the else arm right
+#    below that call ALREADY handles a failed join and prints the manual
+#    steps. The recovery existed and was merely unreachable, because the call
+#    never returned. Two properties, both asserted, because either one alone
+#    leaves the hang possible:
+#      -n        the remote read takes EOF at once, turning the unanswerable
+#                prompt into the ordinary failure the else arm was written for
+#      timeout   a bound for a stall that is NOT about stdin
+#
+#    Checked on the --join line specifically, not anywhere in the file: this
+#    is the invocation whose remote end asks a question.
+# ---------------------------------------------------------------------------
+join_line=$(grep -n 'deploy.sh --join=/root/\$(basename' "$DEPLOY_SRC" | head -1 | cut -d: -f1)
+join_ctx=""
+[ -n "$join_line" ] && join_ctx=$(sed -n "$((join_line-6)),${join_line}p" "$DEPLOY_SRC")
+if [ -n "$join_ctx" ] \
+   && printf '%s' "$join_ctx" | grep -q 'ssh -n ' \
+   && printf '%s' "$join_ctx" | grep -q 'timeout "\$PEER_REMOTE_JOIN_TIMEOUT"' \
+   && grep -q '^PEER_REMOTE_JOIN_TIMEOUT=' "$DEPLOY_SRC"; then
+    ok "do_pair: the automated --join-remotely ssh closes stdin (-n) AND is bounded by \$PEER_REMOTE_JOIN_TIMEOUT"
+else
+    bad "do_pair: the automated --join-remotely ssh closes stdin (-n) AND is bounded by \$PEER_REMOTE_JOIN_TIMEOUT" \
+        "without both, a peer that asks a question hangs this command forever (measured 2026-08-20); join_line=${join_line:-none}"
+fi
+
+# 9. A stall and a refusal are different problems, and collapsing them sends
+#    the operator hunting for an ssh error that was never printed. timeout(1)
+#    reports 124; the fallback must say so in its own words.
+if grep -q 'if \[ "\$?" -eq 124 \]' "$DEPLOY_SRC" \
+   && grep -q 'gave up after \${PEER_REMOTE_JOIN_TIMEOUT}s' "$DEPLOY_SRC"; then
+    ok "do_pair: a timed-out remote join is reported as a stall, not as an ssh failure"
+else
+    bad "do_pair: a timed-out remote join is reported as a stall, not as an ssh failure" \
+        "exit 124 is not distinguished in the --join-remotely fallback"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
