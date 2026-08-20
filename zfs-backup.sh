@@ -4791,6 +4791,19 @@ $gcerr"
 # something about itself and the account failing at it later.
 
 # Datasets a config actually manages, from its own section headers.
+#
+# NO PRODUCTION CALLER since migrate-to-account was retired on 2026-08-19, and
+# deliberately kept anyway. It is the TESTED definition of how a section scope
+# is split and trimmed, and assert_no_overlapping_policy re-implements that
+# same convention inline -- its comment says so by name ("the same comma split
+# and whitespace trim config_datasets() applies"). Deleting this would leave
+# the convention with an inline implementation and no test.
+#
+# That makes it the same shape as the snapsend/snapget twins: one rule, two
+# implementations, only one watched. The right repair is for the planner to
+# CALL this rather than restate it -- which is a change to the planner, so it
+# belongs with lab testing rather than with a cleanup sweep. Flagged
+# 2026-08-20 so the next dead-code pass does not simply remove it.
 config_datasets() {   # <config file>
     # SPLIT ON COMMAS. `[prune:a,b,c]` is one section naming three datasets, and
     # gen-cron.sh has always allowed it -- metropolis pve2 has two such sections.
