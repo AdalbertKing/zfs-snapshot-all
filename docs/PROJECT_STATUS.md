@@ -57,6 +57,25 @@
   `assert_config_readable_by_target` jest wołany w 5 miejscach; ten w zerowej.
   Nie usunięto i nie podpięto: podpięcie to zmiana zachowania na ścieżce instalacji
   crontaba i należy do testów na labie, nie do sprzątania.
+- **Ledger recenzji przestał być bramką merge'a (2026-08-20).** Pierwszy krok
+  redukcji aparatu procesu. `test/impact.sh --verify` wołało
+  `test/reviewctl.sh --verify`, a `--verify` jest wymaganym checkiem `graph`
+  w CI — więc spójność `docs/internal/reviews/` była **warunkiem merge'a**.
+  `HANDOFF.md` zniósł protokół recenzji 2026-08-15 („No reviewer. No REV files,
+  no REVIEW_LEDGER.md routing"), czyli przez pięć dni bramka pilnowała procesu,
+  którego nikt nie prowadził — aparat przeżywający własne zniesienie to dokładnie
+  ta awaria, którą tamten reset miał zakończyć. Skala: **28 142 linie** artefaktów
+  recenzji (127 REV + 119 odpowiedzi), czyli tyle, co CAŁY produkt (28 556).
+  Ukryty koszt: ten check był **jedynym** powodem, dla którego zadanie `graph`
+  potrzebowało `fetch-depth: 0` — CI klonowało pełną historię repozytorium, żeby
+  zwalidować archiwum. Teraz klonuje płytko. Zadanie `suites` zachowuje pełną
+  historię, bo selektywne CI nadal diffuje `base...HEAD`.
+  **NIC NIE USUNIĘTO.** `reviewctl.sh` bajt w bajt nietknięty, wszystkie 127 REV
+  i 119 odpowiedzi na miejscu — decyzja właściciela: to historia projektu i
+  znika, jeśli w ogóle, na końcu. Zmieniło się tylko to, że przestało warunkować
+  merge; `./test/reviewctl.sh --verify` działa na żądanie. Wywołanie usunięte,
+  nie schowane za flagą: bramka domyślnie wyłączona to bramka, którą ktoś
+  przypadkiem włączy z powrotem.
 - **`check-snap-age.sh` odmawia pustego wzorca (2026-08-20).** ZAWĘŻENIE KONTRAKTU
   na pliku ZAMROŻONYM — patrz nota o linii bazowej niżej. Dopasowanie to
   `[[ "$snapname" == "${PATTERN}"* ]]`, więc pusty wzorzec łapie KAŻDY snapshot

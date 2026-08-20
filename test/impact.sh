@@ -339,7 +339,8 @@ verify() {
 
     status_freshness || rc=1
     engine_freeze || rc=1
-    protocol_verify || rc=1
+    # protocol_verify (the review-ledger check) was removed here on 2026-08-20 --
+    # see the block above `status_freshness` for why, and how to run it by hand.
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
     return $rc
@@ -372,16 +373,32 @@ verify() {
 # line, both formats this repo controls. Grepping Polish sentences for meaning
 # was explicitly rejected, and rightly -- it would fail on rewording and pass
 # on the thing that matters.
-# REVIEW PROTOCOL V2 (docs/project/PROTOCOL.md): review state is DERIVED from
-# machine facts, so there is nothing here to police any more. ledger_coherence
-# and the review-head marker existed only to catch drift in a hand-maintained
-# table; a generated table cannot drift from what generates it. Both deleted
-# rather than kept "just in case" -- a check nobody can make fail is noise.
-protocol_verify() {
-    echo "== review ledger agrees with the review artifacts"
-    "$REPO/test/reviewctl.sh" --verify 2>&1 | sed 's/^/  /'
-    return "${PIPESTATUS[0]}"
-}
+#
+# THE REVIEW-LEDGER CHECK USED TO RUN HERE, AND NO LONGER DOES (2026-08-20).
+#
+# `protocol_verify` ran `test/reviewctl.sh --verify` as part of --verify, which
+# is a required CI check, which made the coherence of docs/internal/reviews/ a
+# merge gate. HANDOFF.md retired the review protocol on 2026-08-15 -- "No
+# reviewer. No REV files, no REVIEW_LEDGER.md routing, no response files" -- so
+# for five days the gate policed a process nobody was running. The apparatus
+# outliving its own abolition is the specific failure that reset was meant to
+# end.
+#
+# What it cost, beyond the seconds: this check is the ONLY reason the graph job
+# needed `fetch-depth: 0`. reviewctl asserts that every commit-bearing review
+# header names a SHA reachable from the published branch, so CI had to clone the
+# entire history of the repository to validate an archive.
+#
+# NOTHING WAS DELETED. reviewctl.sh, its own suite, and all 127 REV files with
+# their 119 responses stay exactly where they are -- they are the project's
+# history and the owner's decision is that they go, if ever, at the end. What
+# changed is only that they stopped being a condition for merging:
+#
+#     ./test/reviewctl.sh --verify        # on demand, whenever it is wanted
+#
+# Removing the call rather than wrapping it in a flag is deliberate. An
+# opt-in gate that defaults to off is still a gate someone re-enables by
+# accident, and the honest statement is that this is not checked any more.
 
 STATUS_FILE="docs/PROJECT_STATUS.md"
 RDIR_FREEZE="$REPO/docs/internal/reviews"
