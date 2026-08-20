@@ -2573,8 +2573,19 @@ log "Phase 4: notify-fail.sh (alert reporting)"
 # service account able to write there could replace them. Hence a separate
 # group-writable directory that contains only data.
 ALERT_GROUP="zfsalert"
-if [ "$CHECK_ONLY" -eq 1 ]; then
-    getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
+# DEFINED HERE, at top level, deliberately -- not inside the branch below.
+#
+# These two used to sit inside the `if CHECK_ONLY` arm, while
+# cron_lock_files_repair is called from the `else` arm. So on every REAL
+# deployment run the definition never executed and the call died with
+# "command not found", printed into the middle of a long deploy log and
+# carried on. Found 2026-08-20 by running deploy.sh --join for real on
+# metropolis pve2. No suite could catch it: the suites extract functions with
+# sed, so the definition is always present for them.
+#
+# What it cost: the repair below is what fixes a 0644 lock file locking a
+# delegated account out of its own crontab -- measured on THREE OF FOUR
+# production hosts on 2026-08-07 -- and it had not run once since.
 # A lock file is a SHARED object in a setgid directory: the directory makes it
 # inherit the group, but the MODE comes from whoever creates it first -- and
 # root usually does (deploy and activate-client take the ACCOUNT's lock as
@@ -2638,6 +2649,9 @@ cron_lock_files_audit() {   # <lock dir> <expected group>  -> 0 all usable, 1 no
     warn "  a normal (non --check-only) deploy.sh run repairs this."
     return 1
 }
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    getent group "$ALERT_GROUP" >/dev/null || warn "  group $ALERT_GROUP missing -- a delegated account could not queue alerts"
 
     if [ -d "$ALERT_SHARED_DIR" ]; then
         log "  $ALERT_SHARED_DIR present ($(stat -c '%a %U:%G' "$ALERT_SHARED_DIR"))"

@@ -2543,7 +2543,16 @@ else
 fi
 mds_ssh_stub   # restore for the next case
 
-# No scope file at all: --draft-scope has not run yet.
+# Nothing fetchable from the peer. This USED TO BE one case asserting one
+# message; it is two, because until 2026-08-20 the code could not tell them
+# apart and said "--draft-scope" for both. That is the wrong question when the
+# JOIN never completed -- and the join is the common failure, because the
+# one-command form attempts it, prints manual instructions on failure, and then
+# resumes PAST it. An operator was sent to look at --draft-scope on a peer that
+# had never accepted the pairing package at all (measured on metropolis).
+#
+# The peer MANIFEST is what separates them: --join writes it on the source and
+# it is copied back here, so its absence means the join, not the draft.
 mds_ssh_noscope() {
     cat > "$MDS/bin/ssh" <<EOF
 #!/bin/bash
@@ -2552,12 +2561,28 @@ EOF
     chmod +x "$MDS/bin/ssh"
 }
 mds_ssh_noscope
-out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"has --draft-scope run"*) true ;; *) false ;; esac; then
-    ok "resolve_mode_datasets: refuses when --draft-scope has not run yet on the peer"
+
+# (a) no manifest -> the JOIN is the missing step, and the message must say so
+#     without mentioning --draft-scope as the fix.
+MDS_PEERS="$MDS/peers"; mkdir -p "$MDS_PEERS"
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; PEER_STATE_DIR="$MDS_PEERS"        SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"JOIN has not completed"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: no manifest -> names the JOIN, not --draft-scope"
 else
-    bad "resolve_mode_datasets: refuses when --draft-scope has not run yet on the peer" "rc=$rc out=$out"
+    bad "resolve_mode_datasets: no manifest -> names the JOIN, not --draft-scope" "rc=$rc out=$out"
 fi
+
+# (b) manifest present, still no scope -> NOW --draft-scope really is the answer.
+#     The label is peer_label of LOAD_HOST, which is how the code looks it up.
+printf 'PEER_JOIN_ROLE="pull"
+' > "$MDS_PEERS/peer.example.conf"
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; PEER_STATE_DIR="$MDS_PEERS"        SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"--draft-scope"*) true ;; *) false ;; esac; then
+    ok "resolve_mode_datasets: manifest present but no scope -> names --draft-scope"
+else
+    bad "resolve_mode_datasets: manifest present but no scope -> names --draft-scope" "rc=$rc out=$out"
+fi
+rm -f "$MDS_PEERS/peer.example.conf"
 
 # --- 37. add-client --mode= validation (REV-20260802-033 slice 6) -----------
 # Only the local (pre-network) refusal paths are testable here -- an ACCEPTED

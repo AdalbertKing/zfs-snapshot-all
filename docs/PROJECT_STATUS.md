@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8af0d2c1d6130e97 -->
+<!-- status-covers-digest: eb19351c3e42de9d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,40 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **LAB4 na metropolis: łańcuch pve9 → pve2 → pve1 dowiedziony, cztery błędy znalezione i naprawione (2026-08-20).**
+  Pierwszy pełny lab na dzisiejszym kodzie. Dane 12 MB przeszły dwa skoki, **md5
+  zgodne co do bitu na wszystkich trzech hostach**. Produkcja nietknięta — sprawdzone
+  na obu kolektorach: zero delegacji kont labowych na `hdd/vm-disks`, `hdd/backups`,
+  `rpool/data`, `rpool/ROOT`; granty wyłącznie na liściach lab4; produkcyjne crontaby
+  (pve2 12 zadań, pve1 16) na osobnych kontach i configach, bez zmian.
+  **BŁĄD 1 — `cron_lock_files_repair` nigdy nie działał przy prawdziwym wdrożeniu.**
+  `deploy.sh`: definicja w gałęzi `--check-only`, wywołanie w gałęzi `else`. Commit
+  `2f69c2d` z 7 sierpnia — **trzynaście dni**. Naprawa dotyczy pliku blokady 0644,
+  który zamyka konto delegowane przed jego własnym crontabem: zmierzone na TRZECH
+  Z CZTERECH hostów produkcyjnych 2026-08-07. Żadna suita tego nie widziała, bo
+  suity wyciągają funkcje sedem — u nich definicja istnieje zawsze. Obie funkcje
+  przeniesione na poziom pliku.
+  **BŁĄD 2 — wznowienie przeskakuje krok, który padł.** Ze stanu `pending_enroll`
+  ponowienie tej samej komendy **nie ponawia joinu** (log wznowienia: dwie linie,
+  zero prób) i wywala się na pobraniu zakresu komunikatem „czy `--draft-scope` już
+  tam chodził?" — kierując operatora na zły problem. Komunikat rozdzielony po
+  MANIFEŚCIE peera: jego brak znaczy join, jego obecność znaczy draft. Plan
+  lifecycle mówi teraz wprost, że ponowienie joinu nie ponawia. Automatyczne
+  ponawianie joinu ŚWIADOMIE niezrobione — `cmd_add_client` odmawia istniejącemu
+  klientowi, więc to przepisanie ścieżki parowania, nie poprawka komunikatu.
+  **BŁĄD 3 — stan `removed` raportowany jako „unknown".** Wpadał w gałąź domyślną
+  i odsyłał do `status/seed/activate`, z których żaden nie odnawia usuniętej relacji
+  — a nic innego w drzewie też nie. Ma teraz własny przypadek mówiący, że jest
+  terminalny, i wskazujący `--name=NOWA` jako drogę do ponownego backupu tego peera.
+  **BŁĄD 4 — okazał się NIE być błędem.** Seed stempluje `automated_daily_`, a
+  monitor pilnuje `automated_hourly`. Zgłosiłem to jako niespójność; po przemyśleniu
+  jest odwrotnie: seed nazwany `automated_hourly_` byłby świeżym pasującym snapshotem
+  niezależnie od tego, czy godzinowy job kiedykolwiek ruszy — czyli najnowsze, co
+  widziałby monitor, byłoby artefaktem enrolmentu, nie dowodem działającego
+  harmonogramu. Drabinka GFS kasuje po `automated_`, więc seed i tak podlega
+  retencji. Udokumentowane w miejscu wywołania zamiast „naprawione".
+  Test `resolve_mode_datasets` rozdzielony na dwa przypadki — stary pinował jeden
+  komunikat na dwa różne stany, bo kod ich nie odróżniał.
 - **Siedem działających przełączników dopisanych do `--help` (2026-08-20).**
   Przemiał przełączników przed labem. Znalezione: dziewięć flag jest parsowanych
   i w pełni działa, a nie ma ich w pomocy — czyli jedynym sposobem, żeby je
