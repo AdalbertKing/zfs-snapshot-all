@@ -268,6 +268,31 @@ Uwaga: jeśli host jest **jednocześnie** kolektorem i źródłem (środek łań
 potrzebuje obu — łatwo przeoczyć `--leave` na hoście, o którym myślisz „to
 przecież kolektor".
 
+> **Kolejność jest nieodwracalna: `--leave` PRZED sprzątaniem ręcznym.**
+> Manifest `peers/<etykieta>.conf` jest mapą, z której `--leave` czyta, co cofnąć
+> i kogo usunąć. Skasuj go najpierw, a narzędzie odmówi:
+>
+> ```
+> FATAL: no join manifest for 'pve9' at /etc/zfs-snapshot-all/peers/pve9.conf
+>        -- nothing to leave (was --join even run here under this label?)
+> ```
+>
+> Odmowa jest poprawna — narzędzie nie zgaduje — ale konto zostaje wtedy poza
+> jego zasięgiem i trzeba je usunąć ręcznie, czyli dokładnie tym, czego reguła
+> whitelisty ma unikać. Zrobiłem ten błąd 2026-08-20 na pve1.
+
+**Listę `--leave` wyprowadzaj z KONT na hoście, nie z topologii łańcucha.**
+Rozebrałem trzy relacje, które sam zbudowałem, i przegapiłem konto
+`zfsbackup-pve9` na pve1 — zostało po starszym labie, w którym pve1 było
+źródłem. Miało żywy klucz i powłokę przy zerze grantów. Pytanie do zadania na
+każdym hoście brzmi „jakie konta `zfsbackup-*` tu są i czym każde z nich jest
+uzasadnione", a nie „jakie relacje ja budowałem":
+
+```bash
+[każdy]  ls -d /home/zfsbackup-* 2>/dev/null
+         # dla każdego: id <konto>, zfs allow, grep w crontabach i /etc
+```
+
 ### 3. Reszta — czego narzędzia nie sprzątają
 
 Zanim skasujesz cokolwiek ręcznie, **sprawdź, że produkcja tego nie używa**:
