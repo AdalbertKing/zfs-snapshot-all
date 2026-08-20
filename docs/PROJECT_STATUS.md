@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 62a5a7a142181644 -->
+<!-- status-covers-digest: b62688d3e4c7d896 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -51,7 +51,20 @@
   „brak zfs w PATH", czego nie naprawiam sam, bo silnik jest zamrożony.
   Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O12, procedura w
   `docs/LAB-RUNBOOK.md` §9.
-- **ZNANY DEFEKT: `--grant-remotely` wiesza się na parze, która NIE jest jeszcze
+- **NAPRAWIONE tego samego dnia, obie drogi (decyzja właściciela).** `deploy.sh`
+  woła zdalny join jako `timeout "$PEER_REMOTE_JOIN_TIMEOUT" ssh -n ...`: `-n`
+  daje zdalnemu odczytowi EOF od razu, więc `--join` kończy się swoją własną
+  porażką — tą, dla której gałąź awaryjna została napisana; `timeout` (300 s)
+  jest drugim ograniczeniem na zator niezwiązany z wejściem, a jego brak też
+  wpada w tę samą gałąź zamiast wisieć. Zator jest raportowany osobno od odmowy.
+  Druga droga: `rux_grant_remotely_preflight` sprawdza kanał root-ssh **i**
+  manifest joinu na źródle, **zanim** powstanie konto, rekord klienta, klucze
+  i wsad — bo bez joinu nie istnieje konto, do którego grant miałby trafić.
+  Przy okazji domknięta ta sama choroba obok: komentarz obiecywał „refuse EARLY,
+  before any state changes", a funkcja była wołana po `cmd_add_client`.
+  Regresje: `joinremote` 8–9, `rux` 25–28, sprawdzone jako **padające na kodzie
+  sprzed poprawki**; `rux` 26 jest kontrolą pozytywną.
+- **ZNALEZIONE: `--grant-remotely` wieszało się na parze, która NIE jest jeszcze
   sparowana (2026-08-20).** Wykryte przy wdrożeniu od zera na sterylnych hostach:
   jedna komenda stanęła na ponad sześć minut bez żadnego komunikatu. Zmierzone:
   `deploy.sh --join` na peerze siedział w `wchan=pipe_read`, `stdin=pipe:`.

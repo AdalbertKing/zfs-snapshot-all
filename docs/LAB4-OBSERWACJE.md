@@ -317,7 +317,7 @@ konta" jako strategia właśnie umarła. To drugi, niezależny powód dla reguł
 Omal nie zaraportowałem tych trzech jako żywych kont z dostępem. Puste pole
 powłoki z `getent passwd` **nie jest** dowodem na istnienie konta; `id` jest.
 
-## O14. `--grant-remotely` wiesza się na parze hostów, która NIE jest sparowana — ZNALEZIONE
+## O14. `--grant-remotely` wiesza się na parze hostów, która NIE jest sparowana — NAPRAWIONE (obie drogi)
 
 Przy wdrożeniu od zera, na **sterylnych** hostach, jedna komenda stanęła i stała
 przez ponad sześć minut bez żadnego komunikatu. Zmierzone, nie wywnioskowane:
@@ -383,6 +383,36 @@ FATAL: join interrupted before scope acceptance
 Czyli kod na to zawieszenie **już ma odpowiedź** — brakuje wyłącznie tego, żeby
 ją mógł osiągnąć. To najtańsza możliwa poprawka: ograniczyć czas i zamknąć
 wejście, nic więcej.
+
+### Zrobione — obie drogi (decyzja właściciela)
+
+**Droga 1 — nigdy się nie wieszać.** `deploy.sh` woła teraz zdalny join jako
+`timeout "$PEER_REMOTE_JOIN_TIMEOUT" ssh -n ...`, i to `-n` jest tu istotne:
+zdalny odczyt dostaje EOF natychmiast, `--join` kończy się swoim własnym
+„join interrupted before scope acceptance", czyli **dokładnie tą porażką, dla
+której gałąź `else` została napisana**. `timeout` (300 s) jest drugim
+ograniczeniem, na zator niezwiązany ze standardowym wejściem. Jego własny brak
+też jest bezpieczny, nie sprytny: bez `timeout` polecenie po prostu się nie uda
+i wpadnie w tę samą gałąź `else` zamiast wisieć. Zator (`124`) jest nazywany
+osobno od odmowy — inaczej operator szuka komunikatu ssh, którego nigdy nie było.
+
+**Droga 2 — pytać wcześniej.** Nowe `rux_grant_remotely_preflight` sprawdza kanał
+root-ssh **i** obecność manifestu joinu na źródle, zanim powstanie cokolwiek:
+konto, rekord klienta, klucze, wsad. Bez joinu nie ma konta, do którego grant
+miałby trafić, więc flaga nie może dotrzymać swojej obietnicy „jedna komenda
+zamiast czterech" — a dowiadywanie się o tym w połowie zostawiało niedokończonego
+klienta do sprzątnięcia. Odmowa wypisuje pełną drogę dwustronną i mówi wprost,
+że przy **kolejnej** relacji z tym hostem flaga znów zadziała.
+
+Przy okazji naprawiona druga sztuka tej samej choroby: komentarz nad
+`rux_grant_remotely` obiecywał *„no root channel → refuse EARLY, before any state
+changes"*, a funkcja była wołana **po** `cmd_add_client`. Obietnica dotyczyła
+komunikatu, nie umiejscowienia.
+
+Testy regresyjne: `joinremote` 8 i 9, `rux` 25–28. Sprawdzone, że **padają na
+kodzie sprzed poprawki** (2 i 4 błędy odpowiednio) i przechodzą po niej. `rux` 26
+jest kontrolą pozytywną — ta sama bramka przepuszcza peera, który dołączył, bo
+bramka, która nigdy nie otwiera, niczego nie dowodzi.
 
 ## O15. Wdrożenie od zera bez błędów — OSIĄGNIĘTE
 
