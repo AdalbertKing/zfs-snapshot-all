@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3660da157bbc7a16 -->
+<!-- status-covers-digest: 16d62fb2e8f49163 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,42 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Martwy kod usunięty: −278 linii, w tym zahardkodowana polityka po Slice B1 (2026-08-20).**
+  Drugi krok redukcji. Trzy skupiska, wszystkie potwierdzone brakiem callerów
+  w kodzie ORAZ w testach (lekcja z usuwania migrate: testy pinują dosłowne
+  linie źródła, nie tylko nazwy funkcji):
+  **(1) Zahardkodowane szablony, 93 linie** — `STANDARD_TEMPLATE_*` /
+  `KEEP_TEMPLATE_*` plus listy nazw. Sam plik pisał obok: *„Until B1 the policy
+  above lived in shell variables in this file. It now lives in `profiles/<name>/`,
+  and this is the only place that reads it"* — hardcode był świadomie zastąpiony
+  i po prostu został. Sprawdzone też pod kątem indirekcji `${!var}` (jedyne jej
+  użycia dotyczą endpointów, nie szablonów).
+  **(2) `HOST_NAME/TAIL/BEGIN/END` + `set_host_block`, 49 linii** — pozostałość
+  po usunięciu `migrate-to-account` (2026-08-19). Blok `zfs-backup-host` ŻYJE,
+  ale jego pisarzem jest `deploy.sh` (`CRON_HOST_BLOCK`); kopia w `zfs-backup.sh`
+  służyła wyłącznie migracji. Komentarz w `lib-cron.sh` twierdzący, że ten blok
+  należy do `zfs-backup.sh`, poprawiony.
+  **(3) `QCAP_VALUE_FLAGS` + `job_positionals`, 42 linie** — resztka po tym samym
+  usunięciu (prefiks `QCAP_` to podsystem capability-survey).
+  Do tego sekcja 21 w `test/zfsbackup` (89 linii), która testowała (2), oraz
+  nieaktualna nota „Slice A: fixture only" w `profiles/default/templates.conf` —
+  wraz z przeniesieniem tam wiedzy o `retain=` zamiast `keep=` (REV-20260730-001),
+  która ginęła razem z usuwanym komentarzem. Naprawiona też biała lista
+  `.gitignore`: `profiles/` nie było na niej wcale, więc jego pliki były śledzone
+  tylko dlatego, że git już o nich wiedział — ta sama pułapka, którą komentarz
+  o `deploy.sh` dwie linijki wyżej opisuje.
+  Suity: `profiles` 55/55, `gencron` 78/78, `cron` 137/137; `zfsbackup` 302 PASS
+  / 0 FAIL zanim lokalny limit uciął (pełny przebieg ~34 min — w CI).
+- **`assert_block_runnable_by` to BRAKUJĄCE WYWOŁANIE, nie martwy kod (2026-08-20).**
+  Funkcja istnieje, nie ma ani jednego callera, a `docs/discussions/DEPLOY-PRECONDITIONS.md`
+  opisuje ją jako **[JEST]** — aktywny warunek wstępny. Powstała po awarii na
+  metropolis pve2 2026-08-01: config odbudowany przez `cron2conf.sh` niósł
+  `[defaults] repo_dir` z rootową ścieżką, `/root` ma 0700, więc każda linia bloku
+  kończyła się `exit 126` — a idiom crona kończy się `rm -f "$e"`, więc **każda
+  raportowała rc=0** i host nie miał działającego backupu. Sąsiedni warunek
+  `assert_config_readable_by_target` jest wołany w 5 miejscach; ten w zerowej.
+  Nie usunięto i nie podpięto: podpięcie to zmiana zachowania na ścieżce instalacji
+  crontaba i należy do testów na labie, nie do sprzątania.
 - **Ledger recenzji przestał być bramką merge'a (2026-08-20).** Pierwszy krok
   redukcji aparatu procesu. `test/impact.sh --verify` wołało
   `test/reviewctl.sh --verify`, a `--verify` jest wymaganym checkiem `graph`
