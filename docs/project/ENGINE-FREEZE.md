@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 675f46d1664351f9219ed3012ad2b2d52573982c -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
-<!-- frozen: lib-zfs-snap.sh 100644 902b307cbcac9fbedf7c3f076334a801884f3666 -->
+<!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -78,6 +78,34 @@ Owner-authorized refreezes:
   44 lines added, count of changed non-comment lines zero, and the twins
   baseline confirmed the pinned function hashes did not move. Also not
   pre-authorised, same batch of work.
+- **2026-08-20** -- `lib-zfs-snap.sh`: a peer whose pair gate is DISABLED is
+  named as such instead of guessed at (O12). **PRE-AUTHORISED** by the owner,
+  in those words: *"Odblokuj silnik i napraw O12"* — the first entry on this
+  list that was directed beforehand rather than reported afterwards.
+  Measured on metropolis the same day: the gate answered
+  `PAIR_DISABLED: relationship pve1 is disabled by administrator`, and the
+  library reported *"exit 93 -- e.g. no 'zfs' in this account's PATH"*. It had
+  the answer in hand and guessed a different one — the same family as the
+  exit-255 confusion that block already exists to end.
+  Three call sites, and the third matters most: `pool_health` discarded the
+  exit status, so the refusal fell through to `UNKNOWN`, and
+  `check_pool_health` MAILS on anything that is not ONLINE. An administrative
+  block was raising a **storage alarm** about a perfectly healthy pool. It now
+  reports `PAIR-DISABLED`, says why, and raises no alert — the instrument for
+  "this relationship stopped copying" is `check-snap-age`, in its own terms.
+  **No transfer semantics changed:** every edit is a diagnosis, a return value
+  already reserved for "unknown", or the suppression of a false alert.
+  Carried along, because unit-testing `pool_health` directly for the first time
+  exposed it: both cache-keyed helpers built their key inside the same `local`
+  that declared its inputs. Bash expands those words before the builtin runs,
+  so the key came from the OUTER scope — unbound under `set -u`, and silently
+  the WRONG VALUE when an outer `pool` existed. It worked only because
+  `check_pool_health` happens to declare its own `local pool` immediately
+  before calling. Fixed in `pool_health` and its twin `csend_pool_has`; the
+  stake is a cache key, so a wrong one crosses pools.
+  Regression tests: `test/quiesce` gains 11, verified to fail on the frozen
+  baseline and pass after — including controls that the new recogniser does
+  NOT relabel an ordinary remote failure as an administrative block.
 
 ## How it is enforced
 

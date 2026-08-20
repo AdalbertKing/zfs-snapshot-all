@@ -1399,6 +1399,92 @@ case "$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")" in
     *)        check "failopen: the local abandon path allocates nothing either" "0" "0" ;;
 esac
 
+# ---- a DISABLED pair gate is named, not guessed at -------------------------
+#
+# Measured on metropolis 2026-08-20: with the peer's gate disabled, the engine
+# was handed
+#     PAIR_DISABLED: relationship pve1 is disabled by administrator
+# and reported "exit 93 -- e.g. no 'zfs' in this account's PATH", plus a pool
+# alert saying that peer's pool was UNKNOWN. The answer was in hand and a
+# different one was guessed -- the same family as the exit-255 confusion the
+# probe block in the library exists to end.
+
+check "gate: RC_DISABLED alone is recognised"      "0" "$(remote_refused_by_gate 93; echo $?)"
+check "gate: the PAIR_DISABLED line alone is too"  "0" "$(remote_refused_by_gate 1 'PAIR_DISABLED: relationship x is disabled by administrator'; echo $?)"
+# Controls in the other direction. A recogniser that says yes to everything
+# would "fix" this by relabelling every remote failure as an administrative
+# block -- which is the original bug wearing the opposite coat.
+check "gate: an ordinary remote failure is NOT a gate refusal" "1" "$(remote_refused_by_gate 127 'bash: zfs: command not found'; echo $?)"
+check "gate: a clean run is NOT a gate refusal"               "1" "$(remote_refused_by_gate 0 'ONLINE'; echo $?)"
+
+# probe_dataset through an ssh stub that behaves exactly as the gate does.
+probe_out=$(
+    ssh() { echo "PAIR_DISABLED: relationship pve1 is disabled by administrator" >&2; return 93; }
+    log() { shift; echo "$*"; }
+    probe_dataset hdd/lab4/src zfsbackup-pve1 192.168.28.99 source 2>&1
+)
+case "$probe_out" in
+    *"REFUSES this relationship"*"enable-client"*) check "gate: probe_dataset names the gate and the way back" "0" "0" ;;
+    *) check "gate: probe_dataset names the gate and the way back" "0" "1"; echo "     got: $probe_out" ;;
+esac
+case "$probe_out" in
+    *PATH*) check "gate: probe_dataset no longer blames the account's PATH" "0" "1"; echo "     got: $probe_out" ;;
+    *)      check "gate: probe_dataset no longer blames the account's PATH" "0" "0" ;;
+esac
+
+# pool_health reports the refusal as its own state, and check_pool_health must
+# raise NO storage alarm for it. An administrative block is not a disk fault,
+# and mailing one as the other is how a real DEGRADED comes to be ignored.
+ph=$(
+    ssh() { return 93; }
+    declare -A POOL_HEALTH_CACHE=()
+    pool_health hdd zfsbackup-pve1@192.168.28.99
+)
+check "gate: pool_health reports PAIR-DISABLED, not UNKNOWN" "PAIR-DISABLED" "$ph"
+
+# Found by the line above, and worth its own guard: both cache-keyed helpers
+# used to build their key inside the same `local` that declared its inputs.
+# Bash expands those words BEFORE the builtin runs, so the key was read from
+# the OUTER scope -- unbound under set -u with no caller variable in sight, and
+# silently the WRONG VALUE when one existed. It worked only because
+# check_pool_health declares its own `local pool` immediately before calling.
+# The stake is the cache key, so a wrong one crosses pools.
+poisoned=$(
+    pool=SOMEONE-ELSES-POOL         # exactly the dynamic-scope trap
+    ssh() { printf 'ONLINE'; return 0; }
+    declare -A POOL_HEALTH_CACHE=()
+    pool_health hdd user@peer
+    printf '|'
+    printf '%s' "${!POOL_HEALTH_CACHE[*]}"
+)
+case "$poisoned" in
+    "ONLINE|hdd/user@peer") check "scope: pool_health keys the cache on its ARGUMENT, not an outer 'pool'" "0" "0" ;;
+    *) check "scope: pool_health keys the cache on its ARGUMENT, not an outer 'pool'" "0" "1"; echo "     got: $poisoned" ;;
+esac
+csend_poisoned=$(
+    pool=SOMEONE-ELSES-POOL
+    ssh() { printf 'active'; return 0; }
+    declare -A CSEND_POOL_CACHE=()
+    csend_pool_has hdd lz4_compress user@peer >/dev/null
+    printf '%s' "${!CSEND_POOL_CACHE[*]}"
+)
+check "scope: csend_pool_has keys the cache on its ARGUMENT too" "hdd/lz4_compress/user@peer" "$csend_poisoned"
+
+notify_marker="$TMPD/gate-notified"
+printf '#!/bin/sh\ntouch "%s"\n' "$notify_marker" > "$TMPD/gate-notify"; chmod +x "$TMPD/gate-notify"
+pool_out=$(
+    ssh() { return 93; }
+    declare -A POOL_HEALTH_CACHE=()
+    NOTIFY_SCRIPT="$TMPD/gate-notify"
+    log() { shift; echo "$*"; }
+    check_pool_health hdd/lab4/src zfsbackup-pve1 192.168.28.99 2>&1
+)
+check "gate: a disabled peer raises NO pool alert" "1" "$([ -e "$notify_marker" ]; echo $?)"
+case "$pool_out" in
+    *"not allowed to ask"*) check "gate: check_pool_health says why it could not answer" "0" "0" ;;
+    *) check "gate: check_pool_health says why it could not answer" "0" "1"; echo "     got: $pool_out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

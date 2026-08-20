@@ -419,6 +419,30 @@ get_snapshot_guids() {
 REMOTE_PROBE_RC=0     # raw exit status of the last probe_dataset/remote_list
 REMOTE_PROBE_ERR=""   # ssh's own local stderr from the last probe_dataset
 
+# A peer whose gate has been disabled (zfs-backup.sh disable-client) refuses
+# every data-plane command with RC_DISABLED and a line that names itself:
+#
+#     PAIR_DISABLED: relationship pve1 is disabled by administrator
+#
+# Measured on metropolis 2026-08-20: that sentence arrived, and this library
+# reported "e.g. no 'zfs' in this account's PATH" -- it had the answer in hand
+# and guessed a different one. Same family as the exit-255 confusion the block
+# above exists to end: an administrative block and a broken deployment call for
+# opposite repairs, so one message covering both sends the reader to the wrong
+# half of the system.
+#
+# The exit code is the contract (zfs-pair-gate.sh RC_DISABLED); the text is
+# corroboration and is not always captured -- remote_list deliberately lets the
+# peer's stderr flow straight through, so there the code is all we have. Either
+# is sufficient, because a false positive here costs a more specific message
+# and nothing else.
+PAIR_GATE_RC_DISABLED=93
+remote_refused_by_gate() {   # <rc> [captured output] -> 0 when the gate refused
+    [ "${1:-}" = "$PAIR_GATE_RC_DISABLED" ] && return 0
+    case "${2-}" in *"PAIR_DISABLED:"*) return 0 ;; esac
+    return 1
+}
+
 # probe_dataset DATASET [REMOTE_USER] [REMOTE_HOST] [ROLE]
 #   0  the dataset exists
 #   1  ssh worked (or the check was local) and the dataset genuinely is not there
@@ -449,6 +473,8 @@ probe_dataset() {
     [ -n "$why" ] || why="(ssh printed nothing)"
     if [ $REMOTE_PROBE_RC -eq 255 ]; then
         log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while checking whether the $role '$dataset' exists -- a CONNECTION-level failure (authentication, host key, network or DNS), NOT a missing dataset. ssh said: $why"
+    elif remote_refused_by_gate "$REMOTE_PROBE_RC" "$REMOTE_PROBE_ERR"; then
+        log 0 "$remote_host REFUSES this relationship: its pair gate is DISABLED, so the check on the $role '$dataset' was never allowed to run. Nothing is wrong with the dataset, the account or the link. Lift it from the collector with 'zfs-backup.sh enable-client <name>', or on $remote_host as root. Gate said: $why"
     else
         log 0 "Reached $remote_user@$remote_host over ssh, but the existence check for the $role '$dataset' could not run (exit $REMOTE_PROBE_RC -- e.g. no 'zfs' in this account's PATH). Treating this as UNKNOWN, not as a missing dataset. Output: $why"
     fi
@@ -481,6 +507,8 @@ remote_list() {
     fi
     if [ $REMOTE_PROBE_RC -eq 255 ]; then
         log 0 "Cannot reach $remote_user@$remote_host over ssh (exit 255) while $what -- a CONNECTION-level failure (authentication, host key, network or DNS); ssh's own reason is on stderr above. Treating the result as UNKNOWN, not as an empty list."
+    elif remote_refused_by_gate "$REMOTE_PROBE_RC" "$out"; then
+        log 0 "$remote_host REFUSES this relationship: its pair gate is DISABLED, so $what was never allowed to run. Nothing is wrong with the data or the link. Lift it with 'zfs-backup.sh enable-client <name>' from the collector, or on $remote_host as root. Treating the result as UNKNOWN, not as an empty list."
     else
         log 0 "Reached $remote_user@$remote_host over ssh, but $what failed on the remote side (exit $REMOTE_PROBE_RC). Treating the result as UNKNOWN, not as an empty list."
     fi
@@ -1193,7 +1221,12 @@ declare -A CSEND_POOL_CACHE=()
 
 # "enabled" and "active" both mean the pool can take it; "disabled" cannot.
 csend_pool_has() {
-    local pool="$1" feature="$2" remote="$3" key="$pool/$feature/$remote" val
+    # Same split, same reason, as pool_health below: a key built inside the
+    # `local` that declares its own inputs is expanded against the OUTER scope.
+    # Not left alone merely because no caller trips it today -- half a fix to a
+    # bug with a twin is how the twin becomes permanent.
+    local pool="$1" feature="$2" remote="$3" val
+    local key="$pool/$feature/$remote"
     if [ -n "${CSEND_POOL_CACHE[$key]+x}" ]; then
         printf '%s' "${CSEND_POOL_CACHE[$key]}"
         return 0
@@ -1257,13 +1290,34 @@ compressed_send_flag() {
 declare -A POOL_HEALTH_CACHE=()
 
 pool_health() {
-    local pool="$1" remote="$2" key="$pool/$remote" val
+    # Two statements, not one. `local pool="$1" key="$pool/..."` expands $pool
+    # BEFORE the builtin runs, so it reads the OUTER scope: unbound under set -u
+    # if no caller happens to have a `pool` variable, and silently the WRONG
+    # VALUE if one does. This worked only by dynamic-scope accident --
+    # check_pool_health declares its own `local pool` just before calling here,
+    # so the key came out right for the one caller that exists. Found 2026-08-20
+    # by unit-testing this function directly for the first time; the cache key
+    # is the thing at stake, so a wrong one crosses pools.
+    local pool="$1" remote="$2" val
+    local key="$pool/$remote"
     if [ -n "${POOL_HEALTH_CACHE[$key]+x}" ]; then
         printf '%s' "${POOL_HEALTH_CACHE[$key]}"
         return 0
     fi
     if [ -n "$remote" ]; then
+        # The exit status is read, not discarded. Without it a peer whose gate
+        # is DISABLED produced an empty answer that fell through to "UNKNOWN"
+        # -- and check_pool_health MAILS on anything that is not ONLINE, so an
+        # administrative block raised a storage alarm. Measured on metropolis
+        # 2026-08-20: "Pool 'hdd' on 192.168.28.99 is UNKNOWN" for a pool that
+        # was perfectly healthy and simply not ours to ask about right then.
+        # Only the code is needed here: stderr stays discarded so a chatty ssh
+        # banner cannot contaminate the health VALUE, and the code alone is the
+        # gate's contract.
+        local rc
         val=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool list -H -o health '$pool'" 2>/dev/null)
+        rc=$?
+        remote_refused_by_gate "$rc" && val="PAIR-DISABLED"
     else
         val=$(zpool list -H -o health "$pool" 2>/dev/null)
     fi
@@ -1300,6 +1354,15 @@ check_pool_health() {
     fi
     health=$(pool_health "$pool" "$remote")
     [ "$health" = "ONLINE" ] && return 0
+    # An administrative block is not a storage fault, and must not raise a
+    # storage alarm. Said out loud rather than passed over in silence -- the
+    # run is about to fail anyway and this is half of why -- but no mail: the
+    # instrument for "this relationship stopped copying" is check-snap-age,
+    # which goes stale on its own schedule and says so in those terms.
+    if [ "$health" = "PAIR-DISABLED" ]; then
+        log 0 "Pool '$pool' on $host_desc could not be checked: that peer's pair gate REFUSES this relationship (disable-client). The pool is not necessarily unhealthy -- we were not allowed to ask. No pool alert raised for this."
+        return 0
+    fi
     log 0 "Pool '$pool' on $host_desc is $health"
     # Send the vdev table with the alert, not just the word DEGRADED. "pool
     # DEGRADED: rpool" tells the reader to go and log in; the config/status
