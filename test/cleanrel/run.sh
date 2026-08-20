@@ -214,7 +214,27 @@ else
     bad "the LAST STATE line decides, not the first" "$out"
 fi
 
-# 13. Sandbox integrity: the suite must be incapable of touching a real path.
+# ---------------------------------------------------------------------------
+# 13. The DEFAULT relationship name IS the peer's address, so on a collector
+#     that took the default, the identity and the address are the same string
+#     and several families resolve to the same file. Found on pve2 the moment
+#     this ran on a real host: peers/192.168.28.99.conf was listed twice under
+#     two family names. A duplicate in a list an operator is about to approve
+#     is a list they cannot check.
+# ---------------------------------------------------------------------------
+T="$WORK/t13"; build_tree "$T"
+printf 'CLIENT_NAME=10.0.0.55\nPEER_HOST=10.0.0.55\nSTATE=removed\n' > "$T/clients/10.0.0.55.conf"
+printf 'PEER_SAVED_ACCOUNT=x\n' > "$T/peers/10.0.0.55.conf"
+out=$(run_cr "$T")
+dupes=$(grep -c 'peers/10.0.0.55.conf' <<<"$out")
+if [ "$dupes" -eq 1 ]; then
+    ok "an address-named relationship lists each file once, not once per family"
+else
+    bad "an address-named relationship lists each file once, not once per family" \
+        "peers/10.0.0.55.conf appears $dupes times" "$out"
+fi
+
+# 14. Sandbox integrity: the suite must be incapable of touching a real path.
 #     Asserted against the source, because this is a property of the tool's
 #     defaults rather than of any single run.
 if grep -qE '^CLIENTS_DIR="\$\{CLIENTS_DIR:-' "$CR" \

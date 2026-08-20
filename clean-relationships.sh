@@ -230,7 +230,16 @@ classify() {
 # artefacts_for <identity> -- every path this identity owns that EXISTS, one
 # per line, prefixed by a family tag. Existence is checked here so the report
 # and the purge cannot drift apart: they both read this list.
-artefacts_for() {
+#
+# DEDUPLICATED, and not for tidiness. The DEFAULT relationship name IS the
+# peer's address, so on a collector that took the default the identity and the
+# address are the same string and several families resolve to one file --
+# measured on pve2, where peers/192.168.28.99.conf was reported twice under two
+# different family names. A duplicate in a list an operator is about to approve
+# is a list they cannot check.
+artefacts_for() { _artefacts_raw "$@" | awk -F'\t' '!seen[$2]++'; }
+
+_artefacts_raw() {
     local id="$1" addr="${NAME_ADDR[$id]:-}" f
     [ -e "$CLIENTS_DIR/$id.conf" ]       && echo "client	$CLIENTS_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
