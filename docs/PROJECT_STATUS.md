@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 047d6d8791fb728c -->
+<!-- status-covers-digest: d069877f69ee9ce9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,6 +97,29 @@
   u jedynego wołającego; stawką jest klucz cache, więc zły klucz przechodzi
   między pulami. Semantyka transferu nietknięta.
   `test/quiesce` +11 testów, sprawdzonych jako padające na zamrożonej bazie.
+- **NOWE NARZĘDZIE: `clean-relationships.sh` — audyt i usuwanie śladów po
+  relacjach (2026-08-20).** Powstało z dzisiejszej rozbiórki: dwa istniejące
+  czasowniki (`remove-client`, `deploy.sh --leave`) robią swoje dobrze, ale
+  żaden nie odpowiada na pytanie **„co po relacjach zostało na TYM hoście"** —
+  a ręczne odpowiadanie na nie zawiodło dwa razy tego samego dnia.
+  Kodowane jest w nim to, co okazało się sednem trudności: **jedna relacja ma
+  na dysku do trzech tożsamości** — nazwę (rekord klienta, `-L` w cronie),
+  adres (`peers/<addr>.conf`, cztery pliki klucza, rusztowanie joinu) i etykietę
+  (`peers/<label>.conf`, `relationships/<label>/`, konto `zfsbackup-<label>`).
+  Sprzątanie kluczowane na jednej z nich **musi** przegapić resztę; stąd dwie
+  asymetrie, dla których to narzędzie istnieje: `peers/` jest kluczowane
+  dwojako i `remove-client` usuwa tylko wariant po adresie, oraz dokładnie
+  jeden z czterech plików klucza (`_alias_known_hosts`, ten podawany do `-k`
+  w liniach crona) przeżywa usunięcie.
+  Domyślnie **tylko czyta** i wychodzi z kodem 3, gdy znajdzie sieroty.
+  Usuwanie wymaga jawnego `--purge=`/`--purge-orphans` **i** `--yes`; wszystko,
+  co zaklasyfikowane jako LIVE, jest odmawiane; kolejność jest wymuszona
+  w kodzie (`deploy.sh --leave` **przed** ręcznym sprzątaniem, bo manifest jest
+  jego mapą); katalogi znikają przez `rmdir`, który sam odmawia przy niepustym;
+  `known_hosts` nietknięty, komenda `ssh-keygen -R` wypisana, nie wykonana;
+  crontaby wszystkich kont hashowane przed i po, z raportem.
+  Konto `zfsbackup` bez sufiksu jest jawnie wyłączone — to konto własnych zadań
+  hosta, nie relacja. `test/cleanrel` 13/13, w pełni w piaskownicy.
 - **NAPRAWIONE tego samego dnia, obie drogi (decyzja właściciela).** `deploy.sh`
   woła zdalny join jako `timeout "$PEER_REMOTE_JOIN_TIMEOUT" ssh -n ...`: `-n`
   daje zdalnemu odczytowi EOF od razu, więc `--join` kończy się swoją własną
