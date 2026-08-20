@@ -2477,6 +2477,39 @@ else
     bad "resolve_mode_datasets: fetches, verifies the hash, and resolves the real leaf list" "rc=$rc out=$out"
 fi
 
+# A FAILED fetch must not claim to know why. Found on metropolis 2026-08-20
+# while running a deployment matrix: this path used to test peers/<addr>.conf
+# HERE and call its presence proof that "the join completed", sending the
+# operator to inspect a scope draft. Measured on a pair whose source provably
+# had no manifest and no account -- the COLLECTOR writes that file itself at
+# --pair time and it carries only PEER_SAVED_*, so the discriminator was always
+# true, the "join has not completed" branch was unreachable, and the advice it
+# gave was the same wrong advice it had been added to stop giving.
+#
+# No local fact proves a remote join completed, so the refusal presents both
+# possibilities in the order to check them rather than picking one.
+cat > "$MDS/bin/ssh" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+chmod +x "$MDS/bin/ssh"
+out=$( PATH="$MDS/bin:$PATH" bash -c "
+    source '$ZFSBACKUP'
+    $mds_env
+    PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''
+    resolve_mode_datasets
+" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] \
+   && ! grep -qi 'so the join completed' <<<"$out" \
+   && grep -qi 'CAN TELL THEM APART' <<<"$out" \
+   && grep -qi 'did the JOIN complete' <<<"$out" \
+   && grep -qi 'draft' <<<"$out"; then
+    ok "resolve_mode_datasets: a failed scope fetch names BOTH causes and claims neither"
+else
+    bad "resolve_mode_datasets: a failed scope fetch names BOTH causes and claims neither" "rc=$rc out=$(printf '%s' "$out" | tail -6)"
+fi
+mds_ssh_stub "" ""    # restore the working stub for the cases below
+
 # A no-op for a legacy (--peer-datasets) client: PEER_SAVED_DATASETS is
 # already non-empty, so no ssh call should even happen.
 out=$( PATH="$MDS/bin:$PATH" bash -c "
