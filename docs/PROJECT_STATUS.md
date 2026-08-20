@@ -51,6 +51,39 @@
   „brak zfs w PATH", czego nie naprawiam sam, bo silnik jest zamrożony.
   Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O12, procedura w
   `docs/LAB-RUNBOOK.md` §9.
+- **ZNANY DEFEKT: `--grant-remotely` wiesza się na parze, która NIE jest jeszcze
+  sparowana (2026-08-20).** Wykryte przy wdrożeniu od zera na sterylnych hostach:
+  jedna komenda stanęła na ponad sześć minut bez żadnego komunikatu. Zmierzone:
+  `deploy.sh --join` na peerze siedział w `wchan=pipe_read`, `stdin=pipe:`.
+  `--join` pyta o akceptację zakresu i **celowo** nie ma `--yes`; puszczony przez
+  ssh bez terminala nie ma jak dostać odpowiedzi, a nic go nie ogranicza czasowo.
+  Sedno: wołający **już** toleruje nieudany join i ma tor awaryjny
+  (`zfs-backup.sh:3357`) — ten tor nigdy się nie włącza, bo wywołanie nie wraca.
+  To **nie jest fail-open**: po zakończeniu zdalnego procesu tor awaryjny zadziałał,
+  a enrolment dokończył się poprawnie z grantem zatwierdzonym na źródle.
+  Poprawka jest zmierzona, nie wyrozumowana — uruchomienie z `</dev/null`
+  sprawiło, że zdalny `--join` dostał EOF i tor awaryjny włączył się dokładnie
+  jak zaprojektowano. **Do decyzji właściciela**, bo dotyka granicy bezpieczeństwa:
+  (1) ograniczyć czas i zamknąć wejście zdalnemu `--join`, (2) `--grant-remotely`
+  sprawdza sparowanie przed startem i odmawia od razu, (3) rozszerzyć audytowaną
+  zgodę na akceptację zakresu. Skłaniam się do (1)+(2).
+  **Koryguje wcześniejszy wpis o `--grant-remotely`** niżej: flaga działała, ale
+  tamta para hostów była już sparowana, więc krok, który się wiesza, wtedy się
+  nie wykonał. „Od zera" było nieprawdą.
+  Obejście na dziś: na niesparowanej parze użyj drogi domyślnej, dwustronnej
+  (`--install` → `deploy.sh --join=` na peerze → `--commit-scope=` na źródle →
+  powtórz `--install`). Przeprowadzona tą drogą 2026-08-20: `rc=0`, zero `!!!`.
+- **Wdrożenie od zera bez błędów, po pełnej rozbiórce (2026-08-20).** Łańcuch
+  `pve9 → pve2 → pve1` rozebrany do zera i zbudowany ponownie **tymi samymi
+  nazwami relacji** — niepełna rozbiórka rozbiłaby się o terminalny stan
+  `removed`, więc to jest jednocześnie dowód jej kompletności. md5 zgodne na
+  wszystkich trzech skokach, drugi skok `rc=0` bez jednej linii `!!!`.
+  Produkcja nietknięta na obu kolektorach: crontab konta `zfsbackup` identyczny
+  bajt w bajt, zero grantów na `hdd/vm-disks`, `hdd/backups`, `rpool/data`
+  i `rpool/ROOT`. Skryptu „usuń pakiet i wszystkie ślady" nadal **nie ma**
+  (`clean_all` zaplanowany); taksonomia tego, co zostawiają `remove-client`
+  i `--leave`, zmierzona i spisana w `docs/LAB4-OBSERWACJE.md` O13 wraz
+  z pełną kolejnością w `docs/LAB-RUNBOOK.md`.
 - **`--pause`/`--resume` przestały być wdrożeniem (2026-08-20).** Wysyłka leżała
   pod wszystkimi innymi trybami, więc okno serwisowe wykonywało najpierw całe
   wdrożenie: **dziewięć faz**, zmierzone z prawdziwego przebiegu. Dwie z nich
