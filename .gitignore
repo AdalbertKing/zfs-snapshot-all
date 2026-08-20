@@ -33,3 +33,11 @@
 # not.
 !test/
 !test/**
+# profiles/ was in exactly the state the deploy.sh note above describes: its
+# three default/ files stayed tracked only because git already knew about them,
+# and no rule here would admit a new one. Adding profiles/tiered/ on 2026-08-20
+# hit the ignore rule head-on. A profile is data the runtime reads and selects
+# with --profile=NAME, so adding one must not require -f: the next person to
+# forget the flag would ship a profile that is not in the repository.
+!profiles/
+!profiles/**

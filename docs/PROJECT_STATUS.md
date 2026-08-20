@@ -21,6 +21,31 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Profil `tiered` — druga gotowa polityka, pierwszy realny wybór (2026-08-20).**
+  Punkt 2 uzgodnionej kolejki. Do dziś `profiles/` miało jeden wpis, więc
+  `--profile=NAME` był mechanizmem bez treści. `tiered` to transkrypcja tego, co
+  produkcyjne hosty robią ręcznie od dawna: **cztery rodziny snapshotów**
+  (`automated_hourly_/daily_/weekly_/monthly_`), każda na własnej kadencji, każda
+  przycinana własnym płaskim licznikiem (`-H24/-D7/-W4/-M6`), każda z własnym
+  monitorem. Kontrast z `default` jest celowy i to są **dwa różne KSZTAŁTY**, nie
+  warianty: `default` to JEDNA rodzina przebudowywana jedną kaskadową drabiną GFS.
+  Powód, dla którego warto mieć oba, nie jest arytmetyczny — **nazwa tieru jest
+  czytelnym dla człowieka kontraktem spójności**. `automated_daily_2026-08-20_...`
+  mówi w nazwie, która polityka go wyprodukowała; pod drabiną wszystko nazywa się
+  `automated_hourly_`, a to, co przeżyło, jest własnością arytmetyki drabiny.
+  Ma to realną wagę przy quiesce: **quiesce zawodzi zamknięcie**, więc samo
+  istnienie snapshotu `automated_daily_` JEST dowodem, że freeze się udał — bez
+  flagi koherencji, bez pliku obok, bez mechanizmu znakowania (rozważone i
+  ODRZUCONE). `quiesce = auto` od daily w górę, NIGDY na hourly: freeze to realny
+  przestój zapisu w gościu i płacenie go 24 razy dziennie za snapshot żyjący dobę
+  to zły interes. Monitor monthly celowo pominięty (produkcja usunęła go
+  2026-07-22 — próg ~35d chodzący co 15 min).
+  **Zero zmian w kodzie** — maszyneria profili obsłużyła to jako dane;
+  `PROFILE_GFS` okazało się detektorem STARYCH hostów, nie przełącznikiem profilu.
+  Dowód przez PRAWDZIWY `gen-cron.sh`: 4 linie `snapget` (po jednym prefiksie),
+  `-q auto` na daily/weekly/monthly i **brak** na hourly, 4 płaskie `delsnaps`
+  bez `-G`, 3 monitory. Suita `profiles` 55 → **65 PASS**; kontrola negatywna:
+  podmiana `tiered` na kopię `default` wywala **7 asercji**.
 - **`check-snap-age.sh` odmawia pustego wzorca (2026-08-20).** ZAWĘŻENIE KONTRAKTU
   na pliku ZAMROŻONYM — patrz nota o linii bazowej niżej. Dopasowanie to
   `[[ "$snapname" == "${PATTERN}"* ]]`, więc pusty wzorzec łapie KAŻDY snapshot
