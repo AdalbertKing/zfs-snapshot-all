@@ -47,19 +47,16 @@ jobs:
     name: dependency graph matches the tree
     runs-on: ubuntu-latest
     steps:
+      # Shallow again since 2026-08-20. This job carried `fetch-depth: 0` for
+      # ONE reason (REV-20260812-115 F1): --verify ran reviewctl, which asserts
+      # that every commit-bearing review header names a SHA reachable from the
+      # published branch, so CI had to clone the repository's entire history to
+      # validate docs/internal/reviews/. That check is no longer part of
+      # --verify -- HANDOFF.md retired the review protocol on 2026-08-15 and the
+      # gate outlived it by five days -- so the history is not needed here.
+      # The archive and reviewctl.sh both stay; run ./test/reviewctl.sh --verify
+      # by hand if it is ever wanted.
       - uses: actions/checkout@v4
-        with:
-          # REV-20260812-115 F1. This job is the ONLY one that needs history.
-          # `--verify` runs reviewctl, which deliberately checks that every
-          # commit-bearing review/delivery header names a SHA that exists and is
-          # reachable from the published branch -- the REV-067 property that keeps
-          # an orphan or never-pushed SHA from passing as evidence. actions/checkout
-          # defaults to fetch-depth 1, so in CI those historical commits were simply
-          # absent and every one of REV-065..114 reported "not a commit in this
-          # repository". The gate was therefore measuring checkout depth, not the
-          # repository, and its permanent red masked any real drift it might later
-          # catch. Fetch the history instead of weakening the check.
-          fetch-depth: 0
       # --verify is the anti-drift assertion: every tracked shell file must be
       # declared in test/deps.conf, every declared suite must exist and be
       # executable, contract membership must be symmetric. An unregistered new
@@ -92,13 +89,14 @@ jobs:
         # test/ci-suites.sh, which is now the only list.
         suite: ${{ fromJSON(needs.discover.outputs.suites) }}
     steps:
-      # fetch-depth: 0 for two reasons at once. (1) The gate below diffs
-      # base...HEAD to decide whether this suite's layer was touched. (2) The
-      # `impact` suite runs impact.sh --verify, which reaches reviewctl's SHA
-      # reachability check and fails on a shallow checkout (REV-20260812-115 F1).
-      # Full history serves both, and replaces the old conditional unshallow step
-      # whose `fetch-depth: ${{ ... && 0 || 1 }}` form silently stayed shallow
-      # because 0 is falsy in a GitHub expression.
+      # fetch-depth: 0 because the gate below diffs base...HEAD to decide
+      # whether this suite's layer was touched. It replaces the old conditional
+      # unshallow step whose `fetch-depth: ${{ ... && 0 || 1 }}` form silently
+      # stayed shallow, because 0 is falsy in a GitHub expression.
+      # A second reason used to sit here -- the `impact` suite ran
+      # impact.sh --verify, which reached reviewctl's SHA reachability check --
+      # and it went away on 2026-08-20 when the review ledger stopped being a
+      # gate. The selective-CI diff still needs the history, so this stays.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
