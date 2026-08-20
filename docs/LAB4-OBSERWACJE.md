@@ -506,7 +506,7 @@ Jedyne zatrzymanie po drodze było **poprawne**: grant jest decyzją strony
 przyznaniem obejrzany szkic — dokładnie jedna sekcja `[dataset:]`, kopia
 labowa, zero produkcji.
 
-## O12. `snapget` opisuje odmowę bramy jako „brak zfs w PATH" — DO DECYZJI
+## O12. `snapget` opisuje odmowę bramy jako „brak zfs w PATH" — NAPRAWIONE
 
 Ten sam przebieg co wyżej. Silnik dostał odpowiedź, która sama się nazywa:
 
@@ -527,7 +527,52 @@ kiedyś z `exit 255` (konkretna awaria łącza opisywana jako problem z danymi):
 **nie zgaduj, kiedy odpowiedź jest w treści**.
 
 Poprawka jest tania — jeśli zebrane wyjście zawiera `PAIR_DISABLED:`, powiedz
-to. Ale `snapget.sh` jest **zamrożony** (ENGINE-FREEZE), więc to decyzja
-właściciela, nie moja. Dotyczy tak samo `snapsend.sh`.
+to. Ale silnik jest **zamrożony** (ENGINE-FREEZE), więc to decyzja właściciela.
 
-**Nie naprawiam samodzielnie.**
+### Zrobione — po decyzji „Odblokuj silnik i napraw O12"
+
+Kod siedział w `lib-zfs-snap.sh`, nie w samym `snapget.sh`, więc poprawka objęła
+oba silniki naraz. Jeden wspólny rozpoznawacz `remote_refused_by_gate`: kod
+wyjścia `93` (`RC_DISABLED` z `zfs-pair-gate.sh`) jest kontraktem, tekst
+`PAIR_DISABLED:` potwierdzeniem — bo `remote_list` celowo nie przechwytuje
+stderr peera i tam zostaje sam kod.
+
+**Trzy miejsca, i trzecie okazało się najgroźniejsze.** `pool_health`
+wyrzucało kod wyjścia do `/dev/null`, więc odmowa spadała na `UNKNOWN` —
+a `check_pool_health` **wysyła mail na wszystko, co nie jest ONLINE**. Czyli
+blokada administracyjna podnosiła **alarm o stanie magazynu** dla całkowicie
+zdrowej puli. To nie jest mylący komunikat, to fałszywy alarm o dyskach:
+
+```
+Pool 'hdd' on 192.168.28.99 is UNKNOWN     <- pula byla zdrowa
+```
+
+Teraz zwraca `PAIR-DISABLED`, mówi wprost, że nie wolno było zapytać, i **nie
+alarmuje** — instrumentem od „ta relacja przestała kopiować" jest
+`check-snap-age`, w swoich własnych kategoriach.
+
+**Znalezione przy okazji, bo pierwszy raz przetestowałem `pool_health` wprost.**
+Obie funkcje z cache budowały klucz wewnątrz tego samego `local`, które
+deklarowało ich wejścia. Bash rozwija te słowa **zanim** wbudowane `local` się
+wykona, więc klucz powstawał z zakresu **zewnętrznego** — nieustawiony pod
+`set -u`, a przy istniejącym zewnętrznym `pool` po cichu **z cudzą wartością**:
+
+```
+$ f(){ local a="$1" b="$a-x"; echo "$b"; };  a=OUTER; f Z
+OUTER-x        <- nie "Z-x"
+```
+
+Działało wyłącznie przypadkiem: `check_pool_health` deklaruje własne
+`local pool` tuż przed wywołaniem. Stawką jest klucz cache, więc zły klucz
+przechodzi między pulami. Naprawione w `pool_health` i w bliźniaku
+`csend_pool_has` — połowiczna naprawa błędu, który ma bliźniaka, to sposób na
+utrwalenie bliźniaka.
+
+Semantyka transferu nietknięta: każda zmiana to diagnoza, wartość zwrotna już
+zarezerwowana dla „nie wiadomo", albo wyciszenie fałszywego alarmu.
+
+Testy: `test/quiesce` +11, sprawdzone jako **padające na zamrożonej bazie**
+(11 błędów), w tym kontrole, że nowy rozpoznawacz **nie** przemianowuje zwykłej
+awarii zdalnej na blokadę administracyjną. Rozmrożenie zapisane w
+`docs/project/ENGINE-FREEZE.md` — pierwszy wpis na tej liście, który był
+**autoryzowany z góry**, a nie zgłoszony po fakcie.

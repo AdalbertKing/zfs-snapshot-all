@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b62688d3e4c7d896 -->
+<!-- status-covers-digest: eb2a179cc7169b5d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -47,10 +47,26 @@
   jobs now exit SKIPPED", choć retencja jest zarządzana i **chodzi dalej** —
   linie `delsnaps` nie mają `-L` (silnik nie zna tej flagi), także ta tnąca po
   źródle; skutek ogranicza drabinka GFS, ale twierdzenie było fałszywe.
-  Otwarte, bo wymaga decyzji właściciela: `snapget` opisał `PAIR_DISABLED` jako
-  „brak zfs w PATH", czego nie naprawiam sam, bo silnik jest zamrożony.
-  Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O12, procedura w
+  Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O17, procedura w
   `docs/LAB-RUNBOOK.md` §9.
+- **Odmowa bramy przestała udawać awarię wdrożenia — i fałszywy alarm o puli
+  zniknął (2026-08-20).** Silnik dostawał wprost `PAIR_DISABLED: relationship
+  ... is disabled by administrator`, a raportował „exit 93 — e.g. no 'zfs' in
+  this account's PATH". Poprawka w `lib-zfs-snap.sh` (rozmrożenie autoryzowane
+  z góry przez właściciela, wpis w `ENGINE-FREEZE.md`), więc objęła oba silniki.
+  Kod wyjścia `93` jest kontraktem `zfs-pair-gate.sh`, tekst potwierdzeniem.
+  **Najgroźniejsze było trzecie miejsce:** `pool_health` wyrzucało kod wyjścia,
+  odmowa spadała na `UNKNOWN`, a `check_pool_health` wysyła mail na wszystko,
+  co nie jest `ONLINE` — czyli blokada administracyjna podnosiła alarm o stanie
+  dysków dla zdrowej puli. Teraz `PAIR-DISABLED`, wyjaśnienie i **zero alertu**;
+  od „relacja przestała kopiować" jest `check-snap-age`.
+  Przy okazji naprawiony błąd zakresu w obu funkcjach z cache: klucz budowany
+  wewnątrz tego samego `local`, które deklaruje wejścia, rozwija się z zakresu
+  **zewnętrznego** — nieustawiony pod `set -u`, a z cudzą wartością, gdy taka
+  zmienna istnieje. Działało wyłącznie przypadkiem dzięki dynamicznemu zakresowi
+  u jedynego wołającego; stawką jest klucz cache, więc zły klucz przechodzi
+  między pulami. Semantyka transferu nietknięta.
+  `test/quiesce` +11 testów, sprawdzonych jako padające na zamrożonej bazie.
 - **NAPRAWIONE tego samego dnia, obie drogi (decyzja właściciela).** `deploy.sh`
   woła zdalny join jako `timeout "$PEER_REMOTE_JOIN_TIMEOUT" ssh -n ...`: `-n`
   daje zdalnemu odczytowi EOF od razu, więc `--join` kończy się swoją własną
