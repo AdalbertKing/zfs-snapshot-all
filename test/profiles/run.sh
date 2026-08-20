@@ -436,5 +436,111 @@ else
 fi
 
 
+
+###############################################################################
+# PROFILE "tiered" -- the four-family, flat-counter shape.
+#
+# Every assertion below is one the DEFAULT profile would FAIL, which is the
+# point: "profiles/tiered exists and validates" would also pass against a copy
+# of default, and would pin nothing. What distinguishes the two profiles is the
+# emitted block, so that is what is asserted -- and it is asserted through the
+# REAL gen-cron.sh, because "the fragment parses" is the appearance this
+# project keeps mistaking for the property (REV-20260809-082 V1).
+###############################################################################
+TI="$ROOT/profiles/tiered"
+
+if profile_validate_dir "$TI" "$GEN"; then
+    ok "tiered: validates against the production validator"
+else
+    bad "tiered: validates against the production validator" "$PROFILE_ERR"
+fi
+
+TD="$TMP/tiered"; mkdir -p "$TD"
+if profile_render_templates "$TI" tiered "$TD/tpl.conf" \
+   && profile_render_fragment "$TI/dataset.inc" tiered "$TD/ds.inc" \
+   && profile_render_fragment "$TI/prune.inc" tiered "$TD/pr.inc"; then
+    ok "tiered: renders"
+else
+    bad "tiered: renders" "$PROFILE_ERR"
+fi
+
+{
+    printf '[defaults]\n\thost_label = tprof\n\n'
+    cat "$TD/tpl.conf"
+    printf '\n[dataset:tank/backups/c1/rpool/data]\n'
+    cat "$TD/ds.inc"
+    printf '\tsrc          = zfsbackup@10.0.0.1:rpool/data\n\tpair_label   = c1\n\tnotify       = c1-data\n'
+    printf '\n[prune:tank/backups/c1]\n'
+    cat "$TD/pr.inc"
+    printf '\trecursive    = yes\n\tpair_label   = c1\n\tnotify       = c1\n'
+} > "$TD/cand.conf"
+
+TOUT="$TD/out.txt"
+if bash "$GEN" -c "$TD/cand.conf" > "$TOUT" 2>"$TD/err.txt"; then
+    ok "tiered: the composed config is accepted by the REAL gen-cron.sh"
+else
+    bad "tiered: the composed config is accepted by the REAL gen-cron.sh" "$(head -2 "$TD/err.txt")"
+fi
+
+# FOUR families created, one per tier. The default profile creates ONE.
+n=$(grep -c 'snapget.sh' "$TOUT")
+if [ "$n" -eq 4 ]; then ok "tiered: four send lines, one per tier"
+else bad "tiered: four send lines, one per tier" "got $n"; fi
+
+miss=""
+for p in automated_hourly_ automated_daily_ automated_weekly_ automated_monthly_; do
+    grep -q -- "-m \"$p\"" "$TOUT" || miss="$miss $p"
+done
+if [ -z "$miss" ]; then ok "tiered: each tier stamps its own family prefix"
+else bad "tiered: each tier stamps its own family prefix" "missing:$miss"; fi
+
+# quiesce from daily upwards, never on hourly. A freeze costs a write stall in
+# the guest; paying it 24x a day for a snapshot that lives 24 hours is the
+# trade this profile deliberately does not make.
+hq=$(grep 'snapget.sh' "$TOUT" | grep -c -- '-m "automated_hourly_".*-q')
+oq=$(grep 'snapget.sh' "$TOUT" | grep -cE -- '-m "automated_(daily|weekly|monthly)_".*-q auto')
+if [ "$hq" -eq 0 ] && [ "$oq" -eq 3 ]; then
+    ok "tiered: quiesce on daily/weekly/monthly, never on hourly"
+else
+    bad "tiered: quiesce on daily/weekly/monthly, never on hourly" "hourly-with-q=$hq daily+=$oq"
+fi
+
+# FLAT counters, one delsnaps line per family -- and NO ladder. This is the
+# assertion that would fail against the default profile, which emits exactly
+# one `delsnaps.sh -G`.
+n=$(grep -c 'delsnaps.sh' "$TOUT")
+g=$(grep -c 'delsnaps.sh -G' "$TOUT")
+if [ "$n" -eq 4 ] && [ "$g" -eq 0 ]; then
+    ok "tiered: four flat prune lines and no GFS ladder"
+else
+    bad "tiered: four flat prune lines and no GFS ladder" "delsnaps=$n with -G=$g"
+fi
+
+miss=""
+for r in '"automated_hourly" -H24' '"automated_daily" -D7' '"automated_weekly" -W4' '"automated_monthly" -M6'; do
+    grep -qF -- "$r" "$TOUT" || miss="$miss [$r]"
+done
+if [ -z "$miss" ]; then ok "tiered: each family is pruned by its own counter"
+else bad "tiered: each family is pruned by its own counter" "missing:$miss"; fi
+
+# Per-tier monitors -- and none on monthly, which production removed on
+# 2026-07-22 after a ~35d threshold fired against every dataset using the tier.
+n=$(grep -c 'check-snap-age.sh' "$TOUT")
+mm=$(grep -c 'check-snap-age.sh.*automated_monthly' "$TOUT")
+if [ "$n" -eq 3 ] && [ "$mm" -eq 0 ]; then
+    ok "tiered: a monitor per tier except monthly"
+else
+    bad "tiered: a monitor per tier except monthly" "monitors=$n monthly=$mm"
+fi
+
+# The two profiles must stay DISTINGUISHABLE. If someone edits tiered into a
+# copy of default this goes red, where every assertion above would still pass
+# on a single-family ladder that happened to keep the tier names.
+if ! diff -q "$TI/prune.inc" "$ROOT/profiles/default/prune.inc" >/dev/null; then
+    ok "tiered: prune policy differs from default"
+else
+    bad "tiered: prune policy differs from default" "the two prune.inc are identical"
+fi
+
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
