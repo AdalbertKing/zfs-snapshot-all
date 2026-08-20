@@ -121,6 +121,36 @@ PATTERN="$2"
 WARN_ARG="$3"
 CRIT_ARG="$4"
 
+# An EMPTY pattern is refused (2026-08-20). The match below is
+# `[[ "$snapname" == "${PATTERN}"* ]]`, so an empty pattern matches every
+# snapshot on the dataset -- including ones this project did not make and does
+# not control. On a Proxmox host that is not a theoretical set: pvesr keeps its
+# own `__replicate_<job>_<epoch>__` bookkeeping snapshot and refreshes it on the
+# replication schedule, and vzdump leaves its own behind.
+#
+# Measured live on pve2, 2026-08-20, same dataset, same instant:
+#
+#   pattern=automated_hourly -> newest=automated_hourly_2026-08-20_05-37-01  age=3h
+#   pattern=                 -> newest=__replicate_107-0_1787198451__        age=2h
+#
+# So the empty pattern reported an age an hour YOUNGER by measuring someone
+# else's snapshot. Had this project's own family stopped entirely, that monitor
+# would have gone on reporting OK for as long as pvesr kept running. A staleness
+# check that cannot go red is worse than no check: it occupies the place where a
+# working one would be, and it reads as evidence of health.
+#
+# There is no "watch anything" use case to preserve. Every caller names the
+# family it owns; gen-cron.sh cannot even emit this shape, because require_field
+# already refuses a blank 'pattern' everywhere a monitor is derived. This closes
+# the same hole for the hand-written invocations this script's own header tells
+# operators to write for a remote scope.
+#
+# UNKNOWN, not WARNING/CRITICAL, for the reason stated above: no snapshot has
+# been examined yet, so any staleness answer would be fabricated. Generated cron
+# lines route rc>=3 to notify-fail as "monitor BROKEN", which is exactly what a
+# monitor that cannot report is.
+[ -n "$PATTERN" ] || { echo "UNKNOWN -- the snapshot pattern is empty, which matches EVERY snapshot on the dataset including pvesr's __replicate_* and vzdump's own. A monitor scoped that wide reports the freshness of whatever else touches the pool and can never go red for this project's family, so it is refused rather than run. Pass the prefix of the family you actually own, e.g. 'automated_hourly'." >&2; exit "$EXIT_UNKNOWN"; }
+
 # Converts "<N><m|h|d>" to seconds; echoes the value or returns 1 on a
 # malformed duration (caught once at startup so a typo fails loudly, not by
 # silently comparing against 0).
