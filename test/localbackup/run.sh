@@ -658,11 +658,17 @@ if ! command -v flock >/dev/null 2>&1; then
 else
 UWORK="$WORK/uninstall"; mkdir -p "$UWORK/bin" "$UWORK/locks"
 printf '# BEGIN zfs-backup-managed\n# Source: /etc/x.conf -- do not edit\n1 * * * * /bin/true\n# END zfs-backup-managed\n7 7 * * * /root/mine.sh\n' > "$UWORK/tab"
+# lib-cron writes with `crontab <file>` -- a FILENAME argument, not stdin. A
+# stub that reads stdin instead silently stores an empty crontab, the writer's
+# read-back correctly refuses, and the failure looks like the tool's. CI caught
+# exactly that; this machine had skipped the cases for want of flock.
 cat > "$UWORK/bin/crontab" <<EOF
 #!/bin/sh
+last=""
+for a in "\$@"; do last="\$a"; done
 case " \$* " in
   *" -l "*) cat "$UWORK/tab" ;;
-  *) cat > "$UWORK/tab" ;;
+  *) if [ -n "\$last" ] && [ -f "\$last" ]; then cat "\$last" > "$UWORK/tab"; else cat > "$UWORK/tab"; fi ;;
 esac
 exit 0
 EOF
