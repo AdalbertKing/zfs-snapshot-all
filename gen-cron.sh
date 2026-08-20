@@ -460,6 +460,10 @@ Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
   -c <FILE>   Config file (default: jobs.<hostname -s>.conf next to this script)
   --install   Install/replace the managed block in this user's crontab
               (idempotent). Without it, the block is printed to stdout.
+  --uninstall Remove the managed block from this user's crontab and stop.
+              Needs no -c: the usual reason to want this is that the config
+              is gone or wrong. Removes the SCHEDULE only -- the config file
+              and the datasets are named and left alone.
   -V          Print version and exit
   -h          Print this help
 
@@ -2874,12 +2878,14 @@ migrate_recursion() {   # <config file>
 ###############################################################################
 CONFIG=""
 INSTALL=0
+UNINSTALL=0
 MIGRATE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -c) CONFIG="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
+        --uninstall) UNINSTALL=1; shift ;;
         --migrate-recursion) MIGRATE=1; shift ;;
         --reconcile) RECONCILE=1; shift ;;
         # Undocumented, and deliberately so: it renders a PRE-v4.27 config as
@@ -3225,6 +3231,48 @@ do_reconcile() {
     echo "NOT OK -- ${#uncovered[@]} uncovered, ${#missing[@]} declared but absent."
     return 1
 }
+
+# --uninstall runs BEFORE the config is required, and that is the point of it.
+#
+# gen-cron.sh WRITES the managed block, and until now nothing could take it
+# back. A relationship could be torn down (`remove-client` calls
+# cron_block_remove when the last one goes), but a LOCAL backup -- one host,
+# --source/--target, no peer -- installed a block that no verb could remove:
+# remove-client needs a relationship, clean-relationships.sh correctly reports
+# it is not one, and an emptied config is refused ("no send/prune/monitor rules
+# resolved"). Measured on pve9 2026-08-20 while working through a deployment
+# matrix. The writer of a thing should be able to unwrite it.
+#
+# No config needed, deliberately: the common reason to want this is that the
+# config is already gone, or wrong, or the one thing you are trying to get rid
+# of. Requiring it would refuse exactly when it is most needed.
+#
+# Scope is the block and nothing else. The config file and the datasets are
+# NAMED and left, the same stance the package takes everywhere -- remove-client
+# with known_hosts, clean-relationships.sh with data.
+if [ "$UNINSTALL" -eq 1 ]; then
+    [ "$INSTALL" -eq 1 ] && die "--install and --uninstall are opposites -- pick one"
+    command -v crontab >/dev/null || die "crontab command not found"
+    # Same guard install_crontab already has, and for a reason worth repeating:
+    # without it, a missing flock surfaces from the lock helper as "could not
+    # acquire the crontab lock within 10s -- another writer is holding it",
+    # which sends the operator hunting for a process that does not exist. A
+    # missing tool and a contended lock are different problems.
+    command -v flock >/dev/null || die "flock command not found"
+    _me=$(id -un)
+    if ! cron_block_remove "$_me" zfs-backup-managed; then
+        die "$CRON_ERR"
+    fi
+    if [ "${CRON_CHANGED:-1}" -eq 0 ]; then
+        echo "gen-cron.sh: no managed block in ${_me}'s crontab -- nothing to remove" >&2
+        exit 0
+    fi
+    echo "gen-cron.sh: managed block removed from ${_me}'s crontab" >&2
+    echo "gen-cron.sh: the config and the datasets are untouched. This removed the SCHEDULE, not the backups." >&2
+    [ -n "$CONFIG" ] && [ -f "$CONFIG" ] && \
+        echo "gen-cron.sh:   config still at $CONFIG -- delete it by hand if this deployment is really finished" >&2
+    exit 0
+fi
 
 if [ -z "$CONFIG" ]; then
     CONFIG="$SCRIPT_DIR/jobs.$(hostname -s 2>/dev/null || hostname).conf"
