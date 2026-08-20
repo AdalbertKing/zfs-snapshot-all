@@ -86,6 +86,20 @@ See this script's own header comment for the full limitations list.
 EOF
 }
 
+# Byte-identical to gen-cron.sh's trim(), and duplicated rather than shared for
+# the same reason SEP is (see its comment above): this script is deployed
+# standalone and sources nothing, so it cannot reach a library. Same structural
+# argument delsnaps.sh gives for its copy of HOLD_TAG, and zfs-pair-gate.sh for
+# its copy of the label check.
+#
+# Written down on 2026-08-20 only because it had NOT been: a duplication sweep
+# flagged this as unexplained, which was fair. Every other deliberate copy in
+# this repo carries its justification at the site, so an unexplained one reads
+# as an oversight somebody should go and "fix".
+#
+# If it ever changes, gen-cron.sh's copy changes with it. cron2conf.sh parses
+# what gen-cron.sh emits, so two different ideas of "trimmed" is a round-trip
+# that silently stops round-tripping.
 trim() {
     local s="$1"
     s="${s#"${s%%[![:space:]]*}"}"
