@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 947486fadd6597d6 -->
+<!-- status-covers-digest: 884f6fc481af4fcb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -45,6 +45,54 @@
   go dowoziła. Lista jest nic niewarta, jeśli notuje tylko wygodne przypadki —
   tym bardziej że `check-snap-age.sh` trafił na listę zamrożonych właśnie za
   zawężenie zatwierdzonego kontraktu (REV-20260808-070 F1).
+- **Mapa redukcji domknięta: reszta to duplikacja ŚWIADOMA, brakowało jej opisu (2026-08-20).**
+  Trzy pozycje ze skanu duplikacji NIE nadają się do scalenia i nigdy nie
+  nadawały — brakowało im wyłącznie uzasadnienia w miejscu, którego wymaga własna
+  konwencja tego repozytorium (każda inna celowa kopia je nosi, więc kopia bez
+  opisu czyta się jak przeoczenie, które ktoś powinien „naprawić").
+  **`trim()`** w `cron2conf.sh` i `gen-cron.sh` — bajt w bajt, ale `cron2conf.sh`
+  jest wdrażany samodzielnie i **niczego nie sourcuje** (zweryfikowane), więc ma
+  tę samą strukturalną przyczynę co kopia `HOLD_TAG` w `delsnaps.sh`. Opis dodany
+  po obu stronach, bo para musi być widoczna z obu końców; kluczowe: cron2conf
+  czyta to, co gen-cron emituje, więc rozjazd definicji „przycięcia" to cichy
+  koniec round-trippingu.
+  **Tabela konwersji `<N>m/h/d`** w trzech kopiach — podwójna WALIDACJA była już
+  udokumentowana, powielona TABELA nie. `check-snap-age.sh` trzyma dwie z nich,
+  jest samodzielnym monitorem i plikiem zamrożonym, więc trzy kopie zostają;
+  dopisana reguła, że GRAMATYKA jest jedna — dodanie jednostki musi trafić we
+  wszystkie trzy, inaczej próg akceptowany przez generator monitor odrzuca o 3 nad ranem.
+  **`config_datasets`** — bez callera produkcyjnego po usunięciu migrate, ale
+  **nie martwa**: to przetestowana definicja konwencji dzielenia scope'u, którą
+  `assert_no_overlapping_policy` powtarza inline, odwołując się do niej po nazwie
+  w komentarzu. Skasowanie zostawiłoby konwencję z implementacją inline i bez
+  testu. To ten sam kształt co bliźniaki snapsend/snapget: jedna reguła, dwie
+  implementacje, pilnowana jedna. Właściwa naprawa — żeby planer ją WOŁAŁ zamiast
+  powtarzać — jest zmianą w planerze, więc należy do laba. Oznaczone w kodzie,
+  żeby następny przemiał martwego kodu jej nie usunął.
+- **Preambuła skryptów alertowych pisana RAZ zamiast trzy razy (2026-08-20).**
+  `deploy.sh` generuje trzy samodzielne skrypty na hoście — `notify-fail.sh`,
+  `notify-warn.sh`, `alert-digest.sh` — i wklejał do nich **tę samą 28-liniową
+  preambułę** (snapshot zmiennych środowiskowych, wyszukanie configu, `_restore_env`)
+  trzema osobnymi kopiami w jednym pliku. Zmierzone: kopie były bajt w bajt
+  identyczne. Te skrypty faktycznie nie mogą sourcować wspólnej biblioteki, więc
+  tekst MUSI wystąpić w każdym z trzech — ale `deploy.sh` nie musi go nieść
+  trzykrotnie. Koszt starego kształtu jest konkretny: poprawka reguły „środowisko
+  bije config" (a to jest reguła, przez którą test kiedyś zjadł PRODUKCYJNĄ
+  kolejkę alertów) musiała trafić w trzy miejsca albo trzy skrypty zaczynały się
+  różnić tym, który pokrętek wygrywa.
+  Teraz jedna zmienna `ALERT_ENV_PREAMBLE`, interpolowana w trzy miejsca.
+  **−84 / +55 linii.** Zdefiniowana **niecytowanym** heredokiem świadomie: każdy
+  `$` w ciele jest zapisany jako `\$`, bo jest przeznaczony dla generowanego
+  skryptu, a niecytowany heredoc rozwiązuje to escapowanie w momencie definicji —
+  zmienna trzyma dosłowny `$`, a rozwinięcie parametru nie jest rekurencyjne,
+  więc przy wstawianiu nic nie rozwija się drugi raz. Heredoc CYTOWANY nie byłby
+  równoważny: zostawiłby backslashe i wypuścił `\${ZFS_ALERT_MODE:-}` do skryptu.
+  Dowód, nie założenie: wyrenderowane **wszystkie trzy** skrypty przed i po —
+  108/60/151 linii, **zero różnic** w każdym. Kontrola pozytywna: preambuła jest
+  obecna w każdym renderze. Kontrola negatywna: z pustą zmienną render ma 81 linii
+  zamiast 108 i 29 różnic, więc tożsamość nie jest pusta. Pierwsza wersja tego
+  pomiaru dawała „0 linii vs 0 linii, 0 różnic" — pusty pass przez złe
+  dopasowanie w awk; poprawiony, bo taki wynik to nie dowód. Suita `alertmail` 20/20.
 - **Alarm dryfu bliźniaków domknięty: 8 → 12 pilnowanych funkcji (2026-08-20).**
   `test/twins/run.sh` deklaruje o sobie regułę: *„Keep this list exhaustive
   rather than curated: a name that exists in both and is NOT watched here is the
