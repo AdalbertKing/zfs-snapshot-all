@@ -66,6 +66,15 @@ CLIENTS_DIR="${CLIENTS_DIR:-/etc/zfs-snapshot-all/clients}"
 PEER_STATE_DIR="${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}"
 REL_STATE_DIR="${REL_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 PEER_KEY_DIR="${PEER_KEY_DIR:-/root/.ssh/pairing}"
+# Where a purge records what it is about to make unfindable. NOT under
+# relationships/ -- that subtree has its own ownership model and Phase 4's group
+# sweep is pruned around it; a plain record has no business living there.
+TOMBSTONE_DIR="${TOMBSTONE_DIR:-/var/lib/zfs-snapshot-all/removed}"
+# Named rather than found on PATH, so "is zfs here?" is a question a test can
+# answer either way on any machine. Deciding it by emptying PATH would make the
+# result depend on the runner -- the exact flake test/pairgate already
+# documents, where a suite passed only on hosts that happened to lack `logger`.
+ZFS_BIN="${ZFS_BIN:-zfs}"
 PAIRING_DIR="${PAIRING_DIR:-/root/scripts/pairing}"
 HOME_ROOT="${HOME_ROOT:-/home}"
 DEPLOY="${DEPLOY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy.sh}"
@@ -111,6 +120,7 @@ for _d in "$CLIENTS_DIR:/etc/zfs-snapshot-all/clients" \
           "$PEER_STATE_DIR:/etc/zfs-snapshot-all/peers" \
           "$REL_STATE_DIR:/var/lib/zfs-snapshot-all/relationships" \
           "$PEER_KEY_DIR:/root/.ssh/pairing" \
+          "$TOMBSTONE_DIR:/var/lib/zfs-snapshot-all/removed" \
           "$HOME_ROOT:/home"; do
     [ "${_d%%:*}" = "${_d#*:}" ] && ON_REAL_HOST=1
 done
@@ -308,6 +318,51 @@ report() {
     return 0
 }
 
+# report_orphaned_data -- datasets a tombstone says belonged to a relationship
+# that is gone, and which are still on disk.
+#
+# The claim is made from the RECORD, not from the shape of a name. There is no
+# pattern matching here and there must not be: `hdd/kopie` once looked exactly
+# like a test dataset and was a real copy target, and a sweep would have taken
+# it. A dataset is reported only when something wrote down that a relationship
+# owned it -- which is why the tombstone above had to exist first.
+#
+# `zfs` is used, and only to ASK. This is the single place in the file that
+# touches it, it is read-only, and its absence is a skip rather than an error:
+# the rest of the tool must keep working on a host where zfs is broken, which
+# is a state this tool is specifically for.
+report_orphaned_data() {
+    [ -d "$TOMBSTONE_DIR" ] || return 0
+    local f ds line name shown=0
+    if ! command -v "$ZFS_BIN" >/dev/null 2>&1; then
+        log "tombstones exist in $TOMBSTONE_DIR but zfs is not available -- cannot check whether that data is still here. The records are still in $TOMBSTONE_DIR; read them by hand."
+        return 0
+    fi
+    for f in "$TOMBSTONE_DIR"/*; do
+        [ -f "$f" ] || continue
+        name=$(sed -n 's/^REMOVED_NAME=//p' "$f" | head -1)
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            "$ZFS_BIN" list -H -o name "$ds" >/dev/null 2>&1 || continue
+            if [ "$shown" -eq 0 ]; then
+                echo
+                echo "  DATA WITHOUT A RELATIONSHIP"
+                echo "      Still on disk, and the relationship that produced it is gone."
+                echo "      This tool does not destroy datasets. Decide, then run the line yourself."
+                shown=1
+            fi
+            printf '      %-40s (was %s, see %s)\n' "$ds" "${name:-?}" "$(basename "$f")"
+            printf '        zfs destroy -r %s   # then delete %s\n' "$ds" "$(basename "$f")"
+        done < <(sed -n 's/^DATA=//p' "$f")
+    done
+    # Said out loud rather than left as a silent limit: anything purged before
+    # tombstones existed, or removed by remove-client/--leave directly, has no
+    # record and cannot be found here. Inferring it from dataset names would be
+    # the sweep this tool refuses to do.
+    [ "$shown" -eq 1 ] && echo "      (only data a tombstone recorded can appear here -- earlier removals left no record)"
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 # PURGE
 # ------------------------------------------------------------------------------
@@ -317,11 +372,63 @@ report() {
 # home, and deletes the manifest and scope. Hand-removing that manifest first
 # strands the account somewhere no tool can reach it, and the operator is left
 # doing by hand precisely what the whitelist rule exists to avoid.
+# write_tombstone <id> -- record what this purge is about to make unfindable.
+#
+# The defect this closes was walked into on 2026-08-20: the purge deletes the
+# client record, and that record is the ONLY thing on the host naming the data
+# the relationship produced. hdd/lab4direct outlived its relationship and, the
+# moment clients/lab4-direct.conf was gone, nothing linked those 12 MB to
+# anything at all -- not a config file, not a cron line, nothing. Asked "what
+# is this?", the host had no answer, and neither did this tool.
+#
+# So the record is written BEFORE the removal, not after, and the removal is
+# REFUSED if the relationship owns data and the record cannot be written. The
+# order is the property: a tombstone written afterwards is a tombstone that a
+# crash halfway through would have skipped, on precisely the run that needed it.
+write_tombstone() {   # <id> <data lines...>  -> 0 written or nothing to record
+    local id="$1"; shift
+    [ "$#" -gt 0 ] || return 0          # no data: nothing would be lost
+    mkdir -p "$TOMBSTONE_DIR" 2>/dev/null || { warn "  could not create $TOMBSTONE_DIR"; return 1; }
+    local f="$TOMBSTONE_DIR/$id.$(date +%Y%m%d-%H%M%S)"
+    {
+        echo "# clean-relationships.sh tombstone"
+        echo "#"
+        echo "# The relationship below was purged from this host. Its own record named"
+        echo "# this data and that record is gone, so this file is now the only thing"
+        echo "# that does. Nothing here has been destroyed -- this tool never destroys"
+        echo "# datasets, on either side of a relationship."
+        echo "REMOVED_NAME=$id"
+        echo "REMOVED_AT=$(date '+%Y-%m-%d %H:%M:%S %z')"
+        echo "REMOVED_ON=$(hostname)"
+        local d
+        for d in "$@"; do echo "DATA=$d"; done
+        echo "#"
+        echo "# If that data is no longer wanted, destroy it deliberately and by hand:"
+        for d in "$@"; do echo "#   zfs destroy -r $d"; done
+        echo "# Then delete this file. While it exists, the audit reports that data as"
+        echo "# orphaned, which is the whole point of it existing."
+    } > "$f" 2>/dev/null || { warn "  could not write $f"; return 1; }
+    chmod 0644 "$f" 2>/dev/null || :
+    log "  recorded what this removes: $f"
+    return 0
+}
+
 purge_one() {
     local id="$1" verdict reason art fam path rc=0
     IFS=$'\t' read -r verdict reason <<< "$(classify "$id")"
     if [ "$verdict" != ORPHAN ]; then
         warn "$id is $verdict ($reason) -- refusing. Stop the relationship first (zfs-backup.sh remove-client / deploy.sh --leave), then re-run."
+        return 1
+    fi
+
+    # BEFORE anything is touched, including --leave, which removes the join
+    # manifest that carries PEER_JOIN_GRANTED_DATASETS.
+    local -a owned=()
+    while IFS=$'\t' read -r fam path; do
+        [ "$fam" = data ] && owned+=("$path")
+    done <<< "$(artefacts_for "$id")"
+    if ! write_tombstone "$id" "${owned[@]+"${owned[@]}"}"; then
+        warn "$id owns data (${owned[*]}) and the record of it could not be written -- REFUSING to purge. Removing the last thing that names this data, without leaving anything that names it, is the failure this record exists to prevent."
         return 1
     fi
 
@@ -417,6 +524,7 @@ main() {
 
     echo "== relationship traces on $(hostname) =="
     report
+    report_orphaned_data
 
     if [ "$PURGING" -eq 0 ]; then
         if [ "${#ORPHANS[@]}" -gt 0 ]; then

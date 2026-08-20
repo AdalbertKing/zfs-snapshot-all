@@ -67,6 +67,7 @@ run_cr() {   # <tree> <args...> -- echoes output, returns rc
     local T="$1"; shift
     CLIENTS_DIR="$T/clients" PEER_STATE_DIR="$T/peers" REL_STATE_DIR="$T/rel" \
     PEER_KEY_DIR="$T/keys" PAIRING_DIR="$T/pairing" HOME_ROOT="$T/home" \
+    TOMBSTONE_DIR="$T/removed" ZFS_BIN="${ZFS_BIN:-zfs}" \
     DEPLOY=/nonexistent ZFSBACKUP=/nonexistent \
     bash "$CR" "$@" 2>&1
 }
@@ -253,7 +254,7 @@ EOD
 chmod +x "$FAKE"
 out=$(CLIENTS_DIR="$T/clients" PEER_STATE_DIR="$T/peers" REL_STATE_DIR="$T/rel" \
       PEER_KEY_DIR="$T/keys" PAIRING_DIR="$T/pairing" HOME_ROOT="$T/home" \
-      DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
+      TOMBSTONE_DIR="$T/removed" DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
 if grep -q 'assumes a transfer is RUNNING' <<<"$out" \
    && grep -q '%recv' <<<"$out" \
    && grep -q 'zfs release zfssnapall_inflight' <<<"$out" \
@@ -274,7 +275,7 @@ EOD
 chmod +x "$FAKE"
 out=$(CLIENTS_DIR="$T/clients" PEER_STATE_DIR="$T/peers" REL_STATE_DIR="$T/rel" \
       PEER_KEY_DIR="$T/keys" PAIRING_DIR="$T/pairing" HOME_ROOT="$T/home" \
-      DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
+      TOMBSTONE_DIR="$T/removed" DEPLOY="$FAKE" ZFSBACKUP=/nonexistent bash "$CR" --purge=oldpeer --yes 2>&1)
 if ! grep -q 'assumes a transfer is RUNNING' <<<"$out" && grep -q 'something else entirely' <<<"$out"; then
     ok "a refusal with a different cause is quoted, and gets no invented advice"
 else
@@ -307,16 +308,113 @@ else
     bad "the purge removes the record, names the data it leaves, and never destroys it" "$out"
 fi
 
-# 17. Sandbox integrity: the suite must be incapable of touching a real path.
+# ---------------------------------------------------------------------------
+# 17-20. The tombstone. Purging deletes the record that is the only thing on
+#     the host naming the data a relationship produced -- measured 2026-08-20,
+#     when hdd/lab4direct outlived its relationship and the moment
+#     clients/lab4-direct.conf was gone, nothing linked those 12 MB to anything
+#     at all. The record is therefore written BEFORE the removal, and the
+#     removal is refused if it cannot be written.
+# ---------------------------------------------------------------------------
+T="$WORK/t17"; build_tree "$T"
+printf 'CLIENT_NAME=withdata\nPEER_HOST=10.0.0.77\nRUX_TARGET=hdd/somebackups\nSTATE=removed\n' \
+    > "$T/clients/withdata.conf"
+run_cr "$T" --purge=withdata --yes >/dev/null
+tomb=$(ls "$T/removed"/withdata.* 2>/dev/null | head -1)
+if [ -n "$tomb" ] && grep -q '^DATA=hdd/somebackups' "$tomb" \
+   && grep -q '^REMOVED_NAME=withdata' "$tomb" \
+   && grep -q 'zfs destroy -r hdd/somebackups' "$tomb"; then
+    ok "a purge leaves a tombstone naming the data, and the command to destroy it"
+else
+    bad "a purge leaves a tombstone naming the data, and the command to destroy it" \
+        "tombstone=${tomb:-none}" "$(cat "$tomb" 2>/dev/null)"
+fi
+
+# 18. A relationship that owns NO data needs no tombstone -- nothing would be
+#     lost. Writing one anyway would fill the directory with noise and teach an
+#     operator to ignore it.
+T="$WORK/t18"; build_tree "$T"
+run_cr "$T" --purge=barepeer --yes >/dev/null
+if [ -z "$(ls "$T/removed" 2>/dev/null)" ]; then
+    ok "a relationship owning no data leaves no tombstone"
+else
+    bad "a relationship owning no data leaves no tombstone" "$(ls "$T/removed")"
+fi
+
+# 19. If the record cannot be written, the purge REFUSES. Deleting the last
+#     thing that names this data while leaving nothing that names it is exactly
+#     the failure the tombstone exists to prevent, so it must not be reachable
+#     by a tool that merely warns.
+T="$WORK/t19"; build_tree "$T"
+printf 'CLIENT_NAME=withdata\nPEER_HOST=10.0.0.77\nRUX_TARGET=hdd/somebackups\nSTATE=removed\n' \
+    > "$T/clients/withdata.conf"
+: > "$T/removed"          # a FILE where the directory must go: mkdir -p fails
+out=$(run_cr "$T" --purge=withdata --yes)
+if grep -qi 'REFUSING to purge' <<<"$out" && [ -e "$T/clients/withdata.conf" ]; then
+    ok "an unwritable tombstone refuses the purge, and the record survives"
+else
+    bad "an unwritable tombstone refuses the purge, and the record survives" "$out"
+fi
+
+# 20. The audit reports tombstoned data that is STILL THERE -- the claim comes
+#     from the record, never from the shape of a name. `zfs` is stubbed: the
+#     tool's only use of it is this read-only existence question.
+T="$WORK/t20"; build_tree "$T"
+mkdir -p "$T/removed" "$T/bin"
+printf 'REMOVED_NAME=gone\nDATA=hdd/stillhere\nDATA=hdd/alreadygone\n' > "$T/removed/gone.20260820-000000"
+cat > "$T/bin/zfs" <<'EOD'
+#!/bin/sh
+# exists only for hdd/stillhere
+for a in "$@"; do [ "$a" = "hdd/stillhere" ] && { echo "$a"; exit 0; }; done
+exit 1
+EOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T")
+if grep -q 'DATA WITHOUT A RELATIONSHIP' <<<"$out" \
+   && grep -q 'hdd/stillhere' <<<"$out" \
+   && ! grep -q 'hdd/alreadygone' <<<"$out" \
+   && grep -q 'zfs destroy -r hdd/stillhere' <<<"$out"; then
+    ok "the audit reports tombstoned data that still exists, and only that"
+else
+    bad "the audit reports tombstoned data that still exists, and only that" "$out"
+fi
+
+# 21. No zfs on PATH is a skip with a reason, not an error and not silence: the
+#     rest of this tool has to keep working on a host where zfs is broken,
+#     which is a state it is specifically for.
+T="$WORK/t21"; build_tree "$T"
+mkdir -p "$T/removed"
+printf 'REMOVED_NAME=gone\nDATA=hdd/stillhere\n' > "$T/removed/gone.20260820-000000"
+# Named binary, not an emptied PATH: emptying PATH also removes `bash`, and a
+# result that depends on what the runner happens to have installed is the flake
+# test/pairgate already documents.
+out=$(ZFS_BIN="$T/no-such-zfs" run_cr "$T" 2>&1)
+if grep -q 'zfs is not available' <<<"$out" && grep -q 'read them by hand' <<<"$out"; then
+    ok "without zfs the data check says so rather than reporting nothing"
+else
+    bad "without zfs the data check says so rather than reporting nothing" "$out"
+fi
+
+# 22. Sandbox integrity: the suite must be incapable of touching a real path.
 #     Asserted against the source, because this is a property of the tool's
 #     defaults rather than of any single run.
-if grep -qE '^CLIENTS_DIR="\$\{CLIENTS_DIR:-' "$CR" \
-   && grep -qE '^REL_STATE_DIR="\$\{REL_STATE_DIR:-' "$CR" \
-   && grep -qE '^HOME_ROOT="\$\{HOME_ROOT:-' "$CR"; then
-    ok "every system path is overridable, which is what makes this suite safe"
+#     Every writable path is listed, and so is the root-check's own list --
+#     TOMBSTONE_DIR was added to the tool before it was added to that check,
+#     which would have let a "sandboxed" run write to /var/lib. The suite caught
+#     it; this assertion is what keeps the next one from slipping through.
+sandbox_missing=""
+for v in CLIENTS_DIR PEER_STATE_DIR REL_STATE_DIR PEER_KEY_DIR PAIRING_DIR \
+         HOME_ROOT TOMBSTONE_DIR ZFS_BIN; do
+    grep -qE "^$v=\"\\\$\\{$v:-" "$CR" || sandbox_missing="$sandbox_missing $v"
+done
+for v in CLIENTS_DIR PEER_STATE_DIR REL_STATE_DIR PEER_KEY_DIR TOMBSTONE_DIR HOME_ROOT; do
+    grep -q "\$$v:" "$CR" || sandbox_missing="$sandbox_missing $v(root-check)"
+done
+if [ -z "$sandbox_missing" ]; then
+    ok "every system path is overridable AND in the root check, which is what makes this suite safe"
 else
-    bad "every system path is overridable, which is what makes this suite safe" \
-        "a hardcoded path would make this suite able to touch the host"
+    bad "every system path is overridable AND in the root check, which is what makes this suite safe" \
+        "not overridable / not in the root check:$sandbox_missing"
 fi
 
 echo "--------------------------------------------"
