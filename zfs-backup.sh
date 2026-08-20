@@ -3387,7 +3387,26 @@ fetch_committed_scope() {
     if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$outfile" 2>/dev/null \
        || [ ! -s "$outfile" ]; then
         rm -f "$hash_tmp"
-        die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- has --draft-scope run there yet?"
+        # Name the RIGHT missing step. Until 2026-08-20 this said only "has
+        # --draft-scope run there yet?", which is the wrong question whenever
+        # the JOIN never completed -- and that is the common case, because the
+        # one-command form attempts the join, prints manual instructions when it
+        # fails, and then RESUMES PAST IT: re-running it from state
+        # 'pending_enroll' does not retry the join, it goes straight to this
+        # fetch. The operator was then sent to look at --draft-scope on a peer
+        # that had never accepted the package at all. Measured on metropolis
+        # 2026-08-20: the resume log was two lines, with zero join attempts.
+        #
+        # The manifest is the machine fact that separates the two cases -- it is
+        # written by --join on the SOURCE and copied back here, so its absence
+        # means the join, not the draft.
+        local _mpath; _mpath=$(peer_manifest_path "$(peer_label "$LOAD_HOST")")
+        if [ ! -r "$_mpath" ]; then
+            die "could not fetch the scope file from $LOAD_HOST ($sfile_remote), and there is no accepted pairing manifest for it here ($_mpath) -- so the JOIN has not completed on $LOAD_HOST yet, and --draft-scope is not the missing step.
+
+Finish the join on $LOAD_HOST first (add-client printed the exact two commands when it fell back to the manual path: copy the .tgz there, then run deploy.sh --join=<that file>). Re-running THIS command does not retry the join -- it resumes past it."
+        fi
+        die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- the pairing manifest is here, so the join completed; what is missing is the scope draft. Run deploy.sh --draft-scope on $LOAD_HOST, or re-run its --join, which drafts one."
     fi
     if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
        || [ ! -s "$hash_tmp" ]; then
@@ -3574,6 +3593,23 @@ cmd_seed() {
     for ds in $PEER_SAVED_DATASETS; do
         localpath=$(client_local_path "$ds")
         log "seeding $ds -> $localpath (real transfer, may take a while)..."
+        # 'automated_daily_', deliberately NOT the hourly prefix the recurring
+        # job uses. Written down 2026-08-20 after a lab run made it look like an
+        # oversight; it is not, and the reason is worth having at the call site.
+        #
+        # The seed is ONE snapshot, taken once, and it is not a member of the
+        # cadence anything monitors. The default profile's monitor watches
+        # 'automated_hourly' -- so a seed named 'automated_hourly_' would be a
+        # fresh matching snapshot sitting there whether or not the hourly job
+        # ever runs, i.e. the newest thing the staleness check can see would be
+        # an artefact of enrolment rather than evidence of a working schedule.
+        # Under the daily name the monitor finds no match and falls back to the
+        # dataset's own creation time, which keeps growing if the job is broken.
+        #
+        # The GFS ladder prunes on 'automated_', which matches both, so the seed
+        # is retained and aged like any other snapshot rather than living
+        # forever outside retention. Verified live on metropolis 2026-08-20:
+        # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
         if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
@@ -3662,6 +3698,23 @@ cmd_final_catchup() {
     for ds in $PEER_SAVED_DATASETS; do
         localpath=$(client_local_path "$ds")
         log "final catch-up $ds -> $localpath over '$(endpoint_display)'..."
+        # 'automated_daily_', deliberately NOT the hourly prefix the recurring
+        # job uses. Written down 2026-08-20 after a lab run made it look like an
+        # oversight; it is not, and the reason is worth having at the call site.
+        #
+        # The seed is ONE snapshot, taken once, and it is not a member of the
+        # cadence anything monitors. The default profile's monitor watches
+        # 'automated_hourly' -- so a seed named 'automated_hourly_' would be a
+        # fresh matching snapshot sitting there whether or not the hourly job
+        # ever runs, i.e. the newest thing the staleness check can see would be
+        # an artefact of enrolment rather than evidence of a working schedule.
+        # Under the daily name the monitor finds no match and falls back to the
+        # dataset's own creation time, which keeps growing if the job is broken.
+        #
+        # The GFS ladder prunes on 'automated_', which matches both, so the seed
+        # is retained and aged like any other snapshot rather than living
+        # forever outside retention. Verified live on metropolis 2026-08-20:
+        # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
         if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
@@ -5598,8 +5651,28 @@ rux_remote_plan() {
             echo "  stages that would run:         add-client (enrol + attempt remote join) -> seed -> activate"
             echo "  remote join:                    attempted automatically over SSH from this host; on failure, one manual join command is printed and re-running this SAME command resumes"
             ;;
-        pending_enroll|seeding)
+        pending_enroll)
+            # NOT the same as seeding, although it used to be reported that way.
+            # pending_enroll means the record exists and the join has not been
+            # confirmed -- and resuming does NOT retry the join, it goes on to
+            # the scope fetch. Saying "seed -> activate" here promised a
+            # continuation that cannot happen while the peer has not accepted
+            # the package. Measured on metropolis 2026-08-20.
+            echo "  stages that would run:         seed -> activate, BUT ONLY once the join is complete on the peer"
+            echo "  note:                          re-running this command does NOT retry the join. If it fell back to"
+            echo "                                 manual, finish it on the peer first (deploy.sh --join=<the .tgz>)."
+            ;;
+        seeding)
             echo "  stages that would run:         seed -> activate"
+            ;;
+        removed)
+            # Its own case since 2026-08-20. It used to fall into the catch-all
+            # below and be called an "unknown state", pointing at
+            # status/seed/activate -- none of which can revive a removed record,
+            # and nothing else in the tree can either: `removed` is terminal.
+            echo "  stages that would run:         NONE -- this relationship was removed and cannot be revived."
+            echo "  to back this peer up again:    use a different relationship name (--name=NEW), which enrols"
+            echo "                                 alongside the removed record and leaves its history intact."
             ;;
         seed_complete|endpoint_verified|endpoint_change_pending)
             echo "  stages that would run:         activate"
