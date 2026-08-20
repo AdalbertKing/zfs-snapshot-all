@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b9fdbafeec11b61f -->
+<!-- status-covers-digest: 884f6fc481af4fcb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Mapa redukcji domknięta: reszta to duplikacja ŚWIADOMA, brakowało jej opisu (2026-08-20).**
+  Trzy pozycje ze skanu duplikacji NIE nadają się do scalenia i nigdy nie
+  nadawały — brakowało im wyłącznie uzasadnienia w miejscu, którego wymaga własna
+  konwencja tego repozytorium (każda inna celowa kopia je nosi, więc kopia bez
+  opisu czyta się jak przeoczenie, które ktoś powinien „naprawić").
+  **`trim()`** w `cron2conf.sh` i `gen-cron.sh` — bajt w bajt, ale `cron2conf.sh`
+  jest wdrażany samodzielnie i **niczego nie sourcuje** (zweryfikowane), więc ma
+  tę samą strukturalną przyczynę co kopia `HOLD_TAG` w `delsnaps.sh`. Opis dodany
+  po obu stronach, bo para musi być widoczna z obu końców; kluczowe: cron2conf
+  czyta to, co gen-cron emituje, więc rozjazd definicji „przycięcia" to cichy
+  koniec round-trippingu.
+  **Tabela konwersji `<N>m/h/d`** w trzech kopiach — podwójna WALIDACJA była już
+  udokumentowana, powielona TABELA nie. `check-snap-age.sh` trzyma dwie z nich,
+  jest samodzielnym monitorem i plikiem zamrożonym, więc trzy kopie zostają;
+  dopisana reguła, że GRAMATYKA jest jedna — dodanie jednostki musi trafić we
+  wszystkie trzy, inaczej próg akceptowany przez generator monitor odrzuca o 3 nad ranem.
+  **`config_datasets`** — bez callera produkcyjnego po usunięciu migrate, ale
+  **nie martwa**: to przetestowana definicja konwencji dzielenia scope'u, którą
+  `assert_no_overlapping_policy` powtarza inline, odwołując się do niej po nazwie
+  w komentarzu. Skasowanie zostawiłoby konwencję z implementacją inline i bez
+  testu. To ten sam kształt co bliźniaki snapsend/snapget: jedna reguła, dwie
+  implementacje, pilnowana jedna. Właściwa naprawa — żeby planer ją WOŁAŁ zamiast
+  powtarzać — jest zmianą w planerze, więc należy do laba. Oznaczone w kodzie,
+  żeby następny przemiał martwego kodu jej nie usunął.
 - **Preambuła skryptów alertowych pisana RAZ zamiast trzy razy (2026-08-20).**
   `deploy.sh` generuje trzy samodzielne skrypty na hoście — `notify-fail.sh`,
   `notify-warn.sh`, `alert-digest.sh` — i wklejał do nich **tę samą 28-liniową

@@ -799,6 +799,11 @@ lint_ssh_flags() {
     done
 }
 
+# cron2conf.sh carries a byte-identical copy of this, deliberately -- it is
+# deployed standalone and sources nothing. It reads back what this script
+# emits, so the two must agree on what "trimmed" means or the round-trip stops
+# round-tripping. Its copy carries the full reasoning; this note exists so the
+# pair is visible from BOTH ends rather than only one.
 trim() {
     local s="$1"
     s="${s#"${s%%[![:space:]]*}"}"
@@ -1359,6 +1364,15 @@ cron_max_gap_minutes() {
 # duration_seconds STR CTX -- converts "<N>m/h/d" (same shorthand check-snap-age.sh
 # itself parses) to seconds, or dies with CTX prefixed. Validated here too so a
 # malformed threshold fails at generate time, not silently at 3am in cron.log.
+#
+# The double VALIDATION is the point above; the duplicated 60/3600/86400 TABLE
+# is the price. check-snap-age.sh holds two more copies of it (parse_duration
+# and, inverted, fmt_duration) and cannot source anything -- it is the monitor,
+# deployed and run standalone, and it is a frozen engine besides. So three
+# copies stay, and the rule is that the GRAMMAR is one thing: if <N>m/h/d ever
+# grows a unit, it grows in all three or a threshold this generator accepts
+# becomes one the monitor rejects at 3am. Noted 2026-08-20, after a duplication
+# sweep read the untold half as an oversight.
 duration_seconds() {
     local s="$1" ctx="$2"
     [[ "$s" =~ ^([0-9]+)([mhd])$ ]] || die "$ctx: invalid duration '$s' (expected <N>m, <N>h, or <N>d)"
