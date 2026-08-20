@@ -2828,6 +2828,58 @@ if [ "$CHECK_ONLY" -eq 0 ] && command -v logrotate >/dev/null; then
         || warn "  logrotate rejected $LOGROTATE_CONF -- check it by hand"
 fi
 
+# The alert scripts' shared config/env preamble, written ONCE.
+#
+# notify-fail.sh, notify-warn.sh and alert-digest.sh are three standalone
+# scripts on the host -- they cannot source a common library, so the text below
+# genuinely has to appear in all three. What does NOT have to happen is this
+# file carrying three copies of it: until 2026-08-20 it did, and a fix to the
+# env-precedence rule had to land in three places or the three generated
+# scripts would disagree about which knob wins.
+#
+# Defined with an UNQUOTED heredoc on purpose. Every '$' in the body is
+# escaped as '\$' because it is destined for the generated script, and an
+# unquoted heredoc resolves that escaping HERE, at definition time, so the
+# variable holds a literal '$'. Interpolating it into the three (also
+# unquoted) heredocs below then inserts it verbatim -- parameter expansion is
+# not recursive, so nothing in the body is expanded a second time.
+#
+# Verified before the change, not assumed: rendering the body directly and
+# rendering it through this variable produce byte-identical output (28 lines,
+# zero diff). A quoted heredoc here would NOT be equivalent -- it would keep
+# the backslashes and emit '\${ZFS_ALERT_MODE:-}' into the generated script.
+ALERT_ENV_PREAMBLE=$(cat <<EOF
+# The ENVIRONMENT wins over the config file. Sourcing the config last looks
+# harmless until you notice these are exactly the knobs a test sets: a run with
+# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
+# instead -- summarised it, mailed it and deleted it. Snapshot the env values
+# before the config can overwrite them, then put them back.
+_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
+_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
+_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
+CONF="\${ZFS_ALERT_CONF:-}"
+if [ -z "\$CONF" ]; then
+    # /etc first: /root is 0700, so a delegated service account (see
+    # phase 8) cannot read anything under it. The old in-/root
+    # location stays as a fallback so an un-migrated host keeps working.
+    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
+        [ -r "\$c" ] && { CONF="\$c"; break; }
+    done
+fi
+# shellcheck disable=SC1090
+[ -n "\$CONF" ] && . "\$CONF"
+_restore_env() {
+    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
+    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
+    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
+    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
+    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
+    return 0
+}
+_restore_env
+EOF
+)
+
 NOTIFY_SCRIPT="/root/scripts/notify-fail.sh"
 NOTIFY_SCRIPT_MARKER="# notify-fail.sh v9"   # bump this comment when the heredoc body below changes
 if [ "$CHECK_ONLY" -eq 1 ]; then
@@ -2873,34 +2925,7 @@ $NOTIFY_SCRIPT_MARKER -- reports an ALERT-tier finding: a cron job that returned
 # lines generated before v4.16 keep working unchanged.
 JOB="\$1"
 DETAIL="\${2:-}"
-# The ENVIRONMENT wins over the config file. Sourcing the config last looks
-# harmless until you notice these are exactly the knobs a test sets: a run with
-# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
-# instead -- summarised it, mailed it and deleted it. Snapshot the env values
-# before the config can overwrite them, then put them back.
-_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
-_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
-_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
-CONF="\${ZFS_ALERT_CONF:-}"
-if [ -z "\$CONF" ]; then
-    # /etc first: /root is 0700, so a delegated service account (see
-    # phase 8) cannot read anything under it. The old in-/root
-    # location stays as a fallback so an un-migrated host keeps working.
-    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
-        [ -r "\$c" ] && { CONF="\$c"; break; }
-    done
-fi
-# shellcheck disable=SC1090
-[ -n "\$CONF" ] && . "\$CONF"
-_restore_env() {
-    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
-    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
-    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
-    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
-    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
-    return 0
-}
-_restore_env
+$ALERT_ENV_PREAMBLE
 
 MODE="\${ZFS_ALERT_MODE:-daily}"
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
@@ -3021,34 +3046,7 @@ $WARN_SCRIPT_MARKER -- reports a WARNING-tier monitor finding ("getting stale",
 # label alone is not enough to act on.
 JOB="\$1"
 DETAIL="\${2:-}"
-# The ENVIRONMENT wins over the config file. Sourcing the config last looks
-# harmless until you notice these are exactly the knobs a test sets: a run with
-# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
-# instead -- summarised it, mailed it and deleted it. Snapshot the env values
-# before the config can overwrite them, then put them back.
-_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
-_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
-_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
-CONF="\${ZFS_ALERT_CONF:-}"
-if [ -z "\$CONF" ]; then
-    # /etc first: /root is 0700, so a delegated service account (see
-    # phase 8) cannot read anything under it. The old in-/root
-    # location stays as a fallback so an un-migrated host keeps working.
-    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
-        [ -r "\$c" ] && { CONF="\$c"; break; }
-    done
-fi
-# shellcheck disable=SC1090
-[ -n "\$CONF" ] && . "\$CONF"
-_restore_env() {
-    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
-    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
-    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
-    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
-    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
-    return 0
-}
-_restore_env
+$ALERT_ENV_PREAMBLE
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 if [ "\${ZFS_WARN_MODE:-daily}" = "immediate" ]; then
@@ -3098,34 +3096,7 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # healthy, since a dead cron would also be silent. That is the accepted
 # trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
 # from each is exactly the noise this replaced.
-# The ENVIRONMENT wins over the config file. Sourcing the config last looks
-# harmless until you notice these are exactly the knobs a test sets: a run with
-# ZFS_ALERT_QUEUE pointed at a scratch file silently used the PRODUCTION queue
-# instead -- summarised it, mailed it and deleted it. Snapshot the env values
-# before the config can overwrite them, then put them back.
-_E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
-_E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
-_E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
-CONF="\${ZFS_ALERT_CONF:-}"
-if [ -z "\$CONF" ]; then
-    # /etc first: /root is 0700, so a delegated service account (see
-    # phase 8) cannot read anything under it. The old in-/root
-    # location stays as a fallback so an un-migrated host keeps working.
-    for c in /etc/zfs-alert.conf /root/scripts/zfs-alert.conf; do
-        [ -r "\$c" ] && { CONF="\$c"; break; }
-    done
-fi
-# shellcheck disable=SC1090
-[ -n "\$CONF" ] && . "\$CONF"
-_restore_env() {
-    [ -n "\$_E_MODE" ]  && ZFS_ALERT_MODE="\$_E_MODE"
-    [ -n "\$_E_WMODE" ] && ZFS_WARN_MODE="\$_E_WMODE"
-    [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
-    [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
-    [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
-    return 0
-}
-_restore_env
+$ALERT_ENV_PREAMBLE
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
 LEGACY_QUEUE="/root/scripts/warn-queue.log"

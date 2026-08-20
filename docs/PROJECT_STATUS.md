@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 947486fadd6597d6 -->
+<!-- status-covers-digest: b9fdbafeec11b61f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Preambuła skryptów alertowych pisana RAZ zamiast trzy razy (2026-08-20).**
+  `deploy.sh` generuje trzy samodzielne skrypty na hoście — `notify-fail.sh`,
+  `notify-warn.sh`, `alert-digest.sh` — i wklejał do nich **tę samą 28-liniową
+  preambułę** (snapshot zmiennych środowiskowych, wyszukanie configu, `_restore_env`)
+  trzema osobnymi kopiami w jednym pliku. Zmierzone: kopie były bajt w bajt
+  identyczne. Te skrypty faktycznie nie mogą sourcować wspólnej biblioteki, więc
+  tekst MUSI wystąpić w każdym z trzech — ale `deploy.sh` nie musi go nieść
+  trzykrotnie. Koszt starego kształtu jest konkretny: poprawka reguły „środowisko
+  bije config" (a to jest reguła, przez którą test kiedyś zjadł PRODUKCYJNĄ
+  kolejkę alertów) musiała trafić w trzy miejsca albo trzy skrypty zaczynały się
+  różnić tym, który pokrętek wygrywa.
+  Teraz jedna zmienna `ALERT_ENV_PREAMBLE`, interpolowana w trzy miejsca.
+  **−84 / +55 linii.** Zdefiniowana **niecytowanym** heredokiem świadomie: każdy
+  `$` w ciele jest zapisany jako `\$`, bo jest przeznaczony dla generowanego
+  skryptu, a niecytowany heredoc rozwiązuje to escapowanie w momencie definicji —
+  zmienna trzyma dosłowny `$`, a rozwinięcie parametru nie jest rekurencyjne,
+  więc przy wstawianiu nic nie rozwija się drugi raz. Heredoc CYTOWANY nie byłby
+  równoważny: zostawiłby backslashe i wypuścił `\${ZFS_ALERT_MODE:-}` do skryptu.
+  Dowód, nie założenie: wyrenderowane **wszystkie trzy** skrypty przed i po —
+  108/60/151 linii, **zero różnic** w każdym. Kontrola pozytywna: preambuła jest
+  obecna w każdym renderze. Kontrola negatywna: z pustą zmienną render ma 81 linii
+  zamiast 108 i 29 różnic, więc tożsamość nie jest pusta. Pierwsza wersja tego
+  pomiaru dawała „0 linii vs 0 linii, 0 różnic" — pusty pass przez złe
+  dopasowanie w awk; poprawiony, bo taki wynik to nie dowód. Suita `alertmail` 20/20.
 - **Alarm dryfu bliźniaków domknięty: 8 → 12 pilnowanych funkcji (2026-08-20).**
   `test/twins/run.sh` deklaruje o sobie regułę: *„Keep this list exhaustive
   rather than curated: a name that exists in both and is NOT watched here is the
