@@ -247,14 +247,67 @@ musi wrócić `PAIR_DISABLED`:
 | `join interrupted before scope acceptance` | `--join` czeka na `t`, nie ma `--yes` |
 | `unknown state 'removed'` (przed poprawką) | relacja usunięta, użyj `--name=NOWA` |
 
-## Sprzątanie po labie
+## Sprzątanie po labie — pełna, sprawdzona kolejność
+
+Skryptu robiącego to jednym poleceniem **nie ma** (`clean_all` jest dopiero
+zaplanowany). Poniżej kolejność wykonana i zmierzona 2026-08-20; po niej trzy
+hosty były sterylne, a produkcja nietknięta.
+
+**Kolejność ma znaczenie.** Najpierw kolektor, potem źródło: `remove-client`
+wypisuje, którą komendę uruchomić po drugiej stronie.
 
 ```bash
-[pve2]  zfs destroy -r hdd/lab4backups
-[pve1]  zfs destroy -r hdd/lab4chain
-[pve9]  zfs destroy -r hdd/lab4
-[każdy] bash zfs-backup.sh remove-client <nazwa>
+# 1. KOLEKTOR -- kasuje linie crona, peers/<ip>.conf, klucze, .tgz
+[kolektor]  bash zfs-backup.sh remove-client <nazwa>
+
+# 2. ZRODLO -- cofa granty ZFS, kasuje konto z katalogiem domowym, manifest, scope
+[zrodlo]    bash deploy.sh --leave=<etykieta>
 ```
+
+Uwaga: jeśli host jest **jednocześnie** kolektorem i źródłem (środek łańcucha),
+potrzebuje obu — łatwo przeoczyć `--leave` na hoście, o którym myślisz „to
+przecież kolektor".
+
+### 3. Reszta — czego narzędzia nie sprzątają
+
+Zanim skasujesz cokolwiek ręcznie, **sprawdź, że produkcja tego nie używa**:
+
+```bash
+[każdy]  crontab -l -u zfsbackup | grep -icE 'lab4|-L '     # ma byc 0
+         grep -licE 'lab4' /etc/zfs-snapshot-all/jobs.*.conf # ma byc pusto
+         zfs list -H -o name,origin | awk '$2!="-"'          # klony
+         # holdy na kazdym snapshocie datasetu labowego
+```
+
+Potem, **whitelistą po dokładnych nazwach, nigdy `grep -i test`**:
+
+```bash
+rm -f /etc/zfs-snapshot-all/clients/<nazwa>.conf          # zostaje ze STATE=removed
+rm -f /etc/zfs-snapshot-all/peers/<etykieta>.conf         # peers/ jest kluczowane
+rm -f /etc/zfs-snapshot-all/peers/<etykieta>.scope*       #   DWOJAKO: po IP i etykiecie
+rm -rf /var/lib/zfs-snapshot-all/relationships/<etykieta>
+rm -f /root/.ssh/pairing/<ip>_alias_known_hosts           # jedyny klucz, ktory przezyl
+rm -f /root/scripts/pairing/*
+zfs destroy -r <pool>/<dataset labowy>
+```
+
+`known_hosts` zostaje celowo — narzędzie samo to mówi i podaje `ssh-keygen -R`.
+To nasz zapis o tym, kim oni są, nie uprawnienie dla nich.
+
+### 4. Weryfikacja, że host jest sterylny
+
+```bash
+[każdy]  ls -A /etc/zfs-snapshot-all/clients/ /etc/zfs-snapshot-all/peers/ \
+                /var/lib/zfs-snapshot-all/relationships/ /root/.ssh/pairing/
+         ls -d /home/zfsbackup-* 2>/dev/null
+         crontab -l -u zfsbackup | md5sum   # PORÓWNAJ z sumą sprzed rozbiórki
+```
+
+Wszystkie listy puste, konta per-peer żadne, md5 produkcji **bez zmian**.
+
+Uwaga o katalogach domowych: konto może już nie istnieć, a katalog zostać — i po
+recyklingu UID należeć do **innego, żywego** konta. Sprawdzaj `id <nazwa>`, nie
+właściciela katalogu; puste pole powłoki z `getent passwd` nie jest dowodem.
 
 Odsunięte pozostałości po lab3 leżą na pve2 w `/root/lab3-residue.<timestamp>/`
 — nie skasowane, na wypadek gdyby czegoś zabrakło.
