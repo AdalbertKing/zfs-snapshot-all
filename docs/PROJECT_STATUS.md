@@ -47,12 +47,29 @@
   jobs now exit SKIPPED", choć retencja jest zarządzana i **chodzi dalej** —
   linie `delsnaps` nie mają `-L` (silnik nie zna tej flagi), także ta tnąca po
   źródle; skutek ogranicza drabinka GFS, ale twierdzenie było fałszywe.
-  Otwarte, bo wymaga decyzji: `--pause`/`--resume` wykonują najpierw **dziewięć
-  faz pełnego wdrożenia** i wypisują dwa fałszywe `!!!` (łącznie z „this host
-  would stop picking up updates") osiem linii przed poprawnym wznowieniem;
-  oraz `snapget` opisał `PAIR_DISABLED` jako „brak zfs w PATH", czego nie
-  naprawiam sam, bo silnik jest zamrożony. Szczegóły: `docs/LAB4-OBSERWACJE.md`
-  O8–O12, procedura w `docs/LAB-RUNBOOK.md` §9.
+  Otwarte, bo wymaga decyzji właściciela: `snapget` opisał `PAIR_DISABLED` jako
+  „brak zfs w PATH", czego nie naprawiam sam, bo silnik jest zamrożony.
+  Szczegóły: `docs/LAB4-OBSERWACJE.md` O8–O12, procedura w
+  `docs/LAB-RUNBOOK.md` §9.
+- **`--pause`/`--resume` przestały być wdrożeniem (2026-08-20).** Wysyłka leżała
+  pod wszystkimi innymi trybami, więc okno serwisowe wykonywało najpierw całe
+  wdrożenie: **dziewięć faz**, zmierzone z prawdziwego przebiegu. Dwie z nich
+  piszą linie crona, a `lib-cron.sh` słusznie odmawia zapisu do zapauzowanego
+  bloku — więc `--resume` ogłaszał „this host would stop picking up updates"
+  osiem linii przed poprawnym wznowieniem. Strażnik działał, alarm był fałszywy;
+  to jest ta kombinacja, która uczy operatora przewijać `!!!`.
+  Cała rodzina `do_pause*`/`do_resume*` przeniesiona ponad fazy (bash nie zna
+  funkcji zdefiniowanej niżej, więc sam `if` nie wystarczał), po sprawdzeniu, że
+  blok woła tylko `log`/`warn` i `lib-cron.sh`. Zmierzone na żywo na pve9 przez
+  worktree na gałęzi, checkout główny nietknięty na `main`: log z **61 linii na 4**,
+  **z 9 faz na 0**, `--resume` z **dwóch `!!!` na zero**, oba crontaby po pełnym
+  cyklu identyczne bajt w bajt.
+  Przy okazji naprawiony kontrakt testowy: `test/pause` kończyła wycinanie kodu
+  na komentarzu, który *przypadkiem* stał zaraz za rodziną funkcji, więc po
+  przeniesieniu wciągnęła resztę pliku i padła na `PAUSE_MODE: unbound variable`
+  daleko od przyczyny. `deploy.sh` ma jawny terminator, suita odmawia wprost przy
+  ponownym przekroczeniu, a kontrola pozytywna (skasowany terminator) potwierdza,
+  że nowa bramka faktycznie strzela.
 - **`--grant-remotely` i `--join-remotely` dopisane do pomocy; enrolment z 4 komend na 1 (2026-08-20).**
   Przemiał przełączników objął `deploy.sh` i `gen-cron.sh`, a **pominął
   `zfs-backup.sh`** — moje niedopatrzenie. Kryły się tam dwie działające flagi

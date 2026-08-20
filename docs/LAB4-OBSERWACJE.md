@@ -119,7 +119,7 @@ ciało bloku zakomentowane a markery zostają, ponowna pauza odmawia (rc=1),
 ręczna linia dopisana w oknie **przetrwała i została zgłoszona**, crontab konta
 wrócił bajt w bajt.
 
-## O8. `--pause` i `--resume` robią najpierw pełne wdrożenie — DO DECYZJI
+## O8. `--pause` i `--resume` robią najpierw pełne wdrożenie — NAPRAWIONE (droga 1)
 
 Gałąź pauzy leży w `deploy.sh` **za** fazami. Zmierzone: `--pause` przeleciał
 9 faz (`Phase 1 2 4 4a 4b 5 6 6a 7`), dopiero potem zapauzował. To nie jest
@@ -150,7 +150,31 @@ Dwie drogi, do decyzji właściciela:
    komunikatu z wyjaśnieniem. Usuwa fałszywy alarm, zostawia dziwność, że
    „pauza" robi wdrożenie.
 
-Skłaniam się do (1) — (2) leczy objaw.
+Właściciel wybrał (1). Cała rodzina `do_pause*`/`do_resume*`/`pause_targets`
+przeniesiona ponad fazy razem z wysyłką — bash nie zna funkcji zdefiniowanej
+niżej, więc samo przesunięcie `if`-a nie wystarczało. Przed przeniesieniem
+sprawdzone, że blok jest samowystarczalny: woła wyłącznie `log`/`warn`
+(linie 153–154) i `lib-cron.sh` (sourcowane w linii 103), a `detect_delegated_account`
+i `cron_block_names_present` są używane tylko wewnątrz niego.
+
+Zmierzone na żywo na pve9, z worktree na gałęzi (checkout główny nietknięty
+na `main`):
+
+| | przed | po |
+|---|---|---|
+| `--pause`, linii logu | 61 | **4** |
+| `--pause`, faz wdrożenia | 9 | **0** |
+| `--resume`, fałszywych `!!!` | 2 | **0** |
+| crontaby po cyklu | — | identyczne bajt w bajt |
+
+**Suita złapała to przeniesienie — ale przez awarię, nie przez raport.**
+`test/pause` kończyła wycinanie kodu na `# do_revoke_old`, czyli na komentarzu,
+który *przypadkiem* stał zaraz za rodziną funkcji. Gdy sąsiedztwo zniknęło,
+`sed` wciągnął resztę pliku razem z wysyłką i suita wywaliła się na
+`PAUSE_MODE: unbound variable` — daleko od przyczyny. `deploy.sh` ma teraz jawny
+terminator, a suita odmawia wprost, jeśli wycinanie kiedykolwiek znów sięgnie
+wysyłki. Kontrola pozytywna: po skasowaniu terminatora suita pada z tym nowym
+komunikatem, nie ze starym.
 
 ## O9. Miękka pauza **nie pauzuje retencji** — NAPRAWIONE (komunikat)
 
