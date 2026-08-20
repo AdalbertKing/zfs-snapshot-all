@@ -281,7 +281,33 @@ else
     bad "a refusal with a different cause is quoted, and gets no invented advice" "$out"
 fi
 
-# 16. Sandbox integrity: the suite must be incapable of touching a real path.
+# ---------------------------------------------------------------------------
+# 16. The DATA a relationship owns is reported and never removed. Measured
+#     2026-08-20: hdd/lab4direct outlived its relationship, and once the client
+#     record was deleted nothing on the host linked that dataset to anything.
+#     Reporting it costs no `zfs` call -- both the client record and the join
+#     manifest name it in plain text -- and it has to happen BEFORE the record
+#     that knows about it is deleted, which is why the purge says it again.
+# ---------------------------------------------------------------------------
+T="$WORK/t16"; build_tree "$T"
+printf 'CLIENT_NAME=withdata\nPEER_HOST=10.0.0.77\nRUX_TARGET=hdd/somebackups\nSTATE=removed\n' \
+    > "$T/clients/withdata.conf"
+out=$(run_cr "$T")
+if grep -qE 'data +hdd/somebackups' <<<"$out"; then
+    ok "the audit names the dataset a relationship owns"
+else
+    bad "the audit names the dataset a relationship owns" "$out"
+fi
+out=$(run_cr "$T" --purge=withdata --yes)
+if grep -q 'DATA LEFT IN PLACE: hdd/somebackups' <<<"$out" \
+   && grep -q 'zfs destroy -r hdd/somebackups' <<<"$out" \
+   && [ ! -e "$T/clients/withdata.conf" ]; then
+    ok "the purge removes the record, names the data it leaves, and never destroys it"
+else
+    bad "the purge removes the record, names the data it leaves, and never destroys it" "$out"
+fi
+
+# 17. Sandbox integrity: the suite must be incapable of touching a real path.
 #     Asserted against the source, because this is a property of the tool's
 #     defaults rather than of any single run.
 if grep -qE '^CLIENTS_DIR="\$\{CLIENTS_DIR:-' "$CR" \

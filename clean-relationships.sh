@@ -240,8 +240,20 @@ classify() {
 artefacts_for() { _artefacts_raw "$@" | awk -F'\t' '!seen[$2]++'; }
 
 _artefacts_raw() {
-    local id="$1" addr="${NAME_ADDR[$id]:-}" f
+    local id="$1" addr="${NAME_ADDR[$id]:-}" f d
     [ -e "$CLIENTS_DIR/$id.conf" ]       && echo "client	$CLIENTS_DIR/$id.conf"
+    # The DATA this relationship owns, reported and never removed. Reading it
+    # costs no `zfs` call -- the client record and the join manifest both name
+    # it in plain text -- and the reason to report it is that the record is
+    # about to be deleted. Measured 2026-08-20: hdd/lab4direct outlived its
+    # relationship, and once clients/lab4-direct.conf was gone nothing on the
+    # host linked that dataset to anything at all. Removing data is a separate
+    # decision with a separate blast radius, so this tool names it and stops.
+    for d in $(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
+                   "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
+               | cut -d= -f2- | tr -d "'\"" | tr ',' ' '); do
+        [ -n "$d" ] && echo "data	$d"
+    done
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
@@ -357,6 +369,11 @@ purge_one() {
     while IFS=$'\t' read -r fam path; do
         [ -n "$path" ] || continue
         case "$fam" in
+            data)
+                # Named once more on the way out, because the record that knew
+                # about it is being deleted in this same run.
+                log "  DATA LEFT IN PLACE: $path -- this tool never destroys datasets. If it is no longer wanted: zfs destroy -r $path"
+                continue ;;
             account)
                 if deluser --remove-home "$path" >/dev/null 2>&1; then
                     log "  removed account $path (with its home)"
