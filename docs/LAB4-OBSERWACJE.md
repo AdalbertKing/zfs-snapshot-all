@@ -279,6 +279,95 @@ Poprawka: `status` odpytuje bramę i raportuje stan u peera osobno od pauzy
 lokalnej; zdanie o nieblokowanych komendach pojawia się **tylko** wtedy, gdy
 jest prawdziwe.
 
+## O13. Rozbiórka: co zostawiają narzędzia — ZMIERZONE
+
+Skryptu „usuń pakiet i wszystkie ślady z hosta" **nie ma** — to zaplanowana
+pozycja `clean_all` (`docs/project/TODO-THREADS-2026-08-17.md`, punkt 4).
+Istnieją dwa czasowniki cząstkowe i oba działają dobrze w swoim zakresie:
+
+- `zfs-backup.sh remove-client NAME` — strona kolektora
+- `deploy.sh --leave=<label>` — strona źródła
+
+Rozebrałem nimi trzy relacje na trzech hostach, mierząc inwentarz przed i po
+każdym wywołaniu. **Produkcja nietknięta** na obu kolektorach — md5 crontaba
+konta `zfsbackup` identyczne przed i po całej rozbiórce.
+
+`remove-client` **usuwa**: linie crona relacji, `peers/<ip>.conf`, trzy z
+czterech plików klucza, `pairing/<ip>.conf.suggested`, `pairing/<host>-to-<ip>.tgz`.
+
+`--leave` **usuwa**: granty ZFS, konto **razem z katalogiem domowym**, manifest
+joinu, plik scope i jego sumę.
+
+Co zostaje po obu, zmierzone (to jest specyfikacja dla `clean_all`):
+
+| ślad | gdzie | uwaga |
+|---|---|---|
+| `clients/<name>.conf` ze `STATE=removed` | kolektor i źródło | z projektu — log stanu jest dopisywalny; ale stan jest **terminalny**, więc blokuje ponowne użycie nazwy |
+| `relationships/<label>/` | oba | znana luka, potwierdzona ponownie |
+| `peers/<label>.conf` + `.scope` + `.scope.sha256` | kolektor | **nowe**: `peers/` jest kluczowane **dwojako** — po IP i po etykiecie; `remove-client` usuwa tylko wariant po IP |
+| `<addr>_alias_known_hosts` | kolektor | **nowe**: jedyny z czterech plików klucza, który przeżywa — i akurat ten, którego używały linie crona (`-k ..._alias_known_hosts`) |
+
+Osobno, zastane po starszych testach na pve2: trzy katalogi `/home/zfsbackup-*`
+**bez kont** (`id` odmawia dla wszystkich trzech), z czego dwa należały do
+**żywego** konta `zfsbackup-pve1`, które przejęło ich UID. Zawartość to same
+dotfile'y, więc bezpieczeństwo nietknięte — ale „kasuj to, co należy do tego
+konta" jako strategia właśnie umarła. To drugi, niezależny powód dla reguły
+*whitelist, nigdy sweep*.
+
+Omal nie zaraportowałem tych trzech jako żywych kont z dostępem. Puste pole
+powłoki z `getent passwd` **nie jest** dowodem na istnienie konta; `id` jest.
+
+## O14. `--grant-remotely` wiesza się na parze hostów, która NIE jest sparowana — ZNALEZIONE
+
+Przy wdrożeniu od zera, na **sterylnych** hostach, jedna komenda stanęła i stała
+przez ponad sześć minut bez żadnego komunikatu. Zmierzone, nie wywnioskowane:
+
+```
+pve2:  bash zfs-backup.sh --source=... --grant-remotely --install --yes   (05:48)
+pve2:   \_ ssh root@192.168.28.99 ... ./deploy.sh --join=/root/pve2-to-...tgz  (05:44)
+pve9:      \_ /bin/bash ./deploy.sh --join=...   wchan=pipe_read  stdin=pipe:[188378]
+```
+
+`deploy.sh --join` **pyta o akceptację zakresu i celowo nie ma `--yes`** — to
+jest udokumentowana decyzja bezpieczeństwa (§4 runbooka). Uruchomiony przez ssh
+bez terminala nie ma jak dostać odpowiedzi i **nie ma żadnego limitu czasu**.
+
+Sedno jest w tym, że wołający **już** to toleruje. `zfs-backup.sh:3357` mówi
+wprost: „whether `--join-remotely` succeeded … or fell back to manual
+instructions" — nieudany join nie jest śmiertelny i jest przewidziany awaryjny
+tor ręczny. Ten tor **nigdy się nie włącza**, bo wywołanie nie wraca.
+
+> Projekt, który znosi porażkę, jest pokonany przez wywołanie, które nie potrafi
+> się nie udać.
+
+Dowód po fakcie: po zakończeniu zdalnego procesu wołający natychmiast poszedł
+swoim torem awaryjnym i **enrolment dokończył się poprawnie** — grant zatwierdzony
+na źródle (`hdd/lab4/src -> user zfsbackup-pve2`), scope na miejscu, dane
+przesłane, cron zainstalowany, `STATE=active`. Czyli to nie jest fail-open:
+brakowało wyłącznie ograniczenia czasu na krok, który z definicji nie może
+odpowiedzieć.
+
+**Korekta mojego wcześniejszego raportu (O5).** Napisałem, że `--grant-remotely`
+przeszło „od zera do `STATE=active`" i że to „pierwsze uruchomienie tej ścieżki
+na żywo". Flaga faktycznie zadziałała, ale para hostów pve1↔pve9 **była już
+sparowana** wcześniej tego dnia, więc `--join` nie był potrzebny i krok, który
+teraz się wiesza, wtedy się nie wykonał. „Od zera" było nieprawdą i to jest
+pierwszy przebieg na naprawdę niesparowanej parze.
+
+Kierunki poprawki (do decyzji właściciela — dotyka granicy bezpieczeństwa):
+
+1. **Nie wieszać się nigdy.** Zdalny `--join` dostaje limit czasu i zamknięte
+   wejście; po przekroczeniu wołający robi to, co i tak umie — wypisuje ręczne
+   instrukcje. Sama ta zmiana usuwa awarię i nie rusza granicy bezpieczeństwa.
+2. **Wykryć wcześniej.** `--grant-remotely` sprawdza *przed* startem, czy para
+   jest już sparowana, i jeśli nie — odmawia od razu, zamiast zaczynać pracę,
+   której nie dokończy.
+3. Rozszerzyć jawną, audytowaną zgodę `--grant-remotely` na przyjęcie zakresu.
+   To realna zmiana granicy bezpieczeństwa; nie proponuję jej samodzielnie.
+
+Skłaniam się do (1) **plus** (2): pierwsze usuwa zawieszenie, drugie sprawia, że
+komenda mówi prawdę o swoim zakresie stosowalności, zanim cokolwiek zrobi.
+
 ## O12. `snapget` opisuje odmowę bramy jako „brak zfs w PATH" — DO DECYZJI
 
 Ten sam przebieg co wyżej. Silnik dostał odpowiedź, która sama się nazywa:
