@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 16d62fb2e8f49163 -->
+<!-- status-covers-digest: 947486fadd6597d6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,32 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Alarm dryfu bliźniaków domknięty: 8 → 12 pilnowanych funkcji (2026-08-20).**
+  `test/twins/run.sh` deklaruje o sobie regułę: *„Keep this list exhaustive
+  rather than curated: a name that exists in both and is NOT watched here is the
+  one place drift gets to happen unobserved"*. **Nie była wyczerpująca.** Zmierzone:
+  dwanaście funkcji zdefiniowanych pod tą samą nazwą w obu silnikach, pilnowanych
+  osiem. Brakowały `translate_long_options`, `opt_takes_arg`, `cluster_needs_next`,
+  `declare_recursion` — dziś bajt w bajt identyczne (46/3/11/4 linii, zero różnic),
+  co jest zarazem powodem, dla którego łatwo je przeoczyć, i powodem, dla którego
+  późniejszą rozbieżność trudno byłoby zauważyć.
+  Kontekst, bo bez niego wygląda to na argument za scaleniem: **scalenie silników
+  zostało ROZWAŻONE I ODRZUCONE 2026-08-04** (wpis niżej w tym pliku) — parametr
+  kierunku zawodzi OTWARCIE przy wykrywaniu wspólnej bazy, a `test/snapsend` jest
+  LOCAL MODE ONLY, więc suita, która miałaby to złapać, strukturalnie nie może.
+  Tamta decyzja wybrała **alarm zamiast scalenia**, więc dziura w alarmie była
+  dziurą w decyzji, nie argumentem przeciw niej. Te cztery nie niosą kierunku
+  w ogóle, i to też nie czyni ich kandydatami do `lib-zfs-snap.sh`.
+  Linia bazowa: dokładnie 4 dopisane wiersze, ósemka nietknięta; każda z czwórki
+  ma identyczny skrót po obu stronach, co niezależnie potwierdza identyczność.
+  Kontrola: przed blessem suita czerwieni się na nowych nazwach (lista jest realnie
+  konsultowana), po — **38 PASS / 0 FAIL** (było 30). Oba silniki dostały nagłówek
+  `THE TWIN` z odsyłaczem do decyzji; zmierzone, że komentarz nagłówkowy nie
+  narusza pinowanych skrótów. ZAMROŻENIE: linia bazowa przejęta przez `--refreeze`,
+  zmiana to wyłącznie komentarze.
+  Osobno warte zapamiętania: `translate_long_options` niesie komentarz *„a
+  hand-kept list is a list that drifts, and a drift here is silent"* — sam będąc
+  ręcznie trzymaną drugą kopią, której nic nie pilnowało.
 - **Martwy kod usunięty: −278 linii, w tym zahardkodowana polityka po Slice B1 (2026-08-20).**
   Drugi krok redukcji. Trzy skupiska, wszystkie potwierdzone brakiem callerów
   w kodzie ORAZ w testach (lekcja z usuwania migrate: testy pinują dosłowne

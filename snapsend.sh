@@ -425,6 +425,28 @@ set -o pipefail
 #   snapsend.sh -v1 pool/data backuppool/data_backup
 #   snapsend.sh -r pool/data user@backuphost:tank/backups/data
 #   snapsend.sh -r pool/data user@backuphost              # sync: mirrors as pool/data on backuphost
+#
+# THE TWIN: snapsend.sh (push) and snapget.sh (pull) share TWELVE function names.
+#
+# Merging the two engines was considered and REJECTED on 2026-08-04. What is
+# left after the easy sharing is DIVERGENCE, not duplication: push reads locally
+# and writes remotely, pull does the reverse, so the safety checks sit on
+# opposite sides. Eight of the twelve carry that direction with IDENTICAL
+# signatures and parameter names, so a merge needs a direction argument whose
+# only failure mode is silent -- and it fails OPEN on common-base detection.
+# test/snapsend/run.sh is LOCAL MODE ONLY by design, so with empty
+# remote_user/remote_host both branches collapse to the same call: the suite
+# that would catch a reversed direction structurally cannot.
+#
+# The decision was therefore DO NOT MERGE, ALARM ON DRIFT. The alarm is
+# test/twins/run.sh plus the twin-functions contract in test/deps.conf, which
+# pins each side's function bodies SEPARATELY -- so the two are free to differ,
+# and neither is free to change unnoticed.
+#
+# Whatever is shared and carries no direction already lives in lib-zfs-snap.sh,
+# which both scripts source. Before moving anything else there, read the
+# 2026-08-04 entry in docs/PROJECT_STATUS.md: this looks like obvious
+# duplication and is not.
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
