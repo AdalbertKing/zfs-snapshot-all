@@ -4950,7 +4950,14 @@ cmd_pause_client() {
     } > "$marker.new" || { rm -f "$marker.new"; die "could not write $marker.new"; }
     chmod 0644 "$marker.new" || { rm -f "$marker.new"; die "could not chmod $marker.new"; }
     mv "$marker.new" "$marker" || { rm -f "$marker.new"; die "could not commit $marker"; }
-    log "client '$name' paused (PAUSED_LOCAL). Managed jobs and labeled manual runs now exit 'SKIPPED: relationship $name is paused' before any snapshot/SSH work."
+    log "client '$name' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship $name is paused' before any snapshot/SSH work."
+    # Said out loud because the old wording ("managed jobs") was read as all of
+    # them, and retention is managed too. Measured on metropolis 2026-08-20: a
+    # paused relationship still ran both of its delsnaps lines, the one over the
+    # SOURCE included. That is not a generator oversight -- the label becomes
+    # snapget/snapsend/check-snap-age -L, and delsnaps.sh has no such flag at
+    # all -- so the honest move is to name the gap rather than imply it away.
+    log "NOT covered: retention. This relationship's delsnaps lines carry no '-L' and keep pruning on schedule, on the source as well as the target. The GFS ladder bounds what that can erode, so a pause measured in hours or days cannot cost you the common base; a pause left running for months could."
     # In-flight contract (REV-045 boundary 4): a run already past its
     # preflight finishes -- pause gates the NEXT run, it kills nothing.
     local running
@@ -5126,16 +5133,50 @@ cmd_status() {
         . "$mpath"; }
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
     local LOAD_HOST="$host" LOAD_PORT="$port"
+    # The peer's own view, asked out loud (2026-08-20, measured on metropolis).
+    # Until this existed, a relationship the peer was refusing outright showed
+    # only PAUSED_LOCAL -- together with a sentence promising that unlabeled
+    # manual runs are NOT blocked, which was false at exactly that moment. The
+    # hard pause lives on the PEER; there is nothing local to read, so it has
+    # to be asked.
+    #
+    # In a subshell: load_client_and_connection sets the LOAD_* family that
+    # this function otherwise builds by hand, and it may die -- neither may
+    # touch the display state built above. A peer that cannot be asked (down,
+    # or status run by a user who cannot read the relationship's key under
+    # /root/.ssh/pairing) is reported as UNKNOWN, never as active.
+    #
+    # Only the detail view asks. The no-argument list stays local and fast, and
+    # its PAUSED_LOCAL flag is a sound hint: disable-client establishes the
+    # local pause FIRST, so a disabled relationship is a paused one there too.
+    local peerstate
+    peerstate=$( load_client_and_connection "$cpath" >/dev/null 2>&1 \
+                 && peer_pair_state >/dev/null 2>&1 \
+                 && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
+
     echo "Klient:            $CLIENT_NAME"
     echo "Stan:              ${STATE:-unknown}"
+    if [ "$peerstate" = "DISABLED" ]; then
+        echo "Blokada u peera:   DISABLED -- peer odmawia komend tej relacji, TAKZE recznych bez '-L $name'."
+        echo "                   To jest granica bezpieczenstwa, nie tylko pauza logiczna."
+        echo "                   Zdjecie: $0 enable-client $name"
+    elif [ -z "$peerstate" ]; then
+        echo "Blokada u peera:   NIEZNANA -- nie udalo sie zapytac bramy (peer nieosiagalny albo brak dostepu do klucza relacji; sprobuj jako root). Nie zakladaj, ze relacja jest aktywna u peera."
+    fi
     if client_paused "$name"; then
         local PAUSED_AT="" PAUSED_REASON=""
         # shellcheck disable=SC1090
         . "$(pause_marker_path "$name")"
         echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
         echo "                   joby i reczne uruchomienia Z etykieta '-L $name' sa pomijane;"
-        echo "                   reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,"
-        echo "                   nie granica bezpieczenstwa). Wznowienie: $0 resume-client $name"
+        if [ "$peerstate" != "DISABLED" ]; then
+            echo "                   reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,"
+            echo "                   nie granica bezpieczenstwa). Wznowienie: $0 resume-client $name"
+        else
+            echo "                   Wznowienie: $0 enable-client $name (zdejmuje obie warstwy)"
+        fi
+        echo "                   Pauza NIE obejmuje retencji: linie delsnaps nie maja '-L' i tna dalej,"
+        echo "                   takze po stronie zrodla. Drabinka GFS ogranicza skutek."
     fi
     echo "Endpoint docelowy: $(endpoint_display)"
     # Legacy display (records that predate U9): the dormant slot, if any.
