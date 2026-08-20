@@ -2477,38 +2477,6 @@ else
     bad "resolve_mode_datasets: fetches, verifies the hash, and resolves the real leaf list" "rc=$rc out=$out"
 fi
 
-# A FAILED fetch must not claim to know why. Found on metropolis 2026-08-20
-# while running a deployment matrix: this path used to test peers/<addr>.conf
-# HERE and call its presence proof that "the join completed", sending the
-# operator to inspect a scope draft. Measured on a pair whose source provably
-# had no manifest and no account -- the COLLECTOR writes that file itself at
-# --pair time and it carries only PEER_SAVED_*, so the discriminator was always
-# true, the "join has not completed" branch was unreachable, and the advice it
-# gave was the same wrong advice it had been added to stop giving.
-#
-# No local fact proves a remote join completed, so the refusal presents both
-# possibilities in the order to check them rather than picking one.
-cat > "$MDS/bin/ssh" <<'EOF'
-#!/bin/bash
-exit 1
-EOF
-chmod +x "$MDS/bin/ssh"
-out=$( PATH="$MDS/bin:$PATH" bash -c "
-    source '$ZFSBACKUP'
-    $mds_env
-    PEER_SAVED_MODE=backup PEER_SAVED_DATASETS=''
-    resolve_mode_datasets
-" 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] \
-   && ! grep -qi 'so the join completed' <<<"$out" \
-   && grep -qi 'CAN TELL THEM APART' <<<"$out" \
-   && grep -qi 'did the JOIN complete' <<<"$out" \
-   && grep -qi 'draft' <<<"$out"; then
-    ok "resolve_mode_datasets: a failed scope fetch names BOTH causes and claims neither"
-else
-    bad "resolve_mode_datasets: a failed scope fetch names BOTH causes and claims neither" "rc=$rc out=$(printf '%s' "$out" | tail -6)"
-fi
-mds_ssh_stub "" ""    # restore the working stub for the cases below
 
 # A no-op for a legacy (--peer-datasets) client: PEER_SAVED_DATASETS is
 # already non-empty, so no ssh call should even happen.
@@ -2576,16 +2544,29 @@ else
 fi
 mds_ssh_stub   # restore for the next case
 
-# Nothing fetchable from the peer. This USED TO BE one case asserting one
-# message; it is two, because until 2026-08-20 the code could not tell them
-# apart and said "--draft-scope" for both. That is the wrong question when the
-# JOIN never completed -- and the join is the common failure, because the
-# one-command form attempts it, prints manual instructions on failure, and then
-# resumes PAST it. An operator was sent to look at --draft-scope on a peer that
-# had never accepted the pairing package at all (measured on metropolis).
+# Nothing fetchable from the peer. This block asserted the wrong thing twice
+# over, and the way it did so is worth keeping.
 #
-# The peer MANIFEST is what separates them: --join writes it on the source and
-# it is copied back here, so its absence means the join, not the draft.
+# It used to be TWO cases: "no manifest -> the JOIN is missing" and "manifest
+# present -> --draft-scope is missing", split by the presence of
+# peers/<addr>.conf HERE. Both passed. Both were green while the code was
+# wrong, because the sandbox could CREATE a state the real system never
+# produces: the collector writes that file itself at --pair time, so on any
+# real host it is always present, the "no manifest" branch was unreachable, and
+# every actual failure got the --draft-scope advice -- the exact wrong advice
+# the split had been added to stop giving.
+#
+# A test can be perfectly correct about a scenario that does not exist. These
+# two were.
+#
+# Measured on metropolis 2026-08-20: a pair whose SOURCE provably had no
+# manifest and no zfsbackup-<label> account still produced "the pairing
+# manifest is here, so the join completed".
+#
+# There is no local fact that proves a remote join completed -- the join runs
+# over there, and nothing comes back until a scope can be read, which is the
+# thing that just failed. So one case now, and it asserts that the refusal
+# names both possibilities and claims neither.
 mds_ssh_noscope() {
     cat > "$MDS/bin/ssh" <<EOF
 #!/bin/bash
@@ -2594,26 +2575,17 @@ EOF
     chmod +x "$MDS/bin/ssh"
 }
 mds_ssh_noscope
-
-# (a) no manifest -> the JOIN is the missing step, and the message must say so
-#     without mentioning --draft-scope as the fix.
 MDS_PEERS="$MDS/peers"; mkdir -p "$MDS_PEERS"
-out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; PEER_STATE_DIR="$MDS_PEERS"        SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"JOIN has not completed"*) true ;; *) false ;; esac; then
-    ok "resolve_mode_datasets: no manifest -> names the JOIN, not --draft-scope"
-else
-    bad "resolve_mode_datasets: no manifest -> names the JOIN, not --draft-scope" "rc=$rc out=$out"
-fi
 
-# (b) manifest present, still no scope -> NOW --draft-scope really is the answer.
-#     The label is peer_label of LOAD_HOST, which is how the code looks it up.
+# With the manifest present -- the state EVERY real host is in -- the refusal
+# must still offer the join as the first thing to check.
 printf 'PEER_JOIN_ROLE="pull"
 ' > "$MDS_PEERS/peer.example.conf"
-out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; PEER_STATE_DIR="$MDS_PEERS"        SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"--draft-scope"*) true ;; *) false ;; esac; then
-    ok "resolve_mode_datasets: manifest present but no scope -> names --draft-scope"
+out=$( PATH="$MDS/bin:$PATH"; eval "$mds_env"; PEER_STATE_DIR="$MDS_PEERS" SCOPE_ROOTS='' SCOPE_ERR='' PEER_SAVED_MODE=backup PEER_SAVED_DATASETS='' resolve_mode_datasets 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ]    && case "$out" in *"did the JOIN complete"*) true ;; *) false ;; esac    && case "$out" in *"draft-scope"*) true ;; *) false ;; esac    && case "$out" in *"so the join completed"*) false ;; *) true ;; esac; then
+    ok "resolve_mode_datasets: a failed fetch names BOTH causes and claims neither"
 else
-    bad "resolve_mode_datasets: manifest present but no scope -> names --draft-scope" "rc=$rc out=$out"
+    bad "resolve_mode_datasets: a failed fetch names BOTH causes and claims neither" "rc=$rc out=$out"
 fi
 rm -f "$MDS_PEERS/peer.example.conf"
 
