@@ -142,7 +142,22 @@ BACKUP_USER=""
 # Extracted by pattern, not line number, from the real deploy.sh -- so this
 # suite tracks the actual shipped code and cannot silently start testing a
 # stale copy if the surrounding file grows.
-eval "$(sed -n '/^PAUSE_STATE_DIR="\${PAUSE_STATE_DIR/,/^# do_revoke_old/p' "$DEPLOY_SRC" | sed '$d')"
+#
+# The end anchor is an EXPLICIT terminator in deploy.sh. It used to be
+# `# do_revoke_old` -- the next comment that happened to follow the family.
+# When the family moved above the phases (2026-08-20) that adjacency vanished
+# and the extraction quietly swallowed the rest of the file, dispatch
+# included, surfacing as `PAUSE_MODE: unbound variable` far from its cause.
+_pause_src=$(sed -n '/^PAUSE_STATE_DIR="\${PAUSE_STATE_DIR/,/^# END --pause\/--resume family/p' "$DEPLOY_SRC" | sed '$d')
+# Over-extraction is exactly what this file could not see before, so name it
+# directly instead of inferring it from whatever breaks downstream: the family
+# is constants and function definitions, and must carry no dispatch of its own.
+case "$_pause_src" in
+    *'if [ "$PAUSE_MODE" -eq 1 ]'*)
+        echo "FATAL: the extraction reached deploy.sh's --pause dispatch, so it took more than the pause/resume family -- fix the end anchor rather than letting the extra code run here" >&2
+        exit 1 ;;
+esac
+eval "$_pause_src"
 if ! declare -F do_resume >/dev/null; then
     echo "FATAL: could not extract the pause/resume functions from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
     exit 1
