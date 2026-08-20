@@ -64,9 +64,21 @@
   Zamiatacz zachowuje swoje zadanie i przestaje wchodzić w poddrzewo, którego
   nie jest właścicielem (`alert_dir_chgrp`, `find -prune`). `test/pairgate` +3,
   w tym kontrakt przez nieobecność gołego `chgrp -R`.
-  **Wymaga jednorazowej naprawy na hostach z istniejącymi relacjami** —
-  `chown root:zfsbackup-<peer> /var/lib/zfs-snapshot-all/relationships/<label>`;
-  po tej zmianie naprawa jest już trwała.
+  **Flota naprawiona 2026-08-20, jednorazowo i trwale.** `chown
+  root:zfsbackup-<peer>` wykonany na pve2 (`pve1`) i pve9 (`pve1`, `pve2`),
+  a trwałość **sprawdzona**: po naprawie uruchomiony prawdziwy `deploy.sh` na
+  obu hostach z nowym kodem i grupa została. Przegląd całej floty (pve0 i pve1
+  z 11.x, pve1/pve2 metropolis, pve9) nie pokazuje już żadnego katalogu bramy
+  ze złą grupą. Nowe relacje wychodzą poprawne same.
+  Przy okazji usunięty osierocony `relationships/pve0` na **11.x pve1** —
+  pusty, bez konta, bez manifestu, bez klucza i bez linii crona, pozostałość po
+  dwuhostowym dowodzie RUX z 2026-08-16, którego rozbiórka pominęła ten katalog
+  (ta sama luka, którą opisuje O13). Jedyne wystąpienia `pve0` w żywym configu
+  produkcyjnym to komentarze, `pair_label` nie występuje tam wcale. Świadomie
+  **bez** `deploy.sh --leave=pve0`: bez manifestu i tak by odmówił, a po drodze
+  wykonałby pełne wdrożenie na produkcyjnym hoście z `vsql2`; usunięte przez
+  `rmdir`, który sam odmówiłby przy niepustym katalogu. Zapis w
+  `/root/orphan-relationships-pve0.<timestamp>/` na tym hoście.
 - **Odmowa bramy przestała udawać awarię wdrożenia — i fałszywy alarm o puli
   zniknął (2026-08-20).** Silnik dostawał wprost `PAIR_DISABLED: relationship
   ... is disabled by administrator`, a raportował „exit 93 — e.g. no 'zfs' in
