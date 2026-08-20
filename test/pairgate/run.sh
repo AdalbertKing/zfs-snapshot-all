@@ -502,6 +502,74 @@ else
     bad "install: a failed commit leaves authorized_keys untouched and no staging file behind" "rc=$rc file=$(cat "$AK") staging=$(ls "$AKD"/lockout.new.* 2>/dev/null)"
 fi
 
+# ---------------------------------------------------------------------------
+# Phase 4's group sweep must not walk into the gate's relationship state.
+#
+# Found live on metropolis 2026-08-20, and this is the root cause under the
+# symptom recorded earlier: `disable-client` kept failing with
+#     zfs-pair-gate: .../relationships/<label>/disabled.new: Permission denied
+# because Phase 4 ran `chgrp -R zfsalert /var/lib/zfs-snapshot-all` -- straight
+# through relationships/, whose directories are deliberately owned
+# root:<that relationship's own account> so the account can create and remove
+# its own marker and no other relationship can reach it.
+#
+# The measured consequence: EVERY deploy.sh run re-broke the hard pause on
+# every relationship on the host, so repairing it by hand held only until the
+# next deploy, self-update or --commit-scope. A blocking mechanism that routine
+# runs silently disarm is worse than an absent one -- the operator believes
+# they have it.
+#
+# Asserted by ownership, not by reading the source: build the real shape, run
+# the real function, and look at what moved.
+# ---------------------------------------------------------------------------
+# The shape that caused it, pinned by absence. Reinstating a bare recursive
+# chgrp over the shared alert directory silently re-arms the bug, and it would
+# do so in a file whose tests otherwise all pass -- nothing else here would
+# notice, because the damage lands on a directory this suite does not own.
+# Comments are stripped first: the fix's own explanation quotes the offending
+# line verbatim, and a contract that cannot tell code from the commentary about
+# the code fires on the very change that satisfies it.
+if grep -vE '^[[:space:]]*#' "$DEPLOY_SRC" | grep -qE 'chgrp -R .*ALERT_(GROUP|SHARED_DIR)'; then
+    bad "install: no bare recursive chgrp over the shared alert dir" \
+        "found 'chgrp -R' on the alert tree -- it walks into relationships/ and disarms every hard pause on the host"
+else
+    ok "install: no bare recursive chgrp over the shared alert dir"
+fi
+
+eval "$(sed -n '/^alert_dir_chgrp() {/,/^}$/p' "$DEPLOY_SRC")"
+if ! declare -F alert_dir_chgrp >/dev/null; then
+    bad "extract alert_dir_chgrp from deploy.sh" "the sed anchors no longer match -- update this suite"
+else
+    SWEEP="$WORK/sweep"
+    mkdir -p "$SWEEP/notify-state" "$SWEEP/relationships/pve1"
+    : > "$SWEEP/alert-queue.log"; : > "$SWEEP/notify-state/state"; : > "$SWEEP/relationships/pve1/disabled"
+    # A group this test can actually chgrp to, without needing root: our own.
+    MYGRP=$(id -g)
+    # Mark the excluded subtree with something distinguishable first. Using the
+    # numeric primary gid for both would prove nothing, so the check is "did the
+    # sweep VISIT it", recorded via mtime of the ownership change.
+    before_rel=$(stat -c '%g' "$SWEEP/relationships/pve1")
+    alert_dir_chgrp "$SWEEP" "$MYGRP" "$SWEEP/relationships" >/dev/null 2>&1
+    after_rel=$(stat -c '%g' "$SWEEP/relationships/pve1")
+    swept=$(find "$SWEEP" -path "$SWEEP/relationships" -prune -o -print | wc -l)
+    pruned=$(find "$SWEEP" -path "$SWEEP/relationships" -prune -o -print | grep -c relationships || true)
+    if [ "$before_rel" = "$after_rel" ] && [ "$pruned" -eq 0 ] && [ "$swept" -ge 4 ]; then
+        ok "install: the alert group sweep covers the alert files and PRUNES relationships/"
+    else
+        bad "install: the alert group sweep covers the alert files and PRUNES relationships/" \
+            "before=$before_rel after=$after_rel swept=$swept relationships_seen=$pruned"
+    fi
+    # And the sweep still does its actual job -- a guard that only excludes is
+    # indistinguishable from a guard that does nothing.
+    if [ "$(stat -c '%g' "$SWEEP/alert-queue.log")" = "$MYGRP" ] \
+       && [ "$(stat -c '%g' "$SWEEP/notify-state/state")" = "$MYGRP" ]; then
+        ok "install: the sweep still regroups the alert files it exists for"
+    else
+        bad "install: the sweep still regroups the alert files it exists for" \
+            "queue=$(stat -c '%g' "$SWEEP/alert-queue.log") state=$(stat -c '%g' "$SWEEP/notify-state/state") want=$MYGRP"
+    fi
+fi
+
 # 7. NEGATIVE -- a malformed public key is refused before the file is touched.
 AK="$AKD/badkey"; printf '%s\n' "$KEY_B" > "$AK"
 sum_before=$(md5sum < "$AK")

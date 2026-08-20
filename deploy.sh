@@ -131,6 +131,36 @@ REPO_DIR="${REPO_DIR:-/root/scripts/zfs-snapshot-all}"
 # mid-file definition ran -- which made every plain deploy.sh invocation die on
 # `ALERT_SHARED_DIR: unbound variable`.
 ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
+# Lives here, beside the directory it sits inside, for the reason the paragraph
+# above already learned the hard way: Phase 4 needs it and Phase 4 runs long
+# before the pair-gate section that used to define it.
+PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+
+# alert_dir_chgrp <dir> <group> <excluded subtree>
+#
+# Phase 4 used to do this with a plain `chgrp -R "$ALERT_GROUP"
+# "$ALERT_SHARED_DIR"`, and that swept straight through the pair-gate's
+# relationship state -- which lives under the same root and is deliberately
+# owned differently: root:<the relationship's own account>, so that account,
+# and only it, can create or remove its disabled marker.
+#
+# The consequence was measured on metropolis 2026-08-20 and it is not small:
+# EVERY deploy.sh run re-broke the hard pause on every relationship on the host.
+# `disable-client` then failed with
+#     zfs-pair-gate: .../relationships/<label>/disabled.new: Permission denied
+# and repairing it by hand held only until the next deploy, self-update or
+# --commit-scope. A relationship-blocking mechanism that any routine run
+# silently disarms is worse than one that is absent, because the operator
+# believes they have it.
+#
+# The sweep keeps its repair job -- old alert files predating the setgid bit
+# still need the group -- and simply stops walking into a subtree it does not
+# own. Prune by path, and prune before -exec, so the excluded directory is
+# neither changed nor descended into.
+alert_dir_chgrp() {
+    local dir="$1" group="$2" excluded="$3"
+    find "$dir" -path "$excluded" -prune -o -exec chgrp "$group" {} +
+}
 
 # The permission set a delegated account needs to run the scripts at all. ONE
 # definition, because it is delegated from two unrelated places -- Phase 8 (this
@@ -3170,7 +3200,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 else
     getent group "$ALERT_GROUP" >/dev/null || { groupadd --system "$ALERT_GROUP" && log "created group $ALERT_GROUP"; }
     mkdir -p "$ALERT_SHARED_DIR/notify-state"
-    chgrp -R "$ALERT_GROUP" "$ALERT_SHARED_DIR"
+    alert_dir_chgrp "$ALERT_SHARED_DIR" "$ALERT_GROUP" "$PAIR_GATE_STATE_DIR"
     # 2775: setgid, so every file created here inherits the group and stays
     # writable by the other account no matter which one created it.
     chmod 2775 "$ALERT_SHARED_DIR" "$ALERT_SHARED_DIR/notify-state"
@@ -4568,7 +4598,10 @@ EOF
 # that does not exist and the relationship fails loudly -- fail-closed, which
 # is the correct direction for this particular file.
 PAIR_GATE_PATH="${PAIR_GATE_PATH:-/usr/local/sbin/zfs-pair-gate}"
-PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+# PAIR_GATE_STATE_DIR is declared far above, next to ALERT_SHARED_DIR: Phase 4's
+# group sweep has to know which subtree to leave alone, and it runs long before
+# this section. Kept as one definition rather than two literals -- the whole
+# point is that the sweep and the gate agree on the same path.
 
 # pair_label_valid <label>
 #
