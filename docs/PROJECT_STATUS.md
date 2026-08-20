@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 810591e74d61df40 -->
+<!-- status-covers-digest: 3660da157bbc7a16 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,28 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`check-snap-age.sh` odmawia pustego wzorca (2026-08-20).** ZAWĘŻENIE KONTRAKTU
+  na pliku ZAMROŻONYM — patrz nota o linii bazowej niżej. Dopasowanie to
+  `[[ "$snapname" == "${PATTERN}"* ]]`, więc pusty wzorzec łapie KAŻDY snapshot
+  na datasecie, także cudzy. Na Proxmoksie to nie jest zbiór teoretyczny: pvesr
+  trzyma własny `__replicate_<job>_<epoch>__` i odświeża go w rytmie replikacji,
+  vzdump zostawia swoje. Zmierzone na żywo na pve2, ten sam dataset, ta sama chwila:
+  `pattern=automated_hourly` → `newest=automated_hourly_2026-08-20_05-37-01 age=3h`,
+  `pattern=` (pusty) → `newest=__replicate_107-0_1787198451__ age=2h`. Czyli pusty
+  wzorzec podał wiek o godzinę MŁODSZY, mierząc cudzy snapshot; gdyby nasza rodzina
+  stanęła całkowicie, taki monitor raportowałby OK tak długo, jak długo chodzi pvesr.
+  Monitor, który nie może się zaczerwienić, jest gorszy niż jego brak — zajmuje
+  miejsce działającego i czyta się jak dowód zdrowia. Nie ma przypadku użycia
+  „pilnuj czegokolwiek": każdy caller nazywa rodzinę, którą posiada, a `gen-cron.sh`
+  tego kształtu nie potrafi nawet wyemitować (`require_field` odrzuca pusty
+  `pattern` wszędzie, gdzie monitor powstaje). Zamknięte dla wywołań RĘCZNYCH,
+  które nagłówek tego skryptu sam każe pisać dla zdalnego scope'u.
+  Wyjście `UNKNOWN` (3), nie WARNING/CRITICAL: żaden snapshot nie został jeszcze
+  zbadany, więc każda odpowiedź o świeżości byłaby zmyślona — a generowana linia
+  crona kieruje `rc>=3` na `notify-fail` jako „monitor BROKEN", czym taki monitor
+  dokładnie jest. Live-proven na pve2 2026-08-20: pusty → rc=3 z komunikatem,
+  właściwy wzorzec → rc=2 CRITICAL bez zmian. Linia bazowa zamrożenia przejęta
+  przez `--refreeze` (brak recenzenta w obecnym reżimie; reset jest widoczny w diffie).
 - **Próg monitora konfrontowany z własną kadencją tieru (2026-08-20).**
   Ostatnia z pięciu dziur gramatyki configu, jedyna wymagająca nowej maszynerii.
   Monitor mierzy wiek najnowszego pasującego snapshotu: zero tuż po runie,
