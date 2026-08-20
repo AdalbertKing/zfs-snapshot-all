@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: eb19351c3e42de9d -->
+<!-- status-covers-digest: 3c308faa5c394e46 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`--grant-remotely` i `--join-remotely` dopisane do pomocy; enrolment z 4 komend na 1 (2026-08-20).**
+  Przemiał przełączników objął `deploy.sh` i `gen-cron.sh`, a **pominął
+  `zfs-backup.sh`** — moje niedopatrzenie. Kryły się tam dwie działające flagi
+  bez wpisu w pomocy, w tym ta, która skraca całe wdrożenie relacji.
+  Domyślna ścieżka to **cztery wykonania** (plan → install, staje na grancie →
+  `--commit-scope` na źródle → install ponownie) i jedno obejrzenie szkicu.
+  To jest projekt, nie niedoróbka: grant jest decyzją strony źródłowej.
+  `--grant-remotely` to jawna, audytowana zgoda na podjęcie jej zdalnie —
+  **jedna komenda zamiast czterech**. Zmierzone na labie, nie przeczytane z kodu:
+  `--source=192.168.28.99:hdd/lab4/src2 --target=hdd/lab4direct --name=lab4-direct
+  --grant-remotely --install --yes` przeszło od zera do `STATE=active`, a md5
+  `ec156c1e6a665a919a85148e5bec56ed` zgodne ze źródłem. Log potwierdza własności,
+  które ta flaga miała trzymać: zakres zbudowany **z linii poleceń** (`1 dataset(s)
+  granted, 0 revoked, 0 held back`), audyt zapisany na źródle, zwykła weryfikacja
+  wykonana po fakcie. **Pierwsze uruchomienie tej ścieżki na żywo.**
+  Ważne, czego to NIE zmienia: cztery poprawki z laba **nie skróciły niczego** —
+  naprawiły to, że komunikat mówi prawdę o brakującym kroku. Redukcja istniała
+  przez cały czas w niewidocznej fladze. Dokładnie ten problem, który opisałem
+  słowami „przełącznik, który działa i którego nie da się znaleźć, jest gorszy
+  niż jego brak" — i przegapiłem go, bo nie przemiotłem tego jednego pliku.
+- **ZNALEZIONE PRZY OKAZJI: pve9 ma inną strefę czasową niż flota.** Narzędzie
+  ostrzegło samo: pve1 `+0200`, pve9 `+0000`. Nazwy snapshotów tworzonych na pve9
+  niosą inny czas niż reszta floty, a `restore --plan` zgłosi to jako rozjazd
+  nazwa↔`creation`. Nie ruszone — to zmiana na hoście, nie w kodzie.
 - **LAB4 na metropolis: łańcuch pve9 → pve2 → pve1 dowiedziony, cztery błędy znalezione i naprawione (2026-08-20).**
   Pierwszy pełny lab na dzisiejszym kodzie. Dane 12 MB przeszły dwa skoki, **md5
   zgodne co do bitu na wszystkich trzech hostach**. Produkcja nietknięta — sprawdzone

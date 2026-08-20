@@ -209,6 +209,27 @@ Usage:
                                     without --install: read-only plan, touches neither host
                                     --install:          enrol (remote --join over SSH), seed,
                                                        verify endpoint, activate
+                                    --join-remotely:   (DEFAULT) create the delegated account
+                                                       on the source over your root-ssh channel
+                                                       instead of printing a package to carry
+                                                       there by hand. --manual-join opts out.
+                                    --grant-remotely:  ALSO commit the scope on the source, so
+                                                       the whole enrolment is ONE command
+                                                       instead of stopping for
+                                                       'deploy.sh --commit-scope' there and
+                                                       being re-run. Off by default: granting
+                                                       is the source's decision, and this is
+                                                       the explicit opt-in to making it from
+                                                       here. What it may NOT do: the scope it
+                                                       commits is built from THIS command line,
+                                                       so it is the requested dataset and never
+                                                       wider; a pre-existing draft that selects
+                                                       something else is refused rather than
+                                                       overwritten; no root channel refuses
+                                                       before anything changes; and the source
+                                                       records GRANTED_REMOTELY_BY. The ordinary
+                                                       fetch+hash+includes verification still
+                                                       runs afterwards and still decides.
   zfs-backup.sh --source=HOST:DATASET --mode=sync [--port=N] [--profile=NAME]
                 [--name=NAME] [--local-user=NAME] [--install] [--yes|-y]
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
