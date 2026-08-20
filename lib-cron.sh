@@ -12,8 +12,13 @@
 #                  line, and a removal path), each of which REWRITES THE WHOLE
 #                  crontab to add or drop one line;
 #   gen-cron.sh    the `# BEGIN/END zfs-backup-managed` block;
-#   zfs-backup.sh  the `# BEGIN/END zfs-backup-host` block, plus its own
-#                  backup/restore around gen-cron.sh --install.
+#   zfs-backup.sh  its own backup/restore around gen-cron.sh --install.
+#
+# The `# BEGIN/END zfs-backup-host` block used to be listed here as
+# zfs-backup.sh's. It never was, in the end: deploy.sh owns it
+# (CRON_HOST_BLOCK), and zfs-backup.sh's copy of the markers existed only for
+# the root-to-account migration verb, which was retired on 2026-08-19. The
+# markers went with it on 2026-08-20; this line lagged both.
 #
 # Two of deploy.sh's lines were not inside any block at all -- loose in the
 # crontab, indistinguishable from something a human put there, protected only

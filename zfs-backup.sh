@@ -652,99 +652,6 @@ propose_backup_target() {
 
 # read_server_conf lives in lib-backup-common.sh since the restore split.
 
-# The 'standard' profile's four templates, values approved by the owner
-# 2026-07-30: retain -H24/-D7/-W4/-M12. Daily/weekly/monthly send_schedule is
-# midnight. No quiesce -- see file header. 'retain=', not 'keep=':
-# gen-cron.sh's 'keep=' auto-derives a -H/-D/... flag from TIER_LETTER, keyed
-# by the CANONICAL tier name (hourly/daily/...) -- these templates are named
-# standard_<tier> to avoid colliding with a host's own hand-maintained
-# hourly/daily/... templates in a DIFFERENT config file, so 'keep=' would fail
-# to resolve a letter for them (found live, REV-20260730-001 fix commit
-# 7ebfbf7). 'retain=' is the raw-flag escape hatch for exactly this case.
-STANDARD_TEMPLATE_NAMES="standard_hourly"
-
-STANDARD_TEMPLATE_standard_hourly='
-[template:standard_hourly]
-	send_schedule  = 1 * * * *
-	prefix         = automated_hourly_
-	notify_word    = backup
-'
-
-# ---- ONE send cadence, ONE ladder (REV-20260801-016 F2)
-#
-# An earlier version of this profile kept four named send tiers -- hourly,
-# daily, weekly, monthly -- alongside the GFS ladder. That combined both models
-# and gave the benefit of neither. `delsnaps.sh -G` buckets snapshots purely by
-# CREATION TIME and never looks at the prefix, so the daily/weekly/monthly sends
-# defined no retention tier at all: they only made extra snapshots and extra
-# transfers, and they all fired at 00:00 against the same source and target
-# while the hourly job followed a minute later.
-#
-# So there is one send cadence. The ladder turns those hourly snapshots into
-# 24 hourly / 7 daily / 4 weekly / 12 monthly buckets, which is what GFS is for.
-#
-# Every keep_* tier therefore matches 'automated_hourly' -- the only prefix that
-# now exists -- and only the finest tier carries monitor thresholds. Giving
-# keep_daily a monitor on 'automated_daily' would watch a pattern nothing ever
-# creates and sit at CRITICAL forever.
-#
-# ---- keep_* : retention and staleness, deliberately SEPARATE from standard_*
-#
-# gen-cron.sh accepts gfs= only in a [prune:] section, and a [dataset:] prunes
-# exactly when its tiers resolve a prune_schedule. So a single template family
-# cannot express "send here, keep by a GFS ladder over there": the dataset would
-# prune flat per tier AND the ladder would prune the same snapshots, on the same
-# schedule, and the two race.
-#
-# Hence two families. standard_* carries send_schedule/prefix and nothing else;
-# keep_* carries prune_schedule/pattern/retain plus the staleness thresholds.
-#
-# The monitors live HERE, not on standard_*, and that is forced rather than
-# chosen: in gen-cron.sh the [dataset:] monitor block is nested inside the
-# prune_schedule branch, so a dataset that does not prune is not monitored
-# either. Riding the [prune:] section makes each check recursive over the whole
-# client subtree -- one alert per tier per client instead of one per dataset.
-# That is a consolidation, not a loss: check-snap-age.sh -R names the offending
-# dataset in the output the alert carries.
-KEEP_TEMPLATE_NAMES="keep_hourly keep_daily keep_weekly keep_monthly"
-
-KEEP_TEMPLATE_keep_hourly='
-[template:keep_hourly]
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -H24
-	notify_word    = prune
-	monitor_warn   = 90m
-	monitor_crit   = 150m
-'
-KEEP_TEMPLATE_keep_daily='
-[template:keep_daily]
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -D7
-	notify_word    = prune
-'
-KEEP_TEMPLATE_keep_weekly='
-[template:keep_weekly]
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -W4
-	notify_word    = prune
-'
-KEEP_TEMPLATE_keep_monthly='
-[template:keep_monthly]
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -M12
-	notify_word    = prune
-'
-
-# REV-20260730-003 F8 (review 2): checks EACH template independently and
-# appends only what is actually missing -- a file with standard_hourly but
-# missing standard_daily/weekly/monthly (hand-edited, or from an older
-# version of this script) was previously considered "complete" because only
-# standard_hourly was ever checked, AND a single-blob append would have
-# duplicated whatever templates were already present.
 # ---- the profile runtime (Slice B1) -----------------------------------------
 #
 # Until B1 the policy above lived in shell variables in this file. It now lives
@@ -4877,55 +4784,6 @@ $gcerr"
     log "source retention added to $missing relationship(s); all other policy preserved."
 }
 
-# ------------------------------------------------------------------------------
-# Host-level jobs: a SECOND tool-owned block in root's crontab.
-#
-# REV-20260801-020 F2. Some generated lines are host-level rather than
-# collector-level -- alert-digest.sh above all, which is deliberately one per
-# host and is never provisioned to a delegated account. When the collector block
-# moves to an account those lines have nowhere to go. The first version of this
-# migration parked them in root's crontab as ordinary unmanaged lines, and the
-# reviewer's objection is exact: that splits one deployment between something
-# the tool owns and something a human has to remember forever. A later
-# migration would duplicate them, remove-client could not tell whether they
-# belonged to it, and no preview could honestly show the whole change.
-#
-# So they get their own marked block, owned by this tool, rewritten wholesale
-# and idempotently -- the same contract gen-cron.sh has with its own block, and
-# for the same reason.
-HOST_NAME='zfs-backup-host'
-HOST_TAIL='(host-level jobs kept by zfs-backup.sh -- do not hand-edit)'
-HOST_BEGIN="# BEGIN $HOST_NAME $HOST_TAIL"
-HOST_END="# END $HOST_NAME"
-
-# Replace (or insert, or delete) the host block inside a crontab held in a file.
-# Empty <lines file> removes the block, which is what makes repeated migrations
-# converge instead of accumulating.
-set_host_block() {   # <crontab file> <lines file>
-    local cron="$1" lines="$2" tmp
-    tmp=$(mktemp) || die "mktemp failed"
-    # MERGE, not replace -- REV-20260802-034 F1.
-    #
-    # This handed `lines` to cron_block_render as the COMPLETE new body, which
-    # was right while this script was the block's only requester. Since
-    # 2026-08-02 deploy.sh puts the root updater, the capacity check and the
-    # account's auto-pull line in the same block, while `lines` here holds only
-    # what this migration rescued out of the managed block (today: the digest).
-    # Replacing from that partial inventory deleted the other three -- silently,
-    # while reporting a healthy migration.
-    #
-    # So the rule a shared block needs: a requester adds its own lines and never
-    # speaks for the rest of the body. An empty `lines` means this migration has
-    # nothing to add, NOT that the block should go.
-    #
-    # Rendering still comes from lib-cron.sh, so "keep everything else byte for
-    # byte" has one definition. The awk this originally replaced was correct,
-    # and that was the point: a second correct implementation is still a second
-    # thing to keep correct.
-    cron_block_merge_render "$cron" "$HOST_NAME" "$lines" "$tmp" "$HOST_TAIL" \
-        || die "${CRON_ERR:-could not render the $HOST_NAME block} -- nothing has been changed"
-    mv -f "$tmp" "$cron"
-}
 
 # ------------------------------------------------------------------------------
 # Capability probes. Read-only, and each one answers for the ACCOUNT, not for
@@ -4945,48 +4803,6 @@ config_datasets() {   # <config file>
         | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u
 }
 
-# ------------------------------------------------------------------------------
-# WHAT THE JOBS ACTUALLY NEED (REV-20260801-026)
-#
-# The first version probed one fixed set -- snapshot,destroy,hold,release,mount --
-# against every dataset a config mentioned. That is neither necessary nor
-# sufficient, and pve2 showed both halves:
-#
-#   * NOT SUFFICIENT. A receive target needs receive/create/rollback/canmount,
-#     none of which were probed. An account with the five would pass preflight
-#     and then fail at 04:00 on `cannot receive: permission denied`.
-#   * NOT NECESSARY. A `[prune:]` carrying `prune = no` is a MONITOR line; it
-#     destroys nothing and needs no delegation at all. Those datasets were
-#     reported as gaps on pve2, sending the operator to widen a grant for a job
-#     that only reads.
-#
-# So the capabilities are derived from the RENDERED BLOCK -- the actual command
-# lines the account would run -- rather than from a section type. That is the
-# only description of the work that cannot drift from it, because it IS it.
-#
-# Remote scopes are identified exactly as snapsend.sh identifies them, and
-# deliberately produce NO local requirement: what they need is ssh and a grant
-# on the far side, which is a different question this verb does not answer.
-
-# Flags that consume the NEXT token. Everything else that starts with '-' is
-# boolean or glued (-R, -G, -B, -H24, -d30), and its following quoted token is a
-# positional argument, not a value. Getting this list wrong makes a dataset be
-# read as a flag value or vice versa -- so it is stated once, here, and pinned
-# by a test against what gen-cron.sh can emit.
-QCAP_VALUE_FLAGS=" -m -v -q -o -x -c -K -p -k -O -b -T -P -i -j "
-
-# Positional (non-flag, non-flag-value) quoted arguments of one command, in
-# order, one per line.
-job_positionals() {   # <command string>
-    printf '%s\n' "$1" | tr ' ' '\n' | awk -v vf="$QCAP_VALUE_FLAGS" '
-        function isval(t) { return index(vf, " " t " ") > 0 }
-        {
-            tok = $0
-            if (skip) { skip = 0; next }
-            if (tok ~ /^-/) { if (isval(tok)) skip = 1; next }
-            if (tok ~ /^".*"$/) { gsub(/^"|"$/, "", tok); print tok }
-        }'
-}
 
 
 
