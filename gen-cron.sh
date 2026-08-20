@@ -75,6 +75,20 @@ set -o pipefail
 #       monitor_crit     = <duration>      # matching 'pattern' that trips WARN/CRIT. Both
 #                                          # must be set together, or neither. Omit both to
 #                                          # not monitor this tier. Requires 'pattern' too.
+#                                          # Where the SAME tier also sends,
+#                                          # monitor_warn must be LONGER than
+#                                          # that tier's own longest gap
+#                                          # between runs -- gen-cron walks a
+#                                          # real calendar over send_schedule
+#                                          # to find it, so weekly is 7 days,
+#                                          # monthly is 31 and Mon-Fri is 72
+#                                          # hours. A threshold at or below
+#                                          # that alarms on a healthy job every
+#                                          # cycle and never on a fault; it is
+#                                          # refused. Not checked where the
+#                                          # cadence is not in this file (a
+#                                          # [prune:] scope, or a dataset tier
+#                                          # that only receives).
 #       monitor_schedule = <5-field cron>  # default: */15 * * * * if monitor_warn/crit are set
 #
 #   [dataset:<zfs/path>]                  # a dataset you own end-to-end
@@ -1209,6 +1223,139 @@ lint_cron_schedule() {
                                                                         || die "$ctx: $field = '$spec' -- day-of-week field '${f[4]}' is not valid (0-7 where both 0 and 7 are Sunday, or sun..sat, with * , - and / )"
 }
 
+# ---------------------------------------------------------------------------
+# How long a schedule can legitimately stay silent.
+#
+# A staleness monitor measures the age of the newest matching snapshot. Right
+# after a run that age is zero; just before the next run it equals the gap
+# between two consecutive fires. So a monitor_warn no larger than the LONGEST
+# such gap alarms on a perfectly healthy job, every cycle, forever. That is not
+# hypothetical: a */15 monitor against thresholds sized for the wrong cadence
+# produced 384 mails in one night on this estate, and the same shape has now
+# been hit three separate times. Both numbers are in gen-cron's hand at
+# generate time, so it is the right place to refuse.
+#
+# _cron_name2num NAME NAMES_ALTERNATION -- three-letter month/day names to their
+# numbers, passthrough for anything already numeric.
+_cron_name2num() {
+    local v="$1" names="$2" i=1 n
+    [ -n "$names" ] || { printf '%s' "$v"; return 0; }
+    case "$v" in ''|*[!0-9]*) ;; *) printf '%s' "$v"; return 0 ;; esac
+    local -a list=()
+    IFS='|' read -ra list <<< "$names"
+    # months are 1-based, weekdays 0-based; the alternation's own order decides,
+    # which is why the caller passes the list in calendar order.
+    [ "${list[0]}" = "sun" ] && i=0
+    for n in ${list[@]+"${list[@]}"}; do
+        [ "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" = "$n" ] && { printf '%s' "$i"; return 0; }
+        i=$((i + 1))
+    done
+    printf '%s' "$v"
+}
+# _cron_expand FIELD LO HI NAMES -- every value the field matches, one per line.
+# Assumes lint_cron_schedule already accepted the field.
+_cron_expand() {
+    local f="$1" lo="$2" hi="$3" names="$4" item base step a b i
+    local -a items=()
+    IFS=',' read -ra items <<< "$f"
+    for item in ${items[@]+"${items[@]}"}; do
+        base="${item%%/*}"; step=1
+        [ "$base" != "$item" ] && step="${item#*/}"
+        if [ "$base" = '*' ]; then
+            a="$lo"; b="$hi"
+        elif [ "${base#*-}" != "$base" ]; then
+            a="$(_cron_name2num "${base%%-*}" "$names")"
+            b="$(_cron_name2num "${base#*-}" "$names")"
+        else
+            a="$(_cron_name2num "$base" "$names")"
+            # vixie reads "N/step" as "N-max/step", not as the single value N.
+            if [ "$step" -gt 1 ]; then b="$hi"; else b="$a"; fi
+        fi
+        [ "$a" -le "$b" ] || continue
+        for ((i = a; i <= b; i += step)); do printf '%s\n' "$i"; done
+    done
+}
+# cron_max_gap_minutes SPEC -- the longest gap between two consecutive fires,
+# observed over a fixed two-year window (2028-2029, so both a leap February and
+# an ordinary one are in it). Echoes nothing when the window holds fewer than
+# two fires.
+#
+# An OBSERVED gap is a real gap, so this is a lower bound on the true worst
+# case even where the window cannot see the whole cycle (a Feb-29-only schedule
+# fires once here and is therefore skipped rather than guessed at). Refusing
+# only on a lower bound is what keeps the check free of false rejections.
+#
+# The calendar is walked arithmetically rather than by calling date(1) 731
+# times: on the hosts that would be 731 processes per monitored tier, and this
+# runs inside a generator that is expected to be instant.
+declare -A CRON_GAP_CACHE=()
+cron_max_gap_minutes() {
+    local spec="$1"
+    if [ -n "${CRON_GAP_CACHE[$spec]+x}" ]; then printf '%s' "${CRON_GAP_CACHE[$spec]}"; return 0; fi
+    local -a f=(); read -ra f <<< "$spec"
+
+    local -A mset=() hset=() domset=() monset=() dowset=()
+    local v
+    while read -r v; do [ -n "$v" ] && mset[$v]=1; done < <(_cron_expand "${f[0]}" 0 59 "")
+    while read -r v; do [ -n "$v" ] && hset[$v]=1; done < <(_cron_expand "${f[1]}" 0 23 "")
+    while read -r v; do [ -n "$v" ] && domset[$v]=1; done < <(_cron_expand "${f[2]}" 1 31 "")
+    while read -r v; do [ -n "$v" ] && monset[$v]=1; done < <(_cron_expand "${f[3]}" 1 12 "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec")
+    while read -r v; do [ -n "$v" ] && dowset[$((v % 7))]=1; done < <(_cron_expand "${f[4]}" 0 7 "sun|mon|tue|wed|thu|fri|sat")
+
+    # Fire times inside a matching day, ascending by construction.
+    local -a fires=(); local h m
+    for ((h = 0; h < 24; h++)); do
+        [ -n "${hset[$h]+x}" ] || continue
+        for ((m = 0; m < 60; m++)); do
+            [ -n "${mset[$m]+x}" ] || continue
+            fires+=($((h * 60 + m)))
+        done
+    done
+    [ "${#fires[@]}" -gt 0 ] || { CRON_GAP_CACHE[$spec]=""; return 0; }
+
+    # vixie's day rule: when BOTH day-of-month and day-of-week are restricted,
+    # a day matches if EITHER does. Otherwise both must.
+    local dom_r=1 dow_r=1
+    [ "${f[2]}" = '*' ] && dom_r=0
+    [ "${f[4]}" = '*' ] && dow_r=0
+
+    local -a mlen=(0 31 29 31 30 31 30 31 31 30 31 30 31)   # 2028 is a leap year
+    local y mo d dow=6 dayidx=0 prev_day=-1 total=0 gap max=0
+    for y in 2028 2029; do
+        [ "$y" = 2029 ] && mlen[2]=28
+        for ((mo = 1; mo <= 12; mo++)); do
+            for ((d = 1; d <= mlen[mo]; d++)); do
+                local hit=0
+                if [ -n "${monset[$mo]+x}" ]; then
+                    if [ "$dom_r" -eq 1 ] && [ "$dow_r" -eq 1 ]; then
+                        { [ -n "${domset[$d]+x}" ] || [ -n "${dowset[$dow]+x}" ]; } && hit=1
+                    else
+                        { [ -z "${domset[$d]+x}" ] || [ -z "${dowset[$dow]+x}" ]; } || hit=1
+                    fi
+                fi
+                if [ "$hit" -eq 1 ]; then
+                    if [ "$prev_day" -ge 0 ]; then
+                        gap=$(( (dayidx - prev_day) * 1440 - fires[${#fires[@]}-1] + fires[0] ))
+                        [ "$gap" -gt "$max" ] && max="$gap"
+                    fi
+                    prev_day="$dayidx"
+                    total=$((total + ${#fires[@]}))
+                fi
+                dow=$(( (dow + 1) % 7 )); dayidx=$((dayidx + 1))
+            done
+        done
+    done
+    if [ "$total" -lt 2 ]; then CRON_GAP_CACHE[$spec]=""; printf ''; return 0; fi
+    # Gaps inside one day, on any matching day they are the same.
+    local i
+    for ((i = 1; i < ${#fires[@]}; i++)); do
+        gap=$(( fires[i] - fires[i-1] ))
+        [ "$gap" -gt "$max" ] && max="$gap"
+    done
+    CRON_GAP_CACHE[$spec]="$max"
+    printf '%s' "$max"
+}
+
 # duration_seconds STR CTX -- converts "<N>m/h/d" (same shorthand check-snap-age.sh
 # itself parses) to seconds, or dies with CTX prefixed. Validated here too so a
 # malformed threshold fails at generate time, not silently at 3am in cron.log.
@@ -1445,14 +1592,16 @@ build_dataset() {
         ntier="$(resolve_field tier_label "$ds" "$tmpl" "")" || ntier="$tier"
 
         # ---- send ----
-        # Captured for the create/prune agreement check below. Reset PER TIER:
-        # 'prefix' is declared inside the send branch, so a tier that does not
-        # send would otherwise still see the previous tier's value and be
-        # checked against a family it never creates.
-        local tier_created_prefix="" tier_creates=0
+        # Captured for the create/prune agreement check and the monitor-vs-
+        # cadence check below. Reset PER TIER: 'prefix' and 'send_schedule' are
+        # both declared inside the send branch, so a tier that does not send
+        # would otherwise still see the previous tier's values and be checked
+        # against a family it never creates, at a cadence it never runs.
+        local tier_created_prefix="" tier_creates=0 tier_send_schedule=""
         local send_schedule
         if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$send_schedule" "[dataset:$ds_path] tier=$tier" send_schedule
+            tier_send_schedule="$send_schedule"
             local dst src prefix flags label raw_notify word notify direction remote_spec
             dst="$(resolve_field dst "$ds" "$tmpl" defaults)" || dst=""
             src="$(resolve_field src "$ds" "$tmpl" defaults)" || src=""
@@ -1570,6 +1719,31 @@ build_dataset() {
 
             # ---- monitor (rides this same pattern and the same scope) ----
             if resolve_monitor "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier"; then
+                # A threshold no larger than this tier's own longest silence
+                # alarms on a healthy job, every cycle, forever. Only checkable
+                # where the CADENCE is known, which is exactly here: this tier
+                # both sends and monitors, so the schedule that refreshes the
+                # snapshot and the threshold that judges its age are the same
+                # config's business.
+                #
+                # Deliberately NOT extended to [prune:] sections or to a
+                # dataset tier with no send_schedule. There the family arrives
+                # from upstream -- another host's push, a pvesr chain -- and
+                # its cadence is not in this file. Guessing it is how a monitor
+                # that is correctly sized for a two-hop chain would get
+                # refused.
+                #
+                # The comparison is against a LOWER bound on the true worst
+                # gap (see cron_max_gap_minutes), and it is strict: equality
+                # already means the alarm fires exactly as the next run is due.
+                if [ -n "$tier_send_schedule" ]; then
+                    local gap_min warn_sec
+                    gap_min="$(cron_max_gap_minutes "$tier_send_schedule")"
+                    if [ -n "$gap_min" ]; then
+                        warn_sec="$(duration_seconds "$MONITOR_WARN" "[dataset:$ds_path] tier=$tier: monitor_warn")"
+                        [ "$warn_sec" -gt "$((gap_min * 60))" ] || die "[dataset:$ds_path] tier=$tier: monitor_warn ($MONITOR_WARN) is not longer than this tier's own longest gap between runs (${gap_min}m, from send_schedule '$tier_send_schedule') -- a healthy job reaches exactly that age just before every run, so this monitor would alert on every cycle and never on a real fault. Raise monitor_warn above ${gap_min}m with room for the run itself, or take the schedule down to the cadence the threshold assumes."
+                    fi
+                fi
                 local mnotify mbroken mwarntext
                 mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
                 mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"

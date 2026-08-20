@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2e76b7c1db2aa6dd -->
+<!-- status-covers-digest: 810591e74d61df40 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Próg monitora konfrontowany z własną kadencją tieru (2026-08-20).**
+  Ostatnia z pięciu dziur gramatyki configu, jedyna wymagająca nowej maszynerii.
+  Monitor mierzy wiek najnowszego pasującego snapshotu: zero tuż po runie,
+  a tuż przed następnym — dokładnie przerwę między runami. Więc `monitor_warn`
+  nie większy niż najdłuższa przerwa alarmuje na **zdrowym** jobie co cykl i nigdy
+  na prawdziwej awarii. Tier dobowy z `monitor_warn = 90m` przy `monitor_schedule`
+  `*/15` to ~76 maili dziennie na dataset — to nie prognoza, to incydent
+  384-maili-na-noc, trafiony na tej infrastrukturze trzy razy. Obie liczby są
+  w ręku generatora, więc odmowa idzie tutaj.
+  Maksymalna przerwa liczona przez przejście PRAWDZIWEGO kalendarza (okno
+  2028-2029, więc luty przestępny i zwykły), arytmetycznie, bez `date(1)` —
+  731 procesów na tier byłoby nie do przyjęcia w generatorze, który ma być
+  natychmiastowy; wynik cache'owany per wyrażenie. Dzięki temu weekly to 7 dni,
+  monthly 31 (najdłuższy miesiąc, nie średnia), a `* * * * 1-5` to 72 h przez
+  weekend — wartości, których naiwne „popatrz na pole, które wygląda na interwał"
+  nie daje. Porównanie jest z DOLNYM ograniczeniem prawdziwej najgorszej przerwy
+  (zaobserwowana przerwa jest przerwą rzeczywistą), co gwarantuje brak fałszywych
+  odmów; harmonogram o mniej niż dwóch odpaleniach w oknie (np. `0 0 29 2 *`)
+  jest pomijany, nie zgadywany. Sprawdzane WYŁĄCZNIE tam, gdzie ten sam tier
+  wysyła i monitoruje — `[prune:]` i dataset bez `send_schedule` pilnują rodziny
+  przychodzącej skądinąd i ich kadencji w tym pliku nie ma.
+  Zasięg: 6 produkcyjnych configów v4 + 4 przykłady bez zmian; kontrola pozytywna
+  — `jobs.pve1.v4.conf` z `monitor_warn` obniżonym z 30h do 20h jest odrzucany.
+  Fixture'y: `test/negative/monitor-below-cadence`, golden `test/fixtures/monitor-cadence-ok`.
 - **Pola harmonogramu walidowane składniowo (2026-08-20).**
   `send_schedule`, `prune_schedule`, `monitor_schedule` i `schedule`
   w `[prune-bookmarks:]` szły dotąd do crontaba niesprawdzone. `send_schedule = 0 2 *`
