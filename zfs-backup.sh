@@ -2960,6 +2960,19 @@ cmd_local_backup() {
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
+    # read_server_conf UNCONDITIONALLY resets LOCAL_USER="" -- before it even
+    # checks whether server.conf is readable -- so the account chosen above has
+    # to be put back, exactly as cmd_activate_client and cmd_remove_client
+    # already do after their own calls. Without this the flag parsed cleanly,
+    # the variable was set, and it was gone again a hundred lines later.
+    #
+    # Measured, not deduced: probes on pve9 read LOCAL_USER=[zfsbackup] at the
+    # assignment and LOCAL_USER=[PUSTE] with cron_target_user=[root] just before
+    # the seed. Everything in between only READ the variable. It took a probe
+    # either side of the gap to see that the loader was the writer -- and the
+    # two remote paths carry a comment saying so, which is how the same trap was
+    # already known and still caught a third caller.
+    LOCAL_USER="$local_user"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
