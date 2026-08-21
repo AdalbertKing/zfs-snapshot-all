@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 274baf7ec76e59cee3bfea961486c11aa485517f -->
-<!-- frozen: snapget.sh 100755 5de207de47e98d2a5b1de797d61294a8c2a9c348 -->
+<!-- frozen: snapget.sh 100755 19982a35c65a45576d4000a840925a534831ae29 -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
 <!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
@@ -65,6 +65,15 @@ Owner-authorized refreezes:
   this honestly -- enumerating leaves at activation freezes membership, which
   the owner rejected; under -e the family IS the membership, so the engine has
   to be the one that says "no family here means not a member".
+  Refined in the same authorization after pass 6 measured the first cut: the
+  REQUESTED root under -R is a subtree designator and may itself be
+  scaffolding (the chain root's family lives only in its descendants), so
+  under -R -e ANY member with no family is skipped, and a new aggregate guard
+  fails the run only when NOTHING in the whole expansion had a family --
+  "success" must never report an adoption that never happened. The first cut
+  also planted its membership flag in the quiesce loop instead of the
+  transfer loop (same iterator spelling, two screens apart) -- caught by the
+  live campaign, not by any suite, and worth recording for the next surgeon.
 
 - **2026-08-17** -- `delsnaps.sh`: failure-cause-specific destroy hints
   (lab3 campaign, owner direction "napraw błędy"). The unconditional

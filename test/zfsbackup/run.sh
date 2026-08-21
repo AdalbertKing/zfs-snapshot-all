@@ -6211,12 +6211,15 @@ for fn in cmd_seed cmd_final_catchup; do
 done
 
 # 67e. the engine half (owner-authorized unfreeze, snapget v2.70): an
-#      -R-expanded child with no matching family is scaffolding under -e --
-#      skipped with a log, never a failure -- while a REQUESTED root with
-#      nothing to adopt stays the hard error. Source-grep of the frozen file;
-#      the live proof is the chain's R2 running green.
+#      under -R -e ANY member with no matching family (the recv -p path
+#      containers, and equally a bare root whose family lives in its
+#      descendants) is scaffolding -- skipped with a log, never a failure --
+#      and an aggregate guard fails the run only when NOTHING in the whole
+#      expansion had a family. A plainly named dataset (no -R) keeps the hard
+#      error. Source-grep of the frozen file; the live proof is the chain's
+#      R2 running green.
 SG="$(dirname "$ZFSBACKUP")/snapget.sh"
-if grep -q 'REQUESTED_ROOTS' "$SG"    && grep -q 'scaffolding, skipped' "$SG"    && grep -q 'log 0 "No source snapshots found"' "$SG"; then
+if grep -q 'scaffolding under -R -e, skipped' "$SG"    && grep -q 'ADOPT_SKIPPED' "$SG"    && grep -q 'No matching family anywhere under the requested root' "$SG"    && grep -q 'log 0 "No source snapshots found"' "$SG"; then
     ok "67e: snapget skips family-less expanded children under -e, roots still fail hard"
 else
     bad "67e: snapget skips family-less expanded children under -e, roots still fail hard"         "$(grep -c 'scaffolding, skipped' "$SG") skip / $(grep -c 'REQUESTED_ROOTS' "$SG") roots"
