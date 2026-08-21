@@ -69,6 +69,37 @@ ma kontrakt „bez `--install`: planuje i pokazuje, nie instaluje nic", i konto
 uniksowe nie jest niczym. Na runnerze linuksowym mój własny test założyłby
 prawdziwego użytkownika komendą, która z definicji nie zmienia hosta.
 
+**I dwie przyczyny, które wyszły dopiero na żywo, mimo zielonego CI.**
+
+Pierwsza wersja przeszła wszystkie testy i **nie działała na hoście**: flaga się
+parsowała, zmienna ustawiała, blok i tak lądował u roota. CI było zielone, bo
+suita woła funkcję i sprawdza odmowy, a nie to, do czyjego crontaba trafia
+prawdziwa instalacja.
+
+`read_server_conf()` ustawia `LOCAL_USER=""` **bezwarunkowo** — zanim jeszcze
+sprawdzi, czy `server.conf` da się odczytać — a `cmd_local_backup` woła ją, żeby
+rozwiązać `CRON_CONFIG`. Wszystko między przypisaniem a użyciem tylko **czytało**
+tę zmienną, więc grep po przypisaniach nie znajdował nic. Widać to dopiero
+z sondą po obu stronach luki:
+
+```
+SONDA-0  LOCAL_USER=[zfsbackup]                       <- przy przypisaniu
+SONDA-2  LOCAL_USER=[PUSTE]  cron_target_user=[root]  <- przed seedem
+```
+
+Pułapka **była już znana**: dwie ścieżki zdalne noszą komentarz „read_server_conf
+just reset LOCAL_USER, so resolve it" i odtwarzają wartość po swoim wywołaniu.
+Znana, udokumentowana w dwóch miejscach — i mimo to złapała trzeciego wołającego.
+To argument, żeby ładowarka nie czyściła po cichu stanu, którego nie jest
+właścicielem, ale to zmiana szersza niż ta poprawka.
+
+Druga wyszła dopiero, gdy pierwsza zadziałała: kandydat configu to `mktemp`,
+czyli `0600`, a renderuje go **konto**, nie root. Nieczytelny plik wychodził jako
+`no sections found` — czyli jak zepsuty config, a nie jak problem uprawnień;
+`Permission denied` było linijkę wyżej i łatwo je przeoczyć. Kandydat dostaje
+`0644`, tak jak zainstalowany config: to opis datasetów i harmonogramów, nigdy
+sekret, a konto musi go czytać przy każdym przebiegu.
+
 Rozstrzygnięte tak: pod `--install` konto powstaje, przy planie **odmowa**.
 Nie dlatego, że tak bezpieczniej, tylko dlatego, że plan nie miałby czego
 pokazać — `gen-cron` wypieka ścieżki z kopii, która go uruchamia, więc podgląd
