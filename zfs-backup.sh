@@ -2139,9 +2139,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     if [ "$sync_mode" -eq 1 ]; then
         local pds
         for pds in $PEER_SAVED_DATASETS; do
-            if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
-                   "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot -d 1 -o name -- '$pds'" 2>/dev/null \
-                 | grep -q '@automated_'; then
+            if source_family_exists "$pds"; then
                 passive_ds+=("$pds")
                 log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
             fi
@@ -3950,6 +3948,25 @@ is_recursive_root() {   # <dataset> -> 0 yes
     return 1
 }
 
+# The family probe for a dataset this relationship touches: does ANY dataset
+# in its scope already carry an automated_* snapshot? Depth follows the
+# recursion contract, and that is the point (LAB6-F4 round two, caught by the
+# clean pass itself): for a RECURSIVE root the family may live only on
+# DESCENDANTS -- the measured chain shape, where R3 stamps tree/child deep
+# inside and the chain root itself is never snapshotted -- so a -d 1 probe of
+# the root read "fresh" and the seed went active against a middle that was
+# very much owned, recursively re-stamping all six datasets. A -d 1 probe
+# stays correct for an enumerated dataset, whose children are separate list
+# entries probed on their own. ONE probe for the seed, the catch-up and the
+# emit-time passivity decision -- three copies of it would drift exactly like
+# everything else this campaign measured.
+source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
+    local depth='-d 1'
+    is_recursive_root "$1" && depth='-r'
+    load_ssh_opts
+    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot $depth -o name -- '$1'" 2>/dev/null | grep -q '@automated_'
+}
+
 # ONE CONFIG = ONE ACCOUNT (LAB6-F2). A config file renders WHOLE into the
 # target account's crontab -- gen-cron has no per-section account filter, and
 # that is the single-writer design, not an omission. So a file that already
@@ -4321,7 +4338,7 @@ cmd_seed() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
-        if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}"                "zfs list -H -t snapshot -d 1 -o name -- '$ds'" 2>/dev/null | grep -q '@automated_'; then
+        if source_family_exists "$ds"; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
@@ -4447,7 +4464,7 @@ cmd_final_catchup() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
-        if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}"                "zfs list -H -t snapshot -d 1 -o name -- '$ds'" 2>/dev/null | grep -q '@automated_'; then
+        if source_family_exists "$ds"; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
