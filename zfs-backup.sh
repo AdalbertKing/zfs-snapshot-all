@@ -182,10 +182,17 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh --source=DATASET [--target=DATASET] [--profile=NAME] [--config=FILE] [--install] [--yes|-y]
+  zfs-backup.sh --source=DATASET [--target=DATASET] [--profile=NAME] [--config=FILE]
+                [--local-user=NAME] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
                                     --target omitted:  proposed (server.conf default, else the pool layout)
                                                        and shown; a GUESSED target will not install under --yes
+                                    --local-user:      account these jobs run as; omitted means root.
+                                                       Same flag and same default as the remote form --
+                                                       the account is a per-deployment decision, never a
+                                                       host-wide setting. Created if missing, delegated on
+                                                       every source AND on the target, and the block is
+                                                       installed into ITS crontab.
                                     without --install: plans and previews, installs nothing
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
@@ -2807,6 +2814,7 @@ cmd_local_backup() {
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
     local do_install=0 assume_yes=0
+    local local_user="" local_user_given=0
     local -a source_flags=()
     for a in "$@"; do
         case "$a" in
@@ -2817,10 +2825,65 @@ cmd_local_backup() {
             --plan)      do_install=0 ;;   # explicit form of the default
             --install)   do_install=1 ;;
             --yes|-y)    assume_yes=1 ;;
+            # Who runs these jobs. Same flag, same grammar and the same default
+            # as add-client, because it is the same question -- a LOCAL backup
+            # was the one shape that could not answer it, and only because this
+            # parser refused the word. Everything underneath was already
+            # account-aware: cron_target_user, crontab_for_target,
+            # assert_config_readable_by_target and atomic_replace_and_install
+            # all key off LOCAL_USER, and gencron_as_target runs the ACCOUNT's
+            # own checkout so the emitted lines carry its paths. Measured on
+            # pve9 2026-08-20: `setup-server --local-user=zfsbackup` created the
+            # account and the block still landed in root's crontab, because
+            # nothing here ever set LOCAL_USER.
+            --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
             *) die "local-backup: unknown option $a" ;;
         esac
     done
     [ "${#source_flags[@]}" -gt 0 ] || die "local-backup: --source=<dataset>[,<dataset>...] is required (the dataset(s) to back up)"
+
+    # The account decision, resolved exactly as add-client resolves it: the flag
+    # or root, never a host-wide setting. setup-server deliberately records no
+    # account -- "who runs a relationship's jobs is decided per-relationship and
+    # travels with it" -- and a local backup is not an exception to that, it was
+    # simply left out of it.
+    #
+    # LOCAL_USER is a global on purpose: cron_target_user reads it, and every
+    # account-aware helper below reads cron_target_user. Setting it here is what
+    # makes the whole existing path point at the account instead of at root.
+    if [ "$local_user_given" -eq 1 ]; then
+        case "$local_user" in
+            root) local_user="" ;;   # written literally, meaning "root runs them"
+            *[!a-z0-9_-]* | "" | [!a-z_]*)
+                die "local-backup: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
+        esac
+    else
+        log "local-backup: no --local-user -- these jobs will run as root; pass --local-user=NAME to delegate them to an account"
+    fi
+    LOCAL_USER="$local_user"
+
+    # A missing account is handled differently by the two verbs, and the
+    # difference is the plan's own contract: "without --install: plans and
+    # previews, installs nothing". Creating a Unix account is not nothing.
+    #
+    #   --install : create it, the same folding-in the remote form does. It is a
+    #               local root action the operator running this already has, and
+    #               a loud line beats stopping to say "go run the other command".
+    #   plan      : REFUSE. gen-cron bakes the running copy's paths into every
+    #               line, so a preview of an account that does not exist can
+    #               only be rendered from root's copy -- a block that will never
+    #               be installed. Showing it would be worse than showing
+    #               nothing, and this tree's stance is to refuse rather than
+    #               display something untrue.
+    if [ -n "$LOCAL_USER" ] && ! id -u "$LOCAL_USER" >/dev/null 2>&1; then
+        if [ "$do_install" -eq 1 ]; then
+            log "local-backup: account '$LOCAL_USER' does not exist -- creating it now (deploy.sh --backup-user=$LOCAL_USER)"
+            bash "$DEPLOY" --backup-user="$LOCAL_USER" \
+                || die "local-backup: deploy.sh --backup-user=$LOCAL_USER failed -- see above; nothing was installed"
+        else
+            die "local-backup: --local-user='$LOCAL_USER' names an account that does not exist on this host, so this plan cannot show you the block that would actually be installed -- gen-cron writes the running copy's paths into every line, and only that account's own checkout produces the right ones. Nothing was created. Either create it first (deploy.sh --backup-user=$LOCAL_USER) and re-run this plan, or run the same command with --install, which creates it as part of the deployment."
+        fi
+    fi
 
     # Slice 3: --target may be omitted. Propose one through the SAME helper
     # setup-server uses, then make the proposal visible and correctable. Two
@@ -2897,6 +2960,19 @@ cmd_local_backup() {
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
+    # read_server_conf UNCONDITIONALLY resets LOCAL_USER="" -- before it even
+    # checks whether server.conf is readable -- so the account chosen above has
+    # to be put back, exactly as cmd_activate_client and cmd_remove_client
+    # already do after their own calls. Without this the flag parsed cleanly,
+    # the variable was set, and it was gone again a hundred lines later.
+    #
+    # Measured, not deduced: probes on pve9 read LOCAL_USER=[zfsbackup] at the
+    # assignment and LOCAL_USER=[PUSTE] with cron_target_user=[root] just before
+    # the seed. Everything in between only READ the variable. It took a probe
+    # either side of the gap to see that the loader was the writer -- and the
+    # two remote paths carry a comment saying so, which is how the same trap was
+    # already known and still caught a third caller.
+    LOCAL_USER="$local_user"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -2909,6 +2985,17 @@ cmd_local_backup() {
     # -- apply the shared fail-closed guard before inventing one; ensure_cron_config
     # then adds the profile templates/floors idempotently.
     local cand; cand=$(mktemp) || die "mktemp failed"
+    # mktemp gives 0600 and this file is rendered by the TARGET ACCOUNT, not by
+    # root -- gencron_as_target runs the account's own gen-cron on it. At 0600 it
+    # simply could not be read, and the failure surfaced as gen-cron saying "no
+    # sections found", which reads like a malformed config rather than a
+    # permission problem. Found the moment a delegated local backup first ran for
+    # real on pve9.
+    #
+    # 0644 is what the INSTALLED config carries at /etc/zfs-snapshot-all, so this
+    # matches it rather than inventing a looser mode: a job config names datasets
+    # and schedules, never a secret, and the account has to read it every run.
+    chmod 0644 "$cand" 2>/dev/null || :
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
     else
@@ -2979,7 +3066,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
 
-    if ! bash "$GENCRON" -c "$cand" >/dev/null 2>"$cand.err"; then
+    # Rendered through gencron_as_target, not `bash $GENCRON`, so the preview is
+    # produced by the SAME identity and the same checkout that the install will
+    # use. gen-cron derives its repo paths from where it lives, so root's copy
+    # emits /root/scripts/... into every line while a delegated run emits
+    # /home/<acct>/... -- a preview from the wrong copy is a preview of a block
+    # that will never exist. Harmless while local backups could only be root;
+    # not harmless the moment they can be delegated.
+    if ! gencron_as_target -c "$cand" >/dev/null 2>"$cand.err"; then
         warn "$(cat "$cand.err" 2>/dev/null)"; rm -f "$cand" "$cand.err"
         die "the additive candidate config was rejected by gen-cron.sh (see above) -- refusing; $config was NOT touched"
     fi
@@ -3006,7 +3100,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     cat "$cand"
     echo
     echo "--- wygenerowany blok crona (gen-cron.sh -c, pelny) ---"
-    bash "$GENCRON" -c "$cand"
+    gencron_as_target -c "$cand"
     if [ "$do_install" -ne 1 ]; then
         echo
         echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
@@ -3066,7 +3160,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # fail closed if the line cannot be found, rather than seeding with a guess
     # that would create a snapshot family the installed job never prunes.
     local seed_prefix rendered_send
-    rendered_send="$(bash "$GENCRON" -c "$cand" 2>/dev/null | grep -F 'snapsend.sh' | grep -F -- "$target" | head -1)"
+    rendered_send="$(gencron_as_target -c "$cand" 2>/dev/null | grep -F 'snapsend.sh' | grep -F -- "$target" | head -1)"
     # `[^"]*` rather than `.*` before -m: sed is greedy, so a leading `.*` would
     # bind to the LAST -m on the line. Refusing to cross a quote anchors this to
     # the send's own -m.
@@ -3086,6 +3180,37 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # property that stops it binding to a later -m.
     seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/^.*snapsend\.sh[^"]*-m[ ]*"\([^"]*\)".*/\1/p')"
     [ -n "$seed_prefix" ] || { rm -f "$cand"; die "could not read the snapshot prefix back out of the rendered cron line -- refusing to seed with a guessed prefix; $config was NOT touched"; }
+
+    # DELEGATE BEFORE SEEDING, and delegate BOTH ends. A local backup reads the
+    # source and writes the target on the same host, so a delegated account
+    # needs permissions on each; the remote form only ever had to grant the
+    # receive side, because the send side lives on the peer and is granted there
+    # by --commit-scope.
+    #
+    # Before the seed rather than after, for the reason the whole install is
+    # ordered this way: the seed runs as this account too, and a grant that
+    # arrives afterwards would make the first transfer the one thing that only
+    # works when run by root. Failing here costs nothing -- the config is still
+    # a candidate and the crontab is untouched.
+    # The TARGET is the landing parent and it need not exist yet -- the first
+    # receive is what usually creates it. Granting on a dataset that is not
+    # there fails, and granting on its parent instead would hand the account
+    # the whole pool. So it is created explicitly first, narrow and empty, and
+    # the grant lands exactly where the jobs will write. Same shape the remote
+    # form uses for a sync landing parent, made explicit rather than assumed.
+    if [ -n "$LOCAL_USER" ]; then
+        local _ds
+        if ! zfs list -H -o name -- "$target" >/dev/null 2>&1; then
+            zfs create -p -- "$target" \
+                || { rm -f "$cand"; die "local-backup: could not create the target '$target' to delegate it to '$LOCAL_USER' -- NOTHING was installed and $config is untouched"; }
+            log "local-backup: created the landing target '$target' (it did not exist; the grant needs something to land on)"
+        fi
+        for _ds in "${roots[@]}" "$target"; do
+            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$_ds" \
+                || { rm -f "$cand"; die "local-backup: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on '$_ds' for '$LOCAL_USER' failed -- NOTHING was installed and $config is untouched. Without it the installed jobs would fail every run."; }
+        done
+        log "local-backup: delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on ${#roots[@]} source(s) and on '$target'"
+    fi
 
     log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
     local seed_failed=0 sr

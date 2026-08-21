@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 62be4f934049a2a0 -->
+<!-- status-covers-digest: 1a71363e0f435e20 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,6 +97,29 @@
   u jedynego wołającego; stawką jest klucz cache, więc zły klucz przechodzi
   między pulami. Semantyka transferu nietknięta.
   `test/quiesce` +11 testów, sprawdzonych jako padające na zamrożonej bazie.
+- **Wdrożenie jednoserwerowe przyjmuje `--local-user` (2026-08-21).** Do tej pory
+  mogło chodzić **tylko jako root**, i to nie z projektu, tylko z przeoczenia:
+  parser formy lokalnej odrzucał flagę (`unknown option --local-user=...`),
+  `setup-server --local-user` tworzył konto ale go nie zapisywał — słusznie, bo
+  konto jest decyzją **per wdrożenie**, nie ustawieniem hosta — a
+  `cron_target_user` bez `LOCAL_USER` zwracał roota. Zmierzone na pve9: konto
+  powstało, blok i tak wylądował u roota.
+  Cała maszyneria pod spodem była już świadoma konta (`cron_target_user`,
+  `crontab_for_target`, `assert_config_readable_by_target`,
+  `atomic_replace_and_install`). Brakowało wyłącznie flagi. Zrobione **spójnie
+  z formą zdalną**: ta sama nazwa, ta sama gramatyka nazwy konta, ten sam
+  domyślny root z tym samym zdaniem, konto tworzone gdy brak, blok do crontaba
+  tego konta.
+  Dwie rzeczy musiały wejść razem, bo bez nich delegacja byłaby pozorna:
+  podgląd renderował się przez `bash $GENCRON` (kopia roota), a instalacja przez
+  `gencron_as_target` (kopia konta) — `gen-cron` wypieka ścieżki z miejsca, gdzie
+  leży, więc podgląd pokazywałby blok, który nigdy nie powstanie; oraz delegacja
+  ZFS musi objąć **każde źródło i cel**, a cel przed seedem jeszcze nie istnieje,
+  więc jest tworzony jawnie i wąsko, zamiast delegować rodzica i oddać kontu pulę.
+  **Plan nie tworzy konta.** Pierwsza wersja tworzyła — a plan ma kontrakt
+  „installs nothing", i konto uniksowe nim nie jest. Pod `--install` powstaje,
+  przy planie odmowa: `gen-cron` nie miałby czym wyrenderować prawdziwego bloku,
+  a pokazanie cudzego jest gorsze niż odmowa. `test/localbackup` +5.
 - **`gen-cron.sh --uninstall` — właściciel bloku umie go wreszcie zdjąć (2026-08-20).**
   Znalezione przy przechodzeniu macierzy wdrożeń na pve9: backup **lokalny**
   (jeden host, `--source`/`--target`, bez peera) instaluje blok zarządzany,
