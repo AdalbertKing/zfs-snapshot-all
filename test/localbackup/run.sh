@@ -727,8 +727,73 @@ fi   # flock present
 out4=$( bash "$REPO/gen-cron.sh" --install --uninstall 2>&1 ); rc4=$?
 if [ "$rc4" -ne 0 ] && grep -qi 'opposites' <<<"$out4"; then
     ok "uninstall: --install --uninstall is refused before any lock is attempted"
+    :
 else
     bad "uninstall: --install --uninstall is refused before any lock is attempted" "rc=$rc4 out=$out4"
+fi
+
+# ===========================================================================
+# --local-user on the LOCAL form.
+#
+# Measured on pve9 2026-08-20 while working a deployment matrix: a single-host
+# deployment could only ever run as root. The local parser refused the word
+# (`unknown option --local-user=zfsbackup`), setup-server provisions an account
+# but deliberately records none, and cron_target_user falls back to root -- so
+# `setup-server --local-user=zfsbackup` created the account and the block still
+# landed in root's crontab.
+#
+# Everything underneath was already account-aware. The flag is the whole gap.
+# ===========================================================================
+# A PLAN naming an account that does not exist REFUSES, and creates nothing.
+# The plan's contract is "installs nothing", and a Unix account is not nothing
+# -- an earlier draft of this created the account during a plan, which on a
+# Linux runner would have been a real user made by a read-only command.
+# Refusing also avoids the other half: gen-cron bakes the running copy's paths
+# into every line, so a preview for a non-existent account could only come from
+# root's copy and would show a block that will never be installed.
+out="$(run --source=rpool/data --target=hdd/backups --local-user=nosuchacct_zz --config="$WORK/lu1.conf")"; rc=$?
+if [ "$rc" -ne 0 ]    && printf '%s' "$out" | grep -q 'does not exist on this host'    && printf '%s' "$out" | grep -q 'Nothing was created'    && ! printf '%s' "$out" | grep -q 'unknown option'; then
+    ok "local-user: the local form accepts the flag, and a plan for a missing account refuses without creating it"
+else
+    bad "local-user: the local form accepts the flag, and a plan for a missing account refuses without creating it" "rc=$rc $(printf '%s' "$out" | tail -2)"
+fi
+if ! id -u nosuchacct_zz >/dev/null 2>&1; then
+    ok "local-user: ...and the account really was not created"
+else
+    bad "local-user: ...and the account really was not created" "nosuchacct_zz exists after a PLAN"
+fi
+
+# Same grammar as add-client, so the two forms cannot drift into disagreeing
+# about what an account name is.
+out="$(run --source=rpool/data --target=hdd/backups --local-user=9bad --config="$WORK/lu2.conf")"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'not a valid account name'; } \
+    && ok "local-user: an invalid account name is refused, in add-client's words" \
+    || bad "local-user: an invalid account name is refused, in add-client's words" "rc=$rc"
+
+# Omitted means root, and says so -- the same sentence the remote form prints,
+# because it is the same decision.
+out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/lu3.conf")"
+printf '%s' "$out" | grep -q 'will run as root' \
+    && ok "local-user: omitted means root, and the run says so" \
+    || bad "local-user: omitted means root, and the run says so" "$(printf '%s' "$out" | head -3)"
+
+# `root` written literally is accepted and means root -- not an account called
+# "root" to be created and delegated to.
+out="$(run --source=rpool/data --target=hdd/backups --local-user=root --config="$WORK/lu4.conf")"; rc=$?
+{ [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'not a valid account name'; } \
+    && ok "local-user: an explicit 'root' is accepted and is not treated as an account to create" \
+    || bad "local-user: an explicit 'root' is accepted and is not treated as an account to create" "rc=$rc"
+
+# The preview must be rendered by the identity that will install it. gen-cron
+# derives its paths from where it lives, so root's copy bakes /root/scripts/...
+# into every line while a delegated run bakes /home/<acct>/... -- a preview from
+# the wrong copy previews a block that will never exist. Asserted at the source,
+# because the difference only shows on a host with a real account.
+if ! grep -n 'bash "\$GENCRON"' "$ZB" | awk -F: '$1>2800 && $1<3200' | grep -q .; then
+    ok "local-user: the local form renders through gencron_as_target, not gen-cron directly"
+else
+    bad "local-user: the local form renders through gencron_as_target, not gen-cron directly" \
+        "$(grep -n 'bash "\$GENCRON"' "$ZB" | awk -F: '$1>2800 && $1<3200')"
 fi
 
 echo "--------------------------------------------"
