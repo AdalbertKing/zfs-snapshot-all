@@ -3840,9 +3840,47 @@ then re-run the exact command that printed this -- it resumes from where it stop
     fi
 }
 
+# Does the source hold a COMMITTED scope for us? (T3 sidecar present and
+# non-empty.) Probed over the relationship's own channel; a transport failure
+# reads as "no", which is safe -- every caller is about to do real ssh work
+# that will fail loudly on the same broken link.
+has_committed_scope() {
+    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
+        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+        "test -s '$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")'" >/dev/null 2>&1
+}
+
 resolve_mode_datasets() {
-    [ -n "${PEER_SAVED_MODE:-}" ] || return 0
-    [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+    # THE SIGNED SCOPE IS THE CONTRACT (owner decision A, LAB6-F1 2026-08-21).
+    #
+    # Until now only mode-based (sync / deferred-backup) relationships resolved
+    # their list from the source's committed scope; an explicit request
+    # (--datasets / --source=HOST:A,B) was terminal. LAB6 R1 measured what that
+    # split costs: the request named hdd/lab6/tree, the auto-draft carried
+    # include_children = yes, the source SIGNED a grant over four datasets --
+    # and the job replicated two. tree/a and tree/b had a signed grant, zero
+    # snapshots, zero protection, and every report was green. The grant read as
+    # proof of coverage while the request quietly decided coverage.
+    #
+    # So: when a committed scope EXISTS, it supersedes the recorded request for
+    # every relationship kind. The request still seeds the draft, still shapes
+    # --grant-remotely, and rux_verify_requested_scope still asserts it is
+    # COVERED by what was signed -- but what replicates is what the source's
+    # administrator signed, parent and children per include_parent/
+    # include_children. A legacy relationship with no committed scope keeps its
+    # recorded list: there is no signed contract to supersede it with.
+    #
+    # Boundary, stated honestly: the list is resolved at seed/activate time.
+    # A child dataset created on the source LATER joins at the next
+    # re-activation, not automatically at the next cron tick.
+    if [ -n "${PEER_SAVED_MODE:-}" ]; then
+        [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
+    else
+        [ -n "${PEER_SAVED_DATASETS:-}" ] || return 0
+        has_committed_scope || return 0
+    fi
 
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \

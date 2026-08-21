@@ -1280,7 +1280,18 @@ do_draft_scope() {
         # shellcheck disable=SC1090
         . "$mpath_draft"
     fi
+    local from_request=0
     if [ -n "$PEER_JOIN_DATASETS" ]; then
+        # LAB6-F1 (2026-08-21): NAMED IS WANTED. When the active stanzas come
+        # from an explicit request, the operator typed each of these names, and
+        # the container heuristic below ("a dataset with children is a branch,
+        # send only what is under it") silently excluded the parent -- so a
+        # request for hdd/lab6/tree drafted a scope whose own text said the
+        # data ON tree stays behind. The heuristic remains right for the
+        # whole-estate draft, where nobody named anything and containers
+        # abound; for a request it overrode the one thing that was actually
+        # said.
+        from_request=1
         for ds in $PEER_JOIN_DATASETS; do
             zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
                 || die "the collector requested '$ds' (PEER_JOIN_DATASETS in $mpath_draft), but no such dataset exists on this host -- refusing to draft a scope around a request that cannot be satisfied"
@@ -1338,7 +1349,11 @@ do_draft_scope() {
         # exactly what will be granted.
         for ds in "${active[@]}"; do
             printf '[dataset:%s]\n' "$ds"
-            if zfs list -H -o name -r -- "$ds" 2>/dev/null | grep -qv "^${ds}$"; then
+            # A REQUESTED dataset always includes itself: the operator named it,
+            # and naming is wanting (LAB6-F1). The branch heuristic applies only
+            # to the estate draft, where the stanzas are proposals, not asks.
+            if [ "$from_request" -eq 0 ] \
+               && zfs list -H -o name -r -- "$ds" 2>/dev/null | grep -qv "^${ds}$"; then
                 echo "include_parent = no"
             else
                 echo "include_parent = yes"

@@ -5994,6 +5994,65 @@ else
     bad "64z2: control -- the same shape under 'aim' still aims at the single block" "got=$got"
 fi
 
+# --- 65. the signed scope is the contract (owner decision A, LAB6-F1) --------
+# LAB6 R1 measured the split this closes: the request named hdd/lab6/tree, the
+# auto-draft carried include_children=yes, the source SIGNED four datasets --
+# and the job replicated two. tree/a and tree/b had a signed grant, zero
+# snapshots, and every report was green. When a committed scope exists it now
+# supersedes the recorded request for every relationship kind; a legacy
+# relationship with no committed scope keeps its recorded list, because there
+# is no signed contract to supersede it with.
+rmd_env() {   # <scope-exists 0|1> <saved-datasets> -> resolved list or rc
+    local sx="$1" sd="$2"
+    local SB="$WORK/rmd-stub"; mkdir -p "$SB"
+    cat > "$SB/ssh" <<'EOS'
+#!/bin/sh
+case "$*" in
+  *"test -s"*) exit ${SCOPE_EXISTS:-1} ;;
+  *"zfs list"*) printf '%s
+' "tank/x" "tank/x/kid" ;;
+esac
+EOS
+    chmod +x "$SB/ssh"
+    cat > "$SB/scope" <<'EOS'
+[dataset:tank/x]
+include_parent = yes
+include_children = yes
+EOS
+    PATH="$SB:$PATH" SCOPE_EXISTS="$sx" ZB="$ZFSBACKUP" SD="$sd" STUBDIR="$SB" bash -c '
+        source "$ZB"
+        LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null
+        LOAD_ACCOUNT=u LOAD_HOST=h COLLECTOR_LABEL=me
+        fetch_committed_scope() { cat "$STUBDIR/scope" > "$1"; }
+        PEER_SAVED_MODE=""
+        PEER_SAVED_DATASETS="$SD"
+        resolve_mode_datasets >/dev/null 2>&1 && printf "%s" "$PEER_SAVED_DATASETS"
+    '
+}
+
+got=$(rmd_env 1 "tank/x")
+if [ "$got" = "tank/x" ]; then
+    ok "65a: no committed scope -> the recorded request stays the contract (legacy)"
+else
+    bad "65a: no committed scope -> the recorded request stays the contract (legacy)" "got=[$got]"
+fi
+
+got=$(rmd_env 0 "tank/x")
+if [ "$got" = "tank/x tank/x/kid" ]; then
+    ok "65b: a committed scope supersedes the request -- parent AND children replicate"
+else
+    bad "65b: a committed scope supersedes the request -- parent AND children replicate" "got=[$got]"
+fi
+
+# 65c. the mode-based path is untouched: mode set + list already present is a
+#      no-op, exactly as before this change.
+got=$(rmd_env 0 "")
+if [ "$got" = "" ]; then
+    ok "65c: empty request without mode stays a no-op"
+else
+    bad "65c: empty request without mode stays a no-op" "got=[$got]"
+fi
+
 # 63i. an unknown policy is refused rather than silently treated as one of them.
 out=$(ctx nonsense "" "" "" ""); rc=$?
 if printf '%s' "$out" | grep -q "unknown policy"; then
