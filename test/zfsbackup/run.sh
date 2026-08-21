@@ -246,19 +246,20 @@ else
 fi
 
 # --- 3b. peer_manifest_path parity with deploy.sh (audit C1, 2026-08-21) -----
-# The trust-mirror family (peer_label, local_keyfile_path, local_knownhosts_path,
-# peer_scope_path, peer_scope_granted_hash_path) is deliberately duplicated
-# deploy.sh <-> zfs-backup.sh with no source edge -- and peer_manifest_path had
-# slipped out of BOTH the deps.conf enumeration and this parity suite. Byte-drift
-# between the two would silently split where the two programs look for the same
-# manifest, which is the exact failure the parity pins exist to prevent. The
-# comparison is textual (extract both bodies), same technique as peer_label's.
-zb_pmp=$(awk '/^peer_manifest_path\(\)/{print; exit}' "$ZFSBACKUP")
-dp_pmp=$(awk '/^peer_manifest_path\(\)/{print; exit}' "$(dirname "$ZFSBACKUP")/deploy.sh")
-if [ -n "$zb_pmp" ] && [ "$zb_pmp" = "$dp_pmp" ]; then
-    ok "peer_manifest_path: byte-identical between zfs-backup.sh and deploy.sh"
+# The trust-mirror family is deliberately duplicated deploy.sh <-> zfs-backup.sh
+# with no source edge -- and peer_manifest_path had slipped out of BOTH the
+# deps.conf enumeration and this parity suite. The comparison is BEHAVIORAL,
+# not textual: the first version of this pin diffed the source text and
+# promptly failed on formatting (one-liner here, wrapped there) -- pinning
+# whitespace is not the contract, where the manifest LIVES is.
+dp_pmp_out=$(env PEER_STATE_DIR=/PIN bash -c '
+    eval "$(sed -n "/^peer_manifest_path() {/,/^}/p" "$1")"
+    peer_manifest_path some-label' _ "$(dirname "$ZFSBACKUP")/deploy.sh")
+zb_pmp_out=$(PEER_STATE_DIR=/PIN peer_manifest_path some-label)
+if [ -n "$zb_pmp_out" ] && [ "$zb_pmp_out" = "$dp_pmp_out" ]; then
+    ok "peer_manifest_path: both programs resolve the same manifest path"
 else
-    bad "peer_manifest_path: byte-identical between zfs-backup.sh and deploy.sh"         "zb=[$zb_pmp] dp=[$dp_pmp]"
+    bad "peer_manifest_path: both programs resolve the same manifest path"         "zb=[$zb_pmp_out] dp=[$dp_pmp_out]"
 fi
 
 # --- 4. ensure_cron_config: creates, templates, and is idempotent -----------
