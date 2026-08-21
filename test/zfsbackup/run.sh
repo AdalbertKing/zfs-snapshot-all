@@ -5894,17 +5894,44 @@ for fn in cmd_migrate_profile cmd_audit_source_retention; do
     fi
 done
 
-# 64h. cron_known_accounts reads OUR OWN records, never /home or passwd. An
-#      account exists for reasons unrelated to this project; treating one as
-#      ours because it has a home directory is a local fact standing in for a
-#      decision -- the family this whole campaign is named after.
+# 64h. Where the candidate accounts come from -- and this assertion is the one
+#      that was WRONG, caught live on pve2 rather than by CI.
+#
+#      It used to pin "our own records only, never /home or passwd", on the
+#      reasoning that an account exists for reasons unrelated to this project
+#      and claiming one because it has a home directory is a local fact standing
+#      in for a decision. That reasoning is still right -- /home and passwd are
+#      still not read. The PREMISE was wrong: it assumed every account running
+#      our jobs got there through a relationship. Production on this fleet did
+#      not; those are plain local jobs older than the relationship model, named
+#      by no record of ours. So on the very host P10 was measured against, the
+#      refusal did not fire and the tool called root "the only account".
+#
+#      The crontab spool answers "who has a crontab" and nothing more; the
+#      CALLER filters on our own block marker, so an unrelated account cannot be
+#      claimed -- it would have to be running a block we wrote.
 body=$(awk 'index($0,"cron_known_accounts() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
 if printf '%s\n' "$body" | grep -q 'CLIENTS_DIR' \
    && printf '%s\n' "$body" | grep -q 'PEER_STATE_DIR' \
+   && printf '%s\n' "$body" | grep -q 'CRON_SPOOL_DIRS' \
    && ! printf '%s\n' "$body" | grep -qE '/home|/etc/passwd|getent'; then
-    ok "64h: known accounts come from our own records, not from /home or passwd"
+    ok "64h: candidates come from our records AND the crontab spool, never /home or passwd"
 else
-    bad "64h: known accounts come from our own records, not from /home or passwd" "$body"
+    bad "64h: candidates come from our records AND the crontab spool, never /home or passwd" "$body"
+fi
+
+# 64i. An account with a crontab but NO managed block of ours is not a
+#      candidate for anything. The spool is where the names come from; our own
+#      marker is what makes one ours. Without this, adding the spool would have
+#      turned every unrelated cron user into an ambiguity and the refusal would
+#      fire on hosts that have no second relationship at all.
+got=$(ctx adopt "" "" "" "" \
+      "FAKE_ACCOUNTS=root someunrelateduser zfsbackup" \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve9.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve9.conf|zfsbackup" ]; then
+    ok "64i: a crontab without one of our blocks is not treated as a second relationship"
+else
+    bad "64i: a crontab without one of our blocks is not treated as a second relationship" "got=$got"
 fi
 
 # 63i. an unknown policy is refused rather than silently treated as one of them.
