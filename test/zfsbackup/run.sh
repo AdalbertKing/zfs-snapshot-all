@@ -6075,6 +6075,60 @@ else
     bad "65d: empty request without mode stays a no-op" "got=[$got]"
 fi
 
+# --- 66. one config = one account (LAB6-F2) ----------------------------------
+# Measured on pve1: a bkpsvc relationship's activation resolved to the HOST
+# default jobs.pve1.conf -- the same file root's R1 renders from. A config
+# renders WHOLE into one account's crontab (single-writer design, no
+# per-section account filter), so sharing the file means the next
+# regeneration for EITHER account installs BOTH relationships' jobs under
+# itself -- one of them on keys it cannot read. Only withheld consent stopped
+# it; these assertions make the stop structural.
+ctx2() {   # <x-config> <x-user> [env...] -> "file|user" or the refusal
+    local xc="$1" xu="$2"; shift 2
+    env "$@" ZB="$ZFSBACKUP" XC="$xc" XU="$xu" bash -c '
+        source "$ZB"
+        cron_known_accounts() { printf "%s
+" root bkpsvc; }
+        cron_source_for_user() { [ "$1" = root ] && { echo /etc/zfs-snapshot-all/jobs.pve1.conf; return 0; }; return 1; }
+        hostname() { echo pve1; }
+        cron_context_resolve adopt "$XC" "$XU" "" ""             && printf "%s|%s" "$CRON_CTX_FILE" "$CRON_CTX_USER"
+    ' 2>&1
+}
+
+# 66a. a non-root account with nothing recorded gets its OWN default file.
+got=$(ctx2 "" bkpsvc)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve1.bkpsvc.conf|bkpsvc" ]; then
+    ok "66a: a delegated account defaults to its own jobs.<host>.<account>.conf"
+else
+    bad "66a: a delegated account defaults to its own jobs.<host>.<account>.conf" "got=$got"
+fi
+
+# 66b. root keeps the historical bare name -- fleet compatibility.
+got=$(ctx2 "" root)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve1.conf|" ]; then
+    ok "66b: root keeps the historical jobs.<host>.conf"
+else
+    bad "66b: root keeps the historical jobs.<host>.conf" "got=$got"
+fi
+
+# 66c. EXPLICITLY naming another account's live config is refused, not obeyed
+#      -- the flag names a file, but the file already answers to somebody.
+out=$(ctx2 /etc/zfs-snapshot-all/jobs.pve1.conf bkpsvc)
+if printf '%s' "$out" | grep -q "already drives root's managed crontab block"    && printf '%s' "$out" | grep -q 'Nothing was read and nothing was changed'; then
+    ok "66c: another account's config is refused even when named explicitly"
+else
+    bad "66c: another account's config is refused even when named explicitly" "got=$out"
+fi
+
+# 66d. the SAME account's own file passes -- the guard is about crossing
+#      accounts, not about files having owners.
+got=$(ctx2 /etc/zfs-snapshot-all/jobs.pve1.conf root)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve1.conf|" ]; then
+    ok "66d: an account naming its own config passes the ownership guard"
+else
+    bad "66d: an account naming its own config passes the ownership guard" "got=$got"
+fi
+
 # 63i. an unknown policy is refused rather than silently treated as one of them.
 out=$(ctx nonsense "" "" "" ""); rc=$?
 if printf '%s' "$out" | grep -q "unknown policy"; then
