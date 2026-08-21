@@ -3418,16 +3418,33 @@ fetch_committed_scope() {
         # that had never accepted the package at all. Measured on metropolis
         # 2026-08-20: the resume log was two lines, with zero join attempts.
         #
-        # The manifest is the machine fact that separates the two cases -- it is
-        # written by --join on the SOURCE and copied back here, so its absence
-        # means the join, not the draft.
-        local _mpath; _mpath=$(peer_manifest_path "$(peer_label "$LOAD_HOST")")
-        if [ ! -r "$_mpath" ]; then
-            die "could not fetch the scope file from $LOAD_HOST ($sfile_remote), and there is no accepted pairing manifest for it here ($_mpath) -- so the JOIN has not completed on $LOAD_HOST yet, and --draft-scope is not the missing step.
+        # THE FIRST ATTEMPT AT THIS USED A DISCRIMINATOR THAT DOES NOT
+        # DISCRIMINATE, and it is worth saying why rather than quietly replacing
+        # it. It tested peers/<addr>.conf here and called its presence proof
+        # that "the join completed", on the belief that --join writes it on the
+        # SOURCE and it is copied back. It is not: the COLLECTOR writes that
+        # file itself at --pair time, before any join, and it carries only
+        # PEER_SAVED_* -- measured 2026-08-20 on a pair whose source provably
+        # had no manifest and no account. So the "join has not completed" branch
+        # was unreachable and every case got the draft advice, which is the very
+        # bug the branch was added to fix, still happening.
+        #
+        # There IS no local fact that proves a remote join completed. The join
+        # runs over there; when it is driven manually, nothing comes back until
+        # a scope can be fetched -- which is the thing that just failed. So this
+        # says both possibilities and orders them by likelihood instead of
+        # picking one. Guessing here is what sent an operator to inspect a draft
+        # on a peer that had never accepted the package.
+        die "could not fetch the scope file from $LOAD_HOST ($sfile_remote).
 
-Finish the join on $LOAD_HOST first (add-client printed the exact two commands when it fell back to the manual path: copy the .tgz there, then run deploy.sh --join=<that file>). Re-running THIS command does not retry the join -- it resumes past it."
-        fi
-        die "could not fetch the scope file from $LOAD_HOST ($sfile_remote) -- the pairing manifest is here, so the join completed; what is missing is the scope draft. Run deploy.sh --draft-scope on $LOAD_HOST, or re-run its --join, which drafts one."
+Two things can cause this and NOTHING HERE CAN TELL THEM APART -- the join runs on $LOAD_HOST, and this host learns nothing about it until a scope can be read. Check in this order, on $LOAD_HOST:
+
+  1. did the JOIN complete?   ls -l /etc/zfs-snapshot-all/peers/  and  id zfsbackup-<this host's label>
+     If neither is there, the join is the missing step: copy the .tgz this command printed and run
+     deploy.sh --join=<that file> there. Re-running THIS command does NOT retry the join -- it resumes past it.
+
+  2. only if the join IS done: the scope draft is missing.
+     Run deploy.sh --draft-scope on $LOAD_HOST, or re-run its --join, which drafts one."
     fi
     if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
        || [ ! -s "$hash_tmp" ]; then

@@ -201,6 +201,24 @@ discover() {
         SEEN_ADDR["$b"]=1
     done
 
+    # THE DELEGATED ACCOUNT KEEPS ITS OWN COPIES, somewhere else and named
+    # differently: /home/<acct>/.ssh/pairing-<addr>_* -- a PREFIX, where root
+    # uses a directory. This file scanned only root's until 2026-08-20, which
+    # made it blind in exactly the shape that matters most: a relationship
+    # installed with --local-user runs from the account's crontab and uses the
+    # account's keys, so on a production host the tool was reporting the half
+    # nobody uses. Measured on pve1 the moment a delegated relationship was
+    # built: five key files there, one of them
+    # `pairing-192.168.28.190_alias_known_hosts` -- an address named by no
+    # config and no cron line on that host, which is precisely what this tool
+    # exists to surface and could not see.
+    for f in "$HOME_ROOT"/*/.ssh/pairing-*; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f"); b="${b#pairing-}"
+        b="${b%_ed25519}"; b="${b%.pub}"; b="${b%_alias_known_hosts}"; b="${b%_known_hosts}"
+        [ -n "$b" ] && SEEN_ADDR["$b"]=1
+    done
+
     # Anything a crontab still calls by label is LIVE by definition, whatever
     # the files say. This is the authority the classification below leans on.
     local u tab
@@ -250,7 +268,12 @@ classify() {
 artefacts_for() { _artefacts_raw "$@" | awk -F'\t' '!seen[$2]++'; }
 
 _artefacts_raw() {
+    # An identity that IS an address -- an orphan key file with no client
+    # record left to name it -- resolves to itself. Without this the
+    # address-keyed families below were unreachable for exactly the entries
+    # that have lost everything else.
     local id="$1" addr="${NAME_ADDR[$id]:-}" f d
+    [ -n "$addr" ] || { [ -n "${SEEN_ADDR[$id]+x}" ] && addr="$id"; }
     [ -e "$CLIENTS_DIR/$id.conf" ]       && echo "client	$CLIENTS_DIR/$id.conf"
     # The DATA this relationship owns, reported and never removed. Reading it
     # costs no `zfs` call -- the client record and the join manifest both name
@@ -287,6 +310,12 @@ _artefacts_raw() {
         for f in "$PAIRING_DIR"/*-to-"$addr".tgz; do
             [ -e "$f" ] && echo "scaffold	$f"
         done
+        # The delegated account's own copies, prefix-named rather than in a
+        # directory. Globbed across every account because the relationship that
+        # created them may be gone -- which is when finding them matters.
+        for f in "$HOME_ROOT"/*/.ssh/pairing-"$addr"_*; do
+            [ -e "$f" ] && echo "key	$f"
+        done
     fi
 }
 
@@ -296,7 +325,21 @@ _artefacts_raw() {
 ORPHANS=()
 report() {
     local ids id verdict reason art n=0
-    ids=$(printf '%s\n' "${!SEEN_NAME[@]}" "${!SEEN_LABEL[@]}" | grep -v '^$' | sort -u)
+    # Addresses are included, and were not until 2026-08-20 -- SEEN_ADDR was
+    # collected and never reported, so a key file whose client record had
+    # already been deleted was invisible to the tool written to find exactly
+    # that. Only addresses no NAME already accounts for, otherwise every live
+    # relationship would appear twice under its own two identities.
+    local claimed=" "
+    for id in "${!NAME_ADDR[@]}"; do claimed="$claimed${NAME_ADDR[$id]} "; done
+    local orphan_addrs=""
+    for id in "${!SEEN_ADDR[@]}"; do
+        case "$claimed" in *" $id "*) continue ;; esac
+        [ -n "${SEEN_NAME[$id]+x}" ] && continue
+        [ -n "${SEEN_LABEL[$id]+x}" ] && continue
+        orphan_addrs="$orphan_addrs$id"$'\n'
+    done
+    ids=$(printf '%s\n' "${!SEEN_NAME[@]}" "${!SEEN_LABEL[@]}" $orphan_addrs | grep -v '^$' | sort -u)
     [ -n "$ids" ] || { log "no relationship traces on this host at all"; return 0; }
     while read -r id; do
         [ -n "$id" ] || continue
