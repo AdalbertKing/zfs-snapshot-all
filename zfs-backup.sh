@@ -2985,6 +2985,17 @@ cmd_local_backup() {
     # -- apply the shared fail-closed guard before inventing one; ensure_cron_config
     # then adds the profile templates/floors idempotently.
     local cand; cand=$(mktemp) || die "mktemp failed"
+    # mktemp gives 0600 and this file is rendered by the TARGET ACCOUNT, not by
+    # root -- gencron_as_target runs the account's own gen-cron on it. At 0600 it
+    # simply could not be read, and the failure surfaced as gen-cron saying "no
+    # sections found", which reads like a malformed config rather than a
+    # permission problem. Found the moment a delegated local backup first ran for
+    # real on pve9.
+    #
+    # 0644 is what the INSTALLED config carries at /etc/zfs-snapshot-all, so this
+    # matches it rather than inventing a looser mode: a job config names datasets
+    # and schedules, never a secret, and the account has to read it every run.
+    chmod 0644 "$cand" 2>/dev/null || :
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
     else
