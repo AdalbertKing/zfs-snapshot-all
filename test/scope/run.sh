@@ -141,6 +141,41 @@ scope_read "$F"
 check "C13 the most specific root decides" "no" "$(inc rpool/data/vm-100-disk-0)"
 check "C14 ...and the wider one still covers its own" "yes" "$(inc rpool/other/x)"
 
+# --- D. dataset_list_split -- the ONE list grammar ---------------------------
+# The comma is the package convention, and that is MEASURED, not chosen: both
+# engines (snapsend.sh:1905, snapget.sh:1913), delsnaps.sh:942,
+# check-snap-age.sh:314, gen-cron.sh (four sites), lib-profile.sh and
+# cron2conf.sh all split a user-supplied dataset list on ','.
+#
+# What diverged was the relationship path: `deploy.sh --peer-datasets` documented
+# "A B" because that is how PEER_SAVED_DATASETS is STORED ("${arr[*]}" out, an
+# unquoted `for` back in). An internal representation had leaked into the
+# user-facing grammar, so one package took commas from one command and spaces
+# from the next -- and the one-command remote form took exactly ONE dataset and
+# had no list grammar at all.
+#
+# Permissive on input, canonical on output. Accepting whitespace too is not a
+# second convention: the stored form and every manifest already on disk must
+# keep parsing.
+dsplit() { dataset_list_split "$1" | tr '\n' '|'; }
+
+check "D1 comma is the convention"                  "a|b|"      "$(dsplit 'a,b')"
+check "D2 spaces after commas are trimmed"          "a|b|"      "$(dsplit 'a, b')"
+check "D3 empty items are dropped"                  "a|b|"      "$(dsplit 'a,,b')"
+check "D4 the stored space form still parses"       "a|b|"      "$(dsplit 'a b')"
+check "D5 mixed separators mean the same thing"     "a|b|c|"    "$(dsplit 'a b,c')"
+check "D6 surrounding whitespace is trimmed"        "a|b|"      "$(dsplit '  a  ,  b  ')"
+check "D7 a single dataset is a one-item list"      "hdd/x|"    "$(dsplit 'hdd/x')"
+check "D8 an empty list is empty, not one blank"    ""          "$(dsplit '')"
+check "D9 a lone separator yields nothing"          ""          "$(dsplit ' , ')"
+# D10 is the one a probe caught: printf '%s' without a trailing newline made
+# `read` discard the final item, so 'a,b' silently became just 'a'. A list
+# grammar that drops the last dataset is worse than no list grammar.
+check "D10 the LAST item is never dropped"          "one|two|three|" "$(dsplit 'one,two,three')"
+
+check "D11 join renders the canonical form"         "a,b,c"     "$(dataset_list_join a b c)"
+check "D12 join skips empties rather than doubling" "a,b"       "$(dataset_list_join a '' b)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
