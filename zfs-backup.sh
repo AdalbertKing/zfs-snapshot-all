@@ -2523,6 +2523,14 @@ cron_known_accounts() {   # -> one candidate per line, root first, deduplicated
 #            That emptiness MEANS "this relationship was never activated" and
 #            remove-client reads it that way. Inventing a default there would
 #            have it clean up a config it was never installed from.
+#   aim      HOST-scoped commands only (migrate-profile, audit-source-
+#            retention). Like adopt, but when nothing names an account it may
+#            look at which accounts carry OUR managed blocks: one -> aim at
+#            it, two -> refuse and name both. A relationship command must
+#            NEVER use this policy -- for a relationship, "nobody named an
+#            account" IS the answer (root), and inheriting one from whatever
+#            else the host runs is how LAB6 R1 landed in production's crontab
+#            (2026-08-21, reverted live).
 #   adopt    recorded -> server.conf -> the '# Source:' line of the block
 #            ALREADY INSTALLED in this account's crontab -> the host default.
 #            Adoption is not a nicety: a crontab has ONE managed block, so
@@ -2538,8 +2546,8 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
     local policy="${1:?cron_context_resolve: policy is required}"
     local x_config="${2-}" x_user="${3-}" r_config="${4-}" r_user="${5-}"
     case "$policy" in
-        record|adopt) ;;
-        *) die "cron_context_resolve: unknown policy '$policy' (record|adopt)" ;;
+        record|adopt|aim) ;;
+        *) die "cron_context_resolve: unknown policy '$policy' (record|adopt|aim)" ;;
     esac
 
     # The ACCOUNT first, and the order is load-bearing: the adoption step below
@@ -2578,21 +2586,29 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
     [ "$policy" = record ] && return 0
     [ -n "$CRON_CTX_FILE" ] && return 0
 
-    # P10. Adoption reads ONE account's crontab, so it is only an answer if we
-    # know which account. When nothing told us -- no flag, no record, no
-    # manifest -- "root" above is a FALLBACK, not a decision, and on a host
-    # carrying two relationships the two are indistinguishable from here.
+    # P10 -- and ONLY for policy 'aim'. This block guesses or refuses by what
+    # the HOST is running, and that is the right question for exactly two
+    # commands: migrate-profile and audit-source-retention, which operate on
+    # "whatever is installed here" and need aiming when two things are.
     #
-    # Measured 2026-08-21 on pve2 and pve1: root's crontab runs the lab from
-    # jobs.<host>.conf while the delegated account runs production from
-    # jobs.<host>.v4.conf. `audit-source-retention` took the lab, reported
-    # "1 active pull dataset, nothing to add", and never opened production.
-    # It was not wrong about anything it looked at. It looked at one of two.
+    # It is the WRONG question for a relationship command, and that was
+    # measured the expensive way (LAB6 R1, 2026-08-21, live on pve1): a fresh
+    # enrolment with no --local-user means ROOT -- but root had no managed
+    # block after the lab teardown, production's zfsbackup was the "only
+    # account with managed jobs", and this branch ADOPTED it. The lab's cron
+    # lines landed in the PRODUCTION account's crontab and its v4 config,
+    # with root-owned key paths that would have failed at :01. Reverted in
+    # minutes; remove-client took out exactly its own lines.
     #
-    # So: if the account was a fallback and this host has managed blocks under
-    # more than one account, refuse and name them. This does NOT decide which
-    # one is meant -- that is the operator's to say, and now they can say it.
-    if [ -z "$x_user" ] && [ -z "$r_user" ] && [ -z "${PEER_SAVED_LOCAL_USER:-}" ]; then
+    # The distinction, stated once: for a relationship, "nobody named an
+    # account" IS the answer (root) -- the relationship carries its own
+    # identity and must never inherit one from whatever else the host runs.
+    # For a host-scoped command, "nobody named an account" is a QUESTION, and
+    # the host's installed blocks are the legitimate place to look for the
+    # answer. One resolver, two policies, and the guessing branch is fenced
+    # to the policy whose question it answers.
+    if [ "$policy" = aim ] \
+       && [ -z "$x_user" ] && [ -z "$r_user" ] && [ -z "${PEER_SAVED_LOCAL_USER:-}" ]; then
         local -a installed=()
         local acct asrc
         while IFS= read -r acct; do
@@ -5044,7 +5060,7 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     # the host default -- a name, on a host where a config belongs to a
     # relationship -- and rewrote whatever it landed on. The two flags above are
     # what make the refusal below an answerable question rather than a wall.
-    cron_context_resolve adopt "$config_arg" "$local_user_arg" "" ""
+    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
@@ -5185,7 +5201,7 @@ cmd_audit_source_retention() {   # [--config=PATH] [--local-user=NAME] [--apply]
     # "1 active pull dataset, nothing to add" while describing the LAB, having
     # never opened production in the delegated account's config. It was not
     # wrong about anything it looked at -- it looked at one of two.
-    cron_context_resolve adopt "$config_arg" "$local_user_arg" "" ""
+    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
     local cronfile="$CRON_CTX_FILE"
     log "audit: config $cronfile ($CRON_CTX_WHY_FILE), as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER)"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
