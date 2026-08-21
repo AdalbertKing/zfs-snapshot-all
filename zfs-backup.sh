@@ -6412,6 +6412,53 @@ rux_remote_install() {
 # BEFORE any argument reaches an entrypoint that would refuse ':' in --source.
 # Local behaviour is byte-for-byte unchanged: cmd_local_backup is called with
 # the ORIGINAL, unmodified argument vector.
+# P7: refuse a relationship whose "remote" source is this very host.
+#
+# The engines already refuse it -- validate_remote_host in lib-zfs-snap.sh
+# compares /etc/machine-id and aborts. But that lives in the engine, and the
+# PLANNER never calls it, so `--source=<our own address> --mode=sync` planned
+# clean with rc=0. Follow that plan and you build an account, a key pair and a
+# set of cron lines, and the refusal finally arrives at the first job -- long
+# after the state exists. A guard that fires only after the damage is not the
+# same guard, it is a post-mortem.
+#
+# This is deliberately NOT the machine-id check. That one needs an ssh channel,
+# and at PLAN time there is no key and no pairing yet -- requiring one would
+# mean the plan could not run until after the thing it is meant to prevent.
+# Asking "is this address mine?" needs no peer at all, and for SELF-detection a
+# local fact is not standing in for a remote one: if the address is on one of my
+# interfaces, it IS me. Sound, not complete -- an address that reaches this host
+# by NAT or an alias still gets through here, and validate_remote_host remains
+# the backstop for exactly that. The point is to catch the ordinary mistake at
+# the moment it is typed rather than three commands later.
+#
+# The engine's own check is not called and not duplicated: this asks a different
+# question by a different means, so there is no second copy to drift.
+rux_refuse_self_source() {   # <host> <original --source string>
+    local host="$1" src="$2" a
+    local -a mine=()
+    # -o keeps one address per line; the `addr` field is 'A.B.C.D/len'.
+    while read -r a; do [ -n "$a" ] && mine+=("${a%%/*}"); done < <(
+        ip -o addr show scope global 2>/dev/null | awk '{print $4}'
+    )
+    mine+=(127.0.0.1 ::1 localhost)
+    [ -n "$(hostname -s 2>/dev/null)" ] && mine+=("$(hostname -s)")
+    [ -n "$(hostname -f 2>/dev/null)" ] && mine+=("$(hostname -f)")
+    for a in "${mine[@]}"; do
+        [ "$host" = "$a" ] || continue
+        die "rux: --source='$src' names THIS host ('$host' is $(hostname -s 2>/dev/null || echo 'one of our own addresses')).
+
+A relationship replicates between two machines. Pointed at itself it would
+create an account, a key pair and cron lines here, and only fail at the first
+real job -- when the engine's own loopback check finally sees it.
+
+If you meant a backup that stays on this machine, that is the local form and it
+needs no peer at all:
+    zfs-backup.sh --source=<dataset> --target=<dataset> [--install]
+Nothing was created."
+    done
+}
+
 rux_entry() {
     local source="" a
     for a in "$@"; do
@@ -6449,6 +6496,8 @@ rux_entry() {
     # datasets at pair time and the operator picks. Backup-mode only -- sync
     # reproduces a NAMED source path, so it must be told which one.
     local deferred=0; [ -z "$dataset" ] && deferred=1
+
+    rux_refuse_self_source "$host" "$source"
 
     if [ -n "$mode" ] && [ "$mode" != sync ]; then
         die "rux: --mode must be 'sync' for a remote source (the ordinary backup case needs no --mode at all)"
