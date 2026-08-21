@@ -4305,7 +4305,28 @@ cmd_seed() {
         # forever outside retention. Verified live on metropolis 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        # LAB6-F4 (2026-08-21, live): the seed was the one ACTIVE act left on a
+        # chain middle. lab4's F7 made the recurring CRON line passive when the
+        # source already carries an automated_* family -- but the seed still
+        # stamped its own recursive @automated_daily_ onto the source
+        # unconditionally. On the pve9<->pve1<-pve2 chain, R2's seed stamped
+        # R3's TARGET; at the next :21, R3's own GFS ladder kept the younger
+        # foreign snapshot and destroyed R3's base (zpool history: destroy at
+        # 16:21:02, first tick after the stamp); every later R3 pull then
+        # refused on zero common GUID -- correctly fail-closed, and wedged.
+        #
+        # Same probe, same shape, same wording as the emit-time passive
+        # detection: an existing automated_* family on the source means this
+        # relationship is a CONSUMER there. It adopts the newest existing
+        # snapshot as its base (-e, generic automated_ prefix) and creates
+        # nothing. A fresh source probes negative and seeds exactly as before.
+        local -a seed_flags=(-m automated_daily_)
+        if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}"                "zfs list -H -t snapshot -d 1 -o name -- '$ds'" 2>/dev/null | grep -q '@automated_'; then
+            seed_flags=(-m automated_ -e)
+            log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
+        is_recursive_root "$ds" && seed_flags+=(-R)
+        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -4410,7 +4431,28 @@ cmd_final_catchup() {
         # forever outside retention. Verified live on metropolis 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        # LAB6-F4 (2026-08-21, live): the seed was the one ACTIVE act left on a
+        # chain middle. lab4's F7 made the recurring CRON line passive when the
+        # source already carries an automated_* family -- but the seed still
+        # stamped its own recursive @automated_daily_ onto the source
+        # unconditionally. On the pve9<->pve1<-pve2 chain, R2's seed stamped
+        # R3's TARGET; at the next :21, R3's own GFS ladder kept the younger
+        # foreign snapshot and destroyed R3's base (zpool history: destroy at
+        # 16:21:02, first tick after the stamp); every later R3 pull then
+        # refused on zero common GUID -- correctly fail-closed, and wedged.
+        #
+        # Same probe, same shape, same wording as the emit-time passive
+        # detection: an existing automated_* family on the source means this
+        # relationship is a CONSUMER there. It adopts the newest existing
+        # snapshot as its base (-e, generic automated_ prefix) and creates
+        # nothing. A fresh source probes negative and seeds exactly as before.
+        local -a seed_flags=(-m automated_daily_)
+        if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}"                "zfs list -H -t snapshot -d 1 -o name -- '$ds'" 2>/dev/null | grep -q '@automated_'; then
+            seed_flags=(-m automated_ -e)
+            log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
+        is_recursive_root "$ds" && seed_flags+=(-R)
+        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
