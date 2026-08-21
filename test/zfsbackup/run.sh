@@ -5837,6 +5837,36 @@ else
     bad "64b: --local-user aims it at that account's own block" "got=$got"
 fi
 
+# 64b2. --local-user=root is an ANSWER, not an absence. This is the one the
+#       refusal itself recommends -- "use root's own jobs with --local-user=root"
+#       -- and until 2026-08-21 it landed straight back in the refusal, because
+#       the parsers blanked a literal "root" to "" and the resolver could no
+#       longer tell it from silence. A guard whose printed remedy it rejects is
+#       a dead end, which is worse than no guard: it stops the work AND misleads
+#       about how to continue. Found live on pve2 and pve1 by exit code -- the
+#       output looked like a clean audit, and only `echo $?` disagreed.
+got=$(ctx adopt "" root "" "" \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve2.conf|" ]; then
+    ok "64b2: --local-user=root escapes the refusal that recommends it, and picks root's block"
+else
+    bad "64b2: --local-user=root escapes the refusal that recommends it, and picks root's block" "got=$got"
+fi
+
+# 64b3. And the parsers must not blank it before the resolver ever sees it --
+#       source-grep, because that is where the defect lived, not in the resolver.
+for fn in cmd_migrate_profile cmd_audit_source_retention; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if ! printf '%s\n' "$body" | grep -q 'local_user_arg="" ;;'; then
+        ok "64b3: $fn passes an explicit root through instead of blanking it"
+    else
+        bad "64b3: $fn passes an explicit root through instead of blanking it" \
+            "still blanks root before the resolver can see it"
+    fi
+done
+
 # 64c. --config answers it too, and wins outright -- no crontab is consulted.
 got=$(ctx adopt /etc/mine.conf "" "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
