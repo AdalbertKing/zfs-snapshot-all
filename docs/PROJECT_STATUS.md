@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1a71363e0f435e20 -->
+<!-- status-covers-digest: 41fdf3543cd6ead3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,6 +97,30 @@
   u jedynego wołającego; stawką jest klucz cache, więc zły klucz przechodzi
   między pulami. Semantyka transferu nietknięta.
   `test/quiesce` +11 testów, sprawdzonych jako padające na zamrożonej bazie.
+- **Usunięta przyczyna, nie łata: `read_server_conf` przestało kasować cudzy stan
+  (2026-08-21).** Właściciel zapytał wprost, czemu wdrożenie jednoserwerowe idzie
+  innym kodem niż dwuserwerowe i nazwał to łataniem. Pomiar przyznał mu rację
+  w miejscu głębszym, niż sam wskazał.
+  Sama **instalacja jest wspólna** — obie ścieżki wołają te same dziewięć
+  pomocników (cztery asercje, transakcja, `cron_target_user`, `crontab_for_target`,
+  `default_cron_config`, `read_server_conf`). Rozjeżdża się **warstwa decyzji**
+  nad nimi, i każdy rozjazd dał dziś osobny błąd.
+  Najgłębszy: `read_server_conf()` ustawiało `LOCAL_USER=""` — a `setup-server`
+  zapisuje do `server.conf` **dokładnie dwa pola** i `LOCAL_USER` nie jest jednym
+  z nich. Czyli ładowarka kasowała zmienną, której wczytywany plik **nigdy nie
+  zawiera**: pozostałość po czasach, gdy konto było ustawieniem hosta. Gdy projekt
+  przeszedł na decyzję per relacja, usunięto zapis, a czyszczenie zostało.
+  `cmd_activate_client` i `cmd_remove_client` **obchodziły** to, każde własnym
+  odtworzeniem wartości — i te dwa obejścia sprawiały, że zachowanie wyglądało na
+  zamierzone. Trzeci wołający nie wiedział i dostał błąd. Dwa obejścia i jeden
+  błąd to koszt złamania zasady, że **ładowarka nie czyści stanu, którego nie jest
+  właścicielem**. Czyszczenie usunięte, moja własna łata razem z nim.
+  Druga duplikacja: gramatyka nazwy konta istniała w **trzech kopiach** różniących
+  się tylko prefiksem błędu (`setup-server`, `add-client`, `local-backup`) —
+  trzecią dopisałem wczoraj, kopiując drugą, i tak samo odziedziczyłem brakujące
+  odtworzenie `LOCAL_USER`. Jedna funkcja `local_user_name_valid` zamiast trzech.
+  `test/localbackup` +3, w tym asercja, że ładowarka zostawia `LOCAL_USER`
+  w spokoju — ta jedna linia złapałaby wczorajszy błąd.
 - **Wdrożenie jednoserwerowe przyjmuje `--local-user` (2026-08-21).** Do tej pory
   mogło chodzić **tylko jako root**, i to nie z projektu, tylko z przeoczenia:
   parser formy lokalnej odrzucał flagę (`unknown option --local-user=...`),

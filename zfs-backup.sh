@@ -2371,6 +2371,24 @@ client_local_path() {   # <source dataset> -> where it lands locally
 # opts out.
 cron_target_user() { printf '%s' "${LOCAL_USER:-root}"; }
 
+# The ONE grammar for --local-user, because three commands ask the same question
+# and were each answering it with their own copy of this case statement --
+# setup-server, add-client and (from 2026-08-21) local-backup. Three copies
+# differing only in the prefix on the error is how they drift: the third was
+# written by copying the second, which is also how local-backup inherited a
+# missing LOCAL_USER restore that the second happened to have.
+#
+# `root` is a legal answer meaning "root runs them", not an account to create,
+# so it is accepted here and the CALLER decides what that means for it.
+local_user_name_valid() {   # <name> -> 0 valid (incl. 'root'), 1 not
+    case "${1-}" in
+        root) return 0 ;;
+        *[!a-z0-9_-]* | "" | [!a-z_]*) return 1 ;;
+    esac
+    return 0
+}
+LOCAL_USER_GRAMMAR="lowercase letters, digits, _ and -, not starting with a digit"
+
 # The receive-side delegation set. Mirrors deploy.sh's ZFS_PERMS (what --pair
 # grants on a backup-mode target root) -- kept in step by test/zfsbackup's
 # parity pin, not by sourcing deploy.sh (no source edge, see deps.conf).
@@ -2694,10 +2712,7 @@ cmd_setup_server() {
     local delegate="$local_user"
     [ "$delegate" = root ] && delegate=""
     if [ -n "$delegate" ]; then
-        case "$delegate" in
-            *[!a-z0-9_-]* | "" | [!a-z_]*)
-                die "setup-server: --local-user='$delegate' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit)" ;;
-        esac
+        local_user_name_valid "$delegate"             || die "setup-server: --local-user='$delegate' is not a valid account name ($LOCAL_USER_GRAMMAR)"
     fi
 
     if [ -n "$delegate" ]; then
@@ -2852,11 +2867,8 @@ cmd_local_backup() {
     # account-aware helper below reads cron_target_user. Setting it here is what
     # makes the whole existing path point at the account instead of at root.
     if [ "$local_user_given" -eq 1 ]; then
-        case "$local_user" in
-            root) local_user="" ;;   # written literally, meaning "root runs them"
-            *[!a-z0-9_-]* | "" | [!a-z_]*)
-                die "local-backup: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
-        esac
+        local_user_name_valid "$local_user"             || die "local-backup: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
+        [ "$local_user" = root ] && local_user=""   # literal 'root' means root runs them
     else
         log "local-backup: no --local-user -- these jobs will run as root; pass --local-user=NAME to delegate them to an account"
     fi
@@ -2960,19 +2972,10 @@ cmd_local_backup() {
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
-    # read_server_conf UNCONDITIONALLY resets LOCAL_USER="" -- before it even
-    # checks whether server.conf is readable -- so the account chosen above has
-    # to be put back, exactly as cmd_activate_client and cmd_remove_client
-    # already do after their own calls. Without this the flag parsed cleanly,
-    # the variable was set, and it was gone again a hundred lines later.
-    #
-    # Measured, not deduced: probes on pve9 read LOCAL_USER=[zfsbackup] at the
-    # assignment and LOCAL_USER=[PUSTE] with cron_target_user=[root] just before
-    # the seed. Everything in between only READ the variable. It took a probe
-    # either side of the gap to see that the loader was the writer -- and the
-    # two remote paths carry a comment saying so, which is how the same trap was
-    # already known and still caught a third caller.
-    LOCAL_USER="$local_user"
+    # No LOCAL_USER restore here on purpose. read_server_conf used to clear it
+    # and this line used to put it back -- the same workaround the two remote
+    # paths carry. The loader no longer clears state it does not own, so the
+    # workaround went with it rather than being copied a third time.
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -3359,11 +3362,7 @@ cmd_add_client() {
     # untestable, which is how an earlier attempt at this guard broke six unrelated
     # assertions without proving anything.
     if [ "$local_user_given" -eq 1 ]; then
-        case "$local_user" in
-            root) ;;
-            *[!a-z0-9_-]* | "" | [!a-z_]*)
-                die "add-client: --local-user='$local_user' is not a valid account name (lowercase letters, digits, _ and -, not starting with a digit). Nothing was created." ;;
-        esac
+        local_user_name_valid "$local_user"             || die "add-client: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
     else
         # No --local-user: the jobs run as root. There is no host-wide account to
         # read and nothing to guess -- name an account to delegate them instead.
