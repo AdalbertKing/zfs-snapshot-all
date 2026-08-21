@@ -6146,25 +6146,67 @@ else
     bad "66d: an account naming its own config passes the ownership guard" "got=$got"
 fi
 
-# --- 67. the seed is passive where the family already exists (LAB6-F4) -------
-# lab4's F7 made the recurring cron line passive on a chain middle; the SEED
-# still stamped its own recursive @automated_daily_ unconditionally. Measured
-# live on the pve9<->pve1<-pve2 chain: R2's seed stamped R3's target, R3's own
-# GFS ladder then kept the younger foreign snapshot and destroyed R3's base
-# (zpool history: destroy at the first :21 after the stamp), and every later
-# pull refused on zero common GUID -- correctly fail-closed, and wedged.
-# Source-greps, because the seed's real work needs a live pair; what is
-# pinnable here is that BOTH transfer sites carry the probe and the passive
-# branch, in the same shape the emit-time detection uses.
+# --- 67. the family probe is ONE function, depth-aware (LAB6-F4, two rounds) --
+# Round one made the seed passive when the source already carries an
+# automated_* family. Round two -- caught by the clean pass itself -- was the
+# probe's DEPTH: -d 1 on a RECURSIVE root reads "fresh" when the family lives
+# only on descendants (the measured chain shape: R3 stamps tree/child deep
+# inside, the chain root is never snapshotted), so the seed re-stamped all six
+# datasets; and the emit-time passivity probe had the same blind spot, which
+# meant fixing the seed alone would have flipped the CRON line active instead.
+# One helper now: -r for recursive roots, -d 1 for enumerated datasets, used by
+# the seed, the catch-up and the emit-time decision alike.
+
+# 67a. recursive root, family only on a descendant -> the probe SEES it.
+fam_probe() {   # <recursive-roots> -> PASYWNY|AKTYWNY
+    local SB="$WORK/fam-stub"; mkdir -p "$SB"
+    cat > "$SB/ssh" <<'EOS'
+#!/bin/sh
+case "$*" in
+  *" -r "*) printf '%s
+' "tank/mid/deep@automated_hourly_x" ;;
+  *" -d 1 "*) : ;;
+esac
+EOS
+    chmod +x "$SB/ssh"
+    PATH="$SB:$PATH" RR="$1" ZB="$ZFSBACKUP" bash -c '
+        source "$ZB"
+        LOAD_KEYFILE=/k LOAD_ALIAS=a LOAD_ALIAS_KH=/kh LOAD_PORT=22 LOAD_ACCOUNT=u LOAD_HOST=h
+        PEER_SAVED_RECURSIVE_ROOTS="$RR"
+        source_family_exists tank/mid && echo PASYWNY || echo AKTYWNY'
+}
+got=$(fam_probe tank/mid)
+[ "$got" = PASYWNY ]     && ok "67a: a recursive root sees a family living only on its descendants"     || bad "67a: a recursive root sees a family living only on its descendants" "got=$got"
+
+# 67b. the SAME topology, enumerated root -> -d 1, correctly blind to the
+#      descendant (its children are separate list entries probed on their own).
+got=$(fam_probe "")
+[ "$got" = AKTYWNY ]     && ok "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)"     || bad "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)" "got=$got"
+
+# 67c. all three consumers go through the ONE helper -- three inline copies of
+#      this probe would drift exactly like everything else this campaign
+#      measured. Source-grep: the helper exists, and no caller keeps a private
+#      "-t snapshot ... automated_" probe of its own.
+# The probe idiom is `| grep -q '@automated_'` -- exactly one, inside the
+# helper. (A LOOSER grep also catches activate's newest-matching-snapshot
+# query at its dry-run block; that one answers WHICH, not WHETHER, and is
+# not this probe.)
+n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
+n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
+if [ "$n_inline" -eq 1 ] && [ "$n_calls" -eq 3 ]; then
+    ok "67c: one probe implementation, three callers (seed, catch-up, emit)"
+else
+    bad "67c: one probe implementation, three callers (seed, catch-up, emit)"         "inline=$n_inline calls=$n_calls"
+fi
+
+# 67d. both transfer sites still carry the passive branch itself.
 for fn in cmd_seed cmd_final_catchup; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
     if printf '%s
-' "$body" | grep -q 'PASSIVE seed (-e)'        && printf '%s
-' "$body" | grep -q 'seed_flags=(-m automated_ -e)'        && printf '%s
-' "$body" | grep -qF 'grep -q '"'"'@automated_'"'"''; then
-        ok "67: $fn probes the source family and seeds passively when one exists"
+' "$body" | grep -q 'seed_flags=(-m automated_ -e)'; then
+        ok "67d: $fn seeds passively when the family exists"
     else
-        bad "67: $fn probes the source family and seeds passively when one exists" "brak galezi pasywnej w $fn"
+        bad "67d: $fn seeds passively when the family exists" "brak galezi w $fn"
     fi
 done
 
