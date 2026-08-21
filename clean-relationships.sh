@@ -98,7 +98,7 @@ for a in "$@"; do
         -h|--help)      usage 0 ;;
         --purge=*)      PURGE_TARGET="${a#*=}" ;;
         --purge-orphans) PURGE_ORPHANS=1 ;;
-        --yes)          ASSUME_YES=1 ;;
+        --yes|-y)       ASSUME_YES=1 ;;
         *) echo "unknown option: $a" >&2; usage 2 ;;
     esac
 done

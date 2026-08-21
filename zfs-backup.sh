@@ -3374,7 +3374,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         local ans
         read -rp "Zainstalowac ten backup lokalny? [t/N] " ans
         case "$ans" in
-            t|T|tak|TAK) ;;
+            t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$cand"; die "not confirmed -- $config was NOT touched, nothing installed" ;;
         esac
     fi
@@ -3552,9 +3552,18 @@ cmd_add_client() {
     # the far end of a generated cron line, where a typo becomes a nightly
     # failure mail instead of an error you can see now.
     if [ -n "$bandwidth" ]; then
-        case "$bandwidth" in
-            *[!0-9kKmMgG]* | "" | *[kKmMgG]*[kKmMgG]* | [kKmMgG]*)
-                die "add-client: --bandwidth='$bandwidth' is not a byte rate (digits, optionally followed by one of k/M/G -- e.g. 20M). It is BYTES per second, not bits." ;;
+        # The accepted set is THE ENGINE'S set (snapsend/snapget:
+        # ^[0-9]+[bkKmMgG]?$), transcribed, not approximated. The previous
+        # approximation disagreed in both directions (basket B8): '100b' was
+        # legal to the engine and refused here, while '2M0' passed here, was
+        # written into the client record, rebuilt into the cron line, and the
+        # engine refused it EVERY NIGHT -- a validator stricter than its
+        # engine trades one visible error now for an invisible one forever.
+        local _bw_core="$bandwidth"
+        case "$_bw_core" in *[bkKmMgG]) _bw_core="${_bw_core%?}" ;; esac
+        case "$_bw_core" in
+            "" | *[!0-9]*)
+                die "add-client: --bandwidth='$bandwidth' is not a byte rate the engines accept (digits, then at most one of b/k/M/G at the end -- e.g. 20M). It is BYTES per second, not bits." ;;
         esac
     fi
 
@@ -3994,7 +4003,7 @@ load_client_and_connection() {
 cmd_seed() {
     local name="${1:-}"; shift || true
     local yes=0
-    for a in "$@"; do case "$a" in --yes) yes=1 ;; *) die "seed: unknown option $a" ;; esac; done
+    for a in "$@"; do case "$a" in --yes|-y) yes=1 ;; *) die "seed: unknown option $a" ;; esac; done
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
     # shellcheck disable=SC1090
@@ -4065,7 +4074,7 @@ cmd_seed() {
             echo "Cel:     (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
         fi
         read -rp "Wykonac PELNY transfer teraz (rzeczywiste dane, bez -n)? [t/N] " ans
-        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- no transfer performed, state stays 'seeding'" ;; esac
+        case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- no transfer performed, state stays 'seeding'" ;; esac
     fi
 
     local ds localpath failed=0
@@ -4150,7 +4159,7 @@ cmd_seed() {
 cmd_final_catchup() {
     local name="${1:-}"; shift || true
     local yes=0
-    for a in "$@"; do case "$a" in --yes) yes=1 ;; *) die "final-catchup: unknown option $a" ;; esac; done
+    for a in "$@"; do case "$a" in --yes|-y) yes=1 ;; *) die "final-catchup: unknown option $a" ;; esac; done
     [ -n "$name" ] || die "final-catchup requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
@@ -4169,7 +4178,7 @@ cmd_final_catchup() {
         echo "Endpoint: $(endpoint_display)"
         echo "Zrodla:   $PEER_SAVED_DATASETS"
         read -rp "Wykonac koncowy transfer przyrostowy teraz? [t/N] " ans
-        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing transferred" ;; esac
+        case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing transferred" ;; esac
     fi
 
     local base; base=$(snapget_local_base)
@@ -4532,7 +4541,7 @@ cmd_activate_client() {
     local yes=0 verbose=0
     for a in "$@"; do
         case "$a" in
-            --yes) yes=1 ;;
+            --yes|-y) yes=1 ;;
             --verbose) verbose=1 ;;
             *) die "activate-client: unknown option $a" ;;
         esac
@@ -4829,7 +4838,7 @@ cmd_activate_client() {
     if [ "$yes" -ne 1 ]; then
         read -rp "Aktywowac backup? [t/N] " ans
         case "$ans" in
-            t|T|tak|TAK) ;;
+            t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
         esac
     fi
@@ -4893,7 +4902,7 @@ cmd_activate() {
     for a in "$@"; do
         case "$a" in
             --host=*) requested_host="${a#*=}" ;;
-            --yes) yes=1 ;;
+            --yes|-y) yes=1 ;;
             --verbose) verbose=1 ;;
             *) die "activate: unknown option $a" ;;
         esac
@@ -5015,7 +5024,7 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     local yes=0 a config_arg="" local_user_arg=""
     for a in "$@"; do
         case "$a" in
-            --yes) yes=1 ;;
+            --yes|-y) yes=1 ;;
             --config=*)     config_arg="${a#*=}" ;;
             --local-user=*) local_user_arg="${a#*=}"
                 local_user_name_valid "$local_user_arg" \
@@ -5119,7 +5128,7 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     if [ "$yes" -ne 1 ]; then
         read -rp "Zmigrowac ten host na standardowa polityke GFS? [t/N] " ans
         case "$ans" in
-            t|T|y|Y) ;;
+            t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
         esac
     fi
@@ -5330,7 +5339,7 @@ $gcerr"
     if [ "$yes" -ne 1 ]; then
         read -rp "Dodac brakujaca retencje zrodla? [t/N] " ans
         case "$ans" in
-            t|T|y|Y) ;;
+            t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
         esac
     fi
@@ -6095,6 +6104,16 @@ rux_split_source() {
     # datasets at pair time and the operator picks -- so only the host is required.
     [ -n "$host" ] \
         || die "rux: --source='$s' is not a valid remote source (need HOST:DATASET, or HOST: for deferred scope)"
+    # Basket B6: the same colon separates a DATASET here and a PORT in
+    # --host=HOST:PORT, one screen apart in the same script. A dataset that is
+    # all digits is legal to ZFS, so this cannot be refused outright -- but it
+    # is almost certainly the other flag's grammar arriving in this one, and
+    # 'pool 22 does not exist' three commands later names the symptom, not the
+    # mistake.
+    case "$dataset" in
+        *[!0-9]*|'') ;;
+        *) warn "rux: --source='$s' -- '$dataset' is all digits, which reads like a PORT. Here the colon separates the DATASET (--source=HOST:pool/path); a port goes in --port=$dataset. Proceeding, in case a pool really is named '$dataset'." ;;
+    esac
     printf '%s\t%s\n' "$host" "$dataset"
 }
 
@@ -6659,6 +6678,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # arguments, so a local --source is still byte-for-byte cmd_local_backup.
         # `local-backup` stays a LOCAL-only internal alias, unchanged.
         --source=*|--target=*) rux_entry "$@" ;;
+        --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         # Forwarded, not implemented: restore lives in zfs-restore.sh since the
         # 2026-08-17 split -- it is the one operation whose active side writes

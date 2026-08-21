@@ -311,7 +311,13 @@ PEER_ALLOW_PUBLIC=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --check-only)   CHECK_ONLY=1; shift ;;
+        --check-only|--plan) CHECK_ONLY=1; shift ;;
+        # --plan is the package-wide audit verb (zfs-backup.sh --plan,
+        # zfs-restore.sh --plan); --check-only stays as the historical name.
+        # Basket C: deploy.sh and zfs-backup.sh were the only two tools without
+        # --version; the checkout SHA is the honest version here, because
+        # deployment IS the hourly git pull.
+        --version) echo "deploy.sh (zfs-snapshot-all) $(git -C "$_DEPLOY_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
         --test-mail)    SEND_TEST_MAIL=1; shift ;;
         --alerts=*)     ALERT_MODE="${1#*=}"; shift ;;
         --alerts)       ALERT_MODE="${2:-}"; shift 2 ;;
@@ -357,7 +363,11 @@ while [ "$#" -gt 0 ]; do
         --fullcron)     FULLCRON_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
-        --peer=*)       PEER_HOST="${1#*=}"; shift ;;
+        # --host= is the alias: zfs-backup.sh's normal form for the other
+        # machine is --host, deploy grew up with --peer, and the concept is one
+        # (basket B2). Both parse; --peer stays the documented form HERE because
+        # every runbook and printed instruction on the fleet says --peer.
+        --peer=*|--host=*) PEER_HOST="${1#*=}"; shift ;;
         --peer)         PEER_HOST="${2:-}"; shift 2 ;;
         # Normalised at the door, not at every reader. The package's list
         # grammar is the comma (dataset_list_split, lib-scope.sh); the SPACE
@@ -6371,17 +6381,22 @@ cat <<'EOF'
   1. Add the actual snapsend.sh / snapget.sh / delsnaps.sh cron lines for
      THIS host's datasets. There is no generic template here on purpose --
      copying another host's dataset names blindly is how backups silently
-     stop protecting the right data. For each job, follow the pattern
-     already used on pve0/pve1:
+     stop protecting the right data. Prefer writing a config and letting
+     gen-cron.sh render the lines -- it lints what these hand-written
+     shapes cannot. If writing by hand anyway:
 
        <schedule> /root/scripts/zfs-snapshot-all/snapsend.sh -m <prefix> \
-         [-e] [-r] [-u] [-z] -v 3 <DATASETS> [<REMOTE>] \
+         [-e] [-r|-R] [-u] [-z] -v 3 <DATASETS> [<REMOTE>] \
          2>>/root/scripts/cron.log || /root/scripts/notify-fail.sh "<short job name>"
 
-     Same pattern for delsnaps.sh (retention) -- always pass -R and a
-     specific enough pattern (e.g. automated_hourly, not just automated_)
-     unless a flat/blanket retention is genuinely what you want for that
-     host.
+     For delsnaps.sh (retention): its -v is a bare TOGGLE, not '-v 3' --
+     the engines' -v takes a level, delsnaps' does not, and '-v 3' there
+     makes '3' the dataset list (basket B7; the two parsers are frozen).
+     Use -R when subtree retention is wanted, and a specific enough pattern
+     (e.g. automated_hourly, not just automated_) unless a flat/blanket
+     retention is genuinely what you want. Always give explicit retention
+     flags: delsnaps with NO retention flags defaults to age-mode with
+     threshold=now, which deletes everything the pattern matches.
 
   2. Before adding a new schedule, sanity-check it against what's ALREADY
      in crontab -l on this host -- specifically watch for jobs that can
