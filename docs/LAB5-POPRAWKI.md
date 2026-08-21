@@ -169,6 +169,13 @@ stał. Uratował limit czasu nałożony z zewnątrz, nie kod.
 terminal; bez terminala wypisać ścieżkę pliku i komendę do uruchomienia ręcznie.
 `[ -t 0 ]` jest całym testem.
 
+**ZROBIONE 2026-08-21.** Bramka `[ -t 0 ]` po NASZEJ stronie — `-t` wymusza
+pty na peerze niezaleznie od tego, czy tu jest czlowiek, wiec pytanie peera to
+pytanie zlego konca. Bez terminala zakres jest **szkicowany** (to jest bez
+skutkow ubocznych i przydatne), po czym przebieg staje z nowym kodem 5 i dwoma
+komendami do dokonczenia recznie. `-t` ustepuje `-n`. Kod 5 nie jest awaria:
+zakres to dokument zgody, a edytor otwarty przy nikim zgody nie tworzy.
+
 ### P7. Self-sync przechodzi planowanie
 
 `--source=<własny adres> --mode=sync` daje `rc=0`. `validate_remote_host`
@@ -177,6 +184,14 @@ konto, klucze i linie crona, a odmowa przyjdzie przy pierwszym jobie.
 
 **Poprawka:** wołać tę samą kontrolę w planerze RUX, przed `add-client`.
 Straż istnieje — chodzi tylko o drugie miejsce wywołania.
+
+**ZROBIONE 2026-08-21.** `rux_refuse_self_source` w planerze, przed `add-client`.
+**Celowo NIE** jest to kontrola machine-id: tamta wymaga kanalu ssh, a w chwili
+planowania nie ma jeszcze klucza ani parowania — wymaganie go znaczyloby, ze plan
+nie moze zadzialac, dopoki nie powstanie to, czemu ma zapobiec. Pytanie "czy ten
+adres jest moj" nie potrzebuje peera. Poprawne, ale niezupelne: adres docierajacy
+tu przez NAT albo alias nadal przejdzie, i `validate_remote_host` zostaje na to
+siatka. Chodzi o zlapanie zwyklej pomylki tam, gdzie zostala popelniona.
 
 ### P8. `remove-client` zabiera wspólny rekord parowania
 
@@ -188,6 +203,13 @@ czasownikiem.
 **Poprawka:** przed usunięciem rekordu sprawdzić, czy inna relacja go nie
 używa; jeśli używa — zostawić i powiedzieć, że został, bo dzieli go z `<nazwa>`.
 
+**ZROBIONE 2026-08-21.** Kolejnosc tego nie naprawi — ktokolwiek idzie pierwszy,
+zabiera rekord. Wiec `remove-client` pyta, czy ktos inny go jeszcze trzyma, i
+jesli tak, **zostawia go i mowi, ze zostawil**, wymieniajac kto trzyma. Ostatnia
+relacja robi `--unpair`, nie pierwsza. Pulapka warta zapisania: zrodlowanie cudzego
+rekordu ustawia `PEER_HOST` z tego pliku, wiec porownanie z zywa zmienna
+porownuje ja ze soba i pasuje zawsze — adres jest zapamietany przed petla.
+
 ### P9. Nagrobek nazywa dane, których już nie ma
 
 `clean-relationships.sh --purge` wypisuje `DATA LEFT IN PLACE` także wtedy, gdy
@@ -195,6 +217,10 @@ dataset został skasowany chwilę wcześniej. Kosmetyczne, ale to komunikat
 o stanie, który nie został sprawdzony — czyli ta sama rodzina co reszta.
 
 **Poprawka:** sprawdzić istnienie przed wypisaniem, tak jak robi to już audyt.
+
+**ZROBIONE 2026-08-21.** `zfs list` przed wypisaniem, a przypadek "juz nie ma"
+dostaje wlasne brzmienie zamiast milczenia — milczenie nie pozwala odroznic
+sprawdzonego-i-nieobecnego od linii, ktora nigdy nie powstala.
 
 ### P10. `migrate-profile` i `audit-source-retention` nie umieją wybrać relacji
 
