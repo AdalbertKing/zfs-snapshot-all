@@ -5901,7 +5901,36 @@ cmd_remove_client() {
         warn "no managed dataset list on file (client was never activated?) -- skipping cron removal"
     fi
 
-    bash "$DEPLOY" --unpair --peer="$PEER_HOST" || die "deploy.sh --unpair failed -- see above"
+    # P8. The pairing record is keyed by the peer ADDRESS, not by the
+    # relationship, so two relationships to the same peer SHARE one
+    # peers/<addr>.conf. --unpair deletes it. Removing the first relationship
+    # therefore left the second in 'seeding' with "no pairing manifest" -- and
+    # remove-client refuses a client in that state, so the survivor became
+    # unremovable by its own verb. Measured in the 2026-08-20 campaign.
+    #
+    # Nothing here can be fixed by ordering: whichever goes first takes the
+    # record. So ask whether anyone else is still using it, and if so leave it
+    # and SAY that it was left, naming who holds it. The last relationship out
+    # unpairs; the others just stop referring to it.
+    # this_peer is captured BEFORE the loop: sourcing another client's record
+    # sets PEER_HOST from that file, so comparing against the live variable
+    # inside the subshell would compare it with itself and match every time.
+    local this_peer="$PEER_HOST"
+    local -a peer_shared_with=()
+    local _f _other
+    for _f in "$CLIENTS_DIR"/*.conf; do
+        [ -r "$_f" ] || continue
+        _other=$( . "$_f" >/dev/null 2>&1
+                  [ "${CLIENT_NAME:-}" = "$name" ] && exit 0
+                  [ "${STATE:-}" = removed ] && exit 0
+                  [ "${PEER_HOST:-}" = "$this_peer" ] && printf '%s' "${CLIENT_NAME:-}" )
+        [ -n "$_other" ] && peer_shared_with+=("$_other")
+    done
+    if [ "${#peer_shared_with[@]}" -gt 0 ]; then
+        log "leaving the pairing with $PEER_HOST in place -- it is keyed by the peer ADDRESS and ${peer_shared_with[*]} still uses it. This client's own state is removed below; --unpair is the last relationship's job, not this one's."
+    else
+        bash "$DEPLOY" --unpair --peer="$PEER_HOST" || die "deploy.sh --unpair failed -- see above"
+    fi
 
     {
         cat "$cpath"
@@ -5918,7 +5947,11 @@ cmd_remove_client() {
     fi
     rmdir "$RELATIONSHIPS_DIR/$name" 2>/dev/null || :
 
-    log "client '$name' removed locally. Run the peer-side commands deploy.sh --unpair printed above."
+    if [ "${#peer_shared_with[@]}" -gt 0 ]; then
+        log "client '$name' removed locally. NO peer-side commands to run: the pairing with $PEER_HOST stays, because ${peer_shared_with[*]} still uses it."
+    else
+        log "client '$name' removed locally. Run the peer-side commands deploy.sh --unpair printed above."
+    fi
 }
 
 # ------------------------------------------------------------------------------
