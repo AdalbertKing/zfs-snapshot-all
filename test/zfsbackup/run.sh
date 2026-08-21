@@ -6210,6 +6210,18 @@ for fn in cmd_seed cmd_final_catchup; do
     fi
 done
 
+# 67e. the engine half (owner-authorized unfreeze, snapget v2.70): an
+#      -R-expanded child with no matching family is scaffolding under -e --
+#      skipped with a log, never a failure -- while a REQUESTED root with
+#      nothing to adopt stays the hard error. Source-grep of the frozen file;
+#      the live proof is the chain's R2 running green.
+SG="$(dirname "$ZFSBACKUP")/snapget.sh"
+if grep -q 'REQUESTED_ROOTS' "$SG"    && grep -q 'scaffolding, skipped' "$SG"    && grep -q 'log 0 "No source snapshots found"' "$SG"; then
+    ok "67e: snapget skips family-less expanded children under -e, roots still fail hard"
+else
+    bad "67e: snapget skips family-less expanded children under -e, roots still fail hard"         "$(grep -c 'scaffolding, skipped' "$SG") skip / $(grep -c 'REQUESTED_ROOTS' "$SG") roots"
+fi
+
 # 63i. an unknown policy is refused rather than silently treated as one of them.
 out=$(ctx nonsense "" "" "" ""); rc=$?
 if printf '%s' "$out" | grep -q "unknown policy"; then

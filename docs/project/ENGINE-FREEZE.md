@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 274baf7ec76e59cee3bfea961486c11aa485517f -->
-<!-- frozen: snapget.sh 100755 675f46d1664351f9219ed3012ad2b2d52573982c -->
+<!-- frozen: snapget.sh 100755 5de207de47e98d2a5b1de797d61294a8c2a9c348 -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
 <!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
@@ -54,6 +54,17 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-21 (snapget.sh v2.69 -> v2.70): under -e, an -R-EXPANDED child with
+  no matching family is scaffolding and is skipped with a log line instead of
+  failing the run; a REQUESTED root with nothing to adopt stays the hard error
+  it always was. Authorized live during LAB6 pass 5: the chain middle's empty
+  path containers (created by recv -p, never snapshotted by anything) failed
+  every passive seed and would have failed every passive cron tick, while the
+  leaves transferred correctly (guid-verified). The upper layer cannot fix
+  this honestly -- enumerating leaves at activation freezes membership, which
+  the owner rejected; under -e the family IS the membership, so the engine has
+  to be the one that says "no family here means not a member".
 
 - **2026-08-17** -- `delsnaps.sh`: failure-cause-specific destroy hints
   (lab3 campaign, owner direction "napraw błędy"). The unconditional

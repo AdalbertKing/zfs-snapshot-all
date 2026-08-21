@@ -357,7 +357,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.69'
+VERSION='v2.70'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1100,6 +1100,10 @@ process_dataset() {
         local src_snaps
         src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
         if [ ${#src_snaps[@]} -eq 0 ]; then
+            if [ "${EXPANDED_CHILD:-0}" -eq 1 ]; then
+                log 1 "No family on expanded child '$src_dataset' -- scaffolding, skipped (under -e the family defines membership)"
+                return 0
+            fi
             log 0 "No source snapshots found"
             return 1
         fi
@@ -1107,6 +1111,10 @@ process_dataset() {
         if [ -n "$MESSAGE" ]; then
             src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
             if [ ${#src_snaps[@]} -eq 0 ]; then
+                if [ "${EXPANDED_CHILD:-0}" -eq 1 ]; then
+                    log 1 "No '$MESSAGE*' family on expanded child '$src_dataset' -- scaffolding, skipped (under -e the family defines membership)"
+                    return 0
+                fi
                 log 0 "No source snapshots matching message: $MESSAGE"
                 return 1
             fi
@@ -1962,6 +1970,14 @@ LOCAL_BASE=$(echo "$LOCAL_BASE" | sed 's:^/+::; s:/+$::')
 # the main loop below. Same ordering guarantee as snapsend.sh: `zfs list -r`
 # lists a dataset before any descendant, and sort -u preserves that (a
 # parent's name always sorts before "parent/anything").
+# ENGINE UNFREEZE 2026-08-21 (owner-authorized; see docs/project/ENGINE-FREEZE.md):
+# the names the OPERATOR typed, kept apart from what -R discovers. Under -e an
+# expanded child with no matching family is SCAFFOLDING (an empty path
+# container recv -p created; nothing ever snapshots it) and is skipped in
+# process_dataset -- but a REQUESTED root with nothing to adopt stays the hard
+# error it always was: there the operator asked to consume a family that does
+# not exist.
+declare -a REQUESTED_ROOTS=("${DATASETS[@]}")
 if [ $FLAT_RECURSE -eq 1 ]; then
     declare -a EXPANDED_DATASETS=()
     for ds in "${DATASETS[@]}"; do
@@ -2096,6 +2112,10 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     quiesce_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
     declare -a QSCOPE=() QSNAPS=()
     for src_path in "${DATASETS[@]}"; do
+    EXPANDED_CHILD=1
+    for _rr in "${REQUESTED_ROOTS[@]}"; do
+        [ "$src_path" = "$_rr" ] && { EXPANDED_CHILD=0; break; }
+    done
         # Under -r the guests live in the CHILDREN of the named parent, so the
         # scope is expanded remotely; the snapshot list still names the parent,
         # because `zfs snapshot -r parent@snap` covers the tree atomically by
