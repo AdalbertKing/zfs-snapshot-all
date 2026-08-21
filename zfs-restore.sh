@@ -126,7 +126,7 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
     if [ "$yes" -ne 1 ]; then
         local ans
         read -rp "Odtworzyc? [t/N] " ans
-        case "$ans" in t|T|tak|TAK) ;; *) die "not confirmed -- nothing was created" ;; esac
+        case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing was created" ;; esac
     fi
 
     local src_guid; src_guid="$(zfs get -H -o value guid "${copy}@${snap}" 2>/dev/null)"
@@ -1106,7 +1106,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
         local ans
         read -rp "Zniszczyc powyzsze i odtworzyc '$src' z kopii? [t/N] " ans
         case "$ans" in
-            t|T|tak|TAK) ;;
+            t|T|tak|TAK|y|Y|yes|YES) ;;
             *) restore_die_after_cleanup "$src" ok \
                    "restore (odtworzenie niszczace): niepotwierdzone -- nic nie zniszczono." \
                    "$preview_snap" ;;

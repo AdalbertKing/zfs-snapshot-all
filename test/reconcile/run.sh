@@ -105,8 +105,8 @@ case "$out" in *"UNCOVERED"*tank/forgotten*) ok "an uncovered dataset is reporte
   *) bad "an uncovered dataset is reported" "$out" ;; esac
 case "$out" in *tank/covered*) bad "a covered dataset is not listed as uncovered" "$out" ;;
   *) ok "a covered dataset is not listed as uncovered" ;; esac
-[ "$(rc)" = 1 ] && ok "an uncovered dataset makes the exit code non-zero" \
-                || bad "an uncovered dataset makes the exit code non-zero" "rc=$(rc)"
+[ "$(rc)" = 3 ] && ok "an uncovered dataset exits 3 (findings) -- distinguishable from a crash" \
+                || bad "an uncovered dataset exits 3 (findings) -- distinguishable from a crash" "rc=$(rc)"
 
 # A pool root is not a workload and must not be reported forever.
 case "$out" in *$'\n  tank\n'*) bad "the pool root is not reported as uncovered" "$out" ;;
@@ -140,8 +140,8 @@ conf '[dataset:tank/real]
 out="$(run)"
 case "$out" in *"DECLARED BUT ABSENT"*tank/ghost*) ok "a job whose source is gone is reported" ;;
   *) bad "a job whose source is gone is reported" "$out" ;; esac
-[ "$(rc)" = 1 ] && ok "an absent declared dataset makes the exit code non-zero" \
-                || bad "an absent declared dataset makes the exit code non-zero" "rc=$(rc)"
+[ "$(rc)" = 3 ] && ok "an absent declared dataset exits 3 (findings) -- distinguishable from a crash" \
+                || bad "an absent declared dataset exits 3 (findings) -- distinguishable from a crash" "rc=$(rc)"
 
 # --- system datasets are MARKED, never silently dropped ----------------------
 # The opposite direction from deploy.sh --draft-scope, deliberately: there a

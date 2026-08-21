@@ -1503,6 +1503,19 @@ resolve_bool_field() {
         yes) BOOL_FIELD=1 ;;
         no)  BOOL_FIELD=0 ;;
         '')  die "$ctx: '$field' is blank -- a blank field is not a default, it is a question nobody answered (say yes or no)" ;;
+        flat|atomic)
+             # Basket B3, and only for the recursion field -- this function is
+             # generic and 'gfs = flat' deserves the generic refusal, not a
+             # lecture about send modes. Recursion is no|flat|atomic on a
+             # [dataset:] (the engines have two recursion modes) but yes|no on
+             # a [prune:]/[prune-bookmarks:], because delsnaps has exactly one
+             # recursion (-R, a subtree walk). The word arriving here is almost
+             # always a [dataset:] habit; name the mapping, not just 'expected
+             # yes'.
+             if [ "$field" = recursive ]; then
+                 die "$ctx: $field = '$raw' -- this section's recursion is yes|no, not no|flat|atomic. delsnaps.sh has exactly ONE recursion mode (a subtree walk, its -R); 'flat' and 'atomic' are SEND modes and only a [dataset:] section chooses between them. If you meant 'recurse over the subtree', say ${field} = yes."
+             fi
+             die "$ctx: $field = '$raw' -- expected 'yes' or 'no'." ;;
         *)   die "$ctx: $field = '$raw' -- expected 'yes' or 'no'. Until 2026-08-20 every other spelling silently meant 'no', which is how a one-letter typo turned a declared policy into its opposite while generation still reported success." ;;
     esac
 }
@@ -3335,7 +3348,13 @@ do_reconcile() {
         return 0
     fi
     echo "NOT OK -- ${#uncovered[@]} uncovered, ${#missing[@]} declared but absent."
-    return 1
+    # 3, not 1 (basket B10). 1 is what die() exits with, so a script driving
+    # --reconcile could not tell "there are uncovered datasets" from "gen-cron
+    # crashed before it looked" -- and the two demand opposite reactions: a
+    # report to act on, versus a report that never happened. clean-relationships
+    # already draws this exact line (3 = orphans found); adopted here as the
+    # package convention: 0 clean, 1 broken, 2 usage, 3 findings.
+    return 3
 }
 
 # --uninstall runs BEFORE the config is required, and that is the point of it.
