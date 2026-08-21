@@ -161,6 +161,10 @@ COLLECTOR_LABEL="$(hostname -s 2>/dev/null || hostname)"
 # SERVER_CONF lives in lib-backup-common.sh since the restore split -- both
 # programs must agree on where the server config is, so neither defines it.
 CLIENTS_DIR="/etc/zfs-snapshot-all/clients"
+# Where crontabs live, for the "who has one" question in cron_known_accounts.
+# Debian/Proxmox first, RHEL second. Only ever read, never written -- gen-cron
+# remains the single writer, through crontab(1).
+CRON_SPOOL_DIRS=(/var/spool/cron/crontabs /var/spool/cron)
 
 # Shared cluster filesystem, world-searchable. A plain global (not read from
 # the environment) like the others above -- overridden the same way in tests,
@@ -2430,15 +2434,33 @@ cron_source_for_user() {   # <account> -> its managed block's config path, or no
     normalize_cron_source "$src"
 }
 
-# Every account this host might be running managed jobs as: root, plus every
-# account named by one of OUR OWN records.
+# Every account this host might be running managed jobs as. CANDIDATES only --
+# the caller decides membership by asking cron_source_for_user whether each one
+# actually carries a managed block.
 #
-# Deliberately not `ls /home` or a passwd scan. An account exists for reasons
-# that have nothing to do with this project, and treating one as ours because it
-# has a home directory is the same class of mistake as reading directory
-# ownership instead of `id` -- a local fact standing in for a decision. If no
-# record of ours names an account, this project did not put jobs there.
-cron_known_accounts() {   # -> one account per line, root first, deduplicated
+# Three sources, and the third was learned the hard way. Live on pve2,
+# 2026-08-21, the first version of this returned root alone and the P10 refusal
+# did not fire on the very host it was measured against:
+#
+#   * root, always;
+#   * every account named by one of OUR OWN records (clients/, peers/);
+#   * every account that HAS A CRONTAB.
+#
+# The first version stopped after the second bullet, reasoning that an account
+# exists for reasons unrelated to this project and treating one as ours because
+# it has a home directory is a local fact standing in for a decision. That
+# reasoning is still right, and it is still why /home and passwd are not read.
+# What it got wrong is the premise: it assumed every account running our jobs
+# got there through a RELATIONSHIP. Production on this fleet did not. Those are
+# plain local jobs in an account's crontab, older than the relationship model,
+# and no record of ours has ever named them -- so the check looked past the
+# exact thing it existed to find.
+#
+# The crontab spool is not an account enumeration in the sense that was
+# rejected. It answers "who has a crontab", and the caller then filters on OUR
+# OWN block marker, so an unrelated account cannot be claimed by this: it would
+# have to be running a block we wrote.
+cron_known_accounts() {   # -> one candidate per line, root first, deduplicated
     local f u
     {
         echo root
@@ -2451,6 +2473,16 @@ cron_known_accounts() {   # -> one account per line, root first, deduplicated
             [ -r "$f" ] || continue
             u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
             [ -n "$u" ] && echo "$u"
+        done
+        # Debian/Proxmox spool first, then the RHEL layout. A name here is a
+        # candidate and nothing more.
+        local d
+        for d in "${CRON_SPOOL_DIRS[@]}"; do
+            [ -d "$d" ] || continue
+            for f in "$d"/*; do
+                [ -f "$f" ] || continue
+                echo "${f##*/}"
+            done
         done
     } 2>/dev/null | awk 'NF && !seen[$0]++'
 }
