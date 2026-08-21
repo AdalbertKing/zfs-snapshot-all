@@ -1047,14 +1047,27 @@ peer_scope_path() {
 #   2  --draft-scope failed -- stopped before the editor, no file created
 #   3  the editor itself exited non-zero
 #   4  --commit-scope-check failed on the file the editor produced
+#   5  no terminal here, so the scope was drafted but NOT reviewed (P6)
 #   *  ssh/transport failure (host unreachable, session killed, etc.)
+#
+# P6, measured in the 2026-08-20 campaign: with no terminal on this side, the
+# `ssh -t` below still allocated a pty on the peer and vi opened into nobody.
+# Eight minutes, a swap file left behind, the whole enrolment stalled -- and
+# what ended it was a timeout imposed from outside, not this code.
+#
+# The gate is local, and it has to be: `-t` forces a pty on the peer whether or
+# not a human exists here, so asking the peer is asking the wrong end. Same
+# `[ -t 0 ]` shape as the O14 fix on --join, for the same reason -- an editor is
+# a conversation, and there is nobody to have it with.
 remote_scope_stage() {
     local label="$1" host="$2" port="$3" scope="$4"
+    local can_edit=0; [ -t 0 ] && can_edit=1
     local remote_script
     remote_script=$(cat <<EOF2
 set -u
 cd $REPO_DIR || { echo "cannot cd into $REPO_DIR on this peer -- is deploy.sh deployed at its usual path?" >&2; exit 1; }
 SCOPE="$scope"
+CAN_EDIT=$can_edit
 if [ -e "\$SCOPE" ]; then
     echo "existing scope file found at \$SCOPE -- opening it directly, no draft"
 else
@@ -1062,6 +1075,15 @@ else
         echo "draft-scope failed for label '$label' (see error above) -- stopping before the editor; no scope file was created" >&2
         exit 2
     fi
+fi
+if [ "\$CAN_EDIT" -ne 1 ]; then
+    echo "the scope is drafted at \$SCOPE, but this run has no terminal, so it has NOT been reviewed." >&2
+    echo "A scope is a consent document; opening an editor with nobody at it does not produce consent." >&2
+    echo "On this peer ($host), read it, narrow it to what you actually want to hand over, then commit it:" >&2
+    echo "    \${EDITOR:-vi} \$SCOPE" >&2
+    echo "    cd $REPO_DIR && ./deploy.sh --commit-scope=$label" >&2
+    echo "Nothing was granted." >&2
+    exit 5
 fi
 \${VISUAL:-\${EDITOR:-vi}} "\$SCOPE"
 ec=\$?
@@ -1077,8 +1099,15 @@ echo "scope for '$label' is valid and ready for local --commit-scope=$label"
 exit 0
 EOF2
 )
-    ssh -t -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
-        -p "$port" "root@$host" "$remote_script"
+    # -t only when there IS a terminal to attach it to. Asking for a pty from a
+    # session that has none is how the peer ended up running vi for nobody.
+    if [ "$can_edit" -eq 1 ]; then
+        ssh -t -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -p "$port" "root@$host" "$remote_script"
+    else
+        ssh -n -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -p "$port" "root@$host" "$remote_script"
+    fi
 }
 
 # ENROLMENT-AGREED-2026-08-02 T3: the sha256 of the scope file --commit-scope
@@ -4505,7 +4534,11 @@ EOF
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
             if [ -n "$PEER_MODE" ]; then
-                log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first only if it does not exist yet, same as 'crontab -e')..."
+                if [ -t 0 ]; then
+                    log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first only if it does not exist yet, same as 'crontab -e')..."
+                else
+                    log "no terminal here, so the scope will be DRAFTED on $PEER_HOST but not opened -- the commands to review it come below (P6)"
+                fi
                 remote_scope_stage "$my_label" "$PEER_HOST" "$PEER_PORT" "$remote_scope"
                 scope_rc=$?
                 [ "$scope_rc" -ne 0 ] && warn "the remote scope stage on $PEER_HOST did not finish cleanly (see above) -- see the exact recovery step below"
@@ -4560,6 +4593,18 @@ EOF
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+                5)
+                    # P6. Not a failure -- a refusal to fake consent. The draft
+                    # exists and is the whole point; what is missing is a human,
+                    # and no exit code can supply one.
+                    log "Zakres ZOSTAL NASZKICOWANY na $PEER_HOST, ale NIE zredagowany -- ten przebieg nie ma terminala."
+                    log "Zakres to dokument zgody. Edytor otwarty przy nikim nie tworzy zgody, wiec go nie otwieramy."
+                    log "Nic nie zostalo przyznane. Dokoncz TAM, na $PEER_HOST:"
+                    log "  ssh root@$PEER_HOST"
+                    log "  cd $REPO_DIR"
+                    log "  \${EDITOR:-vi} $remote_scope   # zawez do tego, co naprawde oddajesz"
+                    log "  ./deploy.sh --commit-scope=$my_label"
                     ;;
                 *)
                     log "Zostalo: uruchom TAM, lokalnie na $PEER_HOST:"
