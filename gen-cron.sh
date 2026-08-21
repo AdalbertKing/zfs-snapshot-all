@@ -2802,7 +2802,7 @@ migrate_rewrite() {   # <config file>
 # the two renders cannot share global state.
 #
 # Two lines are dropped, and neither is cosmetic:
-#   - the BEGIN/END markers, because cron_block_read returns the block's
+#   - the BEGIN/END markers, because the lib's block readers return the block's
 #     CONTENTS and comparing content against a marked-up render would differ
 #     every time, for a reason that has nothing to do with the migration;
 #   - "# Source: <path>", because the migrated config is rendered from a temp

@@ -245,6 +245,23 @@ else
     bad "local_knownhosts_path (root) matches deploy.sh's PEER_KEY_DIR layout" "got=$kh"
 fi
 
+# --- 3b. peer_manifest_path parity with deploy.sh (audit C1, 2026-08-21) -----
+# The trust-mirror family is deliberately duplicated deploy.sh <-> zfs-backup.sh
+# with no source edge -- and peer_manifest_path had slipped out of BOTH the
+# deps.conf enumeration and this parity suite. The comparison is BEHAVIORAL,
+# not textual: the first version of this pin diffed the source text and
+# promptly failed on formatting (one-liner here, wrapped there) -- pinning
+# whitespace is not the contract, where the manifest LIVES is.
+dp_pmp_out=$(env PEER_STATE_DIR=/PIN bash -c '
+    eval "$(sed -n "/^peer_manifest_path() {/,/^}/p" "$1")"
+    peer_manifest_path some-label' _ "$(dirname "$ZFSBACKUP")/deploy.sh")
+zb_pmp_out=$(PEER_STATE_DIR=/PIN peer_manifest_path some-label)
+if [ -n "$zb_pmp_out" ] && [ "$zb_pmp_out" = "$dp_pmp_out" ]; then
+    ok "peer_manifest_path: both programs resolve the same manifest path"
+else
+    bad "peer_manifest_path: both programs resolve the same manifest path"         "zb=[$zb_pmp_out] dp=[$dp_pmp_out]"
+fi
+
 # --- 4. ensure_cron_config: creates, templates, and is idempotent -----------
 CF="$WORK/jobs.test.conf"
 ensure_cron_config "$CF"

@@ -273,26 +273,6 @@ cron_lock_release() {   # <user>
     unset "CRON_LOCK_FD[$user]"
 }
 
-# Several users, ONE deterministic order -- sorted by name, never by call
-# order -- so a migration naming root and an account can never deadlock against
-# a hypothetical other transaction that happened to name them the other way
-# round. Anything already acquired is released before reporting failure, so a
-# refused multi-lock never leaves a partial hold behind.
-cron_lock_acquire_multi() {   # <user> [<user> ...]  -> 0 all held, 1 refused
-    local sorted u got=()
-    sorted=$(printf '%s\n' "$@" | sort -u)
-    for u in $sorted; do
-        if ! cron_lock_acquire "$u"; then
-            local g; for g in "${got[@]}"; do cron_lock_release "$g"; done
-            return 1
-        fi
-        got+=("$u")
-    done
-    return 0
-}
-cron_lock_release_multi() {   # <user> [<user> ...]
-    local u; for u in "$@"; do cron_lock_release "$u"; done
-}
 
 # Read <user>'s crontab into <outfile>, or fail loudly.
 #
@@ -449,21 +429,6 @@ cron_block_locate() {   # <file> <name>  -> 0 ok (CRON_B/CRON_E set), 1 malforme
     return 0
 }
 
-# The block's body, without its markers. Empty output for an absent block, so
-# callers distinguish "absent" from "present but empty" by the return of
-# cron_block_locate, not by the text.
-cron_block_read() {   # <user> <name>
-    local who="$1" name="$2" cur
-    cron_block_name_valid "$name" || { CRON_ERR="invalid block name '$name'"; return 1; }
-    cur=$(mktemp) || return 1
-    cron_read "$who" "$cur" || { rm -f "$cur"; return 1; }
-    if ! cron_block_locate "$cur" "$name"; then rm -f "$cur"; return 1; fi
-    if [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B+1)) ]; then
-        sed -n "$((CRON_B+1)),$((CRON_E-1))p" "$cur"
-    fi
-    rm -f "$cur"
-    return 0
-}
 
 # Render what the crontab WOULD look like with <name>'s block replaced by
 # <bodyfile> (or removed, when bodyfile is "-"). Everything outside the block is
@@ -611,22 +576,6 @@ cron_block_remove_impl() {
     return 0
 }
 
-# What would change, without changing it. Printed to an operator before any
-# managed write, because every incident this file exists to prevent was a write
-# nobody looked at first.
-cron_block_diff() {   # <user> <name> <bodyfile|->  -> prints a diff, 0 if identical
-    local who="$1" name="$2" body="$3"
-    CRON_ERR=""
-    local cur new
-    cur=$(mktemp) || return 1
-    new=$(mktemp) || { rm -f "$cur"; return 1; }
-    if ! cron_read "$who" "$cur"; then rm -f "$cur" "$new"; return 1; fi
-    if ! cron_block_render "$cur" "$name" "$body" "$new" ""; then rm -f "$cur" "$new"; return 1; fi
-    if cmp -s "$cur" "$new"; then rm -f "$cur" "$new"; return 0; fi
-    diff -u --label "crontab($who) now" --label "crontab($who) after" "$cur" "$new" || :
-    rm -f "$cur" "$new"
-    return 1
-}
 
 # Make sure ONE line exists inside <name>'s block, and adopt any loose copy of
 # it that is living outside the block.
@@ -748,45 +697,6 @@ cron_block_adopt_line_impl() {
     cron_block_ensure_line_impl "$who" "$name" "$match" "$line" "$tail"
 }
 
-# Render <name>'s block with <linesfile> ADDED to whatever it already holds.
-#
-# The difference from cron_block_render is ownership. A block with more than one
-# requester must never be rewritten from one requester's partial inventory:
-# REV-20260802-034 F1 found exactly that -- zfs-backup.sh's migration rebuilt
-# the shared host block from the single line it had rescued from the managed
-# block, and after deploy.sh started putting the updater and capacity lines
-# there, a migration would have deleted both. Silently, while reporting a
-# healthy migration.
-#
-# So a requester that owns SOME lines of a shared block adds them and leaves the
-# rest alone. Lines already present verbatim are not duplicated, which is what
-# makes repeating a migration converge instead of accumulating.
-cron_block_merge_render() {   # <curfile> <name> <linesfile> <outfile> [begin_tail]
-    local cur="$1" name="$2" lines="$3" out="$4" tail="${5:-}"
-    local body ln
-    body=$(mktemp) || { CRON_ERR="mktemp failed"; return 1; }
-    if ! cron_block_locate "$cur" "$name"; then rm -f "$body"; return 1; fi
-    if [ "$CRON_B" -gt 0 ] && [ "$CRON_E" -gt $((CRON_B+1)) ]; then
-        sed -n "$((CRON_B+1)),$((CRON_E-1))p" "$cur" > "$body"
-    fi
-    if [ -s "$lines" ]; then
-        while IFS= read -r ln; do
-            [ -n "$ln" ] || continue
-            grep -qxF -- "$ln" "$body" || printf '%s\n' "$ln" >> "$body"
-        done < "$lines"
-    fi
-    # An empty result is an empty BLOCK, not a removed one: "this requester has
-    # nothing to add" and "this block should not exist" are different sentences,
-    # and only the second may take somebody else's lines with it.
-    if [ ! -s "$body" ] && [ "$CRON_B" -eq 0 ]; then
-        rm -f "$body"
-        cp "$cur" "$out" || { CRON_ERR="could not copy the crontab"; return 1; }
-        return 0
-    fi
-    cron_block_render "$cur" "$name" "$body" "$out" "$tail"; local rc=$?
-    rm -f "$body"
-    return $rc
-}
 
 # Replace <user>'s ENTIRE crontab with <infile>, verified. The whole-crontab
 # primitive, for a change that cannot be expressed as one named block's

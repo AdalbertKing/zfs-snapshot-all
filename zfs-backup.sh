@@ -550,7 +550,7 @@ endpoint_display() {
 # the same account; the raw per-level dump is shown only when verbose=1.
 check_inherited_grants() {
     local ds="$1" account="$2" host="$3" port="$4" keyfile="$5" alias_kh="$6" alias="$7" verbose="$8"
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
     local path="" seg out found_exact=0 ancestors=""
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
@@ -588,9 +588,7 @@ check_inherited_grants() {
 # installed on hope.
 assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
     local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
-    local -a opts=(-i "$keyfile" -p "$port" -o BatchMode=yes -o "HostKeyAlias=$alias" \
-        -o UserKnownHostsFile="$alias_kh" -o StrictHostKeyChecking=yes \
-        -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
     local ds out rc
     for ds in "$@"; do
         out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
@@ -2141,9 +2139,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     if [ "$sync_mode" -eq 1 ]; then
         local pds
         for pds in $PEER_SAVED_DATASETS; do
-            if ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-                   -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-                   -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
+            if load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
                    "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot -d 1 -o name -- '$pds'" 2>/dev/null \
                  | grep -q '@automated_'; then
                 passive_ds+=("$pds")
@@ -2770,11 +2766,44 @@ runuser_test_r() {   # <user> <path>
     fi
 }
 
+# E1 (audit 2026-08-21): the LOAD_* connection options were pasted, identically,
+# NINE times -- and test/zfsbackup's BatchMode-count assertion was a copy-count
+# guard standing in for this factorization (its own text records the pre-fix
+# bug: a new copy forgot the timeouts). One builder; the grant-check callers
+# pass their own key material, everyone else defaults to the LOAD_* context.
+load_ssh_opts() {   # [keyfile alias alias_kh port] -> fills LOAD_SSH_OPTS[]
+    # ${VAR:-} inside the defaults, deliberately: this can be reached from
+    # contexts that probe BEFORE a connection is loaded (emit_client_sections'
+    # passive-detection ssh runs under a test with no LOAD_* at all), and under
+    # set -u a bare $LOAD_KEYFILE here would abort the whole shell -- where the
+    # old inline arrays only failed the one command. Empty options make the
+    # ssh fail exactly as loudly as the unbound expansion used to, minus the
+    # collateral.
+    local kf="${1:-${LOAD_KEYFILE:-}}" al="${2:-${LOAD_ALIAS:-}}" kh="${3:-${LOAD_ALIAS_KH:-}}" pt="${4:-${LOAD_PORT:-22}}"
+    LOAD_SSH_OPTS=(-i "$kf" -p "$pt" -o BatchMode=yes \
+        -o "HostKeyAlias=$al" -o "UserKnownHostsFile=$kh" \
+        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
+        -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+}
+
 runuser_test_x() {   # <user> <path>
     if command -v runuser >/dev/null 2>&1; then
         runuser --user "$1" -- test -x "$2"
     else
         su -s /bin/bash "$1" -c "$(printf '%q ' test -x "$2")"
+    fi
+}
+
+# Can THIS process actually run commands as <user>? Distinguishes "checked and
+# failed" from "cannot check": an unprivileged run (CI, a non-root operator)
+# cannot switch user at all, and a guard that read that inability as
+# "unreachable" would refuse every install it cannot verify -- fail-closed in
+# the wrong direction, on the machines where nothing real is at stake.
+runuser_can() {   # <user> -> 0 this process can act as <user>
+    if command -v runuser >/dev/null 2>&1; then
+        runuser --user "$1" -- true 2>/dev/null
+    else
+        su -s /bin/bash "$1" -c true 2>/dev/null
     fi
 }
 
@@ -2799,6 +2828,17 @@ runuser_test_x() {   # <user> <path>
 # the monitors alerted, and only because they carry their own rc test.
 assert_block_runnable_by() {   # <account> <block file>
     local acct="$1" blk="$2" p unreachable=""
+    # A1 (2026-08-21): written after the 2026-08-01 metropolis pve2 incident
+    # (config rebuilt by cron2conf carried a root repo_dir; /root is 0700; every
+    # block line exited 126 and still reported rc=0 because the cron idiom ends
+    # in `rm -f "$e"`) -- and then NEVER CALLED, for over two weeks, while
+    # DEPLOY-PRECONDITIONS.md described it as an active precondition. Wired at
+    # the atomic_replace_and_install chokepoint now, so every config writer
+    # passes it. Skipped honestly where the check is impossible:
+    if ! runuser_can "$acct"; then
+        log "runnability check for '$acct' skipped -- this process cannot run commands as that account; a real install on a host runs as root and does check"
+        return 0
+    fi
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         runuser_test_x "$acct" "$p" || unreachable="$unreachable
@@ -2939,6 +2979,18 @@ _restore_target_crontab() {   # <file>
 
 atomic_replace_and_install() {
     local realfile="$1" workfile="$2"
+    # A1: the runnability guard, FIRST, before any state is touched -- a
+    # refusal here has nothing to roll back. Rendered from the workfile the
+    # same way the install will render it; if the render itself fails, fall
+    # through and let the --install path below report it with its own rollback.
+    local _blk; _blk=$(mktemp) || { rm -f "$workfile"; die "mktemp failed for the runnability check"; }
+    if gencron_as_target -c "$workfile" > "$_blk" 2>/dev/null; then
+        if ! ( assert_block_runnable_by "$(cron_target_user)" "$_blk" ); then
+            rm -f "$_blk" "$workfile"
+            die "refusing to install: the rendered block is not runnable by $(cron_target_user) (see above) -- neither $realfile nor the crontab was touched"
+        fi
+    fi
+    rm -f "$_blk"
     local backup="" crontab_backup
     crontab_backup=$(mktemp) || { rm -f "$workfile"; die "mktemp failed for crontab backup"; }
     crontab_for_target > "$crontab_backup" 2>/dev/null
@@ -3820,9 +3872,7 @@ cmd_add_client() {
 # implementation of "what did the source actually sign", not two.
 fetch_committed_scope() {
     local outfile="$1"
-    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
     # REV-20260804-037: NOT $LOAD_LABEL (see $COLLECTOR_LABEL's own comment
     # at its declaration for why these two are different labels, and why
     # using the wrong one here was invisible to every prior local test).
@@ -3926,9 +3976,7 @@ Nothing was read and nothing was changed."
 }
 
 has_committed_scope() {
-    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
     ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
         "test -s '$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")'" >/dev/null 2>&1
 }
@@ -3963,9 +4011,7 @@ resolve_mode_datasets() {
         has_committed_scope || return 0
     fi
 
-    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
 
     local scope_tmp
     scope_tmp=$(mktemp) || die "mktemp failed"
@@ -4884,9 +4930,7 @@ cmd_activate_client() {
             # local landing exists or its parent is delegated. The engine's
             # silent rc=1 is a separate finding (frozen file; TODO).
             local newest
-            newest=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-                -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-                -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
+            newest=$(load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
                 "${LOAD_ACCOUNT}@${LOAD_HOST}" \
                 "zfs list -H -t snapshot -d 1 -o name,creation -p -- '$ds' 2>/dev/null | grep '@${dr_prefix:-automated_}' | sort -k2,2n | tail -1 | cut -f1")
             if [ -n "$newest" ]; then
@@ -4986,9 +5030,7 @@ cmd_activate_client() {
     # tool's, and the transfer itself is unaffected.
     local peer_tz local_tz
     local_tz=$(date +%z)
-    peer_tz=$(ssh -i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
+    peer_tz=$(load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
         "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
     if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
         warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
@@ -5660,10 +5702,7 @@ cmd_resume_client() {
 # nothing else; see zfs-pair-gate.sh for why they take no arguments.
 pair_control() {   # <verb> -> prints the gate's reply, non-zero on failure
     local verb="$1"
-    local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
-        -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
-        -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null \
-        -o CheckHostIP=no -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT")
+    local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
     ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "PAIR-CONTROL $verb"
 }
 

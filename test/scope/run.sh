@@ -173,8 +173,6 @@ check "D9 a lone separator yields nothing"          ""          "$(dsplit ' , ')
 # grammar that drops the last dataset is worse than no list grammar.
 check "D10 the LAST item is never dropped"          "one|two|three|" "$(dsplit 'one,two,three')"
 
-check "D11 join renders the canonical form"         "a,b,c"     "$(dataset_list_join a b c)"
-check "D12 join skips empties rather than doubling" "a,b"       "$(dataset_list_join a '' b)"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
