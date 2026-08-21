@@ -2548,7 +2548,13 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
     # metropolis failure, where teardown looked at root's block while the
     # client's lines were in the account's.
     if [ -n "$x_user" ]; then
-        CRON_CTX_USER="$x_user";  CRON_CTX_WHY_USER="named on the command line"
+        # A literal "root" is an ANSWER, not an absence. Internally root is the
+        # empty string (cron_target_user's own convention), but the two must
+        # stay distinguishable up to this point or the ambiguity refusal below
+        # rejects the very flag it tells the operator to use.
+        CRON_CTX_USER="$x_user"
+        [ "$x_user" = root ] && CRON_CTX_USER=""
+        CRON_CTX_WHY_USER="named on the command line"
     elif [ -n "$r_user" ]; then
         CRON_CTX_USER="$r_user";  CRON_CTX_WHY_USER="recorded with the relationship"
     elif [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
@@ -3037,7 +3043,7 @@ cmd_local_backup() {
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
     local do_install=0 assume_yes=0
-    local local_user="" local_user_given=0
+    local local_user="" local_user_given=0 resolver_user=""
     local -a source_flags=()
     for a in "$@"; do
         case "$a" in
@@ -3076,6 +3082,14 @@ cmd_local_backup() {
     # makes the whole existing path point at the account instead of at root.
     if [ "$local_user_given" -eq 1 ]; then
         local_user_name_valid "$local_user"             || die "local-backup: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
+        # Two variables on purpose. $local_user is blanked for root because the
+        # account-creation and zfs-allow logic below keys on "is there an
+        # account to delegate to", and root is not one. The RESOLVER needs the
+        # opposite distinction -- an explicit "root" is an answer to "which
+        # account", and collapsing it into "" makes it indistinguishable from
+        # silence, which is what sends --local-user=root back into the very
+        # refusal that recommends it.
+        resolver_user="$local_user"
         [ "$local_user" = root ] && local_user=""   # literal 'root' means root runs them
     else
         log "local-backup: no --local-user -- these jobs will run as root; pass --local-user=NAME to delegate them to an account"
@@ -3188,7 +3202,7 @@ cmd_local_backup() {
     # arguments to the resolver rather than something it goes looking for: a
     # decision layer that reads its caller's locals is not one home, it is five
     # again with a shared address.
-    cron_context_resolve adopt "$config" "$local_user" "" ""
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
     config="$CRON_CTX_FILE"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
@@ -4996,7 +5010,12 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
             --local-user=*) local_user_arg="${a#*=}"
                 local_user_name_valid "$local_user_arg" \
                     || die "migrate-profile: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
-                [ "$local_user_arg" = root ] && local_user_arg="" ;;
+                # NOT blanked to "" here. The resolver has to tell an explicit
+                # "root" from "nothing said", and blanking made them identical
+                # -- so --local-user=root, the remedy the refusal itself
+                # prints, landed straight back in the refusal. Found live on
+                # pve2 and pve1, 2026-08-21.
+                ;;
             *) die "migrate-profile: unknown option $a" ;;
         esac
     done
@@ -5132,7 +5151,12 @@ cmd_audit_source_retention() {   # [--config=PATH] [--local-user=NAME] [--apply]
             --local-user=*) local_user_arg="${a#*=}"
                 local_user_name_valid "$local_user_arg" \
                     || die "audit-source-retention: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
-                [ "$local_user_arg" = root ] && local_user_arg="" ;;
+                # NOT blanked to "" here. The resolver has to tell an explicit
+                # "root" from "nothing said", and blanking made them identical
+                # -- so --local-user=root, the remedy the refusal itself
+                # prints, landed straight back in the refusal. Found live on
+                # pve2 and pve1, 2026-08-21.
+                ;;
             *) die "audit-source-retention: unknown option $a" ;;
         esac
     done
