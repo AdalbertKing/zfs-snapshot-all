@@ -38,6 +38,19 @@ if ! declare -F remote_scope_stage >/dev/null; then
     exit 1
 fi
 
+# P6 put a terminal gate in front of the editor: with no tty the scope is
+# drafted but not opened, and the stage exits 5. CI never has a tty, so every
+# editor case below would take that branch and the three paths this suite
+# exists for would stop being tested -- a gate that silently deletes its own
+# coverage. deploy.sh factors the test into have_terminal() precisely so it can
+# be answered here; the default is "yes, there is one" and case 10 overrides it
+# to prove the gate itself, with 10b as its positive control.
+have_terminal() { [ "${FAKE_TTY:-1}" -eq 1 ]; }
+if ! sed -n '/^have_terminal() {/,/^}/p' "$DEPLOY_SRC" | grep -q '\-t 0'; then
+    echo "FATAL: deploy.sh's have_terminal no longer tests -t 0 -- this suite's override is now lying about what it replaces" >&2
+    exit 1
+fi
+
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 
@@ -276,6 +289,47 @@ else
     bad "do_pair: a timed-out remote join is reported as a stall, not as an ssh failure" \
         "exit 124 is not distinguished in the --join-remotely fallback"
 fi
+
+# 10. P6. No terminal: the scope is DRAFTED but never opened, the stage exits 5,
+#     and the operator is told how to finish it. Measured 2026-08-20 -- vi
+#     opened into nobody, sat eight minutes, left a swap file, and stalled the
+#     enrolment until a timeout imposed from OUTSIDE ended it.
+#
+#     The draft still happens on purpose: it is side-effect-free and it is the
+#     part a human then edits. What must not happen is treating an unopened file
+#     as reviewed -- a scope is a consent document, and 5 says "no human was
+#     here", which no exit code can remedy.
+new_case notty
+stub_deploy ok
+# The editor is stubbed to SUCCEED. If the gate leaked, the stage would return
+# 0 and this case would be indistinguishable from case 2 -- so the stub is set
+# up to make a leak loud rather than convenient.
+stub_editor 0
+out=$( FAKE_TTY=0 remote_scope_stage mylabel fakehost 22 "$FAKE/scope.file" 2>&1 ); rc=$?
+if [ "$rc" -eq 5 ] \
+   && printf '%s' "$out" | grep -q 'has NOT been reviewed' \
+   && printf '%s' "$out" | grep -q 'commit-scope=mylabel' \
+   && printf '%s' "$out" | grep -q 'Nothing was granted' \
+   && ! printf '%s' "$out" | grep -q 'is valid and ready'; then
+    ok "no terminal: the scope is drafted, NOT opened, and the stage refuses to call it ready"
+else
+    bad "no terminal: the scope is drafted, NOT opened, and the stage refuses to call it ready" "rc=$rc" "$out"
+fi
+restore_env
+
+# 10b. Positive control for 10: the SAME setup with a terminal must reach the
+#      editor and succeed. Without it, 10 would also pass on a stage that was
+#      simply broken, which is the failure mode a negative test cannot see.
+new_case notty-control
+stub_deploy ok ok
+stub_editor 0
+out=$( FAKE_TTY=1 remote_scope_stage mylabel fakehost 22 "$FAKE/scope.file" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'is valid and ready'; then
+    ok "control: with a terminal the same setup reaches the editor and succeeds"
+else
+    bad "control: with a terminal the same setup reaches the editor and succeeds" "rc=$rc" "$out"
+fi
+restore_env
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

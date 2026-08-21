@@ -1059,9 +1059,17 @@ peer_scope_path() {
 # not a human exists here, so asking the peer is asking the wrong end. Same
 # `[ -t 0 ]` shape as the O14 fix on --join, for the same reason -- an editor is
 # a conversation, and there is nobody to have it with.
+#
+# The terminal test is its own function for one reason: test/joinremote drives
+# remote_scope_stage directly, and CI never has a tty, so with `[ -t 0 ]` inline
+# the three editor paths (runs / fails / post-check fails) became unreachable --
+# the gate would have silently deleted its own test coverage. A one-line
+# function is overridable; an inline condition is not.
+have_terminal() { [ -t 0 ]; }
+
 remote_scope_stage() {
     local label="$1" host="$2" port="$3" scope="$4"
-    local can_edit=0; [ -t 0 ] && can_edit=1
+    local can_edit=0; have_terminal && can_edit=1
     local remote_script
     remote_script=$(cat <<EOF2
 set -u
@@ -4534,7 +4542,7 @@ EOF
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
             if [ -n "$PEER_MODE" ]; then
-                if [ -t 0 ]; then
+                if have_terminal; then
                     log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first only if it does not exist yet, same as 'crontab -e')..."
                 else
                     log "no terminal here, so the scope will be DRAFTED on $PEER_HOST but not opened -- the commands to review it come below (P6)"

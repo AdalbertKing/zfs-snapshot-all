@@ -529,7 +529,7 @@ purge_one() {
                 # to say what survived, and this one asserted the survival of
                 # something it had never looked at. Same family as the rest of
                 # the campaign; the audit path already checks.
-                if zfs list -H -o name -- "$path" >/dev/null 2>&1; then
+                if "$ZFS_BIN" list -H -o name -- "$path" >/dev/null 2>&1; then
                     log "  DATA LEFT IN PLACE: $path -- this tool never destroys datasets. If it is no longer wanted: zfs destroy -r $path"
                 else
                     log "  data $path is ALREADY GONE -- the record named it, the pool does not have it; nothing was left in place"
