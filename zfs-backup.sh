@@ -3616,6 +3616,78 @@ resolve_mode_datasets() {
         || die "the scope file on $LOAD_HOST selects nothing that currently exists there -- nothing to back up"
 
     PEER_SAVED_DATASETS="${resolved[*]}"
+    # Unconditional, and that is the point. This is the moment the list stops
+    # being the source's business and becomes what this host will replicate,
+    # and until 2026-08-21 it was the one fact nobody printed: cmd_seed's
+    # `Zrodla:` line lives inside `if [ "$yes" -ne 1 ]`, so an automated run
+    # moved real data having never named what it was moving. Logged here rather
+    # than at the gates because there is exactly one producer and two consumers.
+    log "scope on $LOAD_HOST resolves to ${#resolved[@]} dataset(s): ${resolved[*]}"
+}
+
+# The dataset the operator actually named, if anything recorded one.
+# RUX_SOURCE is 'host:dataset' and is written by the rux one-command path only;
+# a plain `add-client --mode=sync` never had a requested dataset, so this is
+# empty there and the comparison below correctly declines to invent one.
+sync_requested_dataset() {   # -> dataset half of RUX_SOURCE, or nothing
+    case "${RUX_SOURCE:-}" in
+        *:*) printf '%s' "${RUX_SOURCE#*:}" ;;
+    esac
+}
+
+# What a sync relationship RESOLVED, minus what was asked for.
+#
+# The gap this measures (2026-08-20 campaign, P5): rux drops the dataset half of
+# --source=HOST:DATASET before calling add-client, because a sync add-client
+# refuses --datasets. So --pair carries no dataset list, the source drafts its
+# scope from an EMPTY request, and an empty request drafts the whole branch
+# inventory of every pool. Accept that draft and the relationship quietly
+# carries datasets nobody asked for -- measured: one enrolment naming one
+# dataset replicated three, one of them another relationship's.
+#
+# rux_verify_requested_scope cannot see this. It asks whether the request is
+# COVERED by the committed scope, which is true here: the scope is WIDER, and
+# wider is the direction that hurts. Sync lands every dataset at the SAME path
+# on this host, so an unrequested extra is a collision, not a bonus backup.
+sync_scope_extra_datasets() {   # -> space-separated datasets outside the request
+    local requested ds
+    requested=$(sync_requested_dataset)
+    [ -n "$requested" ] || return 0
+    local -a extra=()
+    for ds in ${PEER_SAVED_DATASETS:-}; do
+        case "$ds" in
+            "$requested" | "$requested"/*) continue ;;
+        esac
+        extra+=("$ds")
+    done
+    [ "${#extra[@]}" -gt 0 ] || return 0
+    printf '%s' "${extra[*]}"
+}
+
+# The --yes gate for the above, and deliberately ONLY the --yes gate.
+# An interactive run already prints `Zrodla:` and requires a `t`, so an operator
+# who reads a wider list can still consent to it on purpose -- that is a real
+# use (adopting an existing broader grant) and refusing it would be us deciding
+# for them. --yes has no reader. It cannot consent to something it never saw,
+# so it refuses rather than assuming the silence meant yes.
+assert_sync_scope_within_request() {   # <yes-flag> <command-name>
+    [ "${1:-0}" -eq 1 ] || return 0
+    local extra; extra=$(sync_scope_extra_datasets)
+    [ -n "$extra" ] || return 0
+    local requested; requested=$(sync_requested_dataset)
+    die "$2: refusing to run under --yes. This relationship asked for '$requested', but the scope committed on $PEER_HOST resolves to dataset(s) outside it: $extra
+  full resolved list: $PEER_SAVED_DATASETS
+A sync relationship reproduces each source path verbatim on this host, so every
+extra entry above writes to a path this relationship was never granted -- where
+something else may already live. The extras exist because a sync enrolment sends
+no dataset list to the source, so the source drafted its scope from the whole
+pool inventory and that draft was accepted.
+Narrow it on $PEER_HOST (label '$(peer_label "$PEER_HOST")'), then re-run:
+  ./deploy.sh --draft-scope=$(peer_label "$PEER_HOST")   # edit: keep only what this relationship takes
+  ./deploy.sh --commit-scope=$(peer_label "$PEER_HOST")
+or re-run the enrolment with --grant-remotely, which signs a scope of exactly
+the requested dataset. Nothing was transferred and nothing was installed.
+Dropping --yes shows you the list and lets you consent to it deliberately."
 }
 
 # Shared setup for every command that connects to an already-paired peer:
@@ -3720,6 +3792,13 @@ cmd_seed() {
 
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
+    # Before assert_no_coverage_overlap, not after: that guard asks whether two
+    # relationships collide on this host, which is a fine question and a
+    # different one. This asks whether THIS relationship is about to move data
+    # nobody requested -- and it is cheaper to answer, because it needs no
+    # local paths. Placed ahead of every mktemp in this function so the refusal
+    # has nothing to clean up.
+    assert_sync_scope_within_request "$yes" "seed"
 
     # REV-20260809-085 F1. This is the earliest point where every candidate
     # local destination path is known, and the LAST point before the real,
@@ -4257,6 +4336,11 @@ cmd_activate_client() {
 
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
+    # Also checked in cmd_seed, and both are needed rather than one: activate is
+    # reachable directly on an already-seeded client, and it is the step that
+    # installs the RECURRING job. Seed moves the data once; activate is what
+    # makes an unrequested dataset keep arriving every hour.
+    assert_sync_scope_within_request "$yes" "activate"
 
     apply_client_profile_choice "$is_new_relationship" "${PROFILE:-}"
 
