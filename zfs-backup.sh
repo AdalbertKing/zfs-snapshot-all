@@ -2434,7 +2434,24 @@ ZFS_PERMS_LOCAL_RECEIVE="snapshot,destroy,send,receive,create,mount,rollback,hol
 # found live on metropolis pve1, 2026-08-01), and it puts operator state INSIDE
 # the git checkout that hourly self-updates (found live 2026-08-17, lab3: a
 # fresh RUX install wrote its config next to the code it came from).
-default_cron_config() { echo "/etc/zfs-snapshot-all/jobs.$(hostname -s 2>/dev/null || hostname).conf"; }
+# LAB6-F2 (2026-08-21): the default names the ACCOUNT, not just the host.
+# A config belongs to an account+relationship, and the host-wide default was
+# the second half of P10 still latent on the CREATION path: activating a
+# bkpsvc relationship on a host whose root already ran one resolved to the
+# SAME jobs.<host>.conf -- merge the sections and the next regeneration for
+# EITHER account renders BOTH relationships into its crontab. Root keeps the
+# historical bare name; every other account gets its own file. Fleet legacy
+# (zfsbackup's v4 configs) is untouched: recorded values win over any default.
+default_cron_config() {
+    local u h
+    u=$(cron_target_user)
+    h=$(hostname -s 2>/dev/null || hostname)
+    if [ "$u" = root ]; then
+        echo "/etc/zfs-snapshot-all/jobs.$h.conf"
+    else
+        echo "/etc/zfs-snapshot-all/jobs.$h.$u.conf"
+    fi
+}
 
 # `crontab -l` for whoever owns the jobs. Root can read another account's
 # crontab with -u; as that account itself, -u is refused, so it is only added
@@ -2610,7 +2627,10 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
         CRON_CTX_FILE="$CRON_CONFIG"; CRON_CTX_WHY_FILE="server.conf"
     fi
     [ "$policy" = record ] && return 0
-    [ -n "$CRON_CTX_FILE" ] && return 0
+    if [ -n "$CRON_CTX_FILE" ]; then
+        cron_context_assert_file_owner
+        return 0
+    fi
 
     # P10 -- and ONLY for policy 'aim'. This block guesses or refuses by what
     # the HOST is running, and that is the right question for exactly two
@@ -2669,7 +2689,11 @@ Nothing was read and nothing was changed."
         return 0
     fi
     CRON_CTX_FILE="$(default_cron_config)"
-    CRON_CTX_WHY_FILE="the host default -- nothing had recorded a config"
+    CRON_CTX_WHY_FILE="the account default -- nothing had recorded a config"
+    # The default is account-scoped now, so a collision here means somebody
+    # hand-drove another account's block from this account's default name --
+    # unlikely, but the invariant is cheap to hold everywhere it can break.
+    cron_context_assert_file_owner
 }
 
 # Run gen-cron.sh as the account that owns the jobs, with ITS paths. Running it
@@ -3876,6 +3900,31 @@ is_recursive_root() {   # <dataset> -> 0 yes
     return 1
 }
 
+# ONE CONFIG = ONE ACCOUNT (LAB6-F2). A config file renders WHOLE into the
+# target account's crontab -- gen-cron has no per-section account filter, and
+# that is the single-writer design, not an omission. So a file that already
+# drives another account's managed block must never become this context's
+# answer: merging would make the next regeneration for either account render
+# BOTH relationships' jobs into its crontab, one of them under an account
+# whose keys it cannot read. Refused for the explicit flag too -- naming
+# another account's file is answered with "use that account", not obeyed.
+# remove-client (policy record) never comes through here: its recorded pair
+# was installed together and teardown must not be lockable by this.
+cron_context_assert_file_owner() {
+    [ -n "${CRON_CTX_FILE:-}" ] || return 0
+    local me="${CRON_CTX_USER:-root}" acct asrc
+    while IFS= read -r acct; do
+        [ "$acct" = "$me" ] && continue
+        asrc=$(cron_source_for_user "$acct") || continue
+        [ "$asrc" = "$CRON_CTX_FILE" ] || continue
+        die "config '$CRON_CTX_FILE' already drives ${acct}'s managed crontab block, and this run resolves to account '${me}'. One config file renders WHOLE into one account's crontab, so sharing it would install ${acct}'s jobs under '${me}' (and vice versa) at the next regeneration. Say which you mean:
+    --local-user=$acct           (join that account's existing config)
+    --config=<different path>    (give '${me}' its own file; the default is $(default_cron_config))
+Nothing was read and nothing was changed."
+    done < <(cron_known_accounts)
+    return 0
+}
+
 has_committed_scope() {
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
@@ -4850,6 +4899,11 @@ cmd_activate_client() {
         esac
         local -a dr_args=(-n)
         [ -n "$dr_prefix" ] && dr_args+=(-m "$dr_prefix")
+        # F3 (2026-08-21): this dry-run was the one snapget call that did not
+        # mirror the recursive-root flag, so the ACTIVATION preview warned
+        # "neither -r nor -R was given" about a relationship whose installed
+        # line carries -R -- a proposal disagreeing with what it proposes.
+        is_recursive_root "$ds" && dr_args+=(-R)
         # shellcheck disable=SC2086
         if [ -n "$base" ]; then
             set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"
