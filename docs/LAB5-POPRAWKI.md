@@ -135,6 +135,30 @@ Minimum, gdyby pełna zmiana miała czekać: enrolment sync **wypisuje listę
 datasetów, które weźmie**, i pod `--yes` odmawia, jeśli jest szersza niż
 `--source`. Nazwanie skutku przed jego wywołaniem jest tanie.
 
+**Minimum ZROBIONE 2026-08-21.** `resolve_mode_datasets` loguje rozwiązaną listę
+**bezwarunkowo** — dotąd `Zrodla:` w `cmd_seed` siedziało wewnątrz
+`if [ "$yes" -ne 1 ]`, więc przebieg automatyczny ruszał prawdziwe dane nigdy
+nie nazwawszy, co rusza. `assert_sync_scope_within_request` porównuje rozwiązaną
+listę z `RUX_SOURCE` i **pod `--yes` odmawia**, wymieniając nadmiarowe datasety
+i podając dwie drogi naprawy (`--draft-scope`/`--commit-scope` na źródle albo
+ponowny enrolment z `--grant-remotely`). Bramkują obie komendy: `cmd_seed`, bo
+przenosi dane raz, i `cmd_activate_client`, bo instaluje zadanie cykliczne —
+jedna bez drugiej zostawia drogę, `activate` wchodzi wprost na zaseedowanego
+klienta.
+
+**Bez `--yes` celowo przepuszcza.** Przebieg interaktywny i tak wypisuje
+`Zrodla:` i żąda `t`, więc operator, który przeczyta szerszą listę, może się na
+nią świadomie zgodzić — przejęcie istniejącego szerszego grantu to realny
+przypadek. `--yes` nie ma czytelnika i nie może zgodzić się na coś, czego nie
+zobaczył.
+
+**Czego to NIE naprawia — trzy ogniwa stoją.** Dataset nadal odpada z `--source`
+przy wołaniu `add-client` (`zfs-backup.sh:6107`), źródło nadal szkicuje zakres
+z pustego żądania, a `rux_verify_requested_scope` nadal wychodzi dla sync
+(`:5812`), bo pyta o *pokrycie*, a boli *szerokość*. To jest siatka pod dziurą,
+nie zaszycie dziury — semantyka `--source` czeka na decyzję właściciela.
+Testy: `test/zfsbackup` 62a–62h.
+
 ### P6. Enrolment sync otwiera `vi` na peerze
 
 `remote_scope_stage` uruchamia `${VISUAL:-${EDITOR:-vi}}` przez `ssh -t` po

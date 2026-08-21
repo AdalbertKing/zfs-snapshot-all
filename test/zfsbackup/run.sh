@@ -5563,6 +5563,116 @@ else
         "rc=$rc deploy=$(cat "$SS/deploy.log" 2>/dev/null) conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
 fi
 
+# --- 62. P5: a sync relationship may not quietly take more than was asked -----
+# Campaign finding P5 (docs/LAB5-POPRAWKI.md): one sync enrolment naming ONE
+# dataset replicated THREE, one of them another relationship's. The chain is
+# structural -- rux drops the dataset half of --source before add-client, so the
+# source drafts its scope from an empty request, and an empty request drafts the
+# whole pool inventory. Nothing downstream compared the two, because
+# rux_verify_requested_scope asks only whether the request is COVERED (it is;
+# the scope is wider), and wider is the direction that hurts: sync writes every
+# dataset to the same path here.
+#
+# These assertions pin the comparison itself, not the enrolment chain that
+# produces it -- that chain needs two live hosts and a committed scope file, and
+# is the zfsbackup-live-pair manual obligation.
+
+# 62a. the request is respected: itself and its children are not "extra"
+out=$( RUX_SOURCE="src.example:tank/lab" \
+       PEER_SAVED_DATASETS="tank/lab tank/lab/a tank/lab/a/b" \
+       bash -c "source '$ZFSBACKUP'; sync_scope_extra_datasets" 2>&1 )
+if [ -z "$out" ]; then
+    ok "62a: sync scope check treats the requested dataset and its children as requested"
+else
+    bad "62a: sync scope check treats the requested dataset and its children as requested" "extra=[$out]"
+fi
+
+# 62b. THE BUG. The measured shape: asked for one, scope resolved to three.
+out=$( RUX_SOURCE="src.example:hdd/lab4/src" \
+       PEER_SAVED_DATASETS="hdd/lab4/src hdd/other rpool/ROOT/pve-1" \
+       bash -c "source '$ZFSBACKUP'; sync_scope_extra_datasets" 2>&1 )
+if [ "$out" = "hdd/other rpool/ROOT/pve-1" ]; then
+    ok "62b: sync scope check names exactly the datasets outside the request"
+else
+    bad "62b: sync scope check names exactly the datasets outside the request" "extra=[$out]"
+fi
+
+# 62c. a prefix is not a parent -- tank/lab must not swallow tank/labour.
+# Without the '/' in the pattern this is the classic unanchored-match bug that
+# -X already cost this project once (see project_exclude_and_skip_parent).
+out=$( RUX_SOURCE="src.example:tank/lab" \
+       PEER_SAVED_DATASETS="tank/lab tank/labour" \
+       bash -c "source '$ZFSBACKUP'; sync_scope_extra_datasets" 2>&1 )
+if [ "$out" = "tank/labour" ]; then
+    ok "62c: sync scope check anchors on the path boundary, not the string prefix"
+else
+    bad "62c: sync scope check anchors on the path boundary, not the string prefix" "extra=[$out]"
+fi
+
+# 62d. no recorded request (plain `add-client --mode=sync`) -> nothing to
+#      compare, and the check invents nothing. The list is still LOGGED; that is
+#      resolve_mode_datasets' job and is asserted separately at 62g.
+out=$( RUX_SOURCE="" \
+       PEER_SAVED_DATASETS="tank/a tank/b" \
+       bash -c "source '$ZFSBACKUP'; sync_scope_extra_datasets" 2>&1 )
+if [ -z "$out" ]; then
+    ok "62d: with no recorded request the check declines to invent one"
+else
+    bad "62d: with no recorded request the check declines to invent one" "extra=[$out]"
+fi
+
+# 62e. --yes REFUSES a wider scope, and the refusal names the extras.
+out=$( RUX_SOURCE="src.example:hdd/lab4/src" \
+       PEER_SAVED_DATASETS="hdd/lab4/src hdd/other" \
+       PEER_HOST="192.168.28.99" \
+       bash -c "source '$ZFSBACKUP'; assert_sync_scope_within_request 1 seed" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'hdd/other' \
+   && printf '%s' "$out" | grep -q 'Nothing was transferred'; then
+    ok "62e: --yes refuses a scope wider than the request, and says which datasets"
+else
+    bad "62e: --yes refuses a scope wider than the request, and says which datasets" "rc=$rc out=$out"
+fi
+
+# 62f. WITHOUT --yes the same scope passes this gate. Deliberate, and the
+#      difference is the whole design: an interactive run prints `Zrodla:` and
+#      demands a `t`, so an operator who READS a wider list may still consent to
+#      it (adopting an existing broader grant is a real thing to want). --yes has
+#      no reader. Refusing both would be us overruling a decision that was made;
+#      refusing neither is what shipped the bug.
+out=$( RUX_SOURCE="src.example:hdd/lab4/src" \
+       PEER_SAVED_DATASETS="hdd/lab4/src hdd/other" \
+       PEER_HOST="192.168.28.99" \
+       bash -c "source '$ZFSBACKUP'; assert_sync_scope_within_request 0 seed" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "62f: without --yes the gate defers to the interactive confirmation"
+else
+    bad "62f: without --yes the gate defers to the interactive confirmation" "rc=$rc out=$out"
+fi
+
+# 62g. the resolved list is logged UNCONDITIONALLY. Source-grep, because the
+#      producer needs ssh and a committed scope file to run. The point is the
+#      placement: cmd_seed's own `Zrodla:` line sits inside `if [ "$yes" -ne 1 ]`,
+#      so before this the list was invisible on exactly the runs that had no
+#      human to see it.
+rmd=$(awk '/^resolve_mode_datasets\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+if printf '%s\n' "$rmd" | grep -q 'log "scope on \$LOAD_HOST resolves to'; then
+    ok "62g: resolve_mode_datasets logs the resolved dataset list unconditionally"
+else
+    bad "62g: resolve_mode_datasets logs the resolved dataset list unconditionally" "$rmd"
+fi
+
+# 62h. both consumers gate. seed moves the data once; activate is what makes an
+#      unrequested dataset keep arriving every hour. One without the other
+#      leaves a reachable path -- activate runs directly on a seeded client.
+for fn in cmd_seed cmd_activate_client; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if printf '%s\n' "$body" | grep -q 'assert_sync_scope_within_request "\$yes"'; then
+        ok "62h: $fn gates on the requested sync scope"
+    else
+        bad "62h: $fn gates on the requested sync scope" "not found in $fn"
+    fi
+done
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
