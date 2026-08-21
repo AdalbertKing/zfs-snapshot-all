@@ -4265,10 +4265,17 @@ cmd_activate_client() {
     # The account the jobs run as is a fact of the RELATIONSHIP: chosen once at
     # create (--local-user, else root), carried in the manifest as
     # PEER_SAVED_LOCAL_USER, and -- from this activation on -- in the client
-    # record too. read_server_conf just reset LOCAL_USER, so resolve it: the
-    # record if a prior activation wrote it, else the manifest, else empty (root,
-    # via cron_target_user). No server.conf account, no host-wide guess. Record it
-    # back below so remove-client and any re-activation read the same answer.
+    # record too. Resolve it: the record if a prior activation wrote it, else the
+    # manifest, else empty (root, via cron_target_user). No server.conf account,
+    # no host-wide guess. Recorded back below so remove-client and any
+    # re-activation read the same answer.
+    #
+    # This used to be a RESTORE, because read_server_conf cleared LOCAL_USER -- a
+    # variable server.conf has never contained. That clear is gone (2026-08-21),
+    # so the line no longer undoes anything; what remains is its real job,
+    # resolving the record against the manifest fallback. recorded_local_user is
+    # captured from the client record above rather than read live, so nothing
+    # loaded in between can quietly become the answer.
     LOCAL_USER="${recorded_local_user:-${PEER_SAVED_LOCAL_USER:-}}"
     log "activate: jobs run as ${LOCAL_USER:-root} (recorded with the relationship below)"
 
@@ -5531,10 +5538,16 @@ cmd_remove_client() {
     [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
     # The account the managed jobs run as is a fact of the RELATIONSHIP, not the
     # host: it was decided once at create (--local-user, else root) and recorded
-    # in the client record. read_server_conf has just reset LOCAL_USER, so restore
-    # it from the record; fall back to the manifest's PEER_SAVED_LOCAL_USER for a
-    # relationship enrolled before the record carried the field. Empty means root,
-    # which is exactly what cron_target_user then resolves. Without this the block
+    # in the client record. Take it from the record, falling back to the
+    # manifest's PEER_SAVED_LOCAL_USER for a relationship enrolled before the
+    # record carried the field. Empty means root, which is exactly what
+    # cron_target_user then resolves.
+    #
+    # This was written as a RESTORE after read_server_conf, which used to clear
+    # LOCAL_USER -- a field server.conf has never carried. That clear is gone
+    # (2026-08-21); the resolution below is unchanged and still load-bearing,
+    # because the manifest fallback is not something the record alone provides.
+    # Without it the block
     # removal below would target root's crontab while the jobs live in the
     # delegated account's, clear nothing, and --unpair would refuse on the lines it
     # failed to remove (found live 2026-08-19, lab3 pve9 sync/passive).
