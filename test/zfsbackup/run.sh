@@ -520,17 +520,17 @@ cat > "$CF5B" <<'EOF'
 [prune:hdd/backups/pve2]
 	# managed-by: zfs-backup.sh client=pve2
 	pattern = automated_
-	retain = 24
+	retain = -H24
 
 [prune:zfsbackup-pve2@10.0.0.2:rpool/data]
 	# managed-by: zfs-backup.sh client=pve2
 	pattern = automated_
-	retain = 24
+	retain = -H24
 
 [prune:zfsbackup-other@10.0.0.9:tank/x]
 	# managed-by: zfs-backup.sh client=other
 	pattern = automated_
-	retain = 24
+	retain = -H24
 EOF
 
 # The capture half had the same same-statement `local ... marker=...$name`
@@ -4218,7 +4218,7 @@ cat > "$PGC" <<EOF
 	prefix         = automated_hourly_
 	prune_schedule = 21 * * * *
 	pattern        = automated_hourly_
-	retain         = 24
+	retain         = -H24
 
 [dataset:tank/backups/10.7.7.8/rpool/data]
 	# managed-by: zfs-backup.sh client=apx
