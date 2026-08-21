@@ -5691,13 +5691,22 @@ ctx() {   # <policy> <x-config> <x-user> <r-config> <r-user> [env assignments...
         source '$ZFSBACKUP'
         crontab_for_target() { printf '%s\n' \"\${FAKE_CRONTAB:-}\"; }
         default_cron_config() { echo /etc/zfs-snapshot-all/jobs.HOST.conf; }
+        # Per-account managed blocks. FAKE_BLOCK_<account>=<config>; an account
+        # with no variable has no managed block, which is what the real
+        # cron_source_for_user signals with a non-zero return.
+        cron_source_for_user() {
+            local v=\"FAKE_BLOCK_\$1\"
+            [ -n \"\${!v:-}\" ] || return 1
+            printf '%s' \"\${!v}\"
+        }
+        cron_known_accounts() { printf '%s\n' \${FAKE_ACCOUNTS:-root}; }
         cron_context_resolve '$pol' '$xc' '$xu' '$rc' '$ru'
         printf '%s|%s\n' \"\$CRON_CTX_FILE\" \"\$CRON_CTX_USER\"
     " 2>&1
 }
 
 # 63a. the config ladder, top rung: an explicit --config outranks everything.
-got=$(ctx host /explicit.conf "" /recorded.conf "" CRON_CONFIG=/server.conf)
+got=$(ctx adopt /explicit.conf "" /recorded.conf "" CRON_CONFIG=/server.conf)
 if [ "$got" = "/explicit.conf|" ]; then
     ok "63a: an explicit --config outranks the record and server.conf"
 else
@@ -5707,7 +5716,7 @@ fi
 # 63b. the record outranks server.conf. This is the rung whose ABSENCE was the
 #      2026-08-09 metropolis bug: read_server_conf blanked the recorded value and
 #      remove-client then read the client as "never activated".
-got=$(ctx host "" "" /recorded.conf "" CRON_CONFIG=/server.conf)
+got=$(ctx adopt "" "" /recorded.conf "" CRON_CONFIG=/server.conf)
 if [ "$got" = "/recorded.conf|" ]; then
     ok "63b: a value recorded with the relationship outranks server.conf"
 else
@@ -5717,23 +5726,24 @@ fi
 # 63c. policy 'adopt' takes the '# Source:' of the block ALREADY INSTALLED
 #      rather than defaulting. A crontab has ONE managed block, so defaulting
 #      instead would DELETE every job the installed file describes.
-got=$(ctx adopt "" "" "" "" \
-      "FAKE_CRONTAB=# Source: /etc/zfs-snapshot-all/jobs.HOST.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead")
+got=$(ctx adopt "" "" "" "" FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.HOST.v4.conf)
 if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.v4.conf|" ]; then
     ok "63c: policy 'adopt' adopts the installed block's source instead of defaulting"
 else
     bad "63c: policy 'adopt' adopts the installed block's source instead of defaulting" "got=$got"
 fi
 
-# 63d. policy 'host' does NOT adopt -- same input as 63c, different answer.
-#      This is P10 in one assertion, and it is deliberately still true here:
-#      this commit moves the decision, the next one changes it.
-got=$(ctx host "" "" "" "" \
-      "FAKE_CRONTAB=# Source: /etc/zfs-snapshot-all/jobs.HOST.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead")
-if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|" ]; then
-    ok "63d: policy 'host' does not adopt, and lands on the host default (P10, still open)"
+# 63d. policy 'host' is GONE. It was recorded -> server.conf -> host default
+#      with no adoption, three callers used it, and none of them meant to: it
+#      was not a decision, it was the absence of one, and it is what P10
+#      measured. An unknown policy must be refused, not silently treated as
+#      one of the survivors -- otherwise removing it would be a no-op for any
+#      caller that still asked for it.
+out=$(ctx host "" "" "" "")
+if printf '%s' "$out" | grep -q "unknown policy 'host'"; then
+    ok "63d: policy 'host' is gone, and asking for it is refused rather than ignored"
 else
-    bad "63d: policy 'host' does not adopt, and lands on the host default (P10, still open)" "got=$got"
+    bad "63d: policy 'host' is gone, and asking for it is refused rather than ignored" "got=$out"
 fi
 
 # 63e. policy 'record' leaves an unrecorded config EMPTY. remove-client keys its
@@ -5749,11 +5759,11 @@ fi
 # 63f. the ACCOUNT ladder: record, then the manifest, then root -- and never
 #      server.conf, which is why LOCAL_USER=... is set in the environment here
 #      and still does not win. The account is a fact of the RELATIONSHIP.
-got=$(ctx host "" "" "" acctfromrecord PEER_SAVED_LOCAL_USER=acctfrommanifest)
+got=$(ctx adopt "" "" "" acctfromrecord PEER_SAVED_LOCAL_USER=acctfrommanifest)
 [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|acctfromrecord" ] \
     && ok "63f: the account comes from the record when it has one" \
     || bad "63f: the account comes from the record when it has one" "got=$got"
-got=$(ctx host "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
+got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
 [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|acctfrommanifest" ] \
     && ok "63f: it falls back to the pairing manifest when the record predates the field" \
     || bad "63f: it falls back to the pairing manifest when the record predates the field" "got=$got"
@@ -5783,12 +5793,119 @@ while read -r fn want; do
             "$(printf '%s\n' "$body" | grep -n 'cron_context_resolve' || echo 'no call at all')"
     fi
 done <<'POLICIES'
-cmd_local_backup host
+cmd_local_backup adopt
 cmd_activate_client adopt
-cmd_migrate_profile host
-cmd_audit_source_retention host
+cmd_migrate_profile adopt
+cmd_audit_source_retention adopt
 cmd_remove_client record
 POLICIES
+
+# --- 64. P10 closed: aim it, or be told you have not ------------------------
+# Measured on pve2 and pve1 (2026-08-21): root's crontab runs the lab from
+# jobs.<host>.conf while the delegated account runs production from
+# jobs.<host>.v4.conf. `audit-source-retention` reported "1 active pull
+# dataset, nothing to add" -- describing the lab, never opening production.
+# It was not wrong about anything it looked at. It looked at one of two.
+#
+# The shape of the fix matters: it does NOT pick. Picking would be the same
+# mistake with better odds. It refuses, names both, and offers two ways to say
+# which -- which is why the flags had to come with it.
+
+# 64a. THE MEASURED CASE. Two accounts, two blocks, nothing says which.
+out=$(ctx adopt "" "" "" "" \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
+if printf '%s' "$out" | grep -q 'more than one account' \
+   && printf '%s' "$out" | grep -q 'jobs.pve2.conf' \
+   && printf '%s' "$out" | grep -q 'jobs.pve2.v4.conf' \
+   && printf '%s' "$out" | grep -q 'Nothing was read and nothing was changed'; then
+    ok "64a: two accounts with managed blocks and no aim -> refuses, naming BOTH"
+else
+    bad "64a: two accounts with managed blocks and no aim -> refuses, naming BOTH" "got=$out"
+fi
+
+# 64b. --local-user answers it. The refusal has to be answerable or it is just
+#      a wall; this is the half that makes 64a a question.
+got=$(ctx adopt "" zfsbackup "" "" \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve2.v4.conf|zfsbackup" ]; then
+    ok "64b: --local-user aims it at that account's own block"
+else
+    bad "64b: --local-user aims it at that account's own block" "got=$got"
+fi
+
+# 64c. --config answers it too, and wins outright -- no crontab is consulted.
+got=$(ctx adopt /etc/mine.conf "" "" "" \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
+if [ "$got" = "/etc/mine.conf|" ]; then
+    ok "64c: --config answers it without consulting any crontab"
+else
+    bad "64c: --config answers it without consulting any crontab" "got=$got"
+fi
+
+# 64d. ONE account with a block is not ambiguous -- it adopts and says so.
+#      Without this the refusal would fire on every single-relationship host,
+#      which is most of them, and the fix would be worse than the defect.
+got=$(ctx adopt "" "" "" "" \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve9.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve9.conf|zfsbackup" ]; then
+    ok "64d: a single managed block is adopted, account and all, with no refusal"
+else
+    bad "64d: a single managed block is adopted, account and all, with no refusal" "got=$got"
+fi
+
+# 64e. NO managed block anywhere -- a fresh host -- still falls back to the
+#      default. A first install must not be blocked by a check about second
+#      relationships.
+got=$(ctx adopt "" "" "" "" "FAKE_ACCOUNTS=root zfsbackup")
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|" ]; then
+    ok "64e: a host with no managed block at all still gets the default"
+else
+    bad "64e: a host with no managed block at all still gets the default" "got=$got"
+fi
+
+# 64f. a RELATIONSHIP knows its own account, so the ambiguity check must not
+#      fire for it: activate-client on a two-relationship host is normal.
+got=$(ctx adopt "" "" "" zfsbackup \
+      "FAKE_ACCOUNTS=root zfsbackup" \
+      FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
+      FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve2.v4.conf|zfsbackup" ]; then
+    ok "64f: a recorded account is an answer, so a relationship never sees the refusal"
+else
+    bad "64f: a recorded account is an answer, so a relationship never sees the refusal" "got=$got"
+fi
+
+# 64g. both orphan commands now take the two flags. Source-grep, because
+#      reaching their parsers needs a config, a crontab and a peer.
+for fn in cmd_migrate_profile cmd_audit_source_retention; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if printf '%s\n' "$body" | grep -q -- '--config=\*)' \
+       && printf '%s\n' "$body" | grep -q -- '--local-user=\*)'; then
+        ok "64g: $fn accepts --config and --local-user"
+    else
+        bad "64g: $fn accepts --config and --local-user" "not both found in $fn"
+    fi
+done
+
+# 64h. cron_known_accounts reads OUR OWN records, never /home or passwd. An
+#      account exists for reasons unrelated to this project; treating one as
+#      ours because it has a home directory is a local fact standing in for a
+#      decision -- the family this whole campaign is named after.
+body=$(awk 'index($0,"cron_known_accounts() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+if printf '%s\n' "$body" | grep -q 'CLIENTS_DIR' \
+   && printf '%s\n' "$body" | grep -q 'PEER_STATE_DIR' \
+   && ! printf '%s\n' "$body" | grep -qE '/home|/etc/passwd|getent'; then
+    ok "64h: known accounts come from our own records, not from /home or passwd"
+else
+    bad "64h: known accounts come from our own records, not from /home or passwd" "$body"
+fi
 
 # 63i. an unknown policy is refused rather than silently treated as one of them.
 out=$(ctx nonsense "" "" "" ""); rc=$?

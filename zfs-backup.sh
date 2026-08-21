@@ -2416,6 +2416,45 @@ crontab_for_target() {   # -> the target user's crontab on stdout
     cat "$tmp"; rm -f "$tmp"
 }
 
+# The '# Source:' path of the managed block installed in ONE account's crontab,
+# or nothing if that account has no managed block. Uses cron_read directly
+# rather than crontab_for_target, which resolves the account from LOCAL_USER --
+# here the account is the question, not a global to be borrowed.
+cron_source_for_user() {   # <account> -> its managed block's config path, or nothing
+    local u="$1" tmp src
+    tmp=$(mktemp) || return 1
+    if ! cron_read "$u" "$tmp"; then rm -f "$tmp"; return 1; fi
+    src=$(grep -m1 '^# Source: ' "$tmp" | sed -E 's/^# Source: (.*) -- .*/\1/')
+    rm -f "$tmp"
+    [ -n "$src" ] || return 1
+    normalize_cron_source "$src"
+}
+
+# Every account this host might be running managed jobs as: root, plus every
+# account named by one of OUR OWN records.
+#
+# Deliberately not `ls /home` or a passwd scan. An account exists for reasons
+# that have nothing to do with this project, and treating one as ours because it
+# has a home directory is the same class of mistake as reading directory
+# ownership instead of `id` -- a local fact standing in for a decision. If no
+# record of ours names an account, this project did not put jobs there.
+cron_known_accounts() {   # -> one account per line, root first, deduplicated
+    local f u
+    {
+        echo root
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            [ -n "$u" ] && echo "$u"
+        done
+        for f in "$PEER_STATE_DIR"/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            [ -n "$u" ] && echo "$u"
+        done
+    } 2>/dev/null | awk 'NF && !seen[$0]++'
+}
+
 # ------------------------------------------------------------------------------
 # THE decision layer: WHICH cron config, and AS WHICH account.
 #
@@ -2452,19 +2491,23 @@ crontab_for_target() {   # -> the target user's crontab on stdout
 #            That emptiness MEANS "this relationship was never activated" and
 #            remove-client reads it that way. Inventing a default there would
 #            have it clean up a config it was never installed from.
-#   host     recorded -> server.conf -> the host default. No adoption.
 #   adopt    recorded -> server.conf -> the '# Source:' line of the block
 #            ALREADY INSTALLED in this account's crontab -> the host default.
 #            Adoption is not a nicety: a crontab has ONE managed block, so
 #            installing from a freshly-defaulted path DELETES every job the
 #            installed file describes. The 2026-07-30 incident guard caught
 #            exactly that and refused; adopting makes the refusal unnecessary.
+#
+# There used to be a third, 'host': recorded -> server.conf -> host default, no
+# adoption. Three callers used it and none of them meant to -- it was not a
+# decision, it was the absence of one, and it is what P10 measured. It is gone;
+# what it encoded is now either an adoption or an explicit refusal to guess.
 cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorded-config> <recorded-user>
     local policy="${1:?cron_context_resolve: policy is required}"
     local x_config="${2-}" x_user="${3-}" r_config="${4-}" r_user="${5-}"
     case "$policy" in
-        record|host|adopt) ;;
-        *) die "cron_context_resolve: unknown policy '$policy' (record|host|adopt)" ;;
+        record|adopt) ;;
+        *) die "cron_context_resolve: unknown policy '$policy' (record|adopt)" ;;
     esac
 
     # The ACCOUNT first, and the order is load-bearing: the adoption step below
@@ -2497,14 +2540,53 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
     [ "$policy" = record ] && return 0
     [ -n "$CRON_CTX_FILE" ] && return 0
 
-    if [ "$policy" = adopt ]; then
-        local src
-        src=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
-        if [ -n "$src" ]; then
-            CRON_CTX_FILE=$(normalize_cron_source "$src")
-            CRON_CTX_WHY_FILE="adopted from the managed block already installed in ${CRON_CTX_USER:-root}'s crontab ('$src')"
+    # P10. Adoption reads ONE account's crontab, so it is only an answer if we
+    # know which account. When nothing told us -- no flag, no record, no
+    # manifest -- "root" above is a FALLBACK, not a decision, and on a host
+    # carrying two relationships the two are indistinguishable from here.
+    #
+    # Measured 2026-08-21 on pve2 and pve1: root's crontab runs the lab from
+    # jobs.<host>.conf while the delegated account runs production from
+    # jobs.<host>.v4.conf. `audit-source-retention` took the lab, reported
+    # "1 active pull dataset, nothing to add", and never opened production.
+    # It was not wrong about anything it looked at. It looked at one of two.
+    #
+    # So: if the account was a fallback and this host has managed blocks under
+    # more than one account, refuse and name them. This does NOT decide which
+    # one is meant -- that is the operator's to say, and now they can say it.
+    if [ -z "$x_user" ] && [ -z "$r_user" ] && [ -z "${PEER_SAVED_LOCAL_USER:-}" ]; then
+        local -a installed=()
+        local acct asrc
+        while IFS= read -r acct; do
+            asrc=$(cron_source_for_user "$acct") || continue
+            installed+=("$acct=$asrc")
+        done < <(cron_known_accounts)
+        if [ "${#installed[@]}" -gt 1 ]; then
+            die "this host runs managed jobs as more than one account, and nothing in this command says which one you mean:
+$(printf '    %s\n' "${installed[@]}")
+Each account has its own crontab and its own config, so picking for you would
+mean silently operating on one relationship while reporting on the host. Name
+the one you mean:
+    --local-user=<account>      (use root's own jobs with --local-user=root)
+    --config=<path>             (if you would rather name the file directly)
+Nothing was read and nothing was changed."
+        fi
+        if [ "${#installed[@]}" -eq 1 ]; then
+            CRON_CTX_USER="${installed[0]%%=*}"
+            [ "$CRON_CTX_USER" = root ] && CRON_CTX_USER=""
+            LOCAL_USER="$CRON_CTX_USER"
+            CRON_CTX_WHY_USER="the only account on this host with managed jobs"
+            CRON_CTX_FILE="${installed[0]#*=}"
+            CRON_CTX_WHY_FILE="adopted from the managed block already installed in ${CRON_CTX_USER:-root}'s crontab"
             return 0
         fi
+    fi
+
+    local src
+    if src=$(cron_source_for_user "$(cron_target_user)"); then
+        CRON_CTX_FILE="$src"
+        CRON_CTX_WHY_FILE="adopted from the managed block already installed in ${CRON_CTX_USER:-root}'s crontab"
+        return 0
     fi
     CRON_CTX_FILE="$(default_cron_config)"
     CRON_CTX_WHY_FILE="the host default -- nothing had recorded a config"
@@ -3074,7 +3156,7 @@ cmd_local_backup() {
     # arguments to the resolver rather than something it goes looking for: a
     # decision layer that reads its caller's locals is not one home, it is five
     # again with a shared address.
-    cron_context_resolve host "$config" "$local_user" "" ""
+    cron_context_resolve adopt "$config" "$local_user" "" ""
     config="$CRON_CTX_FILE"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
@@ -4873,23 +4955,26 @@ cmd_activate() {
 # It rebuilds every ACTIVE client through emit_client_sections(), the same
 # function activate-client uses, so a migrated host lands on byte-identical
 # sections rather than on a second implementation of the same shape.
-cmd_migrate_profile() {
-    local yes=0 a
+cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
+    local yes=0 a config_arg="" local_user_arg=""
     for a in "$@"; do
         case "$a" in
             --yes) yes=1 ;;
+            --config=*)     config_arg="${a#*=}" ;;
+            --local-user=*) local_user_arg="${a#*=}"
+                local_user_name_valid "$local_user_arg" \
+                    || die "migrate-profile: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
+                [ "$local_user_arg" = root ] && local_user_arg="" ;;
             *) die "migrate-profile: unknown option $a" ;;
         esac
     done
 
     read_server_conf
-    # Policy 'host', which is exactly what this line already did -- preserved,
-    # not corrected. This is one of the two commands P10 names: no adoption
-    # step, no --config, no --local-user, so on a host carrying two
-    # relationships it silently takes whichever one owns the default NAME.
-    # That is a behaviour change and it gets its own commit; this one only
-    # moves the decision into a place where the difference is visible.
-    cron_context_resolve host "" "" "" ""
+    # P10: this used to have no way to be aimed. It resolved server.conf, then
+    # the host default -- a name, on a host where a config belongs to a
+    # relationship -- and rewrote whatever it landed on. The two flags above are
+    # what make the refusal below an answerable question rather than a wall.
+    cron_context_resolve adopt "$config_arg" "$local_user_arg" "" ""
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
@@ -5005,25 +5090,29 @@ cmd_migrate_profile() {
 # an existing source-prune endpoint, or touch target prune. The migration changes only
 # the intended source-retention material, in the same previewed/confirmed/grant-checked
 # transaction migrate-profile uses.
-cmd_audit_source_retention() {   # [--apply] [--yes]
-    local apply=0 yes=0 a
+cmd_audit_source_retention() {   # [--config=PATH] [--local-user=NAME] [--apply] [--yes]
+    local apply=0 yes=0 a config_arg="" local_user_arg=""
     for a in "$@"; do
         case "$a" in
             --apply) apply=1 ;;
             --yes)   yes=1 ;;
+            --config=*)     config_arg="${a#*=}" ;;
+            --local-user=*) local_user_arg="${a#*=}"
+                local_user_name_valid "$local_user_arg" \
+                    || die "audit-source-retention: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
+                [ "$local_user_arg" = root ] && local_user_arg="" ;;
             *) die "audit-source-retention: unknown option $a" ;;
         esac
     done
 
     read_server_conf
-    # Policy 'host', which is exactly what this line already did -- preserved,
-    # not corrected. This is one of the two commands P10 names: no adoption
-    # step, no --config, no --local-user, so on a host carrying two
-    # relationships it silently takes whichever one owns the default NAME.
-    # That is a behaviour change and it gets its own commit; this one only
-    # moves the decision into a place where the difference is visible.
-    cron_context_resolve host "" "" "" ""
+    # P10: measured on pve2 and pve1 2026-08-21. This command printed
+    # "1 active pull dataset, nothing to add" while describing the LAB, having
+    # never opened production in the delegated account's config. It was not
+    # wrong about anything it looked at -- it looked at one of two.
+    cron_context_resolve adopt "$config_arg" "$local_user_arg" "" ""
     local cronfile="$CRON_CTX_FILE"
+    log "audit: config $cronfile ($CRON_CTX_WHY_FILE), as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER)"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
 
     # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
