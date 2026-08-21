@@ -1941,16 +1941,29 @@ else
         "$(printf '%s\n' "$fc_body" | grep -n 'read_server_conf')"
 fi
 
-# And the guard behind that reasoning: read_server_conf really does clear the
-# two variables before sourcing, so "it would be harmless there" is false.
-# Since the 2026-08-17 restore split the function BODY lives in
-# lib-backup-common.sh (shared with zfs-restore.sh) -- the property guarded here
-# is unchanged, only its address moved, so the extraction follows it.
+# And the guard behind that reasoning: read_server_conf really does clear its
+# OWN fields before sourcing, so "it would be harmless there" is false. Since
+# the 2026-08-17 restore split the function BODY lives in lib-backup-common.sh
+# (shared with zfs-restore.sh).
+#
+# BOTH HALVES are pinned now, and the second half is the one that cost a bug.
+# It used to clear LOCAL_USER as well -- left over from when the account was a
+# host-wide setting, which setup-server stopped recording. The loader was wiping
+# a variable the file it sources never contains, silently discarding a decision
+# its CALLER had made. Two commands worked around that, which made it look
+# deliberate; a third (local-backup, 2026-08-21) did not know to, and shipped a
+# --local-user that parsed, set the variable, and lost it a hundred lines later.
+#
+# The reasoning above is unchanged: CRON_CONFIG is still cleared, so calling
+# this in final-catchup would still discard what the client record said. What
+# changed is that it no longer clears state it does not own.
 rsc=$(awk '/^read_server_conf\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$(dirname "$ZFSBACKUP")/lib-backup-common.sh")
-if printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""' && printf '%s\n' "$rsc" | grep -q 'CRON_CONFIG=""'; then
-    ok "read_server_conf: resets before sourcing, so where it is called matters"
+if printf '%s\n' "$rsc" | grep -q 'CRON_CONFIG=""' \
+   && printf '%s\n' "$rsc" | grep -q 'DEFAULT_TARGET=""' \
+   && ! printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""'; then
+    ok "read_server_conf: clears its OWN fields before sourcing, and only those"
 else
-    bad "read_server_conf: resets before sourcing, so where it is called matters" "$rsc"
+    bad "read_server_conf: clears its OWN fields before sourcing, and only those" "$rsc"
 fi
 
 # PR #14 F2. Exercise the PUBLIC command, not its helpers in isolation. This is

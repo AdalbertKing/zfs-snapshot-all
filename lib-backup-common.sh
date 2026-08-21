@@ -26,10 +26,28 @@ die()  { echo "FATAL: $*" >&2; exit 1; }
 # every later command. KEY=VALUE, sourced -- setup-server is the only writer.
 SERVER_CONF="${SERVER_CONF:-/etc/zfs-snapshot-all/zfs-backup.conf}"
 
+# Resets ONLY the fields this file actually carries, so a stale value from an
+# earlier read cannot survive onto a host that has no server.conf. Those fields
+# are exactly the two setup-server writes: DEFAULT_TARGET and CRON_CONFIG.
+#
+# It used to clear LOCAL_USER too. That was left over from when the account WAS
+# a host-wide setting: setup-server stopped recording it -- who runs a
+# relationship's jobs became a per-relationship decision that travels with the
+# relationship -- but the clear stayed behind, silently destroying a decision
+# made by the CALLER, on behalf of a file that never mentions it.
+#
+# The cost was not theoretical. cmd_activate_client and cmd_remove_client each
+# carry a comment about the reset and put the value back afterwards, and those
+# two workarounds made the behaviour look deliberate. cmd_local_backup then
+# gained --local-user (2026-08-21), did not know to work around it, and shipped
+# a flag that parsed correctly, set the variable correctly, and had it wiped a
+# hundred lines later: the block went to root's crontab with nothing delegated,
+# past a green CI, and it took probes either side of the gap to see why.
+#
+# A loader must not clear state it does not own.
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""
-    LOCAL_USER=""
     [ -r "$SERVER_CONF" ] || return 0
     # shellcheck disable=SC1090
     . "$SERVER_CONF"

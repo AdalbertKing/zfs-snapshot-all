@@ -763,6 +763,45 @@ else
     bad "local-user: ...and the account really was not created" "nosuchacct_zz exists after a PLAN"
 fi
 
+# THE LOADER MUST NOT CLEAR STATE IT DOES NOT OWN.
+#
+# read_server_conf used to set LOCAL_USER="" before it even checked whether
+# server.conf was readable -- left over from when the account was a host-wide
+# setting. setup-server stopped writing it, the clear stayed, and it silently
+# destroyed a decision made by the caller out of a file that never mentions it.
+#
+# cmd_activate_client and cmd_remove_client each worked around it, which made
+# the behaviour look deliberate; cmd_local_backup then gained --local-user, did
+# not know to work around it, and shipped a flag that parsed, set the variable,
+# and had it wiped a hundred lines later. Green CI throughout.
+#
+# This is the assertion that would have caught it, and it is cheap.
+( LOCAL_USER=someacct; SERVER_CONF="$WORK/no-such-server.conf"; read_server_conf
+  [ "${LOCAL_USER:-}" = someacct ] ) \
+    && ok "read_server_conf leaves LOCAL_USER alone when there is no server.conf" \
+    || bad "read_server_conf leaves LOCAL_USER alone when there is no server.conf" \
+           "the loader cleared a variable server.conf never carries"
+printf 'DEFAULT_TARGET=hdd/x\nCRON_CONFIG=/etc/x.conf\n' > "$WORK/sc-present.conf"
+( LOCAL_USER=someacct; SERVER_CONF="$WORK/sc-present.conf"; read_server_conf
+  [ "${LOCAL_USER:-}" = someacct ] && [ "$DEFAULT_TARGET" = hdd/x ] ) \
+    && ok "read_server_conf still loads its OWN fields, and still leaves LOCAL_USER" \
+    || bad "read_server_conf still loads its OWN fields, and still leaves LOCAL_USER" \
+           "either the reset came back, or the loader stopped loading"
+
+# ONE grammar for --local-user, not one per command. Three commands ask the
+# same question -- setup-server, add-client, local-backup -- and each used to
+# carry its own copy of the case statement, differing only in the prefix on the
+# error. The third was written by copying the second, which is also how it
+# inherited a missing LOCAL_USER restore. Asserted at the source: the pattern
+# must appear once, in the shared helper.
+copies=$(grep -c '\*\[!a-z0-9_-\]\* | "" | \[!a-z_\]\*' "$ZB")
+if [ "$copies" -eq 1 ]; then
+    ok "the --local-user grammar exists once, in one helper, not once per command"
+else
+    bad "the --local-user grammar exists once, in one helper, not once per command" \
+        "found $copies copies of the account-name pattern"
+fi
+
 # Same grammar as add-client, so the two forms cannot drift into disagreeing
 # about what an account name is.
 out="$(run --source=rpool/data --target=hdd/backups --local-user=9bad --config="$WORK/lu2.conf")"; rc=$?
