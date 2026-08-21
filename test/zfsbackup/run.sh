@@ -5673,6 +5673,131 @@ for fn in cmd_seed cmd_activate_client; do
     fi
 done
 
+# --- 63. the extracted decision layer: which config, and as which account ----
+# Five commands used to answer these two questions for themselves. The answers
+# had diverged in ways nothing could see, and both of the last two days' live
+# bugs came out of that: read_server_conf clearing LOCAL_USER (two callers
+# worked around it, the third did not know to), and P10 (two callers resolve the
+# config with no adoption step and no flag to aim them).
+#
+# These assertions pin two separate things, and the difference matters:
+#   63a-63f  the LADDERS themselves, so a future edit cannot quietly reorder one
+#   63g-63h  that each command still asks for the SAME ladder it asked for
+#            before the extraction -- this commit moves the decision, it does
+#            not change any answer.
+ctx() {   # <policy> <x-config> <x-user> <r-config> <r-user> [env assignments...]
+    local pol="$1" xc="$2" xu="$3" rc="$4" ru="$5"; shift 5
+    env "$@" bash -c "
+        source '$ZFSBACKUP'
+        crontab_for_target() { printf '%s\n' \"\${FAKE_CRONTAB:-}\"; }
+        default_cron_config() { echo /etc/zfs-snapshot-all/jobs.HOST.conf; }
+        cron_context_resolve '$pol' '$xc' '$xu' '$rc' '$ru'
+        printf '%s|%s\n' \"\$CRON_CTX_FILE\" \"\$CRON_CTX_USER\"
+    " 2>&1
+}
+
+# 63a. the config ladder, top rung: an explicit --config outranks everything.
+got=$(ctx host /explicit.conf "" /recorded.conf "" CRON_CONFIG=/server.conf)
+if [ "$got" = "/explicit.conf|" ]; then
+    ok "63a: an explicit --config outranks the record and server.conf"
+else
+    bad "63a: an explicit --config outranks the record and server.conf" "got=$got"
+fi
+
+# 63b. the record outranks server.conf. This is the rung whose ABSENCE was the
+#      2026-08-09 metropolis bug: read_server_conf blanked the recorded value and
+#      remove-client then read the client as "never activated".
+got=$(ctx host "" "" /recorded.conf "" CRON_CONFIG=/server.conf)
+if [ "$got" = "/recorded.conf|" ]; then
+    ok "63b: a value recorded with the relationship outranks server.conf"
+else
+    bad "63b: a value recorded with the relationship outranks server.conf" "got=$got"
+fi
+
+# 63c. policy 'adopt' takes the '# Source:' of the block ALREADY INSTALLED
+#      rather than defaulting. A crontab has ONE managed block, so defaulting
+#      instead would DELETE every job the installed file describes.
+got=$(ctx adopt "" "" "" "" \
+      "FAKE_CRONTAB=# Source: /etc/zfs-snapshot-all/jobs.HOST.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead")
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.v4.conf|" ]; then
+    ok "63c: policy 'adopt' adopts the installed block's source instead of defaulting"
+else
+    bad "63c: policy 'adopt' adopts the installed block's source instead of defaulting" "got=$got"
+fi
+
+# 63d. policy 'host' does NOT adopt -- same input as 63c, different answer.
+#      This is P10 in one assertion, and it is deliberately still true here:
+#      this commit moves the decision, the next one changes it.
+got=$(ctx host "" "" "" "" \
+      "FAKE_CRONTAB=# Source: /etc/zfs-snapshot-all/jobs.HOST.v4.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead")
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|" ]; then
+    ok "63d: policy 'host' does not adopt, and lands on the host default (P10, still open)"
+else
+    bad "63d: policy 'host' does not adopt, and lands on the host default (P10, still open)" "got=$got"
+fi
+
+# 63e. policy 'record' leaves an unrecorded config EMPTY. remove-client keys its
+#      whole cron-cleanup branch on that emptiness meaning "never activated";
+#      a default here would have teardown rewrite a config it never installed.
+got=$(ctx record "" "" "" "" "FAKE_CRONTAB=# Source: /whatever.conf -- x")
+if [ "$got" = "|" ]; then
+    ok "63e: policy 'record' returns nothing rather than inventing a config"
+else
+    bad "63e: policy 'record' returns nothing rather than inventing a config" "got=$got"
+fi
+
+# 63f. the ACCOUNT ladder: record, then the manifest, then root -- and never
+#      server.conf, which is why LOCAL_USER=... is set in the environment here
+#      and still does not win. The account is a fact of the RELATIONSHIP.
+got=$(ctx host "" "" "" acctfromrecord PEER_SAVED_LOCAL_USER=acctfrommanifest)
+[ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|acctfromrecord" ] \
+    && ok "63f: the account comes from the record when it has one" \
+    || bad "63f: the account comes from the record when it has one" "got=$got"
+got=$(ctx host "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
+[ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|acctfrommanifest" ] \
+    && ok "63f: it falls back to the pairing manifest when the record predates the field" \
+    || bad "63f: it falls back to the pairing manifest when the record predates the field" "got=$got"
+
+# 63g. every config writer goes through the one decision layer. A writer that
+#      re-derives its own answer is the exact shape this extraction removed, so
+#      the count is pinned rather than left to review.
+writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
+resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
+if [ "$writers" -eq 5 ] && [ "$resolvers" -eq 5 ]; then
+    ok "63g: all five config writers resolve through cron_context_resolve"
+else
+    bad "63g: all five config writers resolve through cron_context_resolve" \
+        "atomic_replace_and_install call sites=$writers cron_context_resolve call sites=$resolvers"
+fi
+
+# 63h. and each one asks for the policy it asked for BEFORE the extraction.
+#      This is the assertion that makes "no behaviour change" checkable rather
+#      than asserted: get one of these wrong and a command silently changes
+#      which file it writes.
+while read -r fn want; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if printf '%s\n' "$body" | grep -q "cron_context_resolve $want "; then
+        ok "63h: $fn uses policy '$want'"
+    else
+        bad "63h: $fn uses policy '$want'" \
+            "$(printf '%s\n' "$body" | grep -n 'cron_context_resolve' || echo 'no call at all')"
+    fi
+done <<'POLICIES'
+cmd_local_backup host
+cmd_activate_client adopt
+cmd_migrate_profile host
+cmd_audit_source_retention host
+cmd_remove_client record
+POLICIES
+
+# 63i. an unknown policy is refused rather than silently treated as one of them.
+out=$(ctx nonsense "" "" "" ""); rc=$?
+if printf '%s' "$out" | grep -q "unknown policy"; then
+    ok "63i: an unknown policy is refused by name"
+else
+    bad "63i: an unknown policy is refused by name" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

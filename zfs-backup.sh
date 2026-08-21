@@ -2416,6 +2416,100 @@ crontab_for_target() {   # -> the target user's crontab on stdout
     cat "$tmp"; rm -f "$tmp"
 }
 
+# ------------------------------------------------------------------------------
+# THE decision layer: WHICH cron config, and AS WHICH account.
+#
+# The crontab has one writer -- gen-cron.sh --install -- and that writer owns
+# the lock and the validation, so none of its 18 requesters can diverge on
+# either: they have no way to touch them. The config has no such owner.
+# atomic_replace_and_install is an ENDING, not an owner; five commands each ran
+# their own read-modify-write and, above it, their own answer to these two
+# questions. Five answers, nothing comparing them, each locally sensible.
+#
+# What that cost, measured 2026-08-20/21:
+#   * read_server_conf cleared LOCAL_USER, a field server.conf never carries.
+#     Two of the five saved and restored it around the call; the third copied
+#     the shape without the restore and shipped a --local-user that parsed, set
+#     the variable, and lost it a hundred lines later, past a green CI.
+#   * Two of the five resolve the config without the '# Source:' adoption step
+#     and accept no flag to aim them, so on a host carrying two relationships
+#     they silently operate on whichever one owns the default NAME (P10).
+#
+# Neither is a coding mistake. Both are what happens when a decision has five
+# homes: a divergence is invisible until a host disagrees with it.
+#
+# So this function is the one home. It does not remove the differences between
+# the commands -- those are real -- it makes them an ARGUMENT, visible side by
+# side, instead of 2500 lines apart.
+#
+# Sets: CRON_CTX_FILE, CRON_CTX_USER, CRON_CTX_WHY_FILE, CRON_CTX_WHY_USER.
+# Also assigns LOCAL_USER, because cron_target_user is what every crontab
+# helper turns on and it reads exactly that.
+#
+# Policies -- what a caller may fall back to when nothing recorded a config:
+#
+#   record   Only a recorded value counts; an empty answer is left empty.
+#            That emptiness MEANS "this relationship was never activated" and
+#            remove-client reads it that way. Inventing a default there would
+#            have it clean up a config it was never installed from.
+#   host     recorded -> server.conf -> the host default. No adoption.
+#   adopt    recorded -> server.conf -> the '# Source:' line of the block
+#            ALREADY INSTALLED in this account's crontab -> the host default.
+#            Adoption is not a nicety: a crontab has ONE managed block, so
+#            installing from a freshly-defaulted path DELETES every job the
+#            installed file describes. The 2026-07-30 incident guard caught
+#            exactly that and refused; adopting makes the refusal unnecessary.
+cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorded-config> <recorded-user>
+    local policy="${1:?cron_context_resolve: policy is required}"
+    local x_config="${2-}" x_user="${3-}" r_config="${4-}" r_user="${5-}"
+    case "$policy" in
+        record|host|adopt) ;;
+        *) die "cron_context_resolve: unknown policy '$policy' (record|host|adopt)" ;;
+    esac
+
+    # The ACCOUNT first, and the order is load-bearing: the adoption step below
+    # reads THIS account's crontab. Resolve it second and adoption would read
+    # root's while installing into the account's -- which is the 2026-08-01
+    # metropolis failure, where teardown looked at root's block while the
+    # client's lines were in the account's.
+    if [ -n "$x_user" ]; then
+        CRON_CTX_USER="$x_user";  CRON_CTX_WHY_USER="named on the command line"
+    elif [ -n "$r_user" ]; then
+        CRON_CTX_USER="$r_user";  CRON_CTX_WHY_USER="recorded with the relationship"
+    elif [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
+        CRON_CTX_USER="$PEER_SAVED_LOCAL_USER"
+        CRON_CTX_WHY_USER="the pairing manifest (the record predates the field)"
+    else
+        CRON_CTX_USER="";         CRON_CTX_WHY_USER="nothing recorded an account -- root"
+    fi
+    # Never from server.conf. The account is a fact of the RELATIONSHIP, and
+    # setup-server deliberately records none; see cmd_setup_server.
+    LOCAL_USER="$CRON_CTX_USER"
+
+    CRON_CTX_FILE=""; CRON_CTX_WHY_FILE=""
+    if [ -n "$x_config" ]; then
+        CRON_CTX_FILE="$x_config"; CRON_CTX_WHY_FILE="named on the command line"
+    elif [ -n "$r_config" ]; then
+        CRON_CTX_FILE="$r_config"; CRON_CTX_WHY_FILE="recorded with the relationship"
+    elif [ -n "${CRON_CONFIG:-}" ]; then
+        CRON_CTX_FILE="$CRON_CONFIG"; CRON_CTX_WHY_FILE="server.conf"
+    fi
+    [ "$policy" = record ] && return 0
+    [ -n "$CRON_CTX_FILE" ] && return 0
+
+    if [ "$policy" = adopt ]; then
+        local src
+        src=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+        if [ -n "$src" ]; then
+            CRON_CTX_FILE=$(normalize_cron_source "$src")
+            CRON_CTX_WHY_FILE="adopted from the managed block already installed in ${CRON_CTX_USER:-root}'s crontab ('$src')"
+            return 0
+        fi
+    fi
+    CRON_CTX_FILE="$(default_cron_config)"
+    CRON_CTX_WHY_FILE="the host default -- nothing had recorded a config"
+}
+
 # Run gen-cron.sh as the account that owns the jobs, with ITS paths. Running it
 # as root and redirecting would install into root's crontab instead -- gen-cron
 # writes to "this user's" crontab by design.
@@ -2971,11 +3065,17 @@ cmd_local_backup() {
     done
 
     read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-$(default_cron_config)}"
-    # No LOCAL_USER restore here on purpose. read_server_conf used to clear it
-    # and this line used to put it back -- the same workaround the two remote
-    # paths carry. The loader no longer clears state it does not own, so the
-    # workaround went with it rather than being copied a third time.
+    # Policy 'host': no relationship record to read from, and no adoption --
+    # preserved exactly as it was, NOT quietly upgraded. Adding adoption here is
+    # the P10 change and it belongs in its own commit with its own test, not
+    # smuggled in under a refactor that claims to change no behaviour.
+    #
+    # This is also the caller that has real flags to pass, which is why they are
+    # arguments to the resolver rather than something it goes looking for: a
+    # decision layer that reads its caller's locals is not one home, it is five
+    # again with a shared address.
+    cron_context_resolve host "$config" "$local_user" "" ""
+    config="$CRON_CTX_FILE"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -4345,23 +4445,15 @@ cmd_activate_client() {
     apply_client_profile_choice "$is_new_relationship" "${PROFILE:-}"
 
     read_server_conf
-    [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    # The account the jobs run as is a fact of the RELATIONSHIP: chosen once at
-    # create (--local-user, else root), carried in the manifest as
-    # PEER_SAVED_LOCAL_USER, and -- from this activation on -- in the client
-    # record too. Resolve it: the record if a prior activation wrote it, else the
-    # manifest, else empty (root, via cron_target_user). No server.conf account,
-    # no host-wide guess. Recorded back below so remove-client and any
-    # re-activation read the same answer.
-    #
-    # This used to be a RESTORE, because read_server_conf cleared LOCAL_USER -- a
-    # variable server.conf has never contained. That clear is gone (2026-08-21),
-    # so the line no longer undoes anything; what remains is its real job,
-    # resolving the record against the manifest fallback. recorded_local_user is
-    # captured from the client record above rather than read live, so nothing
-    # loaded in between can quietly become the answer.
-    LOCAL_USER="${recorded_local_user:-${PEER_SAVED_LOCAL_USER:-}}"
-    log "activate: jobs run as ${LOCAL_USER:-root} (recorded with the relationship below)"
+    # Both halves in one call, and HERE rather than at the cronfile line below,
+    # because the sync delegation a few lines down already needs the account.
+    # That is why the account resolution used to live up here and the config
+    # resolution a hundred lines further on: two questions, one answer each,
+    # separated by enough code that nobody saw they were the same decision.
+    # The ladder is unchanged (recorded -> server.conf -> adopt -> default for
+    # the config; record -> manifest -> root for the account); only its home is.
+    cron_context_resolve adopt "" "" "$recorded_cron_config" "$recorded_local_user"
+    log "activate: jobs run as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER -- recorded with the relationship below)"
 
     # Sync mode: the RECEIVE-side delegation that backup mode gets at --pair
     # time (deploy.sh grants ZFS_PERMS on target/label) has no counterpart,
@@ -4399,17 +4491,9 @@ cmd_activate_client() {
     # unnecessary by adopting the installed truth, same as setup-server already
     # does. New sections MERGE into the host's one config, which is the
     # single-writer design, not a workaround.
-    local cronfile="${CRON_CONFIG:-}"
-    if [ -z "$cronfile" ]; then
-        local existing_src
-        existing_src=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
-        if [ -n "$existing_src" ]; then
-            cronfile=$(normalize_cron_source "$existing_src")
-            log "activate: adopting the installed managed block's config '$existing_src' (resolved: $cronfile) -- one crontab, one managed block, one source file"
-        else
-            cronfile="$(default_cron_config)"
-        fi
-    fi
+    # Resolved once, at the top of this function, together with the account.
+    local cronfile="$CRON_CTX_FILE"
+    log "activate: config $cronfile ($CRON_CTX_WHY_FILE)"
 
     # REV-20260730-003 F4/F6: everything below builds and validates a WORKING
     # COPY of the config -- the real file is never touched until validation,
@@ -4799,7 +4883,14 @@ cmd_migrate_profile() {
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
+    # Policy 'host', which is exactly what this line already did -- preserved,
+    # not corrected. This is one of the two commands P10 names: no adoption
+    # step, no --config, no --local-user, so on a host carrying two
+    # relationships it silently takes whichever one owns the default NAME.
+    # That is a behaviour change and it gets its own commit; this one only
+    # moves the decision into a place where the difference is visible.
+    cron_context_resolve host "" "" "" ""
+    local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
     if ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule"; then
@@ -4925,7 +5016,14 @@ cmd_audit_source_retention() {   # [--apply] [--yes]
     done
 
     read_server_conf
-    local cronfile="${CRON_CONFIG:-$(default_cron_config)}"
+    # Policy 'host', which is exactly what this line already did -- preserved,
+    # not corrected. This is one of the two commands P10 names: no adoption
+    # step, no --config, no --local-user, so on a host carrying two
+    # relationships it silently takes whichever one owns the default NAME.
+    # That is a behaviour change and it gets its own commit; this one only
+    # moves the decision into a place where the difference is visible.
+    cron_context_resolve host "" "" "" ""
+    local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
 
     # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
@@ -5619,23 +5717,19 @@ cmd_remove_client() {
     # assert_cron_config_matches_installed caught it, which is the third time
     # today a guard turned a defect into a message instead of an incident.
     read_server_conf
-    [ -n "$recorded_cron_config" ] && CRON_CONFIG="$recorded_cron_config"
-    # The account the managed jobs run as is a fact of the RELATIONSHIP, not the
-    # host: it was decided once at create (--local-user, else root) and recorded
-    # in the client record. Take it from the record, falling back to the
-    # manifest's PEER_SAVED_LOCAL_USER for a relationship enrolled before the
-    # record carried the field. Empty means root, which is exactly what
-    # cron_target_user then resolves.
+    # Policy 'record', and it is the only caller that wants it. The branch below
+    # keys cron cleanup on CRON_CONFIG being NON-EMPTY -- an empty answer is not
+    # a missing answer here, it is the statement "this client was never
+    # activated, so there is no managed block of its to remove". Let this fall
+    # back to the host default like activate-client does and teardown would go
+    # rewriting a config it was never installed from.
     #
-    # This was written as a RESTORE after read_server_conf, which used to clear
-    # LOCAL_USER -- a field server.conf has never carried. That clear is gone
-    # (2026-08-21); the resolution below is unchanged and still load-bearing,
-    # because the manifest fallback is not something the record alone provides.
-    # Without it the block
-    # removal below would target root's crontab while the jobs live in the
-    # delegated account's, clear nothing, and --unpair would refuse on the lines it
-    # failed to remove (found live 2026-08-19, lab3 pve9 sync/passive).
-    LOCAL_USER="${recorded_local_user:-${PEER_SAVED_LOCAL_USER:-}}"
+    # The account half is the same ladder as everywhere else and is what stops
+    # the removal below from targeting root's crontab while the jobs live in the
+    # delegated account's -- clearing nothing, then --unpair refusing on the
+    # lines it failed to remove (found live 2026-08-19, lab3 pve9 sync/passive).
+    cron_context_resolve record "" "" "$recorded_cron_config" "$recorded_local_user"
+    CRON_CONFIG="$CRON_CTX_FILE"
     [ "${STATE:-}" = "removed" ] && die "client '$name' is already removed"
 
     if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
