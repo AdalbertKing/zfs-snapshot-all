@@ -6002,8 +6002,8 @@ fi
 # supersedes the recorded request for every relationship kind; a legacy
 # relationship with no committed scope keeps its recorded list, because there
 # is no signed contract to supersede it with.
-rmd_env() {   # <scope-exists 0|1> <saved-datasets> -> resolved list or rc
-    local sx="$1" sd="$2"
+rmd_env() {   # <scope-exists 0|1> <saved-datasets> <scope-body-file> -> "list|recursive-roots"
+    local sx="$1" sd="$2" sc="$3"
     local SB="$WORK/rmd-stub"; mkdir -p "$SB"
     cat > "$SB/ssh" <<'EOS'
 #!/bin/sh
@@ -6014,43 +6014,65 @@ case "$*" in
 esac
 EOS
     chmod +x "$SB/ssh"
-    cat > "$SB/scope" <<'EOS'
+    PATH="$SB:$PATH" SCOPE_EXISTS="$sx" ZB="$ZFSBACKUP" SD="$sd" SCOPEF="$sc" bash -c '
+        source "$ZB"
+        LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null
+        LOAD_ACCOUNT=u LOAD_HOST=h COLLECTOR_LABEL=me
+        fetch_committed_scope() { cat "$SCOPEF" > "$1"; }
+        PEER_SAVED_MODE=""
+        PEER_SAVED_DATASETS="$SD"
+        resolve_mode_datasets >/dev/null 2>&1             && printf "%s|%s" "$PEER_SAVED_DATASETS" "${PEER_SAVED_RECURSIVE_ROOTS:-}"
+    '
+}
+SOLID="$WORK/scope-solid"; NARROW="$WORK/scope-narrow"
+cat > "$SOLID" <<'EOS'
 [dataset:tank/x]
 include_parent = yes
 include_children = yes
 EOS
-    PATH="$SB:$PATH" SCOPE_EXISTS="$sx" ZB="$ZFSBACKUP" SD="$sd" STUBDIR="$SB" bash -c '
-        source "$ZB"
-        LOAD_KEYFILE=/dev/null LOAD_PORT=22 LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null
-        LOAD_ACCOUNT=u LOAD_HOST=h COLLECTOR_LABEL=me
-        fetch_committed_scope() { cat "$STUBDIR/scope" > "$1"; }
-        PEER_SAVED_MODE=""
-        PEER_SAVED_DATASETS="$SD"
-        resolve_mode_datasets >/dev/null 2>&1 && printf "%s" "$PEER_SAVED_DATASETS"
-    '
-}
+cat > "$NARROW" <<'EOS'
+[dataset:tank/x]
+include_parent = yes
+include_children = yes
+exclude = tank/x/kid
+EOS
 
-got=$(rmd_env 1 "tank/x")
-if [ "$got" = "tank/x" ]; then
+got=$(rmd_env 1 "tank/x" "$SOLID")
+if [ "$got" = "tank/x|" ]; then
     ok "65a: no committed scope -> the recorded request stays the contract (legacy)"
 else
     bad "65a: no committed scope -> the recorded request stays the contract (legacy)" "got=[$got]"
 fi
 
-got=$(rmd_env 0 "tank/x")
-if [ "$got" = "tank/x tank/x/kid" ]; then
-    ok "65b: a committed scope supersedes the request -- parent AND children replicate"
+# 65b. A SOLID signed root stays ONE entry, marked recursive -- the ENGINE
+#      re-expands it on the source at every run (snapget -R does a remote
+#      zfs list -r before each transfer), so a child created tomorrow joins
+#      at the next cron tick. The owner rejected the frozen-enumeration
+#      boundary in exactly those words; this is the assertion that holds him
+#      to getting what he asked for.
+got=$(rmd_env 0 "tank/x" "$SOLID")
+if [ "$got" = "tank/x|tank/x" ]; then
+    ok "65b: a solid signed root collapses to one RECURSIVE entry (engine expands at run time)"
 else
-    bad "65b: a committed scope supersedes the request -- parent AND children replicate" "got=[$got]"
+    bad "65b: a solid signed root collapses to one RECURSIVE entry (engine expands at run time)" "got=[$got]"
 fi
 
-# 65c. the mode-based path is untouched: mode set + list already present is a
-#      no-op, exactly as before this change.
-got=$(rmd_env 0 "")
-if [ "$got" = "" ]; then
-    ok "65c: empty request without mode stays a no-op"
+# 65c. A hand-NARROWED root cannot ride engine recursion (the engine would
+#      take the whole subtree, excludes and all), so it enumerates now and is
+#      NOT marked -- its membership honestly freezes at activation, and
+#      resolve says so in its log.
+got=$(rmd_env 0 "tank/x" "$NARROW")
+if [ "$got" = "tank/x|" ]; then
+    ok "65c: a hand-narrowed root enumerates without the recursive marker"
 else
-    bad "65c: empty request without mode stays a no-op" "got=[$got]"
+    bad "65c: a hand-narrowed root enumerates without the recursive marker" "got=[$got]"
+fi
+
+got=$(rmd_env 0 "" "$SOLID")
+if [ "$got" = "|" ]; then
+    ok "65d: empty request without mode stays a no-op"
+else
+    bad "65d: empty request without mode stays a no-op" "got=[$got]"
 fi
 
 # 63i. an unknown policy is refused rather than silently treated as one of them.

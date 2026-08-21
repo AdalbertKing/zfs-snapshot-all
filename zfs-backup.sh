@@ -1110,12 +1110,21 @@ source_prune_sflags() {
 # identical, independent, non-recursive source ladder.
 append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds>
     local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6"
+    # Recursion here MIRRORS the pull's. A solid scope root pulls with -R, so
+    # its children accumulate the tool-owned automated_ snapshots on the
+    # source too -- a non-recursive source prune would cover the parent and
+    # let every child's source pool fill without bound, which is REV-102's
+    # exact defect reborn one level down. delsnaps' -R walks the remote
+    # subtree at each run, same as the pull, so the two stay in step as
+    # children come and go.
+    local rec=no
+    is_recursive_root "$ds" && rec=yes
     {
         echo
         echo "[prune:$scope]"
         echo "	$marker"
         emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
-        echo "	recursive    = no"
+        echo "	recursive    = $rec"
         echo "	ssh_flags    = $sflags"
         echo "	pair_label   = $name"
         echo "	notify       = ${name}-src-$(basename "$ds")"
@@ -2238,6 +2247,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS"
             fi
+            # A solid scope root rides ENGINE recursion: snapget -R re-expands
+            # the subtree on the source at every run, so a child created there
+            # tomorrow joins at the next cron tick -- which is what the signed
+            # include_children=yes means over time. Dataset-level field, so it
+            # wins over any template default (and the profile fragment
+            # deliberately carries no 'recursive' of its own).
+            if is_recursive_root "$ds"; then
+                echo "	recursive    = flat"
+            fi
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
@@ -2273,7 +2291,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     echo "[prune:$ds]"
                     echo "	$marker"
                     profile_emit "$PROFILE_PRUNE_FILE"
-                    echo "	recursive    = no"
+                    # Mirrors the pull's recursion, same reasoning as
+                    # append_source_prune_create: a solid root's children are
+                    # pulled by -R at every tick, so their landed snapshots
+                    # must be pruned by -R at every tick too.
+                    if is_recursive_root "$ds"; then
+                        echo "	recursive    = yes"
+                    else
+                        echo "	recursive    = no"
+                    fi
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}-$(basename "$ds")"
                 } >> "$workfile" || return 1
@@ -3844,6 +3870,12 @@ then re-run the exact command that printed this -- it resumes from where it stop
 # non-empty.) Probed over the relationship's own channel; a transport failure
 # reads as "no", which is safe -- every caller is about to do real ssh work
 # that will fail loudly on the same broken link.
+# Is <ds> one of the roots the engine re-expands at every run?
+is_recursive_root() {   # <dataset> -> 0 yes
+    case " ${PEER_SAVED_RECURSIVE_ROOTS:-} " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
 has_committed_scope() {
     local -a ssh_opts=(-i "$LOAD_KEYFILE" -p "$LOAD_PORT" -o BatchMode=yes \
         -o "HostKeyAlias=$LOAD_ALIAS" -o "UserKnownHostsFile=$LOAD_ALIAS_KH" \
@@ -3893,20 +3925,45 @@ resolve_mode_datasets() {
     scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
     rm -f "$scope_tmp"
 
+    # A SOLID root -- include_parent=yes, include_children=yes, no excludes --
+    # stays ONE entry, marked recursive, and the engine expands it on the
+    # source AT EVERY RUN (snapget -R does a remote `zfs list -r` before each
+    # transfer). That is what makes the signed contract hold over time: a
+    # child created on the source tomorrow is inside the signed subtree, and
+    # it joins at the next cron tick, not at the next re-activation. The
+    # owner rejected the frozen-enumeration boundary in exactly those words.
+    #
+    # A root the operator NARROWED -- excludes, or parent/children switched
+    # off -- cannot ride engine recursion (the engine would take the whole
+    # subtree), so it is enumerated here and its membership DOES freeze at
+    # activation. That is the honest cost of a hand-carved scope, and it is
+    # said out loud below rather than discovered from a backup missing a
+    # dataset.
     local -a resolved=()
+    PEER_SAVED_RECURSIVE_ROOTS=""
     local root ds
     for root in "${SCOPE_ROOTS[@]}"; do
+        if [ "${SCOPE_PARENT[$root]}" = yes ] && [ "${SCOPE_CHILDREN[$root]}" = yes ] \
+           && [ -z "${SCOPE_EXCLUDE[$root]}" ] && [ -z "${SCOPE_EXCLUDE_TREE[$root]}" ]; then
+            case " ${resolved[*]:-} " in *" $root "*) continue ;; esac
+            resolved+=("$root")
+            PEER_SAVED_RECURSIVE_ROOTS="${PEER_SAVED_RECURSIVE_ROOTS:+$PEER_SAVED_RECURSIVE_ROOTS }$root"
+            continue
+        fi
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
             scope_includes "$ds" || continue
             case " ${resolved[*]:-} " in *" $ds "*) continue ;; esac
             resolved+=("$ds")
         done < <(ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -o name -r -- '$root'" 2>/dev/null)
+        log "scope root '$root' is hand-narrowed (excludes or include_* switched off) -- its membership is enumerated NOW and a dataset created there later joins at the next re-activation, not the next cron tick"
     done
     [ "${#resolved[@]}" -gt 0 ] \
         || die "the scope file on $LOAD_HOST selects nothing that currently exists there -- nothing to back up"
 
     PEER_SAVED_DATASETS="${resolved[*]}"
+    [ -n "$PEER_SAVED_RECURSIVE_ROOTS" ] \
+        && log "recursive root(s) -- the engine re-expands these on the source at every run: $PEER_SAVED_RECURSIVE_ROOTS"
     # Unconditional, and that is the point. This is the moment the list stops
     # being the source's business and becomes what this host will replicate,
     # and until 2026-08-21 it was the one fact nobody printed: cmd_seed's
@@ -4153,7 +4210,7 @@ cmd_seed() {
         # forever outside retention. Verified live on metropolis 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" -m automated_daily_ $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -4258,7 +4315,7 @@ cmd_final_catchup() {
         # forever outside retention. Verified live on metropolis 2026-08-20:
         # after enrolment the monitor returned rc=0 with no hourly snapshot yet.
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -m automated_daily_ $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" -m automated_daily_ $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -4472,7 +4529,7 @@ probe_snapget_endpoint() {   # <host> <port>
         # what made the old text heuristic fragile) but not discarded either
         # -- REV-20260802-033 F4, the source-IP/firewall diagnostic lives here.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
+        out=$(bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
         if [ "$rc" -ne 0 ]; then
             failed=$((failed + 1))
             PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'
@@ -5774,7 +5831,7 @@ cmd_test() {
     local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
