@@ -5795,8 +5795,8 @@ while read -r fn want; do
 done <<'POLICIES'
 cmd_local_backup adopt
 cmd_activate_client adopt
-cmd_migrate_profile adopt
-cmd_audit_source_retention adopt
+cmd_migrate_profile aim
+cmd_audit_source_retention aim
 cmd_remove_client record
 POLICIES
 
@@ -5812,7 +5812,7 @@ POLICIES
 # which -- which is why the flags had to come with it.
 
 # 64a. THE MEASURED CASE. Two accounts, two blocks, nothing says which.
-out=$(ctx adopt "" "" "" "" \
+out=$(ctx aim "" "" "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
       FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
@@ -5827,7 +5827,7 @@ fi
 
 # 64b. --local-user answers it. The refusal has to be answerable or it is just
 #      a wall; this is the half that makes 64a a question.
-got=$(ctx adopt "" zfsbackup "" "" \
+got=$(ctx aim "" zfsbackup "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
       FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
@@ -5845,7 +5845,7 @@ fi
 #       a dead end, which is worse than no guard: it stops the work AND misleads
 #       about how to continue. Found live on pve2 and pve1 by exit code -- the
 #       output looked like a clean audit, and only `echo $?` disagreed.
-got=$(ctx adopt "" root "" "" \
+got=$(ctx aim "" root "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
       FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
@@ -5868,7 +5868,7 @@ for fn in cmd_migrate_profile cmd_audit_source_retention; do
 done
 
 # 64c. --config answers it too, and wins outright -- no crontab is consulted.
-got=$(ctx adopt /etc/mine.conf "" "" "" \
+got=$(ctx aim /etc/mine.conf "" "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
       FAKE_BLOCK_root=/etc/zfs-snapshot-all/jobs.pve2.conf \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve2.v4.conf)
@@ -5881,7 +5881,7 @@ fi
 # 64d. ONE account with a block is not ambiguous -- it adopts and says so.
 #      Without this the refusal would fire on every single-relationship host,
 #      which is most of them, and the fix would be worse than the defect.
-got=$(ctx adopt "" "" "" "" \
+got=$(ctx aim "" "" "" "" \
       "FAKE_ACCOUNTS=root zfsbackup" \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve9.conf)
 if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve9.conf|zfsbackup" ]; then
@@ -5893,7 +5893,7 @@ fi
 # 64e. NO managed block anywhere -- a fresh host -- still falls back to the
 #      default. A first install must not be blocked by a check about second
 #      relationships.
-got=$(ctx adopt "" "" "" "" "FAKE_ACCOUNTS=root zfsbackup")
+got=$(ctx aim "" "" "" "" "FAKE_ACCOUNTS=root zfsbackup")
 if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|" ]; then
     ok "64e: a host with no managed block at all still gets the default"
 else
@@ -5955,13 +5955,43 @@ fi
 #      marker is what makes one ours. Without this, adding the spool would have
 #      turned every unrelated cron user into an ambiguity and the refusal would
 #      fire on hosts that have no second relationship at all.
-got=$(ctx adopt "" "" "" "" \
+got=$(ctx aim "" "" "" "" \
       "FAKE_ACCOUNTS=root someunrelateduser zfsbackup" \
       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve9.conf)
 if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve9.conf|zfsbackup" ]; then
     ok "64i: a crontab without one of our blocks is not treated as a second relationship"
 else
     bad "64i: a crontab without one of our blocks is not treated as a second relationship" "got=$got"
+fi
+
+# 64z. THE LAB6 R1 REGRESSION -- the one that reached production before any
+#      test did. Policy 'adopt' (a RELATIONSHIP command), nobody named an
+#      account, and another account carries the only managed block on the
+#      host. The answer must be ROOT and root's own resolution -- never the
+#      other account. On live pve1 (2026-08-21) the pre-fix resolver adopted
+#      production's zfsbackup here, and a fresh lab enrolment installed its
+#      cron lines into the production account's crontab and v4 config, with
+#      root-owned key paths that would have failed at :01. Reverted live in
+#      minutes. This is the fourth defect a live host found after green CI,
+#      and the third my own test had pinned as correct behaviour (64d).
+#
+#      Stated once, asserted here: for a relationship, "nobody named an
+#      account" IS the answer; a host-wide fact must never become a
+#      relationship's identity.
+got=$(ctx adopt "" "" "" ""       "FAKE_ACCOUNTS=root zfsbackup"       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve1.v4.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.HOST.conf|" ]; then
+    ok "64z: a fresh relationship with no account resolves to ROOT, never to whoever else has jobs"
+else
+    bad "64z: a fresh relationship with no account resolves to ROOT, never to whoever else has jobs" "got=$got"
+fi
+
+# 64z2. Positive control: the SAME shape under policy 'aim' still aims -- the
+#       host-scoped commands keep their P10 behaviour, the fence is the policy.
+got=$(ctx aim "" "" "" ""       "FAKE_ACCOUNTS=root zfsbackup"       FAKE_BLOCK_zfsbackup=/etc/zfs-snapshot-all/jobs.pve1.v4.conf)
+if [ "$got" = "/etc/zfs-snapshot-all/jobs.pve1.v4.conf|zfsbackup" ]; then
+    ok "64z2: control -- the same shape under 'aim' still aims at the single block"
+else
+    bad "64z2: control -- the same shape under 'aim' still aims at the single block" "got=$got"
 fi
 
 # 63i. an unknown policy is refused rather than silently treated as one of them.
