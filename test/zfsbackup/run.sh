@@ -6146,6 +6146,28 @@ else
     bad "66d: an account naming its own config passes the ownership guard" "got=$got"
 fi
 
+# --- 67. the seed is passive where the family already exists (LAB6-F4) -------
+# lab4's F7 made the recurring cron line passive on a chain middle; the SEED
+# still stamped its own recursive @automated_daily_ unconditionally. Measured
+# live on the pve9<->pve1<-pve2 chain: R2's seed stamped R3's target, R3's own
+# GFS ladder then kept the younger foreign snapshot and destroyed R3's base
+# (zpool history: destroy at the first :21 after the stamp), and every later
+# pull refused on zero common GUID -- correctly fail-closed, and wedged.
+# Source-greps, because the seed's real work needs a live pair; what is
+# pinnable here is that BOTH transfer sites carry the probe and the passive
+# branch, in the same shape the emit-time detection uses.
+for fn in cmd_seed cmd_final_catchup; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if printf '%s
+' "$body" | grep -q 'PASSIVE seed (-e)'        && printf '%s
+' "$body" | grep -q 'seed_flags=(-m automated_ -e)'        && printf '%s
+' "$body" | grep -qF 'grep -q '"'"'@automated_'"'"''; then
+        ok "67: $fn probes the source family and seeds passively when one exists"
+    else
+        bad "67: $fn probes the source family and seeds passively when one exists" "brak galezi pasywnej w $fn"
+    fi
+done
+
 # 63i. an unknown policy is refused rather than silently treated as one of them.
 out=$(ctx nonsense "" "" "" ""); rc=$?
 if printf '%s' "$out" | grep -q "unknown policy"; then
