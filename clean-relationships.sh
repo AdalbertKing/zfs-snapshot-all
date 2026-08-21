@@ -522,7 +522,18 @@ purge_one() {
             data)
                 # Named once more on the way out, because the record that knew
                 # about it is being deleted in this same run.
-                log "  DATA LEFT IN PLACE: $path -- this tool never destroys datasets. If it is no longer wanted: zfs destroy -r $path"
+                #
+                # P9: but only if it is still there. This printed "DATA LEFT IN
+                # PLACE" for a dataset destroyed moments earlier -- cosmetic
+                # exactly until someone believes it. A tombstone's whole job is
+                # to say what survived, and this one asserted the survival of
+                # something it had never looked at. Same family as the rest of
+                # the campaign; the audit path already checks.
+                if "$ZFS_BIN" list -H -o name -- "$path" >/dev/null 2>&1; then
+                    log "  DATA LEFT IN PLACE: $path -- this tool never destroys datasets. If it is no longer wanted: zfs destroy -r $path"
+                else
+                    log "  data $path is ALREADY GONE -- the record named it, the pool does not have it; nothing was left in place"
+                fi
                 continue ;;
             account)
                 if deluser --remove-home "$path" >/dev/null 2>&1; then

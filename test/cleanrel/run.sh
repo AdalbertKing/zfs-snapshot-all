@@ -299,13 +299,42 @@ if grep -qE 'data +hdd/somebackups' <<<"$out"; then
 else
     bad "the audit names the dataset a relationship owns" "$out"
 fi
-out=$(run_cr "$T" --purge=withdata --yes)
+# P9: the tombstone says what SURVIVED, so it has to look. Until 2026-08-21 it
+# said "DATA LEFT IN PLACE" without checking -- including for datasets destroyed
+# moments earlier. `zfs` is stubbed here for the same reason as case 20: the
+# tool's only use of it is a read-only existence question.
+mkdir -p "$T/bin"
+cat > "$T/bin/zfs" <<'EOD'
+#!/bin/sh
+for a in "$@"; do [ "$a" = "hdd/somebackups" ] && { echo "$a"; exit 0; }; done
+exit 1
+EOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T" --purge=withdata --yes)
 if grep -q 'DATA LEFT IN PLACE: hdd/somebackups' <<<"$out" \
    && grep -q 'zfs destroy -r hdd/somebackups' <<<"$out" \
    && [ ! -e "$T/clients/withdata.conf" ]; then
     ok "the purge removes the record, names the data it leaves, and never destroys it"
 else
     bad "the purge removes the record, names the data it leaves, and never destroys it" "$out"
+fi
+
+# 16b. P9's other half, and the one that was wrong: data the record names but
+#      the pool no longer has must NOT be reported as left in place. A tombstone
+#      is the only thing on the host naming this data once the record is gone --
+#      asserting the survival of something it never looked at is the campaign's
+#      whole family, in the one output whose job is to be trusted afterwards.
+T="$WORK/t16b"; build_tree "$T"; mkdir -p "$T/bin"
+printf 'CLIENT_NAME=gonedata\nPEER_HOST=10.0.0.78\nRUX_TARGET=hdd/vanished\nSTATE=removed\n' \
+    > "$T/clients/gonedata.conf"
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/zfs"; chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T" --purge=gonedata --yes)
+if grep -q 'ALREADY GONE' <<<"$out" \
+   && grep -q 'hdd/vanished' <<<"$out" \
+   && ! grep -q 'DATA LEFT IN PLACE' <<<"$out"; then
+    ok "the purge does not claim data survived when the pool no longer has it"
+else
+    bad "the purge does not claim data survived when the pool no longer has it" "$out"
 fi
 
 # ---------------------------------------------------------------------------
