@@ -85,14 +85,6 @@ dataset_list_split() {   # <list> -> one item per line
     done
 }
 
-# The canonical rendering of a list for a HUMAN or for another command's
-# argument. Storage keeps using "${array[*]}" (space) because that is what the
-# manifests already contain and what the unquoted `for` loops read.
-dataset_list_join() {   # <items...> -> comma-separated
-    local out="" i
-    for i in "$@"; do [ -n "$i" ] || continue; out="${out:+$out,}$i"; done
-    printf '%s' "$out"
-}
 
 # ---- identifier validators (moved verbatim from deploy.sh) ------------------
 
