@@ -2772,7 +2772,14 @@ runuser_test_r() {   # <user> <path>
 # bug: a new copy forgot the timeouts). One builder; the grant-check callers
 # pass their own key material, everyone else defaults to the LOAD_* context.
 load_ssh_opts() {   # [keyfile alias alias_kh port] -> fills LOAD_SSH_OPTS[]
-    local kf="${1:-$LOAD_KEYFILE}" al="${2:-$LOAD_ALIAS}" kh="${3:-$LOAD_ALIAS_KH}" pt="${4:-$LOAD_PORT}"
+    # ${VAR:-} inside the defaults, deliberately: this can be reached from
+    # contexts that probe BEFORE a connection is loaded (emit_client_sections'
+    # passive-detection ssh runs under a test with no LOAD_* at all), and under
+    # set -u a bare $LOAD_KEYFILE here would abort the whole shell -- where the
+    # old inline arrays only failed the one command. Empty options make the
+    # ssh fail exactly as loudly as the unbound expansion used to, minus the
+    # collateral.
+    local kf="${1:-${LOAD_KEYFILE:-}}" al="${2:-${LOAD_ALIAS:-}}" kh="${3:-${LOAD_ALIAS_KH:-}}" pt="${4:-${LOAD_PORT:-22}}"
     LOAD_SSH_OPTS=(-i "$kf" -p "$pt" -o BatchMode=yes \
         -o "HostKeyAlias=$al" -o "UserKnownHostsFile=$kh" \
         -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no \
