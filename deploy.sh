@@ -317,8 +317,17 @@ while [ "$#" -gt 0 ]; do
         --alerts)       ALERT_MODE="${2:-}"; shift 2 ;;
         --backup-user=*) BACKUP_USER="${1#*=}"; shift ;;
         --backup-user)  BACKUP_USER="${2:-}"; shift 2 ;;
-        --datasets=*)   BACKUP_USER_DATASETS="${1#*=}"; shift ;;
-        --datasets)     BACKUP_USER_DATASETS="${2:-}"; shift 2 ;;
+        # --grant-datasets is the honest name: this is the `zfs allow`
+        # WHITELIST for the delegated account, not a replication list --
+        # zfs-backup.sh add-client has a --datasets that means "what to
+        # replicate", and one word carrying both meanings across the two
+        # commands is how a whitelist ends up shaped like a request (basket A2).
+        # --datasets stays accepted; every existing script keeps working.
+        # Normalised AT THE DOOR like --peer-datasets: the package list grammar
+        # is the comma (dataset_list_split), the space form was storage leaking
+        # outward. Both parse; internally the space form flows on unchanged.
+        --grant-datasets=*|--datasets=*) BACKUP_USER_DATASETS="$(dataset_list_split "${1#*=}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; shift ;;
+        --grant-datasets|--datasets)     BACKUP_USER_DATASETS="$(dataset_list_split "${2:-}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; shift 2 ;;
         --email=*)      NOTIFY_EMAIL="${1#*=}"; shift ;;
         --email)        NOTIFY_EMAIL="${2:-}"; shift 2 ;;
         --pair)         PAIR_MODE=1; shift ;;
@@ -388,7 +397,10 @@ Usage: deploy.sh [options]
   --backup-user=NAME      also create the delegated non-root account NAME.
                           Omit it and an EXISTING account is still detected and
                           maintained; only creation needs to be asked for.
-  --datasets="A B"        datasets to delegate to that account
+  --grant-datasets="A,B"  datasets to DELEGATE to that account (the zfs allow
+                          whitelist -- not a replication list; that one lives in
+                          zfs-backup.sh add-client). --datasets is an accepted
+                          alias; comma or space separated, like every list here.
   --allow-quiesce         additionally let that account FREEZE the guests whose
                           disks live under those datasets (local quiesce -- what
                           a managed block using 'quiesce = auto' needs once it
@@ -6284,15 +6296,26 @@ EOF
     # ------------------------------------------------------------------------------
     # ZFS_PERMS is defined once in the config block at the top -- see the note
     # there about 'bookmark' and the 'delegation-verbs' contract.
+    GRANTED_COUNT=0
     for ds in "${DATASETS[@]}"; do
         if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
             warn "dataset $ds does not exist on this host -- skipping (create it first, then: zfs allow -u $USERNAME $ZFS_PERMS $ds)"
             continue
         fi
         zfs allow -u "$USERNAME" "$ZFS_PERMS" "$ds" || die "zfs allow failed for $ds"
+        GRANTED_COUNT=$((GRANTED_COUNT+1))
         log "delegated on $ds:"
         zfs allow "$ds" | grep "$USERNAME" || true
     done
+    # Basket A1's real sting was not the separator, it was the OUTCOME: a list
+    # whose every item missed produced an account with zero delegations and
+    # exit 0 -- a run that says "done" while the account cannot touch a single
+    # dataset. Skipping ONE bad name among good ones stays a warning (that is
+    # a real workflow: grant now, create the dataset later). All of them
+    # missing is not a partial success, it is the request not happening.
+    if [ "${#DATASETS[@]}" -gt 0 ] && [ "$GRANTED_COUNT" -eq 0 ]; then
+        die "none of the ${#DATASETS[@]} requested dataset(s) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Check the names (zfs list -H -o name) and re-run."
+    fi
 
     # ------------------------------------------------------------------------------
     log "Phase 8h: guest quiesce grant"

@@ -801,6 +801,41 @@ else
     fi
 fi
 
+# --- basket A1/A2: the delegation whitelist takes the package list grammar ---
+# Source-greps, deliberately: the delegation loop itself runs useradd and
+# zfs allow as root, and this suite's header explains why that stays untested
+# locally. What CAN be pinned without root is the grammar at the door and the
+# fail-closed outcome, which are exactly the two halves that failed:
+# --datasets="a,b" became ONE bad name, every item missed, and the run
+# finished with an account holding zero delegations -- exit 0.
+
+# A1a. both spellings parse through the one list splitter.
+if grep -qE -- '\-\-grant-datasets=\*\|--datasets=\*\).*dataset_list_split' "$DEPLOY"; then
+    ok "grant-datasets: both flag spellings normalise through dataset_list_split at the door"
+else
+    bad "grant-datasets: both flag spellings normalise through dataset_list_split at the door"         "$(grep -n -- '--datasets=\*' "$DEPLOY" | head -2)"
+fi
+
+# A1b. a request that grants NOTHING dies instead of exiting 0. The count is
+#      compared, not just mentioned: one bad name among good ones stays a
+#      warning (grant now, create later is a real workflow); ALL bad is the
+#      request not happening.
+if grep -q 'GRANTED_COUNT' "$DEPLOY"    && grep -q 'was granted NOTHING' "$DEPLOY"; then
+    ok "grant-datasets: zero granted out of a non-empty request is a refusal, not a success"
+else
+    bad "grant-datasets: zero granted out of a non-empty request is a refusal, not a success"         "no GRANTED_COUNT / die in the delegation loop"
+fi
+
+# A2. the usage text now tells the two --datasets apart: deploy's is the
+#     zfs-allow WHITELIST, add-client's is a replication list. One word
+#     carrying both meanings across two commands is how a whitelist ends up
+#     shaped like a request.
+if grep -q -- '--grant-datasets="A,B"' "$DEPLOY"    && grep -qi 'not a replication list' "$DEPLOY"; then
+    ok "grant-datasets: usage names the concept (whitelist), not just the shape"
+else
+    bad "grant-datasets: usage names the concept (whitelist), not just the shape"         "$(grep -n -- 'grant-datasets' "$DEPLOY" | head -3)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

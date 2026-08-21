@@ -1157,8 +1157,73 @@ resolve_keep_retain() {
             KEEP_RETAIN_ERROR="no retain-flag letter known for tier '$tier' -- use 'retain=' instead of 'keep=', or add it to TIER_LETTER"
             return 1
         fi
+        # keep is a COUNT and nothing else. Unvalidated it rode straight into
+        # the flag ("-M${keep}"), so keep=abc produced -Mabc and surfaced as a
+        # delsnaps parse error at 3 a.m. instead of here. Same class as the
+        # retain lint below: this field builds arguments for the one tool whose
+        # empty default is destructive, so its inputs get checked at the desk.
+        case "$keep" in
+            *[!0-9]*) KEEP_RETAIN_ERROR="'keep = $keep' is not a number -- keep takes a plain count (how many of this tier to retain)"; return 1 ;;
+            0) KEEP_RETAIN_ERROR="'keep = 0' would keep nothing of this tier -- if that is really meant, say it with an explicit retain= flag, not a count of zero"; return 1 ;;
+        esac
         RESOLVED_RETAIN="-${TIER_LETTER[$tier]}${keep}"
         return 0
+    fi
+    # Basket A3. retain reaches delsnaps.sh VERBATIM after the positionals, and
+    # this was the one raw-flag field with no lint at all: ssh_flags refuses
+    # everything outside its whitelist (and refuses -F by name), the bookmark
+    # age field refuses -n, retain refused NOTHING. delsnaps' option surface
+    # includes -F (clear-cut: zfs destroy -R, takes linked clones with it) and
+    # a bare default that deletes everything -- so a typo here is not a syntax
+    # error, it is a different operation.
+    #
+    # The whitelist is the retention flags and only those: lowercase = AGE
+    # (delete older than N units), uppercase = COUNT (keep newest N), number
+    # attached. One shape, no exceptions -- gfs=yes narrows it further to a
+    # single uppercase flag, and that stricter check stays where it is.
+    # Both spellings delsnaps' own parser accepts are legal here: '-h12' and
+    # '-h 12'. The second is not hypothetical -- jobs.11.11.v4.conf carries
+    # 'retain = -h 12' live, and the first version of this lint refused it.
+    # Caught by rendering every fleet config as the regression control BEFORE
+    # the change shipped, which is the whole argument for that control.
+    local _tok _pending=""
+    for _tok in $retain; do
+        if [ -n "$_pending" ]; then
+            case "$_tok" in
+                ''|*[!0-9]*)
+                    KEEP_RETAIN_ERROR="'retain = $retain': '$_pending' needs a number and '$_tok' is not one"; return 1 ;;
+            esac
+            _pending=""
+            continue
+        fi
+        case "$_tok" in
+            -[yYmMwWdDhH])
+                _pending="$_tok" ;;
+            -[yYmMwWdDhH][0-9]*)
+                case "${_tok:2}" in *[!0-9]*)
+                    KEEP_RETAIN_ERROR="'retain = $retain': '$_tok' has a malformed count"; return 1 ;;
+                esac ;;
+            *)
+                KEEP_RETAIN_ERROR="'retain = $retain': '$_tok' is not a retention flag. This field takes only -y/-m/-w/-d/-h (AGE: delete snapshots older than N) or -Y/-M/-W/-D/-H (COUNT: keep the newest N), e.g. -D7, '-h 12', or '-H24 -D7'. Anything else is an OPERATION flag to delsnaps.sh (-F there means zfs destroy -R) and does not belong in a retention field"
+                return 1 ;;
+        esac
+    done
+    if [ -n "$_pending" ]; then
+        KEEP_RETAIN_ERROR="'retain = $retain': '$_pending' at the end has no number"; return 1
+    fi
+    # The unit trap next door (basket A7): monitor_warn=90m two lines above a
+    # retain=-m3 -- the first m is MINUTES, the second MONTHS. And on the tier
+    # whose own letter this is, the case of one character flips the meaning:
+    # keep=3 / retain=-M3 keeps three, retain=-m3 deletes everything older
+    # than three months. A warning rather than a refusal, because age mode on
+    # a monthly tier is a legitimate thing to want -- what is not legitimate
+    # is meaning one and silently getting the other.
+    if [ -n "${TIER_LETTER[$tier]+x}" ]; then
+        local _lo; _lo=$(printf '%s' "${TIER_LETTER[$tier]}" | tr '[:upper:]' '[:lower:]')
+        case " $retain " in
+            *" -${_lo}"[0-9]*)
+                warn "tier=$tier: 'retain = $retain' uses lowercase -${_lo}, which is AGE mode -- delete snapshots OLDER than that many. Keeping that many is keep= or uppercase -${TIER_LETTER[$tier]}. Proceeding as written." ;;
+        esac
     fi
     RESOLVED_RETAIN="$retain"
     return 0
@@ -1866,6 +1931,23 @@ build_prune_section() {
         pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
             || die "[prune:$scope] tier=$tier: 'pattern' did not resolve (missing, or set but blank)"
 
+        # Basket A4, the [prune:] half. build_dataset already refuses a tier
+        # that CREATES one family and prunes another; a [prune:] section does
+        # not create, so that guard never sees it -- but when its tier's own
+        # template carries a 'prefix', the template is declaring which family
+        # it is about, and a pattern that cannot see that family is the same
+        # silent divergence: the family the template creates elsewhere grows
+        # without bound while this prune reports success against whatever DOES
+        # match. Checked only from the section/template pair, never [defaults]
+        # -- a defaults-level prefix is a send-side convenience, and judging a
+        # section that legitimately prunes an upstream family against it would
+        # refuse correct configs.
+        local _tpl_prefix
+        _tpl_prefix="$(resolve_field prefix "$sec" "$tmpl" "")" || _tpl_prefix=""
+        if [ -n "$_tpl_prefix" ] && [ "${_tpl_prefix:0:${#pattern}}" != "$pattern" ]; then
+            die "[prune:$scope] tier=$tier: this tier's template names the family 'prefix = $_tpl_prefix' but prunes 'pattern = $pattern' -- delsnaps.sh matches by literal prefix, so this prune can never touch that family. Make 'pattern' a prefix of 'prefix' (usually they are equal), or drop 'prefix' from a template that is only about pruning."
+        fi
+
         if [ "$emit_prune" -eq 1 ] && [ "$gfs" -eq 1 ]; then
             # This tier is about to hand the ladder a bucket letter and a count.
             # For that to mean anything the ladder has to be able to SEE this
@@ -1974,10 +2056,34 @@ build_bookmark_prune_section() {
     ini_has "$sec" age || die "[prune-bookmarks:$scope] has no 'age' (raw delsnaps.sh age flags, e.g. \"-d30\")"
     local age
     age="$(ini_get "$sec" age)"
-    local tok
+    # Same whitelist as retain= (basket A3), for the same reason: this string
+    # reaches delsnaps.sh verbatim, and "only -n is refused" left every
+    # operation flag -- including -F, clear-cut -- valid in a field named
+    # 'age'. The -n refusal keeps its own specific message because a dry-run
+    # here has a specific consequence (a job that never prunes), not just a
+    # wrong shape.
+    local tok _age_pending=""
     for tok in $age; do
         [ "$tok" = "-n" ] && die "[prune-bookmarks:$scope]: 'age' contains -n (dry-run) -- never actually prunes anything as a recurring job"
+        if [ -n "$_age_pending" ]; then
+            case "$tok" in
+                ''|*[!0-9]*) die "[prune-bookmarks:$scope]: 'age' -- '$_age_pending' needs a number and '$tok' is not one" ;;
+            esac
+            _age_pending=""
+            continue
+        fi
+        case "$tok" in
+            -[yYmMwWdDhH])
+                _age_pending="$tok" ;;
+            -[yYmMwWdDhH][0-9]*)
+                case "${tok:2}" in *[!0-9]*)
+                    die "[prune-bookmarks:$scope]: 'age' token '$tok' has a malformed count" ;;
+                esac ;;
+            *)
+                die "[prune-bookmarks:$scope]: 'age' token '$tok' is not a retention flag (takes -y/-m/-w/-d/-h or -Y/-M/-W/-D/-H with a number, e.g. -d30 or '-d 30'). Operation flags do not belong here" ;;
+        esac
     done
+    [ -n "$_age_pending" ] && die "[prune-bookmarks:$scope]: 'age' -- '$_age_pending' at the end has no number"
 
     # Unlike the two snapshot-pattern sites above, a blank value here falls
     # back to the safe default rather than dying -- this field already HAS a
