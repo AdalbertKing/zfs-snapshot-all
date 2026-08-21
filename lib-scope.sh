@@ -45,6 +45,55 @@
 # datasets, which is the opposite of the point.
 ###############################################################################
 
+# ---- the one dataset-list grammar -------------------------------------------
+#
+# THE COMMA IS THE PACKAGE CONVENTION, and that is measured rather than chosen:
+# both engines (snapsend.sh:1905, snapget.sh:1913), the destructive one
+# (delsnaps.sh:942), the monitor (check-snap-age.sh:314), the generator
+# (gen-cron.sh, four sites), lib-profile.sh and cron2conf.sh all split a
+# user-supplied dataset list on ','. Nothing else was ever the convention.
+#
+# What diverged was the RELATIONSHIP path. `deploy.sh --peer-datasets` documented
+# "A B" -- space separated -- because that is how the list is STORED internally
+# (PEER_SAVED_DATASETS is written with "${array[*]}" and read back with an
+# unquoted `for`). An internal representation leaked into the user-facing
+# grammar, so the same package took commas from one command and spaces from the
+# next. The one-command remote form was worse still: it took exactly ONE
+# dataset and silently had no list grammar at all.
+#
+# So: one splitter, here, in the library both zfs-backup.sh and deploy.sh
+# already source. It accepts commas AND whitespace deliberately -- that is not
+# two conventions, it is one grammar being permissive on INPUT and canonical on
+# OUTPUT. Permissive because the internal space-separated form and every
+# manifest already written to disk must keep parsing; canonical because comma is
+# what the package documents and what callers emit.
+#
+# Empty items are dropped and surrounding whitespace trimmed, so "a, b" and
+# "a,,b" and "a b" all mean the same two datasets.
+dataset_list_split() {   # <list> -> one item per line
+    # printf '%s\n', not '%s': without the trailing newline `read` discards the
+    # final item, so "a,b" silently became just "a". Caught by a probe that
+    # tried every input shape rather than the one I had in mind.
+    printf '%s\n' "${1-}" | tr ',' '\n' | while IFS= read -r _it; do
+        _it="${_it#"${_it%%[![:space:]]*}"}"     # ltrim
+        _it="${_it%"${_it##*[![:space:]]}"}"     # rtrim
+        [ -n "$_it" ] || continue
+        # A remaining internal space means the caller passed the stored form
+        # ("a b"); split it the same way rather than inventing a dataset whose
+        # name contains a space -- ZFS has none, so this is never ambiguous.
+        printf '%s\n' $_it
+    done
+}
+
+# The canonical rendering of a list for a HUMAN or for another command's
+# argument. Storage keeps using "${array[*]}" (space) because that is what the
+# manifests already contain and what the unquoted `for` loops read.
+dataset_list_join() {   # <items...> -> comma-separated
+    local out="" i
+    for i in "$@"; do [ -n "$i" ] || continue; out="${out:+$out,}$i"; done
+    printf '%s' "$out"
+}
+
 # ---- identifier validators (moved verbatim from deploy.sh) ------------------
 
 pc_is_dataset() {

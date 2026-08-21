@@ -350,8 +350,16 @@ while [ "$#" -gt 0 ]; do
         --role)         PEER_ROLE="${2:-}"; shift 2 ;;
         --peer=*)       PEER_HOST="${1#*=}"; shift ;;
         --peer)         PEER_HOST="${2:-}"; shift 2 ;;
-        --peer-datasets=*) PEER_DATASETS="${1#*=}"; shift ;;
-        --peer-datasets)   PEER_DATASETS="${2:-}"; shift 2 ;;
+        # Normalised at the door, not at every reader. The package's list
+        # grammar is the comma (dataset_list_split, lib-scope.sh); the SPACE
+        # here was never a grammar, it was PEER_SAVED_DATASETS' storage format
+        # leaking outward. Both are accepted, and what is stored downstream is
+        # the space-separated form every existing manifest and unquoted `for`
+        # already expects -- so this is a widening, not a break.
+        --peer-datasets=*) PEER_DATASETS="$(dataset_list_split "${1#*=}" | tr '
+' ' ')"; PEER_DATASETS="${PEER_DATASETS% }"; shift ;;
+        --peer-datasets)   PEER_DATASETS="$(dataset_list_split "${2:-}" | tr '
+' ' ')"; PEER_DATASETS="${PEER_DATASETS% }"; shift 2 ;;
         --mode=*)       PEER_MODE="${1#*=}"; shift ;;
         --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
@@ -399,7 +407,7 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
     --role=pull|push        pull (default): this host pulls via snapget.sh.
                             push: this host pushes via snapsend.sh.
     --peer=HOST             the other host's hostname/IP
-    --peer-datasets="A B"   expert path: datasets involved in this
+    --peer-datasets="A,B"   expert path: datasets involved in this
                             relationship, named here directly. For
                             --role=pull this means the SOURCE's own datasets
                             -- an operator who does not know that layout

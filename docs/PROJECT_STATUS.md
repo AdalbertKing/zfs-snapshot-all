@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b0478b8ae8234622 -->
+<!-- status-covers-digest: dd1c5ab1a6aae803 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,54 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Lista poprawek pokampanijnych P1–P10 zamknięta; P10 dowiedziony na żywo,
+  a żywe hosty znalazły TRZY wady po zielonym CI (2026-08-21).**
+  Zamknięte: P5 (sync brał więcej niż zamówiono — `assert_sync_scope_within_request`
+  plus bezwarunkowe logowanie rozwiązanej listy), P6 (edytor zakresu przez
+  `ssh -t` bez terminala), P7 (relacja wycelowana we własny host przechodziła
+  planowanie), P8 (`remove-client` zabierał wspólny rekord parowania),
+  P9 (nagrobek twierdził, że dane przeżyły, nie sprawdzając), P10
+  (`migrate-profile` i `audit-source-retention` nie umiały wybrać relacji).
+  Przy okazji wyciągnięta **warstwa decyzyjna** `cron_context_resolve` — jedno
+  miejsce odpowiadające „który config i jako kto". Powód jest mierzalny: crontab
+  ma **jednego** pisarza, który trzyma zamek i walidację, więc jego ~18
+  zleceniodawców nie ma jak się rozjechać; config miał **pięciu** pisarzy, zero
+  zamków i pięć własnych warstw decyzyjnych.
+
+  **P10 dowiedziony na `8b55e2a`, oba kierunki, na trzech hostach**, kod wyjścia
+  mierzony bez potoku. pve2 i pve1 (root = lab z `jobs.<host>.conf`, `zfsbackup`
+  = produkcja z `jobs.<host>.v4.conf`): bez celowania `rc=1` i odmowa nazywająca
+  **oba** bloki; `--local-user=root` → `rc=0` i config laba; `--local-user=zfsbackup`
+  → `rc=0` i config produkcji. pve9 (bez żadnego bloku) nie zapala fałszywego
+  alarmu — mówi wprost, że nie ma configu.
+
+  **Trzy wady znalezione przez żywy host już PO zielonym CI** — to jest właściwy
+  wniosek z tego etapu, nie sama lista:
+  1. `cron_known_accounts` czytało wyłącznie nasze rekordy, więc odmowa **nie
+     zapaliła się na hoście, na którym wadę zmierzono**. Uzasadnienie („konto
+     istnieje z powodów niezwiązanych z projektem, katalog domowy nie czyni go
+     naszym") było słuszne — **przesłanka nie**: produkcja na tej flocie nie
+     trafiła do konta przez relację, jest starsza od modelu relacji. Test 64h
+     **przypinał martwe pole**, co jest gorsze niż brak testu. Naprawione
+     spoolem crontabów jako trzecim źródłem kandydatów, filtrowanym naszym
+     własnym znacznikiem bloku — więc obce konto nie może zostać przywłaszczone.
+  2. `--local-user=root`, czyli **recepta, którą sama odmowa drukuje**, wpadała
+     z powrotem w tę odmowę: parsery zerowały dosłowne `root` do `""`,
+     nieodróżnialnego od „nic nie podano". Strażnik odrzucający własną receptę
+     jest gorszy niż brak strażnika — zatrzymuje pracę *i* myli co do wyjścia.
+  3. Bramka terminala P6, wpisana na sztywno, **skasowała własne pokrycie
+     testowe**: w CI nigdy nie ma tty, więc trzy ścieżki edytora przestały być
+     testowane. Wyciągnięta do `have_terminal()`, którą suite podmienia, wraz
+     z kontrolą pozytywną i asercją, że podmiana nie kłamie o tym, co zastępuje.
+
+  We wszystkich trzech kod, test i komentarz zgadzały się ze sobą i myliły
+  **razem**. Dwa razy mylił się też sam pomiar, **zanim** pomylił się kod:
+  `rc` czytane przez `| head` raportowało status `head` (czyli `0` dla odmowy —
+  gdyby to była prawda, byłaby to znacznie gorsza wada, bo `die` z zerem
+  pozwala każdemu wołającemu iść dalej), a oczekiwanie sondy dla pve9 było
+  błędne, nie zachowanie narzędzia. **Oczekiwanie sondy jest hipotezą i wymaga
+  uzasadnienia tak samo jak wynik.**
 
 - **Trzy pauzy przetestowane na żywo; twarda pauza była NIEMOŻLIWA (2026-08-20).**
   Pauza zadania (`deploy.sh --pause`), miękka pauza relacji (`pause-client`)

@@ -3033,7 +3033,7 @@ config_section_overlap() {   # <file> <path>...
                 path_overlaps "$member" "$req" \
                     && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
             done
-        done < <(printf '%s\n' "$scope" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        done < <(dataset_list_split "$scope")
     done < <(grep -oE '^\[(dataset|prune):[^]]+\]' "$file")
     return 0
 }
@@ -3159,7 +3159,7 @@ cmd_local_backup() {
             seen=0
             for u in ${roots[@]+"${roots[@]}"}; do [ "$u" = "$r" ] && { seen=1; break; }; done
             [ "$seen" -eq 0 ] && roots+=("$r")
-        done < <(printf '%s\n' "$sv" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        done < <(dataset_list_split "$sv")
     done
     [ "${#roots[@]}" -gt 0 ] || die "local-backup: --source resolved to no dataset name"
 
@@ -3881,11 +3881,21 @@ sync_scope_extra_datasets() {   # -> space-separated datasets outside the reques
     local requested ds
     requested=$(sync_requested_dataset)
     [ -n "$requested" ] || return 0
+    # The request is a LIST now. Matching only the first item would report every
+    # other requested dataset as "extra" and refuse a perfectly correct scope
+    # under --yes -- the guard turning on the thing it was built to permit.
+    local -a want=()
+    while IFS= read -r _w; do want+=("$_w"); done < <(dataset_list_split "$requested")
     local -a extra=()
+    local _w hit
     for ds in ${PEER_SAVED_DATASETS:-}; do
-        case "$ds" in
-            "$requested" | "$requested"/*) continue ;;
-        esac
+        hit=0
+        for _w in "${want[@]}"; do
+            case "$ds" in
+                "$_w" | "$_w"/*) hit=1; break ;;
+            esac
+        done
+        [ "$hit" -eq 1 ] && continue
         extra+=("$ds")
     done
     [ "${#extra[@]}" -gt 0 ] || return 0
@@ -6183,8 +6193,16 @@ rux_verify_requested_scope() {
     fetch_committed_scope "$scope_tmp"
     scope_read "$scope_tmp" || { rm -f "$scope_tmp"; die "scope file fetched from $LOAD_HOST: $SCOPE_ERR"; }
     rm -f "$scope_tmp"
-    scope_includes "$requested" \
-        || die "rux: requested source '$requested' is not covered by the scope '$PEER_HOST' actually COMMITTED (active roots: ${SCOPE_ROOTS[*]:-none}) -- the source-side grant differs from what was asked. Fix the scope on the source (edit + deploy.sh --commit-scope) or re-run naming a dataset the source actually granted. Nothing was seeded."
+    # Every requested dataset, not just the first. --source carries a LIST now,
+    # and a containment check that stopped at item one would let items two and
+    # three through ungranted -- a guard that reads as passing while covering a
+    # fraction of what it was asked about.
+    local _rq _missing=""
+    while IFS= read -r _rq; do
+        scope_includes "$_rq" || _missing="${_missing:+$_missing, }$_rq"
+    done < <(dataset_list_split "$requested")
+    [ -z "$_missing" ] \
+        || die "rux: requested source(s) '$_missing' not covered by the scope '$PEER_HOST' actually COMMITTED (active roots: ${SCOPE_ROOTS[*]:-none}) -- the source-side grant differs from what was asked. Fix the scope on the source (edit + deploy.sh --commit-scope) or re-run naming datasets the source actually granted. Nothing was seeded."
 }
 
 # rux_remote_plan <host> <port> <dataset> <target> <mode> <profile> <name>
@@ -6360,14 +6378,27 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
     done
     [ -n "$remote_repo" ] || die "--grant-remotely: could not find deploy.sh on $host (tried $SCRIPT_DIR, /root/scripts/zfs-snapshot-all, /root/zfs-snapshot-all) -- is the package deployed there?"
 
-    # The scope this flag is allowed to sign: exactly the request.
-    local want
-    want=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$requested")
+    # The scope this flag is allowed to sign: exactly the request -- one stanza
+    # per requested dataset, because --source now carries a LIST like every
+    # other dataset argument in the package (dataset_list_split, lib-scope.sh).
+    # A single-item list renders byte-identical to what this wrote before, so an
+    # existing draft written by an earlier run still compares equal below.
+    local want="" _rq
+    while IFS= read -r _rq; do
+        want+=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$_rq")
+        want+=$'\n'
+    done < <(dataset_list_split "$requested")
+    want="${want%$'\n'}"
 
+    # The comparison has to be list-against-list. Comparing the peer's stanzas
+    # to a single "[dataset:$requested]" would refuse every multi-dataset
+    # request outright, and -- worse -- would compare a two-line block against a
+    # one-line string and call a MATCHING scope a conflict.
+    local want_headers; want_headers=$(dataset_list_split "$requested" | sed 's/^/[dataset:/; s/$/]/')
     local existing_active
     existing_active=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null" \
         | awk '/^# ==========/{exit} /^\[dataset:/{print}')
-    if [ -n "$existing_active" ] && [ "$existing_active" != "[dataset:$requested]" ]; then
+    if [ -n "$existing_active" ] && [ "$existing_active" != "$want_headers" ]; then
         # The pending-decision guard protects a HUMAN's choice -- and the lab3
         # final run tripped it on a file no human ever touched: a sync-mode
         # join carries no dataset list, so the join's own remote scope stage
@@ -6386,7 +6417,9 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
         else
             die "--grant-remotely: $host already carries a DRAFT scope for '$COLLECTOR_LABEL' selecting something different:
 $existing_active
-than the request ([dataset:$requested]). An operator prepared that file, and this flag is not permission to overwrite their pending decision. Either commit it locally there (deploy.sh --commit-scope=$COLLECTOR_LABEL), align it with the request, or remove it and re-run. Nothing was changed."
+than the request:
+$want_headers
+An operator prepared that file, and this flag is not permission to overwrite their pending decision. Either commit it locally there (deploy.sh --commit-scope=$COLLECTOR_LABEL), align it with the request, or remove it and re-run. Nothing was changed."
         fi
     fi
 
