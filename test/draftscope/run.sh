@@ -269,6 +269,31 @@ else
     ok "D2 no leftover advice to put -R in a config's 'flags'"
 fi
 
+# ---- E. named is wanted (LAB6-F1, 2026-08-21) --------------------------------
+# When the active stanzas come from an EXPLICIT REQUEST, the container
+# heuristic must not fire: the operator typed the name, and a draft whose own
+# text says "the data on the thing you named stays behind" is how LAB6 R1's
+# tree kept its file out of a signed, green-reporting backup. hdd/LXC is the
+# stub's container (it has a child), so the estate draft gives it
+# include_parent = no -- the REQUEST draft must give it yes.
+rm -f "$TMPD/peers/req.scope" "$TMPD/peers/req.scope.sha256" 2>/dev/null
+cat > "$TMPD/peers/req.conf" <<EOF
+PEER_JOIN_ROLE="pull"
+PEER_JOIN_AS="delegated"
+PEER_JOIN_ACCOUNT="zfsbackup-pve1"
+PEER_JOIN_DATASETS="hdd/LXC"
+EOF
+out=$(do_draft_scope req 2>&1); rc=$?
+check "E1 a request-derived draft succeeds" "0" "$rc"
+stanza=$(awk '/^\[dataset:hdd\/LXC\]/{f=1;next} f&&/^include_parent/{print $3; exit}' "$TMPD/peers/req.scope")
+check "E2 a REQUESTED container includes itself (named is wanted)" "yes" "$stanza"
+
+# Positive control: the estate draft keeps the branch heuristic -- same
+# container, no request, include_parent = no. Without this, E2 would also pass
+# if the heuristic were simply deleted.
+stanza=$(awk '/^\[dataset:hdd\/LXC\]/{f=1;next} f&&/^include_parent/{print $3; exit}' "$TMPD/peers/demo.scope")
+check "E3 control: the estate draft still treats a container as a branch" "no" "$stanza"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
