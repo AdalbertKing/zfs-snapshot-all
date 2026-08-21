@@ -4,6 +4,9 @@ Osiem znalezisk z macierzy wdrożeń 2026-08-20 (`docs/LAB5-KAMPANIA.md`),
 uporządkowanych jako praca. Kolejność: naprawione, potem otwarte według tego,
 co kosztuje najwięcej, gdy zawiedzie.
 
+P10 dopisane później i **spoza macierzy** — wyszło 2026-08-21 przy pytaniu
+o `server.conf`. Trafiło tutaj, bo należy do tej samej rodziny co reszta.
+
 ## Wspólna diagnoza
 
 Wszystkie osiem to jedna rodzina:
@@ -168,6 +171,59 @@ dataset został skasowany chwilę wcześniej. Kosmetyczne, ale to komunikat
 o stanie, który nie został sprawdzony — czyli ta sama rodzina co reszta.
 
 **Poprawka:** sprawdzić istnienie przed wypisaniem, tak jak robi to już audyt.
+
+### P10. `migrate-profile` i `audit-source-retention` nie umieją wybrać relacji
+
+Dopisane 2026-08-21, poza macierzą — wyszło przy pytaniu o `server.conf`.
+Zmierzone na żywo na pve2 i pve1 (metropolis), nie wywnioskowane z kodu.
+
+Na hoście z dwiema relacjami żyją dwa configi i dwa crontaby:
+
+| crontab | config | zawartość |
+|---|---|---|
+| `root` | `jobs.<host>.conf` | lab4 — 1 dataset |
+| `zfsbackup` | `jobs.<host>.v4.conf` | produkcja — pve2: 4, pve1: 7 datasetów |
+
+Obie komendy rozwiązują plik jako `${CRON_CONFIG:-$(default_cron_config)}`.
+Pomijają krok adopcji `# Source:` z zainstalowanego bloku, który mają
+`setup-server` i `activate-client`; nie czytają rekordu klienta; i **nie
+przyjmują ani `--config`, ani `--local-user`** (`migrate-profile` zna tylko
+`--yes`, `audit-source-retention` tylko `--apply --yes`). Nie ma czym w nie
+wycelować.
+
+Bez `server.conf` — a nie ma go na żadnym z pięciu hostów — zostaje sam
+`default_cron_config()`, czyli config laba. Dalej `LOCAL_USER` jest puste,
+więc `cron_target_user` zwraca `root`, więc
+`assert_cron_config_matches_installed` porównuje config laba z blokiem roota,
+**zgadza się i przepuszcza**. Straż działa poprawnie — sprawdza spójność
+wewnątrz niewłaściwego zakresu.
+
+Pomiar (`audit-source-retention` bez `--apply`, oba hosty):
+
+```
+Audyt retencji ZRODLA (config: /etc/zfs-snapshot-all/jobs.pve2.conf)
+  aktywne pull-datasety (zarzadzane): 1
+  Kazda aktywna relacja pull ma juz ograniczona retencje zrodla -- nic do dodania.
+```
+
+Opisał laba, produkcji nie otworzył.
+
+**Waga, bez naciągania: dziś utajone, nie czynne.** Werdykt audytu i tak
+wyszedłby ten sam, bo produkcyjne datasety to lokalne źródła, nie pull — audyt
+produkcji też znalazłby zero. Ale `migrate-profile` **pisze**
+(`atomic_replace_and_install`): przepisałby config laba, przeinstalował
+crontab roota, zgłosił sukces i zostawił 7 produkcyjnych datasetów
+niezmigrowanych bez ostrzeżenia.
+
+Rodzina jak reszta listy: **fakt hostowy użyty jako dowód, o którą relację
+chodziło.** `default_cron_config()` jest z czasów, gdy host miał jeden config;
+konto jest per-relacja od dawna, a ta nazwa nigdy za tym nie poszła.
+
+**Kształt naprawy — do ustalenia z właścicielem.** Dwie drogi, wykluczające
+się tylko pozornie: (a) adopcja `# Source:` jak w `activate-client`, co
+wybiera to, co faktycznie chodzi, ale nadal zgaduje konto; (b) wymuszony
+`--config`/`--local-user`, co jest jawne, ale psuje wywołania bez argumentów.
+Nie przesądzać przed decyzją.
 
 ---
 
