@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 7df5d69ba057892a1d268260f041239c76bd650f -->
-<!-- frozen: snapget.sh 100755 f65c887f541f42382a500dd5b87aaae403a44035 -->
+<!-- frozen: snapsend.sh 100755 58de7b91f3cccf2fdbdb11d429510d260ff1a724 -->
+<!-- frozen: snapget.sh 100755 47d28c9c284f798450c9ee657188a2ea56b9f8d1 -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
 <!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
@@ -54,6 +54,21 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-23 (snapsend.sh + snapget.sh): the landing check moved BEFORE the
+  durable yes. Same authorization as the entry below it -- this is that change
+  finished, not a new one. Caught in review: the first cut ran the verification
+  AFTER release_snapshot, clear_inflight_snap and record_send_bookmark, so a
+  failed verification returned 1 while the hold protecting the snapshot was
+  already gone, the in-flight marker was already cleared, and the bookmark
+  already pointed at a target nobody had confirmed. Durable state said "done"
+  about a transfer the same function was in the middle of calling failed, and
+  the retry would have found its base unprotected and prunable. A proof that
+  runs after the thing it is meant to gate is decoration.
+  Proven live with the discriminating test the review asked for:
+      comparator = false -> EXIT=1, bookmarks created 0, hold still held 1
+      normal run         -> EXIT=0, bookmarks created 1, hold released 0
+  No transfer semantics changed: the same check, earlier in the same function.
 
 - 2026-08-22 (snapsend.sh + snapget.sh): a transfer must PROVE it landed.
   Owner-directed in those words -- "Bierz i idz po kolei" against a list whose
