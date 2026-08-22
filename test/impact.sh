@@ -337,6 +337,7 @@ verify() {
         [ -n "${SEC_KIND[file:$name]:-}" ] || { echo "  $name is sourced by${SOURCED_BY[$name]} but is not declared"; rc=1; }
     done
 
+    no_conflict_markers || rc=1
     status_freshness || rc=1
     engine_freeze || rc=1
     # protocol_verify (the review-ledger check) was removed here on 2026-08-20 --
@@ -505,6 +506,31 @@ status_changed_hint() {   # <watched...>
 ' "$f"
     done
 }
+# A file that is TRACKED must not carry the leftovers of a merge. Added
+# 2026-08-22 after I merged them onto main myself: successive merges of
+# PROJECT_STATUS.md left NESTED <<<<<<< / ======= / >>>>>>> blocks and three
+# copies of the status digest, and every gate stayed green -- the digest check
+# hashes the file's CONTENT, so a corrupted file simply hashes to a corrupted
+# value and matches itself. Caught by review, not by CI, which is the wrong way
+# round for something this mechanical.
+#
+# Cheap, total, and it applies to every tracked text file rather than just the
+# one that happened to break.
+no_conflict_markers() {
+    echo "== no merge conflict markers in tracked files"
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
+    local hits
+    hits=$(git grep -n -I -E '^(<{7}|={7}|>{7})( |$)' -- . 2>/dev/null | grep -vE '^test/impact\.sh:' || true)
+    [ -z "$hits" ] && return 0
+    echo "  CONFLICT MARKERS. A merge was resolved by hand and not finished:"
+    printf '    %s
+' "$hits" | head -20
+    echo "  Nothing downstream can catch this -- the status digest hashes the"
+    echo "  file's content, so a broken file hashes to a broken value and agrees"
+    echo "  with itself. Finish the resolution and re-run."
+    return 1
+}
+
 status_freshness() {
     echo "== PROJECT_STATUS.md still describes the current tree"
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
