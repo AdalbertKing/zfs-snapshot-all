@@ -5624,7 +5624,7 @@ join_human_bytes() {   # <bytes>
                 die "scope was not accepted; no ZFS grant was committed"
                 ;;
             *)
-                warn "choose t (accept), e (edit), or n (stop)"
+                warn "type the dataset count to accept, e to edit, or n to stop"
                 ;;
         esac
     done
