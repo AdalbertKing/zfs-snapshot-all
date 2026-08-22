@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 6aebdd99aa1517b8d3efef504307f45f402ce23e -->
-<!-- frozen: snapget.sh 100755 e1ebce30093f8ad1b78be84522ddee5f7adc7ab2 -->
+<!-- frozen: snapsend.sh 100755 7df5d69ba057892a1d268260f041239c76bd650f -->
+<!-- frozen: snapget.sh 100755 f65c887f541f42382a500dd5b87aaae403a44035 -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
 <!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
@@ -54,6 +54,36 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-22 (snapsend.sh + snapget.sh): a transfer must PROVE it landed.
+  Owner-directed in those words -- "Bierz i idz po kolei" against a list whose
+  first item was exactly this, after I argued it was the only item on that list
+  where the product can currently report success about a backup that is not
+  there. Until now the sole evidence was the pipeline exiting 0, which says the
+  processes did not crash. Every live campaign in this project has been verified
+  by a human comparing GUIDs by hand afterwards -- I did it on every hop of
+  every pass today -- precisely because the tool could not say it.
+  NOT new machinery: validate_snapshot already compares ZFS's own identity for
+  a snapshot on both sides, and both engines already trusted it to decide
+  whether an existing target snapshot is the same one. It is now also called
+  after a successful transfer, so "success" means the snapshot is on the target
+  carrying the source's GUID. A second comparator was deliberately not written:
+  two definitions of "the same snapshot" would drift, and this project spent
+  today paying for exactly that kind of duplication (the fourth copy of the
+  family probe).
+  BOUNDARY, recorded rather than hidden: under -r the subtree travels as ONE
+  stream, so this proves the ROOT landed; descendants rode the same stream and
+  cannot have arrived separately, but are not individually checked. Under -R
+  every dataset is its own job and every one is proven.
+  Proven live with both controls:
+      normal transfer     -> "Verified: hdd/vtgt/hdd/vsrc@vtest2_... carries
+                              the source's GUID", run succeeds
+      comparator says no  -> "VERIFY FAILED: ... the transfer reported success
+                              but the snapshot cannot be confirmed", EXIT=1
+  The negative control was produced by forcing a false verdict from the
+  comparator on a scratch copy of the engine -- it proves the WIRING (a failed
+  verification becomes a failed dataset and a non-zero run, so cron alerts),
+  not the comparator, which this file already relied on for the same question.
 
 - 2026-08-22 (snapsend.sh + snapget.sh): a long transfer can be WATCHED from a
   terminal. Authorized in those words -- "zrob progres transferu, masz zgode" --
