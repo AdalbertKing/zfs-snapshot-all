@@ -5520,18 +5520,6 @@ join_scope_is_committed() {   # <label>
 # --draft-scope/--commit-scope verbs stay available for expert repair, but the
 # ordinary operator does not have to discover or sequence them. The proposed
 # ACTIVE portion is always shown before the single accept/edit decision.
-guided_join_scope() {   # <label>
-    local label="$1" sfile choice editor
-    sfile=$(peer_scope_path "$label")
-
-    if join_scope_is_committed "$label"; then
-        log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
-        return 0
-    fi
-    if [ ! -e "$sfile" ]; then
-        do_draft_scope "$label"
-    fi
-
 # WHAT ACCEPTING THIS COSTS, said before the question is asked.
 #
 # Measured 2026-08-22 on the mandated four-command path of issue #9: the
@@ -5580,6 +5568,18 @@ join_human_bytes() {   # <bytes>
         printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
     }'
 }
+
+guided_join_scope() {   # <label>
+    local label="$1" sfile choice editor
+    sfile=$(peer_scope_path "$label")
+
+    if join_scope_is_committed "$label"; then
+        log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
+        return 0
+    fi
+    if [ ! -e "$sfile" ]; then
+        do_draft_scope "$label"
+    fi
 
     while :; do
         echo
