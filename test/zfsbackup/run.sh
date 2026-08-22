@@ -2826,6 +2826,8 @@ EC1="$WORK/emit_sync.conf"
 out=$( ( PEER_SAVED_MODE=sync PEER_SAVED_TARGET="" LOAD_LABEL=pve9 \
          LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.9.9.9 LOAD_FLAGS="-K /dev/null" \
          PEER_SAVED_DATASETS="rpool/data/vm-100-disk-0 hdd/LXC/103" PROFILE_GFS=1
+         ssh() { return 0; }
+         load_ssh_opts() { LOAD_SSH_OPTS=(); }
          emit_client_sections "$EC1" synctest
          echo "managed=[${managed[*]}]"
          echo "prune_scope=[$prune_scope]" ) 2>&1 ); rc=$?
@@ -3470,6 +3472,7 @@ MANAGED_PRUNE_SCOPE="rpool/data"
 EOF
 outB="$OV/syncB.conf"; : > "$outB"
 out=$( ( CLIENTS_DIR="$OV/clients" PEER_SAVED_MODE=sync PEER_SAVED_TARGET=""          LOAD_LABEL=syncB LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.3.3.3 LOAD_FLAGS="-K /dev/null"          PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
+         ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
          emit_client_sections "$outB" syncB ) 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *syncA*) true ;; *) false ;; esac; then
     ok "overlap (sync): a child of an owned path is refused, naming the other relationship"
@@ -3658,7 +3661,8 @@ PEER_SAVED_TARGET=tank/backups
 PEER_SAVED_MODE=backup
 PEER_SAVED_DATASETS="$dss"
 EOF2
-    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+    ( ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
       cmd_seed "$nm" --yes ) 2>&1
 }
 
@@ -3724,7 +3728,8 @@ PEER_SAVED_TARGET=tank/backups
 PEER_SAVED_MODE=backup
 PEER_SAVED_DATASETS="$dss"
 EOF2
-    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+    ( ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
       cmd_seed "$nm" --yes ) 2>&1
 }
 rm -f "$SD_RECORDER"
@@ -6278,10 +6283,6 @@ else
     bad "63i: an unknown policy is refused by name" "rc=$rc out=$out"
 fi
 
-echo "--------------------------------------------"
-echo "PASS=$PASS FAIL=$FAIL"
-[ "$FAIL" -eq 0 ]
-
 # ---------------------------------------------------------------------------
 # 68. THE PROBE MUST NOT ANSWER A QUESTION IT COULD NOT ASK.
 #
@@ -6360,6 +6361,49 @@ case "$got" in
     *)     bad "68e: remote 'zfs list' failure -> unknown, not 'no family'" "dostalem: $got" ;;
 esac
 
+# 68f. THE ONE THAT MATTERS: SSH error -> refusal, and no fallback to the
+#      recorded dataset list. 68c proves the probe returns 2; this proves what
+#      the consumer DOES with it, which is the property the fix exists for.
+#      `has_committed_scope || return 0` used to mean a dead link downgraded the
+#      relationship out of THE SIGNED SCOPE IS THE CONTRACT (#101) and back to
+#      whatever list was on file -- silently, and with the run continuing.
+#
+#      Paired with its own control: a source that genuinely has no sidecar must
+#      STILL continue on the recorded list, because that is the legacy path and
+#      breaking it would be a different bug wearing this fix's clothes.
+resolve_case() {   # <scope-stub-body> -> "<rc>"
+    (
+        source "$ZFSBACKUP"
+        __scope="$1"
+        ssh() { case "$*" in *"test -s"*) eval "$__scope" ;; *) return 0 ;; esac; }
+        load_ssh_opts() { LOAD_SSH_OPTS=(); }
+        peer_scope_granted_hash_path() { echo /tmp/whatever.sha256; }
+        LOAD_ACCOUNT=probe; LOAD_HOST=probe.invalid; COLLECTOR_LABEL=probe
+        PEER_SAVED_MODE=""
+        PEER_SAVED_DATASETS="rpool/stara rpool/lista"
+        resolve_mode_datasets
+        echo "rc=$?"
+    ) 2>&1
+}
+
+got=$(resolve_case 'return 255')
+if printf '%s' "$got" | grep -q "rc=0"; then
+    bad "68f: SSH 255 -> resolve_mode_datasets REFUSES (no fallback to the recorded list)"         "wrocilo rc=0 -- martwe lacze przeszlo jako 'brak podpisu' i lista zostala uzyta"
+elif printf '%s' "$got" | grep -qi "cannot reach"; then
+    ok "68f: SSH 255 -> resolve_mode_datasets REFUSES (no fallback to the recorded list)"
+else
+    bad "68f: SSH 255 -> resolve_mode_datasets REFUSES (no fallback to the recorded list)"         "odmowilo, ale nie tym powodem: $got"
+fi
+
+# 68g. CONTROL for 68f -- a real "no sidecar here" must still continue on the
+#      recorded list, or 68f would pass for the wrong reason (everything dies).
+got=$(resolve_case 'return 1')
+if printf '%s' "$got" | grep -q "rc=0"; then
+    ok "68g: no sidecar (a real answer) -> still continues on the recorded list"
+else
+    bad "68g: no sidecar (a real answer) -> still continues on the recorded list" "$got"
+fi
+
 # 68d. and the callers must REFUSE rather than pick a default. The behaviour is
 #      a die() inside a long command, so "every call site handles it" is the one
 #      thing a source-grep is the right instrument for.
@@ -6376,3 +6420,17 @@ if [ "$n_die" -eq 3 ] && [ "$n_rehearsal" -eq 1 ] && [ "$n_scope" -eq 1 ]; then
 else
     bad "68d: all five consumers (3 refusals, rehearsal, committed-scope) branch on unknown"         "die=$n_die rehearsal=$n_rehearsal scope=$n_scope"
 fi
+
+# ---------------------------------------------------------------------------
+# THE GATE. Everything that asserts must appear ABOVE this line.
+#
+# Section 68 was appended BELOW it (2026-08-22) and the reviewer caught what
+# that cost: the runner has `set -u` but not `set -e`, and bad() ends in
+# FAIL=$((FAIL+1)), an arithmetic assignment that succeeds. So an assertion
+# placed after the gate could raise FAIL and the process would still exit 0 --
+# CI green, test failing, nobody the wiser. The test that was written to stop a
+# fail-open was itself failing open.
+# ---------------------------------------------------------------------------
+echo "--------------------------------------------"
+echo "PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ]
