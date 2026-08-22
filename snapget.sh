@@ -1100,8 +1100,15 @@ process_dataset() {
         local src_snaps
         src_snaps=($(get_sorted_snapshots "$src_dataset" "$remote_user" "$remote_host")) || return 1
         if [ ${#src_snaps[@]} -eq 0 ]; then
-            if [ "${EXPANDED_CHILD:-0}" -eq 1 ]; then
-                log 1 "No family on expanded child '$src_dataset' -- scaffolding, skipped (under -e the family defines membership)"
+            if [ $FLAT_RECURSE -eq 1 ]; then
+                # Under -R the request is a SUBTREE and -e's family defines
+                # membership in it: a member with no family -- the empty path
+                # containers recv -p creates, and equally a bare root whose
+                # family lives only in its descendants -- is scaffolding, not
+                # a failure. The aggregate guard below still fails the run
+                # when NOTHING in the whole expansion had a family.
+                log 1 "No family on '$src_dataset' -- scaffolding under -R -e, skipped"
+                ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
                 return 0
             fi
             log 0 "No source snapshots found"
@@ -1111,8 +1118,9 @@ process_dataset() {
         if [ -n "$MESSAGE" ]; then
             src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
             if [ ${#src_snaps[@]} -eq 0 ]; then
-                if [ "${EXPANDED_CHILD:-0}" -eq 1 ]; then
-                    log 1 "No '$MESSAGE*' family on expanded child '$src_dataset' -- scaffolding, skipped (under -e the family defines membership)"
+                if [ $FLAT_RECURSE -eq 1 ]; then
+                    log 1 "No '$MESSAGE*' family on '$src_dataset' -- scaffolding under -R -e, skipped"
+                    ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
                     return 0
                 fi
                 log 0 "No source snapshots matching message: $MESSAGE"
@@ -1961,23 +1969,6 @@ if [[ "$LOCAL_BASE" == *":"* ]] || [[ "$LOCAL_BASE" == *"@"* ]]; then
 fi
 LOCAL_BASE=$(echo "$LOCAL_BASE" | sed 's:^/+::; s:/+$::')
 
-# -R: expand each entry into itself + every descendant of the REMOTE source
-# (mirrors snapsend.sh's -R block exactly, just on the source side instead of
-# the target side -- the listing goes over ssh when REMOTE_HOST is set, since
-# snapget's source -- unlike snapsend's -- may not be local). Each discovered
-# child comes back as a full path exactly as `zfs list` on the source prints
-# it -- no base to strip, LOCAL_BASE is only ever applied once, uniformly, in
-# the main loop below. Same ordering guarantee as snapsend.sh: `zfs list -r`
-# lists a dataset before any descendant, and sort -u preserves that (a
-# parent's name always sorts before "parent/anything").
-# ENGINE UNFREEZE 2026-08-21 (owner-authorized; see docs/project/ENGINE-FREEZE.md):
-# the names the OPERATOR typed, kept apart from what -R discovers. Under -e an
-# expanded child with no matching family is SCAFFOLDING (an empty path
-# container recv -p created; nothing ever snapshots it) and is skipped in
-# process_dataset -- but a REQUESTED root with nothing to adopt stays the hard
-# error it always was: there the operator asked to consume a family that does
-# not exist.
-declare -a REQUESTED_ROOTS=("${DATASETS[@]}")
 if [ $FLAT_RECURSE -eq 1 ]; then
     declare -a EXPANDED_DATASETS=()
     for ds in "${DATASETS[@]}"; do
@@ -2112,10 +2103,6 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     quiesce_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
     declare -a QSCOPE=() QSNAPS=()
     for src_path in "${DATASETS[@]}"; do
-    EXPANDED_CHILD=1
-    for _rr in "${REQUESTED_ROOTS[@]}"; do
-        [ "$src_path" = "$_rr" ] && { EXPANDED_CHILD=0; break; }
-    done
         # Under -r the guests live in the CHILDREN of the named parent, so the
         # scope is expanded remotely; the snapshot list still names the parent,
         # because `zfs snapshot -r parent@snap` covers the tree atomically by
@@ -2147,6 +2134,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
 fi
 
 declare -a FAILED_DATASETS=()
+ADOPT_SKIPPED=0
 for src_path in "${DATASETS[@]}"; do
     if [ -n "$LOCAL_BASE" ]; then
         dataset="${LOCAL_BASE}/${src_path}"
@@ -2188,6 +2176,13 @@ if [ $DRY_RUN -eq 1 ]; then
 else
     if [ ${#FAILED_DATASETS[@]} -gt 0 ]; then
         printf "%s\n" "${FAILED_DATASETS[@]}" >&2
+        exit 1
+    elif [ $USE_EXISTING_SNAPSHOT -eq 1 ] && [ $FLAT_RECURSE -eq 1 ] && [ "$ADOPT_SKIPPED" -ge ${#DATASETS[@]} ]; then
+        # -e over -R skipped EVERY member as scaffolding: the requested subtree
+        # carries no matching family anywhere, so "success" would report an
+        # adoption that never happened. The per-member skip is not an error;
+        # all of them together is the request not being satisfiable.
+        echo "No matching family anywhere under the requested root(s) -- nothing was adopted (-e -R found only scaffolding)" >&2
         exit 1
     else
         echo "All datasets processed successfully" >&2
