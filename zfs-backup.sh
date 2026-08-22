@@ -4140,6 +4140,21 @@ resolve_mode_datasets() {
     else
         [ -n "${PEER_SAVED_DATASETS:-}" ] || return 0
         local scope_rc; has_committed_scope; scope_rc=$?
+        # ENDPOINT_PROBE: the caller's whole job is to find out WHICH address
+        # answers, so "this one does not" is its expected input, not a fatal.
+        # Regression found in CI on 2026-08-22 and it was mine: the refusal
+        # below is right for anything that will ACT on the dataset list, and
+        # verify-endpoint acts on nothing -- it picks an address. Killing it at
+        # the door removed endpoint failover entirely (U9: "falls back to a
+        # known candidate when the current endpoint does not answer"), because
+        # load_client_and_connection runs ONCE, against the current endpoint,
+        # before the candidate loop ever starts. The list is left exactly as
+        # recorded and is resolved for real by the next load against the address
+        # that did answer -- which is the one that installs.
+        if [ "$scope_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] && [ "${ENDPOINT_PROBE:-0}" -eq 1 ]; then
+            warn "could not ask ${LOAD_ACCOUNT}@${LOAD_HOST} for its committed scope -- carrying the recorded dataset list through endpoint probing only; whichever address answers is asked again before anything is installed"
+            return 0
+        fi
         [ "$scope_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
             && die "cannot reach ${LOAD_ACCOUNT}@${LOAD_HOST} to find out whether it has signed a scope for this relationship, so there is no way to tell a source that granted nothing from a source this host cannot talk to. Continuing would fall back to the recorded dataset list and replicate it as if no signature existed -- which is the split THE SIGNED SCOPE IS THE CONTRACT (#101) closed. Refusing; nothing was changed. Fix the link and re-run."
         [ "$scope_rc" -eq 0 ] || return 0
@@ -4853,7 +4868,9 @@ cmd_verify_endpoint() {
         *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete, endpoint_change_pending, or endpoint_verified (to re-check)" ;;
     esac
 
-    load_client_and_connection "$cpath"
+    # Endpoint probing tolerates an unreachable source: that is the question it
+    # is asking. Everything else keeps the refusal.
+    ENDPOINT_PROBE=1 load_client_and_connection "$cpath"
     local current="$LOAD_HOST:$LOAD_PORT"
     log "verifying endpoint '$current' for '$name'..."
 
