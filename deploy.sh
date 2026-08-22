@@ -3923,6 +3923,50 @@ EOF
     log "created/upgraded $DIGEST_SCRIPT (v2, one mail/day covering ALERT+WARN)"
 fi
 
+# The digest's cron line belongs HERE, in the host block, not in a relationship's
+# generated block. Found live on pve9, 2026-08-22: 15 findings had been queued
+# since the previous day and `alert-digest` appeared in ZERO crontabs, so nothing
+# was ever going to drain them.
+#
+# The cause was a boundary, not a bug in any one line. gen-cron.sh emitted the
+# digest inside the block it generates for a relationship, and only when that
+# block had monitor lines. The design around it is right and unchanged -- ONE
+# digest per host, run by root, reading the queue BOTH accounts write, and a
+# delegated account deliberately opting out because alert-digest.sh is never
+# copied to it. But put those together and a host whose only relationship lives
+# in a delegated account has every party correctly declining to schedule it.
+# pve9 is exactly that host, and the fleet has been moving that way since the
+# root -> delegated-account migration.
+#
+# So: the digest is a HOST-level job, like the capacity check and the auto-pull
+# beside it, and it is installed the same way -- adopt, not ensure, so an
+# operator who moved it to 06:00 keeps 06:00; only the line's LOCATION is this
+# run's business. This also collapses the other half of the same boundary: pve1
+# carried the line TWICE (a residual copy here from an older deploy plus the
+# generated one), two runs at 07:00 racing for the same queue file.
+DIGEST_LINE="0 7 * * * $DIGEST_SCRIPT 2>>/root/scripts/cron.log"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if ! crontab -l 2>/dev/null | grep -qF "$DIGEST_SCRIPT"; then
+        warn "digest cron line MISSING -- findings would queue forever and nobody would ever be told"
+    elif ! crontab -l 2>/dev/null | sed -n "/^# BEGIN $CRON_HOST_BLOCK/,/^# END $CRON_HOST_BLOCK/p" | grep -qF "$DIGEST_SCRIPT"; then
+        warn "digest cron line is present but LOOSE, outside the '$CRON_HOST_BLOCK' block -- a plain run adopts it into the block, keeping its current schedule"
+    else
+        log "digest cron line already in the '$CRON_HOST_BLOCK' block"
+    fi
+else
+    if cron_block_adopt_line root "$CRON_HOST_BLOCK" "$DIGEST_SCRIPT" "$DIGEST_LINE" "$CRON_HOST_TAIL"; then
+        if [ "${CRON_CHANGED:-0}" -eq 0 ]; then
+            log "digest cron line already in the '$CRON_HOST_BLOCK' block, leaving it alone"
+        elif [ "${CRON_ADOPTED:-0}" -gt 0 ]; then
+            log "moved the digest cron line into the '$CRON_HOST_BLOCK' block (schedule unchanged)"
+        else
+            log "added digest cron line: $DIGEST_LINE"
+        fi
+    else
+        warn "could not install the digest cron line: $CRON_ERR -- findings will queue and nobody will be told"
+    fi
+fi
+
 # ------------------------------------------------------------------------------
 log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # ------------------------------------------------------------------------------

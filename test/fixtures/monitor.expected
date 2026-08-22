@@ -8,6 +8,4 @@
 
 */15 * * * * d=$(/REPO/check-snap-age.sh "tank/a,tank/b" "automated_hourly" 90m 3h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "testhost hourly getting stale (groupA)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "testhost hourly stale (groupA)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "testhost hourly monitor BROKEN (groupA)" "$d" 2>>/LOG
 0 */6 * * * d=$(/REPO/check-snap-age.sh -R "backup/store" "automated_weekly" 9d 12d 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "testhost weekly getting stale (store)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "testhost weekly stale (store)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "testhost weekly monitor BROKEN (store)" "$d" 2>>/LOG
-
-0 7 * * * /DIGEST 2>>/LOG
 # END zfs-backup-managed
