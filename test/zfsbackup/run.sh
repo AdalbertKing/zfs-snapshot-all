@@ -3845,11 +3845,27 @@ cp "$REPO/profiles/default/templates.conf" "$P9/prof/templates.conf"
 cp "$REPO/profiles/default/prune.inc"      "$P9/prof/prune.inc"
 cp "$REPO/profiles/default/dataset.inc"    "$P9/prof/dataset.inc"
 
+# THE SOURCE MUST ANSWER, and until 2026-08-22 these cases relied on it not
+# answering. LOAD_HOST is an unroutable test address and ssh was never stubbed,
+# so sync mode's passive/active decision ran through a probe that could not
+# reach anything -- and passed because "unreachable" silently read as "no family
+# here". That is exactly the fail-open the tri-state probe removed, so the moment
+# it refused instead of guessing, five cases went red. They had been green for
+# the wrong reason, which is the worst way for a test to be green.
+#
+# The stub answers on purpose now. EMIT9_SSH_RC picks WHAT it answers:
+#   0 + no output   = reachable, no family (the shape these cases assumed)
+#   0 + a snapshot  = reachable, family present
+#   255             = unreachable, which must refuse
+EMIT9_SSH_RC=0
+EMIT9_SSH_OUT=""
 emit9() {   # <conf> <name> <host> <is_new> [mode] [datasets]
     # MANAGED_DATASETS/MANAGED_PRUNE_SCOPE deliberately EMPTY: ownership must be
     # proven by the marker this function itself wrote, which is the harder half
     # of remove_managed_sections' own test and the one a fresh record relies on.
-    ( PROFILE_ROOT="$P9" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+    ( ssh() { [ -n "$EMIT9_SSH_OUT" ] && printf '%s\n' "$EMIT9_SSH_OUT"; return "$EMIT9_SSH_RC"; }
+      load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      PROFILE_ROOT="$P9" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
       PEER_SAVED_MODE="${5:-backup}" PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
       LOAD_ACCOUNT=zfsbackup LOAD_HOST="$3" LOAD_FLAGS="-K /dev/null" \
       PEER_SAVED_DATASETS="${6:-rpool/data}" PROFILE_GFS=1 \
