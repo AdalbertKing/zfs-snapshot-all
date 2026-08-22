@@ -270,6 +270,23 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     still does), it tells the source what was asked for
                                     so its scope DRAFT starts there instead of at every
                                     pool it has.
+                                    --recursive=flat|atomic picks how a solid scope
+                                    root is replicated. flat (default) sends each
+                                    dataset on its own (-R): a failing child does not
+                                    abort its siblings and each keeps a bookmark.
+                                    atomic sends the whole subtree as ONE stream (-r)
+                                    and DECLINES managed source retention -- under -r
+                                    the engines keep no bookmark, so a source prune
+                                    that ages out the last common snapshot ends the
+                                    relationship until a destructive re-seed. Recorded
+                                    on the client, so re-activation keeps the shape.
+                                    --exclude=REGEX (repeatable) drops matching datasets
+                                    from a flat expansion -- snapget/snapsend -X, an
+                                    unanchored grep -E over the SOURCE-side name, so
+                                    anchor it yourself when you mean the whole name.
+                                    Recorded like --recursive, and refused together with
+                                    --recursive=atomic, where one stream has nowhere to
+                                    filter.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -2212,7 +2229,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         localpath=$(client_local_path "$ds")
         update_section_field "$workfile" "[dataset:$localpath]" src "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" \
             || die "[dataset:$localpath] in $workfile has no 'src' field to refresh -- refusing to leave the relationship pointing at an unknown endpoint. Fix or remove that section by hand and re-run."
-        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS" \
+        # The recorded exclusions ride along, exactly as on the create path a
+        # few lines down. Refreshing `flags` from $LOAD_FLAGS alone rewrote the
+        # transport options AND silently dropped every -X the relationship was
+        # enrolled with -- measured: the re-activation diff removed the line
+        # carrying -X and added one without it, and the anti-deletion guard then
+        # refused the install because two jobs appeared to be vanishing. A
+        # preserved section must come back with everything it had, not with
+        # everything this function happens to know about.
+        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
     done
 
@@ -2247,7 +2272,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo "	flags        = $LOAD_FLAGS -e"
             else
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
             # A solid scope root rides ENGINE recursion: snapget -R re-expands
             # the subtree on the source at every run, so a child created there
@@ -2255,8 +2280,17 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # include_children=yes means over time. Dataset-level field, so it
             # wins over any template default (and the profile fragment
             # deliberately carries no 'recursive' of its own).
+            # RECURSION comes off the client record (sourced by
+            # load_client_and_connection), so re-activation reproduces the shape
+            # the operator chose at enrolment instead of resetting it to the
+            # default. Empty record = flat, which is what every relationship
+            # enrolled before this flag existed carries.
             if is_recursive_root "$ds"; then
-                echo "	recursive    = flat"
+                if [ "${RECURSION:-}" = atomic ]; then
+                    echo "	recursive    = atomic"
+                else
+                    echo "	recursive    = flat"
+                fi
             fi
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
@@ -2352,7 +2386,16 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     for ds in ${PEER_SAVED_DATASETS:-}; do
         sync_ds_is_passive "$ds" || prune_src+=("$ds")
     done
-    emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+    # Atomic declines source retention -- decided at enrolment, recorded, and
+    # honoured here rather than left for assert_no_atomic_with_source_retention
+    # to refuse after the fact. That guard STAYS: it reads the candidate config,
+    # so it still catches a hand-edited 'recursive = atomic' arriving next to a
+    # source prune from anywhere else.
+    if [ "${RECURSION:-}" = atomic ]; then
+        log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
+    else
+        emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+    fi
     return 0
 }
 
@@ -3621,6 +3664,15 @@ cmd_add_client() {
     # the source's committed scope. This only tells the source what was asked
     # for, so its draft can default to that instead of to every pool it has.
     local requested=""
+    # See the note in the one-command form: 'atomic' was unreachable, which made
+    # the engines' -r a mode the product could describe but never install.
+    local recursion=""
+    # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
+    # anti-deletion guard then refused every future activation of that client:
+    # the regenerated job has no -X, so the installed one reads as a job about
+    # to stop running. Measured on the lab -- the line the guard named WAS the
+    # -X line. An exclusion has to be a recorded decision or it is a one-way door.
+    local -a excludes=()
     # Batch B: the account is a DECISION, never a silent default. Empty here means
     # "not stated on the command line"; the resolution below decides what that
     # means, and refuses rather than guessing.
@@ -3634,6 +3686,8 @@ cmd_add_client() {
                            lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
             --requested=*) requested="${a#*=}" ;;
+            --recursive=*) recursion="${a#*=}" ;;
+            --exclude=*)   excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -3685,6 +3739,22 @@ cmd_add_client() {
     # instead of two hosts later.
     [ -z "$requested" ] || [ -n "$mode" ] \
         || die "add-client: --requested= only means something with --mode= (it narrows the scope DRAFT the source writes for a deferred dataset list); with --datasets= the datasets already are the request"
+    # ATOMIC AND SOURCE RETENTION ARE INSEPARABLE, so the choice is stated once,
+    # here, and carried on the record -- not rediscovered by a guard three
+    # commands later. Under -r the engines keep no bookmark: they neither record
+    # nor consult one. Let managed source retention age out the last ordinary
+    # common snapshot and the relationship stops permanently, until a
+    # destructive re-seed. So enrolling atomic DECLINES source retention, and
+    # says so out loud rather than quietly omitting a section.
+    case "$recursion" in
+        ""|flat|atomic) ;;
+        no) die "add-client: --recursive=no is not a relationship shape this layer installs -- a scope root is replicated either per-dataset (flat, the default) or as one stream (atomic). Omit the flag for flat." ;;
+        *)  die "add-client: --recursive must be 'flat' or 'atomic', got '$recursion'" ;;
+    esac
+    # The engines refuse -X without -R rather than ignoring it, so refusing the
+    # same combination here means the operator hears it at the command line
+    # instead of at 01:00 every night.
+    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude to keep one atomic stream."
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -3848,11 +3918,24 @@ cmd_add_client() {
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
         write_client_field PROFILE           "$profile"
+        # On the RECORD, so re-activation regenerates the same shape. A hand
+        # edited config lost its 'recursive = atomic' the moment anything
+        # regenerated the section; the record is the only place a decision
+        # survives that.
+        write_client_field RECURSION         "$recursion"
+        local _xi=0 _x
+        for _x in ${excludes[@]+"${excludes[@]}"}; do
+            _xi=$((_xi + 1))
+            write_client_field "EXCLUDE_$_xi" "$_x"
+        done
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
     log "client '$name' created, state=pending_enroll, profile=$profile"
+    if [ "$recursion" = atomic ]; then
+        log "client '$name': ATOMIC recursion (-r) -- the whole subtree ships as ONE stream, and managed SOURCE retention is DECLINED for this relationship. Under -r the engines keep no bookmark, so a source prune that ages out the last common snapshot would end the relationship permanently. Target-side retention is unaffected; source snapshots are this source's own business."
+    fi
     if [ "$join_remotely" -eq 1 ]; then
         log "next: see deploy.sh's own output above for whether --join-remotely succeeded on $lan_host, or fell back to manual instructions"
     else
@@ -3995,6 +4078,22 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # fails when NOTHING in the expansion had a family. So the probe now also
 # returns the newest match, and the rehearsal calls it instead of asking the
 # same question its own way.
+# The exclusions this relationship was enrolled with, rendered as engine flags.
+# Read off the CLIENT RECORD (sourced by load_client_and_connection), never off
+# the config -- a config edit is exactly what this replaces. Numbered fields
+# rather than one packed string: a regex may contain anything, including the
+# separator someone would have picked.
+client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
+    local i=1 v out=""
+    while :; do
+        eval "v=\${EXCLUDE_$i:-}"
+        [ -n "$v" ] || break
+        out="$out -X $v"
+        i=$((i + 1))
+    done
+    printf '%s' "$out"
+}
+
 # TRI-STATE, and that is the whole point (fail-open found on review, measured
 # 2026-08-22). This probe used to answer a yes/no question with a pipeline whose
 # output is empty for BOTH "the source has no family" and "the source could not
@@ -4476,7 +4575,18 @@ cmd_seed() {
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
-        is_recursive_root "$ds" && seed_flags+=(-R)
+        # The seed obeys the same exclusions the installed job will. Without
+        # this an excluded dataset lands ONCE, at seed time, and is then never
+        # touched again -- a copy that exists, is stale from its first hour, and
+        # no monitor covers because no job names it. Measured on the lab: -X
+        # kept tree/a out of every cron run while the seed had already put it
+        # there. Only under -R, because that is the only shape -X applies to and
+        # the engines refuse it otherwise.
+        if is_recursive_root "$ds"; then
+            seed_flags+=(-R)
+            local _sx
+            for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
+        fi
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
@@ -4604,7 +4714,18 @@ cmd_final_catchup() {
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
-        is_recursive_root "$ds" && seed_flags+=(-R)
+        # The seed obeys the same exclusions the installed job will. Without
+        # this an excluded dataset lands ONCE, at seed time, and is then never
+        # touched again -- a copy that exists, is stale from its first hour, and
+        # no monitor covers because no job names it. Measured on the lab: -X
+        # kept tree/a out of every cron run while the seed had already put it
+        # there. Only under -R, because that is the only shape -X applies to and
+        # the engines refuse it otherwise.
+        if is_recursive_root "$ds"; then
+            seed_flags+=(-R)
+            local _sx
+            for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
+        fi
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
@@ -6946,6 +7067,8 @@ rux_remote_install() {
             [ -n "$target" ] && add_args+=(--target="$target")
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
+        [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
+        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
         # SSH from this host by default (Owner doc, "Join behavior"); --manual-join
@@ -7036,11 +7159,22 @@ rux_entry() {
 
     local target="" mode="" profile="" port="" name="" local_user=""
     local do_install=0 assume_yes=0 verbose=0 grant_remotely=0 manual_join=0
+    # The transfer SHAPE for a solid scope root. Same vocabulary the engines
+    # already use for --recursive, deliberately: flat = per-dataset -R (the
+    # default this layer has always emitted), atomic = one -r stream for the
+    # whole subtree. Before this, `atomic` existed in the engines and in the
+    # config grammar but no command could produce it -- reaching it meant hand
+    # editing a generated config, and the first re-activation wrote the edit
+    # back out. A mode the product cannot install is a mode nobody can operate.
+    local recursion=""
+    local -a excludes=()
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
             --target=*)  target="${a#*=}" ;;
             --mode=*)    mode="${a#*=}" ;;
+            --recursive=*) recursion="${a#*=}" ;;
+            --exclude=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
