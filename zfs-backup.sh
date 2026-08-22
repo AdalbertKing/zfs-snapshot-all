@@ -2229,7 +2229,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         localpath=$(client_local_path "$ds")
         update_section_field "$workfile" "[dataset:$localpath]" src "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" \
             || die "[dataset:$localpath] in $workfile has no 'src' field to refresh -- refusing to leave the relationship pointing at an unknown endpoint. Fix or remove that section by hand and re-run."
-        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS" \
+        # The recorded exclusions ride along, exactly as on the create path a
+        # few lines down. Refreshing `flags` from $LOAD_FLAGS alone rewrote the
+        # transport options AND silently dropped every -X the relationship was
+        # enrolled with -- measured: the re-activation diff removed the line
+        # carrying -X and added one without it, and the anti-deletion guard then
+        # refused the install because two jobs appeared to be vanishing. A
+        # preserved section must come back with everything it had, not with
+        # everything this function happens to know about.
+        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
     done
 
