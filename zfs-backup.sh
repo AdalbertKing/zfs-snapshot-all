@@ -3649,6 +3649,9 @@ cmd_add_client() {
     # the source's committed scope. This only tells the source what was asked
     # for, so its draft can default to that instead of to every pool it has.
     local requested=""
+    # See the note in the one-command form: 'atomic' was unreachable, which made
+    # the engines' -r a mode the product could describe but never install.
+    local recursion=""
     # Batch B: the account is a DECISION, never a silent default. Empty here means
     # "not stated on the command line"; the resolution below decides what that
     # means, and refuses rather than guessing.
@@ -3662,6 +3665,7 @@ cmd_add_client() {
                            lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
             --requested=*) requested="${a#*=}" ;;
+            --recursive=*) recursion="${a#*=}" ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
