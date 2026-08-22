@@ -4560,7 +4560,18 @@ cmd_seed() {
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
-        is_recursive_root "$ds" && seed_flags+=(-R)
+        # The seed obeys the same exclusions the installed job will. Without
+        # this an excluded dataset lands ONCE, at seed time, and is then never
+        # touched again -- a copy that exists, is stale from its first hour, and
+        # no monitor covers because no job names it. Measured on the lab: -X
+        # kept tree/a out of every cron run while the seed had already put it
+        # there. Only under -R, because that is the only shape -X applies to and
+        # the engines refuse it otherwise.
+        if is_recursive_root "$ds"; then
+            seed_flags+=(-R)
+            local _sx
+            for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
+        fi
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
@@ -4688,7 +4699,18 @@ cmd_final_catchup() {
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
-        is_recursive_root "$ds" && seed_flags+=(-R)
+        # The seed obeys the same exclusions the installed job will. Without
+        # this an excluded dataset lands ONCE, at seed time, and is then never
+        # touched again -- a copy that exists, is stale from its first hour, and
+        # no monitor covers because no job names it. Measured on the lab: -X
+        # kept tree/a out of every cron run while the seed had already put it
+        # there. Only under -R, because that is the only shape -X applies to and
+        # the engines refuse it otherwise.
+        if is_recursive_root "$ds"; then
+            seed_flags+=(-R)
+            local _sx
+            for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
+        fi
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
