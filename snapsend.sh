@@ -1497,6 +1497,41 @@ process_dataset() {
 
     # Transfer landed -- this snapshot is no longer "in flight", safe to prune
     # on the next delsnaps.sh run like any other.
+    # PROVE IT LANDED (owner-directed 2026-08-22). Until now the ONLY evidence
+    # a transfer worked was that the pipeline exited 0 -- which says the
+    # processes did not crash, not that the data is on the target. Every live
+    # campaign in this project has been verified by a human comparing GUIDs by
+    # hand afterwards, precisely because the tool could not say it. A backup
+    # tool whose success means "nothing threw an error" is the wrong instrument
+    # for the one question it exists to answer.
+    #
+    # validate_snapshot is not new: it already compares ZFS's own identity for
+    # a snapshot on both sides, and this file already trusts it to decide
+    # whether an existing target snapshot is the same one. Reusing it here
+    # rather than writing a second comparator keeps one definition of "the same
+    # snapshot" -- two would drift, and this project has spent the day paying
+    # for exactly that kind of duplication.
+    #
+    #
+    # AND IT SITS HERE, BEFORE THE DURABLE YES. Caught in review: the first cut
+    # of this check ran AFTER release_snapshot, clear_inflight_snap and
+    # record_send_bookmark. So a failed verification returned 1 while the hold
+    # protecting the snapshot was already gone, the in-flight marker was already
+    # cleared, and the bookmark already pointed at a target nobody had
+    # confirmed -- durable state saying "done" about a transfer the function was
+    # in the middle of calling failed. The retry would then find its base
+    # unprotected and prunable. A proof that runs after the thing it is meant to
+    # gate is decoration.
+    # BOUNDARY, stated rather than hidden: under -r the subtree travels as ONE
+    # stream and this proves the ROOT landed. The descendants rode the same
+    # stream and cannot have arrived separately, but they are not individually
+    # checked here. Under -R each dataset is its own job and each is proven.
+    if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
+        log 0 "VERIFY FAILED: ${tgt_dataset}@${latest_snap} is not on the target with the source's GUID -- the transfer reported success but the snapshot cannot be confirmed. Treating this dataset as FAILED rather than reporting a backup that may not exist."
+        return 1
+    fi
+    log 2 "Verified: ${tgt_dataset}@${latest_snap} carries the source's GUID"
+
     release_snapshot "$snapshot" "" ""
     clear_inflight_snap "$tgt_dataset" "$src_dataset"
 
@@ -1542,31 +1577,6 @@ process_dataset() {
     # or FULL) -- see record_send_bookmark in lib-zfs-snap.sh. Source is
     # always local here.
     [ $RECURSIVE -ne 1 ] && record_send_bookmark "$src_dataset" "$latest_snap" "$tgt_dataset" "" "" "$IDENTIFIER"
-
-    # PROVE IT LANDED (owner-directed 2026-08-22). Until now the ONLY evidence
-    # a transfer worked was that the pipeline exited 0 -- which says the
-    # processes did not crash, not that the data is on the target. Every live
-    # campaign in this project has been verified by a human comparing GUIDs by
-    # hand afterwards, precisely because the tool could not say it. A backup
-    # tool whose success means "nothing threw an error" is the wrong instrument
-    # for the one question it exists to answer.
-    #
-    # validate_snapshot is not new: it already compares ZFS's own identity for
-    # a snapshot on both sides, and this file already trusts it to decide
-    # whether an existing target snapshot is the same one. Reusing it here
-    # rather than writing a second comparator keeps one definition of "the same
-    # snapshot" -- two would drift, and this project has spent the day paying
-    # for exactly that kind of duplication.
-    #
-    # BOUNDARY, stated rather than hidden: under -r the subtree travels as ONE
-    # stream and this proves the ROOT landed. The descendants rode the same
-    # stream and cannot have arrived separately, but they are not individually
-    # checked here. Under -R each dataset is its own job and each is proven.
-    if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
-        log 0 "VERIFY FAILED: ${tgt_dataset}@${latest_snap} is not on the target with the source's GUID -- the transfer reported success but the snapshot cannot be confirmed. Treating this dataset as FAILED rather than reporting a backup that may not exist."
-        return 1
-    fi
-    log 2 "Verified: ${tgt_dataset}@${latest_snap} carries the source's GUID"
 
     log 1 "Transfer completed successfully"
     return 0
