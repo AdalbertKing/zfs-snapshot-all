@@ -6183,20 +6183,49 @@ got=$(fam_probe tank/mid)
 got=$(fam_probe "")
 [ "$got" = AKTYWNY ]     && ok "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)"     || bad "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)" "got=$got"
 
-# 67c. all three consumers go through the ONE helper -- three inline copies of
-#      this probe would drift exactly like everything else this campaign
-#      measured. Source-grep: the helper exists, and no caller keeps a private
-#      "-t snapshot ... automated_" probe of its own.
-# The probe idiom is `| grep -q '@automated_'` -- exactly one, inside the
-# helper. (A LOOSER grep also catches activate's newest-matching-snapshot
-# query at its dry-run block; that one answers WHICH, not WHETHER, and is
-# not this probe.)
+# 67c. every consumer goes through the ONE helper -- copies of this probe drift
+#      exactly like everything else this campaign measured. Source-grep: one
+#      implementation, and no caller keeps a private "-t snapshot" probe.
+#
+# This used to allow a SECOND, looser query: activate-client's dry-run had its
+# own newest-matching-snapshot lookup, excused here as answering WHICH rather
+# than WHETHER. LAB6 pass 7 F-2 measured what that excuse cost. The copy
+# hardcoded -d 1 while the helper follows the recursion contract, so on the
+# chain-middle shape (family only on descendants) ONE activation run said
+# "already carries an automated_* family -- PASSIVE" and then "no snapshot
+# reachable" about the same dataset, and the relationship could not be
+# activated although its installed line was healthy. WHICH and WHETHER are the
+# same lookup: the helper now returns the newest match and existence is "did it
+# return anything", so there is one implementation for both questions.
+#
+# The implementation is the single remote `zfs list -H -t snapshot` in the file.
+n_impl=$(grep -c 'zfs list -H -t snapshot' "$ZFSBACKUP")
+# The old idiom must be gone entirely, not merely reduced -- a lingering
+# `grep -q '@automated_'` would be a second existence test with its own depth.
 n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
+# seed, catch-up, emit-time passivity -- unchanged, still through the wrapper.
 n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
-if [ "$n_inline" -eq 1 ] && [ "$n_calls" -eq 3 ]; then
-    ok "67c: one probe implementation, three callers (seed, catch-up, emit)"
+# the wrapper itself, plus activate-client's rehearsal (the ex-copy).
+n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
+if [ "$n_impl" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
+    ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
 else
-    bad "67c: one probe implementation, three callers (seed, catch-up, emit)"         "inline=$n_inline calls=$n_calls"
+    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
+fi
+
+# 67c2. the activation rehearsal specifically: it must not re-derive the depth.
+#       F-2's copy was invisible to 67c above because it looked like a
+#       different question; what made it wrong was `-d 1` written out by hand
+#       in a block whose installed line carries -R. Pin the absence.
+#       Comments are stripped first: the block explains the old `-d 1` in prose
+#       on purpose, and a test that cannot tell the explanation from the code
+#       would forbid writing down why.
+dryrun_block=$(awk '/dry-run test of each dataset/{f=1} f{print} f&&/^    if \[ "\$failed"/{exit}' "$ZFSBACKUP"     | grep -v '^[[:space:]]*#')
+if printf '%s
+' "$dryrun_block" | grep -q -- '-d 1'; then
+    bad "67c2: the activation rehearsal does not hardcode a probe depth"         "'-d 1' still appears in the dry-run block"
+else
+    ok "67c2: the activation rehearsal does not hardcode a probe depth"
 fi
 
 # 67d. both transfer sites still carry the passive branch itself.
