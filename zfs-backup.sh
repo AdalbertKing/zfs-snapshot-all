@@ -265,6 +265,11 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
                                     --lan, --mode and --datasets remain expert options.
+                                    --requested=DATASET goes WITH --mode: it does not
+                                    choose the datasets (the source's committed scope
+                                    still does), it tells the source what was asked for
+                                    so its scope DRAFT starts there instead of at every
+                                    pool it has.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -3607,6 +3612,12 @@ cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
+    # LAB6 pass 7 F-1: the dataset the caller NAMED for a mode-based
+    # relationship. Not --datasets (which would be a second, conflicting answer
+    # to "what is the list", and --mode refuses it): the list still comes from
+    # the source's committed scope. This only tells the source what was asked
+    # for, so its draft can default to that instead of to every pool it has.
+    local requested=""
     # Batch B: the account is a DECISION, never a silent default. Empty here means
     # "not stated on the command line"; the resolution below decides what that
     # means, and refuses rather than guessing.
@@ -3619,6 +3630,7 @@ cmd_add_client() {
                            endpoint_option="${a%%=*}"
                            lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
+            --requested=*) requested="${a#*=}" ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -3663,6 +3675,13 @@ cmd_add_client() {
     else
         [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\" (or --mode=backup|sync, to let the source choose)"
     fi
+    # Refused rather than ignored. Without a mode the list is --datasets and a
+    # separate "what was asked for" would be a second answer to a question
+    # already answered -- exactly the ambiguity deploy.sh's package validator
+    # refuses on the far side, stated here so it fails at the command line
+    # instead of two hosts later.
+    [ -z "$requested" ] || [ -n "$mode" ] \
+        || die "add-client: --requested= only means something with --mode= (it narrows the scope DRAFT the source writes for a deferred dataset list); with --datasets= the datasets already are the request"
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -3767,6 +3786,7 @@ cmd_add_client() {
     local -a pair_args=(--pair --role=pull --peer="$lan_host")
     if [ -n "$mode" ]; then
         pair_args+=(--mode="$mode")
+        [ -n "$requested" ] && pair_args+=(--peer-requested="$requested")
     else
         pair_args+=(--peer-datasets="$datasets")
     fi
@@ -6776,6 +6796,13 @@ rux_remote_install() {
         local -a add_args=("$name" --host="$hostarg")
         if [ "$mode" = sync ]; then
             add_args+=(--mode=sync)
+            # LAB6 pass 7 F-1: this line is the whole fix. `--source=HOST:DATASET
+            # --mode=sync` names a dataset; before this it went no further than
+            # RUX_SOURCE on this host, so the source was asked to draft a scope
+            # from silence and drafted its entire estate. The list a sync
+            # relationship replicates is still whatever the source COMMITS --
+            # this only makes the draft it commits from start at what was asked.
+            [ -n "$dataset" ] && add_args+=(--requested="$dataset")
         else
             # Deferred scope (empty dataset): pass NO --datasets, so add-client
             # leaves the dataset selection to the source's own scope draft at
