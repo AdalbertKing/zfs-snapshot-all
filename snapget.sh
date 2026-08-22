@@ -396,6 +396,64 @@ MEMORY="16M"
 # limit was asked for. Mirrors snapsend.sh.
 BWLIMIT=""
 BWLIMIT_FLAG=""
+# ---------------------------------------------------------------------------
+# WATCHING A LONG TRANSFER (owner-authorized 2026-08-22)
+#
+# Steady state has nothing to watch: measured on production the same day, a
+# 4.39 TB dataset's hourly incremental was 624 bytes and 532 runs averaged 0.3s.
+# The case that needs an eye is the SEED -- the owner's words, "wyobraz sobie
+# task inicjalny 4TB, puszczamy i nic nie widzimy" -- and it is exactly the case
+# no history can help with, because a first run has nothing to compare against.
+#
+# mbuffer has counted bytes and rate all along; every pipeline in this file ran
+# it with -q. So this is not new machinery, it is a mute being lifted -- and
+# lifted ONLY where somebody is looking. From cron nobody is, and mbuffer's
+# status would land in the stderr that cron appends to cron.log, turning the
+# one file an operator greps into a rate meter. So: stderr on a tty means show,
+# anything else means keep the mute exactly as before.
+#
+# There is no percentage here on purpose. mbuffer cannot be told a total (pv
+# can, and syncoid uses it, but pv is installed on none of these hosts while
+# mbuffer is everywhere). So the total is ANNOUNCED once, up front, from a
+# `zfs send -nP` dry run, and the live counter is mbuffer's own. Two numbers,
+# one line apart, no new dependency.
+MBUFFER_QUIET="-q"
+[ -t 2 ] && MBUFFER_QUIET=""
+
+# What this transfer is about to move, said once before it starts. Fail-SOFT by
+# construction: a size we could not measure is a line we do not print, never a
+# transfer we do not run. The dry run reuses the REAL send command with -nP
+# spliced in after `zfs send`, so it can never describe a different stream than
+# the one that follows.
+announce_transfer_size() {   # <send_cmd> <remote_host> <remote_user>
+    [ -t 2 ] || return 0
+    local send_cmd="$1" rhost="$2" ruser="$3" dry out size
+    case "$send_cmd" in
+        "zfs send "*) dry="zfs send -nP ${send_cmd#zfs send }" ;;
+        *) return 0 ;;
+    esac
+    if [ -n "$rhost" ]; then
+        out=$(ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
+    else
+        out=$(eval "$dry" 2>/dev/null) || return 0
+    fi
+    size=$(printf '%s\n' "$out" | awk '$1=="size"{print $2; exit}')
+    [ -n "$size" ] || return 0
+    log 0 "about to move $(human_bytes "$size") -- mbuffer reports progress below"
+}
+
+# Bytes as a human reads them. Local to this file's reporting; nothing decides
+# anything on it.
+human_bytes() {   # <bytes>
+    local b="$1"
+    awk -v b="$b" 'BEGIN{
+        split("B KiB MiB GiB TiB PiB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 6) { b /= 1024; i++ }
+        printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
+    }'
+}
+
 PORT=22
 USE_EXISTING_SNAPSHOT=0
 # -q: quiesce the Proxmox guest that owns each SOURCE dataset before
@@ -837,6 +895,8 @@ transfer_data() {
     log 3 "SEND CMD: $send_cmd"
     log 3 "RECV CMD: $recv_cmd"
 
+    announce_transfer_size "$send_cmd" "$remote_host" "$remote_user"
+
     local recv_args
     IFS=' ' read -r -a recv_args <<< "$recv_cmd"
 
@@ -846,11 +906,11 @@ transfer_data() {
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 return 1
             fi
         fi
@@ -862,11 +922,11 @@ transfer_data() {
         # correct pipeline if compression is ever wanted here; the policy of not
         # wanting it lives in one place, not spread into the transport layer.
         if [ $COMPRESSION -eq 1 ]; then
-            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
-            if ! "${send_args[@]}" | mbuffer -q -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+            if ! "${send_args[@]}" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 return 1
             fi
         fi
