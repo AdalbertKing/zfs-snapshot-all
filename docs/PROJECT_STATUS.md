@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52e8580607ae844d -->
+<!-- status-covers-digest: 4e11da4f0fec7250 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,10 +21,31 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Wdrożenie sync przestało prosić źródło o podpis pod całym majątkiem
+  (2026-08-22, LAB6 pass 7 F-1).** `--source=HOST:DATASET --mode=sync` nazywa
+  dataset, ale enrolment go gubił: gałąź `if mode = sync` dokładała `--mode=sync`
+  i porzucała `$dataset`, więc wsad parowania szedł z `PEER_CONF_DATASETS=""`,
+  a `--draft-scope` na źródle szkicował z ciszy — czyli cały majątek. Zmierzone
+  na żywo: enrolment nazywający `hdd/lab6chain` wyprodukował na pve1 sekcję
+  AKTYWNĄ (tę, z której nadaje `--commit-scope`, nie zakomentowany inwentarz)
+  obejmującą `hdd/vm-disks` — 5.39T produkcji, w tym `subvol-101`, czyli bramę
+  OpenVPN — oraz `rpool/data`. Następny krok, który narzędzie samo drukuje, to
+  „uruchom `--commit-scope` na źródle".
+  Pakiet mode-based niesie teraz `PEER_CONF_REQUESTED` — to, co kolektor
+  NAZWAŁ — a szkic domyśla sekcję aktywną do tego. **To nie jest druga lista
+  datasetów:** listę, którą sync replikuje, nadal ustala to, co źródło
+  ZATWIERDZI; zmienia się to, co dostaje do podpisu. `validate_peer_conf`
+  odmawia REQUESTED bez MODE i REQUESTED razem z DATASETS, klucz zapisywany
+  jest tylko gdy jest żądanie (starszy kolektor paruje się bez zmian), a bare
+  `add-client --mode=sync` — który naprawdę nic nie nazwał — dalej dostaje
+  szkic całego majątku. Dowód na żywo: 7 stanz → 1, inwentarz nadal pod spodem,
+  `--commit-scope` nadał 6 datasetów podrzewa i zero produkcji.
+
 - **Lista poprawek pokampanijnych P1–P10 zamknięta; P10 dowiedziony na żywo,
   a żywe hosty znalazły TRZY wady po zielonym CI (2026-08-21).**
   Zamknięte: P5 (sync brał więcej niż zamówiono — `assert_sync_scope_within_request`
-  plus bezwarunkowe logowanie rozwiązanej listy), P6 (edytor zakresu przez
+  plus bezwarunkowe logowanie rozwiązanej listy; **to była bramka za grantem, nie
+  zamiast niego** — stronę szkicu zamknęło dopiero F-1 z 2026-08-22 wyżej), P6 (edytor zakresu przez
   `ssh -t` bez terminala), P7 (relacja wycelowana we własny host przechodziła
   planowanie), P8 (`remove-client` zabierał wspólny rekord parowania),
   P9 (nagrobek twierdził, że dane przeżyły, nie sprawdzając), P10

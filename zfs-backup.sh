@@ -265,6 +265,11 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
                                     --lan, --mode and --datasets remain expert options.
+                                    --requested=DATASET goes WITH --mode: it does not
+                                    choose the datasets (the source's committed scope
+                                    still does), it tells the source what was asked for
+                                    so its scope DRAFT starts there instead of at every
+                                    pool it has.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -3607,6 +3612,12 @@ cmd_add_client() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
+    # LAB6 pass 7 F-1: the dataset the caller NAMED for a mode-based
+    # relationship. Not --datasets (which would be a second, conflicting answer
+    # to "what is the list", and --mode refuses it): the list still comes from
+    # the source's committed scope. This only tells the source what was asked
+    # for, so its draft can default to that instead of to every pool it has.
+    local requested=""
     # Batch B: the account is a DECISION, never a silent default. Empty here means
     # "not stated on the command line"; the resolution below decides what that
     # means, and refuses rather than guessing.
@@ -3619,6 +3630,7 @@ cmd_add_client() {
                            endpoint_option="${a%%=*}"
                            lan="${a#*=}" ;;
             --datasets=*)  datasets="${a#*=}" ;;
+            --requested=*) requested="${a#*=}" ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -3663,6 +3675,13 @@ cmd_add_client() {
     else
         [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\" (or --mode=backup|sync, to let the source choose)"
     fi
+    # Refused rather than ignored. Without a mode the list is --datasets and a
+    # separate "what was asked for" would be a second answer to a question
+    # already answered -- exactly the ambiguity deploy.sh's package validator
+    # refuses on the far side, stated here so it fails at the command line
+    # instead of two hosts later.
+    [ -z "$requested" ] || [ -n "$mode" ] \
+        || die "add-client: --requested= only means something with --mode= (it narrows the scope DRAFT the source writes for a deferred dataset list); with --datasets= the datasets already are the request"
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -3767,6 +3786,7 @@ cmd_add_client() {
     local -a pair_args=(--pair --role=pull --peer="$lan_host")
     if [ -n "$mode" ]; then
         pair_args+=(--mode="$mode")
+        [ -n "$requested" ] && pair_args+=(--peer-requested="$requested")
     else
         pair_args+=(--peer-datasets="$datasets")
     fi
@@ -3960,11 +3980,36 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # entries probed on their own. ONE probe for the seed, the catch-up and the
 # emit-time passivity decision -- three copies of it would drift exactly like
 # everything else this campaign measured.
-source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
+#
+# LAB6 pass 7 F-2 (2026-08-22): there was a FOURTH copy, hand-rolled inside
+# activate-client's passive rehearsal, with `-d 1` hardcoded -- and it drifted
+# exactly as promised. Measured on the R2 chain middle: this probe answered
+# "family exists" (2 matches under -r) and chose PASSIVE, then the rehearsal
+# answered "no snapshot reachable" (0 matches under -d 1) and refused the
+# install, about the same dataset on the same host in the same run. The
+# relationship was un-activatable while the line it was rehearsing was
+# healthy -- snapget -R -e skips a family-less member as scaffolding and only
+# fails when NOTHING in the expansion had a family. So the probe now also
+# returns the newest match, and the rehearsal calls it instead of asking the
+# same question its own way.
+source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot, empty if none
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
+    # The caller's own prefix, because the rehearsal has one (the [dataset:]
+    # section's `prefix`, i.e. what the installed line passes to -m) and the
+    # passivity decision does not -- it asks about the FAMILY, whose name is
+    # the project's automated_ root regardless of which tier stamped it.
+    local pfx="${2:-automated_}"
     load_ssh_opts
-    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot $depth -o name -- '$1'" 2>/dev/null | grep -q '@automated_'
+    # -p (parseable creation) so the sort is numeric on a stable field, not on
+    # a locale-formatted date.
+    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+        "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null \
+        | grep "@${pfx}" | sort -k2,2n | tail -1 | cut -f1
+}
+
+source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
+    [ -n "$(source_family_newest "$1")" ]
 }
 
 # ONE CONFIG = ONE ACCOUNT (LAB6-F2). A config file renders WHOLE into the
@@ -4988,14 +5033,22 @@ cmd_activate_client() {
             # family is REACHABLE over the account's own channel, and the
             # local landing exists or its parent is delegated. The engine's
             # silent rc=1 is a separate finding (frozen file; TODO).
+            #
+            # LAB6 pass 7 F-2: through the SHARED probe, so the depth follows
+            # the recursion contract the installed line follows. This used to
+            # inline a -d 1 lookup and refused a recursive root whose family
+            # lives on descendants -- the chain-middle shape -- while the
+            # passivity decision three lines above, using the shared probe,
+            # had already said the family was there.
             local newest
-            newest=$(load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
-                "${LOAD_ACCOUNT}@${LOAD_HOST}" \
-                "zfs list -H -t snapshot -d 1 -o name,creation -p -- '$ds' 2>/dev/null | grep '@${dr_prefix:-automated_}' | sort -k2,2n | tail -1 | cut -f1")
+            newest=$(source_family_newest "$ds" "${dr_prefix:-automated_}")
             if [ -n "$newest" ]; then
-                log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: ${newest#*@}"
+                # The full name, not just the snapshot: under -R the family may
+                # be on a descendant, and WHICH dataset carries it is the half
+                # of the answer an operator cannot reconstruct from the other.
+                log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: $newest"
             else
-                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel"
+                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel$(is_recursive_root "$ds" && echo " (searched the whole subtree, as the installed -R line would)")"
                 failed=$((failed + 1))
             fi
             continue ;;
@@ -6776,6 +6829,13 @@ rux_remote_install() {
         local -a add_args=("$name" --host="$hostarg")
         if [ "$mode" = sync ]; then
             add_args+=(--mode=sync)
+            # LAB6 pass 7 F-1: this line is the whole fix. `--source=HOST:DATASET
+            # --mode=sync` names a dataset; before this it went no further than
+            # RUX_SOURCE on this host, so the source was asked to draft a scope
+            # from silence and drafted its entire estate. The list a sync
+            # relationship replicates is still whatever the source COMMITS --
+            # this only makes the draft it commits from start at what was asked.
+            [ -n "$dataset" ] && add_args+=(--requested="$dataset")
         else
             # Deferred scope (empty dataset): pass NO --datasets, so add-client
             # leaves the dataset selection to the source's own scope draft at

@@ -272,6 +272,17 @@ deploy_exit_cleanup() {
 PEER_ROLE="pull"
 PEER_HOST=""
 PEER_DATASETS=""
+# LAB6 pass 7 F-1 (2026-08-22): what the COLLECTOR NAMED, for a mode-based
+# relationship whose dataset LIST is still the source's to decide. Not a
+# second dataset list and never granted from -- it exists so the source's
+# --draft-scope can default its ACTIVE section to the request instead of to
+# the whole estate. Empty for a bare `add-client --mode=...`, which genuinely
+# named nothing; non-empty only for the one-command form
+# `--source=HOST:DATASET --mode=sync`, which named a dataset and then dropped
+# it on the floor. Measured live: an enrolment naming hdd/lab6chain drafted a
+# scope covering hdd/vm-disks and rpool/data -- 5.4T of production -- with the
+# printed next step being "run --commit-scope on the source".
+PEER_REQUESTED=""
 PEER_TARGET=""
 # REV-20260802-033 slice 5 (F1): the alternative to --peer-datasets for a
 # pull relationship -- the collector operator names a MODE instead of a
@@ -379,6 +390,13 @@ while [ "$#" -gt 0 ]; do
 ' ' ')"; PEER_DATASETS="${PEER_DATASETS% }"; shift ;;
         --peer-datasets)   PEER_DATASETS="$(dataset_list_split "${2:-}" | tr '
 ' ' ')"; PEER_DATASETS="${PEER_DATASETS% }"; shift 2 ;;
+        # Same normalisation as --peer-datasets, deliberately: the two carry the
+        # same kind of value (a dataset list the collector typed) and differ only
+        # in what they AUTHORISE -- this one authorises nothing.
+        --peer-requested=*) PEER_REQUESTED="$(dataset_list_split "${1#*=}" | tr '
+' ' ')"; PEER_REQUESTED="${PEER_REQUESTED% }"; shift ;;
+        --peer-requested)   PEER_REQUESTED="$(dataset_list_split "${2:-}" | tr '
+' ' ')"; PEER_REQUESTED="${PEER_REQUESTED% }"; shift 2 ;;
         --mode=*)       PEER_MODE="${1#*=}"; shift ;;
         --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
@@ -917,7 +935,7 @@ parse_peer_conf() {
         case "$key" in
             PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
             PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL|\
-            PEER_CONF_REMOTE_JOIN) ;;
+            PEER_CONF_REMOTE_JOIN|PEER_CONF_REQUESTED) ;;
             *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
         esac
         [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
@@ -969,6 +987,23 @@ validate_peer_conf() {
         if [ "$mode" = "sync" ] && [ -n "${PC[PEER_CONF_TARGET]:-}" ]; then
             die "peer.conf PEER_CONF_MODE='sync' but PEER_CONF_TARGET='${PC[PEER_CONF_TARGET]}' is set -- sync reproduces source paths at the same paths on the collector, so a package must not carry a target for it"
         fi
+    fi
+
+    # LAB6 pass 7 F-1. PEER_CONF_REQUESTED is what the collector NAMED, and it
+    # is only meaningful where the dataset LIST was deferred: with
+    # PEER_CONF_DATASETS the request IS the list, and without a mode there is
+    # no deferral to narrow. Refusing both combinations keeps exactly one
+    # reading of "what was asked for" in any valid package -- the property that
+    # makes the mode/datasets pair safe in the first place.
+    if [ -n "${PC[PEER_CONF_REQUESTED]:-}" ]; then
+        [ -n "$mode" ] \
+            || die "peer.conf carries PEER_CONF_REQUESTED without PEER_CONF_MODE -- a request only narrows a scope whose dataset list was deferred to this host; without a mode the list is PEER_CONF_DATASETS and there is nothing to narrow"
+        [ -z "${PC[PEER_CONF_DATASETS]:-}" ] \
+            || die "peer.conf carries both PEER_CONF_REQUESTED and PEER_CONF_DATASETS -- the datasets ARE the request in that form, so a package must never carry both"
+        for ds in ${PC[PEER_CONF_REQUESTED]}; do
+            pc_is_dataset "$ds" \
+                || die "peer.conf PEER_CONF_REQUESTED contains '$ds', which is not a valid ZFS dataset name"
+        done
     fi
 
     # Target is required unless mode already decided its shape: sync forbids
@@ -1268,20 +1303,39 @@ do_draft_scope() {
     # records what the collector asked for (PEER_JOIN_DATASETS), so when it
     # names datasets, the ACTIVE section is exactly those -- still editable,
     # still committed by the operator, with the full inventory kept below as
-    # the menu for widening BY HAND. Mode-based (sync) joins carry no dataset
-    # list, and a pre-join --draft-scope has no manifest: both keep the
-    # branch-inventory default, which is the correct "nobody asked for
-    # anything specific yet" answer.
+    # the menu for widening BY HAND. A pre-join --draft-scope has no manifest
+    # and keeps the branch-inventory default, which is the correct "nobody
+    # asked for anything specific yet" answer.
+    #
+    # LAB6 pass 7 F-1 (2026-08-22): that used to be said of mode-based (sync)
+    # joins too, and for a bare `add-client --mode=sync` it is still true. It
+    # was NOT true for the one-command form: `--source=HOST:DATASET --mode=sync`
+    # names a dataset and the enrolment dropped it, so the source drafted from
+    # an empty request -- measured live, an enrolment naming hdd/lab6chain
+    # produced an ACTIVE section covering hdd/vm-disks (5.39T of production VM
+    # disks, the OpenVPN gateway among them) and rpool/data, with "run
+    # --commit-scope" printed as the next step. PEER_JOIN_REQUESTED now carries
+    # what was named. It narrows the DRAFT and nothing else: the dataset list
+    # for a mode-based relationship is still whatever this host COMMITS, the
+    # inventory is still printed below for widening by hand, and a package
+    # without the field (older collector, or a genuinely unnamed request) draws
+    # the whole-estate draft exactly as before.
     local -a active=()
     local pool ds
-    local mpath_draft PEER_JOIN_DATASETS=""
+    local mpath_draft PEER_JOIN_DATASETS="" PEER_JOIN_REQUESTED=""
     mpath_draft=$(peer_manifest_path "$label")
     if [ -r "$mpath_draft" ]; then
         # shellcheck disable=SC1090
         . "$mpath_draft"
     fi
+    # The two are alternatives by construction (validate_peer_conf refuses a
+    # package carrying both), so this is a choice between them, not a merge.
+    local named="$PEER_JOIN_DATASETS" named_kind="PEER_JOIN_DATASETS"
+    if [ -z "$named" ] && [ -n "$PEER_JOIN_REQUESTED" ]; then
+        named="$PEER_JOIN_REQUESTED"; named_kind="PEER_JOIN_REQUESTED"
+    fi
     local from_request=0
-    if [ -n "$PEER_JOIN_DATASETS" ]; then
+    if [ -n "$named" ]; then
         # LAB6-F1 (2026-08-21): NAMED IS WANTED. When the active stanzas come
         # from an explicit request, the operator typed each of these names, and
         # the container heuristic below ("a dataset with children is a branch,
@@ -1292,9 +1346,9 @@ do_draft_scope() {
         # abound; for a request it overrode the one thing that was actually
         # said.
         from_request=1
-        for ds in $PEER_JOIN_DATASETS; do
+        for ds in $named; do
             zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
-                || die "the collector requested '$ds' (PEER_JOIN_DATASETS in $mpath_draft), but no such dataset exists on this host -- refusing to draft a scope around a request that cannot be satisfied"
+                || die "the collector requested '$ds' ($named_kind in $mpath_draft), but no such dataset exists on this host -- refusing to draft a scope around a request that cannot be satisfied"
             active+=("$ds")
         done
     else
@@ -4339,6 +4393,7 @@ do_pair() {
         PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
         PEER_MODE="${PEER_SAVED_MODE:-$PEER_MODE}"
         [ -n "$PEER_DATASETS" ] || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+        [ -n "$PEER_REQUESTED" ] || PEER_REQUESTED="${PEER_SAVED_REQUESTED:-}"
         [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
         [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
     else
@@ -4351,7 +4406,7 @@ do_pair() {
             # there is no way to tell "typed the default" from "didn't type
             # it at all". The saved manifest always wins for these four; only
             # the dataset list is allowed to change here (additively, below).
-            local requested_datasets="$PEER_DATASETS"
+            local requested_datasets="$PEER_DATASETS" requested_named="$PEER_REQUESTED"
             # shellcheck disable=SC1090
             . "$mpath"
             PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
@@ -4359,6 +4414,11 @@ do_pair() {
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
             PEER_MODE="${PEER_SAVED_MODE:-$PEER_MODE}"
             [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+            # Same rule as the dataset list one line up: a value given on THIS
+            # command line wins, otherwise the manifest's survives. A re-run of
+            # the same one-command enrolment (the documented way to resume it)
+            # therefore keeps naming what it named the first time.
+            [ -n "$requested_named" ] && PEER_REQUESTED="$requested_named" || PEER_REQUESTED="${PEER_SAVED_REQUESTED:-}"
             # --local-user and --port are operational, not identity-defining
             # (which account runs cron here, and which port sshd listens on,
             # can legitimately change), so a given value wins.
@@ -4484,6 +4544,7 @@ do_pair() {
 # peer pairing manifest (initiator side) -- managed by deploy.sh --pair, do not edit by hand
 PEER_SAVED_ROLE=$PEER_ROLE
 PEER_SAVED_DATASETS="$PEER_DATASETS"
+PEER_SAVED_REQUESTED="$PEER_REQUESTED"
 PEER_SAVED_TARGET=$PEER_TARGET
 PEER_SAVED_AS=$PEER_AS
 PEER_SAVED_MODE=$PEER_MODE
@@ -4509,6 +4570,12 @@ PEER_CONF_ACCOUNT=$proposed_account
 PEER_CONF_PORT=$PEER_PORT
 PEER_CONF_INITIATOR_LABEL=$my_label
 EOF
+    # Only ever written when there IS a request to carry. An absent key reads
+    # exactly like every package produced before this change, so an older
+    # collector's wsad still joins and still gets the whole-estate draft it
+    # always got -- the narrowing is opt-in by presence, never a new required
+    # field that would refuse a package from a host that has not updated yet.
+    [ -n "$PEER_REQUESTED" ] && echo "PEER_CONF_REQUESTED=\"$PEER_REQUESTED\"" >> "$workdir/peer.conf"
     # REV-20260802-033 slice 9 / U10 condition 3: the peer's OWN manifest
     # records that this entry was created remotely -- do_join reads this flag
     # from the validated package and writes it, plus who/when on ITS side,
@@ -4993,6 +5060,7 @@ do_join() {
     local PEER_CONF_ACCOUNT="${PC[PEER_CONF_ACCOUNT]}"
     local PEER_CONF_AS="${PC[PEER_CONF_AS]}"
     local PEER_CONF_DATASETS="${PC[PEER_CONF_DATASETS]:-}"
+    local PEER_CONF_REQUESTED="${PC[PEER_CONF_REQUESTED]:-}"
     local PEER_CONF_MODE="${PC[PEER_CONF_MODE]:-}"
     local PEER_CONF_INITIATOR_LABEL="${PC[PEER_CONF_INITIATOR_LABEL]}"
     local PEER_CONF_REMOTE_JOIN="${PC[PEER_CONF_REMOTE_JOIN]:-}"
@@ -5153,6 +5221,7 @@ PEER_JOIN_ROLE="$PEER_CONF_ROLE"
 PEER_JOIN_AS="$PEER_CONF_AS"
 PEER_JOIN_MODE="$PEER_CONF_MODE"
 PEER_JOIN_DATASETS="$PEER_CONF_DATASETS"
+PEER_JOIN_REQUESTED="$PEER_CONF_REQUESTED"
 PEER_JOIN_TARGET="$PEER_CONF_TARGET"
 PEER_JOIN_ACCOUNT="$account"
 PEER_JOIN_ACCOUNT_UID="$account_uid"
