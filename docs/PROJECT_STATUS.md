@@ -8,7 +8,15 @@
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 <!-- status-covers-digest: 794ae7d042d389b2 -->
+=======
+<<<<<<< HEAD
+<!-- status-covers-digest: e39b16ce2274adb9 -->
+=======
+<!-- status-covers-digest: 38636048a96af5cc -->
+>>>>>>> main
+>>>>>>> main
 =======
 <!-- status-covers-digest: 333829f636a855b9 -->
 >>>>>>> main
