@@ -3781,7 +3781,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v8"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v9"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -3835,7 +3835,36 @@ if [ -s "\$LEGACY_QUEUE" ]; then
     rm -f "\$LEGACY_QUEUE"
 fi
 
-[ -s "\$PROCESSING" ] || { rm -f "\$PROCESSING"; exit 0; }
+# A WEEK WITH NOTHING TO SAY MUST STILL SAY IT.
+#
+# Until now an empty queue meant no mail, and that made silence carry no
+# information at all. Measured on pve9, 2026-08-22: its MTA was local-delivery
+# only and its digest was not even scheduled, so it had reported NOTHING for
+# months -- and from the owner's inbox that looked exactly like a host with no
+# findings. Three real messages, one of them a genuine digest naming 2 alerts
+# and 1 warning, were sitting in /var/mail on the host itself.
+#
+# So once a week, on Monday, a host with nothing to report says so. One line,
+# one mail per host per week. The point is not the content: it is that from
+# Monday onward, NO mail is itself the alarm -- and it is an alarm the owner
+# notices without checking anything.
+#
+# Stateless on purpose. No "last heartbeat" file to go stale, drift, or be
+# restored from a backup: the weekday IS the schedule. A Monday that already
+# has findings sends the ordinary digest instead, which proves the same path
+# just as well.
+if [ ! -s "\$PROCESSING" ]; then
+    rm -f "\$PROCESSING"
+    [ "\$(date +%u)" = "1" ] || exit 0
+    printf 'Host: %s   %s
+
+Brak zdarzen w minionym tygodniu.
+
+Ten list jest dowodem, ze droga alertu na tym hoscie dziala.
+Jesli w kolejny poniedzialek nie przyjdzie -- to jest alarm.
+'         "\$HOST" "\$TODAY"         | mail -s "[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
+    exit 0
+fi
 
 # Collapse to one row per (severity, message): count, first-seen, last-seen.
 # Sorted ALERT before WARN, then by count descending -- the worst and the

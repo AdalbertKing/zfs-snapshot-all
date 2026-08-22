@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 496d0a9e59ded2f0 -->
+<!-- status-covers-digest: d2745ab0515c3dbb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,23 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Tydzień bez zdarzeń też musi się odezwać (2026-08-22).**
+  Do tej pory pusta kolejka znaczyła brak maila, więc **cisza nie niosła żadnej
+  informacji**. Zmierzone na pve9: jego MTA dostarczał wyłącznie lokalnie, a
+  digest nie był w ogóle zaplanowany, więc host nie raportował niczego przez
+  **miesiące** — a ze skrzynki właściciela wyglądało to identycznie jak host bez
+  zdarzeń. W `/var/mail` na samym hoście leżały trzy prawdziwe wiadomości, w tym
+  digest nazywający 2 alerty i 1 ostrzeżenie.
+  Od teraz raz w tygodniu, w poniedziałek, host bez zdarzeń mówi o tym wprost.
+  Jedna linia, jeden mail na host na tydzień. Nie chodzi o treść — chodzi o to,
+  że **od poniedziałku BRAK maila sam jest alarmem**, i to alarmem, który
+  właściciel zauważa bez zaglądania gdziekolwiek.
+  Bezstanowo z rozmysłem: żadnego pliku „ostatni puls", który mógłby się
+  zestarzeć, rozjechać albo wrócić z backupu — **dniem tygodnia JEST harmonogram**.
+  Poniedziałek, który ma zdarzenia, wysyła zwykły digest i dowodzi tego samego.
+  Dowód na żywo: pusta kolejka w sobotę → zero maili; pusta kolejka w dniu pulsu
+  → mail dostarczony na zewnątrz, `250 Ok`.
 
 - **Digest jest zadaniem HOSTA, nie relacji — pve9 przez to milczał (2026-08-22).**
   Znalezione na żywo: pve9 miał 15 zakolejkowanych zdarzeń od poprzedniego dnia
