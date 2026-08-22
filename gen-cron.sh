@@ -2610,21 +2610,31 @@ generate_block_body() {
         echo ""
     fi
     for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
-    # digest_script = none: emit no digest line at all. There is exactly ONE
-    # digest per host by design -- two would mean two mails a day -- and a
-    # delegated account's crontab is the case that needs to opt out: deploy.sh
-    # gives such an account its own notify-fail/notify-warn but deliberately
-    # does NOT copy alert-digest.sh to it, precisely so root stays the only
-    # sender. Without this switch that account's block would schedule a digest
-    # script that is not there.
-    if [ "${#MONITOR_LINES[@]}" -gt 0 ] && [ "$DIGEST_SCRIPT" != "none" ]; then
-        echo ""
-        # Redirected like every other generated line: the digest is silent on
-        # the happy path, but it reports a failed mail delivery on stderr, and
-        # an unredirected stderr here is a cron mail -- from the very script
-        # whose job is to be the only mail this host sends.
-        echo "$DIGEST_SCHEDULE $DIGEST_SCRIPT 2>>$CRON_LOG"
-    fi
+    # NO DIGEST LINE HERE ANY MORE (2026-08-22). It used to be emitted at this
+    # point, gated on `[ "${#MONITOR_LINES[@]}" -gt 0 ] && digest_script != none`,
+    # and that gate is where pve9 went silent: 15 findings queued since the
+    # previous day with `alert-digest` in ZERO crontabs.
+    #
+    # Every party was behaving correctly. There is ONE digest per host by
+    # design, run by root, reading the queue BOTH accounts write; a delegated
+    # account must opt out because deploy.sh deliberately never copies
+    # alert-digest.sh to it. But a host whose only relationship lives in a
+    # delegated account has no root block at all -- so the one party allowed to
+    # schedule the digest was never asked, while the account that was asked was
+    # right to decline. A boundary, not a bug in any line.
+    #
+    # The digest was never relationship-scoped in the first place: it summarises
+    # the HOST's findings, on the HOST's schedule, into the HOST's one mail a
+    # day. So it lives with the other host-level jobs -- the capacity check and
+    # the auto-pull -- in deploy.sh's `zfs-backup-host` block, installed by
+    # ADOPT so a hand-moved schedule survives. Emitting it from here as well
+    # would give a host two digests, which is what pve1 had.
+    #
+    # digest_script is still parsed (an existing config naming it must not
+    # break), and `none` still reads as "this account is not the sender" -- it
+    # simply no longer has a line to suppress, because this function no longer
+    # writes one.
+    :
 }
 ###############################################################################
 #END 4

@@ -1433,16 +1433,36 @@ else
     bad "local-user: a rollback restores the dedicated account's crontab, not root's" "$(cat "$LU/calls")"
 fi
 
-# The digest must NOT be duplicated into the account's block: deploy.sh gives it
-# notify-fail/notify-warn but deliberately not alert-digest.sh, so root stays the
-# only sender of the daily mail. gen-cron's digest_script=none is that opt-out,
-# and this asserts the generator honours it.
-dg=$(DIGEST_SCRIPT=none bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1 | grep -c "alert-digest")
-withdg=$(bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1 | grep -c "alert-digest")
-if [ "$dg" = 0 ] && [ "$withdg" = 1 ]; then
-    ok "local-user: digest_script=none drops the digest line, and only then"
+# The digest is not a relationship's job and gen-cron no longer writes one.
+#
+# This test used to assert the opposite -- that `digest_script=none` suppressed
+# the line and the default emitted exactly one -- and that contract is what left
+# pve9 silent on 2026-08-22: 15 findings queued since the previous day with
+# `alert-digest` in ZERO crontabs. There is ONE digest per host, run by root,
+# reading the queue BOTH accounts write; a delegated account correctly declines
+# it. On a host whose only relationship lives in that account, nobody is left to
+# schedule it. The digest moved to deploy.sh's `zfs-backup-host` block, beside
+# the capacity check and the auto-pull, where it does not depend on who owns a
+# relationship. So: NO digest line from the generator, whatever digest_script
+# says -- including the default, which is the case that used to emit one.
+for dsv in none "" /root/scripts/alert-digest.sh; do
+    n=$(DIGEST_SCRIPT="$dsv" bash "$REPO/gen-cron.sh" -c "$PROF/gen.conf" 2>&1 | grep -c "alert-digest")
+    [ "$n" = 0 ] || break
+done
+if [ "$n" = 0 ]; then
+    ok "local-user: gen-cron emits no digest line at all (it is a host-level job now)"
 else
-    bad "local-user: digest_script=none drops the digest line, and only then" "none=$dg default=$withdg"
+    bad "local-user: gen-cron emits no digest line at all (it is a host-level job now)"         "digest_script='$dsv' wyemitowal $n linii"
+fi
+
+# ...and deploy.sh is the one that installs it, into the host block, by ADOPT --
+# so a host with no relationship in root's crontab still gets a digest, and a
+# host that already had a loose line keeps its schedule instead of gaining a
+# second line. Source-grep: the behaviour is a cron write on a live host.
+if grep -q 'cron_block_adopt_line root "\$CRON_HOST_BLOCK" "\$DIGEST_SCRIPT"' "$REPO/deploy.sh"; then
+    ok "digest is installed as a host-level job by deploy.sh (adopt, not ensure)"
+else
+    bad "digest is installed as a host-level job by deploy.sh (adopt, not ensure)"         "brak cron_block_adopt_line dla DIGEST_SCRIPT w deploy.sh"
 fi
 
 # --- 13. never create the config the installed block claims to come from ----
