@@ -5532,16 +5532,82 @@ guided_join_scope() {   # <label>
         do_draft_scope "$label"
     fi
 
+# WHAT ACCEPTING THIS COSTS, said before the question is asked.
+#
+# Measured 2026-08-22 on the mandated four-command path of issue #9: the
+# collector named only a --target, so this host had nothing to narrow to and
+# proposed its whole estate -- 22 datasets including every guest volume. One
+# keystroke granted a lab collector snapshot,destroy,send,hold on production
+# VM disks, the OpenVPN gateway's among them. The proposal itself was not
+# wrong; this IS what the source has. What was wrong is that accepting it cost
+# one character while the consequence was delegated destroy rights over
+# everything.
+#
+# So three things happen here, and none of them narrows the proposal -- for a
+# Proxmox backup tool the guest volumes usually ARE the payload, and a
+# heuristic that hid them would be wrong more often than right:
+#   1. say plainly what the collector did NOT ask for;
+#   2. state the magnitude before the question, because a human judges
+#      "22 datasets, 5.4 TB" faster than a list of 22 names;
+#   3. take a consent that cannot be muscle memory. Reflex is the thing that
+#      actually fails here -- anyone who means it types the number without effort.
+join_scope_summary() {   # <scope file> -> "<count> <guest-volume count> <bytes>"
+    local sfile="$1" ds n=0 g=0 bytes=0 used
+    ( scope_read "$sfile" >/dev/null 2>&1 ) || { printf '0 0 0'; return 0; }
+    scope_read "$sfile" >/dev/null 2>&1 || { printf '0 0 0'; return 0; }
+    local root
+    for root in "${SCOPE_ROOTS[@]}"; do
+        zfs list -H -o name -- "$root" >/dev/null 2>&1 || continue
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            scope_includes "$ds" || continue
+            n=$((n + 1))
+            case "${ds##*/}" in
+                vm-[0-9]*-disk-*|vm-[0-9]*-cloudinit|subvol-[0-9]*-disk-*) g=$((g + 1)) ;;
+            esac
+            used=$(zfs get -Hp -o value used -- "$ds" 2>/dev/null)
+            case "$used" in ''|*[!0-9]*) used=0 ;; esac
+            bytes=$((bytes + used))
+        done < <(zfs list -H -o name -r -- "$root" 2>/dev/null)
+    done
+    printf '%s %s %s' "$n" "$g" "$bytes"
+}
+
+join_human_bytes() {   # <bytes>
+    awk -v b="$1" 'BEGIN{
+        split("B KiB MiB GiB TiB PiB", u, " "); i = 1
+        while (b >= 1024 && i < 6) { b /= 1024; i++ }
+        printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
+    }'
+}
+
     while :; do
         echo
         echo "Proponowany zakres backupu dla '$label':"
         echo "------------------------------------------------------------"
         awk '/^# ==========================================================/{exit} {print}' "$sfile"
         echo "------------------------------------------------------------"
-        read -rp "Zaakceptowac ten zakres? [t]ak / [e]dytuj / [n]przerwij: " choice \
+        # 1. What the collector did NOT say. Without this line the proposal
+        #    reads as a considered selection rather than "everything I have".
+        if [ -z "${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}" ]; then
+            echo "!!! Kolektor NIE wskazal zadnego datasetu -- podal tylko cel"
+            echo "!!! (--target=${PEER_JOIN_TARGET:-?}). Ta propozycja to zatem"
+            echo "!!! CALY majatek tego hosta, nie wybor zrobiony dla Ciebie."
+        else
+            echo ">>> Kolektor prosil o: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+        fi
+        # 2. The magnitude, before the question.
+        read -r _js_n _js_g _js_b <<< "$(join_scope_summary "$sfile")"
+        echo ">>> Przyjecie nada kontu ${PEER_JOIN_ACCOUNT:-?} prawa"
+        echo ">>>   snapshot,destroy,mount,send,hold,release,bookmark"
+        echo ">>> na $_js_n dataset(ach), w tym $_js_g wolumen(ach) maszyn, lacznie $(join_human_bytes "$_js_b")."
+        echo "------------------------------------------------------------"
+        # 3. A consent reflex cannot give. Typing the count is trivial for
+        #    anyone who read the line above, and impossible to do by habit.
+        read -rp "Wpisz liczbe datasetow ($_js_n) aby ZAAKCEPTOWAC, [e]dytuj, [n]przerwij: " choice \
             || die "join interrupted before scope acceptance"
         case "$choice" in
-            t|T|tak|TAK|y|Y|yes|YES)
+            "$_js_n")
                 do_commit_scope "$label"
                 join_scope_is_committed "$label" \
                     || die "scope grant finished without a matching hash read-back"

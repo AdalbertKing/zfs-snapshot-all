@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 496d0a9e59ded2f0 -->
+<!-- status-covers-digest: 7bc3a2a6e0c4f7e8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,22 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
+  Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
+  `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój
+  majątek** — 22 datasety, w tym wszystkie wolumeny maszyn. Jedno naciśnięcie
+  `t` nadało labowemu kolektorowi `snapshot,destroy,send,hold` na produkcyjnych
+  dyskach pve2, w tym na `subvol-101-*`, czyli bramie OpenVPN. Cofnięte w ciągu
+  minuty, zweryfikowane `zfs allow` (zero wpisów) — ale to nie był błąd
+  wykonania, tylko zachowanie produktu na jego własnej normalnej ścieżce.
+  **Propozycja nie jest zawężana** i celowo: to jest narzędzie do backupu
+  Proxmoksa, wolumeny gościa zwykle SĄ ładunkiem, a heurystyka, która by je
+  chowała, myliłaby się częściej niż trafiała. Zmieniona jest cena zgody:
+  monit mówi wprost, że kolektor **nie wskazał niczego** i że propozycja to
+  cały host; podaje wielkość (ile datasetów, ile wolumenów maszyn, ile bajtów)
+  **zanim** zada pytanie; i przyjmuje zgodę tylko przez **wpisanie liczby
+  datasetów**, bo odruch jest tu jedyną rzeczą, która naprawdę zawodzi.
 
 - **Digest jest zadaniem HOSTA, nie relacji — pve9 przez to milczał (2026-08-22).**
   Znalezione na żywo: pve9 miał 15 zakolejkowanych zdarzeń od poprzedniego dnia
