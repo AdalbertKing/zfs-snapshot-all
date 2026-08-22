@@ -415,6 +415,51 @@ report_orphaned_data() {
 # home, and deletes the manifest and scope. Hand-removing that manifest first
 # strands the account somewhere no tool can reach it, and the operator is left
 # doing by hand precisely what the whitelist rule exists to avoid.
+# QUEUED ALERTS BELONG TO THE RELATIONSHIP THAT CAUSED THEM.
+#
+# Found live 2026-08-22: pve1's alert queue held four findings about lab6-r1 and
+# a torn-down lab9 attempt -- relationships purged hours earlier -- and the next
+# 07:00 digest would have mailed the owner about backups that no longer exist.
+# Neither remove-client nor this tool touched the queue, so every teardown left
+# its complaints behind to be delivered later, out of context and unanswerable.
+#
+# That is how alerting dies. This project has the receipt: 384 mails in one
+# night, and the reflex it produced was MAILTO="" rather than a fix.
+#
+# The findings are NOT discarded. They move into the relationship's tombstone --
+# the file that already exists to be the last thing naming what this
+# relationship left behind. So the history stays exactly where someone asking
+# "what was this?" will look, and tomorrow's digest reports only what is still
+# true.
+#
+# Matching is on the label the monitor itself writes in parentheses, e.g.
+# "pve1 profile__default__keep_hourly stale (lab6-r1)" -- the same string
+# gen-cron put in the notify argument, so it cannot drift from the record.
+ALERT_QUEUE="${ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
+drain_queued_alerts() {   # <relationship id> <tombstone file or empty>
+    local id="$1" tomb="${2:-}"
+    [ -s "$ALERT_QUEUE" ] || return 0
+    local mine tmp
+    mine=$(grep -F "($id)" "$ALERT_QUEUE" 2>/dev/null) || true
+    [ -n "$mine" ] || return 0
+    local n; n=$(printf '%s
+' "$mine" | grep -c .)
+    if [ -n "$tomb" ] && [ -f "$tomb" ]; then
+        {
+            echo "#"
+            echo "# Findings this relationship had queued when it was purged. They were"
+            echo "# removed from the alert queue so the next digest does not report a"
+            echo "# backup that no longer exists -- kept here because they DID happen."
+            printf '%s
+' "$mine" | sed 's/^/QUEUED_ALERT=/'
+        } >> "$tomb" 2>/dev/null || warn "  could not append the queued findings to $tomb -- leaving them in the queue rather than losing them"
+    fi
+    tmp=$(mktemp "${ALERT_QUEUE}.XXXXXX" 2>/dev/null) || { warn "  could not rewrite $ALERT_QUEUE -- its findings for '$id' stay queued"; return 0; }
+    grep -vF "($id)" "$ALERT_QUEUE" > "$tmp" 2>/dev/null
+    cat "$tmp" > "$ALERT_QUEUE" 2>/dev/null && rm -f "$tmp"         || { rm -f "$tmp"; warn "  could not rewrite $ALERT_QUEUE -- its findings for '$id' stay queued"; return 0; }
+    log "  moved $n queued finding(s) for '$id' out of the alert queue${tomb:+ and into $(basename "$tomb")}"
+}
+
 # write_tombstone <id> -- record what this purge is about to make unfindable.
 #
 # The defect this closes was walked into on 2026-08-20: the purge deletes the
@@ -453,6 +498,10 @@ write_tombstone() {   # <id> <data lines...>  -> 0 written or nothing to record
     } > "$f" 2>/dev/null || { warn "  could not write $f"; return 1; }
     chmod 0644 "$f" 2>/dev/null || :
     log "  recorded what this removes: $f"
+    # Published so the purge can append to the same file -- see
+    # drain_queued_alerts, which puts the relationship's queued findings where
+    # the record of the relationship already is.
+    TOMBSTONE_WRITTEN="$f"
     return 0
 }
 
@@ -476,6 +525,7 @@ purge_one() {
     fi
 
     log "purging '$id'"
+    TOMBSTONE_WRITTEN=""
 
     # 1. The source's own verb, only when its map is still there.
     if [ -s "$PEER_STATE_DIR/$id.conf" ] && [ -x "$DEPLOY" ]; then
@@ -555,7 +605,12 @@ purge_one() {
         esac
     done <<< "$art"
 
-    # 3. known_hosts is deliberately not touched -- same stance remove-client
+    # 3. The findings this relationship had queued. Done AFTER the artefacts,
+    #    so a purge that failed halfway leaves the queue untouched and the
+    #    complaints still deliverable -- an alert is worth more than tidiness.
+    drain_queued_alerts "$id" "${TOMBSTONE_WRITTEN:-}"
+
+    # 4. known_hosts is deliberately not touched -- same stance remove-client
     #    takes, and for the same reason.
     local addr="${NAME_ADDR[$id]:-}"
     [ -n "$addr" ] && log "  known_hosts left alone (our record of who they are, not a permission for them). To drop it: ssh-keygen -f /root/.ssh/known_hosts -R $addr"
