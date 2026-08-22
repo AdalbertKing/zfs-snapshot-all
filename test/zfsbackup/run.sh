@@ -3661,7 +3661,8 @@ PEER_SAVED_TARGET=tank/backups
 PEER_SAVED_MODE=backup
 PEER_SAVED_DATASETS="$dss"
 EOF2
-    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+    ( ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
       cmd_seed "$nm" --yes ) 2>&1
 }
 
@@ -3727,7 +3728,8 @@ PEER_SAVED_TARGET=tank/backups
 PEER_SAVED_MODE=backup
 PEER_SAVED_DATASETS="$dss"
 EOF2
-    ( CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
+    ( ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      CLIENTS_DIR="$SD/clients" PEER_STATE_DIR="$SD/peerstate" PEER_KEY_DIR="$SD/keys" SNAPGET="$SD_SNAPGET" \
       cmd_seed "$nm" --yes ) 2>&1
 }
 rm -f "$SD_RECORDER"
