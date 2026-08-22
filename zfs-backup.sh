@@ -270,6 +270,16 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     still does), it tells the source what was asked for
                                     so its scope DRAFT starts there instead of at every
                                     pool it has.
+                                    --recursive=flat|atomic picks how a solid scope
+                                    root is replicated. flat (default) sends each
+                                    dataset on its own (-R): a failing child does not
+                                    abort its siblings and each keeps a bookmark.
+                                    atomic sends the whole subtree as ONE stream (-r)
+                                    and DECLINES managed source retention -- under -r
+                                    the engines keep no bookmark, so a source prune
+                                    that ages out the last common snapshot ends the
+                                    relationship until a destructive re-seed. Recorded
+                                    on the client, so re-activation keeps the shape.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -2255,8 +2265,17 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # include_children=yes means over time. Dataset-level field, so it
             # wins over any template default (and the profile fragment
             # deliberately carries no 'recursive' of its own).
+            # RECURSION comes off the client record (sourced by
+            # load_client_and_connection), so re-activation reproduces the shape
+            # the operator chose at enrolment instead of resetting it to the
+            # default. Empty record = flat, which is what every relationship
+            # enrolled before this flag existed carries.
             if is_recursive_root "$ds"; then
-                echo "	recursive    = flat"
+                if [ "${RECURSION:-}" = atomic ]; then
+                    echo "	recursive    = atomic"
+                else
+                    echo "	recursive    = flat"
+                fi
             fi
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
@@ -2352,7 +2371,16 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     for ds in ${PEER_SAVED_DATASETS:-}; do
         sync_ds_is_passive "$ds" || prune_src+=("$ds")
     done
-    emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+    # Atomic declines source retention -- decided at enrolment, recorded, and
+    # honoured here rather than left for assert_no_atomic_with_source_retention
+    # to refuse after the fact. That guard STAYS: it reads the candidate config,
+    # so it still catches a hand-edited 'recursive = atomic' arriving next to a
+    # source prune from anywhere else.
+    if [ "${RECURSION:-}" = atomic ]; then
+        log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
+    else
+        emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+    fi
     return 0
 }
 
@@ -3685,6 +3713,18 @@ cmd_add_client() {
     # instead of two hosts later.
     [ -z "$requested" ] || [ -n "$mode" ] \
         || die "add-client: --requested= only means something with --mode= (it narrows the scope DRAFT the source writes for a deferred dataset list); with --datasets= the datasets already are the request"
+    # ATOMIC AND SOURCE RETENTION ARE INSEPARABLE, so the choice is stated once,
+    # here, and carried on the record -- not rediscovered by a guard three
+    # commands later. Under -r the engines keep no bookmark: they neither record
+    # nor consult one. Let managed source retention age out the last ordinary
+    # common snapshot and the relationship stops permanently, until a
+    # destructive re-seed. So enrolling atomic DECLINES source retention, and
+    # says so out loud rather than quietly omitting a section.
+    case "$recursion" in
+        ""|flat|atomic) ;;
+        no) die "add-client: --recursive=no is not a relationship shape this layer installs -- a scope root is replicated either per-dataset (flat, the default) or as one stream (atomic). Omit the flag for flat." ;;
+        *)  die "add-client: --recursive must be 'flat' or 'atomic', got '$recursion'" ;;
+    esac
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -3848,11 +3888,19 @@ cmd_add_client() {
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
         write_client_field PROFILE           "$profile"
+        # On the RECORD, so re-activation regenerates the same shape. A hand
+        # edited config lost its 'recursive = atomic' the moment anything
+        # regenerated the section; the record is the only place a decision
+        # survives that.
+        write_client_field RECURSION         "$recursion"
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
 
     log "client '$name' created, state=pending_enroll, profile=$profile"
+    if [ "$recursion" = atomic ]; then
+        log "client '$name': ATOMIC recursion (-r) -- the whole subtree ships as ONE stream, and managed SOURCE retention is DECLINED for this relationship. Under -r the engines keep no bookmark, so a source prune that ages out the last common snapshot would end the relationship permanently. Target-side retention is unaffected; source snapshots are this source's own business."
+    fi
     if [ "$join_remotely" -eq 1 ]; then
         log "next: see deploy.sh's own output above for whether --join-remotely succeeded on $lan_host, or fell back to manual instructions"
     else
@@ -6929,6 +6977,7 @@ rux_remote_install() {
             [ -n "$target" ] && add_args+=(--target="$target")
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
+        [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
         # SSH from this host by default (Owner doc, "Join behavior"); --manual-join
@@ -7019,11 +7068,20 @@ rux_entry() {
 
     local target="" mode="" profile="" port="" name="" local_user=""
     local do_install=0 assume_yes=0 verbose=0 grant_remotely=0 manual_join=0
+    # The transfer SHAPE for a solid scope root. Same vocabulary the engines
+    # already use for --recursive, deliberately: flat = per-dataset -R (the
+    # default this layer has always emitted), atomic = one -r stream for the
+    # whole subtree. Before this, `atomic` existed in the engines and in the
+    # config grammar but no command could produce it -- reaching it meant hand
+    # editing a generated config, and the first re-activation wrote the edit
+    # back out. A mode the product cannot install is a mode nobody can operate.
+    local recursion=""
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
             --target=*)  target="${a#*=}" ;;
             --mode=*)    mode="${a#*=}" ;;
+            --recursive=*) recursion="${a#*=}" ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
