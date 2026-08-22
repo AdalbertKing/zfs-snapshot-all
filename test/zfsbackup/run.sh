@@ -2826,6 +2826,8 @@ EC1="$WORK/emit_sync.conf"
 out=$( ( PEER_SAVED_MODE=sync PEER_SAVED_TARGET="" LOAD_LABEL=pve9 \
          LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.9.9.9 LOAD_FLAGS="-K /dev/null" \
          PEER_SAVED_DATASETS="rpool/data/vm-100-disk-0 hdd/LXC/103" PROFILE_GFS=1
+         ssh() { return 0; }
+         load_ssh_opts() { LOAD_SSH_OPTS=(); }
          emit_client_sections "$EC1" synctest
          echo "managed=[${managed[*]}]"
          echo "prune_scope=[$prune_scope]" ) 2>&1 ); rc=$?
@@ -3470,6 +3472,7 @@ MANAGED_PRUNE_SCOPE="rpool/data"
 EOF
 outB="$OV/syncB.conf"; : > "$outB"
 out=$( ( CLIENTS_DIR="$OV/clients" PEER_SAVED_MODE=sync PEER_SAVED_TARGET=""          LOAD_LABEL=syncB LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.3.3.3 LOAD_FLAGS="-K /dev/null"          PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
+         ssh() { return 0; }; load_ssh_opts() { LOAD_SSH_OPTS=(); }
          emit_client_sections "$outB" syncB ) 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *syncA*) true ;; *) false ;; esac; then
     ok "overlap (sync): a child of an owned path is refused, naming the other relationship"
