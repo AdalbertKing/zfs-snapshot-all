@@ -21,6 +21,28 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Digest jest zadaniem HOSTA, nie relacji — pve9 przez to milczał (2026-08-22).**
+  Znalezione na żywo: pve9 miał 15 zakolejkowanych zdarzeń od poprzedniego dnia
+  i `alert-digest` w **zerowej** liczbie crontabów. Nikt nie zawinił z osobna.
+  Zasada jest słuszna — jeden digest na host, wykonuje root, czyta kolejkę,
+  do której piszą OBA konta, a konto delegowane musi opt-outować, bo
+  `alert-digest.sh` celowo nie jest mu kopiowany. Ale linię emitował
+  `gen-cron.sh` **wewnątrz bloku relacji i tylko gdy ten blok miał monitory**,
+  więc na hoście, którego jedyna relacja żyje na koncie delegowanym, jedyna
+  strona uprawniona do zaplanowania digestu nigdy nie była pytana, a pytana
+  słusznie odmawiała. Granica, nie błąd w linijce — i flota idzie w tę stronę
+  od migracji root→konto delegowane.
+  Digest przeniesiony do bloku `zfs-backup-host` w `deploy.sh`, obok kontroli
+  pojemności i auto-pulla, instalowany przez **adopt** (ręcznie przestawiony
+  harmonogram przeżywa; przenoszona jest tylko LOKALIZACJA linii). To zamyka
+  też drugą połowę tej samej granicy: pve1 miał linię **dwa razy** — rezydualnie
+  w bloku hosta ze starszego deploya i wygenerowaną — czyli dwa uruchomienia
+  o 07:00 ścigające się o ten sam plik kolejki.
+  `digest_script` jest nadal parsowany (istniejące configi nie pękają), ale nie
+  ma już linii do stłumienia. **Obowiązek ręczny:** host dostaje linię przy
+  najbliższym uruchomieniu `deploy.sh` (każda zmiana relacji je odpala);
+  host, który długo nie widział deploya, do tego czasu digestu nie ma.
+
 - **Martwe łącze nie może już powiedzieć „nie ma tu rodziny" (2026-08-22).**
   Dwie sondy odpowiadały na pytanie o ŹRÓDŁO statusem, który znaczył też
   „nie dało się zapytać". `source_family_exists` sprowadzało
