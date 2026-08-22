@@ -2142,9 +2142,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         case " ${passive_ds[*]:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac
     }
     if [ "$sync_mode" -eq 1 ]; then
-        local pds
+        local pds pds_rc
         for pds in $PEER_SAVED_DATASETS; do
-            if source_family_exists "$pds"; then
+            source_family_exists "$pds"; pds_rc=$?
+            [ "$pds_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
+                && die_probe_unknown "$pds" "whether this relationship consumes that family passively or stamps its own"
+            if [ "$pds_rc" -eq 0 ]; then
                 passive_ds+=("$pds")
                 log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
             fi
@@ -3992,7 +3995,29 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # fails when NOTHING in the expansion had a family. So the probe now also
 # returns the newest match, and the rehearsal calls it instead of asking the
 # same question its own way.
-source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot, empty if none
+# TRI-STATE, and that is the whole point (fail-open found on review, measured
+# 2026-08-22). This probe used to answer a yes/no question with a pipeline whose
+# output is empty for BOTH "the source has no family" and "the source could not
+# be reached" -- and the seed call site reads no-family as licence to run an
+# ACTIVE seed, creating snapshots on a source this relationship may not own.
+# Measured on the live chain with a working positive control:
+#
+#   live channel, dataset WITH a family    -> newest named, exists -> yes
+#   live channel, dataset with no family   -> empty,        exists -> no
+#   SAME dataset with a family, host down  -> empty,        exists -> no   <-- here
+#
+# The third row is how LAB6-F4's damage starts: an active seed against a chain
+# middle owned by another relationship re-stamps it, that relationship's GFS
+# ladder then destroys its own base, and the pulls wedge on a GUID refusal. A
+# dead link must never be able to say "there is nothing here".
+#
+# So: rc 0 = the source answered (stdout may legitimately be empty),
+#     rc 2 = the question could not be asked. Callers refuse on 2.
+# A nonexistent dataset lands in 2 as well: `zfs list` exits non-zero for it,
+# and "you asked about something that is not there" is not evidence of an
+# empty family either.
+SOURCE_PROBE_UNKNOWN=2
+source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 2 = unknown
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
     # The caller's own prefix, because the rehearsal has one (the [dataset:]
@@ -4002,14 +4027,32 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot, emp
     local pfx="${2:-automated_}"
     load_ssh_opts
     # -p (parseable creation) so the sort is numeric on a stable field, not on
-    # a locale-formatted date.
-    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
-        "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null \
-        | grep "@${pfx}" | sort -k2,2n | tail -1 | cut -f1
+    # a locale-formatted date. The remote call is captured on its own so its
+    # exit status is ITS status -- piping it straight into grep would hand the
+    # caller grep's verdict, which is exactly the confusion this fixes.
+    local out rc
+    out=$(ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+            "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null)
+    rc=$?
+    [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
+    printf '%s\n' "$out" | grep "@${pfx}" | sort -k2,2n | tail -1 | cut -f1
+    return 0
 }
 
-source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
-    [ -n "$(source_family_newest "$1")" ]
+source_family_exists() {   # <dataset> -> 0 family, 1 none, 2 could not ask
+    local out rc
+    out=$(source_family_newest "$1"); rc=$?
+    [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
+    [ -n "$out" ]
+}
+
+# The one wording for "the probe could not answer", so three call sites cannot
+# describe the same condition three ways. Names the dataset and the channel,
+# says plainly that nothing was changed, and does NOT suggest a retry flag --
+# there is none, and there should be none: the answer to an unreachable source
+# is to make it reachable, not to proceed without it.
+die_probe_unknown() {   # <dataset> <what-was-being-decided>
+    die "cannot reach ${LOAD_ACCOUNT}@${LOAD_HOST} to ask whether '$1' already carries an automated_* family, so $2 cannot be decided. Treating an unreachable source as 'no family here' is how an active seed lands on a middle another relationship owns -- refusing instead. Nothing was changed. Fix the link (or the account's access to that dataset) and re-run; this command is resumable."
 }
 
 # ONE CONFIG = ONE ACCOUNT (LAB6-F2). A config file renders WHOLE into the
@@ -4037,10 +4080,36 @@ Nothing was read and nothing was changed."
     return 0
 }
 
+# TRI-STATE for the same reason as the family probe, and this one decides more:
+# `has_committed_scope || return 0` below means "no signed scope -- keep the
+# recorded dataset list". `ssh "test -s ..."` returns non-zero for BOTH "the
+# sidecar is not there" (test's own 1) and "the link is down" (ssh's 255), so a
+# transport failure silently downgraded a relationship from THE SIGNED SCOPE IS
+# THE CONTRACT (#101) back to whatever list happened to be recorded -- the exact
+# split #101 exists to end, reachable by unplugging a cable.
+#
+# ssh already distinguishes them: it reserves 255 for its own failures and
+# passes the remote command's status through otherwise. The status was there;
+# the code discarded it. This project has a name for that mistake already --
+# never blame the data for a link failure.
+#
+#   rc 0 = a committed scope is present
+#   rc 1 = the source answered, and there is none
+#   rc 2 = could not ask
 has_committed_scope() {
     local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
+    local rc
     ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
         "test -s '$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")'" >/dev/null 2>&1
+    rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        # 255 is ssh's own; anything else is a remote shell that could not even
+        # run `test` (no shell, refused command, killed). Neither is evidence
+        # about the sidecar.
+        *) return "$SOURCE_PROBE_UNKNOWN" ;;
+    esac
 }
 
 resolve_mode_datasets() {
@@ -4070,7 +4139,10 @@ resolve_mode_datasets() {
         [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
     else
         [ -n "${PEER_SAVED_DATASETS:-}" ] || return 0
-        has_committed_scope || return 0
+        local scope_rc; has_committed_scope; scope_rc=$?
+        [ "$scope_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
+            && die "cannot reach ${LOAD_ACCOUNT}@${LOAD_HOST} to find out whether it has signed a scope for this relationship, so there is no way to tell a source that granted nothing from a source this host cannot talk to. Continuing would fall back to the recorded dataset list and replicate it as if no signature existed -- which is the split THE SIGNED SCOPE IS THE CONTRACT (#101) closed. Refusing; nothing was changed. Fix the link and re-run."
+        [ "$scope_rc" -eq 0 ] || return 0
     fi
 
     local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
@@ -4383,7 +4455,9 @@ cmd_seed() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
-        if source_family_exists "$ds"; then
+        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
+        if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
@@ -4509,7 +4583,9 @@ cmd_final_catchup() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
-        if source_family_exists "$ds"; then
+        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
+        if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
@@ -5040,9 +5116,17 @@ cmd_activate_client() {
             # lives on descendants -- the chain-middle shape -- while the
             # passivity decision three lines above, using the shared probe,
             # had already said the family was there.
-            local newest
-            newest=$(source_family_newest "$ds" "${dr_prefix:-automated_}")
-            if [ -n "$newest" ]; then
+            local newest newest_rc
+            newest=$(source_family_newest "$ds" "${dr_prefix:-automated_}"); newest_rc=$?
+            if [ "$newest_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]; then
+                # Distinct from "no snapshot reachable": that verdict is about
+                # the SOURCE's contents, this one is about not having reached
+                # it. Reported as a failure either way -- the install must not
+                # proceed on an unasked question -- but named for what it is,
+                # because the two need different fixes.
+                warn "  UNKNOWN (passive): $ds -> $localpath -- could not ask ${LOAD_ACCOUNT}@${LOAD_HOST} what it carries (link or access, not content)"
+                failed=$((failed + 1))
+            elif [ -n "$newest" ]; then
                 # The full name, not just the snapshot: under -R the family may
                 # be on a descendant, and WHICH dataset carries it is the half
                 # of the answer an operator cannot reconstruct from the other.

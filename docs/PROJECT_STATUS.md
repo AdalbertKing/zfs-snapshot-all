@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4e11da4f0fec7250 -->
+<!-- status-covers-digest: d073d8d4423090cb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,29 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Martwe łącze nie może już powiedzieć „nie ma tu rodziny" (2026-08-22).**
+  Dwie sondy odpowiadały na pytanie o ŹRÓDŁO statusem, który znaczył też
+  „nie dało się zapytać". `source_family_exists` sprowadzało
+  `ssh | grep | sort | tail | cut` do tekstu albo pustki, a puste znaczyło
+  „brak rodziny" — i miejsce wywołania w seedzie czyta brak rodziny jako
+  zgodę na seed **aktywny**, stemplujący snapshoty na źródle. Zmierzone na
+  żywym łańcuchu z działającą kontrolą pozytywną: ten sam dataset z rodziną
+  przy padniętym hoście dawał tę samą odpowiedź co dataset bez rodziny. Tak
+  zaczyna się szkoda LAB6-F4 — środek łańcucha przestemplowany, drabinka jego
+  właściciela kasuje własną bazę, pull wiesza się na odmowie GUID.
+  Bliźniaczo `has_committed_scope` (`ssh "test -s …"`) mieszało „nie ma
+  sidecara" (rc 1) z „nie ma łącza" (rc 255), a `has_committed_scope || return 0`
+  znaczy „brak podpisu → zostaw starą listę datasetów": awaria transportu
+  po cichu cofała relację z kontraktu THE SIGNED SCOPE IS THE CONTRACT (#101)
+  do zapisanej listy. Obie sondy są teraz **trójstanowe** (jest / nie ma /
+  nie dało się zapytać), a wszystkich pięciu konsumentów ma jawną gałąź
+  „nie wiem": trzy odmawiają (decyzja o pasywności, seed, final-catchup),
+  próba generalna aktywacji raportuje własne `UNKNOWN (passive)` zamiast
+  cudzego „no snapshot reachable", a `resolve_mode_datasets` odmawia zamiast
+  wracać do starej listy. Testy 68a–68e są **behawioralne** (stub `ssh` per
+  funkcja, prawdziwe funkcje), z kontrolą pozytywną i negatywną — 67c/67c2
+  pinują kształt, 68 pinuje zachowanie.
 
 - **Wdrożenie sync przestało prosić źródło o podpis pod całym majątkiem
   (2026-08-22, LAB6 pass 7 F-1).** `--source=HOST:DATASET --mode=sync` nazywa

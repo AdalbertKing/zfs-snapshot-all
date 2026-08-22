@@ -6265,3 +6265,98 @@ fi
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
+
+# ---------------------------------------------------------------------------
+# 68. THE PROBE MUST NOT ANSWER A QUESTION IT COULD NOT ASK.
+#
+# Found on review and measured live 2026-08-22 on the LAB6 chain, with a working
+# positive control:
+#
+#   live channel, dataset WITH a family    -> exists: yes
+#   live channel, dataset with no family   -> exists: no
+#   SAME dataset with a family, host down  -> exists: no    <-- the defect
+#
+# The seed call site reads "no family" as licence for an ACTIVE seed, which
+# stamps snapshots on a source this relationship may not own. That is how
+# LAB6-F4's damage begins: the chain middle gets re-stamped, its owner's GFS
+# ladder destroys its own base, and the pulls wedge on a GUID refusal. So an
+# unreachable source must be its own answer, and every caller must refuse on it.
+#
+# Behavioural, not a source-grep: ssh is stubbed per case and the real functions
+# run. 67c/67c2 pin the SHAPE; these pin what it DOES.
+probe_case() {   # <family-stub-body> <scope-stub-body> -> "<exists-rc> <scope-rc>"
+    (
+        source "$ZFSBACKUP"
+        # One stub, two questions: it dispatches on the remote command the way
+        # the real sshd would, so each function gets its own answer and the
+        # cases below can vary them independently.
+        __fam="$1"; __scope="$2"
+        ssh() {
+            case "$*" in
+                *"zfs list"*) eval "$__fam" ;;
+                *"test -s"*)  eval "$__scope" ;;
+                *) return 127 ;;
+            esac
+        }
+        load_ssh_opts() { LOAD_SSH_OPTS=(); }
+        peer_scope_granted_hash_path() { echo /tmp/whatever.sha256; }
+        LOAD_ACCOUNT=probe; LOAD_HOST=probe.invalid; COLLECTOR_LABEL=probe
+        PEER_SAVED_RECURSIVE_ROOTS=""
+        source_family_exists rpool/x; e=$?
+        has_committed_scope; s=$?
+        echo "$e $s"
+    ) 2>/dev/null
+}
+
+# 68a. POSITIVE CONTROL -- the source answers and there IS a family / a sidecar.
+got=$(probe_case 'printf "rpool/x@automated_hourly_2026-01-01_00-00-00	1735689600
+"; return 0' 'return 0')
+if [ "$got" = "0 0" ]; then
+    ok "68a: source answers, family present + scope signed -> 0 0"
+else
+    bad "68a: source answers, family present + scope signed -> 0 0" "dostalem: $got"
+fi
+
+# 68b. NEGATIVE CONTROL -- the source answers, and the answer is "nothing here".
+#      An existing dataset with no snapshots is rc 0 + empty output; a missing
+#      sidecar is `test -s` exiting 1. Both are real answers, both may continue.
+got=$(probe_case 'return 0' 'return 1')
+if [ "$got" = "1 1" ]; then
+    ok "68b: source answers 'nothing here' -> 1 1 (no family, no scope)"
+else
+    bad "68b: source answers 'nothing here' -> 1 1 (no family, no scope)" "dostalem: $got"
+fi
+
+# 68c. THE DEFECT -- ssh's own failure status. Must differ from 68b.
+got=$(probe_case 'return 255' 'return 255')
+if [ "$got" = "2 2" ]; then
+    ok "68c: SSH transport error -> 2 2 (unknown), NOT confused with 'nothing here'"
+else
+    bad "68c: SSH transport error -> 2 2 (unknown), NOT confused with 'nothing here'"         "dostalem: $got -- rowne 68b znaczy, ze martwe lacze nadal mowi 'nie ma rodziny'"
+fi
+
+# 68e. The other way to get no output: the remote `zfs list` itself failed --
+#      dataset gone, or the delegated account cannot see it. Also not evidence
+#      of an empty family, and also not a licence to seed actively.
+got=$(probe_case 'return 1' 'return 0')
+case "$got" in
+    "2 "*) ok "68e: remote 'zfs list' failure -> unknown, not 'no family'" ;;
+    *)     bad "68e: remote 'zfs list' failure -> unknown, not 'no family'" "dostalem: $got" ;;
+esac
+
+# 68d. and the callers must REFUSE rather than pick a default. The behaviour is
+#      a die() inside a long command, so "every call site handles it" is the one
+#      thing a source-grep is the right instrument for.
+# Three consumers refuse outright -- the emit-time passivity decision and the
+# two seed sites (seed, final-catchup) -- and the activation rehearsal reports
+# its own UNKNOWN rather than reusing the "no snapshot reachable" wording, since
+# the two need different fixes. Counted, so adding a consumer without an
+# unknown branch fails here rather than at 3am on someone's chain middle.
+n_die=$(grep -c 'die_probe_unknown "\$' "$ZFSBACKUP")
+n_rehearsal=$(grep -c 'UNKNOWN (passive)' "$ZFSBACKUP")
+n_scope=$(grep -c 'has signed a scope for this relationship' "$ZFSBACKUP")
+if [ "$n_die" -eq 3 ] && [ "$n_rehearsal" -eq 1 ] && [ "$n_scope" -eq 1 ]; then
+    ok "68d: all five consumers (3 refusals, rehearsal, committed-scope) branch on unknown"
+else
+    bad "68d: all five consumers (3 refusals, rehearsal, committed-scope) branch on unknown"         "die=$n_die rehearsal=$n_rehearsal scope=$n_scope"
+fi
