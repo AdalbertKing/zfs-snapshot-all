@@ -7,7 +7,11 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
+<<<<<<< HEAD
+<!-- status-covers-digest: 38636048a96af5cc -->
+=======
 <!-- status-covers-digest: 333829f636a855b9 -->
+>>>>>>> main
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
