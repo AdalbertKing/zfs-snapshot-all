@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 274baf7ec76e59cee3bfea961486c11aa485517f -->
-<!-- frozen: snapget.sh 100755 19982a35c65a45576d4000a840925a534831ae29 -->
+<!-- frozen: snapsend.sh 100755 6aebdd99aa1517b8d3efef504307f45f402ce23e -->
+<!-- frozen: snapget.sh 100755 e1ebce30093f8ad1b78be84522ddee5f7adc7ab2 -->
 <!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
 <!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
@@ -54,6 +54,37 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-22 (snapsend.sh + snapget.sh): a long transfer can be WATCHED from a
+  terminal. Authorized in those words -- "zrob progres transferu, masz zgode" --
+  after the owner rejected the ordering I proposed, and he was right to. I wanted
+  to mine the duration history first; production says there is nothing there to
+  mine. Measured the same day: hdd/vm-disks/subvol-101-disk-1, 4.39 TB
+  referenced, ships **624 bytes** in an hourly incremental, and 532 runs average
+  0.3 s. The history is a flat line. The case that actually needs an eye is the
+  SEED -- "wyobraz sobie task inicjalny 4TB, puszczamy i nic nie widzimy" -- and
+  it is the one case no history can serve, because a first run has nothing to
+  compare against.
+  Not new machinery: mbuffer has counted bytes and rate all along and every
+  pipeline in both engines ran it with `-q`. The mute is now lifted ONLY when
+  stderr is a tty. From cron nobody is watching and mbuffer's status would land
+  in the stderr cron appends to cron.log, turning the one file an operator greps
+  into a rate meter -- so there the behaviour is byte-for-byte what it was.
+  No percentage, deliberately: mbuffer cannot be told a total, and `pv` (which
+  can, and which syncoid uses for exactly this) is installed on none of these
+  hosts. Instead the total is ANNOUNCED once from a `zfs send -nP` dry run that
+  splices -nP into the REAL send command, so it can never describe a different
+  stream than the one that follows. Fail-soft by construction: a size that could
+  not be measured is a line that is not printed, never a transfer that does not
+  run.
+  Proven live the same day, both paths and both silences:
+      local push  : "about to move 400.7 MiB" then "summary: 401 MiByte in 0.6sec"
+      remote pull : the same announcement, then mbuffer's running total every
+                    second -- 50.5, 98.8, 147, 198, 244, 289, 335, 382 MiB --
+                    and "summary: 401 MiByte in 4.4sec - average of 91.4 MiB/s"
+      no tty      : zero lines. Not fewer -- zero.
+  No transfer semantics changed: every edit is a message, a `[ -t 2 ]` test, or
+  a dry run that moves nothing.
 
 - 2026-08-21 (snapget.sh v2.69 -> v2.70): under -e, an -R-EXPANDED child with
   no matching family is scaffolding and is skipped with a log line instead of
