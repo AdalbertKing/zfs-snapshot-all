@@ -3980,11 +3980,36 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # entries probed on their own. ONE probe for the seed, the catch-up and the
 # emit-time passivity decision -- three copies of it would drift exactly like
 # everything else this campaign measured.
-source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
+#
+# LAB6 pass 7 F-2 (2026-08-22): there was a FOURTH copy, hand-rolled inside
+# activate-client's passive rehearsal, with `-d 1` hardcoded -- and it drifted
+# exactly as promised. Measured on the R2 chain middle: this probe answered
+# "family exists" (2 matches under -r) and chose PASSIVE, then the rehearsal
+# answered "no snapshot reachable" (0 matches under -d 1) and refused the
+# install, about the same dataset on the same host in the same run. The
+# relationship was un-activatable while the line it was rehearsing was
+# healthy -- snapget -R -e skips a family-less member as scaffolding and only
+# fails when NOTHING in the expansion had a family. So the probe now also
+# returns the newest match, and the rehearsal calls it instead of asking the
+# same question its own way.
+source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot, empty if none
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
+    # The caller's own prefix, because the rehearsal has one (the [dataset:]
+    # section's `prefix`, i.e. what the installed line passes to -m) and the
+    # passivity decision does not -- it asks about the FAMILY, whose name is
+    # the project's automated_ root regardless of which tier stamped it.
+    local pfx="${2:-automated_}"
     load_ssh_opts
-    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -t snapshot $depth -o name -- '$1'" 2>/dev/null | grep -q '@automated_'
+    # -p (parseable creation) so the sort is numeric on a stable field, not on
+    # a locale-formatted date.
+    ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+        "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null \
+        | grep "@${pfx}" | sort -k2,2n | tail -1 | cut -f1
+}
+
+source_family_exists() {   # <dataset> -> 0 an automated_* family exists in scope
+    [ -n "$(source_family_newest "$1")" ]
 }
 
 # ONE CONFIG = ONE ACCOUNT (LAB6-F2). A config file renders WHOLE into the
@@ -5008,14 +5033,22 @@ cmd_activate_client() {
             # family is REACHABLE over the account's own channel, and the
             # local landing exists or its parent is delegated. The engine's
             # silent rc=1 is a separate finding (frozen file; TODO).
+            #
+            # LAB6 pass 7 F-2: through the SHARED probe, so the depth follows
+            # the recursion contract the installed line follows. This used to
+            # inline a -d 1 lookup and refused a recursive root whose family
+            # lives on descendants -- the chain-middle shape -- while the
+            # passivity decision three lines above, using the shared probe,
+            # had already said the family was there.
             local newest
-            newest=$(load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
-                "${LOAD_ACCOUNT}@${LOAD_HOST}" \
-                "zfs list -H -t snapshot -d 1 -o name,creation -p -- '$ds' 2>/dev/null | grep '@${dr_prefix:-automated_}' | sort -k2,2n | tail -1 | cut -f1")
+            newest=$(source_family_newest "$ds" "${dr_prefix:-automated_}")
             if [ -n "$newest" ]; then
-                log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: ${newest#*@}"
+                # The full name, not just the snapshot: under -R the family may
+                # be on a descendant, and WHICH dataset carries it is the half
+                # of the answer an operator cannot reconstruct from the other.
+                log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: $newest"
             else
-                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel"
+                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel$(is_recursive_root "$ds" && echo " (searched the whole subtree, as the installed -R line would)")"
                 failed=$((failed + 1))
             fi
             continue ;;
