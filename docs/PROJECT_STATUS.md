@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 496d0a9e59ded2f0 -->
+<!-- status-covers-digest: a0e29fa083c9e3e9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,22 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zakolejkowane zdarzenia odchodzą razem z relacją (2026-08-22).**
+  Znalezione na żywo: kolejka alertów pve1 trzymała cztery zdarzenia o relacjach
+  zdemontowanych wiele godzin wcześniej, a najbliższy digest o 07:00 wysłałby
+  właścicielowi mail o backupach, które już nie istnieją. Ani `remove-client`,
+  ani `clean-relationships.sh` nie tykały kolejki, więc **każda rozbiórka
+  zostawiała swoje skargi do doręczenia później**, bez kontekstu i bez adresata.
+  Tak umiera alerting — ten projekt ma na to rachunek: 384 maile w jedną noc i
+  odruch `MAILTO=""` zamiast naprawy.
+  Zdarzenia **nie są kasowane**: przy purge przenoszą się do nagrobka relacji,
+  czyli do pliku, który i tak istnieje po to, żeby być ostatnią rzeczą nazywającą
+  to, co po niej zostało. Historia zostaje tam, gdzie zajrzy pytający, a digest
+  raportuje tylko to, co nadal prawdziwe. Dopasowanie po etykiecie, którą monitor
+  sam wpisuje w nawiasie, więc nie może się rozjechać z rekordem. Dowód na żywej
+  kolejce pve1: 4 wpisy → 1, trzy przeniesione do nagrobka jako `QUEUED_ALERT=`,
+  wpis niezwiązany nietknięty.
 
 - **Digest jest zadaniem HOSTA, nie relacji — pve9 przez to milczał (2026-08-22).**
   Znalezione na żywo: pve9 miał 15 zakolejkowanych zdarzeń od poprzedniego dnia
