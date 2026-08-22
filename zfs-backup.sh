@@ -280,6 +280,13 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     that ages out the last common snapshot ends the
                                     relationship until a destructive re-seed. Recorded
                                     on the client, so re-activation keeps the shape.
+                                    --exclude=REGEX (repeatable) drops matching datasets
+                                    from a flat expansion -- snapget/snapsend -X, an
+                                    unanchored grep -E over the SOURCE-side name, so
+                                    anchor it yourself when you mean the whole name.
+                                    Recorded like --recursive, and refused together with
+                                    --recursive=atomic, where one stream has nowhere to
+                                    filter.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -2257,7 +2264,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo "	flags        = $LOAD_FLAGS -e"
             else
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
             # A solid scope root rides ENGINE recursion: snapget -R re-expands
             # the subtree on the source at every run, so a child created there
@@ -3652,6 +3659,12 @@ cmd_add_client() {
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
     local recursion=""
+    # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
+    # anti-deletion guard then refused every future activation of that client:
+    # the regenerated job has no -X, so the installed one reads as a job about
+    # to stop running. Measured on the lab -- the line the guard named WAS the
+    # -X line. An exclusion has to be a recorded decision or it is a one-way door.
+    local -a excludes=()
     # Batch B: the account is a DECISION, never a silent default. Empty here means
     # "not stated on the command line"; the resolution below decides what that
     # means, and refuses rather than guessing.
@@ -3666,6 +3679,7 @@ cmd_add_client() {
             --datasets=*)  datasets="${a#*=}" ;;
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --exclude=*)   excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -3729,6 +3743,10 @@ cmd_add_client() {
         no) die "add-client: --recursive=no is not a relationship shape this layer installs -- a scope root is replicated either per-dataset (flat, the default) or as one stream (atomic). Omit the flag for flat." ;;
         *)  die "add-client: --recursive must be 'flat' or 'atomic', got '$recursion'" ;;
     esac
+    # The engines refuse -X without -R rather than ignoring it, so refusing the
+    # same combination here means the operator hears it at the command line
+    # instead of at 01:00 every night.
+    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude to keep one atomic stream."
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -3897,6 +3915,11 @@ cmd_add_client() {
         # regenerated the section; the record is the only place a decision
         # survives that.
         write_client_field RECURSION         "$recursion"
+        local _xi=0 _x
+        for _x in ${excludes[@]+"${excludes[@]}"}; do
+            _xi=$((_xi + 1))
+            write_client_field "EXCLUDE_$_xi" "$_x"
+        done
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
     chmod 0600 "$cpath"
@@ -4047,6 +4070,22 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # fails when NOTHING in the expansion had a family. So the probe now also
 # returns the newest match, and the rehearsal calls it instead of asking the
 # same question its own way.
+# The exclusions this relationship was enrolled with, rendered as engine flags.
+# Read off the CLIENT RECORD (sourced by load_client_and_connection), never off
+# the config -- a config edit is exactly what this replaces. Numbered fields
+# rather than one packed string: a regex may contain anything, including the
+# separator someone would have picked.
+client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
+    local i=1 v out=""
+    while :; do
+        eval "v=\${EXCLUDE_$i:-}"
+        [ -n "$v" ] || break
+        out="$out -X $v"
+        i=$((i + 1))
+    done
+    printf '%s' "$out"
+}
+
 # TRI-STATE, and that is the whole point (fail-open found on review, measured
 # 2026-08-22). This probe used to answer a yes/no question with a pipeline whose
 # output is empty for BOTH "the source has no family" and "the source could not
@@ -6982,6 +7021,7 @@ rux_remote_install() {
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
+        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
         # SSH from this host by default (Owner doc, "Join behavior"); --manual-join
@@ -7080,12 +7120,14 @@ rux_entry() {
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
     local recursion=""
+    local -a excludes=()
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
             --target=*)  target="${a#*=}" ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --exclude=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
