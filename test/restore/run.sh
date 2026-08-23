@@ -1820,6 +1820,56 @@ else
     bad "resolver: right label + unknown dataset refuses and says which half failed" "rc=$rc out=$out"
 fi
 
+
+# ---------------------------------------------------------------------------
+# ':' IS LEGAL INSIDE A ZFS DATASET NAME (#132 reviewer discriminator).
+#
+# The first resolver split every colon-bearing token as label:dataset before
+# considering a verbatim managed path, so a legal copy location
+# `.../pool/data:archive` -- sitting right there in CONFIG -- was refused as
+# relation 'hdd/backups/...' + dataset 'archive'. The seven original resolver
+# tests were green the whole time, because none used a colon-bearing name.
+#
+# The rule stays "never guess": exact verbatim match wins; if BOTH readings
+# resolve, that is genuine ambiguity and it refuses naming both.
+RSC="$WORK/colon.conf"
+cat > "$RSC" <<'CONF'
+[dataset:hdd/backups/client/pool/data:archive]
+	src          = acct@10.0.0.1:pool/data:archive
+	pair_label   = pve2
+
+[dataset:hdd/plain/archive]
+	src          = acct@10.0.0.1:archive
+	pair_label   = hdd/backups/client/pool/data
+CONF
+
+rsc() { ( set +u; VERBOSE=0; source "$ZB" 2>/dev/null; restore_resolve_token "$RSC" "$1" 2>&1 ); }
+
+out=$(rsc "hdd/backups/client/pool/data:archive"); rc=$?
+# the second section's pair_label makes BOTH readings resolve -> must refuse
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "ambiguous"; then
+    ok "resolver: a token matching BOTH a managed path and label:dataset refuses as ambiguous"
+else
+    bad "resolver: a token matching BOTH a managed path and label:dataset refuses as ambiguous" "rc=$rc out=$out"
+fi
+
+# with the contrived label removed, the verbatim path must win
+sed -i 's|pair_label   = hdd/backups/client/pool/data$|pair_label   = inny|' "$RSC"
+out=$(rsc "hdd/backups/client/pool/data:archive"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "pool/data:archive"; then
+    ok "resolver: a legal colon-bearing managed copy resolves verbatim"
+else
+    bad "resolver: a legal colon-bearing managed copy resolves verbatim" "rc=$rc out=$out"
+fi
+
+# and the ordinary label:dataset reading still works on the same config
+out=$(rsc "pve2:pool/data:archive"); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "resolver: label:dataset still resolves when the dataset half itself carries a colon"
+else
+    bad "resolver: label:dataset still resolves when the dataset half itself carries a colon" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
