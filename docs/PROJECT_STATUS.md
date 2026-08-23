@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a5eb7b5bfc93912c -->
+<!-- status-covers-digest: 7cdf63d9f75963c7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -2324,6 +2324,23 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## Parowanie wielorelacyjne (2026-08-23, galaz feat/multi-relationship-pairing)
+
+Sciana "jedna relacja na hosta zrodlowego" zburzona. Target jest faktem
+RELACJI: rekord klienta zapisuje CLIENT_TARGET przy create, a
+load_client_and_connection nadpisuje nim per-hostowy PEER_SAVED_TARGET z
+manifestu parowania (pusty/nieobecny = zachowanie manifestu, zero migracji).
+Klucze, zaufanie hosta i konto delegowane zostaja per-host z projektu
+(1 config = 1 konto, LAB6). Dowod na zywo pve9<-pve2: dwie rownolegle
+relacje (labS, labD) do wlasnych targetow — obie EXIT=0 od zera, osobne
+przestrzenie nazw, scope zrodla z dwiema stanzami (rozszerzenie z #140),
+filtr REQUESTED_DATASETS pomija korzen rodzenstwa, oba crony rc=0 jako bckp.
+Kontrola negatywna: trzecia relacja celowo mierzaca w target labS odmowa
+przez straznik pokrycia (EXIT=1, fail-closed nietkniety).
+
+Nieobjete tym etapem: rozne --local-user dla relacji do TEGO SAMEGO zrodla
+(manifest trzyma jedno konto per host) — zmierzy to pelny lab pasywny.
 
 ## Rodzina seeda z profilu + granice wielorelacyjne (2026-08-23, galaz fix/seed-family-prefix)
 
