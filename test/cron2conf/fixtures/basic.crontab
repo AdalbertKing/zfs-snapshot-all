@@ -5,6 +5,4 @@
 51 * * * * echo "$(date -Is) ZFS-JOB BEGIN h1 hourly prune (vm1)" >>/LOG; e=$(mktemp 2>/dev/null) || e=/LOG.err.$$; /REPO/delsnaps.sh "tank/vm1" "automated_hourly" -H24 2>"$e"; rc=$?; cat "$e" >>/LOG; echo "$(date -Is) ZFS-JOB END h1 hourly prune (vm1) rc=$rc" >>/LOG; [ $rc -ne 0 ] && /NOTIFY "h1 hourly prune (vm1)" "$(tail -n 8 "$e")" 2>>/LOG; rm -f "$e"
 
 */15 * * * * d=$(/REPO/check-snap-age.sh "tank/vm1" "automated_hourly" 90m 3h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "h1 hourly getting stale (vm1)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "h1 hourly stale (vm1)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "h1 hourly monitor BROKEN (vm1)" "$d" 2>>/LOG
-
-0 7 * * * /DIGEST 2>>/LOG
 # END zfs-backup-managed

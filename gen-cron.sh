@@ -2704,6 +2704,30 @@ install_crontab() {
             exit 1
         fi
     fi
+    # A host whose managed block still carries the pre-2026-08-22 digest line
+    # LOSES it here: this install rewrites the block and generate_block_body no
+    # longer writes one. That is the intended migration -- the digest is a HOST
+    # job now, installed into deploy.sh's own block by adopt -- but the two are
+    # not scheduled together. Deployment is an hourly `git pull`, not an hourly
+    # deploy.sh, so between this install and whenever someone next runs deploy.sh
+    # the host queues findings and mails nothing, saying nothing about it. That
+    # is precisely how pve9 went silent for months.
+    #
+    # A warning, not a refusal: the line is legitimately leaving, and blocking
+    # every host's first install after the change would be the worse failure.
+    if awk '/^# BEGIN zfs-backup-managed/ { inblock = 1 }
+            /^# END zfs-backup-managed/   { inblock = 0 }
+            inblock && /alert-digest/     { found = 1 }
+            END { exit !found }' "$current"; then
+        {
+            echo "gen-cron.sh: WARNING: this crontab's managed block still contains the daily"
+            echo "alert digest, and this install REMOVES it. Since 2026-08-22 the digest is a"
+            echo "host-level job that deploy.sh installs in its own block, not a relationship"
+            echo "job -- a host that had both was sending two."
+            echo "Until deploy.sh runs here, this host queues findings and mails NOTHING,"
+            echo "silently. Run ./deploy.sh on this host right after this install."
+        } >&2
+    fi
     rm -f "$current"
 
     # Everything else -- locating the block, refusing a malformed one, keeping

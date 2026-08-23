@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 477fb5a45964bb7a -->
+<!-- status-covers-digest: b40a9eaeade11b72 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -78,9 +78,30 @@
   w bloku hosta ze starszego deploya i wygenerowaną — czyli dwa uruchomienia
   o 07:00 ścigające się o ten sam plik kolejki.
   `digest_script` jest nadal parsowany (istniejące configi nie pękają), ale nie
-  ma już linii do stłumienia. **Obowiązek ręczny:** host dostaje linię przy
-  najbliższym uruchomieniu `deploy.sh` (każda zmiana relacji je odpala);
-  host, który długo nie widział deploya, do tego czasu digestu nie ma.
+  ma już linii do stłumienia. Host dostaje linię przy najbliższym uruchomieniu
+  `deploy.sh` (każda zmiana relacji je odpala).
+  **Okno bez digestu jest teraz głośne (2026-08-23).** Do tej pory był to cichy
+  obowiązek ręczny: `gen-cron.sh --install` przepisuje blok, stara linia digestu
+  z niego znika, a nowej nie ma nigdzie, dopóki ktoś nie odpali `deploy.sh`.
+  Wdrożenie to godzinny `git pull`, **nie** godzinny `deploy.sh`, więc to okno
+  jest realne i nieograniczone — host w nim kolejkuje znaleziska i nie wysyła nic,
+  nie mówiąc o tym ani słowa. Dokładnie w tym stanie pve9 spędził miesiące.
+  `--install` **ostrzega** teraz wprost, gdy usuwa linię digestu ze starego bloku,
+  i podaje lekarstwo (`./deploy.sh` na tym hoście). Ostrzeżenie, nie odmowa:
+  linia odchodzi zgodnie z projektem, a blokowanie pierwszej instalacji na każdym
+  hoście byłoby gorszą awarią. Kontrola negatywna w suicie: blok bez digestu
+  instaluje się cicho.
+- **Kontrakt, który wskazuje test, nie zastępuje krawędzi, która go uruchamia
+  (2026-08-23).** `cron2conf` padał **10 przypadków na opublikowanym `main`** i nikt
+  tego nie widział. `aa66674` wyprowadził linię digestu z bloku gen-cron.sh, przez
+  co fikstury round-tripu przestały opisywać dzisiejszy kształt — a `[file:gen-cron.sh]`
+  w grafie wpływu nie wymieniał suity `cron2conf`, więc CI nigdy jej nie wybrało.
+  Kontrakt `cron-line-shape` **od początku** mówił, że `cron2conf.sh` czyta wyjście
+  `gen-cron.sh` jako sztywny literał, i jego `check` wskazywał właśnie te fikstury —
+  ale kontrakt każe czytelnikowi spojrzeć, niczego nie uruchamia. Wyszło dopiero, gdy
+  niezwiązana gałąź przypadkiem wybrała tę suitę. Krawędź dopisana; fikstury
+  `fixtures/` opisują dzisiejszy kształt, `fixtures-legacy/` **zachowują** linię
+  digestu (bo hosty naprawdę ją mają), a harness dowodzi wprost, że nie jest odtwarzana.
 
 - **Martwe łącze nie może już powiedzieć „nie ma tu rodziny" (2026-08-22).**
   Dwie sondy odpowiadały na pytanie o ŹRÓDŁO statusem, który znaczył też
