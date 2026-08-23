@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 73fabd9b81d770d5 -->
+<!-- status-covers-digest: a98f5559b3d0cd79 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -113,6 +113,12 @@
   przechodzi w plan zawezony do relacji. Druga pozycyjna (cel miedzy hostami) odmawia z
   nazwana sekwencja R-025 - te drzwi wisza po recenzji tych.
   Siedem dyskryminatorow w test/restore, w tym wszystkie trzy odmowy R-025 osobno.
+  Zywy dowod po wdrozeniu zlapal ostatnia luke: na prawdziwym hoscie publiczna pisownia
+  umierala o brak configu, bo jedyny mechanizm jego odkrycia opieral sie na szczatkowym
+  server.conf (zmierzone: nieobecny na kazdym hoscie). Fallback to deterministyczna LOKALNA
+  konwencja jobs.<host>.conf, ktora pisze i czyta cala reszta narzedzia - nie zgadywanie w
+  sensie R-025; odmowa nadal wymienia, czego sprobowano. Dowod: restore pve2 bez flag na
+  pve9 -> plan z /etc/zfs-snapshot-all/jobs.pve9.conf; restore pve7 -> odmowa z nazwa.
 - **Monitor zaczal konsumowac warstwe danych: zdrowie puli i martwe transfery (2026-08-23).**
   Dwie dziury, za ktore estata juz zaplacila: `rpool` na pve1 byl **DEGRADED tygodniami** bez
   jednego alertu (pojemnosc sprawdzana codziennie, zdrowie NIGDZIE - zdegradowana pula
