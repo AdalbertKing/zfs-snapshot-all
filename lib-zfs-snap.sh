@@ -205,6 +205,18 @@ progress_watch() {   # <errfile> <dataset> <target> <peer> <direction> <mode> <b
     local pfile; pfile=$(progress_path "$target")
     mkdir -p "$(progress_dir)" 2>/dev/null || return 0
     (
+        # CLOSE THE INHERITED LOCK FD. This subshell outlives the engine run
+        # by design (the caller kills it at progress_done), and a child
+        # inherits every open descriptor -- including fd 200, the engine's
+        # own flock. Held here, the single-instance lock outlived the run by
+        # a few seconds and the very next invocation against the same
+        # datasets refused with "Another instance ... is already running".
+        # Found by the declared-passive closing campaign: the one-command
+        # flow's verify probe fires seconds after its own seed, and every
+        # first-ever enrolment died at verify while a manual retry -- run
+        # after the watcher's sleep tick had cycled -- always passed. An
+        # ordering heisenbug with a one-line cause.
+        exec 200>&- 2>/dev/null || true
         local total=0 done_b=0 started prev_b=0 prev_t rate=0 eta=-1 now line
         started=$(date +%s); prev_t=$started
         while :; do
