@@ -456,6 +456,7 @@ human_bytes() {   # <bytes>
 
 PORT=22
 USE_EXISTING_SNAPSHOT=0
+declare -a EXCLUDE_SNAPS=()
 # -q: quiesce the Proxmox guest that owns each SOURCE dataset before
 # snapshotting it. Unlike snapsend.sh's -q, the guest is on the REMOTE host
 # here, so the whole freeze/snapshot/thaw runs in one remote invocation --
@@ -1236,6 +1237,33 @@ process_dataset() {
             return 1
         fi
 
+        # -E exclusions (declared-passive, 2026-08-23): the owner's model for
+        # passive is "take the NEWEST, whatever it is called, minus the
+        # excluded families". Names are data from a foreign system, so this is
+        # a prefix skip-list, not a recogniser -- an excluded name can never be
+        # adopted as the base, and the newest NON-excluded snapshot wins even
+        # when an excluded one is newer.
+        if [ ${#EXCLUDE_SNAPS[@]} -gt 0 ]; then
+            local _xs=() _sn _xp _hit
+            for _sn in "${src_snaps[@]}"; do
+                _hit=0
+                for _xp in "${EXCLUDE_SNAPS[@]}"; do
+                    case "$_sn" in "$_xp"*) _hit=1; break ;; esac
+                done
+                [ "$_hit" -eq 0 ] && _xs+=("$_sn")
+            done
+            src_snaps=(${_xs[@]+"${_xs[@]}"})
+            if [ ${#src_snaps[@]} -eq 0 ]; then
+                if [ $FLAT_RECURSE -eq 1 ]; then
+                    log 1 "Only excluded families on '$src_dataset' -- scaffolding under -R -e, skipped"
+                    ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
+                    return 0
+                fi
+                log 0 "Every source snapshot on '$src_dataset' matches an -E exclusion -- nothing eligible to adopt"
+                return 1
+            fi
+        fi
+
         if [ -n "$MESSAGE" ]; then
             src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
             if [ ${#src_snaps[@]} -eq 0 ]; then
@@ -1776,7 +1804,7 @@ if [ $# -gt 0 ]; then
     set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
 fi
 
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:" opt; do
+while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
@@ -1784,6 +1812,7 @@ while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:" opt; do
         q) QUIESCE="$OPTARG";;
         Q) QUIESCE_DEADMAN="$OPTARG";;
         e) USE_EXISTING_SNAPSHOT=1;;
+        E) EXCLUDE_SNAPS+=("$OPTARG");;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         Z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
         g) COMPRESSION=1; COMPRESSOR="pigz"; COMPRESSION_SET=1;;

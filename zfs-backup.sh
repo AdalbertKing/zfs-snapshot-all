@@ -2296,7 +2296,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # refused the install because two jobs appeared to be vanishing. A
         # preserved section must come back with everything it had, not with
         # everything this function happens to know about.
-        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)" \
+        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
     done
 
@@ -2329,6 +2329,18 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo "	monitor_crit = 5h"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS -e"
+            elif [ "${PASSIVE:-0}" = "1" ]; then
+                # DECLARED passive (LAB-E, 2026-08-23) -- distinct from the
+                # sync-chain branch above, which detects OUR OWN family: this
+                # one is an operator decision recorded at create, works for a
+                # FOREIGN family with any name or none, and therefore sets no
+                # prefix at all (the passive profile template is prefixless).
+                # monitor_exclude mirrors the -E list so the monitor is blind
+                # to exactly the families the pickup refuses to adopt --
+                # measured both ways in LAB-E: an aging excluded family must
+                # not page, a fresh one must not paint a stale relation green.
+                echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
@@ -2422,6 +2434,14 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     echo "[prune:$prune_scope]"
                     echo "	$marker"
                     profile_emit "$PROFILE_PRUNE_FILE"
+                    # Declared-passive: the copy-side monitor rides these
+                    # tiers, and it must be blind to exactly the families the
+                    # pickup refuses to adopt (-E list), or an excluded family
+                    # arriving by other means keeps a dead relation green.
+                    if [ "${PASSIVE:-0}" = "1" ]; then
+                        local _pex; _pex=$(client_passive_flags | awk '{for(i=1;i<=NF;i++) if ($i=="-E") printf "%s%s", (n++?",":""), $(i+1)}')
+                        [ -n "$_pex" ] && echo "	monitor_exclude = $_pex"
+                    fi
                     echo "	recursive    = yes"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}"
@@ -2450,7 +2470,9 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # to refuse after the fact. That guard STAYS: it reads the candidate config,
     # so it still catches a hand-edited 'recursive = atomic' arriving next to a
     # source prune from anywhere else.
-    if [ "${RECURSION:-}" = atomic ]; then
+    if [ "${PASSIVE:-0}" = "1" ]; then
+        log "source retention NOT generated for '$name': the relationship is DECLARED PASSIVE -- every source snapshot belongs to the foreign system that stamped it, and pruning another owner's family is how the sync chain destroyed one in 80 minutes. The copy-side ladder still bounds OUR disk."
+    elif [ "${RECURSION:-}" = atomic ]; then
         log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
     else
         emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
@@ -3812,7 +3834,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion=""
+    local recursion="" passive=0 exclude_snaps=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -3833,6 +3855,8 @@ cmd_add_client() {
             --datasets=*)  datasets="${a#*=}" ;;
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --passive)     passive=1 ;;
+            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
             --exclude=*)   excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
@@ -3921,6 +3945,13 @@ cmd_add_client() {
         esac
     fi
 
+    # A declared-passive relationship defaults to the PASSIVE profile: its
+    # templates are prefixless and its monitors run in any-mode -- the only
+    # shape that matches the declaration. An explicit --profile= still wins.
+    if [ "$passive" -eq 1 ] && [ "$profile" = "default" ]; then
+        profile=passive
+    fi
+
     local cpath; cpath=$(client_conf_path "$name")
     if [ -e "$cpath" ]; then
         # A record whose last STATE is 'removed' is a TOMBSTONE, not a live
@@ -3979,6 +4010,39 @@ cmd_add_client() {
     # assertions without proving anything.
     if [ "$local_user_given" -eq 1 ]; then
         local_user_name_valid "$local_user"             || die "add-client: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
+        # PROVISION THE COLLECTOR-SIDE ACCOUNT, here, at the one moment the
+        # choice is made. LAB-E measured what its absence costs: activation
+        # refused three separate times, each naming the next missing piece
+        # (no repo copy -> no notify scripts -> no queue-group membership),
+        # because the fleet's delegated accounts were provisioned by the
+        # migration campaign and a FRESH account created by this flag got
+        # nothing. Everything below is idempotent and matches what deploy.sh
+        # gives an account (account-paths contract).
+        # BEST-EFFORT, never fatal: the runnability guard at activation is the
+        # enforcer and names the exact missing piece; this block exists so a
+        # root operator never MEETS that guard. A non-root caller (tests, a
+        # delegated shell) skips with a log line instead of dying on useradd.
+        if ! id "$local_user" >/dev/null 2>&1; then
+            if [ "$(id -u)" -eq 0 ] && useradd -m -s /bin/bash -c "zfs-snapshot-all collector account" "$local_user" 2>/dev/null; then
+                passwd -l "$local_user" >/dev/null 2>&1 || true
+                log "add-client: created account '$local_user' (uid $(id -u "$local_user")), password locked"
+            else
+                log "add-client: account '$local_user' does not exist and cannot be created here -- activation's runnability guard will name whatever is missing"
+            fi
+        fi
+        local _lu_home; _lu_home=$(getent passwd "$local_user" 2>/dev/null | cut -d: -f6)
+        if [ -n "$_lu_home" ] && [ "$(id -u)" -eq 0 ]; then
+            if [ ! -x "$_lu_home/zfs-snapshot-all/gen-cron.sh" ]; then
+                rm -rf "$_lu_home/zfs-snapshot-all"
+                git clone -q "$SCRIPT_DIR" "$_lu_home/zfs-snapshot-all" 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     && log "add-client: provisioned $_lu_home/zfs-snapshot-all (accounts cannot use root's 0700 checkout)"                     || warn "add-client: could not clone the repo for '$local_user' -- activation will refuse with the exact path"
+            fi
+            local _lu_s
+            for _lu_s in notify-fail.sh notify-warn.sh; do
+                [ -e "$_lu_home/$_lu_s" ] || { cp -p "/root/scripts/$_lu_s" "$_lu_home/$_lu_s" 2>/dev/null && chown "$local_user:$local_user" "$_lu_home/$_lu_s"; }
+            done
+            mkdir -p "$_lu_home/run" && chown "$local_user:$local_user" "$_lu_home/run"
+            getent group zfsalert >/dev/null 2>&1 && usermod -aG zfsalert "$local_user" 2>/dev/null
+        fi
     else
         # No --local-user: the jobs run as root. There is no host-wide account to
         # read and nothing to guess -- name an account to delegate them instead.
@@ -4094,6 +4158,21 @@ cmd_add_client() {
         # regenerated the section; the record is the only place a decision
         # survives that.
         write_client_field RECURSION         "$recursion"
+        # DECLARED passivity (LAB-E, 2026-08-23). Passive is a decision, not a
+        # deduction: this relationship only ever ADOPTS the newest existing
+        # snapshot (engine -e), stamps nothing on the source, and its monitor
+        # watches "newest of anything" rather than a named family. Recorded at
+        # CREATE like RECURSION, read back by seed and activation; never
+        # sniffed from snapshot names -- the sync-chain probe taught us where
+        # name-sniffing ends.
+        write_client_field PASSIVE           "$passive"
+        if [ -n "$exclude_snaps" ]; then
+            local _esi=1 _esp
+            for _esp in ${exclude_snaps//,/ }; do
+                write_client_field "EXCLUDE_SNAP_${_esi}" "$_esp"
+                _esi=$((_esi + 1))
+            done
+        fi
         local _xi=0 _x
         for _x in ${excludes[@]+"${excludes[@]}"}; do
             _xi=$((_xi + 1))
@@ -4254,6 +4333,25 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # the config -- a config edit is exactly what this replaces. Numbered fields
 # rather than one packed string: a regex may contain anything, including the
 # separator someone would have picked.
+# The PASSIVE half of the flags a preserved/generated section must carry:
+# ' -e' when the relationship declared passivity, plus one ' -E <prefix>' per
+# recorded snapshot-family exclusion. Same shape and same reason as
+# client_exclude_flags below -- a refreshed section must come back with
+# everything the DECLARATION implies, or a re-activation quietly turns a
+# passive relationship active and it starts stamping the source.
+client_passive_flags() {
+    local out="" i=1 v
+    [ "${PASSIVE:-0}" = "1" ] || { printf ''; return 0; }
+    out=" -e"
+    while :; do
+        eval "v=\${EXCLUDE_SNAP_$i:-}"
+        [ -n "$v" ] || break
+        out="$out -E $v"
+        i=$((i + 1))
+    done
+    printf '%s' "$out"
+}
+
 client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
     local i=1 v out=""
     while :; do
@@ -4740,11 +4838,25 @@ cmd_seed() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
+        # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
+        # stamp. The relationship SAID it is passive at create, so the seed
+        # adopts the newest existing snapshot whatever it is called (engine -e
+        # with no mask -- measured: newest wins regardless of prefix) and the
+        # engine's own "no snapshots" refusal is the empty-source answer. The
+        # automated_* probe below stays ONLY for undeclared relationships,
+        # where it is the sync-chain guard it was built as -- it detects OUR
+        # OWN family stamped by another instance, and was never able to see a
+        # foreign one (that blindness, measured, is why the declaration
+        # exists).
+        if [ "${PASSIVE:-0}" = "1" ]; then
+            seed_flags=(-e)
+        else
         local fam_rc; source_family_exists "$ds"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
         fi
         # The seed obeys the same exclusions the installed job will. Without
         # this an excluded dataset lands ONCE, at seed time, and is then never
@@ -4879,11 +4991,25 @@ cmd_final_catchup() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
+        # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
+        # stamp. The relationship SAID it is passive at create, so the seed
+        # adopts the newest existing snapshot whatever it is called (engine -e
+        # with no mask -- measured: newest wins regardless of prefix) and the
+        # engine's own "no snapshots" refusal is the empty-source answer. The
+        # automated_* probe below stays ONLY for undeclared relationships,
+        # where it is the sync-chain guard it was built as -- it detects OUR
+        # OWN family stamped by another instance, and was never able to see a
+        # foreign one (that blindness, measured, is why the declaration
+        # exists).
+        if [ "${PASSIVE:-0}" = "1" ]; then
+            seed_flags=(-e)
+        else
         local fam_rc; source_family_exists "$ds"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
         fi
         # The seed obeys the same exclusions the installed job will. Without
         # this an excluded dataset lands ONCE, at seed time, and is then never
@@ -5122,6 +5248,15 @@ probe_snapget_endpoint() {   # <host> <port>
         fi
         plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
         case "$plan" in
+            # base=null is NOT an incremental: it means "no common snapshot",
+            # i.e. a full transfer on every run, forever -- the exact shape the
+            # 2026-08-01 live defect wore, and LAB-E measured this verdict
+            # slipping through as "incremental-only confirmed" for an EXCLUDED
+            # child the probe should never have asked about. It now counts as
+            # needing a full, so activation stops and names the dataset.
+            "PLAN=INCREMENTAL base=null"*)
+                needs_full=$((needs_full + 1))
+                PROBE_DETAIL="${PROBE_DETAIL}  FULL-FOREVER (base=null): $ds"$'\n' ;;
             PLAN=INCREMENTAL*) ;;
             PLAN=FULL*)
                 needs_full=$((needs_full + 1))
@@ -5426,7 +5561,15 @@ cmd_activate_client() {
             # passivity decision three lines above, using the shared probe,
             # had already said the family was there.
             local newest newest_rc
-            newest=$(source_family_newest "$ds" "${dr_prefix:-automated_}"); newest_rc=$?
+            # A prefixless section (declared passive, Phase 3.5) has no family
+            # NAME to probe for -- the family is "whatever is newest". The old
+            # automated_ fallback made the rehearsal blind to exactly the
+            # relationships it was rehearsing (LAB-E audit, hostage H3).
+            local _drp="${dr_prefix:-automated_}"
+            case " $(installed_dataset_field "$workfile" "$localpath" flags) " in
+                *" -e "*) [ -n "$dr_prefix" ] || _drp="" ;;
+            esac
+            newest=$(source_family_newest "$ds" "$_drp"); newest_rc=$?
             if [ "$newest_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]; then
                 # Distinct from "no snapshot reachable": that verdict is about
                 # the SOURCE's contents, this one is about not having reached
@@ -5441,7 +5584,7 @@ cmd_activate_client() {
                 # of the answer an operator cannot reconstruct from the other.
                 log "  OK (passive): $ds -> $localpath -- newest family snapshot reachable: $newest"
             else
-                warn "  FAILED (passive): $ds -> $localpath -- no '${dr_prefix:-automated_}*' snapshot reachable on $LOAD_HOST via the pairing channel$(is_recursive_root "$ds" && echo " (searched the whole subtree, as the installed -R line would)")"
+                warn "  FAILED (passive): $ds -> $localpath -- no '${_drp:-<any>}*' snapshot reachable on $LOAD_HOST via the pairing channel$(is_recursive_root "$ds" && echo " (searched the whole subtree, as the installed -R line would)")"
                 failed=$((failed + 1))
             fi
             continue ;;
@@ -6936,9 +7079,16 @@ rux_resolve_name() {
         local f
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            local CLIENT_NAME="" PEER_HOST=""
+            local CLIENT_NAME="" PEER_HOST="" STATE=""
             # shellcheck disable=SC1090
             . "$f"
+            # A record whose last STATE is 'removed' is a tombstone, not a
+            # relationship. Counting it here made rux demand --name on a host
+            # with NOTHING live pointing at it -- LAB-E hit this with two
+            # tombstones and zero live relations. Same rule as add-client's
+            # reuse path and the coverage-overlap probe (#124): removed is
+            # invisible everywhere, or it is a trap somewhere.
+            [ "${STATE:-}" = removed ] && continue
             [ "$PEER_HOST" = "$host" ] && matches+=("$CLIENT_NAME")
         done
     fi
@@ -7307,9 +7457,20 @@ rux_remote_install() {
     local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}" grant_remotely="${11:-0}" manual_join="${12:-0}"
 
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
+    # A declared-passive relationship defaults to the PASSIVE profile: its
+    # templates are prefixless and its monitors run in any-mode, which is the
+    # only shape that matches the declaration. An explicit --profile= still
+    # wins -- the operator may have a customised passive variant.
+    if [ "$passive" -eq 1 ] && { [ -z "$profile" ] || [ "$profile" = "default" ]; }; then
+        profile=passive
+    fi
+
     local cpath; cpath=$(client_conf_path "$name")
     local state=""
     [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+    # Same tombstone rule: a removed record must not block the unified path
+    # either -- add-client (called below) archives it and reuses the name.
+    [ "$state" = removed ] && state=""
 
     # Which account the generated jobs run as. Decided ONCE, here, at create:
     #
@@ -7373,6 +7534,7 @@ rux_remote_install() {
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
+        [ "$passive" -eq 1 ] && add_args+=(--passive)
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
@@ -7471,7 +7633,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion=""
+    local recursion="" passive=0 exclude_snaps=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
@@ -7479,6 +7641,8 @@ rux_entry() {
             --target=*)  target="${a#*=}" ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --passive)     passive=1 ;;
+            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
             --exclude=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;

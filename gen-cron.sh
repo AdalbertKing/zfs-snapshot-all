@@ -930,7 +930,7 @@ _allow_fields() {
 # template allow-list are the same set by construction.
 POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                tier_label notify notify_raw notify_raw_prune notify_word
-               monitor_warn monitor_crit monitor_schedule
+               monitor_warn monitor_crit monitor_schedule monitor_exclude
                dst src autotune quiesce flags"
 # The subset whose lookup actually reaches [defaults] as its last layer.
 # Deliberately absent: keep/retain and monitor_warn/monitor_crit (per-tier by
@@ -963,7 +963,7 @@ _allow_fields template  $POLICY_FIELDS
 # notify_raw_prune (the prune line's literal text, likewise).
 DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                        tier_label notify notify_raw
-                       monitor_warn monitor_crit monitor_schedule
+                       monitor_warn monitor_crit monitor_schedule monitor_exclude
                        dst src autotune quiesce flags"
 # A [prune:] section does not send. send_schedule, prefix, dst, src, autotune,
 # quiesce and flags are transfer-side fields build_prune_section never looks at,
@@ -972,7 +972,7 @@ DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
 # read. notify_word is template-only here as well.
 PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
                      tier_label notify notify_raw_prune
-                     monitor_warn monitor_crit monitor_schedule"
+                     monitor_warn monitor_crit monitor_schedule monitor_exclude"
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
@@ -1858,7 +1858,14 @@ build_dataset() {
                 mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
                 mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
                 mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
-                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
+                # monitor_exclude (declared-passive, 2026-08-23): comma-separated name
+                # PREFIXES this monitor must not see -- neither satisfying
+                # freshness nor raising it. Reaches check-snap-age.sh as -x
+                # flags. Resolved like every other tier field (ds overrides
+                # template); absent = empty = the monitor sees everything,
+                # exactly as before.
+                local mexcl; mexcl="$(resolve_field_or_omit monitor_exclude "$ds" "$tmpl" "")" || mexcl=""
+                MONITOR_ENTITIES+=("${ds_path}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}")
             fi
         fi
     done
@@ -2028,7 +2035,8 @@ build_prune_section() {
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}")
+            local mexcl; mexcl="$(resolve_field_or_omit monitor_exclude "$sec" "$tmpl" "")" || mexcl=""
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}")
         fi
     done
 
@@ -2172,11 +2180,14 @@ group_monitor() {
     declare -ga MONITOR_GROUP_ORDER=()
     local e scope pattern warn crit schedule recursive notify broken warntext pairlbl key
     for e in "${MONITOR_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl <<< "$e"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl <<< "$e"
         # pair_label is IN the key (REV-045): two relationships sharing a
         # threshold shape must not merge into one check-snap-age line --
         # pausing one would silence the staleness alarm of the other.
-        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}"
+        # mexcl is part of the key: two monitors that differ only in what they
+        # must NOT see cannot share one line -- merging them would silently
+        # apply one relation's blind spots to the other.
+        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}${SEP}${mexcl}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2523,12 +2534,12 @@ emit_monitor() {
         list="${MONITOR_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl <<< "${members[0]}"
 
         local -a targets=()
         local m mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl <<< "$m"
+            IFS="$SEP" read -r mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl mexcl2 <<< "$m"
             targets+=("$mscope")
         done
         local joined
@@ -2541,7 +2552,14 @@ emit_monitor() {
         # paging every monitor interval for a backup that was stopped on
         # purpose. Resume restores normal thresholds with no other change.
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}\"$joined\" \"$pattern\" $warn $crit"
+        # -x exclusions ride ahead of the positional args; comma list from the
+        # config's monitor_exclude, one flag per prefix. Empty = no flags,
+        # byte-identical line to before the field existed.
+        local xflags="" _mx
+        if [ -n "${mexcl:-}" ]; then
+            for _mx in ${mexcl//,/ }; do xflags+="-x $_mx "; done
+        fi
+        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}\"$joined\" \"$pattern\" $warn $crit"
         # The verdict is CAPTURED and handed to the notify script, not just
         # appended to the log. check-snap-age.sh already prints the dataset, the
         # pattern, the newest snapshot, its real age and both thresholds -- all
