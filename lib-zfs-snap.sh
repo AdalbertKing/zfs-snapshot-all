@@ -1073,7 +1073,19 @@ tune_control_path() {
     dir=$(tune_cache_dir) || return 0
     [ -n "$dir" ] || return 0
     safe=$(printf '%s' "$host" | tr -c 'a-zA-Z0-9.\-_' '_')
-    p="${dir}/cm.${safe}_${PORT:-22}"
+    # $$ -- the socket is PER RUN, not per host. Keyed by host+port alone it
+    # was SHARED by every concurrent run against the same source, and
+    # tune_ssh_close's '-O exit' meant the FIRST run to finish killed the
+    # common master and tore down every sibling's in-flight transfer:
+    # ssh died 255 with no words, mbuffer saw a clean EOF, recv said
+    # 'failed to read from stream', sshd logged nothing, and the victim was
+    # whoever was still transferring -- measured in the passive lab, where
+    # three same-minute relationships lost a random member on every tick
+    # with fresh data (the single-dataset one always survived: it finished
+    # first, so it was the killer, not the victim). Sharing a master ACROSS
+    # runs was never the goal -- the measured win (150-230ms -> ~8ms per
+    # call) is the many small calls WITHIN one run, and that is preserved.
+    p="${dir}/cm.${safe}_${PORT:-22}.$$"
     [ ${#p} -lt 100 ] && printf '%s' "$p"
 }
 
