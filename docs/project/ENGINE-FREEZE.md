@@ -1,9 +1,9 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 986ed072af2e066a25f343e29e30ca6de5fdf031 -->
-<!-- frozen: snapget.sh 100755 80fb3c041b1d278bcb2b64378b32f273e799887b -->
+<!-- frozen: snapsend.sh 100755 67e98c7273006be3d306f8b5ac1ba6eae110848d -->
+<!-- frozen: snapget.sh 100755 6d043179ff1e7ddaf62829e38aa26dea05a608d3 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
-<!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
+<!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 3706b66c925c77bb4a05e9d732d19d74be4caa5d -->
 <!-- unfreeze: - -->
 
@@ -54,6 +54,23 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-23 (snapget.sh, snapsend.sh, check-snap-age.sh): the DECLARED-PASSIVE
+  stage, owner-directed ('Rob etap pasywny') from the LAB-E campaign findings.
+  snapget/snapsend gain -E PREFIX (repeatable): in -e adoption, snapshots whose
+  name starts with an excluded prefix can never be adopted as the base -- the
+  newest NON-excluded snapshot wins even when an excluded one is newer. Proven
+  live with the discriminating pair on pve9<->pve2: -E smiec_ adopted the older
+  dobry_1; the control without -E adopted smiec_nowszy.
+  check-snap-age.sh gains the explicit any-mode (pattern '-') and -x PREFIX
+  exclusions: a passive relation watches 'the newest snapshot of anything,
+  minus the excluded families'. The empty-pattern refusal stays untouched --
+  silence is not a declaration. Age is printed in minutes under two hours,
+  because 'age=0h' next to CRITICAL at a 20m threshold read as a contradiction.
+  The owner's model, verbatim: passive takes the newest snapshot WHATEVER it is
+  called; there are no recognisable prefixes in foreign names. Prefix-sniffing
+  remains only where it was truthful all along -- the sync-chain guard, which
+  detects OUR OWN family stamped by another instance.
 
 - 2026-08-23 (snapget.sh, snapsend.sh, lib-zfs-snap.sh): live transfer
   progress. Owner-authorized as a STAGE ("obecnie szerzej -- chce widziec ile

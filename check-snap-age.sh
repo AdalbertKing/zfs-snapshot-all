@@ -322,7 +322,12 @@ check_one() {
     fi
 
     if [ "$sev" -gt 0 ] || [ "$VERBOSE" = true ]; then
-        echo "$label dataset=$ds $detail age=${age_h}h (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
+                # Age in floored hours hid the minutes: with 12m/20m lab thresholds a
+        # 21-minute breach printed "age=0h" next to CRITICAL, which reads as a
+        # contradiction. Under two hours the minutes ARE the signal.
+        local age_disp="${age_h}h"
+        [ "$age" -lt 7200 ] && age_disp="$(( age / 60 ))m"
+echo "$label dataset=$ds $detail age=${age_disp} (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
     fi
 }
 
