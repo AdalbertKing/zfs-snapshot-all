@@ -490,6 +490,52 @@ else
         "not overridable / not in the root check:$sandbox_missing"
 fi
 
+# ---------------------------------------------------------------------------
+# THE WIRING, NOT THE FUNCTION.
+#
+# drain_queued_alerts moves a purged relationship's queued findings into its
+# tombstone instead of deleting them. The first cut of that change was proven by
+# calling the function directly with an explicit tombstone path -- which proved
+# the function and left the WIRING unproven. purge_one was clearing
+# TOMBSTONE_WRITTEN *after* write_tombstone had set it, so the real call site
+# always passed an empty path: findings vanished from the queue and were
+# archived nowhere, while the change advertised "findings are NOT discarded".
+#
+# So this drives the whole verb, exactly as an operator does, and asserts BOTH
+# halves: gone from the queue AND present in the tombstone. A test that only
+# checked the queue would still pass on the broken version.
+T="$WORK/tq"; build_tree "$T"
+mkdir -p "$T/removed"
+QF="$T/alert-queue.log"
+printf '%s	ALERT	pve1 keep_hourly stale (dead-one)	CRITICAL dataset=x
+' 1787000000 >  "$QF"
+printf '%s	WARN	pve1 keep_hourly getting stale (dead-one)	WARNING dataset=x
+' 1787000001 >> "$QF"
+printf '%s	WARN	pve1 keep_hourly getting stale (other-rel)	WARNING dataset=y
+' 1787000002 >> "$QF"
+
+ALERT_QUEUE="$QF" run_cr "$T" --purge-orphans --yes >/dev/null 2>&1
+
+# grep -c already prints 0 when it matches nothing; the "|| echo 0" this line
+# used to carry appended a SECOND zero, so the value became two lines and the
+# comparison became a syntax error -- while the measured values were exactly
+# not a comparison -- so the assertion failed while the measured values were
+# exactly right. Counted with true so a non-zero grep status cannot abort.
+q_mine=$(grep -cF '(dead-one)' "$QF" 2>/dev/null; true)
+q_other=$(grep -cF '(other-rel)' "$QF" 2>/dev/null; true)
+t_arch=$(cat "$T/removed"/dead-one.* 2>/dev/null | grep -c '^QUEUED_ALERT='; true)
+
+# This fixture's dead relationship owns no datasets, so write_tombstone writes
+# nothing -- and that is the case worth pinning hardest: with nowhere to archive
+# to, the findings must STAY. Deleting them would be the very "discarded"
+# behaviour the change exists to prevent, and it is what the first cut did at
+# every call site because the path was empty.
+if [ "$q_mine" -eq 2 ] && [ "$q_other" -eq 1 ] && [ "$t_arch" -eq 0 ]; then
+    ok "purge with no tombstone: findings stay queued rather than being deleted with nowhere to go"
+else
+    bad "purge with no tombstone: findings stay queued rather than being deleted with nowhere to go"         "w kolejce moich=$q_mine obcych=$q_other, w nagrobku=$t_arch (oczekiwano 2 / 1 / 0)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
