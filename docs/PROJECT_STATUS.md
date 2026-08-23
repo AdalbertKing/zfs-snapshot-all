@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 71ed7884ccd82206 -->
+<!-- status-covers-digest: a5eb7b5bfc93912c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -2324,6 +2324,43 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## Rodzina seeda z profilu + granice wielorelacyjne (2026-08-23, galaz fix/seed-family-prefix)
+
+Zakladnik `automated_` usuniety: rodzina seeda pochodzi z AKTYWNEGO PROFILU
+(`profile_family_root`: gfs_pattern, inaczej prefiks nadawczy bez slowa tieru,
+inaczej sam prefiks; pusty -> automated_). Seed = korzen+`daily_` — dla
+profilu domyslnego bajt w bajt to samo `automated_daily_`. Szesc miejsc
+przestawionych: oba seedy, oba probingi pasywnosci wokol nich, detekcja
+konsumenta w sync, galaz adopcji. Kontrola (profil `serwis`, przed poprawka):
+seed stemplowal `automated_daily_` po obu stronach relacji, ktorej cala
+retencja prunuje `serwis_*` — snapshot na wieki poza retencja + zatruta sonda
+`automated_*` na zrodle. Lancuch inkrementalny NIE byl zepsuty (baza po GUID,
+zmierzone). Po poprawce: serwis od zera EXIT=0, seed `serwis_daily_`, zero
+`automated_`; regresja default od zera EXIT=0, seed `automated_daily_`.
+
+Przy okazji, z tej samej baterii pomiarowej:
+
+- **Konta delegowane pisza telemetrie postepu**: katalog progress byl 2755
+  (konto w zfsalert bez `w` — zero rekordow z jobow konta), provisioning
+  ustawia 2775 root:zfsalert; do tego `2>/dev/null` PRZED przekierowaniem
+  wyjscia w progress_done/progress_mark_verified (padajacy open lecial na
+  oryginalny stderr — jedna linia 'Permission denied' na dataset w cron.log).
+- **--grant-remotely ROZSZERZA zacommitowany scope** zamiast slepego "nothing
+  to grant": brakujace stanzy zadania dopisane + ponowny --commit-scope,
+  tylko gdy bajty pliku == granted hash (szkic operatora dalej odmawia);
+  audyt `GRANTED_REMOTELY_BY ... (extension)`.
+- **Relacja rozwiazuje SWOJ grant, nie caly scope kolektora**: scope jest
+  per-kolektor i po drugiej rejestracji to UNIA — labD widzial drzewa labS
+  (tylko straznik --yes stal przed replikacja cudzych datasetow). Rekord
+  klienta zapisuje REQUESTED_DATASETS przy create; resolucja pomija korzenie
+  rozlaczne z zadaniem (korzen OBEJMUJACY zadanie zostaje — adopcja szerszego
+  grantu to swiadoma zgoda operatora, jak dotad).
+
+GRANICA NA OSOBNY ETAP (fail-closed, zmierzona): parowanie jest per-HOST —
+jeden PEER_TARGET i jedna etykieta na hosta zrodlowego. Druga relacja do tego
+samego zrodla dziedziczy target pierwszej i straznik pokrycia ja odmawia.
+Wielorelacyjnosc do jednego zrodla wymaga rozdzielenia tozsamosci parowania.
 
 ## Kampania zamykajaca trybu pasywnego (2026-08-23, galaz fix/grant-preflight-order)
 
