@@ -113,6 +113,96 @@ else
     bad "simple flow: add-client --host defaults to backup and writes pending relationship" "rc=$rc out=$out pair=$(cat "$SF/pair.log" 2>/dev/null) record=$(cat "$SF/clients/pve2.conf" 2>/dev/null)"
 fi
 
+# A NAME MUST BE REUSABLE AFTER THE RELATIONSHIP IS REMOVED.
+#
+# Found live on 2026-08-23 while running the four-command trial of issue #9 a
+# second time. remove-client deliberately KEEPS the client record and appends
+# STATE=removed -- that file is the relationship's own history. add-client
+# refused on the file's mere EXISTENCE, so after a completely clean teardown
+# (cron gone, config sections gone, keys gone, peer account deleted, zero zfs
+# allow entries) the very next step of the documented lifecycle refused, and
+# told the operator to run "remove-client" -- the command they had just run,
+# which would have changed nothing.
+#
+# Every other scanner in zfs-backup.sh already skips STATE=removed records.
+# These cases pin add-client agreeing with them, and pin the two halves that
+# must NOT change: a live record still refuses, and the archived tombstone is
+# not visible to anything globbing *.conf.
+sf_live_conf="$SF/clients/pve2.conf"
+printf 'STATE=removed\nREMOVED_AT="2026-08-23 09:46:13"\n' >> "$sf_live_conf"
+: > "$SF/pair.log"
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
+    CLIENTS_DIR="$SF/clients"
+    RELATIONSHIPS_DIR="$SF/relationships"
+    PVE_NODES_DIR="$SF/pve-nodes"
+    DEPLOY="$SF_DEPLOY"
+    cmd_add_client pve2 --host=192.168.28.8:22 --target=hdd/backups
+) 2>&1)"; rc=$?
+sf_arch=$(ls "$SF/clients"/pve2.conf.removed-* 2>/dev/null | head -1)
+if [ "$rc" -eq 0 ] && [ -n "$sf_arch" ]         && grep -q '^STATE=pending_enroll$' "$sf_live_conf"         && ! grep -q '^STATE=removed$' "$sf_live_conf"         && grep -q '^STATE=removed$' "$sf_arch"; then
+    ok "lifecycle: a name whose relationship was removed can be used again"
+else
+    bad "lifecycle: a name whose relationship was removed can be used again"         "rc=$rc arch=${sf_arch:-BRAK}" "out=$out"
+fi
+
+# The tombstone is ARCHIVED, not deleted -- and must not be picked up as a live
+# record by anything scanning "$CLIENTS_DIR"/*.conf.
+sf_confs=$(ls "$SF/clients"/*.conf 2>/dev/null | wc -l)
+if [ "$sf_confs" -eq 1 ] && [ -s "${sf_arch:-/nonexistent}" ]; then
+    ok "lifecycle: the removed record is archived out of the *.conf namespace, not deleted"
+else
+    bad "lifecycle: the removed record is archived out of the *.conf namespace, not deleted"         "plikow *.conf=$sf_confs archiwum=${sf_arch:-BRAK}"
+fi
+
+# The other half: a record that is NOT a tombstone still refuses, and now says
+# which state it is in rather than only that a file exists.
+out="$( (
+    profile_validate_dir() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
+    CLIENTS_DIR="$SF/clients"
+    RELATIONSHIPS_DIR="$SF/relationships"
+    PVE_NODES_DIR="$SF/pve-nodes"
+    DEPLOY="$SF_DEPLOY"
+    cmd_add_client pve2 --host=192.168.28.8:22 --target=hdd/backups
+) 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "already exists"         && printf '%s' "$out" | grep -q "pending_enroll"; then
+    ok "lifecycle: a LIVE relationship still refuses, and the refusal names its state"
+else
+    bad "lifecycle: a LIVE relationship still refuses, and the refusal names its state"         "rc=$rc out=$out"
+fi
+
+# A PINNED HOST KEY MUST BE FILED UNDER THE NAME ssh ACTUALLY ASKS FOR.
+#
+# With HostKeyAlias set, OpenSSH looks the key up under the alias ALONE -- it
+# does not append the port the way it does for a real hostname. This function
+# used to write "[alias]:port" whenever the port was not 22, so every endpoint
+# on a non-default port failed "Host key verification failed" with the correct
+# key sitting in the file. Port 22 was unaffected, which is why it survived
+# until an endpoint switch to another port was tried (issue #9, second path,
+# live on 2026-08-23).
+#
+# Asserted with ssh-keygen -F -- OpenSSH own known_hosts matcher, doing the
+# same bare-name lookup ssh does. Grepping for a bracket would only pin the
+# current spelling; this pins the property, and it fails on the old code
+# because ssh-keygen genuinely cannot find a bracketed entry by bare name.
+akh_dir="$WORK/aliaskh"; mkdir -p "$akh_dir"
+akh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPhkVkBbh0x3swx+notarealkey"
+for akh_port in 22 2222; do
+    printf 'peer.example %s\n' "$akh_key" > "$akh_dir/pv_known_hosts"
+    akh_out=$( PEER_KEY_DIR="$akh_dir" LOCAL_USER="" ensure_alias_known_hosts pv "" "$akh_port" zfs-client-trial 2>/dev/null )
+    if [ -z "$akh_out" ] || [ ! -s "$akh_out" ]; then
+        bad "host key: a pinned alias is written for port $akh_port" "ensure_alias_known_hosts gave: ${akh_out:-BRAK}"
+    elif ssh-keygen -F zfs-client-trial -f "$akh_out" >/dev/null 2>&1; then
+        ok "host key: ssh own matcher finds the pinned alias on port $akh_port"
+    else
+        bad "host key: ssh own matcher finds the pinned alias on port $akh_port" "ssh-keygen -F nie znalazl w: $(cat "$akh_out")"
+    fi
+done
+
+
+
 pair_lines_before=$(wc -l < "$SF/pair.log")
 out="$( (
     profile_validate_dir() { return 0; }
@@ -761,17 +851,34 @@ fi
 KHDIR="$WORK/pairing"; mkdir -p "$KHDIR"
 printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/192.168.11.11_known_hosts"
 alias_out=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 22 zfs-client-pve2 )
-if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"; then
-    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, not the address-derived label"
+if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"         && ssh-keygen -F zfs-client-pve2 -f "$alias_out" >/dev/null 2>&1; then
+    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, and ssh can find it"
 else
     bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
 fi
 
+# THIS ASSERTION USED TO REQUIRE THE OPPOSITE, AND IT WAS WRONG.
+#
+# It demanded '[alias]:2222' for a non-default port -- the notation known_hosts
+# uses for a real HOSTNAME on a non-default port. But when HostKeyAlias is set,
+# OpenSSH looks the key up under the alias ALONE and never appends the port, so
+# the pinned key was filed under a name ssh does not ask for and every
+# non-default-port endpoint failed "Host key verification failed" with the
+# right key in the file. Port 22 was unaffected, so nothing noticed until an
+# endpoint switch to another port was tried live (issue #9, 2026-08-23):
+#
+#   bracketed entry, real connection to :2222   -> Host key verification failed
+#   same key, same port, entry without the port -> connects, reads the scope
+#
+# The old case tested the SPELLING and passed while the product could not
+# connect. Both cases now ask ssh-keygen -F -- OpenSSH's own known_hosts
+# matcher, doing the same bare-name lookup ssh does -- so what is pinned is
+# that ssh can FIND the key, for either port.
 alias_out2=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 2222 zfs-client-pve2 )
-if [ -f "$alias_out2" ] && grep -q '^\[zfs-client-pve2\]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out2"; then
-    ok "ensure_alias_known_hosts (non-default port) uses bracket:port notation"
+if [ -f "$alias_out2" ] && ssh-keygen -F zfs-client-pve2 -f "$alias_out2" >/dev/null 2>&1; then
+    ok "ensure_alias_known_hosts (non-default port): ssh's own matcher finds the pinned alias"
 else
-    bad "ensure_alias_known_hosts (non-default port) uses bracket:port notation" "alias_out2=$alias_out2 content=$(cat "$alias_out2" 2>&1)"
+    bad "ensure_alias_known_hosts (non-default port): ssh's own matcher finds the pinned alias" "alias_out2=$alias_out2 content=$(cat "$alias_out2" 2>&1)"
 fi
 
 rc=0
