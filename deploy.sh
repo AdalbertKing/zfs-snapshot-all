@@ -3807,9 +3807,10 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # the alerting away is worse off than one who reads a single daily summary.
 #
 # A silent day means "nothing was queued" -- it does NOT prove the host is
-# healthy, since a dead cron would also be silent. That is the accepted
-# trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
-# from each is exactly the noise this replaced.
+# healthy, since a dead cron would also be silent. That gap is closed once a
+# week rather than daily: see the heartbeat below. A daily "all OK" from every
+# host is exactly the noise this design replaced, but a weekly one is cheap and
+# is the only thing that distinguishes a quiet host from a mute one.
 $ALERT_ENV_PREAMBLE
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
