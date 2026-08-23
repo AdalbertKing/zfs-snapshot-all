@@ -914,11 +914,14 @@ transfer_data() {
     local _pg_snap _pg_err _pg_pid _pg_rc=0
     progress_reap
     _pg_snap=${send_cmd##* }
+    local _pg_tgt=${recv_cmd##* }
+    local PG_MODE PG_BASE; progress_classify "$send_cmd"
     if [ "${PROGRESS_ENABLED:-1}" = "1" ]; then
         case "$send_cmd" in
             "zfs send "*) send_cmd="zfs send -v -P ${send_cmd#zfs send }" ;;
         esac
         _pg_err=$(mktemp 2>/dev/null) || _pg_err=""
+        local _pg_wire=""; [ -n "$_pg_err" ] && { _pg_wire=$(mktemp 2>/dev/null) || _pg_wire=""; }
     fi
 
     if [ -n "$remote_host" ]; then
@@ -932,27 +935,27 @@ transfer_data() {
             # covered only the uncompressed branch below and a live demo showed
             # nothing at all; the send's -v output was going straight to stderr,
             # which is also where the alerting path reads a failure reason from.
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
-            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "$remote_host" pull "$PG_MODE" "$PG_BASE" "$_pg_wire")
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET ${_pg_wire:+-l "$_pg_wire"} -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
-                rm -f "$_pg_err"
+                rm -f "$_pg_err" ${_pg_wire:+"$_pg_wire"}
             fi
             if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
-            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "$remote_host" pull "$PG_MODE" "$PG_BASE" "$_pg_wire")
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET ${_pg_wire:+-l "$_pg_wire"} -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
-                rm -f "$_pg_err"
+                rm -f "$_pg_err" ${_pg_wire:+"$_pg_wire"}
             fi
             if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
@@ -964,13 +967,29 @@ transfer_data() {
         # correct pipeline if compression is ever wanted here; the policy of not
         # wanting it lives in one place, not spread into the transport layer.
         if [ $COMPRESSION -eq 1 ]; then
-            if ! "${send_args[@]}" | $COMPRESS_PIPE | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
-                return 1
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" local pull "$PG_MODE" "$PG_BASE" "$_pg_wire")
+            if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | $COMPRESS_PIPE | mbuffer $MBUFFER_QUIET ${_pg_wire:+-l "$_pg_wire"} -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+                _pg_rc=1
             fi
+            if [ -n "$_pg_err" ]; then
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_strip "$_pg_err"
+                [ -s "$_pg_err" ] && cat "$_pg_err" >&2
+                rm -f "$_pg_err" ${_pg_wire:+"$_pg_wire"}
+            fi
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            if ! "${send_args[@]}" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
-                return 1
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" local pull "$PG_MODE" "$PG_BASE" "$_pg_wire")
+            if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET ${_pg_wire:+-l "$_pg_wire"} -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+                _pg_rc=1
             fi
+            if [ -n "$_pg_err" ]; then
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_strip "$_pg_err"
+                [ -s "$_pg_err" ] && cat "$_pg_err" >&2
+                rm -f "$_pg_err" ${_pg_wire:+"$_pg_wire"}
+            fi
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
     fi
 }

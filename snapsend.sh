@@ -1010,6 +1010,8 @@ transfer_data() {
     local _pg_snap _pg_err _pg_pid _pg_rc=0
     progress_reap
     _pg_snap=${send_cmd##* }
+    local _pg_tgt=${recv_cmd##* }
+    local PG_MODE PG_BASE; progress_classify "$send_cmd"
     if [ "${PROGRESS_ENABLED:-1}" = "1" ]; then
         case "$send_cmd" in
             "zfs send "*) send_cmd="zfs send -v -P ${send_cmd#zfs send }" ;;
@@ -1028,24 +1030,24 @@ transfer_data() {
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "${remote_host:-local}" push "$PG_MODE" "$PG_BASE")
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | $COMPRESS_PIPE | ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | $recv_cmd"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
             if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "${remote_host:-local}" push "$PG_MODE" "$PG_BASE")
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $recv_cmd"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
@@ -1058,24 +1060,24 @@ transfer_data() {
         # correct pipeline if compression is ever wanted here; the policy of not
         # wanting it lives in one place, not spread into the transport layer.
         if [ $COMPRESSION -eq 1 ]; then
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "${remote_host:-local}" push "$PG_MODE" "$PG_BASE")
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | $COMPRESS_PIPE | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
             if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "${remote_host:-local}" push "$PG_MODE" "$PG_BASE")
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"

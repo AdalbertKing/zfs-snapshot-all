@@ -354,9 +354,9 @@ printf '14:21:24\t2236400\thdd/lab9src/deep@automated_hourly_2026-08-23_12-01-01
   . "$REPO/lib-zfs-snap.sh" 2>/dev/null
   cp "$pg_tmp/err" "$pg_tmp/stripped"
   progress_strip "$pg_tmp/stripped"
-  pid=$(progress_watch "$pg_tmp/err" "hdd/x@s" peer pull); sleep 3
-  progress_done "$pid" "hdd/x@s" ok
-  cp "$(progress_path "hdd/x@s")" "$pg_tmp/record" 2>/dev/null
+  pid=$(progress_watch "$pg_tmp/err" "hdd/x@s" "tank/dst" peer pull); sleep 3
+  progress_done "$pid" "hdd/x@s" "tank/dst" ok
+  cp "$(progress_path "hdd/x@s" "tank/dst")" "$pg_tmp/record" 2>/dev/null
 ) >/dev/null 2>&1
 
 if [ "$(wc -l < "$pg_tmp/stripped")" -eq 1 ] && grep -q 'Invalid argument' "$pg_tmp/stripped"; then
@@ -420,6 +420,93 @@ for eng in "$SNAPSEND" "$SNAPGET"; do
         PASS=$((PASS+1)); echo "PASS F $n does not let progress bookkeeping decide the transfer's exit status"
     fi
 done
+
+# THE PROGRESS RECORD MUST BE KEYED BY JOB, NOT BY DATASET NAME.
+#
+# Reviewer ADVISORY on #129, confirmed by measurement before being accepted:
+# building the filename by replacing "/" and "@" with "_" is not injective, so
+# `pool/a_b@s` and `pool/a/b@s` produced the SAME file and one job's progress
+# silently became the other's.
+#
+# Dataset alone is the wrong key for a second reason too: the same source may be
+# sent to two different targets at once, and those are different jobs.
+#
+# Both discriminators below fail on the pre-advisory code, which is the point.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/keys"; export ZFS_PROGRESS_DIR
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  {
+    printf '%s\n' "$(progress_path 'pool/a_b@s' 'tank/dst')"
+    printf '%s\n' "$(progress_path 'pool/a/b@s' 'tank/dst')"
+    printf '%s\n' "$(progress_path 'pool/src@s' 'tank/dstA')"
+    printf '%s\n' "$(progress_path 'pool/src@s' 'tank/dstB')"
+  } > "$pg_tmp/keys.txt"
+) >/dev/null 2>&1
+
+k1=$(sed -n 1p "$pg_tmp/keys.txt"); k2=$(sed -n 2p "$pg_tmp/keys.txt")
+k3=$(sed -n 3p "$pg_tmp/keys.txt"); k4=$(sed -n 4p "$pg_tmp/keys.txt")
+if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then
+    PASS=$((PASS+1)); echo "PASS F pool/a_b@s and pool/a/b@s get different progress records"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F pool/a_b@s and pool/a/b@s get different progress records"
+    echo "     oba: $k1"
+fi
+if [ -n "$k3" ] && [ "$k3" != "$k4" ]; then
+    PASS=$((PASS+1)); echo "PASS F the same source to two different targets gets two records"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the same source to two different targets gets two records"
+    echo "     oba: $k3"
+fi
+# The human identity must survive INSIDE the record -- a hashed filename is
+# unreadable, so if the dataset and target are not in the JSON the operator has
+# a key and no idea what it names.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/keys"; export ZFS_PROGRESS_DIR
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  printf 'size\t10\n' > "$pg_tmp/kerr"
+  pid=$(progress_watch "$pg_tmp/kerr" "pool/src@s" "tank/dstA" peer pull); sleep 3
+  progress_done "$pid" "pool/src@s" "tank/dstA" ok
+  cp "$(progress_path 'pool/src@s' 'tank/dstA')" "$pg_tmp/krec" 2>/dev/null
+) >/dev/null 2>&1
+if grep -q '"dataset":"pool/src@s"' "$pg_tmp/krec" 2>/dev/null \
+   && grep -q '"target":"tank/dstA"' "$pg_tmp/krec" 2>/dev/null; then
+    PASS=$((PASS+1)); echo "PASS F the hashed record still names its dataset and target inside"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the hashed record still names its dataset and target inside"
+    echo "     rekord: $(cat "$pg_tmp/krec" 2>/dev/null)"
+fi
+
+# THE RECORD IS A DATA LAYER FOR MACHINES, NOT A STATUS LINE (owner direction,
+# 2026-08-23): a future GUI/monitor must read per-job and per-relation state
+# without scraping text. So the identity fields are pinned as a contract:
+# relation label, mode+base derived from the REAL send command, job identity,
+# and wire bytes that are -1 (unknown), never 0, when not measurable.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/idkeys"; export ZFS_PROGRESS_DIR
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  PAIR_LABEL=lab-rel
+  progress_classify "zfs send -v -P -R -i hdd/a@prev hdd/a@now"; printf '%s %s\n' "$PG_MODE" "$PG_BASE" >  "$pg_tmp/cls"
+  progress_classify "zfs send -t 1-abc-token";                   printf '%s %s\n' "$PG_MODE" "$PG_BASE" >> "$pg_tmp/cls"
+  progress_classify "zfs send hdd/a@now";                        printf '%s %s\n' "$PG_MODE" "$PG_BASE" >> "$pg_tmp/cls"
+  printf 'size\t100\n14:00:01\t40\tx\n' > "$pg_tmp/iderr"
+  pid=$(progress_watch "$pg_tmp/iderr" "hdd/a@now" "tank/dst" peer pull incremental "hdd/a@prev"); sleep 3
+  progress_done "$pid" "hdd/a@now" "tank/dst" ok
+  cp "$(progress_path 'hdd/a@now' 'tank/dst')" "$pg_tmp/idrec" 2>/dev/null
+) >/dev/null 2>&1
+if [ "$(cat "$pg_tmp/cls" 2>/dev/null)" = "incremental hdd/a@prev
+resume 1-abc-token
+full " ]; then
+    PASS=$((PASS+1)); echo "PASS F progress_classify reads mode and base off the real send command"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F progress_classify reads mode and base off the real send command"
+    echo "     dostal: $(tr '\n' '|' < "$pg_tmp/cls" 2>/dev/null)"
+fi
+if grep -q '"label":"lab-rel"' "$pg_tmp/idrec" 2>/dev/null \
+   && grep -q '"mode":"incremental","base":"hdd/a@prev"' "$pg_tmp/idrec" \
+   && grep -q '"job":"[0-9a-f]' "$pg_tmp/idrec" \
+   && grep -q '"wire_bytes":-1' "$pg_tmp/idrec"; then
+    PASS=$((PASS+1)); echo "PASS F the record carries relation, mode, base, job identity, and honest wire=-1"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the record carries relation, mode, base, job identity, and honest wire=-1"
+    echo "     rekord: $(cat "$pg_tmp/idrec" 2>/dev/null | cut -c1-200)"
+fi
 
 echo
 echo "twins: $PASS passed, $FAIL failed"

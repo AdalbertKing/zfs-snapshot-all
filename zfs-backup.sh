@@ -3144,6 +3144,46 @@ atomic_replace_and_install() {
 cmd_progress() {
     local dir="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
     local f any=0
+    # --json IS the product here, not a convenience: the point of this stage is
+    # a data layer a future GUI or monitor can read, per dataset AND per
+    # relation, without scraping human text. One JSON object: "jobs" is the raw
+    # records verbatim (the engines own that schema), "relations" aggregates by
+    # the label the engines stamp into every record -- summed bytes, worst-case
+    # freshness, and a state that is "running" only if something actually runs.
+    if [ "${1:-}" = "--json" ]; then
+        local first=1
+        printf '{"jobs":['
+        for f in "$dir"/*.json; do
+            [ -e "$f" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            cat "$f"
+        done
+        printf '],"relations":['
+        first=1
+        for f in "$dir"/*.json; do [ -e "$f" ] && cat "$f"; done | awk -v now="$(date +%s)" '
+            { match($0,/"label":"[^"]*"/);        lb=substr($0,RSTART+9,RLENGTH-10)
+              if (lb=="") lb="(bez etykiety)"
+              match($0,/"total_bytes":[0-9]*/);   t=substr($0,RSTART+14,RLENGTH-14)+0
+              match($0,/"done_bytes":[0-9]*/);    d=substr($0,RSTART+13,RLENGTH-13)+0
+              match($0,/"updated_epoch":[0-9]*/); u=substr($0,RSTART+16,RLENGTH-16)+0
+              run = ($0 ~ /"state":"running"/) ? 1 : 0
+              tot[lb]+=t; don[lb]+=d; n[lb]++
+              if (run) { running[lb]++; if (u<old[lb] || old[lb]==0) old[lb]=u }
+            }
+            END {
+              first=1
+              for (lb in n) {
+                if (!first) printf ","
+                first=0
+                st = (running[lb]>0) ? "running" : "idle"
+                age = (running[lb]>0) ? now-old[lb] : -1
+                printf "{\"label\":\"%s\",\"jobs\":%d,\"running\":%d,\"total_bytes\":%d,\"done_bytes\":%d,\"state\":\"%s\",\"oldest_update_age\":%d}", lb, n[lb], running[lb]+0, tot[lb], don[lb], st, age
+              }
+            }'
+        printf ']}\n'
+        return 0
+    fi
     for f in "$dir"/*.json; do
         [ -e "$f" ] || continue
         any=1
@@ -3155,6 +3195,7 @@ cmd_progress() {
                 return sprintf("%dh%02dm%02ds", s/3600, (s%3600)/60, s%60) }
             {
                 match($0,/"dataset":"[^"]*"/);   ds=substr($0,RSTART+11,RLENGTH-12)
+                tg=""; if (match($0,/"target":"[^"]*"/)) tg=substr($0,RSTART+10,RLENGTH-11)
                 match($0,/"state":"[^"]*"/);     st=substr($0,RSTART+9,RLENGTH-10)
                 match($0,/"total_bytes":[0-9]*/);  tot=substr($0,RSTART+14,RLENGTH-14)+0
                 match($0,/"done_bytes":[0-9]*/);   don=substr($0,RSTART+13,RLENGTH-13)+0
@@ -3164,7 +3205,10 @@ cmd_progress() {
                 pct = (tot>0) ? don*100/tot : 0
                 age = now-upd
                 stale = (st=="running" && age>30) ? "  (bez aktualizacji od " age "s -- moze nie zyc)" : ""
-                printf "  %s\n", ds
+                # The filename is a hash now, so the record has to say what it
+                # is about. Target included because it is what distinguishes
+                # two simultaneous jobs for the same source.
+                if (tg != "") printf "  %s  ->  %s\n", ds, tg; else printf "  %s\n", ds
                 printf "    %s  %s / %s  (%.1f%%)   %s/s   pozostalo %s%s\n", st, h(don), h(tot), pct, h(rt), dur(eta), stale
             }' "$f"
     done
@@ -6261,6 +6305,66 @@ cmd_enable_client() {
     log "client '$name' is ACTIVE again on both sides. The next scheduled run catches up incrementally."
 }
 
+# ------------------------------------------------------------------------------
+# What this relationship is doing NOW, what it did LAST, and what is safe next.
+#
+# `status` used to describe only the enrolment: state, endpoint, timestamps. It
+# never read the history, so it could not answer the question an operator
+# actually has at 08:00 -- "did last night work?" -- and it printed `Zrodla: ?`
+# for every mode-based client, because for those the dataset list lives in the
+# peer's committed scope, not in the manifest it was reading.
+#
+# Both are answered from LOCAL, authoritative sources: the installed CONFIG (what
+# cron really pulls), the stats JSONL (what happened), and the progress records
+# (what is happening). No ssh: status must work when the peer is unreachable,
+# which is exactly when it is most likely to be run.
+status_sources_from_config() {   # <client name> -> the src= of every section it owns
+    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out=""
+    [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            "[dataset:"*) cur="" ;;
+            *"managed-by: zfs-backup.sh client=$name") cur="yes" ;;
+            *"src"*=*)
+                [ "$cur" = yes ] || continue
+                out="$out ${line#*= }" ;;
+        esac
+    done < "$cfg"
+    out="${out# }"
+    [ -n "$out" ] || return 1
+    printf '%s' "$out"
+}
+
+status_last_result() {   # <local target prefix> -> "<time> <status> <duration>s" or nothing
+    local prefix="$1" log="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"
+    [ -r "$log" ] || return 1
+    grep -F "\"dataset\":\"$prefix" "$log" 2>/dev/null | grep -F '"script":"snapget.sh"' | tail -1 \
+    | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p'
+}
+
+status_running_now() {   # <local target prefix> -> one line per live record
+    local prefix="$1" dir="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}" f
+    [ -d "$dir" ] || return 1
+    local any=1
+    for f in "$dir"/*.json; do
+        [ -e "$f" ] || continue
+        grep -q '"state":"running"' "$f" 2>/dev/null || continue
+        grep -qF "\"target\":\"$prefix" "$f" 2>/dev/null || continue
+        any=0
+        awk -v now="$(date +%s)" '
+            function h(b,   u,i){split("B KiB MiB GiB TiB",u," ");i=1
+                while(b>=1024&&i<5){b/=1024;i++} return sprintf(i==1?"%d %s":"%.1f %s",b,u[i])}
+            { match($0,/"dataset":"[^"]*"/); ds=substr($0,RSTART+11,RLENGTH-12)
+              match($0,/"total_bytes":[0-9]*/); t=substr($0,RSTART+14,RLENGTH-14)+0
+              match($0,/"done_bytes":[0-9]*/);  d=substr($0,RSTART+13,RLENGTH-13)+0
+              match($0,/"updated_epoch":[0-9]*/); u=substr($0,RSTART+16,RLENGTH-16)+0
+              p = (t>0)? d*100/t : 0
+              stale = (now-u>30) ? sprintf("  (bez aktualizacji od %ds)", now-u) : ""
+              printf "                   %s  %s / %s (%.1f%%)%s\n", ds, h(d), h(t), p, stale }' "$f"
+    done
+    return $any
+}
+
 cmd_status() {
     local name="${1:-}"
     if [ -z "$name" ]; then
@@ -6351,7 +6455,13 @@ cmd_status() {
     else
         echo "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)"
     fi
-    echo "Zrodla:            ${PEER_SAVED_DATASETS:-?}"
+    # The manifest is the wrong place to ask for a MODE-BASED client: there the
+    # dataset list lives in the peer's committed scope, which is why this line
+    # printed "?" for every such relationship. The installed CONFIG is local,
+    # authoritative, and describes what cron actually pulls tonight.
+    local _st_src
+    _st_src=$(status_sources_from_config "$CLIENT_NAME")         || _st_src="${PEER_SAVED_DATASETS:-?}"
+    echo "Zrodla:            $_st_src"
     echo "Cel:               ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
     echo "Spojnosc:          ${QUIESCE_MODE:-crash-consistent (bez quiesce)}"
     echo "Utworzono:         ${CREATED_AT:-?}"
@@ -6359,6 +6469,31 @@ cmd_status() {
     [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.:  $ENDPOINT_VERIFIED_AT (${ENDPOINT_VERIFIED_FOR:-?})"
     [ -n "${ACTIVATED_AT:-}" ]         && echo "Aktywowano:        $ACTIVATED_AT"
     [ -n "${REMOVED_AT:-}" ]           && echo "Usunieto:          $REMOVED_AT"
+
+    # NOW, LAST, and what is safe next -- the three questions status could not
+    # answer before. Each is stated only when it is actually known: an absent
+    # history says so rather than being reported as "no failures".
+    local _st_prefix="${MANAGED_PRUNE_SCOPE:-${MANAGED_DATASETS:-}}"
+    _st_prefix=${_st_prefix%% *}
+    if [ -n "$_st_prefix" ]; then
+        echo
+        if status_running_now "$_st_prefix"; then
+            echo "Teraz:             (transfer w toku -- szczegoly wyzej)"
+        else
+            echo "Teraz:             nic nie biegnie dla tej relacji"
+        fi
+        local _st_last; _st_last=$(status_last_result "$_st_prefix")
+        if [ -n "$_st_last" ]; then
+            set -- $_st_last
+            echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+            if [ "$2" != success ]; then
+                echo "Nastepny krok:     sprawdz $0 test $CLIENT_NAME i log w ${CRON_LOG:-cron.log}"
+            fi
+        else
+            echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
+            echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------------------

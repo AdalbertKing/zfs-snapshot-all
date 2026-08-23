@@ -39,8 +39,13 @@ emit_stats() {
     local resumed_bool="false"
     [ "$resumed" = "yes" ] && resumed_bool="true"
     {
-        printf '{"time":"%s","script":"%s","dataset":"%s","target":"%s","status":"%s","duration_s":%s,"resumed":%s}\n' \
+        # "label" joined 2026-08-23: the RELATION identity (-L), so history can
+        # be grouped per relationship by a future monitor/GUI instead of being
+        # guessed from path prefixes. Additive field -- every existing consumer
+        # keeps parsing.
+        printf '{"time":"%s","script":"%s","label":"%s","dataset":"%s","target":"%s","status":"%s","duration_s":%s,"resumed":%s}\n' \
             "$(date -u +%FT%TZ)" "$(basename "$0")" \
+            "$(json_escape "${PAIR_LABEL:-}")" \
             "$(json_escape "$dataset")" "$(json_escape "$target")" "$(json_escape "$status")" \
             "$duration" "$resumed_bool"
     } >> "$STATS_LOG" 2>/dev/null || true
@@ -79,13 +84,29 @@ emit_stats() {
 
 progress_dir() { printf '%s' "${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"; }
 
-# One file per in-flight dataset, named after it so a second run on the same
-# dataset overwrites its own record instead of accumulating stale ones.
-progress_path() {   # <dataset>
-    local k="$1"
-    k="${k//$(printf "%s" "/")/_}"
-    k="${k//@/_}"
-    printf '%s/%s.json' "$(progress_dir)" "$k"
+# ONE FILE PER JOB, keyed by job_state_key -- NOT by the dataset name.
+#
+# The first version built the filename by replacing "/" and "@" with "_", which
+# is not injective: `pool/a_b@s` and `pool/a/b@s` produce the same name, and one
+# job's record silently becomes the other's. Reviewer ADVISORY on #129, and
+# confirmed by measurement before being accepted:
+#
+#     pool/a_b@s  ->  pool_a_b_s.json
+#     pool/a/b@s  ->  pool_a_b_s.json
+#
+# Dataset alone is the wrong key for a second reason as well: two jobs may run
+# for the SAME source at the same time toward different targets, or under
+# different -j identifiers, and those are different jobs whose progress must not
+# overwrite each other.
+#
+# job_state_key already solves exactly this, for exactly this reason -- it hashes
+# script basename (which is the direction), IDENTIFIER, source and target with
+# NUL delimiters "so no value can impersonate a boundary" (REV-20260729-001 F3).
+# Reusing it means one definition of job identity in this file, not two that can
+# drift. The human-readable dataset and target stay INSIDE the record, where
+# they are read rather than parsed.
+progress_path() {   # <source dataset|snapshot> <target>
+    printf '%s/%s.json' "$(progress_dir)" "$(job_state_key "${2:-}" "$1")"
 }
 
 # Recognises a progress line WITHOUT consuming anything else. Kept as its own
@@ -139,9 +160,33 @@ progress_reap() {   # [max age in seconds, default 7 days]
     return 0
 }
 
-progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
-    local errfile="$1" dataset="$2" peer="${3:-}" direction="${4:-}"
-    local pfile; pfile=$(progress_path "$dataset")
+# WHAT this transfer is, derived from the REAL send command rather than from a
+# second copy of the decision logic that could drift from it:
+#   zfs send -t <token>       -> resume       (base = the token)
+#   zfs send ... -i <base>    -> incremental  (base = snapshot or bookmark)
+#   zfs send ... -I <base>    -> incremental
+#   otherwise                 -> full
+# The GUID handshake is NOT duplicated here: validate_snapshot already compares
+# source and target GUIDs after the transfer, and the terminal state of this
+# record ("ok") is only ever written when that check passed -- so state=ok IS
+# the GUID verification, recorded once, by the code that owns it.
+progress_classify() {   # <send_cmd> -> sets PG_MODE and PG_BASE
+    PG_MODE=full; PG_BASE=""
+    set -- $1
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -t) PG_MODE=resume;      PG_BASE="${2:-}"; return 0 ;;
+            -i|-I) PG_MODE=incremental; PG_BASE="${2:-}"; return 0 ;;
+        esac
+        shift
+    done
+    return 0
+}
+
+progress_watch() {   # <errfile> <dataset> <target> <peer> <direction> <mode> <base> [wirefile] -> pid
+    local errfile="$1" dataset="$2" target="${3:-}" peer="${4:-}" direction="${5:-}"
+    local mode="${6:-full}" base="${7:-}" wirefile="${8:-}"
+    local pfile; pfile=$(progress_path "$dataset" "$target")
     mkdir -p "$(progress_dir)" 2>/dev/null || return 0
     (
         local total=0 done_b=0 started prev_b=0 prev_t rate=0 eta=-1 now line
@@ -156,6 +201,20 @@ progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
                 esac
             done < "$errfile"
             case "$total" in ''|*[!0-9]*) total=0 ;; esac
+            # Bytes that actually crossed the link, read from mbuffer's own log
+            # (-l). Distinct from done_bytes on purpose: done_bytes is what
+            # zfs send pushed into the pipe, wire is what left the host -- with
+            # compression the two differ by the compression ratio. -1 means
+            # "not measurable here" (push runs its mbuffer on the REMOTE side),
+            # never 0, so a missing measurement cannot read as an idle link.
+            wire=-1
+            if [ -n "$wirefile" ] && [ -s "$wirefile" ]; then
+                wire=$(awk '/total/ { for(i=1;i<NF;i++) if ($(i+1)=="kiB" || $(i+1)=="MiB" || $(i+1)=="GiB") {v=$i; u=$(i+1)} }
+                    END { if (v=="") { print -1; exit }
+                          m=1; if (u=="kiB") m=1024; else if (u=="MiB") m=1048576; else if (u=="GiB") m=1073741824
+                          printf "%d", v*m }' "$wirefile" 2>/dev/null)
+                case "$wire" in ''|*[!0-9-]*) wire=-1 ;; esac
+            fi
             case "$done_b" in ''|*[!0-9]*) done_b=0 ;; esac
             now=$(date +%s)
             if [ "$now" -gt "$prev_t" ] && [ "$done_b" -ge "$prev_b" ]; then
@@ -173,6 +232,11 @@ progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
             mkdir -p "$(progress_dir)" 2>/dev/null
             {
                 printf '{"dataset":"%s"' "$(json_escape "$dataset")"
+                printf ',"target":"%s"' "$(json_escape "$target")"
+                printf ',"label":"%s"' "$(json_escape "${PAIR_LABEL:-}")"
+                printf ',"mode":"%s","base":"%s"' "$(json_escape "$mode")" "$(json_escape "$base")"
+                printf ',"job":"%s"' "$(job_state_key "$target" "$dataset")"
+                printf ',"wire_bytes":%s' "$wire"
                 printf ',"peer":"%s","direction":"%s"' "$(json_escape "$peer")" "$(json_escape "$direction")"
                 printf ',"total_bytes":%s,"done_bytes":%s' "$total" "$done_b"
                 printf ',"rate_bps":%s,"eta_seconds":%s' "$rate" "$eta"
@@ -189,10 +253,10 @@ progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
 # purpose for a moment -- a reader that looked away must still be able to see
 # how the transfer ended -- and removed on the next successful start for the
 # same dataset.
-progress_done() {   # <watcher pid> <dataset> <status>
-    local pid="$1" dataset="$2" status="$3"
+progress_done() {   # <watcher pid> <dataset> <target> <status>
+    local pid="$1" dataset="$2" target="$3" status="$4"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    local pfile; pfile=$(progress_path "$dataset")
+    local pfile; pfile=$(progress_path "$dataset" "$target")
     [ -f "$pfile" ] || return 0
     local body; body=$(cat "$pfile" 2>/dev/null) || return 0
     # Replace the running marker rather than appending beside it: two "state"
