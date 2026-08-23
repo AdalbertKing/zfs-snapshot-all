@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4e9f8ad0c1ddc21e -->
+<!-- status-covers-digest: b81e01e0c897ce11 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Dwie wady cyklu życia, które ujawniła dopiero druga próba czterech komend (2026-08-23).**
+  Obie znalezione na żywo (pve9 → pve2), obie blokowały samą próbę, żadnej nie dało się
+  zobaczyć czytaniem kodu.
+  **Nazwy nie dało się użyć ponownie.** `remove-client` celowo **zostawia** rekord relacji
+  i dopisuje `STATE=removed` — to jej własna historia. `add-client` odrzucał jednak każdy
+  istniejący plik, niezależnie od stanu. Po całkowicie czystej rozbiórce (blok crona,
+  sekcje configu, klucze, konto na peerze, zero `zfs allow` — wszystko sprawdzone) kolejny
+  krok tego samego cyklu odmawiał i kazał uruchomić `remove-client`, czyli komendę, która
+  właśnie przebiegła i nic by nie zmieniła. Dwie połowy cyklu, każda spójna wewnętrznie,
+  wzajemnie sprzeczne. Nagrobek jest teraz **archiwizowany** poza przestrzeń `*.conf`,
+  którą skanują wszystkie pętle, a nazwa wraca do użytku; rekord w każdym innym stanie
+  nadal odmawia i odmowa **nazywa ten stan**.
+  **Każdy endpoint na porcie innym niż 22 nie przechodził weryfikacji klucza hosta.**
+  Przy `HostKeyAlias` OpenSSH szuka klucza pod **samym aliasem** — nie dokleja portu, jak
+  robi to dla prawdziwej nazwy hosta. `ensure_alias_known_hosts` zapisywał `[alias]:port`,
+  więc klucz leżał pod nazwą, o którą ssh nigdy nie pyta. Port 22 działał i tylko dlatego
+  wada przetrwała — nic w estacie nie używało innego portu aż do przełączenia endpointu.
+  Awaria jest myląca: klucz **jest** w pliku, a `ssh -v` mówi to wprost
+  (`hostkeys_find_by_key_cb: found matching key`, zaraz potem `Host key verification failed`)
+  — bo to szukanie po KLUCZU ze skanu `UpdateHostKeys`, gdy szukanie po NAZWIE już chybiło.
+  Zmierzone: klucz przypięty był co do bajtu równy prawdziwemu kluczowi pve2, a ten sam
+  wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
+  jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
+  Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój

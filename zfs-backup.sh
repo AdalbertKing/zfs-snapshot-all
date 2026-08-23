@@ -428,11 +428,30 @@ ensure_alias_known_hosts() {
     local rest; rest=$(printf '%s' "$keyline" | cut -d' ' -f2-)
     [ -n "$rest" ] || return 1
     local dst="${src%_known_hosts}_alias_known_hosts"
-    if [ "$port" != "22" ]; then
-        printf '[%s]:%s %s\n' "$alias" "$port" "$rest" > "$dst" || return 1
-    else
-        printf '%s %s\n' "$alias" "$rest" > "$dst" || return 1
-    fi
+    # ALWAYS the bare alias, never the [alias]:port form -- and the port
+    # argument is deliberately not used here.
+    #
+    # When HostKeyAlias is set, OpenSSH looks the host key up under the alias
+    # ALONE; it does not append the port the way it does for a real hostname.
+    # This used to write '[alias]:port' whenever the port was not 22, so the
+    # pinned key was filed under a name ssh never asks for, and EVERY endpoint
+    # on a non-default port failed "Host key verification failed" with the
+    # correct key sitting in the file. Port 22 worked, which is why it survived
+    # this long: nothing in the estate used another port until an endpoint
+    # switch to one was tried.
+    #
+    # Found live 2026-08-23 running issue #9's second path (LAN seed, then
+    # activate --host=<other>:2222). ssh -v named it exactly:
+    #     debug1: hostkeys_find_by_key_cb: found matching key in ...:1
+    #     Host key verification failed.
+    # -- found by the UpdateHostKeys scan, which searches by KEY, while the
+    # lookup by NAME had already missed. Rewriting the same file's single entry
+    # without the port made the identical connection succeed.
+    #
+    # The alias is per relationship and the key belongs to the host, so a name
+    # without a port is also the semantically right thing to pin: changing the
+    # port does not change who the peer is.
+    printf '%s %s\n' "$alias" "$rest" > "$dst" || return 1
     chmod 0600 "$dst" 2>/dev/null
     # This file lives in the account's own ~/.ssh but is written HERE, by root.
     # Without the chown it lands root:root 0600 -- and the account then cannot
@@ -3776,7 +3795,32 @@ cmd_add_client() {
     fi
 
     local cpath; cpath=$(client_conf_path "$name")
-    [ -e "$cpath" ] && die "client '$name' already exists ($cpath) -- use seed/activate-client/remove-client"
+    if [ -e "$cpath" ]; then
+        # A record whose last STATE is 'removed' is a TOMBSTONE, not a live
+        # relationship, and the two halves of the lifecycle disagreed about
+        # that. remove-client deliberately KEEPS the file and appends
+        # STATE=removed (it is the relationship's own history); add-client
+        # refused on the file's mere existence. So a name could never be reused
+        # after a normal teardown, and the refusal told the operator to run
+        # "remove-client" -- which they had just run, and which would have
+        # changed nothing. Found live on 2026-08-23 running the four-command
+        # trial of issue #9 a second time.
+        #
+        # Every other scanner in this file already treats STATE=removed as
+        # "not a relationship" (see the coverage-overlap probe); this makes
+        # add-client agree with them.
+        local _prev_state
+        _prev_state=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${STATE:-unknown}" )
+        if [ "$_prev_state" = removed ]; then
+            # Archived, not deleted, and deliberately NOT matching *.conf so no
+            # scanner picks it up as a live record.
+            local _arch="${cpath}.removed-$(date '+%Y%m%d-%H%M%S')"
+            mv -f "$cpath" "$_arch"                 || die "client '$name' was removed earlier, but its old record $cpath could not be archived -- refusing to create a new relationship on top of it"
+            log "name '$name' was used by a relationship that has been removed -- its record is kept as $_arch and the name is reused"
+        else
+            die "client '$name' already exists ($cpath), state '$_prev_state' -- use seed/activate-client/remove-client"
+        fi
+    fi
 
     read_server_conf
     # ---- Batch B: the account the jobs will run as, decided here or not at all
