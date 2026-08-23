@@ -7348,11 +7348,20 @@ rux_root_ssh() {   # <host> <port> <command...>
 # Refusing is therefore the kinder answer, not the stricter one. Nothing here
 # is a security decision: the default two-sided path remains fully available
 # and is printed verbatim.
-rux_grant_remotely_preflight() {   # <host> <port>
-    local host="$1" port="$2"
+rux_grant_remotely_preflight() {   # <host> <port> [will_join_now=0]
+    local host="$1" port="$2" will_join_now="${3:-0}"
     if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
         die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
     fi
+    # The manifest requirement holds only when THIS run will not create it.
+    # The one-command flow's own add-client performs the join (--join-remotely,
+    # the default) minutes after this gate -- demanding a PRE-existing join
+    # there made the "whole enrolment is ONE command" promise false for the
+    # first-ever pairing of a clean host, and the LAB-E closing campaign met
+    # exactly that on a source with no leftovers. With --manual-join the join
+    # will NOT happen in this run, and the early refusal below stays exactly
+    # as the 2026-08-20 live failure demanded.
+    [ "$will_join_now" -eq 1 ] && return 0
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
     if ! rux_root_ssh "$host" "$port" "test -s '$mfile'" >/dev/null 2>&1; then
         die "--grant-remotely: $host has not joined '$COLLECTOR_LABEL' yet (no $mfile there), so there is no delegated account to grant to and this flag cannot do the whole enrolment in one command. Nothing was changed anywhere -- no client record, no keys, no package.
@@ -7497,7 +7506,7 @@ rux_remote_install() {
     # Spelled as an `if`, not a `&&` chain, on purpose: this is a gate, and a
     # gate must not depend on nobody ever adding `set -e` to this file.
     if [ "$grant_remotely" -eq 1 ] && [ -z "$state" ]; then
-        rux_grant_remotely_preflight "$host" "$port"
+        rux_grant_remotely_preflight "$host" "$port" "$([ "$manual_join" -eq 1 ] && echo 0 || echo 1)"
     fi
 
     # Accepted semantics: --local-user names the account this relationship
