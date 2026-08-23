@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 6d043179ff1e7ddaf62829e38aa26dea05a608d3 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 48c36b3cb49c6358a1b1aaed3be62297600deaa5 -->
+<!-- frozen: lib-zfs-snap.sh 100644 53bf4c38f6102f1de8cc7f49590a93d0879704b1 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -54,6 +54,20 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-23 (lib-zfs-snap.sh, two changes, one stage -- the seed-family /
+  closing campaigns, owner-directed 'Rob'):
+  (1) the progress watcher subshell now closes the inherited engine flock
+  (exec 200>&-) -- it outlives the engine by design, and holding fd 200 kept
+  the single-instance lock alive for seconds after every run, so the
+  one-command flow's verify probe (firing right after its own seed) died with
+  'Another instance ... is already running' on every FIRST enrolment while
+  every manual retry passed.
+  (2) progress_done/progress_mark_verified moved 2>/dev/null BEFORE the
+  output redirect: bash opens redirects left to right, so a failing open of
+  the record file was reported to the still-original stderr -- one
+  'Permission denied' line per dataset in a delegated account's cron.log.
+  Both measured live on pve9 before the fix; no transfer semantics touched.
 
 - 2026-08-23 (snapget.sh, snapsend.sh, check-snap-age.sh): the DECLARED-PASSIVE
   stage, owner-directed ('Rob etap pasywny') from the LAB-E campaign findings.

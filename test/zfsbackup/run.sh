@@ -6513,8 +6513,12 @@ fi
 # 67d. both transfer sites still carry the passive branch itself.
 for fn in cmd_seed cmd_final_catchup; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    # 2026-08-23: the family root is profile-derived now (profile_family_root),
+    # so the branch adopts with -m "$seed_root" -e instead of the automated_
+    # literal this test used to pin. The question is unchanged: the branch
+    # must still exist and still adopt (-e) under the family name.
     if printf '%s
-' "$body" | grep -q 'seed_flags=(-m automated_ -e)'; then
+' "$body" | grep -q 'seed_flags=(-m "\$seed_root" -e)'; then
         ok "67d: $fn seeds passively when the family exists"
     else
         bad "67d: $fn seeds passively when the family exists" "brak galezi w $fn"
