@@ -828,11 +828,38 @@ out="$(run --source=rpool/data --target=hdd/backups --local-user=root --config="
 # into every line while a delegated run bakes /home/<acct>/... -- a preview from
 # the wrong copy previews a block that will never exist. Asserted at the source,
 # because the difference only shows on a host with a real account.
-if ! grep -n 'bash "\$GENCRON"' "$ZB" | awk -F: '$1>2800 && $1<3200' | grep -q .; then
-    ok "local-user: the local form renders through gencron_as_target, not gen-cron directly"
+# This used to be pinned by LINE NUMBER RANGE (2800..3200), which is not the
+# property -- it is where the property happened to live. Adding comments
+# anywhere above shifted gencron_as_target's OWN call into the window and the
+# case failed for a reason that had nothing to do with what it protects
+# (2026-08-23). Now the file is walked function by function and the rule is
+# stated directly: exactly one function may reach gen-cron.sh without going
+# through the wrapper, and it is the wrapper itself; the previewing path must
+# not. The named exceptions are commands that render a config for validation
+# under the identity they already are, not a preview of someone else's block.
+gencron_callers=$(awk '
+    /^[a-z_][a-z0-9_]*\(\) \{/ { fn = $1; sub(/\(\).*/, "", fn) }
+    /bash "\$GENCRON"/          { print fn }
+' "$ZB" | sort -u)
+gencron_allowed="gencron_as_target
+cmd_activate_client
+cmd_audit_source_retention
+cmd_migrate_profile
+cmd_remove_client"
+gencron_unexpected=$(comm -23 <(printf '%s
+' "$gencron_callers") <(printf '%s
+' "$gencron_allowed" | sort))
+if [ -z "$gencron_unexpected" ]; then
+    ok "local-user: only known functions reach gen-cron.sh directly; previewing goes through gencron_as_target"
 else
-    bad "local-user: the local form renders through gencron_as_target, not gen-cron directly" \
-        "$(grep -n 'bash "\$GENCRON"' "$ZB" | awk -F: '$1>2800 && $1<3200')"
+    bad "local-user: only known functions reach gen-cron.sh directly; previewing goes through gencron_as_target"         "nowy bezposredni wolajacy: $(printf '%s' "$gencron_unexpected" | tr '
+' ' ')"
+fi
+# And the previewing path itself, named rather than located.
+if ! awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -q 'bash "\$GENCRON"'; then
+    ok "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"
+else
+    bad "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"         "$(awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -n 'bash "\$GENCRON"')"
 fi
 
 echo "--------------------------------------------"
