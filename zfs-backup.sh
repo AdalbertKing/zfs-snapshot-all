@@ -7499,7 +7499,59 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
     fi
 
     if rux_root_ssh "$host" "$port" "test -s '$hfile'" >/dev/null 2>&1; then
-        log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' -- nothing to grant, the ordinary verification below decides whether it covers the request"
+        # A committed scope exists. Until 2026-08-23 this branch said "nothing
+        # to grant" unconditionally -- true for a re-run of the SAME
+        # relationship, and a dead end for the SECOND relationship to the same
+        # source: its new root was never granted and the ordinary verification
+        # below failed with "not covered by the scope actually COMMITTED"
+        # (measured, labD after labS). The request this flag is allowed to
+        # sign is unchanged -- exactly the requested roots -- so a committed
+        # scope is EXTENDED by appending the missing request-shaped stanzas
+        # and re-running --commit-scope, which reconciles grants exactly like
+        # the first commit did. Roots already carrying a stanza are left
+        # alone; a broader operator-written stanza that covers the request
+        # without naming it gains a redundant, audited, harmless child stanza.
+        local committed_headers missing="" _rh
+        committed_headers=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null"             | awk '/^\[dataset:/{print}')
+        while IFS= read -r _rh; do
+            case "$committed_headers" in
+                *"[dataset:$_rh]"*) ;;
+                *) missing+="$_rh"$'
+' ;;
+            esac
+        done < <(dataset_list_split "$requested")
+        if [ -z "$missing" ]; then
+            log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' covering the request -- nothing to grant"
+            return 0
+        fi
+        # Extend only a file that IS the committed version. A file whose bytes
+        # differ from the granted hash is an operator's pending edit, and this
+        # flag is not permission to build on top of it.
+        rux_root_ssh "$host" "$port" "[ \"\$(sha256sum -- '$sfile' | awk '{print \$1}')\" = \"\$(cat -- '$hfile')\" ]" >/dev/null 2>&1             || die "--grant-remotely: the scope file on $host differs from the last committed version -- an operator is editing it. Commit or align it there (deploy.sh --commit-scope=$COLLECTOR_LABEL), then re-run. Nothing was changed."
+        local extend_repo="" _xd
+        for _xd in "$SCRIPT_DIR" /root/scripts/zfs-snapshot-all /root/zfs-snapshot-all; do
+            if rux_root_ssh "$host" "$port" "test -x '$_xd/deploy.sh'" >/dev/null 2>&1; then extend_repo="$_xd"; break; fi
+        done
+        [ -n "$extend_repo" ] || die "--grant-remotely: could not find deploy.sh on $host -- cannot re-commit the extended scope"
+        local ext_stamp; ext_stamp="root@$(hostname -s 2>/dev/null || hostname) $(date '+%Y-%m-%d %H:%M:%S %Z')"
+        log "--grant-remotely: extending the committed scope on $host with $(printf '%s' "$missing" | wc -l) new root(s) and re-committing (audited)"
+        {
+            printf '
+# Extended by --grant-remotely from %s.
+' "$ext_stamp"
+            while IFS= read -r _rh; do
+                [ -n "$_rh" ] || continue
+                printf '[dataset:%s]
+include_parent = yes
+include_children = yes
+' "$_rh"
+            done <<< "$missing"
+        } | rux_root_ssh_in "$host" "$port" "cat >> '$sfile'"             || die "--grant-remotely: could not append to the scope file on $host -- nothing was committed"
+        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
+        local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
+        rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
+' '$ext_stamp (extension)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
+        log "--grant-remotely: extension committed on $host as '$COLLECTOR_LABEL', audit recorded"
         return 0
     fi
 
