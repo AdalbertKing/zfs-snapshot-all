@@ -1751,8 +1751,39 @@ crontab_of_or_die() {   # <user> <outfile>
 # match a colon that happens to appear later, inside the dataset path.
 # A line with no such argument at all (delsnaps.sh/check-snap-age.sh -- no
 # remote connection to switch) is returned unchanged.
+# The endpoint has THREE spellings in a generated block, and this used to
+# normalize only the first:
+#
+#   1. snapget.sh's  -A "acct@host:path"                      -- was covered;
+#   2. delsnaps.sh's remote source-prune POSITIONAL argument
+#      "acct@host:path" -- not covered. The comment at the call site said
+#      delsnaps.sh lines have "no remote connection to switch", which stopped
+#      being true when managed source retention gained a remote form;
+#   3. the ssh port, which lives in its own -p flag and never travelled with
+#      the host at all.
+#
+# So an endpoint switch that changed the port -- or that touched the source
+# prune line -- left the relationship's OWN job lines looking like a foreign
+# workload about to be deleted, and the guard refused. Measured live on
+# 2026-08-23 (issue #9, second path), with a control that isolates it:
+#
+#   activate --host=<same endpoint>    -> EXIT=0, no-op
+#   activate --host=<other host:port>  -> EXIT=1, "2 job line(s) would be DELETED"
+#
+# and the two "foreign" lines named in the refusal were that client's own
+# backup and source-prune jobs. The first switch of a relationship's life
+# succeeded only because no managed block existed yet to compare against; every
+# switch after cron was installed was impossible.
+#
+# Still fail-closed by construction: only the host and the port are blanked.
+# The account, the source dataset, the target dataset, the schedule, the
+# retention flags, HostKeyAlias and everything else are compared verbatim, so a
+# job that genuinely disappears is still reported -- a relationship losing one
+# of two datasets cannot hide behind the other.
 endpoint_normalized_identity() {
-    sed -E 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/'
+    sed -E -e 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/' \
+           -e 's/"([^"@ ]+@)[^:" ]+:/"\1<ENDPOINT>:/g' \
+           -e 's/(^| )-p [0-9]+( |$)/\1-p <PORT>\2/g'
 }
 
 # REV-20260801-021 F1. The overlap guard below deliberately allows a target that
