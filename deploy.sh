@@ -3856,14 +3856,23 @@ fi
 if [ ! -s "\$PROCESSING" ]; then
     rm -f "\$PROCESSING"
     [ "\$(date +%u)" = "1" ] || exit 0
-    printf 'Host: %s   %s
+    # The heartbeat's ONLY job is to prove the channel carries, so it must not
+    # report success when the send failed. The first cut piped into mail and
+    # then exited 0 unconditionally -- a broken MTA would have produced a
+    # cheerful "channel fine" exit while nothing left the host, which is the
+    # exact failure the heartbeat exists to expose, wearing the heartbeat's own
+    # clothes. Caught in review.
+    if printf 'Host: %s   %s
 
 Brak zdarzen w minionym tygodniu.
 
 Ten list jest dowodem, ze droga alertu na tym hoscie dziala.
 Jesli w kolejny poniedzialek nie przyjdzie -- to jest alarm.
-'         "\$HOST" "\$TODAY"         | mail -s "[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"
-    exit 0
+'         "\$HOST" "\$TODAY"         | mail -s "[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
+        exit 0
+    fi
+    echo "alert-digest.sh: weekly heartbeat could not be sent -- the alert channel on this host is NOT proven" >&2
+    exit 1
 fi
 
 # Collapse to one row per (severity, message): count, first-seen, last-seen.
