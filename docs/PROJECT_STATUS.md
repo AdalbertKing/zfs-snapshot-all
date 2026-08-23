@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3572524182dbca70 -->
+<!-- status-covers-digest: 4e9f8ad0c1ddc21e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -50,6 +50,29 @@
   Kontrola na odrzuconej bazie: dryf inwentarza między pytaniem a grantem kończył
   się `rc=0` i **trzema wykonanymi `zfs allow`** na zbiorze, którego nikt nie
   zaakceptował; po poprawce — odmowa i zero grantów.
+- **Tydzień bez zdarzeń też musi się odezwać (2026-08-22).**
+  Do tej pory pusta kolejka znaczyła brak maila, więc **cisza nie niosła żadnej
+  informacji**. Zmierzone na pve9: jego MTA dostarczał wyłącznie lokalnie, a
+  digest nie był w ogóle zaplanowany, więc host nie raportował niczego przez
+  **miesiące** — a ze skrzynki właściciela wyglądało to identycznie jak host bez
+  zdarzeń. W `/var/mail` na samym hoście leżały trzy prawdziwe wiadomości, w tym
+  digest nazywający 2 alerty i 1 ostrzeżenie.
+  Od teraz raz w tygodniu, w poniedziałek, host bez zdarzeń mówi o tym wprost.
+  Jedna linia, jeden mail na host na tydzień. Nie chodzi o treść — chodzi o to,
+  że **od poniedziałku BRAK maila sam jest alarmem**, i to alarmem, który
+  właściciel zauważa bez zaglądania gdziekolwiek.
+  Bezstanowo z rozmysłem: żadnego pliku „ostatni puls", który mógłby się
+  zestarzeć, rozjechać albo wrócić z backupu — **dniem tygodnia JEST harmonogram**.
+  Poniedziałek, który ma zdarzenia, wysyła zwykły digest i dowodzi tego samego.
+  Dowód na żywo: pusta kolejka w sobotę → zero maili; pusta kolejka w dniu pulsu
+  → mail dostarczony na zewnątrz, `250 Ok`.
+  Puls **zawodzi zamknięcie**: pierwsza wersja wpychała do `mail` i kończyła
+  bezwarunkowym `exit 0`, więc zepsuty MTA raportował „kanał sprawny" mimo że nic
+  nie opuściło hosta — dokładnie ta awaria, którą puls ma ujawniać, w przebraniu
+  samego pulsu. Teraz o werdykcie decyduje kod wyjścia wysyłki. Zmierzone na pve9:
+  `mail` działa → `rc=0`; `mail` zwraca 3 → `rc=1` i na stderr „the alert channel
+  on this host is NOT proven". Przypięte behawioralnie w `test/alertmail/run.sh`
+  (uruchamia prawdziwy wygenerowany skrypt, nie grepuje źródła).
 - **Zakolejkowane zdarzenia odchodzą razem z relacją (2026-08-22).**
   Znalezione na żywo: kolejka alertów pve1 trzymała cztery zdarzenia o relacjach
   zdemontowanych wiele godzin wcześniej, a najbliższy digest o 07:00 wysłałby

@@ -283,6 +283,82 @@ else
     done
 fi
 
+
+# ---------------------------------------------------------------------------
+# THE WEEKLY HEARTBEAT MUST FAIL CLOSED.
+#
+# Same finding class as the rest of this file: a claim of health the evidence
+# does not support. The heartbeat exists for exactly one reason -- to prove the
+# alert channel still carries on a week with nothing to report -- so a send that
+# never left the host must not exit 0. The first cut piped into mail and then
+# ran an unconditional exit 0, which meant a broken MTA produced a cheerful
+# "channel fine" while nothing was delivered.
+#
+# This runs the REAL generated script, not a grep of deploy.sh. The heredoc body
+# is extracted and expanded exactly as deploy.sh expands it, then executed with
+# the queue redirected into a temp dir and mail(1) stubbed. The day check is
+# neutralised by pinning it to whatever today is -- an earlier hand-run of this
+# control returned 0 and looked like a pass purely because the date had rolled
+# past the heartbeat day and the branch never executed at all.
+# ---------------------------------------------------------------------------
+hb_body=$(sed -n '/^    cat > "\$DIGEST_SCRIPT" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC" | sed '1d;$d')
+if [ -z "$hb_body" ]; then
+    bad "the alert-digest heredoc can be extracted from deploy.sh" \
+        "sed anchors no longer match -- update this suite"
+elif ! printf '%s\n' "$hb_body" | grep -q 'cisza, kanal sprawny'; then
+    bad "the extracted digest carries the weekly heartbeat" \
+        "no heartbeat send found in the extracted body"
+else
+    hb_dir=$(mktemp -d)
+    DIGEST_SCRIPT_MARKER="# alert-digest.sh test" \
+    ALERT_ENV_PREAMBLE="" NOTIFY_EMAIL="root" \
+        eval "cat > '$hb_dir/digest.sh' <<EOF
+$hb_body
+EOF"
+    # Pin the heartbeat day to today so the branch always runs. Without this the
+    # case silently no-ops on six days out of seven and reports a pass.
+    sed -i "s/\"\$(date +%u)\" = \"[0-9]\"/\"\$(date +%u)\" = \"$(date +%u)\"/" "$hb_dir/digest.sh"
+    if ! grep -q "= \"$(date +%u)\"" "$hb_dir/digest.sh"; then
+        bad "the heartbeat day check can be pinned for the test" \
+            "the day comparison in the generated script no longer matches the sed"
+    elif ! bash -n "$hb_dir/digest.sh" 2>/dev/null; then
+        bad "the extracted digest is valid bash" "$(bash -n "$hb_dir/digest.sh" 2>&1 | head -3)"
+    else
+        mkdir -p "$hb_dir/bin"
+        printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$hb_dir/bin/mail"
+        chmod +x "$hb_dir/bin/mail"
+
+        rm -f "$hb_dir/q" "$hb_dir/q.processing"
+        hb_out=$(PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
+                 bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
+        if [ "$hb_rc" -eq 0 ]; then
+            ok "heartbeat: a delivered send exits 0"
+        else
+            bad "heartbeat: a delivered send exits 0" "rc=$hb_rc" "out: $hb_out"
+        fi
+
+        # The discriminating case. mail(1) fails; the heartbeat must say so.
+        printf '#!/bin/sh\ncat >/dev/null\nexit 3\n' > "$hb_dir/bin/mail"
+        rm -f "$hb_dir/q" "$hb_dir/q.processing"
+        hb_out=$(PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
+                 bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
+        if [ "$hb_rc" -ne 0 ]; then
+            ok "heartbeat: a send that failed does NOT report success"
+        else
+            bad "heartbeat: a send that failed does NOT report success" \
+                "mail(1) exited 3 and the digest still exited 0 -- the pulse is fail-open" \
+                "out: $hb_out"
+        fi
+        if printf '%s' "$hb_out" | grep -q "NOT proven"; then
+            ok "heartbeat: a failed send names the channel as unproven"
+        else
+            bad "heartbeat: a failed send names the channel as unproven" \
+                "nothing on stderr told cron what broke" "out: $hb_out"
+        fi
+    fi
+    rm -rf "$hb_dir"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
