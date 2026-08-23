@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a446348ca4536717 -->
+<!-- status-covers-digest: 4e9f8ad0c1ddc21e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,35 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
+  Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
+  `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój
+  majątek** — 22 datasety, w tym wszystkie wolumeny maszyn. Jedno naciśnięcie
+  `t` nadało labowemu kolektorowi `snapshot,destroy,send,hold` na produkcyjnych
+  dyskach pve2, w tym na `subvol-101-*`, czyli bramie OpenVPN. Cofnięte w ciągu
+  minuty, zweryfikowane `zfs allow` (zero wpisów) — ale to nie był błąd
+  wykonania, tylko zachowanie produktu na jego własnej normalnej ścieżce.
+  **Propozycja nie jest zawężana** i celowo: to jest narzędzie do backupu
+  Proxmoksa, wolumeny gościa zwykle SĄ ładunkiem, a heurystyka, która by je
+  chowała, myliłaby się częściej niż trafiała. Zmieniona jest cena zgody:
+  monit mówi wprost, że kolektor **nie wskazał niczego** i że propozycja to
+  cały host; podaje wielkość (ile datasetów, ile wolumenów maszyn, ile bajtów)
+  **zanim** zada pytanie; i przyjmuje zgodę tylko przez **wpisanie liczby
+  datasetów**, bo odruch jest tu jedyną rzeczą, która naprawdę zawodzi.
+  Sama liczba jest jednak warta tyle, ile jej **związanie z grantem**, a pierwsza
+  wersja nie wiązała nic. Podgląd i grant liczyły zakres **osobno**: podgląd
+  zamieniał nieudany odczyt na mniejszą liczbę (błąd `scope_read` → „0 0 0", root
+  bez `zfs list` → pominięty, nieudany `zfs get used` → zero bajtów), po czym
+  `do_commit_scope` enumerował pulę **jeszcze raz** i nadawał to, co znalazł.
+  Wszystkie trzy pomyłki szły w tę stronę, która sprzedaje zgodę za tanio.
+  Teraz jest **jeden** enumerator dla obu, każdy nieudany odczyt to **odmowa**
+  zamiast mniejszej liczby, zbiór jest deduplikowany, a zaakceptowana liczba
+  **i zbiór** są sprawdzane w `do_commit_scope` **przed pierwszym `zfs allow`**.
+  Dowód wykonywalny w `test/joinmanifest/run.sh` (prawdziwy `do_commit_scope`,
+  sterowalny `zfs`, każdy przypadek liczy faktyczne wywołania `zfs allow`).
+  Kontrola na odrzuconej bazie: dryf inwentarza między pytaniem a grantem kończył
+  się `rc=0` i **trzema wykonanymi `zfs allow`** na zbiorze, którego nikt nie
+  zaakceptował; po poprawce — odmowa i zero grantów.
 - **Tydzień bez zdarzeń też musi się odezwać (2026-08-22).**
   Do tej pory pusta kolejka znaczyła brak maila, więc **cisza nie niosła żadnej
   informacji**. Zmierzone na pve9: jego MTA dostarczał wyłącznie lokalnie, a
