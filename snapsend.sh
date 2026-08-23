@@ -1038,7 +1038,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
             [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $recv_cmd"; then
@@ -1050,7 +1050,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
     else
         # COMPRESSION is forced to 0 for a local target in section 5B, so this
@@ -1068,7 +1068,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
             [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "${remote_host:-local}" push)
             if ! "${send_args[@]}" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
@@ -1080,7 +1080,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
     fi
 }

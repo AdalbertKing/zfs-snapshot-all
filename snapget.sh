@@ -942,7 +942,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
             [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
             if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
@@ -954,7 +954,7 @@ transfer_data() {
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
-            [ $_pg_rc -ne 0 ] && return 1
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
     else
         local send_args

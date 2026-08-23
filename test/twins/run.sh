@@ -402,6 +402,25 @@ for eng in "$SNAPSEND" "$SNAPGET"; do
     fi
 done
 
+# A SUCCESSFUL TRANSFER MUST NOT REPORT FAILURE.
+#
+# `[ $rc -ne 0 ] && return 1` as the LAST statement of a branch returns 1 when
+# the test is false, and that becomes the function's exit status: every
+# successful transfer reported "Transfer failed", with no reason, because there
+# was none. Found by running a real push against the pre-change code as a
+# control -- the same transfer succeeded there. CI was 30/30 at the time.
+#
+# The shape, not the spelling: no progress bookkeeping may end a branch with a
+# bare test, in either engine.
+for eng in "$SNAPSEND" "$SNAPGET"; do
+    n=$(basename "$eng")
+    if grep -qE '^\s*\[ \$_pg_rc -ne 0 \] &&' "$eng"; then
+        FAIL=$((FAIL+1)); echo "FAIL F $n ends a branch with a bare test -- a successful transfer would report failure"
+    else
+        PASS=$((PASS+1)); echo "PASS F $n does not let progress bookkeeping decide the transfer's exit status"
+    fi
+done
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
