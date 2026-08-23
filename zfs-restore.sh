@@ -623,13 +623,40 @@ restore_resolve_token() {   # <config> <token>
         *@*)
             die "restore: '$tok' looks like user@host:dataset -- transport addressing is not part of the public restore surface (R-025). Address the backup by its relation: 'restore <label>' or 'restore <label>:<dataset>'; labels come from 'restore --plan'." ;;
     esac
+    # ZFS dataset names legally contain ':' (pc_is_dataset accepts it), so a
+    # token with a colon is AMBIGUOUS between label:dataset and a verbatim
+    # managed path -- the reviewer's discriminator on #132: a legal copy
+    # location `.../pool/data:archive` was split at the first colon and refused
+    # while sitting right there in CONFIG. The rule stays "never guess":
+    #   1. an EXACT verbatim match against the managed locations wins -- it is
+    #      deterministic and local;
+    #   2. otherwise the label:dataset reading applies;
+    #   3. if BOTH readings resolve, that is a genuine ambiguity and it
+    #      REFUSES, naming the two readings -- a guess here aims a recovery.
     local label="" want=""
     case "$tok" in
-        *:*) label="${tok%%:*}"; want="${tok#*:}" ;;
+        *:*)
+            if restore_resolve_try "$config" "" "$tok" >/dev/null; then
+                if restore_resolve_try "$config" "${tok%%:*}" "${tok#*:}" >/dev/null; then
+                    die "restore: '$tok' is ambiguous -- it matches a managed location verbatim AND parses as relation '${tok%%:*}' + dataset '${tok#*:}', which also resolves. Refusing to choose: use 'restore --plan' to see both and address the one you mean unambiguously."
+                fi
+                restore_resolve_try "$config" "" "$tok"
+                return 0
+            fi
+            label="${tok%%:*}"; want="${tok#*:}" ;;
         */*) want="$tok" ;;
         *)   label="$tok" ;;
     esac
-    local ds l s d hit=0
+    restore_resolve_try "$config" "$label" "$want" && return 0
+    restore_resolve_fail "$config" "$label" "$want"
+}
+
+# The matching core, shared by both readings. Prints "src<TAB>copy" per hit;
+# returns 1 (silently) when nothing matches -- the CALLER owns the refusal
+# wording, because which reading failed decides what the operator is told.
+restore_resolve_try() {   # <config> <label> <want>
+    local config="$1" label="$2" want="$3"
+    local ds l s d hit=1
     for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config"); do
         s="$(installed_dataset_field "$config" "$ds" src)"
         d="$(installed_dataset_field "$config" "$ds" dst)"
@@ -652,9 +679,13 @@ restore_resolve_token() {   # <config> <token>
             [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue
         fi
         printf '%s\t%s\n' "$src_id" "$copy_loc"
-        hit=1
+        hit=0
     done
-    [ "$hit" -eq 1 ] && return 0
+    return "$hit"
+}
+
+restore_resolve_fail() {   # <config> <label> <want> -> always dies
+    local config="$1" label="$2" want="$3"
     if [ -n "$label" ] && [ -n "$want" ]; then
         die "restore: relation '$label' does not cover dataset '$want' in $config. 'restore --plan' lists what it does cover. A name that does not resolve is an error, never a guess."
     elif [ -n "$label" ]; then

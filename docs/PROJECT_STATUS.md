@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f20a573fba01c316 -->
+<!-- status-covers-digest: dc6271530341e27a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -119,6 +119,12 @@
   konwencja jobs.<host>.conf, ktora pisze i czyta cala reszta narzedzia - nie zgadywanie w
   sensie R-025; odmowa nadal wymienia, czego sprobowano. Dowod: restore pve2 bez flag na
   pve9 -> plan z /etc/zfs-snapshot-all/jobs.pve9.conf; restore pve7 -> odmowa z nazwa.
+  Recenzent znalazl dwuznacznosc, potwierdzona pomiarem: nazwy datasetow ZFS legalnie
+  zawieraja ':', a resolver dzielil kazdy token z dwukropkiem jako label:dataset ZANIM
+  rozwazyl zarzadzana sciezke - legalna kopia `.../pool/data:archive` byla odrzucana, choc
+  siedziala w CONFIG-u. Siedem testow bylo zielonych, bo zaden nie uzywal nazwy z
+  dwukropkiem. Regula dalej nie zgaduje: dokladne dopasowanie verbatim wygrywa; gdy OBA
+  odczyty pasuja naraz, odmowa nazywa oba. Trzy nowe dyskryminatory w test/restore.
 - **Monitor zaczal konsumowac warstwe danych: zdrowie puli i martwe transfery (2026-08-23).**
   Dwie dziury, za ktore estata juz zaplacila: `rpool` na pve1 byl **DEGRADED tygodniami** bez
   jednego alertu (pojemnosc sprawdzana codziennie, zdrowie NIGDZIE - zdegradowana pula
