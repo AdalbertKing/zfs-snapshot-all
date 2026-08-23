@@ -98,6 +98,26 @@
   wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
   jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
   Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
+- **PELNA SEKWENCJA WDROZENIOWA na koncowym main dnia - czysty przelot, ktory wisial od LAB6
+  (2026-08-23, main@91d9734, pve9<->pve2).** Jeden cykl zycia od zera przez WSZYSTKIE
+  dzisiejsze poprawki naraz, kazda w swoim naturalnym miejscu toru, zadna nie dowodzona
+  osobno na boku:
+  K1 add-client: nazwa po rozbiorce uzyta ponownie, nagrobek zarchiwizowany (#124).
+  K2 join: `t` odrzucone (monit powtorzony), liczba przyjeta, 22->4 datasety, produkcja
+  zero grantow (#117). K3 seed po LAN BEZ --yes, odpowiedz ze strumienia (#127/#128);
+  podglad z INNEJ sesji w trakcie: `running 42% 256 KiB/s` obok `verified` (warstwa
+  danych); GUID zgodny po obu stronach. K4 activate przez tunel 10.99.0.2:22 ze strumienia,
+  cron przepisany na endpoint tunelowy (#125/#126). K5 linia crona DOSLOWNIE: rc=0,
+  +50 KiB licznikiem wg0, cztery rekordy `verified` - nie `ok` (#121/#134). K6 status:
+  teraz/ostatni wynik/nastepny krok (#130-B). K7 restore: plan relacji bez flag (#133),
+  trzy odmowy R-025 na zywo, safe restore z GUID-em ZWERYFIKOWANYM do hdd/restore,
+  produkcja nietknieta. K8 check v4: zdrowy host MILCZY (kolejka 2->2) - kontrola
+  negatywna #131 na zywo. K9 clean rerun: crontab i CONFIG IDENTYCZNE co do md5, 4->4
+  linie, seed odmawia stanem, activate no-op. K10 rozbiorka: zero grantow, konto
+  usuniete, nazwa uzyta TRZECI raz.
+  Jedna nieczystosc, nazwana: w K3 podglad w locie pochodzil z rownoleglego dlawionego
+  transferu obok seeda (wyscig o zamek) - wlasciwosci pokazane, ale stan koncowy
+  dowodzi seed + GUID, nie tamten przebieg.
 - **Restore dostal publiczne drzwi: adresy relacyjne z odmowa zamiast zgadywania (2026-08-23).**
   Gramatyka wlasciciela z 2026-08-13 (`restore pve2`, `restore pve2:rpool/data`, sciezka
   zarzadzanej kopii) miala od poczatku jedna zasade rozbrajajaca dwuznacznosc: **nazwa,
