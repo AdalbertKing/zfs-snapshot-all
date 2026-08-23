@@ -926,9 +926,22 @@ transfer_data() {
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
-                return 1
+            # This is the branch that actually runs for a remote pull -- remote
+            # transfers compress by default. The first wiring of live progress
+            # covered only the uncompressed branch below and a live demo showed
+            # nothing at all; the send's -v output was going straight to stderr,
+            # which is also where the alerting path reads a failure reason from.
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+                _pg_rc=1
             fi
+            if [ -n "$_pg_err" ]; then
+                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_strip "$_pg_err"
+                [ -s "$_pg_err" ] && cat "$_pg_err" >&2
+                rm -f "$_pg_err"
+            fi
+            [ $_pg_rc -ne 0 ] && return 1
         else
             [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
             if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
