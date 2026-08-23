@@ -9,6 +9,4 @@
 
 */15 * * * * d=$(/REPO/check-snap-age.sh "tank/single,tank/explicitno" "automated_" 90m 3h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "arc hourly getting stale (single)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "arc hourly stale (single)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "arc hourly monitor BROKEN (single)" "$d" 2>>/LOG
 */15 * * * * d=$(/REPO/check-snap-age.sh -R "tank/flatpush,tank/atompush" "automated_" 90m 3h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "arc hourly getting stale (flatpush)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "arc hourly stale (flatpush)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "arc hourly monitor BROKEN (flatpush)" "$d" 2>>/LOG
-
-0 7 * * * /DIGEST 2>>/LOG
 # END zfs-backup-managed

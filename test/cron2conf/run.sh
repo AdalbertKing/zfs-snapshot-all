@@ -94,6 +94,27 @@ for cf in "$DIR"/fixtures-legacy/*.crontab; do
                 bash "$GEN" -c "$conf" 2>&1)"
     want="$(extract_block < "$cf")"
     got="$(printf '%s\n' "$rendered" | strip_markers | extract_block)"
+    # THE DIGEST LINE IS NOT A RELATIONSHIP JOB AND MUST NOT COME BACK.
+    #
+    # Every host in the estate still has one INSIDE its old managed block --
+    # that is what fixtures-legacy is for, and the line stays in the corpus for
+    # exactly that reason. Since 2026-08-22 the digest is a HOST job that
+    # deploy.sh installs by adopt into its own block, and gen-cron.sh no longer
+    # writes one: a host that got both had two digests, which pve1 did.
+    #
+    # So the old line disappearing from the regenerated block is the intended
+    # migration, not drift, and it is asserted here rather than filtered away
+    # quietly -- if gen-cron.sh ever starts emitting a digest again, this is
+    # what says so.
+    if printf '%s\n' "$want" | grep -qE '(alert-digest|/DIGEST)'; then
+        if printf '%s\n' "$got" | grep -qE '(alert-digest|/DIGEST)'; then
+            echo "FAIL legacy/$name-digest-dropped (gen-cron.sh regenerated a digest line; the host would get two)"
+            fail=$((fail+1))
+        else
+            echo "PASS legacy/$name-digest-dropped"; pass=$((pass+1))
+        fi
+        want="$(printf '%s\n' "$want" | grep -vE '(alert-digest|/DIGEST)')"
+    fi
     if [ "$want" = "$got" ]; then
         echo "PASS legacy/$name"; pass=$((pass+1))
     else
@@ -160,6 +181,111 @@ else
     echo "FAIL misc/stdin (rc=$rc)"; fail=$((fail+1))
 fi
 rm -f "$conf"
+
+# ---- the install that removes an old digest line must SAY SO ---------------
+#
+# The migration above is silent from the host's point of view: --install
+# rewrites the managed block, the digest line inside it disappears, and the
+# digest does not exist anywhere else until someone runs deploy.sh. Deployment
+# is an hourly `git pull`, not an hourly deploy.sh, so that window is real and
+# unbounded. A host in it queues findings and mails nothing -- pve9 spent
+# months in exactly that state and the only reason anyone found out was a
+# hand audit.
+#
+# Driven through the real gen-cron.sh --install against a stubbed crontab, on
+# a config recovered from the legacy corpus -- i.e. from the shape hosts
+# actually have. The negative control is the same install on a block with no
+# digest line, which must stay quiet: a warning that fires either way teaches
+# people to skip it.
+INSTALL_TMP="$(mktemp -d)"
+trap 'rm -rf "$INSTALL_TMP"' EXIT
+mkdir -p "$INSTALL_TMP/bin" "$INSTALL_TMP/tabs" "$INSTALL_TMP/locks"
+cat > "$INSTALL_TMP/bin/crontab" <<'STUB'
+#!/bin/bash
+d="${CRONTAB_DIR:?}"; u="$(id -un)"
+[ "${1:-}" = "-u" ] && { u="$2"; shift 2; }
+f="$d/$u"
+if [ "${1:-}" = "-l" ]; then
+    [ -f "$f" ] || { echo "no crontab for $u" >&2; exit 1; }
+    cat "$f"; exit 0
+fi
+cat "${1:?}" > "$f"; exit 0
+STUB
+chmod +x "$INSTALL_TMP/bin/crontab"
+# Same shim, and the same caveat, as test/cron/run.sh: this dev machine has no
+# flock(1). It satisfies lib-cron.sh's two call shapes and nothing more.
+if ! command -v flock >/dev/null 2>&1; then
+cat > "$INSTALL_TMP/bin/flock" <<'STUB'
+#!/bin/bash
+mode="" timeout="" fd=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -w) timeout="$2"; shift 2 ;;
+        -u) mode="unlock"; shift ;;
+        -n) mode="${mode:-nonblock}"; shift ;;
+        -x|-s) shift ;;
+        *) fd="$1"; shift ;;
+    esac
+done
+path=$(readlink /proc/self/fd/"$fd" 2>/dev/null) || exit 1
+lockdir="${path}.lockdir"
+[ "$mode" = unlock ] && { rmdir "$lockdir" 2>/dev/null; exit 0; }
+deadline=$(( $(date +%s%N) + ${timeout:-1} * 1000000000 ))
+while :; do
+    mkdir "$lockdir" 2>/dev/null && exit 0
+    [ "$(date +%s%N)" -ge "$deadline" ] && exit 1
+    sleep 0.05
+done
+STUB
+chmod +x "$INSTALL_TMP/bin/flock"
+fi
+
+install_case() {   # <name> <fixture> <expect-warning yes|no>
+    local name="$1" fixture="$2" expect="$3" conf out rc me
+    conf="$(mktemp)"
+    if ! bash "$C2C" -f "$fixture" -o "$conf" >/dev/null 2>&1; then
+        echo "FAIL install/$name (cron2conf.sh could not recover a config from the fixture)"
+        fail=$((fail+1)); rm -f "$conf"; return
+    fi
+    me="$(id -un)"
+    cp "$fixture" "$INSTALL_TMP/tabs/$me"
+    # A lock directory PER CASE. The flock shim above locks with mkdir, and
+    # unlike flock(2) that does not release when the process exits -- so the
+    # first install left its lockdir behind and the second was refused with
+    # "another gen-cron.sh --install is already running". The shim's own
+    # caveat, met in practice.
+    mkdir -p "$INSTALL_TMP/locks/$name"
+    out="$(PATH="$INSTALL_TMP/bin:$PATH" CRONTAB_DIR="$INSTALL_TMP/tabs" \
+           CRON_LOCK_DIR="$INSTALL_TMP/locks/$name" \
+           env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
+           bash "$GEN" -c "$conf" --install 2>&1)"; rc=$?
+    rm -f "$conf"
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL install/$name (gen-cron.sh --install exited $rc)"; printf '  %s\n' "$out"
+        fail=$((fail+1)); return
+    fi
+    local warned=no
+    printf '%s\n' "$out" | grep -q 'this install REMOVES it' && warned=yes
+    if [ "$warned" != "$expect" ]; then
+        echo "FAIL install/$name (warning expected=$expect, got=$warned)"; printf '  %s\n' "$out"
+        fail=$((fail+1)); return
+    fi
+    # And the line really is gone -- the warning must describe what happened,
+    # not merely accompany it.
+    if [ "$expect" = yes ] && grep -q 'alert-digest' "$INSTALL_TMP/tabs/$me"; then
+        echo "FAIL install/$name (warned, but the digest line is still in the crontab)"
+        fail=$((fail+1)); return
+    fi
+    echo "PASS install/$name"; pass=$((pass+1))
+}
+
+# The legacy fixtures carry /DIGEST, not the real script name the awk guard
+# looks for, so the case is built from a copy with the real path substituted --
+# a host's crontab names /root/scripts/alert-digest.sh.
+sed 's#/DIGEST#/root/scripts/alert-digest.sh#' "$DIR/fixtures-legacy/basic.crontab" \
+    > "$INSTALL_TMP/with-digest.crontab"
+install_case with-digest "$INSTALL_TMP/with-digest.crontab" yes
+install_case no-digest   "$DIR/fixtures-legacy/nodigest-delegated.crontab" no
 
 echo "----------------------------------------"
 echo "pass=$pass fail=$fail"
