@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 6d043179ff1e7ddaf62829e38aa26dea05a608d3 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 53bf4c38f6102f1de8cc7f49590a93d0879704b1 -->
+<!-- frozen: lib-zfs-snap.sh 100644 065bc43d92729170bbfbf54c8dc273910c4b5a60 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
