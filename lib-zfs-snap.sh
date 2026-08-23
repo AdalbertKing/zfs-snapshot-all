@@ -47,6 +47,172 @@ emit_stats() {
 }
 
 ###############################################################################
+# LIVE TRANSFER PROGRESS
+###############################################################################
+#
+# WHAT THIS IS FOR. Until now a transfer said nothing until it ended. On a 4 TB
+# seed that is hours of silence, and the only honest answer to "how far along is
+# it" was "wait and see". mbuffer prints a rate on a terminal, but a rate
+# without a TOTAL cannot say how much is LEFT, and it is invisible from any
+# other terminal than the one that started the run.
+#
+# WHERE THE NUMBERS COME FROM. `zfs send -v -P` -- ZFS itself, no new
+# dependency. Measured 2026-08-23 on zfs-2.1.11:
+#
+#     full<TAB><snapshot><TAB>8448112     <- the total, in bytes, immediately
+#     size<TAB>8448112
+#     14:21:23<TAB>1842248<TAB><snapshot> <- one line per second, cumulative
+#
+# and in the PULL direction those same lines come back over ssh's stderr intact,
+# which is what makes one mechanism work for both engines.
+#
+# WHY A WATCHER AND NOT A PIPE. The send's stderr is also where its ERRORS
+# arrive, and the alerting path takes `tail -n 8` of that file when a job fails.
+# Piping progress through it would put progress lines in the alert instead of
+# the reason -- a mail that says "14:21:23 1842248" about a failed backup. So
+# the stderr file keeps its job, a watcher reads it alongside, and
+# progress_strip removes the progress lines before anything diagnoses from it.
+# Nothing about failure reporting changes shape.
+#
+# Best-effort throughout: an unwritable progress dir, a killed watcher or a
+# malformed line must never affect the transfer. This is a window, not a gate.
+
+progress_dir() { printf '%s' "${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"; }
+
+# One file per in-flight dataset, named after it so a second run on the same
+# dataset overwrites its own record instead of accumulating stale ones.
+progress_path() {   # <dataset>
+    local k="$1"
+    k="${k//$(printf "%s" "/")/_}"
+    k="${k//@/_}"
+    printf '%s/%s.json' "$(progress_dir)" "$k"
+}
+
+# Recognises a progress line WITHOUT consuming anything else. Kept as its own
+# function so the stripper and the watcher can never disagree about what a
+# progress line is.
+progress_is_line() {   # <line> -> 0 when it is progress output, not diagnostics
+    case "$1" in
+        [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) return 0 ;;
+        size*) return 0 ;;
+        full*|incremental*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Removes progress lines from a stderr file, in place, leaving diagnostics
+# alone. Called before the file is used to explain a failure.
+progress_strip() {   # <errfile>
+    local f="$1" tmp
+    [ -s "$f" ] || return 0
+    tmp="${f}.noprog.$$"
+    : > "$tmp" 2>/dev/null || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        progress_is_line "$line" || printf '%s\n' "$line" >> "$tmp"
+    done < "$f"
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    return 0
+}
+
+# Reads the growing stderr file and keeps ONE durable record per dataset up to
+# date. Runs in the background; the caller kills it when the transfer ends.
+# Prints its PID so the caller can.
+# Finished records are kept for a while so an operator who looked away can still
+# see how a transfer ended, then removed. Without this the directory grows one
+# file per dataset per run forever -- the same slow leak the tombstone and
+# alert-queue work has already had to clean up twice in this project.
+#
+# Only FINISHED records age out. A record still marked running is left alone
+# whatever its age: deciding it is dead and deleting it would destroy the one
+# piece of evidence that something died, and the reader already reports an
+# unrefreshed record as suspect rather than as current.
+progress_reap() {   # [max age in seconds, default 7 days]
+    local max="${1:-604800}" dir f now mtime
+    dir=$(progress_dir); [ -d "$dir" ] || return 0
+    now=$(date +%s)
+    for f in "$dir"/*.json; do
+        [ -e "$f" ] || continue
+        grep -q '"state":"running"' "$f" 2>/dev/null && continue
+        mtime=$(stat -c %Y -- "$f" 2>/dev/null) || continue
+        [ $(( now - mtime )) -gt "$max" ] && rm -f "$f" 2>/dev/null
+    done
+    return 0
+}
+
+progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
+    local errfile="$1" dataset="$2" peer="${3:-}" direction="${4:-}"
+    local pfile; pfile=$(progress_path "$dataset")
+    mkdir -p "$(progress_dir)" 2>/dev/null || return 0
+    (
+        local total=0 done_b=0 started prev_b=0 prev_t rate=0 eta=-1 now line
+        started=$(date +%s); prev_t=$started
+        while :; do
+            [ -s "$errfile" ] && while IFS= read -r line; do
+                case "$line" in
+                    size*)              total=${line##*$(printf "\t")} ;;
+                    [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*)
+                        line=${line#*$(printf "\t")}
+                        done_b=${line%%$(printf "\t")*} ;;
+                esac
+            done < "$errfile"
+            case "$total" in ''|*[!0-9]*) total=0 ;; esac
+            case "$done_b" in ''|*[!0-9]*) done_b=0 ;; esac
+            now=$(date +%s)
+            if [ "$now" -gt "$prev_t" ] && [ "$done_b" -ge "$prev_b" ]; then
+                rate=$(( (done_b - prev_b) / (now - prev_t) ))
+                prev_b=$done_b; prev_t=$now
+            fi
+            eta=-1
+            [ "$rate" -gt 0 ] && [ "$total" -gt "$done_b" ] && eta=$(( (total - done_b) / rate ))
+            # mkdir on every write, not once at start. During bring-up one run
+            # produced no record at all and never reproduced in three attempts;
+            # rather than claim a diagnosis, the whole class is removed -- a
+            # directory that disappears now self-heals instead of silently
+            # yielding nothing, which is the failure mode telemetry can least
+            # afford.
+            mkdir -p "$(progress_dir)" 2>/dev/null
+            {
+                printf '{"dataset":"%s"' "$(json_escape "$dataset")"
+                printf ',"peer":"%s","direction":"%s"' "$(json_escape "$peer")" "$(json_escape "$direction")"
+                printf ',"total_bytes":%s,"done_bytes":%s' "$total" "$done_b"
+                printf ',"rate_bps":%s,"eta_seconds":%s' "$rate" "$eta"
+                printf ',"started_epoch":%s,"updated_epoch":%s' "$started" "$now"
+                printf ',"pid":%s,"state":"running"}\n' "$$"
+            } > "${pfile}.tmp" 2>/dev/null && mv -f "${pfile}.tmp" "$pfile" 2>/dev/null
+            sleep 2
+        done
+    ) >/dev/null 2>&1 &
+    printf '%s' "$!"
+}
+
+# Stops the watcher and marks the record finished. The file is LEFT behind on
+# purpose for a moment -- a reader that looked away must still be able to see
+# how the transfer ended -- and removed on the next successful start for the
+# same dataset.
+progress_done() {   # <watcher pid> <dataset> <status>
+    local pid="$1" dataset="$2" status="$3"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    local pfile; pfile=$(progress_path "$dataset")
+    [ -f "$pfile" ] || return 0
+    local body; body=$(cat "$pfile" 2>/dev/null) || return 0
+    # Replace the running marker rather than appending beside it: two "state"
+    # keys in one object is not a record, it is a coin toss for whichever
+    # parser reads it. Caught by the first isolation run of this function.
+    # The quotes must be ESCAPED, not quoted: inside ${var%pattern} bash applies
+    # its own quote removal first, so ,"state":"running"} becomes the pattern
+    # ,state:running} and never matches. The record then kept its running
+    # marker forever and the guard below silently declined to write. Caught by
+    # the end-of-stage battery, not by reading.
+    body=${body%,\"state\":\"running\"\}}
+    case "$body" in *'"state":"running"'*) return 0 ;; esac
+    printf '%s' "$body" > "${pfile}.tmp" 2>/dev/null || return 0
+    printf ',"state":"%s","finished_epoch":%s}\n' "$(json_escape "$status")" "$(date +%s)" >> "${pfile}.tmp" 2>/dev/null
+    mv -f "${pfile}.tmp" "$pfile" 2>/dev/null
+    return 0
+}
+
+
+###############################################################################
 # RESUMABLE TRANSFER SUPPORT
 ###############################################################################
 # If a prior zfs recv into $tgt_dataset was interrupted mid-stream, ZFS leaves

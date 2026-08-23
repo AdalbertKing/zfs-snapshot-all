@@ -900,19 +900,61 @@ transfer_data() {
     local recv_args
     IFS=' ' read -r -a recv_args <<< "$recv_cmd"
 
+    # LIVE PROGRESS (2026-08-23). `zfs send -v` makes the send report a total and
+    # then one cumulative line per second; -P makes both machine-readable. In
+    # this direction the send runs on the SOURCE, so those lines arrive on ssh's
+    # stderr -- measured, they come back intact.
+    #
+    # The stderr is captured to a file instead of flowing straight out, a watcher
+    # reads it alongside, and the progress lines are STRIPPED before the file is
+    # replayed to stderr. That last step is the point: the alerting path takes
+    # `tail -n 8` of this stream when a job fails, and a mail reading
+    # "14:21:23 1842248" instead of the reason would be worse than no progress
+    # at all.
+    local _pg_snap _pg_err _pg_pid _pg_rc=0
+    progress_reap
+    _pg_snap=${send_cmd##* }
+    if [ "${PROGRESS_ENABLED:-1}" = "1" ]; then
+        case "$send_cmd" in
+            "zfs send "*) send_cmd="zfs send -v -P ${send_cmd#zfs send }" ;;
+        esac
+        _pg_err=$(mktemp 2>/dev/null) || _pg_err=""
+    fi
+
     if [ -n "$remote_host" ]; then
         if [ $COMPRESSION -eq 1 ]; then
             if [ "$(remote_has_compressor "$remote_user" "$remote_host" "$COMPRESSOR")" != "yes" ]; then
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
-                return 1
+            # This is the branch that actually runs for a remote pull -- remote
+            # transfers compress by default. The first wiring of live progress
+            # covered only the uncompressed branch below and a live demo showed
+            # nothing at all; the send's -v output was going straight to stderr,
+            # which is also where the alerting path reads a failure reason from.
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+                _pg_rc=1
             fi
+            if [ -n "$_pg_err" ]; then
+                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_strip "$_pg_err"
+                [ -s "$_pg_err" ] && cat "$_pg_err" >&2
+                rm -f "$_pg_err"
+            fi
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
-                return 1
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+                _pg_rc=1
             fi
+            if [ -n "$_pg_err" ]; then
+                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_strip "$_pg_err"
+                [ -s "$_pg_err" ] && cat "$_pg_err" >&2
+                rm -f "$_pg_err"
+            fi
+            if [ $_pg_rc -ne 0 ]; then return 1; fi
         fi
     else
         local send_args

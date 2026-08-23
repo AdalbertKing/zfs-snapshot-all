@@ -277,23 +277,29 @@ done
 # the options array. Without that, help text ("ssh -c") and diagnostics ("over
 # ssh (exit 255)") are counted as calls -- the first draft of this check
 # reported five such lines as defects.
-ssh_payload_lines() {   # <file> -> line numbers whose ssh legitimately reads stdin
-    case "$1" in
-        */snapsend.sh)     printf '1011\n1015\n' ;;
-        */lib-zfs-snap.sh) printf '980\n2504\n'  ;;
-        *)                 : ;;
+# A PAYLOAD call is one the DATA flows into: something pipes into it. That is a
+# property of the line, so it is read off the line.
+#
+# This was a hardcoded list of line numbers for about an hour, until wiring live
+# progress shifted every one of them and the check reported four healthy calls
+# as defects. Same brittleness this suite diagnosed in test/localbackup this
+# morning -- pinning a property to WHERE it lives instead of WHAT it is --
+# committed again, by me, the same day. Line numbers are never the property.
+ssh_receives_stdin() {   # <line> -> 0 when something pipes INTO this ssh
+    case "${1%%ssh *}" in
+        *"|"*) return 0 ;;
+        *)     return 1 ;;
     esac
 }
 for f in "$SNAPSEND" "$SNAPGET" "$REPO/delsnaps.sh" "$REPO/lib-zfs-snap.sh"; do
     [ -r "$f" ] || continue
     name=$(basename "$f")
-    payload=$(ssh_payload_lines "$f")
-    missing=""; wrong=""
+    missing=""; wrong=""; has_payload=no
     while IFS=: read -r ln rest; do
         [ -n "$ln" ] || continue
         case "$rest" in \#*|" "*\#*) continue ;; esac
         is_payload=no
-        [ -n "$payload" ] && printf '%s\n' "$payload" | grep -qx "$ln" && is_payload=yes
+        ssh_receives_stdin "$rest" && { is_payload=yes; has_payload=yes; }
         case "$rest" in
             *"ssh -n "*) [ "$is_payload" = yes ] && wrong="$wrong $ln" ;;
             *)           [ "$is_payload" = no  ] && missing="$missing $ln" ;;
@@ -307,13 +313,111 @@ EOF
     else
         PASS=$((PASS+1)); echo "PASS E $name: every read-only ssh passes -n"
     fi
-    if [ -n "$payload" ]; then
+    if [ "$has_payload" = yes ] || [ -n "$wrong" ]; then
         if [ -n "$wrong" ]; then
             FAIL=$((FAIL+1)); echo "FAIL E $name: -n added to a PAYLOAD ssh at line(s):$wrong -- this breaks the transfer"
             echo "     those calls receive the send stream / probe data / quiesce script ON STDIN."
         else
             PASS=$((PASS+1)); echo "PASS E $name: the payload-carrying ssh calls still have no -n"
         fi
+    fi
+done
+
+
+# ---------------------------------------------------------------------------
+# F. LIVE TRANSFER PROGRESS -- the properties, not the plumbing.
+#
+# Three things must hold, and the middle one is the reason this is tested at
+# all rather than eyeballed:
+#
+#   1. the progress lines zfs send -v -P really emits are recognised;
+#   2. they are STRIPPED from the stderr a failure is diagnosed from -- the
+#      alerting path takes `tail -n 8` of that stream, and a mail reading
+#      "14:21:23 1842248" instead of the reason is worse than no progress;
+#   3. real diagnostics SURVIVE the stripping. A filter that ate the error too
+#      would pass test 2 and destroy alerting.
+#
+# The fixture is a verbatim capture from zfs-2.1.11, not a line typed for the
+# test -- see feedback_assert_real_tool_output_not_fixtures: today alone, four
+# defects survived because an assertion was pinned to a shape the tool had
+# stopped emitting.
+# ---------------------------------------------------------------------------
+pg_tmp="$(mktemp -d)"
+trap 'rm -rf "$pg_tmp"' EXIT
+printf 'full\thdd/lab9src/deep@automated_hourly_2026-08-23_12-01-01\t8448112\n' >  "$pg_tmp/err"
+printf 'size\t8448112\n'                                                       >> "$pg_tmp/err"
+printf '14:21:23\t1842248\thdd/lab9src/deep@automated_hourly_2026-08-23_12-01-01\n' >> "$pg_tmp/err"
+printf 'warning: cannot send: Invalid argument\n'                              >> "$pg_tmp/err"
+printf '14:21:24\t2236400\thdd/lab9src/deep@automated_hourly_2026-08-23_12-01-01\n' >> "$pg_tmp/err"
+
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/prog"; export ZFS_PROGRESS_DIR
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  cp "$pg_tmp/err" "$pg_tmp/stripped"
+  progress_strip "$pg_tmp/stripped"
+  pid=$(progress_watch "$pg_tmp/err" "hdd/x@s" peer pull); sleep 3
+  progress_done "$pid" "hdd/x@s" ok
+  cp "$(progress_path "hdd/x@s")" "$pg_tmp/record" 2>/dev/null
+) >/dev/null 2>&1
+
+if [ "$(wc -l < "$pg_tmp/stripped")" -eq 1 ] && grep -q 'Invalid argument' "$pg_tmp/stripped"; then
+    PASS=$((PASS+1)); echo "PASS F progress lines are stripped from the stderr a failure is diagnosed from"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F progress lines are stripped from the stderr a failure is diagnosed from"
+    echo "     zostalo: $(cat "$pg_tmp/stripped" | tr '\n' '|')"
+fi
+
+if grep -q 'Invalid argument' "$pg_tmp/stripped"; then
+    PASS=$((PASS+1)); echo "PASS F the real diagnostic SURVIVES the stripping"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the real diagnostic SURVIVES the stripping -- alerting would lose the reason"
+fi
+
+if [ -s "$pg_tmp/record" ] \
+   && grep -q '"total_bytes":8448112' "$pg_tmp/record" \
+   && grep -q '"done_bytes":2236400' "$pg_tmp/record"; then
+    PASS=$((PASS+1)); echo "PASS F the record carries the total and the latest cumulative position"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the record carries the total and the latest cumulative position"
+    echo "     rekord: $(cat "$pg_tmp/record" 2>/dev/null)"
+fi
+
+# One "state" key, not two. The first version of progress_done appended beside
+# the running marker instead of replacing it, which is not a record -- it is a
+# coin toss for whichever parser reads it.
+if [ "$(grep -o '"state"' "$pg_tmp/record" 2>/dev/null | wc -l)" -eq 1 ] \
+   && grep -q '"state":"ok"' "$pg_tmp/record" 2>/dev/null; then
+    PASS=$((PASS+1)); echo "PASS F a finished record has exactly one state, and it is the final one"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F a finished record has exactly one state, and it is the final one"
+fi
+
+# Both engines must splice -v -P into the REAL send command, and the push
+# direction must never put -n on the ssh that RECEIVES the stream.
+for eng in "$SNAPSEND" "$SNAPGET"; do
+    n=$(basename "$eng")
+    if grep -q 'zfs send -v -P ${send_cmd#zfs send }' "$eng"; then
+        PASS=$((PASS+1)); echo "PASS F $n splices -v -P into the real send command"
+    else
+        FAIL=$((FAIL+1)); echo "FAIL F $n splices -v -P into the real send command"
+    fi
+done
+
+# A SUCCESSFUL TRANSFER MUST NOT REPORT FAILURE.
+#
+# `[ $rc -ne 0 ] && return 1` as the LAST statement of a branch returns 1 when
+# the test is false, and that becomes the function's exit status: every
+# successful transfer reported "Transfer failed", with no reason, because there
+# was none. Found by running a real push against the pre-change code as a
+# control -- the same transfer succeeded there. CI was 30/30 at the time.
+#
+# The shape, not the spelling: no progress bookkeeping may end a branch with a
+# bare test, in either engine.
+for eng in "$SNAPSEND" "$SNAPGET"; do
+    n=$(basename "$eng")
+    if grep -qE '^\s*\[ \$_pg_rc -ne 0 \] &&' "$eng"; then
+        FAIL=$((FAIL+1)); echo "FAIL F $n ends a branch with a bare test -- a successful transfer would report failure"
+    else
+        PASS=$((PASS+1)); echo "PASS F $n does not let progress bookkeeping decide the transfer's exit status"
     fi
 done
 

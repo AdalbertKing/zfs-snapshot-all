@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bb5ed448cceabc1d -->
+<!-- status-covers-digest: 2172fb9546d9619c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -98,6 +98,43 @@
   wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
   jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
   Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
+- **Widac, ile zostalo - w trakcie transferu, nie po (2026-08-23).**
+  Do tej pory transfer milczal az do konca. Na seedzie 4 TB to godziny ciszy, a jedyna
+  uczciwa odpowiedz na „jak daleko jest” brzmiala „poczekaj”. `mbuffer` pokazuje tempo na
+  terminalu, ale tempo **bez sumy** nie powie, ile **zostalo**, i jest niewidoczne z kazdego
+  innego okna niz to, ktore uruchomilo przelot.
+  Zrodlem liczb jest `zfs send -v -P` - sam ZFS, zero nowych zaleznosci. Zmierzone na
+  zfs-2.1.11: naglowek `size<TAB><bajty>` od razu, potem linia na sekunde z suma narastajaca,
+  a w kierunku **pull** te same linie wracaja przez stderr ssh nienaruszone. Jeden mechanizm
+  dziala wiec w obu silnikach.
+  Warstwa zlecajaca ma czasownik `progress`: pokazuje **wszystkie** transfery w locie -
+  procent, tempo, pozostaly czas - **z dowolnego terminala**. Zmierzone na zywo:
+  `running 3.9 MiB / 8.1 MiB (48.3%) 192.5 KiB/s pozostalo 0h00m22s`, dziesiec sekund
+  pozniej `5.9 MiB / 8.1 MiB (73.1%)`.
+  **Alert jest chroniony i to byla trudna czesc.** Stderr wysylki to zarazem miejsce, gdzie
+  przychodza jej **bledy**, a sciezka alertowania bierze z niego `tail -n 8`. Linie postepu
+  zostawione w tym strumieniu zamienilyby powod awarii na licznik bajtow. Dlatego stderr
+  trafia do osobnego pliku, czytnik czyta go obok, a linie postepu sa **usuwane** przed
+  odtworzeniem pliku na stderr. Zmierzone: zero linii postepu w logu skryptu podczas
+  prawdziwego transferu.
+  **Nieswiezy rekord mowi, ze jest nieswiezy** - podglad dopisuje „bez aktualizacji od Ns
+  - moze nie zyc” zamiast pokazywac zamrozona liczbe jako aktualna. Rekordy zakonczone sa
+  sprzatane po tygodniu; rekord `running` **nigdy** - skasowanie go zniszczyloby jedyny slad,
+  ze cos padlo.
+  **Granica pomiaru, zapisana zamiast ukryta:** `-v` liczy bajty **wepchniete do potoku**,
+  nie dostarczone. Przy kompresji i buforze mbuffera roznica to glebokosc bufora - na 4 TB
+  nieistotna, na malym zbiorze „100%” pojawi sie chwile przed koncem odbioru. Liczenie po
+  stronie odbiorczej kosztowaloby drugi strumien; nierobione.
+  **Etap wprowadzil regresje i zlapala ja dopiero kontrola na zywo, nie CI.**
+  `[ $_pg_rc -ne 0 ] && return 1` jako OSTATNIE polecenie galezi zwraca 1, gdy warunek jest
+  falszywy - i to staje sie kodem wyjscia funkcji. Kazdy **udany** transfer w kierunku push
+  meldowal `Transfer failed`, bez przyczyny, bo zadnej nie bylo. CI dawalo 30/30.
+  Znalezione przez puszczenie prawdziwego push na kodzie SPRZED zmiany jako kontroli - tam
+  ten sam transfer konczyl sie `All datasets processed successfully`. Gdyby to weszlo na
+  `main`, flota zaczelaby alarmowac o backupach, ktore dzialaja: odwrotnosc falszywego
+  zdrowia, ale to samo zatrucie alertowania.
+  Poprawione w szesciu miejscach obu silnikow i przypiete **ksztaltem, nie pisownia**: zadna
+  ksiegowosc postepu nie moze konczyc galezi golym testem.
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój

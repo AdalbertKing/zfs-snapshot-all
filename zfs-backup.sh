@@ -3134,6 +3134,43 @@ atomic_replace_and_install() {
 }
 
 # ------------------------------------------------------------------------------
+# Live view of every transfer in flight, readable from ANY terminal -- not just
+# the one that started the run. The engines keep one durable record per dataset
+# while a send is running (lib-zfs-snap.sh, progress_watch); this only reads
+# them. A record whose 'running' state has not been refreshed for a while is
+# reported as such rather than shown as if it were current: the watcher can be
+# killed with its run, and a stale number presented as live is exactly the kind
+# of false health this project keeps finding.
+cmd_progress() {
+    local dir="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
+    local f any=0
+    for f in "$dir"/*.json; do
+        [ -e "$f" ] || continue
+        any=1
+        awk -v now="$(date +%s)" '
+            function h(b,   u,i) { split("B KiB MiB GiB TiB PiB",u," "); i=1
+                while (b>=1024 && i<6) { b/=1024; i++ }
+                return sprintf(i==1?"%d %s":"%.1f %s", b, u[i]) }
+            function dur(s) { if (s<0) return "?"
+                return sprintf("%dh%02dm%02ds", s/3600, (s%3600)/60, s%60) }
+            {
+                match($0,/"dataset":"[^"]*"/);   ds=substr($0,RSTART+11,RLENGTH-12)
+                match($0,/"state":"[^"]*"/);     st=substr($0,RSTART+9,RLENGTH-10)
+                match($0,/"total_bytes":[0-9]*/);  tot=substr($0,RSTART+14,RLENGTH-14)+0
+                match($0,/"done_bytes":[0-9]*/);   don=substr($0,RSTART+13,RLENGTH-13)+0
+                match($0,/"rate_bps":[0-9]*/);     rt=substr($0,RSTART+11,RLENGTH-11)+0
+                match($0,/"eta_seconds":-?[0-9]*/);eta=substr($0,RSTART+14,RLENGTH-14)+0
+                match($0,/"updated_epoch":[0-9]*/);upd=substr($0,RSTART+16,RLENGTH-16)+0
+                pct = (tot>0) ? don*100/tot : 0
+                age = now-upd
+                stale = (st=="running" && age>30) ? "  (bez aktualizacji od " age "s -- moze nie zyc)" : ""
+                printf "  %s\n", ds
+                printf "    %s  %s / %s  (%.1f%%)   %s/s   pozostalo %s%s\n", st, h(don), h(tot), pct, h(rt), dur(eta), stale
+            }' "$f"
+    done
+    [ "$any" -eq 1 ] || echo "  brak transferow w toku"
+}
+
 cmd_setup_server() {
     local target="" config="" local_user=""
     for a in "$@"; do
@@ -7365,6 +7402,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
+        progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
         -h|--help|"")     usage; exit 0 ;;
