@@ -2455,6 +2455,83 @@ else
     bad "clobber: a different client's removed job continues to refuse" "rc=$rc out=$out"
 fi
 
+# THE SAME PROPERTY, IN THE SHAPE gen-cron.sh ACTUALLY EMITS TODAY.
+#
+# The cases above are written against `-A "acct@host:path"`. gen-cron.sh has
+# not emitted that for a long time: `-A` is the AUTOTUNE flag now and the
+# endpoint is a positional argument. Measured on a line taken verbatim from a
+# live crontab, the old normalizer substituted NOTHING -- so the endpoint-switch
+# exemption existed as code and was dead, and every switch after cron was
+# installed was refused as if the relationship's own jobs were a foreign
+# workload. The fixtures passed the whole time, because they were hand-written
+# in a shape the product had stopped producing.
+#
+# Live on 2026-08-23 (issue #9, second path), isolated by a control:
+#   activate --host=<same endpoint>    -> EXIT=0
+#   activate --host=<other host:port>  -> EXIT=1, "2 job line(s) would be DELETED"
+#
+# Three things the old fixtures could not see: the positional endpoint, the
+# port in its own -p flag, and delsnaps.sh's REMOTE source-prune line (the call
+# site's comment claimed delsnaps.sh lines have no endpoint to switch, which
+# stopped being true when managed source retention gained a remote form).
+cat > "$CL/target-real.cron" <<'EOF'
+0 8 * * * /root/scripts/check-pool-capacity.sh
+# BEGIN zfs-backup-managed
+1 * * * * /root/scripts/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -R -K /root/.ssh/pairing/k_ed25519 -k /root/.ssh/pairing/k_alias_known_hosts -O HostKeyAlias=zfs-client-pve2prod -p 22 -A -L pve2prod "zfsbackup-pve9@192.168.28.8:hdd/lab9src" "hdd/tgt" 2>"$e"
+21 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh -G -R -K /root/.ssh/pairing/k_ed25519 -O HostKeyAlias=zfs-client-pve2prod -p 22 "zfsbackup-pve9@192.168.28.8:hdd/lab9src" "automated_" -H24 2>"$e"
+# END zfs-backup-managed
+EOF
+cat > "$CL/bin/crontab" <<EOF
+#!/bin/bash
+[ "\$1" = "-u" ] && { cat "$CL/target-real.cron"; exit 0; }
+cat "$CL/target-real.cron"
+exit 0
+EOF
+chmod +x "$CL/bin/crontab"
+
+# Both lines move to a different HOST and a different PORT -- the switch that
+# was impossible.
+cat > "$CL/proposal-real-switch.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /root/scripts/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -R -K /root/.ssh/pairing/k_ed25519 -k /root/.ssh/pairing/k_alias_known_hosts -O HostKeyAlias=zfs-client-pve2prod -p 2222 -A -L pve2prod "zfsbackup-pve9@pve2-prod:hdd/lab9src" "hdd/tgt" 2>"$e"
+21 * * * * /root/scripts/zfs-snapshot-all/delsnaps.sh -G -R -K /root/.ssh/pairing/k_ed25519 -O HostKeyAlias=zfs-client-pve2prod -p 2222 "zfsbackup-pve9@pve2-prod:hdd/lab9src" "automated_" -H24 2>"$e"
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="root" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-real-switch.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] && ok "clobber: an endpoint switch in TODAY'S line shape (host+port, snapget and remote prune) passes" \
+                || bad "clobber: an endpoint switch in TODAY'S line shape (host+port, snapget and remote prune) passes" "rc=$rc out=$out"
+
+# Fail-closed control in the same shape: the endpoint moves AND the remote
+# prune job disappears. The surviving line must not excuse the missing one.
+cat > "$CL/proposal-real-lost.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+1 * * * * /root/scripts/zfs-snapshot-all/snapget.sh -m "automated_hourly_" -R -K /root/.ssh/pairing/k_ed25519 -k /root/.ssh/pairing/k_alias_known_hosts -O HostKeyAlias=zfs-client-pve2prod -p 2222 -A -L pve2prod "zfsbackup-pve9@pve2-prod:hdd/lab9src" "hdd/tgt" 2>"$e"
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CL/bin:$PATH" LOCAL_USER="root" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CL/proposal-real-lost.txt'; }; assert_target_block_not_clobbered '$CL/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac \
+   && case "$out" in *delsnaps.sh*) true ;; *) false ;; esac; then
+    ok "clobber: a job that really disappears is still refused, even while the endpoint moves"
+else
+    bad "clobber: a job that really disappears is still refused, even while the endpoint moves" "rc=$rc out=$out"
+fi
+
+# THE EXEMPTION MUST BE ALIVE, not merely present. This is what nothing checked:
+# if the generated line shape drifts again so the normalizer stops matching, it
+# goes quiet instead of failing, and every endpoint switch starts refusing.
+real_line='1 * * * * /r/snapget.sh -O HostKeyAlias=zfs-client-x -p 2222 -A -L x "acct@some-host:hdd/src" "hdd/dst" 2>"$e"'
+norm=$( printf '%s\n' "$real_line" | bash -c "source '$ZFSBACKUP'; endpoint_normalized_identity" )
+if [ "$norm" != "$real_line" ] && case "$norm" in *"<ENDPOINT>"*) true ;; *) false ;; esac \
+   && case "$norm" in *"<PORT>"*) true ;; *) false ;; esac; then
+    ok "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape"
+else
+    bad "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape" \
+        "nic nie podmienil -- wyjatek jest martwy" "in : $real_line" "out: $norm"
+fi
+
+
 # REV-20260804-043's own counterexample: one client, two datasets, both
 # sharing the same HostKeyAlias. The target currently runs both.
 cat > "$CL/target-multi.cron" <<'EOF'

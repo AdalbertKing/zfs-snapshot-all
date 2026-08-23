@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b81e01e0c897ce11 -->
+<!-- status-covers-digest: 9ff7404aa877bd0e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,28 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`activate --host=` nie działał po zainstalowaniu crona — przy ŻADNEJ zmianie
+  endpointu (2026-08-23).** Nie „przy zmianie portu" — przy każdej. Pierwsze przełączenie
+  w życiu relacji przechodziło wyłącznie dlatego, że nie było jeszcze bloku crona do
+  porównania; każde następne strażnik odrzucał, biorąc **własne** zadania relacji za obcy
+  workload, który zaraz zniknie. Kontrola izolująca: `--host=<ten sam>` → `EXIT=0`,
+  `--host=<inny host:port>` → `EXIT=1` i „2 job line(s) would be DELETED", a obie
+  wymienione linie należały do tej właśnie relacji.
+  Wyjątek dla przełączenia endpointu **istniał** (REV-042/043) i był **martwy**: napisano
+  go pod kształt `-A "acct@host:path"`, którego `gen-cron.sh` już nie emituje — `-A` to dziś
+  flaga autotune, a endpoint jest argumentem pozycyjnym. Zmierzone na linii wziętej
+  dosłownie z żywego crontaba: stary wzorzec **nie podmieniał niczego**. Do tego port żyje
+  w osobnej fladze `-p` i nigdy nie podróżował z hostem, a linia zdalnego prune
+  (`delsnaps.sh`) niesie endpoint pozycyjnie — mimo że komentarz przy wywołaniu twierdzi,
+  że linie `delsnaps.sh` „nie mają połączenia zdalnego do przełączenia".
+  Normalizowane są teraz wszystkie trzy pisownie, i **tylko** one: konto, dataset źródłowy,
+  docelowy, harmonogram, retencja i `HostKeyAlias` nadal porównywane co do znaku, więc
+  zadanie, które naprawdę znika, nadal jest zgłaszane (kontrole fail-closed z REV-043
+  przechodzą bez zmian).
+  Dołożona kontrola, której brakowało: test sprawdza, że wyjątek **żyje** — że normalizator
+  faktycznie przepisuje linię w emitowanym kształcie. Kolejny dryf kształtu zrobi się
+  czerwony zamiast cichy. To trzeci raz tego dnia, gdy zielony test był przypięty do
+  kształtu, którego produkt już nie ma.
 - **Dwie wady cyklu życia, które ujawniła dopiero druga próba czterech komend (2026-08-23).**
   Obie znalezione na żywo (pve9 → pve2), obie blokowały samą próbę, żadnej nie dało się
   zobaczyć czytaniem kodu.
