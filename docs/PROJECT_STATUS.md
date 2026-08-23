@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2172fb9546d9619c -->
+<!-- status-covers-digest: bc3fca159319590e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -135,6 +135,16 @@
   zdrowia, ale to samo zatrucie alertowania.
   Poprawione w szesciu miejscach obu silnikow i przypiete **ksztaltem, nie pisownia**: zadna
   ksiegowosc postepu nie moze konczyc galezi golym testem.
+  **Rekord jest kluczowany TOZSAMOSCIA ZADANIA, nie nazwa datasetu (advisory recenzenta,
+  #129).** Pierwsza wersja budowala nazwe pliku, zamieniajac `/` i `@` na `_` - co nie jest
+  roznowartosciowe. Potwierdzone pomiarem przed przyjeciem: `pool/a_b@s` i `pool/a/b@s` daly
+  ten sam plik, wiec postep jednego zadania po cichu stawal sie postepem drugiego. Dataset
+  jest zlym kluczem takze z drugiego powodu: to samo zrodlo moze isc rownoczesnie do dwoch
+  roznych celow, a to sa rozne zadania.
+  Uzyty zostal **istniejacy** `job_state_key` - hashuje kierunek, IDENTIFIER, zrodlo i cel
+  z separatorem NUL, wlasnie po to, by zadna wartosc nie mogla udawac granicy (REV-001 F3).
+  Jedna definicja tozsamosci zadania w pliku, nie druga obok. Czytelna nazwa datasetu i celu
+  zostaje **w srodku** rekordu, a podglad pokazuje `zrodlo -> cel`.
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój

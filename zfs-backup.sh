@@ -3155,6 +3155,7 @@ cmd_progress() {
                 return sprintf("%dh%02dm%02ds", s/3600, (s%3600)/60, s%60) }
             {
                 match($0,/"dataset":"[^"]*"/);   ds=substr($0,RSTART+11,RLENGTH-12)
+                tg=""; if (match($0,/"target":"[^"]*"/)) tg=substr($0,RSTART+10,RLENGTH-11)
                 match($0,/"state":"[^"]*"/);     st=substr($0,RSTART+9,RLENGTH-10)
                 match($0,/"total_bytes":[0-9]*/);  tot=substr($0,RSTART+14,RLENGTH-14)+0
                 match($0,/"done_bytes":[0-9]*/);   don=substr($0,RSTART+13,RLENGTH-13)+0
@@ -3164,7 +3165,10 @@ cmd_progress() {
                 pct = (tot>0) ? don*100/tot : 0
                 age = now-upd
                 stale = (st=="running" && age>30) ? "  (bez aktualizacji od " age "s -- moze nie zyc)" : ""
-                printf "  %s\n", ds
+                # The filename is a hash now, so the record has to say what it
+                # is about. Target included because it is what distinguishes
+                # two simultaneous jobs for the same source.
+                if (tg != "") printf "  %s  ->  %s\n", ds, tg; else printf "  %s\n", ds
                 printf "    %s  %s / %s  (%.1f%%)   %s/s   pozostalo %s%s\n", st, h(don), h(tot), pct, h(rt), dur(eta), stale
             }' "$f"
     done

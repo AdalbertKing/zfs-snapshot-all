@@ -79,13 +79,29 @@ emit_stats() {
 
 progress_dir() { printf '%s' "${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"; }
 
-# One file per in-flight dataset, named after it so a second run on the same
-# dataset overwrites its own record instead of accumulating stale ones.
-progress_path() {   # <dataset>
-    local k="$1"
-    k="${k//$(printf "%s" "/")/_}"
-    k="${k//@/_}"
-    printf '%s/%s.json' "$(progress_dir)" "$k"
+# ONE FILE PER JOB, keyed by job_state_key -- NOT by the dataset name.
+#
+# The first version built the filename by replacing "/" and "@" with "_", which
+# is not injective: `pool/a_b@s` and `pool/a/b@s` produce the same name, and one
+# job's record silently becomes the other's. Reviewer ADVISORY on #129, and
+# confirmed by measurement before being accepted:
+#
+#     pool/a_b@s  ->  pool_a_b_s.json
+#     pool/a/b@s  ->  pool_a_b_s.json
+#
+# Dataset alone is the wrong key for a second reason as well: two jobs may run
+# for the SAME source at the same time toward different targets, or under
+# different -j identifiers, and those are different jobs whose progress must not
+# overwrite each other.
+#
+# job_state_key already solves exactly this, for exactly this reason -- it hashes
+# script basename (which is the direction), IDENTIFIER, source and target with
+# NUL delimiters "so no value can impersonate a boundary" (REV-20260729-001 F3).
+# Reusing it means one definition of job identity in this file, not two that can
+# drift. The human-readable dataset and target stay INSIDE the record, where
+# they are read rather than parsed.
+progress_path() {   # <source dataset|snapshot> <target>
+    printf '%s/%s.json' "$(progress_dir)" "$(job_state_key "${2:-}" "$1")"
 }
 
 # Recognises a progress line WITHOUT consuming anything else. Kept as its own
@@ -139,9 +155,9 @@ progress_reap() {   # [max age in seconds, default 7 days]
     return 0
 }
 
-progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
-    local errfile="$1" dataset="$2" peer="${3:-}" direction="${4:-}"
-    local pfile; pfile=$(progress_path "$dataset")
+progress_watch() {   # <errfile> <dataset> <target> <peer> <direction> -> pid
+    local errfile="$1" dataset="$2" target="${3:-}" peer="${4:-}" direction="${5:-}"
+    local pfile; pfile=$(progress_path "$dataset" "$target")
     mkdir -p "$(progress_dir)" 2>/dev/null || return 0
     (
         local total=0 done_b=0 started prev_b=0 prev_t rate=0 eta=-1 now line
@@ -173,6 +189,7 @@ progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
             mkdir -p "$(progress_dir)" 2>/dev/null
             {
                 printf '{"dataset":"%s"' "$(json_escape "$dataset")"
+                printf ',"target":"%s"' "$(json_escape "$target")"
                 printf ',"peer":"%s","direction":"%s"' "$(json_escape "$peer")" "$(json_escape "$direction")"
                 printf ',"total_bytes":%s,"done_bytes":%s' "$total" "$done_b"
                 printf ',"rate_bps":%s,"eta_seconds":%s' "$rate" "$eta"
@@ -189,10 +206,10 @@ progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
 # purpose for a moment -- a reader that looked away must still be able to see
 # how the transfer ended -- and removed on the next successful start for the
 # same dataset.
-progress_done() {   # <watcher pid> <dataset> <status>
-    local pid="$1" dataset="$2" status="$3"
+progress_done() {   # <watcher pid> <dataset> <target> <status>
+    local pid="$1" dataset="$2" target="$3" status="$4"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    local pfile; pfile=$(progress_path "$dataset")
+    local pfile; pfile=$(progress_path "$dataset" "$target")
     [ -f "$pfile" ] || return 0
     local body; body=$(cat "$pfile" 2>/dev/null) || return 0
     # Replace the running marker rather than appending beside it: two "state"

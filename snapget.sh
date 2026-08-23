@@ -914,6 +914,7 @@ transfer_data() {
     local _pg_snap _pg_err _pg_pid _pg_rc=0
     progress_reap
     _pg_snap=${send_cmd##* }
+    local _pg_tgt=${recv_cmd##* }
     if [ "${PROGRESS_ENABLED:-1}" = "1" ]; then
         case "$send_cmd" in
             "zfs send "*) send_cmd="zfs send -v -P ${send_cmd#zfs send }" ;;
@@ -932,24 +933,24 @@ transfer_data() {
             # covered only the uncompressed branch below and a live demo showed
             # nothing at all; the send's -v output was going straight to stderr,
             # which is also where the alerting path reads a failure reason from.
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "$remote_host" pull)
             if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
             fi
             if [ $_pg_rc -ne 0 ]; then return 1; fi
         else
-            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$remote_host" pull)
+            [ -n "$_pg_err" ] && _pg_pid=$(progress_watch "$_pg_err" "$_pg_snap" "$_pg_tgt" "$remote_host" pull)
             if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" 2>${_pg_err:-/dev/stderr} | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 _pg_rc=1
             fi
             if [ -n "$_pg_err" ]; then
-                progress_done "$_pg_pid" "$_pg_snap" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
+                progress_done "$_pg_pid" "$_pg_snap" "$_pg_tgt" "$([ $_pg_rc -eq 0 ] && echo ok || echo failed)"
                 progress_strip "$_pg_err"
                 [ -s "$_pg_err" ] && cat "$_pg_err" >&2
                 rm -f "$_pg_err"
