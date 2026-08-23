@@ -5278,7 +5278,15 @@ probe_snapget_endpoint() {   # <host> <port>
                 PROBE_DETAIL="${PROBE_DETAIL}  $ds would need a FULL transfer -- no common base"$'\n' ;;
             *)
                 unknown=$((unknown + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n' ;;
+                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n'
+                # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
+                # was captured but printed only on rc!=0, so this branch said
+                # '<none>' and nothing else -- LAB-E and the closing campaign
+                # both stalled here blind. The engine's own last lines ARE the
+                # reason; show them.
+                if [ -s "$errtmp" ]; then
+                    while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
+                fi ;;
         esac
     done
     rm -f "$errtmp"
