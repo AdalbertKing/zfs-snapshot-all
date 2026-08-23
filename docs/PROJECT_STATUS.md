@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a5ae3c80d23de369 -->
+<!-- status-covers-digest: df8e45edb81cc47b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -113,6 +113,10 @@
   monitora (monitor_exclude -> -x) i jest czescia klucza grupowania monitorow (dwa
   monitory rozniace sie slepymi polami nie moga dzielic linii). Wiek monitora w minutach
   ponizej 2h. Kampania zamykajaca etap: na zywo po CI.
+  Korekta z CI: prowizja konta jest BEST-EFFORT, nie twardym useradd - egzekutorem
+  pozostaje straznik uruchamialnosci przy aktywacji, ktory nazywa brakujacy kawalek;
+  wolajacy bez roota pomija z logiem zamiast umierac (kazdy test --local-user na
+  prawdziwym cmd_add_client padal na useradd w kontekscie CI).
 - **KAMPANIA LAB-E: pasywnosc wobec CUDZYCH snapshotow (2026-08-23, wieczorem).** Plan
   wlasciciela: caly ruch -e takze w trybie backup; cudze rodziny (cudzy_/smiec_/bez
   prefiksu) generowane cronem co 5 min na zrodle; dwa cykle (root+join reczny+atomowy -r;
