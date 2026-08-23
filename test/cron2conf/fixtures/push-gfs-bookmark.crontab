@@ -8,6 +8,4 @@
 
 */15 * * * * d=$(/REPO/check-snap-age.sh "tank/backups/tank/src1" "automated_hourly" 200m 260m 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "h3 hourly getting stale (svc1)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "h3 hourly stale (svc1)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "h3 hourly monitor BROKEN (svc1)" "$d" 2>>/LOG
 */15 * * * * d=$(/REPO/check-snap-age.sh "tank/backups/tank/src2" "automated_daily" 30h 48h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/LOG; [ $rc -eq 1 ] && /WARN "h3 daily getting stale (svc2)" "$d" 2>>/LOG; [ $rc -eq 2 ] && /NOTIFY "h3 daily stale (svc2)" "$d" 2>>/LOG; [ $rc -ge 3 ] && /NOTIFY "h3 daily monitor BROKEN (svc2)" "$d" 2>>/LOG
-
-0 7 * * * /DIGEST 2>>/LOG
 # END zfs-backup-managed
