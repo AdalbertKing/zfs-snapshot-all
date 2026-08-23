@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6805702b36b64411 -->
+<!-- status-covers-digest: 2172fb9546d9619c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -125,6 +125,16 @@
   nie dostarczone. Przy kompresji i buforze mbuffera roznica to glebokosc bufora - na 4 TB
   nieistotna, na malym zbiorze „100%” pojawi sie chwile przed koncem odbioru. Liczenie po
   stronie odbiorczej kosztowaloby drugi strumien; nierobione.
+  **Etap wprowadzil regresje i zlapala ja dopiero kontrola na zywo, nie CI.**
+  `[ $_pg_rc -ne 0 ] && return 1` jako OSTATNIE polecenie galezi zwraca 1, gdy warunek jest
+  falszywy - i to staje sie kodem wyjscia funkcji. Kazdy **udany** transfer w kierunku push
+  meldowal `Transfer failed`, bez przyczyny, bo zadnej nie bylo. CI dawalo 30/30.
+  Znalezione przez puszczenie prawdziwego push na kodzie SPRZED zmiany jako kontroli - tam
+  ten sam transfer konczyl sie `All datasets processed successfully`. Gdyby to weszlo na
+  `main`, flota zaczelaby alarmowac o backupach, ktore dzialaja: odwrotnosc falszywego
+  zdrowia, ale to samo zatrucie alertowania.
+  Poprawione w szesciu miejscach obu silnikow i przypiete **ksztaltem, nie pisownia**: zadna
+  ksiegowosc postepu nie moze konczyc galezi golym testem.
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój
