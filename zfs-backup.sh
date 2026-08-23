@@ -2219,13 +2219,20 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     }
     if [ "$sync_mode" -eq 1 ]; then
         local pds pds_rc
+        # Ask about THIS profile's family, not the literal automated_ root.
+        # Only when the plan is going to render from the profile anyway
+        # (PLAN_NEEDS_PROFILE): a preserving reactivation must keep working
+        # after its profile is renamed or removed (REV-090), and its
+        # detection result feeds nothing -- no section is re-emitted.
+        local sync_family_root=automated_
+        [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && sync_family_root=$(profile_family_root)
         for pds in $PEER_SAVED_DATASETS; do
-            source_family_exists "$pds"; pds_rc=$?
+            source_family_exists "$pds" "$sync_family_root"; pds_rc=$?
             [ "$pds_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
                 && die_probe_unknown "$pds" "whether this relationship consumes that family passively or stamps its own"
             if [ "$pds_rc" -eq 0 ]; then
                 passive_ds+=("$pds")
-                log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
+                log "sync: '$pds' already carries a ${sync_family_root}* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
             fi
         done
     fi
@@ -4061,6 +4068,18 @@ cmd_add_client() {
             done
             mkdir -p "$_lu_home/run" && chown "$local_user:$local_user" "$_lu_home/run"
             getent group zfsalert >/dev/null 2>&1 && usermod -aG zfsalert "$local_user" 2>/dev/null
+            # Progress records (lib-zfs-snap.sh progress_watch/progress_done)
+            # live under /var/lib/zfs-snapshot-all/progress. Created by root
+            # flows it came out 2755 -- the delegated account, though a
+            # zfsalert member, could not write, so account-run jobs produced
+            # NO telemetry and progress_done leaked one 'Permission denied'
+            # line per dataset into cron.log (measured, serwis control run).
+            # Group-writable + setgid; best-effort like the rest of this block.
+            if getent group zfsalert >/dev/null 2>&1; then
+                local _lu_pd="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
+                mkdir -p "$_lu_pd" 2>/dev/null
+                chgrp zfsalert "$_lu_pd" 2>/dev/null && chmod 2775 "$_lu_pd" 2>/dev/null
+            fi
         fi
     else
         # No --local-user: the jobs run as root. There is no host-wide account to
@@ -4172,6 +4191,13 @@ cmd_add_client() {
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
         write_client_field PROFILE           "$profile"
+        # What THIS relationship asked for. The committed scope on the source
+        # is per-COLLECTOR and grows with every relationship this host
+        # enrols against that source; resolution filters it back down to
+        # these roots (see scope_root_is_ours). Empty for sync mode -- there
+        # the source's scope IS the request -- and absent on older records,
+        # both of which keep the whole-scope legacy behavior.
+        write_client_field REQUESTED_DATASETS "$datasets"
         # On the RECORD, so re-activation regenerates the same shape. A hand
         # edited config lost its 'recursive = atomic' the moment anything
         # regenerated the section; the record is the only place a decision
@@ -4404,6 +4430,59 @@ client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
 # and "you asked about something that is not there" is not evidence of an
 # empty family either.
 SOURCE_PROBE_UNKNOWN=2
+# --- profile-derived family root -------------------------------------------
+# The FAMILY is whatever name makes a snapshot OURS, and until 2026-08-23 that
+# name was the literal automated_ in six places -- correct for the built-in
+# default and silently wrong for every other profile (measured, lab 'serwis':
+# the seed stamped automated_daily_ onto both sides of a relationship whose
+# ladder prunes serwis_* -- a snapshot no retention would ever touch, and an
+# automated_* family on the source that would flip a future undeclared
+# enrolment of the same source into a consumer).
+#
+# The root comes from the ACTIVE PROFILE, in the order the design already
+# trusts: gfs_pattern first (retention had to know the family root to prune
+# it -- default: automated_), else the send prefix with a recognizable tier
+# word stripped (serwis_hourly_ -> serwis_), else the send prefix itself (a
+# flat one-family profile: the seed then shares the cadence name; retention
+# coverage wins over the one-tick monitor artefact, and the artefact ends at
+# the first scheduled run). Empty result -- a prefixless profile, which never
+# reaches an ACTIVE seed -- falls back to the historic automated_.
+profile_family_root() {
+    load_active_profile
+    local root
+    root=$(awk -F= 'NF==2 && $1 ~ /^[[:space:]]*gfs_pattern[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$PROFILE_PRUNE_FILE")
+    if [ -z "$root" ]; then
+        local pfx
+        pfx=$(awk -F= 'NF==2 && $1 ~ /^[[:space:]]*prefix[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$PROFILE_TPL_FILE")
+        case "$pfx" in
+            *hourly_)  root="${pfx%hourly_}" ;;
+            *daily_)   root="${pfx%daily_}" ;;
+            *weekly_)  root="${pfx%weekly_}" ;;
+            *monthly_) root="${pfx%monthly_}" ;;
+            *)         root="$pfx" ;;
+        esac
+    fi
+    printf '%s' "${root:-automated_}"
+}
+
+# The seed's name: root + daily_. For the default profile this is byte-for-
+# byte the automated_daily_ the call-site comment below argues for; the
+# argument itself (not the monitor's cadence name, but inside the ladder's
+# reach) now holds for every profile instead of one.
+profile_seed_prefix() { printf '%sdaily_' "$(profile_family_root)"; }
+
+# The seed and the catch-up run OUTSIDE the activation plan, where nothing
+# has chosen a profile yet -- but the client record has (create-time
+# provenance, .-sourced into $PROFILE). Point the loader at it; a record
+# predating the field keeps the env/default choice, zero migration.
+seed_profile_context() {
+    if [ -n "${PROFILE:-}" ] && [ "$PROFILE" != "$PROFILE_ACTIVE" ]; then
+        profile_release_tmp
+        PROFILE_ACTIVE="$PROFILE"
+    fi
+    load_active_profile
+}
+
 source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 2 = unknown
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
@@ -4433,9 +4512,9 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
     return 0
 }
 
-source_family_exists() {   # <dataset> -> 0 family, 1 none, 2 could not ask
+source_family_exists() {   # <dataset> [prefix] -> 0 family, 1 none, 2 could not ask
     local out rc
-    out=$(source_family_newest "$1"); rc=$?
+    out=$(source_family_newest "$1" "${2-automated_}"); rc=$?
     [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
     [ -n "$out" ]
 }
@@ -4580,7 +4659,34 @@ resolve_mode_datasets() {
     local -a resolved=()
     PEER_SAVED_RECURSIVE_ROOTS=""
     local root ds
+    # The committed scope belongs to the COLLECTOR, not to this relationship:
+    # after a second enrolment against the same source it is the UNION of
+    # every relationship's grant (measured, labD after labS: labD's seed
+    # resolved labS's trees and the --yes guard refused -- and without the
+    # guard it would have replicated a sibling's datasets). The record knows
+    # what THIS relationship asked for; a root disjoint from that request is
+    # a sibling's and is skipped. A root that CONTAINS the request is kept
+    # whole -- adopting a deliberately broader grant is a real use, and the
+    # interactive consent / --yes sync guard still owns that decision.
+    local -a _req_roots=()
+    if [ -n "${REQUESTED_DATASETS:-}" ]; then
+        local _rr
+        while IFS= read -r _rr; do [ -n "$_rr" ] && _req_roots+=("$_rr"); done < <(dataset_list_split "$REQUESTED_DATASETS")
+    fi
+    scope_root_is_ours() {   # <scope root> -> 0 keep, 1 sibling's
+        [ "${#_req_roots[@]}" -gt 0 ] || return 0
+        local q
+        for q in "${_req_roots[@]}"; do
+            case "$1" in "$q" | "$q"/*) return 0 ;; esac
+            case "$q" in "$1"/*) return 0 ;; esac
+        done
+        return 1
+    }
     for root in "${SCOPE_ROOTS[@]}"; do
+        if ! scope_root_is_ours "$root"; then
+            log "scope root '$root' is outside this relationship's request (a sibling relationship's grant) -- skipped"
+            continue
+        fi
         if [ "${SCOPE_PARENT[$root]}" = yes ] && [ "${SCOPE_CHILDREN[$root]}" = yes ] \
            && [ -z "${SCOPE_EXCLUDE[$root]}" ] && [ -z "${SCOPE_EXCLUDE_TREE[$root]}" ]; then
             case " ${resolved[*]:-} " in *" $root "*) continue ;; esac
@@ -4863,7 +4969,9 @@ cmd_seed() {
         # relationship is a CONSUMER there. It adopts the newest existing
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
-        local -a seed_flags=(-m automated_daily_)
+        seed_profile_context
+        local seed_root; seed_root=$(profile_family_root)
+        local -a seed_flags=(-m "$(profile_seed_prefix)")
         # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
         # stamp. The relationship SAID it is passive at create, so the seed
         # adopts the newest existing snapshot whatever it is called (engine -e
@@ -4877,10 +4985,10 @@ cmd_seed() {
         if [ "${PASSIVE:-0}" = "1" ]; then
             seed_flags=(-e)
         else
-        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
-            seed_flags=(-m automated_ -e)
+            seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
         fi
@@ -5016,7 +5124,9 @@ cmd_final_catchup() {
         # relationship is a CONSUMER there. It adopts the newest existing
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
-        local -a seed_flags=(-m automated_daily_)
+        seed_profile_context
+        local seed_root; seed_root=$(profile_family_root)
+        local -a seed_flags=(-m "$(profile_seed_prefix)")
         # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
         # stamp. The relationship SAID it is passive at create, so the seed
         # adopts the newest existing snapshot whatever it is called (engine -e
@@ -5030,10 +5140,10 @@ cmd_final_catchup() {
         if [ "${PASSIVE:-0}" = "1" ]; then
             seed_flags=(-e)
         else
-        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
-            seed_flags=(-m automated_ -e)
+            seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
         fi
@@ -7423,7 +7533,59 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
     fi
 
     if rux_root_ssh "$host" "$port" "test -s '$hfile'" >/dev/null 2>&1; then
-        log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' -- nothing to grant, the ordinary verification below decides whether it covers the request"
+        # A committed scope exists. Until 2026-08-23 this branch said "nothing
+        # to grant" unconditionally -- true for a re-run of the SAME
+        # relationship, and a dead end for the SECOND relationship to the same
+        # source: its new root was never granted and the ordinary verification
+        # below failed with "not covered by the scope actually COMMITTED"
+        # (measured, labD after labS). The request this flag is allowed to
+        # sign is unchanged -- exactly the requested roots -- so a committed
+        # scope is EXTENDED by appending the missing request-shaped stanzas
+        # and re-running --commit-scope, which reconciles grants exactly like
+        # the first commit did. Roots already carrying a stanza are left
+        # alone; a broader operator-written stanza that covers the request
+        # without naming it gains a redundant, audited, harmless child stanza.
+        local committed_headers missing="" _rh
+        committed_headers=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null"             | awk '/^\[dataset:/{print}')
+        while IFS= read -r _rh; do
+            case "$committed_headers" in
+                *"[dataset:$_rh]"*) ;;
+                *) missing+="$_rh"$'
+' ;;
+            esac
+        done < <(dataset_list_split "$requested")
+        if [ -z "$missing" ]; then
+            log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' covering the request -- nothing to grant"
+            return 0
+        fi
+        # Extend only a file that IS the committed version. A file whose bytes
+        # differ from the granted hash is an operator's pending edit, and this
+        # flag is not permission to build on top of it.
+        rux_root_ssh "$host" "$port" "[ \"\$(sha256sum -- '$sfile' | awk '{print \$1}')\" = \"\$(cat -- '$hfile')\" ]" >/dev/null 2>&1             || die "--grant-remotely: the scope file on $host differs from the last committed version -- an operator is editing it. Commit or align it there (deploy.sh --commit-scope=$COLLECTOR_LABEL), then re-run. Nothing was changed."
+        local extend_repo="" _xd
+        for _xd in "$SCRIPT_DIR" /root/scripts/zfs-snapshot-all /root/zfs-snapshot-all; do
+            if rux_root_ssh "$host" "$port" "test -x '$_xd/deploy.sh'" >/dev/null 2>&1; then extend_repo="$_xd"; break; fi
+        done
+        [ -n "$extend_repo" ] || die "--grant-remotely: could not find deploy.sh on $host -- cannot re-commit the extended scope"
+        local ext_stamp; ext_stamp="root@$(hostname -s 2>/dev/null || hostname) $(date '+%Y-%m-%d %H:%M:%S %Z')"
+        log "--grant-remotely: extending the committed scope on $host with $(printf '%s' "$missing" | wc -l) new root(s) and re-committing (audited)"
+        {
+            printf '
+# Extended by --grant-remotely from %s.
+' "$ext_stamp"
+            while IFS= read -r _rh; do
+                [ -n "$_rh" ] || continue
+                printf '[dataset:%s]
+include_parent = yes
+include_children = yes
+' "$_rh"
+            done <<< "$missing"
+        } | rux_root_ssh_in "$host" "$port" "cat >> '$sfile'"             || die "--grant-remotely: could not append to the scope file on $host -- nothing was committed"
+        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
+        local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
+        rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
+' '$ext_stamp (extension)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
+        log "--grant-remotely: extension committed on $host as '$COLLECTOR_LABEL', audit recorded"
         return 0
     fi
 
