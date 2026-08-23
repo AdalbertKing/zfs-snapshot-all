@@ -2741,6 +2741,9 @@ cron_context_resolve() {   # <policy> <explicit-config> <explicit-user> <recorde
         CRON_CTX_WHY_USER="named on the command line"
     elif [ -n "$r_user" ]; then
         CRON_CTX_USER="$r_user";  CRON_CTX_WHY_USER="recorded with the relationship"
+        # Same normalization as the command-line branch above: 'root' is an
+        # answer ("root runs them"), not an account name to delegate to.
+        [ "$r_user" = root ] && CRON_CTX_USER=""
     elif [ -n "${PEER_SAVED_LOCAL_USER:-}" ]; then
         CRON_CTX_USER="$PEER_SAVED_LOCAL_USER"
         CRON_CTX_WHY_USER="the pairing manifest (the record predates the field)"
@@ -4145,6 +4148,23 @@ cmd_add_client() {
     # Both an explicit 'root' AND an empty local_user (no --local-user given at
     # all -- the new default) mean exactly that: run as root, delegate nothing.
     # Only a real account name is passed through.
+    # An EXISTING pairing already delegated this source host to ONE account
+    # (keys, alias known_hosts and the manifest's PEER_SAVED_LOCAL_USER are
+    # per-host). A second relationship naming a DIFFERENT account was
+    # silently flipped to the paired one -- measured in the passive lab:
+    # --local-user=root enrolled cleanly and its lines landed in bckp's
+    # crontab, bckp's config, under bckp's keys, with no word said. Until
+    # mixed accounts get their own pairing identities, the honest answer is
+    # a refusal that names the conflict.
+    local _mf_user_path; _mf_user_path=$(peer_manifest_path "$(peer_label "$lan_host")")
+    if [ -r "$_mf_user_path" ]; then
+        local _mf_user; _mf_user=$( . "$_mf_user_path" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-root}" )
+        local _want_user="${local_user:-root}"
+        [ -z "$_mf_user" ] && _mf_user=root
+        if [ "$_want_user" != "$_mf_user" ]; then
+            die "add-client: this host's pairing with '$lan_host' is delegated to account '$_mf_user', and this relationship asked for '--local-user=$_want_user'. The pairing identity (key, pinned host key, manifest) is per source host, so a second account cannot ride it -- the previous behavior silently ran the new relationship as '$_mf_user' instead. Either use --local-user=$_mf_user, or unpair the host first if the delegation itself should change. Nothing was changed."
+        fi
+    fi
     [ -n "$local_user" ] && [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
     # REV-20260802-033 slice 9 / U10: pass-through only -- this file does not
     # reimplement the remote scp/ssh/editor flow, deploy.sh --pair does it
@@ -4198,6 +4218,11 @@ cmd_add_client() {
         # the source's scope IS the request -- and absent on older records,
         # both of which keep the whole-scope legacy behavior.
         write_client_field REQUESTED_DATASETS "$datasets"
+        # The account CHOICE, persisted with the relationship (r_user in
+        # cron_context_resolve). Without it, activation resolved the account
+        # from the per-host pairing manifest -- which is how the silent
+        # account flip above stayed invisible until the passive lab.
+        write_client_field LOCAL_USER        "$local_user"
         # The TARGET is a fact of the RELATIONSHIP, recorded here at create.
         # The pairing manifest also carries a target, but the manifest is
         # per-HOST: the first relationship against a source wrote it, and a
@@ -4999,7 +5024,16 @@ cmd_seed() {
         # foreign one (that blindness, measured, is why the declaration
         # exists).
         if [ "${PASSIVE:-0}" = "1" ]; then
-            seed_flags=(-e)
+            # -e PLUS the declared exclusions. The bare -e here adopted the
+            # newest snapshot of ANYTHING -- including the very families the
+            # relationship declared excluded, whenever an excluded one was
+            # freshest (measured, passive lab: the seed shipped smiec_* to
+            # the target while the installed line right next to it carried
+            # -E smiec_). The closing campaign missed it because its excluded
+            # snapshot happened to be older than the adopted one. Same
+            # fields, same flags, same meaning as the installed line:
+            # client_passive_flags is the one place that renders them.
+            read -r -a seed_flags <<< "$(client_passive_flags)"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
@@ -5154,7 +5188,16 @@ cmd_final_catchup() {
         # foreign one (that blindness, measured, is why the declaration
         # exists).
         if [ "${PASSIVE:-0}" = "1" ]; then
-            seed_flags=(-e)
+            # -e PLUS the declared exclusions. The bare -e here adopted the
+            # newest snapshot of ANYTHING -- including the very families the
+            # relationship declared excluded, whenever an excluded one was
+            # freshest (measured, passive lab: the seed shipped smiec_* to
+            # the target while the installed line right next to it carried
+            # -E smiec_). The closing campaign missed it because its excluded
+            # snapshot happened to be older than the adopted one. Same
+            # fields, same flags, same meaning as the installed line:
+            # client_passive_flags is the one place that renders them.
+            read -r -a seed_flags <<< "$(client_passive_flags)"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
