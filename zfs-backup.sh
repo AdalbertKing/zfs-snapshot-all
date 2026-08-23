@@ -4198,6 +4198,15 @@ cmd_add_client() {
         # the source's scope IS the request -- and absent on older records,
         # both of which keep the whole-scope legacy behavior.
         write_client_field REQUESTED_DATASETS "$datasets"
+        # The TARGET is a fact of the RELATIONSHIP, recorded here at create.
+        # The pairing manifest also carries a target, but the manifest is
+        # per-HOST: the first relationship against a source wrote it, and a
+        # second relationship (own --target) silently inherited the first
+        # one's namespace -- the coverage guard then refused it as an
+        # overlap (measured, labD beside labS). load_client_and_connection
+        # lets this field override the manifest's; empty (sync mode) and
+        # absent (older records) keep the manifest value, zero migration.
+        write_client_field CLIENT_TARGET     "$target"
         # On the RECORD, so re-activation regenerates the same shape. A hand
         # edited config lost its 'recursive = atomic' the moment anything
         # regenerated the section; the record is the only place a decision
@@ -4799,6 +4808,9 @@ Dropping --yes shows you the list and lets you consent to it deliberately."
 # host, port, flags.
 load_client_and_connection() {
     local cpath="$1"
+    # Reset before sourcing: records predating a field must not inherit the
+    # previous client's value when one process loads several records.
+    CLIENT_TARGET=""
     # shellcheck disable=SC1090
     . "$cpath"
     local label; label=$(peer_label "$PEER_HOST")
@@ -4807,6 +4819,10 @@ load_client_and_connection() {
     [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- run add-client first"
     # shellcheck disable=SC1090
     . "$mpath"
+
+    # Relationship-owned facts override their per-host manifest defaults --
+    # see the CLIENT_TARGET note at the record writer.
+    [ -n "${CLIENT_TARGET:-}" ] && PEER_SAVED_TARGET="$CLIENT_TARGET"
 
     LOAD_ACCOUNT="${PEER_SAVED_ACCOUNT:-root}"
     LOAD_KEYFILE=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")
