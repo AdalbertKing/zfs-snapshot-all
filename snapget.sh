@@ -912,6 +912,7 @@ transfer_data() {
     # "14:21:23 1842248" instead of the reason would be worse than no progress
     # at all.
     local _pg_snap _pg_err _pg_pid _pg_rc=0
+    progress_reap
     _pg_snap=${send_cmd##* }
     if [ "${PROGRESS_ENABLED:-1}" = "1" ]; then
         case "$send_cmd" in

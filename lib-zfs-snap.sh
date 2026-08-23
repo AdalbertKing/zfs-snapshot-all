@@ -117,6 +117,28 @@ progress_strip() {   # <errfile>
 # Reads the growing stderr file and keeps ONE durable record per dataset up to
 # date. Runs in the background; the caller kills it when the transfer ends.
 # Prints its PID so the caller can.
+# Finished records are kept for a while so an operator who looked away can still
+# see how a transfer ended, then removed. Without this the directory grows one
+# file per dataset per run forever -- the same slow leak the tombstone and
+# alert-queue work has already had to clean up twice in this project.
+#
+# Only FINISHED records age out. A record still marked running is left alone
+# whatever its age: deciding it is dead and deleting it would destroy the one
+# piece of evidence that something died, and the reader already reports an
+# unrefreshed record as suspect rather than as current.
+progress_reap() {   # [max age in seconds, default 7 days]
+    local max="${1:-604800}" dir f now mtime
+    dir=$(progress_dir); [ -d "$dir" ] || return 0
+    now=$(date +%s)
+    for f in "$dir"/*.json; do
+        [ -e "$f" ] || continue
+        grep -q '"state":"running"' "$f" 2>/dev/null && continue
+        mtime=$(stat -c %Y -- "$f" 2>/dev/null) || continue
+        [ $(( now - mtime )) -gt "$max" ] && rm -f "$f" 2>/dev/null
+    done
+    return 0
+}
+
 progress_watch() {   # <errfile> <dataset> <peer> <direction> -> pid
     local errfile="$1" dataset="$2" peer="${3:-}" direction="${4:-}"
     local pfile; pfile=$(progress_path "$dataset")
@@ -176,7 +198,12 @@ progress_done() {   # <watcher pid> <dataset> <status>
     # Replace the running marker rather than appending beside it: two "state"
     # keys in one object is not a record, it is a coin toss for whichever
     # parser reads it. Caught by the first isolation run of this function.
-    body=${body%,"state":"running"\}}
+    # The quotes must be ESCAPED, not quoted: inside ${var%pattern} bash applies
+    # its own quote removal first, so ,"state":"running"} becomes the pattern
+    # ,state:running} and never matches. The record then kept its running
+    # marker forever and the guard below silently declined to write. Caught by
+    # the end-of-stage battery, not by reading.
+    body=${body%,\"state\":\"running\"\}}
     case "$body" in *'"state":"running"'*) return 0 ;; esac
     printf '%s' "$body" > "${pfile}.tmp" 2>/dev/null || return 0
     printf ',"state":"%s","finished_epoch":%s}\n' "$(json_escape "$status")" "$(date +%s)" >> "${pfile}.tmp" 2>/dev/null

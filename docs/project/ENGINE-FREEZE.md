@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 2920feff488c1c81f99b138e88c41ee7ee66a3dd -->
-<!-- frozen: snapget.sh 100755 9b8ab52b93bb201df5177bd180b9f8630ba05fa1 -->
+<!-- frozen: snapsend.sh 100755 fce66bee25ddc3a08dc0d53a71b6bc57290eabed -->
+<!-- frozen: snapget.sh 100755 bc961523787500ed6023860f52c67cc1a671d543 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
-<!-- frozen: lib-zfs-snap.sh 100644 bdb0d002f9b71dd3a02c04577760ca6480d5ba19 -->
+<!-- frozen: lib-zfs-snap.sh 100644 9033aad83b8185343c3e86af40ed9effec58d291 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -54,6 +54,36 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-23 (snapget.sh, snapsend.sh, lib-zfs-snap.sh): live transfer
+  progress. Owner-authorized as a STAGE ("obecnie szerzej -- chce widziec ile
+  zostalo np z 4TB w trakcie transferu, a nie po"), which cannot be built
+  without the engines: they are the only place that knows a transfer is
+  happening.
+  `zfs send` gains `-v -P`. That is the whole source of the numbers -- ZFS
+  itself, no new dependency. Measured on zfs-2.1.11: a `size<TAB><bytes>`
+  header immediately, then one `HH:MM:SS<TAB><cumulative><TAB><snapshot>` line
+  per second, and in the PULL direction those come back over ssh's stderr
+  intact.
+  THE PART THAT NEEDED CARE, and the reason this is an engine change rather
+  than a wrapper: the send's stderr is also where its ERRORS arrive, and the
+  alerting path takes `tail -n 8` of that stream when a job fails. Progress
+  lines left in it would replace the failure reason with a byte counter. So
+  the stderr is captured to a file, a watcher reads it alongside, and
+  progress_strip removes the progress lines before the file is replayed to
+  stderr. Verified live: zero progress lines in the script's own log during a
+  real transfer.
+  ssh is untouched in the PUSH direction -- there it RECEIVES the stream on
+  stdin, so the capture goes on the send, never on the ssh, and never `-n`.
+  BOUNDARY, recorded rather than hidden: `-v` counts bytes the send PUSHED
+  INTO the pipe, not bytes landed on the target. With compression and an
+  mbuffer in between the difference is the buffer depth -- irrelevant on a 4 TB
+  seed, but on a small dataset "100%" appears shortly before the receive
+  finishes. Measuring the landed side would cost a second stream; not done.
+  Best-effort throughout: an unwritable directory, a killed watcher or a
+  malformed line must never affect the transfer. A record that stops being
+  refreshed is reported as suspect by the reader, never deleted -- deleting it
+  would destroy the only evidence that something died.
 
 - 2026-08-23 (snapget.sh, snapsend.sh, delsnaps.sh, lib-zfs-snap.sh): `-n` on
   every READ-ONLY ssh invocation. Owner-authorized in chat after the exact
