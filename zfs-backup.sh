@@ -4018,13 +4018,20 @@ cmd_add_client() {
         # migration campaign and a FRESH account created by this flag got
         # nothing. Everything below is idempotent and matches what deploy.sh
         # gives an account (account-paths contract).
+        # BEST-EFFORT, never fatal: the runnability guard at activation is the
+        # enforcer and names the exact missing piece; this block exists so a
+        # root operator never MEETS that guard. A non-root caller (tests, a
+        # delegated shell) skips with a log line instead of dying on useradd.
         if ! id "$local_user" >/dev/null 2>&1; then
-            useradd -m -s /bin/bash -c "zfs-snapshot-all collector account" "$local_user"                 || die "add-client: could not create account '$local_user'"
-            passwd -l "$local_user" >/dev/null 2>&1 || true
-            log "add-client: created account '$local_user' (uid $(id -u "$local_user")), password locked"
+            if [ "$(id -u)" -eq 0 ] && useradd -m -s /bin/bash -c "zfs-snapshot-all collector account" "$local_user" 2>/dev/null; then
+                passwd -l "$local_user" >/dev/null 2>&1 || true
+                log "add-client: created account '$local_user' (uid $(id -u "$local_user")), password locked"
+            else
+                log "add-client: account '$local_user' does not exist and cannot be created here -- activation's runnability guard will name whatever is missing"
+            fi
         fi
-        local _lu_home; _lu_home=$(getent passwd "$local_user" | cut -d: -f6)
-        if [ -n "$_lu_home" ]; then
+        local _lu_home; _lu_home=$(getent passwd "$local_user" 2>/dev/null | cut -d: -f6)
+        if [ -n "$_lu_home" ] && [ "$(id -u)" -eq 0 ]; then
             if [ ! -x "$_lu_home/zfs-snapshot-all/gen-cron.sh" ]; then
                 rm -rf "$_lu_home/zfs-snapshot-all"
                 git clone -q "$SCRIPT_DIR" "$_lu_home/zfs-snapshot-all" 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     && log "add-client: provisioned $_lu_home/zfs-snapshot-all (accounts cannot use root's 0700 checkout)"                     || warn "add-client: could not clone the repo for '$local_user' -- activation will refuse with the exact path"
