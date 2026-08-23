@@ -851,17 +851,34 @@ fi
 KHDIR="$WORK/pairing"; mkdir -p "$KHDIR"
 printf '192.168.11.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' > "$KHDIR/192.168.11.11_known_hosts"
 alias_out=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 22 zfs-client-pve2 )
-if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"; then
-    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, not the address-derived label"
+if [ -f "$alias_out" ] && grep -q '^zfs-client-pve2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out"         && ssh-keygen -F zfs-client-pve2 -f "$alias_out" >/dev/null 2>&1; then
+    ok "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias, and ssh can find it"
 else
     bad "ensure_alias_known_hosts (port 22) writes an alias-keyed known_hosts under the STABLE alias" "alias_out=$alias_out content=$(cat "$alias_out" 2>&1)"
 fi
 
+# THIS ASSERTION USED TO REQUIRE THE OPPOSITE, AND IT WAS WRONG.
+#
+# It demanded '[alias]:2222' for a non-default port -- the notation known_hosts
+# uses for a real HOSTNAME on a non-default port. But when HostKeyAlias is set,
+# OpenSSH looks the key up under the alias ALONE and never appends the port, so
+# the pinned key was filed under a name ssh does not ask for and every
+# non-default-port endpoint failed "Host key verification failed" with the
+# right key in the file. Port 22 was unaffected, so nothing noticed until an
+# endpoint switch to another port was tried live (issue #9, 2026-08-23):
+#
+#   bracketed entry, real connection to :2222   -> Host key verification failed
+#   same key, same port, entry without the port -> connects, reads the scope
+#
+# The old case tested the SPELLING and passed while the product could not
+# connect. Both cases now ask ssh-keygen -F -- OpenSSH's own known_hosts
+# matcher, doing the same bare-name lookup ssh does -- so what is pinned is
+# that ssh can FIND the key, for either port.
 alias_out2=$( PEER_KEY_DIR="$KHDIR" ensure_alias_known_hosts 192.168.11.11 '' 2222 zfs-client-pve2 )
-if [ -f "$alias_out2" ] && grep -q '^\[zfs-client-pve2\]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest$' "$alias_out2"; then
-    ok "ensure_alias_known_hosts (non-default port) uses bracket:port notation"
+if [ -f "$alias_out2" ] && ssh-keygen -F zfs-client-pve2 -f "$alias_out2" >/dev/null 2>&1; then
+    ok "ensure_alias_known_hosts (non-default port): ssh's own matcher finds the pinned alias"
 else
-    bad "ensure_alias_known_hosts (non-default port) uses bracket:port notation" "alias_out2=$alias_out2 content=$(cat "$alias_out2" 2>&1)"
+    bad "ensure_alias_known_hosts (non-default port): ssh's own matcher finds the pinned alias" "alias_out2=$alias_out2 content=$(cat "$alias_out2" 2>&1)"
 fi
 
 rc=0
