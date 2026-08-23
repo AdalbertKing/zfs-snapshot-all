@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5430e760d55b161a -->
+<!-- status-covers-digest: 73fabd9b81d770d5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -98,6 +98,21 @@
   wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
   jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
   Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
+- **Restore dostal publiczne drzwi: adresy relacyjne z odmowa zamiast zgadywania (2026-08-23).**
+  Gramatyka wlasciciela z 2026-08-13 (`restore pve2`, `restore pve2:rpool/data`, sciezka
+  zarzadzanej kopii) miala od poczatku jedna zasade rozbrajajaca dwuznacznosc: **nazwa,
+  ktora sie nie rozwiazuje, to blad - nigdy zgadywanie**. Zadnego fallbacku do hostname,
+  DNS ani sondy ssh, bo koszt zgadniecia to destrukcyjne odtworzenie wycelowane w zla
+  maszyne. Trzy ostrza R-025 wprost w resolverze: `user@host:dataset` odrzucane (transport
+  nie nalezy do powierzchni publicznej); gole slowo NIGDY nie staje sie hostname; obca
+  sciezka NIGDY nie jest adoptowana jako kopia. Kazda odmowa nazywa powod i bezpieczny
+  nastepny krok (`restore --plan`).
+  Adres pozycyjny wpiety w parser: z `--snapshot` wymaga dokladnie JEDNEGO datasetu -
+  odtworzenie calej relacji do jednej nazwy snapshotu ozywiloby falszywa idee, ze rowne
+  nazwy to jedno zdarzenie atomowe (zmierzone na pve2, ze nie sa). Bez `--snapshot` adres
+  przechodzi w plan zawezony do relacji. Druga pozycyjna (cel miedzy hostami) odmawia z
+  nazwana sekwencja R-025 - te drzwi wisza po recenzji tych.
+  Siedem dyskryminatorow w test/restore, w tym wszystkie trzy odmowy R-025 osobno.
 - **Monitor zaczal konsumowac warstwe danych: zdrowie puli i martwe transfery (2026-08-23).**
   Dwie dziury, za ktore estata juz zaplacila: `rpool` na pve1 byl **DEGRADED tygodniami** bez
   jednego alertu (pojemnosc sprawdzana codziennie, zdrowie NIGDZIE - zdegradowana pula
