@@ -6738,15 +6738,28 @@ else
         "przeczytano: ${ssh_stdin_probe:-NIC} -- ssh zjadl stdin, monit bedzie nieodpowiadalny"
 fi
 
+# ONE exemption, keyed on an explicit marker, not on judgement: the
+# stdin-carrier variant exists because --grant-remotely pipes the scope stanza
+# into `cat > file` on the source, and -n there writes an EMPTY scope -- the
+# 2026-08-23 sweep did exactly that and killed the automatic enrolment for a
+# few hours (the empty-scope grammar guard kept it fail-closed). The marker
+# must appear on the offending line itself; an unmarked -n-less ssh still fails.
 ssh_no_n=$(grep -nE '(^|[^a-z_])ssh ' "$ZFSBACKUP" \
            | grep -v '^\s*[0-9]*:\s*#' \
            | grep -vE 'ssh -n ' \
-           | grep -vE '\.ssh|ssh_opts|ssh_flags|SSH_OPTS|known_hosts|ssh-keygen|root-ssh|ssh\(1\)|# ')
+           | grep -vE '\.ssh|ssh_opts|ssh_flags|SSH_OPTS|known_hosts|ssh-keygen|root-ssh|ssh\(1\)|stdin-carrier|# ')
 if [ -z "$ssh_no_n" ]; then
     ok "ssh: every invocation in zfs-backup.sh passes -n"
 else
     bad "ssh: every invocation in zfs-backup.sh passes -n" \
         "bez -n:" "$(printf '%s' "$ssh_no_n" | cut -c1-140)"
+fi
+# The carrier itself must exist and must NOT have -n -- a future sweep that
+# "fixes" it recreates the empty-scope breakage, so its shape is pinned.
+if grep -q 'rux_root_ssh_in()' "$ZFSBACKUP"    && ! sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep -qE 'ssh -n '; then
+    ok "ssh: the stdin-carrier variant exists and does NOT pass -n"
+else
+    bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep 'ssh ' | head -1)"
 fi
 
 echo "--------------------------------------------"

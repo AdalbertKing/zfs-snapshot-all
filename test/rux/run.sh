@@ -745,6 +745,10 @@ out="$( (
             *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
         esac
     }
+    # The scope write travels through the stdin-carrier variant since the
+    # #127-regression fix -- the stub must cover it, or the test escapes into
+    # real ssh (which is exactly how CI caught the fix's first version).
+    rux_root_ssh_in() { rux_root_ssh "$@"; }
     mkdir -p "$WORK/24b"
     rux_grant_remotely pve2 22 rpool/data
 ) 2>&1 )"; rc=$?

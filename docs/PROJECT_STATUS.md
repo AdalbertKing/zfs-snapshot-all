@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dc6271530341e27a -->
+<!-- status-covers-digest: 2e0f7bc0836df3ea -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -98,6 +98,35 @@
   wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
   jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
   Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
+- **KAMPANIA LAB-E: pasywnosc wobec CUDZYCH snapshotow (2026-08-23, wieczorem).** Plan
+  wlasciciela: caly ruch -e takze w trybie backup; cudze rodziny (cudzy_/smiec_/bez
+  prefiksu) generowane cronem co 5 min na zrodle; dwa cykle (root+join reczny+atomowy -r;
+  bckp+join automatyczny --grant-remotely+plaski -R z wykluczonym dzieckiem); monitory maja
+  ignorowac starzejace sie cudze SPOZA wozonej rodziny.
+  **Dowiedzione na zywo:** silnik juz umie model wlasciciela (-e bez maski = najnowszy,
+  jakkolwiek sie nazywa - zmierzone); pelna pasywnosc w obu cyklach (md5 listy snapshotow
+  zrodla identyczne przed/po, wielokrotnie); wykluczenie dziecka pod kontem delegowanym;
+  --grant-remotely z audytem; monitor: zielony na swiezych cudzych -> WARN 13 min ->
+  CRITICAL 21 min po zgaszeniu generatora, z nazwa datasetu.
+  **Dziewiec znalezisk** (pelna lista w zapisie kampanii): seed stempluje mimo cudzej
+  rodziny (x2); pasywnosc niewyrazalna przy enrolacji; monitor odmawia bezprefiksowosci;
+  -r atomowy wiezie bagaz innych rodzin (semantyka ZFS -R), plaski nie; pasywnosc
+  per-dataset przy prefiksowanym szablonie niewyrazalna (wlasny szablon dziala); rux liczy
+  nagrobki STATE=removed (rodzina #124); **regresja -n z #127 zabila --grant-remotely**
+  (stanza przez wrapper -> pusty plik zakresu; strazi gramatyki utrzymal fail-closed;
+  naprawione wariantem stdin-carrier z dyskryminatorem); rux --local-user nie prowizjonuje
+  konta kolektora (repo, notify-skrypty, grupa) a wykluczone dziecko dostaje
+  PLAN=base=null i liczy sie do 'incremental-only confirmed'; wiek monitora drukowany w
+  pelnych godzinach ukrywa minuty przy progach minutowych.
+  **AUDYT ZAKLADNIKOW automated_:** silniki, gen-cron, restore, cron2conf, lib-* - CZYSTE
+  (wzorce z configu/argumentow). Zakladnicy WYLACZNIE w zfs-backup.sh, 6 miejsc, wspolny
+  korzen: sonda rodziny (pfx domyslnie automated_) + seed z zaszytym -m automated_daily_.
+  Z audytu wynika tez przewidywanie dla testu aktywnego z innym prefiksem: profil
+  prefix=serwis_ rozdwoi rodzine na starcie, bo seed stempluje automated_daily_ na sztywno.
+  **Wniosek architektoniczny:** sync nigdy nie byl pasywny OGOLNIE - byl pasywny
+  LANCUCHOWO: jego sonda widzi tylko automated_*, a poligon (lancuch naszych instancji)
+  spelnial to zalozenie z definicji. Etap 'pasywnosc deklaratywna' ma kompletna mape:
+  flaga relacji zamiast sondy; sonda zostaje tylko jako straznik lancucha w sync.
 - **PELNA SEKWENCJA WDROZENIOWA na koncowym main dnia - czysty przelot, ktory wisial od LAB6
   (2026-08-23, main@91d9734, pve9<->pve2).** Jeden cykl zycia od zera przez WSZYSTKIE
   dzisiejsze poprawki naraz, kazda w swoim naturalnym miejscu toru, zadna nie dowodzona
