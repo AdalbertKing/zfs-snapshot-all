@@ -602,6 +602,21 @@ restore_relations() {   # <config>
 #
 # Output: one "src<TAB>copy" line per selected dataset. Every refusal is die,
 # with the reason and the safe next step named.
+# The installed CONFIG, found the way the rest of the tooling names it.
+#
+# read_server_conf can only learn CRON_CONFIG from server.conf, and server.conf
+# is vestigial -- measured absent on every live host -- so on a real machine the
+# public spelling died with "no readable installed config" the first time it was
+# driven (pve9, 2026-08-23) while /etc/zfs-snapshot-all/jobs.pve9.conf sat right
+# there. Falling back to that path is NOT guessing in the R-025 sense: it is a
+# deterministic LOCAL file naming convention every other part of this tooling
+# writes and reads, not a network address inferred from a name. If the file is
+# not there either, the refusal still says exactly what to pass.
+restore_default_config() {
+    local h; h=$(hostname -s 2>/dev/null || hostname)
+    printf '%s' "/etc/zfs-snapshot-all/jobs.${h}.conf"
+}
+
 restore_resolve_token() {   # <config> <token>
     local config="$1" tok="$2"
     case "$tok" in
@@ -1328,7 +1343,8 @@ cmd_restore() {
     if [ -n "$addr" ]; then
         read_server_conf
         local _rc_cfg="$config"; [ -n "$_rc_cfg" ] || _rc_cfg="${CRON_CONFIG:-}"
-        [ -n "$_rc_cfg" ] && [ -r "$_rc_cfg" ] || die "restore: no readable installed config to resolve '$addr' against -- pass --config=FILE"
+        [ -n "$_rc_cfg" ] || { _rc_cfg=$(restore_default_config); [ -r "$_rc_cfg" ] || _rc_cfg=""; }
+        [ -n "$_rc_cfg" ] && [ -r "$_rc_cfg" ] || die "restore: no readable installed config to resolve '$addr' against (tried \$CRON_CONFIG and $(restore_default_config)) -- pass --config=FILE"
         local _rc_sel; _rc_sel=$(restore_resolve_token "$_rc_cfg" "$addr")
         local _rc_n; _rc_n=$(printf '%s
 ' "$_rc_sel" | grep -c .)
@@ -1361,6 +1377,7 @@ cmd_restore() {
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || { config=$(restore_default_config); [ -r "$config" ] || config=""; }
     [ -n "$config" ] || die "restore --plan: no cron config known -- pass --config=FILE or run setup-server"
     [ -r "$config" ] || die "restore --plan: cannot read $config"
 
