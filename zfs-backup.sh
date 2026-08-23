@@ -4068,6 +4068,18 @@ cmd_add_client() {
             done
             mkdir -p "$_lu_home/run" && chown "$local_user:$local_user" "$_lu_home/run"
             getent group zfsalert >/dev/null 2>&1 && usermod -aG zfsalert "$local_user" 2>/dev/null
+            # Progress records (lib-zfs-snap.sh progress_watch/progress_done)
+            # live under /var/lib/zfs-snapshot-all/progress. Created by root
+            # flows it came out 2755 -- the delegated account, though a
+            # zfsalert member, could not write, so account-run jobs produced
+            # NO telemetry and progress_done leaked one 'Permission denied'
+            # line per dataset into cron.log (measured, serwis control run).
+            # Group-writable + setgid; best-effort like the rest of this block.
+            if getent group zfsalert >/dev/null 2>&1; then
+                local _lu_pd="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
+                mkdir -p "$_lu_pd" 2>/dev/null
+                chgrp zfsalert "$_lu_pd" 2>/dev/null && chmod 2775 "$_lu_pd" 2>/dev/null
+            fi
         fi
     else
         # No --local-user: the jobs run as root. There is no host-wide account to

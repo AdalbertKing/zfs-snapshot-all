@@ -149,7 +149,11 @@ progress_mark_verified() {   # <target> <verified|verify_failed>
     local body; body=$(cat "$pfile" 2>/dev/null) || return 0
     case "$body" in *'"state":"ok"'*) ;; *) return 0 ;; esac
     body=${body/'"state":"ok"'/'"state":"'$2'"'}
-    printf '%s' "$body" > "${pfile}.tmp" 2>/dev/null || return 0
+    # 2>/dev/null BEFORE the output redirect: bash opens redirects left to
+    # right, so with '> file 2>/dev/null' a failing open is reported to the
+    # STILL-ORIGINAL stderr -- measured as one 'Permission denied' line per
+    # dataset in a delegated account's cron.log while the guard returned 0.
+    printf '%s' "$body" 2>/dev/null > "${pfile}.tmp" || return 0
     mv -f "${pfile}.tmp" "$pfile" 2>/dev/null
     return 0
 }
@@ -297,8 +301,8 @@ progress_done() {   # <watcher pid> <dataset> <target> <status>
     # the end-of-stage battery, not by reading.
     body=${body%,\"state\":\"running\"\}}
     case "$body" in *'"state":"running"'*) return 0 ;; esac
-    printf '%s' "$body" > "${pfile}.tmp" 2>/dev/null || return 0
-    printf ',"state":"%s","finished_epoch":%s}\n' "$(json_escape "$status")" "$(date +%s)" >> "${pfile}.tmp" 2>/dev/null
+    printf '%s' "$body" 2>/dev/null > "${pfile}.tmp" || return 0
+    printf ',"state":"%s","finished_epoch":%s}\n' "$(json_escape "$status")" "$(date +%s)" 2>/dev/null >> "${pfile}.tmp"
     mv -f "${pfile}.tmp" "$pfile" 2>/dev/null
     return 0
 }
