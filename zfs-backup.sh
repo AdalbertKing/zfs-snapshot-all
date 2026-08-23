@@ -4041,8 +4041,16 @@ cmd_add_client() {
                 # predated a monitor flag the freshly generated line used --
                 # the account's own tool refused its own crontab line. Nothing
                 # else updates account clones (the hourly pull is root's).
-                git -C "$_lu_home/zfs-snapshot-all" fetch -q origin 2>/dev/null || git -C "$_lu_home/zfs-snapshot-all" fetch -q 2>/dev/null || true
-                sudo -u "$local_user" git -C "$_lu_home/zfs-snapshot-all" pull -q --ff-only 2>/dev/null                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
+                #
+                # The refresh must not rely on the clone's own remote: an old
+                # clone may point at an unreachable origin (root's 0700
+                # checkout, or a URL the account has no key for), and a
+                # 'pull --ff-only' as the account then fails SILENTLY while
+                # the stale tool keeps refusing fresh lines (measured: a
+                # leftover clone parked on a wip branch). Root's checkout on
+                # this host IS the deployed truth, so root hard-syncs the
+                # account copy to its own HEAD and hands ownership back.
+                git -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD 2>/dev/null                     && git -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
             fi
             local _lu_s
             for _lu_s in notify-fail.sh notify-warn.sh; do
