@@ -451,7 +451,18 @@ ensure_alias_known_hosts() {
     # The alias is per relationship and the key belongs to the host, so a name
     # without a port is also the semantically right thing to pin: changing the
     # port does not change who the peer is.
-    printf '%s %s\n' "$alias" "$rest" > "$dst" || return 1
+    # PRESERVE the other relationships' aliases. This file is per HOST while
+    # the alias is per RELATIONSHIP -- the single-entry overwrite this used
+    # to do meant the LAST enrolment won and every sibling relationship's
+    # next cron run failed ssh 255 with "No ED25519 host key is known for
+    # <its alias>" (measured, passive lab: three relationships, the file
+    # held only labP2). Replace this alias's line, keep the rest.
+    local tmp; tmp=$(mktemp) || return 1
+    {
+        [ -f "$dst" ] && awk -v a="$alias" '$1 != a' "$dst" 2>/dev/null
+        printf '%s %s\n' "$alias" "$rest"
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$dst" || { rm -f "$tmp"; return 1; }
     chmod 0600 "$dst" 2>/dev/null
     # This file lives in the account's own ~/.ssh but is written HERE, by root.
     # Without the chown it lands root:root 0600 -- and the account then cannot
@@ -5659,6 +5670,23 @@ cmd_activate_client() {
                 || die "activate: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on $sync_parent for '$LOCAL_USER' failed"
         done
         log "activate: sync receive delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on the local landing parent(s)"
+    fi
+    # The SAME delegation for backup mode, which never had it: only the sync
+    # branch above delegated local receive, so a backup relationship's
+    # delegated account failed every pull with 'cannot receive incremental
+    # stream: permission denied' -- masked for weeks because the SEED runs as
+    # root and the cron idiom's last command always exits 0 (measured,
+    # passive lab, the first scheduled tick). Backup mode lands everything
+    # under one base (target/<label>), so one grant there covers the
+    # relationship -- including the account-run ladder prune (destroy is in
+    # the set).
+    if [ "${PEER_SAVED_MODE:-}" != sync ] && [ -n "${LOCAL_USER:-}" ] && [ "$LOCAL_USER" != root ]; then
+        local bk_base; bk_base=$(snapget_local_base)
+        if [ -n "$bk_base" ]; then
+            zfs list -H -o name -- "$bk_base" >/dev/null 2>&1                 || zfs create -p -- "$bk_base"                 || die "activate: could not create the local backup base '$bk_base'"
+            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$bk_base"                 || die "activate: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on $bk_base for '$LOCAL_USER' failed"
+            log "activate: backup receive delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on $bk_base"
+        fi
     fi
     # Resolution order: recorded CRON_CONFIG -> the Source line of the block
     # ALREADY INSTALLED in the target account's crontab -> only then the /etc
