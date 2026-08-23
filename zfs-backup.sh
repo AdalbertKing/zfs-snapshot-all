@@ -4191,6 +4191,13 @@ cmd_add_client() {
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
         write_client_field BANDWIDTH         "$bandwidth"
         write_client_field PROFILE           "$profile"
+        # What THIS relationship asked for. The committed scope on the source
+        # is per-COLLECTOR and grows with every relationship this host
+        # enrols against that source; resolution filters it back down to
+        # these roots (see scope_root_is_ours). Empty for sync mode -- there
+        # the source's scope IS the request -- and absent on older records,
+        # both of which keep the whole-scope legacy behavior.
+        write_client_field REQUESTED_DATASETS "$datasets"
         # On the RECORD, so re-activation regenerates the same shape. A hand
         # edited config lost its 'recursive = atomic' the moment anything
         # regenerated the section; the record is the only place a decision
@@ -4652,7 +4659,34 @@ resolve_mode_datasets() {
     local -a resolved=()
     PEER_SAVED_RECURSIVE_ROOTS=""
     local root ds
+    # The committed scope belongs to the COLLECTOR, not to this relationship:
+    # after a second enrolment against the same source it is the UNION of
+    # every relationship's grant (measured, labD after labS: labD's seed
+    # resolved labS's trees and the --yes guard refused -- and without the
+    # guard it would have replicated a sibling's datasets). The record knows
+    # what THIS relationship asked for; a root disjoint from that request is
+    # a sibling's and is skipped. A root that CONTAINS the request is kept
+    # whole -- adopting a deliberately broader grant is a real use, and the
+    # interactive consent / --yes sync guard still owns that decision.
+    local -a _req_roots=()
+    if [ -n "${REQUESTED_DATASETS:-}" ]; then
+        local _rr
+        while IFS= read -r _rr; do [ -n "$_rr" ] && _req_roots+=("$_rr"); done < <(dataset_list_split "$REQUESTED_DATASETS")
+    fi
+    scope_root_is_ours() {   # <scope root> -> 0 keep, 1 sibling's
+        [ "${#_req_roots[@]}" -gt 0 ] || return 0
+        local q
+        for q in "${_req_roots[@]}"; do
+            case "$1" in "$q" | "$q"/*) return 0 ;; esac
+            case "$q" in "$1"/*) return 0 ;; esac
+        done
+        return 1
+    }
     for root in "${SCOPE_ROOTS[@]}"; do
+        if ! scope_root_is_ours "$root"; then
+            log "scope root '$root' is outside this relationship's request (a sibling relationship's grant) -- skipped"
+            continue
+        fi
         if [ "${SCOPE_PARENT[$root]}" = yes ] && [ "${SCOPE_CHILDREN[$root]}" = yes ] \
            && [ -z "${SCOPE_EXCLUDE[$root]}" ] && [ -z "${SCOPE_EXCLUDE_TREE[$root]}" ]; then
             case " ${resolved[*]:-} " in *" $root "*) continue ;; esac
