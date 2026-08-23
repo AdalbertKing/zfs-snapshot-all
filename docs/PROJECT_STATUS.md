@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bc3fca159319590e -->
+<!-- status-covers-digest: 6da21a7504ec5fe1 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -145,6 +145,19 @@
   z separatorem NUL, wlasnie po to, by zadna wartosc nie mogla udawac granicy (REV-001 F3).
   Jedna definicja tozsamosci zadania w pliku, nie druga obok. Czytelna nazwa datasetu i celu
   zostaje **w srodku** rekordu, a podglad pokazuje `zrodlo -> cel`.
+  **Warstwa danych dla maszyn, nie tylko oczy (kierunek wlasciciela, 2026-08-23).** Sens
+  etapu: pakiet ma wiedziec, jak idzie transfer datasetu, jak idzie CALA relacja i jak
+  wygladalo to wczesniej - zeby przyszle GUI albo monitor mogly to zbadac bez skrobania
+  tekstu. Dlatego: rekord niesie **relacje** (`label` z `-L`), **tryb i baze** wyprowadzone
+  z prawdziwej komendy send (`full`/`incremental`/`resume`), **tozsamosc zadania** oraz
+  **bajty na laczu** z logu mbuffera (`wire_bytes`; `-1` = niemierzalne, nigdy 0, zeby brak
+  pomiaru nie czytal sie jako bezczynne lacze; mierzalne w pull, w push mbuffer biegnie po
+  stronie zdalnej). Historia JSONL dostala pole `label` (dokladane - starzy konsumenci
+  czytaja dalej). `progress --json` zwraca surowe rekordy per zadanie ORAZ agregat per
+  relacja. `status` odpowiada: co biegnie TERAZ, jaki byl OSTATNI wynik, co dalej - i brak
+  historii nazywa 'nie wiadomo', nie 'bez awarii'. Zmierzone na zywo: przy kompresji
+  done_bytes=0 (send skonczyl przed pierwsza linia postepu - opisana granica), a
+  wire_bytes=1441792 mowil prawde o laczu w locie. Dwie miary, obie uczciwe.
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój
