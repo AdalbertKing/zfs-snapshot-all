@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9ff7404aa877bd0e -->
+<!-- status-covers-digest: 37e8edaf45eecfa9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -43,6 +43,14 @@
   faktycznie przepisuje linię w emitowanym kształcie. Kolejny dryf kształtu zrobi się
   czerwony zamiast cichy. To trzeci raz tego dnia, gdy zielony test był przypięty do
   kształtu, którego produkt już nie ma.
+  **Pierwsza poprawka nadal nie wystarczyła — i wpadła w tę samą pułapkę.** Zamieniała
+  `-p 2222` na `-p <PORT>`, co zrównuje strony tylko wtedy, gdy **obie** niosą flagę.
+  Tymczasem `gen-cron.sh` przy porcie 22 **nie emituje `-p` w ogóle**, więc powrót na
+  endpoint LAN porównywał linię z `-p <PORT>` z linią bez niczego i strażnik dalej odmawiał.
+  Fikstura testu miała `-p 22` po obu stronach — kształt, którego narzędzie nigdy nie
+  produkuje. Port jest teraz **usuwany**, nie podmieniany, a test renderuje **obie** strony
+  prawdziwym `gen-cron.sh` z dwóch configów różniących się wyłącznie endpointem i
+  **asercjonuje samą przesłankę** (że wersja portu 22 nie ma `-p`). Człowiek zniknął z pętli.
 - **Dwie wady cyklu życia, które ujawniła dopiero druga próba czterech komend (2026-08-23).**
   Obie znalezione na żywo (pve9 → pve2), obie blokowały samą próbę, żadnej nie dało się
   zobaczyć czytaniem kodu.
