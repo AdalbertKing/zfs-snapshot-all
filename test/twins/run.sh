@@ -255,6 +255,68 @@ for _eng in "$SNAPSEND" "$SNAPGET"; do
     fi
 done
 
+
+# ---------------------------------------------------------------------------
+# E. ssh -n ON EVERY READ, AND ON NONE OF THE FOUR THAT CARRY THE PAYLOAD.
+#
+# ssh without -n reads its stdin to EOF and hands it to the remote command.
+# Every read-only call in the engines was doing that, which is why a
+# confirmation prompt printed after engine work could not be answered from a
+# pipe: `seed` and `activate` refused "not confirmed" whatever was fed in,
+# because the engine had already drained the answer. On a terminal it works,
+# so it only ever showed once something was scripted (issue #9, 2026-08-23).
+#
+# This guards BOTH directions, and the second matters more:
+#   * a NEW read-only call without -n reintroduces the defect quietly;
+#   * -n added to one of the four payload calls BREAKS THE TRANSFER -- the
+#     stream, the throughput probe and the quiesce script all arrive on stdin.
+#     A well-meaning sweep is exactly how that would happen, so the four are
+#     named here rather than left to judgement.
+# ---------------------------------------------------------------------------
+# Matches an INVOCATION, not the word: a real call is followed by a flag or by
+# the options array. Without that, help text ("ssh -c") and diagnostics ("over
+# ssh (exit 255)") are counted as calls -- the first draft of this check
+# reported five such lines as defects.
+ssh_payload_lines() {   # <file> -> line numbers whose ssh legitimately reads stdin
+    case "$1" in
+        */snapsend.sh)     printf '1011\n1015\n' ;;
+        */lib-zfs-snap.sh) printf '980\n2504\n'  ;;
+        *)                 : ;;
+    esac
+}
+for f in "$SNAPSEND" "$SNAPGET" "$REPO/delsnaps.sh" "$REPO/lib-zfs-snap.sh"; do
+    [ -r "$f" ] || continue
+    name=$(basename "$f")
+    payload=$(ssh_payload_lines "$f")
+    missing=""; wrong=""
+    while IFS=: read -r ln rest; do
+        [ -n "$ln" ] || continue
+        case "$rest" in \#*|" "*\#*) continue ;; esac
+        is_payload=no
+        [ -n "$payload" ] && printf '%s\n' "$payload" | grep -qx "$ln" && is_payload=yes
+        case "$rest" in
+            *"ssh -n "*) [ "$is_payload" = yes ] && wrong="$wrong $ln" ;;
+            *)           [ "$is_payload" = no  ] && missing="$missing $ln" ;;
+        esac
+    done <<EOF
+$(grep -nE '(^|[^a-z_-])ssh (-[a-zA-Z]|"\$)' "$f" | grep -vE '\.ssh|ssh-keygen' | sed 's/:[[:space:]]*/:/')
+EOF
+    if [ -n "$missing" ]; then
+        FAIL=$((FAIL+1)); echo "FAIL E $name: read-only ssh without -n at line(s):$missing"
+        echo "     ssh without -n drains the operator's stdin, so any prompt after it is unanswerable from a pipe."
+    else
+        PASS=$((PASS+1)); echo "PASS E $name: every read-only ssh passes -n"
+    fi
+    if [ -n "$payload" ]; then
+        if [ -n "$wrong" ]; then
+            FAIL=$((FAIL+1)); echo "FAIL E $name: -n added to a PAYLOAD ssh at line(s):$wrong -- this breaks the transfer"
+            echo "     those calls receive the send stream / probe data / quiesce script ON STDIN."
+        else
+            PASS=$((PASS+1)); echo "PASS E $name: the payload-carrying ssh calls still have no -n"
+        fi
+    fi
+done
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
