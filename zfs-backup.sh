@@ -4050,7 +4050,10 @@ cmd_add_client() {
                 # leftover clone parked on a wip branch). Root's checkout on
                 # this host IS the deployed truth, so root hard-syncs the
                 # account copy to its own HEAD and hands ownership back.
-                git -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD 2>/dev/null                     && git -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
+                # -c safe.directory: root touching an account-owned repo
+                # trips git's dubious-ownership guard (measured: the refresh
+                # warned and the stale clone survived a full clean rerun).
+                git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD 2>/dev/null                     && git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
             fi
             local _lu_s
             for _lu_s in notify-fail.sh notify-warn.sh; do
