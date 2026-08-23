@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 37e8edaf45eecfa9 -->
+<!-- status-covers-digest: 52816994a70c1229 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,21 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Monit potwierdzenia był nieodpowiadalny ze strumienia — `ssh` zjadało stdin (2026-08-23).**
+  `ssh` bez `-n` czyta swoje wejście do końca i przekazuje je zdalnej komendzie. Żadne
+  wywołanie w `zfs-backup.sh` tego nie chce, ale **każde połykało** to, co niósł stdin
+  operatora. `seed` i `activate` rozwijają zakres peera przez `ssh` **przed** zapytaniem
+  o potwierdzenie, więc obie komendy odmawiały „not confirmed" niezależnie od tego, co im
+  podano. Na terminalu działa (stdin to tty), więc wada nie pokazywała się w ręcznych
+  testach — tylko w automatyzacji i transkryptach. Zmierzone na pve9:
+  `printf 'ZOSTALO' | { ssh root@peer true; read -r x; ... }` → `[PUSTO]`.
+  `-n` na wszystkich dziesięciu wywołaniach; żadne z nich niczego do `ssh` nie podaje,
+  a przyszłe, które będzie musiało, ma `-n` zdjąć świadomie i to uzasadnić.
+  Test behawioralny z kontrolą: przed poprawką `[PUSTO]`, po `[ODPOWIEDZ]`, plus kontrola
+  kompletności, żeby nowe wywołanie bez `-n` nie wśliznęło się później.
+  Ta kontrola od razu się przydała: złapała, że mój własny komentarz rozpadł się na dwie
+  linie i druga **nie była komentarzem**, tylko żywym kodem w środku pliku. `bash -n`
+  tego nie widziało, bo cudzysłowy domykały się dalej.
 - **`activate --host=` nie działał po zainstalowaniu crona — przy ŻADNEJ zmianie
   endpointu (2026-08-23).** Nie „przy zmianie portu" — przy każdej. Pierwsze przełączenie
   w życiu relacji przechodziło wyłącznie dlatego, że nie było jeszcze bloku crona do

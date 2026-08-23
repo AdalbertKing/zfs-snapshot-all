@@ -596,7 +596,7 @@ check_inherited_grants() {
     IFS='/' read -ra _segs <<< "$ds"
     for seg in "${_segs[@]}"; do
         path="${path:+$path/}$seg"
-        out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow '$path'" 2>&1)
+        out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow '$path'" 2>&1)
         if [ "$verbose" -eq 1 ]; then
             echo "    zfs allow $path :"
             printf '%s\n' "$out" | sed 's/^/      /'
@@ -632,7 +632,7 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
     local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
     local ds out rc
     for ds in "$@"; do
-        out=$(ssh "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
+        out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
         [ "$rc" -eq 0 ] || die "source-prune grant check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a remote source prune whose authorization cannot be confirmed. Output: $(printf '%s' "$out" | tail -2)"
         # The account's own permission line carries a comma-list of perms; `destroy`
         # is bounded by commas/space so grep -w matches it inside snapshot,destroy,send.
@@ -4070,7 +4070,7 @@ fetch_committed_scope() {
 
     local hash_tmp
     hash_tmp=$(mktemp) || die "mktemp failed"
-    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$outfile" 2>/dev/null \
+    if ! ssh -n "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$sfile_remote'" > "$outfile" 2>/dev/null \
        || [ ! -s "$outfile" ]; then
         rm -f "$hash_tmp"
         # Name the RIGHT missing step. Until 2026-08-20 this said only "has
@@ -4111,7 +4111,7 @@ Two things can cause this and NOTHING HERE CAN TELL THEM APART -- the join runs 
   2. only if the join IS done: the scope draft is missing.
      Run deploy.sh --draft-scope on $LOAD_HOST, or re-run its --join, which drafts one."
     fi
-    if ! ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
+    if ! ssh -n "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "cat -- '$hfile_remote'" > "$hash_tmp" 2>/dev/null \
        || [ ! -s "$hash_tmp" ]; then
         rm -f "$hash_tmp"
         die "the source $LOAD_HOST has GRANTED nothing yet: the scope draft exists there, but the grant (--commit-scope) is deliberately a source-side decision and never runs remotely. Whose move it is: on $LOAD_HOST, review the draft and run:
@@ -4214,7 +4214,7 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
     # exit status is ITS status -- piping it straight into grep would hand the
     # caller grep's verdict, which is exactly the confusion this fixes.
     local out rc
-    out=$(ssh "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+    out=$(ssh -n "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
             "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null)
     rc=$?
     [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
@@ -4282,7 +4282,7 @@ Nothing was read and nothing was changed."
 has_committed_scope() {
     local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
     local rc
-    ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
+    ssh -n "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" \
         "test -s '$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")'" >/dev/null 2>&1
     rc=$?
     case "$rc" in
@@ -4382,7 +4382,7 @@ resolve_mode_datasets() {
             scope_includes "$ds" || continue
             case " ${resolved[*]:-} " in *" $ds "*) continue ;; esac
             resolved+=("$ds")
-        done < <(ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -o name -r -- '$root'" 2>/dev/null)
+        done < <(ssh -n "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -o name -r -- '$root'" 2>/dev/null)
         log "scope root '$root' is hand-narrowed (excludes or include_* switched off) -- its membership is enumerated NOW and a dataset created there later joins at the next re-activation, not the next cron tick"
     done
     [ "${#resolved[@]}" -gt 0 ] \
@@ -5448,7 +5448,7 @@ cmd_activate_client() {
     # tool's, and the transfer itself is unaffected.
     local peer_tz local_tz
     local_tz=$(date +%z)
-    peer_tz=$(load_ssh_opts; ssh "${LOAD_SSH_OPTS[@]}" \
+    peer_tz=$(load_ssh_opts; ssh -n "${LOAD_SSH_OPTS[@]}" \
         "${LOAD_ACCOUNT}@${LOAD_HOST}" "date +%z" 2>/dev/null)
     if [ -n "$peer_tz" ] && [ "$peer_tz" != "$local_tz" ]; then
         warn "strefy czasowe sie roznia: ten host $local_tz, zrodlo $PEER_HOST $peer_tz -- nazwy snapshotow beda nosic INNY czas niz reszta floty (restore --plan bedzie to flagowac jako rozjazd nazwa<->creation). Wyrownaj timedatectl set-timezone na obu, jesli to nie jest zamierzone."
@@ -6121,7 +6121,7 @@ cmd_resume_client() {
 pair_control() {   # <verb> -> prints the gate's reply, non-zero on failure
     local verb="$1"
     local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
-    ssh "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "PAIR-CONTROL $verb"
+    ssh -n "${ssh_opts[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "PAIR-CONTROL $verb"
 }
 
 # Reads the peer's own view. Returns 0 and sets PEER_PAIR_STATE, or non-zero
@@ -6950,9 +6950,33 @@ rux_remote_plan() {
 # already-committed probe: the account channel would recurse into
 # resolve_mode_datasets' own T3 fetch for sync-mode clients -- the very check
 # this function exists to satisfy first.
+# -n ON EVERY ssh IN THIS FILE, AND IT IS NOT COSMETIC.
+#
+# ssh without -n reads its standard input to EOF and forwards it to the remote
+# command. Nothing here ever wants that -- no call site pipes anything in -- but
+# every one of them SWALLOWS whatever the operator's stdin was carrying. The
+# visible consequence is that a confirmation prompt printed AFTER an ssh call
+# can never be answered from a pipe, because the answer was already eaten:
+#
+#     ./zfs-backup.sh seed <name>      < answers      -> "not confirmed"
+#     ./zfs-backup.sh activate <name>  < answers      -> "not confirmed"
+#
+# Both resolve the peer's scope over ssh before asking. Measured on pve9,
+# 2026-08-23:
+#
+#     printf 'ZOSTALO<NL>' | { ssh root@peer true; read -r x; echo "[${x:-PUSTO}]"; }
+#       -> [PUSTO]
+#
+# On a terminal it works, because stdin is the tty and ssh does not consume the
+# keystrokes typed after it exits -- so this never showed up in hand testing,
+# only the moment anything was scripted. Found running issue #9's trial.
+#
+# `-n` is the documented fix (ssh(1): redirect stdin from /dev/null). It is safe
+# at every site because no call in this file feeds ssh anything; a site that
+# ever needs to must drop -n deliberately and say why.
 rux_root_ssh() {   # <host> <port> <command...>
     local host="$1" port="$2"; shift 2
-    ssh -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    ssh -n -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts \
         -o StrictHostKeyChecking=yes -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
         -p "${port:-22}" "root@$host" "$@"
 }
