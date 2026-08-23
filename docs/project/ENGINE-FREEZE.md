@@ -55,6 +55,15 @@ and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
 
+- 2026-08-23 (lib-zfs-snap.sh): the ControlMaster socket is per RUN ($$ in
+  the path), not per host+port. The shared master plus tune_ssh_close's
+  '-O exit' meant the first concurrent run to finish killed every sibling's
+  in-flight transfer (silent ssh 255, 'cannot receive: failed to read from
+  stream', random victim). Measured live in the passive lab on same-minute
+  relationships; diagnosed by PIPESTATUS probes (255 0 1) and ssh -v
+  ('auto-mux: Trying existing master'). The within-run handshake saving
+  that motivated the multiplexer is unchanged.
+
 - 2026-08-23 (lib-zfs-snap.sh, two changes, one stage -- the seed-family /
   closing campaigns, owner-directed 'Rob'):
   (1) the progress watcher subshell now closes the inherited engine flock
