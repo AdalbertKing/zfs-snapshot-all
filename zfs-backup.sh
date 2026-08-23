@@ -3158,8 +3158,8 @@ cmd_progress() {
                 match($0,/"state":"[^"]*"/);     st=substr($0,RSTART+9,RLENGTH-10)
                 match($0,/"total_bytes":[0-9]*/);  tot=substr($0,RSTART+14,RLENGTH-14)+0
                 match($0,/"done_bytes":[0-9]*/);   don=substr($0,RSTART+13,RLENGTH-13)+0
-                match($0,/"rate_bps":[0-9]*/);     rt=substr($0,RSTART+10,RLENGTH-10)+0
-                match($0,/"eta_seconds":-?[0-9]*/);eta=substr($0,RSTART+13,RLENGTH-13)+0
+                match($0,/"rate_bps":[0-9]*/);     rt=substr($0,RSTART+11,RLENGTH-11)+0
+                match($0,/"eta_seconds":-?[0-9]*/);eta=substr($0,RSTART+14,RLENGTH-14)+0
                 match($0,/"updated_epoch":[0-9]*/);upd=substr($0,RSTART+16,RLENGTH-16)+0
                 pct = (tot>0) ? don*100/tot : 0
                 age = now-upd
