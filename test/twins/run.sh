@@ -474,6 +474,40 @@ else
     echo "     rekord: $(cat "$pg_tmp/krec" 2>/dev/null)"
 fi
 
+# THE RECORD IS A DATA LAYER FOR MACHINES, NOT A STATUS LINE (owner direction,
+# 2026-08-23): a future GUI/monitor must read per-job and per-relation state
+# without scraping text. So the identity fields are pinned as a contract:
+# relation label, mode+base derived from the REAL send command, job identity,
+# and wire bytes that are -1 (unknown), never 0, when not measurable.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/idkeys"; export ZFS_PROGRESS_DIR
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  PAIR_LABEL=lab-rel
+  progress_classify "zfs send -v -P -R -i hdd/a@prev hdd/a@now"; printf '%s %s\n' "$PG_MODE" "$PG_BASE" >  "$pg_tmp/cls"
+  progress_classify "zfs send -t 1-abc-token";                   printf '%s %s\n' "$PG_MODE" "$PG_BASE" >> "$pg_tmp/cls"
+  progress_classify "zfs send hdd/a@now";                        printf '%s %s\n' "$PG_MODE" "$PG_BASE" >> "$pg_tmp/cls"
+  printf 'size\t100\n14:00:01\t40\tx\n' > "$pg_tmp/iderr"
+  pid=$(progress_watch "$pg_tmp/iderr" "hdd/a@now" "tank/dst" peer pull incremental "hdd/a@prev"); sleep 3
+  progress_done "$pid" "hdd/a@now" "tank/dst" ok
+  cp "$(progress_path 'hdd/a@now' 'tank/dst')" "$pg_tmp/idrec" 2>/dev/null
+) >/dev/null 2>&1
+if [ "$(cat "$pg_tmp/cls" 2>/dev/null)" = "incremental hdd/a@prev
+resume 1-abc-token
+full " ]; then
+    PASS=$((PASS+1)); echo "PASS F progress_classify reads mode and base off the real send command"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F progress_classify reads mode and base off the real send command"
+    echo "     dostal: $(tr '\n' '|' < "$pg_tmp/cls" 2>/dev/null)"
+fi
+if grep -q '"label":"lab-rel"' "$pg_tmp/idrec" 2>/dev/null \
+   && grep -q '"mode":"incremental","base":"hdd/a@prev"' "$pg_tmp/idrec" \
+   && grep -q '"job":"[0-9a-f]' "$pg_tmp/idrec" \
+   && grep -q '"wire_bytes":-1' "$pg_tmp/idrec"; then
+    PASS=$((PASS+1)); echo "PASS F the record carries relation, mode, base, job identity, and honest wire=-1"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F the record carries relation, mode, base, job identity, and honest wire=-1"
+    echo "     rekord: $(cat "$pg_tmp/idrec" 2>/dev/null | cut -c1-200)"
+fi
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

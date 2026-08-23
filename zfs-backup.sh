@@ -3144,6 +3144,46 @@ atomic_replace_and_install() {
 cmd_progress() {
     local dir="${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
     local f any=0
+    # --json IS the product here, not a convenience: the point of this stage is
+    # a data layer a future GUI or monitor can read, per dataset AND per
+    # relation, without scraping human text. One JSON object: "jobs" is the raw
+    # records verbatim (the engines own that schema), "relations" aggregates by
+    # the label the engines stamp into every record -- summed bytes, worst-case
+    # freshness, and a state that is "running" only if something actually runs.
+    if [ "${1:-}" = "--json" ]; then
+        local first=1
+        printf '{"jobs":['
+        for f in "$dir"/*.json; do
+            [ -e "$f" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            cat "$f"
+        done
+        printf '],"relations":['
+        first=1
+        for f in "$dir"/*.json; do [ -e "$f" ] && cat "$f"; done | awk -v now="$(date +%s)" '
+            { match($0,/"label":"[^"]*"/);        lb=substr($0,RSTART+9,RLENGTH-10)
+              if (lb=="") lb="(bez etykiety)"
+              match($0,/"total_bytes":[0-9]*/);   t=substr($0,RSTART+14,RLENGTH-14)+0
+              match($0,/"done_bytes":[0-9]*/);    d=substr($0,RSTART+13,RLENGTH-13)+0
+              match($0,/"updated_epoch":[0-9]*/); u=substr($0,RSTART+16,RLENGTH-16)+0
+              run = ($0 ~ /"state":"running"/) ? 1 : 0
+              tot[lb]+=t; don[lb]+=d; n[lb]++
+              if (run) { running[lb]++; if (u<old[lb] || old[lb]==0) old[lb]=u }
+            }
+            END {
+              first=1
+              for (lb in n) {
+                if (!first) printf ","
+                first=0
+                st = (running[lb]>0) ? "running" : "idle"
+                age = (running[lb]>0) ? now-old[lb] : -1
+                printf "{\"label\":\"%s\",\"jobs\":%d,\"running\":%d,\"total_bytes\":%d,\"done_bytes\":%d,\"state\":\"%s\",\"oldest_update_age\":%d}", lb, n[lb], running[lb]+0, tot[lb], don[lb], st, age
+              }
+            }'
+        printf ']}\n'
+        return 0
+    fi
     for f in "$dir"/*.json; do
         [ -e "$f" ] || continue
         any=1
