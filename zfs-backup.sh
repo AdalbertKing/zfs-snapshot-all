@@ -1780,10 +1780,19 @@ crontab_of_or_die() {   # <user> <outfile>
 # retention flags, HostKeyAlias and everything else are compared verbatim, so a
 # job that genuinely disappears is still reported -- a relationship losing one
 # of two datasets cannot hide behind the other.
+# THE PORT IS DELETED, NOT BLANKED, AND THAT IS THE WHOLE POINT: gen-cron.sh
+# EMITS NO -p FLAG AT ALL FOR PORT 22.
+#
+# The first cut of this rewrote '-p 2222' to '-p <PORT>', which only compares
+# equal when both sides carry the flag. Switching back to a port-22 endpoint
+# compares a line holding '-p <PORT>' against one holding nothing, so the guard
+# still called the relationship's own job a deletion. Measured on the real
+# lines out of a live crontab, not on a fixture -- the fixture had '-p 22' on
+# both sides, which the tool never produces.
 endpoint_normalized_identity() {
     sed -E -e 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/' \
            -e 's/"([^"@ ]+@)[^:" ]+:/"\1<ENDPOINT>:/g' \
-           -e 's/(^| )-p [0-9]+( |$)/\1-p <PORT>\2/g'
+           -e 's/ -p [0-9]+ / /g' -e 's/ -p [0-9]+$//'
 }
 
 # REV-20260801-021 F1. The overlap guard below deliberately allows a target that

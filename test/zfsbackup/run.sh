@@ -2521,14 +2521,71 @@ fi
 # THE EXEMPTION MUST BE ALIVE, not merely present. This is what nothing checked:
 # if the generated line shape drifts again so the normalizer stops matching, it
 # goes quiet instead of failing, and every endpoint switch starts refusing.
-real_line='1 * * * * /r/snapget.sh -O HostKeyAlias=zfs-client-x -p 2222 -A -L x "acct@some-host:hdd/src" "hdd/dst" 2>"$e"'
-norm=$( printf '%s\n' "$real_line" | bash -c "source '$ZFSBACKUP'; endpoint_normalized_identity" )
-if [ "$norm" != "$real_line" ] && case "$norm" in *"<ENDPOINT>"*) true ;; *) false ;; esac \
-   && case "$norm" in *"<PORT>"*) true ;; *) false ;; esac; then
-    ok "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape"
+# THE ONLY VERSION OF THIS TEST THAT CANNOT ROT: both sides are rendered by the
+# REAL gen-cron.sh, from two configs that differ ONLY in the endpoint.
+#
+# Every previous attempt at this property -- including my own first one, hours
+# earlier the same day -- fed the guard lines a human typed. That is how the
+# exemption died unnoticed for months, and it is how the FIRST fix for it still
+# failed live: the hand-written fixture carried "-p 22" on both sides, and
+# gen-cron.sh emits no -p flag at all for port 22. So the real comparison was
+# "-p <PORT>" against nothing, and the guard went on calling the relationship's
+# own job a deletion.
+#
+# gen-cron.sh is a pure text tool (no root, no ZFS, no network), so rendering
+# it here costs nothing and removes the human from the loop entirely.
+EPC="$WORK/endpointcfg"; mkdir -p "$EPC"
+ep_conf() {   # <outfile> <flags-tail>
+    cat > "$1" <<CONF
+[defaults]
+	host_label = pve9
+
+[template:t_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	notify_word    = backup
+
+[dataset:hdd/tgt/hdd/src]
+	use_template = t_hourly
+	src          = acct@$2:hdd/src
+	flags        = -K /k -k /kh -O HostKeyAlias=zfs-client-x$3
+	recursive    = flat
+	pair_label   = x
+	notify       = x-src
+CONF
+}
+ep_conf "$EPC/lan.conf"  "192.168.28.8" ""
+ep_conf "$EPC/prod.conf" "peer-prod"    " -p 2222"
+ep_lan=$(  bash "$REPO/gen-cron.sh" -c "$EPC/lan.conf"  2>/dev/null | grep -E '^[0-9*]' )
+ep_prod=$( bash "$REPO/gen-cron.sh" -c "$EPC/prod.conf" 2>/dev/null | grep -E '^[0-9*]' )
+if [ -z "$ep_lan" ] || [ -z "$ep_prod" ]; then
+    bad "clobber: gen-cron.sh renders both endpoint variants for the exemption test"         "lan=${ep_lan:-BRAK} prod=${ep_prod:-BRAK}"
 else
-    bad "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape" \
-        "nic nie podmienil -- wyjatek jest martwy" "in : $real_line" "out: $norm"
+    # The premise this test exists to defend, asserted rather than assumed:
+    # the port-22 rendering carries NO -p flag, so the exemption has to cope
+    # with a token that is present on one side and absent on the other.
+    if printf '%s
+' "$ep_lan" | grep -q -- ' -p '; then
+        bad "clobber: gen-cron.sh omits -p for port 22 (premise of the exemption test)"             "lan line unexpectedly carries -p: $ep_lan"
+    else
+        ok "clobber: gen-cron.sh omits -p for port 22, so the exemption must handle an ABSENT flag"
+    fi
+    n_lan=$(  printf '%s
+' "$ep_lan"  | bash -c "source '$ZFSBACKUP'; endpoint_normalized_identity" )
+    n_prod=$( printf '%s
+' "$ep_prod" | bash -c "source '$ZFSBACKUP'; endpoint_normalized_identity" )
+    if [ "$n_lan" = "$n_prod" ]; then
+        ok "clobber: two REAL gen-cron.sh renderings differing only in endpoint normalize identically"
+    else
+        bad "clobber: two REAL gen-cron.sh renderings differing only in endpoint normalize identically"             "lan : $n_lan" "prod: $n_prod"
+    fi
+    # And the exemption must still be ALIVE -- it has to actually rewrite the
+    # emitted shape, not silently match nothing.
+    if [ "$n_prod" != "$ep_prod" ]; then
+        ok "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape"
+    else
+        bad "clobber: endpoint_normalized_identity actually rewrites a line in the emitted shape"             "nic nie podmienil -- wyjatek jest martwy" "in : $ep_prod"
+    fi
 fi
 
 
