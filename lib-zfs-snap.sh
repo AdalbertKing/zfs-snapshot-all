@@ -67,7 +67,7 @@ get_resume_token() {
     local remote_host="${3:-}"
     local token
     if [ -n "$remote_host" ]; then
-        token=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        token=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs get -H -o value receive_resume_token '$tgt_dataset' 2>/dev/null")
     else
         token=$(zfs get -H -o value receive_resume_token "$tgt_dataset" 2>/dev/null)
@@ -83,7 +83,7 @@ abandon_resume() {
     local remote_host="${3:-}"
     log 1 "Abandoning stuck resume state on $tgt_dataset (zfs receive -A)"
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs receive -A '$tgt_dataset'"
     else
         zfs receive -A "$tgt_dataset"
     fi
@@ -194,7 +194,7 @@ is_pvesr_managed() {
     local key="${remote_host}:${ds}" found
     if [ -z "${PVESR_MANAGED_CACHE[$key]+x}" ]; then
         if [ -n "$remote_host" ]; then
-            found=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            found=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs list -t snapshot -H -o name -d 1 '$ds' 2>/dev/null | grep -c '@__replicate_'" 2>/dev/null) || found=0
         else
             found=$(zfs list -t snapshot -H -o name -d 1 "$ds" 2>/dev/null | grep -c '@__replicate_') || found=0
@@ -215,7 +215,7 @@ hold_snapshot() {
         return 0
     fi
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs hold '$HOLD_TAG' '$snap'" 2>/dev/null \
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs hold '$HOLD_TAG' '$snap'" 2>/dev/null \
             || log 2 "Could not place hold on $snap (missing delegated 'hold'?) -- continuing without in-flight protection"
     else
         zfs hold "$HOLD_TAG" "$snap" 2>/dev/null \
@@ -247,7 +247,7 @@ abort_held_snapshot() {
 release_snapshot() {
     local snap="$1" remote_user="${2:-}" remote_host="${3:-}"
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs release '$HOLD_TAG' '$snap'" 2>/dev/null || true
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs release '$HOLD_TAG' '$snap'" 2>/dev/null || true
     else
         zfs release "$HOLD_TAG" "$snap" 2>/dev/null || true
     fi
@@ -353,7 +353,7 @@ get_snapshot_guid() {
     local remote_host="${4:-}"
     local guid
     if [ -n "$remote_host" ]; then
-        guid=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        guid=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs get -H -o value guid '${dataset}@${snap}' 2>/dev/null") || return 1
     else
         guid=$(zfs get -H -o value guid "${dataset}@${snap}" 2>/dev/null) || return 1
@@ -375,7 +375,7 @@ get_snapshot_guids() {
     [ "${RECURSIVE:-0}" -eq 1 ] && depth_option=""
 
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -o name,guid -t snapshot -s creation $depth_option '$dataset' 2>/dev/null" \
             | awk -F'\t' '{split($1,a,"@"); print a[2]"\t"$2}'
     else
@@ -462,7 +462,7 @@ probe_dataset() {
     # line that says why. Worth capturing rather than letting it drift to stderr
     # unattached: in cron mail it would sit apart from the log line that draws a
     # conclusion from it, which is exactly how this survived twice.
-    REMOTE_PROBE_ERR=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+    REMOTE_PROBE_ERR=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
         "zfs list -H '$dataset' >/dev/null 2>&1" 2>&1)
     REMOTE_PROBE_RC=$?
     case $REMOTE_PROBE_RC in
@@ -499,7 +499,7 @@ probe_dataset() {
 remote_list() {
     local remote_user="$1" remote_host="$2" what="$3" cmd="$4"
     local out
-    out=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd")
+    out=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd")
     REMOTE_PROBE_RC=$?
     if [ $REMOTE_PROBE_RC -eq 0 ] || [ $REMOTE_PROBE_RC -eq 1 ]; then
         [ -n "$out" ] && printf '%s\n' "$out"
@@ -617,7 +617,7 @@ ensure_target_ancestors() {
     [ -z "$cmd" ] && return 0
 
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd exit 0"
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd exit 0"
         local rc=$?
         # A write, not a probe -- but on a push this is the FIRST remote call
         # that can fail, so it is where the operator meets an unreachable peer.
@@ -658,7 +658,7 @@ validate_remote_host() {
 
     # Get remote machine ID through SSH
     local remote_machine_id
-    remote_machine_id=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+    remote_machine_id=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
         "cat /etc/machine-id 2>/dev/null || echo 'UNKNOWN'" 2>/dev/null)
 
     # Core safety check
@@ -673,7 +673,7 @@ validate_remote_host() {
         local local_hostname
         local_hostname=$(hostname -f)
         local remote_hostname
-        remote_hostname=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "hostname -f")
+        remote_hostname=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "hostname -f")
 
         if [[ "$local_hostname" == "$remote_hostname" ]]; then
             log 0 "CRITICAL: Remote hostname matches local ($local_hostname)"
@@ -699,7 +699,7 @@ remote_has_compressor() {
         printf '%s' "${REMOTE_COMPRESSOR_CACHE[$key]}"
         return 0
     fi
-    if ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v $compressor >/dev/null 2>&1"; then
+    if ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "command -v $compressor >/dev/null 2>&1"; then
         val=yes
     else
         val=no
@@ -730,7 +730,7 @@ dataset_encryption() {
     local remote_user="${2:-}"
     local remote_host="${3:-}"
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs get -H -o value encryption '$dataset' 2>/dev/null"
     else
         zfs get -H -o value encryption "$dataset" 2>/dev/null
@@ -837,7 +837,7 @@ tune_ssh_enable() {
 tune_ssh_close() {
     local remote="$1"
     [ -n "$TUNE_SOCK" ] && [ -n "$remote" ] || return 0
-    ssh -o "ControlPath=$TUNE_SOCK" -O exit "$remote" >/dev/null 2>&1 || true
+    ssh -n -o "ControlPath=$TUNE_SOCK" -O exit "$remote" >/dev/null 2>&1 || true
     TUNE_SOCK=""
 }
 
@@ -1014,7 +1014,7 @@ tune_probe_stream() {
       echo "$rb $t0 $t1 $cb $t2 $t3"
     '
     if [ -n "$remote" ]; then
-        out=$(ssh "${SSH_OPTS[@]}" "$remote" "$script" 2>/dev/null) || return 1
+        out=$(ssh -n "${SSH_OPTS[@]}" "$remote" "$script" 2>/dev/null) || return 1
     else
         out=$(sh -c "$script" 2>/dev/null) || return 1
     fi
@@ -1232,7 +1232,7 @@ csend_pool_has() {
         return 0
     fi
     if [ -n "$remote" ]; then
-        val=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool get -H -o value feature@$feature '$pool'" 2>/dev/null)
+        val=$(ssh -n "${SSH_OPTS[@]}" "$remote" "zpool get -H -o value feature@$feature '$pool'" 2>/dev/null)
     else
         val=$(zpool get -H -o value "feature@$feature" "$pool" 2>/dev/null)
     fi
@@ -1266,7 +1266,7 @@ compressed_send_flag() {
     }
 
     if [ -n "$src_remote" ]; then
-        comp=$(ssh "${SSH_OPTS[@]}" "$src_remote" "zfs get -H -o value compression '$src_dataset'" 2>/dev/null)
+        comp=$(ssh -n "${SSH_OPTS[@]}" "$src_remote" "zfs get -H -o value compression '$src_dataset'" 2>/dev/null)
     else
         comp=$(zfs get -H -o value compression "$src_dataset" 2>/dev/null)
     fi
@@ -1315,7 +1315,7 @@ pool_health() {
         # banner cannot contaminate the health VALUE, and the code alone is the
         # gate's contract.
         local rc
-        val=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool list -H -o health '$pool'" 2>/dev/null)
+        val=$(ssh -n "${SSH_OPTS[@]}" "$remote" "zpool list -H -o health '$pool'" 2>/dev/null)
         rc=$?
         remote_refused_by_gate "$rc" && val="PAIR-DISABLED"
     else
@@ -1371,7 +1371,7 @@ check_pool_health() {
     # scan/errors detail can stay in the log.
     local detail=""
     if [ -n "$remote" ]; then
-        detail=$(ssh "${SSH_OPTS[@]}" "$remote" "zpool status '$pool' 2>/dev/null | head -n 24")
+        detail=$(ssh -n "${SSH_OPTS[@]}" "$remote" "zpool status '$pool' 2>/dev/null | head -n 24")
     else
         detail=$(zpool status "$pool" 2>/dev/null | head -n 24)
     fi
@@ -1409,7 +1409,7 @@ auto_skip_intermediates() {
 
     local listing
     if [ -n "$remote_host" ]; then
-        listing=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        listing=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -Hp -o name,creation -t snapshot -s creation -d 1 '$src_dataset' 2>/dev/null")
     else
         listing=$(zfs list -Hp -o name,creation -t snapshot -s creation -d 1 "$src_dataset" 2>/dev/null)
@@ -1453,7 +1453,7 @@ auto_skip_intermediates() {
     done
     if [ -z "$common_t" ]; then
         if [ -n "$remote_host" ]; then
-            common_t=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            common_t=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs get -Hp -o value creation '${src_dataset}@${common_snapshot}'" 2>/dev/null)
         else
             common_t=$(zfs get -Hp -o value creation "${src_dataset}@${common_snapshot}" 2>/dev/null)
@@ -2546,7 +2546,7 @@ find_bookmark_base() {
     [ -z "$tgt_head_guid" ] && return 0
     local marks
     if [ -n "$remote_host" ]; then
-        marks=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        marks=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -t bookmark -o name,guid '$src_dataset' 2>/dev/null")
     else
         marks=$(zfs list -H -t bookmark -o name,guid "$src_dataset" 2>/dev/null)
@@ -2579,7 +2579,7 @@ record_send_bookmark() {
     mark="tgt-${tag}"
     full="${src_dataset}#${mark}"
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -t bookmark -o name '$full' >/dev/null 2>&1 && zfs destroy '$full'; zfs bookmark '${src_dataset}@${sent_snap}' '$full'" \
             || log 1 "Warning: failed to refresh bookmark $full on $remote_host (non-fatal)"
     else

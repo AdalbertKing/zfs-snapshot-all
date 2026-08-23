@@ -526,7 +526,7 @@ announce_transfer_size() {   # <send_cmd> <remote_host> <remote_user>
         *) return 0 ;;
     esac
     if [ -n "$rhost" ]; then
-        out=$(ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
     else
         out=$(eval "$dry" 2>/dev/null) || return 0
     fi
@@ -699,7 +699,7 @@ get_sorted_snapshots() {
         # command ends in a pipe, so ssh returns awk's status and a nonzero rc
         # here means ssh itself failed, not that the dataset has no snapshots.
         # Callers array-collect the output and drop the status, so say it here.
-        snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        snaps=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || {
             local _rc=$?
             if [ $_rc -eq 255 ]; then
@@ -1267,7 +1267,7 @@ process_dataset() {
             return 1
         }
         if [ -n "$remote_host" ]; then
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs list '$create_target' >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT '$create_target'" || {
                     abort_held_snapshot "$snapshot" "$tgt_dataset"; return 1; }
         else
@@ -1285,7 +1285,7 @@ process_dataset() {
 
         local protected_snaps
         if [ -n "$remote_host" ]; then
-            protected_snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            protected_snaps=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs list -t snapshot -H -o name -r '$tgt_dataset' 2>/dev/null" | grep -E '@(__replicate_|__migration__|vzdump)' || true)
         else
             protected_snaps=$(zfs list -t snapshot -H -o name -r "$tgt_dataset" 2>/dev/null | grep -E '@(__replicate_|__migration__|vzdump)' || true)
@@ -1305,7 +1305,7 @@ process_dataset() {
         
         if [ -n "$remote_host" ]; then
             log 4 "EXECUTING DESTROY ON REMOTE: $remote_host"
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$destroy_cmd"
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$destroy_cmd"
         else
             log 4 "EXECUTING DESTROY LOCALLY"
             zfs list -H -o name -r "$tgt_dataset" 2>/dev/null | tac | xargs -I{} sh -c 'zfs destroy -R "$@" 2>/dev/null || true' -- {} || true
@@ -1330,7 +1330,7 @@ process_dataset() {
         log 4 "RAW ZFS CREATE COMMAND: $create_cmd"
 
         if [ -n "$remote_host" ]; then
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$create_cmd" || {
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$create_cmd" || {
                 log 0 "Hint: -f destroys and recreates the target, which needs to mount it. On Linux, non-root users cannot mount/unmount even with full 'zfs allow' delegation -- -f requires root on $remote_host."
                 abort_held_snapshot "$snapshot" "$tgt_dataset"
                 return 1
@@ -1542,7 +1542,7 @@ process_dataset() {
     # (keystatus=unavailable), so failing here costs nothing immediate.
     if [ $RAW_SEND -eq 1 ]; then
         if [ -n "$remote_host" ]; then
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
                 "zfs set canmount=$TARGET_CANMOUNT '$tgt_dataset'" 2>/dev/null \
                 || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
         else
@@ -1564,7 +1564,7 @@ process_dataset() {
     if [ $RECURSIVE -eq 1 ] && [ "$TARGET_CANMOUNT" = "noauto" ]; then
         local canmount_cmd="zfs list -H -o name -t filesystem -r '$tgt_dataset' 2>/dev/null | while IFS= read -r d; do zfs set canmount=noauto \"\$d\" 2>/dev/null; done"
         if [ -n "$remote_host" ]; then
-            ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$canmount_cmd" 2>/dev/null \
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$canmount_cmd" 2>/dev/null \
                 || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
         else
             eval "$canmount_cmd" 2>/dev/null \

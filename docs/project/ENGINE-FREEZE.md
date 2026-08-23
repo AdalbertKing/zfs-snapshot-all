@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 58de7b91f3cccf2fdbdb11d429510d260ff1a724 -->
-<!-- frozen: snapget.sh 100755 47d28c9c284f798450c9ee657188a2ea56b9f8d1 -->
-<!-- frozen: delsnaps.sh 100755 b792c0c1d160b44c404d444d43dcbae392554219 -->
+<!-- frozen: snapsend.sh 100755 2920feff488c1c81f99b138e88c41ee7ee66a3dd -->
+<!-- frozen: snapget.sh 100755 9b8ab52b93bb201df5177bd180b9f8630ba05fa1 -->
+<!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 d9fa660e813a71d929a3bafbadc1a076b60eae5c -->
-<!-- frozen: lib-zfs-snap.sh 100644 ad72f9a09b6490175938dc0abe1c06029766464d -->
+<!-- frozen: lib-zfs-snap.sh 100644 bdb0d002f9b71dd3a02c04577760ca6480d5ba19 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -54,6 +54,32 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-23 (snapget.sh, snapsend.sh, delsnaps.sh, lib-zfs-snap.sh): `-n` on
+  every READ-ONLY ssh invocation. Owner-authorized in chat after the exact
+  scope was stated, because this is the kind of change the seal exists to make
+  visible: it touches four frozen files and the transfer pipeline runs through
+  two of them.
+  ssh without -n reads its stdin to EOF and hands it to the remote command.
+  None of these calls want that; all of them were taking it. The visible
+  consequence is that any confirmation prompt printed AFTER engine work cannot
+  be answered from a pipe -- `seed` and `activate` refused "not confirmed" no
+  matter what was fed in, because the engine had already drained the answer.
+  On a terminal it works (stdin is the tty), so it never appeared in hand
+  testing; it appeared the moment anything was scripted. Found running issue
+  #9's four-command trial. Measured on pve9, engine driven directly:
+      printf 'ZOSTALO' | { ./snapget.sh -n ... >/dev/null; read -r x; ... }
+        -> [PUSTO]
+  38 invocations changed. FOUR were deliberately left alone, and they are the
+  reason this needed authorization rather than a sweep -- each one carries the
+  PAYLOAD on stdin, and -n there would break the transfer outright:
+      snapsend.sh:1011,1015   zfs send | [compress |] ssh "mbuffer | zfs recv"
+      lib-zfs-snap.sh:980     throughput probe piping into ssh "cat > /dev/null"
+      lib-zfs-snap.sh:2504    the quiesce script fed to ssh "bash -s"
+  A first, cruder attempt at this landed in zfs-backup.sh alone (#127) and was
+  necessary but NOT sufficient: `activate` still refused, because the catch-up
+  it runs on the way calls the engine. That is recorded here rather than
+  quietly superseded -- the earlier claim was too strong.
 
 - 2026-08-23 (snapsend.sh + snapget.sh): the landing check moved BEFORE the
   durable yes. Same authorization as the entry below it -- this is that change

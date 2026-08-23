@@ -333,7 +333,7 @@ run_zfs() {
             cmd+=" '${arg}'"
         done
         cmd+=" -- '${target}'"
-        ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$cmd"
+        ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "$cmd"
     else
         zfs "${args[@]}" -- "$target"
     fi

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52816994a70c1229 -->
+<!-- status-covers-digest: bb5ed448cceabc1d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -36,6 +36,14 @@
   Ta kontrola od razu się przydała: złapała, że mój własny komentarz rozpadł się na dwie
   linie i druga **nie była komentarzem**, tylko żywym kodem w środku pliku. `bash -n`
   tego nie widziało, bo cudzysłowy domykały się dalej.
+  **Sama poprawka `zfs-backup.sh` była jednak niewystarczająca, wbrew temu, co tu wcześniej
+  napisałem.** Sprawdzone na żywo: `activate` dalej odmawiał, bo catch-up po drodze woła
+  **silnik**, a `snapget.sh` też zjadał stdin. Zmierzone wprost — `printf | snapget.sh -n …;
+  read` → `[PUSTO]`. Domknięte zmianą w zamrożonych silnikach za zgodą właściciela:
+  `-n` na **38** wywołaniach czytających w `snapget.sh`, `snapsend.sh`, `delsnaps.sh`
+  i `lib-zfs-snap.sh`. **Cztery zostały nietknięte celowo** — niosą ładunek na stdin
+  (potok `zfs send | ssh … zfs recv` ×2, próba przepustowości, skrypt quiesce przez
+  `bash -s`) i `-n` zerwałoby tam transfer. Wpis w rejestrze zamrożenia wymienia je z nazwy.
 - **`activate --host=` nie działał po zainstalowaniu crona — przy ŻADNEJ zmianie
   endpointu (2026-08-23).** Nie „przy zmianie portu" — przy każdej. Pierwsze przełączenie
   w życiu relacji przechodziło wyłącznie dlatego, że nie było jeszcze bloku crona do

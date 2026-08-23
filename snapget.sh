@@ -433,7 +433,7 @@ announce_transfer_size() {   # <send_cmd> <remote_host> <remote_user>
         *) return 0 ;;
     esac
     if [ -n "$rhost" ]; then
-        out=$(ssh "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
+        out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
     else
         out=$(eval "$dry" 2>/dev/null) || return 0
     fi
@@ -613,7 +613,7 @@ get_sorted_snapshots() {
         # drop the status, so without this line an unreachable host looks
         # exactly like a dataset with no snapshots. Control flow is unchanged --
         # the point is that the run says which one it was.
-        snaps=$(ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        snaps=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs list -H -o name -t snapshot -s creation $depth_option '$dataset' 2>/dev/null | awk -F '@' '{print \$2}'") || {
             local _rc=$?
             if [ $_rc -eq 255 ]; then
@@ -861,7 +861,7 @@ create_snapshot() {
 
     log 1 "Creating new source snapshot: $snapshot_name"
     if [ -n "$remote_host" ]; then
-        ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
+        ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" \
             "zfs snapshot $recursive_flag '$snapshot_name'" || return 1
     else
         zfs snapshot $recursive_flag "$snapshot_name" || return 1
@@ -906,11 +906,11 @@ transfer_data() {
                 log 0 "Compression requested but $COMPRESSOR is not installed on remote host $remote_host"
                 return 1
             fi
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd | $COMPRESS_PIPE" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | $DECOMPRESS_PIPE | "${recv_args[@]}"; then
                 return 1
             fi
         else
-            if ! ssh "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
+            if ! ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$send_cmd" | mbuffer $MBUFFER_QUIET -s $BUFFER_SIZE -m $MEMORY$BWLIMIT_FLAG | "${recv_args[@]}"; then
                 return 1
             fi
         fi
