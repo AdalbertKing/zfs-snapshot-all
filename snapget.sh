@@ -1621,10 +1621,12 @@ process_dataset() {
     # stream and cannot have arrived separately, but they are not individually
     # checked here. Under -R each dataset is its own job and each is proven.
     if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
+        progress_mark_verified "$tgt_dataset" verify_failed
         log 0 "VERIFY FAILED: ${tgt_dataset}@${latest_snap} is not on the target with the source's GUID -- the transfer reported success but the snapshot cannot be confirmed. Treating this dataset as FAILED rather than reporting a backup that may not exist."
         return 1
     fi
     log 2 "Verified: ${tgt_dataset}@${latest_snap} carries the source's GUID"
+    progress_mark_verified "$tgt_dataset" verified
 
     # Transfer landed -- this snapshot is no longer "in flight", safe to prune
     # on the next delsnaps.sh run like any other.

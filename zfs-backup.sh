@@ -3161,7 +3161,13 @@ cmd_progress() {
         done
         printf '],"relations":['
         first=1
+        # LIVE rows only. The reviewer's discriminator: one finished 100/100
+        # record plus one current 25/100 used to aggregate as 200/125 "running"
+        # -- history retained for the operator was silently inflating the live
+        # relation state. Finished records stay in "jobs" (history is data);
+        # the relation aggregate answers "how is it going NOW" and nothing else.
         for f in "$dir"/*.json; do [ -e "$f" ] && cat "$f"; done | awk -v now="$(date +%s)" '
+            !/"state":"running"/ { next }
             { match($0,/"label":"[^"]*"/);        lb=substr($0,RSTART+9,RLENGTH-10)
               if (lb=="") lb="(bez etykiety)"
               match($0,/"total_bytes":[0-9]*/);   t=substr($0,RSTART+14,RLENGTH-14)+0
