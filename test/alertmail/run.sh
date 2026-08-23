@@ -359,6 +359,83 @@ EOF"
     rm -rf "$hb_dir"
 fi
 
+
+# ---------------------------------------------------------------------------
+# HOST HEALTH v4: pool state and stalled transfers.
+#
+# Same file, same finding class as everything above -- a claim of health the
+# evidence does not support, in two shapes this estate has ALREADY paid for:
+#   * pve1's rpool sat DEGRADED for weeks with zero alerts, because capacity
+#     was checked daily and health was checked nowhere;
+#   * a hung transfer never exits, so the job-level alert (which fires on a
+#     non-zero EXIT) is structurally silent about it. The progress data layer
+#     exists precisely so something can notice; this is the something.
+#
+# Runs the REAL generated script (heredoc extracted and expanded, zpool/zfs
+# stubbed, notify captured). The negative controls matter as much as the
+# positives: an ONLINE pool, a live transfer and a FINISHED old record must
+# stay silent -- an alert that fires either way teaches people to filter it.
+# ---------------------------------------------------------------------------
+cap_body=$(sed -n '/^    cat > "\$CAPACITY_SCRIPT" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC" | sed '1d;$d')
+if [ -z "$cap_body" ]; then
+    bad "the capacity-script heredoc can be extracted from deploy.sh" "sed anchors no longer match"
+else
+    hv_dir=$(mktemp -d)
+    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v4" NOTIFY_EMAIL=root \
+        eval "cat > '$hv_dir/check.sh' <<EOF
+$cap_body
+EOF"
+    mkdir -p "$hv_dir/bin" "$hv_dir/prog"
+    cat > "$hv_dir/bin/zpool" <<'ST'
+#!/bin/bash
+case "$*" in
+  "list -H o name"*|"list -H -o name") echo rpool; echo hdd ;;
+  *"-o capacity"*) echo "42%" ;;
+  *"-o health rpool") echo "$HV_RPOOL_HEALTH" ;;
+  *"-o health hdd") echo ONLINE ;;
+  "status rpool") echo "  state: $HV_RPOOL_HEALTH"; echo "  scan: resilver in progress" ;;
+esac
+ST
+    printf '#!/bin/bash\nexit 0\n' > "$hv_dir/bin/zfs"
+    printf '#!/bin/bash\nprintf "%%s\n" "$1" >> "$NLOG"\n' > "$hv_dir/bin/notify.sh"
+    chmod +x "$hv_dir/bin/"*
+    hv_now=$(date +%s)
+    printf '{"dataset":"hdd/x@s","label":"pve2","state":"running","updated_epoch":%s}\n' $((hv_now-3600)) > "$hv_dir/prog/dead.json"
+    printf '{"dataset":"hdd/y@s","label":"pve2","state":"running","updated_epoch":%s}\n' $((hv_now-10))   > "$hv_dir/prog/live.json"
+    printf '{"dataset":"hdd/z@s","label":"pve2","state":"ok","updated_epoch":%s}\n'      $((hv_now-9000)) > "$hv_dir/prog/done.json"
+
+    : > "$hv_dir/alerts"
+    HV_RPOOL_HEALTH=DEGRADED NLOG="$hv_dir/alerts" PATH="$hv_dir/bin:$PATH" \
+        ZFS_NOTIFY_SCRIPT="$hv_dir/bin/notify.sh" ZFS_PROGRESS_DIR="$hv_dir/prog" \
+        bash "$hv_dir/check.sh" >/dev/null 2>&1
+    if grep -q "rpool.*DEGRADED" "$hv_dir/alerts"; then
+        ok "health: a DEGRADED pool is a finding"
+    else
+        bad "health: a DEGRADED pool is a finding" "alerty: $(cat "$hv_dir/alerts")"
+    fi
+    if grep -q "hdd/x@s.*bez pulsu" "$hv_dir/alerts"; then
+        ok "health: a running record with no heartbeat for 30+ min is a finding"
+    else
+        bad "health: a running record with no heartbeat for 30+ min is a finding" "alerty: $(cat "$hv_dir/alerts")"
+    fi
+    if ! grep -qE "hdd/y@s|hdd/z@s|'hdd'" "$hv_dir/alerts"; then
+        ok "health: a live transfer, a finished record and an ONLINE pool stay silent"
+    else
+        bad "health: a live transfer, a finished record and an ONLINE pool stay silent" "alerty: $(cat "$hv_dir/alerts")"
+    fi
+
+    : > "$hv_dir/alerts"
+    HV_RPOOL_HEALTH=ONLINE NLOG="$hv_dir/alerts" PATH="$hv_dir/bin:$PATH" \
+        ZFS_NOTIFY_SCRIPT="$hv_dir/bin/notify.sh" ZFS_PROGRESS_DIR="$hv_dir/empty" \
+        bash "$hv_dir/check.sh" >/dev/null 2>&1
+    if [ ! -s "$hv_dir/alerts" ]; then
+        ok "health: a fully healthy host emits nothing at all"
+    else
+        bad "health: a fully healthy host emits nothing at all" "alerty: $(cat "$hv_dir/alerts")"
+    fi
+    rm -rf "$hv_dir"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

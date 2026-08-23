@@ -4188,7 +4188,7 @@ log "Phase 5: check-pool-capacity.sh (pool/quota capacity alerting)"
 # fileserver LXC (subvol-101-disk-1) was independently at 91% of its own
 # refquota, neither of which any existing alert would have caught in advance.
 CAPACITY_SCRIPT="/root/scripts/check-pool-capacity.sh"
-CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v3"
+CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v4"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$CAPACITY_SCRIPT" ]; then
         warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"
@@ -4242,6 +4242,48 @@ zfs list -Hp -o name,referenced,refquota -t filesystem | while IFS=\$'\t' read -
               "Dataset '\${name}' na \${HOST} wykorzystuje \${pct}% swojego refquota (prog: \${THRESHOLD}%)."
     fi
 done
+
+# POOL HEALTH (v4). Capacity was checked daily; HEALTH was checked nowhere in
+# the whole estate, and it showed: pve1's rpool sat DEGRADED for weeks with a
+# working backup chain and not one alert, because a degraded pool still
+# transfers fine -- right up until the second disk goes. Anything != ONLINE is
+# a finding, with the zpool status detail attached so the digest names the
+# device instead of making the operator ssh in to ask.
+for pool in \$(zpool list -H -o name); do
+    health=\$(zpool list -H -o health "\$pool" 2>/dev/null)
+    if [ -n "\$health" ] && [ "\$health" != "ONLINE" ]; then
+        detail=\$(zpool status "\$pool" 2>/dev/null | head -n 20)
+        alert "pula '\${pool}' na \${HOST}: \${health}" \
+              "Pula '\${pool}' na \${HOST} ma stan \${health} (oczekiwany: ONLINE).
+
+\${detail}"
+    fi
+done
+
+# STALLED TRANSFERS (v4). The engines keep one live-progress record per running
+# transfer (/var/lib/zfs-snapshot-all/progress, built 2026-08-23 exactly so a
+# monitor can consume it). A record still marked "running" whose watcher
+# stopped refreshing it means the transfer died, hung, or was killed -- and
+# nothing else reports that: the job's own alert fires only when the job EXITS
+# non-zero, which a hung pipeline never does. 30 minutes without a heartbeat on
+# a record that refreshes every 2 seconds is not lag; it is a corpse.
+PROG_DIR="\${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"
+NOW=\$(date +%s)
+if [ -d "\$PROG_DIR" ]; then
+    for f in "\$PROG_DIR"/*.json; do
+        [ -e "\$f" ] || continue
+        grep -q '"state":"running"' "\$f" 2>/dev/null || continue
+        upd=\$(sed -n 's/.*"updated_epoch":\([0-9]*\).*/\1/p' "\$f")
+        case "\$upd" in ''|*[!0-9]*) continue ;; esac
+        age=\$(( NOW - upd ))
+        if [ "\$age" -ge 1800 ]; then
+            ds=\$(sed -n 's/.*"dataset":"\([^"]*\)".*/\1/p' "\$f")
+            lb=\$(sed -n 's/.*"label":"\([^"]*\)".*/\1/p' "\$f")
+            alert "transfer '\${ds}' (\${lb:-bez etykiety}) na \${HOST}: bez pulsu od \$(( age / 60 )) min" \
+                  "Rekord transferu '\${ds}' wciaz mowi 'running', ale nie odswiezyl sie od \$(( age / 60 )) minut (odswieza co 2 s). Transfer najpewniej wisi albo zostal ubity tak, ze kod wyjscia zadania tego nie zglosi. Sprawdz: zfs-backup.sh progress na \${HOST}."
+        fi
+    done
+fi
 EOF
     chmod +x "$CAPACITY_SCRIPT"
     log "created $CAPACITY_SCRIPT (alerts -> $NOTIFY_EMAIL, threshold 90%)"

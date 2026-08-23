@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6da21a7504ec5fe1 -->
+<!-- status-covers-digest: 5430e760d55b161a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -98,6 +98,18 @@
   wpis bez portu przepuścił identyczne połączenie. Przypinany jest teraz sam alias — i to
   jest też znaczeniowo poprawne: zmiana portu nie zmienia tego, kim jest peer.
   Testy pytają **własny matcher OpenSSH** (`ssh-keygen -F`), a nie grepują nawiasu.
+- **Monitor zaczal konsumowac warstwe danych: zdrowie puli i martwe transfery (2026-08-23).**
+  Dwie dziury, za ktore estata juz zaplacila: `rpool` na pve1 byl **DEGRADED tygodniami** bez
+  jednego alertu (pojemnosc sprawdzana codziennie, zdrowie NIGDZIE - zdegradowana pula
+  transferuje normalnie, az padnie drugi dysk); oraz wiszacy transfer, ktorego alert
+  zadaniowy strukturalnie nie widzi, bo strzela na niezerowy KOD WYJSCIA, a wiszacy potok
+  nigdy nie wychodzi.
+  `check-pool-capacity.sh` v4 (ta sama linia crona 08:00, ten sam kanal kolejki, zero nowych
+  procesow): kazda pula != ONLINE to znalezisko z doczepionym `zpool status`; rekord
+  `running` bez odswiezenia od 30+ min (odswieza co 2 s) to znalezisko wskazujace
+  `zfs-backup.sh progress`. Kontrole negatywne przypiete na rowni z pozytywnymi: pula
+  ONLINE, zywy transfer i stary ZAKONCZONY rekord milcza - alert strzelajacy tak czy siak
+  uczy filtrowania. Testy jada na PRAWDZIWYM wygenerowanym skrypcie (test/alertmail, 27/27).
 - **Widac, ile zostalo - w trakcie transferu, nie po (2026-08-23).**
   Do tej pory transfer milczal az do konca. Na seedzie 4 TB to godziny ciszy, a jedyna
   uczciwa odpowiedz na „jak daleko jest” brzmiala „poczekaj”. `mbuffer` pokazuje tempo na
