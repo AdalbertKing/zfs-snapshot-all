@@ -2219,13 +2219,20 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     }
     if [ "$sync_mode" -eq 1 ]; then
         local pds pds_rc
+        # Ask about THIS profile's family, not the literal automated_ root.
+        # Only when the plan is going to render from the profile anyway
+        # (PLAN_NEEDS_PROFILE): a preserving reactivation must keep working
+        # after its profile is renamed or removed (REV-090), and its
+        # detection result feeds nothing -- no section is re-emitted.
+        local sync_family_root=automated_
+        [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && sync_family_root=$(profile_family_root)
         for pds in $PEER_SAVED_DATASETS; do
-            source_family_exists "$pds"; pds_rc=$?
+            source_family_exists "$pds" "$sync_family_root"; pds_rc=$?
             [ "$pds_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
                 && die_probe_unknown "$pds" "whether this relationship consumes that family passively or stamps its own"
             if [ "$pds_rc" -eq 0 ]; then
                 passive_ds+=("$pds")
-                log "sync: '$pds' already carries an automated_* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
+                log "sync: '$pds' already carries a ${sync_family_root}* family on $LOAD_HOST -- PASSIVE consumption (snapget -e): no new snapshots on the source, no source prune, retention stays with the family's owner"
             fi
         done
     fi
@@ -4404,6 +4411,59 @@ client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
 # and "you asked about something that is not there" is not evidence of an
 # empty family either.
 SOURCE_PROBE_UNKNOWN=2
+# --- profile-derived family root -------------------------------------------
+# The FAMILY is whatever name makes a snapshot OURS, and until 2026-08-23 that
+# name was the literal automated_ in six places -- correct for the built-in
+# default and silently wrong for every other profile (measured, lab 'serwis':
+# the seed stamped automated_daily_ onto both sides of a relationship whose
+# ladder prunes serwis_* -- a snapshot no retention would ever touch, and an
+# automated_* family on the source that would flip a future undeclared
+# enrolment of the same source into a consumer).
+#
+# The root comes from the ACTIVE PROFILE, in the order the design already
+# trusts: gfs_pattern first (retention had to know the family root to prune
+# it -- default: automated_), else the send prefix with a recognizable tier
+# word stripped (serwis_hourly_ -> serwis_), else the send prefix itself (a
+# flat one-family profile: the seed then shares the cadence name; retention
+# coverage wins over the one-tick monitor artefact, and the artefact ends at
+# the first scheduled run). Empty result -- a prefixless profile, which never
+# reaches an ACTIVE seed -- falls back to the historic automated_.
+profile_family_root() {
+    load_active_profile
+    local root
+    root=$(awk -F= 'NF==2 && $1 ~ /^[[:space:]]*gfs_pattern[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$PROFILE_PRUNE_FILE")
+    if [ -z "$root" ]; then
+        local pfx
+        pfx=$(awk -F= 'NF==2 && $1 ~ /^[[:space:]]*prefix[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$PROFILE_TPL_FILE")
+        case "$pfx" in
+            *hourly_)  root="${pfx%hourly_}" ;;
+            *daily_)   root="${pfx%daily_}" ;;
+            *weekly_)  root="${pfx%weekly_}" ;;
+            *monthly_) root="${pfx%monthly_}" ;;
+            *)         root="$pfx" ;;
+        esac
+    fi
+    printf '%s' "${root:-automated_}"
+}
+
+# The seed's name: root + daily_. For the default profile this is byte-for-
+# byte the automated_daily_ the call-site comment below argues for; the
+# argument itself (not the monitor's cadence name, but inside the ladder's
+# reach) now holds for every profile instead of one.
+profile_seed_prefix() { printf '%sdaily_' "$(profile_family_root)"; }
+
+# The seed and the catch-up run OUTSIDE the activation plan, where nothing
+# has chosen a profile yet -- but the client record has (create-time
+# provenance, .-sourced into $PROFILE). Point the loader at it; a record
+# predating the field keeps the env/default choice, zero migration.
+seed_profile_context() {
+    if [ -n "${PROFILE:-}" ] && [ "$PROFILE" != "$PROFILE_ACTIVE" ]; then
+        profile_release_tmp
+        PROFILE_ACTIVE="$PROFILE"
+    fi
+    load_active_profile
+}
+
 source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 2 = unknown
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
@@ -4433,9 +4493,9 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
     return 0
 }
 
-source_family_exists() {   # <dataset> -> 0 family, 1 none, 2 could not ask
+source_family_exists() {   # <dataset> [prefix] -> 0 family, 1 none, 2 could not ask
     local out rc
-    out=$(source_family_newest "$1"); rc=$?
+    out=$(source_family_newest "$1" "${2-automated_}"); rc=$?
     [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
     [ -n "$out" ]
 }
@@ -4863,7 +4923,9 @@ cmd_seed() {
         # relationship is a CONSUMER there. It adopts the newest existing
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
-        local -a seed_flags=(-m automated_daily_)
+        seed_profile_context
+        local seed_root; seed_root=$(profile_family_root)
+        local -a seed_flags=(-m "$(profile_seed_prefix)")
         # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
         # stamp. The relationship SAID it is passive at create, so the seed
         # adopts the newest existing snapshot whatever it is called (engine -e
@@ -4877,10 +4939,10 @@ cmd_seed() {
         if [ "${PASSIVE:-0}" = "1" ]; then
             seed_flags=(-e)
         else
-        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
-            seed_flags=(-m automated_ -e)
+            seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
         fi
@@ -5016,7 +5078,9 @@ cmd_final_catchup() {
         # relationship is a CONSUMER there. It adopts the newest existing
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
-        local -a seed_flags=(-m automated_daily_)
+        seed_profile_context
+        local seed_root; seed_root=$(profile_family_root)
+        local -a seed_flags=(-m "$(profile_seed_prefix)")
         # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
         # stamp. The relationship SAID it is passive at create, so the seed
         # adopts the newest existing snapshot whatever it is called (engine -e
@@ -5030,10 +5094,10 @@ cmd_final_catchup() {
         if [ "${PASSIVE:-0}" = "1" ]; then
             seed_flags=(-e)
         else
-        local fam_rc; source_family_exists "$ds"; fam_rc=$?
+        local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
-            seed_flags=(-m automated_ -e)
+            seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
         fi
