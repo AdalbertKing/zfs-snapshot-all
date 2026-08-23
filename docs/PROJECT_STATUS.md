@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 34ccf15d6ae4e9a3 -->
+<!-- status-covers-digest: 54b1f72fb8e41608 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -2324,6 +2324,31 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## Lab pasywny, pierwszy planowy tick — hydraulika kont (2026-08-23, galaz fix/multi-relationship-account-plumbing)
+
+Pierwszy PLANOWY bieg crona (20:01) obnazyl dwie kolejne wady rodziny
+wielorelacyjnej, obie maskowane przez to samo: idiom linii crona konczy sie
+komenda, ktora zawsze wychodzi 0 — prawda jest wylacznie w polu rc= w
+cron.log.
+
+1. **Ostatnia rejestracja kradla hostkey rodzenstwu**: plik alias_known_hosts
+   jest per HOST, alias per RELACJA; ensure_alias_known_hosts nadpisywal plik
+   jednym wpisem — po trzech rejestracjach zostal tylko labP2 i kazdy
+   planowy bieg rodzenstwa padal ssh 255. Writer podmienia teraz tylko
+   wlasna linie aliasu.
+2. **Tryb backup nigdy nie delegowal lokalnego receive**: zfs allow robil
+   tylko branch SYNC; konto delegowane padalo na 'cannot receive incremental
+   stream: permission denied' — niewidoczne, bo SEED idzie jako root, wiec
+   targety wygladaly na zasilone. Backup dostaje ten sam
+   ZFS_PERMS_LOCAL_RECEIVE na swojej bazie ladowania (target/<label>).
+
+Dowod: trojka relacji od zera na tej galezi — plik aliasow z trzema wpisami,
+delegacja 'user bckp' na kazdej bazie, wszystkie trzy linie verbatim jako
+konto z PRAWDZIWYM rc=0 czytanym z cron.log. Lab nocny (starzenie monitora
+na zrodle karmionym tylko wykluczonymi) biegnie dalej na tych poprawkach.
+Notatka na przyszly etap: zachowawcza re-aktywacja to no-op — poprawki
+docieraja do istniejacych relacji przez re-rejestracje.
 
 ## Lab pasywny — pierwsze znaleziska (2026-08-23, galaz fix/passive-seed-exclusions)
 
