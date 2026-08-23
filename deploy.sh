@@ -3781,7 +3781,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v8"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v9"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -3807,9 +3807,10 @@ $DIGEST_SCRIPT_MARKER -- THE only mail this host sends about backups. Once a day
 # the alerting away is worse off than one who reads a single daily summary.
 #
 # A silent day means "nothing was queued" -- it does NOT prove the host is
-# healthy, since a dead cron would also be silent. That is the accepted
-# trade-off: no per-host heartbeat mail, because at 18 hosts a daily "all OK"
-# from each is exactly the noise this replaced.
+# healthy, since a dead cron would also be silent. That gap is closed once a
+# week rather than daily: see the heartbeat below. A daily "all OK" from every
+# host is exactly the noise this design replaced, but a weekly one is cheap and
+# is the only thing that distinguishes a quiet host from a mute one.
 $ALERT_ENV_PREAMBLE
 
 QUEUE="\${ZFS_ALERT_QUEUE:-/var/lib/zfs-snapshot-all/alert-queue.log}"
@@ -3835,7 +3836,45 @@ if [ -s "\$LEGACY_QUEUE" ]; then
     rm -f "\$LEGACY_QUEUE"
 fi
 
-[ -s "\$PROCESSING" ] || { rm -f "\$PROCESSING"; exit 0; }
+# A WEEK WITH NOTHING TO SAY MUST STILL SAY IT.
+#
+# Until now an empty queue meant no mail, and that made silence carry no
+# information at all. Measured on pve9, 2026-08-22: its MTA was local-delivery
+# only and its digest was not even scheduled, so it had reported NOTHING for
+# months -- and from the owner's inbox that looked exactly like a host with no
+# findings. Three real messages, one of them a genuine digest naming 2 alerts
+# and 1 warning, were sitting in /var/mail on the host itself.
+#
+# So once a week, on Monday, a host with nothing to report says so. One line,
+# one mail per host per week. The point is not the content: it is that from
+# Monday onward, NO mail is itself the alarm -- and it is an alarm the owner
+# notices without checking anything.
+#
+# Stateless on purpose. No "last heartbeat" file to go stale, drift, or be
+# restored from a backup: the weekday IS the schedule. A Monday that already
+# has findings sends the ordinary digest instead, which proves the same path
+# just as well.
+if [ ! -s "\$PROCESSING" ]; then
+    rm -f "\$PROCESSING"
+    [ "\$(date +%u)" = "1" ] || exit 0
+    # The heartbeat's ONLY job is to prove the channel carries, so it must not
+    # report success when the send failed. The first cut piped into mail and
+    # then exited 0 unconditionally -- a broken MTA would have produced a
+    # cheerful "channel fine" exit while nothing left the host, which is the
+    # exact failure the heartbeat exists to expose, wearing the heartbeat's own
+    # clothes. Caught in review.
+    if printf 'Host: %s   %s
+
+Brak zdarzen w minionym tygodniu.
+
+Ten list jest dowodem, ze droga alertu na tym hoscie dziala.
+Jesli w kolejny poniedzialek nie przyjdzie -- to jest alarm.
+'         "\$HOST" "\$TODAY"         | mail -s "[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
+        exit 0
+    fi
+    echo "alert-digest.sh: weekly heartbeat could not be sent -- the alert channel on this host is NOT proven" >&2
+    exit 1
+fi
 
 # Collapse to one row per (severity, message): count, first-seen, last-seen.
 # Sorted ALERT before WARN, then by count descending -- the worst and the
