@@ -4035,6 +4035,25 @@ cmd_add_client() {
             if [ ! -x "$_lu_home/zfs-snapshot-all/gen-cron.sh" ]; then
                 rm -rf "$_lu_home/zfs-snapshot-all"
                 git clone -q "$SCRIPT_DIR" "$_lu_home/zfs-snapshot-all" 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     && log "add-client: provisioned $_lu_home/zfs-snapshot-all (accounts cannot use root's 0700 checkout)"                     || warn "add-client: could not clone the repo for '$local_user' -- activation will refuse with the exact path"
+            else
+                # An EXISTING clone is refreshed, not trusted: the closing
+                # campaign met an account copy cloned hours earlier that
+                # predated a monitor flag the freshly generated line used --
+                # the account's own tool refused its own crontab line. Nothing
+                # else updates account clones (the hourly pull is root's).
+                #
+                # The refresh must not rely on the clone's own remote: an old
+                # clone may point at an unreachable origin (root's 0700
+                # checkout, or a URL the account has no key for), and a
+                # 'pull --ff-only' as the account then fails SILENTLY while
+                # the stale tool keeps refusing fresh lines (measured: a
+                # leftover clone parked on a wip branch). Root's checkout on
+                # this host IS the deployed truth, so root hard-syncs the
+                # account copy to its own HEAD and hands ownership back.
+                # -c safe.directory: root touching an account-owned repo
+                # trips git's dubious-ownership guard (measured: the refresh
+                # warned and the stale clone survived a full clean rerun).
+                git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" fetch -q "$SCRIPT_DIR" HEAD 2>/dev/null                     && git -c safe.directory="$_lu_home/zfs-snapshot-all" -C "$_lu_home/zfs-snapshot-all" reset -q --hard FETCH_HEAD 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
             fi
             local _lu_s
             for _lu_s in notify-fail.sh notify-warn.sh; do
@@ -4392,7 +4411,14 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
     # section's `prefix`, i.e. what the installed line passes to -m) and the
     # passivity decision does not -- it asks about the FAMILY, whose name is
     # the project's automated_ root regardless of which tier stamped it.
-    local pfx="${2:-automated_}"
+    # ${2-...}, NOT ${2:-...}: an EMPTY prefix is a real answer ("any family",
+    # the declared-passive rehearsal) and must survive; only an UNPASSED second
+    # argument falls back to the automated_ root (the sync-chain guard and the
+    # undeclared-seed probe, unchanged). The colon form ate the empty string
+    # and the passive rehearsal silently probed automated_ again -- caught by
+    # the closing campaign's dry-run refusing a source with three fresh
+    # foreign snapshots on it.
+    local pfx="${2-automated_}"
     load_ssh_opts
     # -p (parseable creation) so the sort is numeric on a stable field, not on
     # a locale-formatted date. The remote call is captured on its own so its
@@ -5263,7 +5289,15 @@ probe_snapget_endpoint() {   # <host> <port>
                 PROBE_DETAIL="${PROBE_DETAIL}  $ds would need a FULL transfer -- no common base"$'\n' ;;
             *)
                 unknown=$((unknown + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n' ;;
+                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n'
+                # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
+                # was captured but printed only on rc!=0, so this branch said
+                # '<none>' and nothing else -- LAB-E and the closing campaign
+                # both stalled here blind. The engine's own last lines ARE the
+                # reason; show them.
+                if [ -s "$errtmp" ]; then
+                    while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
+                fi ;;
         esac
     done
     rm -f "$errtmp"
@@ -7348,11 +7382,20 @@ rux_root_ssh() {   # <host> <port> <command...>
 # Refusing is therefore the kinder answer, not the stricter one. Nothing here
 # is a security decision: the default two-sided path remains fully available
 # and is printed verbatim.
-rux_grant_remotely_preflight() {   # <host> <port>
-    local host="$1" port="$2"
+rux_grant_remotely_preflight() {   # <host> <port> [will_join_now=0]
+    local host="$1" port="$2" will_join_now="${3:-0}"
     if ! rux_root_ssh "$host" "$port" "true" >/dev/null 2>&1; then
         die "--grant-remotely: no root ssh channel to $host (BatchMode, pinned /root/.ssh/known_hosts). Establish it first -- e.g. install this host's root key there: ssh-copy-id root@$host -- or drop --grant-remotely and run the grant on the source yourself: deploy.sh --commit-scope=$COLLECTOR_LABEL. Nothing was changed anywhere."
     fi
+    # The manifest requirement holds only when THIS run will not create it.
+    # The one-command flow's own add-client performs the join (--join-remotely,
+    # the default) minutes after this gate -- demanding a PRE-existing join
+    # there made the "whole enrolment is ONE command" promise false for the
+    # first-ever pairing of a clean host, and the LAB-E closing campaign met
+    # exactly that on a source with no leftovers. With --manual-join the join
+    # will NOT happen in this run, and the early refusal below stays exactly
+    # as the 2026-08-20 live failure demanded.
+    [ "$will_join_now" -eq 1 ] && return 0
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
     if ! rux_root_ssh "$host" "$port" "test -s '$mfile'" >/dev/null 2>&1; then
         die "--grant-remotely: $host has not joined '$COLLECTOR_LABEL' yet (no $mfile there), so there is no delegated account to grant to and this flag cannot do the whole enrolment in one command. Nothing was changed anywhere -- no client record, no keys, no package.
@@ -7497,7 +7540,7 @@ rux_remote_install() {
     # Spelled as an `if`, not a `&&` chain, on purpose: this is a gate, and a
     # gate must not depend on nobody ever adding `set -e` to this file.
     if [ "$grant_remotely" -eq 1 ] && [ -z "$state" ]; then
-        rux_grant_remotely_preflight "$host" "$port"
+        rux_grant_remotely_preflight "$host" "$port" "$([ "$manual_join" -eq 1 ] && echo 0 || echo 1)"
     fi
 
     # Accepted semantics: --local-user names the account this relationship
@@ -7535,6 +7578,7 @@ rux_remote_install() {
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
+        [ -n "$exclude_snaps" ] && add_args+=(--exclude-snapshots="$exclude_snaps")
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over

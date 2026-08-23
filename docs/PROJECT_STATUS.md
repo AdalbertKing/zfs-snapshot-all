@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: df8e45edb81cc47b -->
+<!-- status-covers-digest: ed0509d138e9c45e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -2324,6 +2324,35 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## Kampania zamykajaca trybu pasywnego (2026-08-23, galaz fix/grant-preflight-order)
+
+Jednokomendowa rejestracja pasywna od zera (`--source=... --passive
+--exclude-snapshots=smiec_ --grant-remotely --install --yes`, pve9<-pve2 po
+tunelu WireGuard) przechodzi za pierwszym podejsciem: EXIT=0, zrodlo
+nietkniete (md5 listy snapshotow przed/po identyczne), zaadoptowany najnowszy
+niewykluczony obcy snapshot (`bez-prefiksu-103`; `smiec_102` pominiety).
+Zainstalowana linia backupu niesie `-e -m "" -E smiec_`, linia monitora
+wzorzec `-` i `-x smiec_`; obie uruchomione verbatim jako `bckp` daja rc=0.
+
+Cztery wady znalezione i usuniete po drodze (kazda najpierw zmierzona):
+
+1. preflight grant-remotely odrzucal czysty host — test manifestu bramkowany
+   na will_join_now;
+2. `${2:-automated_}` zjadal pusty prefiks („dowolna rodzina") — `${2-...}`;
+3. rux nie przekazywal `--exclude-snapshots` i `--passive` do add-client;
+4. watcher postepu dziedziczyl flock silnika (fd 200) i przezywal bieg —
+   kazda PIERWSZA rejestracja padala na verify („Another instance"), a kazda
+   reczna proba przechodzila; `exec 200>&-` w watcherze. Wykryte dopiero po
+   tym, jak bezwerdyktowa galaz sondy nauczyla sie pokazywac stderr silnika.
+
+Odswiezanie klonu konta przepisane: root twardo synchronizuje kopie konta do
+HEAD wlasnego checkoutu (`fetch $SCRIPT_DIR HEAD` + `reset --hard` +
+`chown -R`, z `-c safe.directory`), zamiast ufac originowi i galezi zastanego
+klonu — zmierzony przypadek: klon na porzuconej galezi wip z nieosiagalnym
+originem cicho przezywal refresh i odrzucal swieze linie (`monitor_exclude
+... not a field`). Laboratorium (labP/labE) rozebrane na obu hostach;
+produkcja pve2 zweryfikowana nietknieta.
 
 ## 1. Co jest wdrożone, gdzie i w jakiej wersji
 
