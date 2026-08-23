@@ -100,6 +100,7 @@ command -v zfs >/dev/null || { echo "UNKNOWN -- 'zfs' command not found in PATH"
 VERBOSE=false
 RECURSE=false
 PAIR_LABEL=""
+declare -a EXCLUDES=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         # --recursive is the long spelling of -R (Stage 2.3). Unlike the
@@ -108,6 +109,14 @@ while [ "$#" -gt 0 ]; do
         -R|--recursive) RECURSE=true; shift ;;
         -v|--verbose) VERBOSE=true; shift ;;
         -L) PAIR_LABEL="${2:-}"; shift 2 ;;
+        # -x PREFIX (repeatable): snapshots whose name starts with PREFIX are
+        # INVISIBLE to this monitor -- they neither satisfy freshness nor raise
+        # it. Built for DECLARED-PASSIVE relations (2026-08-23, LAB-E): the
+        # watched family is "whatever the foreign system stamps", so the
+        # positive pattern is '-' (any), and exclusions carve out the families
+        # that must not count -- an aging excluded family must not page, and a
+        # fresh excluded family must not paint a stale relation green.
+        -x) EXCLUDES+=("${2:?-x requires a prefix}"); shift 2 ;;
         *) break ;;
     esac
 done
@@ -149,7 +158,12 @@ CRIT_ARG="$4"
 # been examined yet, so any staleness answer would be fabricated. Generated cron
 # lines route rc>=3 to notify-fail as "monitor BROKEN", which is exactly what a
 # monitor that cannot report is.
-[ -n "$PATTERN" ] || { echo "UNKNOWN -- the snapshot pattern is empty, which matches EVERY snapshot on the dataset including pvesr's __replicate_* and vzdump's own. A monitor scoped that wide reports the freshness of whatever else touches the pool and can never go red for this project's family, so it is refused rather than run. Pass the prefix of the family you actually own, e.g. 'automated_hourly'." >&2; exit "$EXIT_UNKNOWN"; }
+# '-' is the EXPLICIT any-snapshot mode (declared-passive relations watch the
+# newest snapshot whatever its name, minus -x exclusions). Only the literal
+# dash: an EMPTY pattern is still refused below, unchanged -- silence is not a
+# declaration, and the original hole this guard closed stays closed.
+if [ "$PATTERN" = "-" ]; then PATTERN=""; PATTERN_ANY=true; else PATTERN_ANY=false; fi
+[ -n "$PATTERN" ] || [ "$PATTERN_ANY" = true ] || { echo "UNKNOWN -- the snapshot pattern is empty, which matches EVERY snapshot on the dataset including pvesr's __replicate_* and vzdump's own. A monitor scoped that wide reports the freshness of whatever else touches the pool and can never go red for this project's family, so it is refused rather than run. Pass the prefix of the family you actually own, e.g. 'automated_hourly'." >&2; exit "$EXIT_UNKNOWN"; }
 
 # Converts "<N><m|h|d>" to seconds; echoes the value or returns 1 on a
 # malformed duration (caught once at startup so a typo fails loudly, not by
@@ -250,6 +264,11 @@ check_one() {
         [ -z "$line" ] && continue
         any_snap=true
         snapname="${line#*@}"
+        local _ex _skip=false
+        for _ex in "${EXCLUDES[@]:-}"; do
+            [ -n "$_ex" ] && [[ "$snapname" == "${_ex}"* ]] && { _skip=true; break; }
+        done
+        [ "$_skip" = true ] && continue
         [[ "$snapname" == "${PATTERN}"* ]] && newest="$line"
     done < <(zfs list -H -o name -s creation -t snapshot "$ds" 2>/dev/null)
 
@@ -267,7 +286,7 @@ check_one() {
         # alarm where the promise is actually broken, and gives this case the
         # WARNING band it never had.
         if ! newest_epoch="$(creation_epoch "$ds")"; then
-            echo "UNKNOWN dataset=$ds -- no snapshot matches pattern=$PATTERN and the dataset's creation time could not be read, so its age is unknown" >&2
+            echo "UNKNOWN dataset=$ds -- no snapshot matches pattern=${PATTERN:-(any)} and the dataset's creation time could not be read, so its age is unknown" >&2
             SAW_UNKNOWN=1
             return
         fi
@@ -297,9 +316,9 @@ check_one() {
     # Provenance is part of the contract: an operator reading "age=72h" must not
     # have to work out whether that is the age of a snapshot or of the dataset.
     if [ "$from_creation" = true ]; then
-        detail="pattern=$PATTERN -- no snapshot found matching this pattern; age measured from dataset creation"
+        detail="pattern=${PATTERN:-(any)} -- no snapshot found matching this pattern; age measured from dataset creation"
     else
-        detail="pattern=$PATTERN newest=${newest#*@}"
+        detail="pattern=${PATTERN:-(any)} newest=${newest#*@}"
     fi
 
     if [ "$sev" -gt 0 ] || [ "$VERBOSE" = true ]; then

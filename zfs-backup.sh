@@ -3812,7 +3812,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion=""
+    local recursion="" passive=0
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -3833,6 +3833,7 @@ cmd_add_client() {
             --datasets=*)  datasets="${a#*=}" ;;
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --passive)     passive=1 ;;
             --exclude=*)   excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
@@ -4094,6 +4095,14 @@ cmd_add_client() {
         # regenerated the section; the record is the only place a decision
         # survives that.
         write_client_field RECURSION         "$recursion"
+        # DECLARED passivity (LAB-E, 2026-08-23). Passive is a decision, not a
+        # deduction: this relationship only ever ADOPTS the newest existing
+        # snapshot (engine -e), stamps nothing on the source, and its monitor
+        # watches "newest of anything" rather than a named family. Recorded at
+        # CREATE like RECURSION, read back by seed and activation; never
+        # sniffed from snapshot names -- the sync-chain probe taught us where
+        # name-sniffing ends.
+        write_client_field PASSIVE           "$passive"
         local _xi=0 _x
         for _x in ${excludes[@]+"${excludes[@]}"}; do
             _xi=$((_xi + 1))
@@ -4740,11 +4749,25 @@ cmd_seed() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
+        # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
+        # stamp. The relationship SAID it is passive at create, so the seed
+        # adopts the newest existing snapshot whatever it is called (engine -e
+        # with no mask -- measured: newest wins regardless of prefix) and the
+        # engine's own "no snapshots" refusal is the empty-source answer. The
+        # automated_* probe below stays ONLY for undeclared relationships,
+        # where it is the sync-chain guard it was built as -- it detects OUR
+        # OWN family stamped by another instance, and was never able to see a
+        # foreign one (that blindness, measured, is why the declaration
+        # exists).
+        if [ "${PASSIVE:-0}" = "1" ]; then
+            seed_flags=(-e)
+        else
         local fam_rc; source_family_exists "$ds"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
         fi
         # The seed obeys the same exclusions the installed job will. Without
         # this an excluded dataset lands ONCE, at seed time, and is then never
@@ -4879,11 +4902,25 @@ cmd_final_catchup() {
         # snapshot as its base (-e, generic automated_ prefix) and creates
         # nothing. A fresh source probes negative and seeds exactly as before.
         local -a seed_flags=(-m automated_daily_)
+        # DECLARED passive (LAB-E, 2026-08-23): no probe, no family name, no
+        # stamp. The relationship SAID it is passive at create, so the seed
+        # adopts the newest existing snapshot whatever it is called (engine -e
+        # with no mask -- measured: newest wins regardless of prefix) and the
+        # engine's own "no snapshots" refusal is the empty-source answer. The
+        # automated_* probe below stays ONLY for undeclared relationships,
+        # where it is the sync-chain guard it was built as -- it detects OUR
+        # OWN family stamped by another instance, and was never able to see a
+        # foreign one (that blindness, measured, is why the declaration
+        # exists).
+        if [ "${PASSIVE:-0}" = "1" ]; then
+            seed_flags=(-e)
+        else
         local fam_rc; source_family_exists "$ds"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
         if [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m automated_ -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
+        fi
         fi
         # The seed obeys the same exclusions the installed job will. Without
         # this an excluded dataset lands ONCE, at seed time, and is then never
@@ -7373,6 +7410,7 @@ rux_remote_install() {
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
+        [ "$passive" -eq 1 ] && add_args+=(--passive)
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
@@ -7471,7 +7509,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion=""
+    local recursion="" passive=0
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
@@ -7479,6 +7517,7 @@ rux_entry() {
             --target=*)  target="${a#*=}" ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
+            --passive)     passive=1 ;;
             --exclude=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
