@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e3c1ff14377476b7 -->
+<!-- status-covers-digest: 34ccf15d6ae4e9a3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -2324,6 +2324,31 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## Lab pasywny — pierwsze znaleziska (2026-08-23, galaz fix/passive-seed-exclusions)
+
+Pelny lab pasywny (3 zrodla na pve2, kszalty: -r/auto/bckp, -R/reczny join,
+plaski/auto; generator cudzych snapshotow co 5 min z rotacja prefiksow i
+rodzina wykluczona smiec_) ruszyl i w pierwszej godzinie zlapal dwie wady:
+
+1. **Seed pasywny ignorowal wykluczenia**: gola galaz -e adoptowala
+   najnowszy snapshot CZEGOKOLWIEK — w tym rodzine zadeklarowana jako
+   wykluczona, gdy byla najswiezsza (zmierzone: seed wyslal smiec_* na
+   target, podczas gdy linia crona obok niosla -E smiec_). Kampania
+   zamykajaca tego nie widziala, bo jej smiec_ byl akurat starszy. Seed
+   renderuje teraz flagi przez client_passive_flags — to samo zrodlo pol i
+   ten sam renderer co linia instalowana.
+2. **Ciche przejecie konta**: druga relacja z innym --local-user byla po
+   cichu przestawiana na konto z manifestu parowania (zmierzone:
+   --local-user=root wyladowal w crontabie bckp, configu bckp, na kluczach
+   bckp, bez slowa). add-client odmawia teraz po imieniu; wybor konta jest
+   tez zapisywany na rekordzie relacji (LOCAL_USER, slot r_user). Pelne
+   wsparcie kont mieszanych per host (osobne tozsamosci parowania) = osobny
+   przyszly etap.
+
+Lab nocny zostaje uruchomiony (labP1/labP2/labP3 aktywne, generator tyka):
+rano odczyt monitorow — labE3 dostaje TYLKO wykluczone smiec_, wiec jego
+monitor ma zestarzec sie do WARN/CRIT mimo swiezych wykluczonych snapshotow.
 
 ## Parowanie wielorelacyjne (2026-08-23, galaz feat/multi-relationship-pairing)
 
