@@ -582,6 +582,73 @@ restore_relations() {   # <config>
 # verification that came back unreadable left the caller holding a failure and no
 # idea what to put back -- and a production source stuck read-only. Nothing may
 # touch the property until the caller is holding what it takes to undo it.
+# ---------------------------------------------------------------------------
+# THE PUBLIC ADDRESS RESOLVER (owner grammar of 2026-08-13, R-025 constraints).
+#
+#   restore pve2                  whole relation
+#   restore pve2:rpool/data       one dataset of that relation
+#   restore hdd/backups/...       a managed copy/source path, verbatim
+#
+# The rule that disarms the dangerous ambiguity: A NAME THAT DOES NOT RESOLVE
+# IS AN ERROR, NEVER A GUESS. No fallback from unknown relation to hostname, no
+# DNS, no ssh probe -- the failure mode of guessing is a destructive recovery
+# aimed at the wrong machine. R-025 sharpened three edges, all enforced here:
+#   1. user@HOST:DATASET is refused outright -- transport and account mechanics
+#      do not belong on the public surface;
+#   2. a bare word is ONLY a relation label (pair_label in the installed
+#      CONFIG). It is never treated as a hostname;
+#   3. a POOL/PATH must be a source or copy the installed CONFIG already knows.
+#      An arbitrary local dataset is never adopted as backup provenance.
+#
+# Output: one "src<TAB>copy" line per selected dataset. Every refusal is die,
+# with the reason and the safe next step named.
+restore_resolve_token() {   # <config> <token>
+    local config="$1" tok="$2"
+    case "$tok" in
+        *@*)
+            die "restore: '$tok' looks like user@host:dataset -- transport addressing is not part of the public restore surface (R-025). Address the backup by its relation: 'restore <label>' or 'restore <label>:<dataset>'; labels come from 'restore --plan'." ;;
+    esac
+    local label="" want=""
+    case "$tok" in
+        *:*) label="${tok%%:*}"; want="${tok#*:}" ;;
+        */*) want="$tok" ;;
+        *)   label="$tok" ;;
+    esac
+    local ds l s d hit=0
+    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config"); do
+        s="$(installed_dataset_field "$config" "$ds" src)"
+        d="$(installed_dataset_field "$config" "$ds" dst)"
+        l="$(installed_dataset_field "$config" "$ds" pair_label)"
+        local src_id copy_loc
+        if [ -n "$d" ]; then src_id="$ds"; copy_loc="${d}/${ds}"
+        elif [ -n "$s" ]; then src_id="$s"; copy_loc="$ds"
+        else continue; fi
+        # src may carry acct@host: transport. It is stripped for MATCHING the
+        # user's token (nobody addresses a backup by its transport), but the
+        # value PRINTED is the recorded one -- that is what the plan filter and
+        # cmd_restore_safe compare against: internal plumbing handed to internal
+        # calls, never an address accepted from the user. The first cut printed
+        # the stripped form and the very first end-to-end run of `restore pve2`
+        # matched nothing -- the resolver and the plan disagreed about identity
+        # spelling. One spelling, the recorded one, everywhere.
+        local src_plain="${src_id#*@}"; src_plain="${src_plain#*:}"
+        if [ -n "$label" ] && [ "$l" != "$label" ]; then continue; fi
+        if [ -n "$want" ]; then
+            [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue
+        fi
+        printf '%s\t%s\n' "$src_id" "$copy_loc"
+        hit=1
+    done
+    [ "$hit" -eq 1 ] && return 0
+    if [ -n "$label" ] && [ -n "$want" ]; then
+        die "restore: relation '$label' does not cover dataset '$want' in $config. 'restore --plan' lists what it does cover. A name that does not resolve is an error, never a guess."
+    elif [ -n "$label" ]; then
+        die "restore: '$label' is not a relation label in $config (no [dataset:] section carries pair_label = $label). It is NOT treated as a hostname, deliberately -- guessing is how a recovery aims at the wrong machine. 'restore --plan' lists the labels."
+    else
+        die "restore: '$want' is neither a source nor a managed copy location in $config. An arbitrary dataset is never adopted as backup provenance (R-025). 'restore --plan' lists the managed locations."
+    fi
+}
+
 restore_fence_capture() {   # <dataset> -> prints "<value> <source>"
     local ds="$1" val srcp
     val="$(zfs get -H -o value readonly "$ds" 2>/dev/null)"
@@ -1239,7 +1306,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 }
 
 cmd_restore() {
-    local plan=0 dataset="" config="" snapshot="" yes=0
+    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
     for a in "$@"; do
         case "$a" in
             --plan)       plan=1 ;;
@@ -1247,9 +1314,41 @@ cmd_restore() {
             --snapshot=*) snapshot="${a#*=}" ;;
             --config=*)   config="${a#*=}" ;;
             --yes|-y)     yes=1 ;;
-            *) die "restore: unknown option $a" ;;
+            --*) die "restore: unknown option $a" ;;
+            *)
+                # Positional token: the public address (relation label,
+                # label:dataset, or a managed path). Resolved AFTER the loop,
+                # when --config is known. One address per invocation -- a
+                # second positional is the cross-host destination, which
+                # follows under R-025 once this door is reviewed.
+                [ -z "$addr" ] || die "restore: got two addresses ('$addr' and '$a') -- the cross-host destination form is not open yet (R-025 sequencing); one address per call"
+                addr="$a" ;;
         esac
     done
+    if [ -n "$addr" ]; then
+        read_server_conf
+        local _rc_cfg="$config"; [ -n "$_rc_cfg" ] || _rc_cfg="${CRON_CONFIG:-}"
+        [ -n "$_rc_cfg" ] && [ -r "$_rc_cfg" ] || die "restore: no readable installed config to resolve '$addr' against -- pass --config=FILE"
+        local _rc_sel; _rc_sel=$(restore_resolve_token "$_rc_cfg" "$addr")
+        local _rc_n; _rc_n=$(printf '%s
+' "$_rc_sel" | grep -c .)
+        if [ -n "$snapshot" ]; then
+            # A destructive-capable form needs exactly one dataset: restoring a
+            # WHOLE relation to one snapshot name would revive the false idea
+            # that equal names are one atomic event (measured otherwise on pve2).
+            [ "$_rc_n" -eq 1 ] || die "restore: '$addr' selects $_rc_n datasets -- with --snapshot give one dataset (label:dataset), not a whole relation"
+            dataset=$(printf '%s' "$_rc_sel" | cut -f1)
+        else
+            plan=1
+            if [ "$_rc_n" -eq 1 ]; then
+                dataset=$(printf '%s' "$_rc_sel" | cut -f1)
+            else
+                addr_filter=$(printf '%s\n' "$_rc_sel" | cut -f1)
+            fi
+        fi
+        config="$_rc_cfg"
+    fi
+
     # Phase 7 slice 2: a SAFE restore is the plain verb. Destructive replacement of
     # a live dataset stays a SEPARATE verb (slice 3), never a flag on this one --
     # a --force that turns a safe command into a destructive one is exactly the
@@ -1282,6 +1381,11 @@ cmd_restore() {
     for i in "${!src[@]}"; do
         if [ -n "$dataset" ]; then
             [ "${src[$i]}" = "$dataset" ] || [ "${copy[$i]}" = "$dataset" ] || continue
+        fi
+        # A whole-relation address narrows the plan to the datasets the resolver
+        # selected -- `restore pve2` must not print other relations' rows.
+        if [ -n "$addr_filter" ]; then
+            printf '%s\n' "$addr_filter" | grep -qxF -- "${src[$i]}" || continue
         fi
         shown=$((shown + 1))
         echo

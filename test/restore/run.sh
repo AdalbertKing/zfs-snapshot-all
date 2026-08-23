@@ -1732,6 +1732,94 @@ strays="$(grep -vE '^(list|get) ' "$WORK/zfs-calls3" 2>/dev/null \
     && ok "audit: across the whole suite the destructive path only read, fenced, or ran its own primitives" \
     || bad "audit: across the whole suite the destructive path only read, fenced, or ran its own primitives" "$strays"
 
+
+# ---------------------------------------------------------------------------
+# THE PUBLIC ADDRESS RESOLVER (owner grammar 2026-08-13, R-025).
+#
+# The rule under test is the one that disarms the destructive ambiguity: a name
+# that does not resolve is an ERROR, never a guess. The three R-025 refusals
+# are pinned as discriminators, because each one is a door to restoring onto
+# the wrong machine if it ever silently opens.
+# ---------------------------------------------------------------------------
+RSV="$WORK/resolver.conf"
+cat > "$RSV" <<'CONF'
+[dataset:hdd/backups/192.168.28.8/rpool/data]
+	# managed-by: zfs-backup.sh client=pve2
+	src          = acct@192.168.28.8:rpool/data
+	pair_label   = pve2
+
+[dataset:hdd/backups/192.168.28.8/tank/vm]
+	# managed-by: zfs-backup.sh client=pve2
+	src          = acct@192.168.28.8:tank/vm
+	pair_label   = pve2
+
+[dataset:rpool/data2]
+	# managed-by: zfs-backup.sh client=local
+	dst          = hdd/localcopy
+	pair_label   = lokalny
+CONF
+
+rsv() {   # <token> -> stdout lines; rc
+    ( set +u; VERBOSE=0
+      source "$ZB" 2>/dev/null
+      restore_resolve_token "$RSV" "$1" 2>&1 )
+}
+
+out=$(rsv pve2); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c .)" -eq 2 ] \
+   && printf '%s\n' "$out" | grep -q "acct@192.168.28.8:rpool/data	hdd/backups/192.168.28.8/rpool/data"; then
+    ok "resolver: a bare label selects the WHOLE relation, identity printed AS RECORDED"
+else
+    bad "resolver: a bare label selects the WHOLE relation, identity printed AS RECORDED" "rc=$rc out=$out"
+fi
+
+out=$(rsv pve2:tank/vm); rc=$?
+if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ] \
+   && printf '%s\n' "$out" | grep -q "^acct@192.168.28.8:tank/vm	"; then
+    ok "resolver: label:dataset selects exactly that dataset of that relation"
+else
+    bad "resolver: label:dataset selects exactly that dataset of that relation" "rc=$rc out=$out"
+fi
+
+out=$(rsv hdd/localcopy/rpool/data2); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "^rpool/data2	"; then
+    ok "resolver: a managed copy path resolves verbatim"
+else
+    bad "resolver: a managed copy path resolves verbatim" "rc=$rc out=$out"
+fi
+
+# R-025 refusal 1: transport addressing is not a public address.
+out=$(rsv "acct@192.168.28.8:rpool/data"); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "transport addressing is not part"; then
+    ok "resolver R-025/1: user@host:dataset is refused outright"
+else
+    bad "resolver R-025/1: user@host:dataset is refused outright" "rc=$rc out=$out"
+fi
+
+# R-025 refusal 2: a bare word never falls back to being a hostname.
+out=$(rsv pve9); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "NOT treated as a hostname"; then
+    ok "resolver R-025/2: an unknown bare word refuses, never a hostname guess"
+else
+    bad "resolver R-025/2: an unknown bare word refuses, never a hostname guess" "rc=$rc out=$out"
+fi
+
+# R-025 refusal 3: an arbitrary local dataset is never adopted as provenance.
+out=$(rsv rpool/scratch/vm-999); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "never adopted as backup provenance"; then
+    ok "resolver R-025/3: an unmanaged POOL/PATH refuses"
+else
+    bad "resolver R-025/3: an unmanaged POOL/PATH refuses" "rc=$rc out=$out"
+fi
+
+# And the near-miss inside a real relation: right label, wrong dataset.
+out=$(rsv pve2:rpool/ROOT); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "does not cover dataset"; then
+    ok "resolver: right label + unknown dataset refuses and says which half failed"
+else
+    bad "resolver: right label + unknown dataset refuses and says which half failed" "rc=$rc out=$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
