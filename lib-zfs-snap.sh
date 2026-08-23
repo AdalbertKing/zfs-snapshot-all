@@ -84,29 +84,25 @@ emit_stats() {
 
 progress_dir() { printf '%s' "${ZFS_PROGRESS_DIR:-/var/lib/zfs-snapshot-all/progress}"; }
 
-# ONE FILE PER JOB, keyed by job_state_key -- NOT by the dataset name.
+# ONE FILE PER JOB, keyed by job_state_key over the configured TARGET -- not by
+# the dataset name, and NOT by the snapshot either.
 #
-# The first version built the filename by replacing "/" and "@" with "_", which
-# is not injective: `pool/a_b@s` and `pool/a/b@s` produce the same name, and one
-# job's record silently becomes the other's. Reviewer ADVISORY on #129, and
-# confirmed by measurement before being accepted:
+# Two prior shapes of this key were wrong, both caught by discriminators rather
+# than by reading. Replacing "/" and "@" with "_" was not injective (pool/a_b@s
+# vs pool/a/b@s collided). Then keying on (target, dataset) looked right and
+# was not: the engines pass the SNAPSHOT being moved, which changes every run,
+# and on a resume the last send token is the receive token -- so one configured
+# job produced a fresh file per snapshot, and a resume did not even share
+# identity with the run it resumed. Measured, per the reviewer's discriminator:
+# pool/a@s1, pool/a@s2 and a resume token gave three different hashes. The
+# seven-day reaper was quietly papering over the resulting leak.
 #
-#     pool/a_b@s  ->  pool_a_b_s.json
-#     pool/a/b@s  ->  pool_a_b_s.json
-#
-# Dataset alone is the wrong key for a second reason as well: two jobs may run
-# for the SAME source at the same time toward different targets, or under
-# different -j identifiers, and those are different jobs whose progress must not
-# overwrite each other.
-#
-# job_state_key already solves exactly this, for exactly this reason -- it hashes
-# script basename (which is the direction), IDENTIFIER, source and target with
-# NUL delimiters "so no value can impersonate a boundary" (REV-20260729-001 F3).
-# Reusing it means one definition of job identity in this file, not two that can
-# drift. The human-readable dataset and target stay INSIDE the record, where
-# they are read rather than parsed.
-progress_path() {   # <source dataset|snapshot> <target>
-    printf '%s/%s.json' "$(progress_dir)" "$(job_state_key "${2:-}" "$1")"
+# The TARGET is the stable anchor: one dataset lands in exactly one place, two
+# jobs never legitimately share a target, and it is known identically in a
+# fresh run and in a resume. job_state_key folds in script (direction) and
+# IDENTIFIER. Source and snapshot remain INSIDE the record, as data.
+progress_path() {   # <target>
+    printf '%s/%s.json' "$(progress_dir)" "$(job_state_key "$1" "")"
 }
 
 # Recognises a progress line WITHOUT consuming anything else. Kept as its own
@@ -138,6 +134,26 @@ progress_strip() {   # <errfile>
 # Reads the growing stderr file and keeps ONE durable record per dataset up to
 # date. Runs in the background; the caller kills it when the transfer ends.
 # Prints its PID so the caller can.
+# THE END-STATE UPGRADE. transfer's own progress_done fires at the pipeline
+# boundary, which is BEFORE the landed-GUID verification in process_dataset.
+# So "ok" there means "the pipeline exited 0" and nothing more -- an earlier
+# ENGINE-FREEZE entry claimed the terminal state implied the GUID check, and
+# this function is the correction of that overclaim, not its restatement.
+# After validate_snapshot has actually compared GUIDs the record is upgraded:
+# ok -> verified, or ok -> verify_failed. A consumer can now distinguish "the
+# processes did not crash" from "the data is provably on the target", which is
+# the one question this tool exists to answer.
+progress_mark_verified() {   # <target> <verified|verify_failed>
+    local pfile; pfile=$(progress_path "$1")
+    [ -f "$pfile" ] || return 0
+    local body; body=$(cat "$pfile" 2>/dev/null) || return 0
+    case "$body" in *'"state":"ok"'*) ;; *) return 0 ;; esac
+    body=${body/'"state":"ok"'/'"state":"'$2'"'}
+    printf '%s' "$body" > "${pfile}.tmp" 2>/dev/null || return 0
+    mv -f "${pfile}.tmp" "$pfile" 2>/dev/null
+    return 0
+}
+
 # Finished records are kept for a while so an operator who looked away can still
 # see how a transfer ended, then removed. Without this the directory grows one
 # file per dataset per run forever -- the same slow leak the tombstone and
@@ -186,7 +202,7 @@ progress_classify() {   # <send_cmd> -> sets PG_MODE and PG_BASE
 progress_watch() {   # <errfile> <dataset> <target> <peer> <direction> <mode> <base> [wirefile] -> pid
     local errfile="$1" dataset="$2" target="${3:-}" peer="${4:-}" direction="${5:-}"
     local mode="${6:-full}" base="${7:-}" wirefile="${8:-}"
-    local pfile; pfile=$(progress_path "$dataset" "$target")
+    local pfile; pfile=$(progress_path "$target")
     mkdir -p "$(progress_dir)" 2>/dev/null || return 0
     (
         local total=0 done_b=0 started prev_b=0 prev_t rate=0 eta=-1 now line
@@ -256,7 +272,7 @@ progress_watch() {   # <errfile> <dataset> <target> <peer> <direction> <mode> <b
 progress_done() {   # <watcher pid> <dataset> <target> <status>
     local pid="$1" dataset="$2" target="$3" status="$4"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    local pfile; pfile=$(progress_path "$dataset" "$target")
+    local pfile; pfile=$(progress_path "$target")
     [ -f "$pfile" ] || return 0
     local body; body=$(cat "$pfile" 2>/dev/null) || return 0
     # Replace the running marker rather than appending beside it: two "state"

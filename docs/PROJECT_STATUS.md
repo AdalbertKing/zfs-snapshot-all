@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a98f5559b3d0cd79 -->
+<!-- status-covers-digest: f20a573fba01c316 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -191,6 +191,19 @@
   historii nazywa 'nie wiadomo', nie 'bez awarii'. Zmierzone na zywo: przy kompresji
   done_bytes=0 (send skonczyl przed pierwsza linia postepu - opisana granica), a
   wire_bytes=1441792 mowil prawde o laczu w locie. Dwie miary, obie uczciwe.
+  **Trzy wady kontraktu znalezione przez recenzenta, potwierdzone pomiarem i naprawione
+  (2026-08-23).** (1) Tozsamosc zadania hashowala SNAPSHOT (ostatni token komendy send),
+  wiec jedno skonfigurowane zadanie produkowalo nowy plik na kazdy przebieg, a resume nie
+  dzielil tozsamosci z przebiegiem, ktory wznawial - zmierzone: trzy rozne hashe dla
+  jednego zadania; siedmiodniowy reaper po cichu maskowal wyciek. Klucz to teraz sam CEL
+  (jeden dataset laduje w jednym miejscu; stabilny przy snapshotach i resume), zrodlo i
+  snapshot zostaja w rekordzie jako dane. (2) Agregat relacji mieszal zakonczone rekordy
+  z zywymi: gotowy 100/100 + biezacy 25/100 dawal 200/125 'running' zamiast 100/25 -
+  agregat liczy teraz wylacznie state=running, historia zostaje w jobs. (3) Stan 'ok'
+  zapisywal sie PRZED weryfikacja GUID (wpis w rejestrze zamrozenia twierdzil odwrotnie -
+  to jest korekta tamtej deklaracji): po validate_snapshot rekord awansuje ok->verified
+  albo ok->verify_failed, wiec konsument odroznia 'procesy nie padly' od 'dane sa
+  dowodnie na celu'. Piec dyskryminatorow w twins (58/58).
 - **Zgoda na zakres przy `--join` kosztuje teraz tyle, ile jest warta (2026-08-22).**
   Zmierzone na wymaganym przez #9 torze czterech komend: kolektor podał wyłącznie
   `--target`, więc źródło nie miało czego zawęzić i zaproponowało **cały swój
