@@ -4035,6 +4035,14 @@ cmd_add_client() {
             if [ ! -x "$_lu_home/zfs-snapshot-all/gen-cron.sh" ]; then
                 rm -rf "$_lu_home/zfs-snapshot-all"
                 git clone -q "$SCRIPT_DIR" "$_lu_home/zfs-snapshot-all" 2>/dev/null                     && chown -R "$local_user:$local_user" "$_lu_home/zfs-snapshot-all"                     && log "add-client: provisioned $_lu_home/zfs-snapshot-all (accounts cannot use root's 0700 checkout)"                     || warn "add-client: could not clone the repo for '$local_user' -- activation will refuse with the exact path"
+            else
+                # An EXISTING clone is refreshed, not trusted: the closing
+                # campaign met an account copy cloned hours earlier that
+                # predated a monitor flag the freshly generated line used --
+                # the account's own tool refused its own crontab line. Nothing
+                # else updates account clones (the hourly pull is root's).
+                git -C "$_lu_home/zfs-snapshot-all" fetch -q origin 2>/dev/null || git -C "$_lu_home/zfs-snapshot-all" fetch -q 2>/dev/null || true
+                sudo -u "$local_user" git -C "$_lu_home/zfs-snapshot-all" pull -q --ff-only 2>/dev/null                     || warn "add-client: could not refresh $_lu_home/zfs-snapshot-all -- the account may run an older tool than the lines generated for it"
             fi
             local _lu_s
             for _lu_s in notify-fail.sh notify-warn.sh; do
@@ -7551,6 +7559,7 @@ rux_remote_install() {
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
+        [ -n "$exclude_snaps" ] && add_args+=(--exclude-snapshots="$exclude_snaps")
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
