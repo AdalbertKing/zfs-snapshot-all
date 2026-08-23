@@ -6692,6 +6692,63 @@ fi
 # CI green, test failing, nobody the wiser. The test that was written to stop a
 # fail-open was itself failing open.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# A PROMPT AFTER AN ssh CALL MUST STILL BE ANSWERABLE.
+#
+# ssh without -n reads its stdin to EOF and hands it to the remote command. No
+# call in zfs-backup.sh wants that, but every one of them ATE whatever the
+# operator's stdin held -- so `seed` and `activate`, which both resolve the
+# peer's scope over ssh before asking for confirmation, could never be answered
+# from a pipe. They refused with "not confirmed" no matter what was fed in.
+# On a terminal it works, so it only ever appeared once something was scripted.
+# Found running issue #9's four-command trial, 2026-08-23; measured on pve9:
+#
+#     printf 'ZOSTALO\n' | { ssh root@peer true; read -r x; echo "[${x:-PUSTO}]"; }
+#       -> [PUSTO]
+#
+# Two checks, because neither alone is enough:
+#   1. behavioural -- drive a real function that calls ssh, then read. The ssh
+#      stub reproduces the documented behaviour (drain stdin unless -n), which
+#      is what the live measurement above showed;
+#   2. completeness -- every ssh invocation in the file carries -n. Deliberately
+#      syntactic: the property IS the flag, and case 1 can only ever cover the
+#      one call site it drives.
+# ---------------------------------------------------------------------------
+ssh_stdin_probe=$( printf 'ODPOWIEDZ\n' | (
+    source "$ZFSBACKUP" 2>/dev/null
+    # Stands in for ssh(1): consumes stdin exactly when -n is absent.
+    ssh() {
+        local a keep_stdin=1
+        for a in "$@"; do [ "$a" = "-n" ] && keep_stdin=0; done
+        [ "$keep_stdin" -eq 1 ] && cat >/dev/null
+        return 0
+    }
+    load_ssh_opts() { LOAD_SSH_OPTS=(-o BatchMode=yes); }
+    LOAD_ACCOUNT=acct; LOAD_HOST=peer; COLLECTOR_LABEL=x
+    peer_scope_granted_hash_path() { echo /tmp/nic; }
+    has_committed_scope >/dev/null 2>&1
+    read -r answer
+    printf '%s' "${answer:-PUSTO}"
+) )
+if [ "$ssh_stdin_probe" = "ODPOWIEDZ" ]; then
+    ok "ssh: a prompt after an ssh call still receives the operator's answer"
+else
+    bad "ssh: a prompt after an ssh call still receives the operator's answer" \
+        "przeczytano: ${ssh_stdin_probe:-NIC} -- ssh zjadl stdin, monit bedzie nieodpowiadalny"
+fi
+
+ssh_no_n=$(grep -nE '(^|[^a-z_])ssh ' "$ZFSBACKUP" \
+           | grep -v '^\s*[0-9]*:\s*#' \
+           | grep -vE 'ssh -n ' \
+           | grep -vE '\.ssh|ssh_opts|ssh_flags|SSH_OPTS|known_hosts|ssh-keygen|root-ssh|ssh\(1\)|# ')
+if [ -z "$ssh_no_n" ]; then
+    ok "ssh: every invocation in zfs-backup.sh passes -n"
+else
+    bad "ssh: every invocation in zfs-backup.sh passes -n" \
+        "bez -n:" "$(printf '%s' "$ssh_no_n" | cut -c1-140)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
