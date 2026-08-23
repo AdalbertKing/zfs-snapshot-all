@@ -4999,7 +4999,16 @@ cmd_seed() {
         # foreign one (that blindness, measured, is why the declaration
         # exists).
         if [ "${PASSIVE:-0}" = "1" ]; then
-            seed_flags=(-e)
+            # -e PLUS the declared exclusions. The bare -e here adopted the
+            # newest snapshot of ANYTHING -- including the very families the
+            # relationship declared excluded, whenever an excluded one was
+            # freshest (measured, passive lab: the seed shipped smiec_* to
+            # the target while the installed line right next to it carried
+            # -E smiec_). The closing campaign missed it because its excluded
+            # snapshot happened to be older than the adopted one. Same
+            # fields, same flags, same meaning as the installed line:
+            # client_passive_flags is the one place that renders them.
+            read -r -a seed_flags <<< "$(client_passive_flags)"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
@@ -5154,7 +5163,16 @@ cmd_final_catchup() {
         # foreign one (that blindness, measured, is why the declaration
         # exists).
         if [ "${PASSIVE:-0}" = "1" ]; then
-            seed_flags=(-e)
+            # -e PLUS the declared exclusions. The bare -e here adopted the
+            # newest snapshot of ANYTHING -- including the very families the
+            # relationship declared excluded, whenever an excluded one was
+            # freshest (measured, passive lab: the seed shipped smiec_* to
+            # the target while the installed line right next to it carried
+            # -E smiec_). The closing campaign missed it because its excluded
+            # snapshot happened to be older than the adopted one. Same
+            # fields, same flags, same meaning as the installed line:
+            # client_passive_flags is the one place that renders them.
+            read -r -a seed_flags <<< "$(client_passive_flags)"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
