@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: acb54effd6134dd4 -->
+<!-- status-covers-digest: 6a94b2662ac376a6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -36,6 +36,20 @@
   cały host; podaje wielkość (ile datasetów, ile wolumenów maszyn, ile bajtów)
   **zanim** zada pytanie; i przyjmuje zgodę tylko przez **wpisanie liczby
   datasetów**, bo odruch jest tu jedyną rzeczą, która naprawdę zawodzi.
+  Sama liczba jest jednak warta tyle, ile jej **związanie z grantem**, a pierwsza
+  wersja nie wiązała nic. Podgląd i grant liczyły zakres **osobno**: podgląd
+  zamieniał nieudany odczyt na mniejszą liczbę (błąd `scope_read` → „0 0 0", root
+  bez `zfs list` → pominięty, nieudany `zfs get used` → zero bajtów), po czym
+  `do_commit_scope` enumerował pulę **jeszcze raz** i nadawał to, co znalazł.
+  Wszystkie trzy pomyłki szły w tę stronę, która sprzedaje zgodę za tanio.
+  Teraz jest **jeden** enumerator dla obu, każdy nieudany odczyt to **odmowa**
+  zamiast mniejszej liczby, zbiór jest deduplikowany, a zaakceptowana liczba
+  **i zbiór** są sprawdzane w `do_commit_scope` **przed pierwszym `zfs allow`**.
+  Dowód wykonywalny w `test/joinmanifest/run.sh` (prawdziwy `do_commit_scope`,
+  sterowalny `zfs`, każdy przypadek liczy faktyczne wywołania `zfs allow`).
+  Kontrola na odrzuconej bazie: dryf inwentarza między pytaniem a grantem kończył
+  się `rc=0` i **trzema wykonanymi `zfs allow`** na zbiorze, którego nikt nie
+  zaakceptował; po poprawce — odmowa i zero grantów.
 - **Zakolejkowane zdarzenia odchodzą razem z relacją (2026-08-22).**
   Znalezione na żywo: kolejka alertów pve1 trzymała cztery zdarzenia o relacjach
   zdemontowanych wiele godzin wcześniej, a najbliższy digest o 07:00 wysłałby

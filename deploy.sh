@@ -5378,22 +5378,29 @@ do_commit_scope() {
         fi
     fi
 
+    # Same enumerator the consent preview used. It was a separate loop here
+    # until REV #117 F2: the preview skipped an unreadable root and showed a
+    # smaller number, this loop skipped it too but was free to find it again on
+    # a retry, and nothing compared the two. Fail-closed now lives in one place.
     local -a granted=()
-    local root ds
-    for root in "${SCOPE_ROOTS[@]}"; do
-        if ! zfs list -H -o name -- "$root" >/dev/null 2>&1; then
-            warn "scope root $root does not exist on this host -- skipping"
-            continue
+    local ds _cs_listing
+    _cs_listing=$(join_scope_enumerate "$sfile") || die "refusing to grant: $_cs_listing"
+    while IFS= read -r ds; do [ -n "$ds" ] && granted+=("$ds"); done <<< "$_cs_listing"
+
+    # THE BINDING. Set by guided_join_scope from the exact figures the operator
+    # was shown and typed back. Checked here, before the first zfs allow, so a
+    # pool that changed between the question and the answer -- a dataset
+    # created, a root vanishing, a transient read that under-reported -- stops
+    # the grant instead of quietly widening it. Absent when --commit-scope is
+    # driven directly, which has no preview to bind to.
+    if [ -n "${JOIN_ACCEPTED_COUNT:-}" ]; then
+        if [ "${#granted[@]}" != "$JOIN_ACCEPTED_COUNT" ]; then
+            die "refusing to grant: the operator accepted $JOIN_ACCEPTED_COUNT dataset(s), but ${#granted[@]} are selected now. The pool changed between the consent prompt and the grant. Re-run the join so the number shown is the number granted."
         fi
-        while IFS= read -r ds; do
-            [ -n "$ds" ] || continue
-            scope_includes "$ds" || continue
-            case " ${granted[*]:-} " in *" $ds "*) continue ;; esac
-            granted+=("$ds")
-        done < <(zfs list -H -o name -r -- "$root")
-    done
-    [ "${#granted[@]}" -gt 0 ] \
-        || die "scope file $sfile selects nothing that exists on this host -- nothing to grant"
+        if [ "$_cs_listing" != "${JOIN_ACCEPTED_SET:-}" ]; then
+            die "refusing to grant: the selected datasets are not the ones the operator accepted, even though the count matches. Something was created and something removed between the consent prompt and the grant. Re-run the join."
+        fi
+    fi
 
     # ENROLMENT-AGREED-2026-08-02 U2: finalization is the deliberate act, and
     # the diff it shows is against what is granted TODAY (the manifest's
@@ -5539,26 +5546,85 @@ join_scope_is_committed() {   # <label>
 #      "22 datasets, 5.4 TB" faster than a list of 22 names;
 #   3. take a consent that cannot be muscle memory. Reflex is the thing that
 #      actually fails here -- anyone who means it types the number without effort.
-join_scope_summary() {   # <scope file> -> "<count> <guest-volume count> <bytes>"
-    local sfile="$1" ds n=0 g=0 bytes=0 used
-    ( scope_read "$sfile" >/dev/null 2>&1 ) || { printf '0 0 0'; return 0; }
-    scope_read "$sfile" >/dev/null 2>&1 || { printf '0 0 0'; return 0; }
-    local root
+# ONE enumerator, used by BOTH the consent preview and the grant that follows
+# it. REV finding F2 on #117: there were two, and they disagreed by design --
+# the preview skipped any root whose `zfs list` failed and reported the smaller
+# number, then do_commit_scope re-enumerated independently and delegated the
+# larger set. The operator consented to a magnitude that was never binding on
+# anything. A single implementation cannot drift from itself.
+#
+# FAIL-CLOSED throughout. Every read that could make the answer smaller than
+# the truth is an error, not a zero: an unreadable scope file, a root that
+# cannot be listed, a listing that fails mid-way. The old code turned all three
+# into silent shrinkage, which is the direction that matters -- under-reporting
+# the scope is what buys consent for more than was shown.
+#
+# On failure the REASON is printed on stdout, where the list would have been,
+# and the exit status says which it is. A global would have been the obvious
+# choice and is the wrong one: every caller reads this through $( ), so a
+# variable set inside dies with the subshell and the refusal arrives with an
+# empty explanation -- or, under `set -u`, with an unbound-variable abort
+# instead of the message. Found by the discriminating test, not by reading.
+#
+# Output is deduplicated and sorted so the set is comparable as a string.
+# Overlapping roots (rpool and rpool/data) previously counted a dataset twice
+# in the preview and once in the grant.
+join_scope_enumerate() {   # <scope file> -> deduplicated, sorted dataset names, one per line
+    local sfile="$1" root ds listing
+    if ! scope_read "$sfile" >/dev/null 2>&1; then
+        printf 'scope file %s could not be read: %s' "$sfile" "${SCOPE_ERR:-unparseable}"
+        return 1
+    fi
+    local -a out=()
     for root in "${SCOPE_ROOTS[@]}"; do
-        zfs list -H -o name -- "$root" >/dev/null 2>&1 || continue
+        if ! zfs list -H -o name -- "$root" >/dev/null 2>&1; then
+            printf "scope root '%s' could not be read -- it does not exist on this host, or zfs list failed. Refusing rather than granting a scope nobody could measure; if the root is genuinely gone, edit it out of %s and retry." "$root" "$sfile"
+            return 1
+        fi
+        # Captured, not piped from a process substitution: a `zfs list -r` that
+        # dies half-way through a large pool used to end the loop with a short
+        # answer and no error anywhere.
+        listing=$(zfs list -H -o name -r -- "$root") || {
+            printf "zfs list -r failed under scope root '%s' -- the scope cannot be measured, so it will not be granted" "$root"
+            return 1
+        }
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
             scope_includes "$ds" || continue
-            n=$((n + 1))
-            case "${ds##*/}" in
-                vm-[0-9]*-disk-*|vm-[0-9]*-cloudinit|subvol-[0-9]*-disk-*) g=$((g + 1)) ;;
-            esac
-            used=$(zfs get -Hp -o value used -- "$ds" 2>/dev/null)
-            case "$used" in ''|*[!0-9]*) used=0 ;; esac
-            bytes=$((bytes + used))
-        done < <(zfs list -H -o name -r -- "$root" 2>/dev/null)
+            case " ${out[*]:-} " in *" $ds "*) continue ;; esac
+            out+=("$ds")
+        done <<< "$listing"
     done
-    printf '%s %s %s' "$n" "$g" "$bytes"
+    if [ "${#out[@]}" -eq 0 ]; then
+        printf 'scope file %s selects nothing that exists on this host -- nothing to grant' "$sfile"
+        return 1
+    fi
+    printf '%s
+' "${out[@]}" | LC_ALL=C sort
+}
+
+join_scope_summary() {   # <scope file> -> "<count> <guest-volume count> <bytes>"
+    local sfile="$1" ds g=0 bytes=0 used listing
+    listing=$(join_scope_enumerate "$sfile") || { printf '%s' "$listing"; return 1; }
+    local -a sel=()
+    while IFS= read -r ds; do [ -n "$ds" ] && sel+=("$ds"); done <<< "$listing"
+    for ds in "${sel[@]}"; do
+        case "${ds##*/}" in
+            vm-[0-9]*-disk-*|vm-[0-9]*-cloudinit|subvol-[0-9]*-disk-*) g=$((g + 1)) ;;
+        esac
+        # A failed `zfs get used` used to become 0 and quietly shrink the total
+        # the operator was shown. It is now a refusal like the rest.
+        used=$(zfs get -Hp -o value used -- "$ds" 2>/dev/null) || {
+            printf 'zfs get used failed for %s -- the size shown to the operator would understate the scope' "$ds"
+            return 1
+        }
+        case "$used" in ''|*[!0-9]*)
+            printf "zfs get used returned '%s' for %s -- refusing to present an unmeasured scope as a number" "$used" "$ds"
+            return 1 ;;
+        esac
+        bytes=$((bytes + used))
+    done
+    printf '%s %s %s' "${#sel[@]}" "$g" "$bytes"
 }
 
 join_human_bytes() {   # <bytes>
@@ -5571,6 +5637,7 @@ join_human_bytes() {   # <bytes>
 
 guided_join_scope() {   # <label>
     local label="$1" sfile choice editor
+    local _js_n _js_g _js_b _js_sum _js_set
     sfile=$(peer_scope_path "$label")
 
     if join_scope_is_committed "$label"; then
@@ -5596,8 +5663,16 @@ guided_join_scope() {   # <label>
         else
             echo ">>> Kolektor prosil o: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
         fi
-        # 2. The magnitude, before the question.
-        read -r _js_n _js_g _js_b <<< "$(join_scope_summary "$sfile")"
+        # 2. The magnitude, before the question. A measurement that failed is
+        #    not a small scope -- it is no scope, and the join stops here
+        #    rather than asking the operator to consent to a number nobody
+        #    could compute.
+        _js_sum=$(join_scope_summary "$sfile")             || die "refusing to ask for consent: $_js_sum"
+        read -r _js_n _js_g _js_b <<< "$_js_sum"
+        # The exact set behind that number, captured HERE, so what the operator
+        # accepts is what do_commit_scope must find when it grants. Re-reading
+        # the pool between the two is the whole hole this closes.
+        _js_set=$(join_scope_enumerate "$sfile")             || die "refusing to ask for consent: $_js_set"
         echo ">>> Przyjecie nada kontu ${PEER_JOIN_ACCOUNT:-?} prawa"
         echo ">>>   snapshot,destroy,mount,send,hold,release,bookmark"
         echo ">>> na $_js_n dataset(ach), w tym $_js_g wolumen(ach) maszyn, lacznie $(join_human_bytes "$_js_b")."
@@ -5608,7 +5683,10 @@ guided_join_scope() {   # <label>
             || die "join interrupted before scope acceptance"
         case "$choice" in
             "$_js_n")
-                do_commit_scope "$label"
+                # Bind the accepted count AND the accepted set to the grant.
+                # do_commit_scope refuses if either has moved since the number
+                # above was printed, BEFORE its first zfs allow.
+                JOIN_ACCEPTED_COUNT="$_js_n" JOIN_ACCEPTED_SET="$_js_set"                     do_commit_scope "$label"
                 join_scope_is_committed "$label" \
                     || die "scope grant finished without a matching hash read-back"
                 log "scope accepted and committed for '$label'"
