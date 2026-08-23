@@ -4392,7 +4392,14 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
     # section's `prefix`, i.e. what the installed line passes to -m) and the
     # passivity decision does not -- it asks about the FAMILY, whose name is
     # the project's automated_ root regardless of which tier stamped it.
-    local pfx="${2:-automated_}"
+    # ${2-...}, NOT ${2:-...}: an EMPTY prefix is a real answer ("any family",
+    # the declared-passive rehearsal) and must survive; only an UNPASSED second
+    # argument falls back to the automated_ root (the sync-chain guard and the
+    # undeclared-seed probe, unchanged). The colon form ate the empty string
+    # and the passive rehearsal silently probed automated_ again -- caught by
+    # the closing campaign's dry-run refusing a source with three fresh
+    # foreign snapshots on it.
+    local pfx="${2-automated_}"
     load_ssh_opts
     # -p (parseable creation) so the sort is numeric on a stable field, not on
     # a locale-formatted date. The remote call is captured on its own so its
