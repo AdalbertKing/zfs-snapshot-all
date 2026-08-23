@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4196f0c2eb3f2ec6 -->
+<!-- status-covers-digest: 477fb5a45964bb7a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -37,6 +37,13 @@
   Poniedziałek, który ma zdarzenia, wysyła zwykły digest i dowodzi tego samego.
   Dowód na żywo: pusta kolejka w sobotę → zero maili; pusta kolejka w dniu pulsu
   → mail dostarczony na zewnątrz, `250 Ok`.
+  Puls **zawodzi zamknięcie**: pierwsza wersja wpychała do `mail` i kończyła
+  bezwarunkowym `exit 0`, więc zepsuty MTA raportował „kanał sprawny" mimo że nic
+  nie opuściło hosta — dokładnie ta awaria, którą puls ma ujawniać, w przebraniu
+  samego pulsu. Teraz o werdykcie decyduje kod wyjścia wysyłki. Zmierzone na pve9:
+  `mail` działa → `rc=0`; `mail` zwraca 3 → `rc=1` i na stderr „the alert channel
+  on this host is NOT proven". Przypięte behawioralnie w `test/alertmail/run.sh`
+  (uruchamia prawdziwy wygenerowany skrypt, nie grepuje źródła).
 - **Zakolejkowane zdarzenia odchodzą razem z relacją (2026-08-22).**
   Znalezione na żywo: kolejka alertów pve1 trzymała cztery zdarzenia o relacjach
   zdemontowanych wiele godzin wcześniej, a najbliższy digest o 07:00 wysłałby
