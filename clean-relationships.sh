@@ -444,6 +444,15 @@ drain_queued_alerts() {   # <relationship id> <tombstone file or empty>
     [ -n "$mine" ] || return 0
     local n; n=$(printf '%s
 ' "$mine" | grep -c .)
+    # NO ARCHIVE, NO DELETION. write_tombstone writes nothing when the
+    # relationship owned no data, so there can be no file to append to -- and
+    # deleting the findings anyway would be exactly the "discarded" behaviour
+    # this function exists to avoid. Stale alerts are recoverable; deleted ones
+    # are not, so the queue keeps them and says why.
+    if [ -z "$tomb" ] || [ ! -f "$tomb" ]; then
+        log "  $n queued finding(s) for '$id' left in the alert queue -- this relationship owned no data, so there is no tombstone to keep them in and they will not be deleted without one"
+        return 0
+    fi
     if [ -n "$tomb" ] && [ -f "$tomb" ]; then
         {
             echo "#"
@@ -454,9 +463,20 @@ drain_queued_alerts() {   # <relationship id> <tombstone file or empty>
 ' "$mine" | sed 's/^/QUEUED_ALERT=/'
         } >> "$tomb" 2>/dev/null || warn "  could not append the queued findings to $tomb -- leaving them in the queue rather than losing them"
     fi
+    # Read-and-rewrite under a lock on the queue itself. The writers are
+    # notify-fail.sh and notify-warn.sh, which APPEND -- so without this, a
+    # finding appended between the read and the write is silently dropped by
+    # the rewrite. Rare, and exactly the kind of rare that costs an alert.
+    # flock is already a dependency this project refuses to start without.
     tmp=$(mktemp "${ALERT_QUEUE}.XXXXXX" 2>/dev/null) || { warn "  could not rewrite $ALERT_QUEUE -- its findings for '$id' stay queued"; return 0; }
-    grep -vF "($id)" "$ALERT_QUEUE" > "$tmp" 2>/dev/null
-    cat "$tmp" > "$ALERT_QUEUE" 2>/dev/null && rm -f "$tmp"         || { rm -f "$tmp"; warn "  could not rewrite $ALERT_QUEUE -- its findings for '$id' stay queued"; return 0; }
+    if ! ( flock -w 10 9 || exit 1
+           grep -vF "($id)" "$ALERT_QUEUE" > "$tmp" 2>/dev/null
+           cat "$tmp" > "$ALERT_QUEUE" 2>/dev/null ) 9>>"$ALERT_QUEUE"; then
+        rm -f "$tmp"
+        warn "  could not rewrite $ALERT_QUEUE under a lock -- its findings for '$id' stay queued rather than risk losing one appended alongside"
+        return 0
+    fi
+    rm -f "$tmp"
     log "  moved $n queued finding(s) for '$id' out of the alert queue${tomb:+ and into $(basename "$tomb")}"
 }
 
@@ -507,6 +527,16 @@ write_tombstone() {   # <id> <data lines...>  -> 0 written or nothing to record
 
 purge_one() {
     local id="$1" verdict reason art fam path rc=0
+    # Cleared HERE, before write_tombstone can set it -- never after. The first
+    # cut reset it AFTER the write, which silently emptied the path
+    # drain_queued_alerts is handed, so every queued finding was deleted from
+    # the queue and archived nowhere. The PR that introduced it claimed
+    # "findings are NOT discarded" and the claim was false. It survived my own
+    # live test because I called drain_queued_alerts directly with an explicit
+    # path -- proving the function while leaving the wiring unproven.
+    # --purge-orphans loops over several relationships in one run, so the reset
+    # is needed; it just has to happen before, not after.
+    TOMBSTONE_WRITTEN=""
     IFS=$'\t' read -r verdict reason <<< "$(classify "$id")"
     if [ "$verdict" != ORPHAN ]; then
         warn "$id is $verdict ($reason) -- refusing. Stop the relationship first (zfs-backup.sh remove-client / deploy.sh --leave), then re-run."
@@ -525,7 +555,6 @@ purge_one() {
     fi
 
     log "purging '$id'"
-    TOMBSTONE_WRITTEN=""
 
     # 1. The source's own verb, only when its map is still there.
     if [ -s "$PEER_STATE_DIR/$id.conf" ] && [ -x "$DEPLOY" ]; then
