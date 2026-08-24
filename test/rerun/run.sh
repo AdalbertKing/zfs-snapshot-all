@@ -42,7 +42,10 @@ addclient_decision() {   # <host> <target> <user> -> rc + first log line
       echo 'log() { echo "LOG: $*"; }'
       echo 'die() { echo "DIE: $*"; exit 1; }'
       printf 'cpath=%q\n' "$WORK/clients/rel.conf"
-      printf 'name=rel\nlan_host=%q\ntarget=%q\nlocal_user=%q\n' "$1" "$2" "$3"
+      # `lan` is what add-client really has here -- the RAW --host argument.
+      # Handing the test a pre-parsed lan_host is what let the first cut of
+      # this fix reference a variable that does not exist yet at that point.
+      printf 'name=rel\nlan=%q\ntarget=%q\nlocal_user=%q\n' "$1" "$2" "$3"
       # The block under test, verbatim from the real file, wrapped in a
       # function: it uses `local`, which bash rejects at top level -- and a
       # rejected `local` would make every case "fail" for a reason that has

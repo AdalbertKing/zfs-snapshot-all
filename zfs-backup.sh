@@ -4198,7 +4198,15 @@ cmd_add_client() {
             _prev_host=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${PEER_HOST:-}" )
             _prev_target=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${CLIENT_TARGET:-}" )
             _prev_user=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
-            [ "$_prev_host" = "$lan_host" ] || _same=0
+            # $lan is the RAW --host argument here; lan_host/lan_port are
+            # parsed 120 lines further down, long after this gate. Compare
+            # against the host half of the raw value instead of a variable
+            # that does not exist yet -- under `set -u` reaching for it aborts
+            # the command, which is how the first cut of this fix turned a
+            # refusal into a crash (caught on the live rerun, not by the
+            # suite, because the suite set the variable by hand).
+            local _want_host="${lan%%:*}"
+            [ "$_prev_host" = "$_want_host" ] || _same=0
             [ -z "$target" ] || [ "$_prev_target" = "$target" ] || _same=0
             [ -z "$local_user" ] || [ "$local_user" = root ] || [ "$_prev_user" = "$local_user" ] || _same=0
             if [ "$_same" -eq 1 ]; then
@@ -4206,7 +4214,7 @@ cmd_add_client() {
                 log "next: ./zfs-backup.sh seed $name    (or activate $name, if the seed already completed)"
                 return 0
             fi
-            die "client '$name' already exists ($cpath), state '$_prev_state', and this call asks for a DIFFERENT host/target/account than the one recorded (recorded: ${_prev_host}/${_prev_target}/${_prev_user:-root}). Refusing to redefine a live relationship from a creation command -- use remove-client first, or correct the arguments."
+            die "client '$name' already exists ($cpath), state '$_prev_state', and this call asks for a DIFFERENT host/target/account than the one recorded (recorded: ${_prev_host}/${_prev_target}/${_prev_user:-root}; requested: ${_want_host}/${target:-<same>}/${local_user:-root}). Refusing to redefine a live relationship from a creation command -- use remove-client first, or correct the arguments."
         fi
     fi
 
