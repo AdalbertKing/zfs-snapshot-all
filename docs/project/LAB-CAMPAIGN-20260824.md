@@ -268,7 +268,9 @@ niezależna od trybu rekursji: **każdy** inkrement `-I` niesie pośrednie.
 **Konsekwencje:**
 
 1. transfer i miejsce na targecie zużywane przez rodziny uznane za śmieci;
-2. wykluczone rodziny **konkurują o sloty drabiny retencji** z danymi, które
+2. wykluczone rodziny wchodzą do puli, z której drabina wybiera — patrz
+   pomiar w 18.1: **marginalnie**, nie kosztem retencji, jak najpierw
+   napisałem; konkurują o sloty z danymi, które
    operator chce trzymać (drabina pasywna jest bezprefiksowa — patrz niżej);
 3. nic tego nie mówi: ani opis flagi, ani wyjście rejestracji.
 
@@ -426,7 +428,7 @@ dołoży dziecku jakikolwiek snapshot, nie dowie się nigdy.
 
 | # | Znalezisko | Klasa | Status |
 |---|---|---|---|
-| F1 | `-E` chroni tylko adopcję: wykluczone rodziny jadą na target jako snapshoty pośrednie (`send -I`) i konkurują o sloty retencji | projektowe / niedopowiedzenie | zmierzone |
+| F1 | `-E` chroni tylko adopcję: wykluczone rodziny jadą na target jako snapshoty pośrednie (`send -I`); koszt to pasmo i chwilowe miejsce, drabina je sprząta (18.1) | projektowe / niedopowiedzenie | zmierzone |
 | F2 | Stampede: trzy relacje, dwa konta, dwa źródła — wszystkie o `:01` | znane, w kolejce | zmierzone |
 | F3 | Skasowanie bazy na źródle zatrzymuje relację atomową na stałe; komunikat surowy, brak samonaprawy (tryb płaski: samoleczący) | odporność | zmierzone |
 | F4 | **`-F` raportuje pełny sukces przy niezsynchronizowanym dziecku**; monitor nie widzi rozjazdu rodzeństwa | **fail-open, cisza** | zmierzone ×2 |
@@ -704,3 +706,32 @@ usunięty. Targety `hdd/lab9chain` i `hdd/lab9r1` zniszczone.
 Stan końcowy pve1: zero linii `lab9` w crontabie roota, zero aktywnych
 rekordów klientów, **produkcja nietknięta** — `crontab -u zfsbackup -l` = 24
 linie, `jobs.pve1.v4.conf` = 7 sekcji, pvesr replikuje dalej.
+
+## 18. Pomiar po kampanii: czy wykluczona rodzina wypycha dane z retencji
+
+Zapis F1 twierdził, że wykluczone rodziny **konkurują o sloty drabiny
+retencji**. To była hipoteza podana jak wniosek — i lab dwuźródłowy pozwolił
+ją zmierzyć.
+
+### 18.1 Wynik: obalona
+
+Relacja `k1`, dwie godziny biegu, generator dosypujący `tmpjob_` co pięć
+minut. Stan targetu po dwóch cyklach prune:
+
+```
+at@serwis_20260824-161001      <- slot godzinowy
+at@serwis_20260824-165001      <- najnowszy
+at@tmpjob_20260824-151001      <- jeden, najstarszy
+```
+
+Dziewięć snapshotów łącznie, **trzy** `tmpjob_` — po jednym na dataset, i to
+jako **najstarszy** slot. Rodzina nie narasta i nie wypycha świeżych danych.
+
+**Mechanizm:** drabina traktuje wszystkie snapshoty jako jedną pulę i
+zachowuje najnowszy w każdym oknie czasowym. Wykluczona rodzina wygrywa slot
+tylko wtedy, gdy akurat jest najświeższa w tym oknie — co zdarza się rzadko
+i kosztuje **jeden** snapshot, nie retencję.
+
+Skorygowana treść F1: `-E` nie chroni ani transferu, ani zawartości targetu —
+ale szkoda ogranicza się do pasma i chwilowego miejsca. Pierwotne
+sformułowanie było mocniejsze niż dowód, który za nim stał.
