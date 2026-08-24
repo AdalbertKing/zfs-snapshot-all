@@ -904,11 +904,19 @@ validate_snapshot() {
 validate_subtree() {   # <src> <tgt> <snapshot> [ruser] [rhost] -> 0 ok, 1 something lagged
     local src="$1" tgt="$2" snap="$3" ruser="${4:-}" rhost="${5:-}"
     local src_have tgt_have
-    src_have=$(zfs list -H -o name -t snapshot -r "$src" 2>/dev/null) || return 0
+    # FAIL CLOSED on an inventory error -- see the note in snapget.sh: a check
+    # that vanishes when the link breaks is not a check. Review finding.
+    src_have=$(zfs list -H -o name -t snapshot -r "$src" 2>/dev/null) || {
+        log 0 "VERIFY FAILED (subtree): could not list the source's snapshots to prove every descendant landed. Refusing to report success on an unasked question."
+        return 1; }
     if [ -n "$rhost" ]; then
-        tgt_have=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost"             "zfs list -H -o name -t snapshot -r '$tgt' 2>/dev/null")
+        tgt_have=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost"             "zfs list -H -o name -t snapshot -r '$tgt' 2>/dev/null") || {
+            log 0 "VERIFY FAILED (subtree): could not list the target's snapshots on $rhost to prove every descendant landed. Refusing to report success on an unasked question."
+            return 1; }
     else
-        tgt_have=$(zfs list -H -o name -t snapshot -r "$tgt" 2>/dev/null)
+        tgt_have=$(zfs list -H -o name -t snapshot -r "$tgt" 2>/dev/null) || {
+            log 0 "VERIFY FAILED (subtree): could not list the target's snapshots to prove every descendant landed. Refusing to report success on an unasked question."
+            return 1; }
     fi
 
     local line ds rel missing=""
@@ -918,10 +926,11 @@ validate_subtree() {   # <src> <tgt> <snapshot> [ruser] [rhost] -> 0 ok, 1 somet
         [ "$ds" = "$src" ] && continue          # the root is proven by GUID above
         rel="${ds#$src/}"
         dataset_excluded "$ds" && continue      # -X: never travelled, cannot lag
-        case "$tgt_have" in
-            *"$tgt/$rel@$snap"*) ;;
-            *) missing="$missing $tgt/$rel" ;;
-        esac
+        # EXACT LINE, not substring: `pool/t/a@s3-extra` contains
+        # `pool/t/a@s3` and was being accepted as proof that @s3 exists.
+        # Review finding, reproduced. -F literal, -x whole line.
+        printf '%s
+' "$tgt_have" | grep -Fxq "$tgt/$rel@$snap"             || missing="$missing $tgt/$rel"
     done <<< "$src_have"
 
     [ -z "$missing" ] && return 0

@@ -2366,11 +2366,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # to exactly the families the pickup refuses to adopt --
                 # measured both ways in LAB-E: an aging excluded family must
                 # not page, a fresh one must not paint a stale relation green.
-                echo "	send_schedule = $stagger_send_expr"
+                [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
-                echo "	send_schedule = $stagger_send_expr"
+                [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
@@ -2475,7 +2475,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     # gap the profile had between them. A prune that wraps
                     # past the hour is fine: it deletes by age and keep-count,
                     # not by "did a backup just run".
-                    echo "	prune_schedule = $stagger_prune_expr"
+                    [ -n "$stagger_prune_expr" ] && echo "	prune_schedule = $stagger_prune_expr"
                     echo "	recursive    = yes"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}"
@@ -2664,7 +2664,11 @@ schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
 # minute inside the tier's own rhythm, never about the rhythm itself.
 schedule_with_minute() {   # <cron expression> <minute> -> expression with field 1 replaced
     local expr="$1" min="$2"
-    [ -n "$expr" ] || { printf '%s * * * *' "$min"; return 0; }
+    # NO expression means we do not know this profile's cadence -- either it
+    # declares none, or its tiers disagree (see schedule_template_expr). Emit
+    # nothing rather than inventing an hourly one: a section field overrides
+    # every tier, so a guess here would rewrite the operator's policy.
+    [ -n "$expr" ] || return 0
     printf '%s %s' "$min" "$(printf '%s' "$expr" | awk '{$1=""; sub(/^ /,""); print}')"
 }
 
@@ -2681,9 +2685,28 @@ schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or no
     esac
     [ -n "${PROFILE_LOADED:-}" ] && [ -r "${frag:-}" ] || return 0
     tpl=$(awk -F= '/^[[:space:]]*use_template[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$frag")
-    tpl="${tpl%%,*}"
     [ -n "$tpl" ] || return 0
-    profile_template_section "profile__${PROFILE_ACTIVE}__${tpl}" 2>/dev/null         | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}'
+    # use_template is a LIST, and a field written into the SECTION overrides
+    # EVERY tier it references (gen-cron). So the stagger may only touch this
+    # field when all referenced tiers already declare the SAME cadence for it
+    # -- otherwise writing one value would collapse a daily or weekly tier onto
+    # the hourly one. Measured by review on a two-tier profile: daily
+    # "2 3 * * *" became "17 * * * *". The built-in profiles all declare one
+    # cadence per field, which is why the lab never showed it.
+    local one first="" expr=""
+    for one in ${tpl//,/ }; do
+        [ -n "$one" ] || continue
+        expr=$(profile_template_section "profile__${PROFILE_ACTIVE}__${one}" 2>/dev/null             | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
+        # A tier that does not declare the field at all does not constrain it.
+        [ -n "$expr" ] || continue
+        if [ -z "$first" ]; then
+            first="$expr"
+        elif [ "$expr" != "$first" ]; then
+            log "schedule: '$field' differs between the tiers this profile references -- leaving it to the profile rather than collapsing them onto one cadence"
+            return 0
+        fi
+    done
+    printf '%s' "$first"
 }
 
 schedule_pick_minute() {   # <relationship name> -> minute 0-59

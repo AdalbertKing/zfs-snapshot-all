@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 a8a8155ec81ce0424ac8dd9247d95181c7149d0c -->
-<!-- frozen: snapget.sh 100755 5ecde3141e2404fb39766479d3391370b66d39cd -->
+<!-- frozen: snapsend.sh 100755 734018bac437763fcd242e52b755f135f48bbe7e -->
+<!-- frozen: snapget.sh 100755 1a4dab0c5c9e65468bde2c331429046deb44ceff -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 065bc43d92729170bbfbf54c8dc273910c4b5a60 -->
@@ -54,6 +54,20 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-24 (snapget.sh, snapsend.sh): HOTFIX to the subtree verification
+  landed hours earlier the same day. Independent review found it fail-open in
+  two ways, both reproduced with executable discriminators:
+  (1) an inventory error was accepted as success -- `src_have=$(... ) ||
+  return 0` meant an ssh/zfs failure SKIPPED the check and let the run keep
+  its success, i.e. the verification disappeared exactly when the link broke;
+  (2) membership was a SUBSTRING test, so `pool/t/a@s3-extra` was accepted as
+  proof that `pool/t/a@s3` exists.
+  Both inventory calls now fail closed with a named diagnostic, and membership
+  is an exact whole-line match (grep -Fxq). New suite test/subtree/run.sh pins
+  all four cases plus the original skipped-descendant case in BOTH engines;
+  the four review cases fail against the pre-fix engines (negative control
+  run).
 
 - 2026-08-24 (snapget.sh, snapsend.sh): under `-r` the verification now proves EVERY
   descendant landed, not just the root. The boundary the code stated --
