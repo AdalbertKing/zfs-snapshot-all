@@ -208,20 +208,36 @@ worku oznaczonym „nie dotykać".
 `retain`, `pattern`, `gfs`/`gfs_pattern`, `monitor_warn`, `monitor_crit`,
 `monitor_schedule`, `notify_word`.
 
-**Do profilu opcjonalnie (P, dziś Z):** rodziny zarezerwowane i ich `keep`,
-`autotune`. Argument za: profil przestaje być połowicznym opisem polityki.
-Argument przeciw: to są wartości chroniące przed zniszczeniem cudzych danych
+**Do profilu opcjonalnie (P, dziś Z):** rodziny zarezerwowane i ich `keep`.
+Argument za: profil przestaje być połowicznym opisem polityki. Argument
+przeciw: to są wartości chroniące przed zniszczeniem cudzych danych
 (`__replicate_`), więc może właśnie nie powinny być edytowalne z profilu.
-**Wymaga decyzji.**
+**Wymaga decyzji właściciela.**
 
 **Nigdy do profilu (T):** wszystko, co identyfikuje relację — źródło, cel,
 nazwa, konta, port, klucze, tryb. Egzekwowane dziś przez
 `profile_field_forbidden`.
 
 **Domyślne z profilu, nadpisywalne przy tworzeniu (D):** rekursja,
-pasywność, wykluczenia, pasmo. Dziś idą wyłącznie z L1/L2 i profil nie ma
-o nich zdania — a to jest naturalne miejsce na sensowną domyślną
-(np. profil „archiwalny" domyślnie płaski i pasywny).
+pasywność, wykluczenia. Dziś idą wyłącznie z L1/L2 i profil nie ma o nich
+zdania — a to jest naturalne miejsce na sensowną domyślną (np. profil
+„archiwalny" domyślnie płaski i pasywny).
+
+**Nie do profilu, bo należą do ŁĄCZA (patrz §5.1):** pasmo, kompresja,
+cipher, `autotune`. Właściciel: para hostów, czyli manifest parowania (L3),
+z możliwością nadpisania na relacji. Profil nie wie, przez jakie łącze
+poleci.
+
+> **KOREKTA 2026-08-24, po recenzji.** Pierwsza wersja tej listy wymieniała
+> `pasmo` pod „domyślne z profilu", a `autotune` pod „do profilu
+> opcjonalnie" — w sprzeczności z §5.1, który argumentuje, że oba są
+> własnością łącza. Powstało to tak, że lista propozycji została napisana
+> **przed** analizą osi własności, a po dopisaniu §5 nie przeszedłem
+> dokumentu jako całości. Dwie sprzeczne umowy własności nie mogą
+> jednocześnie prowadzić implementacji; obowiązuje §5.1. Lekcja jest ta
+> sama, co przy raporcie kampanii: **dopisanie sekcji wymaga przejścia
+> całości, nie tylko miejsca dopisania.**
+
 
 ## Krok drugi: `default` jako jawny parametr
 
