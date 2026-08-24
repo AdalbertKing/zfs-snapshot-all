@@ -2732,10 +2732,21 @@ schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or no
     # the hourly one. Measured by review on a two-tier profile: daily
     # "2 3 * * *" became "17 * * * *". The built-in profiles all declare one
     # cadence per field, which is why the lab never showed it.
-    local one first="" expr=""
+    local one first="" expr="" sect=""
     for one in ${tpl//,/ }; do
         [ -n "$one" ] || continue
-        expr=$(profile_template_section "profile__${PROFILE_ACTIVE}__${one}" 2>/dev/null             | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
+        # The RENDERED fragment already carries the namespaced name
+        # (profile_render_fragment writes `use_template = profile__P__tier`),
+        # so prefixing again looked for profile__P__profile__P__tier and found
+        # NOTHING -- every call returned empty. #148 hid that behind a default
+        # hourly cadence; #149 turned it into "emit nothing", i.e. no stagger
+        # at all. The two-source lab caught it in its first minute: both
+        # relationships landed on the template's own :01. Accept both forms.
+        case "$one" in
+            profile__*) sect="$one" ;;
+            *)          sect="profile__${PROFILE_ACTIVE}__${one}" ;;
+        esac
+        expr=$(profile_template_section "$sect" 2>/dev/null           | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
         # A tier that does not declare the field at all does not constrain it.
         [ -n "$expr" ] || continue
         if [ -z "$first" ]; then
