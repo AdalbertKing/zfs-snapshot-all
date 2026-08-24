@@ -96,6 +96,13 @@ set -o pipefail
 #       notify       = <short label>
 #       flags        = <snapsend.sh flags, or snapget.sh flags when 'src' is set>
 #       flags_<tier> = <per-tier flags override>
+#       bandwidth    = <mbuffer rate>      # LINK fields: what the transfer does
+#       compression  = zstd|gzip|none|default  # to the WIRE, named instead of
+#       cipher       = <ssh -c argument>   # hand-written into 'flags'. Section
+#                                          # only -- no template/defaults layer,
+#                                          # and profile-forbidden: a policy
+#                                          # carrier is shared by datasets that
+#                                          # do not share a destination.
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
 #       pair_label   = <name>              # REV-045: the zfs-backup.sh client
@@ -681,6 +688,122 @@ flags_opt_letters() {   # <flags string> -> option letters, one per line
     flags_opt_pairs "$1" | cut -f1
 }
 
+# ------------------------------------------------------------------------------
+# LINK FIELDS -- bandwidth, compression, cipher.
+# ------------------------------------------------------------------------------
+# These three describe the LINK a dataset flies over. They are not the policy it
+# obeys (retention, schedules, prefixes) and not the identity it connects with
+# (keys, pinned host key, port), and until now they had no field of their own:
+# the only way to express any of them was to hand-write the engine letter inside
+# the free-form 'flags' string -- the same string that carries the pairing key
+# and the host-key alias. That single sack is why 'flags' is relationship-owned
+# and profile-forbidden, and therefore why no layer above a hand edit could say
+# "cap this peer at 2 MB/s" at all.
+#
+# Naming them does not move the decision, it just gives it a home: each field
+# renders exactly the token an operator would have typed, so a section carrying
+# `bandwidth = 2500k` produces the same engine invocation as one carrying
+# flags="... -b 2500k".
+#
+# [dataset:] ONLY, deliberately. A [template:]/[defaults] is a policy carrier
+# shared by every dataset that names it, and those datasets do not share a
+# destination -- the same retention serves a gigabit LAN and a 20 Mbit VPN. A
+# link value inherited from a policy layer would be applied to links nobody
+# looked at, which is the opposite of what naming the field is for.
+#
+# ONE OPTION, ONE HOME. If 'flags' already carries the letter one of these
+# fields renders, that is REFUSED rather than merged, deduplicated or silently
+# preferred. Two sources of truth for one engine option is precisely the
+# condition this split exists to end, and picking a winner would hide it.
+#
+# Sets LINK_CONFLICT to the offending letter when it returns 0.
+link_flag_letter_present() {   # <flags> <letters, as one string> -> 0 when present
+    LINK_CONFLICT=""
+    local have
+    for have in $(flags_opt_letters "$1"); do
+        case "$2" in *"$have"*) LINK_CONFLICT="$have"; return 0 ;; esac
+    done
+    return 1
+}
+
+# Validated OUTSIDE the command substitution that renders -- see lint_autotune
+# for why that separation is not optional (a die() inside $( ) exits the
+# subshell and leaves the run going with the flag quietly dropped).
+#
+# The accepted rate spec is snapsend.sh's own (its -b validation, "expected an
+# mbuffer rate"): digits with an optional b/k/M/G suffix, BYTES per second.
+# Refusing the same strings here means a typo is caught while generating rather
+# than mid-transfer on the first run, after the snapshot has been taken.
+lint_link_bandwidth() {   # <value> <flags> <ctx>
+    local val="$1" flags="$2" ctx="$3"
+    [ -z "$val" ] && die "$ctx: 'bandwidth' is present but blank -- give it an mbuffer rate (e.g. 2500k), or remove the line to keep the link uncapped"
+    case "$val" in
+        -*) die "$ctx: bandwidth='$val' -- give the RATE only; the '-b' is what this field renders for you" ;;
+    esac
+    [[ "$val" =~ ^[0-9]+[bkKmMgG]?$ ]] \
+        || die "$ctx: bandwidth='$val' -- expected an mbuffer rate: a plain number of BYTES per second, or one with a b/k/M/G suffix (e.g. 2M, 500k). Note BYTES, not bits: a 20 Mbps link is 2M."
+    link_flag_letter_present "$flags" b \
+        && die "$ctx: 'bandwidth' is set and 'flags' already carries -b -- one option, one home. Drop the -b from 'flags' and keep the field."
+    return 0
+}
+
+# zstd/gzip/none, spelled as compressors rather than as letters. 'default' and
+# an omitted field are the same thing: whatever the engine decides for this
+# destination (compression is on by default over a remote link, off locally).
+#
+# A local destination is NOT warned about here, deliberately: this field renders
+# -Z/-g into the flags string, and lint_flags -- which runs after the render --
+# already says exactly that about a compressor on a local dst. Saying it twice
+# for one condition trains an operator to skim warnings, and the field's job is
+# to be indistinguishable from the hand-written letter it replaces.
+lint_link_compression() {   # <value> <flags> <ctx>
+    local val="$1" flags="$2" ctx="$3"
+    case "$val" in
+        zstd|gzip|none|default) ;;
+        "") die "$ctx: 'compression' is present but blank -- expected zstd, gzip, none or default, or remove the line" ;;
+        *) die "$ctx: compression='$val' -- expected zstd, gzip, none or default" ;;
+    esac
+    link_flag_letter_present "$flags" zZgN \
+        && die "$ctx: 'compression' is set and 'flags' already carries -$LINK_CONFLICT -- one option, one home. Drop the compressor letter from 'flags' and keep the field."
+    return 0
+}
+
+# The ssh cipher list, passed straight through to ssh -c. Not enumerated here:
+# which ciphers exist is the local OpenSSH build's answer, not this generator's,
+# and an allow-list would go stale against a host we cannot see. Only the shape
+# is checked -- one token, no spaces, no leading dash -- so a mistyped field
+# cannot smuggle a second ssh option in behind the -c.
+lint_link_cipher() {   # <value> <flags> <ctx> <dst-or-src spec>
+    local val="$1" flags="$2" ctx="$3" spec="$4"
+    [ -z "$val" ] && die "$ctx: 'cipher' is present but blank -- name a cipher (e.g. aes128-gcm@openssh.com), or remove the line"
+    case "$val" in
+        -*) die "$ctx: cipher='$val' -- give the cipher only; the '-c' is what this field renders for you" ;;
+        *[[:space:]]*) die "$ctx: cipher='$val' -- one ssh -c argument, no spaces (a comma-separated list is one argument: 'a,b')" ;;
+        *[!A-Za-z0-9,@.=_-]*) die "$ctx: cipher='$val' -- expected an ssh cipher name or comma-separated list" ;;
+    esac
+    link_flag_letter_present "$flags" c \
+        && die "$ctx: 'cipher' is set and 'flags' already carries -c -- one option, one home. Drop the -c from 'flags' and keep the field."
+    case "$spec" in
+        *:*|*@*) ;;
+        *) warn "$ctx: cipher=$val on a LOCAL destination -- no ssh connection is opened for a local send, so this has no effect" ;;
+    esac
+    return 0
+}
+
+# The renderers. Deliberately dumb: every decision was made in the lint above,
+# so these cannot fail and are safe inside a command substitution.
+add_link_flags() {   # <flags> <bandwidth> <compression> <cipher> -> flags
+    local flags="$1" bw="$2" comp="$3" ciph="$4"
+    case "$comp" in
+        zstd) flags="${flags:+$flags }-Z" ;;
+        gzip) flags="${flags:+$flags }-g" ;;
+        none) flags="${flags:+$flags }-N" ;;
+    esac
+    [ -n "$ciph" ] && flags="${flags:+$flags }-c $ciph"
+    [ -n "$bw" ] && flags="${flags:+$flags }-b $bw"
+    printf '%s' "$flags"
+}
+
 # Splits legacy recursion OUT of a flags string, using the same option walk as
 # flags_opt_letters (REV-20260807-057 contract 1: detection must not be a
 # substring rule that mistakes `-m R-daily_` for recursion).
@@ -973,8 +1096,13 @@ DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
 PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
                      tier_label notify notify_raw_prune
                      monitor_warn monitor_crit monitor_schedule monitor_exclude"
+# bandwidth/compression/cipher are the LINK fields (see link_flag_letter_present):
+# [dataset:] only, never POLICY_FIELDS -- a policy carrier is shared by datasets
+# that do not share a destination, so there is no layer above the section where
+# a link value would be true for everything that inherited it.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label recursive $DATASET_POLICY_FIELDS
+_allow_fields dataset   use_template pair_label recursive \
+                        bandwidth compression cipher $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
@@ -1745,6 +1873,28 @@ build_dataset() {
             prefix="$(resolve_field_or_omit prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: 'prefix' resolved to a blank value -- omit the field entirely for no-prefix, do not set it to nothing"
             tier_created_prefix="$prefix"; tier_creates=1
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
+            # LINK FIELDS -- resolved from the [dataset:] section only (see the
+            # block above link_flag_letter_present for why no template/defaults
+            # layer), and rendered BEFORE -A is considered on purpose: an
+            # explicit compressor makes snapsend's autotune stand down, and
+            # maybe_add_autotune already knows that. Rendering them afterwards
+            # would emit a line carrying both -A and -Z -- a cron line that
+            # announces a no-op on every run.
+            #
+            # resolve_field returns 1 for ABSENT and prints "" for a present but
+            # blank field. The two are different mistakes and the lints say so,
+            # so the status is read here rather than collapsed with `|| x=""`.
+            local link_bw="" link_comp="" link_ciph=""
+            if link_bw="$(resolve_field bandwidth "$ds" "" "")"; then
+                lint_link_bandwidth "$link_bw" "$flags" "[dataset:$ds_path] tier=$tier"
+            else link_bw=""; fi
+            if link_comp="$(resolve_field compression "$ds" "" "")"; then
+                lint_link_compression "$link_comp" "$flags" "[dataset:$ds_path] tier=$tier"
+            else link_comp=""; fi
+            if link_ciph="$(resolve_field cipher "$ds" "" "")"; then
+                lint_link_cipher "$link_ciph" "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
+            else link_ciph=""; fi
+            flags="$(add_link_flags "$flags" "$link_bw" "$link_comp" "$link_ciph")"
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
             lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"
