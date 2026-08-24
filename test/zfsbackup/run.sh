@@ -156,21 +156,36 @@ else
     bad "lifecycle: the removed record is archived out of the *.conf namespace, not deleted"         "plikow *.conf=$sf_confs archiwum=${sf_arch:-BRAK}"
 fi
 
-# The other half: a record that is NOT a tombstone still refuses, and now says
-# which state it is in rather than only that a file exists.
-out="$( (
-    profile_validate_dir() { return 0; }
-    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
-    CLIENTS_DIR="$SF/clients"
-    RELATIONSHIPS_DIR="$SF/relationships"
-    PVE_NODES_DIR="$SF/pve-nodes"
-    DEPLOY="$SF_DEPLOY"
-    cmd_add_client pve2 --host=192.168.28.8:22 --target=hdd/backups
-) 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "already exists"         && printf '%s' "$out" | grep -q "pending_enroll"; then
-    ok "lifecycle: a LIVE relationship still refuses, and the refusal names its state"
+# The other half. CONTRACT CHANGE 2026-08-24 (issue #9: "rerun resumes from
+# durable state"): repeating add-client on a relationship that already exists
+# is no longer a refusal by itself -- an interrupted flow must be replayable
+# from step 1. What it still must not do is REDEFINE a live relationship, so
+# the refusal moved from "the record exists" to "the record says something
+# else", and both halves are asserted here.
+addc() {   # <host> <target> -> combined output, rc in $rc
+    out="$( (
+        profile_validate_dir() { return 0; }
+        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
+        CLIENTS_DIR="$SF/clients"
+        RELATIONSHIPS_DIR="$SF/relationships"
+        PVE_NODES_DIR="$SF/pve-nodes"
+        DEPLOY="$SF_DEPLOY"
+        cmd_add_client pve2 --host="$1" --target="$2"
+    ) 2>&1)"; rc=$?
+}
+
+addc 192.168.28.8:22 hdd/backups
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "nothing to create"; then
+    ok "lifecycle: an IDENTICAL add-client rerun resumes instead of refusing"
 else
-    bad "lifecycle: a LIVE relationship still refuses, and the refusal names its state"         "rc=$rc out=$out"
+    bad "lifecycle: an IDENTICAL add-client rerun resumes instead of refusing" "rc=$rc out=$out"
+fi
+
+addc 192.168.28.99:22 hdd/backups
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "already exists"         && printf '%s' "$out" | grep -q "pending_enroll"         && printf '%s' "$out" | grep -q "DIFFERENT"; then
+    ok "lifecycle: a rerun REDEFINING a live relationship still refuses, naming its state"
+else
+    bad "lifecycle: a rerun REDEFINING a live relationship still refuses, naming its state" "rc=$rc out=$out"
 fi
 
 # A PINNED HOST KEY MUST BE FILED UNDER THE NAME ssh ACTUALLY ASKS FOR.
