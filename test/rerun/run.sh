@@ -24,13 +24,14 @@ bad() { echo "FAIL $1"; [ -n "${2:-}" ] && printf '  %s\n' "$2"; FAIL=$((FAIL+1)
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 # A client record as the flow leaves it once finished.
-mkrec() {   # <state> <host> <target> <user>
+mkrec() {   # <state> <host> <target> <user> [created-endpoint]
     mkdir -p "$WORK/clients"
     cat > "$WORK/clients/rel.conf" <<REC
 CLIENT_NAME=rel
 PEER_HOST=$2
 CLIENT_TARGET=$3
 LOCAL_USER=$4
+CREATED_ENDPOINT=${5:-$2:22}
 STATE=$1
 REC
 }
@@ -46,6 +47,11 @@ addclient_decision() {   # <host> <target> <user> -> rc + first log line
       # Handing the test a pre-parsed lan_host is what let the first cut of
       # this fix reference a variable that does not exist yet at that point.
       printf 'name=rel\nlan=%q\ntarget=%q\nlocal_user=%q\n' "$1" "$2" "$3"
+      # The gate falls back to the pairing manifest when a record predates
+      # CREATED_ENDPOINT; stub the helpers so the test states its own inputs.
+      printf 'peer_manifest_path() { echo %q; }
+' "${MANIFEST:-/nonexistent}"
+      echo 'peer_label() { echo lbl; }'
       # The block under test, verbatim from the real file, wrapped in a
       # function: it uses `local`, which bash rejects at top level -- and a
       # rejected `local` would make every case "fail" for a reason that has
@@ -77,6 +83,85 @@ case "$out" in
     *DIE:*) ok "an add-client rerun naming a DIFFERENT target is refused" ;;
     *) bad "an add-client rerun naming a DIFFERENT target is refused" "$(printf '%s' "$out" | head -2)" ;;
 esac
+
+# --- the two identity elements the first cut let through --------------------
+# Both were reported by review with a discriminator; both are pinned here.
+
+# PORT: a record created for :2222 must not accept a rerun asking for :22.
+mkrec active 10.0.0.1 pool/tgt bckp 10.0.0.1:2222
+out="$(addclient_decision 10.0.0.1:22 pool/tgt bckp)"
+case "$out" in
+    *DIE:*) ok "a rerun changing only the PORT is refused" ;;
+    *) bad "a rerun changing only the PORT is refused" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+out="$(addclient_decision 10.0.0.1:2222 pool/tgt bckp)"
+case "$out" in
+    *"RC=0"*) ok "the SAME port is still a no-op" ;;
+    *) bad "the SAME port is still a no-op" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+# ACCOUNT: an explicit --local-user=root is a request, not a wildcard.
+mkrec active 10.0.0.1 pool/tgt bckp
+out="$(addclient_decision 10.0.0.1 pool/tgt root)"
+case "$out" in
+    *DIE:*) ok "an explicit --local-user=root against a bckp record is refused" ;;
+    *) bad "an explicit --local-user=root against a bckp record is refused" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+# ...and an OMITTED account still says nothing about identity.
+out="$(addclient_decision 10.0.0.1 pool/tgt '')"
+case "$out" in
+    *"RC=0"*) ok "an OMITTED account leaves identity unchallenged" ;;
+    *) bad "an OMITTED account leaves identity unchallenged" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+# The state used by the remaining cases.
+mkrec active 10.0.0.1 pool/tgt bckp
+
+
+# --- the fallback path, which the cases above never touch -------------------
+# A record predating CREATED_ENDPOINT must still have its port checked, and the
+# only durable source is the pairing manifest's PEER_SAVED_PORT. Stubbing the
+# manifest away (as every case above does) would leave this whole branch
+# untested -- so these two cases hand it a real file.
+mkrec_nolegacy() {   # <host> <target> <user>  -- record WITHOUT CREATED_ENDPOINT
+    mkdir -p "$WORK/clients"
+    cat > "$WORK/clients/rel.conf" <<REC
+CLIENT_NAME=rel
+PEER_HOST=$1
+CLIENT_TARGET=$2
+LOCAL_USER=$3
+STATE=active
+REC
+}
+
+mkrec_nolegacy 10.0.0.1 pool/tgt bckp
+printf 'PEER_SAVED_PORT=2222
+' > "$WORK/manifest.conf"
+
+MANIFEST="$WORK/manifest.conf" out="$(MANIFEST="$WORK/manifest.conf" addclient_decision 10.0.0.1:22 pool/tgt bckp)"
+case "$out" in
+    *DIE:*) ok "a legacy record takes its port from the pairing manifest (mismatch refused)" ;;
+    *) bad "a legacy record takes its port from the pairing manifest (mismatch refused)" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+out="$(MANIFEST="$WORK/manifest.conf" addclient_decision 10.0.0.1:2222 pool/tgt bckp)"
+case "$out" in
+    *"RC=0"*) ok "a legacy record with a MATCHING manifest port is a no-op" ;;
+    *) bad "a legacy record with a MATCHING manifest port is a no-op" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+# Neither CREATED_ENDPOINT nor a readable manifest: the endpoint cannot be
+# confirmed, so this must NOT be treated as the same request.
+out="$(addclient_decision 10.0.0.1:22 pool/tgt bckp)"
+case "$out" in
+    *DIE:*) ok "an unconfirmable endpoint fails CLOSED, not into a no-op" ;;
+    *) bad "an unconfirmable endpoint fails CLOSED, not into a no-op" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+mkrec active 10.0.0.1 pool/tgt bckp
+
 
 # The seed state gate, same treatment.
 seed_gate() {   # <state> -> rc + message

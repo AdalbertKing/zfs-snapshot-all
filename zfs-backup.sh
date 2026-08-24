@@ -4205,10 +4205,41 @@ cmd_add_client() {
             # the command, which is how the first cut of this fix turned a
             # refusal into a crash (caught on the live rerun, not by the
             # suite, because the suite set the variable by hand).
-            local _want_host="${lan%%:*}"
+            local _want_host="${lan%%:*}" _want_port=22
+            case "$lan" in *:*) _want_port="${lan##*:}" ;; esac
             [ "$_prev_host" = "$_want_host" ] || _same=0
             [ -z "$target" ] || [ "$_prev_target" = "$target" ] || _same=0
-            [ -z "$local_user" ] || [ "$local_user" = root ] || [ "$_prev_user" = "$local_user" ] || _same=0
+
+            # THE PORT IS PART OF THE ENDPOINT, and it cannot be read off
+            # ACTIVE_ENDPOINT: activate --host= rewrites that to the production
+            # endpoint, so on a relationship already switched to a VPN it says
+            # 10.99.0.2:22 while the LAN request said 192.168.28.8:2222.
+            # CREATED_ENDPOINT records the original --host verbatim; older
+            # records fall back to the pairing manifest's PEER_SAVED_PORT,
+            # which --join wrote and nothing later rewrites. If neither is
+            # available the endpoint cannot be confirmed, so this is NOT a
+            # no-op -- an unconfirmed identity fails closed.
+            local _prev_endpoint _prev_port=""
+            _prev_endpoint=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${CREATED_ENDPOINT:-}" )
+            if [ -n "$_prev_endpoint" ]; then
+                case "$_prev_endpoint" in *:*) _prev_port="${_prev_endpoint##*:}" ;; *) _prev_port=22 ;; esac
+            else
+                local _mf; _mf=$(peer_manifest_path "$(peer_label "$_prev_host")")
+                [ -r "$_mf" ] && _prev_port=$( . "$_mf" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_PORT:-}" )
+            fi
+            if [ -z "$_prev_port" ]; then
+                _same=0
+            else
+                [ "$_prev_port" = "$_want_port" ] || _same=0
+            fi
+
+            # An EXPLICIT --local-user=root is a request for root, not a
+            # wildcard. Only an OMITTED account says nothing about identity.
+            # The previous form treated any explicit root as matching, so a
+            # relationship recorded for bckp accepted a rerun asking for root.
+            if [ -n "$local_user" ]; then
+                [ "${_prev_user:-root}" = "$local_user" ] || _same=0
+            fi
             if [ "$_same" -eq 1 ]; then
                 log "client '$name' already exists (state '$_prev_state') and this call asks for the same host/target/account -- nothing to create, continuing"
                 log "next: ./zfs-backup.sh seed $name    (or activate $name, if the seed already completed)"
@@ -4446,6 +4477,11 @@ cmd_add_client() {
         # the source's scope IS the request -- and absent on older records,
         # both of which keep the whole-scope legacy behavior.
         write_client_field REQUESTED_DATASETS "$datasets"
+        # The endpoint AS REQUESTED at create, port included, kept verbatim.
+        # ACTIVE_ENDPOINT cannot serve this purpose: activate --host= rewrites
+        # it to the production endpoint. The rerun identity gate above needs
+        # the original to tell "the same request again" from "a different one".
+        write_client_field CREATED_ENDPOINT   "$lan"
         # The account CHOICE, persisted with the relationship (r_user in
         # cron_context_resolve). Without it, activation resolved the account
         # from the per-host pairing manifest -- which is how the silent
