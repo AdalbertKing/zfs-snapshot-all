@@ -133,6 +133,75 @@ powiedzieć „przesuń każdy tier tej relacji o N minut". Naturalne uzupełnie
 to pole `schedule_offset` w sekcji, dodawane przez `gen-cron.sh` do minuty
 każdego renderowanego harmonogramu. `gen-cron.sh` nie jest zamrożony.
 
+## 5. Spójność i łącze: trzeci i czwarty właściciel (uwaga właściciela)
+
+Retencja to nie jedyny wymiar. Są jeszcze **snapshoty koherentne** (quiesce)
+i **negocjacje pasma** (kompresja, limit, cipher, autotune) — i one **nie
+należą do tego samego właściciela co retencja**. To jest właściwe kryterium
+podziału, nie „gdzie akurat dziś siedzą".
+
+Cztery naturalne własności:
+
+| oś | co obejmuje | naturalny właściciel | dlaczego |
+|---|---|---|---|
+| **polityka danych** | retencja, harmonogramy, prefiks, progi, GFS | **profil** | jedna decyzja dla całej klasy relacji, zmieniana w jednym miejscu |
+| **charakterystyka danych** | quiesce, rekursja | **relacja**, z domyślną z profilu | zależy od tego, CO jest w datasecie: baza danych vs archiwum plików |
+| **charakterystyka łącza** | pasmo, kompresja, cipher, autotune, rozmiar mbuffera | **para hostów** | dwie relacje przez ten sam VPN mają to samo łącze; jeden profil użyty do dziesięciu hostów ma dziesięć różnych łączy |
+| **tożsamość** | klucze, alias, host, konto, port | **relacja + parowanie** | jak dziś |
+
+### 5.1 Dlaczego pasmo NIE powinno iść do profilu
+
+To jest kontrintuicyjne, więc wprost: profil „archiwalny" nie wie, przez jakie
+łącze poleci. Ta sama polityka retencji obsłuży relację po gigabitowym LAN-ie
+i przez VPN 20 Mbit. Wpisanie `-b` do profilu znaczyłoby albo dławienie LAN-u,
+albo zapchanie VPN-u — zależnie od tego, którą relację twórca profilu miał
+przed oczami.
+
+Dziś `BANDWIDTH` siedzi na **rekordzie relacji** (`--bandwidth`). To jest
+bliżej prawdy niż profil, ale wciąż o jeden poziom za nisko: dwie relacje do
+tego samego hosta przez to samo łącze muszą dziś dostać ten sam limit
+**dwa razy, ręcznie**, i nic nie pilnuje, żeby się nie rozjechały.
+Naturalne miejsce to **manifest parowania** (L3, per host), z możliwością
+nadpisania na relacji.
+
+Że `gen-cron.sh` dokłada `-A` po tym, czy `dst` jest **zdalny** — czyli po
+własności ŁĄCZA, nie polityki — jest niezależnym potwierdzeniem tego podziału:
+kod już dziś podejmuje tę decyzję na właściwej osi, tylko nie ma dla niej
+warstwy.
+
+### 5.2 Quiesce: dane, nie polityka i nie łącze
+
+Czy zamrozić gościa przed snapshotem, zależy od tego, co w nim siedzi —
+baza SQL potrzebuje spójności aplikacyjnej, archiwum plików nie. To jest
+własność **datasetu**, więc relacji. Profil może dać sensowną domyślną
+(„profil produkcyjny = quiesce włączony"), ale ostatnie słowo ma relacja,
+bo tylko ona wie, co backupuje.
+
+Quiesce ma dodatkowy wymiar, którego pozostałe nie mają: **wymaga grantu na
+źródle** (`--allow-quiesce` przy parowaniu). Czyli profil może o nim mieć
+zdanie, ale nie może go **przyznać** — to należy do warstwy parowania.
+Profil deklarujący quiesce dla relacji bez grantu musi kończyć się czytelną
+odmową, nie cichym pominięciem.
+
+### 5.3 Przeszkoda techniczna: `flags` to worek
+
+Zmierzone: kompresja, pasmo i cipher **nie mają własnych pól** w gramatyce
+CONFIG v4. Jadą w polu `flags` sekcji `[dataset:]` — razem z kluczami,
+aliasem hosta, `-X`, `-e` i `-E`. A `flags` jest w
+`PROFILE_FORBIDDEN_FIELDS`, i słusznie, bo zawiera tożsamość.
+
+Konsekwencja: **profil dziś fizycznie nie może ustawić ani kompresji, ani
+pasma, ani ciphera** — nie z decyzji projektowej, tylko dlatego, że wszystkie
+trzy mieszkają w polu, którego nie wolno mu tknąć. Pola z własnymi nazwami
+mają tylko `quiesce`, `autotune` i `recursive` — i to jest jedyny powód, dla
+którego akurat o nich profil może mieć zdanie.
+
+Czyli **warunkiem sensownego rozdziału jest rozbicie `flags` na pola według
+właściciela**: opcje łącza osobno od tożsamości osobno od decyzji relacji.
+Dopóki to jeden string, każda odpowiedź na pytanie „co ma wejść do profilu"
+jest ograniczona nie przez sens, tylko przez to, że pół odpowiedzi leży w
+worku oznaczonym „nie dotykać".
+
 ## Propozycja podziału na potrzeby etapu profili
 
 **Do profilu (P) — obowiązkowo:** `prefix`, `send_schedule`, `prune_schedule`,
