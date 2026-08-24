@@ -623,11 +623,34 @@ CI urosło z 35 do 37 checków.
 | F2 | Stampede harmonogramów | wydajność/skala | **naprawione** (#147/#148/#149) |
 | F3 | Skasowanie bazy na źródle zatrzymuje relację atomową; tryb płaski samoleczący | odporność | zmierzone, fail-closed poprawny |
 | F4 | Rekurencyjny odbiór pomija potomka, bieg raportuje sukces | **fail-open** | **naprawione** (#146 + hotfix #148) |
-| R1–R4 | Cztery wady we własnych naprawach, zgłoszone przez recenzję | fail-open ×2, semantyka ×2 | **naprawione** (#148/#149) |
+| R1–R2 | Fail-open we własnej naprawie: błąd inwentarza jako sukces; porównanie podciągiem | fail-open ×2 | **naprawione** (#148) |
+| R3 | Rozrzut zwijający tiery na jedną kadencję | semantyka | **naprawione dopiero #148 + #151** — patrz 16.1 |
+| R4 | Kolektor zajętych minut widział tylko literały | semantyka | **naprawione** (#149) |
+| R5 | Diagnostyka na stdout zanieczyszczała przechwyconą wartość | **fail-open** | **naprawione** (#152) |
 
 Obalone przewidywania: nr 1 (atomowy + ręczny snapshot dziecka nie powoduje
 odmowy — dojeżdża przy następnym cyklu) i nr 2 (sync nie wszedł w kolizję ze
 strażnikiem pokrycia). Potwierdzone: nr 4 (stampede).
+
+### 16.1 KOREKTA: „naprawione” napisane przedwcześnie
+
+Pierwsza wersja tej tabeli mówiła, że R1–R4 są zamknięte przez
+#147/#148/#149. **To było nieprawdą w chwili pisania** i wytknęła to recenzja.
+Stan faktyczny:
+
+- **#151** był konieczny, bo `schedule_template_expr` nigdy nie znajdował
+  kadencji — namespace doklejany dwa razy. #148 maskował to domyślną kadencją
+  godzinową, #149 zamienił w **brak rozrzutu**. Lab dwuźródłowy złapał to w
+  pierwszej minucie: obie relacje na szablonowej `:01`.
+- **#152** był konieczny, bo obie funkcje pomocnicze są wołane w `$( )`, a
+  `log()` pisze na **stdout** — więc komunikat diagnostyczny stawał się
+  wartością i trafiłby do configu jako `send_schedule = 17 schedule: '...'`.
+
+Napełnienie tabeli słowem „naprawione” na podstawie **zmergowania PR-a**, a nie
+dowodu na aktualnym `main`, jest dokładnie tym błędem, który ten projekt nazywa
+„tytuł commita to nie dowód”. Reguła na przyszłość: status „naprawione” wpisuje
+się po zielonym dyskryminatorze **na głowie, która jest właśnie wdrożona**, nie
+po merge'u.
 
 **Lekcja metodologiczna tej kampanii.** F4 miałem najpierw jako dwa sprzeczne
 pomiary — i **nie ogłosiłem wady**, tylko zbudowałem kontrolowany eksperyment
