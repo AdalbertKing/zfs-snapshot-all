@@ -136,6 +136,45 @@ else
     bad "the collector mixes literal and stepped jobs, and ignores non-engine lines"         "reported '$got_mixed', wanted '0 20 23 40'"
 fi
 
+# --- the cadence lookup -----------------------------------------------------
+# schedule_template_expr must actually FIND the tier's cadence. It never did:
+# the rendered fragment already carries `use_template = profile__P__tier`, and
+# the lookup prefixed the namespace a second time, so every call returned
+# empty. #148 hid that behind a default hourly cadence; #149 turned it into
+# "emit nothing" -- no stagger at all. The discriminator is that a rendered
+# fragment (namespaced) and a raw one (not) must BOTH resolve.
+expr_for() {   # <use_template value> -> the cadence found, or nothing
+    local t; t=$(mktemp); local d; d=$(mktemp -d)
+    printf '	use_template = %s
+' "$1" > "$d/ds.inc"
+    printf '[template:profile__p__hourly]
+	send_schedule  = 4 * * * *
+' > "$d/tpl"
+    { echo 'set -u'
+      echo 'log() { :; }'
+      printf 'PROFILE_DS_FILE=%q
+' "$d/ds.inc"
+      printf 'PROFILE_TPL_FILE=%q
+' "$d/tpl"
+      echo 'PROFILE_PRUNE_FILE=""'
+      echo 'PROFILE_LOADED=1'
+      echo 'PROFILE_ACTIVE=p'
+      awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      lift schedule_template_expr
+      echo 'schedule_template_expr send'; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -rf "$t" "$d"
+}
+
+for form in "profile__p__hourly" "hourly"; do
+    got="$(expr_for "$form")"
+    if [ "$got" = "4 * * * *" ]; then
+        ok "the cadence is found for use_template='$form'"
+    else
+        bad "the cadence is found for use_template='$form'" "got '$got', wanted '4 * * * *'"
+    fi
+done
+
 # --- determinism ------------------------------------------------------------
 if [ "$(pick "$NAME" "")" = "$free_pick" ] && [ "$(pick "$NAME" "")" = "$free_pick" ]; then
     ok "the same relationship always lands on the same minute"
