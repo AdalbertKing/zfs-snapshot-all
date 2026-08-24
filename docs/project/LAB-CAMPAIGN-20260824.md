@@ -439,3 +439,245 @@ Potwierdzone: nr 4 (stampede).
 
 Do rozstrzygnięcia w dalszej części kampanii: nr 3 (monitor na nodze sync
 przy dwóch przeskokach wieku) — wymaga upływu czasu.
+
+## 12. F4 — weryfikacja, odtworzenie i NAPRAWA
+
+Pierwsze dwa pomiary F4 (bieg z `-F` → `rc=0` mimo dziecka w tyle) nie dały
+się powtórzyć w trzecim podejściu — dlatego **nie ogłosiłem wady**, tylko
+zbudowałem kontrolowany eksperyment od zera.
+
+### 12.1 Eksperyment kontrolny
+
+Świeże drzewo `hdd/lab1c/at` + dzieci `a`, `b`, relacja `k1c` (atomowa,
+pasywna). Sekwencja odtwarzająca zachowanie admina:
+
+```bash
+zfs snapshot -r hdd/lab1c/at@s1        # relacja zarejestrowana i zsynchronizowana
+zfs snapshot -r hdd/lab1c/at@s2        # cykl, bieg -> target ma s1, s2
+zfs destroy  -r hdd/lab1c/at@s2        # admin sprząta bazę
+zfs snapshot -r hdd/lab1c/at@s3        # nowy cykl
+# bieg z -F -> rc=0, target ma s1,s2,s3 WSZĘDZIE -- czyli -F zadziałał POPRAWNIE
+```
+
+Czyli sam `-F` niczego nie tłumi. Różnicą wobec `k1a` była **asymetria
+drzewa**: dziecko `a` miało ręczny snapshot, którego reszta drzewa nigdy nie
+miała. Dołożone do eksperymentu:
+
+```bash
+zfs snapshot hdd/lab1c/at/a@reczny-tylko-a   # tylko na dziecku
+zfs snapshot -r hdd/lab1c/at@s4              # cykl, bieg -> wszystko ląduje
+zfs destroy  -r hdd/lab1c/at@s4              # admin kasuje bazę
+zfs snapshot -r hdd/lab1c/at@s5
+```
+
+Bieg **bez żadnych flag naprawczych**:
+
+```
+rc=0
+at@s2 s3 s4 s5                       <- rodzic: aktualny
+at/b@s1..s4 s5                       <- rodzeństwo: aktualne
+at/a@s1 s2 s3 reczny-tylko-a s4      <- BEZ s5
+```
+
+**Znalezisko potwierdzone i zawężone.** Nie chodziło o `-F`. Chodzi o to, że
+`zfs recv` strumienia `-R` **pomija potomka**, którego stan lokalny nie
+przyjmuje przyrostu, ląduje całą resztę i **kończy się zerem**. Silnik
+przyjmował to za niemożliwe — miał to zapisane wprost w komentarzu:
+
+> „under -r the subtree travels as ONE stream and this proves the ROOT
+> landed. The descendants rode the same stream and **cannot have arrived
+> separately**"
+
+Monitor tego nie zasłoni: mierzy wiek bezwzględny każdego datasetu wobec
+progów, a nie rozjazd między rodzeństwem.
+
+### 12.2 Naprawa (PR #146, `main@62c4bd3`)
+
+`validate_subtree` dowodzi, że **każdy** potomek otrzymał przesłany snapshot.
+Koszt: dwa wywołania `zfs list` (po jednym na stronę), nie jedno na dataset.
+Wymagane są tylko te datasety, które **naprawdę** mają ten snapshot na
+źródle (dataset utworzony później zgodnie z prawdą go nie ma), a wykluczenia
+`-X` są pomijane, bo nigdy nie weszły do strumienia.
+
+**Dowód na żywo — ta sama sekwencja na naprawionym silniku** (`hdd/lab1d`,
+relacja `k1d`):
+
+```
+rc=1
+VERIFY FAILED (subtree): the stream reported success but these descendants
+did not receive @s3: hdd/k1d-tgt/192.168.28.9/hdd/lab1d/at/a
+```
+
+Przed: `rc=0` i cisza. Po: fail-closed i komunikat nazywający **konkretny**
+dataset. Zdrowe relacje sprawdzone pod kątem fałszywych alarmów: `k1b`
+(płaska) `rc=0`, `k2s` (sync) `rc=0`.
+
+### 12.3 Ta sama dziura była w silniku PUSH
+
+Suita `twins` odrzuciła jednostronną zmianę: „process_dataset changed in
+snapget.sh ONLY". Słusznie — strona odbiorcza zachowuje się tak samo bez
+względu na to, kto wypchnął strumień, więc `snapsend.sh` miał identyczną
+dziurę. Poprawka zdublowana (ta sama funkcja, przeciwny kierunek: źródło
+lokalne, target zdalny), kontrakt zatwierdzony po przejrzeniu obu diffów.
+
+**Ta suita zarobiła dziś na siebie**: bez niej naprawilibyśmy połowę
+problemu i nie wiedzieli o tym.
+
+## 13. F2 — rozrzut harmonogramów: naprawiony w trakcie kampanii
+
+Kampania potwierdziła stampede pomiarem (sekcja 7), więc rozrzut wszedł jako
+osobny etap (PR #147 + poprawki #148/#149).
+
+**Mechanizm:** minuta wybierana **raz, przy tworzeniu relacji** — `cksum` z
+nazwy modulo 60 jako punkt startowy, przy zajętości pierwsza wolna w górę — i
+zapisywana w sekcji jako prawdziwy `send_schedule`. Config nadal mówi prawdę
+o tym, kiedy job leci; ręczny wpis operatora jest nietykalny; re-aktywacja nie
+przelicza; usunięcie relacji zwalnia minutę. Prune trzyma odstęp 20 minut.
+Zajęte minuty czytane **globalnie** — z bloków zarządzanych wszystkich kont
+plus z sekcji configów. Gramatyka gen-cron nietknięta: `send_schedule` i
+`prune_schedule` były już polami, które sekcja może nadpisać.
+
+**Dowód na labie** — trzy relacje z jednego profilu, jedna po drugiej:
+
+```
+57 backup s1   ->  17 prune s1     (zawinięcie przez godzinę)
+14 backup s2   ->  34 prune s2
+10 backup s3   ->  30 prune s3
+```
+
+Sześć linii, sześć różnych minut, każda para z odstępem 20. Ręcznie wpisany
+`send_schedule = 5` przeżył re-aktywację. Po 2,5 h autonomii: **zero
+niezerowych werdyktów** dla `s1`/`s2`/`s3`, ticki widoczne w logu dokładnie na
+swoich minutach.
+
+## 14. Znaleziska recenzji — trzy, wszystkie trafione
+
+Recenzent zgłosił trzy wady **we własnych naprawach z tej kampanii**, każdą z
+wykonawczym dyskryminatorem. Wszystkie okazały się realne.
+
+### R1 — błąd inwentarza przyjmowany jako sukces (`validate_subtree`)
+
+Napisałem `src_have=$(...) || return 0`, więc awaria ssh albo zfs **pomijała**
+weryfikację i bieg zachowywał sukces. Weryfikacja, która znika dokładnie
+wtedy, gdy łącze pada, nie jest weryfikacją — i to jest **ta sama klasa
+błędu, którą ta naprawa miała usuwać**, wprowadzona w samej naprawie.
+Oba inwentarze (źródła i celu) padają teraz fail-closed z nazwanym powodem.
+
+### R2 — porównanie podciągiem zamiast dokładnym
+
+`case "$tgt_have" in *"$tgt/$rel@$snap"*)` przyjmował `pool/t/a@s3-extra`
+jako dowód, że istnieje `pool/t/a@s3`. Teraz dokładne dopasowanie całej linii
+(`grep -Fxq`).
+
+### R3 — rozrzut zwijający tiery na jedną kadencję
+
+`use_template` to **lista**, a pole wpisane do sekcji nadpisuje **każdy**
+referowany tier — więc profil z tierem dziennym `2 3 * * *` dostałby kadencję
+godzinową. Wbudowane profile deklarują jedną kadencję na pole, dlatego lab
+tego nie pokazał. Rozrzut czyta teraz kadencję ze wszystkich referowanych
+tierów i wpisuje pole tylko przy zgodzie; przy rozbieżności zostawia
+harmonogram profilowi i mówi dlaczego. Nieznana kadencja nie emituje niczego.
+
+### R4 — kolektor zajętych minut widział tylko literały
+
+Zgłoszone osobno, po hotfixie: `schedule_taken_minutes` przepuszczał wyłącznie
+`^[0-9]+$`, więc poprawny job `*/15 ... snapget.sh` był **niewidzialny** i
+relacja z hashem 15 lądowała dokładnie na nim. Gramatyka pola minuty jest
+mała i w całości rozwijalna, więc jest rozwijana: literały, listy, zakresy,
+kroki, zakresy ze skokiem.
+
+Pisanie tego ekspandera dołożyło własną pułapkę, złapaną przez jego własny
+test: **gołe `*` w `for part in $field` jest rozwijane przez glob do nazw
+plików**, więc najczęstszy wildcard po cichu dawał pusto.
+
+### Czego brakowało: testów
+
+Recenzent miał rację, że `twins.sha256` dowodził wyłącznie równoległej zmiany
+obu silników, a żadnego z tych zachowań nie sprawdzał. Powstały dwie suity, obie
+z **kontrolą negatywną** wobec kodu sprzed poprawki:
+
+| suita | asercje | pada na starym kodzie |
+|---|---|---|
+| `subtree` | 10/10 | 4 (oba fail-open × oba silniki) |
+| `stagger` | 13/13 | 8 (ekspander + oba dyskryminatory kolektora) |
+
+CI urosło z 35 do 37 checków.
+
+## 15. Obserwacje operacyjne (niezgłoszone jako wady)
+
+- **`--grant-remotely` nie odtwarza zerwanego parowania.** Po `--leave` na
+  źródle i wyczyszczeniu stanu na kolektorze rejestracja pada z
+  `no pairing manifest ... run --join first` — grant zakłada istniejący join.
+  Realny scenariusz: operator zrywa relację i chce ją odtworzyć.
+- **Rekord w stanie `pending_enroll` blokuje ponowną próbę.** Po nieudanej
+  rejestracji kolejne wywołanie **wznawia** zamiast joinować („resuming ...
+  from state 'pending_enroll'"), więc pada w tym samym miejscu w kółko.
+  Wyjście: usunąć rekord ręcznie. Kosztowało mnie w tej kampanii cztery
+  nieudane podejścia, zanim zdiagnozowałem, że to stan, a nie kod.
+
+## 16. Bilans kampanii
+
+| # | Znalezisko | Klasa | Status |
+|---|---|---|---|
+| F1 | `-E` chroni tylko adopcję; wykluczone rodziny jadą na target jako pośrednie | niedopowiedzenie | udokumentowane, świadomie bez zmiany kodu |
+| F2 | Stampede harmonogramów | wydajność/skala | **naprawione** (#147/#148/#149) |
+| F3 | Skasowanie bazy na źródle zatrzymuje relację atomową; tryb płaski samoleczący | odporność | zmierzone, fail-closed poprawny |
+| F4 | Rekurencyjny odbiór pomija potomka, bieg raportuje sukces | **fail-open** | **naprawione** (#146 + hotfix #148) |
+| R1–R4 | Cztery wady we własnych naprawach, zgłoszone przez recenzję | fail-open ×2, semantyka ×2 | **naprawione** (#148/#149) |
+
+Obalone przewidywania: nr 1 (atomowy + ręczny snapshot dziecka nie powoduje
+odmowy — dojeżdża przy następnym cyklu) i nr 2 (sync nie wszedł w kolizję ze
+strażnikiem pokrycia). Potwierdzone: nr 4 (stampede).
+
+**Lekcja metodologiczna tej kampanii.** F4 miałem najpierw jako dwa sprzeczne
+pomiary — i **nie ogłosiłem wady**, tylko zbudowałem kontrolowany eksperyment
+od zera, który pokazał, że przyczyną nie jest `-F` (jak sądziłem), lecz
+asymetria drzewa. Ta sama dyscyplina zawiodła jednak w samej naprawie:
+napisałem `|| return 0` i nie napisałem testu, więc dziura fail-open przeżyła
+merge i znalazł ją dopiero recenzent. **Kod, który sprawdza, sam wymaga
+sprawdzenia** — a dowodem jest wyłącznie test, który pada na wersji sprzed
+poprawki.
+
+## 17. Rozbiórka — i błąd, który przy niej wyszedł
+
+### 17.1 Co zostało zdjęte
+
+| Host | Co | Dowód |
+|---|---|---|
+| pve9 | relacje `s1`/`s2`/`s3`, targety, config konta | pula `hdd` zawiera już tylko `hdd/osrc`; crontab roota bez zadań |
+| pve1 | generator + skrypt, drzewa `lab1a`–`lab1d`, parowanie z pve9 | `diff` crontaba: `20d19`, zdjęta wyłącznie linia `# LAB-GEN-PVE1` |
+| pve2 | generator + skrypt, `lab2s`, stare `lab9src`, parowanie | `diff` crontaba: `11d10`; produkcja `zfsbackup` 20 linii |
+
+### 17.2 BŁĄD: „rezydua" na pve9 były źródłem żywych relacji na pve1
+
+Wcześniej tego dnia, na polecenie właściciela, usunąłem z pve9 drzewa
+`hdd/lab9`, `hdd/pve2backup` i `hdd/pve2prodbackup` jako rezydua starszych
+kampanii. Sprawdziłem przedtem, że **na pve9** nic ich nie używa — i to była
+prawda. Nie sprawdziłem drugiej strony.
+
+`hdd/lab9` było **źródłem dwóch aktywnych relacji na pve1** (`lab9-atomic`,
+`lab9-flat`, dziewięć linii w crontabie roota). Od chwili usunięcia zaczęły
+padać: 18 niezerowych werdyktów tego dnia, backupy `rc=1`.
+
+**Wniosek, który wychodzi poza tę kampanię:** „nikt tego nie używa" sprawdzone
+na JEDNYM hoście nie jest dowodem. Dataset może być źródłem relacji, której
+rekord i crontab żyją na zupełnie innej maszynie — a lokalny audyt nigdy tego
+nie zobaczy. Pakiet nie ma dziś sposobu, by zapytać „kto ciągnie z tego
+datasetu" — wiedzę ma wyłącznie strona kolektora.
+
+Przy okazji korekta wcześniejszego zapisu z tej samej kampanii: sekcja 2
+podawała, że crontab roota pve1 zawiera „9 zadań produkcyjnych". **To nie była
+produkcja** — to były właśnie te labowe joby `lab9`. Prawdziwa produkcja pve1
+to crontab konta `zfsbackup` (24 linie) plus `jobs.pve1.v4.conf` (7 sekcji), i
+ta pozostała nietknięta przez całą kampanię.
+
+### 17.3 Sprzątanie martwych relacji
+
+`remove-client lab9-atomic` i `remove-client lab9-flat` zdjęły cały blok
+zarządzany z crontaba roota (`diff`: `6,19d5` — trzy linie backupu, cztery
+prune, nagłówki bloku) i opróżniły `jobs.pve1.conf` do zera sekcji; plik
+usunięty. Targety `hdd/lab9chain` i `hdd/lab9r1` zniszczone.
+
+Stan końcowy pve1: zero linii `lab9` w crontabie roota, zero aktywnych
+rekordów klientów, **produkcja nietknięta** — `crontab -u zfsbackup -l` = 24
+linie, `jobs.pve1.v4.conf` = 7 sekcji, pvesr replikuje dalej.
