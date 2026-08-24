@@ -2636,21 +2636,60 @@ default_cron_config() {
 # configs. A relationship installed in a crontab this host cannot enumerate
 # stays invisible and may still collide. Same assumption the coverage guard
 # already makes; stated rather than hidden.
+# Every minute a cron MINUTE FIELD actually fires in. The first cut kept only
+# fields matching ^[0-9]+$, so a perfectly valid `*/15` job was invisible to
+# the collision check and a relationship hashing to 15 was placed straight on
+# top of it (review finding, reproduced). Cron's minute grammar is small and
+# entirely expandable, so expand it instead of ignoring what is not a literal.
+schedule_expand_minutes() {   # <cron minute field> -> one minute per line
+    local field="$1" part base step lo hi m
+    [ -n "$field" ] || return 0
+    # Split on newlines from tr, NOT `for part in $field` with IFS=,: an
+    # unquoted '*' there is glob-expanded into filenames, so the commonest
+    # wildcard silently produced nothing. Caught by the expander's own test.
+    while IFS= read -r part; do
+        [ -n "$part" ] || continue
+        step=1
+        case "$part" in *"/"*) step="${part##*/}"; base="${part%%/*}" ;; *) base="$part" ;; esac
+        case "$step" in ''|*[!0-9]*) continue ;; esac
+        [ "$step" -ge 1 ] 2>/dev/null || continue
+        case "$base" in
+            '*')     lo=0;  hi=59 ;;
+            *-*)     lo="${base%%-*}"; hi="${base##*-}" ;;
+            *)       lo="$base"; hi="$base" ;;
+        esac
+        case "$lo$hi" in ''|*[!0-9]*) continue ;; esac
+        [ "$lo" -le "$hi" ] 2>/dev/null || continue
+        [ "$hi" -le 59 ] 2>/dev/null || hi=59
+        m="$lo"
+        while [ "$m" -le "$hi" ]; do
+            printf '%s
+' "$m"
+            m=$((m + step))
+        done
+    done <<< "$(printf '%s' "$field" | tr ',' '
+')"
+}
+
 schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
-    local u tmp f
+    local u tmp f _sched
     while IFS= read -r u; do
         [ -n "$u" ] || continue
         tmp=$(mktemp) || continue
         if cron_read "$u" "$tmp"; then
             # First field of any line that actually runs a transfer engine.
-            grep -E '(snapget|snapsend)\.sh' "$tmp" 2>/dev/null                 | awk '{print $1}' | grep -E '^[0-9]+$' || true
+            while IFS= read -r _sched; do
+                [ -n "$_sched" ] && schedule_expand_minutes "$_sched"
+            done < <(grep -E '(snapget|snapsend)\.sh' "$tmp" 2>/dev/null | awk '{print $1}')
         fi
         rm -f "$tmp"
     done < <(cron_known_accounts)
     # Sections that exist but are not installed yet.
     for f in /etc/zfs-snapshot-all/jobs.*.conf; do
         [ -r "$f" ] || continue
-        sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]].*//p' "$f" 2>/dev/null || true
+        while IFS= read -r _sched; do
+            [ -n "$_sched" ] && schedule_expand_minutes "$_sched"
+        done < <(sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]].*//p' "$f" 2>/dev/null)
     done
 }
 
