@@ -784,6 +784,50 @@ validate_snapshot() {
     fi
     [ "$src_guid" = "$tgt_guid" ] && return 0 || return 1
 }
+
+# PROVE THE WHOLE SUBTREE LANDED, not just its root.
+#
+# The verification below used to stop at the root under -r, on this stated
+# assumption: "the descendants rode the same stream and cannot have arrived
+# separately". MEASURED FALSE (2026-08-24, campaign pve1>pve9): `zfs recv`
+# of a -R stream SKIPS a descendant whose local state cannot accept the
+# increment, lands everything else, and exits 0. Reproduced deterministically:
+# a child carrying a snapshot the rest of the tree never had (an admin's
+# manual one) plus the base deleted on the source -> parent and sibling got
+# the new snapshot, that child did not, and the run reported success.
+#
+# Cost: two `zfs list` calls (one per side), not one per dataset. Only the
+# datasets that REALLY carry the snapshot on the source are required on the
+# target -- a dataset created after the snapshot legitimately does not have
+# it, and -X exclusions never entered the stream in the first place.
+validate_subtree() {   # <src> <tgt> <snapshot> [ruser] [rhost] -> 0 ok, 1 something lagged
+    local src="$1" tgt="$2" snap="$3" ruser="${4:-}" rhost="${5:-}"
+    local src_have tgt_have
+    if [ -n "$rhost" ]; then
+        src_have=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost"             "zfs list -H -o name -t snapshot -r '$src' 2>/dev/null") || return 0
+    else
+        src_have=$(zfs list -H -o name -t snapshot -r "$src" 2>/dev/null) || return 0
+    fi
+    tgt_have=$(zfs list -H -o name -t snapshot -r "$tgt" 2>/dev/null)
+
+    local line ds rel missing=""
+    while IFS= read -r line; do
+        case "$line" in *"@$snap") ;; *) continue ;; esac
+        ds="${line%@*}"
+        [ "$ds" = "$src" ] && continue          # the root is proven by GUID above
+        rel="${ds#$src/}"
+        dataset_excluded "$ds" && continue      # -X: never travelled, cannot lag
+        case "$tgt_have" in
+            *"$tgt/$rel@$snap"*) ;;
+            *) missing="$missing $tgt/$rel" ;;
+        esac
+    done <<< "$src_have"
+
+    [ -z "$missing" ] && return 0
+    log 0 "VERIFY FAILED (subtree): the stream reported success but these descendants did not receive @${snap}:$missing"
+    log 0 "A recursive receive skips a descendant whose local state cannot accept the increment and still exits 0. Treating this run as FAILED rather than reporting a backup that is missing part of the tree. Reconcile the target (-F) or re-pull it (-f) once you know why it diverged."
+    return 1
+}
 ###############################################################################
 #END 3A
 
@@ -1644,13 +1688,20 @@ process_dataset() {
     # in the middle of calling failed. The retry would then find its base
     # unprotected and prunable. A proof that runs after the thing it is meant to
     # gate is decoration.
-    # BOUNDARY, stated rather than hidden: under -r the subtree travels as ONE
-    # stream and this proves the ROOT landed. The descendants rode the same
-    # stream and cannot have arrived separately, but they are not individually
-    # checked here. Under -R each dataset is its own job and each is proven.
+    # Under -r this proves the ROOT landed; validate_subtree right below proves
+    # every descendant did too. The boundary noted here until 2026-08-24 --
+    # "the descendants rode the same stream and cannot have arrived
+    # separately" -- was measured FALSE and is now checked, not assumed.
+    # Under -R each dataset is its own job and each is proven on its own pass.
     if ! validate_snapshot "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
         progress_mark_verified "$tgt_dataset" verify_failed
         log 0 "VERIFY FAILED: ${tgt_dataset}@${latest_snap} is not on the target with the source's GUID -- the transfer reported success but the snapshot cannot be confirmed. Treating this dataset as FAILED rather than reporting a backup that may not exist."
+        return 1
+    fi
+    # Under -r the descendants are NOT individually proven by the check above
+    # -- and they cannot be assumed, see validate_subtree.
+    if [ $RECURSIVE -eq 1 ] && ! validate_subtree "$src_dataset" "$tgt_dataset" "$latest_snap" "$remote_user" "$remote_host"; then
+        progress_mark_verified "$tgt_dataset" verify_failed
         return 1
     fi
     log 2 "Verified: ${tgt_dataset}@${latest_snap} carries the source's GUID"
