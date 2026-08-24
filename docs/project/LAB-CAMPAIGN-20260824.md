@@ -335,3 +335,107 @@ Monitory (verbatim z crontaba):
 ./check-snap-age.sh -R -L k1b -x tmpjob_ "hdd/k1b-tgt/192.168.28.9" "-" 90m 150m -> rc=0
 sudo -u bckp ... -R -L k2s "hdd/lab2s/at" "-" 90m 150m                   -> rc=0
 ```
+
+## 9. ZNALEZISKO F3 — admin kasuje na źródle snapshot będący bazą kopii
+
+Scenariusz w pełni realistyczny: admin sprząta miejsce na źródle i usuwa
+snapshot, który akurat jest punktem odniesienia kopii.
+
+```bash
+# na pve1 -- snapshot obecny na targecie jako baza
+zfs destroy -r hdd/lab1a/at@20260824-092334
+```
+
+Bieg linii `k1a` verbatim:
+
+```
+cannot receive incremental stream: most recent snapshot of
+hdd/k1a-tgt/192.168.28.9/hdd/lab1a/at/a does not match incremental source
+2026-08-24 07:28:52 - Transfer failed
+ZFS-JOB END ... backup (k1a-at) rc=1
+```
+
+**Fail-closed — poprawnie**: nic nie zostało zniszczone, relacja odmawia i
+alarmuje. Zastrzeżenie: komunikat jest surowym tekstem ZFS-a i nie mówi
+operatorowi tego, co się naprawdę stało („na źródle zniknął snapshot, od
+którego liczy się przyrost"). Relacja **nie naprawia się sama** — profil
+pasywny nie ustawia `-F` ani `-f`, więc kolejne biegi będą padać do czasu
+interwencji człowieka.
+
+### 9.1 Kontrast: to samo w trybie PŁASKIM — samoleczące
+
+```bash
+# na pve1, źródło relacji plaskiej
+zfs destroy hdd/lab1b/at/a@20260824-092601
+zfs snapshot hdd/lab1b/at/a@po-skasowaniu-bazy
+```
+
+Bieg `k1b` verbatim: **`rc=0`**, dziecko dostało komplet nowych snapshotów.
+W trybie płaskim każdy dataset negocjuje **własną** bazę, więc rozjazd
+jednego dziecka nie dotyka pozostałych ani relacji jako całości.
+
+**Wniosek projektowy:** tryb atomowy kupuje spójność punktu w czasie ceną
+kruchości — jeden rozjechany dataset zatrzymuje całe drzewo.
+
+## 10. ZNALEZISKO F4 — `-F` (reconcile) zamienia uczciwą awarię w cichą rozbieżność
+
+Ta sama sytuacja co F3, tym razem z flagą naprawczą. Ta sama linia + `-F`:
+
+```
+All datasets processed successfully
+ZFS-JOB END ... backup (k1a-at) rc=0
+```
+
+Stan targetu **po** tym „sukcesie":
+
+```
+at@20260824-092001, 092334, arch_20260824-092501, 20260824-092601     <- aktualny
+at/b@20260824-092001, 092334, arch_20260824-092501, 20260824-092601   <- aktualny
+at/a@20260824-092001, przed-migracja-recznie, 20260824-092334         <- ZOSTAŁO W TYLE
+```
+
+Źródło dziecka `a` ma w tym czasie `arch_20260824-092501`,
+`20260824-092601`, `nocny_20260824-093001` — **trzech snapshotów brakuje na
+kopii**, a bieg zaraportował pełny sukces.
+
+Pomiar **powtórzony dwukrotnie**, wynik identyczny. Bez `-F` ten sam stan
+daje uczciwe `rc=1` (F3).
+
+**To jest istota znaleziska:** flaga, której zadaniem jest pogodzenie
+rozjazdu, w tym przypadku niczego nie godzi, a jedynie **tłumi błąd** —
+relacja zgłasza „All datasets processed successfully", podczas gdy jedno
+dziecko przestało być kopiowane.
+
+### 10.1 Monitor tego nie łapie
+
+```
+$ ./check-snap-age.sh -v -R -L k1a "hdd/k1a-tgt/192.168.28.9" "-" 90m 150m
+OK dataset=.../lab1a/at     newest=20260824-092601             age=4m
+OK dataset=.../lab1a/at/a   newest=20260824-092334             age=6m   <- w tyle
+OK dataset=.../lab1a/at/b   newest=20260824-092601             age=4m
+rc=0
+```
+
+Monitor mierzy **wiek bezwzględny** każdego datasetu wobec progów (90m/150m),
+a nie **rozjazd między rodzeństwem**. Dziecko odstające o dwa snapshoty jest
+dla niego zdrowe, dopóki nie przekroczy progu czasowego — czyli przez
+kolejne półtorej godziny nikt się nie dowie, a jeśli w międzyczasie coś
+dołoży dziecku jakikolwiek snapshot, nie dowie się nigdy.
+
+## 11. Podsumowanie pierwszej fazy
+
+| # | Znalezisko | Klasa | Status |
+|---|---|---|---|
+| F1 | `-E` chroni tylko adopcję: wykluczone rodziny jadą na target jako snapshoty pośrednie (`send -I`) i konkurują o sloty retencji | projektowe / niedopowiedzenie | zmierzone |
+| F2 | Stampede: trzy relacje, dwa konta, dwa źródła — wszystkie o `:01` | znane, w kolejce | zmierzone |
+| F3 | Skasowanie bazy na źródle zatrzymuje relację atomową na stałe; komunikat surowy, brak samonaprawy (tryb płaski: samoleczący) | odporność | zmierzone |
+| F4 | **`-F` raportuje pełny sukces przy niezsynchronizowanym dziecku**; monitor nie widzi rozjazdu rodzeństwa | **fail-open, cisza** | zmierzone ×2 |
+
+Obalone przewidywania: nr 1 (atomowy + ręczny snapshot dziecka **nie** powoduje
+odmowy — dojeżdża przy następnym cyklu) i nr 2 (sync nie wszedł w kolizję ze
+strażnikiem pokrycia).
+
+Potwierdzone: nr 4 (stampede).
+
+Do rozstrzygnięcia w dalszej części kampanii: nr 3 (monitor na nodze sync
+przy dwóch przeskokach wieku) — wymaga upływu czasu.
