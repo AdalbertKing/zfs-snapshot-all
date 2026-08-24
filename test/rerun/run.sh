@@ -49,7 +49,8 @@ addclient_decision() {   # <host> <target> <user> -> rc + first log line
       printf 'name=rel\nlan=%q\ntarget=%q\nlocal_user=%q\n' "$1" "$2" "$3"
       # The gate falls back to the pairing manifest when a record predates
       # CREATED_ENDPOINT; stub the helpers so the test states its own inputs.
-      echo 'peer_manifest_path() { echo /nonexistent; }'
+      printf 'peer_manifest_path() { echo %q; }
+' "${MANIFEST:-/nonexistent}"
       echo 'peer_label() { echo lbl; }'
       # The block under test, verbatim from the real file, wrapped in a
       # function: it uses `local`, which bash rejects at top level -- and a
@@ -116,6 +117,49 @@ case "$out" in
 esac
 
 # The state used by the remaining cases.
+mkrec active 10.0.0.1 pool/tgt bckp
+
+
+# --- the fallback path, which the cases above never touch -------------------
+# A record predating CREATED_ENDPOINT must still have its port checked, and the
+# only durable source is the pairing manifest's PEER_SAVED_PORT. Stubbing the
+# manifest away (as every case above does) would leave this whole branch
+# untested -- so these two cases hand it a real file.
+mkrec_nolegacy() {   # <host> <target> <user>  -- record WITHOUT CREATED_ENDPOINT
+    mkdir -p "$WORK/clients"
+    cat > "$WORK/clients/rel.conf" <<REC
+CLIENT_NAME=rel
+PEER_HOST=$1
+CLIENT_TARGET=$2
+LOCAL_USER=$3
+STATE=active
+REC
+}
+
+mkrec_nolegacy 10.0.0.1 pool/tgt bckp
+printf 'PEER_SAVED_PORT=2222
+' > "$WORK/manifest.conf"
+
+MANIFEST="$WORK/manifest.conf" out="$(MANIFEST="$WORK/manifest.conf" addclient_decision 10.0.0.1:22 pool/tgt bckp)"
+case "$out" in
+    *DIE:*) ok "a legacy record takes its port from the pairing manifest (mismatch refused)" ;;
+    *) bad "a legacy record takes its port from the pairing manifest (mismatch refused)" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+out="$(MANIFEST="$WORK/manifest.conf" addclient_decision 10.0.0.1:2222 pool/tgt bckp)"
+case "$out" in
+    *"RC=0"*) ok "a legacy record with a MATCHING manifest port is a no-op" ;;
+    *) bad "a legacy record with a MATCHING manifest port is a no-op" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
+# Neither CREATED_ENDPOINT nor a readable manifest: the endpoint cannot be
+# confirmed, so this must NOT be treated as the same request.
+out="$(addclient_decision 10.0.0.1:22 pool/tgt bckp)"
+case "$out" in
+    *DIE:*) ok "an unconfirmable endpoint fails CLOSED, not into a no-op" ;;
+    *) bad "an unconfirmable endpoint fails CLOSED, not into a no-op" "$(printf '%s' "$out" | head -2)" ;;
+esac
+
 mkrec active 10.0.0.1 pool/tgt bckp
 
 
