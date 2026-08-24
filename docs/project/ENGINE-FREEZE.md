@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 67e98c7273006be3d306f8b5ac1ba6eae110848d -->
-<!-- frozen: snapget.sh 100755 6d043179ff1e7ddaf62829e38aa26dea05a608d3 -->
+<!-- frozen: snapsend.sh 100755 a8a8155ec81ce0424ac8dd9247d95181c7149d0c -->
+<!-- frozen: snapget.sh 100755 5ecde3141e2404fb39766479d3391370b66d39cd -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 065bc43d92729170bbfbf54c8dc273910c4b5a60 -->
@@ -54,6 +54,23 @@ change is recorded here in prose with the date and the direction it answers,
 and `--refreeze` re-pins the baseline as part of the same change.
 
 Owner-authorized refreezes:
+
+- 2026-08-24 (snapget.sh, snapsend.sh): under `-r` the verification now proves EVERY
+  descendant landed, not just the root. The boundary the code stated --
+  "the descendants rode the same stream and cannot have arrived separately"
+  -- was measured FALSE in the pve1>pve9 campaign: `zfs recv` of a -R stream
+  SKIPS a descendant whose local state cannot accept the increment, lands
+  the rest, and exits 0. Reproduced deterministically on a purpose-built
+  tree (a child carrying a manual snapshot the rest of the tree never had,
+  plus the base deleted on the source): parent and sibling received the new
+  snapshot, that child did not, and the run reported success. New
+  validate_subtree costs two `zfs list` calls (one per side) and requires
+  only the datasets that really carry the snapshot on the source; -X
+  exclusions are skipped because they never entered the stream. Mirrored into
+  snapsend.sh in the same change: the receive side behaves identically
+  whoever pushed the stream, so the push engine carried the same hole (the
+  twins suite refused the one-sided edit and named it). Owner direction:
+  "Opisz po polsku znaleziska i naprawiamy".
 
 - 2026-08-23 (lib-zfs-snap.sh): the ControlMaster socket is per RUN ($$ in
   the path), not per host+port. The shared master plus tune_ssh_close's
