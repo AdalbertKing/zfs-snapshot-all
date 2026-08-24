@@ -2325,6 +2325,89 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## KAMPANIA: lab pasywny pve2>pve9 -- ZALICZONA (2026-08-23/24)
+
+Wachlarz trzech relacji pasywnych z jednego zrodla, kazda innego ksztaltu, na
+koncie delegowanym `bckp`, pod prawdziwym cronem, ze zewnetrznym generatorem
+"cudzych" snapshotow co 5 minut (rotacja `serwis_`/`kopia_`/BEZ prefiksu +
+rodzina wykluczona `smiec_`).
+
+- **labP1** `hdd/labE1/at` z dziecmi, rekursja ATOMOWA (`-r`), join
+  automatyczny (`--grant-remotely`), `-E smiec_`;
+- **labP2** `hdd/labE2/at`, rekursja PLASKA (`-R`), join RECZNY (stop z
+  instrukcja -> `--commit-scope` na zrodle -> wznowienie), `-E smiec_`,
+  wykluczone dziecko `-X skip`;
+- **labP3** `hdd/labE3/at`, pojedynczy dataset, join automatyczny,
+  `-E smiec_`; jego zrodlo dostawalo WYLACZNIE wykluczone `smiec_` -- pulapka
+  na monitor.
+
+### Wynik czystego przelotu (start 23:56, odczyt 08:40)
+
+**54 biegi cronowe, 54x rc=0** (27 backupow + 27 prune, 9 godzin pelnej
+autonomii, werdykty czytane z pola `rc=` w logu -- status samej linii crona
+jest zawsze 0 i nie jest dowodem). Rejestracje pierwszym podejsciem: P1 i P3
+jedna komenda EXIT=0, P2 zaprojektowany stop -> commit operatora ->
+wznowienie EXIT=0. Adopcje niezaleznie od nazwy: `20260823-222001` (BEZ
+prefiksu), `serwis_*`, `kopia_*`. Wykluczone dziecko `skip` nieobecne na
+targecie. Monitor labP3 przeszedl pelna sciezke `OK -> WARNING -> CRITICAL`
+(34 wpisy CRIT w logu) MIMO swiezych `smiec_` co 5 minut -- nie dal sie
+przekupic rodzina zadeklarowana jako wykluczona. To byl glowny pomiar
+kampanii.
+
+### Wady wykryte i naprawione po drodze (PR #142, #143, #144)
+
+Dwa wczesniejsze przebiegi zostaly UNIEWAZNIONE przez wlasciciela ("ma byc
+caly bez zaciecia") i posluzyly jako kampania lapania dziur:
+
+1. **seed pasywny ignorowal wykluczenia** -- gola galaz `-e` adoptowala
+   najnowszy snapshot czegokolwiek, w tym rodziny wykluczonej, gdy byla
+   najswiezsza; seed renderuje teraz flagi przez `client_passive_flags`
+   (#142);
+2. **ciche przejecie konta** -- druga relacja z innym `--local-user` byla
+   przestawiana na konto z manifestu parowania; add-client odmawia po imieniu
+   (#142);
+3. **kradziez hostkeya rodzenstwu** -- `alias_known_hosts` jest per HOST,
+   alias per RELACJA; writer nadpisywal plik jednym wpisem (#143);
+4. **brak delegacji lokalnego receive w trybie backup** -- `zfs allow` robil
+   tylko branch sync; maskowane, bo seed idzie jako root (#143);
+5. **wspolny multiplekser ssh** -- socket ControlMaster kluczowany tylko
+   hostem i portem byl DZIELONY przez rownoczesne biegi, a `-O exit` na
+   koncu biegu zabijal wspolnego mastera i scinal rodzenstwu transfer w pol
+   strumienia. Awaria maksymalnie cicha: ssh 255 bez slowa, mbuffer czysty
+   EOF, `recv` "failed to read from stream", sshd normalna sesja, ofiara
+   losowa. Biegi sekwencyjne NIGDY nie padaly -- dlatego kazda reczna
+   weryfikacja przechodzila, a prawdziwy tick crona nie. Socket per BIEG
+   (`$$`); dowod: 6 rund x 3 rownoczesne relacje = 18/18 rc=0 (#144).
+
+### Obserwacje, nie wady
+
+- **Tryb atomowy niesie wykluczone snapshoty.** Na targecie labP1 wyladowalo
+  18 snapshotow `smiec_`: `zfs send -R -I` z definicji przesyla WSZYSTKO z
+  zakresu. Wykluczenia rzadza wyborem bazy, monitoringiem i prune -- nie
+  zawartoscia strumienia atomowego. Targety plaski i pojedynczy: zero
+  `smiec_`.
+- **Kanal alertowy pve9 jest gluchy.** Monitor poprawnie krzyczal CRIT i
+  `notify-fail.sh` strzelil, ale alert nie dotarl nigdzie: brak
+  `/var/mail/root`, 4 wiadomosci frozen w kolejce exima, bounce'y do
+  `bckp@pve9`. Wada srodowiska hosta laboratoryjnego, nie pakietu -- ale na
+  produkcji nikt by o CRIT nie wiedzial.
+- **Uprzaz pomiarowa klamala dwa razy**, produkt ani razu: rekonstruowana
+  linia monitora bez `-R` dala falszywe OK, a `bash -c ""` na pustym
+  wyciagnieciu linii dalo falszywe rc=0. Regula: uruchamiaj linie VERBATIM z
+  crontaba.
+
+### Rozbiorka
+
+Relacje usuniete przez `remove-client` (kaskada rozpoznala kolejnosc: dopiero
+ostatnia zwolnila parowanie), targety `labP*-tgt` zniszczone, rezydualny
+config konta usuniety, linia generatora zdjeta z crontaba pve2 z DIFFEM
+(11 -> 10 linii, usunieta wylacznie `# LAB-PASSIVE-GEN`), skrypt generatora
+usuniety, `deploy.sh --leave=pve9` na zrodle, zrodla `hdd/labE1..3`
+zniszczone. Produkcja pve2 zweryfikowana nietknieta (20 linii crontaba
+`zfsbackup`). Na pve9 zostaja rezydua STARSZYCH labow (`hdd/lab9*`,
+`hdd/pve2backup/...lab9src`, `hdd/pve2prodbackup/...lab9src`) -- nie z tej
+kampanii, nie ruszane.
+
 ## Lab pasywny, pierwszy planowy tick — hydraulika kont (2026-08-23, galaz fix/multi-relationship-account-plumbing)
 
 Pierwszy PLANOWY bieg crona (20:01) obnazyl dwie kolejne wady rodziny
