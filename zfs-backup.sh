@@ -2752,7 +2752,13 @@ schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or no
         if [ -z "$first" ]; then
             first="$expr"
         elif [ "$expr" != "$first" ]; then
-            log "schedule: '$field' differs between the tiers this profile references -- leaving it to the profile rather than collapsing them onto one cadence"
+            # >&2, NOT log's stdout: this function is CAPTURED by the caller
+            # ( expr=$(schedule_template_expr send) ), so a diagnostic on
+            # stdout BECOMES the value and is written into the config as
+            # `send_schedule = 17 schedule: '...' differs ...`. The "leave it
+            # to the profile" path would then emit invalid policy -- the exact
+            # failure it exists to avoid. Same family as `die` inside $().
+            log "schedule: '$field' differs between the tiers this profile references -- leaving it to the profile rather than collapsing them onto one cadence" >&2
             return 0
         fi
     done
@@ -2774,7 +2780,9 @@ schedule_pick_minute() {   # <relationship name> -> minute 0-59
     done
     # Every minute of the hour is already used. Grouping is unavoidable now,
     # so say so instead of pretending the spread worked.
-    log "schedule: all 60 minutes on this host already carry a transfer job -- '$name' shares minute $start"
+    # >&2 for the same reason as above: the caller captures this function, so
+    # a diagnostic on stdout would be returned as the MINUTE.
+    log "schedule: all 60 minutes on this host already carry a transfer job -- '$name' shares minute $start" >&2
     printf '%s' "$start"
 }
 
