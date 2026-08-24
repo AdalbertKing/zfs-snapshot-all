@@ -4856,12 +4856,23 @@ fi
 # variable first: this suite runs under pipefail, so `gen-cron | grep -q` would
 # report the whole pipeline as failed (gen-cron takes SIGPIPE the moment grep -q
 # short-circuits on a match), which is the opposite of what the grep found.
+# CONTRACT CHANGE 2026-08-24 (schedule stagger): the MINUTE is no longer the
+# profile's to decide -- relationships are spread across the clock so they stop
+# firing in one bucket, and the chosen minute is written into the section. What
+# the profile still owns, and what this therefore asserts, is the CADENCE: the
+# remaining four cron fields must arrive from the ALT template untouched. The
+# assertion was rewritten rather than deleted, because the property it was built
+# for (profile semantics reach the real gen-cron output, not just the config
+# text) is exactly the property that must survive the stagger.
 pc_rendered="$(bash "$REPO/gen-cron.sh" -c "$PC/cap/workfile" 2>/dev/null)"
-if [ -f "$PC/cap/workfile" ] && printf '%s\n' "$pc_rendered" | grep -qE '^7 \* \* \* \* '; then
+pc_send_line="$(printf '%s
+' "$pc_rendered" | grep -E 'snapget|snapsend' | grep -v delsnaps | head -1)"
+pc_cadence="$(printf '%s' "$pc_send_line" | awk '{print $2, $3, $4, $5}')"
+pc_minute="$(printf '%s' "$pc_send_line" | awk '{print $1}')"
+if [ -n "$pc_send_line" ] && [ "$pc_cadence" = "* * * *" ]         && printf '%s' "$pc_minute" | grep -qE '^[0-9]+$'; then
     ok "95: the ALT send cadence reaches the rendered cron via the real gen-cron.sh"
 else
-    bad "95: the ALT send cadence reaches the rendered cron via the real gen-cron.sh" \
-        "$(printf '%s\n' "$pc_rendered" | grep -E 'snapget|snapsend|^[0-9]' | head -3)"
+    bad "95: the ALT send cadence reaches the rendered cron via the real gen-cron.sh"         "cadence='$pc_cadence' minute='$pc_minute' line='$pc_send_line'"
 fi
 
 # 2. The omitted-choice path (add-client stores PROFILE=default) still resolves

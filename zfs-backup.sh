@@ -2318,6 +2318,15 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
     done
 
+    # One minute for this relationship, chosen once here and written into every
+    # section it creates -- see schedule_pick_minute. Only for sections being
+    # CREATED: a preserved section keeps whatever it already carries.
+    local stagger_min stagger_prune stagger_send_expr stagger_prune_expr
+    stagger_min=$(schedule_pick_minute "$name")
+    stagger_prune=$(( (stagger_min + 20) % 60 ))
+    stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
+    stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
+
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
         {
@@ -2357,9 +2366,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # to exactly the families the pickup refuses to adopt --
                 # measured both ways in LAB-E: an aging excluded family must
                 # not page, a fresh one must not paint a stale relation green.
+                echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
+                echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
@@ -2460,6 +2471,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                         local _pex; _pex=$(client_passive_flags | awk '{for(i=1;i<=NF;i++) if ($i=="-E") printf "%s%s", (n++?",":""), $(i+1)}')
                         [ -n "$_pex" ] && echo "	monitor_exclude = $_pex"
                     fi
+                    # Same stagger as the send side, keeping the 20-minute
+                    # gap the profile had between them. A prune that wraps
+                    # past the hour is fine: it deletes by age and keep-count,
+                    # not by "did a backup just run".
+                    echo "	prune_schedule = $stagger_prune_expr"
                     echo "	recursive    = yes"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}"
@@ -2595,6 +2611,98 @@ default_cron_config() {
     else
         echo "/etc/zfs-snapshot-all/jobs.$h.$u.conf"
     fi
+}
+
+# --- SCHEDULE STAGGER ------------------------------------------------------
+# Relationships created from the same profile inherit the same literal
+# send_schedule, so every one of them fires in the SAME minute. Measured in
+# the pve1>pve9 campaign: three relationships, two accounts, two different
+# source hosts -- all at :01, all prune at :21. At fleet scale that is a
+# thundering herd on the link, on the source's disks and on sshd (MaxStartups
+# refuses connections, which looks like a network fault). The owner named it
+# before the lab did.
+#
+# The minute is chosen ONCE, at create, and written into the section as a
+# real send_schedule -- so the config keeps telling the truth about when the
+# job runs, an operator can overwrite it by hand, and a re-activation never
+# re-rolls it (a preserved section is untouchable, same rule as the profile).
+#
+# GLOBAL by owner decision: the collector's disks and CPU are shared by every
+# relationship regardless of which source it pulls from, so the spread is
+# computed across the whole host, not per source.
+#
+# Honest boundary: this can only avoid the minutes it can SEE -- the managed
+# blocks of the accounts cron_known_accounts finds, plus the sections of the
+# configs. A relationship installed in a crontab this host cannot enumerate
+# stays invisible and may still collide. Same assumption the coverage guard
+# already makes; stated rather than hidden.
+schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
+    local u tmp f
+    while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        tmp=$(mktemp) || continue
+        if cron_read "$u" "$tmp"; then
+            # First field of any line that actually runs a transfer engine.
+            grep -E '(snapget|snapsend)\.sh' "$tmp" 2>/dev/null                 | awk '{print $1}' | grep -E '^[0-9]+$' || true
+        fi
+        rm -f "$tmp"
+    done < <(cron_known_accounts)
+    # Sections that exist but are not installed yet.
+    for f in /etc/zfs-snapshot-all/jobs.*.conf; do
+        [ -r "$f" ] || continue
+        sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]].*//p' "$f" 2>/dev/null || true
+    done
+}
+
+# Deterministic start point, then the first free minute upwards. cksum, not
+# $RANDOM: the same relationship must land on the same minute on every host
+# and on every re-read, or the crontab diff becomes noise.
+# The template's own cadence, with ONLY the minute field replaced. Writing a
+# bare "M * * * *" would have silently converted a daily or weekly profile
+# (e.g. "0 3 * * *") into an hourly one -- caught by the suite's assertion that
+# a profile's cadence reaches the rendered cron. The spread is about WHICH
+# minute inside the tier's own rhythm, never about the rhythm itself.
+schedule_with_minute() {   # <cron expression> <minute> -> expression with field 1 replaced
+    local expr="$1" min="$2"
+    [ -n "$expr" ] || { printf '%s * * * *' "$min"; return 0; }
+    printf '%s %s' "$min" "$(printf '%s' "$expr" | awk '{$1=""; sub(/^ /,""); print}')"
+}
+
+# The send/prune cadence this relationship's profile actually declares, read
+# from the tier its dataset fragment references (use_template). Empty when the
+# profile is not loaded -- the caller then keeps the hourly default, which is
+# what every built-in profile uses.
+schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or nothing
+    local which="$1" frag tpl field
+    case "$which" in
+        send)  frag="$PROFILE_DS_FILE";    field=send_schedule ;;
+        prune) frag="$PROFILE_PRUNE_FILE"; field=prune_schedule ;;
+        *) return 0 ;;
+    esac
+    [ -n "${PROFILE_LOADED:-}" ] && [ -r "${frag:-}" ] || return 0
+    tpl=$(awk -F= '/^[[:space:]]*use_template[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$frag")
+    tpl="${tpl%%,*}"
+    [ -n "$tpl" ] || return 0
+    profile_template_section "profile__${PROFILE_ACTIVE}__${tpl}" 2>/dev/null         | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}'
+}
+
+schedule_pick_minute() {   # <relationship name> -> minute 0-59
+    local name="$1" start taken probe i
+    start=$(printf '%s' "$name" | cksum 2>/dev/null | awk '{print $1 % 60}')
+    case "$start" in ''|*[!0-9]*) start=0 ;; esac
+    taken=" $(schedule_taken_minutes | sort -un | tr '
+' ' ') "
+    for i in $(seq 0 59); do
+        probe=$(( (start + i) % 60 ))
+        case "$taken" in
+            *" $probe "*) continue ;;
+            *) printf '%s' "$probe"; return 0 ;;
+        esac
+    done
+    # Every minute of the hour is already used. Grouping is unavoidable now,
+    # so say so instead of pretending the spread worked.
+    log "schedule: all 60 minutes on this host already carry a transfer job -- '$name' shares minute $start"
+    printf '%s' "$start"
 }
 
 # `crontab -l` for whoever owns the jobs. Root can read another account's
