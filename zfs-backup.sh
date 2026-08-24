@@ -2321,9 +2321,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # One minute for this relationship, chosen once here and written into every
     # section it creates -- see schedule_pick_minute. Only for sections being
     # CREATED: a preserved section keeps whatever it already carries.
-    local stagger_min stagger_prune
+    local stagger_min stagger_prune stagger_send_expr stagger_prune_expr
     stagger_min=$(schedule_pick_minute "$name")
     stagger_prune=$(( (stagger_min + 20) % 60 ))
+    stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
+    stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
 
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
@@ -2364,11 +2366,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # to exactly the families the pickup refuses to adopt --
                 # measured both ways in LAB-E: an aging excluded family must
                 # not page, a fresh one must not paint a stale relation green.
-                echo "	send_schedule = $stagger_min * * * *"
+                echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
-                echo "	send_schedule = $stagger_min * * * *"
+                echo "	send_schedule = $stagger_send_expr"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
@@ -2473,7 +2475,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     # gap the profile had between them. A prune that wraps
                     # past the hour is fine: it deletes by age and keep-count,
                     # not by "did a backup just run".
-                    echo "	prune_schedule = $stagger_prune * * * *"
+                    echo "	prune_schedule = $stagger_prune_expr"
                     echo "	recursive    = yes"
                     echo "	pair_label   = $name"
                     echo "	notify       = ${name}"
@@ -2655,6 +2657,35 @@ schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
 # Deterministic start point, then the first free minute upwards. cksum, not
 # $RANDOM: the same relationship must land on the same minute on every host
 # and on every re-read, or the crontab diff becomes noise.
+# The template's own cadence, with ONLY the minute field replaced. Writing a
+# bare "M * * * *" would have silently converted a daily or weekly profile
+# (e.g. "0 3 * * *") into an hourly one -- caught by the suite's assertion that
+# a profile's cadence reaches the rendered cron. The spread is about WHICH
+# minute inside the tier's own rhythm, never about the rhythm itself.
+schedule_with_minute() {   # <cron expression> <minute> -> expression with field 1 replaced
+    local expr="$1" min="$2"
+    [ -n "$expr" ] || { printf '%s * * * *' "$min"; return 0; }
+    printf '%s %s' "$min" "$(printf '%s' "$expr" | awk '{$1=""; sub(/^ /,""); print}')"
+}
+
+# The send/prune cadence this relationship's profile actually declares, read
+# from the tier its dataset fragment references (use_template). Empty when the
+# profile is not loaded -- the caller then keeps the hourly default, which is
+# what every built-in profile uses.
+schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or nothing
+    local which="$1" frag tpl field
+    case "$which" in
+        send)  frag="$PROFILE_DS_FILE";    field=send_schedule ;;
+        prune) frag="$PROFILE_PRUNE_FILE"; field=prune_schedule ;;
+        *) return 0 ;;
+    esac
+    [ -n "${PROFILE_LOADED:-}" ] && [ -r "${frag:-}" ] || return 0
+    tpl=$(awk -F= '/^[[:space:]]*use_template[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$frag")
+    tpl="${tpl%%,*}"
+    [ -n "$tpl" ] || return 0
+    profile_template_section "profile__${PROFILE_ACTIVE}__${tpl}" 2>/dev/null         | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}'
+}
+
 schedule_pick_minute() {   # <relationship name> -> minute 0-59
     local name="$1" start taken probe i
     start=$(printf '%s' "$name" | cksum 2>/dev/null | awk '{print $1 % 60}')
