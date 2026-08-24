@@ -439,3 +439,86 @@ Potwierdzone: nr 4 (stampede).
 
 Do rozstrzygnięcia w dalszej części kampanii: nr 3 (monitor na nodze sync
 przy dwóch przeskokach wieku) — wymaga upływu czasu.
+
+## 12. F4 — weryfikacja, odtworzenie i NAPRAWA
+
+Pierwsze dwa pomiary F4 (bieg z `-F` → `rc=0` mimo dziecka w tyle) nie dały
+się powtórzyć w trzecim podejściu — dlatego **nie ogłosiłem wady**, tylko
+zbudowałem kontrolowany eksperyment od zera.
+
+### 12.1 Eksperyment kontrolny
+
+Świeże drzewo `hdd/lab1c/at` + dzieci `a`, `b`, relacja `k1c` (atomowa,
+pasywna). Sekwencja odtwarzająca zachowanie admina:
+
+```bash
+zfs snapshot -r hdd/lab1c/at@s1        # relacja zarejestrowana i zsynchronizowana
+zfs snapshot -r hdd/lab1c/at@s2        # cykl, bieg -> target ma s1, s2
+zfs destroy  -r hdd/lab1c/at@s2        # admin sprząta bazę
+zfs snapshot -r hdd/lab1c/at@s3        # nowy cykl
+# bieg z -F -> rc=0, target ma s1,s2,s3 WSZĘDZIE -- czyli -F zadziałał POPRAWNIE
+```
+
+Czyli sam `-F` niczego nie tłumi. Różnicą wobec `k1a` była **asymetria
+drzewa**: dziecko `a` miało ręczny snapshot, którego reszta drzewa nigdy nie
+miała. Dołożone do eksperymentu:
+
+```bash
+zfs snapshot hdd/lab1c/at/a@reczny-tylko-a   # tylko na dziecku
+zfs snapshot -r hdd/lab1c/at@s4              # cykl, bieg -> wszystko ląduje
+zfs destroy  -r hdd/lab1c/at@s4              # admin kasuje bazę
+zfs snapshot -r hdd/lab1c/at@s5
+```
+
+Bieg **bez żadnych flag naprawczych**:
+
+```
+rc=0
+at@s2 s3 s4 s5                       <- rodzic: aktualny
+at/b@s1..s4 s5                       <- rodzeństwo: aktualne
+at/a@s1 s2 s3 reczny-tylko-a s4      <- BEZ s5
+```
+
+**Znalezisko potwierdzone i zawężone.** Nie chodziło o `-F`. Chodzi o to, że
+`zfs recv` strumienia `-R` **pomija potomka**, którego stan lokalny nie
+przyjmuje przyrostu, ląduje całą resztę i **kończy się zerem**. Silnik
+przyjmował to za niemożliwe — miał to zapisane wprost w komentarzu:
+
+> „under -r the subtree travels as ONE stream and this proves the ROOT
+> landed. The descendants rode the same stream and **cannot have arrived
+> separately**"
+
+Monitor tego nie zasłoni: mierzy wiek bezwzględny każdego datasetu wobec
+progów, a nie rozjazd między rodzeństwem.
+
+### 12.2 Naprawa (PR #146, `main@62c4bd3`)
+
+`validate_subtree` dowodzi, że **każdy** potomek otrzymał przesłany snapshot.
+Koszt: dwa wywołania `zfs list` (po jednym na stronę), nie jedno na dataset.
+Wymagane są tylko te datasety, które **naprawdę** mają ten snapshot na
+źródle (dataset utworzony później zgodnie z prawdą go nie ma), a wykluczenia
+`-X` są pomijane, bo nigdy nie weszły do strumienia.
+
+**Dowód na żywo — ta sama sekwencja na naprawionym silniku** (`hdd/lab1d`,
+relacja `k1d`):
+
+```
+rc=1
+VERIFY FAILED (subtree): the stream reported success but these descendants
+did not receive @s3: hdd/k1d-tgt/192.168.28.9/hdd/lab1d/at/a
+```
+
+Przed: `rc=0` i cisza. Po: fail-closed i komunikat nazywający **konkretny**
+dataset. Zdrowe relacje sprawdzone pod kątem fałszywych alarmów: `k1b`
+(płaska) `rc=0`, `k2s` (sync) `rc=0`.
+
+### 12.3 Ta sama dziura była w silniku PUSH
+
+Suita `twins` odrzuciła jednostronną zmianę: „process_dataset changed in
+snapget.sh ONLY". Słusznie — strona odbiorcza zachowuje się tak samo bez
+względu na to, kto wypchnął strumień, więc `snapsend.sh` miał identyczną
+dziurę. Poprawka zdublowana (ta sama funkcja, przeciwny kierunek: źródło
+lokalne, target zdalny), kontrakt zatwierdzony po przejrzeniu obu diffów.
+
+**Ta suita zarobiła dziś na siebie**: bez niej naprawilibyśmy połowę
+problemu i nie wiedzieli o tym.
