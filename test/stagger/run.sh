@@ -105,8 +105,7 @@ esac
 collect() {   # <crontab text> -> the minutes the collector reports
     local t; t=$(mktemp)
     { echo 'set -u'
-      printf 'CRONTAB_TEXT=%q
-' "$1"
+      printf 'CRONTAB_TEXT=%q\n' "$1"
       echo 'cron_known_accounts() { echo root; }'
       echo 'cron_read() { printf "%s
 " "$CRONTAB_TEXT" > "$2"; }'
@@ -148,14 +147,11 @@ expr_for() {   # <use_template value> -> the cadence found, or nothing
     printf '	use_template = %s
 ' "$1" > "$d/ds.inc"
     printf '[template:profile__p__hourly]
-	send_schedule  = 4 * * * *
-' > "$d/tpl"
+	send_schedule  = 4 * * * *\n' > "$d/tpl"
     { echo 'set -u'
       echo 'log() { :; }'
-      printf 'PROFILE_DS_FILE=%q
-' "$d/ds.inc"
-      printf 'PROFILE_TPL_FILE=%q
-' "$d/tpl"
+      printf 'PROFILE_DS_FILE=%q\n' "$d/ds.inc"
+      printf 'PROFILE_TPL_FILE=%q\n' "$d/tpl"
       echo 'PROFILE_PRUNE_FILE=""'
       echo 'PROFILE_LOADED=1'
       echo 'PROFILE_ACTIVE=p'
@@ -174,6 +170,60 @@ for form in "profile__p__hourly" "hourly"; do
         bad "the cadence is found for use_template='$form'" "got '$got', wanted '4 * * * *'"
     fi
 done
+
+# --- diagnostics must not become the value ---------------------------------
+# Both helpers are CAPTURED by their caller ( x=$(schedule_...) ), and log()
+# writes to STDOUT. A diagnostic printed there is returned as the value and
+# written into the config -- `send_schedule = 17 schedule: '...' differs ...`.
+# So these cases deliberately install a log() that behaves like the real one.
+two_tier_expr() {   # -> what schedule_template_expr returns when tiers disagree
+    local t; t=$(mktemp); local d; d=$(mktemp -d)
+    printf '	use_template = profile__p__hourly,profile__p__daily\n' > "$d/ds.inc"
+    { printf '[template:profile__p__hourly]
+	send_schedule  = 4 * * * *\n'
+      printf '[template:profile__p__daily]
+	send_schedule  = 2 3 * * *\n'; } > "$d/tpl"
+    { echo 'set -u'
+      echo 'log() { echo ">>> $*"; }'      # the REAL log: stdout
+      printf 'PROFILE_DS_FILE=%q\n' "$d/ds.inc"
+      printf 'PROFILE_TPL_FILE=%q\n' "$d/tpl"
+      echo 'PROFILE_PRUNE_FILE=""'
+      echo 'PROFILE_LOADED=1'
+      echo 'PROFILE_ACTIVE=p'
+      awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      lift schedule_template_expr
+      echo 'schedule_template_expr send'; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -rf "$t" "$d"
+}
+
+got_two="$(two_tier_expr)"
+if [ -z "$got_two" ]; then
+    ok "disagreeing tiers yield NOTHING, not a diagnostic string"
+else
+    bad "disagreeing tiers yield NOTHING, not a diagnostic string"         "returned '$got_two' -- this value would be written into the config"
+fi
+
+saturated_pick() {   # -> what schedule_pick_minute returns with every minute taken
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      echo 'log() { echo ">>> $*"; }'      # the REAL log: stdout
+      echo 'schedule_taken_minutes() { seq 0 59; }'
+      lift schedule_pick_minute
+      echo 'schedule_pick_minute rel1'; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -f "$t"
+}
+
+got_sat="$(saturated_pick)"
+# The WHOLE value must be digits. A line-anchored grep would happily match the
+# second line of a polluted capture (diagnostic first, minute after) and call
+# it a pass -- which is exactly how the first version of this case was blind.
+if [ -n "$got_sat" ] && case "$got_sat" in *[!0-9]*) false ;; *) true ;; esac; then
+    ok "a saturated host still yields a bare minute, not a diagnostic string"
+else
+    bad "a saturated host still yields a bare minute, not a diagnostic string"         "returned '$got_sat' -- this value would become the cron minute"
+fi
 
 # --- determinism ------------------------------------------------------------
 if [ "$(pick "$NAME" "")" = "$free_pick" ] && [ "$(pick "$NAME" "")" = "$free_pick" ]; then
