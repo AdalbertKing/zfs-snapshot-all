@@ -1184,6 +1184,14 @@ out="$(runi snapsend-ok "" --source=rpool/db --target=hdd/backups --config="$CFG
     || bad "krok5/refusal: an unmarked (foreign) section at the same path still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
 
 # OURS, but pointing at a DIFFERENT target: a different request, not a rerun.
+#
+# Self-contained fixture on purpose. Leaning on whatever the previous
+# assertions left in $CFG made this one refuse for an unrelated reason (a
+# leftover section referencing a template that does not exist), which is a test
+# passing on the wrong evidence -- and it only showed up once the cases around
+# it were reordered.
+seed_cfg
+printf '\n[dataset:rpool/data]\n\t# managed-by: zfs-backup.sh local-backup source=rpool/data\n\tuse_template = profile__default__standard_hourly\n\tdst          = hdd/backups\n' >> "$CFG"
 out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/dokumenty --config="$CFG" --install --yes)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'overlap'; } \
     && ok "krok5/refusal: our own section with a different target still refuses (not a no-op)" \
