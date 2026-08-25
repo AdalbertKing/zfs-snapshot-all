@@ -953,6 +953,7 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
 PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
 PROFILE_EXCL_FILE=""
+PROFILE_LETTERS_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
 # BASHPID of the shell whose EXIT trap holds the release. Inherited by a
@@ -989,12 +990,12 @@ declare -A SOURCE_PRUNE_PRESERVED=()
 # larger lie. The warning is the report.
 profile_release_tmp() {
     local f left=""
-    for f in "$PROFILE_TPL_FILE" "$PROFILE_EXCL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
+    for f in "$PROFILE_TPL_FILE" "$PROFILE_EXCL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE" "$PROFILE_LETTERS_FILE"; do
         [ -n "$f" ] || continue
         rm -f "$f" 2>/dev/null
         [ -e "$f" ] && left="$left $f"
     done
-    PROFILE_TPL_FILE=""; PROFILE_EXCL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
+    PROFILE_TPL_FILE=""; PROFILE_EXCL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LETTERS_FILE=""; PROFILE_LOADED=""
     if [ -n "$left" ]; then
         warn "could not remove the rendered profile file(s):$left -- they are still in place"
         return 1
@@ -1109,9 +1110,28 @@ load_active_profile() {
     PROFILE_EXCL_FILE=$(mktemp)  || die "mktemp failed"
     PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
     PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"
-    profile_render_templates "$dir" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE" "$PROFILE_EXCL_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$dir/dataset.inc" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$dir/prune.inc" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    # ONE FILE IN, FOUR ARTIFACTS OUT. profile.conf is what an operator edits;
+    # the split is this runtime's business and nobody else's. The tier-letter
+    # table comes from gen-cron itself (--dump-tier-letters), so `keep = 24` in
+    # a profile becomes `retain = -H24` without this file keeping a second copy
+    # of what -W means.
+    local _psplit_t _psplit_d _psplit_p
+    _psplit_t=$(mktemp) || die "mktemp failed"
+    _psplit_d=$(mktemp) || die "mktemp failed"
+    _psplit_p=$(mktemp) || die "mktemp failed"
+    PROFILE_LETTERS_FILE=$(mktemp) || die "mktemp failed"
+    bash "$GENCRON" --dump-tier-letters > "$PROFILE_LETTERS_FILE" 2>/dev/null \
+        || die "profile '$PROFILE_ACTIVE': could not read the tier-letter table from gen-cron.sh -- refusing to translate a retention against a table this run cannot see"
+    profile_split_one_file "$dir/profile.conf" "$_psplit_t" "$_psplit_d" "$_psplit_p" "$PROFILE_EXCL_FILE" \
+        || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_templates "$_psplit_t" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE" "" "$PROFILE_LETTERS_FILE" \
+        || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_d" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_p" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    # The split halves were scaffolding for this function alone: they never
+    # leave it, so they are removed here rather than joining the release list,
+    # which exists for the artifacts the REST of the run reads.
+    rm -f "$_psplit_t" "$_psplit_d" "$_psplit_p"
     PROFILE_LOADED=1
     return 0
 }
@@ -1588,13 +1608,30 @@ cron_config_section() {   # <file> <exact header, e.g. '[template:foo]'>
 # is read off the INSTALLED file, never from the profile -- which is why it can
 # be answered before deciding whether the profile is needed at all
 # (REV-20260810-090).
+# Read by SHAPE, not by name. This used to look for the literal
+# `[template:standard_hourly]` and ask whether that one section carried a
+# prune_schedule -- which worked only for configs written by the built-in
+# `default`, and answered "ladder" for every config whose tiers are named
+# anything else. A profile transcribed from production (`hourly`, `daily`,
+# `weekly`, `monthly`) is exactly that case: flat per-tier pruning that the
+# name check reads as a ladder.
+#
+# The question is really about shape: does a template CREATE a family and PRUNE
+# it in the same breath? A ladder keeps those apart -- one create-only template
+# and several prune-only ones over its family. A flat per-tier config fuses
+# them. So one template carrying both send_schedule and prune_schedule settles
+# it, whatever anyone called it.
 detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
     PROFILE_GFS=1
-    if grep -q "^\[template:standard_hourly\]" "$1" 2>/dev/null; then
-        if sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$1" | grep -q "prune_schedule"; then
-            PROFILE_GFS=0
-        fi
-    fi
+    [ -r "$1" ] || return 0
+    awk '
+        /^\[template:/ { has_send=0; has_prune=0; intpl=1; next }
+        /^\[/          { intpl=0 }
+        intpl && /^[ 	]*send_schedule[ 	]*=/  { has_send=1 }
+        intpl && /^[ 	]*prune_schedule[ 	]*=/ { has_prune=1 }
+        intpl && has_send && has_prune { print "flat"; exit }
+    ' "$1" 2>/dev/null | grep -q flat && PROFILE_GFS=0
+    return 0
 }
 
 # Does this CONFIG already carry relationship policy anyone could be affected by?

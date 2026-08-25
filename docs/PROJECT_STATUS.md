@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f229e1fba222e7ba -->
+<!-- status-covers-digest: 8cdc3ffae4a37d2b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1672,6 +1672,71 @@
   quiesce, `daily`/`weekly`/`monthly` z `auto`), a ksztalt profilu, ktory
   splaszczylby to do jednej wartosci, wykluczylby zarowno te late, jak i opis
   obecnej produkcji.
+
+- **ETAP PROFILI, faza 2: JEDEN PLIK NATYWNY + profil `prod` odwzorowujacy
+  produkcje (2026-08-25).**
+
+  Decyzja wlasciciela po dyskusji z recenzentem: **jeden plik dla operatora,
+  bez tworzenia nowego jezyka**. Profil to `profiles/<nazwa>/profile.conf`;
+  trzy dotychczasowe artefakty pozostaja, ale jako **cel kompilacji**, nie jako
+  interfejs. Nikt nie powinien wiedziec, ze profil to trzy pliki, zeby zmienic
+  retencje.
+
+  **Co wziete z propozycji recenzenta:** jeden plik, naglowek `[profile]`
+  z wersja, oraz ergonomiczne `keep = 24` — tlumaczone na `retain = -H24` przy
+  renderowaniu, z **kanonicznej** nazwy tieru, przy uzyciu tabeli liter
+  pobranej z `gen-cron.sh --dump-tier-letters` (nowe), a nie jej kopii.
+
+  **Co zostawione ze swojego:** natywne nazwy sekcji i pol (jeden autorytet
+  schematu), oraz — co wazniejsze — **tworzenie i kasowanie nie sa zrosniete**.
+  Fuzja `[tier:]` z propozycji recenzenta umie opisac produkcje, ale **nie umie
+  opisac `default`**, ktory tworzy JEDNA rodzine i przycina ja CZTEREMA
+  licznikami w jednej drabinie GFS.
+
+  **Dowod, ze zmiana formatu niczego nie zmienila:** ten sam plan wyrenderowany
+  z builda `main` (trzy pliki) i z jednoplikowego — **94 linie kazdy,
+  IDENTYCZNE**.
+
+  **`profiles/prod/profile.conf`** — przepisany z zywego
+  `jobs.pve1.v4.conf` (odczyt 2026-08-25), nie zaprojektowany:
+
+  | tier | prefiks | retencja | quiesce | progi |
+  |---|---|---|---|---|
+  | hourly | `automated_hourly_` | 24 | — | 90m / 3h |
+  | daily | `automated_daily_` | 7 | **auto** | 30h / 48h |
+  | weekly | `automated_weekly_` | 4 | **auto** | 9d / 12d |
+  | monthly | `automated_monthly_` | 6 | **auto** | **brak** (zdjete 2026-07-22, strzelalo co 15 min) |
+
+  Brak progow miesiecznych jest przepisany **swiadomie**: profil, ktory po cichu
+  by je przywrocil, przywrocilby powodz. Nie ma tez bloku `[prune]` — kazdy tier
+  przycina wlasna rodzine wlasnym `prune_schedule`, wiec nie ma osobnej drabiny
+  do wyemitowania.
+
+  **`detect_profile_gfs` czyta teraz KSZTALT, nie nazwe.** Szukalo doslownego
+  `[template:standard_hourly]` i pytalo, czy ta sekcja ma `prune_schedule` — co
+  dzialalo wylacznie dla configow pisanych przez wbudowany `default`, a dla
+  profilu nazwanego jak produkcja (`hourly`, `daily`) odpowiadalo „drabina",
+  choc to plaski uklad per tier. Teraz rozstrzyga jeden fakt: czy szablon
+  TWORZY rodzine i PRZYCINA ja w tym samym miejscu. Zmierzone w czterech
+  kierunkach: drabina -> GFS, produkcyjny plaski -> plaski, **stary
+  `standard_hourly` plaski -> plaski** (zachowane), pusty config -> GFS.
+
+  **ZNANE OGRANICZENIE, nazwane wprost: rozrzut po osi czasu MILCZY dla profilu
+  wielotierowego.** Zmierzone: `default` -> `send_expr='1 * * * *'` (rozrzut
+  dziala), `prod` -> `send_expr=''` (rozrzut nie robi nic). Przyczyna jest
+  zaprojektowana: pole sekcji nadpisuje KAZDY tier, ktory `use_template`
+  wymienia, wiec wpisanie jednej minuty splaszczyloby dzienny, tygodniowy
+  i miesieczny na godzinne — pierwsza wersja rozrzutu tak wlasnie robila
+  i recenzja to zlapala. Skutek: kilka relacji z profilu `prod` na jednym
+  kolektorze uderzy w te same minuty.
+
+  **Rozwiazanie jest znane i tanie**, tylko nie tutaj: `resolve_field_tiered`
+  jest juz GENERYCZNE (sprawdza `<pole>_<tier>` na sekcji) i dzis wolane
+  wylacznie dla `flags`. Wpiecie go dla `send_schedule`/`prune_schedule`
+  pozwoli rozrzutowi pisac minute **per tier** (`send_schedule_hourly = 44 * * * *`),
+  zachowujac kadencje kazdego tieru. Osobny krok, bo wymaga liczenia kolizji
+  w trzech roznych oknach czasowych (godzina, doba, tydzien) — nowa logika,
+  ktorej nie wolno mieszac z transkrypcja.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 

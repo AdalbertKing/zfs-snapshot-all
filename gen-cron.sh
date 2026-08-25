@@ -3229,6 +3229,16 @@ while [ $# -gt 0 ]; do
         --dump-fields)
             for _k in "${!FIELD_OK[@]}"; do printf '%s %s\n' "${_k%%${SEP}*}" "${_k#*${SEP}}"; done | sort
             exit 0 ;;
+        # Same reason as --dump-fields, for the other table a profile has to
+        # agree with. A profile may write the ergonomic `keep = 24`, but its
+        # tier names are NAMESPACED before they reach this file, so the letter
+        # can no longer be derived here -- the profile renderer derives it and
+        # emits `retain`. Asking for the table instead of copying it keeps one
+        # authority: a letter added here is available there the same day, and a
+        # second copy cannot quietly disagree about what -W means.
+        --dump-tier-letters)
+            for _k in "${!TIER_LETTER[@]}"; do printf '%s %s\n' "$_k" "${TIER_LETTER[$_k]}"; done | sort
+            exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (see -h)" ;;
     esac

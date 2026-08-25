@@ -12,8 +12,10 @@ fail=0
 ok() { echo "PASS: $*"; pass=$((pass+1)); }
 bad() { echo "FAIL: $*" >&2; fail=$((fail+1)); }
 
+# A profile is ONE file since 2026-08-25. This used to check three.
+if [ -r "$PROFILE/profile.conf" ]; then ok "default/profile.conf exists"; else bad "default/profile.conf missing"; fi
 for f in templates.conf dataset.inc prune.inc; do
-    if [ -r "$PROFILE/$f" ]; then ok "default/$f exists"; else bad "default/$f missing"; fi
+    if [ -e "$PROFILE/$f" ]; then bad "default/$f still shipped -- the three-file layout was replaced, not doubled"; else ok "default/$f is gone (one file now)"; fi
 done
 
 DUMP="$TMP/fields"
@@ -36,12 +38,42 @@ profile_schema_dump "$GEN" "$DUMPFILE" || { echo "cannot read the field schema: 
 
 validate_fragment() { profile_validate_fragment "$1" "$2" "$DUMPFILE"; }
 
-if validate_fragment dataset "$PROFILE/dataset.inc"; then
+# ---------------------------------------------------------------------------
+# ONE FILE. A profile is profiles/<name>/profile.conf, and the three artifacts
+# the runtime consumes are produced from it. The suite therefore splits the
+# same way the runtime does, so the validator and renderer assertions below
+# keep testing what they always tested -- the content -- rather than the layout
+# it used to be stored in.
+# ---------------------------------------------------------------------------
+psplit() {   # <profile dir> -> echoes "<tpl> <ds> <prune> <excl>" of temp files
+    local d="$1" t x p2 e
+    t="$(mktemp)"; x="$(mktemp)"; p2="$(mktemp)"; e="$(mktemp)"
+    profile_split_one_file "$d/profile.conf" "$t" "$x" "$p2" "$e" || return 1
+    cat "$e" >> "$t"
+    printf '%s %s %s %s' "$t" "$x" "$p2" "$e"
+}
+LETTERS="$(mktemp)"; bash "$GEN" --dump-tier-letters > "$LETTERS"
+PSPLIT_DEFAULT=($(psplit "$ROOT/profiles/default"))
+TPL_DEFAULT="${PSPLIT_DEFAULT[0]}"
+DS_DEFAULT="${PSPLIT_DEFAULT[1]}"
+PR_DEFAULT="${PSPLIT_DEFAULT[2]}"
+
+# ...and the RENDERED form, which is what a host actually installs: namespaced
+# names, and `keep` already translated to the engine's own flag. The composed
+# fixture below must use these, not the source: gen-cron never sees a profile's
+# bare tier names, and feeding it those tests a config that cannot exist.
+RND_TPL="$(mktemp)"; RND_DS="$(mktemp)"; RND_PR="$(mktemp)"
+profile_render_templates "$TPL_DEFAULT" default "$RND_TPL" "" "$LETTERS" || echo "FATAL: render tpl: $PROFILE_ERR" >&2
+profile_render_fragment  "$DS_DEFAULT"  default "$RND_DS"  || echo "FATAL: render ds: $PROFILE_ERR" >&2
+profile_render_fragment  "$PR_DEFAULT"  default "$RND_PR"  || echo "FATAL: render prune: $PROFILE_ERR" >&2
+
+
+if validate_fragment dataset "$DS_DEFAULT"; then
     ok "dataset.inc contains only native profile-owned dataset fields"
 else
     bad "dataset.inc violates native field/ownership contract"
 fi
-if validate_fragment prune "$PROFILE/prune.inc"; then
+if validate_fragment prune "$PR_DEFAULT"; then
     ok "prune.inc contains only native profile-owned prune fields"
 else
     bad "prune.inc violates native field/ownership contract"
@@ -54,7 +86,7 @@ fi
 # templates (shared, never namespaced), which is why they are rendered to their
 # own artifact -- so the rule that matters here is still that nothing else gets
 # in.
-if grep -E '^\[' "$PROFILE/templates.conf" | grep -vqE '^\[(template|excluded):[^]]+\]$'; then
+if grep -E '^\[' "$TPL_DEFAULT" | grep -vqE '^\[(template|excluded):[^]]+\]$'; then
     bad "templates.conf contains a section a profile may not own"
 else
     ok "templates.conf contains template sections only"
@@ -66,14 +98,14 @@ CAND="$TMP/candidate.conf"
 {
     echo '[defaults]'
     echo 'host_label = profile-slice-a'
-    cat "$PROFILE/templates.conf"
+    cat "$RND_TPL"
     echo
     echo '[dataset:tank/profile_a]'
-    cat "$PROFILE/dataset.inc"
+    cat "$RND_DS"
     echo 'notify = fixture'
     echo
     echo '[prune:tank/profile_a]'
-    cat "$PROFILE/prune.inc"
+    cat "$RND_PR"
     echo 'recursive = no'
     echo 'notify = fixture'
 } > "$CAND"
@@ -84,21 +116,41 @@ else
     bad "gen-cron rejects composed default profile: $(tr '\n' ' ' < "$TMP/render.err")"
 fi
 
-# Pin the current default policy before extraction. These are the values in the
-# zfs-backup.sh hardcode at Slice A; B1/B2 must prove byte identity separately.
+# Pin the current default policy. The retentions are pinned in BOTH spellings
+# on purpose, because since 2026-08-25 they have two:
+#
+#   the profile SAYS      keep = 24        (what production writes, readable)
+#   the render EMITS      retain = -H24    (what the generator takes)
+#
+# The translation happens in profile_render_templates, from the tier's cadence,
+# because a profile's names are namespaced before the generator sees them and
+# the letter can no longer be derived there. Pinning only the source would let
+# the translation break silently; pinning only the render would not notice a
+# profile that changed its retention.
 for needle in \
     'send_schedule  = 1 * * * *' \
     'prefix         = automated_hourly_' \
-    'retain         = -H24' \
-    'retain         = -D7' \
-    'retain         = -W4' \
-    'retain         = -M12' \
+    'keep           = 24' \
+    'keep           = 7' \
+    'keep           = 4' \
+    'keep           = 12' \
     'monitor_warn   = 90m' \
     'monitor_crit   = 150m'; do
-    if grep -qF "$needle" "$PROFILE/templates.conf"; then ok "policy pin: $needle"; else bad "missing policy pin: $needle"; fi
+    if grep -qF "$needle" "$TPL_DEFAULT"; then ok "policy pin (profile): $needle"; else bad "missing policy pin (profile): $needle"; fi
 done
-if grep -qF 'use_template = standard_hourly' "$PROFILE/dataset.inc"; then ok "dataset template pin"; else bad "dataset template pin missing"; fi
-if grep -qF 'gfs          = yes' "$PROFILE/prune.inc" && grep -qF 'gfs_pattern  = automated_' "$PROFILE/prune.inc"; then
+
+# ...and the other half: the render must turn each of those into the engine's
+# own flag, with the right letter for the tier's cadence.
+PINRENDER="$TMP/pin-render.conf"
+if profile_render_templates "$TPL_DEFAULT" default "$PINRENDER" "" "$LETTERS"; then
+    for needle in 'retain         = -H24' 'retain         = -D7' 'retain         = -W4' 'retain         = -M12'; do
+        if grep -qF "$needle" "$PINRENDER"; then ok "policy pin (render): $needle"; else bad "missing policy pin (render): $needle"; fi
+    done
+else
+    bad "policy pin (render): the built-in profile does not render" "$PROFILE_ERR"
+fi
+if grep -qF 'use_template = standard_hourly' "$DS_DEFAULT"; then ok "dataset template pin"; else bad "dataset template pin missing"; fi
+if grep -qF 'gfs          = yes' "$PR_DEFAULT" && grep -qF 'gfs_pattern  = automated_' "$PR_DEFAULT"; then
     ok "GFS policy pins"
 else
     bad "GFS policy pins missing"
@@ -106,19 +158,19 @@ fi
 
 # Negative controls: prove the contract test rejects exactly the classes the
 # agreed design forbids, rather than merely accepting the shipped fixture.
-cp "$PROFILE/dataset.inc" "$TMP/bad-relation.inc"
+cp "$DS_DEFAULT" "$TMP/bad-relation.inc"
 echo 'src = user@host:tank/data' >> "$TMP/bad-relation.inc"
 if validate_fragment dataset "$TMP/bad-relation.inc"; then bad "negative: relation-owned src was accepted"; else ok "negative: relation-owned src refused"; fi
 
-cp "$PROFILE/prune.inc" "$TMP/bad-topology.inc"
+cp "$PR_DEFAULT" "$TMP/bad-topology.inc"
 echo 'recursive = yes' >> "$TMP/bad-topology.inc"
 if validate_fragment prune "$TMP/bad-topology.inc"; then bad "negative: prune topology override was accepted"; else ok "negative: prune topology override refused"; fi
 
-cp "$PROFILE/prune.inc" "$TMP/bad-unknown.inc"
+cp "$PR_DEFAULT" "$TMP/bad-unknown.inc"
 echo 'not_a_real_gencron_field = yes' >> "$TMP/bad-unknown.inc"
 if validate_fragment prune "$TMP/bad-unknown.inc"; then bad "negative: unknown field was accepted"; else ok "negative: unknown field refused via --dump-fields"; fi
 
-cp "$PROFILE/dataset.inc" "$TMP/bad-section.inc"
+cp "$DS_DEFAULT" "$TMP/bad-section.inc"
 echo '[dataset:tank/evil]' >> "$TMP/bad-section.inc"
 if validate_fragment dataset "$TMP/bad-section.inc"; then bad "negative: section header was accepted in .inc"; else ok "negative: section header refused in .inc"; fi
 
@@ -158,7 +210,7 @@ else
 fi
 
 # And the real shipped profile must still validate through the same path.
-if profile_validate_templates "$PROFILE/templates.conf" "$DUMPFILE"; then
+if profile_validate_templates "$TPL_DEFAULT" "$DUMPFILE"; then
     ok "the built-in profile's templates.conf passes the production validator"
 else
     bad "the built-in profile's templates.conf passes the production validator" "$PROFILE_ERR"
@@ -206,9 +258,7 @@ echo
 mkprofile() {   # <which to omit|-> -> a profile dir in $TMP
     local omit="$1" d="$TMP/prof.$$"
     rm -rf "$d"; mkdir -p "$d"
-    [ "$omit" = templates.conf ] || cp "$PROFILE/templates.conf" "$d/"
-    [ "$omit" = dataset.inc ]    || cp "$PROFILE/dataset.inc"    "$d/"
-    [ "$omit" = prune.inc ]      || cp "$PROFILE/prune.inc"      "$d/"
+    [ "$omit" = profile.conf ] || cp "$PROFILE/profile.conf" "$d/"
     printf '%s' "$d"
 }
 refuses_dir() {   # <label> <omitted artifact>
@@ -224,9 +274,7 @@ refuses_dir() {   # <label> <omitted artifact>
     rm -rf "$d"
 }
 
-refuses_dir "negative: a profile without templates.conf is refused" templates.conf
-refuses_dir "negative: a profile without dataset.inc is refused"    dataset.inc
-refuses_dir "negative: a profile without prune.inc is refused"      prune.inc
+refuses_dir "negative: a profile without profile.conf is refused" profile.conf
 
 EMPTYD="$TMP/emptyprof"; rm -rf "$EMPTYD"; mkdir -p "$EMPTYD"
 if profile_validate_dir "$EMPTYD" "$GEN"; then
@@ -262,7 +310,7 @@ rm -rf "$COMPLETE"
 
 RD="$TMP/render"; mkdir -p "$RD"
 
-if profile_render_templates "$ROOT/profiles/default" default "$RD/t.conf"; then
+if profile_render_templates "$TPL_DEFAULT" default "$RD/t.conf"; then
     ok "render: the built-in profile renders its templates"
 else
     bad "render: the built-in profile renders its templates" "$PROFILE_ERR"
@@ -282,7 +330,7 @@ else
     ok "render: the bare template name does not survive rendering"
 fi
 
-if profile_render_fragment "$ROOT/profiles/default/prune.inc" default "$RD/p.inc"; then
+if profile_render_fragment "$PR_DEFAULT" default "$RD/p.inc"; then
     ok "render: a fragment renders"
 else
     bad "render: a fragment renders" "$PROFILE_ERR"
@@ -322,8 +370,8 @@ fi
 # would also refuse the composed file, but its message names only a temporary
 # path and tells the operator nothing about which profile produced it.
 DUPP="$(mkprofile -)"
-printf '\n[template:standard_hourly]\n\tsend_schedule = 5 * * * *\n' >> "$DUPP/templates.conf"
-if profile_render_templates "$DUPP" default "$RD/dup.conf"; then
+printf '\n[template:standard_hourly]\n\tsend_schedule = 5 * * * *\n' >> "$DUPP/profile.conf"
+if profile_render_templates "$(psplit "$DUPP" | cut -d" " -f1)" default "$RD/dup.conf"; then
     bad "render: a duplicate template inside one profile is refused"
 else
     case "$PROFILE_ERR" in
@@ -334,7 +382,7 @@ fi
 rm -rf "$DUPP"
 
 # A profile name that could break a section header is refused, not sanitised.
-if profile_render_templates "$ROOT/profiles/default" 'bad name]' "$RD/bad.conf"; then
+if profile_render_templates "$TPL_DEFAULT" 'bad name]' "$RD/bad.conf"; then
     bad "render: a profile name unusable in a header is refused"
 else
     ok "render: a profile name unusable in a header is refused"
@@ -342,8 +390,8 @@ fi
 
 # The property the whole scheme exists for: two profiles compose without
 # colliding. Same source templates, two names, one config gen-cron accepts.
-profile_render_templates "$ROOT/profiles/default" flat   "$RD/flat.conf"   || bad "render: two-profile composition (flat)"   "$PROFILE_ERR"
-profile_render_templates "$ROOT/profiles/default" atomic "$RD/atomic.conf" || bad "render: two-profile composition (atomic)" "$PROFILE_ERR"
+profile_render_templates "$TPL_DEFAULT" flat   "$RD/flat.conf"   || bad "render: two-profile composition (flat)"   "$PROFILE_ERR"
+profile_render_templates "$TPL_DEFAULT" atomic "$RD/atomic.conf" || bad "render: two-profile composition (atomic)" "$PROFILE_ERR"
 {
     printf '[defaults]\n\thost_label = t\n\tdst = hdd/backups\n\n'
     cat "$RD/flat.conf"; printf '\n'; cat "$RD/atomic.conf"
@@ -360,8 +408,8 @@ fi
 # the same two profiles WITHOUT namespacing are refused by gen-cron.
 {
     printf '[defaults]\n\thost_label = t\n\tdst = hdd/backups\n\n'
-    cat "$ROOT/profiles/default/templates.conf"; printf '\n'
-    cat "$ROOT/profiles/default/templates.conf"
+    cat "$TPL_DEFAULT"; printf '\n'
+    cat "$TPL_DEFAULT"
     printf '\n[dataset:rpool/data]\n\tuse_template = standard_hourly\n'
 } > "$RD/collide.conf"
 if bash "$GEN" -c "$RD/collide.conf" >/dev/null 2>&1; then
@@ -399,7 +447,7 @@ fi
 # is why "both profiles independently validate" cannot hold here and is not
 # claimed.
 COLL1="$(mkprofile -)"
-if profile_render_templates "$COLL1" 'a__b' "$RD/coll1.conf"; then
+if profile_render_templates "$(psplit "$COLL1" | cut -d" " -f1)" 'a__b' "$RD/coll1.conf"; then
     bad "injectivity: a profile NAME carrying the separator is refused"
 else
     case "$PROFILE_ERR" in
@@ -412,7 +460,7 @@ rm -rf "$COLL1"
 # The other half: a native TEMPLATE name carrying the separator. Refused at
 # validation, so such a profile never reaches a runtime at all...
 COLL2="$(mkprofile -)"
-printf '\n[template:b__c]\n\tsend_schedule = 1 * * * *\n\tprefix = x_\n' >> "$COLL2/templates.conf"
+printf '\n[template:b__c]\n\tsend_schedule = 1 * * * *\n\tprefix = x_\n' >> "$COLL2/profile.conf"
 if profile_validate_dir "$COLL2" "$GEN"; then
     bad "injectivity: a TEMPLATE name carrying the separator is refused at validation"
 else
@@ -423,7 +471,7 @@ else
 fi
 # ...and refused again at the render boundary, because rendering is what
 # actually encodes the name and must not depend on a caller having validated.
-if profile_render_templates "$COLL2" default "$RD/coll2.conf"; then
+if profile_render_templates "$(psplit "$COLL2" | cut -d" " -f1)" default "$RD/coll2.conf"; then
     bad "injectivity: a TEMPLATE name carrying the separator is refused at render too"
 else
     case "$PROFILE_ERR" in
@@ -435,7 +483,7 @@ rm -rf "$COLL2"
 
 # The rule must not be wider than the defect: single underscores are how every
 # built-in template is named, and a hyphenated profile name is ordinary.
-if profile_render_templates "$ROOT/profiles/default" 'site-a' "$RD/ok1.conf"; then
+if profile_render_templates "$TPL_DEFAULT" 'site-a' "$RD/ok1.conf"; then
     ok "injectivity: single underscores and hyphens are still accepted"
 else
     bad "injectivity: single underscores and hyphens are still accepted" "$PROFILE_ERR"

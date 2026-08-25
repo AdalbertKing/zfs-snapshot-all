@@ -291,11 +291,10 @@ PROFILE_TEMPLATE_NAMES=""
 # So they go to different outputs. The excluded file is consumed by the floor
 # installer, which appends only what the config lacks; the templates file stays
 # concatenation-safe, exactly as it was before this field existed.
-profile_render_templates() {   # <dir> <profile> <outfile> [excluded outfile]
+profile_render_templates() {   # <templates file> <profile> <outfile> [excluded outfile] [tier letters]
     PROFILE_ERR=""; PROFILE_TEMPLATE_NAMES=""
-    local dir="$1" prof="$2" out="$3" excl_out="${4:-}" file raw name ns n=0 in_excl=0
+    local file="$1" prof="$2" out="$3" excl_out="${4:-}" letters="${5:-}" raw name ns n=0 in_excl=0 canon=""
     profile_name_ok "$prof" || { PROFILE_ERR="profile name '$prof' is not usable in a section header (letters, digits, _ and - only)"; return 1; }
-    file="$dir/templates.conf"
     [ -r "$file" ] || { PROFILE_ERR="cannot read profile templates '$file'"; return 1; }
     : > "$out" || { PROFILE_ERR="cannot write '$out'"; return 1; }
     if [ -n "$excl_out" ]; then
@@ -325,12 +324,25 @@ profile_render_templates() {   # <dir> <profile> <outfile> [excluded outfile]
                 esac
                 PROFILE_TEMPLATE_NAMES="$PROFILE_TEMPLATE_NAMES $ns"
                 in_excl=0
+                canon="$name"
                 printf '[template:%s]\n' "$ns" >> "$out" ;;
             *)
                 if [ "$in_excl" -eq 1 ]; then
                     [ -n "$excl_out" ] && printf '%s\n' "$raw" >> "$excl_out"
                 else
-                    printf '%s\n' "$raw" >> "$out"
+                    # `keep = N` inside a TEMPLATE is the ergonomic spelling and
+                    # is translated here, while the canonical (pre-namespace)
+                    # name is still known. Inside [excluded:] `keep` means
+                    # something else entirely -- a floor count, no cadence, no
+                    # letter -- which is why this branch is the template one.
+                    local _k _kv
+                    _k="$(printf '%s' "$raw" | sed -n -E 's/^[[:space:]]*keep[[:space:]]*=[[:space:]]*(.*)$/\1/p')"
+                    if [ -n "$_k" ] && [ -n "$letters" ] && [ -n "$canon" ]; then
+                        _kv="$(profile_keep_to_retain "$canon" "${_k%%[[:space:]]*}" "$letters")" || return 1
+                        printf '\tretain         = %s\n' "$_kv" >> "$out"
+                    else
+                        printf '%s\n' "$raw" >> "$out"
+                    fi
                 fi ;;
         esac
     done < "$file"
@@ -393,28 +405,151 @@ profile_render_fragment() {   # <file> <profile> <outfile>
 # clean. Putting the completeness check in the caller instead would have
 # recreated the exact problem REV-076 removed: a second piece of profile grammar
 # living outside the one boundary that owns it.
+###############################################################################
+# ONE FILE, NATIVE NAMES -- profiles/<name>/profile.conf
+#
+# Owner decision 2026-08-25: one operator-facing file, and no new vocabulary.
+# The three internal artifacts (templates / dataset fragment / prune fragment)
+# remain, but as a COMPILATION TARGET rather than as the thing an operator
+# writes. Nobody should have to know that a profile is three files to change a
+# retention.
+#
+# WHY THE NAMES STAY NATIVE. The alternative on the table was a dedicated
+# dialect (`[tier:hourly]`, `create_schedule`, `[protect:]`). It reads well and
+# it was rejected for two measured reasons:
+#
+#   * a second vocabulary is a second field list to keep in step with
+#     `gen-cron.sh --dump-fields`, and drift of exactly that kind is what
+#     REV-054 and the REV-074 follow-up already cost this tree;
+#   * `[tier:]` FUSES creation with retention, and the built-in `default`
+#     cannot be written that way at all: it creates ONE family
+#     (`automated_hourly_`) and prunes it with FOUR counters (-H24 -D7 -W4
+#     -M12) in a single GFS ladder call. A shape where a tier owns its own
+#     prefix and its own retention can describe production, and cannot
+#     describe `default`.
+#
+# WHAT WAS TAKEN FROM THE DIALECT PROPOSAL: the single file, an explicit
+# `[profile]` header with a version, and the ergonomic `keep = 24` -- which is
+# translated here rather than pushed into the generator, see
+# profile_keep_to_retain.
+#
+# SECTION KINDS AND HOW EACH COMPOSES:
+#
+#   [profile]            metadata. Never emitted into a config.
+#   [template:NAME]      native template. NAMESPACED -> rendered files may be
+#                        concatenated with another profile's.
+#   [dataset]            defaults copied into every [dataset:] this profile
+#   [prune]              creates; likewise for [prune:]. Pathless on purpose:
+#                        the path belongs to the relationship, never here.
+#   [excluded:PREFIX]    config-wide floor. SHARED, never namespaced -> two
+#                        profiles naming __replicate_ mean the same family, so
+#                        these compose by AGREEMENT, not by concatenation.
+#
+# Splits one profile.conf into the four artifacts the runtime already consumes.
+# Validation is unchanged in kind: every field is still checked against
+# gen-cron's own schema for its section kind, and the forbidden list still
+# refuses identity, topology and link values.
+profile_split_one_file() {   # <profile.conf> <tpl out> <ds out> <prune out> <excl out>
+    PROFILE_ERR=""
+    local file="$1" tpl="$2" dso="$3" pro="$4" exo="$5" raw kind="" n=0 seen_tpl=0
+    [ -r "$file" ] || { PROFILE_ERR="cannot read profile '$file'"; return 1; }
+    : > "$tpl"; : > "$dso"; : > "$pro"; : > "$exo"
+    while IFS= read -r raw || [ -n "$raw" ]; do
+        n=$((n+1))
+        raw="${raw%$'\r'}"
+        case "$raw" in
+            '#'*) continue ;;
+        esac
+        [ -z "${raw//[[:space:]]/}" ] && continue
+        case "$raw" in
+            '[profile]')        kind=meta;     continue ;;
+            '[dataset]')        kind=dataset;  continue ;;
+            '[prune]')          kind=prune;    continue ;;
+            '[template:'*']')   kind=template; seen_tpl=1; printf '%s\n' "$raw" >> "$tpl"; continue ;;
+            '[excluded:'*']')   kind=excluded;                printf '%s\n' "$raw" >> "$exo"; continue ;;
+            '['*)
+                PROFILE_ERR="$file:$n: '$raw' is not a section a profile may carry ([profile], [template:NAME], [dataset], [prune], [excluded:PREFIX])"
+                return 1 ;;
+        esac
+        case "$kind" in
+            "")       PROFILE_ERR="$file:$n: '$raw' appears before any section"; return 1 ;;
+            meta)     continue ;;
+            template) printf '%s\n' "$raw" >> "$tpl" ;;
+            # The two FRAGMENTS are bare stanza lines, never sections, and the
+            # emitter indents them when it pastes them into a real section. The
+            # indentation this file carries for readability is stripped here --
+            # left in, it would arrive doubled.
+            dataset)  printf '%s\n' "${raw#"${raw%%[![:space:]]*}"}" >> "$dso" ;;
+            prune)    printf '%s\n' "${raw#"${raw%%[![:space:]]*}"}" >> "$pro" ;;
+            excluded) printf '%s\n' "$raw" >> "$exo" ;;
+        esac
+    done < "$file"
+    [ "$seen_tpl" -eq 1 ] || { PROFILE_ERR="$file: no [template:NAME] section found"; return 1; }
+    return 0
+}
+
+# `keep = 24` on a profile template -> `retain = -H24`.
+#
+# The ergonomics are the reviewer's and they are right: `keep = 24` is what the
+# production config already says, and it reads better than a flag letter. The
+# reason the generator cannot do it for a profile is mechanical -- it derives
+# the letter from the tier NAME, and a profile's names are namespaced
+# (`profile__default__keep_hourly`) long before they get there.
+#
+# So it is derived HERE, from the canonical name, using gen-cron's own table
+# (`--dump-tier-letters`) rather than a copy of it. The cadence is the LAST
+# underscore-separated component, which is true of every built-in name
+# (`keep_hourly`, `standard_hourly`, `hourly`).
+#
+# Fail closed: a name whose last component is not a known cadence is REFUSED,
+# naming the alternative. Guessing a letter would silently apply the wrong
+# counter to a retention ladder, which is the kind of mistake that is invisible
+# until a restore needs the snapshot that was never kept.
+profile_keep_to_retain() {   # <canonical template name> <keep value> <letters file> -> retain
+    PROFILE_ERR=""
+    local name="$1" keep="$2" letters="$3" cadence letter
+    case "$keep" in
+        ''|*[!0-9]*) PROFILE_ERR="keep='$keep' on '[template:$name]' is not a count"; return 1 ;;
+    esac
+    cadence="${name##*_}"
+    letter="$(awk -v c="$cadence" '$1==c {print $2; exit}' "$letters")"
+    if [ -z "$letter" ]; then
+        PROFILE_ERR="'[template:$name]' uses 'keep = $keep', and the retention letter is derived from the tier cadence -- '$cadence' is not one gen-cron knows ($(awk '{printf "%s ", $1}' "$letters")). Name the tier for its cadence, or write 'retain = -<LETTER>$keep' explicitly"
+        return 1
+    fi
+    printf -- '-%s%s' "$letter" "$keep"
+    return 0
+}
+
 profile_validate_dir() {   # <profile dir> <gen-cron.sh path>
     PROFILE_ERR=""
     local dir="$1" gen="$2" dump f
     [ -d "$dir" ] || { PROFILE_ERR="no such profile directory: $dir"; return 1; }
 
-    # Completeness first: a profile missing a piece is not a smaller profile,
-    # it is a broken one, and the message names the path so the operator is not
-    # left guessing which of the three.
-    for f in templates.conf dataset.inc prune.inc; do
-        if [ ! -r "$dir/$f" ]; then
-            PROFILE_ERR="$dir/$f is missing or unreadable -- a profile is exactly templates.conf, dataset.inc and prune.inc"
-            return 1
-        fi
-    done
+    # ONE FILE. A profile is `profile.conf` and nothing else -- see the header
+    # above profile_split_one_file for why the three internal artifacts stopped
+    # being the operator's interface.
+    if [ ! -r "$dir/profile.conf" ]; then
+        PROFILE_ERR="$dir/profile.conf is missing or unreadable -- a profile is exactly that one file"
+        return 1
+    fi
 
     dump="$(mktemp)" || { PROFILE_ERR="mktemp failed"; return 1; }
     if ! profile_schema_dump "$gen" "$dump"; then rm -f "$dump"; return 1; fi
 
-    if ! profile_validate_templates "$dir/templates.conf" "$dump"; then rm -f "$dump"; return 1; fi
-    if ! profile_validate_fragment dataset "$dir/dataset.inc" "$dump"; then rm -f "$dump"; return 1; fi
-    if ! profile_validate_fragment prune   "$dir/prune.inc"   "$dump"; then rm -f "$dump"; return 1; fi
+    local vt vd vp ve
+    vt="$(mktemp)"; vd="$(mktemp)"; vp="$(mktemp)"; ve="$(mktemp)"
+    if ! profile_split_one_file "$dir/profile.conf" "$vt" "$vd" "$vp" "$ve"; then
+        rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1
+    fi
+    # The excluded sections are validated together with the templates: they are
+    # both "sections a profile may own", and profile_validate_templates already
+    # knows the difference between the two kinds.
+    cat "$ve" >> "$vt"
+    if ! profile_validate_templates "$vt" "$dump"; then rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1; fi
+    if ! profile_validate_fragment dataset "$vd" "$dump"; then rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1; fi
+    if ! profile_validate_fragment prune   "$vp" "$dump"; then rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1; fi
 
-    rm -f "$dump"
+    rm -f "$dump" "$vt" "$vd" "$vp" "$ve"
     return 0
 }
