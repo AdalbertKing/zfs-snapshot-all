@@ -186,9 +186,12 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh --source=DATASET [--target=DATASET] [--profile=NAME] [--config=FILE]
+  zfs-backup.sh [--source=DATASET] [--target=DATASET] [--profile=NAME] [--config=FILE]
                 [--local-user=NAME] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
+                                    --source omitted:  proposed from this host's ZFS inventory and shown,
+                                                       with every skipped dataset and its reason; a PROPOSED
+                                                       source set will not install under --yes
                                     --target omitted:  proposed (server.conf default, else the pool layout)
                                                        and shown; a GUESSED target will not install under --yes
                                     --local-user:      account these jobs run as; omitted means root.
@@ -732,6 +735,200 @@ propose_backup_target() {
     esac
 }
 
+# KROK 5: propose the SOURCES when the operator did not name any.
+#
+# The target had this since slice 3; the source did not, and a local backup was
+# refused outright without --source. That is the one piece of "clean host ->
+# working backup" glue the binding plan still asks for: a first-time operator
+# does not know which of this host's forty datasets are the ones worth copying,
+# and making them find out by reading `zfs list` is the manual step the whole
+# path exists to remove.
+#
+# A PROPOSAL, never a decision. Everything this prints is a guess from the pool
+# layout, so it carries the same rule the guessed target carries: it may be
+# shown, it may be planned with, and it may NOT be installed unattended.
+#
+# WHAT IS EXCLUDED, and why each one would be wrong rather than merely noisy.
+# Every exclusion is REPORTED on stderr, because an invisible heuristic is
+# indistinguishable from a bug to the operator who wonders where a dataset went:
+#
+#   pool root      a pool is a container, not a body of data. Proposing `hdd`
+#                  would offer to snapshot the thing that holds the target;
+#   the target     and everything under it -- a backup cannot land inside the
+#                  thing it backs up (local_backup_overlap refuses it anyway,
+#                  so proposing it would only produce a refusal);
+#   under */ROOT   the OS root filesystem. This tool does not restore a bootable
+#                  system, so offering it promises something it cannot keep;
+#   swap           a swap zvol holds no data worth a snapshot, and snapshotting
+#                  it pins every block it ever wrote;
+#   already        a dataset an installed section already covers. Proposing it
+#   covered        would compose into an overlap refusal on the very next step.
+#
+# A HIERARCHY IS NOT GUESSED AT -- REV of KROK 5 slice 1, F1.
+#
+# The first cut skipped any dataset that had a child and proposed the children
+# instead, reasoning that a flat job on the parent would leave the children
+# unbacked. That reasoning is right and the conclusion was wrong: a parent
+# filesystem holds its own files independently of its children, so proposing
+# only the children replaces APPARENT coverage with SILENT missing coverage --
+# the operator accepts a proposal and the parent's data is simply not copied.
+# The suite encoded that as the expected behaviour, so it went green.
+#
+# Measured rather than assumed (pve9, real ZFS): an empty parent reports
+# usedbydataset=24576 and the same parent with 3 MiB of its own files reports
+# 3173376. So "does the parent hold data" IS answerable -- but only against a
+# threshold picked out of the air, and an emptiness floor differs with
+# recordsize, compression and pool ashift. This function does not get to invent
+# that number.
+#
+# So the layout decides, not a size: local-backup installs one FLAT job per
+# root and `local_backup_overlap` refuses a parent and its child in the same
+# set, which means there is no shape this PROPOSAL can emit that covers both.
+# When the eligible datasets contain a parent/child pair, it therefore refuses
+# to guess (rc=2) and hands the operator the whole eligible list to choose
+# from, rather than choosing a half of it for them. That is the same stance the
+# TARGET proposal already takes on multiple candidate pools: ambiguity refuses.
+#
+# Candidates on STDOUT, the skip report on STDERR -- deliberately not through a
+# variable. This function is called inside a command substitution, where every
+# assignment happens in the SUBSHELL and is gone by the time the caller looks;
+# a report the caller cannot see is the same as no report. Like
+# propose_backup_target it must also not be the place a die() happens inside
+# that substitution -- the caller checks for an empty result instead.
+propose_backup_sources() {   # <target> <installed config or ""> -> candidates, one per line
+    local target="$1" cfg="${2:-}"
+    local skipped="" eligible=""
+    local all
+    all=$(zfs list -H -o name -t filesystem,volume 2>/dev/null) || return 1
+    [ -n "$all" ] || return 1
+
+    # Covered paths, read from the installed config the same way the overlap
+    # check reads it -- one source of truth for "this is already ours".
+    local covered=""
+    if [ -n "$cfg" ] && [ -r "$cfg" ]; then
+        covered=$(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cfg")
+    fi
+
+    local ds child skip why
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        skip=""; why=""
+        case "$ds" in
+            */*) ;;
+            *) skip=1; why="pula, nie zbior danych" ;;
+        esac
+        if [ -z "$skip" ] && local_backup_overlap "$ds" "$target"; then
+            skip=1; why="cel backupu (albo lezy w nim)"
+        fi
+        if [ -z "$skip" ]; then
+            case "$ds" in
+                */ROOT|*/ROOT/*) skip=1; why="system operacyjny -- ten pakiet nie odtwarza bootowalnego systemu" ;;
+                */swap|*/swap/*) skip=1; why="swap -- snapshot przypina kazdy zapisany blok i nie niesie danych" ;;
+            esac
+        fi
+        # "Already covered" is EXACT dataset identity, not path overlap -- and
+        # that distinction is the same finding as the hierarchy one, in the
+        # place it hides best.
+        #
+        # A local job is FLAT: [dataset:rpool/a] copies rpool/a's own blocks and
+        # nothing else. So an installed parent does NOT cover a child created
+        # under it later, and an installed child does not cover its parent. The
+        # first version tested with local_backup_overlap, which meant a new
+        # child under an installed parent was skipped as "already covered" and
+        # silently never proposed -- apparent coverage over missing coverage,
+        # exactly what the hierarchy rule exists to prevent, arrived at from the
+        # other side.
+        #
+        # The one case where containment IS coverage is a section that says so:
+        # `recursive` set to anything but no/off/0 means the installed job
+        # really does walk the subtree, and then a descendant is genuinely
+        # covered. Read from the section rather than assumed, so a config an
+        # operator made recursive by hand is honoured.
+        if [ -z "$skip" ] && [ -n "$covered" ]; then
+            local c crec
+            while IFS= read -r c; do
+                [ -n "$c" ] || continue
+                if [ "$ds" = "$c" ]; then
+                    skip=1; why="juz objety zainstalowana polityka ([dataset:$c])"; break
+                fi
+                case "$ds" in
+                    "$c"/*)
+                        crec="$(installed_dataset_field "$cfg" "$c" recursive)"
+                        crec="$(printf '%s' "$crec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+                        case "$crec" in
+                            ""|no|off|0) ;;   # flat parent: does NOT cover this child
+                            *) skip=1; why="juz objety rekurencyjna sekcja [dataset:$c] (recursive=$crec)"; break ;;
+                        esac
+                        ;;
+                esac
+            done <<< "$covered"
+        fi
+        if [ -n "$skip" ]; then
+            skipped="${skipped}  pominieto $ds -- $why"$'\n'
+        else
+            eligible="${eligible}${ds}"$'\n'
+        fi
+    done <<< "$all"
+    [ -n "$skipped" ] && printf '%s' "$skipped" >&2
+
+    # The hierarchy check, over the ELIGIBLE set only: a parent excluded above
+    # (a pool root, the target, an OS root) is not part of any pair, because it
+    # was never going to be proposed in the first place.
+    #
+    # Reported and refused rather than resolved: a parent cannot be dropped in
+    # favour of its children (its own files would stop being copied) and it
+    # cannot be proposed alongside them either (local_backup_overlap refuses
+    # the pair). There is no third shape this function may emit, so the
+    # operator gets the facts and the choice.
+    local a b pairs=""
+    while IFS= read -r a; do
+        [ -n "$a" ] || continue
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            case "$b" in
+                "$a"/*) pairs="${pairs}  $a  ->  $b"$'\n' ;;
+            esac
+        done <<< "$eligible"
+    done <<< "$eligible"
+
+    # Only the AMBIGUOUS SUBTREE is refused, not the whole proposal: a
+    # hierarchy somewhere on the host says nothing about the datasets that are
+    # not in it, and refusing everything would deny the operator the obvious
+    # candidates because of one pair they may not even care about.
+    #
+    # Both members of every pair drop out. Not the parent alone -- that is the
+    # defect this exists to fix (its own files stop being copied while the
+    # proposal looks complete); and not the children alone either, because a
+    # child proposed without its parent is the same claim in the other
+    # direction. The subtree leaves together, loudly, with the pair named.
+    if [ -n "$pairs" ]; then
+        local amb="" keep=""
+        while IFS= read -r a; do
+            [ -n "$a" ] || continue
+            local hit=0
+            while IFS= read -r b; do
+                [ -n "$b" ] || continue
+                case "$b" in "$a"/*) hit=1; break ;; esac
+                case "$a" in "$b"/*) hit=1; break ;; esac
+            done <<< "$eligible"
+            if [ "$hit" -eq 1 ]; then amb="${amb}$a"$'\n'; else keep="${keep}$a"$'\n'; fi
+        done <<< "$eligible"
+        {
+            printf '  poddrzewo dwuznaczne -- NIE proponuje go, wybierz jawnie:\n'
+            printf '%s' "$pairs"
+            printf '  rodzic trzyma wlasne pliki niezaleznie od dzieci, wiec dzieci NIE pokrywaja\n'
+            printf '  rodzica; a plaskie zadanie na rodzica nie kopiuje dzieci, i oba w jednym\n'
+            printf '  zestawie sa odrzucane jako nakladajace sie. Zadna z tych postaci nie jest\n'
+            printf '  prawdziwa, wiec wybor nalezy do Ciebie:\n'
+            printf '%s' "$amb" | sed 's/^/    --source=/'
+        } >&2
+        eligible="$keep"
+    fi
+
+    printf '%s' "$eligible"
+    return 0
+}
+
 # read_server_conf lives in lib-backup-common.sh since the restore split.
 
 # ---- the profile runtime (Slice B1) -----------------------------------------
@@ -989,13 +1186,22 @@ profile_to_src_id() {   # <template identity>
 # the rendered templates -- never a silent fall-back to the TARGET's authority
 # (REV-106 required property 4). Runs the loop in the current shell (process
 # substitution, not a pipe) so `die` aborts the whole run.
-emit_source_template_family() {   # <rendered prune fragment>
+# <existing config> is optional and is what makes a SECOND local-backup on the
+# same host possible: the source family is emitted once and stays, so a later
+# run adding another source must skip the templates that are already there.
+# Without this the candidate carried two [template:...src_keep_hourly] sections
+# and gen-cron refused the whole thing -- measured on a host whose config still
+# had the family from an earlier run.
+emit_source_template_family() {   # <rendered prune fragment> [existing config]
     local id src section
     while IFS= read -r id; do
         [ -n "$id" ] || continue
+        src="$(profile_to_src_id "$id")"
+        if [ -n "${2:-}" ] && [ -f "$2" ] && grep -qxF "[template:$src]" "$2"; then
+            continue
+        fi
         section="$(profile_template_section "$id")"
         [ -n "$section" ] || die "local-backup source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE retention that would silently reuse the TARGET's template authority (REV-20260811-106)"
-        src="$(profile_to_src_id "$id")"
         printf '[template:%s]\n' "$src"
         printf '%s\n' "$section" | tail -n +2
         echo
@@ -1818,6 +2024,139 @@ endpoint_normalized_identity() {
 # the install must not REMOVE job lines the target is running today. Anything
 # the proposal reproduces is fine, by definition -- that is what installing it
 # means.
+# Is this lost line's COVERAGE still carried by one of the proposed lines?
+#
+# gen-cron merges datasets that resolve to the same policy into one job line:
+# two sources sending to one store become `snapsend.sh ... "a,b" "store"`, and
+# their monitors become `check-snap-age.sh "a,b" ...`. The line that used to say
+# "a" therefore disappears -- and the anti-deletion guard, whose rule is "a line
+# that vanishes is a job that stops", refuses. Measured live on pve9: adding a
+# second local source was impossible for exactly this reason, with the first
+# source's own lines named as the casualties.
+#
+# The guard's rule is a PROXY for the thing that matters, which is coverage. So
+# the exemption is written against coverage and nothing else: a lost line is
+# absorbed only when a proposed line is IDENTICAL to it except at exactly one
+# quoted argument, where the lost line's comma-list is a SUBSET of the proposed
+# one's. Same command, same schedule, same thresholds, same target, and every
+# dataset it named still named.
+#
+# BOUND TO THE DATASET ARGUMENT, not to "whichever quoted value differs".
+# The first cut accepted a widening at any single quoted argument, which proves
+# set inclusion but not that the set is COVERAGE: a widened target, prefix or
+# label would have impersonated preserved dataset coverage just as well. So the
+# command is recognised first and the dataset argument is located by that
+# command's own shape:
+#
+#   snapsend.sh / snapget.sh   ... "<sources>" "<target>"   -> second-to-last
+#   delsnaps.sh                ... "<scope>" "<pattern>" -H..  -> second-to-last
+#   check-snap-age.sh          [-R] "<datasets>" "<pattern>" .. -> first
+#
+# An unrecognised command gets no exemption at all. That is the fail-closed
+# direction: a line this function cannot read the shape of is a line whose
+# disappearance it must not excuse.
+#
+# What this deliberately does NOT excuse, and what the discriminators pin:
+#   * a line whose dataset simply is not in the new block at all -- a deletion;
+#   * a list that SHRINKS ("a,b" -> "a") -- that is a real loss of coverage,
+#     and subset-in-the-wrong-direction is exactly how it would sneak through;
+#   * a line that differs anywhere else as well -- a changed schedule or
+#     threshold is a different job, not a merged one;
+#   * a widening at the TARGET, the PREFIX or the LABEL -- inclusion in the
+#     wrong argument is not coverage.
+line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorbed
+    LOST_LINE="$1" awk '
+        # Split a line into a skeleton (quoted values replaced by \001) and the
+        # ordered list of those quoted values.
+        function shred(s, sk, vals,   out, n, i, ch, inq, cur) {
+            out=""; n=0; inq=0; cur=""
+            for (i=1; i<=length(s); i++) {
+                ch=substr(s,i,1)
+                if (ch=="\"") {
+                    if (inq) { n++; vals[n]=cur; cur=""; out=out "\001"; inq=0 }
+                    else inq=1
+                    continue
+                }
+                if (inq) cur=cur ch; else out=out ch
+            }
+            sk[0]=out
+            return n
+        }
+        function subset(a, b,   na, nb, i, j, av, bv, hit) {
+            na=split(a, av, ","); nb=split(b, bv, ",")
+            for (i=1; i<=na; i++) {
+                hit=0
+                for (j=1; j<=nb; j++) if (av[i]==bv[j]) { hit=1; break }
+                if (!hit) return 0
+            }
+            return 1
+        }
+        # Which quoted argument of the WHOLE line is the DATASET list.
+        #
+        # Counting from the end of the line does not work, and the first cut got
+        # it exactly backwards for that reason: a cron job line carries quoted
+        # values that are not arguments at all -- the stderr redirect, the
+        # notify-fail message, the tail subshell. So the argument region of the
+        # command itself is isolated first (from the script name to its stderr
+        # redirect), the position is resolved inside that region by the shape of
+        # that command, and then shifted back by however many quoted values the
+        # line carried before it.
+        #
+        # 0 means: not a shape this function can read. That is the fail-closed
+        # answer -- no exemption is available for such a line.
+        function count_quotes(s,   i, n) {
+            n=0
+            for (i=1; i<=length(s); i++) if (substr(s,i,1)=="\"") n++
+            return int(n/2)
+        }
+        function dataset_arg(line,   cmd, at, seg, cut, before, n, kind) {
+            kind=0
+            if (line ~ /snapsend\.sh/)       { cmd="snapsend.sh";      kind=1 }
+            else if (line ~ /snapget\.sh/)   { cmd="snapget.sh";       kind=1 }
+            else if (line ~ /delsnaps\.sh/)  { cmd="delsnaps.sh";      kind=1 }
+            else if (line ~ /check-snap-age\.sh/) { cmd="check-snap-age.sh"; kind=2 }
+            else return 0
+            at=index(line, cmd)
+            if (at == 0) return 0
+            before=count_quotes(substr(line, 1, at-1))
+            seg=substr(line, at)
+            cut=index(seg, " 2>")
+            if (cut > 0) seg=substr(seg, 1, cut-1)
+            n=count_quotes(seg)
+            # kind 1: the command ends with "<datasets>" "<target-or-pattern>",
+            #         so the dataset list is the second-to-last of its own args;
+            # kind 2: check-snap-age takes "<datasets>" first.
+            if (kind == 1) return (n >= 2) ? before + n - 1 : 0
+            return (n >= 1) ? before + 1 : 0
+        }
+        BEGIN {
+            ln=ENVIRON["LOST_LINE"]
+            nl=shred(ln, lsk, lv)
+            want=dataset_arg(ln)
+        }
+        {
+            if (want == 0) next
+            np=shred($0, psk, pv)
+            if (np != nl || psk[0] != lsk[0]) next
+            # The proposed line must be the same command, so the argument that
+            # carries datasets sits in the same place in both.
+            if (dataset_arg($0) != want) next
+            diff=0; idx=0
+            for (i=1; i<=nl; i++) if (lv[i] != pv[i]) { diff++; idx=i }
+            # Identical would not have been called lost; more than one differing
+            # argument is a different job, not a wider one.
+            if (diff != 1) next
+            # ...and the one that differs has to BE the dataset argument. A
+            # widened target, prefix or label is inclusion in the wrong place.
+            if (idx != want) next
+            # Direction matters: the OLD list must be contained in the NEW one.
+            # The reverse is coverage being dropped, which is the thing this
+            # guard exists to catch.
+            if (subset(lv[idx], pv[idx]) && !subset(pv[idx], lv[idx])) { print "ABSORBED"; exit }
+        }
+    ' | grep -q ABSORBED
+}
+
 assert_target_block_not_clobbered() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     local tcron; tcron=$(mktemp) || die "mktemp failed"
@@ -1858,6 +2197,12 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             [ -n "$line" ] || continue
             norm=$(printf '%s\n' "$line" | endpoint_normalized_identity)
             if printf '%s\n' "$proposed_norm" | grep -qxF -- "$norm"; then
+                continue
+            fi
+            # Second exemption, same shape as the endpoint one: not "this line
+            # looks similar" but "every dataset this line covered is still
+            # covered, by an otherwise identical line". See line_coverage_absorbed.
+            if printf '%s\n' "$proposed" | line_coverage_absorbed "$line"; then
                 continue
             fi
             still_lost="$still_lost$line
@@ -3622,32 +3967,114 @@ local_backup_overlap() {
 # local_backup_same_pool SRC TGT -> rc 0 when the leading pool component matches.
 local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
 
-# config_section_overlap FILE PATH... -> prints one line per existing
-# [dataset:]/[prune:] section in FILE whose scope overlaps a requested PATH.
-# path_overlaps is the same containment test the pull coverage guard uses. Empty
-# output means the requested job is disjoint from every job already in the file.
-config_section_overlap() {   # <file> <path>...
-    local file="$1"; shift
+# The ownership marker a local-backup section carries, or "" for a section this
+# tool did not write.
+#
+# Every section local-backup emits opens with
+#   # managed-by: zfs-backup.sh local-backup <kind>=<value>
+# and that line is the ONLY thing that distinguishes our own installed policy
+# from a stranger's. Two blockers of the KROK 5 path were the same omission:
+# nothing read the marker back, so the tool's own `[prune:<target>]` from the
+# first run looked exactly like foreign coverage -- which made a second source
+# unaddable, and made rerunning the identical successful command a FATAL
+# instead of a no-op.
+#
+# Read, never inferred from the header: a hand-written `[prune:hdd/backups]`
+# with the same name is NOT ours and must keep refusing.
+local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or ""
+    [ -f "$1" ] || return 0
+    awk -v want="$2" '
+        $0 == want { inside=1; next }
+        inside && /^\[/ { exit }
+        inside && index($0, "# managed-by: zfs-backup.sh local-backup ") {
+            sub(/^.*# managed-by: zfs-backup\.sh local-backup /, "")
+            sub(/[ \t]+$/, "")
+            print; exit
+        }
+    ' "$1" 2>/dev/null
+}
+
+# Which installed sections would genuinely COLLIDE with the jobs about to be
+# written -- and "genuinely" is the whole point, because containment is not
+# coverage for a flat job.
+#
+# The product contract this slice established: a flat [dataset:rpool/a] copies
+# rpool/a and nothing else. It does not cover rpool/a/child, and a flat
+# [dataset:rpool/a/child] does not cover the parent blocks either. Containment
+# becomes coverage only when the installed section says `recursive`.
+#
+# The discovery side was taught this first, and that alone produced a false
+# green: the proposal would offer a child under an installed flat parent, and
+# this gate would then refuse the very candidate it had just proposed. So the
+# rule lives here too, and both sides read it the same way.
+#
+#   exact identity        always a collision, whatever either side declares;
+#   requested INSIDE an   a collision only when that installed section is
+#   installed section     recursive -- otherwise it does not reach down there;
+#   installed INSIDE a    a collision only when the job we are about to write
+#   requested path        will be recursive over it. Sources are written flat,
+#                         so this is the TARGET case: its retention IS emitted
+#                         recursive, and a stranger's dataset under the store
+#                         really would have its snapshots pruned by ours.
+#
+# The recursive paths are named by the caller rather than guessed here, because
+# only the caller knows what it is about to emit.
+#
+# REV-20260811-098 stays: a section scope may name SEVERAL datasets
+# comma-separated ([prune:a,b,c] -- metropolis pve2 has such sections), so each
+# member is evaluated independently. Treating the comma-joined string as one
+# path would miss an overlap with every member but the accidental prefix.
+config_section_overlap() {   # <file> <recursive-request or ""> <requested path>...
+    local file="$1" rec_req="${2:-}"; shift 2
     [ -f "$file" ] || return 0
-    local hdr scope member req
+    local hdr scope member req srec
     while IFS= read -r hdr; do
         scope="${hdr#\[}"; scope="${scope%\]}"; scope="${scope#*:}"
-        # REV-20260811-098: a section scope may name SEVERAL datasets comma-
-        # separated ([prune:a,b,c] -- metropolis pve2 has such sections), so
-        # evaluate each member independently, using the same comma split and
-        # whitespace trim config_datasets() applies. Treating the whole
-        # comma-joined string as one path would miss an overlap with any member
-        # but the accidental prefix, letting the planner accept a job installed
-        # policy already covers.
+        srec="$(section_field "$file" "$hdr" recursive)"
+        srec="$(printf '%s' "$srec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$srec" in ""|no|off|0) srec="" ;; esac
         while IFS= read -r member; do
             [ -n "$member" ] || continue
             for req in "$@"; do
-                path_overlaps "$member" "$req" \
-                    && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
+                if [ "$member" = "$req" ]; then
+                    printf '
+  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
+                    continue
+                fi
+                case "$req" in
+                    "$member"/*)
+                        # The request lies under an installed section: only a
+                        # recursive one reaches it.
+                        [ -n "$srec" ] && printf '
+  %s (%s, recursive=%s) covers requested %s' "$hdr" "$member" "$srec" "$req"
+                        continue ;;
+                esac
+                case "$member" in
+                    "$req"/*)
+                        # An installed section lies under the request: only a
+                        # request we will write recursively reaches IT.
+                        [ -n "$rec_req" ] && [ "$req" = "$rec_req" ]                             && printf '
+  %s (%s) lies under requested %s, which this run would cover recursively' "$hdr" "$member" "$req"
+                        continue ;;
+                esac
             done
         done < <(dataset_list_split "$scope")
     done < <(grep -oE '^\[(dataset|prune):[^]]+\]' "$file")
     return 0
+}
+
+# installed_dataset_field for any section kind, [prune:] included: the flat-vs-
+# recursive question is asked of both, and reading only [dataset:] sections
+# would have made every prune scope look flat.
+section_field() {   # <file> <exact header> <field>
+    awk -v h="$2" -v fld="$3" '
+        $0==h {f=1; next}
+        f && /^\[/ {f=0}
+        f {
+            line=$0; sub(/^[ 	]+/,"",line)
+            if (line ~ ("^" fld "[ 	]*=")) { sub(("^" fld "[ 	]*=[ 	]*"),"",line); print line; exit }
+        }
+    ' "$1" 2>/dev/null
 }
 
 cmd_local_backup() {
@@ -3681,7 +4108,13 @@ cmd_local_backup() {
             *) die "local-backup: unknown option $a" ;;
         esac
     done
-    [ "${#source_flags[@]}" -gt 0 ] || die "local-backup: --source=<dataset>[,<dataset>...] is required (the dataset(s) to back up)"
+    # KROK 5: --source may now be omitted, and the resolution happens further
+    # down -- after the target is known, because a candidate that lands inside
+    # the target is not a candidate. The flag stays authoritative when given
+    # (EXPLICIT-SOURCE-BEATS-DISCOVERY, REV-20260811-101): a proposal is only
+    # ever consulted when the operator named nothing at all.
+    local sources_from=""
+    [ "${#source_flags[@]}" -gt 0 ] && sources_from=explicit
 
     # The account decision, resolved exactly as add-client resolves it: the flag
     # or root, never a host-wide setting. setup-server deliberately records no
@@ -3759,6 +4192,45 @@ cmd_local_backup() {
         esac
     fi
 
+    read_server_conf
+    # Policy 'host': no relationship record to read from, and no adoption --
+    # preserved exactly as it was, NOT quietly upgraded. Adding adoption here is
+    # the P10 change and it belongs in its own commit with its own test, not
+    # smuggled in under a refactor that claims to change no behaviour.
+    #
+    # This is also the caller that has real flags to pass, which is why they are
+    # arguments to the resolver rather than something it goes looking for: a
+    # decision layer that reads its caller's locals is not one home, it is five
+    # again with a shared address.
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+
+    # KROK 5: no --source at all. Propose, and say plainly that this is a guess.
+    #
+    # Resolved HERE and not at parse time for two reasons that are both about
+    # correctness rather than tidiness: a candidate is judged against the TARGET
+    # (which may itself have just been proposed), and against the INSTALLED
+    # CONFIG (which cron_context_resolve has only now decided). Proposing before
+    # either is known would offer datasets that the next step refuses.
+    #
+    # The proposal feeds the SAME --source parser below, so an accepted proposal
+    # and a typed --source travel one code path; there is no second notion of
+    # what a source set is.
+    if [ -z "$sources_from" ]; then
+        local proposed _p _prc
+        # An ambiguous subtree is not an error here: the proposal drops it,
+        # says so precisely on stderr, and returns whatever else it found. The
+        # only failure this call has left is an inventory it could not read.
+        proposed=$(propose_backup_sources "$target" "$config"); _prc=$?
+        [ "$_prc" -eq 0 ] || die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]"
+        [ -n "$proposed" ]             || die "local-backup: no --source given and nothing on this host is a sensible candidate (see the skip reasons above) -- name the dataset(s) explicitly with --source=<dataset>[,<dataset>...]"
+        sources_from=heuristic
+        log "brak --source -- PROPOZYCJA z inwentarza ZFS tego hosta (przekaz --source=..., zeby wybrac inaczej):"
+        while IFS= read -r _p; do [ -n "$_p" ] && log "  $_p"; done <<< "$proposed"
+        source_flags=("$(printf '%s' "$proposed" | tr '
+' ',' | sed 's/,$//')")
+    fi
+
     # REV-20260811-101: one or more explicit roots are the authoritative WHAT
     # (EXPLICIT-SOURCE-BEATS-DISCOVERY). The canonical form is a comma list in one
     # --source; repeated --source flags are normalized into the SAME set rather
@@ -3804,19 +4276,6 @@ cmd_local_backup() {
         done
     done
 
-    read_server_conf
-    # Policy 'host': no relationship record to read from, and no adoption --
-    # preserved exactly as it was, NOT quietly upgraded. Adding adoption here is
-    # the P10 change and it belongs in its own commit with its own test, not
-    # smuggled in under a refactor that claims to change no behaviour.
-    #
-    # This is also the caller that has real flags to pass, which is why they are
-    # arguments to the resolver rather than something it goes looking for: a
-    # decision layer that reads its caller's locals is not one home, it is five
-    # again with a shared address.
-    cron_context_resolve adopt "$config" "$resolver_user" "" ""
-    config="$CRON_CTX_FILE"
-
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
     # a config, and dies with the profile named if it does not exist.
@@ -3848,14 +4307,78 @@ cmd_local_backup() {
     fi
     ensure_cron_config "$cand" 1 1
 
-    # Refuse when any root OR the target overlaps a section already installed --
-    # "add B, do not mutate A" (Gate 2). Nothing is written on refusal.
-    local conflict; conflict="$(config_section_overlap "$cand" ${roots[@]+"${roots[@]}"} "$target")"
+    # WHOSE coverage is already there -- the question the overlap check never
+    # asked, and the reason two KROK 5 blockers looked like one refusal.
+    #
+    # A requested root falls into exactly one of three buckets:
+    #
+    #   ours      an installed [dataset:<root>] this tool wrote, sending to THIS
+    #             same target. Nothing to do for it -- and nothing to refuse
+    #             either, which is what makes an identical rerun a no-op;
+    #   new       no section at all. This is the one to compose and install;
+    #   disputed  a section exists but it is NOT ours, or it is ours and points
+    #             at a DIFFERENT target. Fail-closed, unchanged: it goes into
+    #             the overlap scan below and produces the same refusal it always
+    #             did. A stranger's policy is not ours to extend, and "same
+    #             source, other target" is a different request, not a rerun.
+    local -a new_roots=() have_roots=() scan=()
+    local _mk _dst
+    for r in "${roots[@]}"; do
+        if ! grep -qxF "[dataset:$r]" "$cand"; then
+            new_roots+=("$r"); scan+=("$r"); continue
+        fi
+        _mk="$(local_backup_section_marker "$cand" "[dataset:$r]")"
+        _dst="$(installed_dataset_field "$cand" "$r" dst)"
+        if [ "$_mk" = "source=$r" ] && [ "$_dst" = "$target" ]; then
+            have_roots+=("$r")
+        else
+            scan+=("$r")
+        fi
+    done
+
+    # Refuse when a DISPUTED root, or the target, overlaps a section already
+    # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
+    # refusal.
+    # The TARGET is the one requested path this run covers RECURSIVELY (its
+    # retention is emitted `recursive = yes`), so it is named as such; the
+    # sources are written flat and must not pretend to reach their children.
+    local conflict; conflict="$(config_section_overlap "$cand" "$target" ${scan[@]+"${scan[@]}"} "$target")"
+    # ...except this tool's own target retention for this very target. It is the
+    # same store, written by this same command, and treating it as foreign is
+    # exactly what made a second source impossible to add.
+    local _tmk; _tmk="$(local_backup_section_marker "$cand" "[prune:$target]")"
+    if [ "$_tmk" = "target=$target" ] && [ -n "$conflict" ]; then
+        conflict="$(printf '%s' "$conflict" | grep -vF "  [prune:$target] ")"
+        [ -z "${conflict//[[:space:]]/}" ] && conflict=""
+    fi
     if [ -n "$conflict" ]; then
         rm -f "$cand"
         die "local-backup: a job for these sources / target '$target' would overlap coverage already in $config:$conflict
 Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
     fi
+
+    # IDEMPOTENT RERUN. Every requested root is already installed against this
+    # target, so the durable state the operator asked for exists: say so and
+    # stop. Not a re-render and not a re-seed -- re-seeding would take a fresh
+    # snapshot and reinstall cron for a relationship that is already running,
+    # which is a change disguised as a repetition. Same contract the four-command
+    # remote path was given in KROK 3: a completed step repeats as a clean no-op.
+    if [ "${#new_roots[@]}" -eq 0 ]; then
+        rm -f "$cand"
+        log "local-backup: zrodla ${roots[*]} sa juz zainstalowane w $config dla celu '$target' -- nic do zrobienia."
+        echo
+        echo "Backup lokalny JUZ AKTYWNY (bez zmian)."
+        echo "  Zrodla:  ${roots[*]}"
+        echo "  Cel:     $target"
+        echo "  Config:  $config"
+        return 0
+    fi
+
+    # From here on only the NEW roots are composed. An already-installed root
+    # must not be emitted a second time: gen-cron refuses a duplicate section,
+    # and re-emitting would also silently overwrite an operator's edits to the
+    # policy that root is running under.
+    roots=("${new_roots[@]}")
 
     # One independent [dataset:] per root (each sending to the target; dst=<target>
     # with no ':' is snapsend.sh's local-to-local branch). Then TWO independent
@@ -3867,12 +4390,50 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     #   * TARGET retention -- one recursive [prune:<target>] over the store.
     # Only the tool-owned pattern is matched, so manual/foreign snapshots survive;
     # source and target are disjoint scopes (validated above), never coupled.
+    # One minute per source, chosen once here, exactly as a relationship gets
+    # one at create. Two reasons, and the second one is not cosmetic:
+    #
+    #   * two sources copying into the same store at the same minute compete for
+    #     the same disks and the same pool, which is the stampede the stagger
+    #     exists to end;
+    #   * gen-cron MERGES datasets that resolve to the same (send_schedule, dst,
+    #     prefix, flags) into ONE cron line. Adding a second source therefore
+    #     rewrote the first source's line into a two-dataset one -- and the
+    #     anti-deletion guard, correctly, called the old line deleted and
+    #     refused the install. Measured live on pve9: seed of the second source
+    #     succeeded, the install refused, nothing was left half-installed. A
+    #     distinct minute keeps every line's identity stable, so adding a source
+    #     leaves the existing lines untouched instead of arguing with a safety
+    #     guard about whether a merge is a deletion.
+    # Resolved BEFORE the emit block, once per root, because the same minute has
+    # to reach two sections ([dataset:] and [prune:]) written in two separate
+    # loops -- and because schedule_pick_minute reads the INSTALLED state, which
+    # cannot see the sections this very run is about to add. Minutes already
+    # handed out in this run are therefore tracked here, or two new sources
+    # would be given the same one and merge exactly as before.
+    local -A LB_SEND=() LB_PRUNE=()
+    local _lb_min _lb_pmin _lb_used=" "
+    for r in "${roots[@]}"; do
+        _lb_min=$(schedule_pick_minute "local-backup:$r")
+        while :; do
+            case "$_lb_used" in
+                *" $_lb_min "*) _lb_min=$(( (_lb_min + 1) % 60 )) ;;
+                *) break ;;
+            esac
+        done
+        _lb_used="$_lb_used$_lb_min "
+        _lb_pmin=$(( (_lb_min + 20) % 60 ))
+        LB_SEND[$r]="$(schedule_with_minute "$(schedule_template_expr send)" "$_lb_min")"
+        LB_PRUNE[$r]="$(schedule_with_minute "$(schedule_template_expr prune)" "$_lb_pmin")"
+    done
+
     {
         for r in "${roots[@]}"; do
             echo
             echo "[dataset:$r]"
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
             profile_emit "$PROFILE_DS_FILE"
+            [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
             echo "	dst          = $target"
             echo "	notify       = local-$(basename "$r")"
         done
@@ -3886,7 +4447,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # retain only the target. REV-20260811-106 F1: the family is derived from
             # the templates the profile's prune fragment ACTUALLY references, not
             # from a `keep_*` naming convention, and fails closed if one is missing.
-            emit_source_template_family "$PROFILE_PRUNE_FILE"
+            emit_source_template_family "$PROFILE_PRUNE_FILE" "$cand"
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
@@ -3898,14 +4459,25 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
                 emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+                # Same reason as the send line: without its own minute, two
+                # source prunes with identical policy merge into one delsnaps
+                # line and the first one's identity changes underneath the
+                # anti-deletion guard.
+                [ -n "${LB_PRUNE[$r]}" ] && echo "	prune_schedule = ${LB_PRUNE[$r]}"
                 echo "	notify       = local-src-$(basename "$r")"
             done
-            echo
-            echo "[prune:$target]"
-            echo "	# managed-by: zfs-backup.sh local-backup target=$target"
-            profile_emit "$PROFILE_PRUNE_FILE"
-            echo "	recursive    = yes"
-            echo "	notify       = local-$(basename "$target")"
+            # Once per target, not once per run: a second source landing in the
+            # same store is covered by the retention that is already there, and
+            # emitting it again would be a duplicate section gen-cron refuses --
+            # while also discarding whatever the operator had edited into it.
+            if ! grep -qxF "[prune:$target]" "$cand"; then
+                echo
+                echo "[prune:$target]"
+                echo "	# managed-by: zfs-backup.sh local-backup target=$target"
+                profile_emit "$PROFILE_PRUNE_FILE"
+                echo "	recursive    = yes"
+                echo "	notify       = local-$(basename "$target")"
+            fi
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
 
@@ -3982,8 +4554,18 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         die "local-backup: --yes cannot confirm a target this run GUESSED ('$target', from the pool layout). Name it with --target=$target if that is what you meant, or record it once with setup-server. Nothing was touched."
     fi
 
+    # KROK 5, and the same rule for the same reason: a source set this run
+    # PROPOSED is a guess about what matters on this host, and a guess does not
+    # get installed with nobody looking. The operator either accepts it here, in
+    # front of the rendered plan, or names the set with --source=.
+    if [ "$sources_from" = heuristic ] && [ "$assume_yes" -eq 1 ]; then
+        rm -f "$cand"
+        die "local-backup: --yes cannot confirm a source set this run PROPOSED (${roots[*]}). Name them with --source=$(printf '%s' "${roots[*]}" | tr ' ' ',') if that is what you meant. Nothing was touched."
+    fi
+
     if [ "$assume_yes" -ne 1 ]; then
         local ans
+        [ "$sources_from" = heuristic ]             && log "zrodla powyzej sa PROPOZYCJA tego przebiegu, nie Twoim wyborem -- potwierdzajac, akceptujesz ten zestaw"
         read -rp "Zainstalowac ten backup lokalny? [t/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
@@ -4092,6 +4674,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     echo
     echo "Backup lokalny AKTYWNY."
     echo "  Zrodla:  ${roots[*]}"
+    # Named separately rather than folded into the line above: this run neither
+    # seeded nor re-rendered them, and reporting them as though it had would be
+    # the report claiming work it did not do.
+    [ "${#have_roots[@]}" -gt 0 ] && echo "  Juz bylo: ${have_roots[*]} (bez zmian -- ani seeda, ani nowej sekcji)"
     echo "  Cel:     $target"
     echo "  Config:  $config"
     echo "  Seed:    OK (${#roots[@]} zrodlo/zrodel wyslane)"

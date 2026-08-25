@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aa263a8f53ee044a -->
+<!-- status-covers-digest: 79f4fc13df884859 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1339,7 +1339,219 @@
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
   `check-snap-age.sh` v2.3.
 
-- Bieżąca dostawa dla issue #9: **prosty przepływ dwuserwerowy** — `add-client --host` (domyślny backup), jeden prowadzony `deploy.sh --join` na źródle, jawny `seed` i jeden `activate` na kolektorze. Join odkrywa ZFS, pokazuje zakres, pozwala zaakceptować/edytować i nadaje grant; activate składa końcowy catch-up, opcjonalną zmianę adresu, weryfikację oraz podgląd i transakcyjną instalację crona. Retry wznawia z trwałego stanu; ukończona aktywacja jest no-op. Lokalne dowody: guided join 14/14, zfsbackup 430/430. Dowód na dwóch żywych hostach/ZFS pozostaje obowiązkiem przed merge.
+- Bieżąca dostawa dla issue #9: **prosty przepływ dwuserwerowy** — `add-client --host` (domyślny backup), jeden prowadzony `deploy.sh --join` na źródle, jawny `seed` i jeden `activate` na kolektorze. Join odkrywa ZFS, pokazuje zakres, pozwala zaakceptować/edytować i nadaje grant; activate składa końcowy catch-up, opcjonalną zmianę adresu, weryfikację oraz podgląd i transakcyjną instalację crona. Retry wznawia z trwałego stanu; ukończona aktywacja jest no-op. Lokalne dowody: guided join 14/14, zfsbackup 430/430. **Dowód na dwóch żywych hostach/ZFS został wykonany i przyjęty 2026-08-24** — patrz sekcja „Tor czterech komend — ZAMROŻONY” niżej; ten tor nie jest już obowiązkiem otwartym.
+
+- **Tor czterech komend — ZAMROŻONY (2026-08-24).**
+
+  **Stan: zamknięty i zamrożony.** Recenzent wydał `STAGE ASSESSMENT — PASS`
+  dla toru na dokładnej głowie `main@aded3734d5f73564cc886e53451ae0a52b55a684`,
+  a PR #157 ma niezależne APPROVED dla dokładnego
+  `f321ba5e41cfce85681d177e0ec7129be836128c`; CI `32762425113` — zielone, 38/38.
+
+  Tor to cztery komendy publiczne, w tej kolejności:
+
+  ```
+  zfs-backup.sh add-client NAME --host=... --target=...      (kolektor)
+  deploy.sh --join=...                                        (źródło)
+  zfs-backup.sh seed NAME                                     (kolektor)
+  zfs-backup.sh activate NAME [--host=...]                    (kolektor)
+  ```
+
+  **Co zostało dowiedzione na żywo** (kolektor pve9, źródło pve2, konto
+  delegowane `bckp`; pełne transkrypty w issue #9):
+
+  | próba | wynik |
+  |---|---|
+  | pełna ścieżka czterech komend na żywej relacji ZFS | **PASS** |
+  | seed po LAN + transfer produkcyjny przez osobny endpoint WireGuard | **PASS** |
+  | tożsamość GUID źródło/cel po przesłaniu ładunku ścieżką produkcyjną | **PASS** |
+  | odczyt zwrotny pełnego CONFIG-u i crontaba konta właściciela | **PASS** |
+  | powtórzenie całej sekwencji publicznej | **`0/0/0/0`**, bez zduplikowanych sekcji CONFIG-u i linii crona |
+  | bramka tożsamości `add-client` | ten sam adres → no-op `0`; inny port, jawne konto lub inny target → odmowa `1` |
+
+  **Co znaczy zamrożenie tego toru:** publiczna gramatyka i kolejność tych
+  czterech komend, ich kontrakt wznawiania (ponowienie ukończonego kroku jest
+  no-opem, rozbieżna tożsamość odmawia) oraz kształt dowodu są ustalone.
+  Zmiana w tym torze wymaga **recenzji przed implementacją**, tak samo jak
+  zmiana w pliku objętym `docs/project/ENGINE-FREEZE.md`. Dalsze poprawki
+  dokumentacyjne i późniejsze findingi monitoringu są doradcze i **nie**
+  otwierają tego etapu ponownie.
+
+  **Następny krok: KROK 5** — i tylko on, w zakresie zapisanym w wiążącym
+  OWNER EXECUTION PLAN (issue #9, komentarz `5301880395` z 2026-08-15):
+  domknięcie **wysokopoziomowego wdrożenia jednoserwerowego**. Najpierw krótki
+  audyt „co już jest" wobec zamkniętego Gate 5 — planer, CONFIG, seed,
+  retencja i transakcja crona nie są budowane ponownie. Dostarczany jest
+  wyłącznie brakujący klej UX dla przebiegu **czysty host → działający
+  backup**: root jako domyślny wykonawca; `--local-user=zfsbackup` zmieniający
+  wyłącznie konto, nie procedurę; brak `--source` pokazujący propozycję
+  sensownych datasetów i wymagający akceptacji; target automatyczny tylko gdy
+  jednoznaczny, inaczej jawna decyzja; jedna ponowiona komenda wznawiająca po
+  błędzie; koniec = seed zweryfikowany oraz cron zainstalowany i odczytany
+  z właściwego konta. Dowód akceptacyjny na czystym hoście w dwóch wariantach
+  — root i konto delegowane — bez ręcznej edycji CONFIG-u, grantów i crontaba.
+
+- **KROK 5, plaster 1: brak `--source` proponuje zrodla (2026-08-25).**
+
+  Wysokopoziomowa sciezka lokalna odmawiala bez `--source`, wiec „czysty host ->
+  dzialajacy backup" zaczynal sie od recznego czytania `zfs list`. Teraz brak
+  `--source` daje **propozycje z inwentarza ZFS tego hosta** i **wypisuje kazdy
+  pominiety dataset wraz z powodem** (pula, cel backupu, `*/ROOT`, swap oraz
+  dataset juz objety zainstalowana polityka).
+
+  **Uklad hierarchiczny nie jest zgadywany.** Pierwsza wersja pomijala kazdy
+  dataset majacy potomka i proponowala dzieci — a rodzic trzyma wlasne pliki
+  niezaleznie od dzieci, wiec to zamieniało pozorne pokrycie na CICHY brak
+  pokrycia (finding recenzji do plastra 1; wlasna suita kodowala te wade jako
+  zachowanie oczekiwane, wiec byla zielona nad prawdziwa dziura). Zmierzone na
+  zywym ZFS: pusty rodzic ma `usedbydataset=24576`, ten sam rodzic z 3 MiB
+  wlasnych plikow — `3173376`; rozroznienie jest wiec mozliwe, ale tylko wobec
+  progu wzietego z sufitu, ktorego ta funkcja nie ma prawa wymyslac. Dlatego
+  decyduje UKLAD, nie rozmiar: gdy wsrod kandydatow jest para rodzic/dziecko,
+  **to poddrzewo** wypada z propozycji — oba czlony, bo sam rodzic to pierwotna
+  wada, a same dzieci to ta sama nieprawda w druga strone — z wypisana para,
+  powodem i gotowymi do skopiowania liniami `--source=`. Reszta hosta jest
+  proponowana normalnie: jedna hierarchia nic nie mowi o datasetach poza nia
+  (zawezenie wg zalecenia recenzenta w trybie doradczym).
+
+  Propozycja to zgadywanie, wiec niesie te sama regule co zgadniety cel:
+  **`--yes` jej nie potwierdza**. Jawne `--source` nigdy nie jest podwazane
+  (EXPLICIT-SOURCE-BEATS-DISCOVERY) — propozycja jest czytana wylacznie wtedy,
+  gdy operator nie nazwal niczego.
+
+  Zmierzone na zywo (pve9, worktree, host przywrocony do stanu sprzed testu):
+  propozycja `hdd/k5src` + `hdd/osrc` z pominietym `hdd`; odmowa pod `--yes`
+  nazywajaca zrodla przy niezmienionym hashu crontaba; **wariant root** — EXIT=0,
+  seed z weryfikacja GUID, diff crontaba to dokladnie jeden dodany blok
+  zarzadzany; **wariant konta delegowanego `bckp`** — EXIT=0, blok w crontabie
+  konta, crontab roota bajt w bajt bez zmian, granty ZFS nadane na zrodle i celu.
+
+  **Dwa blockery tej samej sciezki — zmierzone na `main@aded373` (kontrola na
+  nietknietym buildzie), NAPRAWIONE tutaj po przejsciu recenzenta w tryb
+  doradczy:** powtorzenie tego samego udanego polecenia konczylo sie FATAL-em
+  o nakladaniu zamiast byc no-opem; a dodanie **drugiego** zrodla do tego samego
+  celu bylo odrzucane, bo wlasna sekcja `[prune:<cel>]` z pierwszego
+  uruchomienia liczyla sie jako cudza nakladka.
+
+  Jedna przyczyna: kazda sekcja pisana przez `local-backup` otwiera sie markerem
+  `# managed-by: zfs-backup.sh local-backup <rodzaj>=<wartosc>`, **i nikt go nie
+  odczytywal**. Teraz zadane zrodlo trafia do jednego z trzech kubelkow — NASZE
+  (marker nasz i `dst` rowny zadanemu celowi; nic do zrobienia), NOWE (brak
+  sekcji; to jedyne, ktore sie komponuje) albo SPORNE (sekcja cudza albo nasza,
+  ale wskazujaca inny cel; fail-closed, ta sama odmowa co zawsze). Gdy nie ma
+  zadnego nowego zrodla, przebieg jest **no-opem**: bez seeda, bez zapisu crona,
+  config bajt w bajt ten sam. Retencja celu i rodzina szablonow zrodlowych sa
+  emitowane **raz na cel**, nie raz na przebieg.
+
+  **Trzecia rzecz, ujawniona dopiero przez zywy przebieg:** `gen-cron` SCALA
+  datasety o tej samej polityce w jedna linie crona, wiec dolozenie drugiego
+  zrodla nie dodawalo linii — przepisywalo linie pierwszego zrodla na
+  dwudatasetowa. Bramka antykasacyjna, zgodnie z wlasnym kontraktem („linia
+  ktora znikla to zadanie ktore przestalo chodzic"), odmawiala instalacji,
+  wymieniajac jako ofiary wlasne linie pierwszego zrodla. Dwie zmiany, obie
+  waskie:
+
+  * **wlasna minuta na kazde zrodlo lokalne** (ten sam rozrzut, ktorego uzywa
+    sciezka zdalna) — linie przestaja sie scalac, wiec tozsamosc istniejacej
+    linii nie zmienia sie, gdy dochodzi kolejne zrodlo; przy okazji dwa zrodla
+    nie kopiuja do tego samego magazynu w tej samej minucie;
+  * **drugie zwolnienie w bramce**, o tym samym ksztalcie co istniejace
+    zwolnienie dla zmiany endpointu: zgubiona linia jest wchlonieta wylacznie
+    wtedy, gdy w nowym bloku jest linia IDENTYCZNA poza jednym cytowanym
+    argumentem, w ktorym stara lista datasetow jest PODZBIOREM nowej. Kierunek
+    jest cala wlasnoscia bezpieczenstwa i jest pinowany w obie strony: lista
+    ktora sie ZWEZA nadal jest kasacja. Piec dyskryminatorow: scalenie
+    wchloniete, linia po prostu nieobecna — nie; zwezenie — nie; zmieniony prog
+    — nie; zmieniony harmonogram — nie.
+
+  **Dwie dalsze uwagi recenzenta, obie trafne i obie poprawione:**
+
+  * „juz objety" bylo testowane **nakladaniem sciezek**, a zadanie lokalne jest
+    PLASKIE — `[dataset:rpool/a]` nie kopiuje `rpool/a/child`. Nowe dziecko pod
+    zainstalowanym rodzicem bylo wiec pomijane jako „juz objete" i **nigdy nie
+    proponowane**: to samo ciche zniknięcie pokrycia co w F1, tylko od drugiej
+    strony. Teraz „juz objety" to **dokladna tozsamosc datasetu**, chyba ze
+    zainstalowana sekcja jawnie deklaruje `recursive` — wtedy naprawde obejmuje
+    poddrzewo. Trzy dyskryminatory: nowe dziecko pod plaskim rodzicem, rodzic
+    przy zainstalowanym dziecku, oraz kontrola, ze sekcja rekurencyjna nadal
+    obejmuje potomkow;
+  * zwolnienie w bramce **poszerzalo dowolny** cytowany argument, co dowodzi
+    zawierania zbioru, ale nie tego, ze ten zbior jest POKRYCIEM — szerszy cel,
+    prefiks albo etykieta mogly udawac zachowane pokrycie datasetow. Teraz
+    rozpoznawana jest komenda i **pozycja argumentu datasetow w jej wlasnym
+    segmencie** (od nazwy skryptu do przekierowania stderr), bo liczenie od
+    konca calej linii bralo pod uwage cudzyslowy opakowania — pierwsza wersja
+    robila dokladnie odwrotnie, niz powinna. Nieznana komenda nie dostaje
+    zwolnienia w ogole. Dwanascie dyskryminatorow, w tym cztery kontrole „tylko
+    cel / prefiks / wzorzec / lista `-P` sie poszerza — nie wolno wchlonac".
+
+  **F3: ta sama regula musi obowiazywac na OBU koncach.** Nauczenie jej samej
+  propozycji dalo falszywa zielen — odkrywanie oferowalo dziecko pod
+  zainstalowanym plaskim rodzicem, a bramka kompozycji odrzucala kandydata,
+  ktorego przed chwila sama zaproponowala. `config_section_overlap` czyta wiec
+  teraz to samo: **dokladna tozsamosc zawsze koliduje**; zadanie LEZACE POD
+  zainstalowana sekcja koliduje tylko wtedy, gdy ta sekcja jest rekurencyjna;
+  a sekcja lezaca POD zadana sciezka koliduje tylko wtedy, gdy to, co ten
+  przebieg napisze, bedzie ja obejmowac rekurencyjnie — czyli w przypadku CELU,
+  ktorego retencja jest emitowana `recursive = yes`. Sciezki rekurencyjne
+  nazywa **wywolujacy**, bo tylko on wie, co zaraz wyemituje.
+
+  Testy end-to-end sprawdzaja caly przebieg, nie brak frazy: kod wyjscia,
+  zainstalowany CONFIG, przetrwanie starego zadania, obecnosc nowego oraz
+  pokrycie obu w zainstalowanym cronie — dla obu ukladow (zainstalowany plaski
+  rodzic + nowe dziecko; zainstalowane dziecko + kandydat-rodzic) plus odmowa,
+  gdy zainstalowana sekcja naprawde jest rekurencyjna.
+
+  Dowod live (pve9, worktree, host przywrocony do stanu sprzed testu): pierwsza
+  instalacja `EXIT=0`; **powtorka tego samego polecenia `EXIT=0`, md5 configu
+  i crontaba identyczne, snapshot nadal jeden** (zero seeda); **drugie zrodlo
+  `EXIT=0`**, w crontabie dwie osobne linie wysylki na minutach 10 i 30, monitor
+  zrodel scalony do `"hdd/k5a,hdd/k5b"` (pokrycie zachowane), retencja celu
+  jedna.
+
+  Dyskryminatory pinuja obie polowy: no-op nic nie sieje i nic nie zapisuje;
+  drugie zrodlo dolacza, a pierwsze przezywa; cudza sekcja pod ta sama sciezka
+  **nadal odmawia**; nasza sekcja wskazujaca inny cel **nadal odmawia** (to inne
+  zadanie, nie powtorzenie).
+
+- **Sonda pul: awaria przestala byc cisza (2026-08-25, `check-pool-capacity.sh` v6).**
+
+  Advisory recenzenta do PR #131, dwukrotnie ponawiane. Generowany skrypt
+  zdrowia mial dwie sciezki fail-open: `for pool in $(zpool list -H -o name)`
+  wykonuje cialo petli **zero razy**, gdy enumeracja padnie, a
+  `health=$(zpool list -H -o health ...)` z testem `[ -n "$health" ]` milczy,
+  gdy odczyt jednej puli sie nie powiedzie. W obu wypadkach „nie udalo mi sie
+  sprawdzic" docieralo do operatora jako „sprawdzilem i jest dobrze" — czyli
+  dokladnie ta klasa wady, dla ktorej ten plik powstal (rpool na pve1 stal
+  DEGRADED tygodniami, bo zdrowia nie sprawdzal nikt; sonda, ktora nie umie
+  krzyknac, tez go nie sprawdza).
+
+  Teraz enumeracja jest **jedna** i jej wynik ma trzy rozne odpowiedzi:
+  `rc != 0` -> finding „sonda pul PADLA" i **zadna** z petli sie nie wykonuje;
+  `rc == 0` z pusta lista -> osobny finding „ZERO pul" (na hoscie z tym
+  pakietem to nie cisza, tylko brak zaimportowanej pamieci); w przeciwnym razie
+  praca idzie dalej. Nieodczytany `health` i nieodczytana `capacity` sa
+  findingami per pula — ta druga wczesniej dawala blad powloki na stderr i
+  **zaden** alert.
+
+  `CAPACITY_SCRIPT_MARKER` podbity `v4` -> `v6`, bo deploy podmienia ten skrypt
+  tylko wtedy, gdy marker sie nie zgadza: bez podbicia poprawka nie dotarlaby na
+  zadnego hosta z flotą, ktora juz ma v4 (ta sama pulapka co REV-088 —
+  sprawdzenie po nazwie serwuje stara tresc w nieskonczonosc).
+
+  **Druga runda (v6): sonda, ktora sie powiodla, to inne pytanie niz wyjscie,
+  ktore wyglada dobrze.** Finding recenzenta: `health=$(zpool list ...)` uznawal
+  `ONLINE` za sukces takze wtedy, gdy komenda wypisala `ONLINE` i **padla**,
+  a `cap=$(zpool list ... | tr -d '%')` gubil kod `zpool` na rzecz kodu `tr`.
+  Teraz rc jest przechwytywany z samej sondy i sprawdzany **przed** trescia,
+  a `%` obcina rozwiniecie parametru zamiast potoku. Pusta odpowiedz przy
+  `rc=0` i padnieta sonda to dwa **rozne** komunikaty — operator wie, ktora
+  cisza go spotkala.
+
+  `test/alertmail`: **34/0**, +7 asercji. Kontrola negatywna wobec builda sprzed
+  poprawki: **szesc padа**, a siodma — „gdy wszystkie sondy odpowiadaja, zdrowy
+  host nadal milczy" — przechodzi po obu stronach, wiec suita mierzy dokladnie
+  te zmiane, a nie „skrypt zaczal alarmowac zawsze".
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
@@ -1446,7 +1658,7 @@
   zachowany trap wywołującego, akcja z apostrofem) sprawdzone jako PADAJĄCE na
   `9751f29` i przechodzące tutaj. Zmierzone po scaleniu z `main`:
   `zfsbackup` **430/0**.
-  Poprzednia zmiana zachowania: **Batch A — bezpieczna wieloklientowa rozbiórka po PR #14.** Wcześniejszy etap: **czterokomendowy przepływ dwóch serwerów (issue #9) + naprawa świeżego kolektora.** `add-client → deploy.sh --join → seed → activate` jest na `main` (PR #10). Kampania na ŻYWO na parze metropolis (pve1 → pve2, 2026-08-14) dowiodła komend 1–3 end-to-end na prawdziwym ZFS: wsad, prowadzony join z inwentaryzacją rzeczywistych datasetów i nadaniem uprawnień na DOKŁADNIE jeden dataset (proponowany zakres obejmował całą pamięć pve2 z produkcją włącznie i został zawężony przed akceptacją), oraz seed z **realnie przesłanymi 12,1 MB**. Komenda 4 odsłoniła defekt blokujący: `cmd_activate_client` buduje kopię roboczą configu i przy BRAKU configu tworzył ją PUSTĄ, a `ensure_cron_config` zasiewa `[defaults]` tylko gdy pliku nie ma — `mktemp` już go stworzył. Efekt: datasety zapisane na niczym i odmowa `gen-cron.sh: [defaults] must set host_label`, czyli ręczna naprawa CONFIG-u, której issue #9 zabrania. Niewidzialne na każdym kolektorze, który config już ma; widoczne dokładnie przy pierwszym wdrożeniu dwóch serwerów. Zasiewanie jest teraz JEDNĄ funkcją (`write_fresh_config_defaults`) używaną przez obu wywołujących, zamiast literału w jednej gałęzi, o którym druga zapomniała. Po naprawie config się generuje i renderuje pełny podgląd crona (send, prune celu, prune źródła, monitor, digest). Instalacja zatrzymała się na DRUGIEJ, poprawnej bramce: zainstalowany blok zarządzany w crontabie roota na pve1 pochodzi z `/tmp/…/jobs.conf` po dawnej kampanii i już nie istnieje, więc `assert_cron_config_matches_installed` odmówiła — instalacja skasowałaby to, co ten blok opisuje. **Nic nie zmutowano**: crontaby roota i konta na obu hostach zweryfikowane bajt w bajt wobec kopii sprzed przebiegu. Pełny transkrypt czterech komend NIE jest jeszcze domknięty — wymaga kolektora, którego blok zarządzany nie jest pozostałością po teście. Zgłoszone osobno, nie naprawione po cichu: `add-client` bez `--local-user` deklaruje cel jako „delegated to nobody" i generuje zadania rootowe na flocie zmigrowanej na konto delegowane; komunikat końcowy `seed` nadal odsyła do `final-catchup`/`set-endpoint`/`verify-endpoint`/`activate-client`, czyli do sekwencji, którą #9 usuwa; szkic zakresu domyślnie daje `include_parent = no`, co dla liścia nie wybiera niczego (odmawia czysto, ale bezużytecznie). Rozbiórka relacji też została naprawiona, bo kampania na żywo pokazała, że `remove-client` nie umie posprzątać po sobie: rekord klienta trzyma ścieżki CELU (`MANAGED_DATASETS`, `MANAGED_PRUNE_SCOPE`), a scope prune'a ŹRÓDŁA to endpoint (`konto@host:dataset`), więc `remove_managed_sections` nigdy się o nim nie dowiadywała i sekcja przeżywała. Kaskada: następny krok generował cron z niesprzątniętego configu i wstawiał linię z powrotem, po czym `--unpair` odmawiał z powodu linii, którą usuwanie właśnie odtworzyło; a zalecana w komunikacie naprawa była niewykonalna, bo config pozbawiony ostatniej reguły nie daje się zainstalować (`gen-cron` słusznie odmawia renderowania pustki). Usuwanie woła teraz `remove_client_remote_source_prunes` — ten sam helper, którego aktywacja używa do przeniesienia tej sekcji przy zmianie endpointu, więc reguła własności bez zmian (marker, cudze sekcje nietknięte). Komunikat `--unpair` podaje kolejność, która działa: config, potem crontab. **Czwarty defekt, starszy od tej naprawy, odsłonięty przez jej test:** `remove_client_remote_source_prunes` i `capture_client_remote_source_prunes` budowały marker własności wewnątrz jednego `local`, z tej samej zmiennej, która była w nim przypisywana — a bash rozwija wszystkie słowa polecenia zanim wykona którekolwiek przypisanie, więc marker brał wartość z zakresu WYWOŁUJĄCEGO. Działało wyłącznie dlatego, że jedyny wywołujący miał zmienną o tej samej nazwie i wartości; wywołujący z inną usunąłby sekcje cudzego klienta albo zachował cudzą politykę przy re-aktywacji, a pod `set -u` bez zewnętrznej zmiennej funkcja pada — i tak się to ujawniło, przy pierwszym wywołaniu z testu jednostkowego. Obie rozdzielone na dwie instrukcje. Test jest parą: własny zdalny prune znika, cudzy zostaje (usuwający wszystkie zdalne prune'y przeszedłby pierwszą połowę i po cichu skasował retencję źródła innego klienta). Zmierzone: `zfsbackup` 407/0 wobec bazy 406/0 na czystym `main`. Do tego dwie dalsze poprawki z tej samej kampanii: `seed` nazywa teraz DOKŁADNIE jedną następną komendę (`activate NAME`, z `--host=` gdy endpoint produkcyjny różni się od zaseedowanego) zamiast recytować `final-catchup`/`set-endpoint`/`verify-endpoint`/`activate-client`, czyli sekwencję, którą #9 usuwa ze zwykłej ścieżki; a szkic zakresu przestał wpisywać `include_parent = no` liściom — to poprawne dla kontenera i NIE WYBIERA NICZEGO dla liścia, przez co prowadzony join odmawia, a operator musi ręcznie poprawić linijkę na ścieżce, która z definicji nie wymaga ręcznej edycji. Obie asercje pinujące stare brzmienie zostały PRZEPISANE do nowego kontraktu, nie skasowane: podpowiedź po seedzie musi nazywać `activate` ORAZ nie wymieniać żadnego z czterech eksperckich czasowników (sama pierwsza połowa przepuściłaby podpowiedź, która dodaje nową komendę i dalej recytuje stare), a reguła słownictwa („the peer", nigdy „the source") jest pinowana słowami, nie całym zdaniem — regułę wzięto z prawdziwego findingu recenzji i przeredagowałem własny tekst, żeby ją zachować. Zmierzone: gałąź dała 404/2 wobec 406/0 na main, obie porażki moje, po przepisaniu asercji 406/0. Poprzednia zmiana zachowania: **REV-120 runda 2 + REV-121 — zniszczenie nie może poszerzyć zatwierdzonego zbioru, a punkt docelowy nie może być zgadnięty.** Runda 1 mierzyła zbiór tuż przed zniszczeniem i dalej wołała `zfs rollback -r`; pomiar zwęża okno, ale go nie zamyka, bo odczyt i zniszczenie to nadal dwie chwile, a `-r` sam decyduje, co jest nowsze od bazy. Teraz własność niesie KSZTAŁT poleceń: każde wywołanie niszczące to albo `zfs destroy` nazywające zatwierdzone obiekty WPROST (nie tknie niczego innego, cokolwiek by w międzyczasie przyszło), albo **nierekurencyjny** `zfs rollback`, który sam odmawia, gdy istnieje cokolwiek nowszego — ZFS sprawdza to wewnątrz polecenia, nie my przed nim. Zmierzone identycznie na 2.1.9 i 2.2.2: `zfs destroy ds@a,b,c` usuwa wiele snapshotów jednym wywołaniem, składnia z przecinkiem NIE działa dla bookmarków, a nierekurencyjny rollback przy nowszym bookmarku odmawia, wymienia winowajców i nie niszczy niczego — łącznie z danymi żywymi. Cena jest nazwana wprost: zniszczenie zaczyna się teraz PRZED rollbackiem, więc spóźniony obiekt to porażka częściowa (2), a nie czysta odmowa (1). **REV-121:** domyślny punkt docelowy nie jest już ostatnim wierszem listy sortowanej po `creation` — oś zostaje `creation` (to czas powstania danych, czyli sens polityki właściciela), ale gdy maksimum dzieli kilka snapshotów, czasownik ODMAWIA i wymienia kandydatów zamiast wybierać po przypadkowej kolejności. Poprzednia zmiana zachowania: **REV-120 runda 1 —
+  Poprzednia zmiana zachowania: **Batch A — bezpieczna wieloklientowa rozbiórka po PR #14.** Wcześniejszy etap: **czterokomendowy przepływ dwóch serwerów (issue #9) + naprawa świeżego kolektora.** `add-client → deploy.sh --join → seed → activate` jest na `main` (PR #10). Kampania na ŻYWO na parze metropolis (pve1 → pve2, 2026-08-14) dowiodła komend 1–3 end-to-end na prawdziwym ZFS: wsad, prowadzony join z inwentaryzacją rzeczywistych datasetów i nadaniem uprawnień na DOKŁADNIE jeden dataset (proponowany zakres obejmował całą pamięć pve2 z produkcją włącznie i został zawężony przed akceptacją), oraz seed z **realnie przesłanymi 12,1 MB**. Komenda 4 odsłoniła defekt blokujący: `cmd_activate_client` buduje kopię roboczą configu i przy BRAKU configu tworzył ją PUSTĄ, a `ensure_cron_config` zasiewa `[defaults]` tylko gdy pliku nie ma — `mktemp` już go stworzył. Efekt: datasety zapisane na niczym i odmowa `gen-cron.sh: [defaults] must set host_label`, czyli ręczna naprawa CONFIG-u, której issue #9 zabrania. Niewidzialne na każdym kolektorze, który config już ma; widoczne dokładnie przy pierwszym wdrożeniu dwóch serwerów. Zasiewanie jest teraz JEDNĄ funkcją (`write_fresh_config_defaults`) używaną przez obu wywołujących, zamiast literału w jednej gałęzi, o którym druga zapomniała. Po naprawie config się generuje i renderuje pełny podgląd crona (send, prune celu, prune źródła, monitor, digest). Instalacja zatrzymała się na DRUGIEJ, poprawnej bramce: zainstalowany blok zarządzany w crontabie roota na pve1 pochodzi z `/tmp/…/jobs.conf` po dawnej kampanii i już nie istnieje, więc `assert_cron_config_matches_installed` odmówiła — instalacja skasowałaby to, co ten blok opisuje. **Nic nie zmutowano**: crontaby roota i konta na obu hostach zweryfikowane bajt w bajt wobec kopii sprzed przebiegu. Pełny transkrypt czterech komend został domknięty **2026-08-24** na kolektorze pve9 ze źródłem pve2 — czyli dokładnie na kolektorze, którego blok zarządzany nie jest pozostałością po teście, czego ten akapit wymagał. Dowody i werdykt: sekcja „Tor czterech komend — ZAMROŻONY” niżej. Zgłoszone osobno, nie naprawione po cichu: `add-client` bez `--local-user` deklaruje cel jako „delegated to nobody" i generuje zadania rootowe na flocie zmigrowanej na konto delegowane; komunikat końcowy `seed` nadal odsyła do `final-catchup`/`set-endpoint`/`verify-endpoint`/`activate-client`, czyli do sekwencji, którą #9 usuwa; szkic zakresu domyślnie daje `include_parent = no`, co dla liścia nie wybiera niczego (odmawia czysto, ale bezużytecznie). Rozbiórka relacji też została naprawiona, bo kampania na żywo pokazała, że `remove-client` nie umie posprzątać po sobie: rekord klienta trzyma ścieżki CELU (`MANAGED_DATASETS`, `MANAGED_PRUNE_SCOPE`), a scope prune'a ŹRÓDŁA to endpoint (`konto@host:dataset`), więc `remove_managed_sections` nigdy się o nim nie dowiadywała i sekcja przeżywała. Kaskada: następny krok generował cron z niesprzątniętego configu i wstawiał linię z powrotem, po czym `--unpair` odmawiał z powodu linii, którą usuwanie właśnie odtworzyło; a zalecana w komunikacie naprawa była niewykonalna, bo config pozbawiony ostatniej reguły nie daje się zainstalować (`gen-cron` słusznie odmawia renderowania pustki). Usuwanie woła teraz `remove_client_remote_source_prunes` — ten sam helper, którego aktywacja używa do przeniesienia tej sekcji przy zmianie endpointu, więc reguła własności bez zmian (marker, cudze sekcje nietknięte). Komunikat `--unpair` podaje kolejność, która działa: config, potem crontab. **Czwarty defekt, starszy od tej naprawy, odsłonięty przez jej test:** `remove_client_remote_source_prunes` i `capture_client_remote_source_prunes` budowały marker własności wewnątrz jednego `local`, z tej samej zmiennej, która była w nim przypisywana — a bash rozwija wszystkie słowa polecenia zanim wykona którekolwiek przypisanie, więc marker brał wartość z zakresu WYWOŁUJĄCEGO. Działało wyłącznie dlatego, że jedyny wywołujący miał zmienną o tej samej nazwie i wartości; wywołujący z inną usunąłby sekcje cudzego klienta albo zachował cudzą politykę przy re-aktywacji, a pod `set -u` bez zewnętrznej zmiennej funkcja pada — i tak się to ujawniło, przy pierwszym wywołaniu z testu jednostkowego. Obie rozdzielone na dwie instrukcje. Test jest parą: własny zdalny prune znika, cudzy zostaje (usuwający wszystkie zdalne prune'y przeszedłby pierwszą połowę i po cichu skasował retencję źródła innego klienta). Zmierzone: `zfsbackup` 407/0 wobec bazy 406/0 na czystym `main`. Do tego dwie dalsze poprawki z tej samej kampanii: `seed` nazywa teraz DOKŁADNIE jedną następną komendę (`activate NAME`, z `--host=` gdy endpoint produkcyjny różni się od zaseedowanego) zamiast recytować `final-catchup`/`set-endpoint`/`verify-endpoint`/`activate-client`, czyli sekwencję, którą #9 usuwa ze zwykłej ścieżki; a szkic zakresu przestał wpisywać `include_parent = no` liściom — to poprawne dla kontenera i NIE WYBIERA NICZEGO dla liścia, przez co prowadzony join odmawia, a operator musi ręcznie poprawić linijkę na ścieżce, która z definicji nie wymaga ręcznej edycji. Obie asercje pinujące stare brzmienie zostały PRZEPISANE do nowego kontraktu, nie skasowane: podpowiedź po seedzie musi nazywać `activate` ORAZ nie wymieniać żadnego z czterech eksperckich czasowników (sama pierwsza połowa przepuściłaby podpowiedź, która dodaje nową komendę i dalej recytuje stare), a reguła słownictwa („the peer", nigdy „the source") jest pinowana słowami, nie całym zdaniem — regułę wzięto z prawdziwego findingu recenzji i przeredagowałem własny tekst, żeby ją zachować. Zmierzone: gałąź dała 404/2 wobec 406/0 na main, obie porażki moje, po przepisaniu asercji 406/0. Poprzednia zmiana zachowania: **REV-120 runda 2 + REV-121 — zniszczenie nie może poszerzyć zatwierdzonego zbioru, a punkt docelowy nie może być zgadnięty.** Runda 1 mierzyła zbiór tuż przed zniszczeniem i dalej wołała `zfs rollback -r`; pomiar zwęża okno, ale go nie zamyka, bo odczyt i zniszczenie to nadal dwie chwile, a `-r` sam decyduje, co jest nowsze od bazy. Teraz własność niesie KSZTAŁT poleceń: każde wywołanie niszczące to albo `zfs destroy` nazywające zatwierdzone obiekty WPROST (nie tknie niczego innego, cokolwiek by w międzyczasie przyszło), albo **nierekurencyjny** `zfs rollback`, który sam odmawia, gdy istnieje cokolwiek nowszego — ZFS sprawdza to wewnątrz polecenia, nie my przed nim. Zmierzone identycznie na 2.1.9 i 2.2.2: `zfs destroy ds@a,b,c` usuwa wiele snapshotów jednym wywołaniem, składnia z przecinkiem NIE działa dla bookmarków, a nierekurencyjny rollback przy nowszym bookmarku odmawia, wymienia winowajców i nie niszczy niczego — łącznie z danymi żywymi. Cena jest nazwana wprost: zniszczenie zaczyna się teraz PRZED rollbackiem, więc spóźniony obiekt to porażka częściowa (2), a nie czysta odmowa (1). **REV-121:** domyślny punkt docelowy nie jest już ostatnim wierszem listy sortowanej po `creation` — oś zostaje `creation` (to czas powstania danych, czyli sens polityki właściciela), ale gdy maksimum dzieli kilka snapshotów, czasownik ODMAWIA i wymienia kandydatów zamiast wybierać po przypadkowej kolejności. Poprzednia zmiana zachowania: **REV-120 runda 1 —
   zbiór niszczony i test końcowy liczone przez `createtxg` i tożsamość, a
   BOOKMARKI są częścią zbioru strat.** `zfs rollback -r` kasuje również bookmarki
   nowsze od punktu docelowego (zmierzone na pve0: rollback do `@s1` przy
