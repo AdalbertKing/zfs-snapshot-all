@@ -5752,7 +5752,17 @@ load_client_and_connection() {
     local cpath="$1"
     # Reset before sourcing: records predating a field must not inherit the
     # previous client's value when one process loads several records.
+    #
+    # BANDWIDTH joins that list here, and it is the reason the list exists at
+    # all. A record without the field does not overwrite the variable, so in the
+    # commands that load several records in one shell -- migrate-profile,
+    # audit-source-retention -- a capped client A followed by an uncapped client
+    # B left B carrying A's cap: `-b 2M` on B's engine call and a `bandwidth`
+    # line in B's section. A relationship that never asked for a limit gets
+    # quietly slowed, in the direction nobody notices, because a transfer that
+    # is slower than it should be still succeeds.
     CLIENT_TARGET=""
+    BANDWIDTH=""
     # shellcheck disable=SC1090
     . "$cpath"
     local label; label=$(peer_label "$PEER_HOST")
