@@ -1996,6 +1996,76 @@ endpoint_normalized_identity() {
 # the install must not REMOVE job lines the target is running today. Anything
 # the proposal reproduces is fine, by definition -- that is what installing it
 # means.
+# Is this lost line's COVERAGE still carried by one of the proposed lines?
+#
+# gen-cron merges datasets that resolve to the same policy into one job line:
+# two sources sending to one store become `snapsend.sh ... "a,b" "store"`, and
+# their monitors become `check-snap-age.sh "a,b" ...`. The line that used to say
+# "a" therefore disappears -- and the anti-deletion guard, whose rule is "a line
+# that vanishes is a job that stops", refuses. Measured live on pve9: adding a
+# second local source was impossible for exactly this reason, with the first
+# source's own lines named as the casualties.
+#
+# The guard's rule is a PROXY for the thing that matters, which is coverage. So
+# the exemption is written against coverage and nothing else: a lost line is
+# absorbed only when a proposed line is IDENTICAL to it except at exactly one
+# quoted argument, where the lost line's comma-list is a SUBSET of the proposed
+# one's. Same command, same schedule, same thresholds, same target, and every
+# dataset it named still named.
+#
+# What this deliberately does NOT excuse, and what the discriminators pin:
+#   * a line whose dataset simply is not in the new block at all -- a deletion;
+#   * a list that SHRINKS ("a,b" -> "a") -- that is a real loss of coverage,
+#     and subset-in-the-wrong-direction is exactly how it would sneak through;
+#   * a line that differs anywhere else as well -- a changed schedule or
+#     threshold is a different job, not a merged one.
+line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorbed
+    LOST_LINE="$1" awk '
+        # Split a line into a skeleton (quoted values replaced by \001) and the
+        # ordered list of those quoted values.
+        function shred(s, sk, vals,   out, n, i, ch, inq, cur) {
+            out=""; n=0; inq=0; cur=""
+            for (i=1; i<=length(s); i++) {
+                ch=substr(s,i,1)
+                if (ch=="\"") {
+                    if (inq) { n++; vals[n]=cur; cur=""; out=out "\001"; inq=0 }
+                    else inq=1
+                    continue
+                }
+                if (inq) cur=cur ch; else out=out ch
+            }
+            sk[0]=out
+            return n
+        }
+        function subset(a, b,   na, nb, i, j, av, bv, hit) {
+            na=split(a, av, ","); nb=split(b, bv, ",")
+            for (i=1; i<=na; i++) {
+                hit=0
+                for (j=1; j<=nb; j++) if (av[i]==bv[j]) { hit=1; break }
+                if (!hit) return 0
+            }
+            return 1
+        }
+        BEGIN {
+            ln=ENVIRON["LOST_LINE"]
+            nl=shred(ln, lsk, lv)
+        }
+        {
+            np=shred($0, psk, pv)
+            if (np != nl || psk[0] != lsk[0]) next
+            diff=0; idx=0
+            for (i=1; i<=nl; i++) if (lv[i] != pv[i]) { diff++; idx=i }
+            # Identical would not have been called lost; more than one differing
+            # argument is a different job, not a wider one.
+            if (diff != 1) next
+            # Direction matters: the OLD list must be contained in the NEW one.
+            # The reverse is coverage being dropped, which is the thing this
+            # guard exists to catch.
+            if (subset(lv[idx], pv[idx]) && !subset(pv[idx], lv[idx])) { print "ABSORBED"; exit }
+        }
+    ' | grep -q ABSORBED
+}
+
 assert_target_block_not_clobbered() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     local tcron; tcron=$(mktemp) || die "mktemp failed"
@@ -2036,6 +2106,12 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             [ -n "$line" ] || continue
             norm=$(printf '%s\n' "$line" | endpoint_normalized_identity)
             if printf '%s\n' "$proposed_norm" | grep -qxF -- "$norm"; then
+                continue
+            fi
+            # Second exemption, same shape as the endpoint one: not "this line
+            # looks similar" but "every dataset this line covered is still
+            # covered, by an otherwise identical line". See line_coverage_absorbed.
+            if printf '%s\n' "$proposed" | line_coverage_absorbed "$line"; then
                 continue
             fi
             still_lost="$still_lost$line

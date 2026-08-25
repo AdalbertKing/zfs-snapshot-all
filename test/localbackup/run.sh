@@ -1098,6 +1098,41 @@ out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/dokumenty --config="
     && ok "krok5/refusal: our own section with a different target still refuses (not a no-op)" \
     || bad "krok5/refusal: our own section with a different target still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
 
+# ==============================================================================
+# The anti-deletion guard's second exemption: a MERGE is not a deletion.
+#
+# gen-cron merges datasets resolving to the same policy into one job line, so
+# adding a second source rewrites the first source's line into a two-dataset
+# one. The guard's rule -- "a line that vanishes is a job that stops" -- is a
+# proxy for coverage, and on a merge the proxy is wrong: measured live on pve9,
+# where adding a second local source was impossible for exactly this reason.
+#
+# The exemption is written against coverage, so it must hold in ONE direction
+# only. These five cases are the whole contract, and three of them are the ways
+# it could be got wrong.
+# ==============================================================================
+L_A='*/15 * * * * d=$(check.sh "hdd/k5a" "automated_hourly" 90m 150m); rc=$?'
+L_AB='*/15 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 90m 150m); rc=$?'
+printf '%s\n' "$L_AB" | line_coverage_absorbed "$L_A" \
+    && ok "guard/merge: a widened dataset list absorbs the line it replaced" \
+    || bad "guard/merge: a widened dataset list absorbs the line it replaced"
+printf '%s\n' '1 * * * * something else entirely' | line_coverage_absorbed "$L_A" \
+    && bad "guard/merge: a line that is simply gone is still a DELETION" \
+    || ok "guard/merge: a line that is simply gone is still a DELETION"
+# The dangerous direction: coverage SHRINKING must never be excused, and a
+# subset test applied the wrong way round is exactly how it would be.
+printf '%s\n' "$L_A" | line_coverage_absorbed "$L_AB" \
+    && bad "guard/merge: a SHRINKING dataset list is still a deletion" \
+    || ok "guard/merge: a SHRINKING dataset list is still a deletion"
+printf '%s\n' '*/15 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 30m 150m); rc=$?' \
+    | line_coverage_absorbed "$L_A" \
+    && bad "guard/merge: a changed threshold is a different job, not a merged one" \
+    || ok "guard/merge: a changed threshold is a different job, not a merged one"
+printf '%s\n' '*/5 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 90m 150m); rc=$?' \
+    | line_coverage_absorbed "$L_A" \
+    && bad "guard/merge: a changed schedule is a different job, not a merged one" \
+    || ok "guard/merge: a changed schedule is a different job, not a merged one"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
