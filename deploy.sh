@@ -4188,7 +4188,7 @@ log "Phase 5: check-pool-capacity.sh (pool/quota capacity alerting)"
 # fileserver LXC (subvol-101-disk-1) was independently at 91% of its own
 # refquota, neither of which any existing alert would have caught in advance.
 CAPACITY_SCRIPT="/root/scripts/check-pool-capacity.sh"
-CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v5"
+CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v6"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$CAPACITY_SCRIPT" ]; then
         warn "  $CAPACITY_SCRIPT missing -- no early warning before a pool fills up"
@@ -4254,8 +4254,21 @@ elif [ -z "\${POOLS//[[:space:]]/}" ]; then
     POOLS=""
 fi
 
+# THE PROBE SUCCEEDED IS NOT THE SAME QUESTION AS THE OUTPUT LOOKS RIGHT.
+#
+# No pipe here on purpose: \`zpool list ... | tr -d '%'\` reports tr's status,
+# not zpool's, so "42%" printed by a command that then exited non-zero read as
+# a clean measurement. The % is stripped by parameter expansion instead, and rc
+# is captured from the probe itself before anything else can overwrite it.
 for pool in \$POOLS; do
-    cap=\$(zpool list -H -o capacity "\$pool" 2>/dev/null | tr -d '%')
+    cap_raw=\$(zpool list -H -o capacity "\$pool" 2>/dev/null)
+    cap_rc=\$?
+    cap=\${cap_raw%%%}
+    if [ "\$cap_rc" -ne 0 ]; then
+        alert "sonda pojemnosci puli '\${pool}' na \${HOST} PADLA (rc=\${cap_rc})" \\
+              "'zpool list -H -o capacity \${pool}' zakonczylo sie kodem \${cap_rc} na \${HOST}, wiec zapelnienie tej puli NIE zostalo sprawdzone -- niezaleznie od tego, co zdazylo wypisac ('\${cap_raw}')."
+        continue
+    fi
     case "\$cap" in
         ''|*[!0-9]*)
             # Same disease as the enumeration: an unreadable capacity used to
@@ -4294,7 +4307,15 @@ done
 # could not be read looked exactly like a pool that is ONLINE.
 for pool in \$POOLS; do
     health=\$(zpool list -H -o health "\$pool" 2>/dev/null)
-    if [ -z "\$health" ]; then
+    health_rc=\$?
+    if [ "\$health_rc" -ne 0 ]; then
+        # rc BEFORE content: a probe that printed ONLINE and then failed has
+        # not established that the pool is ONLINE. Trusting the string would
+        # let the single most reassuring word on the host be produced by a
+        # command that did not work.
+        alert "sonda stanu puli '\${pool}' na \${HOST} PADLA (rc=\${health_rc})" \\
+              "'zpool list -H -o health \${pool}' zakonczylo sie kodem \${health_rc} na \${HOST}, wiec stan tej puli NIE zostal sprawdzony -- niezaleznie od tego, co zdazylo wypisac ('\${health}')."
+    elif [ -z "\$health" ]; then
         alert "nie odczytano stanu puli '\${pool}' na \${HOST}" \\
               "'zpool list -H -o health \${pool}' nie zwrocilo nic na \${HOST}, wiec stan tej puli NIE zostal sprawdzony.
 Brak alertu o tej puli w tym cyklu nie oznacza ONLINE."

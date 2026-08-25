@@ -381,7 +381,7 @@ if [ -z "$cap_body" ]; then
     bad "the capacity-script heredoc can be extracted from deploy.sh" "sed anchors no longer match"
 else
     hv_dir=$(mktemp -d)
-    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v5" NOTIFY_EMAIL=root \
+    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v6" NOTIFY_EMAIL=root \
         eval "cat > '$hv_dir/check.sh' <<EOF
 $cap_body
 EOF"
@@ -464,11 +464,14 @@ ST
         && ok "probe: ZERO imported pools is a finding of its own, not 'nothing to check'" \
         || bad "probe: zero imported pools is a finding" "alerty: ${a:-<cisza>}"
 
-    # 3. enumeration works, one pool's HEALTH cannot be read
+    # 3. enumeration works, the probe SUCCEEDS but answers nothing for one pool.
+    #    Distinct from case 5 below, where the probe fails outright: an empty
+    #    answer and a non-zero status are two different silences, and the
+    #    operator is told which one happened.
     a="$(hv_probe 'case "$*" in
   *"-o name") echo rpool; echo hdd ;;
   *"-o capacity"*) echo "42%" ;;
-  *"-o health rpool") exit 1 ;;
+  *"-o health rpool") exit 0 ;;
   *"-o health hdd") echo ONLINE ;;
 esac')"
     { printf '%s' "$a" | grep -q "nie odczytano stanu puli 'rpool'" \
@@ -476,17 +479,40 @@ esac')"
         && ok "probe: an unreadable HEALTH is a finding for THAT pool, and the readable one stays silent" \
         || bad "probe: an unreadable health is a finding for that pool" "alerty: ${a:-<cisza>}"
 
-    # 4. enumeration works, one pool's CAPACITY cannot be read
+    # 4. same for capacity: rc=0 with nothing to parse
     a="$(hv_probe 'case "$*" in
   *"-o name") echo rpool ;;
-  *"-o capacity"*) exit 1 ;;
+  *"-o capacity"*) exit 0 ;;
   *"-o health"*) echo ONLINE ;;
 esac')"
     printf '%s' "$a" | grep -q "nie odczytano pojemnosci puli 'rpool'" \
         && ok "probe: an unreadable CAPACITY is a finding, not a shell error and no alert" \
         || bad "probe: an unreadable capacity is a finding" "alerty: ${a:-<cisza>}"
 
-    # 5. CONTROL: with every probe answering, the healthy host is still silent.
+    # 5. THE PROBE SUCCEEDED is a different question from THE OUTPUT LOOKS
+    #    RIGHT. A command that prints the single most reassuring word on the
+    #    host and then exits non-zero has established nothing.
+    a="$(hv_probe 'case "$*" in
+  *"-o name") echo rpool ;;
+  *"-o capacity"*) echo "42%" ;;
+  *"-o health"*) echo ONLINE; exit 1 ;;
+esac')"
+    printf '%s' "$a" | grep -q "sonda stanu puli 'rpool'.*PADLA" \
+        && ok "probe: health printing ONLINE and then FAILING is a probe failure, not ONLINE" \
+        || bad "probe: health printing ONLINE and then failing is a probe failure" "alerty: ${a:-<cisza>}"
+
+    # 6. ...and the same for capacity, where the status used to be lost to a
+    #    pipe: `zpool ... | tr -d '%'` reports tr's status, never zpool's.
+    a="$(hv_probe 'case "$*" in
+  *"-o name") echo rpool ;;
+  *"-o capacity"*) echo "42%"; exit 1 ;;
+  *"-o health"*) echo ONLINE ;;
+esac')"
+    printf '%s' "$a" | grep -q "sonda pojemnosci puli 'rpool'.*PADLA" \
+        && ok "probe: capacity printing 42% and then FAILING is a probe failure, not a reading" \
+        || bad "probe: capacity printing 42% and then failing is a probe failure" "alerty: ${a:-<cisza>}"
+
+    # 7. CONTROL: with every probe answering, the healthy host is still silent.
     #    Without this the four above would pass just as well against a script
     #    that alerts unconditionally -- which is the other way to be useless.
     a="$(hv_probe 'case "$*" in
