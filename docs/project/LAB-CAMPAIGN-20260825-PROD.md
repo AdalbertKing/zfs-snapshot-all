@@ -151,10 +151,26 @@ jedna wartość zwaliłaby daily/weekly/monthly na kadencję godzinową.
 
 ### 3.5 ZNALEZISKO F2 — scalona linia prune niesie JEDNĄ etykietę
 
-Cztery linie `delsnaps` pokrywają oba datasety, ale powiadomienie każdej z nich
-mówi `(p1-at)`. Awaria przy sprzątaniu datasetu **p2** zgłosi się pod nazwą
-relacji **p1**. Niska waga, ale to ta sama klasa co „nigdy nie obwiniaj złej
-rzeczy". Nie naprawione.
+Cztery linie `delsnaps` pokrywały oba datasety, ale powiadomienie każdej z nich
+mówiło `(p1-at)`. Awaria przy sprzątaniu datasetu **p2** zgłosiłaby się pod
+nazwą relacji **p1**.
+
+Argument rozstrzygający stał już w tej samej funkcji, jedno pole wcześniej:
+`recursive` jest w kluczu scalania, bo scalenie „cicho dałoby jednemu z nich zły
+zakres". Scalenie różnych adresatów cicho daje jednemu z nich złą **nazwę**.
+`notify` dołączył do klucza: **scalamy tylko to, co da się zgłosić jako jedną
+rzecz**. Koszt — jedna linia prune na relację na tier zamiast jednej na tier,
+czyli dokładnie tyle, ile emituje już strona wysyłkowa.
+
+NAPRAWIONE i potwierdzone na tym samym żywym hoście (`75148c3`):
+
+| | linie `delsnaps` | scalone między relacjami | dataset p2 pod etykietą p1 |
+|---|---|---|---|
+| przed | 4 | 4 | 4 |
+| po | 8 | 0 | 0 |
+
+Diff crontaba: **−4 / +8**. Bieg verbatim ośmiu linii: **8/8 `rc=0`**, i w logu
+występują wreszcie obie nazwy.
 
 ### 3.6 ZNALEZISKO F3 — trzy z czterech tierów `prod` nie powstają na koncie delegowanym
 
