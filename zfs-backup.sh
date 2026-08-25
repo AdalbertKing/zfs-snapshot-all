@@ -186,9 +186,12 @@ zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
   zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
-  zfs-backup.sh --source=DATASET [--target=DATASET] [--profile=NAME] [--config=FILE]
+  zfs-backup.sh [--source=DATASET] [--target=DATASET] [--profile=NAME] [--config=FILE]
                 [--local-user=NAME] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
+                                    --source omitted:  proposed from this host's ZFS inventory and shown,
+                                                       with every skipped dataset and its reason; a PROPOSED
+                                                       source set will not install under --yes
                                     --target omitted:  proposed (server.conf default, else the pool layout)
                                                        and shown; a GUESSED target will not install under --yes
                                     --local-user:      account these jobs run as; omitted means root.
@@ -730,6 +733,103 @@ propose_backup_target() {
         1) printf '%s\t%s\n' "${candidates}/backups" heuristic ;;
         *) die "multiple candidate pools found ($(printf '%s' "$candidates" | tr '\n' ' ')) -- pass --target=POOL/PATH explicitly" ;;
     esac
+}
+
+# KROK 5: propose the SOURCES when the operator did not name any.
+#
+# The target had this since slice 3; the source did not, and a local backup was
+# refused outright without --source. That is the one piece of "clean host ->
+# working backup" glue the binding plan still asks for: a first-time operator
+# does not know which of this host's forty datasets are the ones worth copying,
+# and making them find out by reading `zfs list` is the manual step the whole
+# path exists to remove.
+#
+# A PROPOSAL, never a decision. Everything this prints is a guess from the pool
+# layout, so it carries the same rule the guessed target carries: it may be
+# shown, it may be planned with, and it may NOT be installed unattended.
+#
+# WHAT IS EXCLUDED, and why each one would be wrong rather than merely noisy.
+# Every exclusion is REPORTED on stderr, because an invisible heuristic is
+# indistinguishable from a bug to the operator who wonders where a dataset went:
+#
+#   pool root      a pool is a container, not a body of data. Proposing `hdd`
+#                  would offer to snapshot the thing that holds the target;
+#   the target     and everything under it -- a backup cannot land inside the
+#                  thing it backs up (local_backup_overlap refuses it anyway,
+#                  so proposing it would only produce a refusal);
+#   has children   THE IMPORTANT ONE. local-backup installs a FLAT job per root
+#                  (no `recursive`), so a parent would copy the parent's own
+#                  blocks and silently leave every child unbacked -- a proposal
+#                  that looks like coverage and is not. The children are
+#                  proposed instead, each of which really is copied;
+#   under */ROOT   the OS root filesystem. This tool does not restore a bootable
+#                  system, so offering it promises something it cannot keep;
+#   swap           a swap zvol holds no data worth a snapshot, and snapshotting
+#                  it pins every block it ever wrote;
+#   already        a dataset an installed section already covers. Proposing it
+#   covered        would compose into an overlap refusal on the very next step.
+#
+# Candidates on STDOUT, the skip report on STDERR -- deliberately not through a
+# variable. This function is called inside a command substitution, where every
+# assignment happens in the SUBSHELL and is gone by the time the caller looks;
+# a report the caller cannot see is the same as no report. Like
+# propose_backup_target it must also not be the place a die() happens inside
+# that substitution -- the caller checks for an empty result instead.
+propose_backup_sources() {   # <target> <installed config or ""> -> candidates, one per line
+    local target="$1" cfg="${2:-}"
+    local skipped=""
+    local all
+    all=$(zfs list -H -o name -t filesystem,volume 2>/dev/null) || return 1
+    [ -n "$all" ] || return 1
+
+    # Covered paths, read from the installed config the same way the overlap
+    # check reads it -- one source of truth for "this is already ours".
+    local covered=""
+    if [ -n "$cfg" ] && [ -r "$cfg" ]; then
+        covered=$(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cfg")
+    fi
+
+    local ds child skip why
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        skip=""; why=""
+        case "$ds" in
+            */*) ;;
+            *) skip=1; why="pula, nie zbior danych" ;;
+        esac
+        if [ -z "$skip" ] && local_backup_overlap "$ds" "$target"; then
+            skip=1; why="cel backupu (albo lezy w nim)"
+        fi
+        if [ -z "$skip" ]; then
+            case "$ds" in
+                */ROOT|*/ROOT/*) skip=1; why="system operacyjny -- ten pakiet nie odtwarza bootowalnego systemu" ;;
+                */swap|*/swap/*) skip=1; why="swap -- snapshot przypina kazdy zapisany blok i nie niesie danych" ;;
+            esac
+        fi
+        if [ -z "$skip" ]; then
+            while IFS= read -r child; do
+                case "$child" in
+                    "$ds"/*) skip=1; why="ma potomkow -- plaskie zadanie skopiowaloby tylko rodzica, dzieci sa proponowane osobno"; break ;;
+                esac
+            done <<< "$all"
+        fi
+        if [ -z "$skip" ] && [ -n "$covered" ]; then
+            local c
+            while IFS= read -r c; do
+                [ -n "$c" ] || continue
+                if local_backup_overlap "$ds" "$c"; then
+                    skip=1; why="juz objety zainstalowana polityka ([dataset:$c])"; break
+                fi
+            done <<< "$covered"
+        fi
+        if [ -n "$skip" ]; then
+            skipped="${skipped}  pominieto $ds -- $why"$'\n'
+        else
+            printf '%s\n' "$ds"
+        fi
+    done <<< "$all"
+    [ -n "$skipped" ] && printf '%s' "$skipped" >&2
+    return 0
 }
 
 # read_server_conf lives in lib-backup-common.sh since the restore split.
@@ -3614,7 +3714,13 @@ cmd_local_backup() {
             *) die "local-backup: unknown option $a" ;;
         esac
     done
-    [ "${#source_flags[@]}" -gt 0 ] || die "local-backup: --source=<dataset>[,<dataset>...] is required (the dataset(s) to back up)"
+    # KROK 5: --source may now be omitted, and the resolution happens further
+    # down -- after the target is known, because a candidate that lands inside
+    # the target is not a candidate. The flag stays authoritative when given
+    # (EXPLICIT-SOURCE-BEATS-DISCOVERY, REV-20260811-101): a proposal is only
+    # ever consulted when the operator named nothing at all.
+    local sources_from=""
+    [ "${#source_flags[@]}" -gt 0 ] && sources_from=explicit
 
     # The account decision, resolved exactly as add-client resolves it: the flag
     # or root, never a host-wide setting. setup-server deliberately records no
@@ -3692,6 +3798,41 @@ cmd_local_backup() {
         esac
     fi
 
+    read_server_conf
+    # Policy 'host': no relationship record to read from, and no adoption --
+    # preserved exactly as it was, NOT quietly upgraded. Adding adoption here is
+    # the P10 change and it belongs in its own commit with its own test, not
+    # smuggled in under a refactor that claims to change no behaviour.
+    #
+    # This is also the caller that has real flags to pass, which is why they are
+    # arguments to the resolver rather than something it goes looking for: a
+    # decision layer that reads its caller's locals is not one home, it is five
+    # again with a shared address.
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+
+    # KROK 5: no --source at all. Propose, and say plainly that this is a guess.
+    #
+    # Resolved HERE and not at parse time for two reasons that are both about
+    # correctness rather than tidiness: a candidate is judged against the TARGET
+    # (which may itself have just been proposed), and against the INSTALLED
+    # CONFIG (which cron_context_resolve has only now decided). Proposing before
+    # either is known would offer datasets that the next step refuses.
+    #
+    # The proposal feeds the SAME --source parser below, so an accepted proposal
+    # and a typed --source travel one code path; there is no second notion of
+    # what a source set is.
+    if [ -z "$sources_from" ]; then
+        local proposed _p
+        proposed=$(propose_backup_sources "$target" "$config")             || die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]"
+        [ -n "$proposed" ]             || die "local-backup: no --source given and nothing on this host is a sensible candidate (see the skip reasons above) -- name the dataset(s) explicitly with --source=<dataset>[,<dataset>...]"
+        sources_from=heuristic
+        log "brak --source -- PROPOZYCJA z inwentarza ZFS tego hosta (przekaz --source=..., zeby wybrac inaczej):"
+        while IFS= read -r _p; do [ -n "$_p" ] && log "  $_p"; done <<< "$proposed"
+        source_flags=("$(printf '%s' "$proposed" | tr '
+' ',' | sed 's/,$//')")
+    fi
+
     # REV-20260811-101: one or more explicit roots are the authoritative WHAT
     # (EXPLICIT-SOURCE-BEATS-DISCOVERY). The canonical form is a comma list in one
     # --source; repeated --source flags are normalized into the SAME set rather
@@ -3736,19 +3877,6 @@ cmd_local_backup() {
                 && die "local-backup: sources '${roots[i]}' and '${roots[j]}' overlap (equal or parent/child) -- refusing; the high-level path will not invent precedence between overlapping roots."
         done
     done
-
-    read_server_conf
-    # Policy 'host': no relationship record to read from, and no adoption --
-    # preserved exactly as it was, NOT quietly upgraded. Adding adoption here is
-    # the P10 change and it belongs in its own commit with its own test, not
-    # smuggled in under a refactor that claims to change no behaviour.
-    #
-    # This is also the caller that has real flags to pass, which is why they are
-    # arguments to the resolver rather than something it goes looking for: a
-    # decision layer that reads its caller's locals is not one home, it is five
-    # again with a shared address.
-    cron_context_resolve adopt "$config" "$resolver_user" "" ""
-    config="$CRON_CTX_FILE"
 
     # Choose the preset. load_active_profile calls profile_validate_dir, which
     # refuses a profile carrying any relationship-owned field before it can reach
@@ -3915,8 +4043,18 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         die "local-backup: --yes cannot confirm a target this run GUESSED ('$target', from the pool layout). Name it with --target=$target if that is what you meant, or record it once with setup-server. Nothing was touched."
     fi
 
+    # KROK 5, and the same rule for the same reason: a source set this run
+    # PROPOSED is a guess about what matters on this host, and a guess does not
+    # get installed with nobody looking. The operator either accepts it here, in
+    # front of the rendered plan, or names the set with --source=.
+    if [ "$sources_from" = heuristic ] && [ "$assume_yes" -eq 1 ]; then
+        rm -f "$cand"
+        die "local-backup: --yes cannot confirm a source set this run PROPOSED (${roots[*]}). Name them with --source=$(printf '%s' "${roots[*]}" | tr ' ' ',') if that is what you meant. Nothing was touched."
+    fi
+
     if [ "$assume_yes" -ne 1 ]; then
         local ans
+        [ "$sources_from" = heuristic ]             && log "zrodla powyzej sa PROPOZYCJA tego przebiegu, nie Twoim wyborem -- potwierdzajac, akceptujesz ten zestaw"
         read -rp "Zainstalowac ten backup lokalny? [t/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
