@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b65b1a64b563d2bd -->
+<!-- status-covers-digest: 460efff330173c4b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1408,9 +1408,11 @@
   wlasnych plikow — `3173376`; rozroznienie jest wiec mozliwe, ale tylko wobec
   progu wzietego z sufitu, ktorego ta funkcja nie ma prawa wymyslac. Dlatego
   decyduje UKLAD, nie rozmiar: gdy wsrod kandydatow jest para rodzic/dziecko,
-  propozycja **odmawia zgadywania**, wypisuje pary i cala liste kandydatow, i
-  zostawia wybor operatorowi — ta sama postawa, ktora propozycja CELU ma juz
-  wobec wielu pul.
+  **to poddrzewo** wypada z propozycji — oba czlony, bo sam rodzic to pierwotna
+  wada, a same dzieci to ta sama nieprawda w druga strone — z wypisana para,
+  powodem i gotowymi do skopiowania liniami `--source=`. Reszta hosta jest
+  proponowana normalnie: jedna hierarchia nic nie mowi o datasetach poza nia
+  (zawezenie wg zalecenia recenzenta w trybie doradczym).
 
   Propozycja to zgadywanie, wiec niesie te sama regule co zgadniety cel:
   **`--yes` jej nie potwierdza**. Jawne `--source` nigdy nie jest podwazane

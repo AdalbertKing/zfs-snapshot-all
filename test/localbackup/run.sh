@@ -959,20 +959,29 @@ printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
 outh="$(runp "rpool/a
 rpool/a/child
 rpool/db" --target=hdd/store --config="$WORK/k5h.conf")"
-# 1. it refuses rather than choosing half a hierarchy
-{ printf '%s' "$outh" | grep -q 'hierarchi' \
-  && printf '%s' "$outh" | grep -q 'NIE zgaduje'; } \
-    && ok "krok5/hierarchia: a parent/child pair makes the proposal refuse to guess" \
-    || bad "krok5/hierarchia: a parent/child pair makes the proposal refuse to guess" "$(printf '%s' "$outh"|tail -6)"
-# 2. the PARENT is named -- it may not disappear silently, which is the defect
-printf '%s' "$outh" | grep -q 'rpool/a' \
-    && ok "krok5/hierarchia: the parent is named in the refusal, not silently dropped" \
-    || bad "krok5/hierarchia: the parent is named in the refusal" "$(printf '%s' "$outh"|tail -6)"
-# 3. and nothing is planned or installed off a guess
-{ ! printf '%s' "$outh" | grep -q 'kandydat CONFIG v4'; } \
-    && ok "krok5/hierarchia: no plan is rendered from a hierarchy it refused to guess at" \
-    || bad "krok5/hierarchia: no plan is rendered from a refused hierarchy" "a candidate config was printed"
-# 4. CONTROL: the same inventory without the child proposes the parent happily,
+# 1. the ambiguous subtree is refused, with the pair named
+{ printf '%s' "$outh" | grep -q 'poddrzewo dwuznaczne' \
+  && printf '%s' "$outh" | grep -q 'rpool/a  ->  rpool/a/child'; } \
+    && ok "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree, named" \
+    || bad "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree" "$(printf '%s' "$outh"|head -10)"
+# 2. BOTH members leave the proposal. The parent alone would be the original
+#    defect; the children alone would be the same claim in the other direction.
+{ ! printf '%s' "$outh" | grep -qE '^>>>   rpool/a$' \
+  && ! printf '%s' "$outh" | grep -qE '^>>>   rpool/a/child$'; } \
+    && ok "krok5/hierarchia: neither the parent nor the child is proposed as if it covered the other" \
+    || bad "krok5/hierarchia: neither the parent nor the child is proposed" "$(printf '%s' "$outh"|grep '>>>   '|head -5)"
+# 3. the parent is NAMED -- it may not disappear without the operator being told,
+#    which is the whole finding, and the explanation must be actionable.
+{ printf '%s' "$outh" | grep -q -- '--source=rpool/a$' \
+  && printf '%s' "$outh" | grep -q 'NIE pokrywaja'; } \
+    && ok "krok5/hierarchia: the parent is named with a copyable --source= and the reason why" \
+    || bad "krok5/hierarchia: the parent is named with a copyable --source=" "$(printf '%s' "$outh"|head -10)"
+# 4. the REST of the host is still proposed -- one hierarchy says nothing about
+#    the datasets outside it, so refusing everything would be its own defect.
+printf '%s' "$outh" | grep -qE '^>>>   rpool/db$' \
+    && ok "krok5/hierarchia: datasets outside the ambiguous subtree are still proposed" \
+    || bad "krok5/hierarchia: datasets outside the ambiguous subtree are still proposed" "$(printf '%s' "$outh"|grep '>>>   '|head -5)"
+# 5. CONTROL: the same inventory without the child proposes the parent happily,
 #    so the refusal keys on the PAIR and not on the name or on some other rule.
 outc="$(runp "rpool/a
 rpool/db" --target=hdd/store --config="$WORK/k5i.conf")"

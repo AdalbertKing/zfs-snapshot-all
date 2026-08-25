@@ -863,16 +863,38 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
         done <<< "$eligible"
     done <<< "$eligible"
 
+    # Only the AMBIGUOUS SUBTREE is refused, not the whole proposal: a
+    # hierarchy somewhere on the host says nothing about the datasets that are
+    # not in it, and refusing everything would deny the operator the obvious
+    # candidates because of one pair they may not even care about.
+    #
+    # Both members of every pair drop out. Not the parent alone -- that is the
+    # defect this exists to fix (its own files stop being copied while the
+    # proposal looks complete); and not the children alone either, because a
+    # child proposed without its parent is the same claim in the other
+    # direction. The subtree leaves together, loudly, with the pair named.
     if [ -n "$pairs" ]; then
+        local amb="" keep=""
+        while IFS= read -r a; do
+            [ -n "$a" ] || continue
+            local hit=0
+            while IFS= read -r b; do
+                [ -n "$b" ] || continue
+                case "$b" in "$a"/*) hit=1; break ;; esac
+                case "$a" in "$b"/*) hit=1; break ;; esac
+            done <<< "$eligible"
+            if [ "$hit" -eq 1 ]; then amb="${amb}$a"$'\n'; else keep="${keep}$a"$'\n'; fi
+        done <<< "$eligible"
         {
-            printf '  uklad hierarchiczny -- NIE zgaduje:\n'
+            printf '  poddrzewo dwuznaczne -- NIE proponuje go, wybierz jawnie:\n'
             printf '%s' "$pairs"
-            printf '  rodzic trzyma wlasne pliki niezaleznie od dzieci, a plaskie zadanie na rodzica\n'
-            printf '  nie kopiuje dzieci; jednoczesnie rodzic i dziecko w jednym zestawie sa odrzucane.\n'
-            printf '  Wybierz sam sposrod kandydatow:\n'
-            printf '%s' "$eligible" | sed 's/^/    /'
+            printf '  rodzic trzyma wlasne pliki niezaleznie od dzieci, wiec dzieci NIE pokrywaja\n'
+            printf '  rodzica; a plaskie zadanie na rodzica nie kopiuje dzieci, i oba w jednym\n'
+            printf '  zestawie sa odrzucane jako nakladajace sie. Zadna z tych postaci nie jest\n'
+            printf '  prawdziwa, wiec wybor nalezy do Ciebie:\n'
+            printf '%s' "$amb" | sed 's/^/    --source=/'
         } >&2
-        return 2
+        eligible="$keep"
     fi
 
     printf '%s' "$eligible"
@@ -3871,15 +3893,11 @@ cmd_local_backup() {
     # what a source set is.
     if [ -z "$sources_from" ]; then
         local proposed _p _prc
-        # Three outcomes, three different things to say. rc=2 is not a failure
-        # of the inventory read: it is the proposal declining to choose half of
-        # a hierarchy for the operator, and the reasons are already on stderr.
+        # An ambiguous subtree is not an error here: the proposal drops it,
+        # says so precisely on stderr, and returns whatever else it found. The
+        # only failure this call has left is an inventory it could not read.
         proposed=$(propose_backup_sources "$target" "$config"); _prc=$?
-        case "$_prc" in
-            0) ;;
-            2) die "local-backup: no --source given, and this host's datasets form a hierarchy this proposal will not guess at (the pairs and the candidate list are above). Name the set yourself with --source=<dataset>[,<dataset>...]." ;;
-            *) die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]" ;;
-        esac
+        [ "$_prc" -eq 0 ] || die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]"
         [ -n "$proposed" ]             || die "local-backup: no --source given and nothing on this host is a sensible candidate (see the skip reasons above) -- name the dataset(s) explicitly with --source=<dataset>[,<dataset>...]"
         sources_from=heuristic
         log "brak --source -- PROPOZYCJA z inwentarza ZFS tego hosta (przekaz --source=..., zeby wybrac inaczej):"
