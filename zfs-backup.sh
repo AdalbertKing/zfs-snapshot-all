@@ -4098,12 +4098,50 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     #   * TARGET retention -- one recursive [prune:<target>] over the store.
     # Only the tool-owned pattern is matched, so manual/foreign snapshots survive;
     # source and target are disjoint scopes (validated above), never coupled.
+    # One minute per source, chosen once here, exactly as a relationship gets
+    # one at create. Two reasons, and the second one is not cosmetic:
+    #
+    #   * two sources copying into the same store at the same minute compete for
+    #     the same disks and the same pool, which is the stampede the stagger
+    #     exists to end;
+    #   * gen-cron MERGES datasets that resolve to the same (send_schedule, dst,
+    #     prefix, flags) into ONE cron line. Adding a second source therefore
+    #     rewrote the first source's line into a two-dataset one -- and the
+    #     anti-deletion guard, correctly, called the old line deleted and
+    #     refused the install. Measured live on pve9: seed of the second source
+    #     succeeded, the install refused, nothing was left half-installed. A
+    #     distinct minute keeps every line's identity stable, so adding a source
+    #     leaves the existing lines untouched instead of arguing with a safety
+    #     guard about whether a merge is a deletion.
+    # Resolved BEFORE the emit block, once per root, because the same minute has
+    # to reach two sections ([dataset:] and [prune:]) written in two separate
+    # loops -- and because schedule_pick_minute reads the INSTALLED state, which
+    # cannot see the sections this very run is about to add. Minutes already
+    # handed out in this run are therefore tracked here, or two new sources
+    # would be given the same one and merge exactly as before.
+    local -A LB_SEND=() LB_PRUNE=()
+    local _lb_min _lb_pmin _lb_used=" "
+    for r in "${roots[@]}"; do
+        _lb_min=$(schedule_pick_minute "local-backup:$r")
+        while :; do
+            case "$_lb_used" in
+                *" $_lb_min "*) _lb_min=$(( (_lb_min + 1) % 60 )) ;;
+                *) break ;;
+            esac
+        done
+        _lb_used="$_lb_used$_lb_min "
+        _lb_pmin=$(( (_lb_min + 20) % 60 ))
+        LB_SEND[$r]="$(schedule_with_minute "$(schedule_template_expr send)" "$_lb_min")"
+        LB_PRUNE[$r]="$(schedule_with_minute "$(schedule_template_expr prune)" "$_lb_pmin")"
+    done
+
     {
         for r in "${roots[@]}"; do
             echo
             echo "[dataset:$r]"
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
             profile_emit "$PROFILE_DS_FILE"
+            [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
             echo "	dst          = $target"
             echo "	notify       = local-$(basename "$r")"
         done
@@ -4129,6 +4167,11 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
                 emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+                # Same reason as the send line: without its own minute, two
+                # source prunes with identical policy merge into one delsnaps
+                # line and the first one's identity changes underneath the
+                # anti-deletion guard.
+                [ -n "${LB_PRUNE[$r]}" ] && echo "	prune_schedule = ${LB_PRUNE[$r]}"
                 echo "	notify       = local-src-$(basename "$r")"
             done
             # Once per target, not once per run: a second source landing in the
