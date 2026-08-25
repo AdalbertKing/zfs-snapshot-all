@@ -352,6 +352,57 @@ else
     bad "negative control" "could not read HEAD:gen-cron.sh -- the control did not run"
 fi
 
+# --- 10. the cap must not leak from one record to the next -------------------
+# A client record that predates a field, or simply does not set it, does NOT
+# overwrite the variable. So in the commands that load several records in one
+# shell -- migrate-profile, audit-source-retention -- a CAPPED client followed
+# by an UNCAPPED one left the second carrying the first one's limit: `-b 2M` on
+# its engine call and a `bandwidth` line in its section. A relationship that
+# never asked for a cap gets quietly slowed, in the direction nobody notices,
+# because a transfer slower than it should be still succeeds.
+#
+# The REAL function is executed, twice, in one shell -- that sequence is the
+# whole finding, and a test that called it once could not see it. Its helpers
+# are stubbed; the reset under test is the file's own line.
+seq_load() {   # -> "<flag after A>|<flag after B>"
+    local d="$TMPD/seq"; rm -rf "$d"; mkdir -p "$d"
+    printf 'CLIENT_NAME=a\nPEER_HOST=h\nSTATE=active\nACTIVE_ENDPOINT=h:22\nBANDWIDTH=2M\nCLIENT_TARGET=t/a\n' > "$d/a.conf"
+    # B deliberately carries NO BANDWIDTH line at all -- that is the case.
+    printf 'CLIENT_NAME=b\nPEER_HOST=h\nSTATE=active\nACTIVE_ENDPOINT=h:22\nCLIENT_TARGET=t/b\n' > "$d/b.conf"
+    printf 'PEER_SAVED_ACCOUNT=root\nPEER_SAVED_DATASETS=p/x\nPEER_SAVED_TARGET=t\n' > "$d/peer.conf"
+    local t; t=$(mktemp)
+    {   echo 'set -u'
+        echo 'log() { :; }'
+        echo 'warn() { :; }'
+        echo 'die() { echo "DIE: $*"; exit 1; }'
+        printf 'peer_manifest_path() { echo %q; }\n' "$d/peer.conf"
+        echo 'peer_label() { echo lbl; }'
+        echo 'local_keyfile_path() { echo /k; }'
+        echo 'host_key_alias() { echo alias; }'
+        echo 'active_endpoint_host_port() { echo "h 22"; }'
+        echo 'ensure_alias_known_hosts() { echo /kh; }'
+        echo 'resolve_mode_datasets() { :; }'
+        # resolve_link_bandwidth too: since the cap moved to the pairing, the
+        # function under test delegates the "which value applies" question to
+        # it, and a harness that lifted only the caller would exercise a call
+        # to something that is not there.
+        awk '/^resolve_link_bandwidth\(\) \{/,/^\}/' "$ZB"
+        awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB"
+        printf 'load_client_and_connection %q; A="$LOAD_BW_FLAG"\n' "$d/a.conf"
+        printf 'load_client_and_connection %q; B="$LOAD_BW_FLAG"\n' "$d/b.conf"
+        echo 'printf "%s|%s" "$A" "$B"'
+    } > "$t"
+    bash "$t" 2>/dev/null; rm -f "$t"
+}
+
+r="$(seq_load)"
+case "$r" in
+    " -b 2M|") ok "cap: an uncapped client loaded after a capped one gets NO -b (no leak between records)" ;;
+    " -b 2M|"*) bad "cap: an uncapped client loaded after a capped one gets no -b" \
+                    "the second client inherited: '${r#*|}'" ;;
+    *) bad "cap: an uncapped client loaded after a capped one gets no -b" \
+           "the harness did not reach the case -- got '$r' (first field should be ' -b 2M')" ;;
+esac
 # --- 10. WHERE THE CAP LIVES: the pairing, not the relationship -------------
 # The cap describes the WIRE, and the wire belongs to the pair of hosts. On the
 # relationship record two relationships to the same peer had to be given the
@@ -455,7 +506,6 @@ case "$out" in *OK*) ok "cap control: asking for the SAME cap is not a conflict"
 out="$(pair_cap_decision - 8M)"
 case "$out" in *OK*) ok "cap control: a peer with no pairing yet takes the cap without argument" ;;
                   *) bad "cap control: a peer with no pairing yet takes the cap" "$out" ;; esac
-
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
