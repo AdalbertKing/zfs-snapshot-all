@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d293a4dcb9f7a219 -->
+<!-- status-covers-digest: 933c030b11fbf624 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1442,6 +1442,34 @@
   zadnego nowego zrodla, przebieg jest **no-opem**: bez seeda, bez zapisu crona,
   config bajt w bajt ten sam. Retencja celu i rodzina szablonow zrodlowych sa
   emitowane **raz na cel**, nie raz na przebieg.
+
+  **Trzecia rzecz, ujawniona dopiero przez zywy przebieg:** `gen-cron` SCALA
+  datasety o tej samej polityce w jedna linie crona, wiec dolozenie drugiego
+  zrodla nie dodawalo linii — przepisywalo linie pierwszego zrodla na
+  dwudatasetowa. Bramka antykasacyjna, zgodnie z wlasnym kontraktem („linia
+  ktora znikla to zadanie ktore przestalo chodzic"), odmawiala instalacji,
+  wymieniajac jako ofiary wlasne linie pierwszego zrodla. Dwie zmiany, obie
+  waskie:
+
+  * **wlasna minuta na kazde zrodlo lokalne** (ten sam rozrzut, ktorego uzywa
+    sciezka zdalna) — linie przestaja sie scalac, wiec tozsamosc istniejacej
+    linii nie zmienia sie, gdy dochodzi kolejne zrodlo; przy okazji dwa zrodla
+    nie kopiuja do tego samego magazynu w tej samej minucie;
+  * **drugie zwolnienie w bramce**, o tym samym ksztalcie co istniejace
+    zwolnienie dla zmiany endpointu: zgubiona linia jest wchlonieta wylacznie
+    wtedy, gdy w nowym bloku jest linia IDENTYCZNA poza jednym cytowanym
+    argumentem, w ktorym stara lista datasetow jest PODZBIOREM nowej. Kierunek
+    jest cala wlasnoscia bezpieczenstwa i jest pinowany w obie strony: lista
+    ktora sie ZWEZA nadal jest kasacja. Piec dyskryminatorow: scalenie
+    wchloniete, linia po prostu nieobecna — nie; zwezenie — nie; zmieniony prog
+    — nie; zmieniony harmonogram — nie.
+
+  Dowod live (pve9, worktree, host przywrocony do stanu sprzed testu): pierwsza
+  instalacja `EXIT=0`; **powtorka tego samego polecenia `EXIT=0`, md5 configu
+  i crontaba identyczne, snapshot nadal jeden** (zero seeda); **drugie zrodlo
+  `EXIT=0`**, w crontabie dwie osobne linie wysylki na minutach 10 i 30, monitor
+  zrodel scalony do `"hdd/k5a,hdd/k5b"` (pokrycie zachowane), retencja celu
+  jedna.
 
   Dyskryminatory pinuja obie polowy: no-op nic nie sieje i nic nie zapisuje;
   drugie zrodlo dolacza, a pierwsze przezywa; cudza sekcja pod ta sama sciezka
