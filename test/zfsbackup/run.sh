@@ -5575,16 +5575,25 @@ else
 fi
 
 # 2. POSITIVE CONTROL. The same body with the release defeated must leave the
-#    three files -- otherwise case 1 proves only that the check cannot see.
+#    rendered artifacts behind -- otherwise case 1 proves only that the check
+#    cannot see.
+#
+#    The count is derived, not typed. It was the literal 3, and the day the
+#    profile gained a FOURTH rendered artifact (the shared [excluded:] sections,
+#    which compose differently from templates and so cannot share their file)
+#    this control failed for a reason that had nothing to do with leaking. A
+#    control that has to be edited whenever the thing it watches grows will
+#    eventually be edited without being understood.
 n="$(rm -rf "$LK/tmp/ctl"; mkdir -p "$LK/tmp/ctl"
      ( export TMPDIR="$LK/tmp/ctl"
        profile_release_tmp() { :; }; _profile_arm_release() { :; }
        lk_env prof emit_client_sections "$LK/one.conf" lkc 1 ) >/dev/null 2>&1
      find "$LK/tmp/ctl" -mindepth 1 | wc -l | tr -d ' ')"
-if [ "$n" = 3 ]; then
-    ok "60: control -- with the release defeated the same run leaks exactly 3 (the check discriminates)"
+want_leak="$(grep -cE '^[[:space:]]*PROFILE_[A-Z_]+FILE=\$\(mktemp\)' "$REPO/zfs-backup.sh")"
+if [ "$n" = "$want_leak" ] && [ "$want_leak" -gt 0 ]; then
+    ok "60: control -- with the release defeated the same run leaks every rendered artifact ($want_leak) (the check discriminates)"
 else
-    bad "60: control -- with the release defeated the same run leaks exactly 3" "left=$n (expected the pre-fix leak)"
+    bad "60: control -- with the release defeated the same run leaks every rendered artifact" "left=$n, artefaktow renderowania=$want_leak"
 fi
 
 # 3. TWO loads in one shell. A trap alone cannot fix this: it fires once, on the
