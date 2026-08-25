@@ -1137,6 +1137,44 @@ seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
     && ok "krok5/blocker2: only the genuinely new source is seeded, the installed ones are not" \
     || bad "krok5/blocker2: only the genuinely new source is seeded" "seeds $seeds_before -> $seeds_after"
 
+# ---- F3: flat parent/child, END TO END ------------------------------------
+# Teaching only the PROPOSAL that a flat job covers exactly its own dataset
+# produced a false green: discovery would offer a child under an installed flat
+# parent, and the composition gate would then refuse the very candidate it had
+# just proposed. The rule has to hold at both ends, so these assert the whole
+# run -- exit code, installed CONFIG, the pre-existing job surviving, the new
+# job present, and the cron actually covering both -- not the absence of a
+# phrase.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a new CHILD joins an installed flat parent as its own job" \
+    || bad "krok5/F3: a new child joins an installed flat parent" "rc=$rc $(printf '%s' "$out"|tail -4)"
+blk="$(cat "$WORK/crontab-store" 2>/dev/null)"
+{ printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a"' \
+  && printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a/child"'; } \
+    && ok "krok5/F3: the installed cron covers BOTH the parent and the child" \
+    || bad "krok5/F3: the installed cron covers both" "$(printf '%s' "$blk" | grep -oE 'snapsend\.sh[^;]*' | head -3)"
+
+# The mirror arrangement: installed child, parent discovered later.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a new PARENT joins an installed flat child as its own job" \
+    || bad "krok5/F3: a new parent joins an installed flat child" "rc=$rc $(printf '%s' "$out"|tail -4)"
+
+# And the refusal that must survive it: an installed section that really IS
+# recursive does reach its descendants, so a child under it still collides.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+printf '\n[dataset:rpool/a]\n\t# managed-by: zfs-backup.sh local-backup source=rpool/a\n\tuse_template = profile__default__standard_hourly\n\tdst          = hdd/backups\n\trecursive    = yes\n' >> "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'recursive'; } \
+    && ok "krok5/F3: a child under a RECURSIVE installed section still refuses, naming why" \
+    || bad "krok5/F3: a child under a recursive installed section still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+seed_cfg
+
 # ---- the refusals that must SURVIVE reading our own marker -----------------
 # FOREIGN coverage at the same path is not ours, whatever it is called.
 printf '\n[dataset:rpool/db]\n\tuse_template = whatever\n\tdst          = hdd/backups\n' >> "$CFG"

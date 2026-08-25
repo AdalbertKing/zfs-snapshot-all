@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 292b8f4bb27aa9bb -->
+<!-- status-covers-digest: 6f041fbcc55ee88e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1484,6 +1484,23 @@
     robila dokladnie odwrotnie, niz powinna. Nieznana komenda nie dostaje
     zwolnienia w ogole. Dwanascie dyskryminatorow, w tym cztery kontrole „tylko
     cel / prefiks / wzorzec / lista `-P` sie poszerza — nie wolno wchlonac".
+
+  **F3: ta sama regula musi obowiazywac na OBU koncach.** Nauczenie jej samej
+  propozycji dalo falszywa zielen — odkrywanie oferowalo dziecko pod
+  zainstalowanym plaskim rodzicem, a bramka kompozycji odrzucala kandydata,
+  ktorego przed chwila sama zaproponowala. `config_section_overlap` czyta wiec
+  teraz to samo: **dokladna tozsamosc zawsze koliduje**; zadanie LEZACE POD
+  zainstalowana sekcja koliduje tylko wtedy, gdy ta sekcja jest rekurencyjna;
+  a sekcja lezaca POD zadana sciezka koliduje tylko wtedy, gdy to, co ten
+  przebieg napisze, bedzie ja obejmowac rekurencyjnie — czyli w przypadku CELU,
+  ktorego retencja jest emitowana `recursive = yes`. Sciezki rekurencyjne
+  nazywa **wywolujacy**, bo tylko on wie, co zaraz wyemituje.
+
+  Testy end-to-end sprawdzaja caly przebieg, nie brak frazy: kod wyjscia,
+  zainstalowany CONFIG, przetrwanie starego zadania, obecnosc nowego oraz
+  pokrycie obu w zainstalowanym cronie — dla obu ukladow (zainstalowany plaski
+  rodzic + nowe dziecko; zainstalowane dziecko + kandydat-rodzic) plus odmowa,
+  gdy zainstalowana sekcja naprawde jest rekurencyjna.
 
   Dowod live (pve9, worktree, host przywrocony do stanu sprzed testu): pierwsza
   instalacja `EXIT=0`; **powtorka tego samego polecenia `EXIT=0`, md5 configu

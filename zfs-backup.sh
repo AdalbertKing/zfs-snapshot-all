@@ -3900,10 +3900,6 @@ local_backup_overlap() {
 # local_backup_same_pool SRC TGT -> rc 0 when the leading pool component matches.
 local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
 
-# config_section_overlap FILE PATH... -> prints one line per existing
-# [dataset:]/[prune:] section in FILE whose scope overlaps a requested PATH.
-# path_overlaps is the same containment test the pull coverage guard uses. Empty
-# output means the requested job is disjoint from every job already in the file.
 # The ownership marker a local-backup section carries, or "" for a section this
 # tool did not write.
 #
@@ -3931,28 +3927,87 @@ local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or
     ' "$1" 2>/dev/null
 }
 
-config_section_overlap() {   # <file> <path>...
-    local file="$1"; shift
+# Which installed sections would genuinely COLLIDE with the jobs about to be
+# written -- and "genuinely" is the whole point, because containment is not
+# coverage for a flat job.
+#
+# The product contract this slice established: a flat [dataset:rpool/a] copies
+# rpool/a and nothing else. It does not cover rpool/a/child, and a flat
+# [dataset:rpool/a/child] does not cover the parent blocks either. Containment
+# becomes coverage only when the installed section says `recursive`.
+#
+# The discovery side was taught this first, and that alone produced a false
+# green: the proposal would offer a child under an installed flat parent, and
+# this gate would then refuse the very candidate it had just proposed. So the
+# rule lives here too, and both sides read it the same way.
+#
+#   exact identity        always a collision, whatever either side declares;
+#   requested INSIDE an   a collision only when that installed section is
+#   installed section     recursive -- otherwise it does not reach down there;
+#   installed INSIDE a    a collision only when the job we are about to write
+#   requested path        will be recursive over it. Sources are written flat,
+#                         so this is the TARGET case: its retention IS emitted
+#                         recursive, and a stranger's dataset under the store
+#                         really would have its snapshots pruned by ours.
+#
+# The recursive paths are named by the caller rather than guessed here, because
+# only the caller knows what it is about to emit.
+#
+# REV-20260811-098 stays: a section scope may name SEVERAL datasets
+# comma-separated ([prune:a,b,c] -- metropolis pve2 has such sections), so each
+# member is evaluated independently. Treating the comma-joined string as one
+# path would miss an overlap with every member but the accidental prefix.
+config_section_overlap() {   # <file> <recursive-request or ""> <requested path>...
+    local file="$1" rec_req="${2:-}"; shift 2
     [ -f "$file" ] || return 0
-    local hdr scope member req
+    local hdr scope member req srec
     while IFS= read -r hdr; do
         scope="${hdr#\[}"; scope="${scope%\]}"; scope="${scope#*:}"
-        # REV-20260811-098: a section scope may name SEVERAL datasets comma-
-        # separated ([prune:a,b,c] -- metropolis pve2 has such sections), so
-        # evaluate each member independently, using the same comma split and
-        # whitespace trim config_datasets() applies. Treating the whole
-        # comma-joined string as one path would miss an overlap with any member
-        # but the accidental prefix, letting the planner accept a job installed
-        # policy already covers.
+        srec="$(section_field "$file" "$hdr" recursive)"
+        srec="$(printf '%s' "$srec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        case "$srec" in ""|no|off|0) srec="" ;; esac
         while IFS= read -r member; do
             [ -n "$member" ] || continue
             for req in "$@"; do
-                path_overlaps "$member" "$req" \
-                    && printf '\n  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
+                if [ "$member" = "$req" ]; then
+                    printf '
+  %s (%s) overlaps requested %s' "$hdr" "$member" "$req"
+                    continue
+                fi
+                case "$req" in
+                    "$member"/*)
+                        # The request lies under an installed section: only a
+                        # recursive one reaches it.
+                        [ -n "$srec" ] && printf '
+  %s (%s, recursive=%s) covers requested %s' "$hdr" "$member" "$srec" "$req"
+                        continue ;;
+                esac
+                case "$member" in
+                    "$req"/*)
+                        # An installed section lies under the request: only a
+                        # request we will write recursively reaches IT.
+                        [ -n "$rec_req" ] && [ "$req" = "$rec_req" ]                             && printf '
+  %s (%s) lies under requested %s, which this run would cover recursively' "$hdr" "$member" "$req"
+                        continue ;;
+                esac
             done
         done < <(dataset_list_split "$scope")
     done < <(grep -oE '^\[(dataset|prune):[^]]+\]' "$file")
     return 0
+}
+
+# installed_dataset_field for any section kind, [prune:] included: the flat-vs-
+# recursive question is asked of both, and reading only [dataset:] sections
+# would have made every prune scope look flat.
+section_field() {   # <file> <exact header> <field>
+    awk -v h="$2" -v fld="$3" '
+        $0==h {f=1; next}
+        f && /^\[/ {f=0}
+        f {
+            line=$0; sub(/^[ 	]+/,"",line)
+            if (line ~ ("^" fld "[ 	]*=")) { sub(("^" fld "[ 	]*=[ 	]*"),"",line); print line; exit }
+        }
+    ' "$1" 2>/dev/null
 }
 
 cmd_local_backup() {
@@ -4217,7 +4272,10 @@ cmd_local_backup() {
     # Refuse when a DISPUTED root, or the target, overlaps a section already
     # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
     # refusal.
-    local conflict; conflict="$(config_section_overlap "$cand" ${scan[@]+"${scan[@]}"} "$target")"
+    # The TARGET is the one requested path this run covers RECURSIVELY (its
+    # retention is emitted `recursive = yes`), so it is named as such; the
+    # sources are written flat and must not pretend to reach their children.
+    local conflict; conflict="$(config_section_overlap "$cand" "$target" ${scan[@]+"${scan[@]}"} "$target")"
     # ...except this tool's own target retention for this very target. It is the
     # same store, written by this same command, and treating it as foreign is
     # exactly what made a second source impossible to add.
