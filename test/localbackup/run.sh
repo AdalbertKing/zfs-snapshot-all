@@ -104,19 +104,35 @@ out="$(run --source=rpool/db --target=hdd/backups --profile=default --config="$W
     || bad "F1/another existing source also proceeds" "rc=$rc"
 
 # ---- REV-20260811-101: multi-source WHAT set semantics ----
-# canonical comma-list: two independent [dataset:] entries, and the rendered cron
-# carries both roots (gen-cron merges same-policy datasets into one comma-joined
-# send, the established multi-dataset shape -- see fixtures/tiered.conf golden).
+# Canonical comma-list: two independent [dataset:] entries, and the rendered
+# cron really sends BOTH roots to the target.
+#
+# REWRITTEN for KROK 5, not deleted. This used to additionally require the two
+# sends to appear as ONE comma-joined line, because same-policy datasets merged.
+# Each local source now gets its own minute, so they render as two lines -- and
+# that is the point rather than a side effect: while they merged, adding a
+# second source rewrote the first one's line, and the anti-deletion guard
+# refused the install (measured live on pve9). The property REV-101 is about --
+# two independent entries, both reaching the cron -- is unchanged and is what
+# is asserted; the single-line shape was incidental to it.
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mc.conf")"; rc=$?
+mc_data="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/data" "hdd/backups"')"
+mc_vm="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/vmstore" "hdd/backups"')"
 if [ "$rc" -eq 0 ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]' \
-        && printf '%s\n' "$out" | grep -qE 'snapsend\.sh -m "automated_hourly_" "rpool/data,rpool/vmstore" "hdd/backups"'; then
+        && [ "$mc_data" -ge 1 ] && [ "$mc_vm" -ge 1 ]; then
     ok "101/comma-list: two independent source entries, both in the rendered cron"
 else
     bad "101/comma-list: two independent source entries, both in the rendered cron" \
         "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snapsend' | head)"
 fi
+# ...and on DIFFERENT minutes, which is what keeps each line's identity stable
+# when a third source joins later.
+mc_min="$(printf '%s\n' "$out" | grep -oE '^[0-9]+ \* \* \* \* echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*backup' | awk '{print $1}' | sort -u | grep -c .)"
+[ "${mc_min:-0}" -ge 2 ] \
+    && ok "101/comma-list: the two sends land on different minutes (no merge, stable identities)" \
+    || bad "101/comma-list: the two sends land on different minutes" "distinct minutes: ${mc_min:-0}"
 # one missing member in a 3-root request -> hard refuse, NO partial candidate.
 out="$(run --source=rpool/data,rpool/nope,hdd/dokumenty --target=hdd/backups --config="$WORK/m3.conf")"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'does not exist' \
@@ -1077,12 +1093,21 @@ out="$(runi snapsend-ok "" --source=rpool/other --target=hdd/backups --config="$
     && ok "krok5/blocker2: the target prune and the source template family stay single" \
     || bad "krok5/blocker2: the target prune and the source template family stay single" \
            "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")"
-# The already-installed source must not be seeded again by the run that adds
-# another one.
-printf '%s' "$out" | grep -q 'rpool/data' \
-    && printf '%s' "$out" | grep -q 'Juz bylo' \
-    && ok "krok5/blocker2: the run names the source it left alone instead of claiming it seeded it" \
-    || bad "krok5/blocker2: the run names the source it left alone" "$(printf '%s' "$out"|tail -5)"
+# The mixed request -- what an operator actually types when adding one source to
+# a set: name them all, and let the tool work out which is new. The installed
+# one must be reported as left alone rather than counted as seeded, and it must
+# not be seeded again.
+seeds_before="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+out="$(runi snapsend-ok "" --source=rpool/data,rpool/other,rpool/vmstore --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'Juz bylo' \
+  && printf '%s' "$out" | grep -q 'rpool/data'; } \
+    && ok "krok5/blocker2: a mixed request names the sources it left alone instead of claiming it seeded them" \
+    || bad "krok5/blocker2: a mixed request names the sources it left alone" "rc=$rc $(printf '%s' "$out"|tail -6)"
+# Exactly ONE new seed (rpool/vmstore); the two already installed are untouched.
+[ "$((seeds_after - seeds_before))" -eq 1 ] \
+    && ok "krok5/blocker2: only the genuinely new source is seeded, the installed ones are not" \
+    || bad "krok5/blocker2: only the genuinely new source is seeded" "seeds $seeds_before -> $seeds_after"
 
 # ---- the refusals that must SURVIVE reading our own marker -----------------
 # FOREIGN coverage at the same path is not ours, whatever it is called.
