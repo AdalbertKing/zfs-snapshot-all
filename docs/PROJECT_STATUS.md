@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 79f4fc13df884859 -->
+<!-- status-covers-digest: bdda2d4086263081 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1552,6 +1552,39 @@
   poprawki: **szesc padа**, a siodma — „gdy wszystkie sondy odpowiadaja, zdrowy
   host nadal milczy" — przechodzi po obu stronach, wiec suita mierzy dokladnie
   te zmiane, a nie „skrypt zaczal alarmowac zawsze".
+
+- **ETAP PROFILI, krok 1: `flags` rozbite wzdluz osi LACZA (2026-08-25).**
+
+  `bandwidth`, `compression` i `cipher` opisuja **drut**, po ktorym leci
+  dataset — nie polityke, ktorej podlega, i nie tozsamosc, ktora sie laczy.
+  Nie mialy wlasnych pol: jedynym sposobem, zeby powiedziec cokolwiek z tej
+  trojki, bylo wpisanie litery silnika do wolnego `flags` — tego samego
+  stringa, ktory niesie klucz parowania, przypiety klucz hosta i port, i ktory
+  z tego powodu jest w `PROFILE_FORBIDDEN_FIELDS`. **Zadna warstwa powyzej
+  recznej edycji nie mogla wiec powiedziec „ogranicz tego peera do 2 MB/s".**
+  To byla mechaniczna, nie projektowa przeszkoda dla calego etapu profili.
+
+  Kazde pole renderuje **dokladnie** ten token, ktory operator wpisalby recznie
+  — dowiedzione przez wyrenderowanie obu zapisow i porownanie wywolania
+  silnika. Ta sama opcja przychodzaca **i** z `flags`, **i** z pola jest
+  **odrzucana**, nie scalana: dwa zrodla prawdy dla jednej opcji to dokladnie
+  ten stan, ktory ten podzial ma zakonczyc. Kontrola dubla uzywa tego samego
+  przejscia po opcjach co getopts, wiec zbundlowane `-eb 2M` jest lapane,
+  a argument `-m b-daily_` nie jest.
+
+  **Tylko `[dataset:]`, i profil ich nie ustawia**: nosnik polityki jest
+  wspoldzielony przez datasety, ktore **nie dziela celu** — ta sama retencja
+  obsluguje gigabitowy LAN i VPN 20 Mbit. Profil nie wie, po jakim laczu
+  poleci.
+
+  Pulapka kolejnosci przypieta kontrola: jawny kompresor sprawia, ze autotune
+  silnika **staje**, wiec pola musza sie renderowac PRZED rozwazeniem `-A`.
+  Odwrotnie daje linie crona z `-A` i `-Z` naraz, czyli zadanie ogłaszajace
+  no-op przy kazdym uruchomieniu.
+
+  `test/linkfields`: **35/0**, z kontrola negatywna wobec poprzedniego
+  `gen-cron.sh` wbudowana w kazdy przebieg — musi odrzucic wszystkie trzy pola
+  jako nieznane.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
