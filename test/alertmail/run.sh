@@ -381,7 +381,7 @@ if [ -z "$cap_body" ]; then
     bad "the capacity-script heredoc can be extracted from deploy.sh" "sed anchors no longer match"
 else
     hv_dir=$(mktemp -d)
-    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v4" NOTIFY_EMAIL=root \
+    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v5" NOTIFY_EMAIL=root \
         eval "cat > '$hv_dir/check.sh' <<EOF
 $cap_body
 EOF"
@@ -433,6 +433,71 @@ ST
     else
         bad "health: a fully healthy host emits nothing at all" "alerty: $(cat "$hv_dir/alerts")"
     fi
+
+    # ---- THE PROBE ITSELF (advisory on PR #131) ---------------------------
+    # The assertion directly above is what made these necessary: "a healthy host
+    # emits nothing" and "the probe failed" produced the SAME output, so the
+    # suite could not tell them apart and neither could the operator. A check
+    # whose failure is silence is a check that is not running.
+    hv_probe() {   # <zpool stub body> -> alerts produced
+        cat > "$hv_dir/bin/zpool" <<ST
+#!/bin/bash
+$1
+ST
+        chmod +x "$hv_dir/bin/zpool"
+        : > "$hv_dir/alerts"
+        HV_RPOOL_HEALTH=ONLINE NLOG="$hv_dir/alerts" PATH="$hv_dir/bin:$PATH" \
+            ZFS_NOTIFY_SCRIPT="$hv_dir/bin/notify.sh" ZFS_PROGRESS_DIR="$hv_dir/empty" \
+            bash "$hv_dir/check.sh" >/dev/null 2>&1
+        cat "$hv_dir/alerts"
+    }
+
+    # 1. enumeration fails outright
+    a="$(hv_probe 'echo "cannot open ZFS" >&2; exit 1')"
+    printf '%s' "$a" | grep -q 'sonda pul.*PADLA' \
+        && ok "probe: a FAILED pool enumeration is a finding, not silence" \
+        || bad "probe: a failed pool enumeration is a finding" "alerty: ${a:-<cisza>}"
+
+    # 2. enumeration succeeds and reports no pools at all
+    a="$(hv_probe 'case "$*" in *"-o name") exit 0 ;; *) exit 0 ;; esac')"
+    printf '%s' "$a" | grep -q 'ZERO pul' \
+        && ok "probe: ZERO imported pools is a finding of its own, not 'nothing to check'" \
+        || bad "probe: zero imported pools is a finding" "alerty: ${a:-<cisza>}"
+
+    # 3. enumeration works, one pool's HEALTH cannot be read
+    a="$(hv_probe 'case "$*" in
+  *"-o name") echo rpool; echo hdd ;;
+  *"-o capacity"*) echo "42%" ;;
+  *"-o health rpool") exit 1 ;;
+  *"-o health hdd") echo ONLINE ;;
+esac')"
+    { printf '%s' "$a" | grep -q "nie odczytano stanu puli 'rpool'" \
+      && ! printf '%s' "$a" | grep -q "puli 'hdd'"; } \
+        && ok "probe: an unreadable HEALTH is a finding for THAT pool, and the readable one stays silent" \
+        || bad "probe: an unreadable health is a finding for that pool" "alerty: ${a:-<cisza>}"
+
+    # 4. enumeration works, one pool's CAPACITY cannot be read
+    a="$(hv_probe 'case "$*" in
+  *"-o name") echo rpool ;;
+  *"-o capacity"*) exit 1 ;;
+  *"-o health"*) echo ONLINE ;;
+esac')"
+    printf '%s' "$a" | grep -q "nie odczytano pojemnosci puli 'rpool'" \
+        && ok "probe: an unreadable CAPACITY is a finding, not a shell error and no alert" \
+        || bad "probe: an unreadable capacity is a finding" "alerty: ${a:-<cisza>}"
+
+    # 5. CONTROL: with every probe answering, the healthy host is still silent.
+    #    Without this the four above would pass just as well against a script
+    #    that alerts unconditionally -- which is the other way to be useless.
+    a="$(hv_probe 'case "$*" in
+  *"-o name") echo rpool ;;
+  *"-o capacity"*) echo "42%" ;;
+  *"-o health"*) echo ONLINE ;;
+esac')"
+    [ -z "$a" ] \
+        && ok "probe control: when every probe answers and all is well, still nothing is emitted" \
+        || bad "probe control: a healthy host stays silent" "alerty: $a"
+
     rm -rf "$hv_dir"
 fi
 
