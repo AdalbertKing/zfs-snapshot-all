@@ -862,6 +862,120 @@ else
     bad "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"         "$(awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -n 'bash "\$GENCRON"')"
 fi
 
+# ==============================================================================
+# KROK 5 -- the SOURCE proposal when --source is omitted.
+#
+# Until now a local backup was refused outright without --source, which made the
+# "clean host -> working backup" path start with an operator reading `zfs list`
+# by hand. The proposal is a GUESS, so it carries the same rule the guessed
+# target carries: it may be shown, it may be planned with, and it may not be
+# installed with nobody looking.
+#
+# The inventory stub answers the one query the proposal makes and leaves every
+# other `zfs` call to the existing stub, so the assertions above are untouched.
+# ==============================================================================
+mkdir -p "$WORK/bin3"
+cat > "$WORK/bin3/zfs" <<'EOF'
+#!/bin/sh
+# `zfs list -H -o name -t filesystem,volume` (no dataset argument) is the
+# inventory query; INVENTORY holds the answer. Everything else falls through to
+# the existence stub, which is what every other assertion in this suite uses.
+case " $* " in
+  *" -t filesystem,volume "*)
+      printf '%s\n' ${INVENTORY:-rpool rpool/ROOT rpool/ROOT/pve-1 rpool/swap rpool/a rpool/a/child rpool/db hdd hdd/store}
+      exit 0 ;;
+esac
+for a in "$@"; do ds="$a"; done
+case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db|rpool/vmstore|hdd/dokumenty|rpool/a|rpool/a/child|rpool/ROOT/pve-1|rpool/swap|hdd/store) exit 0 ;;
+             *) echo "cannot open '$ds': dataset does not exist" >&2; exit 1 ;; esac
+EOF
+cp "$WORK/bin2/zpool" "$WORK/bin3/zpool"
+# bin2's crontab, not bin's: this section installs, and only that stub STORES
+# what it is given. gen-cron writes the crontab and reads it back, so a stub
+# that keeps returning the old content makes the tool correctly refuse -- the
+# product working, and the wrong fixture for testing past it.
+cp "$WORK/bin2/crontab" "$WORK/bin3/crontab"
+chmod +x "$WORK/bin3/zfs" "$WORK/bin3/zpool" "$WORK/bin3/crontab"
+
+# $SNAPSEND is pinned to the same successful stub the install assertions above
+# use: this section is about which SOURCE SET is installed, never about the
+# transfer, and a real engine here would reach for real ZFS.
+runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
+    local inv="$1"; shift
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
+      INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
+      SNAPSEND="$WORK/seedbin/snapsend-ok" cmd_local_backup "$@" ) 2>&1
+}
+
+# ---- the proposal happens at all, and reaches the plan ----------------------
+out="$(runp "-" --target=hdd/store --config="$WORK/k5a.conf")"
+{ printf '%s' "$out" | grep -q 'PROPOZYCJA z inwentarza' \
+  && printf '%s' "$out" | grep -q 'rpool/a/child' \
+  && printf '%s' "$out" | grep -q 'rpool/db'; } \
+    && ok "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" \
+    || bad "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" "$(printf '%s' "$out"|head -8)"
+
+# ---- every exclusion, each with the reason it must be excluded FOR ----------
+# A pool root is a container; the OS root is not restorable by this tool; a swap
+# zvol carries no data; and -- the important one -- a PARENT would be copied by
+# a flat job that silently leaves its children unbacked.
+for pair in "rpool|pula, nie zbior danych" \
+            "rpool/ROOT|system operacyjny" \
+            "rpool/ROOT/pve-1|system operacyjny" \
+            "rpool/swap|swap" \
+            "rpool/a|ma potomkow" \
+            "hdd/store|cel backupu"; do
+    ds="${pair%%|*}"; why="${pair##*|}"
+    if printf '%s' "$out" | grep -q "pominieto $ds -- $why"; then
+        ok "krok5: '$ds' is excluded from the proposal, and the reason is printed"
+    else
+        bad "krok5: '$ds' is excluded from the proposal, and the reason is printed" \
+            "$(printf '%s' "$out" | grep pominieto | head -8)"
+    fi
+    printf '%s' "$out" | grep -qE "^>>>   $ds\$" \
+        && bad "krok5: '$ds' must not be proposed" "it appears in the candidate list"
+done
+
+# ---- a dataset an installed section already covers is not proposed ----------
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/db]\n\tuse_template = x\n' > "$WORK/k5cov.conf"
+out2="$(runp "-" --target=hdd/store --config="$WORK/k5cov.conf")"
+printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
+    && ok "krok5: a dataset the installed config already covers is skipped, naming the section" \
+    || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep pominieto|head -5)"
+
+# ---- nothing sensible left: refuse, and say what to do ---------------------
+out3="$(runp "rpool
+rpool/swap" --target=hdd/store --config="$WORK/k5b.conf")"
+{ printf '%s' "$out3" | grep -q 'nothing on this host is a sensible candidate' \
+  && printf '%s' "$out3" | grep -q -- '--source='; } \
+    && ok "krok5: an inventory with no candidate refuses and names the flag to use" \
+    || bad "krok5: an inventory with no candidate refuses and names the flag to use" "$(printf '%s' "$out3"|tail -3)"
+
+# ---- EXPLICIT-SOURCE-BEATS-DISCOVERY: a named source is never second-guessed -
+out4="$(runp "-" --source=rpool/db --target=hdd/store --config="$WORK/k5c.conf")"
+{ printf '%s' "$out4" | grep -qv 'PROPOZYCJA z inwentarza' \
+  && ! printf '%s' "$out4" | grep -q 'rpool/a/child'; } \
+    && ok "krok5: an explicit --source is used as given -- no proposal is consulted" \
+    || bad "krok5: an explicit --source is used as given" "$(printf '%s' "$out4"|head -6)"
+
+# ---- the acceptance gate: a PROPOSED set never installs unattended ----------
+rm -f "$WORK/crontab-writes"
+out5="$(runp "-" --target=hdd/store --config="$WORK/k5d.conf" --install --yes)"
+{ printf '%s' "$out5" | grep -q 'cannot confirm a source set this run PROPOSED' \
+  && [ ! -f "$WORK/crontab-writes" ]; } \
+    && ok "krok5: --yes cannot confirm a PROPOSED source set, and nothing is installed" \
+    || bad "krok5: --yes cannot confirm a PROPOSED source set" "$(printf '%s' "$out5"|tail -3)" "writes: $(cat "$WORK/crontab-writes" 2>/dev/null)"
+
+# ---- the discriminating control: the gate keys on PROVENANCE, not on --yes --
+# Without this, the assertion above would pass just as well against a build that
+# refused every --yes install, which is a different (and wrong) behaviour.
+rm -f "$WORK/crontab-writes"
+out6="$(runp "-" --source=rpool/db --target=hdd/store --config="$WORK/k5e.conf" --install --yes)"
+printf '%s' "$out6" | grep -q 'cannot confirm a source set this run PROPOSED' \
+    && bad "krok5 control: a NAMED source set is still allowed to install under --yes" \
+           "the proposal gate fired on an explicit --source" \
+    || ok "krok5 control: a NAMED source set is still allowed to install under --yes"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

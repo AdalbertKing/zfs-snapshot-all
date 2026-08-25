@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aa263a8f53ee044a -->
+<!-- status-covers-digest: a4f9cf0f5510f80a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1340,6 +1340,36 @@
   `check-snap-age.sh` v2.3.
 
 - Bieżąca dostawa dla issue #9: **prosty przepływ dwuserwerowy** — `add-client --host` (domyślny backup), jeden prowadzony `deploy.sh --join` na źródle, jawny `seed` i jeden `activate` na kolektorze. Join odkrywa ZFS, pokazuje zakres, pozwala zaakceptować/edytować i nadaje grant; activate składa końcowy catch-up, opcjonalną zmianę adresu, weryfikację oraz podgląd i transakcyjną instalację crona. Retry wznawia z trwałego stanu; ukończona aktywacja jest no-op. Lokalne dowody: guided join 14/14, zfsbackup 430/430. Dowód na dwóch żywych hostach/ZFS pozostaje obowiązkiem przed merge.
+
+- **KROK 5, plaster 1: brak `--source` proponuje zrodla (2026-08-25).**
+
+  Wysokopoziomowa sciezka lokalna odmawiala bez `--source`, wiec „czysty host ->
+  dzialajacy backup" zaczynal sie od recznego czytania `zfs list`. Teraz brak
+  `--source` daje **propozycje z inwentarza ZFS tego hosta** i **wypisuje kazdy
+  pominiety dataset wraz z powodem** (pula, cel backupu, `*/ROOT`, swap, dataset
+  z potomkami — plaskie zadanie skopiowaloby tylko rodzica — oraz dataset juz
+  objety zainstalowana polityka).
+
+  Propozycja to zgadywanie, wiec niesie te sama regule co zgadniety cel:
+  **`--yes` jej nie potwierdza**. Jawne `--source` nigdy nie jest podwazane
+  (EXPLICIT-SOURCE-BEATS-DISCOVERY) — propozycja jest czytana wylacznie wtedy,
+  gdy operator nie nazwal niczego.
+
+  Zmierzone na zywo (pve9, worktree, host przywrocony do stanu sprzed testu):
+  propozycja `hdd/k5src` + `hdd/osrc` z pominietym `hdd`; odmowa pod `--yes`
+  nazywajaca zrodla przy niezmienionym hashu crontaba; **wariant root** — EXIT=0,
+  seed z weryfikacja GUID, diff crontaba to dokladnie jeden dodany blok
+  zarzadzany; **wariant konta delegowanego `bckp`** — EXIT=0, blok w crontabie
+  konta, crontab roota bajt w bajt bez zmian, granty ZFS nadane na zrodle i celu.
+
+  **Dwa blockery tej samej sciezki, oba obecne na `main@aded373` (potwierdzone
+  kontrola na nietknietym buildzie), zgloszone i NIE naprawione tutaj:**
+  powtorzenie tego samego udanego polecenia konczy sie FATAL-em o nakladaniu
+  zamiast byc no-opem; oraz dodanie **drugiego** zrodla na tym samym hoscie jest
+  odrzucane, bo wlasna sekcja `[prune:<cel>]` z pierwszego uruchomienia liczy sie
+  jako nakladka. Obie maja jedna przyczyne: kontrola nakladania nie rozpoznaje
+  sekcji, ktore ten sam tool zainstalowal dla tego samego celu, choc markery
+  `# managed-by:` sa zapisywane.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
