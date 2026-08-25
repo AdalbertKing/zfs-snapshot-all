@@ -902,6 +902,11 @@ chmod +x "$WORK/bin3/zfs" "$WORK/bin3/zpool" "$WORK/bin3/crontab"
 # transfer, and a real engine here would reach for real ZFS.
 runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
     local inv="$1"; shift
+    # '-' means "the stub's default inventory". Spelled out because the stub
+    # uses ${INVENTORY:-default} and a literal '-' is NOT empty: the first cut
+    # passed it straight through, the stub answered with one dataset named '-',
+    # and eight assertions failed against perfectly good code.
+    [ "$inv" = "-" ] && inv=""
     ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
       INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
       SNAPSEND="$WORK/seedbin/snapsend-ok" cmd_local_backup "$@" ) 2>&1
