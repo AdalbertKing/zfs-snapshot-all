@@ -1881,9 +1881,16 @@ build_dataset() {
             # would emit a line carrying both -A and -Z -- a cron line that
             # announces a no-op on every run.
             #
-            # resolve_field returns 1 for ABSENT and prints "" for a present but
-            # blank field. The two are different mistakes and the lints say so,
-            # so the status is read here rather than collapsed with `|| x=""`.
+            # The lookup below returns 1 for an ABSENT field and prints "" for a
+            # present but blank one. Those are different mistakes and the lints
+            # say so, hence reading the status instead of collapsing both into
+            # `|| x=""`.
+            #
+            # (The helper is deliberately not named in this sentence: the
+            # allow-list test in test/run.sh scrapes "<helper> <word>" out of
+            # this file, so prose naming it turns the next word into a field
+            # that does not exist. The file says so a few hundred lines up, and
+            # CI caught me doing it anyway.)
             local link_bw="" link_comp="" link_ciph=""
             if link_bw="$(resolve_field bandwidth "$ds" "" "")"; then
                 lint_link_bandwidth "$link_bw" "$flags" "[dataset:$ds_path] tier=$tier"
