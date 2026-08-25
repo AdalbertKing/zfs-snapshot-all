@@ -1211,6 +1211,30 @@ profile_emit() {   # <rendered fragment>
     done < "$1"
 }
 
+# Does the loaded profile declare a retention LADDER at all?
+#
+# PROFILE_GFS answers a question about the INSTALLED CONFIG -- detect_profile_gfs
+# reads the file. On a FRESH config there is nothing to read, so it answers 1
+# ("ladder"), and a flat profile's first relationship then emitted a [prune:]
+# ladder section with nothing to put in it. Measured on pve9, 2026-08-25, on the
+# first prod relationship ever created:
+#
+#     gen-cron.sh: error: [prune:hdd/prodlab-k1/192.168.28.9] has no use_template
+#
+# `prod` could not create its FIRST relationship, let alone a second. The unit
+# tests missed it because they exercised ensure_cron_config (templates and the
+# frozen-shape refusal) rather than emit_client_sections (the sections).
+#
+# This asks the only question that cannot be wrong: the profile that is about to
+# be written -- does it carry a prune fragment? A profile whose tiers prune
+# themselves (prod) has none, and emitting an empty ladder for it is a defect by
+# construction, not a policy choice. Fail-closed on emptiness.
+profile_declares_ladder() {   # -> 0 when the loaded profile carries a [prune] fragment
+    [ -n "${PROFILE_LOADED:-}" ] || return 1
+    [ -s "${PROFILE_PRUNE_FILE:-}" ] || return 1
+    profile_emit "$PROFILE_PRUNE_FILE" | grep -q '[^[:space:]]'
+}
+
 # One rendered [template:NS] section, whole.
 profile_template_section() {   # <namespaced name>
     awk -v want="[template:$1]" '
@@ -1470,6 +1494,20 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     local workfile="$1" name="$2" marker="$3"; shift 3
     [ "$#" -gt 0 ] || return 0
     [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
+    # The source retention is built from PROFILE_PRUNE_FILE (see
+    # append_source_templates_if_missing just below), so a profile that carries
+    # no prune fragment has nothing to build it FROM. Emitting anyway produced
+    # a [prune:account@host:ds] section with no use_template -- gen-cron rejects
+    # it, which is how this was found, and had it not been rejected it would
+    # have been a retention job that prunes by no rule at all.
+    #
+    # Returning here BEFORE capture/remove is deliberate: nothing is captured
+    # and nothing is removed, so a preserved source prune is not destroyed by a
+    # profile that could not have written one.
+    if ! profile_declares_ladder; then
+        log "source retention NOT generated for '$name': profile '$PROFILE_ACTIVE' declares no prune fragment -- its tiers prune their own families on the TARGET, and it names no policy for the remote source. The source's own snapshots stay the source's business."
+        return 0
+    fi
     # Pure config text -- no SSH here. The fail-closed grant check
     # (assert_source_prune_grant) runs in the FLOW, before the workfile is
     # published, so the two callers gate the INSTALL and this stays unit-testable
@@ -1525,6 +1563,9 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local workfile="$1" name="$2"; shift 2
     [ "$#" -gt 0 ] || return 0
     [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
+    # Same reason as emit_remote_source_prune: no prune fragment, nothing to
+    # build a source retention FROM.
+    profile_declares_ladder || return 0
     local marker="# managed-by: zfs-backup.sh client=$name"
     append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
     local sflags; sflags="$(source_prune_sflags)"
@@ -2816,6 +2857,25 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
 
     if [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] || [ "$PLAN_PRUNE_NEEDS_GEN" -eq 1 ]; then
         PLAN_NEEDS_PROFILE=1
+    fi
+
+    # AFTER the needs-profile decision, never before -- the rule this function
+    # is built on is that "does this run need the profile" cannot be answered by
+    # something that has already loaded it. That rule is intact: the profile is
+    # consulted only once the answer is already yes, and only to correct a shape
+    # the CONFIG cannot know.
+    #
+    # PROFILE_GFS came from detect_profile_gfs reading the installed file. On a
+    # fresh config that file says nothing, so it defaults to "ladder" and a flat
+    # profile's ladder was planned, generated, and rejected by gen-cron for
+    # having no use_template (measured live on pve9). A profile that declares no
+    # prune fragment gets no ladder -- and no MANAGED_PRUNE_SCOPE recorded for
+    # one either, which is what remove-client later reads.
+    if [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && [ "$PLAN_PRUNE_NEEDS_GEN" -eq 1 ]; then
+        load_active_profile
+        if ! profile_declares_ladder; then
+            PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0
+        fi
     fi
     return 0
 }

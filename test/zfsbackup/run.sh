@@ -7074,6 +7074,73 @@ else
         "rc=$mp_rc ladder=$(mp_ladder) tpl=$(grep -cE '^\[template:profile__prod__' "$MP/dir/jobs.conf")"
 fi
 
+# LAST IN THIS GROUP ON PURPOSE: the two assertions below move the client
+# record's PROFILE, and 96f/96h read it. Placed earlier, they turned 96h into a
+# silent no-op that still reported rc=0 -- a test passing because it did
+# nothing.
+# --- A FLAT PROFILE ON A **FRESH** CONFIG EMITS NO LADDER.
+#
+# FOUND ON LIVE INFRASTRUCTURE, not here: pve9, 2026-08-25, the first `prod`
+# relationship ever created.
+#
+#     gen-cron.sh: error: [prune:hdd/prodlab-k1/192.168.28.9] has no use_template
+#
+# PROFILE_GFS is detect_profile_gfs' answer about the INSTALLED CONFIG. A fresh
+# config says nothing, so it defaults to "ladder", and a flat profile's ladder
+# was planned, emitted, and rejected for having no use_template -- `prod` could
+# not create its FIRST relationship. The assertions above missed it because they
+# exercise ensure_cron_config (templates, the frozen-shape refusal); the ladder
+# is emitted by emit_client_sections, one layer further in.
+#
+# The fix asks the only question that cannot be wrong: does the profile being
+# WRITTEN carry a prune fragment at all. `prod` does not -- its tiers prune
+# their own families -- so there is nothing to put in a ladder and emitting one
+# is a defect by construction.
+# The record's profile is the no-op test (96f), so it has to be set AWAY from
+# the destination or this assertion measures nothing. Last assignment wins.
+printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/fresh.conf"
+echo 'PROFILE=default' >> "$MP/clients/mpc.conf"
+mp_fresh_out="$( ( PATH="$MP/bin:$PATH"
+      atomic_replace_and_install() { cp -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
+      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
+      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
+      PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_migrate_profile --config="$MP/dir/fresh.conf" --yes --profile=prod ) 2>&1 )"
+mp_fresh_rc=$?
+if [ "$mp_fresh_rc" -eq 0 ] \
+   && [ "$(grep -c '^\[prune:' "$MP/dir/fresh.conf")" -eq 0 ] \
+   && bash "$REPO/gen-cron.sh" -c "$MP/dir/fresh.conf" >/dev/null 2>&1; then
+    ok "96m: a FLAT profile on a fresh config emits no ladder and the result renders"
+else
+    bad "96m: a FLAT profile on a fresh config emits no ladder and the result renders" \
+        "rc=$mp_fresh_rc prune_sections=$(grep -c '^\[prune:' "$MP/dir/fresh.conf")" \
+        "$(printf '%s' "$mp_fresh_out" | tail -2)"
+fi
+
+# CONTROL: the same fresh-config path with a LADDER profile must still produce
+# one. Without this, 96m would pass against a build that simply stopped emitting
+# [prune:] sections altogether.
+printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/freshg.conf"
+echo 'PROFILE=prod' >> "$MP/clients/mpc.conf"
+( PATH="$MP/bin:$PATH"
+  atomic_replace_and_install() { cp -f "$2" "$1"; }
+  assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+  assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+  assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
+  CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
+  SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
+  PROFILE_ACTIVE=default PROFILE_LOADED="" \
+  cmd_migrate_profile --config="$MP/dir/freshg.conf" --yes --profile=default ) >/dev/null 2>&1
+if [ "$(grep -c '^\[prune:' "$MP/dir/freshg.conf")" -ge 1 ]; then
+    ok "96n control: a LADDER profile on a fresh config still emits its ladder"
+else
+    bad "96n control: a LADDER profile on a fresh config still emits its ladder" \
+        "$(grep -cE '^\[' "$MP/dir/freshg.conf") sections, none of them prune"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
