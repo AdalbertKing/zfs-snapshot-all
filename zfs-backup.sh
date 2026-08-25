@@ -300,6 +300,10 @@ Usage:
                                     explicit two-sided form. Same resumability as above.
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
+                                    --bandwidth caps the LINK, not this one relationship: it is
+                                    written into the pairing with that host and applies to every
+                                    relationship over it. A different value on a peer that is
+                                    already capped is refused, not applied.
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
                                     --lan, --mode and --datasets remain expert options.
@@ -3305,7 +3309,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # from the record must take the field with it: a refresh that left a
         # stale 'bandwidth' behind would keep throttling a relationship the
         # operator had just uncapped, silently and for good.
-        set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${BANDWIDTH:-}" \
+        set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${LOAD_BANDWIDTH:-}" \
             || die "[dataset:$localpath] in $workfile could not be updated with the relationship's bandwidth setting -- refusing to leave the link cap out of step with the client record. Fix or remove that section by hand and re-run."
     done
 
@@ -3397,7 +3401,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # named field is the only form a layer above a hand edit can
             # speak about (it is profile-FORBIDDEN, which is a statement about
             # ownership -- the link belongs to this pair of hosts).
-            [ -n "${BANDWIDTH:-}" ] && echo "	bandwidth    = $BANDWIDTH"
+            [ -n "${LOAD_BANDWIDTH:-}" ] && echo "	bandwidth    = $LOAD_BANDWIDTH"
             # A solid scope root rides ENGINE recursion: snapget -R re-expands
             # the subtree on the source at every run, so a child created there
             # tomorrow joins at the next cron tick -- which is what the signed
@@ -4681,6 +4685,30 @@ local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or
 # comma-separated ([prune:a,b,c] -- metropolis pve2 has such sections), so each
 # member is evaluated independently. Treating the comma-joined string as one
 # path would miss an overlap with every member but the accidental prefix.
+# WHERE THE LINK CAP COMES FROM, in one place that can be read on its own.
+#
+# A cap describes the WIRE, and the wire belongs to the PAIR OF HOSTS. Kept on
+# the relationship record it had to be given twice for two relationships to the
+# same peer, by hand, with nothing keeping them in step and nothing noticing
+# when they drifted. It now lives in the pairing manifest, where one answer
+# serves every relationship that flies over that link.
+#
+# A record written before the move is still honoured -- when the manifest is
+# silent. No deployed relationship changes speed because of the move, and the
+# operator is told once, with the exact command, where the value now belongs.
+# The note goes to stderr because this function is read through a command
+# substitution: on stdout it would BE the rate.
+resolve_link_bandwidth() {   # <manifest value> <record value> <client> <peer> -> rate
+    local from_pair="$1" from_record="$2" client="$3" peer="$4"
+    if [ -n "$from_pair" ]; then printf '%s' "$from_pair"; return 0; fi
+    if [ -n "$from_record" ]; then
+        log "limit pasma '$from_record' pochodzi z rekordu relacji '$client' (zapis sprzed przeniesienia). Lacze nalezy do PARY hostow, wiec docelowe miejsce to manifest parowania -- ustaw je raz przez 'deploy.sh --pair --peer=$peer --bandwidth=$from_record', a bedzie obowiazywac kazda relacje z tym peerem." >&2
+        printf '%s' "$from_record"
+        return 0
+    fi
+    printf ''
+}
+
 config_section_overlap() {   # <file> <recursive-request or ""> <requested path>...
     local file="$1" rec_req="${2:-}"; shift 2
     [ -f "$file" ] || return 0
@@ -5756,6 +5784,10 @@ cmd_add_client() {
     fi
     [ -n "$target" ] && pair_args+=(--target="$target")
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
+    # The cap travels to the PAIRING, because the link does. Passed through
+    # rather than stored here, so there is one home for it and not two that can
+    # disagree.
+    [ -n "$bandwidth" ] && pair_args+=(--bandwidth="$bandwidth")
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
@@ -5778,6 +5810,16 @@ cmd_add_client() {
         [ -z "$_mf_user" ] && _mf_user=root
         if [ "$_want_user" != "$_mf_user" ]; then
             die "add-client: this host's pairing with '$lan_host' is delegated to account '$_mf_user', and this relationship asked for '--local-user=$_want_user'. The pairing identity (key, pinned host key, manifest) is per source host, so a second account cannot ride it -- the previous behavior silently ran the new relationship as '$_mf_user' instead. Either use --local-user=$_mf_user, or unpair the host first if the delegation itself should change. Nothing was changed."
+        fi
+        # The cap is now per PAIR, which cuts both ways: a second relationship
+        # asking for a different one is not asking about itself, it is asking to
+        # re-cap every relationship that already flies over this link. That is a
+        # deliberate act, not a side effect of enrolling something new -- so it
+        # is refused here and named, rather than applied quietly in either
+        # direction.
+        local _mf_bw; _mf_bw=$( . "$_mf_user_path" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_BANDWIDTH:-}" )
+        if [ -n "$bandwidth" ] && [ "$bandwidth" != "$_mf_bw" ]; then
+            die "add-client: this host's link to '$lan_host' is already capped at '${_mf_bw:-<bez limitu>}' by the pairing, and this relationship asked for '--bandwidth=$bandwidth'. The cap belongs to the PAIR of hosts -- changing it here would silently re-cap every relationship that already uses this link. Either drop --bandwidth to accept the pairing's limit, or change it deliberately for the whole link with 'deploy.sh --pair --peer=$lan_host --bandwidth=$bandwidth'. Nothing was changed."
         fi
     fi
     [ -n "$local_user" ] && [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
@@ -5824,7 +5866,10 @@ cmd_add_client() {
         # REV-20260802-033 U9: the literal address IS the endpoint now, no
         # named-slot indirection -- see active_endpoint_host_port.
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
-        write_client_field BANDWIDTH         "$bandwidth"
+        # BANDWIDTH is deliberately NOT written here any more: the cap lives in
+        # the pairing manifest (see load_client_and_connection). Writing a copy
+        # would recreate the two-homes problem this move exists to end -- and
+        # the stale copy would be the one an operator edits.
         write_client_field PROFILE           "$profile"
         # What THIS relationship asked for. The committed scope on the source
         # is per-COLLECTOR and grows with every relationship this host
@@ -6465,7 +6510,10 @@ load_client_and_connection() {
     # quietly slowed, in the direction nobody notices, because a transfer that
     # is slower than it should be still succeeds.
     CLIENT_TARGET=""
+    # The cap now has a SECOND source -- the pairing manifest -- and it is
+    # cleared for the identical reason spelled out above, not a new one.
     BANDWIDTH=""
+    PEER_SAVED_BANDWIDTH=""
     # shellcheck disable=SC1090
     . "$cpath"
     local label; label=$(peer_label "$PEER_HOST")
@@ -6524,8 +6572,22 @@ load_client_and_connection() {
     # Direct engine invocations (seed, the dry-run probes) build a COMMAND LINE
     # rather than a config and therefore still append the flag; they say so at
     # each call site by using $LOAD_BW_FLAG.
+    #
+    # WHERE THE CAP LIVES: the PAIRING MANIFEST, not the relationship record.
+    #
+    # A cap describes the WIRE, and the wire belongs to the pair of hosts. Two
+    # relationships to the same peer over the same link had to be given the same
+    # limit twice, by hand, with nothing keeping them in step -- and nothing
+    # noticing when they drifted. The manifest is per-host, so one answer serves
+    # every relationship that flies over it, which is what "same link" means.
+    #
+    # A record written before the move still wins nothing and loses nothing: it
+    # is honoured when the manifest is silent, so no deployed relationship
+    # changes speed because of this commit, and the operator is told once where
+    # the value now belongs.
+    LOAD_BANDWIDTH="$(resolve_link_bandwidth "${PEER_SAVED_BANDWIDTH:-}" "${BANDWIDTH:-}" "$CLIENT_NAME" "$PEER_HOST")"
     LOAD_BW_FLAG=""
-    [ -n "${BANDWIDTH:-}" ] && LOAD_BW_FLAG=" -b $BANDWIDTH"
+    [ -n "$LOAD_BANDWIDTH" ] && LOAD_BW_FLAG=" -b $LOAD_BANDWIDTH"
 
     # Slice 6: a no-op for a legacy (--peer-datasets) client -- PEER_SAVED_DATASETS
     # is already non-empty from the manifest sourced above. Only a mode-based
@@ -7071,7 +7133,7 @@ probe_snapget_endpoint() {   # <host> <port>
     }
     local pflags="-K $LOAD_KEYFILE -k $pkh -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
     [ "$pport" != "22" ] && pflags="$pflags -p $pport"
-    [ -n "${BANDWIDTH:-}" ] && pflags="$pflags -b $BANDWIDTH"
+    [ -n "${LOAD_BANDWIDTH:-}" ] && pflags="$pflags -b $LOAD_BANDWIDTH"
 
     local base; base=$(snapget_local_base)
     local ds out plan errtmp failed=0 unknown=0 needs_full=0

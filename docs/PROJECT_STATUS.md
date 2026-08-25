@@ -1569,6 +1569,42 @@
   host nadal milczy" — przechodzi po obu stronach, wiec suita mierzy dokladnie
   te zmiane, a nie „skrypt zaczal alarmowac zawsze".
 
+- **ETAP PROFILI, krok 2: pasmo przeniesione do MANIFESTU PAROWANIA (2026-08-25).**
+
+  Decyzja wlasciciela. Limit opisuje **drut**, a drut nalezy do **pary hostow**
+  — nie do relacji. Na rekordzie relacji dwie relacje do tego samego peera przez
+  to samo lacze trzeba bylo ograniczyc **dwa razy, recznie**, i nic nie
+  pilnowalo, zeby sie nie rozjechaly. Teraz mieszka w
+  `PEER_SAVED_BANDWIDTH` w manifescie parowania, gdzie jedna odpowiedz obsluguje
+  kazda relacje lecaca po tym laczu.
+
+  `deploy.sh --pair --bandwidth=RATE` zapisuje wartosc (walidacja przepisana
+  z silnika: `^[0-9]+[bkKmMgG]?$`, BAJTY na sekunde). `add-client --bandwidth=`
+  **przekazuje** ja do parowania zamiast trzymac wlasna kopie.
+
+  **Zmiana limitu pary nie jest efektem ubocznym zapisywania nowej relacji.**
+  Druga relacja proszaca o inny limit nie pyta o siebie — prosi o przecechowanie
+  wszystkiego, co juz po tym laczu lata. Dlatego jest to **odmowa** nazywajaca
+  obie wartosci, a nie ciche zastosowanie w ktoraktolwiek strone. Trzy kontrole
+  pilnuja, ze to nie zamienilo sie w „odrzucaj `--bandwidth` zawsze": pominiety
+  limit przyjmuje limit pary, ten sam limit nie jest konfliktem, a peer bez
+  parowania przyjmuje limit bez sporu.
+
+  **Zgodnosc:** rekord napisany przed przeniesieniem jest nadal honorowany, gdy
+  manifest milczy — **zadna wdrozona relacja nie zmienia predkosci przez ten
+  commit** — a operator dostaje raz komunikat z gotowa komenda, gdzie ta wartosc
+  teraz nalezy. `add-client` **przestal** pisac druga kopie do rekordu: to ta
+  kopia poszlaby w rozsyp i to ja operator by edytowal.
+
+  Obie zrodla sa **czyszczone przed** zrodlowaniem plikow, bo jeden proces
+  laduje wiele rekordow (monitory, audyty), a wartosc po poprzednim ograniczylaby
+  relacje, ktora o nic nie prosila — w kierunku, ktorego nikt nie zauwazy, bo
+  transfer wolniejszy niz powinien nadal sie udaje.
+
+  `test/linkfields`: **45/0** (+10). Kontrola negatywna wobec `main`: **szesc
+  asercji o pasmie pada**, a trzy kontrole „nie wolno odmowic" przechodza po obu
+  stronach.
+
 - **ETAP PROFILI, krok 1: `flags` rozbite wzdluz osi LACZA (2026-08-25).**
 
   `bandwidth`, `compression` i `cipher` opisuja **drut**, po ktorym leci
