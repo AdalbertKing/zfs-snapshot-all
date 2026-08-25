@@ -1158,13 +1158,22 @@ profile_to_src_id() {   # <template identity>
 # the rendered templates -- never a silent fall-back to the TARGET's authority
 # (REV-106 required property 4). Runs the loop in the current shell (process
 # substitution, not a pipe) so `die` aborts the whole run.
-emit_source_template_family() {   # <rendered prune fragment>
+# <existing config> is optional and is what makes a SECOND local-backup on the
+# same host possible: the source family is emitted once and stays, so a later
+# run adding another source must skip the templates that are already there.
+# Without this the candidate carried two [template:...src_keep_hourly] sections
+# and gen-cron refused the whole thing -- measured on a host whose config still
+# had the family from an earlier run.
+emit_source_template_family() {   # <rendered prune fragment> [existing config]
     local id src section
     while IFS= read -r id; do
         [ -n "$id" ] || continue
+        src="$(profile_to_src_id "$id")"
+        if [ -n "${2:-}" ] && [ -f "$2" ] && grep -qxF "[template:$src]" "$2"; then
+            continue
+        fi
         section="$(profile_template_section "$id")"
         [ -n "$section" ] || die "local-backup source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE retention that would silently reuse the TARGET's template authority (REV-20260811-106)"
-        src="$(profile_to_src_id "$id")"
         printf '[template:%s]\n' "$src"
         printf '%s\n' "$section" | tail -n +2
         echo
@@ -3728,6 +3737,33 @@ local_backup_same_pool() { [ "${1%%/*}" = "${2%%/*}" ]; }
 # [dataset:]/[prune:] section in FILE whose scope overlaps a requested PATH.
 # path_overlaps is the same containment test the pull coverage guard uses. Empty
 # output means the requested job is disjoint from every job already in the file.
+# The ownership marker a local-backup section carries, or "" for a section this
+# tool did not write.
+#
+# Every section local-backup emits opens with
+#   # managed-by: zfs-backup.sh local-backup <kind>=<value>
+# and that line is the ONLY thing that distinguishes our own installed policy
+# from a stranger's. Two blockers of the KROK 5 path were the same omission:
+# nothing read the marker back, so the tool's own `[prune:<target>]` from the
+# first run looked exactly like foreign coverage -- which made a second source
+# unaddable, and made rerunning the identical successful command a FATAL
+# instead of a no-op.
+#
+# Read, never inferred from the header: a hand-written `[prune:hdd/backups]`
+# with the same name is NOT ours and must keep refusing.
+local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or ""
+    [ -f "$1" ] || return 0
+    awk -v want="$2" '
+        $0 == want { inside=1; next }
+        inside && /^\[/ { exit }
+        inside && index($0, "# managed-by: zfs-backup.sh local-backup ") {
+            sub(/^.*# managed-by: zfs-backup\.sh local-backup /, "")
+            sub(/[ \t]+$/, "")
+            print; exit
+        }
+    ' "$1" 2>/dev/null
+}
+
 config_section_overlap() {   # <file> <path>...
     local file="$1"; shift
     [ -f "$file" ] || return 0
@@ -3982,14 +4018,75 @@ cmd_local_backup() {
     fi
     ensure_cron_config "$cand" 1 1
 
-    # Refuse when any root OR the target overlaps a section already installed --
-    # "add B, do not mutate A" (Gate 2). Nothing is written on refusal.
-    local conflict; conflict="$(config_section_overlap "$cand" ${roots[@]+"${roots[@]}"} "$target")"
+    # WHOSE coverage is already there -- the question the overlap check never
+    # asked, and the reason two KROK 5 blockers looked like one refusal.
+    #
+    # A requested root falls into exactly one of three buckets:
+    #
+    #   ours      an installed [dataset:<root>] this tool wrote, sending to THIS
+    #             same target. Nothing to do for it -- and nothing to refuse
+    #             either, which is what makes an identical rerun a no-op;
+    #   new       no section at all. This is the one to compose and install;
+    #   disputed  a section exists but it is NOT ours, or it is ours and points
+    #             at a DIFFERENT target. Fail-closed, unchanged: it goes into
+    #             the overlap scan below and produces the same refusal it always
+    #             did. A stranger's policy is not ours to extend, and "same
+    #             source, other target" is a different request, not a rerun.
+    local -a new_roots=() have_roots=() scan=()
+    local _mk _dst
+    for r in "${roots[@]}"; do
+        if ! grep -qxF "[dataset:$r]" "$cand"; then
+            new_roots+=("$r"); scan+=("$r"); continue
+        fi
+        _mk="$(local_backup_section_marker "$cand" "[dataset:$r]")"
+        _dst="$(installed_dataset_field "$cand" "$r" dst)"
+        if [ "$_mk" = "source=$r" ] && [ "$_dst" = "$target" ]; then
+            have_roots+=("$r")
+        else
+            scan+=("$r")
+        fi
+    done
+
+    # Refuse when a DISPUTED root, or the target, overlaps a section already
+    # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
+    # refusal.
+    local conflict; conflict="$(config_section_overlap "$cand" ${scan[@]+"${scan[@]}"} "$target")"
+    # ...except this tool's own target retention for this very target. It is the
+    # same store, written by this same command, and treating it as foreign is
+    # exactly what made a second source impossible to add.
+    local _tmk; _tmk="$(local_backup_section_marker "$cand" "[prune:$target]")"
+    if [ "$_tmk" = "target=$target" ] && [ -n "$conflict" ]; then
+        conflict="$(printf '%s' "$conflict" | grep -vF "  [prune:$target] ")"
+        [ -z "${conflict//[[:space:]]/}" ] && conflict=""
+    fi
     if [ -n "$conflict" ]; then
         rm -f "$cand"
         die "local-backup: a job for these sources / target '$target' would overlap coverage already in $config:$conflict
 Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
     fi
+
+    # IDEMPOTENT RERUN. Every requested root is already installed against this
+    # target, so the durable state the operator asked for exists: say so and
+    # stop. Not a re-render and not a re-seed -- re-seeding would take a fresh
+    # snapshot and reinstall cron for a relationship that is already running,
+    # which is a change disguised as a repetition. Same contract the four-command
+    # remote path was given in KROK 3: a completed step repeats as a clean no-op.
+    if [ "${#new_roots[@]}" -eq 0 ]; then
+        rm -f "$cand"
+        log "local-backup: zrodla ${roots[*]} sa juz zainstalowane w $config dla celu '$target' -- nic do zrobienia."
+        echo
+        echo "Backup lokalny JUZ AKTYWNY (bez zmian)."
+        echo "  Zrodla:  ${roots[*]}"
+        echo "  Cel:     $target"
+        echo "  Config:  $config"
+        return 0
+    fi
+
+    # From here on only the NEW roots are composed. An already-installed root
+    # must not be emitted a second time: gen-cron refuses a duplicate section,
+    # and re-emitting would also silently overwrite an operator's edits to the
+    # policy that root is running under.
+    roots=("${new_roots[@]}")
 
     # One independent [dataset:] per root (each sending to the target; dst=<target>
     # with no ':' is snapsend.sh's local-to-local branch). Then TWO independent
@@ -4020,7 +4117,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # retain only the target. REV-20260811-106 F1: the family is derived from
             # the templates the profile's prune fragment ACTUALLY references, not
             # from a `keep_*` naming convention, and fails closed if one is missing.
-            emit_source_template_family "$PROFILE_PRUNE_FILE"
+            emit_source_template_family "$PROFILE_PRUNE_FILE" "$cand"
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
@@ -4034,12 +4131,18 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
                 echo "	notify       = local-src-$(basename "$r")"
             done
-            echo
-            echo "[prune:$target]"
-            echo "	# managed-by: zfs-backup.sh local-backup target=$target"
-            profile_emit "$PROFILE_PRUNE_FILE"
-            echo "	recursive    = yes"
-            echo "	notify       = local-$(basename "$target")"
+            # Once per target, not once per run: a second source landing in the
+            # same store is covered by the retention that is already there, and
+            # emitting it again would be a duplicate section gen-cron refuses --
+            # while also discarding whatever the operator had edited into it.
+            if ! grep -qxF "[prune:$target]" "$cand"; then
+                echo
+                echo "[prune:$target]"
+                echo "	# managed-by: zfs-backup.sh local-backup target=$target"
+                profile_emit "$PROFILE_PRUNE_FILE"
+                echo "	recursive    = yes"
+                echo "	notify       = local-$(basename "$target")"
+            fi
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
 
@@ -4236,6 +4339,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     echo
     echo "Backup lokalny AKTYWNY."
     echo "  Zrodla:  ${roots[*]}"
+    # Named separately rather than folded into the line above: this run neither
+    # seeded nor re-rendered them, and reporting them as though it had would be
+    # the report claiming work it did not do.
+    [ "${#have_roots[@]}" -gt 0 ] && echo "  Juz bylo: ${have_roots[*]} (bez zmian -- ani seeda, ani nowej sekcji)"
     echo "  Cel:     $target"
     echo "  Config:  $config"
     echo "  Seed:    OK (${#roots[@]} zrodlo/zrodel wyslane)"

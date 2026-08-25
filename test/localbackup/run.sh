@@ -1023,6 +1023,81 @@ printf '%s' "$out6" | grep -q 'cannot confirm a source set this run PROPOSED' \
            "the proposal gate fired on an explicit --source" \
     || ok "krok5 control: a NAMED source set is still allowed to install under --yes"
 
+# ==============================================================================
+# KROK 5 -- the two blockers this path was measured to have, and the two
+# refusals that must survive fixing them.
+#
+# Both blockers were the same omission: every section local-backup writes opens
+# with a "# managed-by: zfs-backup.sh local-backup <kind>=<value>" marker, and
+# nothing read it back. So the tool's own [prune:<target>] from the first run
+# looked exactly like a stranger's coverage -- which made a second source
+# unaddable, and made repeating the identical successful command a FATAL
+# instead of a no-op.
+#
+# The refusals are the other half and are asserted here too: reading our own
+# marker must not turn into trusting any section that happens to sit at the
+# same path.
+# ==============================================================================
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+
+# ---- first install, so there is something to repeat and to extend ----------
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"
+{ printf '%s' "$out" | grep -q 'Backup lokalny AKTYWNY' && grep -qxF '[dataset:rpool/data]' "$CFG"; } \
+    && ok "krok5/blocker: the first install lands (precondition)" \
+    || bad "krok5/blocker: the first install lands (precondition)" "$(printf '%s' "$out"|tail -4)"
+
+# ---- BLOCKER 1: the identical command repeats as a clean no-op -------------
+seeds_before="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+writes_before="$(wc -l < "$WORK/crontab-writes" 2>/dev/null || echo 0)"
+cfg_before="$(md5sum < "$CFG")"
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+writes_after="$(wc -l < "$WORK/crontab-writes" 2>/dev/null || echo 0)"
+cfg_after="$(md5sum < "$CFG")"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'JUZ AKTYWNY'; } \
+    && ok "krok5/blocker1: the identical successful command repeats with rc=0, not a FATAL overlap" \
+    || bad "krok5/blocker1: the identical successful command repeats with rc=0" "rc=$rc $(printf '%s' "$out"|tail -3)"
+# A no-op that re-seeds or rewrites cron is not a no-op: it takes a fresh
+# snapshot and reinstalls a running relationship's jobs.
+{ [ "$seeds_after" = "$seeds_before" ] && [ "$writes_after" = "$writes_before" ] && [ "$cfg_after" = "$cfg_before" ]; } \
+    && ok "krok5/blocker1: the no-op seeds nothing, writes no crontab and leaves the config byte-identical" \
+    || bad "krok5/blocker1: the no-op changes nothing" \
+           "seeds $seeds_before->$seeds_after writes $writes_before->$writes_after cfg $([ "$cfg_after" = "$cfg_before" ] && echo same || echo CHANGED)"
+
+# ---- BLOCKER 2: a second source may join the same tool-managed target ------
+out="$(runi snapsend-ok "" --source=rpool/other --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/data]' "$CFG" && grep -qxF '[dataset:rpool/other]' "$CFG"; } \
+    && ok "krok5/blocker2: a second source joins the same managed target, the first one surviving" \
+    || bad "krok5/blocker2: a second source joins the same managed target" "rc=$rc $(printf '%s' "$out"|tail -4)"
+# The target's retention is emitted once per TARGET, not once per run: a second
+# copy is a duplicate section gen-cron refuses, and it would discard whatever
+# the operator had edited into the first.
+{ [ "$(grep -cxF '[prune:hdd/backups]' "$CFG")" -eq 1 ] \
+  && [ "$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")" -eq 1 ]; } \
+    && ok "krok5/blocker2: the target prune and the source template family stay single" \
+    || bad "krok5/blocker2: the target prune and the source template family stay single" \
+           "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")"
+# The already-installed source must not be seeded again by the run that adds
+# another one.
+printf '%s' "$out" | grep -q 'rpool/data' \
+    && printf '%s' "$out" | grep -q 'Juz bylo' \
+    && ok "krok5/blocker2: the run names the source it left alone instead of claiming it seeded it" \
+    || bad "krok5/blocker2: the run names the source it left alone" "$(printf '%s' "$out"|tail -5)"
+
+# ---- the refusals that must SURVIVE reading our own marker -----------------
+# FOREIGN coverage at the same path is not ours, whatever it is called.
+printf '\n[dataset:rpool/db]\n\tuse_template = whatever\n\tdst          = hdd/backups\n' >> "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/db --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'overlap'; } \
+    && ok "krok5/refusal: an unmarked (foreign) section at the same path still refuses" \
+    || bad "krok5/refusal: an unmarked (foreign) section at the same path still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+
+# OURS, but pointing at a DIFFERENT target: a different request, not a rerun.
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/dokumenty --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'overlap'; } \
+    && ok "krok5/refusal: our own section with a different target still refuses (not a no-op)" \
+    || bad "krok5/refusal: our own section with a different target still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

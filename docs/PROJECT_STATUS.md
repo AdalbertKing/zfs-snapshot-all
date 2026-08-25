@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 460efff330173c4b -->
+<!-- status-covers-digest: d293a4dcb9f7a219 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1426,14 +1426,27 @@
   zarzadzany; **wariant konta delegowanego `bckp`** — EXIT=0, blok w crontabie
   konta, crontab roota bajt w bajt bez zmian, granty ZFS nadane na zrodle i celu.
 
-  **Dwa blockery tej samej sciezki, oba obecne na `main@aded373` (potwierdzone
-  kontrola na nietknietym buildzie), zgloszone i NIE naprawione tutaj:**
-  powtorzenie tego samego udanego polecenia konczy sie FATAL-em o nakladaniu
-  zamiast byc no-opem; oraz dodanie **drugiego** zrodla na tym samym hoscie jest
-  odrzucane, bo wlasna sekcja `[prune:<cel>]` z pierwszego uruchomienia liczy sie
-  jako nakladka. Obie maja jedna przyczyne: kontrola nakladania nie rozpoznaje
-  sekcji, ktore ten sam tool zainstalowal dla tego samego celu, choc markery
-  `# managed-by:` sa zapisywane.
+  **Dwa blockery tej samej sciezki — zmierzone na `main@aded373` (kontrola na
+  nietknietym buildzie), NAPRAWIONE tutaj po przejsciu recenzenta w tryb
+  doradczy:** powtorzenie tego samego udanego polecenia konczylo sie FATAL-em
+  o nakladaniu zamiast byc no-opem; a dodanie **drugiego** zrodla do tego samego
+  celu bylo odrzucane, bo wlasna sekcja `[prune:<cel>]` z pierwszego
+  uruchomienia liczyla sie jako cudza nakladka.
+
+  Jedna przyczyna: kazda sekcja pisana przez `local-backup` otwiera sie markerem
+  `# managed-by: zfs-backup.sh local-backup <rodzaj>=<wartosc>`, **i nikt go nie
+  odczytywal**. Teraz zadane zrodlo trafia do jednego z trzech kubelkow — NASZE
+  (marker nasz i `dst` rowny zadanemu celowi; nic do zrobienia), NOWE (brak
+  sekcji; to jedyne, ktore sie komponuje) albo SPORNE (sekcja cudza albo nasza,
+  ale wskazujaca inny cel; fail-closed, ta sama odmowa co zawsze). Gdy nie ma
+  zadnego nowego zrodla, przebieg jest **no-opem**: bez seeda, bez zapisu crona,
+  config bajt w bajt ten sam. Retencja celu i rodzina szablonow zrodlowych sa
+  emitowane **raz na cel**, nie raz na przebieg.
+
+  Dyskryminatory pinuja obie polowy: no-op nic nie sieje i nic nie zapisuje;
+  drugie zrodlo dolacza, a pierwsze przezywa; cudza sekcja pod ta sama sciezka
+  **nadal odmawia**; nasza sekcja wskazujaca inny cel **nadal odmawia** (to inne
+  zadanie, nie powtorzenie).
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
