@@ -934,6 +934,95 @@ x_old_ran=$(grep -c 'engine ran' "$X_OLDLOG" 2>/dev/null); x_old_ran="${x_old_ra
 check "X7 control: the old shape IS mute under the same failure" \
       "engine=0" "engine=$x_old_ran"
 
+# ===========================================================================
+# Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
+#
+# Inline prune entities are grouped so that datasets sharing a schedule, a
+# family, a retention and a scope become ONE delsnaps.sh call. The render then
+# takes the notify label from members[0] and drops the rest.
+#
+# Measured on pve9, 2026-08-25, two prod relationships on one collector: four
+# merged prune lines, every one announcing itself as "(p1-at)" -- including the
+# ones sweeping p2's dataset. A failure pruning p2 would have sent an operator
+# to look at p1. The file already carries this exact argument for `recursive`
+# ("merging ... would silently give one of them the wrong scope"); notify was
+# the field it forgot.
+#
+# The config below is the shape that produced it: two relationships, same tier,
+# same retention, different notify.
+YD="$TMPD/mergelabel"; mkdir -p "$YD"
+cat > "$YD/jobs.conf" <<'YCONF'
+[defaults]
+	host_label = ytest
+
+[template:hourly]
+	send_schedule  = 37 * * * *
+	prefix         = automated_hourly_
+	notify_word    = snapshot
+	prune_schedule = 51 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:tank/a/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+
+[dataset:tank/b/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.2:tank/src
+	recursive    = flat
+	pair_label   = r2
+	notify       = r2-at
+YCONF
+
+y_render()  { bash "$1" -c "$YD/jobs.conf" 2>/dev/null; }
+y_count()   { printf '%s\n' "$1" | grep -c "delsnaps.sh"; }
+y_wrong()   { printf '%s\n' "$1" | grep "delsnaps.sh" | grep -c 'tank/b/tank/src[^|]*(r1-at)'; }
+y_merged()  { printf '%s\n' "$1" | grep "delsnaps.sh" | grep -c 'tank/a/tank/src,tank/b/tank/src'; }
+
+y_new="$(y_render "$GEN")"
+check "Y1: two relationships get two prune lines, not one shared one" \
+      "lines=2 merged=0" "lines=$(y_count "$y_new") merged=$(y_merged "$y_new")"
+
+check "Y2: no prune line sweeps one relationship's dataset under another's name" \
+      "wrong=0" "wrong=$(y_wrong "$y_new")"
+
+# CONTROL: the datasets of ONE relationship must still merge. Without this, Y1
+# would pass against a build that stopped grouping altogether -- which would
+# turn every collector's prune section into one line per dataset.
+cat > "$YD/same.conf" <<'YCONF'
+[defaults]
+	host_label = ytest
+
+[template:hourly]
+	send_schedule  = 37 * * * *
+	prefix         = automated_hourly_
+	notify_word    = snapshot
+	prune_schedule = 51 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:tank/a/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+
+[dataset:tank/a/tank/src2]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src2
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+YCONF
+y_same="$(bash "$GEN" -c "$YD/same.conf" 2>/dev/null)"
+check "Y3 control: datasets of the SAME relationship still merge into one call" \
+      "lines=1" "lines=$(printf '%s\n' "$y_same" | grep -c delsnaps.sh)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

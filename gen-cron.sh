@@ -2323,7 +2323,23 @@ group_inline_prune() {
         # with a non-recursive one would silently give one of them the wrong
         # scope, either leaving descendants unpruned or pruning descendants
         # nobody asked about.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}"
+        #
+        # 'notify' is in the key for exactly the same reason, one field later.
+        # The render below takes its label from members[0] and drops the rest,
+        # so a group spanning two relationships was swept correctly and
+        # REPORTED under one name. Measured on pve9, 2026-08-25: two prod
+        # relationships, four merged prune lines, every one of them announcing
+        # itself as "(p1-at)" -- a failure pruning p2's dataset would have sent
+        # an operator to look at p1. The estate has paid for misattributed
+        # alerts before (never blame the data for a link failure), and a
+        # retention job that names the wrong relationship is the same defect
+        # wearing the retention hat.
+        #
+        # MERGE ONLY WHAT CAN BE REPORTED AS ONE THING. The cost is one prune
+        # line per relationship per tier instead of one per tier -- which is
+        # what the SEND side already emits, so the two sides now match rather
+        # than one of them quietly folding relationships together.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
