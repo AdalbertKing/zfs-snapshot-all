@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6f041fbcc55ee88e -->
+<!-- status-covers-digest: 79f4fc13df884859 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1513,6 +1513,45 @@
   drugie zrodlo dolacza, a pierwsze przezywa; cudza sekcja pod ta sama sciezka
   **nadal odmawia**; nasza sekcja wskazujaca inny cel **nadal odmawia** (to inne
   zadanie, nie powtorzenie).
+
+- **Sonda pul: awaria przestala byc cisza (2026-08-25, `check-pool-capacity.sh` v6).**
+
+  Advisory recenzenta do PR #131, dwukrotnie ponawiane. Generowany skrypt
+  zdrowia mial dwie sciezki fail-open: `for pool in $(zpool list -H -o name)`
+  wykonuje cialo petli **zero razy**, gdy enumeracja padnie, a
+  `health=$(zpool list -H -o health ...)` z testem `[ -n "$health" ]` milczy,
+  gdy odczyt jednej puli sie nie powiedzie. W obu wypadkach „nie udalo mi sie
+  sprawdzic" docieralo do operatora jako „sprawdzilem i jest dobrze" — czyli
+  dokladnie ta klasa wady, dla ktorej ten plik powstal (rpool na pve1 stal
+  DEGRADED tygodniami, bo zdrowia nie sprawdzal nikt; sonda, ktora nie umie
+  krzyknac, tez go nie sprawdza).
+
+  Teraz enumeracja jest **jedna** i jej wynik ma trzy rozne odpowiedzi:
+  `rc != 0` -> finding „sonda pul PADLA" i **zadna** z petli sie nie wykonuje;
+  `rc == 0` z pusta lista -> osobny finding „ZERO pul" (na hoscie z tym
+  pakietem to nie cisza, tylko brak zaimportowanej pamieci); w przeciwnym razie
+  praca idzie dalej. Nieodczytany `health` i nieodczytana `capacity` sa
+  findingami per pula — ta druga wczesniej dawala blad powloki na stderr i
+  **zaden** alert.
+
+  `CAPACITY_SCRIPT_MARKER` podbity `v4` -> `v6`, bo deploy podmienia ten skrypt
+  tylko wtedy, gdy marker sie nie zgadza: bez podbicia poprawka nie dotarlaby na
+  zadnego hosta z flotą, ktora juz ma v4 (ta sama pulapka co REV-088 —
+  sprawdzenie po nazwie serwuje stara tresc w nieskonczonosc).
+
+  **Druga runda (v6): sonda, ktora sie powiodla, to inne pytanie niz wyjscie,
+  ktore wyglada dobrze.** Finding recenzenta: `health=$(zpool list ...)` uznawal
+  `ONLINE` za sukces takze wtedy, gdy komenda wypisala `ONLINE` i **padla**,
+  a `cap=$(zpool list ... | tr -d '%')` gubil kod `zpool` na rzecz kodu `tr`.
+  Teraz rc jest przechwytywany z samej sondy i sprawdzany **przed** trescia,
+  a `%` obcina rozwiniecie parametru zamiast potoku. Pusta odpowiedz przy
+  `rc=0` i padnieta sonda to dwa **rozne** komunikaty — operator wie, ktora
+  cisza go spotkala.
+
+  `test/alertmail`: **34/0**, +7 asercji. Kontrola negatywna wobec builda sprzed
+  poprawki: **szesc padа**, a siodma — „gdy wszystkie sondy odpowiadaja, zdrowy
+  host nadal milczy" — przechodzi po obu stronach, wiec suita mierzy dokladnie
+  te zmiane, a nie „skrypt zaczal alarmowac zawsze".
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
