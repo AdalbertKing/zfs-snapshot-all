@@ -855,11 +855,20 @@ gencron_callers=$(awk '
     /^[a-z_][a-z0-9_]*\(\) \{/ { fn = $1; sub(/\(\).*/, "", fn) }
     /bash "\$GENCRON"/          { print fn }
 ' "$ZB" | sort -u)
+# load_active_profile joined the list on 2026-08-25, and the distinction that
+# lets it in is worth stating: this rule exists because a PREVIEW rendered by
+# the wrong copy is a preview of a block that will never be installed --
+# gen-cron bakes the running copy's paths into every line. load_active_profile
+# does not render anything. It asks for a TABLE (--dump-tier-letters) so that
+# `keep = 24` in a profile can become `retain = -H24` without this tree keeping
+# a second copy of what -W means. Same class as lib-profile.sh asking for
+# --dump-fields, and the same reason: one schema authority.
 gencron_allowed="gencron_as_target
 cmd_activate_client
 cmd_audit_source_retention
 cmd_migrate_profile
-cmd_remove_client"
+cmd_remove_client
+load_active_profile"
 gencron_unexpected=$(comm -23 <(printf '%s
 ' "$gencron_callers") <(printf '%s
 ' "$gencron_allowed" | sort))

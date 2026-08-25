@@ -508,23 +508,71 @@ printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n
 chmod +x "$FLOOR/bin/crontab"
 sed 's/^\tkeep = 2$/\tkeep = 9/' "$ROOT/profiles/default/profile.conf" > "$FLOOR/p/nine/profile.conf"
 
-floor_run() {   # <config file> -> "rc|<message>"
+floor_run() {   # <config file> [profile] -> "rc|<phrase hits>"
     local out rc
-    out=$( ( PATH="$FLOOR/bin:$PATH"; PROFILE_ROOT="$FLOOR/p"; PROFILE_ACTIVE=nine; PROFILE_LOADED=""
+    out=$( ( PATH="$FLOOR/bin:$PATH"; PROFILE_ROOT="$FLOOR/p"; PROFILE_ACTIVE="${2:-nine}"; PROFILE_LOADED=""
              . "$ROOT/zfs-backup.sh" >/dev/null 2>&1
              load_active_profile
              ensure_cron_config "$1" 0 1 always ) 2>&1 ); rc=$?
-    printf '%s|%s' "$rc" "$(printf '%s' "$out" | grep -c 'already fences')"
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | grep -c 'protects it LESS')"
 }
 
-# 1. the config fences vzdump at 2, the profile says 9 -> refuse, naming both
+# 1. THE DANGEROUS DIRECTION. The config fences vzdump at 2, the profile
+#    requires 9: the relationship being created would run behind a guard weaker
+#    than its own policy declares. Refuse, and say which way round it is.
 printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = 2\n' > "$FLOOR/conflict.conf"
 r="$(floor_run "$FLOOR/conflict.conf")"
 if [ "$r" = "1|1" ]; then
-    ok "floors: a family fenced differently by config and profile is REFUSED"
+    ok "floors: a config fencing a family MORE WEAKLY than the profile is REFUSED"
 else
-    bad "floors: a family fenced differently by config and profile is refused" "got $r"
+    bad "floors: a config fencing a family more weakly than the profile is refused" "got $r"
 fi
+
+# 1b. THE SAFE DIRECTION, and the reason this rule is asymmetric at all. The
+#     first cut refused on ANY difference and broke a property this tree had
+#     already decided and pinned in test/zfsbackup: "only ADDS a missing floor,
+#     never narrows an operator's stronger keep" (REV-20260810-092). A floor is
+#     a MINIMUM: keeping the operator's LARGER number deletes nothing anyone
+#     relies on, so it is not a conflict -- it is their decision, and it stands.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = 30\n' > "$FLOOR/stronger.conf"
+r="$(floor_run "$FLOOR/stronger.conf")"
+#     Read vzdump's OWN keep rather than counting "9" anywhere in the file: the
+#     profile declares three families, and the two it is NOT arguing about are
+#     correctly written at 9 by this very run. Counting the whole file made this
+#     assertion fail for a reason that had nothing to do with what it tests.
+vz_keep() { awk '/^\[excluded:vzdump\]/{f=1;next} /^\[/{f=0} f&&/keep[ \t]*=/{sub(/.*=[ \t]*/,"");print;exit}' "$1"; }
+if [ "${r%%|*}" = "0" ] && [ "$(vz_keep "$FLOOR/stronger.conf")" = "30" ] \
+   && [ "$(grep -c '^\[excluded:' "$FLOOR/stronger.conf")" -eq 3 ]; then
+    ok "floors: an operator's STRONGER floor is kept, not refused and not narrowed"
+else
+    bad "floors: an operator's stronger floor is kept" "got $r, vzdump keep=$(vz_keep "$FLOOR/stronger.conf"), sekcji=$(grep -c '^\[excluded:' "$FLOOR/stronger.conf")"
+fi
+
+# 1c. `all` is a legal keep for gen-cron (build_excluded_section) and is the
+#     strongest floor expressible. Compared as strings it looks merely
+#     "different" from 9 and would have been refused as a conflict; ranked, it
+#     outranks every count and is simply the operator protecting more.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = all\n' > "$FLOOR/all.conf"
+r="$(floor_run "$FLOOR/all.conf")"
+if [ "${r%%|*}" = "0" ] && grep -q 'keep = all' "$FLOOR/all.conf"; then
+    ok "floors: keep = all outranks every count instead of reading as a conflict"
+else
+    bad "floors: keep = all outranks every count" "got $r"
+fi
+
+# 1d. A keep gen-cron would itself reject is neither stronger nor weaker: it is
+#     unreadable, and an unreadable floor must not be ranked as zero -- that
+#     would silently read "unprotected" as "protected less" and refuse for the
+#     wrong reason, or worse, pass.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = kilka\n' > "$FLOOR/junk.conf"
+out=$( ( PATH="$FLOOR/bin:$PATH"; PROFILE_ROOT="$FLOOR/p"; PROFILE_ACTIVE=nine; PROFILE_LOADED=""
+         . "$ROOT/zfs-backup.sh" >/dev/null 2>&1
+         load_active_profile
+         ensure_cron_config "$FLOOR/junk.conf" 0 1 always ) 2>&1 ); rc=$?
+case "$rc:$out" in
+    1:*"neither a count nor 'all'"*) ok "floors: an unreadable keep is refused as unreadable, not ranked as zero" ;;
+    *) bad "floors: an unreadable keep is refused as unreadable" "rc=$rc: $(printf '%s' "$out" | tail -1)" ;;
+esac
 
 # 2. and NOTHING was written before the refusal. A gate that mutates before it
 #    refuses is not a gate -- the first cut appended the first family and then

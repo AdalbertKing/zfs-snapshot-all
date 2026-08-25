@@ -1738,8 +1738,8 @@
   w trzech roznych oknach czasowych (godzina, doba, tydzien) — nowa logika,
   ktorej nie wolno mieszac z transkrypcja.
 
-- **ETAP PROFILI, krok 4: sprzeczne `[excluded:]` sa ODMAWIANE, nie zgadywane
-  (2026-08-25).**
+- **ETAP PROFILI, krok 4: sprzeczna podloga `[excluded:]` jest ODMAWIANA, ale
+  tylko w kierunku, ktory oslabia (2026-08-25).**
 
   Domyka rzecz, ktora trzykrotnie zglaszalem jako niedokonczona. Sekcja
   `[excluded:]` nie jest opinia profilu: `gen-cron` skleja wszystkie w JEDEN
@@ -1749,36 +1749,57 @@
   Dotad przy istniejacej sekcji instalator podlog po prostu **pomijal** swoja —
   czyli pierwszy zainstalowany profil wygrywal na zawsze, a deklaracja drugiego
   byla cicho niewazna: operator czytajacy profil B widzial liczbe, ktora nigdzie
-  nie obowiazuje. Wybranie wiekszej albo nowszej byloby tym samym klamstwem
-  w lepszych manierach.
+  nie obowiazuje.
+
+  **Pierwsze podejscie odmawialo na kazdej roznicy i bylo zle.** Wywrocilo
+  wlasnosc, ktora to drzewo juz raz rozstrzygnelo i przypielo testem: *„only
+  ADDS a missing floor, never narrows an operator's stronger keep"*
+  (REV-20260810-092). `keep` to **minimum**, wiec te dwie liczby nie sa
+  symetryczne — wiecej ochrony jest bezpieczne, mniej nie:
 
   | sytuacja | zachowanie |
   |---|---|
-  | ta sama rodzina, **ten sam** `keep` | deduplikacja, cisza |
-  | ta sama rodzina, **inny** `keep`, sciezka instalujaca | **ODMOWA** nazywajaca obie wartosci |
-  | ta sama rodzina, inny `keep`, sciezka dziedziczaca | **ostrzezenie**, nie odmowa — patrz nizej |
+  | ten sam `keep` | deduplikacja, cisza |
+  | config chroni **mocniej** niz profil prosi | zostaje **wartosc operatora**, jedna linia do logu |
+  | config chroni **slabiej** niz profil wymaga | **ODMOWA** nazywajaca obie wartosci i kierunek |
+  | `keep` nieczytelny dla `gen-cron` | odmowa jako *nieczytelny*, nie jako „slabszy" |
+  | sciezka dziedziczaca, config slabszy | **ostrzezenie**, nie odmowa — patrz nizej |
   | profil sprzeczny **sam ze soba** | odmowa juz przy walidacji, nazywajaca plik |
 
-  Asymetria miedzy trzecim a drugim wierszem jest celowa: na sciezce
-  dziedziczacej przebieg **w ogole nie pisze podlog** — config ma juz polityke
-  relacji, wiec nowa relacja dziedziczy ja dokladnie tak, jak jest zainstalowana
-  (Gate 2). Odmowa uczynilaby host bezuzytecznym dlatego, ze administrator
-  kiedys swiadomie zawezil podloge, co REV-20260810-092 wprost chroni. Ale
-  liczba z profilu nie obowiazuje — i milczenie pozwoliloby wierzyc, ze
-  obowiazuje.
+  Uzasadnienie kierunku: przy `config >= profil` zatrzymanie liczby z configu
+  nie kasuje niczego, na czym cokolwiek polega, a administrator, ktory
+  swiadomie podniosl podloge, zachowuje swoja decyzje. Przy `config < profil`
+  relacja pobieglaby za strazą slabsza niz deklaruje jej wlasna polityka,
+  a podniesienie podlogi tutaj przepisaloby komende prune **kazdej** relacji juz
+  obecnej w pliku (Gate 2) — zadna z tych rzeczy nie jest nasza do wyboru.
 
-  **Dwie wady znalezione we wlasnej poprawce, obie przez czytanie komunikatu
-  zamiast ufania kodowi wyjscia:** komunikat odmowy uzywal `$config`, podczas
-  gdy w tej funkcji zmienna nazywa sie `$file` — pod `set -u` przebieg umieral
-  **z niewlasciwego powodu**; oraz sprawdzanie i pisanie bylo w jednej petli,
-  wiec konflikt na drugiej rodzinie odmawial po dopisaniu pierwszej, a komunikat
-  twierdzil, ze nic nie zmieniono. Teraz sa **dwa przebiegi**: najpierw
-  sprawdzane sa wszystkie podlogi, dopiero potem pisana ktorakolwiek. Bramka,
-  ktora mutuje zanim odmowi, nie jest bramka.
+  `keep = all` jest legalny dla `gen-cron` i jest najsilniejsza podloga, jaka da
+  sie wyrazic. Porownywany jako **tekst** wygladal po prostu „inaczej" niz `9`
+  i zostalby odrzucony jako konflikt; teraz jest **rangowany** i przebija kazda
+  liczbe. Wartosc, ktorej `gen-cron` sam by nie przyjal, nie jest rangowana jako
+  zero — bo „brak ochrony" udajacy „ochrone slabsza" to odmowa z niewlasciwego
+  powodu albo, gorzej, przepustka.
 
-  `test/profiles`: **63/0** (+5). Kontrola negatywna wobec builda sprzed zmiany:
-  **trzy padaja**, a dwie kontrole „nie wolno odmowic" (zgodny config, swiezy
-  config) przechodza po obu stronach.
+  Na sciezce dziedziczacej przebieg **w ogole nie pisze podlog** — config ma juz
+  polityke relacji, wiec nowa relacja dziedziczy ja dokladnie tak, jak jest
+  zainstalowana. Odmowa uczynilaby tam host bezuzytecznym. Ale liczba z profilu
+  nie obowiazuje, a milczenie pozwoliloby wierzyc, ze obowiazuje — wiec silniej
+  ogrodzony config milczy, a slabszy daje ostrzezenie.
+
+  **Trzy wady znalezione we wlasnej poprawce**, wszystkie przez czytanie
+  komunikatu i testu zamiast ufania kodowi wyjscia: komunikat odmowy uzywal
+  `$config`, podczas gdy w tej funkcji zmienna nazywa sie `$file` — pod `set -u`
+  przebieg umieral **z niewlasciwego powodu**; sprawdzanie i pisanie bylo
+  w jednej petli, wiec konflikt na drugiej rodzinie odmawial po dopisaniu
+  pierwszej, a komunikat twierdzil, ze nic nie zmieniono (teraz sa **dwa
+  przebiegi**: najpierw sprawdzane sa wszystkie podlogi, dopiero potem pisana
+  ktorakolwiek — bramka, ktora mutuje zanim odmowi, nie jest bramka); i sama
+  regula symetryczna, ktora zlapal dopiero `test/zfsbackup` w CI.
+
+  `test/profiles`: **66/0** (+8), z asercjami na oba kierunki, na `all`
+  i na wartosc nieczytelna. `test/zfsbackup`: przypieta wlasnosc
+  REV-20260810-092 przechodzi **bez zmian w tescie** — to ona byla dowodem,
+  ze pierwsza wersja reguly byla za szeroka.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
