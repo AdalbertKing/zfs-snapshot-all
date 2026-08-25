@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aa263a8f53ee044a -->
+<!-- status-covers-digest: 6f041fbcc55ee88e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1390,6 +1390,129 @@
   błędzie; koniec = seed zweryfikowany oraz cron zainstalowany i odczytany
   z właściwego konta. Dowód akceptacyjny na czystym hoście w dwóch wariantach
   — root i konto delegowane — bez ręcznej edycji CONFIG-u, grantów i crontaba.
+
+- **KROK 5, plaster 1: brak `--source` proponuje zrodla (2026-08-25).**
+
+  Wysokopoziomowa sciezka lokalna odmawiala bez `--source`, wiec „czysty host ->
+  dzialajacy backup" zaczynal sie od recznego czytania `zfs list`. Teraz brak
+  `--source` daje **propozycje z inwentarza ZFS tego hosta** i **wypisuje kazdy
+  pominiety dataset wraz z powodem** (pula, cel backupu, `*/ROOT`, swap oraz
+  dataset juz objety zainstalowana polityka).
+
+  **Uklad hierarchiczny nie jest zgadywany.** Pierwsza wersja pomijala kazdy
+  dataset majacy potomka i proponowala dzieci — a rodzic trzyma wlasne pliki
+  niezaleznie od dzieci, wiec to zamieniało pozorne pokrycie na CICHY brak
+  pokrycia (finding recenzji do plastra 1; wlasna suita kodowala te wade jako
+  zachowanie oczekiwane, wiec byla zielona nad prawdziwa dziura). Zmierzone na
+  zywym ZFS: pusty rodzic ma `usedbydataset=24576`, ten sam rodzic z 3 MiB
+  wlasnych plikow — `3173376`; rozroznienie jest wiec mozliwe, ale tylko wobec
+  progu wzietego z sufitu, ktorego ta funkcja nie ma prawa wymyslac. Dlatego
+  decyduje UKLAD, nie rozmiar: gdy wsrod kandydatow jest para rodzic/dziecko,
+  **to poddrzewo** wypada z propozycji — oba czlony, bo sam rodzic to pierwotna
+  wada, a same dzieci to ta sama nieprawda w druga strone — z wypisana para,
+  powodem i gotowymi do skopiowania liniami `--source=`. Reszta hosta jest
+  proponowana normalnie: jedna hierarchia nic nie mowi o datasetach poza nia
+  (zawezenie wg zalecenia recenzenta w trybie doradczym).
+
+  Propozycja to zgadywanie, wiec niesie te sama regule co zgadniety cel:
+  **`--yes` jej nie potwierdza**. Jawne `--source` nigdy nie jest podwazane
+  (EXPLICIT-SOURCE-BEATS-DISCOVERY) — propozycja jest czytana wylacznie wtedy,
+  gdy operator nie nazwal niczego.
+
+  Zmierzone na zywo (pve9, worktree, host przywrocony do stanu sprzed testu):
+  propozycja `hdd/k5src` + `hdd/osrc` z pominietym `hdd`; odmowa pod `--yes`
+  nazywajaca zrodla przy niezmienionym hashu crontaba; **wariant root** — EXIT=0,
+  seed z weryfikacja GUID, diff crontaba to dokladnie jeden dodany blok
+  zarzadzany; **wariant konta delegowanego `bckp`** — EXIT=0, blok w crontabie
+  konta, crontab roota bajt w bajt bez zmian, granty ZFS nadane na zrodle i celu.
+
+  **Dwa blockery tej samej sciezki — zmierzone na `main@aded373` (kontrola na
+  nietknietym buildzie), NAPRAWIONE tutaj po przejsciu recenzenta w tryb
+  doradczy:** powtorzenie tego samego udanego polecenia konczylo sie FATAL-em
+  o nakladaniu zamiast byc no-opem; a dodanie **drugiego** zrodla do tego samego
+  celu bylo odrzucane, bo wlasna sekcja `[prune:<cel>]` z pierwszego
+  uruchomienia liczyla sie jako cudza nakladka.
+
+  Jedna przyczyna: kazda sekcja pisana przez `local-backup` otwiera sie markerem
+  `# managed-by: zfs-backup.sh local-backup <rodzaj>=<wartosc>`, **i nikt go nie
+  odczytywal**. Teraz zadane zrodlo trafia do jednego z trzech kubelkow — NASZE
+  (marker nasz i `dst` rowny zadanemu celowi; nic do zrobienia), NOWE (brak
+  sekcji; to jedyne, ktore sie komponuje) albo SPORNE (sekcja cudza albo nasza,
+  ale wskazujaca inny cel; fail-closed, ta sama odmowa co zawsze). Gdy nie ma
+  zadnego nowego zrodla, przebieg jest **no-opem**: bez seeda, bez zapisu crona,
+  config bajt w bajt ten sam. Retencja celu i rodzina szablonow zrodlowych sa
+  emitowane **raz na cel**, nie raz na przebieg.
+
+  **Trzecia rzecz, ujawniona dopiero przez zywy przebieg:** `gen-cron` SCALA
+  datasety o tej samej polityce w jedna linie crona, wiec dolozenie drugiego
+  zrodla nie dodawalo linii — przepisywalo linie pierwszego zrodla na
+  dwudatasetowa. Bramka antykasacyjna, zgodnie z wlasnym kontraktem („linia
+  ktora znikla to zadanie ktore przestalo chodzic"), odmawiala instalacji,
+  wymieniajac jako ofiary wlasne linie pierwszego zrodla. Dwie zmiany, obie
+  waskie:
+
+  * **wlasna minuta na kazde zrodlo lokalne** (ten sam rozrzut, ktorego uzywa
+    sciezka zdalna) — linie przestaja sie scalac, wiec tozsamosc istniejacej
+    linii nie zmienia sie, gdy dochodzi kolejne zrodlo; przy okazji dwa zrodla
+    nie kopiuja do tego samego magazynu w tej samej minucie;
+  * **drugie zwolnienie w bramce**, o tym samym ksztalcie co istniejace
+    zwolnienie dla zmiany endpointu: zgubiona linia jest wchlonieta wylacznie
+    wtedy, gdy w nowym bloku jest linia IDENTYCZNA poza jednym cytowanym
+    argumentem, w ktorym stara lista datasetow jest PODZBIOREM nowej. Kierunek
+    jest cala wlasnoscia bezpieczenstwa i jest pinowany w obie strony: lista
+    ktora sie ZWEZA nadal jest kasacja. Piec dyskryminatorow: scalenie
+    wchloniete, linia po prostu nieobecna — nie; zwezenie — nie; zmieniony prog
+    — nie; zmieniony harmonogram — nie.
+
+  **Dwie dalsze uwagi recenzenta, obie trafne i obie poprawione:**
+
+  * „juz objety" bylo testowane **nakladaniem sciezek**, a zadanie lokalne jest
+    PLASKIE — `[dataset:rpool/a]` nie kopiuje `rpool/a/child`. Nowe dziecko pod
+    zainstalowanym rodzicem bylo wiec pomijane jako „juz objete" i **nigdy nie
+    proponowane**: to samo ciche zniknięcie pokrycia co w F1, tylko od drugiej
+    strony. Teraz „juz objety" to **dokladna tozsamosc datasetu**, chyba ze
+    zainstalowana sekcja jawnie deklaruje `recursive` — wtedy naprawde obejmuje
+    poddrzewo. Trzy dyskryminatory: nowe dziecko pod plaskim rodzicem, rodzic
+    przy zainstalowanym dziecku, oraz kontrola, ze sekcja rekurencyjna nadal
+    obejmuje potomkow;
+  * zwolnienie w bramce **poszerzalo dowolny** cytowany argument, co dowodzi
+    zawierania zbioru, ale nie tego, ze ten zbior jest POKRYCIEM — szerszy cel,
+    prefiks albo etykieta mogly udawac zachowane pokrycie datasetow. Teraz
+    rozpoznawana jest komenda i **pozycja argumentu datasetow w jej wlasnym
+    segmencie** (od nazwy skryptu do przekierowania stderr), bo liczenie od
+    konca calej linii bralo pod uwage cudzyslowy opakowania — pierwsza wersja
+    robila dokladnie odwrotnie, niz powinna. Nieznana komenda nie dostaje
+    zwolnienia w ogole. Dwanascie dyskryminatorow, w tym cztery kontrole „tylko
+    cel / prefiks / wzorzec / lista `-P` sie poszerza — nie wolno wchlonac".
+
+  **F3: ta sama regula musi obowiazywac na OBU koncach.** Nauczenie jej samej
+  propozycji dalo falszywa zielen — odkrywanie oferowalo dziecko pod
+  zainstalowanym plaskim rodzicem, a bramka kompozycji odrzucala kandydata,
+  ktorego przed chwila sama zaproponowala. `config_section_overlap` czyta wiec
+  teraz to samo: **dokladna tozsamosc zawsze koliduje**; zadanie LEZACE POD
+  zainstalowana sekcja koliduje tylko wtedy, gdy ta sekcja jest rekurencyjna;
+  a sekcja lezaca POD zadana sciezka koliduje tylko wtedy, gdy to, co ten
+  przebieg napisze, bedzie ja obejmowac rekurencyjnie — czyli w przypadku CELU,
+  ktorego retencja jest emitowana `recursive = yes`. Sciezki rekurencyjne
+  nazywa **wywolujacy**, bo tylko on wie, co zaraz wyemituje.
+
+  Testy end-to-end sprawdzaja caly przebieg, nie brak frazy: kod wyjscia,
+  zainstalowany CONFIG, przetrwanie starego zadania, obecnosc nowego oraz
+  pokrycie obu w zainstalowanym cronie — dla obu ukladow (zainstalowany plaski
+  rodzic + nowe dziecko; zainstalowane dziecko + kandydat-rodzic) plus odmowa,
+  gdy zainstalowana sekcja naprawde jest rekurencyjna.
+
+  Dowod live (pve9, worktree, host przywrocony do stanu sprzed testu): pierwsza
+  instalacja `EXIT=0`; **powtorka tego samego polecenia `EXIT=0`, md5 configu
+  i crontaba identyczne, snapshot nadal jeden** (zero seeda); **drugie zrodlo
+  `EXIT=0`**, w crontabie dwie osobne linie wysylki na minutach 10 i 30, monitor
+  zrodel scalony do `"hdd/k5a,hdd/k5b"` (pokrycie zachowane), retencja celu
+  jedna.
+
+  Dyskryminatory pinuja obie polowy: no-op nic nie sieje i nic nie zapisuje;
+  drugie zrodlo dolacza, a pierwsze przezywa; cudza sekcja pod ta sama sciezka
+  **nadal odmawia**; nasza sekcja wskazujaca inny cel **nadal odmawia** (to inne
+  zadanie, nie powtorzenie).
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 

@@ -61,14 +61,32 @@ else
     bad "1. local --source (no ':') reaches cmd_local_backup unchanged" "rc=$rc out=$out"
 fi
 
-# 2. Bare --target with no --source at all: same local refusal as before RUX.
+# 2. Bare --target with no --source at all: still the LOCAL path.
+#
+# REWRITTEN for KROK 5, not deleted. This assertion used to pin the literal
+# refusal "--source=<dataset>[,...] is required", which is the one thing KROK 5
+# deliberately removes: an omitted --source is now proposed from the host's ZFS
+# inventory. Pinning a message the product no longer owes would make this suite
+# an obstacle to the change it was never about.
+#
+# What RUX actually cares about here is ROUTING -- a bare --target with no
+# --source and no --host must reach cmd_local_backup, never the remote
+# enrolment path -- and that property is unchanged. So the assertion now keys on
+# the local path OWNING the run (its 'local-backup:' prefix, and the flag it
+# names) while explicitly refusing any sign of the remote path having been
+# entered. On a box without ZFS the inventory read fails and the local path says
+# so; on one with ZFS it proposes. Both are the local path answering, which is
+# the property, so either wording satisfies it.
 out="$( ( CLIENTS_DIR="$WORK/2/clients"
     rux_entry --target=hdd/backup
 ) 2>&1 )"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--source=<dataset>\[,<dataset>\.\.\.\] is required'; then
-    ok "2. bare --target with no --source: unchanged local refusal"
+if [ "$rc" -ne 0 ] \
+   && printf '%s' "$out" | grep -q 'local-backup:' \
+   && printf '%s' "$out" | grep -q -- '--source=' \
+   && ! printf '%s' "$out" | grep -qE 'add-client|--host=|pairing manifest'; then
+    ok "2. bare --target with no --source stays on the LOCAL path (KROK 5 wording)"
 else
-    bad "2. bare --target with no --source: unchanged local refusal" "rc=$rc out=$out"
+    bad "2. bare --target with no --source stays on the LOCAL path (KROK 5 wording)" "rc=$rc out=$out"
 fi
 
 # ------------------------------------------------------------------------------

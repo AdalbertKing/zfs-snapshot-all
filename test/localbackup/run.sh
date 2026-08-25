@@ -104,19 +104,35 @@ out="$(run --source=rpool/db --target=hdd/backups --profile=default --config="$W
     || bad "F1/another existing source also proceeds" "rc=$rc"
 
 # ---- REV-20260811-101: multi-source WHAT set semantics ----
-# canonical comma-list: two independent [dataset:] entries, and the rendered cron
-# carries both roots (gen-cron merges same-policy datasets into one comma-joined
-# send, the established multi-dataset shape -- see fixtures/tiered.conf golden).
+# Canonical comma-list: two independent [dataset:] entries, and the rendered
+# cron really sends BOTH roots to the target.
+#
+# REWRITTEN for KROK 5, not deleted. This used to additionally require the two
+# sends to appear as ONE comma-joined line, because same-policy datasets merged.
+# Each local source now gets its own minute, so they render as two lines -- and
+# that is the point rather than a side effect: while they merged, adding a
+# second source rewrote the first one's line, and the anti-deletion guard
+# refused the install (measured live on pve9). The property REV-101 is about --
+# two independent entries, both reaching the cron -- is unchanged and is what
+# is asserted; the single-line shape was incidental to it.
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mc.conf")"; rc=$?
+mc_data="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/data" "hdd/backups"')"
+mc_vm="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/vmstore" "hdd/backups"')"
 if [ "$rc" -eq 0 ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]' \
-        && printf '%s\n' "$out" | grep -qE 'snapsend\.sh -m "automated_hourly_" "rpool/data,rpool/vmstore" "hdd/backups"'; then
+        && [ "$mc_data" -ge 1 ] && [ "$mc_vm" -ge 1 ]; then
     ok "101/comma-list: two independent source entries, both in the rendered cron"
 else
     bad "101/comma-list: two independent source entries, both in the rendered cron" \
         "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snapsend' | head)"
 fi
+# ...and on DIFFERENT minutes, which is what keeps each line's identity stable
+# when a third source joins later.
+mc_min="$(printf '%s\n' "$out" | grep -oE '^[0-9]+ \* \* \* \* echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*backup' | awk '{print $1}' | sort -u | grep -c .)"
+[ "${mc_min:-0}" -ge 2 ] \
+    && ok "101/comma-list: the two sends land on different minutes (no merge, stable identities)" \
+    || bad "101/comma-list: the two sends land on different minutes" "distinct minutes: ${mc_min:-0}"
 # one missing member in a 3-root request -> hard refuse, NO partial candidate.
 out="$(run --source=rpool/data,rpool/nope,hdd/dokumenty --target=hdd/backups --config="$WORK/m3.conf")"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'does not exist' \
@@ -861,6 +877,386 @@ if ! awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -q 'bash "\$GEN
 else
     bad "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"         "$(awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -n 'bash "\$GENCRON"')"
 fi
+
+# ==============================================================================
+# KROK 5 -- the SOURCE proposal when --source is omitted.
+#
+# Until now a local backup was refused outright without --source, which made the
+# "clean host -> working backup" path start with an operator reading `zfs list`
+# by hand. The proposal is a GUESS, so it carries the same rule the guessed
+# target carries: it may be shown, it may be planned with, and it may not be
+# installed with nobody looking.
+#
+# The inventory stub answers the one query the proposal makes and leaves every
+# other `zfs` call to the existing stub, so the assertions above are untouched.
+# ==============================================================================
+mkdir -p "$WORK/bin3"
+cat > "$WORK/bin3/zfs" <<'EOF'
+#!/bin/sh
+# `zfs list -H -o name -t filesystem,volume` (no dataset argument) is the
+# inventory query; INVENTORY holds the answer. Everything else falls through to
+# the existence stub, which is what every other assertion in this suite uses.
+case " $* " in
+  *" -t filesystem,volume "*)
+      printf '%s\n' ${INVENTORY:-rpool rpool/ROOT rpool/ROOT/pve-1 rpool/swap rpool/vmstore rpool/db hdd hdd/store}
+      exit 0 ;;
+esac
+for a in "$@"; do ds="$a"; done
+case "$ds" in rpool/data|rpool/existing|rpool/other|rpool/db|rpool/vmstore|hdd/dokumenty|rpool/a|rpool/a/child|rpool/ROOT/pve-1|rpool/swap|hdd/store) exit 0 ;;
+             *) echo "cannot open '$ds': dataset does not exist" >&2; exit 1 ;; esac
+EOF
+cp "$WORK/bin2/zpool" "$WORK/bin3/zpool"
+# bin2's crontab, not bin's: this section installs, and only that stub STORES
+# what it is given. gen-cron writes the crontab and reads it back, so a stub
+# that keeps returning the old content makes the tool correctly refuse -- the
+# product working, and the wrong fixture for testing past it.
+cp "$WORK/bin2/crontab" "$WORK/bin3/crontab"
+chmod +x "$WORK/bin3/zfs" "$WORK/bin3/zpool" "$WORK/bin3/crontab"
+
+# $SNAPSEND is pinned to the same successful stub the install assertions above
+# use: this section is about which SOURCE SET is installed, never about the
+# transfer, and a real engine here would reach for real ZFS.
+runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
+    local inv="$1"; shift
+    # '-' means "the stub's default inventory". Spelled out because the stub
+    # uses ${INVENTORY:-default} and a literal '-' is NOT empty: the first cut
+    # passed it straight through, the stub answered with one dataset named '-',
+    # and eight assertions failed against perfectly good code.
+    [ "$inv" = "-" ] && inv=""
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
+      INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
+      SNAPSEND="$WORK/seedbin/snapsend-ok" cmd_local_backup "$@" ) 2>&1
+}
+
+# ---- the proposal happens at all, and reaches the plan ----------------------
+out="$(runp "-" --target=hdd/store --config="$WORK/k5a.conf")"
+{ printf '%s' "$out" | grep -q 'PROPOZYCJA z inwentarza' \
+  && printf '%s' "$out" | grep -q 'rpool/vmstore' \
+  && printf '%s' "$out" | grep -q 'rpool/db'; } \
+    && ok "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" \
+    || bad "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" "$(printf '%s' "$out"|head -8)"
+
+# ---- every exclusion, each with the reason it must be excluded FOR ----------
+# A pool root is a container; the OS root is not restorable by this tool; a swap
+# zvol carries no data; the target cannot hold its own backup. A PARENT is NOT
+# on this list any more -- that question moved to the hierarchy cases below,
+# after it turned out to have the wrong answer here.
+for pair in "rpool|pula, nie zbior danych" \
+            "rpool/ROOT|system operacyjny" \
+            "rpool/ROOT/pve-1|system operacyjny" \
+            "rpool/swap|swap" \
+            "hdd/store|cel backupu"; do
+    ds="${pair%%|*}"; why="${pair##*|}"
+    if printf '%s' "$out" | grep -q "pominieto $ds -- $why"; then
+        ok "krok5: '$ds' is excluded from the proposal, and the reason is printed"
+    else
+        bad "krok5: '$ds' is excluded from the proposal, and the reason is printed" \
+            "$(printf '%s' "$out" | grep pominieto | head -8)"
+    fi
+    printf '%s' "$out" | grep -qE "^>>>   $ds\$" \
+        && bad "krok5: '$ds' must not be proposed" "it appears in the candidate list"
+done
+
+# ---- a dataset an installed section already covers is not proposed ----------
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/db]\n\tuse_template = x\n' > "$WORK/k5cov.conf"
+out2="$(runp "-" --target=hdd/store --config="$WORK/k5cov.conf")"
+printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
+    && ok "krok5: a dataset the installed config already covers is skipped, naming the section" \
+    || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep pominieto|head -5)"
+
+# ---- "already covered" is EXACT identity, because a local job is FLAT -------
+# An installed [dataset:rpool/a] copies rpool/a's own blocks and nothing else.
+# Testing coverage with path overlap therefore hid a new child under an
+# installed parent as "already covered" -- the same silent missing coverage as
+# the hierarchy finding, arrived at from the other side. Both arrangements are
+# pinned, because a containment test excuses one of them whichever way it runs.
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n' > "$WORK/k5par.conf"
+outp="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5par.conf")"
+{ ! printf '%s' "$outp" | grep -q 'pominieto rpool/a/child -- juz objety'; } \
+    && ok "krok5/flat: a NEW CHILD under an installed flat parent is not called 'already covered'" \
+    || bad "krok5/flat: a new child under an installed flat parent is not 'already covered'" "$(printf '%s' "$outp"|grep pominieto|head -4)"
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a/child]\n\tuse_template = x\n' > "$WORK/k5chi.conf"
+outc2="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5chi.conf")"
+{ ! printf '%s' "$outc2" | grep -q 'pominieto rpool/a -- juz objety'; } \
+    && ok "krok5/flat: a PARENT candidate is not called 'already covered' by an installed child" \
+    || bad "krok5/flat: a parent candidate is not 'already covered' by an installed child" "$(printf '%s' "$outc2"|grep pominieto|head -4)"
+# CONTROL: a section that really IS recursive does cover its descendants, and
+# saying so must still work -- otherwise the two assertions above would pass
+# against a build that had simply dropped the covered check.
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n\trecursive    = yes\n' > "$WORK/k5rec.conf"
+outr="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5rec.conf")"
+printf '%s' "$outr" | grep -q 'pominieto rpool/a/child -- juz objety rekurencyjna' \
+    && ok "krok5/flat control: a RECURSIVE installed section does cover its descendants" \
+    || bad "krok5/flat control: a recursive installed section covers its descendants" "$(printf '%s' "$outr"|grep pominieto|head -4)"
+
+# ---- THE HIERARCHY DISCRIMINATOR -------------------------------------------
+# The first cut of the proposal dropped any dataset that had a child and offered
+# the children instead. A parent filesystem holds its OWN files independently of
+# its children, so that turned apparent coverage into silent missing coverage --
+# and this suite encoded it as expected behaviour, so it went green over a real
+# hole. What follows is the discriminator that hole would not survive: a parent
+# with a child must NOT vanish from the proposed coverage without the operator
+# being told.
+outh="$(runp "rpool/a
+rpool/a/child
+rpool/db" --target=hdd/store --config="$WORK/k5h.conf")"
+# 1. the ambiguous subtree is refused, with the pair named
+{ printf '%s' "$outh" | grep -q 'poddrzewo dwuznaczne' \
+  && printf '%s' "$outh" | grep -q 'rpool/a  ->  rpool/a/child'; } \
+    && ok "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree, named" \
+    || bad "krok5/hierarchia: a parent/child pair is refused as an ambiguous subtree" "$(printf '%s' "$outh"|head -10)"
+# 2. BOTH members leave the proposal. The parent alone would be the original
+#    defect; the children alone would be the same claim in the other direction.
+{ ! printf '%s' "$outh" | grep -qE '^>>>   rpool/a$' \
+  && ! printf '%s' "$outh" | grep -qE '^>>>   rpool/a/child$'; } \
+    && ok "krok5/hierarchia: neither the parent nor the child is proposed as if it covered the other" \
+    || bad "krok5/hierarchia: neither the parent nor the child is proposed" "$(printf '%s' "$outh"|grep '>>>   '|head -5)"
+# 3. the parent is NAMED -- it may not disappear without the operator being told,
+#    which is the whole finding, and the explanation must be actionable.
+{ printf '%s' "$outh" | grep -q -- '--source=rpool/a$' \
+  && printf '%s' "$outh" | grep -q 'NIE pokrywaja'; } \
+    && ok "krok5/hierarchia: the parent is named with a copyable --source= and the reason why" \
+    || bad "krok5/hierarchia: the parent is named with a copyable --source=" "$(printf '%s' "$outh"|head -10)"
+# 4. the REST of the host is still proposed -- one hierarchy says nothing about
+#    the datasets outside it, so refusing everything would be its own defect.
+printf '%s' "$outh" | grep -qE '^>>>   rpool/db$' \
+    && ok "krok5/hierarchia: datasets outside the ambiguous subtree are still proposed" \
+    || bad "krok5/hierarchia: datasets outside the ambiguous subtree are still proposed" "$(printf '%s' "$outh"|grep '>>>   '|head -5)"
+# 5. CONTROL: the same inventory without the child proposes the parent happily,
+#    so the refusal keys on the PAIR and not on the name or on some other rule.
+outc="$(runp "rpool/a
+rpool/db" --target=hdd/store --config="$WORK/k5i.conf")"
+{ printf '%s' "$outc" | grep -q 'PROPOZYCJA z inwentarza' \
+  && printf '%s' "$outc" | grep -qE '^>>>   rpool/a$'; } \
+    && ok "krok5/hierarchia control: without the child, the same parent IS proposed" \
+    || bad "krok5/hierarchia control: without the child, the same parent IS proposed" "$(printf '%s' "$outc"|head -6)"
+
+# ---- nothing sensible left: refuse, and say what to do ---------------------
+out3="$(runp "rpool
+rpool/swap" --target=hdd/store --config="$WORK/k5b.conf")"
+{ printf '%s' "$out3" | grep -q 'nothing on this host is a sensible candidate' \
+  && printf '%s' "$out3" | grep -q -- '--source='; } \
+    && ok "krok5: an inventory with no candidate refuses and names the flag to use" \
+    || bad "krok5: an inventory with no candidate refuses and names the flag to use" "$(printf '%s' "$out3"|tail -3)"
+
+# ---- EXPLICIT-SOURCE-BEATS-DISCOVERY: a named source is never second-guessed -
+out4="$(runp "-" --source=rpool/db --target=hdd/store --config="$WORK/k5c.conf")"
+{ printf '%s' "$out4" | grep -qv 'PROPOZYCJA z inwentarza' \
+  && ! printf '%s' "$out4" | grep -q 'rpool/a/child'; } \
+    && ok "krok5: an explicit --source is used as given -- no proposal is consulted" \
+    || bad "krok5: an explicit --source is used as given" "$(printf '%s' "$out4"|head -6)"
+
+# ---- the acceptance gate: a PROPOSED set never installs unattended ----------
+rm -f "$WORK/crontab-writes"
+out5="$(runp "-" --target=hdd/store --config="$WORK/k5d.conf" --install --yes)"
+{ printf '%s' "$out5" | grep -q 'cannot confirm a source set this run PROPOSED' \
+  && [ ! -f "$WORK/crontab-writes" ]; } \
+    && ok "krok5: --yes cannot confirm a PROPOSED source set, and nothing is installed" \
+    || bad "krok5: --yes cannot confirm a PROPOSED source set" "$(printf '%s' "$out5"|tail -3)" "writes: $(cat "$WORK/crontab-writes" 2>/dev/null)"
+
+# ---- the discriminating control: the gate keys on PROVENANCE, not on --yes --
+# Without this, the assertion above would pass just as well against a build that
+# refused every --yes install, which is a different (and wrong) behaviour.
+rm -f "$WORK/crontab-writes"
+out6="$(runp "-" --source=rpool/db --target=hdd/store --config="$WORK/k5e.conf" --install --yes)"
+printf '%s' "$out6" | grep -q 'cannot confirm a source set this run PROPOSED' \
+    && bad "krok5 control: a NAMED source set is still allowed to install under --yes" \
+           "the proposal gate fired on an explicit --source" \
+    || ok "krok5 control: a NAMED source set is still allowed to install under --yes"
+
+# ==============================================================================
+# KROK 5 -- the two blockers this path was measured to have, and the two
+# refusals that must survive fixing them.
+#
+# Both blockers were the same omission: every section local-backup writes opens
+# with a "# managed-by: zfs-backup.sh local-backup <kind>=<value>" marker, and
+# nothing read it back. So the tool's own [prune:<target>] from the first run
+# looked exactly like a stranger's coverage -- which made a second source
+# unaddable, and made repeating the identical successful command a FATAL
+# instead of a no-op.
+#
+# The refusals are the other half and are asserted here too: reading our own
+# marker must not turn into trusting any section that happens to sit at the
+# same path.
+# ==============================================================================
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+
+# ---- first install, so there is something to repeat and to extend ----------
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"
+{ printf '%s' "$out" | grep -q 'Backup lokalny AKTYWNY' && grep -qxF '[dataset:rpool/data]' "$CFG"; } \
+    && ok "krok5/blocker: the first install lands (precondition)" \
+    || bad "krok5/blocker: the first install lands (precondition)" "$(printf '%s' "$out"|tail -4)"
+
+# ---- BLOCKER 1: the identical command repeats as a clean no-op -------------
+seeds_before="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+writes_before="$(wc -l < "$WORK/crontab-writes" 2>/dev/null || echo 0)"
+cfg_before="$(md5sum < "$CFG")"
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+writes_after="$(wc -l < "$WORK/crontab-writes" 2>/dev/null || echo 0)"
+cfg_after="$(md5sum < "$CFG")"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'JUZ AKTYWNY'; } \
+    && ok "krok5/blocker1: the identical successful command repeats with rc=0, not a FATAL overlap" \
+    || bad "krok5/blocker1: the identical successful command repeats with rc=0" "rc=$rc $(printf '%s' "$out"|tail -3)"
+# A no-op that re-seeds or rewrites cron is not a no-op: it takes a fresh
+# snapshot and reinstalls a running relationship's jobs.
+{ [ "$seeds_after" = "$seeds_before" ] && [ "$writes_after" = "$writes_before" ] && [ "$cfg_after" = "$cfg_before" ]; } \
+    && ok "krok5/blocker1: the no-op seeds nothing, writes no crontab and leaves the config byte-identical" \
+    || bad "krok5/blocker1: the no-op changes nothing" \
+           "seeds $seeds_before->$seeds_after writes $writes_before->$writes_after cfg $([ "$cfg_after" = "$cfg_before" ] && echo same || echo CHANGED)"
+
+# ---- BLOCKER 2: a second source may join the same tool-managed target ------
+out="$(runi snapsend-ok "" --source=rpool/other --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/data]' "$CFG" && grep -qxF '[dataset:rpool/other]' "$CFG"; } \
+    && ok "krok5/blocker2: a second source joins the same managed target, the first one surviving" \
+    || bad "krok5/blocker2: a second source joins the same managed target" "rc=$rc $(printf '%s' "$out"|tail -4)"
+# The target's retention is emitted once per TARGET, not once per run: a second
+# copy is a duplicate section gen-cron refuses, and it would discard whatever
+# the operator had edited into the first.
+{ [ "$(grep -cxF '[prune:hdd/backups]' "$CFG")" -eq 1 ] \
+  && [ "$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")" -eq 1 ]; } \
+    && ok "krok5/blocker2: the target prune and the source template family stay single" \
+    || bad "krok5/blocker2: the target prune and the source template family stay single" \
+           "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")"
+# The mixed request -- what an operator actually types when adding one source to
+# a set: name them all, and let the tool work out which is new. The installed
+# one must be reported as left alone rather than counted as seeded, and it must
+# not be seeded again.
+seeds_before="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+out="$(runi snapsend-ok "" --source=rpool/data,rpool/other,rpool/vmstore --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'Juz bylo' \
+  && printf '%s' "$out" | grep -q 'rpool/data'; } \
+    && ok "krok5/blocker2: a mixed request names the sources it left alone instead of claiming it seeded them" \
+    || bad "krok5/blocker2: a mixed request names the sources it left alone" "rc=$rc $(printf '%s' "$out"|tail -6)"
+# Exactly ONE new seed (rpool/vmstore); the two already installed are untouched.
+[ "$((seeds_after - seeds_before))" -eq 1 ] \
+    && ok "krok5/blocker2: only the genuinely new source is seeded, the installed ones are not" \
+    || bad "krok5/blocker2: only the genuinely new source is seeded" "seeds $seeds_before -> $seeds_after"
+
+# ---- F3: flat parent/child, END TO END ------------------------------------
+# Teaching only the PROPOSAL that a flat job covers exactly its own dataset
+# produced a false green: discovery would offer a child under an installed flat
+# parent, and the composition gate would then refuse the very candidate it had
+# just proposed. The rule has to hold at both ends, so these assert the whole
+# run -- exit code, installed CONFIG, the pre-existing job surviving, the new
+# job present, and the cron actually covering both -- not the absence of a
+# phrase.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a new CHILD joins an installed flat parent as its own job" \
+    || bad "krok5/F3: a new child joins an installed flat parent" "rc=$rc $(printf '%s' "$out"|tail -4)"
+blk="$(cat "$WORK/crontab-store" 2>/dev/null)"
+{ printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a"' \
+  && printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a/child"'; } \
+    && ok "krok5/F3: the installed cron covers BOTH the parent and the child" \
+    || bad "krok5/F3: the installed cron covers both" "$(printf '%s' "$blk" | grep -oE 'snapsend\.sh[^;]*' | head -3)"
+
+# The mirror arrangement: installed child, parent discovered later.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a new PARENT joins an installed flat child as its own job" \
+    || bad "krok5/F3: a new parent joins an installed flat child" "rc=$rc $(printf '%s' "$out"|tail -4)"
+
+# And the refusal that must survive it: an installed section that really IS
+# recursive does reach its descendants, so a child under it still collides.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+printf '\n[dataset:rpool/a]\n\t# managed-by: zfs-backup.sh local-backup source=rpool/a\n\tuse_template = profile__default__standard_hourly\n\tdst          = hdd/backups\n\trecursive    = yes\n' >> "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'recursive'; } \
+    && ok "krok5/F3: a child under a RECURSIVE installed section still refuses, naming why" \
+    || bad "krok5/F3: a child under a recursive installed section still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+seed_cfg
+
+# ---- the refusals that must SURVIVE reading our own marker -----------------
+# FOREIGN coverage at the same path is not ours, whatever it is called.
+printf '\n[dataset:rpool/db]\n\tuse_template = whatever\n\tdst          = hdd/backups\n' >> "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/db --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'overlap'; } \
+    && ok "krok5/refusal: an unmarked (foreign) section at the same path still refuses" \
+    || bad "krok5/refusal: an unmarked (foreign) section at the same path still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+
+# OURS, but pointing at a DIFFERENT target: a different request, not a rerun.
+#
+# Self-contained fixture on purpose. Leaning on whatever the previous
+# assertions left in $CFG made this one refuse for an unrelated reason (a
+# leftover section referencing a template that does not exist), which is a test
+# passing on the wrong evidence -- and it only showed up once the cases around
+# it were reordered.
+seed_cfg
+printf '\n[dataset:rpool/data]\n\t# managed-by: zfs-backup.sh local-backup source=rpool/data\n\tuse_template = profile__default__standard_hourly\n\tdst          = hdd/backups\n' >> "$CFG"
+out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/dokumenty --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'overlap'; } \
+    && ok "krok5/refusal: our own section with a different target still refuses (not a no-op)" \
+    || bad "krok5/refusal: our own section with a different target still refuses" "rc=$rc $(printf '%s' "$out"|tail -3)"
+
+# ==============================================================================
+# The anti-deletion guard's second exemption: a MERGE is not a deletion.
+#
+# gen-cron merges datasets resolving to the same policy into one job line, so
+# adding a second source rewrites the first source's line into a two-dataset
+# one. The guard's rule -- "a line that vanishes is a job that stops" -- is a
+# proxy for coverage, and on a merge the proxy is wrong: measured live on pve9,
+# where adding a second local source was impossible for exactly this reason.
+#
+# The exemption is written against coverage, so it must hold in ONE direction
+# only. These five cases are the whole contract, and three of them are the ways
+# it could be got wrong.
+# ==============================================================================
+# absorbed <label> <lost line> <proposed line>   -- must be excused
+# refused  <label> <lost line> <proposed line>   -- must NOT be excused
+absorbed() { printf '%s\n' "$3" | line_coverage_absorbed "$2" \
+    && ok "guard/merge: $1" || bad "guard/merge: $1" "not absorbed"; }
+refused()  { printf '%s\n' "$3" | line_coverage_absorbed "$2" \
+    && bad "guard/merge: $1" "absorbed, and must not have been" || ok "guard/merge: $1"; }
+
+# Real generated shapes, redirect and all: a cron line carries quoted values
+# that are NOT arguments (the stderr redirect, the notify message), and the
+# first cut of the exemption counted from the end of the whole line -- which
+# made it excuse a widened TARGET and refuse a widened SOURCE, exactly
+# backwards. These fixtures keep that wrapper so the position logic is
+# exercised the way it runs.
+SND_A='1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a" "hdd/store" 2>"$e"; rc=$?'
+SND_AB='1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a,hdd/b" "hdd/store" 2>"$e"; rc=$?'
+MON_A='*/15 * * * * d=$(check-snap-age.sh "hdd/a" "automated_hourly" 90m 150m 2>&1); rc=$?'
+DEL_A='21 * * * * delsnaps.sh -G -P "vzdump:2" "hdd/a" "automated_" -H24 2>"$e"; rc=$?'
+
+absorbed "a widened SOURCE list absorbs the send line it replaced" "$SND_A" "$SND_AB"
+absorbed "a widened dataset list absorbs the monitor line it replaced" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
+absorbed "a widened SCOPE absorbs the prune line it replaced" "$DEL_A" \
+    '21 * * * * delsnaps.sh -G -P "vzdump:2" "hdd/a,hdd/b" "automated_" -H24 2>"$e"; rc=$?'
+
+# The exemption is bound to the DATASET argument. Set inclusion anywhere else
+# proves nothing about coverage, and these are the four ways it could pretend to.
+refused "a widened TARGET must not absorb a lost send line" "$SND_A" \
+    '1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a" "hdd/store,hdd/other" 2>"$e"; rc=$?'
+refused "a widened PREFIX must not absorb a lost send line" "$SND_A" \
+    '1 * * * * snapsend.sh -m "automated_hourly_,automated_daily_" "hdd/a" "hdd/store" 2>"$e"; rc=$?'
+refused "a widened PATTERN must not absorb a lost monitor line" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a" "automated_hourly,automated_daily" 90m 150m 2>&1); rc=$?'
+refused "a widened reserved-family list must not absorb a lost prune line" "$DEL_A" \
+    '21 * * * * delsnaps.sh -G -P "vzdump:2,other:2" "hdd/a" "automated_" -H24 2>"$e"; rc=$?'
+
+# ...and the shape has to be one this function can actually read.
+refused "an unrecognised command gets no exemption at all" \
+    '1 * * * * cudze.sh "hdd/a" "x"' '1 * * * * cudze.sh "hdd/a,hdd/b" "x"'
+refused "a line that is simply gone is still a DELETION" "$SND_A" \
+    '1 * * * * something else entirely'
+# The dangerous direction: coverage SHRINKING must never be excused, and a
+# subset test applied the wrong way round is exactly how it would be.
+refused "a SHRINKING dataset list is still a deletion" "$SND_AB" "$SND_A"
+refused "a changed threshold is a different job, not a merged one" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 30m 150m 2>&1); rc=$?'
+refused "a changed schedule is a different job, not a merged one" "$MON_A" \
+    '*/5 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
