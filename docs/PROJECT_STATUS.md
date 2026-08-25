@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 059b72d78a5a835a -->
+<!-- status-covers-digest: f229e1fba222e7ba -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1613,6 +1613,65 @@
   `test/linkfields`: **36/0**, z kontrola negatywna wobec poprzedniego
   `gen-cron.sh` wbudowana w kazdy przebieg — musi odrzucic wszystkie trzy pola
   jako nieznane.
+
+- **ETAP PROFILI, krok 3: `default` WYKRYSTALIZOWANY — rodziny zarezerwowane sa
+  trescia profilu, nie kodu (2026-08-25).**
+
+  Cel wlasciciela na faze 1: „profil `default`, ktory dokladnie odwzoruje obecne
+  ustawienie lab", podany do skryptu jawnie, z dowodem, ze lab idzie identycznie.
+
+  Ostatnia rzecza, ktorej w profilu nie bylo, byla lista rodzin zarezerwowanych —
+  literalne `"__replicate_" "vzdump" "__migration__"` z `keep=2` w
+  `ensure_cron_config`. Czyli **jedyna polityka, pod ktora chodzi KAZDA relacja
+  na tej flocie, byla jedyna, ktorej profil nie umial opisac**: „co robi domyslne
+  wdrozenie" odpowiadalo sie grepem po kodzie. Teraz sa w
+  `profiles/<nazwa>/templates.conf`, a kod nie zna zadnej rodziny z nazwy.
+
+  **Dowod fazy 1 na zywym hoscie** (pve9, worktree, host przywrocony do stanu
+  sprzed testu):
+
+  | przebieg | config | crontab |
+  |---|---|---|
+  | bez `--profile` | `02898f51` | `c3d2e41e` |
+  | `--profile=default` | `02898f51` | `c3d2e41e` |
+  | `diff` | **rc=0** | **rc=0** |
+
+  Oba `EXIT=0`, realny seed, cron odczytany zwrotnie, trzy sekcje `[excluded:]`
+  z `keep = 2` — podlogi przyszly z profilu, a nie zniknely.
+
+  **Konsekwencja projektowa, ktora wyszla dopiero z implementacji:** dwa rodzaje
+  sekcji **skladaja sie inaczej**. `[template:]` jest namespace'owany, wiec
+  renderowane pliki wolno **sklejac** — to wlasnie po to namespace istnieje.
+  `[excluded:]` jest wspoldzielony i celowo NIE zmienia nazwy, bo dwa profile
+  mowiace `__replicate_` mowia o tej samej rodzinie; sklejenie dawalo wiec
+  zduplikowana sekcje i `gen-cron` slusznie odmawial. Render rozdzielony na dwa
+  artefakty: szablony zostaja bezpieczne do konkatenacji, wspoldzielone ida
+  osobno do instalatora podlog, ktory dokłada tylko to, czego w configu nie ma.
+  **Regula ogolna: sekcje namespace'owane skladaja sie przez konkatenacje,
+  wspoldzielone przez ZGODNOSC.**
+
+  `default` przestal tez byc szescioma literalami w kodzie — jest jedna nazwana
+  stala `PROFILE_DEFAULT_NAME`. Dlatego „jawny default zachowuje sie jak brak
+  flagi" da sie w ogole asercjonowac, a nie tylko zalozyc.
+
+  **Jeszcze nie zrobione, nazwane wprost:** odmowa, gdy dwa profile deklaruja te
+  sama rodzine z ROZNYM `keep`. Dedup dziala, odmowa nie — a faza 2 czyni to
+  pilnym, bo beda dwa profile na jednym hoscie.
+
+- **Zapisane do zrobienia po etapie profili: degradacja nieudanego quiesce**
+  (`docs/design/quiesce-degrade.md`). Dzis nieudany freeze oznacza BRAK
+  snapshotu (`exit 5`, REV-20260730-006) — co dla `_hourly` kosztuje 1 z 24,
+  ale dla `_daily` kosztuje trwaly artefakt, po ktory ten tier istnieje, a dla
+  `_monthly` nikt tego nawet nie zglosi, bo monitor zdjeto 2026-07-22. Tamta
+  decyzja dotyczyla **klamstwa** (crash-consistent raportowany jako sukces), nie
+  wartosci snapshotu — wiec odpowiedzia nie jest powrot do fail-open, tylko
+  degradacja JAWNA: `quiesce = <tryb>[,degrade]`, snapshot o odroznialnej
+  nazwie, alert i wczesniejsza zgoda operatora. **Wymaga zmiany w zamrozonym
+  silniku, wiec nie tutaj.** Profile sa jednak przygotowane pod te late:
+  `quiesce` zostaje **per TIER** (produkcja pve1 juz tak dziala — `hourly` bez
+  quiesce, `daily`/`weekly`/`monthly` z `auto`), a ksztalt profilu, ktory
+  splaszczylby to do jednej wartosci, wykluczylby zarowno te late, jak i opis
+  obecnej produkcji.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
