@@ -1902,17 +1902,48 @@ Resolve by hand: give the new relationship's profile a different template identi
     fi
     if [ "$install_floors" -eq 1 ]; then
         local _i
+        # TWO PASSES, AND THE ORDER IS THE POINT: every floor is checked before
+        # any is written. The first cut checked and wrote in one loop, so a
+        # conflict on the second family refused a run that had already appended
+        # the first -- and the refusal said "nothing was changed" while the file
+        # said otherwise. A gate that mutates before it refuses is not a gate.
         for _i in "${!floor_prefixes[@]}"; do
             prefix="${floor_prefixes[$_i]}"
             local keep="${floor_keeps[$_i]}"
             [ -n "$keep" ] || die "profile '$PROFILE_ACTIVE' declares [excluded:$prefix] without a keep -- a floor with no count is not a floor, and guessing one here would fence a family by an amount nobody chose"
+            if grep -qF "[excluded:$prefix]" "$file" 2>/dev/null; then
+                # IDENTICAL DEDUPLICATES, DIFFERENT REFUSES.
+                #
+                # A floor is CONFIG-WIDE: gen-cron folds every [excluded:] into
+                # one PROTECT_FLAGS fragment pasted onto every prune line in the
+                # file. So one config cannot fence a family two ways, and two
+                # profiles that disagree about `keep` are not a merge problem --
+                # they are a question only a human can answer.
+                #
+                # Skipping silently (what this did) means the FIRST profile to
+                # be installed wins forever and the second one's declaration is
+                # quietly void: an operator reading profile B sees a number that
+                # is not in force anywhere. Taking the larger, or the newer,
+                # would be the same lie with better manners.
+                local _have
+                _have="$(section_field "$file" "[excluded:$prefix]" keep)"
+                _have="$(printf '%s' "$_have" | tr -d '[:space:]')"
+                if [ -n "$_have" ] && [ "$_have" != "$keep" ]; then
+                    die "[excluded:$prefix] in $file already fences that family at keep=$_have, and profile '$PROFILE_ACTIVE' declares keep=$keep. A floor is CONFIG-WIDE -- one file cannot protect a family two ways, and neither value is safe to pick for you: the smaller one deletes snapshots something else is relying on, the larger one silently changes the retention every relationship in this file already runs under. Make them agree, in the profile or in the config, and re-run. No floor was written and nothing was installed."
+                fi
+            fi
+        done
+        # PASS 2: write what is genuinely missing. Nothing here can refuse any
+        # more -- every reason to refuse was exhausted above.
+        for _i in "${!floor_prefixes[@]}"; do
+            prefix="${floor_prefixes[$_i]}"
             grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
             {
                 echo
                 echo "[excluded:$prefix]"
-                echo "	keep = $keep"
+                echo "	keep = ${floor_keeps[$_i]}"
             } >> "$file" || die "could not append [excluded:$prefix] to $file"
-            log "added missing reserved-prefix protection [excluded:$prefix] (keep=$keep) to $file"
+            log "added missing reserved-prefix protection [excluded:$prefix] (keep=${floor_keeps[$_i]}) to $file"
         done
     elif [ "$needs_profile" -eq 1 ]; then
         # Inheriting the installed policy is the correct action, but doing it
@@ -1921,10 +1952,27 @@ Resolve by hand: give the new relationship's profile a different template identi
         # operator should learn that here rather than from a missing pvesr or
         # vzdump snapshot later. A warning is neither a mutation nor a refusal,
         # and activate-client shows its full proposal before installing.
-        local missing=""
-        for prefix in ${floor_prefixes[@]+"${floor_prefixes[@]}"}; do
-            grep -qF "[excluded:$prefix]" "$file" 2>/dev/null || missing="$missing $prefix"
+        local missing="" _diff="" _i2 _hv
+        for _i2 in "${!floor_prefixes[@]}"; do
+            prefix="${floor_prefixes[$_i2]}"
+            if ! grep -qF "[excluded:$prefix]" "$file" 2>/dev/null; then
+                missing="$missing $prefix"
+                continue
+            fi
+            # A DISAGREEMENT here is reported, never refused, and that asymmetry
+            # is deliberate. On this path the run is not writing floors at all --
+            # the config already carries relationship policy, so the new
+            # relationship inherits it exactly as installed (Gate 2). Refusing
+            # would make a host unusable because an administrator once narrowed a
+            # floor on purpose, which REV-20260810-092 explicitly protects. But
+            # the profile's number is not in force, and saying nothing would let
+            # an operator believe it was.
+            _hv="$(section_field "$file" "[excluded:$prefix]" keep)"
+            _hv="$(printf '%s' "$_hv" | tr -d '[:space:]')"
+            [ -n "$_hv" ] && [ "$_hv" != "${floor_keeps[$_i2]}" ] \
+                && _diff="$_diff $prefix(config=$_hv, profil=${floor_keeps[$_i2]})"
         done
+        [ -n "$_diff" ] && warn "$file fences these families differently than profile '$PROFILE_ACTIVE' declares:$_diff -- the INSTALLED value stays in force for every relationship in this file, including the new one. The profile's number is not being applied here (that would change the prune command of relationships already running). Reconcile them deliberately if the profile is the one you meant."
         [ -n "$missing" ] && warn "$file has no [excluded:] floor for:$missing -- the new relationship inherits the CONFIG-wide protection policy exactly as installed, and it is NOT being repaired here (that would change the prune command of every relationship already in this file). If those floors are wanted, add them by hand, deliberately, in one edit that you can see affects everything."
     fi
     # Explicit: without it this function's exit status would be whatever the

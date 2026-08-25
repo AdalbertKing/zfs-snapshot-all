@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8cdc3ffae4a37d2b -->
+<!-- status-covers-digest: a44c956e19fbb998 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1737,6 +1737,48 @@
   zachowujac kadencje kazdego tieru. Osobny krok, bo wymaga liczenia kolizji
   w trzech roznych oknach czasowych (godzina, doba, tydzien) — nowa logika,
   ktorej nie wolno mieszac z transkrypcja.
+
+- **ETAP PROFILI, krok 4: sprzeczne `[excluded:]` sa ODMAWIANE, nie zgadywane
+  (2026-08-25).**
+
+  Domyka rzecz, ktora trzykrotnie zglaszalem jako niedokonczona. Sekcja
+  `[excluded:]` nie jest opinia profilu: `gen-cron` skleja wszystkie w JEDEN
+  fragment `PROTECT_FLAGS` doklejany do **kazdej** linii prune w pliku. Jeden
+  config nie moze wiec ogrodzic rodziny na dwa sposoby.
+
+  Dotad przy istniejacej sekcji instalator podlog po prostu **pomijal** swoja —
+  czyli pierwszy zainstalowany profil wygrywal na zawsze, a deklaracja drugiego
+  byla cicho niewazna: operator czytajacy profil B widzial liczbe, ktora nigdzie
+  nie obowiazuje. Wybranie wiekszej albo nowszej byloby tym samym klamstwem
+  w lepszych manierach.
+
+  | sytuacja | zachowanie |
+  |---|---|
+  | ta sama rodzina, **ten sam** `keep` | deduplikacja, cisza |
+  | ta sama rodzina, **inny** `keep`, sciezka instalujaca | **ODMOWA** nazywajaca obie wartosci |
+  | ta sama rodzina, inny `keep`, sciezka dziedziczaca | **ostrzezenie**, nie odmowa — patrz nizej |
+  | profil sprzeczny **sam ze soba** | odmowa juz przy walidacji, nazywajaca plik |
+
+  Asymetria miedzy trzecim a drugim wierszem jest celowa: na sciezce
+  dziedziczacej przebieg **w ogole nie pisze podlog** — config ma juz polityke
+  relacji, wiec nowa relacja dziedziczy ja dokladnie tak, jak jest zainstalowana
+  (Gate 2). Odmowa uczynilaby host bezuzytecznym dlatego, ze administrator
+  kiedys swiadomie zawezil podloge, co REV-20260810-092 wprost chroni. Ale
+  liczba z profilu nie obowiazuje — i milczenie pozwoliloby wierzyc, ze
+  obowiazuje.
+
+  **Dwie wady znalezione we wlasnej poprawce, obie przez czytanie komunikatu
+  zamiast ufania kodowi wyjscia:** komunikat odmowy uzywal `$config`, podczas
+  gdy w tej funkcji zmienna nazywa sie `$file` — pod `set -u` przebieg umieral
+  **z niewlasciwego powodu**; oraz sprawdzanie i pisanie bylo w jednej petli,
+  wiec konflikt na drugiej rodzinie odmawial po dopisaniu pierwszej, a komunikat
+  twierdzil, ze nic nie zmieniono. Teraz sa **dwa przebiegi**: najpierw
+  sprawdzane sa wszystkie podlogi, dopiero potem pisana ktorakolwiek. Bramka,
+  ktora mutuje zanim odmowi, nie jest bramka.
+
+  `test/profiles`: **63/0** (+5). Kontrola negatywna wobec builda sprzed zmiany:
+  **trzy padaja**, a dwie kontrole „nie wolno odmowic" (zgodny config, swiezy
+  config) przechodza po obu stronach.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 

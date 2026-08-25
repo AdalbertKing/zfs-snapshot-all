@@ -204,7 +204,7 @@ profile_validate_fragment() {   # <kind> <file> <schema dump>
 # built-in profile left the suite at 22/22.
 profile_validate_templates() {   # <file> <schema dump>
     PROFILE_ERR=""
-    local file="$1" dump="$2" raw field n=0 in_section=0
+    local file="$1" dump="$2" raw field n=0 in_section=0 seen_excluded=""
     [ -r "$file" ] || { PROFILE_ERR="cannot read profile templates '$file'"; return 1; }
     while IFS= read -r raw || [ -n "$raw" ]; do
         n=$((n+1))
@@ -240,6 +240,15 @@ profile_validate_templates() {   # <file> <schema dump>
                     '')          PROFILE_ERR="$file:$n: [excluded:] with no prefix"; return 1 ;;
                     *'['*|*']'*) PROFILE_ERR="$file:$n: '$field' is not usable in a section header"; return 1 ;;
                 esac
+                # One profile cannot fence one family twice. The runtime refuses
+                # two PROFILES that disagree about a family; a profile
+                # disagreeing with ITSELF is the same fault caught earlier and
+                # more cheaply, and it names the file instead of the composed
+                # temporary the generator would complain about.
+                case " $seen_excluded " in
+                    *" $field "*) PROFILE_ERR="$file:$n: '[excluded:$field]' appears twice in this profile -- one config cannot fence a family two ways"; return 1 ;;
+                esac
+                seen_excluded="$seen_excluded $field"
                 in_section=2
                 continue ;;
             '['*)

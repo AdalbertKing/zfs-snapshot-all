@@ -490,5 +490,82 @@ else
 fi
 
 
+# ===========================================================================
+# CONFIG-WIDE FLOORS: identical deduplicates, DIFFERENT refuses.
+#
+# An [excluded:] section is not this profile's opinion -- gen-cron folds every
+# one of them into a single PROTECT_FLAGS fragment pasted onto EVERY prune line
+# in the file. So one config cannot fence a family two ways, and two profiles
+# that disagree about `keep` are not a merge problem: they are a question only a
+# human can answer.
+#
+# Skipping silently -- which is what the code did until now -- means the FIRST
+# profile installed wins forever while the second one's declaration is quietly
+# void: an operator reading profile B sees a number in force nowhere.
+# ===========================================================================
+FLOOR="$TMP/floors"; rm -rf "$FLOOR"; mkdir -p "$FLOOR/p/nine" "$FLOOR/bin"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$FLOOR/bin/crontab"
+chmod +x "$FLOOR/bin/crontab"
+sed 's/^\tkeep = 2$/\tkeep = 9/' "$ROOT/profiles/default/profile.conf" > "$FLOOR/p/nine/profile.conf"
+
+floor_run() {   # <config file> -> "rc|<message>"
+    local out rc
+    out=$( ( PATH="$FLOOR/bin:$PATH"; PROFILE_ROOT="$FLOOR/p"; PROFILE_ACTIVE=nine; PROFILE_LOADED=""
+             . "$ROOT/zfs-backup.sh" >/dev/null 2>&1
+             load_active_profile
+             ensure_cron_config "$1" 0 1 always ) 2>&1 ); rc=$?
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | grep -c 'already fences')"
+}
+
+# 1. the config fences vzdump at 2, the profile says 9 -> refuse, naming both
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = 2\n' > "$FLOOR/conflict.conf"
+r="$(floor_run "$FLOOR/conflict.conf")"
+if [ "$r" = "1|1" ]; then
+    ok "floors: a family fenced differently by config and profile is REFUSED"
+else
+    bad "floors: a family fenced differently by config and profile is refused" "got $r"
+fi
+
+# 2. and NOTHING was written before the refusal. A gate that mutates before it
+#    refuses is not a gate -- the first cut appended the first family and then
+#    refused on the second, while its own message said nothing had changed.
+if [ "$(grep -c '^\[excluded:' "$FLOOR/conflict.conf")" -eq 1 ]; then
+    ok "floors: the refusal writes no floor at all (checked before written)"
+else
+    bad "floors: the refusal writes no floor at all" "$(grep -c '^\[excluded:' "$FLOOR/conflict.conf") sekcji [excluded:] w pliku"
+fi
+
+# 3. CONTROL: the same profile against a config that AGREES installs quietly.
+#    Without this, case 1 would pass against a build that refused every floor.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = 9\n' > "$FLOOR/agree.conf"
+r="$(floor_run "$FLOOR/agree.conf")"
+if [ "${r%%|*}" = "0" ]; then
+    ok "floors control: a config that AGREES is not refused (identical deduplicates)"
+else
+    bad "floors control: a config that agrees is not refused" "got $r"
+fi
+
+# 4. CONTROL: a fresh config gets the floors written, with the PROFILE's value.
+printf '[defaults]\n\thost_label = t\n' > "$FLOOR/fresh.conf"
+r="$(floor_run "$FLOOR/fresh.conf")"
+if [ "${r%%|*}" = "0" ] && [ "$(grep -c 'keep = 9' "$FLOOR/fresh.conf")" -ge 3 ]; then
+    ok "floors control: a fresh config is given the profile's own values"
+else
+    bad "floors control: a fresh config is given the profile's own values" "got $r, keep9=$(grep -c 'keep = 9' "$FLOOR/fresh.conf")"
+fi
+
+# 5. A profile that contradicts ITSELF is refused earlier and more cheaply, and
+#    the message names the profile file rather than a composed temporary.
+mkdir -p "$FLOOR/p/selfdup"
+{ cat "$ROOT/profiles/default/profile.conf"; printf '\n[excluded:vzdump]\n\tkeep = 5\n'; } > "$FLOOR/p/selfdup/profile.conf"
+if profile_validate_dir "$FLOOR/p/selfdup" "$GEN"; then
+    bad "floors: a profile fencing one family twice is refused"
+else
+    case "$PROFILE_ERR" in
+        *"appears twice"*) ok "floors: a profile fencing one family twice is refused, naming the file" ;;
+        *) bad "floors: a profile fencing one family twice is refused" "wrong reason: $PROFILE_ERR" ;;
+    esac
+fi
+
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

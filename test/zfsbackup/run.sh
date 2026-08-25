@@ -3685,7 +3685,10 @@ fi
 # one more boundary.
 FS_CAND="$FS/candidate.conf"
 ( . "$REPO/lib-profile.sh"
-  profile_render_templates "$FS/p/prof" prof "$FS/tpl.conf" ) || true
+  _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
+  bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
+  profile_split_one_file "$FS/p/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_render_templates "$_t" prof "$FS/tpl.conf" "" "$_L" ) || true
 {
     # No [defaults] dst: this client PULLS -- the emitted section carries src --
     # and gen-cron refuses a section that resolves both.
