@@ -321,7 +321,7 @@ Client state control:
   zfs-backup.sh enable-client NAME
 
 Config maintenance:
-  zfs-backup.sh migrate-profile [--yes]
+  zfs-backup.sh migrate-profile [--profile=NAZWA] [--yes]
   zfs-backup.sh audit-source-retention [--apply] [--yes]
 
 Inspection / teardown:
@@ -1003,9 +1003,42 @@ profile_release_tmp() {
     return 0
 }
 
+# The candidate config a transactional command builds before it publishes.
+#
+# Every command that writes one already removes it on each of its OWN failure
+# paths -- `rm -f "$workfile"; die ...` appears at each one. What none of them
+# can reach is a die() raised INSIDE a function they called: ensure_cron_config
+# refusing a floor conflict, emit_client_sections refusing a foreign section,
+# a grant check failing. The shell exits from under the caller and the
+# half-written candidate stays next to the live config, mode 0644, named
+# .zfsbackup-work.XXXXXX. Harmless to the running estate -- nothing reads a
+# file by that name -- but it is the same leak class that left 1824 rendered
+# profile copies in pve0's /tmp, and it accumulates in the one directory an
+# operator looks at when something has gone wrong.
+#
+# Hooked into the EXIT handler that already exists rather than arming a second
+# trap: _profile_arm_release composes carefully with a consumer's own handler,
+# and two independent traps would be one composition too many.
+WORKFILE_TRACKED=""
+workfile_track() {   # <path> -- release it if the shell dies before it is published
+    WORKFILE_TRACKED="$1"
+    _profile_arm_release
+}
+# Publishing or explicitly discarding it ends the tracking: the path is either
+# gone or is now the live config, and removing THAT on exit would be a disaster
+# rather than a cleanup.
+workfile_untrack() { WORKFILE_TRACKED=""; }
+workfile_release_tmp() {
+    [ -n "$WORKFILE_TRACKED" ] || return 0
+    local f="$WORKFILE_TRACKED"; WORKFILE_TRACKED=""
+    rm -f "$f" 2>/dev/null
+    [ -e "$f" ] && warn "could not remove the candidate config $f -- it is still in place"
+    return 0
+}
+
 # The EXIT trap preserves the status the shell was already exiting with: the
 # leak is a scratch-file problem, not a verdict on the run.
-_profile_release_on_exit() { local rc=$?; profile_release_tmp; return "$rc"; }
+_profile_release_on_exit() { local rc=$?; workfile_release_tmp; profile_release_tmp; return "$rc"; }
 
 # Arm the trap in THIS shell, at load time -- not at file scope.
 #
@@ -1621,6 +1654,37 @@ cron_config_section() {   # <file> <exact header, e.g. '[template:foo]'>
 # and several prune-only ones over its family. A flat per-tier config fuses
 # them. So one template carrying both send_schedule and prune_schedule settles
 # it, whatever anyone called it.
+# TWO DIFFERENT QUESTIONS, one grep used to answer both -- and that conflation
+# made `prod` a one-relationship-per-host profile. Measured 2026-08-25: a config
+# generated from `prod` accepts its FIRST client (4 templates written) and the
+# SECOND is refused with "uses the pre-GFS profile (standard_* still carries
+# prune_schedule)" -- naming a family the file does not contain.
+#
+#   detect_profile_gfs   "does the policy in force prune from a separate
+#                        ladder, or from the send tiers themselves?" That is a
+#                        SHAPE question, it drives whether a [prune:] ladder is
+#                        emitted, and a flat answer for `prod` is correct.
+#
+#   config_is_frozen_legacy  "is this the FROZEN pre-GFS family?" That is a
+#                        NAME question. The frozen family is bare
+#                        standard_hourly/daily/weekly/monthly -- written before
+#                        profiles were namespaced. A modern flat profile is
+#                        profile__<name>__<tier>: it prunes from its tiers too,
+#                        but it is current policy, not frozen policy, and
+#                        adding a second relationship to it is ordinary work.
+#
+# The refusal that reads this exists to stop the standard ladder being stacked
+# on TOP of a legacy family that already self-prunes. A namespaced flat profile
+# poses no such hazard: there is no second ladder to add, because emit's ladder
+# branch is gated on the same shape answer.
+config_is_frozen_legacy() {   # <file> -> 0 when the frozen pre-GFS family is present
+    awk '
+        /^\[template:standard_(hourly|daily|weekly|monthly)\]/ { intpl=1; next }
+        /^\[/ { intpl=0 }
+        intpl && /^[ \t]*prune_schedule[ \t]*=/ { print "frozen"; exit }
+    ' "$1" 2>/dev/null | grep -q frozen
+}
+
 detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
     PROFILE_GFS=1
     [ -r "$1" ] || return 0
@@ -1770,7 +1834,12 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # Note detect_profile_gfs itself still runs unconditionally: PROFILE_GFS is
     # read downstream (the prune shape, the activation summary), and only the
     # REFUSAL is conditional.
-    if [ "$needs_profile" -eq 1 ] && [ "$PROFILE_GFS" -eq 0 ]; then
+    # NAME, not shape -- see config_is_frozen_legacy. Testing PROFILE_GFS here
+    # refused every second relationship on a host running any flat profile,
+    # because "the tiers prune themselves" is true of the frozen family AND of
+    # `prod`. The hazard is stacking the standard ladder on a family that
+    # already self-prunes, and that family is the bare standard_* one.
+    if [ "$needs_profile" -eq 1 ] && config_is_frozen_legacy "$file"; then
         die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
     fi
 
@@ -3898,6 +3967,11 @@ _restore_target_crontab() {   # <file>
 
 atomic_replace_and_install() {
     local realfile="$1" workfile="$2"
+    # From here the candidate is THIS function's: every path below either moves
+    # it into place or removes it explicitly, so the exit-time net must let go
+    # of it now. Releasing a path that has become the live config would be a
+    # disaster dressed as a cleanup.
+    workfile_untrack
     # A1: the runnability guard, FIRST, before any state is touched -- a
     # refusal here has nothing to roll back. Rendered from the workfile the
     # same way the install will render it; if the render itself fails, fall
@@ -6827,6 +6901,7 @@ cmd_activate_client() {
     # itself, not just the config file).
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
         || die "mktemp failed next to $cronfile"
+        workfile_track "$workfile"
     if [ -f "$cronfile" ]; then
         cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile to a working copy"; }
     else
@@ -7211,7 +7286,7 @@ cmd_activate() {
 }
 
 # ------------------------------------------------------------------------------
-# migrate-profile: take a host off the pre-GFS profile, in one decision.
+# migrate-profile: put a host onto a profile, in one decision.
 #
 # REV-20260801-016 F3. Leaving a legacy host alone is safe, but telling its
 # administrator that migration is "a deliberate edit" pushes the internal
@@ -7222,11 +7297,38 @@ cmd_activate() {
 # It rebuilds every ACTIVE client through emit_client_sections(), the same
 # function activate-client uses, so a migrated host lands on byte-identical
 # sections rather than on a second implementation of the same shape.
-cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
-    local yes=0 a config_arg="" local_user_arg=""
+#
+# THE DESTINATION WAS HARDCODED until 2026-08-25: legacy flat-per-tier -> the
+# standard GFS ladder, because that was the only migration in existence. With
+# `default`, `passive` and `prod` as real profiles, "put this host on profile
+# X" became an ordinary operation with no command behind it -- an operator's
+# only route was editing the config by hand, which is exactly what this
+# function was written to spare them. --profile=NAME is that command; omitting
+# it still means `default`, so the original migration is unchanged.
+#
+# Generalising it needed three things the hardcoded version could skip:
+#
+#   1. PROFILE_GFS is DERIVED from the destination's shape, not asserted. It
+#      decides whether a GFS ladder is emitted at all.
+#   2. The client's [prune:] sections are swept by MARKER before regeneration.
+#      A ladder sits at the PARENT of the datasets, so the path-driven
+#      remove_managed_sections cannot reach it -- and the whole ladder-emitting
+#      branch is inside `if PROFILE_GFS`, so migrating to a FLAT profile would
+#      never have run the removal either. GFS -> flat would have left the old
+#      ladder next to the new per-tier prune: two pruners, same snapshots.
+#   3. Orphaned templates are found by reference-counting, not by name.
+cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME] [--yes]
+    local yes=0 a config_arg="" local_user_arg="" target_profile=""
     for a in "$@"; do
         case "$a" in
             --yes|-y) yes=1 ;;
+            # The destination used to be hardcoded: legacy flat-per-tier ->
+            # the standard GFS ladder, and nothing else. That was the only
+            # migration that existed when it was written. With `default`,
+            # `passive` and `prod` as real profiles, "move this host onto
+            # profile X" is an ordinary operation and had no command at all --
+            # an operator's only route was editing the config by hand.
+            --profile=*)    target_profile="${a#*=}" ;;
             --config=*)     config_arg="${a#*=}" ;;
             --local-user=*) local_user_arg="${a#*=}"
                 local_user_name_valid "$local_user_arg" \
@@ -7250,12 +7352,55 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
 
-    if ! sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule"; then
-        log "$cronfile is already on the standard GFS profile -- nothing to migrate."
+    # Same zero-choice default and the same validation as add-client: an
+    # operator who never heard of profiles gets exactly the behaviour this
+    # command had before the flag existed, and a typo fails HERE rather than
+    # halfway through rewriting a config.
+    [ -n "$target_profile" ] || target_profile="$PROFILE_DEFAULT_NAME"
+    profile_validate_dir "$PROFILE_ROOT/$target_profile" "$GENCRON" \
+        || die "migrate-profile: --profile='$target_profile': $PROFILE_ERR"
+    # Point the loader at the DESTINATION before anything reads the profile.
+    # emit_client_sections loads lazily and caches on PROFILE_LOADED, so the
+    # first thing to render must already see the target -- otherwise the whole
+    # migration would quietly run on whatever profile happened to be active.
+    if [ "$PROFILE_ACTIVE" != "$target_profile" ]; then
+        profile_release_tmp
+        PROFILE_LOADED=""
+        PROFILE_ACTIVE="$target_profile"
+    fi
+    load_active_profile
+
+    # ALREADY THERE? Ask the client RECORDS, not the config's shape.
+    #
+    # The old test was a grep for a flat [template:standard_hourly] -- a fine
+    # question when there was exactly one destination, and meaningless now:
+    # `prod` IS flat per tier, so that grep would call an already-migrated prod
+    # host "not migrated yet" and re-run forever. Each record carries the
+    # profile it was created from (write_client_field PROFILE), which is the
+    # fact this question is actually about. Records predating the field hold
+    # "", which correctly reads as "not on the target".
+    local _f _on_target=1 _actives=0
+    for _f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$_f" ] || continue
+        ( : )
+        # shellcheck disable=SC1090
+        . "$_f"
+        [ "${STATE:-}" = active ] || continue
+        _actives=$((_actives + 1))
+        [ "${PROFILE:-}" = "$target_profile" ] || _on_target=0
+    done
+    # A legacy config can hold records that already SAY `default` while the
+    # sections are still flat per tier -- that is the original migration this
+    # command was written for, and it must still be detected.
+    local _legacy=0
+    sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule" && _legacy=1
+    if [ "$_on_target" -eq 1 ] && [ "$_actives" -gt 0 ] && [ "$_legacy" -eq 0 ]; then
+        log "$cronfile is already on profile '$target_profile' ($_actives active client(s)) -- nothing to migrate."
         return 0
     fi
 
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX")         || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
     # mktemp makes 0600. The preview and the install both read this file AS the
     # collector account, so it has to be readable by it -- and the mode has to
     # be right BEFORE either of them runs, not after the swap.
@@ -7263,20 +7408,42 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
 
-    # Drop every legacy send template, then let ensure_cron_config put the new
-    # families back. Removing them is what makes this a migration rather than an
-    # append: the old standard_daily/weekly/monthly sections would otherwise sit
-    # there defining schedules nothing references.
+    # The LEGACY flat family goes before ensure_cron_config, and this is not
+    # housekeeping -- it is what lets the call succeed at all. ensure_cron_config
+    # refuses to add current policy on top of a pre-GFS config (the two would
+    # prune the same snapshots on the same schedule), and that refusal reads the
+    # very templates being replaced here. A no-op on any host that is not legacy.
     local t
     for t in standard_hourly standard_daily standard_weekly standard_monthly; do
         remove_template_section "$workfile" "$t"
     done
-    PROFILE_GFS=1
+    # Everything ELSE orphaned is swept after the clients are rewritten, when it
+    # is finally known what still references what -- see
+    # remove_orphan_profile_templates.
+
     # REV-20260810-092: 'always'. This is the explicit-migration boundary the
     # review carves out -- a previewed, confirmed transaction that shows the
     # exact config and cron diff first, and the one command that installs the
     # broad GFS ladder the reserved-prefix floors exist to fence.
     ensure_cron_config "$workfile" 0 1 always
+
+    # PROFILE_GFS DESCRIBES THE INSTALLED CONFIG, NOT A PROFILE. detect_profile_gfs
+    # reads the FILE (see its call in ensure_cron_config, and the note above
+    # client_section_plan), which during a migration is still the shape being
+    # migrated AWAY from. The hardcoded version got away with asserting
+    # PROFILE_GFS=1 because its destination was always the ladder; asserting the
+    # source's shape for an arbitrary destination is how `--profile=prod` came
+    # out carrying an empty GFS [prune:] section -- the ladder branch ran, and a
+    # flat profile has no [prune] fragment to fill it with. Measured, not
+    # reasoned: gen-cron rejected the candidate with "[prune:...] has no
+    # use_template", which is the same emptiness the source-prune emitters
+    # already gate on.
+    #
+    # So ask the DESTINATION, with the same detector, pointed at the profile's
+    # own rendered templates: a tier carrying both send_schedule and
+    # prune_schedule is flat, anything else is a ladder. One rule, one
+    # implementation, two inputs.
+    detect_profile_gfs "$PROFILE_TPL_FILE"
 
     local f name migrated=0
     local -a managed=(); local prune_scope=""
@@ -7293,6 +7460,12 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
         # re-deriving it is the entire purpose of migrate-profile, which exists
         # precisely to move a host off the legacy profile in one decision. This
         # is the one call site where the profile is meant to win.
+        # The client's own [prune:] sections go first, all of them. With
+        # is_new=1 every dataset regenerates, so emit_client_sections re-emits
+        # exactly what the NEW profile calls for -- and only a marker-driven
+        # sweep can reach a GFS ladder parked at the parent path when the
+        # destination profile has no ladder at all.
+        remove_client_prune_sections "$workfile" "$name"
         emit_client_sections "$workfile" "$name" 1 || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
         # REV-20260811-102 step 3: same fail-closed source-prune grant gate as
         # activate-client, per client -- never migrate a config that installs a
@@ -7313,6 +7486,11 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     done
     [ "$migrated" -gt 0 ] || log "no active clients -- migrating the templates only"
 
+    # Now, and not before: what a template is worth is decided by what still
+    # references it, and that is only settled once every client has been
+    # rewritten onto the destination profile.
+    remove_orphan_profile_templates "$workfile"
+
     log "validating the migrated config (working copy only, nothing real touched yet)..."
     if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
         rm -f "$workfile"
@@ -7324,11 +7502,13 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
         die "could not render the migration preview -- nothing was touched"
     }
 
-    echo "Migracja: plaska retencja per tier  ->  standardowa polityka GFS"
+    local _shape="drabina GFS"
+    [ "${PROFILE_GFS:-1}" -eq 1 ] || _shape="plaska retencja per tier"
+    echo "Migracja profilu:  ->  '$target_profile'  ($_shape)"
     echo "Klientow do przepisania: $migrated"
     echo
     if [ "$yes" -ne 1 ]; then
-        read -rp "Zmigrowac ten host na standardowa polityke GFS? [t/N] " ans
+        read -rp "Zmigrowac ten host na profil '$target_profile'? [t/N] " ans
         case "$ans" in
             t|T|tak|TAK|y|Y|yes|YES) ;;
             *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
@@ -7340,7 +7520,39 @@ cmd_migrate_profile() {   # [--config=PATH] [--local-user=NAME] [--yes]
     assert_target_block_not_clobbered "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
-    log "host migrated to the standard GFS profile ($migrated client(s) rewritten)."
+
+    # THE RECORDS FOLLOW THE CONFIG, and only once the config is really
+    # installed. PROFILE is create-time provenance that seed_profile_context
+    # still reads: leaving it saying `default` on a host now running `prod`
+    # would make the next seed ask about the wrong family root -- a silent lie
+    # of exactly the kind a migration is supposed to end. It is also what makes
+    # a second run of this command a no-op instead of an endless "not migrated
+    # yet".
+    #
+    # After the swap, not before: a failed swap must never leave records ahead
+    # of the file they describe. A failure HERE is the one direction that
+    # cannot be made atomic, so it is named per record instead of swallowed.
+    local _rf _stale=""
+    for _rf in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$_rf" ] || continue
+        ( : )
+        # shellcheck disable=SC1090
+        . "$_rf"
+        [ "${STATE:-}" = active ] || continue
+        [ "${PROFILE:-}" = "$target_profile" ] && continue
+        # Same idiom as activate-client: the record is `.`-sourced, so an
+        # appended assignment is the update -- last one wins.
+        if { cat "$_rf"; write_client_field PROFILE "$target_profile"; } > "${_rf}.new" \
+             && mv -f "${_rf}.new" "$_rf"; then
+            chmod 0600 "$_rf" 2>/dev/null || :
+        else
+            rm -f "${_rf}.new"
+            _stale="$_stale ${CLIENT_NAME:-$_rf}"
+        fi
+    done
+    [ -n "$_stale" ] && warn "the config is now on profile '$target_profile', but these client records still name the old one:$_stale -- seed and catch-up read that field, so set PROFILE=$target_profile in them by hand before the next seed"
+
+    log "host migrated to profile '$target_profile' ($migrated client(s) rewritten)."
 }
 
 # REV-20260811-102 step 5: add SOURCE retention to relationships installed BEFORE
@@ -7471,6 +7683,7 @@ $gcerr"
     # --- --apply (F4): append ONLY the missing source prune sections, nothing else ---
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
         || die "mktemp failed next to $cronfile"
+        workfile_track "$workfile"
     chmod 0644 "$workfile" 2>/dev/null || :
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
@@ -7593,6 +7806,88 @@ config_datasets() {   # <config file>
 # Remove one [template:<name>] section, whole. Used only by migrate-profile:
 # ensure_cron_config deliberately never rewrites a template that is present, so
 # the legacy ones have to go before the new ones can be put back.
+# Every [prune:] section this client owns, gone -- by MARKER, not by path.
+#
+# remove_managed_sections takes dataset paths and clears [dataset:X]/[prune:X]
+# for each. That is right for its callers and wrong for a profile migration: a
+# GFS ladder sits at the PARENT of the datasets (see the comment in
+# remove_managed_sections about the two never sharing a path), so a path-driven
+# sweep cannot reach it. Migrating from a GFS profile to a flat one would then
+# leave the old ladder in place next to the new per-tier prune -- two pruners
+# over the same snapshots, which is the shape this estate has already been
+# bitten by. emit_client_sections re-emits whatever the NEW profile needs
+# (is_new=1 regenerates every dataset), so removing all of them first is safe.
+remove_client_prune_sections() {   # <file> <client name>
+    local file="$1" name="$2" tmp
+    tmp=$(mktemp) || die "mktemp failed"
+    local marker="# managed-by: zfs-backup.sh client=$name"
+    local line in_prune=0 first=0 owned=0
+    local -a buf=()
+    flush_prune_section() {
+        if [ "$owned" -ne 1 ]; then
+            local l
+            for l in ${buf[@]+"${buf[@]}"}; do printf '%s\n' "$l" >> "$tmp"; done
+        fi
+        buf=()
+    }
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            \[prune:*\])
+                flush_prune_section
+                in_prune=1; first=1; owned=0; buf=("$line"); continue ;;
+            \[*\])
+                flush_prune_section
+                in_prune=0; printf '%s\n' "$line" >> "$tmp"; continue ;;
+        esac
+        if [ "$in_prune" -eq 1 ]; then
+            # Authorship is the FIRST content line, exactly as
+            # remove_managed_sections decides it. Header text alone was never
+            # proof of authorship, only of path.
+            if [ "$first" -eq 1 ] && [ -n "${line//[[:space:]]/}" ]; then
+                first=0
+                [ "${line#"${line%%[![:space:]]*}"}" = "$marker" ] && owned=1
+            fi
+            buf+=("$line")
+        else
+            printf '%s\n' "$line" >> "$tmp"
+        fi
+    done < "$file"
+    flush_prune_section
+    unset -f flush_prune_section
+    mv_preserving_mode "$tmp" "$file" || die "could not update $file"
+}
+
+# A template nobody references is dead weight, and leaving it behind is what
+# makes a migration an APPEND instead. The previous version removed four
+# hardcoded legacy names; this asks the file instead, so it works for any
+# profile. gen-cron only allows use_template on [dataset:]/[prune:]
+# (POLICY_FIELDS carries no use_template), so templates cannot nest and one
+# pass over the file is a complete reference count.
+#
+# DELIBERATELY NARROW: only templates this tool generates are candidates --
+# namespaced `profile__*` sections, plus the four legacy names the hardcoded
+# version removed. An operator's own unreferenced template is left alone; a
+# migration is not a housekeeping sweep of somebody else's file.
+remove_orphan_profile_templates() {   # <file>
+    local file="$1" t refs
+    refs=$(awk -F= '
+        /^[ \t]*use_template[ \t]*=/ {
+            gsub(/[[:space:]]/, "", $2)
+            n = split($2, a, ",")
+            for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+        }' "$file" | sort -u)
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        case "$t" in
+            profile__*|standard_hourly|standard_daily|standard_weekly|standard_monthly) ;;
+            *) continue ;;
+        esac
+        printf '%s\n' "$refs" | grep -qxF "$t" && continue
+        remove_template_section "$file" "$t"
+        log "removed orphaned [template:$t] -- nothing references it after the migration"
+    done < <(grep -oE '^\[template:[^]]+\]' "$file" | sed 's/^\[template://; s/\]$//')
+}
+
 remove_template_section() {   # <file> <template name>
     local file="$1" tname="$2" tmp
     tmp=$(mktemp) || die "mktemp failed"
@@ -8192,6 +8487,7 @@ cmd_remove_client() {
         log "removing this client's [dataset:] sections from a working copy of $CRON_CONFIG"
         local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
             || die "mktemp failed next to $CRON_CONFIG"
+            workfile_track "$workfile"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
         chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2a12b626aad5e800 -->
+<!-- status-covers-digest: fd05325b563368ad -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1737,6 +1737,79 @@
   zachowujac kadencje kazdego tieru. Osobny krok, bo wymaga liczenia kolizji
   w trzech roznych oknach czasowych (godzina, doba, tydzien) — nowa logika,
   ktorej nie wolno mieszac z transkrypcja.
+
+- **ETAP PROFILI, krok 5: `migrate-profile --profile=NAZWA`, i dziura, ktora
+  przy tym wyszla (2026-08-25).**
+
+  Cel byl prosty: „zaorac konfiguracje nowym profilem" nie mialo komendy.
+  `migrate-profile` istnialo, ale z **zaszytym** celem — legacy plaska retencja
+  -> drabina GFS — bo taka byla jedyna migracja w chwili jego powstania.
+  Admin chcacy przeniesc hosta z `default` na `prod` mial jedna droge: recznie
+  edytowac config, czyli dokladnie to, przed czym ta komenda mial chronic.
+
+  Uogolnienie wymagalo trzech rzeczy, ktore wersja zaszyta mogla pominac:
+
+  1. **`PROFILE_GFS` opisuje ZAINSTALOWANY config, nie profil.**
+     `detect_profile_gfs` czyta PLIK. W trakcie migracji to wciaz ksztalt,
+     **od ktorego** uciekamy. Wersja zaszyta ustawiala `PROFILE_GFS=1` i miala
+     racje, bo jej celem zawsze byla drabina. Dla dowolnego celu to znaczy, ze
+     `--profile=prod` wchodzil w galaz drabiny, a profil plaski nie ma bloku
+     `[prune]`, ktorym da sie ja wypelnic. Zmierzone, nie wydedukowane:
+     gen-cron odrzucil kandydata komunikatem `[prune:...] has no use_template`.
+     Teraz pytamy **cel**, tym samym detektorem, wycelowanym w wyrenderowane
+     szablony profilu.
+  2. **Sekcje `[prune:]` klienta sa zamiatane po MARKERZE, nie po sciezce.**
+     Drabina GFS siedzi na **rodzicu** datasetow, wiec `remove_managed_sections`
+     (dostaje sciezki datasetow) nie moze jej dosiegnac — a cala galaz emisji
+     drabiny jest pod `if PROFILE_GFS`, wiec migracja DO profilu plaskiego nie
+     uruchomilaby tez usuwania. `default -> prod` zostawilby stara drabine obok
+     nowego prune per tier: **dwa sprzatacze na tych samych snapshotach**.
+  3. **Osierocone szablony liczone przez referencje**, nie po nazwie.
+
+  **Dziura, ktora przy tym wyszla — powazniejsza niz sama migracja.**
+  `detect_profile_gfs` odpowiada na pytanie o KSZTALT („czy tiery sprzataja
+  same siebie?"). Odmowa w `ensure_cron_config` czytala te odpowiedz, ale
+  dotyczy pytania o NAZWE: zamrozonej rodziny `standard_*` sprzed
+  nazw przestrzennych. `prod` jest plaski **z definicji**, wiec wygladal jak
+  legacy. Skutek zmierzony sonda z kontrola pozytywna:
+
+  | krok | wynik |
+  |---|---|
+  | pierwsza generacja z profilu `prod` | 4 szablony zapisane, OK |
+  | **druga** generacja na tym samym configu | **FATAL: „uses the pre-GFS profile (standard_* still carries prune_schedule)"** |
+
+  Czyli `prod` byl profilem **jednej relacji na host** — a komunikat nazywal
+  rodzine, ktorej w tym pliku nie ma. Nie dotyczylo to wylacznie migracji:
+  to jest zwykla sciezka `activate-client` dla drugiego klienta. Wyszloby na
+  zywym kolektorze, przy drugiej relacji, za kilka miesiecy.
+
+  Rozwiazanie: rozdzielic dwa pytania. `config_is_frozen_legacy` pyta o NAZWE
+  (goly `standard_*` z `prune_schedule`), `detect_profile_gfs` dalej o ksztalt.
+  Bramka jest **zwezona, nie usunieta** — kontrola negatywna dowodzi, ze
+  prawdziwy pre-GFS config nadal jest odrzucany.
+
+  **Plik kandydata nie przezywa juz odmowy.** Kazda komenda transakcyjna
+  sprzatala swoja kopie robocza na wlasnych sciezkach bledu, ale zadna nie
+  siega `die()` podniesionego **wewnatrz wywolanej funkcji** — powloka konczy
+  sie spod wolajacego, a `.zfsbackup-work.XXXXXX` zostaje obok zywego configu
+  z prawami 0644. Zmierzone na poprzednim commicie: **1 plik zostaje**. Sprzatanie
+  wpiete w istniejacy handler `EXIT` (`_profile_arm_release` komponuje sie
+  ostroznie z handlerem konsumenta; drugi trap bylby kompozycja za duzo), a
+  `atomic_replace_and_install` zwalnia sledzenie na wejsciu — zwolnienie
+  sciezki, ktora stala sie zywym configiem, byloby katastrofa przebrana za
+  porzadki.
+
+  `test/zfsbackup`: **+12** asercji (96a-96l), w tym cztery kontrole. Kontrola
+  negatywna to pelne drzewo sprzed zmiany (`git archive HEAD`) z wlozonymi
+  nowymi testami: **9 pada**, a trzy kontrole („nieznany profil odmawia",
+  „prawdziwy legacy odmawia", „opublikowany config nie jest zamiatany")
+  przechodza po obu stronach. Asercja o wycieku zostala przerobiona na config
+  **legacy** wlasnie po to, by na starym buildzie padala z wlasciwego powodu, a
+  nie na nierozpoznanej fladze.
+
+  **Nie zrobione, nazwane:** migracja przepisuje rekordy klientow (`PROFILE=`)
+  **po** podmianie configu, bo to jedyny kierunek, ktorego nie da sie uczynic
+  atomowym; blad na tym etapie jest nazwany per rekord, nie polkniety.
 
 - **ETAP PROFILI, krok 4: sprzeczna podloga `[excluded:]` jest ODMAWIANA, ale
   tylko w kierunku, ktory oslabia (2026-08-25).**

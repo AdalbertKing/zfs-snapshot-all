@@ -6821,6 +6821,259 @@ else
     bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep 'ssh ' | head -1)"
 fi
 
+# ===========================================================================
+# 96. migrate-profile takes a DESTINATION (2026-08-25)
+#
+# The destination used to be hardcoded: legacy flat-per-tier -> the standard
+# GFS ladder. With `default`, `passive` and `prod` as real profiles, "put this
+# host on profile X" was an ordinary operation with no command behind it.
+#
+# The sharp edge is GFS -> FLAT. A GFS ladder sits at the PARENT of the
+# datasets, so the path-driven remove_managed_sections cannot reach it -- and
+# the entire ladder branch lives inside `if PROFILE_GFS`, so migrating TO a
+# flat profile would never have run the removal either. The old ladder would
+# have survived next to the new per-tier prune: two pruners, same snapshots,
+# same host. That is the property these assertions exist for.
+#
+# The fixture is built BY the tool: migrate to `default` first (which creates
+# the ladder), then to `prod` (which must remove it). Hand-writing the "already
+# on default" config would have been writing my own expectation into the input.
+# ===========================================================================
+MP="$WORK/migrateprofile"
+rm -rf "$MP"; mkdir -p "$MP/clients" "$MP/peerstate" "$MP/keys" "$MP/dir" \
+                       "$MP/root" "$MP/bin"
+cp -r "$REPO/profiles/default" "$MP/root/default"
+cp -r "$REPO/profiles/prod"    "$MP/root/prod"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$MP/bin/crontab"
+chmod +x "$MP/bin/crontab"
+for h in 10.9.9.8 10.9.9.9; do
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$MP/keys/${h}_known_hosts"
+done
+cat > "$MP/peerstate/10.9.9.8.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$MP" > "$MP/server.conf"
+printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/jobs.conf"
+# NO PROFILE line: a record predating the field, which is exactly the legacy
+# host this command was written for -- and the honest starting point, since a
+# record already naming the destination is (correctly) a no-op.
+{ printf 'CLIENT_NAME=mpc\nPEER_HOST=10.9.9.8\nSTATE=active\n'
+  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
+  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
+  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$MP"
+} > "$MP/clients/mpc.conf"
+
+# The stubs are the transport and the crontab, never the shape under test:
+# atomic_replace_and_install still PUBLISHES (so the record update and the
+# second-run no-op are exercised for real), and the gen-cron validation of the
+# migrated config inside cmd_migrate_profile is left completely alone.
+# assert_source_prune_grant opens SSH to a peer that does not exist here; it has
+# its own coverage under REV-102 and says nothing about which profile won.
+mp_run() {   # <args...> -> rc, and the migrated config lands in $MP/dir/jobs.conf
+    ( PATH="$MP/bin:$PATH"
+      atomic_replace_and_install() { cp -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }
+      assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }
+      assert_config_readable_by_target() { :; }
+      assert_source_prune_grant() { :; }
+      assert_no_atomic_with_source_retention() { :; }
+      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
+      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
+      PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_migrate_profile --config="$MP/dir/jobs.conf" --yes "$@" ) 2>&1
+}
+mp_ladder() { grep -cE '^\[prune:tank/backups' "$MP/dir/jobs.conf"; }
+
+# --- step 1: onto `default`. This is the ORIGINAL migration, unchanged, and
+#     it is also how the fixture for step 2 gets built.
+mp_out="$(mp_run --profile=default)"; mp_rc=$?
+if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -ge 1 ] \
+   && grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf"; then
+    ok "96a: migrate-profile --profile=default installs the GFS ladder (original behaviour)"
+else
+    bad "96a: migrate-profile --profile=default installs the GFS ladder" \
+        "rc=$mp_rc ladder=$(mp_ladder)
+$(printf '%s' "$mp_out" | tail -3)"
+fi
+
+# --- step 2: onto `prod`, which is FLAT. The ladder must GO.
+mp_out="$(mp_run --profile=prod)"; mp_rc=$?
+if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -eq 0 ]; then
+    ok "96b: GFS -> flat REMOVES the old ladder (it sits at the parent path, out of reach of a path sweep)"
+else
+    bad "96b: GFS -> flat removes the old ladder" \
+        "rc=$mp_rc ladder=$(mp_ladder)
+$(grep -nE '^\[prune:' "$MP/dir/jobs.conf" || echo 'no prune sections at all')"
+fi
+
+# ...and the destination's own templates arrived, while the source profile's
+# are gone. An orphan [template:] is not cosmetic: it is a schedule definition
+# sitting in a live config that nothing references, which is exactly what the
+# hardcoded four-name removal existed to prevent for the one case it knew.
+if grep -qE '^\[template:profile__prod__' "$MP/dir/jobs.conf" \
+   && ! grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf"; then
+    ok "96c: the destination's templates arrive and the source profile's orphans are swept"
+else
+    bad "96c: the destination's templates arrive and the source profile's orphans are swept" \
+        "$(grep -E '^\[template:' "$MP/dir/jobs.conf" | tr '\n' ' ')"
+fi
+
+# ...and the result is a config the REAL gen-cron accepts. "The text looks
+# right" is the appearance this project keeps mistaking for the property.
+if bash "$REPO/gen-cron.sh" -c "$MP/dir/jobs.conf" >/dev/null 2>&1; then
+    ok "96d: the migrated config renders through the real gen-cron.sh"
+else
+    bad "96d: the migrated config renders through the real gen-cron.sh" \
+        "$(bash "$REPO/gen-cron.sh" -c "$MP/dir/jobs.conf" 2>&1 | tail -3)"
+fi
+
+# --- the record follows the config. PROFILE is create-time provenance that
+#     seed_profile_context still reads: a record left saying `default` on a
+#     host now running `prod` sends the next seed at the wrong family root.
+if [ "$(grep -c '^PROFILE=prod$' "$MP/clients/mpc.conf")" -ge 1 ] \
+   && [ "$(tail -1 "$MP/clients/mpc.conf")" = "PROFILE=prod" ]; then
+    ok "96e: the client record is moved to the destination profile, last-assignment-wins"
+else
+    bad "96e: the client record is moved to the destination profile" \
+        "$(grep '^PROFILE=' "$MP/clients/mpc.conf" | tr '\n' ' ')"
+fi
+
+# --- running it again is a NO-OP, and this is why the record had to move: the
+#     old "is standard_hourly flat?" test would call an already-migrated prod
+#     host un-migrated and rewrite it on every run, forever.
+mp_before="$(md5sum < "$MP/dir/jobs.conf")"
+mp_out="$(mp_run --profile=prod)"; mp_rc=$?
+if [ "$mp_rc" -eq 0 ] && [ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] \
+   && printf '%s' "$mp_out" | grep -q "already on profile 'prod'"; then
+    ok "96f: a second migration to the same profile is a no-op that says so"
+else
+    bad "96f: a second migration to the same profile is a no-op that says so" \
+        "rc=$mp_rc changed=$([ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] && echo no || echo YES)
+$(printf '%s' "$mp_out" | tail -2)"
+fi
+
+# --- CONTROL: a profile that does not exist is refused BEFORE anything moves.
+#     Without this, every assertion above would also pass against a build that
+#     silently ignored --profile and always did `default`.
+mp_before="$(md5sum < "$MP/dir/jobs.conf")"
+mp_out="$(mp_run --profile=nosuchprofile)"; mp_rc=$?
+if [ "$mp_rc" -ne 0 ] && [ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] \
+   && printf '%s' "$mp_out" | grep -q "nosuchprofile"; then
+    ok "96g control: an unknown --profile is refused by name, with nothing touched"
+else
+    bad "96g control: an unknown --profile is refused by name, with nothing touched" \
+        "rc=$mp_rc: $(printf '%s' "$mp_out" | tail -2)"
+fi
+
+# --- THE CANDIDATE CONFIG DOES NOT SURVIVE A REFUSAL.
+#
+# Every transactional command removes its own working copy on each of its OWN
+# failure paths. None of them can reach a die() raised inside a function they
+# called -- the shell exits from under the caller, and .zfsbackup-work.XXXXXX
+# stays next to the live config at mode 0644. Same leak class as the 1824
+# rendered profile copies found in pve0's /tmp, and it lands in exactly the
+# directory an operator opens when something has just gone wrong.
+#
+# Forced with today's other change: a config fencing a family MORE WEAKLY than
+# the profile requires is refused from inside ensure_cron_config. That is a real
+# refusal on a real path, not a stub raised to make a point.
+# A LEGACY config, deliberately: standard_hourly still carries prune_schedule.
+# That shape reaches the working-copy stage on the PRE-CHANGE build too, so the
+# negative control for this assertion fails because the file was left behind and
+# not because an option was not recognised. Measured on HEAD: 1 leftover.
+# It also fences vzdump MORE WEAKLY than the profile requires.
+{ printf '[defaults]\n\thost_label = mptest\n\n'
+  printf '[template:standard_hourly]\n\tsend_schedule = 1 * * * *\n\tprune_schedule = 21 * * * *\n\tkeep = 24\n\n'
+  printf '[excluded:vzdump]\n\tkeep = 1\n'
+} > "$MP/dir/leak.conf"
+mp_leak_out="$( ( PATH="$MP/bin:$PATH"
+      atomic_replace_and_install() { cp -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
+      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
+      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
+      PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_migrate_profile --config="$MP/dir/leak.conf" --yes ) 2>&1 )"
+mp_leak_rc=$?
+mp_left="$(find "$MP/dir" -maxdepth 1 -name '.zfsbackup-work.*' 2>/dev/null | wc -l)"
+if [ "$mp_leak_rc" -ne 0 ] && [ "$mp_left" -eq 0 ] \
+   && printf '%s' "$mp_leak_out" | grep -q 'protects it LESS'; then
+    ok "96k: a die() from inside a callee does not leave the candidate config behind"
+else
+    bad "96k: a die() from inside a callee does not leave the candidate config behind" \
+        "rc=$mp_leak_rc leftovers=$mp_left" "$(printf '%s' "$mp_leak_out" | tail -1)"
+fi
+
+# CONTROL: the net must not eat a candidate that was PUBLISHED. Releasing a path
+# that has become the live config would be a disaster dressed as a cleanup, so
+# the successful migration above has to have left a readable config behind.
+if [ -s "$MP/dir/jobs.conf" ] && grep -q '^\[defaults\]' "$MP/dir/jobs.conf"; then
+    ok "96l control: a published config is not swept by the same net"
+else
+    bad "96l control: a published config is not swept by the same net" \
+        "$(ls -l "$MP/dir/jobs.conf" 2>&1)"
+fi
+
+# --- A FLAT PROFILE IS NOT THE FROZEN ONE.
+#
+# Found by 96h, not by reading: migrating back out of `prod` was refused with
+# "uses the pre-GFS profile (standard_* still carries prune_schedule)" -- naming
+# a family the file does not contain. detect_profile_gfs answers a SHAPE
+# question ("do the tiers prune themselves?"), and that is true of the frozen
+# pre-GFS family AND of any modern flat profile. The refusal that read it is
+# about a NAME: the bare standard_* family written before profiles were
+# namespaced.
+#
+# The consequence was not limited to migration. Probed directly: a config
+# generated from `prod` accepts its FIRST client and REFUSES the second, so
+# `prod` was a one-relationship-per-host profile -- which would have surfaced on
+# a live collector, on the second relationship, months from now.
+FZ="$WORK/frozenshape"; rm -rf "$FZ"; mkdir -p "$FZ/root" "$FZ/bin"
+cp -r "$REPO/profiles/prod" "$FZ/root/prod"; cp -r "$REPO/profiles/default" "$FZ/root/default"
+printf '#!/bin/sh\nexit 0\n' > "$FZ/bin/crontab"; chmod +x "$FZ/bin/crontab"
+fz_gen() {   # <config> <profile> -> rc
+    ( PATH="$FZ/bin:$PATH"; PROFILE_ROOT="$FZ/root"; PROFILE_ACTIVE="$2"; PROFILE_LOADED=""
+      ensure_cron_config "$1" 0 1 always ) >/dev/null 2>&1
+}
+printf '[defaults]\n\thost_label = fz\n' > "$FZ/jobs.conf"
+fz_gen "$FZ/jobs.conf" prod
+fz_first=$(grep -cE '^\[template:profile__prod__' "$FZ/jobs.conf")
+fz_gen "$FZ/jobs.conf" prod; fz_rc2=$?
+if [ "$fz_first" -ge 1 ] && [ "$fz_rc2" -eq 0 ]; then
+    ok "96i: a host already on a FLAT profile accepts a second relationship"
+else
+    bad "96i: a host already on a FLAT profile accepts a second relationship" \
+        "first generation wrote $fz_first template(s); second returned $fz_rc2"
+fi
+
+# CONTROL, and the reason 96i is not simply the guard switched off: the GENUINE
+# frozen family must still be refused. Without this, deleting the check outright
+# would pass 96i.
+printf '[defaults]\n\thost_label = fz\n\n[template:standard_hourly]\n\tsend_schedule = 1 * * * *\n\tprune_schedule = 21 * * * *\n\tkeep = 24\n' > "$FZ/legacy.conf"
+if ! fz_gen "$FZ/legacy.conf" default; then
+    ok "96j control: a GENUINE pre-GFS config is still refused (the guard is narrowed, not removed)"
+else
+    bad "96j control: a genuine pre-GFS config is still refused" "it was accepted"
+fi
+
+# --- CONTROL: --profile really selects. Migrating BACK to default must put the
+#     ladder back; if the flag were ignored, 96b would pass for the wrong reason
+#     on a build that simply never emits a ladder.
+mp_out="$(mp_run --profile=default)"; mp_rc=$?
+if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -ge 1 ] \
+   && grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf" \
+   && ! grep -qE '^\[template:profile__prod__' "$MP/dir/jobs.conf"; then
+    ok "96h control: migrating BACK to a GFS profile restores the ladder and sweeps prod's templates"
+else
+    bad "96h control: migrating back to a GFS profile restores the ladder" \
+        "rc=$mp_rc ladder=$(mp_ladder) tpl=$(grep -cE '^\[template:profile__prod__' "$MP/dir/jobs.conf")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
