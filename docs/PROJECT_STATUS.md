@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 933c030b11fbf624 -->
+<!-- status-covers-digest: 292b8f4bb27aa9bb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1463,6 +1463,27 @@
     ktora sie ZWEZA nadal jest kasacja. Piec dyskryminatorow: scalenie
     wchloniete, linia po prostu nieobecna — nie; zwezenie — nie; zmieniony prog
     — nie; zmieniony harmonogram — nie.
+
+  **Dwie dalsze uwagi recenzenta, obie trafne i obie poprawione:**
+
+  * „juz objety" bylo testowane **nakladaniem sciezek**, a zadanie lokalne jest
+    PLASKIE — `[dataset:rpool/a]` nie kopiuje `rpool/a/child`. Nowe dziecko pod
+    zainstalowanym rodzicem bylo wiec pomijane jako „juz objete" i **nigdy nie
+    proponowane**: to samo ciche zniknięcie pokrycia co w F1, tylko od drugiej
+    strony. Teraz „juz objety" to **dokladna tozsamosc datasetu**, chyba ze
+    zainstalowana sekcja jawnie deklaruje `recursive` — wtedy naprawde obejmuje
+    poddrzewo. Trzy dyskryminatory: nowe dziecko pod plaskim rodzicem, rodzic
+    przy zainstalowanym dziecku, oraz kontrola, ze sekcja rekurencyjna nadal
+    obejmuje potomkow;
+  * zwolnienie w bramce **poszerzalo dowolny** cytowany argument, co dowodzi
+    zawierania zbioru, ale nie tego, ze ten zbior jest POKRYCIEM — szerszy cel,
+    prefiks albo etykieta mogly udawac zachowane pokrycie datasetow. Teraz
+    rozpoznawana jest komenda i **pozycja argumentu datasetow w jej wlasnym
+    segmencie** (od nazwy skryptu do przekierowania stderr), bo liczenie od
+    konca calej linii bralo pod uwage cudzyslowy opakowania — pierwsza wersja
+    robila dokladnie odwrotnie, niz powinna. Nieznana komenda nie dostaje
+    zwolnienia w ogole. Dwanascie dyskryminatorow, w tym cztery kontrole „tylko
+    cel / prefiks / wzorzec / lista `-P` sie poszerza — nie wolno wchlonac".
 
   Dowod live (pve9, worktree, host przywrocony do stanu sprzed testu): pierwsza
   instalacja `EXIT=0`; **powtorka tego samego polecenia `EXIT=0`, md5 configu

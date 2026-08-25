@@ -964,6 +964,34 @@ printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
     && ok "krok5: a dataset the installed config already covers is skipped, naming the section" \
     || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep pominieto|head -5)"
 
+# ---- "already covered" is EXACT identity, because a local job is FLAT -------
+# An installed [dataset:rpool/a] copies rpool/a's own blocks and nothing else.
+# Testing coverage with path overlap therefore hid a new child under an
+# installed parent as "already covered" -- the same silent missing coverage as
+# the hierarchy finding, arrived at from the other side. Both arrangements are
+# pinned, because a containment test excuses one of them whichever way it runs.
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n' > "$WORK/k5par.conf"
+outp="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5par.conf")"
+{ ! printf '%s' "$outp" | grep -q 'pominieto rpool/a/child -- juz objety'; } \
+    && ok "krok5/flat: a NEW CHILD under an installed flat parent is not called 'already covered'" \
+    || bad "krok5/flat: a new child under an installed flat parent is not 'already covered'" "$(printf '%s' "$outp"|grep pominieto|head -4)"
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a/child]\n\tuse_template = x\n' > "$WORK/k5chi.conf"
+outc2="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5chi.conf")"
+{ ! printf '%s' "$outc2" | grep -q 'pominieto rpool/a -- juz objety'; } \
+    && ok "krok5/flat: a PARENT candidate is not called 'already covered' by an installed child" \
+    || bad "krok5/flat: a parent candidate is not 'already covered' by an installed child" "$(printf '%s' "$outc2"|grep pominieto|head -4)"
+# CONTROL: a section that really IS recursive does cover its descendants, and
+# saying so must still work -- otherwise the two assertions above would pass
+# against a build that had simply dropped the covered check.
+printf '[defaults]\n\thost_label = t\n\n[dataset:rpool/a]\n\tuse_template = x\n\trecursive    = yes\n' > "$WORK/k5rec.conf"
+outr="$(runp "rpool/a
+rpool/a/child" --target=hdd/store --config="$WORK/k5rec.conf")"
+printf '%s' "$outr" | grep -q 'pominieto rpool/a/child -- juz objety rekurencyjna' \
+    && ok "krok5/flat control: a RECURSIVE installed section does cover its descendants" \
+    || bad "krok5/flat control: a recursive installed section covers its descendants" "$(printf '%s' "$outr"|grep pominieto|head -4)"
+
 # ---- THE HIERARCHY DISCRIMINATOR -------------------------------------------
 # The first cut of the proposal dropped any dataset that had a child and offered
 # the children instead. A parent filesystem holds its OWN files independently of
@@ -1136,27 +1164,53 @@ out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/dokumenty --config="
 # only. These five cases are the whole contract, and three of them are the ways
 # it could be got wrong.
 # ==============================================================================
-L_A='*/15 * * * * d=$(check.sh "hdd/k5a" "automated_hourly" 90m 150m); rc=$?'
-L_AB='*/15 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 90m 150m); rc=$?'
-printf '%s\n' "$L_AB" | line_coverage_absorbed "$L_A" \
-    && ok "guard/merge: a widened dataset list absorbs the line it replaced" \
-    || bad "guard/merge: a widened dataset list absorbs the line it replaced"
-printf '%s\n' '1 * * * * something else entirely' | line_coverage_absorbed "$L_A" \
-    && bad "guard/merge: a line that is simply gone is still a DELETION" \
-    || ok "guard/merge: a line that is simply gone is still a DELETION"
+# absorbed <label> <lost line> <proposed line>   -- must be excused
+# refused  <label> <lost line> <proposed line>   -- must NOT be excused
+absorbed() { printf '%s\n' "$3" | line_coverage_absorbed "$2" \
+    && ok "guard/merge: $1" || bad "guard/merge: $1" "not absorbed"; }
+refused()  { printf '%s\n' "$3" | line_coverage_absorbed "$2" \
+    && bad "guard/merge: $1" "absorbed, and must not have been" || ok "guard/merge: $1"; }
+
+# Real generated shapes, redirect and all: a cron line carries quoted values
+# that are NOT arguments (the stderr redirect, the notify message), and the
+# first cut of the exemption counted from the end of the whole line -- which
+# made it excuse a widened TARGET and refuse a widened SOURCE, exactly
+# backwards. These fixtures keep that wrapper so the position logic is
+# exercised the way it runs.
+SND_A='1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a" "hdd/store" 2>"$e"; rc=$?'
+SND_AB='1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a,hdd/b" "hdd/store" 2>"$e"; rc=$?'
+MON_A='*/15 * * * * d=$(check-snap-age.sh "hdd/a" "automated_hourly" 90m 150m 2>&1); rc=$?'
+DEL_A='21 * * * * delsnaps.sh -G -P "vzdump:2" "hdd/a" "automated_" -H24 2>"$e"; rc=$?'
+
+absorbed "a widened SOURCE list absorbs the send line it replaced" "$SND_A" "$SND_AB"
+absorbed "a widened dataset list absorbs the monitor line it replaced" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
+absorbed "a widened SCOPE absorbs the prune line it replaced" "$DEL_A" \
+    '21 * * * * delsnaps.sh -G -P "vzdump:2" "hdd/a,hdd/b" "automated_" -H24 2>"$e"; rc=$?'
+
+# The exemption is bound to the DATASET argument. Set inclusion anywhere else
+# proves nothing about coverage, and these are the four ways it could pretend to.
+refused "a widened TARGET must not absorb a lost send line" "$SND_A" \
+    '1 * * * * snapsend.sh -m "automated_hourly_" "hdd/a" "hdd/store,hdd/other" 2>"$e"; rc=$?'
+refused "a widened PREFIX must not absorb a lost send line" "$SND_A" \
+    '1 * * * * snapsend.sh -m "automated_hourly_,automated_daily_" "hdd/a" "hdd/store" 2>"$e"; rc=$?'
+refused "a widened PATTERN must not absorb a lost monitor line" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a" "automated_hourly,automated_daily" 90m 150m 2>&1); rc=$?'
+refused "a widened reserved-family list must not absorb a lost prune line" "$DEL_A" \
+    '21 * * * * delsnaps.sh -G -P "vzdump:2,other:2" "hdd/a" "automated_" -H24 2>"$e"; rc=$?'
+
+# ...and the shape has to be one this function can actually read.
+refused "an unrecognised command gets no exemption at all" \
+    '1 * * * * cudze.sh "hdd/a" "x"' '1 * * * * cudze.sh "hdd/a,hdd/b" "x"'
+refused "a line that is simply gone is still a DELETION" "$SND_A" \
+    '1 * * * * something else entirely'
 # The dangerous direction: coverage SHRINKING must never be excused, and a
 # subset test applied the wrong way round is exactly how it would be.
-printf '%s\n' "$L_A" | line_coverage_absorbed "$L_AB" \
-    && bad "guard/merge: a SHRINKING dataset list is still a deletion" \
-    || ok "guard/merge: a SHRINKING dataset list is still a deletion"
-printf '%s\n' '*/15 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 30m 150m); rc=$?' \
-    | line_coverage_absorbed "$L_A" \
-    && bad "guard/merge: a changed threshold is a different job, not a merged one" \
-    || ok "guard/merge: a changed threshold is a different job, not a merged one"
-printf '%s\n' '*/5 * * * * d=$(check.sh "hdd/k5a,hdd/k5b" "automated_hourly" 90m 150m); rc=$?' \
-    | line_coverage_absorbed "$L_A" \
-    && bad "guard/merge: a changed schedule is a different job, not a merged one" \
-    || ok "guard/merge: a changed schedule is a different job, not a merged one"
+refused "a SHRINKING dataset list is still a deletion" "$SND_AB" "$SND_A"
+refused "a changed threshold is a different job, not a merged one" "$MON_A" \
+    '*/15 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 30m 150m 2>&1); rc=$?'
+refused "a changed schedule is a different job, not a merged one" "$MON_A" \
+    '*/5 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

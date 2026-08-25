@@ -826,13 +826,41 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
                 */swap|*/swap/*) skip=1; why="swap -- snapshot przypina kazdy zapisany blok i nie niesie danych" ;;
             esac
         fi
+        # "Already covered" is EXACT dataset identity, not path overlap -- and
+        # that distinction is the same finding as the hierarchy one, in the
+        # place it hides best.
+        #
+        # A local job is FLAT: [dataset:rpool/a] copies rpool/a's own blocks and
+        # nothing else. So an installed parent does NOT cover a child created
+        # under it later, and an installed child does not cover its parent. The
+        # first version tested with local_backup_overlap, which meant a new
+        # child under an installed parent was skipped as "already covered" and
+        # silently never proposed -- apparent coverage over missing coverage,
+        # exactly what the hierarchy rule exists to prevent, arrived at from the
+        # other side.
+        #
+        # The one case where containment IS coverage is a section that says so:
+        # `recursive` set to anything but no/off/0 means the installed job
+        # really does walk the subtree, and then a descendant is genuinely
+        # covered. Read from the section rather than assumed, so a config an
+        # operator made recursive by hand is honoured.
         if [ -z "$skip" ] && [ -n "$covered" ]; then
-            local c
+            local c crec
             while IFS= read -r c; do
                 [ -n "$c" ] || continue
-                if local_backup_overlap "$ds" "$c"; then
+                if [ "$ds" = "$c" ]; then
                     skip=1; why="juz objety zainstalowana polityka ([dataset:$c])"; break
                 fi
+                case "$ds" in
+                    "$c"/*)
+                        crec="$(installed_dataset_field "$cfg" "$c" recursive)"
+                        crec="$(printf '%s' "$crec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+                        case "$crec" in
+                            ""|no|off|0) ;;   # flat parent: does NOT cover this child
+                            *) skip=1; why="juz objety rekurencyjna sekcja [dataset:$c] (recursive=$crec)"; break ;;
+                        esac
+                        ;;
+                esac
             done <<< "$covered"
         fi
         if [ -n "$skip" ]; then
@@ -2013,12 +2041,29 @@ endpoint_normalized_identity() {
 # one's. Same command, same schedule, same thresholds, same target, and every
 # dataset it named still named.
 #
+# BOUND TO THE DATASET ARGUMENT, not to "whichever quoted value differs".
+# The first cut accepted a widening at any single quoted argument, which proves
+# set inclusion but not that the set is COVERAGE: a widened target, prefix or
+# label would have impersonated preserved dataset coverage just as well. So the
+# command is recognised first and the dataset argument is located by that
+# command's own shape:
+#
+#   snapsend.sh / snapget.sh   ... "<sources>" "<target>"   -> second-to-last
+#   delsnaps.sh                ... "<scope>" "<pattern>" -H..  -> second-to-last
+#   check-snap-age.sh          [-R] "<datasets>" "<pattern>" .. -> first
+#
+# An unrecognised command gets no exemption at all. That is the fail-closed
+# direction: a line this function cannot read the shape of is a line whose
+# disappearance it must not excuse.
+#
 # What this deliberately does NOT excuse, and what the discriminators pin:
 #   * a line whose dataset simply is not in the new block at all -- a deletion;
 #   * a list that SHRINKS ("a,b" -> "a") -- that is a real loss of coverage,
 #     and subset-in-the-wrong-direction is exactly how it would sneak through;
 #   * a line that differs anywhere else as well -- a changed schedule or
-#     threshold is a different job, not a merged one.
+#     threshold is a different job, not a merged one;
+#   * a widening at the TARGET, the PREFIX or the LABEL -- inclusion in the
+#     wrong argument is not coverage.
 line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorbed
     LOST_LINE="$1" awk '
         # Split a line into a skeleton (quoted values replaced by \001) and the
@@ -2046,18 +2091,64 @@ line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorb
             }
             return 1
         }
+        # Which quoted argument of the WHOLE line is the DATASET list.
+        #
+        # Counting from the end of the line does not work, and the first cut got
+        # it exactly backwards for that reason: a cron job line carries quoted
+        # values that are not arguments at all -- the stderr redirect, the
+        # notify-fail message, the tail subshell. So the argument region of the
+        # command itself is isolated first (from the script name to its stderr
+        # redirect), the position is resolved inside that region by the shape of
+        # that command, and then shifted back by however many quoted values the
+        # line carried before it.
+        #
+        # 0 means: not a shape this function can read. That is the fail-closed
+        # answer -- no exemption is available for such a line.
+        function count_quotes(s,   i, n) {
+            n=0
+            for (i=1; i<=length(s); i++) if (substr(s,i,1)=="\"") n++
+            return int(n/2)
+        }
+        function dataset_arg(line,   cmd, at, seg, cut, before, n, kind) {
+            kind=0
+            if (line ~ /snapsend\.sh/)       { cmd="snapsend.sh";      kind=1 }
+            else if (line ~ /snapget\.sh/)   { cmd="snapget.sh";       kind=1 }
+            else if (line ~ /delsnaps\.sh/)  { cmd="delsnaps.sh";      kind=1 }
+            else if (line ~ /check-snap-age\.sh/) { cmd="check-snap-age.sh"; kind=2 }
+            else return 0
+            at=index(line, cmd)
+            if (at == 0) return 0
+            before=count_quotes(substr(line, 1, at-1))
+            seg=substr(line, at)
+            cut=index(seg, " 2>")
+            if (cut > 0) seg=substr(seg, 1, cut-1)
+            n=count_quotes(seg)
+            # kind 1: the command ends with "<datasets>" "<target-or-pattern>",
+            #         so the dataset list is the second-to-last of its own args;
+            # kind 2: check-snap-age takes "<datasets>" first.
+            if (kind == 1) return (n >= 2) ? before + n - 1 : 0
+            return (n >= 1) ? before + 1 : 0
+        }
         BEGIN {
             ln=ENVIRON["LOST_LINE"]
             nl=shred(ln, lsk, lv)
+            want=dataset_arg(ln)
         }
         {
+            if (want == 0) next
             np=shred($0, psk, pv)
             if (np != nl || psk[0] != lsk[0]) next
+            # The proposed line must be the same command, so the argument that
+            # carries datasets sits in the same place in both.
+            if (dataset_arg($0) != want) next
             diff=0; idx=0
             for (i=1; i<=nl; i++) if (lv[i] != pv[i]) { diff++; idx=i }
             # Identical would not have been called lost; more than one differing
             # argument is a different job, not a wider one.
             if (diff != 1) next
+            # ...and the one that differs has to BE the dataset argument. A
+            # widened target, prefix or label is inclusion in the wrong place.
+            if (idx != want) next
             # Direction matters: the OLD list must be contained in the NEW one.
             # The reverse is coverage being dropped, which is the thing this
             # guard exists to catch.
