@@ -757,17 +757,37 @@ propose_backup_target() {
 #   the target     and everything under it -- a backup cannot land inside the
 #                  thing it backs up (local_backup_overlap refuses it anyway,
 #                  so proposing it would only produce a refusal);
-#   has children   THE IMPORTANT ONE. local-backup installs a FLAT job per root
-#                  (no `recursive`), so a parent would copy the parent's own
-#                  blocks and silently leave every child unbacked -- a proposal
-#                  that looks like coverage and is not. The children are
-#                  proposed instead, each of which really is copied;
 #   under */ROOT   the OS root filesystem. This tool does not restore a bootable
 #                  system, so offering it promises something it cannot keep;
 #   swap           a swap zvol holds no data worth a snapshot, and snapshotting
 #                  it pins every block it ever wrote;
 #   already        a dataset an installed section already covers. Proposing it
 #   covered        would compose into an overlap refusal on the very next step.
+#
+# A HIERARCHY IS NOT GUESSED AT -- REV of KROK 5 slice 1, F1.
+#
+# The first cut skipped any dataset that had a child and proposed the children
+# instead, reasoning that a flat job on the parent would leave the children
+# unbacked. That reasoning is right and the conclusion was wrong: a parent
+# filesystem holds its own files independently of its children, so proposing
+# only the children replaces APPARENT coverage with SILENT missing coverage --
+# the operator accepts a proposal and the parent's data is simply not copied.
+# The suite encoded that as the expected behaviour, so it went green.
+#
+# Measured rather than assumed (pve9, real ZFS): an empty parent reports
+# usedbydataset=24576 and the same parent with 3 MiB of its own files reports
+# 3173376. So "does the parent hold data" IS answerable -- but only against a
+# threshold picked out of the air, and an emptiness floor differs with
+# recordsize, compression and pool ashift. This function does not get to invent
+# that number.
+#
+# So the layout decides, not a size: local-backup installs one FLAT job per
+# root and `local_backup_overlap` refuses a parent and its child in the same
+# set, which means there is no shape this PROPOSAL can emit that covers both.
+# When the eligible datasets contain a parent/child pair, it therefore refuses
+# to guess (rc=2) and hands the operator the whole eligible list to choose
+# from, rather than choosing a half of it for them. That is the same stance the
+# TARGET proposal already takes on multiple candidate pools: ambiguity refuses.
 #
 # Candidates on STDOUT, the skip report on STDERR -- deliberately not through a
 # variable. This function is called inside a command substitution, where every
@@ -777,7 +797,7 @@ propose_backup_target() {
 # that substitution -- the caller checks for an empty result instead.
 propose_backup_sources() {   # <target> <installed config or ""> -> candidates, one per line
     local target="$1" cfg="${2:-}"
-    local skipped=""
+    local skipped="" eligible=""
     local all
     all=$(zfs list -H -o name -t filesystem,volume 2>/dev/null) || return 1
     [ -n "$all" ] || return 1
@@ -806,13 +826,6 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
                 */swap|*/swap/*) skip=1; why="swap -- snapshot przypina kazdy zapisany blok i nie niesie danych" ;;
             esac
         fi
-        if [ -z "$skip" ]; then
-            while IFS= read -r child; do
-                case "$child" in
-                    "$ds"/*) skip=1; why="ma potomkow -- plaskie zadanie skopiowaloby tylko rodzica, dzieci sa proponowane osobno"; break ;;
-                esac
-            done <<< "$all"
-        fi
         if [ -z "$skip" ] && [ -n "$covered" ]; then
             local c
             while IFS= read -r c; do
@@ -825,10 +838,44 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
         if [ -n "$skip" ]; then
             skipped="${skipped}  pominieto $ds -- $why"$'\n'
         else
-            printf '%s\n' "$ds"
+            eligible="${eligible}${ds}"$'\n'
         fi
     done <<< "$all"
     [ -n "$skipped" ] && printf '%s' "$skipped" >&2
+
+    # The hierarchy check, over the ELIGIBLE set only: a parent excluded above
+    # (a pool root, the target, an OS root) is not part of any pair, because it
+    # was never going to be proposed in the first place.
+    #
+    # Reported and refused rather than resolved: a parent cannot be dropped in
+    # favour of its children (its own files would stop being copied) and it
+    # cannot be proposed alongside them either (local_backup_overlap refuses
+    # the pair). There is no third shape this function may emit, so the
+    # operator gets the facts and the choice.
+    local a b pairs=""
+    while IFS= read -r a; do
+        [ -n "$a" ] || continue
+        while IFS= read -r b; do
+            [ -n "$b" ] || continue
+            case "$b" in
+                "$a"/*) pairs="${pairs}  $a  ->  $b"$'\n' ;;
+            esac
+        done <<< "$eligible"
+    done <<< "$eligible"
+
+    if [ -n "$pairs" ]; then
+        {
+            printf '  uklad hierarchiczny -- NIE zgaduje:\n'
+            printf '%s' "$pairs"
+            printf '  rodzic trzyma wlasne pliki niezaleznie od dzieci, a plaskie zadanie na rodzica\n'
+            printf '  nie kopiuje dzieci; jednoczesnie rodzic i dziecko w jednym zestawie sa odrzucane.\n'
+            printf '  Wybierz sam sposrod kandydatow:\n'
+            printf '%s' "$eligible" | sed 's/^/    /'
+        } >&2
+        return 2
+    fi
+
+    printf '%s' "$eligible"
     return 0
 }
 
@@ -3823,8 +3870,16 @@ cmd_local_backup() {
     # and a typed --source travel one code path; there is no second notion of
     # what a source set is.
     if [ -z "$sources_from" ]; then
-        local proposed _p
-        proposed=$(propose_backup_sources "$target" "$config")             || die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]"
+        local proposed _p _prc
+        # Three outcomes, three different things to say. rc=2 is not a failure
+        # of the inventory read: it is the proposal declining to choose half of
+        # a hierarchy for the operator, and the reasons are already on stderr.
+        proposed=$(propose_backup_sources "$target" "$config"); _prc=$?
+        case "$_prc" in
+            0) ;;
+            2) die "local-backup: no --source given, and this host's datasets form a hierarchy this proposal will not guess at (the pairs and the candidate list are above). Name the set yourself with --source=<dataset>[,<dataset>...]." ;;
+            *) die "local-backup: no --source given and this host's ZFS inventory could not be read -- name the dataset(s) with --source=<dataset>[,<dataset>...]" ;;
+        esac
         [ -n "$proposed" ]             || die "local-backup: no --source given and nothing on this host is a sensible candidate (see the skip reasons above) -- name the dataset(s) explicitly with --source=<dataset>[,<dataset>...]"
         sources_from=heuristic
         log "brak --source -- PROPOZYCJA z inwentarza ZFS tego hosta (przekaz --source=..., zeby wybrac inaczej):"

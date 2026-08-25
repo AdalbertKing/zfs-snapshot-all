@@ -882,7 +882,7 @@ cat > "$WORK/bin3/zfs" <<'EOF'
 # the existence stub, which is what every other assertion in this suite uses.
 case " $* " in
   *" -t filesystem,volume "*)
-      printf '%s\n' ${INVENTORY:-rpool rpool/ROOT rpool/ROOT/pve-1 rpool/swap rpool/a rpool/a/child rpool/db hdd hdd/store}
+      printf '%s\n' ${INVENTORY:-rpool rpool/ROOT rpool/ROOT/pve-1 rpool/swap rpool/vmstore rpool/db hdd hdd/store}
       exit 0 ;;
 esac
 for a in "$@"; do ds="$a"; done
@@ -915,20 +915,20 @@ runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
 # ---- the proposal happens at all, and reaches the plan ----------------------
 out="$(runp "-" --target=hdd/store --config="$WORK/k5a.conf")"
 { printf '%s' "$out" | grep -q 'PROPOZYCJA z inwentarza' \
-  && printf '%s' "$out" | grep -q 'rpool/a/child' \
+  && printf '%s' "$out" | grep -q 'rpool/vmstore' \
   && printf '%s' "$out" | grep -q 'rpool/db'; } \
     && ok "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" \
     || bad "krok5: an omitted --source is PROPOSED from the ZFS inventory and reaches the plan" "$(printf '%s' "$out"|head -8)"
 
 # ---- every exclusion, each with the reason it must be excluded FOR ----------
 # A pool root is a container; the OS root is not restorable by this tool; a swap
-# zvol carries no data; and -- the important one -- a PARENT would be copied by
-# a flat job that silently leaves its children unbacked.
+# zvol carries no data; the target cannot hold its own backup. A PARENT is NOT
+# on this list any more -- that question moved to the hierarchy cases below,
+# after it turned out to have the wrong answer here.
 for pair in "rpool|pula, nie zbior danych" \
             "rpool/ROOT|system operacyjny" \
             "rpool/ROOT/pve-1|system operacyjny" \
             "rpool/swap|swap" \
-            "rpool/a|ma potomkow" \
             "hdd/store|cel backupu"; do
     ds="${pair%%|*}"; why="${pair##*|}"
     if printf '%s' "$out" | grep -q "pominieto $ds -- $why"; then
@@ -947,6 +947,39 @@ out2="$(runp "-" --target=hdd/store --config="$WORK/k5cov.conf")"
 printf '%s' "$out2" | grep -q 'pominieto rpool/db -- juz objety' \
     && ok "krok5: a dataset the installed config already covers is skipped, naming the section" \
     || bad "krok5: a dataset the installed config already covers is skipped" "$(printf '%s' "$out2"|grep pominieto|head -5)"
+
+# ---- THE HIERARCHY DISCRIMINATOR -------------------------------------------
+# The first cut of the proposal dropped any dataset that had a child and offered
+# the children instead. A parent filesystem holds its OWN files independently of
+# its children, so that turned apparent coverage into silent missing coverage --
+# and this suite encoded it as expected behaviour, so it went green over a real
+# hole. What follows is the discriminator that hole would not survive: a parent
+# with a child must NOT vanish from the proposed coverage without the operator
+# being told.
+outh="$(runp "rpool/a
+rpool/a/child
+rpool/db" --target=hdd/store --config="$WORK/k5h.conf")"
+# 1. it refuses rather than choosing half a hierarchy
+{ printf '%s' "$outh" | grep -q 'hierarchi' \
+  && printf '%s' "$outh" | grep -q 'NIE zgaduje'; } \
+    && ok "krok5/hierarchia: a parent/child pair makes the proposal refuse to guess" \
+    || bad "krok5/hierarchia: a parent/child pair makes the proposal refuse to guess" "$(printf '%s' "$outh"|tail -6)"
+# 2. the PARENT is named -- it may not disappear silently, which is the defect
+printf '%s' "$outh" | grep -q 'rpool/a' \
+    && ok "krok5/hierarchia: the parent is named in the refusal, not silently dropped" \
+    || bad "krok5/hierarchia: the parent is named in the refusal" "$(printf '%s' "$outh"|tail -6)"
+# 3. and nothing is planned or installed off a guess
+{ ! printf '%s' "$outh" | grep -q 'kandydat CONFIG v4'; } \
+    && ok "krok5/hierarchia: no plan is rendered from a hierarchy it refused to guess at" \
+    || bad "krok5/hierarchia: no plan is rendered from a refused hierarchy" "a candidate config was printed"
+# 4. CONTROL: the same inventory without the child proposes the parent happily,
+#    so the refusal keys on the PAIR and not on the name or on some other rule.
+outc="$(runp "rpool/a
+rpool/db" --target=hdd/store --config="$WORK/k5i.conf")"
+{ printf '%s' "$outc" | grep -q 'PROPOZYCJA z inwentarza' \
+  && printf '%s' "$outc" | grep -qE '^>>>   rpool/a$'; } \
+    && ok "krok5/hierarchia control: without the child, the same parent IS proposed" \
+    || bad "krok5/hierarchia control: without the child, the same parent IS proposed" "$(printf '%s' "$outc"|head -6)"
 
 # ---- nothing sensible left: refuse, and say what to do ---------------------
 out3="$(runp "rpool

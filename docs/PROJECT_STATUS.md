@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a4f9cf0f5510f80a -->
+<!-- status-covers-digest: b65b1a64b563d2bd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1396,9 +1396,21 @@
   Wysokopoziomowa sciezka lokalna odmawiala bez `--source`, wiec „czysty host ->
   dzialajacy backup" zaczynal sie od recznego czytania `zfs list`. Teraz brak
   `--source` daje **propozycje z inwentarza ZFS tego hosta** i **wypisuje kazdy
-  pominiety dataset wraz z powodem** (pula, cel backupu, `*/ROOT`, swap, dataset
-  z potomkami — plaskie zadanie skopiowaloby tylko rodzica — oraz dataset juz
-  objety zainstalowana polityka).
+  pominiety dataset wraz z powodem** (pula, cel backupu, `*/ROOT`, swap oraz
+  dataset juz objety zainstalowana polityka).
+
+  **Uklad hierarchiczny nie jest zgadywany.** Pierwsza wersja pomijala kazdy
+  dataset majacy potomka i proponowala dzieci — a rodzic trzyma wlasne pliki
+  niezaleznie od dzieci, wiec to zamieniało pozorne pokrycie na CICHY brak
+  pokrycia (finding recenzji do plastra 1; wlasna suita kodowala te wade jako
+  zachowanie oczekiwane, wiec byla zielona nad prawdziwa dziura). Zmierzone na
+  zywym ZFS: pusty rodzic ma `usedbydataset=24576`, ten sam rodzic z 3 MiB
+  wlasnych plikow — `3173376`; rozroznienie jest wiec mozliwe, ale tylko wobec
+  progu wzietego z sufitu, ktorego ta funkcja nie ma prawa wymyslac. Dlatego
+  decyduje UKLAD, nie rozmiar: gdy wsrod kandydatow jest para rodzic/dziecko,
+  propozycja **odmawia zgadywania**, wypisuje pary i cala liste kandydatow, i
+  zostawia wybor operatorowi — ta sama postawa, ktora propozycja CELU ma juz
+  wobec wielu pul.
 
   Propozycja to zgadywanie, wiec niesie te sama regule co zgadniety cel:
   **`--yes` jej nie potwierdza**. Jawne `--source` nigdy nie jest podwazane
