@@ -1504,7 +1504,12 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     # Returning here BEFORE capture/remove is deliberate: nothing is captured
     # and nothing is removed, so a preserved source prune is not destroyed by a
     # profile that could not have written one.
-    if ! profile_declares_ladder; then
+    # ONLY when a profile is actually loaded. A preserving re-activation does not
+    # load one (REV-20260809-090 F1), and treating "not loaded" as "declares no
+    # ladder" made this function skip the capture/replay that MOVES an installed
+    # source prune to a new endpoint -- the relationship kept its old scope
+    # silently. Three CI assertions, REV-20260811-107's whole point.
+    if [ -n "${PROFILE_LOADED:-}" ] && ! profile_declares_ladder; then
         log "source retention NOT generated for '$name': profile '$PROFILE_ACTIVE' declares no prune fragment -- its tiers prune their own families on the TARGET, and it names no policy for the remote source. The source's own snapshots stay the source's business."
         return 0
     fi
@@ -1563,9 +1568,11 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local workfile="$1" name="$2"; shift 2
     [ "$#" -gt 0 ] || return 0
     [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
-    # Same reason as emit_remote_source_prune: no prune fragment, nothing to
-    # build a source retention FROM.
-    profile_declares_ladder || return 0
+    # Same reason as emit_remote_source_prune, and the same "only when loaded"
+    # qualifier: not loaded is not the same fact as declares-no-ladder.
+    if [ -n "${PROFILE_LOADED:-}" ] && ! profile_declares_ladder; then
+        return 0
+    fi
     local marker="# managed-by: zfs-backup.sh client=$name"
     append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
     local sflags; sflags="$(source_prune_sflags)"
@@ -2872,9 +2879,22 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
     # prune fragment gets no ladder -- and no MANAGED_PRUNE_SCOPE recorded for
     # one either, which is what remove-client later reads.
     if [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && [ "$PLAN_PRUNE_NEEDS_GEN" -eq 1 ]; then
-        load_active_profile
-        if ! profile_declares_ladder; then
-            PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0
+        # VALIDATE BEFORE LOADING, and never die here. load_active_profile calls
+        # die() on an unreadable or invalid profile, and REV-20260809-090 F1
+        # requires the exact opposite of that on this path: an installed
+        # relationship must keep re-activating after the profile it was created
+        # from is renamed, removed, or edited into something that no longer
+        # validates. CI caught it -- six re-activation assertions, all of them
+        # mine, all of them the same mistake: making a decision depend on a
+        # profile in a path where the profile legitimately is not there.
+        #
+        # When it cannot be read, the config's own answer stands, which is the
+        # behaviour that existed before this block.
+        if profile_validate_dir "$PROFILE_ROOT/$PROFILE_ACTIVE" "$GENCRON" >/dev/null 2>&1; then
+            load_active_profile
+            if ! profile_declares_ladder; then
+                PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0
+            fi
         fi
     fi
     return 0
