@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 79f4fc13df884859 -->
+<!-- status-covers-digest: 059b72d78a5a835a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1568,6 +1568,51 @@
   poprawki: **szesc padа**, a siodma — „gdy wszystkie sondy odpowiadaja, zdrowy
   host nadal milczy" — przechodzi po obu stronach, wiec suita mierzy dokladnie
   te zmiane, a nie „skrypt zaczal alarmowac zawsze".
+
+- **ETAP PROFILI, krok 1: `flags` rozbite wzdluz osi LACZA (2026-08-25).**
+
+  `bandwidth`, `compression` i `cipher` opisuja **drut**, po ktorym leci
+  dataset — nie polityke, ktorej podlega, i nie tozsamosc, ktora sie laczy.
+  Nie mialy wlasnych pol: jedynym sposobem, zeby powiedziec cokolwiek z tej
+  trojki, bylo wpisanie litery silnika do wolnego `flags` — tego samego
+  stringa, ktory niesie klucz parowania, przypiety klucz hosta i port, i ktory
+  z tego powodu jest w `PROFILE_FORBIDDEN_FIELDS`. **Zadna warstwa powyzej
+  recznej edycji nie mogla wiec powiedziec „ogranicz tego peera do 2 MB/s".**
+  To byla mechaniczna, nie projektowa przeszkoda dla calego etapu profili.
+
+  Kazde pole renderuje **dokladnie** ten token, ktory operator wpisalby recznie
+  — dowiedzione przez wyrenderowanie obu zapisow i porownanie wywolania
+  silnika. Ta sama opcja przychodzaca **i** z `flags`, **i** z pola jest
+  **odrzucana**, nie scalana: dwa zrodla prawdy dla jednej opcji to dokladnie
+  ten stan, ktory ten podzial ma zakonczyc. Kontrola dubla uzywa tego samego
+  przejscia po opcjach co getopts, wiec zbundlowane `-eb 2M` jest lapane,
+  a argument `-m b-daily_` nie jest.
+
+  **Tylko `[dataset:]`, i profil ich nie ustawia**: nosnik polityki jest
+  wspoldzielony przez datasety, ktore **nie dziela celu** — ta sama retencja
+  obsluguje gigabitowy LAN i VPN 20 Mbit. Profil nie wie, po jakim laczu
+  poleci.
+
+  Pulapka kolejnosci przypieta kontrola: jawny kompresor sprawia, ze autotune
+  silnika **staje**, wiec pola musza sie renderowac PRZED rozwazeniem `-A`.
+  Odwrotnie daje linie crona z `-A` i `-Z` naraz, czyli zadanie ogłaszajace
+  no-op przy kazdym uruchomieniu.
+
+  **F3 recenzji: limit przeciekal miedzy rekordami.** `load_client_and_connection`
+  zerowal przed zrodlowaniem tylko `CLIENT_TARGET`. Rekord bez pola `BANDWIDTH`
+  nie nadpisuje zmiennej, wiec w komendach ladujacych wiele rekordow w jednej
+  powloce (`migrate-profile`, `audit-source-retention`) klient ograniczony,
+  a po nim nieograniczony, zostawial temu drugiemu limit pierwszego: `-b 2M`
+  w wywolaniu silnika i linie `bandwidth` w jego sekcji. Relacja, ktora o zaden
+  limit nie prosila, cicho zwalnia — w kierunku, ktorego nikt nie zauwazy, bo
+  transfer wolniejszy niz powinien nadal sie udaje. `BANDWIDTH=""` dolaczylo do
+  resetu, a dyskryminator wykonuje **prawdziwa funkcje dwa razy w jednej
+  powloce**, bo ta sekwencja JEST calym findingiem — test wolajacy ja raz nie
+  moglby go zobaczyc.
+
+  `test/linkfields`: **36/0**, z kontrola negatywna wobec poprzedniego
+  `gen-cron.sh` wbudowana w kazdy przebieg — musi odrzucic wszystkie trzy pola
+  jako nieznane.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
@@ -3234,6 +3279,7 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `tune` | 48/48 | cache autotune `-A` |
 | `rerun` | **16/16** | idempotentne ponowienie czterokomendowego przeplywu (kontrakt #9: „rerun resumes from durable state"). `add-client` i `seed` padaly na istniejacej relacji, wiec powtorzenie udokumentowanej sekwencji dawalo `rc=1` dwa razy, a operator musial wiedziec, ktore kroki pominac — to nie jest wznowienie. Przypiete obie polowy: IDENTYCZNE ponowienie to no-op, ponowienie z innym hostem, **portem**, targetem lub **jawnie podanym kontem** nadal odmawia (recenzja wykazala, ze pierwsza wersja przepuszczala rozny port i jawne `--local-user=root` — oba przypadki maja teraz dyskryminatory), a `seed` nadal odmawia w stanach, ktore nie sa ukonczonym seedem. Kontrola negatywna wobec builda sprzed poprawki: **4 asercje padaja**; wobec builda po pierwszej poprawce padaja **2** (port i jawne konto). Osobno przypieta sciezka zapasowa: rekord sprzed `CREATED_ENDPOINT` bierze port z manifestu parowania, a endpoint, ktorego nie da sie potwierdzic, **nie** jest no-opem |
 | `stagger` | **13/13** | rozrzut relacji po tarczy zegara: ktora minute dostaje nowa relacja i ktore minuty sa juz zajete. Dwa znaleziska recenzji przypiete dyskryminatorami: kolektor zajetych minut przepuszczal tylko `^[0-9]+$`, wiec poprawny job `*/15` byl NIEWIDZIALNY i relacja ladowala na nim; a gole `*` w pierwszej wersji ekspandera bylo rozwijane przez GLOB do nazw plikow, wiec najczestszy wildcard po cichu dawal pusto. Kontrola negatywna wobec builda sprzed poprawki: **8 asercji pada**, 5 przechodzi |
+| `linkfields` | **36/36** | pola LACZA — `bandwidth`, `compression`, `cipher` — wyjete z worka `flags`. Pinuje, ze kazde renderuje DOKLADNIE ten token, ktory operator wpisalby recznie (asercja renderuje oba zapisy i porownuje wywolanie silnika), ze ta sama opcja przychodzaca i z `flags`, i z pola jest ODRZUCANA zamiast scalana, oraz ze kontrola dubla czyta `flags` tak jak getopts w obie strony: zbundlowane `-eb 2M` jest lapane, a argument `-m b-daily_` nie. Przypieta tez pulapka kolejnosci: jawny kompresor musi zatrzymac `-A`, wiec pola renderuja sie PRZED autotune, z kontrola, ze bez kompresora `-A` nadal sie pojawia. Kontrola negatywna wbudowana w kazdy przebieg: poprzedni `gen-cron.sh` musi odrzucic wszystkie trzy pola jako nieznane |
 | `subtree` | **10/10** | `validate_subtree` w OBU silnikach — dowod, ze rekurencyjny transfer wyladowal na KAZDYM potomku, nie tylko na korzeniu. Kampania na zywo zmierzyla, ze `zfs recv` strumienia `-R` POMIJA potomka, ktorego stan lokalny nie przyjmuje przyrostu, ladauje reszte i konczy sie zerem — bieg raportowal sukces, a jedno dziecko przestalo byc kopiowane. Pierwsza wersja samej kontroli byla fail-open dwukrotnie (blad inwentarza zwracal „wszystko dobrze"; test przynaleznosci byl PODCIAGIEM, wiec `@s3-extra` spelnial `@s3`) — oba przypadki przypiete tu dyskryminatorami wobec zaslepionych `zfs`/`ssh`. Kontrola negatywna wobec silnikow sprzed poprawki: **4 asercje padaja**, 6 przechodzi |
 | `twins` | **26/26** (+2 sekcja D, 2026-08-19) | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |

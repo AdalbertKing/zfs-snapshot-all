@@ -2465,6 +2465,59 @@ update_section_field() {   # <file> <exact header> <field> <new value>
     mv_preserving_mode "$tmp" "$file"
 }
 
+# update_section_field's sibling for a field that may legitimately be ABSENT.
+#
+# 'flags' and 'src' always exist in a section this tool wrote, so refusing when
+# they are missing is the right fail-closed answer. A link field is different:
+# a relationship with no cap carries no 'bandwidth' line at all, and a cap that
+# is later removed must take the line with it. Three cases, one function:
+#
+#   value non-empty, field present  -> rewrite in place (update_section_field)
+#   value non-empty, field absent   -> insert at the end of the section
+#   value empty                     -> delete the line if it is there
+#
+# Fail-closed on the one thing that is genuinely wrong: a section header that is
+# not in the file at all returns 3, exactly as update_section_field does, rather
+# than silently writing nothing and reporting success. Without that, a refresh
+# aimed at a section that had been renamed or hand-removed would drop the cap
+# and say it had applied it.
+set_or_remove_section_field() {   # <file> <exact header> <field> <value>
+    local file="$1" want="$2" field="$3" value="$4" rc
+    if [ -n "$value" ]; then
+        update_section_field "$file" "$want" "$field" "$value"
+        rc=$?
+        [ "$rc" -ne 3 ] && return "$rc"
+        # Absent: insert. Anything but "not found" is a real failure.
+    fi
+    local tmp; tmp=$(mktemp) || return 1
+    FIELD_VALUE="$value" awk -v want="$want" -v field="$field" '
+        function flush_insert() {
+            if (insert && ENVIRON["FIELD_VALUE"] != "") {
+                printf "\t%s = %s\n", field, ENVIRON["FIELD_VALUE"]
+                insert=0
+            }
+        }
+        $0 == want { seen=1; emit=1; insert=1; print; next }
+        emit && /^\[/ { flush_insert(); emit=0 }
+        emit {
+            line=$0
+            sub(/^[ \t]+/, "", line)
+            n=index(line, "=")
+            if (n > 0) {
+                key=substr(line, 1, n-1)
+                gsub(/[ \t]+$/, "", key)
+                # Deletion: drop the line and, with it, the reason to insert.
+                if (key == field) { insert=0; next }
+            }
+        }
+        { print }
+        END { flush_insert(); if (!seen) exit 3 }
+    ' "$file" > "$tmp"
+    rc=$?
+    [ "$rc" -eq 0 ] || { rm -f "$tmp"; return "$rc"; }
+    mv_preserving_mode "$tmp" "$file"
+}
+
 # Which of this relationship's sections must be GENERATED, and therefore whether
 # this activation needs a profile at all.
 #
@@ -2661,6 +2714,14 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # everything this function happens to know about.
         update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
+        # The link cap is refreshed the same way and for the same reason -- it
+        # is a function of the RECORD, not of the installed policy. Unlike
+        # 'flags' it may legitimately be absent (no cap), and a cap removed
+        # from the record must take the field with it: a refresh that left a
+        # stale 'bandwidth' behind would keep throttling a relationship the
+        # operator had just uncapped, silently and for good.
+        set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${BANDWIDTH:-}" \
+            || die "[dataset:$localpath] in $workfile could not be updated with the relationship's bandwidth setting -- refusing to leave the link cap out of step with the client record. Fix or remove that section by hand and re-run."
     done
 
     # One minute for this relationship, chosen once here and written into every
@@ -2719,6 +2780,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
+            # The LINK cap, as its own field rather than a -b hidden in the
+            # string above: gen-cron.sh renders the identical token, and a
+            # named field is the only form a layer above a hand edit can
+            # speak about (it is profile-FORBIDDEN, which is a statement about
+            # ownership -- the link belongs to this pair of hosts).
+            [ -n "${BANDWIDTH:-}" ] && echo "	bandwidth    = $BANDWIDTH"
             # A solid scope root rides ENGINE recursion: snapget -R re-expands
             # the subtree on the source at every run, so a child created there
             # tomorrow joins at the next cron tick -- which is what the signed
@@ -5685,7 +5752,17 @@ load_client_and_connection() {
     local cpath="$1"
     # Reset before sourcing: records predating a field must not inherit the
     # previous client's value when one process loads several records.
+    #
+    # BANDWIDTH joins that list here, and it is the reason the list exists at
+    # all. A record without the field does not overwrite the variable, so in the
+    # commands that load several records in one shell -- migrate-profile,
+    # audit-source-retention -- a capped client A followed by an uncapped client
+    # B left B carrying A's cap: `-b 2M` on B's engine call and a `bandwidth`
+    # line in B's section. A relationship that never asked for a limit gets
+    # quietly slowed, in the direction nobody notices, because a transfer that
+    # is slower than it should be still succeeds.
     CLIENT_TARGET=""
+    BANDWIDTH=""
     # shellcheck disable=SC1090
     . "$cpath"
     local label; label=$(peer_label "$PEER_HOST")
@@ -5730,11 +5807,22 @@ load_client_and_connection() {
     # whole trust model; the extra IP-spoofing check adds nothing here.
     LOAD_FLAGS="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
     [ "$port" != "22" ] && LOAD_FLAGS="$LOAD_FLAGS -p $port"
-    # -b caps the receive-side mbuffer. It rides in the same flags string as the
-    # ssh options because it is per-CLIENT, not per-host: the whole point is
-    # that a peer at the end of a slow VPN gets a ceiling while a LAN peer on
-    # the same collector does not.
-    [ -n "${BANDWIDTH:-}" ] && LOAD_FLAGS="$LOAD_FLAGS -b $BANDWIDTH"
+    # -b caps the receive-side mbuffer: per-CLIENT, not per-host -- a peer at
+    # the end of a slow VPN gets a ceiling while a LAN peer on the same
+    # collector does not.
+    #
+    # It used to ride inside LOAD_FLAGS, i.e. inside the same string as the
+    # pairing key and the pinned host key, because that string was the only
+    # thing a generated section could carry. Since the CONFIG v4 link split it
+    # has a field of its own ('bandwidth'), so it is kept OUT of LOAD_FLAGS and
+    # written as that field -- one option, one home, and a profile-forbidden
+    # field instead of an unnameable substring.
+    #
+    # Direct engine invocations (seed, the dry-run probes) build a COMMAND LINE
+    # rather than a config and therefore still append the flag; they say so at
+    # each call site by using $LOAD_BW_FLAG.
+    LOAD_BW_FLAG=""
+    [ -n "${BANDWIDTH:-}" ] && LOAD_BW_FLAG=" -b $BANDWIDTH"
 
     # Slice 6: a no-op for a legacy (--peer-datasets) client -- PEER_SAVED_DATASETS
     # is already non-empty from the manifest sourced above. Only a mode-based
@@ -5913,7 +6001,7 @@ cmd_seed() {
             local _sx
             for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
         fi
-        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -6077,7 +6165,7 @@ cmd_final_catchup() {
             local _sx
             for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
         fi
-        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -6682,7 +6770,7 @@ cmd_activate_client() {
             set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
         fi
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" "${dr_args[@]}" $LOAD_FLAGS "$@"; then
+        if bash "$SNAPGET" "${dr_args[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "$@"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
@@ -7742,7 +7830,7 @@ cmd_test() {
     local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        if bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"

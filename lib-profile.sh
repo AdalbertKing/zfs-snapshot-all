@@ -120,7 +120,16 @@ profile_name_ok() {   # <profile>
 #   flags      raw engine flags: an escape hatch around every native field
 #   pair_label relationship identity
 #   notify     relationship-owned notification routing
-PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify'
+#
+# and the three LINK fields split out of 'flags' (gen-cron.sh,
+# link_flag_letter_present):
+#
+#   bandwidth   a cap on ONE link. A profile does not know which link it will
+#   compression fly over -- the same retention serves a gigabit LAN and a
+#   cipher      20 Mbit VPN -- so these belong to the pair of hosts, and are
+#               written per relationship. Naming them made them expressible
+#               in CONFIG v4; it must not make them inheritable from policy.
+PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher'
 
 profile_schema_dump() {   # <gen-cron.sh path> <outfile> -> 0 ok
     PROFILE_ERR=""
