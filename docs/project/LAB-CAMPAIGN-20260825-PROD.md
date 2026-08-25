@@ -193,6 +193,21 @@ Osiem z ośmiu. Linie prune: 4/4 `rc=0`. Monitory czytane **z rc narzędzia**, n
 ze statusu linii crona (ten kończy się testem `[ $rc -ge 3 ]` i jest fałszywy
 przy zdrowym stanie): **6/6 `rc=0`**.
 
+### 3.7 Tik BEZ udziału operatora — i P3 widoczne w sekundach
+
+Wszystko powyżej uruchamiałem ręcznie. Pierwszy tik, którego nie dotknąłem:
+
+```
+2026-08-25T21:37:08 ZFS-JOB END pve9 profile__prod__hourly snapshot (p2-at) rc=0
+2026-08-25T21:37:10 ZFS-JOB END pve9 profile__prod__hourly snapshot (p1-at) rc=0
+```
+
+Zainstalowane linie chodzą same. I widać w nich P3 **zmierzone, nie opisane**:
+obie relacje wystartowały w tej samej minucie, dwie sekundy od siebie. Przy
+dwóch relacjach to nic; przy kilkunastu na jednym kolektorze to jest ta sama
+tłuszcza, którą rozrzut minut miał rozwiązać dla profili jednotierowych.
+Granica `prod` nazwana i potwierdzona.
+
 ## 4. Co ZOSTAJE żywe (do rozbiórki)
 
 Lab **chodzi** — celowo, żeby zobaczyć tiki godzinowe.
