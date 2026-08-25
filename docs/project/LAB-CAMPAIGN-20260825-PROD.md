@@ -78,6 +78,137 @@ z tym brakiem). Spodziewam się linii monitora dla hourly/daily/weekly i
 prefiksy, każdy ze swoją retencją, w przeciwieństwie do `default`, gdzie jest
 jedna rodzina i cztery liczniki.
 
-## 3. Przebieg
+## 3. Przebieg i wyniki
 
-(uzupełniane w trakcie)
+Wersja kodu na kolektorze: **osobny** checkout `/root/zfs-stage` z gałęzi
+`stage/profile-one-file`. Checkout `main` (`/root/zfs-snapshot-all`) **nie był
+ruszany** przez całą kampanię.
+
+### 3.1 ZNALEZISKO F1 — `prod` nie potrafił utworzyć PIERWSZEJ relacji
+
+Pierwsza komenda, pierwsza relacja:
+
+```
+gen-cron.sh: error: [prune:hdd/prodlab-k1/192.168.28.9] has no use_template
+P1 EXIT=1
+```
+
+`PROFILE_GFS` to odpowiedź `detect_profile_gfs` o **zainstalowanym configu**.
+Świeży config nic nie mówi, więc odpowiedź brzmi „drabina" — i drabina profilu
+płaskiego została zaplanowana, wyemitowana i odrzucona za brak `use_template`.
+
+Czternaście asercji jednostkowych tego nie złapało, bo ćwiczyły
+`ensure_cron_config` (szablony, odmowa zamrożonego kształtu). Drabinę emituje
+warstwę dalej `emit_client_sections`, i nic nie przejechało tej ścieżki
+profilem płaskim po świeżym configu. **Lab znalazł to w trzy minuty.**
+
+Poprawka `3f25b8e`: `profile_declares_ladder()` pyta o jedyną rzecz, która nie
+może być błędna — czy profil, który ma zostać **zapisany**, niesie fragment
+`[prune]`. `prod` nie niesie, bo jego tiery sprzątają własne rodziny.
+
+### 3.2 P1 POTWIERDZONE — z żywą kontrolą negatywną
+
+Kontroli **nie dało się** zrobić na `main`: `main` poprzedza jednoplikowy format
+profilu i odmawia `profiles/prod` po nazwie pliku (`templates.conf is missing`).
+Zrobiona więc na **opublikowanym commicie tej samej gałęzi**, jeden przed
+rozdzieleniem kształtu od nazwy — jedna zmienna, wszystko inne identyczne.
+
+| kod | druga relacja `p2` |
+|---|---|
+| `1420ea9` (przed rozdzieleniem) | **FATAL:** *„uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen"* — EXIT=1 |
+| `3f25b8e` (po) | `client 'p2' is active` — EXIT=0 |
+
+Komunikat odmowy nazywał rodzinę `standard_*`, której w tym pliku nie ma.
+`prod` był profilem **jednej relacji na host**, i nie dotyczyło to migracji —
+to zwykła ścieżka `activate-client` dla drugiego klienta.
+
+### 3.3 P2, P5, P6 — potwierdzone pomiarem
+
+Crontab pve9: **+23 linie** (diff `/root/cron9.pre` → `/root/cron9.post`),
+produkcyjne linie nietknięte.
+
+- **8 linii `snapget`** = 2 relacje × 4 tiery.
+- **4 linie `delsnaps`**, i to nie jest brak retencji dla `p2` — gen-cron
+  **scalił** oba datasety w jedno wywołanie na tier:
+  `"hdd/prodlab-k1/.../at,hdd/prodlab-k2/.../at" "automated_hourly" -H24`.
+- **6 linii monitora** = 2 relacje × 3 tiery. **Żadnej dla `monthly`** —
+  dokładnie tak, jak profil został przepisany z pve1 (P5).
+- **Żadnej sekcji `[prune:]` drabiny** — cztery osobne `delsnaps`, każdy na
+  swojej rodzinie z własnym licznikiem: `-H24`, `-D7`, `-W4`, `-M6` (P2).
+- Cztery rodziny na kolektorze: `automated_hourly_`, `_daily_`, `_weekly_`,
+  `_monthly_` (P6).
+
+### 3.4 P3 potwierdzone — rozrzutu nie ma, i silnik to mówi
+
+```
+>>> schedule: 'send_schedule' differs between the tiers this profile references
+    -- leaving it to the profile rather than collapsing them onto one cadence
+```
+
+Obie relacje stoją na minutach profilu (send `:37`, prune `:51`). To znana
+granica, nie odkrycie: pole zapisane w SEKCJI nadpisuje **każdy** tier, więc
+jedna wartość zwaliłaby daily/weekly/monthly na kadencję godzinową.
+
+### 3.5 ZNALEZISKO F2 — scalona linia prune niesie JEDNĄ etykietę
+
+Cztery linie `delsnaps` pokrywają oba datasety, ale powiadomienie każdej z nich
+mówi `(p1-at)`. Awaria przy sprzątaniu datasetu **p2** zgłosi się pod nazwą
+relacji **p1**. Niska waga, ale to ta sama klasa co „nigdy nie obwiniaj złej
+rzeczy". Nie naprawione.
+
+### 3.6 ZNALEZISKO F3 — trzy z czterech tierów `prod` nie powstają na koncie delegowanym
+
+Bieg **verbatim** wszystkich ośmiu linii, obie relacje, przed nadaniem quiesce:
+
+```
+hourly  (p1-at) rc=0      hourly  (p2-at) rc=0
+daily   (p1-at) rc=1      daily   (p2-at) rc=1
+weekly  (p1-at) rc=1      weekly  (p2-at) rc=1
+monthly (p1-at) rc=1      monthly (p2-at) rc=1
+```
+
+```
+Quiesce[192.168.28.8]: this account cannot quiesce guests on the source host:
+it is not root, and /usr/local/sbin/zfs-quiesce-helper is not usable through sudo.
+Quiesce: refusing to continue with unquiesced snapshots
+```
+
+Symetrycznie na **dwóch niezależnych hostach**. `prod` ma `quiesce = auto` na
+daily/weekly/monthly; konto delegowane nie może zamrozić gościa, więc snapshot
+**nie powstaje w ogóle** i zostaje wyłącznie tier godzinowy.
+
+**To jest dokładnie scenariusz, który właściciel opisał przy dyskusji o pliku
+`.ini`** — „gdy się nie powiedzie, nie powstanie; po 24 h okaże się, że brakuje
+mi trwałego snapshotu żyjącego 7 dni" — odtworzony na żywej infrastrukturze,
+a nie wyobrażony. `docs/design/quiesce-degrade.md` ma teraz pomiar za sobą.
+
+Kontrola pozytywna, jedna zmienna (`deploy.sh --commit-scope=pve9
+--allow-quiesce` na obu źródłach):
+
+```
+hourly/daily/weekly/monthly (p1-at) rc=0    (p2-at) rc=0
+```
+
+Osiem z ośmiu. Linie prune: 4/4 `rc=0`. Monitory czytane **z rc narzędzia**, nie
+ze statusu linii crona (ten kończy się testem `[ $rc -ge 3 ]` i jest fałszywy
+przy zdrowym stanie): **6/6 `rc=0`**.
+
+## 4. Co ZOSTAJE żywe (do rozbiórki)
+
+Lab **chodzi** — celowo, żeby zobaczyć tiki godzinowe.
+
+**pve9 (192.168.28.99)**
+- `/root/zfs-stage` — checkout gałęzi. **Zainstalowane linie crona wskazują na
+  ten katalog** (`/root/zfs-stage/snapget.sh`), więc nie wolno go usunąć przed
+  rozbiórką relacji.
+- relacje `p1`, `p2` aktywne; `/etc/zfs-snapshot-all/jobs.pve9.conf`
+- 23 linie crona; kopia sprzed: `/root/cron9.pre`
+- datasety `hdd/prodlab-k1`, `hdd/prodlab-k2`
+
+**pve1 (192.168.28.9) i pve2 (192.168.28.8) — PRODUKCJA**
+- drzewa labowe `hdd/lab1prod`, `hdd/lab2prod`
+- delegacja ZFS na 3 datasety do `zfsbackup-pve9`
+- **nadanie quiesce** dla `zfsbackup-pve9` (whitelist + reguła sudoers).
+  Zdejmuje się: `deploy.sh --revoke-quiesce=zfsbackup-pve9`
+
+Produkcyjne linie crona i datasety produkcyjne **nietknięte** na obu hostach.
