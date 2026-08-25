@@ -22,7 +22,7 @@ z definicji, więc wyglądał jak legacy. Ten lab jest **żywym dowodem** popraw
   replikowanym przez pvesr zakleszcza replikację na stałe.
 - **Gałąź, nie `main`.** Profil `prod` i `migrate-profile --profile=` żyją na
   `stage/profile-one-file`. pve9 dostaje **drugi, osobny checkout**
-  (`/root/zfs-snapshot-all-stage`); istniejący checkout na `main` NIE jest
+  (`/root/zfs-stage`); istniejący checkout na `main` NIE jest
   ruszany. To także jedyny sposób na uczciwą kontrolę A/B — patrz P1.
 - Werdykty czytamy z pola `rc=` w logu, nie ze statusu linii crona.
 - Linie crona uruchamiamy **verbatim**; rekonstruowana linia nie jest dowodem.
