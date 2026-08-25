@@ -1377,10 +1377,19 @@
   dokumentacyjne i późniejsze findingi monitoringu są doradcze i **nie**
   otwierają tego etapu ponownie.
 
-  **Następny krok: KROK 5** — i tylko on. Numeracja `KROK n` pochodzi
-  z komentarzy recenzenta w issue #9; treść KROKU 5 nie została dotąd nigdzie
-  zdefiniowana, więc ten dokument jej nie zgaduje. Do czasu, gdy recenzent ją
-  poda, żadna praca nie startuje z tego toru.
+  **Następny krok: KROK 5** — i tylko on, w zakresie zapisanym w wiążącym
+  OWNER EXECUTION PLAN (issue #9, komentarz `5301880395` z 2026-08-15):
+  domknięcie **wysokopoziomowego wdrożenia jednoserwerowego**. Najpierw krótki
+  audyt „co już jest" wobec zamkniętego Gate 5 — planer, CONFIG, seed,
+  retencja i transakcja crona nie są budowane ponownie. Dostarczany jest
+  wyłącznie brakujący klej UX dla przebiegu **czysty host → działający
+  backup**: root jako domyślny wykonawca; `--local-user=zfsbackup` zmieniający
+  wyłącznie konto, nie procedurę; brak `--source` pokazujący propozycję
+  sensownych datasetów i wymagający akceptacji; target automatyczny tylko gdy
+  jednoznaczny, inaczej jawna decyzja; jedna ponowiona komenda wznawiająca po
+  błędzie; koniec = seed zweryfikowany oraz cron zainstalowany i odczytany
+  z właściwego konta. Dowód akceptacyjny na czystym hoście w dwóch wariantach
+  — root i konto delegowane — bez ręcznej edycji CONFIG-u, grantów i crontaba.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 
