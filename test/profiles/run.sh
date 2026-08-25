@@ -47,9 +47,15 @@ else
     bad "prune.inc violates native field/ownership contract"
 fi
 
-# templates.conf must be literal CONFIG v4 templates, not a mixed mini-config.
-if grep -E '^\[' "$PROFILE/templates.conf" | grep -vqE '^\[template:[^]]+\]$'; then
-    bad "templates.conf contains a non-template section"
+# templates.conf carries literal CONFIG v4 sections, not a mixed mini-config --
+# and since 2026-08-25 that is TWO kinds, not one. REWRITTEN rather than
+# deleted: the property is "only sections a profile may own", and the reserved
+# families became one of them by owner decision. They compose differently from
+# templates (shared, never namespaced), which is why they are rendered to their
+# own artifact -- so the rule that matters here is still that nothing else gets
+# in.
+if grep -E '^\[' "$PROFILE/templates.conf" | grep -vqE '^\[(template|excluded):[^]]+\]$'; then
+    bad "templates.conf contains a section a profile may not own"
 else
     ok "templates.conf contains template sections only"
 fi

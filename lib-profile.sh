@@ -221,19 +221,47 @@ profile_validate_templates() {   # <file> <schema dump>
                 profile_component_ok template "$field" || { PROFILE_ERR="$file:$n: $PROFILE_ERR"; return 1; }
                 in_section=1
                 continue ;;
+            '[excluded:'*']')
+                # The reserved-family floors. They were a hardcoded list in
+                # zfs-backup.sh -- "__replicate_", "vzdump", "__migration__",
+                # keep=2 -- which meant the one thing every deployment on this
+                # estate carries was the one thing no profile could describe,
+                # and "what does a default deployment actually do" could not be
+                # answered by reading the profile.
+                #
+                # A prefix is NOT namespaced the way a template name is. These
+                # sections are config-wide policy shared by every relationship
+                # in the file, and two profiles naming the same family mean the
+                # same family -- rewriting the name would produce two floors
+                # for one thing. So the check is on what a section header can
+                # carry, not profile_component_ok.
+                field="${raw#\[excluded:}"; field="${field%\]}"
+                case "$field" in
+                    '')          PROFILE_ERR="$file:$n: [excluded:] with no prefix"; return 1 ;;
+                    *'['*|*']'*) PROFILE_ERR="$file:$n: '$field' is not usable in a section header"; return 1 ;;
+                esac
+                in_section=2
+                continue ;;
             '['*)
-                PROFILE_ERR="$file:$n: only [template:NAME] sections belong in a profile, got '$raw'"
+                PROFILE_ERR="$file:$n: only [template:NAME] and [excluded:PREFIX] sections belong in a profile, got '$raw'"
                 return 1 ;;
         esac
-        if [ "$in_section" -ne 1 ]; then
-            PROFILE_ERR="$file:$n: '$raw' appears before any [template:NAME] section"
+        if [ "$in_section" -eq 0 ]; then
+            PROFILE_ERR="$file:$n: '$raw' appears before any [template:NAME] or [excluded:PREFIX] section"
             return 1
         fi
         field=$(printf '%s\n' "$raw" | sed -n -E 's/^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=.*$/\1/p')
         [ -n "$field" ] || { PROFILE_ERR="$file:$n: not a 'field = value' line"; return 1; }
-        profile_check_field template "$field" "$dump" "$file:$n" || return 1
+        # Each kind against its own schema: [excluded:] takes `keep` and nothing
+        # else, and checking it against the template field list would accept
+        # every policy field there is.
+        if [ "$in_section" -eq 2 ]; then
+            profile_check_field excluded "$field" "$dump" "$file:$n" || return 1
+        else
+            profile_check_field template "$field" "$dump" "$file:$n" || return 1
+        fi
     done < "$file"
-    [ "$in_section" -eq 1 ] || { PROFILE_ERR="$file: no [template:NAME] section found"; return 1; }
+    [ "$in_section" -ne 0 ] || { PROFILE_ERR="$file: no [template:NAME] section found"; return 1; }
     return 0
 }
 
@@ -249,17 +277,40 @@ profile_validate_templates() {   # <file> <schema dump>
 # Set by profile_render_templates: the namespaced names this profile defines.
 PROFILE_TEMPLATE_NAMES=""
 
-profile_render_templates() {   # <dir> <profile> <outfile>
+# TWO KINDS OF SECTION COMPOSE IN TWO DIFFERENT WAYS, and putting them in one
+# output file broke the scheme the moment profiles gained [excluded:].
+#
+#   [template:NAME]     NAMESPACED. Two profiles may define the same name and
+#                       both survive, so rendered files CONCATENATE -- that is
+#                       the property the whole namespace exists for.
+#   [excluded:PREFIX]   SHARED. Config-wide policy, deliberately not renamed,
+#                       because two profiles naming __replicate_ mean the same
+#                       __replicate_. Concatenating two renders would emit the
+#                       section twice, and gen-cron refuses duplicates.
+#
+# So they go to different outputs. The excluded file is consumed by the floor
+# installer, which appends only what the config lacks; the templates file stays
+# concatenation-safe, exactly as it was before this field existed.
+profile_render_templates() {   # <dir> <profile> <outfile> [excluded outfile]
     PROFILE_ERR=""; PROFILE_TEMPLATE_NAMES=""
-    local dir="$1" prof="$2" out="$3" file raw name ns n=0
+    local dir="$1" prof="$2" out="$3" excl_out="${4:-}" file raw name ns n=0 in_excl=0
     profile_name_ok "$prof" || { PROFILE_ERR="profile name '$prof' is not usable in a section header (letters, digits, _ and - only)"; return 1; }
     file="$dir/templates.conf"
     [ -r "$file" ] || { PROFILE_ERR="cannot read profile templates '$file'"; return 1; }
     : > "$out" || { PROFILE_ERR="cannot write '$out'"; return 1; }
+    if [ -n "$excl_out" ]; then
+        : > "$excl_out" || { PROFILE_ERR="cannot write '$excl_out'"; return 1; }
+    fi
     while IFS= read -r raw || [ -n "$raw" ]; do
         n=$((n+1))
         raw="${raw%$'\r'}"
         case "$raw" in
+            '[excluded:'*']')
+                # Shared, not namespaced -- so it must not reach the file that
+                # gets concatenated with another profile's.
+                in_excl=1
+                [ -n "$excl_out" ] && printf '%s\n' "$raw" >> "$excl_out"
+                continue ;;
             '[template:'*']')
                 name="${raw#\[template:}"; name="${name%\]}"
                 profile_component_ok template "$name" || { PROFILE_ERR="$file:$n: $PROFILE_ERR"; return 1; }
@@ -273,9 +324,14 @@ profile_render_templates() {   # <dir> <profile> <outfile>
                     *" $ns "*) PROFILE_ERR="$file:$n: '[template:$name]' appears twice in profile '$prof' -- the composed config would carry a duplicate section"; return 1 ;;
                 esac
                 PROFILE_TEMPLATE_NAMES="$PROFILE_TEMPLATE_NAMES $ns"
+                in_excl=0
                 printf '[template:%s]\n' "$ns" >> "$out" ;;
             *)
-                printf '%s\n' "$raw" >> "$out" ;;
+                if [ "$in_excl" -eq 1 ]; then
+                    [ -n "$excl_out" ] && printf '%s\n' "$raw" >> "$excl_out"
+                else
+                    printf '%s\n' "$raw" >> "$out"
+                fi ;;
         esac
     done < "$file"
     PROFILE_TEMPLATE_NAMES="${PROFILE_TEMPLATE_NAMES# }"

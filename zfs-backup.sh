@@ -93,7 +93,18 @@ LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
 LIBPROFILE="$SCRIPT_DIR/lib-profile.sh"
 PROFILE_ROOT="${PROFILE_ROOT:-$SCRIPT_DIR/profiles}"
-PROFILE_ACTIVE="${PROFILE_ACTIVE:-default}"
+# The name of the profile a deployment gets when nobody names one. Written once
+# and referred to, not spelled out at each of the six places that used to say
+# "default" in a literal -- with six copies, "what does a plain run do" was a
+# question you answered by grepping, and changing the answer meant finding all
+# six.
+#
+# It is also what makes `--profile=default` TESTABLE: the explicit and the
+# implicit path now resolve through the same name, so "an explicit default
+# behaves exactly like no flag at all" is a property that can be asserted
+# rather than assumed.
+PROFILE_DEFAULT_NAME="default"
+PROFILE_ACTIVE="${PROFILE_ACTIVE:-$PROFILE_DEFAULT_NAME}"
 
 # Shared with zfs-restore.sh (die/warn, the server conf, the installed-config
 # field reader) since the 2026-08-17 restore split. Sourced FIRST because the
@@ -941,6 +952,7 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
 # and the section names it produces end up in a config we then compare against.
 PROFILE_LOADED=""
 PROFILE_TPL_FILE=""
+PROFILE_EXCL_FILE=""
 PROFILE_DS_FILE=""
 PROFILE_PRUNE_FILE=""
 # BASHPID of the shell whose EXIT trap holds the release. Inherited by a
@@ -977,12 +989,12 @@ declare -A SOURCE_PRUNE_PRESERVED=()
 # larger lie. The warning is the report.
 profile_release_tmp() {
     local f left=""
-    for f in "$PROFILE_TPL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
+    for f in "$PROFILE_TPL_FILE" "$PROFILE_EXCL_FILE" "$PROFILE_DS_FILE" "$PROFILE_PRUNE_FILE"; do
         [ -n "$f" ] || continue
         rm -f "$f" 2>/dev/null
         [ -e "$f" ] && left="$left $f"
     done
-    PROFILE_TPL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
+    PROFILE_TPL_FILE=""; PROFILE_EXCL_FILE=""; PROFILE_DS_FILE=""; PROFILE_PRUNE_FILE=""; PROFILE_LOADED=""
     if [ -n "$left" ]; then
         warn "could not remove the rendered profile file(s):$left -- they are still in place"
         return 1
@@ -1091,9 +1103,13 @@ load_active_profile() {
     # covers every failure path without one release call per path.
     _profile_arm_release
     PROFILE_TPL_FILE=$(mktemp)   || die "mktemp failed"
+    # Rendered separately because it composes differently -- see
+    # profile_render_templates. The floors live here; the templates file stays
+    # safe to concatenate with another profile's.
+    PROFILE_EXCL_FILE=$(mktemp)  || die "mktemp failed"
     PROFILE_DS_FILE=$(mktemp)    || die "mktemp failed"
     PROFILE_PRUNE_FILE=$(mktemp) || die "mktemp failed"
-    profile_render_templates "$dir" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_templates "$dir" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE" "$PROFILE_EXCL_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     profile_render_fragment "$dir/dataset.inc" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     profile_render_fragment "$dir/prune.inc" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     PROFILE_LOADED=1
@@ -1811,7 +1827,35 @@ Resolve by hand: give the new relationship's profile a different template identi
     # decision; a new relationship simply inherits the global policy as it
     # stands, the same policy every existing relationship is already running
     # under.
+    # WHICH FAMILIES ARE FENCED IS NOW THE PROFILE'S ANSWER.
+    #
+    # It used to be a literal list here -- "__replicate_", "vzdump",
+    # "__migration__", keep=2 -- which made the one policy every deployment on
+    # this estate carries the one policy no profile could describe. "What does
+    # a default deployment do" was a question you answered by reading this
+    # function, not by reading `default`. Owner decision, 2026-08-25: reserved
+    # families are profile-editable, so `profiles/<name>/templates.conf` names
+    # them and this code renders what it is given.
+    #
+    # Read from the RENDERED profile, not the source directory: that is the
+    # same text every other section comes from, so a profile that fails to
+    # render cannot half-apply here.
     local prefix
+    local -a floor_prefixes=() floor_keeps=()
+    if [ -n "${PROFILE_EXCL_FILE:-}" ] && [ -r "${PROFILE_EXCL_FILE:-}" ]; then
+        local _fl_pfx="" _fl_keep=""
+        while IFS= read -r _fl_line; do
+            case "$_fl_line" in
+                '[excluded:'*']')
+                    [ -n "$_fl_pfx" ] && { floor_prefixes+=("$_fl_pfx"); floor_keeps+=("$_fl_keep"); }
+                    _fl_pfx="${_fl_line#\[excluded:}"; _fl_pfx="${_fl_pfx%\]}"; _fl_keep="" ;;
+                '['*) [ -n "$_fl_pfx" ] && { floor_prefixes+=("$_fl_pfx"); floor_keeps+=("$_fl_keep"); }
+                      _fl_pfx=""; _fl_keep="" ;;
+                *keep*=*) [ -n "$_fl_pfx" ] && _fl_keep="$(printf '%s' "${_fl_line#*=}" | tr -d '[:space:]')" ;;
+            esac
+        done < "$PROFILE_EXCL_FILE"
+        [ -n "$_fl_pfx" ] && { floor_prefixes+=("$_fl_pfx"); floor_keeps+=("$_fl_keep"); }
+    fi
     local install_floors=0
     if [ "$needs_profile" -eq 1 ]; then
         case "$global_policy_mode" in
@@ -1820,14 +1864,18 @@ Resolve by hand: give the new relationship's profile a different template identi
         esac
     fi
     if [ "$install_floors" -eq 1 ]; then
-        for prefix in "__replicate_" "vzdump" "__migration__"; do
+        local _i
+        for _i in "${!floor_prefixes[@]}"; do
+            prefix="${floor_prefixes[$_i]}"
+            local keep="${floor_keeps[$_i]}"
+            [ -n "$keep" ] || die "profile '$PROFILE_ACTIVE' declares [excluded:$prefix] without a keep -- a floor with no count is not a floor, and guessing one here would fence a family by an amount nobody chose"
             grep -qF "[excluded:$prefix]" "$file" 2>/dev/null && continue
             {
                 echo
                 echo "[excluded:$prefix]"
-                echo "	keep = 2"
+                echo "	keep = $keep"
             } >> "$file" || die "could not append [excluded:$prefix] to $file"
-            log "added missing reserved-prefix protection [excluded:$prefix] (keep=2) to $file"
+            log "added missing reserved-prefix protection [excluded:$prefix] (keep=$keep) to $file"
         done
     elif [ "$needs_profile" -eq 1 ]; then
         # Inheriting the installed policy is the correct action, but doing it
@@ -1837,7 +1885,7 @@ Resolve by hand: give the new relationship's profile a different template identi
         # vzdump snapshot later. A warning is neither a mutation nor a refusal,
         # and activate-client shows its full proposal before installing.
         local missing=""
-        for prefix in "__replicate_" "vzdump" "__migration__"; do
+        for prefix in ${floor_prefixes[@]+"${floor_prefixes[@]}"}; do
             grep -qF "[excluded:$prefix]" "$file" 2>/dev/null || missing="$missing $prefix"
         done
         [ -n "$missing" ] && warn "$file has no [excluded:] floor for:$missing -- the new relationship inherits the CONFIG-wide protection policy exactly as installed, and it is NOT being repaired here (that would change the prune command of every relationship already in this file). If those floors are wanted, add them by hand, deliberately, in one edit that you can see affects everything."
@@ -4078,7 +4126,7 @@ section_field() {   # <file> <exact header> <field>
 }
 
 cmd_local_backup() {
-    local target="" profile="default" config=""
+    local target="" profile="$PROFILE_DEFAULT_NAME" config=""
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
     local do_install=0 assume_yes=0
@@ -4735,7 +4783,7 @@ cmd_add_client() {
     # happens, not silently at the first activate-client. Zero-choice default
     # unchanged: an operator who never heard of profiles gets exactly the
     # same "default" behaviour as before this flag existed.
-    [ -n "$profile" ] || profile="default"
+    [ -n "$profile" ] || profile="$PROFILE_DEFAULT_NAME"
     profile_validate_dir "$PROFILE_ROOT/$profile" "$GENCRON" \
         || die "add-client: --profile='$profile': $PROFILE_ERR"
     [ -n "$lan" ] || die "add-client requires --host=HOST[:PORT] (the address used for the initial seed)"
@@ -4811,7 +4859,7 @@ cmd_add_client() {
     # A declared-passive relationship defaults to the PASSIVE profile: its
     # templates are prefixless and its monitors run in any-mode -- the only
     # shape that matches the declaration. An explicit --profile= still wins.
-    if [ "$passive" -eq 1 ] && [ "$profile" = "default" ]; then
+    if [ "$passive" -eq 1 ] && [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; then
         profile=passive
     fi
 
@@ -8347,7 +8395,7 @@ rux_verify_requested_scope() {
 # establish remotely.
 rux_remote_plan() {
     local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" explicit_name="$7"
-    [ -n "$profile" ] || profile="default"
+    [ -n "$profile" ] || profile="$PROFILE_DEFAULT_NAME"
 
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
     local cpath; cpath=$(client_conf_path "$name")
@@ -8689,7 +8737,7 @@ rux_remote_install() {
     # templates are prefixless and its monitors run in any-mode, which is the
     # only shape that matches the declaration. An explicit --profile= still
     # wins -- the operator may have a customised passive variant.
-    if [ "$passive" -eq 1 ] && { [ -z "$profile" ] || [ "$profile" = "default" ]; }; then
+    if [ "$passive" -eq 1 ] && { [ -z "$profile" ] || [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; }; then
         profile=passive
     fi
 
