@@ -537,8 +537,16 @@ profile_validate_dir() {   # <profile dir> <gen-cron.sh path>
     dump="$(mktemp)" || { PROFILE_ERR="mktemp failed"; return 1; }
     if ! profile_schema_dump "$gen" "$dump"; then rm -f "$dump"; return 1; fi
 
+    # Guarded, one by one. The first cut allocated these four with no check, so
+    # a failing mktemp handed the splitter empty paths and validation carried on
+    # against files that were never created -- a profile would have "validated"
+    # because nothing could be read. Caught by the allocation-failure control in
+    # test/zfsbackup, which injects exactly that.
     local vt vd vp ve
-    vt="$(mktemp)"; vd="$(mktemp)"; vp="$(mktemp)"; ve="$(mktemp)"
+    vt="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump"; return 1; }
+    vd="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt"; return 1; }
+    vp="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt" "$vd"; return 1; }
+    ve="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt" "$vd" "$vp"; return 1; }
     if ! profile_split_one_file "$dir/profile.conf" "$vt" "$vd" "$vp" "$ve"; then
         rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1
     fi

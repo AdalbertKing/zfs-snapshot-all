@@ -284,9 +284,7 @@ fi
 # built-in default and renaming keep_ -> ret_ (preserves structure and tabs), then
 # prove the SOURCE family is still derived and distinct.
 mkdir -p "$WORK/profiles/custret"
-sed 's/keep_/ret_/g' "$REPO/profiles/default/templates.conf" > "$WORK/profiles/custret/templates.conf"
-cp "$REPO/profiles/default/dataset.inc"                        "$WORK/profiles/custret/dataset.inc"
-sed 's/keep_/ret_/g' "$REPO/profiles/default/prune.inc"      > "$WORK/profiles/custret/prune.inc"
+sed 's/keep_/ret_/g' "$REPO/profiles/default/profile.conf" > "$WORK/profiles/custret/profile.conf"
 run_custret() {  # like run(), but PROFILE_ROOT points at the temp custom profile
     ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$WORK/profiles" \
       cmd_local_backup "$@" ) 2>&1
@@ -1306,8 +1304,7 @@ fi
 # being read rather than still hardwired somewhere.
 NOFLOOR="$WORK/nofloor"
 mkdir -p "$NOFLOOR/bare"
-sed '/^\[excluded:/,$d' "$REPO/profiles/default/templates.conf" > "$NOFLOOR/bare/templates.conf"
-cp "$REPO/profiles/default/dataset.inc" "$REPO/profiles/default/prune.inc" "$NOFLOOR/bare/"
+sed '/^\[excluded:/,$d' "$REPO/profiles/default/profile.conf" > "$NOFLOOR/bare/profile.conf"
 bare="$( PROFILE_ROOT="$NOFLOOR" run --source=rpool/data --target=hdd/backups \
             --config="$WORK/id3.conf" --profile=bare 2>&1 )"
 if printf '%s' "$bare" | grep -qF '[excluded:__replicate_]'; then

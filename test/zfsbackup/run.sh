@@ -3610,13 +3610,29 @@ fi
 # policy reference -- the suite still reported 295/295. Nothing here asserted
 # that a generated [dataset:] carries a use_template line at all. So this block
 # pins the field, not just the extra one.
+
+# A profile is ONE file since 2026-08-25, so a fixture that wants a variant of
+# the built-in copies profile.conf and appends into the right section instead of
+# editing one of three files. `mkprof_add <dir> <section> <lines...>` appends the
+# lines directly after that section header, which is where an operator would put
+# them and where the splitter expects them.
+mkprof_copy() {   # <target profile dir>
+    mkdir -p "$1"
+    cp "$REPO/profiles/default/profile.conf" "$1/profile.conf"
+}
+mkprof_add() {    # <target profile dir> <section header> <line>
+    awk -v want="$2" -v add="$3" '
+        { print }
+        $0 == want && !done { print add; done=1 }
+    ' "$1/profile.conf" > "$1/profile.conf.new" && mv "$1/profile.conf.new" "$1/profile.conf"
+}
+
 FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
-cp "$REPO/profiles/default/templates.conf" "$FS/p/prof/templates.conf"
-cp "$REPO/profiles/default/prune.inc"      "$FS/p/prof/prune.inc"
+mkprof_copy "$FS/p/prof"
 # A second VALID dataset field the built-in profile does not carry. `recursive`
 # is explicitly profile-owned (REV-073) and is not in the forbidden list, so a
 # profile is entitled to set it and the runtime must carry it through.
-{ cat "$REPO/profiles/default/dataset.inc"; printf 'recursive = flat\n'; } > "$FS/p/prof/dataset.inc"
+mkprof_add "$FS/p/prof" '[dataset]' '\trecursive = flat'
 
 EC_FS="$FS/out.conf"; : > "$EC_FS"
 out=$( ( PROFILE_ROOT="$FS/p" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
@@ -4122,9 +4138,7 @@ fi
 #
 # The nine steps below are the reviewer's required discriminating proof.
 P9="$WORK/phase3"; mkdir -p "$P9/prof"
-cp "$REPO/profiles/default/templates.conf" "$P9/prof/templates.conf"
-cp "$REPO/profiles/default/prune.inc"      "$P9/prof/prune.inc"
-cp "$REPO/profiles/default/dataset.inc"    "$P9/prof/dataset.inc"
+mkprof_copy "$P9/prof"
 
 # THE SOURCE MUST ANSWER, and until 2026-08-22 these cases relied on it not
 # answering. LOAD_HOST is an unroutable test address and ssh was never stubbed,
@@ -4229,8 +4243,8 @@ fi
 # The drift is expressed in VALID profile fields on purpose: an invalid one
 # would be refused at the profile boundary and would prove nothing about the
 # handoff.
-printf 'recursive = yes\n' >> "$P9/prof/dataset.inc"
-sed -i 's/^gfs_pattern *=.*/gfs_pattern = automated_PROFILEDRIFT_/' "$P9/prof/prune.inc"
+mkprof_add "$P9/prof" '[dataset]' '\trecursive = yes'
+sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_PROFILEDRIFT_/' "$P9/prof/profile.conf"
 out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
         && grep -q 'recursive    = flat' "$C9" \
@@ -4246,7 +4260,11 @@ fi
 # looks right" is the appearance this project keeps mistaking for the property
 # (REV-20260809-082 V1), so the boundary is crossed here too.
 P9_CAND="$P9/candidate.conf"
-( . "$REPO/lib-profile.sh"; profile_render_templates "$P9/prof" prof "$P9/tpl.conf" ) || true
+( . "$REPO/lib-profile.sh"
+  _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
+  bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
+  profile_split_one_file "$P9/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_render_templates "$_t" prof "$P9/tpl.conf" "" "$_L" ) || true
 { printf '[defaults]\n\thost_label = p9test\n\n'; cat "$P9/tpl.conf"; printf '\n'; cat "$C9"; } > "$P9_CAND"
 gen_rc=0; gen_out="$(bash "$REPO/gen-cron.sh" -c "$P9_CAND" 2>&1)" || gen_rc=$?
 if [ "$gen_rc" -eq 0 ] && printf '%s\n' "$gen_out" | grep -q 'zfsbackup@10.9.9.3'; then
@@ -4325,14 +4343,11 @@ fi
 # the REAL cmd_activate_client()/ensure_cron_config() boundary.
 AP="$WORK/profilegone"
 mkdir -p "$AP/clients" "$AP/peerstate" "$AP/keys" "$AP/dir" "$AP/root/prof" "$AP/cap"
-cp "$REPO/profiles/default/prune.inc"   "$AP/root/prof/prune.inc"
-cp "$REPO/profiles/default/dataset.inc" "$AP/root/prof/dataset.inc"
+mkprof_copy "$AP/root/prof"
 # An extra template nothing references: the "otherwise-unused generated template
 # the operator removed" of the review's proof step 4. A referenced one could not
 # tell F2 apart from gen-cron simply rejecting a dangling use_template.
-{ cat "$REPO/profiles/default/templates.conf"
-  printf '\n[template:extra_unused]\n\tsend_schedule = 0 5 * * *\n\tprefix        = automated_extra_\n'
-} > "$AP/root/prof/templates.conf"
+printf '\n[template:extra_unused]\n\tsend_schedule = 0 5 * * *\n\tprefix        = automated_extra_\n' >> "$AP/root/prof/profile.conf"
 
 for h in 10.7.7.8 10.7.7.9; do
     printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' "$h" \
@@ -4424,7 +4439,7 @@ mv "$AP/root/prof.gone" "$AP/root/prof"
 # A profile that is PRESENT but no longer valid is the same class of dependency
 # -- an installed CONFIG must not stop being reactivatable because a file it no
 # longer needs stopped parsing.
-printf 'src = zfsbackup@nope:x\n' >> "$AP/root/prof/dataset.inc"
+mkprof_add "$AP/root/prof" '[dataset]' '	src = zfsbackup@nope:x'
 out=$(run_ap "$AP/root")
 if [ -f "$AP/cap/workfile" ] && case "$out" in *"profile 'prof'"*) false ;; *) true ;; esac; then
     ok "90 F1: reactivation is unaffected by the CREATE-time profile becoming invalid"
@@ -4432,7 +4447,7 @@ else
     bad "90 F1: reactivation is unaffected by the CREATE-time profile becoming invalid" \
         "captured=$([ -f "$AP/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
 fi
-sed -i '/^src = zfsbackup@nope:x$/d' "$AP/root/prof/dataset.inc"
+sed -i '/^	src = zfsbackup@nope:x$/d' "$AP/root/prof/profile.conf"
 
 # --- F2: a removed, otherwise-unused generated template stays removed. ---
 if grep -q "^\[template:profile__prof__extra_unused\]" "$APC"; then
@@ -4620,9 +4635,7 @@ fi
 # forbidden shared-policy mutation, because it had no established task to
 # disturb. This section adds one.
 GX="$WORK/gate2additive"; mkdir -p "$GX/prof"
-cp "$REPO/profiles/default/templates.conf" "$GX/prof/templates.conf"
-cp "$REPO/profiles/default/prune.inc"      "$GX/prof/prune.inc"
-cp "$REPO/profiles/default/dataset.inc"    "$GX/prof/dataset.inc"
+mkprof_copy "$GX/prof"
 GXC="$GX/shared.conf"
 
 emit_gx() {   # <client> <label> <host> -- a normal first activation into $GXC
@@ -4748,7 +4761,7 @@ fi
 # 3. A second, real, DIFFERENT profile name is validated and stored correctly
 # -- not just "default" happening to work.
 mkdir -p "$P53/profiles/altprofile"
-cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" "$REPO/profiles/default/prune.inc" "$P53/profiles/altprofile/"
+cp "$REPO/profiles/default/profile.conf" "$P53/profiles/altprofile/"
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   PROFILE_ROOT="$P53/profiles" \
   cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
@@ -4808,13 +4821,12 @@ PC="$WORK/profilechoice"
 mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" \
          "$PC/root/default" "$PC/root/alt"
 for p in default alt; do
-    cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
-       "$REPO/profiles/default/prune.inc" "$PC/root/$p/"
+    cp "$REPO/profiles/default/profile.conf" "$PC/root/$p/"
 done
 # ALT's only difference is an observable, safe-to-render marker: the hourly
 # send cadence. If the candidate carries minute 7 it came from ALT's content,
 # not just ALT's namespace string.
-sed -i 's/^\tsend_schedule  = 1 \* \* \* \*/\tsend_schedule  = 7 * * * */' "$PC/root/alt/templates.conf"
+sed -i 's/^\tsend_schedule  = 1 \* \* \* \*/\tsend_schedule  = 7 * * * */' "$PC/root/alt/profile.conf"
 
 for h in 10.7.7.8 10.7.7.9; do
     printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$PC/keys/${h}_known_hosts"
@@ -5058,9 +5070,7 @@ msg="$( ( assert_no_atomic_with_source_retention "$ATOM/cand.conf" tank/bk/atomi
 # changed profile) + emit9-style harness, with the SSH connection vars set so
 # ssh_flags render realistically and gen-cron accepts the result.
 P56="$WORK/step3prof"; mkdir -p "$P56/prof"
-cp "$REPO/profiles/default/templates.conf" "$P56/prof/templates.conf"
-cp "$REPO/profiles/default/prune.inc"      "$P56/prof/prune.inc"
-cp "$REPO/profiles/default/dataset.inc"    "$P56/prof/dataset.inc"
+mkprof_copy "$P56/prof"
 emit_src3() {   # <conf> <name> <host> <is_new>
     ( PROFILE_ROOT="$P56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
       PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
@@ -5102,7 +5112,13 @@ fi
 # source scope. Assembled the same way as the field-survival render test, because
 # emit_client_sections alone does not write [defaults] or the TARGET templates
 # (ensure_cron_config does that first in the real flow).
-( PROFILE_ROOT="$P56" profile_render_templates "$P56/prof" prof "$WORK/s3tpl.conf" ) || true
+# One file now: split it, then render the templates half. The renderer takes a
+# templates FILE, not a profile directory.
+( PROFILE_ROOT="$P56"
+  _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
+  bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
+  profile_split_one_file "$P56/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_render_templates "$_t" prof "$WORK/s3tpl.conf" "" "$_L" ) || true
 { printf '[defaults]\n\thost_label = pve9\n\n'; cat "$WORK/s3tpl.conf"; cat "$S3"; } > "$WORK/s3full.conf"
 s3_render="$(bash "$REPO/gen-cron.sh" -c "$WORK/s3full.conf" 2>"$WORK/s3.err")"; s3_rc=$?
 if [ "$s3_rc" -eq 0 ]; then
@@ -5184,9 +5200,7 @@ fi   # === end of full-suite-only sections; the retention group below is L0-targ
 # Runs both standalone (targeted) and as part of the full suite.
 # ============================================================================
 RP56="$WORK/retprof"; mkdir -p "$RP56/prof"
-cp "$REPO/profiles/default/templates.conf" "$RP56/prof/templates.conf"
-cp "$REPO/profiles/default/prune.inc"      "$RP56/prof/prune.inc"
-cp "$REPO/profiles/default/dataset.inc"    "$RP56/prof/dataset.inc"
+mkprof_copy "$RP56/prof"
 
 # --- 57. REV-20260811-102 step 5: audit-source-retention (read-only, no silent repair) ---
 #
@@ -5326,7 +5340,11 @@ AP="$WORK/apply5"; mkdir -p "$AP/clients"
   LOAD_ALIAS=a LOAD_ALIAS_KH=/dev/null LOAD_FLAGS="-K /dev/null" \
   PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
   emit_client_sections "$AP/full.conf" apc 1 ) >/dev/null 2>&1
-( PROFILE_ROOT="$RP56" profile_render_templates "$RP56/prof" prof "$AP/tpl.conf" ) || true
+( PROFILE_ROOT="$RP56"
+  _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
+  bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
+  profile_split_one_file "$RP56/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_render_templates "$_t" prof "$AP/tpl.conf" "" "$_L" ) || true
 # assemble the "installed" config, then STRIP the source prune section + its src_
 # templates to simulate a relationship installed BEFORE step 3
 { printf '[defaults]\n\thost_label = pve9\n\n'; cat "$AP/tpl.conf"; cat "$AP/full.conf"; } > "$AP/installed.raw"
@@ -5531,13 +5549,12 @@ fi
 # positive control below is what caught that while this section was written.
 LK="$WORK/leak"
 mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
-cp "$REPO/profiles/default/templates.conf" "$REPO/profiles/default/dataset.inc" \
-   "$REPO/profiles/default/prune.inc" "$LK/root/prof/"
+mkprof_copy "$LK/root/prof"
 # A profile that is COMPLETE (so it gets past the completeness check and reaches
 # lib-profile.sh's own mktemp'd schema dump) but INVALID: `src` is
 # relationship-owned and refused at the profile boundary.
-cp "$LK/root/prof"/* "$LK/root/bad/"
-printf 'src = zfsbackup@nope:x\n' >> "$LK/root/bad/dataset.inc"
+mkprof_copy "$LK/root/bad"
+mkprof_add "$LK/root/bad" '[dataset]' '	src = zfsbackup@nope:x'
 
 lk_env() {   # <profile name> <command...>  -- PROFILE_ROOT is always $LK/root
     local prof="$1"; shift
