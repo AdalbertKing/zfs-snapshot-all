@@ -284,6 +284,9 @@ PEER_DATASETS=""
 # printed next step being "run --commit-scope on the source".
 PEER_REQUESTED=""
 PEER_TARGET=""
+# Empty means "no cap on this link", which is also what every pairing made
+# before this field existed says by saying nothing.
+PEER_BANDWIDTH=""
 # REV-20260802-033 slice 5 (F1): the alternative to --peer-datasets for a
 # pull relationship -- the collector operator names a MODE instead of a
 # source dataset list they cannot be expected to know yet. Empty means
@@ -401,6 +404,12 @@ while [ "$#" -gt 0 ]; do
         --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
         --target)       PEER_TARGET="${2:-}"; shift 2 ;;
+        # The LINK cap, and it belongs to the PAIR of hosts rather than to any
+        # one relationship: two relationships to the same peer over the same
+        # wire have the same wire. Kept on the relationship record it had to be
+        # given twice, by hand, with nothing keeping the two in step.
+        --bandwidth=*)  PEER_BANDWIDTH="${1#*=}"; shift ;;
+        --bandwidth)    PEER_BANDWIDTH="${2:-}"; shift 2 ;;
         --as=*)         PEER_AS="${1#*=}"; shift ;;
         --as)           PEER_AS="${2:-}"; shift 2 ;;
         --port=*)       PEER_PORT="${1#*=}"; PEER_PORT_GIVEN=1; shift ;;
@@ -447,6 +456,11 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
     --role=pull|push        pull (default): this host pulls via snapget.sh.
                             push: this host pushes via snapsend.sh.
     --peer=HOST             the other host's hostname/IP
+    --bandwidth=RATE        cap this LINK, in BYTES per second with the usual
+                            b/k/M/G suffixes (a 20 Mbps line is 2M). It is
+                            recorded in the pairing, so it applies to EVERY
+                            relationship with this peer -- which is what "the
+                            same wire" means. Omitted: no cap.
     --peer-datasets="A,B"   expert path: datasets involved in this
                             relationship, named here directly. For
                             --role=pull this means the SOURCE's own datasets
@@ -647,6 +661,20 @@ case "$PEER_AS" in
     root|delegated) ;;
     *) echo "--as must be 'root' or 'delegated', got '$PEER_AS'" >&2; exit 2 ;;
 esac
+# THE ENGINE'S set, transcribed rather than approximated: snapsend/snapget accept
+# ^[0-9]+[bkKmMgG]?$ and hand it to `mbuffer -r`, which is a BYTE rate. A
+# validator stricter than its engine refuses something that works; a looser one
+# writes a value the engine rejects every night, in a cron job nobody is
+# watching. Both mistakes have been made in this tree already.
+if [ -n "$PEER_BANDWIDTH" ]; then
+    _bw="$PEER_BANDWIDTH"
+    case "$_bw" in *[bkKmMgG]) _bw="${_bw%?}" ;; esac
+    case "$_bw" in
+        ""|*[!0-9]*)
+            echo "--bandwidth='$PEER_BANDWIDTH' is not a byte rate the engines accept (digits, then at most one of b/k/M/G -- e.g. 20M). It is BYTES per second, not bits: a 20 Mbps link is 2M" >&2; exit 2 ;;
+    esac
+    unset _bw
+fi
 # Refused rather than ignored: silently accepting it would leave the operator
 # believing quiesce was granted when nothing was installed at all.
 #
@@ -4743,6 +4771,7 @@ PEER_SAVED_AS=$PEER_AS
 PEER_SAVED_MODE=$PEER_MODE
 PEER_SAVED_ACCOUNT=$proposed_account
 PEER_SAVED_PORT=$PEER_PORT
+PEER_SAVED_BANDWIDTH=$PEER_BANDWIDTH
 PEER_SAVED_LOCAL_USER=$PEER_LOCAL_USER
 PEER_ROTATING=$rotating
 PEER_CURRENT_PUBKEY='$pub'

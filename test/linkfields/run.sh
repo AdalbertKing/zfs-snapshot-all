@@ -41,7 +41,7 @@ set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${LINKFIELDS_REPO:-$(cd "$DIR/../.." && pwd)}"
 GEN="${GEN:-$REPO/gen-cron.sh}"
-ZB="$REPO/zfs-backup.sh"
+ZB="${ZB:-$REPO/zfs-backup.sh}"
 PROFILE_LIB="$REPO/lib-profile.sh"
 
 PASS=0; FAIL=0
@@ -351,6 +351,110 @@ if [ "$HAVE_OLD" -eq 1 ]; then
 else
     bad "negative control" "could not read HEAD:gen-cron.sh -- the control did not run"
 fi
+
+# --- 10. WHERE THE CAP LIVES: the pairing, not the relationship -------------
+# The cap describes the WIRE, and the wire belongs to the pair of hosts. On the
+# relationship record two relationships to the same peer had to be given the
+# same limit twice, by hand, with nothing keeping them in step. resolve_link_
+# bandwidth is the one place that answers "which value applies", so it is
+# asserted directly rather than through the whole connection setup.
+lift_zb() {   # <function name> -> its source
+    awk -v want="$1() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
+}
+bwr() {   # <manifest> <record> -> "<rate>|<note on stderr?>"
+    local t; t=$(mktemp)
+    { echo 'set -u'; echo 'log() { printf "LOG %s
+" "$*" >&2; }'
+      lift_zb resolve_link_bandwidth
+      printf 'resolve_link_bandwidth %q %q rel peer
+' "$1" "$2"; } > "$t"
+    local out err
+    err=$(mktemp)
+    out=$(bash "$t" 2>"$err")
+    printf '%s|%s' "$out" "$(grep -c 'zapis sprzed przeniesienia' "$err")"
+    rm -f "$t" "$err"
+}
+
+r="$(bwr 2M "")"
+[ "$r" = "2M|0" ]     && ok "cap: the pairing's value is used, and says nothing about a move"     || bad "cap: the pairing's value is used" "got: $r"
+
+# A record written before the move still works -- nothing on the fleet changes
+# speed because of this commit -- but the operator is told where it now belongs.
+r="$(bwr "" 4M)"
+[ "$r" = "4M|1" ]     && ok "cap: a legacy record value is honoured AND names the pairing as its new home"     || bad "cap: a legacy record value is honoured and names its new home" "got: $r"
+
+# Precedence, in the direction that matters: the pair wins. The record copy is
+# the one that goes stale, because nothing writes it any more.
+r="$(bwr 2M 9M)"
+[ "$r" = "2M|0" ]     && ok "cap: when both exist the PAIRING wins, silently -- the record copy is the stale one"     || bad "cap: the pairing wins over a record copy" "got: $r"
+
+r="$(bwr "" "")"
+[ "$r" = "|0" ]     && ok "cap: neither set means no cap at all, and no note"     || bad "cap: neither set means no cap" "got: $r"
+
+# --- 11. the cap must not leak between records in one process ---------------
+# The monitors and audits load several client records in one run. A value left
+# over from the previous record would cap a relationship that never asked for
+# one -- in the direction nobody notices, because a transfer that is slower
+# than it should be still succeeds.
+if awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -qE '^\s*BANDWIDTH=""'    && awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -qE '^\s*PEER_SAVED_BANDWIDTH=""'; then
+    ok "cap: both sources are cleared before either file is sourced (no leak between records)"
+else
+    bad "cap: both sources are cleared before either file is sourced"         "$(awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -n 'BANDWIDTH' | head -4)"
+fi
+
+# --- 12. the record is no longer a second home -------------------------------
+# add-client used to write BANDWIDTH into the client record. Leaving that in
+# would recreate the two-homes problem this move exists to end -- and the stale
+# copy is the one an operator would edit.
+if grep -q 'write_client_field BANDWIDTH' "$ZB"; then
+    bad "cap: add-client no longer writes a second copy into the client record"         "$(grep -n 'write_client_field BANDWIDTH' "$ZB")"
+else
+    ok "cap: add-client no longer writes a second copy into the client record"
+fi
+
+# --- 13. changing a PAIR-wide cap is not a side effect of enrolling ----------
+# Because the cap now belongs to the pair, a second relationship asking for a
+# different one is not asking about itself: it is asking to re-cap every
+# relationship that already flies over this link. That is a deliberate act, so
+# it is refused and named rather than applied quietly in either direction.
+#
+# The guard is lifted from the real file the way test/rerun lifts the identity
+# gate -- the test states its own inputs, and the code under test is verbatim.
+pair_cap_decision() {   # <manifest bandwidth or -> <requested bandwidth> -> output
+    local mf="$TMPD/peer.conf" t; t=$(mktemp)
+    if [ "$1" = "-" ]; then mf=/nonexistent
+    else printf 'PEER_SAVED_LOCAL_USER=bckp\nPEER_SAVED_BANDWIDTH=%s\n' "$1" > "$mf"
+    fi
+    { echo 'set -u'
+      echo 'die() { echo "DIE: $*"; exit 1; }'
+      printf 'lan_host=peerhost\nlocal_user=bckp\nbandwidth=%q\n' "$2"
+      printf 'peer_manifest_path() { echo %q; }\n' "$mf"
+      echo 'peer_label() { echo lbl; }'
+      echo 'guard() {'
+      awk '/^    local _mf_user_path; _mf_user_path=/{f=1} f{print} f&&/^    fi$/{exit}' "$ZB"
+      echo '}'
+      echo 'guard'
+      echo 'echo OK'; } > "$t"
+    bash "$t" 2>&1; rm -f "$t"
+}
+
+out="$(pair_cap_decision 2M 8M)"
+{ case "$out" in *DIE:*) true ;; *) false ;; esac \
+  && printf '%s' "$out" | grep -q '2M' && printf '%s' "$out" | grep -q '8M'; } \
+    && ok "cap: a DIFFERENT cap on an already-capped link is refused, naming both values" \
+    || bad "cap: a different cap on an already-capped link is refused" "$out"
+
+# The three that must NOT refuse -- without them the assertion above would pass
+# against a guard that simply rejects --bandwidth outright.
+out="$(pair_cap_decision 2M "")"
+case "$out" in *OK*) ok "cap control: omitting --bandwidth accepts the pairing's existing cap" ;;
+                  *) bad "cap control: omitting --bandwidth accepts the existing cap" "$out" ;; esac
+out="$(pair_cap_decision 2M 2M)"
+case "$out" in *OK*) ok "cap control: asking for the SAME cap is not a conflict" ;;
+                  *) bad "cap control: asking for the same cap is not a conflict" "$out" ;; esac
+out="$(pair_cap_decision - 8M)"
+case "$out" in *OK*) ok "cap control: a peer with no pairing yet takes the cap without argument" ;;
+                  *) bad "cap control: a peer with no pairing yet takes the cap" "$out" ;; esac
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"
