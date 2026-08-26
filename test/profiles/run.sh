@@ -388,6 +388,64 @@ else
     ok "render: a profile name unusable in a header is refused"
 fi
 
+# THE NAME IS THE RETENTION, and this asserts it rather than trusting the
+# header comment that says so.
+#
+# A profile called d7h24 promises seven daily counters and twenty-four hourly
+# ones. That promise is only worth something if the delsnaps line the REAL
+# gen-cron renders carries exactly -D7 and -H24 and nothing else -- otherwise
+# the name is decoration and an administrator picking from `ls` is being misled
+# by a filename.
+#
+# Only profiles named in that scheme are checked; default, passive and prod
+# describe themselves in prose and are covered by their own assertions.
+name_bad=""
+for f in "$ROOT"/profiles/*.conf; do
+    n="$(basename "$f" .conf)"
+    # the retention-named ones: letter+digits pairs, nothing else
+    printf '%s' "$n" | grep -qE '^([dhwmDHWM][0-9]+)+$' || continue
+
+    st="$(mktemp)"; sd="$(mktemp)"; sp="$(mktemp)"; se="$(mktemp)"
+    profile_split_one_file "$f" "$st" "$sd" "$sp" "$se" || { name_bad="$name_bad $n(split);"; continue; }
+    cat "$se" >> "$st"
+    rt="$TMP/nm.$n.tpl"; rd="$TMP/nm.$n.ds"; rp="$TMP/nm.$n.pr"
+    # $LETTERS is not optional: without it `keep = 24` never becomes -H24 and
+    # gen-cron refuses every tier. Learned by leaving it out.
+    profile_render_templates "$st" "$n" "$rt" "" "$LETTERS" || { name_bad="$name_bad $n(tpl:$PROFILE_ERR);"; continue; }
+    profile_render_fragment  "$sd" "$n" "$rd" || { name_bad="$name_bad $n(ds);"; continue; }
+    profile_render_fragment  "$sp" "$n" "$rp" || { name_bad="$name_bad $n(pr);"; continue; }
+    rm -f "$st" "$sd" "$sp" "$se"
+
+    cfg="$TMP/nm.$n.conf"
+    { printf '[defaults]\n\thost_label = nm\n\n'
+      cat "$rt"
+      printf '\n[dataset:tank/x]\n'
+      sed 's/^[[:space:]]*/\t/' "$rd"
+      printf '\trecursive    = no\n\tnotify       = nm\n'
+      printf '\n[prune:tank/x]\n'
+      sed 's/^[[:space:]]*/\t/' "$rp"
+      printf '\trecursive    = no\n\tnotify       = nm\n'
+    } > "$cfg"
+
+    line="$(bash "$GEN" -c "$cfg" 2>/dev/null | grep -F 'delsnaps.sh' | head -1)"
+    [ -n "$line" ] || { name_bad="$name_bad $n(no delsnaps line);"; continue; }
+
+    # what the NAME promises, in the engine's own spelling
+    want="$(printf '%s' "$n" | sed -E 's/([dhwmDHWM])([0-9]+)/ -\U\1\E\2/g')"
+    for flag in $want; do
+        case " $line " in *" $flag "*) : ;; *) name_bad="$name_bad $n(missing $flag);" ;; esac
+    done
+    # ...and NOTHING it does not promise
+    for got in $(printf '%s' "$line" | grep -oE ' -[HDWM][0-9]+'); do
+        case " $want " in *" $got "*) : ;; *) name_bad="$name_bad $n(unpromised$got);" ;; esac
+    done
+done
+if [ -z "$name_bad" ]; then
+    ok "naming: every retention-named profile renders exactly the counters its name promises"
+else
+    bad "naming: every retention-named profile renders exactly the counters its name promises" "$name_bad"
+fi
+
 # The property the whole scheme exists for: two profiles compose without
 # colliding. Same source templates, two names, one config gen-cron accepts.
 profile_render_templates "$TPL_DEFAULT" flat   "$RD/flat.conf"   || bad "render: two-profile composition (flat)"   "$PROFILE_ERR"
