@@ -3154,6 +3154,31 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
     stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
+    # WHEN THE TIERS DISAGREE, SPREAD THEM ONE BY ONE instead of not at all.
+    #
+    # A section-level send_schedule overrides every tier the section names, so a
+    # multi-cadence profile could not be given one -- and got no spreading, which
+    # is how two `prod` relationships on pve9 came to fire two seconds apart.
+    # gen-cron now resolves both schedules per tier, so each tier keeps its OWN
+    # cadence and receives THIS relationship's minute.
+    #
+    # Built here, once, next to the single-field values, so both paths share
+    # schedule_pick_minute's answer and the 20-minute send/prune gap.
+    local _tier_sched=""
+    if [ -z "$stagger_send_expr" ] || [ -z "$stagger_prune_expr" ]; then
+        local _t _e
+        while IFS="$(printf '\t')" read -r _t _e; do
+            [ -n "$_t" ] && [ -n "$_e" ] || continue
+            _tier_sched="$_tier_sched	send_schedule_$_t = $(schedule_with_minute "$_e" "$stagger_min")
+"
+        done < <([ -z "$stagger_send_expr" ] && schedule_tier_exprs send)
+        while IFS="$(printf '\t')" read -r _t _e; do
+            [ -n "$_t" ] && [ -n "$_e" ] || continue
+            _tier_sched="$_tier_sched	prune_schedule_$_t = $(schedule_with_minute "$_e" "$stagger_prune")
+"
+        done < <([ -z "$stagger_prune_expr" ] && schedule_tier_exprs prune)
+        [ -n "$_tier_sched" ] && log "schedule: spreading this relationship tier by tier (its profile declares several cadences, and one section-level value would have flattened them onto the first)"
+    fi
 
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
@@ -3195,10 +3220,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # measured both ways in LAB-E: an aging excluded family must
                 # not page, a fresh one must not paint a stale relation green.
                 [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
+                [ -n "$_tier_sched" ] && printf '%s' "$_tier_sched"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
                 [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
+                [ -n "$_tier_sched" ] && printf '%s' "$_tier_sched"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
             fi
@@ -3549,6 +3576,46 @@ schedule_with_minute() {   # <cron expression> <minute> -> expression with field
 # from the tier its dataset fragment references (use_template). Empty when the
 # profile is not loaded -- the caller then keeps the hourly default, which is
 # what every built-in profile uses.
+# The same walk as schedule_template_expr, but WITHOUT the collapse: one line
+# per referenced tier that declares the field, as "<tier><TAB><expression>".
+#
+# schedule_template_expr answers "is there ONE cadence here" and returns nothing
+# when the tiers disagree -- correct, because a section-level field overrides
+# every tier it names, so one value would flatten daily/weekly/monthly onto the
+# hourly cadence. The consequence was that a multi-cadence profile got no
+# spreading at all: measured on pve9, two `prod` relationships fired two seconds
+# apart in the same minute, and a dozen would be the thundering herd the
+# spreader exists to prevent.
+#
+# gen-cron resolves send_schedule/prune_schedule per tier as of 2026-08-26
+# (resolve_field_tiered, the same helper `flags` has always used), so each tier
+# can carry its own staggered minute at its own cadence. Nothing is collapsed
+# and nothing is left unspread.
+schedule_tier_exprs() {   # <send|prune> -> "<tier>\t<cron expression>" per tier
+    local which="$1" frag tpl field one sect expr
+    case "$which" in
+        send)  frag="$PROFILE_DS_FILE";    field=send_schedule ;;
+        prune) frag="$PROFILE_PRUNE_FILE"; field=prune_schedule ;;
+        *) return 0 ;;
+    esac
+    # A flat profile prunes from the tiers its [dataset] references, so its
+    # prune fragment is empty and the dataset one carries both halves.
+    [ "$which" = prune ] && [ ! -s "${frag:-}" ] && frag="$PROFILE_DS_FILE"
+    [ -n "${PROFILE_LOADED:-}" ] && [ -r "${frag:-}" ] || return 0
+    tpl=$(awk -F= '/^[[:space:]]*use_template[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$frag")
+    [ -n "$tpl" ] || return 0
+    for one in ${tpl//,/ }; do
+        [ -n "$one" ] || continue
+        case "$one" in
+            profile__*) sect="$one" ;;
+            *)          sect="profile__${PROFILE_ACTIVE}__${one}" ;;
+        esac
+        expr=$(profile_template_section "$sect" 2>/dev/null | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
+        [ -n "$expr" ] || continue
+        printf '%s\t%s\n' "$sect" "$expr"
+    done
+}
+
 schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or nothing
     local which="$1" frag tpl field
     case "$which" in

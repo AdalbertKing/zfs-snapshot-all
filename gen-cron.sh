@@ -96,6 +96,8 @@ set -o pipefail
 #       notify       = <short label>
 #       flags        = <snapsend.sh flags, or snapget.sh flags when 'src' is set>
 #       flags_<tier> = <per-tier flags override>
+#       send_schedule_<tier>  = <per-tier send cadence override>
+#       prune_schedule_<tier> = <per-tier prune cadence override>
 #       bandwidth    = <mbuffer rate>      # LINK fields: what the transfer does
 #       compression  = zstd|gzip|none|default  # to the WIRE, named instead of
 #       cipher       = <ssh -c argument>   # hand-written into 'flags'. Section
@@ -1174,9 +1176,15 @@ validate_field_names() {
         kind="${SECTION_KIND[$hdr]:-}"
         [ -n "$kind" ] || continue
         [ -n "${FIELD_OK[${kind}${SEP}${field}]+x}" ] && continue
-        # flags_<tier>: a per-tier override of 'flags', so the tier part cannot
-        # be enumerated ahead of time.
-        case "$field" in flags_*) [ "$kind" = "dataset" ] && continue ;; esac
+        # flags_<tier>, send_schedule_<tier>, prune_schedule_<tier>: per-tier
+        # overrides whose tier part cannot be enumerated ahead of time. The two
+        # schedules joined flags on 2026-08-26 so that a multi-cadence profile
+        # can be spread across the clock without one section-level value
+        # flattening every tier it names.
+        case "$field" in
+            flags_*|send_schedule_*|prune_schedule_*)
+                [ "$kind" = "dataset" ] && continue ;;
+        esac
         elsewhere="$(field_valid_elsewhere "$field")"
         if [ -n "$elsewhere" ]; then
             die "[$hdr] has '$field', which gen-cron.sh does not read in a [$kind:] section (it is valid in:$elsewhere). Move it, or remove it -- left here it does nothing at all."
@@ -1837,7 +1845,17 @@ build_dataset() {
         # against a family it never creates, at a cadence it never runs.
         local tier_created_prefix="" tier_creates=0 tier_send_schedule=""
         local send_schedule
-        if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
+        # PER TIER, like flags. A [dataset:] carrying several tiers with several
+        # cadences could not be staggered before: a single section-level
+        # send_schedule overrides EVERY tier it references, so writing one minute
+        # would have collapsed daily/weekly/monthly onto the hourly cadence. The
+        # spreader therefore wrote nothing at all, and every `prod` relationship
+        # on a collector fired in the same minute (measured on pve9: two
+        # relationships, two seconds apart).
+        #
+        # resolve_field_tiered has been generic since it was written and was used
+        # for exactly one field. This is the second.
+        if send_schedule="$(resolve_field_tiered send_schedule "$tier" "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$send_schedule" "[dataset:$ds_path] tier=$tier" send_schedule
             tier_send_schedule="$send_schedule"
             local dst src prefix flags label raw_notify word notify direction remote_spec
@@ -1950,7 +1968,9 @@ build_dataset() {
         # ---- inline self-prune (own path, non-recursive) ----
         # prune_schedule is the deliberate "yes, prune this dataset" signal.
         local prune_schedule
-        if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
+        # Per tier for the same reason as send_schedule above -- a flat profile
+        # prunes from its tiers, so its prune minutes need spreading too.
+        if prune_schedule="$(resolve_field_tiered prune_schedule "$tier" "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$prune_schedule" "[dataset:$ds_path] tier=$tier" prune_schedule
             local pattern retain_flag plabel praw pnotify
             pattern="$(require_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve (missing, or set but blank)"
