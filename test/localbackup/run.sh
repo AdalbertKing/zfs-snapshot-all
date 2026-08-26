@@ -863,12 +863,19 @@ gencron_callers=$(awk '
 # `keep = 24` in a profile can become `retain = -H24` without this tree keeping
 # a second copy of what -W means. Same class as lib-profile.sh asking for
 # --dump-fields, and the same reason: one schema authority.
+#
+# profile_digest joins on the same ticket (2026-08-26). It asks for the SAME
+# table, and for a reason that makes the rule's own point: `keep = 24` becomes
+# `-H24` through that table, so the table is part of what a relationship was
+# generated FROM. A digest that ignored it would call an installed policy
+# unchanged after the thing that renders it had changed.
 gencron_allowed="gencron_as_target
 cmd_activate_client
 cmd_audit_source_retention
 cmd_migrate_profile
 cmd_remove_client
-load_active_profile"
+load_active_profile
+profile_digest"
 gencron_unexpected=$(comm -23 <(printf '%s
 ' "$gencron_callers") <(printf '%s
 ' "$gencron_allowed" | sort))
