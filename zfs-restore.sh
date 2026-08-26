@@ -711,8 +711,14 @@ restore_resolve_token() {   # <config> <token>
 # The matching core, shared by both readings. Prints "src<TAB>copy" per hit;
 # returns 1 (silently) when nothing matches -- the CALLER owns the refusal
 # wording, because which reading failed decides what the operator is told.
-restore_resolve_try() {   # <config> <label> <want>
-    local config="$1" label="$2" want="$3"
+# $4 is the NAMESPACE, and it is what `--source`/`--target` buy over the loose
+# positional form. Empty (every existing caller) keeps the old behaviour: a token
+# may match either side, which is right when the operator did not say which side
+# they meant. `copy` matches only the collector-side location, `orig` only the
+# name on the machine being restored. Saying which side you mean is the whole
+# point of naming the flag, so the flags must not fall back to "either".
+restore_resolve_try() {   # <config> <label> <want> [namespace: ""|copy|orig]
+    local config="$1" label="$2" want="$3" ns="${4:-}"
     local ds l s d hit=1
     for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config"); do
         s="$(installed_dataset_field "$config" "$ds" src)"
@@ -733,7 +739,11 @@ restore_resolve_try() {   # <config> <label> <want>
         local src_plain="${src_id#*@}"; src_plain="${src_plain#*:}"
         if [ -n "$label" ] && [ "$l" != "$label" ]; then continue; fi
         if [ -n "$want" ]; then
-            [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue
+            case "$ns" in
+                copy) [ "$copy_loc" = "$want" ] || continue ;;
+                orig) [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || continue ;;
+                *)    [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue ;;
+            esac
         fi
         printf '%s\t%s\n' "$src_id" "$copy_loc"
         hit=0
@@ -750,6 +760,118 @@ restore_resolve_fail() {   # <config> <label> <want> -> always dies
     else
         die "restore: '$want' is neither a source nor a managed copy location in $config. An arbitrary dataset is never adopted as backup provenance (R-025). 'restore --plan' lists the managed locations."
     fi
+}
+
+# ------------------------------------------------------------------------------
+# WHICH DATASETS OF THE RELATIONSHIP
+# ------------------------------------------------------------------------------
+# Owner decision, 2026-08-26 (docs/project/OWNER-RESTORE-SCOPE-2026-08-26.md):
+#
+#     restore RELATION                       the whole relationship
+#     restore RELATION --target a,b,c        those datasets, named on this host
+#     restore RELATION --source x,y,z        those datasets, named on the collector
+#
+# A VM with four virtual disks is four datasets and is ONE object to whoever is
+# recovering it: four commands would mean four previews, four destructive
+# confirmations, and a window in which the machine is half restored.
+#
+# THE COMMA IS SAFE BY MEASUREMENT, not by convention. ZFS refuses it in a
+# dataset name outright (pve9, 2026-08-26):
+#
+#     cannot create 'hdd/przecinek,test': invalid character ',' in name
+#
+# so a comma can never occur inside a member and splitting on it cannot destroy a
+# legal name. That is precisely the property `:` lacks -- a colon IS legal inside
+# a dataset name, which is what made `pve2:rpool/data` ambiguous.
+#
+# Reviewer contract, 2026-08-26: ONE NAMESPACE PER INVOCATION. `--source` and
+# `--target` are mutually exclusive, because the mistake this removes is an
+# operator naming two of a VM's disks on the collector and two on the host and
+# getting a plan that looks complete.
+#
+# And the whole list resolves BEFORE anything is shown, let alone done. A plan
+# that is right about three disks and silent about the fourth is not a plan.
+RESTORE_SCOPE_NS=""        # copy | orig | "" when the whole relationship is meant
+declare -a RESTORE_SCOPE_SRC=() RESTORE_SCOPE_COPY=()
+
+# Which installed config a restore reads. Extracted because the scope path below
+# needs the same answer as the address path, and two copies of "try --config,
+# then $CRON_CONFIG, then the default" would be two ways to read a different file
+# from the one the preview described.
+restore_pick_config() {   # <explicit --config or ""> <what for> -> prints the path
+    # TWO statements. `local want="$1" c="$want"` leaves c EMPTY -- bash expands
+    # every word on the line before the builtin assigns any of them. Written
+    # about in this project on 2026-08-20 (pool_health's cache key), again this
+    # morning (quiesce_parse_mode rejecting the bare `auto`), and again here.
+    # It always fails in the safe-looking direction, which is why it survives
+    # reading and only dies to a positive control.
+    local want="$1" what="$2" c
+    c="$want"
+    [ -n "$c" ] || c="${CRON_CONFIG:-}"
+    [ -n "$c" ] || { c=$(restore_default_config); [ -r "$c" ] || c=""; }
+    [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against (tried \$CRON_CONFIG and $(restore_default_config)) -- pass --config=FILE"
+    printf '%s' "$c"
+}
+
+restore_scope_resolve() {   # <config> <label> <namespace> <comma list>
+    local config="$1" label="$2" ns="$3" list="$4"
+    RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=(); RESTORE_SCOPE_NS="$ns"
+    [ -n "$list" ] || return 0
+
+    local rest="$list" member hits n src copy i
+    local -a seen_in=()
+    # Split on commas WITHOUT `read -a`/IFS games: a member is everything up to
+    # the next comma, and the loop ends when there is no comma left. Nothing here
+    # can be tripped by whitespace, because a ZFS name cannot contain any.
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            *,*) member="${rest%%,*}"; rest="${rest#*,}" ;;
+            *)   member="$rest"; rest="" ;;
+        esac
+        # An empty member means a stray or doubled comma. Skipping it silently
+        # would turn `a,,b` into a two-dataset plan the operator did not write,
+        # and `a,b,` into one they might have meant to extend.
+        [ -n "$member" ] || die "restore: the dataset list contains an empty entry ('$list') -- a stray or doubled comma. Every member must name a dataset; refusing rather than restoring a list that is not the one written."
+
+        # Duplicate INPUT, before resolution: two identical names are either a
+        # typo or a copy-paste, and neither is a reason to plan the same
+        # destructive operation twice.
+        for (( i=0; i<${#seen_in[@]}; i++ )); do
+            [ "${seen_in[$i]}" = "$member" ] && die "restore: '$member' appears twice in the dataset list. Refusing rather than planning the same recovery twice."
+        done
+        seen_in+=("$member")
+
+        hits="$(restore_resolve_try "$config" "$label" "$member" "$ns")" || \
+            restore_scope_fail "$config" "$label" "$member" "$ns"
+        n="$(printf '%s\n' "$hits" | grep -c .)"
+        [ "$n" -eq 1 ] || die "restore: '$member' matches $n datasets of relation '$label' in $config, and a recovery needs exactly one. Refusing rather than choosing; 'restore --plan' lists them."
+
+        src="${hits%%	*}"
+        copy="${hits##*	}"
+        # Two DIFFERENT inputs that land on the same dataset -- possible because a
+        # member may be named on either side and the mapping is not injective in
+        # every config. Caught here rather than at execution, where the second
+        # one would arrive after the first had already rewritten the target.
+        for (( i=0; i<${#RESTORE_SCOPE_SRC[@]}; i++ )); do
+            if [ "${RESTORE_SCOPE_SRC[$i]}" = "$src" ]; then
+                die "restore: '$member' resolves to the same dataset as an earlier entry in the list ($src). Refusing: the second one would arrive after the first had already rewritten it."
+            fi
+        done
+        RESTORE_SCOPE_SRC+=("$src"); RESTORE_SCOPE_COPY+=("$copy")
+    done
+    return 0
+}
+
+# The refusal wording depends on WHICH namespace was asked for -- an operator who
+# wrote --target and gets told "not a managed copy location" is being answered a
+# question they did not ask.
+restore_scope_fail() {   # <config> <label> <member> <namespace>
+    local config="$1" label="$2" member="$3" ns="$4"
+    case "$ns" in
+        copy) die "restore: '$member' is not a copy location of relation '$label' in $config. --source names the dataset AS IT EXISTS ON THE COLLECTOR; if you meant the name on the machine being restored, that is --target. 'restore --plan' lists both." ;;
+        orig) die "restore: '$member' is not a dataset of relation '$label' in $config. --target names the dataset AS IT EXISTS ON THE MACHINE BEING RESTORED; if you meant where the copy lives, that is --source. 'restore --plan' lists both." ;;
+        *)    restore_resolve_fail "$config" "$label" "$member" ;;
+    esac
 }
 
 restore_fence_capture() {   # <dataset> -> prints "<value> <source>"
@@ -1414,12 +1536,37 @@ cmd_restore() {
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
-    for a in "$@"; do
+    local scope_src="" scope_tgt="" scope_ns="" scope_list=""
+    # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
+    # next word. Both recorded contracts spell it that way -- `--target
+    # rpool/data/x` -- and an operator typing a recovery at three in the morning
+    # should not have to remember which of the two spellings this program takes.
+    # `need_val` refuses a flag whose value is missing or is itself the next
+    # flag: `--target --plan` silently taking "--plan" as a dataset name is the
+    # kind of thing that ends with a refusal nobody can explain.
+    local a
+    need_val() {   # <flag> <next word or "">
+        case "${2:-}" in
+            ""|-*) die "restore: $1 needs a value -- a dataset path, or several separated by commas" ;;
+        esac
+    }
+    while [ "$#" -gt 0 ]; do
+        a="$1"
         case "$a" in
             --plan)       plan=1 ;;
             --dataset=*)  dataset="${a#*=}" ;;
+            --dataset)    need_val --dataset "${2:-}"; dataset="$2"; shift ;;
+            # Owner decision 2026-08-26: the datasets of a relationship are named
+            # by an exact path, in ONE namespace, several of them separated by
+            # commas -- a VM with four virtual disks is one recovery, not four.
+            --source=*)   scope_src="${a#*=}" ;;
+            --source)     need_val --source "${2:-}"; scope_src="$2"; shift ;;
+            --target=*)   scope_tgt="${a#*=}" ;;
+            --target)     need_val --target "${2:-}"; scope_tgt="$2"; shift ;;
             --snapshot=*) snapshot="${a#*=}" ;;
+            --snapshot)   need_val --snapshot "${2:-}"; snapshot="$2"; shift ;;
             --config=*)   config="${a#*=}" ;;
+            --config)     need_val --config "${2:-}"; config="$2"; shift ;;
             --yes|-y)     yes=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
@@ -1431,12 +1578,47 @@ cmd_restore() {
                 [ -z "$addr" ] || die "restore: got two addresses ('$addr' and '$a') -- the cross-host destination form is not open yet (R-025 sequencing); one address per call"
                 addr="$a" ;;
         esac
+        shift
     done
+    # ONE NAMESPACE PER INVOCATION (reviewer contract, 2026-08-26). The mistake
+    # this removes is an operator naming two of a VM's disks as they exist on the
+    # collector and two as they exist on the host, and getting a plan that looks
+    # complete. Once one side is chosen, the recorded mapping supplies the other.
+    if [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then
+        die "restore: --source and --target are mutually exclusive. Name every dataset of this recovery in ONE namespace -- either as they exist on the collector (--source) or as they exist on the machine being restored (--target). Whichever you choose, the recorded relationship supplies the other side."
+    fi
+    if   [ -n "$scope_src" ]; then scope_ns=copy; scope_list="$scope_src"
+    elif [ -n "$scope_tgt" ]; then scope_ns=orig; scope_list="$scope_tgt"
+    fi
+
+    if [ -n "$scope_list" ]; then
+        [ -n "$addr" ] || die "restore: --source/--target select datasets WITHIN a relationship, so the relationship has to be named too: restore <relation> --target <dataset>[,<dataset>...]"
+        # The relationship name stands ALONE now. `label:dataset` said the same
+        # thing a second way, and two ways to say one thing is how they come to
+        # disagree.
+        case "$addr" in
+            *:*) die "restore: '$addr' already names a dataset, and --source/--target name datasets too. Give the relationship on its own: restore ${addr%%:*} --target <dataset>[,<dataset>...]" ;;
+        esac
+        read_server_conf
+        config="$(restore_pick_config "$config" "'$addr'")"
+        # THE WHOLE LIST, BEFORE ANYTHING IS SHOWN. A plan that is right about
+        # three of a VM's disks and silent about the fourth is not a plan, and
+        # this refuses without having touched anything.
+        restore_scope_resolve "$config" "$addr" "$scope_ns" "$scope_list"
+        [ "${#RESTORE_SCOPE_SRC[@]}" -gt 0 ] || die "restore: the dataset list resolved to nothing"
+        if [ -n "$snapshot" ]; then
+            [ "${#RESTORE_SCOPE_SRC[@]}" -eq 1 ] || die "restore: --snapshot names ONE recovery point and this list selects ${#RESTORE_SCOPE_SRC[@]} datasets. Equal snapshot names are not one atomic event (measured on pve2), so a shared name across several datasets would claim something untrue. Restore them one at a time, or use --at, which resolves per dataset and says so."
+            dataset="${RESTORE_SCOPE_SRC[0]}"
+        else
+            plan=1
+            addr_filter="$(printf '%s\n' "${RESTORE_SCOPE_SRC[@]}")"
+        fi
+        addr=""
+    fi
+
     if [ -n "$addr" ]; then
         read_server_conf
-        local _rc_cfg="$config"; [ -n "$_rc_cfg" ] || _rc_cfg="${CRON_CONFIG:-}"
-        [ -n "$_rc_cfg" ] || { _rc_cfg=$(restore_default_config); [ -r "$_rc_cfg" ] || _rc_cfg=""; }
-        [ -n "$_rc_cfg" ] && [ -r "$_rc_cfg" ] || die "restore: no readable installed config to resolve '$addr' against (tried \$CRON_CONFIG and $(restore_default_config)) -- pass --config=FILE"
+        local _rc_cfg; _rc_cfg="$(restore_pick_config "$config" "'$addr'")"
         local _rc_sel; _rc_sel=$(restore_resolve_token "$_rc_cfg" "$addr")
         local _rc_n; _rc_n=$(printf '%s
 ' "$_rc_sel" | grep -c .)

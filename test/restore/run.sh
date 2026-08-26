@@ -1870,6 +1870,93 @@ else
     bad "resolver: label:dataset still resolves when the dataset half itself carries a colon" "rc=$rc out=$out"
 fi
 
+# ============================================================================
+# WHICH DATASETS OF THE RELATIONSHIP -- `--source` / `--target`, comma-separated
+#
+# Owner decision 2026-08-26: a VM with four virtual disks is four datasets and
+# ONE recovery. Reviewer contract the same day: one namespace per invocation, and
+# the WHOLE list resolves before anything is shown.
+#
+# The pair that carries this block is sc5/sc6: the same dataset named on the
+# wrong side must be refused in BOTH directions. An implementation that let a
+# member match either side would pass every other case here.
+# ============================================================================
+SC="$WORK/scope"; mkdir -p "$SC"
+cat > "$SC/cfg" <<'CFGEOF'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:hdd/store]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-0
+	pair_label   = pve2
+[dataset:hdd/store2]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-1
+	pair_label   = pve2
+[dataset:hdd/other]
+	use_template = h
+	src          = root@pve1:rpool/data/x
+	pair_label   = pve1
+CFGEOF
+
+sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+sc_ok() {   # <desc> <expected substring> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(sc_run "$@")"
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+sc_refuses() {   # <desc> <expected substring of the refusal> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(sc_run "$@")"; local rc=$?
+    if [ "$rc" -eq 0 ]; then bad "$desc" "expected a refusal, got rc=0"; return; fi
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+
+# The case the decision exists for: two disks of one VM, one command.
+out="$(sc_run pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1)"
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 2 ]; then ok "scope: two disks of one VM in ONE command"
+else bad "scope: two disks of one VM in ONE command" "expected 2 datasets in the plan, got $n"; fi
+# ...and it must not have quietly included the relationship's other members or
+# another relationship's. Two, exactly two.
+case "$out" in
+    *"rpool/data/x"*) bad "scope: ...and nothing from another relationship" "rpool/data/x is in the plan" ;;
+    *) ok "scope: ...and nothing from another relationship" ;;
+esac
+
+# The same two, named on the collector side instead. Same plan.
+out2="$(sc_run pve2 --source hdd/store,hdd/store2)"
+n2="$(printf '%s\n' "$out2" | grep -c 'Zrodlo:')"
+if [ "$n2" = 2 ]; then ok "scope: the same two named on the collector side"
+else bad "scope: the same two named on the collector side" "expected 2, got $n2"; fi
+
+sc_refuses "scope: --source and --target are mutually exclusive" \
+    "mutually exclusive" pve2 --target rpool/data/vm-101-disk-0 --source hdd/store
+sc_refuses "scope: a doubled comma is a refusal, not a shorter list" \
+    "empty entry" pve2 --target rpool/data/vm-101-disk-0,,rpool/data/vm-101-disk-1
+sc_refuses "scope: the same dataset twice is a refusal" \
+    "appears twice" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-0
+# sc5/sc6 -- the discriminating pair. Each name is legal in the OTHER namespace,
+# so an implementation that matched either side would accept both.
+sc_refuses "scope: a collector-side name is refused by --target" \
+    "if you meant where the copy lives, that is --source" pve2 --target hdd/store
+sc_refuses "scope: a host-side name is refused by --source" \
+    "if you meant the name on the machine being restored, that is --target" pve2 --source rpool/data/vm-101-disk-0
+sc_refuses "scope: a dataset of ANOTHER relationship is refused" \
+    "is not a dataset of relation 'pve2'" pve2 --target rpool/data/x
+sc_refuses "scope: the relationship has to be named too" \
+    "select datasets WITHIN a relationship" --target rpool/data/vm-101-disk-0
+sc_refuses "scope: label:dataset AND a flag is two ways of saying scope" \
+    "already names a dataset" pve2:rpool/data/vm-101-disk-0 --target rpool/data/vm-101-disk-1
+sc_refuses "scope: a flag whose value is the next flag is refused" \
+    "needs a value" pve2 --target --plan
+# The space form is what both recorded contracts spell, so it is not optional.
+sc_ok "scope: --target takes its value as the next word" \
+    "rpool/data/vm-101-disk-0" pve2 --target rpool/data/vm-101-disk-0
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -79,10 +79,35 @@ why the colon form produced an ambiguity and this one cannot.
 - **The grant stays per relationship.** The list chooses scope within a
   relationship the operator already has a grant for; it never widens it.
 
-## Open, and deliberately not decided here
+## One namespace per invocation — settled
 
-Whether a comma list may mix `--source` and `--target` members, and what happens
-when one member resolves through the stored mapping and another does not. The
-existing rule already covers it in principle — refuse on ambiguity, never guess —
-but the exact wording of that refusal is worth settling with the reviewer before
-it is written.
+Reviewer, 2026-08-26, answering the question this section used to leave open:
+
+- `--source LIST` and `--target LIST` are **mutually exclusive**;
+- every member of one invocation is named in ONE namespace — the collector's or
+  the restored host's;
+- a mixed spelling is not needed: once one side is chosen, the recorded mapping
+  computes the other;
+- the resolver must resolve the **whole** list before the preview. A missing
+  member, an ambiguous one, a duplicate input, or two members leading to the same
+  target is a refusal **with no mutation whatsoever**;
+- only a complete, unambiguous plan reaches one preview and one confirmation.
+
+The mistake this removes is concrete: an operator naming two of a VM's disks as
+they exist on the collector and two as they exist on the host, and getting a plan
+that looks complete.
+
+## As built
+
+`zfs-restore.sh` implements the resolution half. The plan is read-only, so this
+is scope selection only — no destructive door is opened by it.
+
+The `--target`/`--source` split is enforced in the matching core rather than
+above it: `restore_resolve_try` gained a namespace argument, and the existing
+positional form still passes an empty one, which keeps its "either side" reading.
+Saying which side you mean is the whole point of naming the flag, so the flags do
+not fall back to "either".
+
+Both spellings work (`--target x` and `--target=x`) because both recorded
+contracts write the first one, and an option whose value is missing — or is
+itself the next flag — is refused rather than swallowed.

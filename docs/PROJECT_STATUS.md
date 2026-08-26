@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 48df28e97d108ecf -->
+<!-- status-covers-digest: d3ea6f468bf546d4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1750,6 +1750,40 @@
   **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
   zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
   nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
+
+- **RESTORE: zakres odzyskiwania — relacja osobno, datasety po przecinkach
+  (2026-08-26).** Decyzja wlasciciela: VM z czterema dyskami wirtualnymi to
+  cztery datasety i JEDNO odzyskiwanie. Cztery polecenia znaczylyby cztery
+  podglady, cztery potwierdzenia niszczace i okno, w ktorym maszyna jest
+  odtworzona w polowie — dla czegos, co dla czlowieka jest jednym obiektem.
+
+  ```
+  zfs-backup.sh restore pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1
+  ```
+
+  **Przecinek jest bezpieczny ZMIERZONYM faktem, nie konwencja.** ZFS nie
+  dopuszcza go w nazwie datasetu (pve9, 2026-08-26: `invalid character ','`),
+  wiec nie moze wystapic wewnatrz elementu listy i rozciecie po nim nie zniszczy
+  legalnej nazwy. Tego wlasnie brakuje dwukropkowi — dwukropek JEST legalny
+  w nazwie, i to on zrobil z `pve2:rpool/data` przypadek dwuznaczny.
+
+  **Skutek uboczny, wazniejszy niz sama lista:** nazwa relacji stoi teraz sama,
+  a dataset przychodzi flaga — wiec cala dwuznacznosc dwukropka **znika**, a nie
+  zostaje rozstrzygnieta. Plik `OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` jest
+  oznaczony jako czesciowo nieaktualny, nie przepisany.
+
+  **Jeden namespace na wywolanie** (recenzent, 2026-08-26): `--source`
+  i `--target` wykluczaja sie, cala lista musi sie rozwiazac PRZED podgladem,
+  a brak elementu, niejednoznacznosc, duplikat wejscia albo dwa elementy
+  prowadzace do tego samego celu to odmowa **bez zadnej mutacji**. Usuwa to
+  konkretna pomylke: operator nazywa dwa dyski VM po stronie kolektora, dwa po
+  stronie hosta i dostaje plan, ktory wyglada kompletnie.
+
+  Zaimplementowana jest **polowa rozstrzygajaca zakres**; plan jest tylko do
+  odczytu, wiec zadne drzwi niszczace sie tu nie otwieraja. Rozdzial namespace
+  siedzi w rdzeniu dopasowania (`restore_resolve_try` dostal argument
+  namespace), a stara forma pozycyjna dalej podaje pusty — bo powiedzenie, ktora
+  strone sie ma na mysli, jest calym sensem uzycia flagi.
 
 - **RESTORE: nazwa relacji musi wskazywac JEDNA relacje (2026-08-26).**
   `zfs-restore.sh` odmawia przed czymkolwiek, jesli ktorys rekord w
