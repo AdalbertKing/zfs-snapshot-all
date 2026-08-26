@@ -1837,7 +1837,23 @@ cmd_restore() {
                 0)
                     local an ac ag
                     IFS="$(printf '\t')" read -r an ac ag <<< "$at_row"
-                    at_row_ok="$at_row"
+                    # NOT just the chosen row. The strategy uses this listing
+                    # TWICE: once to pick the target (the newest in it) and once
+                    # to walk it for the newest snapshot whose GUID also exists
+                    # on the source -- the common base an incremental needs.
+                    # Handing it a single row got the target right and destroyed
+                    # every base candidate, so a dataset with a perfectly good
+                    # older common base was classified "FULL on a live source --
+                    # no common base" (found in review, 2026-08-26).
+                    #
+                    # Filtered to creation <= the chosen one: everything after
+                    # the requested moment is excluded from being either target
+                    # or base, and every legal older candidate stays. The maximum
+                    # of what remains IS the chosen row -- a tie at that creation
+                    # was already refused above -- so the strategy's own "pick the
+                    # newest" lands on exactly the point --at chose.
+                    at_row_ok="$(printf '%s
+' "$snaps" | awk -F'	' -v c="$ac" 'NF>=3 && $2 ~ /^[0-9]+$/ && ($2+0) <= (c+0)')"
                     echo "  PUNKT --at:  ZADANO $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch")"
                     printf '               WYBRANO %s\n' "${an#*@}"
                     printf '               creation=%s  guid=%s\n' "$(date -d "@$ac" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ac")" "${ag:--}"

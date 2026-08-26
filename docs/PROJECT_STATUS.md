@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e0514a556fe1a335 -->
+<!-- status-covers-digest: ecb305d7be21270f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1782,7 +1782,21 @@
   a poprawna wartosc `root@pve2:...` tez to zawiera, wiec test padal na dzialajacym
   kodzie. Zakotwiczona do konca linii.
 
-  `test/restore` 156/0.
+  **Poprawka do poprawki (ta sama recenzja, druga runda).** Przekazanie strategii
+  WYLACZNIE wybranego wiersza naprawilo cel i zepsulo baze: ta sama lista jest
+  przechodzona DRUGI raz, zeby znalezc najnowszy snapshot, ktorego GUID istnieje
+  takze na zrodle — czyli wspolna baze dla przyrostu. Jeden wiersz = zero
+  kandydatow, wiec dataset z dobra starsza baza byl klasyfikowany jako „FULL na
+  ISTNIEJACE zrodlo, wspolnej bazy NIE MA". Dla czasownika niszczacego to jest
+  odwrotnosc prawdy w niebezpieczna strone.
+  Naprawa: strategia dostaje liste odfiltrowana do `creation <= creation(wybrany)`.
+  Maksimum tego, co zostaje, JEST wybranym punktem (remis na tej sekundzie i tak
+  jest wczesniej odrzucany), a wszystkie legalne starsze kandydatury zostaja.
+  Kontrola negatywna na wersji sprzed poprawki: 3 asercje padaja, a asercja o
+  samym celu dalej przechodzi — czyli rozrozniaja ten defekt, nie alarmuja na
+  wszystkim.
+
+  `test/restore` 162/0.
 
 - **RESTORE: `--at` — punkt odtworzenia w czasie zegarowym (2026-08-26).**
   `restore pve2 --at "2026-08-10 12:00"`. Operator mysli chwila, nie nazwa

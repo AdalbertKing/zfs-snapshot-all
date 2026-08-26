@@ -2202,6 +2202,94 @@ case "$f3_s" in *"vm-101-disk-0"*) ok "f3: --source alone still works" ;; *) bad
 f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
 case "$f3_t" in *"vm-101-disk-0"*) ok "f3: --target alone still works" ;; *) bad "f3: --target alone still works" ;; esac
 
+# ============================================================================
+# --at must not cost the COMMON BASE (review follow-up, 2026-08-26)
+#
+# The first fix for F2 handed restore_plan_strategy a single row -- the one --at
+# chose. That got the target right and destroyed every base candidate, because
+# the SAME listing is walked a second time to find the newest snapshot whose GUID
+# also exists on the source. A dataset with a perfectly good older common base
+# was then classified "FULL on a live source -- no common base", which is the
+# opposite of the truth and, for a destructive verb, the dangerous direction.
+#
+# The discriminator the reviewer specified, verbatim: the source carries G1, the
+# copy has G1/G2/G3, --at picks G2, and the preview must show target G2 AND
+# common base G1 -- never FULL/no-base.
+# ============================================================================
+BB="$WORK/base"; mkdir -p "$BB/bin"
+BB_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$BB/cfg" <<'BBCFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:rpool/data/x]
+	use_template = h
+	dst          = hdd/backup
+	pair_label   = loc
+BBCFG
+# The source EXISTS and carries only G1. Every query the strategy makes is
+# answered in the shape it actually asks for -- an earlier draft of this stub
+# answered the `name,createtxg` query with three fields, and the run then
+# reported the base snapshot itself as a blocker. A stub that answers a
+# different question is a test that proves a different thing.
+cat > "$BB/bin/zfs" <<BBSTUB
+#!/bin/bash
+E=$BB_E
+args="\$*"
+case "\$args" in
+  "list -H -o name rpool/data/x")                exit 0 ;;
+  *"-o guid -d 1 rpool/data/x")                  echo G1; exit 0 ;;
+  *"-o name,guid,createtxg -d 1 rpool/data/x")   printf 'rpool/data/x@old\tG1\t100\n'; exit 0 ;;
+  *"-o name,createtxg -d 1 rpool/data/x")        printf 'rpool/data/x@old\t100\n'; exit 0 ;;
+  *"-t bookmark"*)                               exit 0 ;;
+  *"-o name,creation,guid"*"hdd/backup/rpool/data/x")
+      printf 'hdd/backup/rpool/data/x@old\t%s\tG1\n'    "\$((E-7200))"
+      printf 'hdd/backup/rpool/data/x@WANTED\t%s\tG2\n' "\$((E-3600))"
+      printf 'hdd/backup/rpool/data/x@toonew\t%s\tG3\n' "\$((E+86400))"
+      exit 0 ;;
+  *"written"*)                                   echo 0; exit 0 ;;
+esac
+exit 1
+BBSTUB
+chmod +x "$BB/bin/zfs"
+
+bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$BB/cfg" 2>&1)"
+bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$bb_point" in
+    *WANTED*guid=G2*) ok "base: --at still selects the target it chose" ;;
+    *) bad "base: --at still selects the target it chose" "got: $bb_point" ;;
+esac
+bb_base="$(printf '%s\n' "$bb_out" | sed -n '/Wspolna baza/,+1p' | tail -1)"
+case "$bb_base" in
+    *guid=G1*) ok "base: the OLDER common base survives --at" ;;
+    *) bad "base: the OLDER common base survives --at" "got: $bb_base" ;;
+esac
+case "$bb_out" in
+    *"Wspolnej bazy NIE MA"*) bad "base: and is never reported as FULL/no-base" ;;
+    *) ok "base: and is never reported as FULL/no-base" ;;
+esac
+case "$bb_out" in
+    *"INKREMENT"*) ok "base: so the classification is INKREMENT, not a full replacement" ;;
+    *) bad "base: so the classification is INKREMENT, not a full replacement" "$(printf '%s' "$bb_out" | grep Strategia | head -1)" ;;
+esac
+# A snapshot from AFTER the moment must not become the base either -- the filter
+# is "at or before", and it applies to both uses of the listing.
+case "$bb_base" in
+    *guid=G3*|*toonew*) bad "base: a snapshot from after the moment is not a base" "got: $bb_base" ;;
+    *) ok "base: a snapshot from after the moment is not a base" ;;
+esac
+# NEGATIVE CONTROL for the whole block: without --at the newest IS the target and
+# the base is still found, so these assertions are about --at and not about the
+# strategy having stopped working.
+bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --config="$BB/cfg" 2>&1)"
+bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$bb_ppoint" in
+    *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;
+    *) bad "base: without --at the newest is the target, as before" "got: $bb_ppoint" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
