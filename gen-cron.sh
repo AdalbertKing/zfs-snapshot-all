@@ -1853,8 +1853,15 @@ build_dataset() {
         # on a collector fired in the same minute (measured on pve9: two
         # relationships, two seconds apart).
         #
-        # resolve_field_tiered has been generic since it was written and was used
-        # for exactly one field. This is the second.
+        # The tiered resolver was generic from the day it was written, and had
+        # exactly one caller until now. This is the second.
+        #
+        # Its NAME is deliberately not written next to a following word here.
+        # The allow-list test scrapes "<helper> <word>" out of this file and
+        # cannot tell a comment from code, so naming the helper in prose invents
+        # a field -- which is what the paragraph a few hundred lines up warns
+        # about, and what my first version of this comment did ("... has been
+        # generic" produced a field called `has`).
         if send_schedule="$(resolve_field_tiered send_schedule "$tier" "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$send_schedule" "[dataset:$ds_path] tier=$tier" send_schedule
             tier_send_schedule="$send_schedule"
