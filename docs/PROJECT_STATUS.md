@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e87cf52f4c9f4b76 -->
+<!-- status-covers-digest: 754b60666d94267d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1857,8 +1857,30 @@
   osieroconych relacji nie mial jak go zwolnic. Czyli **dokladnie przypadek
   pve9, od ktorego cale to sprawdzenie sie zaczelo**.
 
-  `test/cleanrel` 63/0, w tym para nosna: to samo polecenie i ten sam snapshot,
-  raz zwolniony, raz nie — roznica jest wylacznie w dowodach.
+  **P1 ZNALEZIONY W RECENZJI I NAPRAWIONY (2026-08-26).** `/var/run` **nie
+  przezywa restartu**. Po reboocie zrodla plik in-flight znika, a hold ZFS
+  **i zdalny token wznowienia zostaja**. Pierwsza wersja widziala wtedy: brak
+  procesu, brak lokalnego tokenu, brak rekordu → ORPHANED → i zwalniala snapshot,
+  ktorego zdalne wznowienie wciaz potrzebowalo.
+
+  Napisalem w raporcie, ze zdalnej strony stad nie widac — i mimo to orzekalem po
+  jej drugiej stronie. **Nazwanie granicy nie czyni decyzji przez nia bezpieczna.**
+  Brak pliku w tmpfs to brak dowodu, nie dowod braku.
+
+  Poprawione: **ORPHANED nie jest juz wnioskowane automatycznie.** Werdykt brzmi
+  UNPROVEN z podaniem powodu — „nic TUTAJ tego nie rosci, ale odbiorcy stad nie
+  widac". Zwalnianie przeniesione do `--release-hold=<snapshot> --yes`, gdzie
+  czlowiek dostarcza osad, ktorego kod nie ma: wie, czy tamta relacja jeszcze
+  istnieje. Wciaz odmawia, jesli cokolwiek widoczne STAD mowi, ze hold jest w
+  uzyciu — pytamy o druga strone, nie o fakty, ktore maszyna juz ma.
+
+  Audyt **nadal nie konczy sie czysto**, i to sie nie zmienilo wraz z werdyktem:
+  hold, ktorego nie rosci nic biegnacego, blokuje `zfs destroy` i po cichu psuje
+  retencje niezaleznie od tego, czyj jest.
+
+  `test/cleanrel` 68/0, w tym kontrprzykład recenzenta wprost: hold istnieje,
+  brak pliku in-flight, brak procesu — stan po restarcie — i `--purge-orphans
+  --yes` **nie wola `zfs release`**.
 
   Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
   wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym
