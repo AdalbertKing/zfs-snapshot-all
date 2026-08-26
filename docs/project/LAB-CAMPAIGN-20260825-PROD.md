@@ -224,6 +224,40 @@ dwóch relacjach to nic; przy kilkunastu na jednym kolektorze to jest ta sama
 tłuszcza, którą rozrzut minut miał rozwiązać dla profili jednotierowych.
 Granica `prod` nazwana i potwierdzona.
 
+### 3.8 P3 UNIEWAŻNIONE: rozrzut per-tier wdrożony i zmierzony (2026-08-26)
+
+Decyzja właściciela: nie przyjmujemy limitu relacji na kolektor, tylko wpinamy
+**istniejący** mechanizm rozsuwania. Nowego budować nie było trzeba —
+`resolve_field_tiered` w gen-cron jest generyczny od chwili napisania i był
+używany dla jednego pola (`flags`). `send_schedule` i `prune_schedule`
+rozstrzygają się teraz tak samo, a walidator przepuszcza `<pole>_<tier>`
+dokładnie tak, jak od zawsze przepuszczał `flags_<tier>`.
+
+Zmierzone na pve9 po `migrate-profile --profile=prod`:
+
+| relacja | minuta wysyłki | kadencje |
+|---|---|---|
+| p1 | **36** | `36 * * * *`, `36 0 * * *`, `36 0 * * 0`, `36 0 1 * *` |
+| p2 | **3**  | `3 * * * *`, `3 0 * * *`, `3 0 * * 0`, `3 0 1 * *` |
+
+Każdy tier zachował **własną kadencję** i dostał **minutę swojej relacji**.
+Diff crontaba: **-16 / +24**. Bieg verbatim ośmiu linii: **8/8 `rc=0`**.
+
+**Dwie wady wyszły dopiero przy wdrażaniu tego na żywo:**
+
+1. **Strażnik anty-kasowania czytał przesunięcie jako usunięcie.** Odmówił
+   migracji komunikatem „16 job line(s) would be DELETED", bo rozstrzyga
+   tożsamość zadania po tekście linii, a zmiana minuty ten tekst zmienia. Nic
+   nie ginęło — szesnaście zadań się przesuwało. Trzecie zwolnienie zbudowane
+   jak dwa istniejące: normalizuj to, co legalnie się rusza, resztę porównuj
+   dosłownie.
+
+2. **F3 jeszcze raz, jedno pole dalej.** Po pierwszej poprawce migracja
+   zaproponowała linię z `-X skip` dla relacji, która nigdy o wykluczenie nie
+   prosiła: `EXCLUDE_1` ze starego, **usuniętego** rekordu dotarło do aktywnego.
+   Reset był **listą nazw** — a pola numerowanego nie da się wyliczyć z góry.
+   Teraz reset pamięta każdą nazwę, jaką przypisał którykolwiek rekord.
+
 ## 4. Co ZOSTAJE żywe (do rozbiórki)
 
 Lab **chodzi** — celowo, żeby zobaczyć tiki godzinowe.
