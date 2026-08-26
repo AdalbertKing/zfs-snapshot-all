@@ -2705,7 +2705,17 @@ prep_one() {
     # One status call, whichever way we can reach the guest. Reading
     # /etc/pve/*.conf directly is exactly what a delegated account cannot do
     # (0640 root:www-data), which is why this goes through gq_status.
-    info=$(gq_status "$id")
+    # A status that could not be READ is not the same answer as "there is no
+    # such guest here", and this copy used to collapse the two: gq_status's exit
+    # code was discarded, an empty reply gave an empty `kind`, and the `*` arm
+    # below reported "no guest -- skipping" and returned SUCCESS. So a helper
+    # that could not answer looked exactly like a host with nothing to freeze,
+    # and the run went on to call itself quiesced. The local path has refused
+    # this since REV-20260801-023; the remote one did not.
+    if ! info=$(gq_status "$id"); then
+        echo "QERR could not determine the state of guest $id on the source host (helper or qm/pct did not answer) -- refusing rather than reading an unreadable status as 'no such guest'" >&2
+        return 1
+    fi
     kind=$(gq_field "$info" kind)
     running=$(gq_field "$info" running)
     frozen=$(gq_field "$info" frozen)
@@ -2719,15 +2729,25 @@ prep_one() {
     # A failure: the operator named a mode this guest cannot honour, so the
     # quiesce they asked for is not going to happen. `auto` cannot land here --
     # it picks the method from the guest kind.
+    # RETURN 2, NOT 1, and the difference is the whole point of this block: 2 is
+    # the class that `,degrade` must never cover. A mode that cannot ever fit
+    # this guest is a config error that will not fix itself, so degrading it
+    # would tell the operator their guests are quiesced for as long as the
+    # config survives. The local path keeps these fatal by simply not calling
+    # the degrade gate; over ssh the only thing that crosses is an exit code, so
+    # the CLASS has to be carried in one.
     case "$mode/$kind" in
-        agent/lxc) echo "QERR guest $id is a container and cannot be frozen by qemu-guest-agent -- use quiesce=sync or auto" >&2; return 1 ;;
-        sync/qemu) echo "QERR guest $id is a VM and 'sync' is the container fallback -- use quiesce=agent or auto" >&2; return 1 ;;
+        agent/lxc) echo "QERR guest $id is a container and cannot be frozen by qemu-guest-agent -- use quiesce=sync or auto" >&2; return 2 ;;
+        sync/qemu) echo "QERR guest $id is a VM and 'sync' is the container fallback -- use quiesce=agent or auto" >&2; return 2 ;;
     esac
     case "$kind" in
         qemu)
+            # Also class 2. Somebody else's freeze window is not ours to end and
+            # we cannot say what application state it holds, so this stays a
+            # fatal refusal with `,degrade` exactly as without it.
             if [ "$frozen" = yes ]; then
                 echo "QERR guest $id was ALREADY frozen before this run -- leaving it alone, someone should investigate. Refusing to snapshot: this run did not establish the freeze and must not claim it did." >&2
-                return 1
+                return 2
             fi
             # REV-20260801-023 ported: on a RUNNING qemu guest an unreadable
             # fsfreeze-status means the agent is not answering, so whether a
@@ -2756,10 +2776,29 @@ prep_one() {
 # got crash-consistent and was told it worked. If any discovered, running guest
 # in scope could not be quiesced, no snapshot is taken at all; the EXIT trap
 # still thaws whatever did get frozen.
+#
+# TWO counters, not one. Collapsing them is the defect the reviewer found on
+# 428feb4f: every prep failure exited 5, the local side degrades 5, and so a
+# foreign freeze and an impossible mode -- both of which the contract keeps
+# fatal -- produced a `*_crash_*` set on the PULL path while the PUSH path
+# correctly refused. The remote exit codes discriminated CLEANLINESS (was
+# anything left frozen, was anything left on disk) and said nothing about CAUSE.
 prep_failed=0
+prep_fatal=0
 for ds in "${scopes[@]}"; do
-    prep_one "$ds" || prep_failed=$((prep_failed + 1))
+    prep_one "$ds"; prc=$?
+    case "$prc" in
+        0) ;;
+        2) prep_fatal=$((prep_fatal + 1)) ;;
+        *) prep_failed=$((prep_failed + 1)) ;;
+    esac
 done
+# Fatal outranks degradable: if any guest is in a state this job must not touch,
+# the whole set is refused whatever else was wrong.
+if [ "$prep_fatal" -gt 0 ]; then
+    echo "QERR $prep_fatal guest(s) are in a state this job must not quiesce (named above) -- NOT taking a snapshot, and NOT degrading either: ',degrade' answers a freeze that failed, not a freeze that must not be attempted" >&2
+    exit 9
+fi
 if [ "$prep_failed" -gt 0 ]; then
     echo "QERR $prep_failed guest(s) could not be quiesced -- NOT taking a snapshot, because it would be crash-consistent while reporting success" >&2
     exit 5
@@ -2969,6 +3008,9 @@ quiesce_remote_run() {
     #   rc 7  the rollback left snapshots behind -- condition 4;
     #   other ssh or the far side broke, which is a link failure and must not be
     #         reported as a quiesce policy decision.
+    # 3 and 5 ONLY. rc 9 is deliberately absent: it is the remote script saying
+    # the cause is one the contract keeps fatal, and adding it here would undo
+    # the two counters that produce it.
     if [ "${QUIESCE_DEGRADE:-0}" -eq 1 ]; then
         case "$rc" in
             3|5)
@@ -2982,6 +3024,7 @@ quiesce_remote_run() {
         3) log 0 "Quiesce: $host cannot run remote quiesce safely (see the reason above) -- nothing was frozen. Either re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce."; return 3 ;;
         4) return 4 ;;
         5) log 0 "Quiesce: a guest on $host could not be quiesced, so NO snapshot was taken -- a crash-consistent snapshot reported as success is the outcome -q exists to prevent."; return 5 ;;
+        9) log 0 "Quiesce: a guest on $host is in a state this job must not quiesce -- a freeze somebody else established, or a mode that cannot fit that guest at all (the reason is above). This is NOT degradable: ',degrade' answers a freeze that failed, not one that must not be attempted."; return 9 ;;
         7) log 0 "Quiesce: $host could not remove the snapshots of an incomplete set (named above) -- they are still there and something downstream will treat them as ordinary snapshots until they are dealt with."; return 7 ;;
         6) log 0 "Quiesce: a guest on $host is STILL FROZEN after the thaw failed. The deadman is retrying; if it gives up, thaw it by hand -- the exact command is in the lines above."; return 6 ;;
         *) log 0 "Quiesce: the remote quiesce run failed on $host (exit $rc)"; return 1 ;;

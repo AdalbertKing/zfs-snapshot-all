@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 bae6fbc3e6aa51817bdf9690a51412a74ca8ddda -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 16bdad0731d9b098743b33b3937d1c9c9a08dece -->
+<!-- frozen: lib-zfs-snap.sh 100644 bd0a7f54ae408fb7545cdad6c03994c69f6fd4db -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -67,6 +67,29 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-26 (lib-zfs-snap.sh): the PULL half of `,degrade` classified by CAUSE,
+  not only by cleanliness. Same authorization as the entry below it -- this is
+  that change corrected, not a new one. Found in review, and the reasoning error
+  is the part worth keeping: the entry below claimed the remote script's exit
+  codes already discriminated everything that mattered. They discriminate
+  CLEANLINESS -- 3 and 5 both mean "the source host is as we found it" -- and say
+  nothing about CAUSE. A foreign freeze and an impossible mode/guest pair are
+  clean too, `prep_one` returned 1 for every failure, the aggregator turned any
+  of them into `exit 5`, and the local side degraded every 5. So the same
+  configuration refused a foreign freeze on PUSH and degraded it on PULL.
+  `prep_one` now returns 2 for the never-degradable causes, the aggregator counts
+  the two classes separately, fatal outranks degradable, and the result is
+  `exit 9` -- which the local mapping will not degrade.
+  Carried in the same reading: `info=$(gq_status "$id")` discarded the command's
+  status, so an unreadable status gave an empty `kind`, fell into the "no guest
+  here -- skipping" arm and returned SUCCESS. A helper that could not answer
+  looked exactly like a host with nothing to freeze. Now an explicit failure, and
+  a degradable one -- the same answer its local twin gives.
+  The tests that missed this stubbed a ready-made rc, proving only that 5 becomes
+  8 and never asking what becomes a five. The new discriminators RUN the remote
+  classifier and carry its actual code through the local mapping; two existing
+  assertions moved from 5 to 9, deliberately, because that is the contract change.
 
 - 2026-08-26 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): `quiesce = <mode>,degrade`.
   Owner direction: "nie. Chcę dokończyć Quiesce". **The first change on this list

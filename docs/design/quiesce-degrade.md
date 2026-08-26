@@ -168,6 +168,7 @@ already distinguishes the states that matter, and does so structurally:
 | remote rc | means | degradable |
 |---|---|---|
 | 3 | refused before freezing anything (no privilege, no `setsid`, deadman not armed) | **yes** |
+| 9 | a guest is in a state this job must not quiesce -- a foreign freeze, or a mode that cannot fit that guest | no |
 | 5 | quiesce failed, rollback and thaw both clean -- a failure in either turns this into 7 or 6 instead | **yes** |
 | 4 | `zfs snapshot` itself failed | no: the crash snapshot uses the same command |
 | 6 | a guest is still frozen | no: an outage |
@@ -176,7 +177,39 @@ already distinguishes the states that matter, and does so structurally:
 
 rc 3 is the case that was measured on pve9/pve1/pve2, 2026-08-25.
 
-**No line of the shipped remote script changed.** The first attempt at this patch
+### The correction that rc 9 exists for
+
+The first cut of this claimed the remote exit codes already discriminated
+everything that mattered, and shipped with **no change to the remote script at
+all**. Review found that wrong, and the reasoning error is worth keeping:
+
+**those codes discriminate CLEANLINESS, not CAUSE.** 3 and 5 both mean "the host
+is as we found it" -- nothing frozen, nothing left on disk -- and that is exactly
+the precondition a crash-consistent set needs. But the two refusals the contract
+keeps fatal, a foreign freeze and an impossible mode/guest pair, are ALSO clean.
+`prep_one` returned 1 for every failure, the aggregator turned any of them into
+`exit 5`, and the local side degraded every 5. So PUSH refused a foreign freeze
+and PULL degraded it, from the same configuration.
+
+The fix carries the CLASS across the boundary, since an exit code is the only
+thing that crosses: `prep_one` returns 2 for the never-degradable causes, the
+aggregator counts the two classes separately, and fatal outranks degradable ->
+`exit 9`, which the local mapping refuses to degrade.
+
+Two more things came out of the same reading:
+
+- `info=$(gq_status "$id")` discarded the command's status. An unreadable status
+  gave an empty `kind`, fell into the "no guest here -- skipping" arm and
+  returned SUCCESS, so a helper that could not answer looked exactly like a host
+  with nothing to freeze. The local path has refused this since
+  REV-20260801-023; this copy did not. It is now an explicit failure, and a
+  degradable one -- same answer as its local twin;
+- the mapping tests stubbed a ready-made rc, so they proved that 5 becomes 8 and
+  never asked what becomes a five. The discriminators now RUN the remote
+  classifier and carry its actual code through the local mapping.
+
+**One line of the shipped remote script changed after all, and this is why it
+was worth writing down.** The first attempt at this patch
 did edit it -- a `quiesce_degrade_gate` call was placed at what looked like a
 local failure site and was in fact inside the heredoc -- which would have called
 an undefined function on the far host and broken remote quiesce outright. Written

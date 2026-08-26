@@ -819,7 +819,12 @@ check "err1: and the run fails (5)" "5" "$rc"
 rq_reset 'exit 0'
 out=$(QFROZEN=yes rq_run2); rc=$?
 check "err2: an already-frozen guest does not snapshot" "no" "$(rq_snapshotted)"
-check "err2: and the run fails (5)" "5" "$rc"
+# 9, not 5, since 2026-08-26. Both codes mean "no snapshot"; the difference is
+# what the LOCAL side is then allowed to do with it. 5 is degradable under
+# `,degrade` and 9 is not, and a freeze somebody else established is the second
+# thing the contract keeps fatal. Until this split existed, the PULL path
+# degraded it while PUSH refused it.
+check "err2: and the run fails FATALLY (9), not degradably" "9" "$rc"
 case "$out" in *"ALREADY frozen"*) check "err2: and says why" "y" "y" ;;
    *) check "err2: and says why" "y" "n ($out)" ;; esac
 
@@ -883,7 +888,9 @@ chmod +x "$RQ_D/bin/zfs"
 rq_reset 'exit 0'
 out=$(QKIND=lxc rq_run2 agent); rc=$?
 check "err6: agent on a container does not snapshot" "no" "$(rq_snapshotted)"
-check "err6: and fails (5)" "5" "$rc"
+# 9 for the same reason as err2: a mode that cannot ever fit this guest is a
+# config error, not a freeze that failed today, so `,degrade` must not cover it.
+check "err6: and fails FATALLY (9), not degradably" "9" "$rc"
 
 # 7. several guests, one freeze fails: no snapshot, and the one that WAS frozen
 #    must not be left that way.
@@ -1668,6 +1675,97 @@ for eng in snapsend.sh snapget.sh; do
         check "degrade-engine: $eng decides rc 8 after the transfer verdict" "0" "1 (deg=$deg_line fail=$fail_line)"
     fi
 done
+
+# ============================================================================
+# ,degrade ACROSS THE SSH BOUNDARY -- the classifier composed with the mapping.
+#
+# The gap this closes, found in review on 428feb4f: the mapping tests above stub
+# a ready-made rc (`ssh() { return 5; }`) and so prove only that 5 becomes 8.
+# They never ask WHAT BECOMES A FIVE. The remote script collapsed every prep
+# failure into one code, so a foreign freeze and an impossible mode -- both kept
+# fatal on the PUSH path -- arrived as 5 and were degraded on PULL.
+#
+# So each case below RUNS the real remote classifier, takes the code it actually
+# produced, and carries THAT through the local mapping. Nothing is assumed about
+# which number a case produces; the number is measured and then composed.
+# ============================================================================
+
+# The sudo stub is redefined several times above; this is the one these cases
+# use, and it adds one knob the others did not need: a status read that FAILS,
+# as opposed to one that answers "absent".
+cat > "$RQ_D/bin/sudo" <<'STUB'
+#!/bin/bash
+echo "sudo $*" >> "$TRACE"
+[ "$1" = "-n" ] && shift
+shift
+st="${QSTATE:-/tmp/qstate}.${2:-x}"
+case "${1:-}" in
+  status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
+          # The privilege probe above still succeeds -- what fails is reading a
+          # PARTICULAR guest, which is what a whitelist miss looks like.
+          [ -n "${QSTATUS_FAIL:-}" ] && exit 1
+          k="${QKIND:-qemu}"; [ "$2" = 200 ] && k=lxc
+          f="${QFROZEN:-}"
+          if [ -z "$f" ]; then f=no; [ -e "$st" ] && f=yes; fi
+          echo "id=$2 kind=$k running=yes frozen=$f"; exit 0 ;;
+  freeze) [ "${QFREEZE:-0}" = 0 ] && : > "$st"; exit "${QFREEZE:-0}" ;;
+  thaw)   [ "${QTHAW:-0}" = 0 ] && rm -f "$st"; exit "${QTHAW:-0}" ;;
+esac
+exit 1
+STUB
+chmod +x "$RQ_D/bin/sudo"
+
+# --- foreign freeze: fatal, and STAYS fatal through the mapping -------------
+rq_reset 'exit 0'
+out=$(QFROZEN=yes rq_run2); rc_foreign=$?
+check "pull-class: a foreign freeze takes no snapshot"        "no"   "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says FATAL (9)"      "9"    "$rc_foreign"
+check "pull-class: ...and ,degrade does NOT rescue it"        "9|0"  "$(rrun "$rc_foreign" 1)"
+check "pull-class: ...and without ,degrade it is unchanged"   "9|0"  "$(rrun "$rc_foreign" 0)"
+
+# --- impossible mode for the guest kind: same class -------------------------
+rq_reset 'exit 0'
+out=$(QKIND=lxc rq_run2 agent); rc_mode=$?
+check "pull-class: agent on a container takes no snapshot"    "no"   "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says FATAL (9)"      "9"    "$rc_mode"
+check "pull-class: ...and ,degrade does NOT rescue it"        "9|0"  "$(rrun "$rc_mode" 1)"
+
+# --- a real freeze failure: this one IS what ,degrade is for -----------------
+# The positive half. Without it the three assertions above would also pass
+# against a mapping that had simply stopped degrading anything at all.
+rq_reset 'exit 0'
+out=$(QFREEZE=1 rq_run2); rc_freeze=$?
+check "pull-class: a freeze that did not take takes no snapshot" "no"  "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says DEGRADABLE (5)"    "5"   "$rc_freeze"
+check "pull-class: ...and ,degrade DOES rescue it"               "8|1" "$(rrun "$rc_freeze" 1)"
+check "pull-class: ...and without ,degrade it stays a refusal"   "5|0" "$(rrun "$rc_freeze" 0)"
+
+# --- a status that cannot be READ is not "no guest here" --------------------
+# The false-success branch: gq_status's exit code was discarded, an empty reply
+# gave an empty kind, and the `*` arm reported the guest absent and returned
+# SUCCESS -- so a helper that could not answer looked exactly like a host with
+# nothing to freeze, and the run called itself quiesced.
+rq_reset 'exit 0'
+out=$(QSTATUS_FAIL=1 rq_run2); rc_stat=$?
+check "pull-class: an unreadable guest status takes no snapshot" "no" "$(rq_snapshotted)"
+if [ "$rc_stat" -eq 0 ]; then
+    check "pull-class: ...and the run does NOT report success" "nonzero" "0"
+else
+    check "pull-class: ...and the run does NOT report success" "nonzero" "nonzero"
+fi
+case "$out" in
+    *"could not determine the state of guest"*)
+        check "pull-class: ...and says the status was unreadable, not 'no guest'" "y" "y" ;;
+    *)  check "pull-class: ...and says the status was unreadable, not 'no guest'" "y" "n ($out)" ;;
+esac
+case "$out" in
+    *"no guest 100 on the source host"*)
+        check "pull-class: ...and does NOT claim the guest is absent" "y" "n ($out)" ;;
+    *)  check "pull-class: ...and does NOT claim the guest is absent" "y" "y" ;;
+esac
+# It is a runtime failure, so it belongs to the degradable class -- the same
+# answer the local path gives for the same cause.
+check "pull-class: ...and it is DEGRADABLE (5), like its local twin" "5" "$rc_stat"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b40ff7d53e271f5b -->
+<!-- status-covers-digest: 48df28e97d108ecf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1708,7 +1708,29 @@
   `lib-cron.sh` — jedyny plik, ktory `zfs-backup.sh` i `gen-cron.sh` i tak oba
   laduja, wiec nie moga sie roznic co do tego, co powiedzial host.
 
-  **Zdalna polowa nie wymagala ANI JEDNEJ linii zmiany** w skrypcie wysylanym
+  **POPRAWKA tego samego dnia, znaleziona w recenzji:** zdanie ponizej bylo
+  bledne i warto zapamietac, na czym polegal blad rozumowania. Kody wyjscia
+  zdalnego skryptu rozrozniaja **CZYSTOSC STANU**, nie **PRZYCZYNE**. `3` i `5`
+  oba znacza „host jest taki, jakim go zastalismy" — i to jest dokladnie warunek
+  wstepny dla zestawu crash-consistent. Ale dwie odmowy, ktore kontrakt trzyma
+  fatalnymi — zastany cudzy freeze i tryb niepasujacy do goscia — TEZ sa czyste.
+  `prep_one` zwracalo 1 dla kazdej awarii, agregator robil z tego `exit 5`,
+  a strona lokalna degradowala kazde 5. Efekt: ta sama konfiguracja odmawiala
+  przy zastanym freeze na PUSH i degradowala go na PULL.
+  Poprawione: `prep_one` zwraca 2 dla przyczyn niedegradowalnych, agregator
+  liczy dwie klasy osobno, fatalna wygrywa — `exit 9`, ktorego mapowanie lokalne
+  nie degraduje. Przy okazji zamkniete: `info=$(gq_status "$id")` gubilo status
+  polecenia, wiec nieczytelny status dawal puste `kind` i wpadal w galaz
+  „no guest — skipping" ze statusem SUKCES; helper, ktory nie umial odpowiedziec,
+  wygladal jak host bez czego zamrazac.
+  Testy, ktore tego nie zlapaly, podstawialy gotowy rc — dowodzily wylacznie, ze
+  5 staje sie 8, i nigdy nie pytaly, **co** staje sie piatka. Nowe dyskryminatory
+  URUCHAMIAJA zdalny klasyfikator i przenosza jego faktyczny kod przez mapowanie
+  lokalne; dwie istniejace asercje przesuniete z 5 na 9 swiadomie, bo to jest ta
+  zmiana kontraktu. Kontrola negatywna: 12 asercji pada na bibliotece sprzed
+  poprawki.
+
+  **Zdalna polowa wymagala jednej zmiany klasyfikacji** w skrypcie wysylanym
   przez ssh, i to jest najwazniejsza rzecz do zapamietania z tej laty. Pierwsze
   podejscie wstawilo wywolanie bramki do tamtego heredoca — czyta sie jak kod
   lokalny, a nie jest nim; po tamtej stronie nie istnieje zadna funkcja
