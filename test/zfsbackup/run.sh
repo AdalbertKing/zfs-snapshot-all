@@ -7133,6 +7133,82 @@ else
         "b saw '$(leak_probe plain_source)' -- expected the leak"
 fi
 
+# --- CREATE MUST NOT SUCCEED WITHOUT SOURCE RETENTION.
+#
+# REV F1, second round, and the reviewer was right about the first one. I
+# replaced a die() with a log-and-continue and argued that gen-cron was the
+# backstop -- it validates the candidate and rejects a [prune:] with no
+# use_template. But that branch writes NO SECTION AT ALL, and gen-cron cannot
+# reject a section that was never written. The relationship would have been
+# created, stamped four families on the source, and bounded none of them.
+#
+# The argument was wrong, not the code around it. These two assertions exist so
+# that the argument cannot be made again without failing.
+SR="$WORK/srfailclosed"; rm -rf "$SR"; mkdir -p "$SR"
+printf '[defaults]\n\thost_label = sr\n' > "$SR/jobs.conf"
+sr_before="$(md5sum < "$SR/jobs.conf")"
+
+# A profile that is LOADED but whose rendered artifacts are unreadable -- the
+# stale-temp case that made me soften this in the first place. It must refuse,
+# not carry on: on a create path both readings ("declares nothing" and "cannot
+# see it") are reasons to stop before publishing.
+sr_create="$( ( PROFILE_LOADED=1
+                PROFILE_ACTIVE=srprof
+                PROFILE_PRUNE_FILE="$SR/gone-prune"
+                PROFILE_DS_FILE="$SR/gone-ds"
+                LOAD_HOST=10.4.4.4
+                SOURCE_PRUNE_EMITTED_DS=()
+                emit_remote_source_prune "$SR/jobs.conf" srclient "# managed-by: zfs-backup.sh client=srclient" tank/src
+              ) 2>&1 )"
+sr_rc=$?
+if [ "$sr_rc" -ne 0 ] && [ "$(md5sum < "$SR/jobs.conf")" = "$sr_before" ] \
+   && printf '%s' "$sr_create" | grep -q 'bound none of them'; then
+    ok "96v: CREATE refuses when no retention fragment resolves, and writes nothing"
+else
+    bad "96v: CREATE refuses when no retention fragment resolves" \
+        "rc=$sr_rc changed=$([ "$(md5sum < "$SR/jobs.conf")" = "$sr_before" ] && echo no || echo YES)" \
+        "$(printf '%s' "$sr_create" | tail -1)"
+fi
+
+# The retrofit verb ONLY ever creates, so reporting success while adding nothing
+# is the same fail-open wearing an audit's clothes. It used to `return 0`.
+sr_apply="$( ( PROFILE_LOADED=1
+               PROFILE_ACTIVE=srprof
+               PROFILE_PRUNE_FILE="$SR/gone-prune"
+               PROFILE_DS_FILE="$SR/gone-ds"
+               SOURCE_PRUNE_EMITTED_DS=()
+               emit_missing_source_prune "$SR/jobs.conf" srclient "acct@10.4.4.4:tank/src"
+             ) 2>&1 )"
+sr_arc=$?
+if [ "$sr_arc" -ne 0 ] && printf '%s' "$sr_apply" | grep -q 'Refusing to report success'; then
+    ok "96w: audit --apply refuses rather than reporting success while adding nothing"
+else
+    bad "96w: audit --apply refuses rather than reporting success while adding nothing" \
+        "rc=$sr_arc" "$(printf '%s' "$sr_apply" | tail -1)"
+fi
+
+# CONTROL: with a READABLE fragment the same call must go through, or 96v/96w
+# would pass against a build that refused source retention outright -- which is
+# the defect this whole finding is about, inverted.
+printf '\tuse_template = t1\n' > "$SR/real-ds"
+: > "$SR/real-prune"
+printf '[template:t1]\n\tprune_schedule = 9 * * * *\n\tpattern = automated_\n\tretain = -H24\n' > "$SR/tpl"
+sr_ok="$( ( PROFILE_LOADED=1
+            PROFILE_ACTIVE=srprof
+            PROFILE_TPL_FILE="$SR/tpl"
+            PROFILE_PRUNE_FILE="$SR/real-prune"
+            PROFILE_DS_FILE="$SR/real-ds"
+            LOAD_HOST=10.4.4.4
+            SOURCE_PRUNE_EMITTED_DS=()
+            emit_remote_source_prune "$SR/jobs.conf" srclient "# managed-by: zfs-backup.sh client=srclient" tank/src
+          ) 2>&1 )"
+if [ "$(grep -c '^\[prune:[^]]*@' "$SR/jobs.conf")" -ge 1 ]; then
+    ok "96x control: a readable fragment still produces the source prune section"
+else
+    bad "96x control: a readable fragment still produces the source prune section" \
+        "$(printf '%s' "$sr_ok" | tail -1)"
+fi
+
 # --- A FLAT PROFILE MUST BOUND THE FAMILIES IT CREATES ON THE SOURCE.
 #
 # REV F1, and it was measured on a PRODUCTION host while the lab ran: pve1

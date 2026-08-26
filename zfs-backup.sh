@@ -1358,14 +1358,19 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
 # A ladder profile keeps retention in [prune]; a flat profile keeps it in the
 # tiers its [dataset] references. Both are a fragment carrying use_template, so
 # the machinery below needs the right FILE, not a new mechanism.
-profile_retention_fragment() {   # -> path of the fragment carrying retention, or rc 1
+# rc 0 = resolved (path on stdout); rc 2 = no profile is loaded, so there is
+# nothing to CREATE from and nothing to say about the policy; rc 1 = a profile
+# IS loaded and expresses no retention at all. The reviewer asked for exactly
+# this split: "cannot see the artifacts" and "the policy is empty" must not be
+# the same answer, because only one of them is a reason to carry on.
+profile_retention_fragment() {   # -> retention fragment path; rc 1 empty, rc 2 unloaded
     # -s ONLY. The first cut probed the file's CONTENT with profile_emit, and
     # CI caught what that costs: the suite drives loads inside subshells, a
     # released temp leaves a STALE PATH behind in the parent, and reading it
     # printed "No such file or directory" from profile_emit's redirection. A
     # resolver must be answerable from what it can see, not from a file it hopes
     # is still there.
-    [ -n "${PROFILE_LOADED:-}" ] || return 1
+    [ -n "${PROFILE_LOADED:-}" ] || return 2
     [ -s "${PROFILE_PRUNE_FILE:-}" ] && { printf '%s' "$PROFILE_PRUNE_FILE"; return 0; }
     [ -s "${PROFILE_DS_FILE:-}" ]    && { printf '%s' "$PROFILE_DS_FILE";    return 0; }
     return 1
@@ -1625,19 +1630,21 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
             # the policy from the profile.
-            # NOT a die. "I cannot see this profile's artifacts right now" and
-            # "this profile declares no retention" are different facts, and the
-            # first one is reachable from a released temp -- CI turned four
-            # unrelated assertions red proving it. The fail-closed backstop for a
-            # genuinely empty policy is already in place and already demonstrated:
-            # gen-cron validates the candidate before publishing and rejects a
-            # [prune:] section with no use_template. That is how the sibling
-            # defect surfaced in the first place.
-            if [ -z "$retfrag" ]; then
-                log "source retention NOT generated for '$ds': profile '$PROFILE_ACTIVE' has no readable retention fragment in this run"
-                SOURCE_PRUNE_EMITTED_DS+=("$ds")
-                continue
-            fi
+            # FAIL CLOSED, and the reviewer was right that the previous version
+            # did not. I replaced a die() with a log-and-continue and called
+            # gen-cron the backstop -- but this branch writes NO section at all,
+            # and gen-cron cannot reject a section that was never written. The
+            # relationship would have been created, stamped four families on the
+            # source, and bounded none of them. The argument was wrong, not the
+            # code around it.
+            #
+            # Nothing is lost by refusing here. A CREATE always loads the profile
+            # (PLAN_NEEDS_PROFILE is 1 whenever anything is generated), so an
+            # unresolvable fragment on this path means either the profile really
+            # expresses no retention or its artifacts vanished mid-run. Both are
+            # reasons to stop before publishing, and neither is a reason to
+            # publish a relationship that prunes nothing on the source.
+            [ -n "$retfrag" ] || die "refusing to create source retention for '$ds': profile '$PROFILE_ACTIVE' yielded no retention fragment. Either it declares none at all, or its rendered artifacts are not readable in this run. This relationship would create automated_* families on ${LOAD_HOST:-the source} and bound none of them there -- which is the defect REV-20260811-102 exists to prevent. Nothing was installed."
             append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
@@ -1661,8 +1668,13 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     # CREATES (it is the retrofit for relationships installed before source
     # retention existed), so an absent fragment is fatal rather than tolerated.
     config_is_frozen_legacy "$workfile" && return 0
-    local retfrag
-    retfrag="$(profile_retention_fragment)" || return 0
+    # This verb ONLY creates -- it is the retrofit for relationships installed
+    # before source retention existed -- so returning success without writing a
+    # section is the exact fail-open the finding names. It reported "nothing to
+    # add" when what it meant was "I could not tell what to add".
+    local retfrag rc
+    retfrag="$(profile_retention_fragment)"; rc=$?
+    [ "$rc" -eq 0 ] || die "audit-source-retention --apply: profile '$PROFILE_ACTIVE' yielded no retention fragment ($([ "$rc" -eq 2 ] && printf 'no profile is loaded in this run' || printf 'the profile expresses no retention at all')). Refusing to report success while adding nothing -- the relationships this verb exists to bound would stay unbounded. Nothing was installed."
     local marker="# managed-by: zfs-backup.sh client=$name"
     append_source_templates_if_missing "$workfile" "$retfrag"
     local sflags; sflags="$(source_prune_sflags)"
