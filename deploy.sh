@@ -287,6 +287,13 @@ PEER_TARGET=""
 # Empty means "no cap on this link", which is also what every pairing made
 # before this field existed says by saying nothing.
 PEER_BANDWIDTH=""
+# Same discriminator as PEER_PORT_GIVEN below, and it exists for the same reason
+# the --local-user=root incident taught this tree: an EMPTY value given on
+# purpose and a value never given are different facts, and "$PEER_BANDWIDTH is
+# empty" cannot tell them apart. Without this, inheriting the manifest's cap on
+# a bare re-pair would also make `--bandwidth=` (the way to REMOVE a cap)
+# impossible -- the fix for one silent loss would have created another.
+PEER_BANDWIDTH_GIVEN=0
 # REV-20260802-033 slice 5 (F1): the alternative to --peer-datasets for a
 # pull relationship -- the collector operator names a MODE instead of a
 # source dataset list they cannot be expected to know yet. Empty means
@@ -408,8 +415,8 @@ while [ "$#" -gt 0 ]; do
         # one relationship: two relationships to the same peer over the same
         # wire have the same wire. Kept on the relationship record it had to be
         # given twice, by hand, with nothing keeping the two in step.
-        --bandwidth=*)  PEER_BANDWIDTH="${1#*=}"; shift ;;
-        --bandwidth)    PEER_BANDWIDTH="${2:-}"; shift 2 ;;
+        --bandwidth=*)  PEER_BANDWIDTH="${1#*=}"; PEER_BANDWIDTH_GIVEN=1; shift ;;
+        --bandwidth)    PEER_BANDWIDTH="${2:-}"; PEER_BANDWIDTH_GIVEN=1; shift 2 ;;
         --as=*)         PEER_AS="${1#*=}"; shift ;;
         --as)           PEER_AS="${2:-}"; shift 2 ;;
         --port=*)       PEER_PORT="${1#*=}"; PEER_PORT_GIVEN=1; shift ;;
@@ -4671,6 +4678,11 @@ do_pair() {
         [ -n "$PEER_REQUESTED" ] || PEER_REQUESTED="${PEER_SAVED_REQUESTED:-}"
         [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
         [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
+        # REV F4. The manifest is written unconditionally at the bottom of this
+        # function, so a field that is not inherited here is not "left alone" --
+        # it is ERASED. Every other operational field is inherited; bandwidth was
+        # not, which made a key rotation silently uncap the link.
+        [ "$PEER_BANDWIDTH_GIVEN" -eq 1 ] || PEER_BANDWIDTH="${PEER_SAVED_BANDWIDTH:-}"
     else
         if [ -r "$mpath" ]; then
             # Re-pairing an existing relationship. Role/target/account-mode/
@@ -4699,6 +4711,21 @@ do_pair() {
             # can legitimately change), so a given value wins.
             [ -n "$PEER_LOCAL_USER" ] || PEER_LOCAL_USER="${PEER_SAVED_LOCAL_USER:-}"
             [ "$PEER_PORT_GIVEN" -eq 1 ] || PEER_PORT="${PEER_SAVED_PORT:-$PEER_PORT}"
+            # REV F4, and this is the path an operator actually walks: re-pairing
+            # to add a dataset, to refresh the wsad, to resume an interrupted
+            # enrolment. None of those mention bandwidth, and every one of them
+            # used to write PEER_SAVED_BANDWIDTH= (empty) over the existing cap.
+            # The loss is invisible in the direction nobody notices: a link that
+            # is FASTER than it should be still succeeds.
+            [ "$PEER_BANDWIDTH_GIVEN" -eq 1 ] || PEER_BANDWIDTH="${PEER_SAVED_BANDWIDTH:-}"
+            if [ "$PEER_BANDWIDTH_GIVEN" -eq 1 ] && [ "${PEER_SAVED_BANDWIDTH:-}" != "$PEER_BANDWIDTH" ]; then
+                # F4 second half, said out loud rather than fixed silently. The
+                # manifest is the pair's record, but an ACTIVE relationship
+                # carries the cap MATERIALISED in its [dataset:] section and in
+                # the installed cron line. Re-pairing does not rewrite those.
+                log "link cap for '$PEER_HOST': '${PEER_SAVED_BANDWIDTH:-<none>}' -> '${PEER_BANDWIDTH:-<none>}' in the manifest"
+                log "NOTE: relationships already ACTIVE against this peer keep running with the OLD cap until each is re-activated -- the value is materialised in their config sections and cron lines, and --pair does not rewrite those. Re-activate them (zfs-backup.sh activate <name>) to make the new cap take effect, and diff the crontab as usual."
+            fi
             log "peer '$PEER_HOST' already paired -- reusing the existing key/role/target/account-mode, refreshing the wsad"
             if [ -n "$requested_datasets" ] && [ "${PEER_SAVED_DATASETS:-}" != "$requested_datasets" ]; then
                 log "dataset list changed: '${PEER_SAVED_DATASETS:-}' -> '$requested_datasets'"

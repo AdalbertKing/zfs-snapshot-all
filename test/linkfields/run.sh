@@ -42,6 +42,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${LINKFIELDS_REPO:-$(cd "$DIR/../.." && pwd)}"
 GEN="${GEN:-$REPO/gen-cron.sh}"
 ZB="${ZB:-$REPO/zfs-backup.sh}"
+# Overridable for the same reason as ZB/GEN: a control that cannot be pointed at
+# an older file silently exercises the current one and passes for the wrong
+# reason. This suite has been bitten by that three times.
+DEPLOY="${DEPLOY:-$REPO/deploy.sh}"
 PROFILE_LIB="$REPO/lib-profile.sh"
 
 PASS=0; FAIL=0
@@ -502,6 +506,49 @@ case "$out" in *OK*) ok "cap control: asking for the SAME cap is not a conflict"
 out="$(pair_cap_decision - 8M)"
 case "$out" in *OK*) ok "cap control: a peer with no pairing yet takes the cap without argument" ;;
                   *) bad "cap control: a peer with no pairing yet takes the cap" "$out" ;; esac
+# --- 15. a re-pair that does not mention the cap must not ERASE it -----------
+#
+# REV F4. deploy.sh --pair writes the manifest unconditionally at the end of the
+# function, so a field it does not INHERIT on the way in is not "left alone" --
+# it is overwritten with empty. Role, target, account-mode, peer-mode, dataset
+# list, local-user and port are all inherited. Bandwidth was not.
+#
+# So the ordinary operator gesture -- re-pair to add a dataset, to refresh the
+# wsad, to resume an interrupted enrolment -- silently uncapped the link. It
+# fails in the direction nobody notices: a transfer that runs FASTER than it
+# should still succeeds.
+#
+# The inheritance line is lifted VERBATIM from deploy.sh, the way test 13 lifts
+# the cap guard: the test states its inputs, the code under test is the file's.
+cap_inherit() {   # <manifest cap> <given 0|1> <flag value> -> resulting cap
+    local mf="$TMPD/inherit.conf" t; t=$(mktemp)
+    printf 'PEER_SAVED_BANDWIDTH=%s\n' "$1" > "$mf"
+    { echo 'set -u'
+      printf 'PEER_BANDWIDTH=%q\n'       "$3"
+      printf 'PEER_BANDWIDTH_GIVEN=%q\n' "$2"
+      printf '. %q\n' "$mf"
+      grep -F 'PEER_BANDWIDTH_GIVEN" -eq 1 ] || PEER_BANDWIDTH=' "$DEPLOY" | head -1
+      echo 'printf "%s" "${PEER_BANDWIDTH:-<none>}"'
+    } > "$t"
+    bash "$t" 2>&1; rm -f "$t"
+}
+
+out="$(cap_inherit 2M 0 "")"
+case "$out" in 2M) ok "cap: a re-pair WITHOUT --bandwidth keeps the pairing's cap" ;;
+               *)  bad "cap: a re-pair without --bandwidth keeps the pairing's cap" "got '$out', expected 2M" ;; esac
+
+# ...and the other direction, which is why a GIVEN flag is tracked separately
+# from a non-empty value. Uncapping is an explicit act (--bandwidth=), and if
+# inheritance were keyed on emptiness alone the fix for one silent loss would
+# have made uncapping impossible -- the same trap as the --local-user=root
+# incident this tree already paid for.
+out="$(cap_inherit 2M 1 "")"
+case "$out" in "<none>") ok "cap: an explicit empty --bandwidth= still REMOVES the cap" ;;
+               *)        bad "cap: an explicit empty --bandwidth= still removes the cap" "got '$out', expected none" ;; esac
+
+out="$(cap_inherit 2M 1 8M)"
+case "$out" in 8M) ok "cap control: a value given on the command line still wins" ;;
+               *)  bad "cap control: a value given on the command line still wins" "got '$out', expected 8M" ;; esac
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"
