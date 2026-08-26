@@ -287,11 +287,48 @@ _artefacts_raw() {
     # relationship, and once clients/lab4-direct.conf was gone nothing on the
     # host linked that dataset to anything at all. Removing data is a separate
     # decision with a separate blast radius, so this tool names it and stops.
-    for d in $(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
-                   "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
-               | cut -d= -f2- | tr -d "'\"" | tr ',' ' '); do
-        [ -n "$d" ] && echo "data	$d"
-    done
+    #
+    # THE SEPARATOR IS AN ESCAPED SPACE, and reading it as whitespace corrupts
+    # the name. These records are `%q`-quoted because they are sourced as root
+    # elsewhere, so a list of two datasets is stored as
+    #
+    #     MANAGED_DATASETS=hdd/a/tree\ hdd/a/flat
+    #
+    # The first version split on whitespace and reported `hdd/a/tree\` -- with a
+    # trailing backslash, which is not a legal ZFS name and cannot be pasted into
+    # the `zfs destroy` this line exists to hand the operator. Found on pve1,
+    # 2026-08-26.
+    #
+    # Decoded WITHOUT eval or source: this file is data and stays data. That is
+    # safe here for a reason worth stating rather than assuming -- a ZFS dataset
+    # name may contain only [A-Za-z0-9_.:/-] (measured: `zfs create hdd/x,y` is
+    # refused, "invalid character ','"), so neither a space nor a comma can occur
+    # INSIDE a name, and `\ ` in this field can only ever be the separator.
+    # Any OTHER backslash means the value is not what this code thinks it is, so
+    # it is reported as suspect instead of being quietly half-decoded.
+    local d exists
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        case "$d" in
+            *\\*) printf 'data\t%s   (SUSPECT: this name still contains a backslash after decoding -- do not paste it into a destroy)\n' "$d"
+                  continue ;;
+        esac
+        # F2: SAY whether it is still there. The audit used to print these
+        # straight from the record without asking ZFS ("costs no zfs call"),
+        # while the purge checked and said "ALREADY GONE". So the destructive
+        # verb verified and the read-only one did not -- and combined with the
+        # mangling above, an operator could not tell "this is gone" from "this
+        # name is corrupted" from "this dataset is still here".
+        # The VALUE only. Whether it still exists is printed by the reporter --
+        # this field is also read by the PURGE, which feeds it to `zfs list`, so
+        # a label appended here becomes part of a dataset name downstream. The
+        # first cut did exactly that and made the purge report an existing
+        # dataset as ALREADY GONE.
+        printf 'data	%s
+' "$d"
+    done < <(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
+                 "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
+             | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ',' '\n')
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
@@ -355,6 +392,22 @@ report() {
         echo "      $reason"
         if [ -n "$art" ]; then
             printf '%s\n' "$art" | while IFS=$'\t' read -r fam path; do
+                # F2, 2026-08-26: SAY whether the data is still there. The audit
+                # printed these straight from the record without asking ZFS, while
+                # the purge checked and said ALREADY GONE -- the destructive verb
+                # verified and the read-only one did not. An operator could not
+                # tell 'gone' from 'still here', and once a name could also be
+                # corrupted, not from 'this name is wrong' either.
+                if [ "$fam" = data ] && command -v "$ZFS_BIN" >/dev/null 2>&1; then
+                    case "$path" in
+                        *SUSPECT*) : ;;
+                        *) if "$ZFS_BIN" list -H -o name -- "$path" >/dev/null 2>&1; then
+                               path="$path   (still on disk)"
+                           else
+                               path="$path   (already gone)"
+                           fi ;;
+                    esac
+                fi
                 printf '      %-9s %s\n' "$fam" "$path"
             done
         else

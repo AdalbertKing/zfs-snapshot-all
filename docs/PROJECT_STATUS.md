@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a72475fcb0879a4c -->
+<!-- status-covers-digest: e15452d6a3cb4760 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1806,6 +1806,30 @@
   Audyt **nie konczy sie czysto**, gdy cos jest trzymane: „nothing orphaned",
   podczas gdy dataset po cichu nie daje sie przyciac, to falszywy spokoj, ktoremu
   to narzedzie ma zapobiegac.
+
+  **F1 i F2 NAPRAWIONE (2026-08-26).** Separator w rekordzie to ESCAPE'OWANA
+  SPACJA (`%q`), wiec dzielenie po bialych znakach dawalo `hdd/a/tree\` —
+  nazwe, ktorej nie da sie wkleic do `zfs destroy`, czyli dokladnie to, po co ta
+  linia istnieje. Dekodowane BEZ `eval` i `source`: plik pozostaje danymi.
+  Bezpieczne, i to nie z zalozenia — **zmierzone**, ze nazwa datasetu ZFS nie
+  moze zawierac ani spacji, ani przecinka (`zfs create hdd/x,y` odrzucone), wiec
+  `\ ` w tym polu moze byc wylacznie separatorem. Kazdy INNY backslash znaczy,
+  ze wartosc nie jest tym, czym kod ja uwaza — i jest oznaczana jako SUSPECT,
+  zamiast po cichu do polowy odkodowana.
+
+  F2: audyt **mowi teraz, czy dane jeszcze sa** (`still on disk` / `already
+  gone`). Wczesniej czasownik niszczacy weryfikowal, a czytajacy nie.
+
+  **Wada, ktora sam przy tym wprowadzilem i ktora zlapala istniejaca asercja:**
+  etykiete doklejalem do POLA, ktore dalej konsumuje purge — podawal ja do
+  `zfs list`, wiec pytal o nieistniejaca nazwe i raportowal istniejacy dataset
+  jako ALREADY GONE. Etykieta nalezy do miejsca, ktore WYPISUJE, nie do tego,
+  ktore produkuje. Przeniesiona do reportera.
+
+  `test/cleanrel` 47/0. Kontrola negatywna na wersji sprzed poprawki: **5
+  asercji pada**, a „dwa datasety" przechodzi tez tam — bo stare dzielenie tez
+  dawalo dwa wpisy, tylko pierwszy zepsuty. Dyskryminatorem jest backslash, nie
+  liczba wpisow.
 
   Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
   wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym

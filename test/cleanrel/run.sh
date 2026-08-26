@@ -655,6 +655,92 @@ out=$(ZFS_BIN="$E/bin/zfs" run_cr "$E"); rc=$?
 if [ "$rc" -eq 3 ]; then ok "holds: a leaked hold ALONE is enough to fail the audit"
 else bad "holds: a leaked hold ALONE is enough to fail the audit" "rc=$rc" "$out"; fi
 
+# ---------------------------------------------------------------------------
+# THE DATASET LINE IS THE ONLY THING LINKING DATA TO A DEAD RELATIONSHIP,
+# so it has to be correct and it has to say whether the data is still there.
+#
+# Found on pve1, 2026-08-26. These records are %q-quoted because they are
+# sourced as root elsewhere, so two datasets are stored separated by an ESCAPED
+# space. Splitting on whitespace reported the first one as `hdd/a/tree\` -- a
+# name that is not legal ZFS and cannot be pasted into the `zfs destroy` this
+# line exists to hand the operator.
+#
+# The carrying case is d2: an implementation that splits on whitespace produces
+# a trailing backslash and fails it, while every other assertion here would
+# still pass.
+# ---------------------------------------------------------------------------
+D="$WORK/dsnames"; mkdir -p "$D/clients" "$D/peers" "$D/rel" "$D/keys" "$D/pairing" "$D/home" "$D/removed" "$D/bin"
+printf 'CLIENT_NAME=demo\nSTATE=active\nMANAGED_DATASETS=hdd/a/tree\\ hdd/a/flat\nSTATE=removed\n' > "$D/clients/demo.conf"
+# tree EXISTS, flat does not -- so one report can show both labels.
+# The real call passes `--` before the name, so the stub matches the shape the
+# code actually uses rather than the one the test author remembered.
+cat > "$D/bin/zfs" <<'DSEOD'
+#!/bin/sh
+case "$*" in
+  *"list -H -o name"*" hdd/a/tree") exit 0 ;;
+esac
+exit 1
+DSEOD
+chmod +x "$D/bin/zfs"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+
+# d1 -- both members are reported, not one.
+n=$(printf '%s\n' "$out" | grep -c '^      data')
+if [ "$n" = 2 ]; then ok "dsnames: a %q-quoted pair is reported as TWO datasets"
+else bad "dsnames: a %q-quoted pair is reported as TWO datasets" "got $n" "$out"; fi
+
+# d2 -- THE carrying assertion. Anchored to the end of the field so it cannot
+# pass on a value that merely contains a backslash somewhere harmless.
+if printf '%s\n' "$out" | grep -qE 'data[[:space:]]+[^[:space:]]*\\([[:space:]]|$)'; then
+    bad "dsnames: no reported name ends in a backslash" "$(printf '%s' "$out" | grep data)"
+else
+    ok "dsnames: no reported name ends in a backslash"
+fi
+case "$out" in
+    *"hdd/a/tree"*) ok "dsnames: the first member survives the split intact" ;;
+    *) bad "dsnames: the first member survives the split intact" "$out" ;;
+esac
+case "$out" in
+    *"hdd/a/flat"*) ok "dsnames: ...and so does the second" ;;
+    *) bad "dsnames: ...and so does the second" "$out" ;;
+esac
+
+# d3 -- the audit says whether the data is STILL THERE. Without this the
+# destructive verb verified and the read-only one did not, so an operator could
+# not tell "gone" from "corrupted" from "still here".
+case "$out" in
+    *"hdd/a/tree   (still on disk)"*) ok "dsnames: a dataset that exists is labelled so" ;;
+    *) bad "dsnames: a dataset that exists is labelled so" "$(printf '%s' "$out" | grep data)" ;;
+esac
+case "$out" in
+    *"hdd/a/flat   (already gone)"*) ok "dsnames: a dataset that is gone is labelled so" ;;
+    *) bad "dsnames: a dataset that is gone is labelled so" "$(printf '%s' "$out" | grep data)" ;;
+esac
+
+# d4 -- an escape this code does NOT understand is named, not half-decoded.
+# A ZFS name cannot contain a backslash, so anything left after decoding means
+# the value is not what the reader thinks it is.
+printf 'CLIENT_NAME=odd\nSTATE=active\nMANAGED_DATASETS=hdd/a\\tweird\nSTATE=removed\n' > "$D/clients/odd.conf"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+case "$out" in
+    *SUSPECT*) ok "dsnames: an escape that is not the separator is flagged SUSPECT" ;;
+    *) bad "dsnames: an escape that is not the separator is flagged SUSPECT" "$(printf '%s' "$out" | grep -A1 odd)" ;;
+esac
+case "$out" in
+    *"do not paste it into a destroy"*) ok "dsnames: ...and says not to paste it into a destroy" ;;
+    *) bad "dsnames: ...and says not to paste it into a destroy" ;;
+esac
+
+# NEGATIVE CONTROL: a value with NO escapes must not be flagged, or the two
+# assertions above would pass against a build that flagged everything.
+rm -f "$D/clients/odd.conf"
+printf 'CLIENT_NAME=plain\nSTATE=active\nRUX_TARGET=hdd/a/tree\nSTATE=removed\n' > "$D/clients/plain.conf"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+case "$out" in
+    *SUSPECT*) bad "dsnames: an ordinary name is NOT flagged" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "dsnames: an ordinary name is NOT flagged" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
