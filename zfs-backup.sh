@@ -194,7 +194,8 @@ COLLECTOR_LABEL="$(hostname -s 2>/dev/null || hostname)"
 # file both programs already source; duplicating an ini parser so that two
 # programs could disagree about what a host said was the alternative.
 
-CLIENTS_DIR="/etc/zfs-snapshot-all/clients"
+# CLIENTS_DIR lives in lib-backup-common.sh since 2026-08-26: zfs-restore.sh
+# needs the same answer, and two definitions are two ways to disagree.
 # Where crontabs live, for the "who has one" question in cron_known_accounts.
 # Debian/Proxmox first, RHEL second. Only ever read, never written -- gen-cron
 # remains the single writer, through crontab(1).

@@ -67,3 +67,17 @@ installed_dataset_field() {   # <cronfile> <local dataset path> <field>
         }
     ' "$1" 2>/dev/null
 }
+
+# ------------------------------------------------------------------------------
+# WHERE A RELATIONSHIP LIVES
+# ------------------------------------------------------------------------------
+# One client record per relationship, and both programs must agree on where they
+# are: zfs-backup.sh WRITES them, zfs-restore.sh READS them to answer "which
+# relationship is `pve2`". A second copy of this path in the second program is a
+# way for the two to disagree about what exists, so it lives here.
+#
+# Overridable from the environment because zfs-restore.sh is its own program and
+# its suite has to point it at a fixture directory; zfs-backup.sh's own suites
+# reassign the same name in a subshell, which still wins because this is read at
+# source time and they run afterwards.
+CLIENTS_DIR="${CLIENTS_DIR:-/etc/zfs-snapshot-all/clients}"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1d75715277ecf9a4 -->
+<!-- status-covers-digest: b40ff7d53e271f5b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1728,6 +1728,26 @@
   **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
   zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
   nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
+
+- **RESTORE: nazwa relacji musi wskazywac JEDNA relacje (2026-08-26).**
+  `zfs-restore.sh` odmawia przed czymkolwiek, jesli ktorys rekord w
+  `/etc/zfs-snapshot-all/clients/` deklaruje `CLIENT_NAME` inny niz wlasna nazwa
+  pliku. Powod jest prosty: adres `pve2:rpool/data` znaczy „relacja pve2", a
+  relacja to nazwa nadana przez operatora — moze wskazywac na dowolna maszyne,
+  takze na pve9. Jesli dwa pliki mowilyby „nazywam sie pve2", narzedzie
+  wybraloby ktorys i odtworzylo nie to, co trzeba. Na pve9 lezy ponad
+  piecdziesiat rekordow, wiec to nie jest teoretyczne.
+
+  Jedno porownanie wystarcza za caly warunek: dwa pliki w jednym katalogu nie
+  moga miec tej samej nazwy, wiec zgodnosc z nazwa pliku JEST jednoznacznoscia.
+  Petla szukajaca duplikatow byla martwym kodem w kostiumie zabezpieczenia i
+  zostala usunieta.
+
+  **Czego NIE zmieniono:** samego adresowania. `restore_resolve_token` juz
+  rozstrzyga dwuznacznosc dwukropka i juz odmawia adresowania po hoscie
+  (R-025) — ostrzej niz proponowala regula recenzenta, i zgodnie z decyzja
+  Ownera nr 1 (pull-first). Drugi parser bylby drugim sposobem czytania tego
+  samego argumentu.
 
 - **ETAP PROFILI, faza 2: JEDEN PLIK NATYWNY + profil `prod` odwzorowujacy
   produkcje (2026-08-25).**

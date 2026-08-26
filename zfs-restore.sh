@@ -30,6 +30,63 @@ LIBCOMMON="$SCRIPT_DIR/lib-backup-common.sh"
 source "$LIBCOMMON"
 
 # ------------------------------------------------------------------------------
+# A RELATIONSHIP NAME MUST IDENTIFY ONE RELATIONSHIP
+# ------------------------------------------------------------------------------
+# Reviewer rule 2 (2026-08-26): the only identifier is the exact `CLIENT_NAME` in
+# exactly one record under $CLIENTS_DIR, and the record's FILE NAME must agree
+# with it. If two records claim the same name, or a record and its filename
+# disagree, the resolver REFUSES before anything is planned.
+#
+# Why this is a separate check rather than a second resolver: restore_resolve_token
+# below already resolves an address, and it resolves it against `pair_label` in
+# the INSTALLED CONFIG -- which zfs-backup.sh writes from the very same
+# CLIENT_NAME (`pair_label   = $name`, four emit sites). So the two agree on the
+# STRING and differ on which file is the authority. Writing a second parser that
+# read the records directly would give this program two ways to interpret the
+# same argument, which is the failure the typed-result requirement exists to
+# prevent -- and it would lose what the config-side resolver knows and the rule
+# does not mention: a ZFS dataset name may legally contain a colon, so
+# `.../pool/data:archive` is a real address that a naive `${tok%%:*}` split
+# destroys (found on #132, and still guarded below).
+#
+# What was genuinely missing is the INTEGRITY half, and only that is added here:
+# the config can only be as trustworthy as the records it was generated from, and
+# nothing checked that the records still identify one relationship each.
+#
+# NOT SOURCED, deliberately. zfs-backup.sh sources these records as root by
+# design, but this function's whole job is to decide whether they can be trusted;
+# executing them to find out would be the wrong order. Two fields are read as
+# text, and a name that is not a plain identifier is refused, not interpreted.
+restore_relations_sane() {
+    [ -d "$CLIENTS_DIR" ] || return 0        # no records here: nothing to contradict
+    local f base name
+    for f in "$CLIENTS_DIR"/*.conf; do
+        # remove-client renames a tombstone to `<name>.conf.removed-<stamp>`, so
+        # the glob already excludes them. An empty directory leaves the pattern
+        # unexpanded, which `-e` catches.
+        [ -e "$f" ] || continue
+        base="${f##*/}"; base="${base%.conf}"
+        # LAST wins: these records are append-only. zfs-backup.sh re-states a
+        # field instead of rewriting the file, so the first CLIENT_NAME line is
+        # the relationship as it was at creation, not as it is.
+        name="$(sed -n 's/^CLIENT_NAME=//p' "$f" 2>/dev/null | tail -1)"
+        [ -n "$name" ] || die "restore: relationship record $f carries no CLIENT_NAME -- refusing to plan against a record that cannot say what it is."
+        case "$name" in
+            *[!A-Za-z0-9._-]*)
+                die "restore: relationship record $f has CLIENT_NAME='$name', which is not a plain identifier. Refusing rather than interpreting it." ;;
+        esac
+        # This one comparison is the whole guarantee. The reviewer asked for two
+        # refusals -- a name/filename mismatch AND two records claiming one name
+        # -- but the second cannot happen once the first holds: two files in one
+        # directory cannot share a filename, so agreeing with the filename IS
+        # uniqueness. A loop looking for duplicates would be unreachable code
+        # wearing the costume of a safety check.
+        [ "$name" = "$base" ] || die "restore: relationship record $f says CLIENT_NAME='$name' but is filed as '$base'. One of the two is wrong, and either answer would resolve a different relationship from the one the operator named. Fix the record or the filename before restoring."
+    done
+    return 0
+}
+
+# ------------------------------------------------------------------------------
 # Phase 7 slice 1 -- `restore --plan`. READ-ONLY. Touches nothing but `zfs list`.
 #
 # The plan's own justification for shipping this alone: "dziś nikt nie wie, co by
@@ -1352,6 +1409,10 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 }
 
 cmd_restore() {
+    # Before the options are even read: a host whose relationship records do not
+    # identify one relationship each cannot answer "which relationship is X",
+    # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
+    restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
     for a in "$@"; do
         case "$a" in
