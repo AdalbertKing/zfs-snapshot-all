@@ -7647,8 +7647,27 @@ cmd_activate() {
 #
 # The `( : )` line beside each source is a shellcheck no-op. It isolates
 # NOTHING; anyone reading it as a subshell (I did) will make this mistake again.
-migrate_read_record() {   # <path> -- reset the fields this command reads, then source
-    STATE=""; PROFILE=""; CLIENT_NAME=""; PROFILE_DIGEST_RECORDED=""
+MIGRATE_RECORD_FIELDS=""
+migrate_read_record() {   # <path> -- source it with no field left over from the last one
+    # NOT A HAND-PICKED LIST, and the first version of this was one. It reset
+    # STATE/PROFILE/CLIENT_NAME/PROFILE_DIGEST_RECORDED -- the fields I could
+    # see -- and the lab found what that misses within the hour: EXCLUDE_1 from
+    # an old, REMOVED record leaked into an active one, and the proposed cron
+    # line grew a `-X skip` the relationship had never asked for. The record
+    # dir on a real collector holds twenty files; a numbered field
+    # (EXCLUDE_<n>) cannot be enumerated ahead of time at all, which is exactly
+    # the shape a hand-written list is guaranteed to miss.
+    #
+    # So: remember every name any record has assigned, clear them all before
+    # the next source, and let the record itself decide what it defines. A
+    # record that carries a field gets its value; one that does not carries
+    # nothing -- which is what a fresh shell would have given it.
+    #
+    # The `. "$1"` is still subshell-free on purpose: the caller needs the
+    # values. That is why the clearing has to be explicit.
+    local f
+    for f in $MIGRATE_RECORD_FIELDS; do unset "$f"; done
+    MIGRATE_RECORD_FIELDS="$MIGRATE_RECORD_FIELDS $(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/{print $1}' "$1" 2>/dev/null | sort -u | tr '\n' ' ')"
     # shellcheck disable=SC1090
     . "$1"
 }

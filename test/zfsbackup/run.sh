@@ -7094,17 +7094,32 @@ fi
 # reads like a subshell and is a shellcheck no-op -- which is how I made the
 # mistake in the first place.
 LK="$WORK/leakrecords"; rm -rf "$LK"; mkdir -p "$LK"
-printf 'CLIENT_NAME=a\nSTATE=active\nPROFILE=prod\n'  > "$LK/a.conf"
-printf 'CLIENT_NAME=b\nSTATE=active\n'                > "$LK/b.conf"
+# EXCLUDE_1 rides along because it is the field that proved the first fix
+# wrong. That fix reset a hand-picked list of names -- the ones I could see --
+# and a NUMBERED field cannot be enumerated ahead of time at all. On pve9 an
+# EXCLUDE_1 from an old, already-REMOVED record reached an active one and the
+# proposed cron line grew a `-X skip` the relationship had never asked for.
+printf 'CLIENT_NAME=a\nSTATE=active\nPROFILE=prod\nEXCLUDE_1=skip\n' > "$LK/a.conf"
+printf 'CLIENT_NAME=b\nSTATE=active\n'                              > "$LK/b.conf"
 
-leak_probe() {   # <reader function name> -> the PROFILE b ends up seeing
-    ( PROFILE=""; $1 "$LK/a.conf"; $1 "$LK/b.conf"; printf '%s' "${PROFILE:-<empty>}" )
+leak_probe() {   # <reader> [field] -> what b ends up seeing in that field
+    local fld="${2:-PROFILE}"
+    ( PROFILE=""; EXCLUDE_1=""
+      $1 "$LK/a.conf"; $1 "$LK/b.conf"
+      eval "printf '%s' \"\${$fld:-<empty>}\"" )
 }
 if [ "$(leak_probe migrate_read_record)" = "<empty>" ]; then
     ok "96r: a record without PROFILE does not inherit the previous record's"
 else
     bad "96r: a record without PROFILE does not inherit the previous record's" \
         "b saw PROFILE='$(leak_probe migrate_read_record)'"
+fi
+
+if [ "$(leak_probe migrate_read_record EXCLUDE_1)" = "<empty>" ]; then
+    ok "96r2: a NUMBERED field does not survive either -- the reset is not a list of names"
+else
+    bad "96r2: a numbered field does not survive either" \
+        "b saw EXCLUDE_1='$(leak_probe migrate_read_record EXCLUDE_1)'"
 fi
 
 # CONTROL, and the reason 96r is not vacuous: the PLAIN source really does leak.
