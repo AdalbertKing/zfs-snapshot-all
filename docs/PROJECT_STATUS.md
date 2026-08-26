@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e15452d6a3cb4760 -->
+<!-- status-covers-digest: e87cf52f4c9f4b76 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1830,6 +1830,35 @@
   asercji pada**, a „dwa datasety" przechodzi tez tam — bo stare dzielenie tez
   dawalo dwa wpisy, tylko pierwszy zepsuty. Dyskryminatorem jest backslash, nie
   liczba wpisow.
+
+  **Zaostrzone po recenzji (2026-08-26).** „Prawdopodobnie wyciekl" nie jest
+  werdyktem, a WIEK niczego nie dowodzi. Hold jest uznawany za OSIEROCONY
+  dopiero wobec dowodow, ktore zapisuje sam silnik:
+
+  | fakt | skad |
+  |---|---|
+  | biegnie silnik | tablica procesow (`snapsend`/`snapget`/`zfs send`) |
+  | rekord in-flight nazywa TEN snapshot | `<silnik>.inflight-snap.<klucz>` w katalogu blokad |
+  | lokalny `receive_resume_token` | `zfs get` |
+
+  Trzy werdykty: **IN-USE** (rekord wskazuje ten snapshot), **UNPROVEN** (cos
+  biegnie albo jakis transfer chce kontynuowac — fail-closed) i **ORPHANED**.
+  **GRANICA POWIEDZIANA WPROST:** token wznowienia jest wlasnoscia CELU, wiec
+  przy relacji pull lezy na innym hoscie i stad go nie widac — raport to mowi,
+  zamiast sugerowac, ze sprawdzil wszystko.
+
+  **Zwalnianie tylko w jawnej sciezce `--purge --yes`**, z nazwaniem kazdego
+  snapshotu; audyt nie zwalnia nigdy. Sprawdzenie procesow idzie przez
+  `HOLD_PS_CMD`, zeby wynik testu nie zalezal od tego, czy na maszynie
+  testujacej akurat cos leci.
+
+  **Wada znaleziona przez wlasny test:** `--purge-orphans` wracalo wczesniej,
+  gdy nie bylo osieroconych RELACJI — wiec host z wyciekniętym holdem i bez
+  osieroconych relacji nie mial jak go zwolnic. Czyli **dokladnie przypadek
+  pve9, od ktorego cale to sprawdzenie sie zaczelo**.
+
+  `test/cleanrel` 63/0, w tym para nosna: to samo polecenie i ten sam snapshot,
+  raz zwolniony, raz nie — roznica jest wylacznie w dowodach.
 
   Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
   wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym
