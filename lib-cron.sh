@@ -718,3 +718,57 @@ cron_replace_all_impl() {
     cron_markers_valid "$in" || return 1
     cron_write "$who" "$in"
 }
+
+###############################################################################
+# HOST SETTINGS
+###############################################################################
+# Here because this is the one file both zfs-backup.sh and gen-cron.sh source,
+# and both need the same answer. It is not crontab machinery; it is next to it.
+#
+# THIS HOST'S DEFAULTS, for the handful of things that are neither policy nor
+# topology: how the ENGINE behaves here.
+#
+# A profile says what to keep. A relationship says where from and where to.
+# Neither can say "on this machine, a catch-up older than half an hour is too
+# stale to reuse" -- that is a property of the host and its link, true for every
+# relationship on it and for none of the others.
+#
+# Until now such settings existed only as environment variables with built-in
+# defaults, which means they were settable by whoever remembered to export them
+# and by nobody else. `CATCHUP_MAX_AGE` is the first one moved here.
+#
+# NOT a second place to say what a profile already says. The quiesce-degrade
+# design (docs/design/quiesce-degrade.md) draws the line: the TIER holds the
+# decision, this file holds the DEFAULT for when a tier is silent. The same
+# layering server.conf's DEFAULT_TARGET already uses. A per-profile settings
+# file would be the two-sources-of-truth problem this tree spent a day removing
+# from the bandwidth manifest -- the profile IS the per-profile settings file.
+#
+# PRECEDENCE: environment, then this file, then the built-in default. The
+# environment wins because that is what the suites use to pin a value, and a
+# host file that could override a test would make the test a liar.
+#
+# Format: flat `key = value`, '#' starts a comment. No sections until something
+# needs one -- CONFIG v4 has sections because it describes many datasets; this
+# describes one host.
+SETTINGS_FILE="${SETTINGS_FILE:-/etc/zfs-snapshot-all/settings.ini}"
+settings_get() {   # <key> <built-in default> -> value
+    local key="$1" fallback="$2" v
+    [ -r "$SETTINGS_FILE" ] || { printf '%s' "$fallback"; return 0; }
+    v="$(awk -F= -v k="$key" '
+        { sub(/#.*/, "") }
+        {
+            key=$1; sub(/^[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
+            if (key == k && NF > 1) {
+                val=$0; sub(/^[^=]*=/, "", val)
+                sub(/^[ \t]+/, "", val); sub(/[ \t]+$/, "", val)
+                print val; exit
+            }
+        }' "$SETTINGS_FILE" 2>/dev/null)"
+    # An EMPTY value is a mistake, not an answer: a key written with nothing
+    # after it reads as "I meant to set this", and silently substituting the
+    # built-in default would hide it. Same rule the config grammar already
+    # applies to blank fields.
+    [ -n "$v" ] || v="$fallback"
+    printf '%s' "$v"
+}

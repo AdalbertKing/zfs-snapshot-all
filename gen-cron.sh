@@ -117,8 +117,15 @@ set -o pipefail
 #                                          # reaches ONLY the monitor -- prune
 #                                          # itself keeps running while paused.
 #       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
-#                                          # that owns this dataset before
-#                                          # snapshotting it (snapsend.sh -q)
+#                    [,degrade]            # that owns this dataset before
+#                                          # snapshotting it (snapsend.sh -q).
+#                                          # ',degrade' says what to do when the
+#                                          # freeze cannot happen: take the set
+#                                          # anyway, crash-consistent, named
+#                                          # <family>_crash_<timestamp>, and exit
+#                                          # 8 so cron reports it. Without it a
+#                                          # failed freeze means NO snapshot.
+#                                          # A failed thaw stays fatal either way.
 #       dst          = <target>            # PUSH: <zfs/path> is the local SOURCE,
 #                                          # snapsend.sh sends TO dst (remote if it
 #                                          # contains ':', else local-to-local).
@@ -559,7 +566,8 @@ maybe_add_autotune() {
     if [ -n "$flags" ]; then printf '%s -A' "$flags"; else printf -- '-A'; fi
 }
 
-# quiesce = agent|fs|auto|no. Unlike -A this is NOT inferred: whether a guest can
+# quiesce = agent|sync|auto|no, each optionally with ',degrade'. Unlike -A this
+# is NOT inferred: whether a guest can
 # be frozen depends on what runs inside it and how much a brief write stall costs
 # there, and neither is visible from a dataset name. So it is opt-in per dataset.
 #
@@ -590,18 +598,40 @@ maybe_add_autotune() {
 #           right place for it, but means a config can generate cleanly here and
 #           still need `--as=root` (or a sudo rule) on the peer to work.
 lint_quiesce() {
-    local want="$1" ctx="$2" direction="$3"
+    local want="$1" ctx="$2" direction="$3" mode="$1" qual=""
+    # `<mode>,degrade` (docs/design/quiesce-degrade.md). The qualifier is split
+    # off HERE so every rule below keeps reading a bare mode -- in particular the
+    # pull/sync rule, which must reject `sync,degrade` on a pull for exactly the
+    # reason it rejects `sync`. The engines parse the same grammar with
+    # quiesce_parse_mode (lib-zfs-snap.sh); this is the config-time half, and the
+    # two must accept the same set or a config would generate cleanly and fail at
+    # run time.
     case "$want" in
+        *,*)
+            mode="${want%%,*}"
+            qual="${want#*,}"
+            case "$qual" in
+                degrade) ;;
+                *) die "$ctx: quiesce='$want' -- ',$qual' is not a qualifier. The only one is ',degrade', and it may appear once: agent,degrade / sync,degrade / auto,degrade." ;;
+            esac
+            case "$mode" in
+                no) die "$ctx: quiesce='no,degrade' -- ',degrade' says what to do when a freeze FAILS, and 'no' never freezes, so the pair asks for nothing. Either name the mode you want quiesced, or drop the field." ;;
+            esac ;;
+    esac
+    # `want` stays the RAW field from here on, so every message below quotes what
+    # the operator actually wrote; the rules read `mode`, which is the same thing
+    # with any qualifier removed.
+    case "$mode" in
         ""|no) return 0 ;;
         agent|auto)
             return 0
             ;;
         sync)
-            [ "$direction" = "pull" ] && die "$ctx: quiesce='sync' on a pull dataset -- sync is the CONTAINER fallback (a 'pct exec <id> -- sync' flush, not a freeze), and running it across an ssh hop buys nothing a push job on that host would not do better. Use quiesce=agent/auto for VMs, or run this dataset as a push job."
+            [ "$direction" = "pull" ] && die "$ctx: quiesce='$want' on a pull dataset -- sync is the CONTAINER fallback (a 'pct exec <id> -- sync' flush, not a freeze), and running it across an ssh hop buys nothing a push job on that host would not do better. Use quiesce=agent/auto for VMs, or run this dataset as a push job."
             return 0
             ;;
         fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;
-        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto" ;;
+        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto, each optionally with ',degrade'" ;;
     esac
 }
 
@@ -1933,6 +1963,15 @@ build_dataset() {
             flags="$(maybe_add_autotune "$flags" "$remote_spec" "$autotune")"
             local quiesce
             quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
+            # ONLY when the tier said nothing. Reviewer contract, 2026-08-26: the
+            # host file is a fallback for silence, never a widening of something
+            # explicit -- a tier that says `auto` keeps meaning fail-closed
+            # `auto`, and no host default may quietly turn it into
+            # `auto,degrade`. That is why this tests for empty rather than
+            # merging, and why it runs BEFORE lint_quiesce: whatever the host
+            # file supplies has to survive exactly the same grammar as a value
+            # written in the config.
+            [ -n "$quiesce" ] || quiesce="$(settings_get quiesce "")"
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             # Baseline render for --migrate-recursion: the recursion VALUE was

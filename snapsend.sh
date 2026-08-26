@@ -1013,7 +1013,7 @@ find_common_snapshot() {
 
 create_snapshot() {
     local dataset="$1"
-    local snapshot_name="${dataset}@${MESSAGE}${RUN_SUFFIX}"
+    local snapshot_name="${dataset}@${SNAP_MESSAGE}${RUN_SUFFIX}"
     local recursive_flag=""
     [ $RECURSIVE -eq 1 ] && recursive_flag="-r"
     
@@ -1931,11 +1931,14 @@ for _pat in "${EXCLUDE_PATTERNS[@]}"; do
     fi
 done
 
-case "$QUIESCE" in
-    no|agent|sync|auto) ;;
-    fs) echo "Error: -q fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host (measured). Use -q sync for containers, which flushes them instead." >&2; exit 1 ;;
-    *) echo "Error: -q '$QUIESCE' -- expected no, agent, sync or auto." >&2; exit 1 ;;
-esac
+# `-q <mode>[,degrade]`. quiesce_parse_mode (lib-zfs-snap.sh) is the ONE parser
+# for both engines, so the qualifier cannot come to mean two things; it prints
+# its own message on anything it does not accept, including `no,degrade`, a
+# misspelled qualifier and a repeated one. QUIESCE afterwards holds the BARE
+# mode, which is what every quiesce function below already expects, and
+# QUIESCE_DEGRADE holds the opt-in.
+quiesce_parse_mode "$QUIESCE" || exit 1
+QUIESCE="$QUIESCE_MODE"
 
 # -U has to reach the dataset, not just the recv flag: a target created with
 # canmount=noauto stays unmounted no matter how it is received, so flipping only
@@ -2129,6 +2132,14 @@ LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' 
 # point in time. Under plain flat the snapshots are still taken one after
 # another. Restore must report which of the three guarantees applies.
 RUN_SUFFIX="$(date '+%Y-%m-%d_%H-%M-%S')"
+# The prefix this run WRITES, which is not always the family it MATCHES. They
+# differ in exactly one case -- a degraded quiesce, where the created names gain
+# `crash_` while every family comparison (-e adoption, -T intermediate counting,
+# delsnaps retention, check-snap-age) must keep using the unmarked family the
+# operator configured. Prefix matching is what makes the two compatible: the
+# marker sits between the family and the timestamp, so `automated_daily_crash_x`
+# still belongs to `automated_daily_`.
+SNAP_MESSAGE="$MESSAGE"
 LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
@@ -2345,7 +2356,13 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # answer is the same for every dataset, and discovering it per guest is how
     # "cannot ask" came to be logged as "not running" once per disk while the
     # run reported success.
-    quiesce_init "$QUIESCE"
+    # QUIESCE_DEGRADED is the one flag the rest of this block reads. It is set by
+    # quiesce_degrade_gate, which only says yes after it has rolled back
+    # everything this run created and thawed everything it froze -- so by the
+    # time it is 1, the host is in the state it was in before -q was attempted.
+    # Every remaining quiesce step is then SKIPPED rather than aborted, and the
+    # run continues down the ordinary unquiesced path below.
+    quiesce_init "$QUIESCE" || :
 
     quiesce_snap_suffix="$RUN_SUFFIX"   # one definition, see RUN_SUFFIX above
     # pool -> space-separated snapshot names. A space-joined string is safe as a
@@ -2354,14 +2371,19 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     declare -A QUIESCE_SNAPS_BY_POOL=()
     quiesce_snap_total=0
     for dataset in "${DATASETS[@]}"; do
+        [ "$QUIESCE_DEGRADED" -eq 1 ] && break
         # Under -r the guests live in the CHILDREN, not in the named parent --
         # see quiesce_scope. The snapshot list still names the parent, because
         # `zfs snapshot -r parent@snap` covers the tree atomically by itself.
         while IFS= read -r quiesce_ds; do
             [ -n "$quiesce_ds" ] && quiesce_prepare "$quiesce_ds" "$QUIESCE"
+            [ "$QUIESCE_DEGRADED" -eq 1 ] && break
         done < <(quiesce_scope "$dataset" "$RECURSIVE")
+        # Before the append, not after: a degraded run must not leave a
+        # half-built list of quiesced names behind for the pool loop to use.
+        [ "$QUIESCE_DEGRADED" -eq 1 ] && break
         quiesce_pool="${dataset%%/*}"
-        QUIESCE_SNAPS_BY_POOL[$quiesce_pool]+=" ${dataset}@${MESSAGE}${quiesce_snap_suffix}"
+        QUIESCE_SNAPS_BY_POOL[$quiesce_pool]+=" ${dataset}@${SNAP_MESSAGE}${quiesce_snap_suffix}"
         quiesce_snap_total=$((quiesce_snap_total + 1))
     done
 
@@ -2372,35 +2394,51 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     # the old code froze them during the loop above and then spent up to 16
     # seconds flushing containers, by which time Windows had released the freeze
     # on its own and nothing noticed.
-    quiesce_freeze_pending
+    [ "$QUIESCE_DEGRADED" -eq 1 ] || quiesce_freeze_pending || :
 
-    log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
     quiesce_snap_failed=0
-    for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
-        # BEFORE EVERY POOL, not once before the loop (REV-20260802-029).
-        # ZFS is atomic within a pool and there is no way to be atomic across
-        # them, so a multi-pool job is N separate commands -- and a slow or
-        # blocked first one can eat the whole window. Checking once certified a
-        # boundary that the second pool never had.
-        if ! quiesce_still_frozen "pool '$quiesce_pool'"; then
-            log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above)"
-            quiesce_abandon_set "$quiesce_recursive_flag" 3
-        fi
-        # Unquoted on purpose: the value is the space-separated list built above,
-        # and each name has to reach zfs as its own argument.
-        # shellcheck disable=SC2086
-        if ! zfs snapshot $quiesce_recursive_flag ${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]}; then
-            log 0 "Quiesce: the atomic snapshot of pool '$quiesce_pool' failed"
-            quiesce_snap_failed=1
-            break
-        fi
-        # Recorded only after zfs says it made them, so the ledger can never
-        # name something that does not exist.
-        # shellcheck disable=SC2206
-        QUIESCE_CREATED+=(${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]})
-    done
+    if [ "$QUIESCE_DEGRADED" -eq 0 ]; then
+        log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
+        for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
+            # BEFORE EVERY POOL, not once before the loop (REV-20260802-029).
+            # ZFS is atomic within a pool and there is no way to be atomic across
+            # them, so a multi-pool job is N separate commands -- and a slow or
+            # blocked first one can eat the whole window. Checking once certified a
+            # boundary that the second pool never had.
+            if ! quiesce_still_frozen "pool '$quiesce_pool'"; then
+                log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above)"
+                # The only degrade point outside the library, because this is the
+                # only refusal decided here rather than there. The gate is given the
+                # recursive flag because pools snapshotted earlier in THIS loop do
+                # exist and have to go before anything crash-consistent is taken --
+                # REV-20260802-030's rule that the SET is what downstream reads.
+                quiesce_degrade_gate "$quiesce_recursive_flag" "the freeze was already gone at the boundary before pool '$quiesce_pool'" && break
+                quiesce_abandon_set "$quiesce_recursive_flag" 3
+            fi
+            # Unquoted on purpose: the value is the space-separated list built above,
+            # and each name has to reach zfs as its own argument.
+            # shellcheck disable=SC2086
+            if ! zfs snapshot $quiesce_recursive_flag ${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]}; then
+                log 0 "Quiesce: the atomic snapshot of pool '$quiesce_pool' failed"
+                quiesce_snap_failed=1
+                break
+            fi
+            # Recorded only after zfs says it made them, so the ledger can never
+            # name something that does not exist.
+            # shellcheck disable=SC2206
+            QUIESCE_CREATED+=(${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]})
+        done
+    fi
 
-    if [ $quiesce_snap_failed -eq 0 ]; then
+    if [ "$QUIESCE_DEGRADED" -eq 1 ]; then
+        # ONE coherent set, which is why nothing is kept from the attempt above:
+        # the gate proved that everything created inside the window is gone and
+        # nothing is frozen, so the ordinary loop below now takes the WHOLE set
+        # again -- every dataset, none of them quiesced, all of them saying so in
+        # their names. No run ever mixes plain and `_crash_` names.
+        SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
+        log 0 "Quiesce: continuing WITHOUT quiesce, as ',degrade' asked. This run's snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup."
+    elif [ $quiesce_snap_failed -eq 0 ]; then
         USE_EXISTING_SNAPSHOT=1
         # Separate from USE_EXISTING_SNAPSHOT because the snapshot-only branch in
         # process_dataset deliberately ignores that one -- see the comment there.
@@ -2464,6 +2502,15 @@ else
         exit 1
     else
         echo "All datasets processed successfully" >&2
+        # Reviewer contract condition 6: a real transfer error OUTRANKS the
+        # degradation, which is why this is decided last and only on the
+        # otherwise-clean path. Returning non-zero before the transfer would
+        # have kept the snapshot on the source and lost the very thing
+        # `,degrade` exists to preserve -- the durable copy on the far side.
+        if [ "${QUIESCE_DEGRADED:-0}" -eq 1 ]; then
+            log 0 "Quiesce: the transfer completed, but this run was DEGRADED -- the snapshots it shipped are crash-consistent, not application-consistent, and are named '${SNAP_MESSAGE}${RUN_SUFFIX}'. Exiting 8 so this is reported rather than filed as a clean backup."
+            exit 8
+        fi
         exit 0
     fi
 fi

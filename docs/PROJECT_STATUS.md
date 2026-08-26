@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7a67f08ce986a239 -->
+<!-- status-covers-digest: 1d75715277ecf9a4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1658,20 +1658,76 @@
   sama rodzine z ROZNYM `keep`. Dedup dziala, odmowa nie — a faza 2 czyni to
   pilnym, bo beda dwa profile na jednym hoscie.
 
-- **Zapisane do zrobienia po etapie profili: degradacja nieudanego quiesce**
-  (`docs/design/quiesce-degrade.md`). Dzis nieudany freeze oznacza BRAK
-  snapshotu (`exit 5`, REV-20260730-006) — co dla `_hourly` kosztuje 1 z 24,
-  ale dla `_daily` kosztuje trwaly artefakt, po ktory ten tier istnieje, a dla
-  `_monthly` nikt tego nawet nie zglosi, bo monitor zdjeto 2026-07-22. Tamta
-  decyzja dotyczyla **klamstwa** (crash-consistent raportowany jako sukces), nie
-  wartosci snapshotu — wiec odpowiedzia nie jest powrot do fail-open, tylko
-  degradacja JAWNA: `quiesce = <tryb>[,degrade]`, snapshot o odroznialnej
-  nazwie, alert i wczesniejsza zgoda operatora. **Wymaga zmiany w zamrozonym
-  silniku, wiec nie tutaj.** Profile sa jednak przygotowane pod te late:
-  `quiesce` zostaje **per TIER** (produkcja pve1 juz tak dziala — `hourly` bez
-  quiesce, `daily`/`weekly`/`monthly` z `auto`), a ksztalt profilu, ktory
-  splaszczylby to do jednej wartosci, wykluczylby zarowno te late, jak i opis
-  obecnej produkcji.
+- **DEGRADACJA NIEUDANEGO QUIESCE — ZROBIONA (2026-08-26).**
+  `docs/design/quiesce-degrade.md` opisuje teraz stan zbudowany, nie plan.
+
+  **Co to naprawia, zmierzone:** w labie pve9/pve1/pve2 (2026-08-25) profil
+  `prod` wyprodukowal ZERO snapshotow dla trzech z czterech tierow, bo konto
+  delegowane nie moglo dosiegnac goscia, a kazdy tier proszacy o `-q` odmawia
+  zamiast zrobic snapshot. Dla `_hourly` to jeden interwal z dwudziestu czterech.
+  Dla `_daily`, `_weekly` i `_monthly` to trwaly artefakt, po ktory ten tier
+  istnieje.
+
+  **Co się zmienilo:** pole `quiesce` przyjmuje opcjonalny kwalifikator
+  `,degrade` — per tier, zadeklarowany z gory. **Bez niego nie zmienilo sie
+  nic**: kazda dotychczasowa odmowa zachowuje sie dokladnie tak jak wczesniej,
+  i to jest asercja, na ktora suita wydaje najwiecej linii (ta sama awaria
+  z kwalifikatorem i bez, w kazdym miejscu odmowy, lokalnie i zdalnie).
+  Z nim: nieudany quiesce najpierw **wycofuje** wszystko, co ten przebieg
+  zdazyl utworzyc, i **rozmraza** wszystko, co zamrozil — i dopiero z tak
+  udowodnionego czystego stanu bierze CALY zestaw ponownie jako
+  `automated_daily_crash_<stamp>`, przesyla go normalnie, weryfikuje ladowanie
+  i konczy sie **rc 8**, wiec notifier crona to zglasza.
+
+  **Czego `,degrade` NIE usprawiedliwia** (fatalne z kwalifikatorem tak samo jak
+  bez): nieudany thaw, zastany cudzy freeze, oraz rollback, ktory nie zdolal
+  usunac snapshotow tego przebiegu. Osobno fatalny zostaje tryb, ktory nigdy nie
+  pasuje do goscia (`agent` na kontenerze, `sync` na VM) — to blad konfiguracji,
+  ktory sam sie nie naprawi, a degradowanie go mowiloby operatorowi, ze jego
+  goscie sa quiesced tak dlugo, jak dlugo ten config przetrwa.
+
+  **Nazwa jest stala i niekonfigurowalna**, budowana jednym helperem dla PUSH
+  i PULL. Znacznik `_crash_` stoi miedzy rodzina a znacznikiem czasu, i obie
+  polowy tego zdania sa nosne: `delsnaps.sh` dopasowuje rodzine PREFIKSOWO
+  (wiec retencja dalej ja przycina), a porzadkuje po `zfs list -s creation`
+  (wiec wstawka niczego nie przestawia). `check-snap-age.sh` z tego samego
+  powodu zostaje ZIELONY — to swiadomy podzial pracy, nie dziura: monitor wieku
+  odpowiada na pytanie „czy jest swiezy snapshot", a to, ze jest
+  crash-consistent, raportuje status przebiegu i mail. Monitor zglaszalby to
+  co 15 minut przez cale zycie snapshotu, czyli powodz, ktora ten estate juz raz
+  zmierzyl i usunal.
+
+  **`prod.conf`**: `auto,degrade` na daily/weekly/monthly; `hourly` dalej bez
+  quiesce w ogole, bo godzinny freeze zatrzymywalby kazdego goscia 24 razy
+  dziennie, a strata jednego interwalu z dwudziestu czterech nie jest tym, po co
+  to powstalo.
+
+  **`settings.ini` hosta** podaje `quiesce` WYLACZNIE wtedy, gdy tier nie podal
+  zadnego. Nie moze rozszerzyc wartosci jawnej: tier, ktory mowi `auto`, dalej
+  znaczy fail-closed `auto`. `settings_get` przeniesione z `zfs-backup.sh` do
+  `lib-cron.sh` — jedyny plik, ktory `zfs-backup.sh` i `gen-cron.sh` i tak oba
+  laduja, wiec nie moga sie roznic co do tego, co powiedzial host.
+
+  **Zdalna polowa nie wymagala ANI JEDNEJ linii zmiany** w skrypcie wysylanym
+  przez ssh, i to jest najwazniejsza rzecz do zapamietania z tej laty. Pierwsze
+  podejscie wstawilo wywolanie bramki do tamtego heredoca — czyta sie jak kod
+  lokalny, a nie jest nim; po tamtej stronie nie istnieje zadna funkcja
+  z biblioteki, wiec zdalny quiesce przestalby dzialac przy pierwszym uzyciu.
+  Wycofane przed wyslaniem. Okazalo sie, ze kontrakt kodow wyjscia tamtego
+  skryptu JUZ rozroznia stany, o ktore chodzi, i to strukturalnie: `3` to
+  odmowa przed zamrozeniem czegokolwiek, `5` to awaria z czystym rollbackiem
+  i thaw (bo porazka ktoregokolwiek z nich zamienia `5` na `7` albo `6`).
+  Wiec cala decyzja to mapowanie rc po stronie lokalnej.
+
+  **Dowody:** `test/quiesce` +53 asercje (tabela gramatyki z obiema polowami,
+  bramka z trzema kontrolami mutacyjnymi, wszystkie siedem zdalnych kodow
+  w obu kierunkach); `test/runsuffix` — zgodnosc nazwy PUSH/PULL z kontrola
+  negatywna; `test/run.sh` — fallback z `settings.ini` plus kontrola, ze NIE
+  rozszerza jawnego `auto`; nowy golden `quiesce-degrade` i cztery przypadki
+  negatywne w `gen-cron.sh`.
+  **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
+  zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
+  nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
 
 - **ETAP PROFILI, faza 2: JEDEN PLIK NATYWNY + profil `prod` odwzorowujacy
   produkcje (2026-08-25).**

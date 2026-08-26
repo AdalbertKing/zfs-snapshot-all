@@ -911,7 +911,7 @@ create_snapshot() {
     local dataset="$1"
     local remote_user="$2"
     local remote_host="$3"
-    local snapshot_name="${dataset}@${MESSAGE}${RUN_SUFFIX}"
+    local snapshot_name="${dataset}@${SNAP_MESSAGE}${RUN_SUFFIX}"
     local recursive_flag=""
     [ $RECURSIVE -eq 1 ] && recursive_flag="-r"
 
@@ -1996,10 +1996,13 @@ if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
     log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
 
-case "$QUIESCE" in
-    no|agent|sync|auto) ;;
-    *) echo "Error: -q '$QUIESCE' -- expected no, agent, sync or auto." >&2; exit 1 ;;
-esac
+# `-q <mode>[,degrade]`. The same parser snapsend.sh uses, so the qualifier
+# cannot come to mean two things depending on which direction a relationship
+# runs; it prints its own message on `no,degrade`, on a misspelled qualifier and
+# on a repeated one. QUIESCE afterwards holds the BARE mode, which is what the
+# remote script's own `case "$mode/$kind"` expects to receive over ssh.
+quiesce_parse_mode "$QUIESCE" || exit 1
+QUIESCE="$QUIESCE_MODE"
 case "$QUIESCE_DEADMAN" in
     ''|*[!0-9]*) echo "Error: -Q '$QUIESCE_DEADMAN' -- expected a positive integer (seconds before the remote deadman thaws unconditionally)." >&2; exit 1 ;;
     *) [ "$QUIESCE_DEADMAN" -ge 10 ] || { echo "Error: -Q '$QUIESCE_DEADMAN' -- must be at least 10 seconds; a deadman shorter than the freeze itself would thaw mid-window." >&2; exit 1; } ;;
@@ -2156,6 +2159,9 @@ LOCK_KEY=$(printf '%s\0%s\0%s' "$1" "${2:-}" "$IDENTIFIER" | md5sum | cut -d' ' 
 # point in time. Under plain flat the snapshots are still taken one after
 # another. Restore must report which of the three guarantees applies.
 RUN_SUFFIX="$(date '+%Y-%m-%d_%H-%M-%S')"
+# The prefix this run WRITES, which is not always the family it MATCHES -- see
+# the identical note in snapsend.sh. They differ only for a degraded quiesce.
+SNAP_MESSAGE="$MESSAGE"
 LOCKDIR="${LOCKDIR:-$ZFS_SNAP_DEFAULT_LOCKDIR}"
 [ -d "$LOCKDIR" ] && [ -w "$LOCKDIR" ] || { echo "Error: LOCKDIR '$LOCKDIR' is not a writable directory (create it or point LOCKDIR at one, e.g. LOCKDIR=~/run for a non-root run)." >&2; exit 1; }
 LOCKFILE="$LOCKDIR/$(basename "$0").${LOCK_KEY}.lock"
@@ -2349,7 +2355,14 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         log 0 "Quiesce: -q needs a REMOTE source (the guest has to be frozen where it runs). For a local source use snapsend.sh -q."
         exit 1
     fi
-    quiesce_suffix="$(date '+%Y-%m-%d_%H-%M-%S')"
+    # RUN_SUFFIX, not a second date(1) call. The note above its definition has
+    # always said the quiesce path consumes that value; snapsend.sh did and this
+    # did not, so a pull run's quiesced snapshots carried a timestamp seconds
+    # away from everything else the same run produced -- correlatable only by
+    # eye. Harmless while nothing compared them; not harmless now that a
+    # degraded pull falls through to create_snapshot(), which uses RUN_SUFFIX,
+    # and PUSH and PULL are required to produce the same name.
+    quiesce_suffix="$RUN_SUFFIX"
     declare -a QSCOPE=() QSNAPS=()
     for src_path in "${DATASETS[@]}"; do
         # Under -r the guests live in the CHILDREN of the named parent, so the
@@ -2365,7 +2378,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         else
             QSCOPE+=("$src_path")
         fi
-        QSNAPS+=("${src_path}@${MESSAGE}${quiesce_suffix}")
+        QSNAPS+=("${src_path}@${SNAP_MESSAGE}${quiesce_suffix}")
     done
     quiesce_rflag=""
     [ $RECURSIVE -eq 1 ] && quiesce_rflag="-r"
@@ -2375,6 +2388,14 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     case $? in
         0) USE_EXISTING_SNAPSHOT=1
            QUIESCE_SNAPPED=1 ;;
+        8) # `,degrade`, and only from the two remote codes that prove the source
+           # host is back in the state it was in before we asked -- see the
+           # reasoning in quiesce_remote_run. USE_EXISTING_SNAPSHOT stays 0, so
+           # the ordinary loop below creates the whole set again over ssh,
+           # unquiesced, through create_snapshot() -- which uses RUN_SUFFIX, the
+           # same suffix the push path uses, under the same crash marker.
+           SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
+           log 0 "Quiesce: continuing WITHOUT quiesce, as ',degrade' asked. This run's source snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup." ;;
         *) # Same refusal as the local path: someone who asked for -q must
            # never silently receive a crash-consistent snapshot instead.
            log 0 "Quiesce: refusing to continue with unquiesced snapshots"
@@ -2435,6 +2456,13 @@ else
         exit 1
     else
         echo "All datasets processed successfully" >&2
+        # Reviewer contract condition 6, identical to snapsend.sh: a real
+        # transfer error OUTRANKS the degradation, so this is decided last and
+        # only on the otherwise-clean path.
+        if [ "${QUIESCE_DEGRADED:-0}" -eq 1 ]; then
+            log 0 "Quiesce: the transfer completed, but this run was DEGRADED -- the snapshots it pulled are crash-consistent, not application-consistent, and are named '${SNAP_MESSAGE}${RUN_SUFFIX}'. Exiting 8 so this is reported rather than filed as a clean backup."
+            exit 8
+        fi
         exit 0
     fi
 fi

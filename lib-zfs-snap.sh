@@ -1862,6 +1862,7 @@ quiesce_init() {   # <mode>
     [ -n "$QUIESCE_VIA" ] && return 0
     if [ "$(id -u)" = "0" ]; then
         if ! qm list >/dev/null 2>&1 && ! pct list >/dev/null 2>&1; then
+            quiesce_degrade_gate "" "neither qm nor pct works on this host" && return 1
             log 0 "Quiesce: running as root but neither qm nor pct works here -- is this a Proxmox host? Refusing to take a snapshot that would silently be crash-consistent."
             exit 3
         fi
@@ -1873,6 +1874,10 @@ quiesce_init() {   # <mode>
         log 2 "Quiesce: reaching guests through $QUIESCE_HELPER (this account is not root)"
         return 0
     fi
+    # THE MEASURED CASE (pve9/pve1/pve2, 2026-08-25). A delegated account without
+    # the quiesce helper reaches exactly here, and every tier that asked for -q
+    # then produced nothing at all -- daily, weekly and monthly included.
+    quiesce_degrade_gate "" "this account cannot reach the guests (not root, and no usable $QUIESCE_HELPER)" && return 1
     log 0 "Quiesce: this account is not root and cannot use $QUIESCE_HELPER through sudo, so it cannot freeze anything. Refusing rather than taking an unquiesced snapshot. Grant it with: deploy.sh --backup-user=$(id -un) --datasets=\"...\" --allow-quiesce"
     exit 3
 }
@@ -1973,6 +1978,7 @@ quiesce_prepare() {
     # be read now is a specific refusal -- most likely one that is outside this
     # account's quiesce whitelist -- and not a reason to snapshot it unfrozen.
     if ! line=$(quiesce_guest_status "$id"); then
+        quiesce_degrade_gate "" "the state of guest $id could not be read via ${QUIESCE_VIA:-direct}" && return 1
         log 0 "Quiesce: could not determine the state of guest $id via ${QUIESCE_VIA:-direct}. If this account is delegated, that guest is probably outside its quiesce whitelist -- add its dataset to deploy.sh --datasets. Refusing rather than taking an unquiesced snapshot."
         exit 3
     fi
@@ -1987,6 +1993,12 @@ quiesce_prepare() {
     # it is a refusal like any other. Beyond the letter of REV-20260801-023,
     # which is about running QEMU guests -- but it is the same rule, and leaving
     # two known silent downgrades behind while fixing four would be pointless.
+    # NOT degradable, deliberately, and neither is the "already frozen" case
+    # below. `,degrade` answers "the freeze did not happen THIS TIME" -- an
+    # environment fact that changes. A mode that cannot ever fit this guest is a
+    # config error that will never fix itself, and degrading it would mean the
+    # operator is told their guests are quiesced for as long as the config
+    # survives. `auto` is the field value that never lands here.
     case "$mode/$kind" in
         agent/lxc)  log 0 "Quiesce: guest $id is a container, which has no qemu-guest-agent, so 'quiesce=agent' would freeze nothing at all. Refusing rather than taking a snapshot that is not what was asked for -- use quiesce=sync or auto."; exit 3 ;;
         sync/qemu)  log 0 "Quiesce: guest $id is a VM; sync-in-guest is the container fallback and does nothing here, so 'quiesce=sync' would freeze nothing at all. Refusing rather than taking a snapshot that is not what was asked for -- use quiesce=agent or auto."; exit 3 ;;
@@ -1997,9 +2009,14 @@ quiesce_prepare() {
             # A freeze this run does not own is not this run's quiesce. We cannot
             # prove where its application boundary is, and we deliberately will
             # not thaw it -- so there is nothing here to report as success.
+            # Reviewer contract, 2026-08-26: a foreign freeze stays a fatal
+            # refusal with or without `,degrade`. Somebody else's window is not
+            # ours to end, and we cannot say what application state it holds.
             case "$frozen" in
                 yes) log 0 "Quiesce: guest $id was ALREADY frozen before this run started. This run does not own that freeze, cannot say what application state it captured, and will not thaw someone else's. Refusing. Investigate the guest -- most likely a previous run died between freeze and thaw -- and thaw it with 'qm guest cmd $id fsfreeze-thaw' once you know why."; exit 3 ;;
-                unknown) log 0 "Quiesce: could not read fsfreeze-status for running VM $id (agent missing, disabled or busy), so whether a freeze would take is unknown. Refusing rather than taking a snapshot that may be crash-consistent while the log calls it quiesced."; exit 3 ;;
+                unknown)
+                    quiesce_degrade_gate "" "fsfreeze-status is unreadable for running VM $id (agent missing, disabled or busy)" && return 1
+                    log 0 "Quiesce: could not read fsfreeze-status for running VM $id (agent missing, disabled or busy), so whether a freeze would take is unknown. Refusing rather than taking a snapshot that may be crash-consistent while the log calls it quiesced."; exit 3 ;;
             esac
             # NOT frozen here. Deferred to quiesce_freeze_pending, which runs
             # immediately before the snapshot -- see the window note below.
@@ -2017,6 +2034,7 @@ quiesce_prepare() {
             if quiesce_do_freeze "$id" lxc; then
                 log 1 "Quiesce: flushed container $id (pct exec sync) -- ZFS cannot be frozen, so this is a flush, not a freeze"
             else
+                quiesce_degrade_gate "" "the flush of container $id failed" && return 1
                 log 0 "Quiesce: 'pct exec $id -- sync' failed, so the container's dirty pages were never pushed into ZFS. Refusing rather than reporting a quiesced backup that had no quiesce."
                 exit 3
             fi
@@ -2076,6 +2094,9 @@ quiesce_freeze_pending() {
             QUIESCE_FROZEN+=("qemu:$id")
             log 1 "Quiesce: froze VM $id via qemu-guest-agent"
         else
+            # Guests frozen earlier in this same loop are still frozen here, so
+            # the gate thaws before it agrees to anything.
+            quiesce_degrade_gate "" "VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy)" && return 1
             log 0 "Quiesce: VM $id did not respond to fsfreeze-freeze (agent missing, disabled or busy). Refusing -- -q asked for a frozen snapshot and this would not be one."
             exit 3
         fi
@@ -2192,6 +2213,145 @@ quiesce_destroy_created() {   # <recursive flag, "" or -r>
 #
 # Thaw happens either way and last: a guest left frozen is an outage, and it
 # must not depend on whether the cleanup worked.
+# ------------------------------------------------------------------------------
+# DEGRADE -- the operator's standing answer to "the freeze did not happen"
+#
+# `-q <mode>` is fail-closed by design and stays that way: a caller who asked for
+# application consistency and silently received crash consistency is worse off
+# than one whose job failed loudly, because only the second one finds out
+# (REV-20260730-006 section 2). Everything above enforces that.
+#
+# What that costs was MEASURED, not imagined. On pve9/pve1/pve2 (2026-08-25) the
+# `prod` profile produced NOTHING for three of its four tiers, because a
+# delegated account could not reach the guests and every tier that asks for -q
+# refuses rather than snapshot. For an hourly tier that is one interval out of
+# twenty-four. For daily, weekly and monthly it is the durable artifact -- the
+# copy that was supposed to still be there next week, next month, next year.
+#
+# `,degrade` is the operator saying BEFOREHAND, per tier: if you cannot give me
+# application consistency, give me crash consistency AND SAY SO. The saying-so is
+# the whole difference between this and the silent fallback the engine has always
+# refused. It is said three ways, and all three are required:
+#
+#   1. the snapshot NAME carries `_crash_`, so the fact survives the run, the
+#      log, the host it was taken on, and the six months before anyone reads it;
+#   2. the run exits 8, not 0, so cron's notifier fires;
+#   3. the log says which quiesce failed and why.
+#
+# WHAT `,degrade` DOES NOT EXCUSE:
+#   * a THAW that did not take -- a guest left frozen is an outage, and an outage
+#     is not improved by taking a snapshot afterwards;
+#   * a foreign freeze found already in place -- somebody else's window is not
+#     ours to end;
+#   * a ROLLBACK that could not remove this run's own snapshots -- degrading on
+#     top of a half-finished quiesced set would leave two overlapping answers to
+#     "what is the current tier snapshot", which is REV-20260802-030 again.
+# Each of those stays fatal, with or without the qualifier.
+QUIESCE_DEGRADE="${QUIESCE_DEGRADE:-0}"
+QUIESCE_DEGRADED=0
+
+# The ONE parser, so `-q` means the same thing in snapsend.sh and snapget.sh.
+# Sets QUIESCE_MODE (the bare mode every function below expects) and
+# QUIESCE_DEGRADE. Prints its own message and returns 1 on anything it does not
+# accept -- a qualifier that is quietly ignored is a promise quietly dropped.
+quiesce_parse_mode() {   # <raw -q value>
+    # TWO statements on purpose. `local raw="$1" mode="$raw"` does NOT work:
+    # bash expands every word on the line before the builtin assigns any of
+    # them, so `mode` would come out EMPTY and every bare mode -- `auto`, the
+    # one production uses -- would be rejected as unknown. Measured here, not
+    # reasoned about, because it fails silently in the safe-looking direction.
+    local raw="$1" deg=0 rest mode
+    mode="$raw"
+    case "$raw" in
+        *,*)
+            mode="${raw%%,*}"
+            rest="${raw#*,}"
+            # Exactly one qualifier, spelled exactly one way. `,degrade,degrade`
+            # and `,Degrade` land here too, which is the point: a typo in the one
+            # field that decides fail-open against fail-closed must not be read
+            # as the safe half of itself.
+            case "$rest" in
+                degrade) deg=1 ;;
+                *) echo "Error: -q '$raw' -- ',$rest' is not a qualifier. The only one is ',degrade', and it may appear once: agent,degrade / sync,degrade / auto,degrade." >&2; return 1 ;;
+            esac ;;
+    esac
+    case "$mode" in
+        agent|sync|auto) ;;
+        no)
+            if [ "$deg" -eq 1 ]; then
+                echo "Error: -q 'no,degrade' -- ',degrade' says what to do when a freeze FAILS, and 'no' never freezes, so the pair asks for nothing. Either name the mode you want quiesced, or drop -q entirely." >&2
+                return 1
+            fi ;;
+        fs) echo "Error: -q fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host (measured). Use -q sync for containers, which flushes them instead." >&2; return 1 ;;
+        *) echo "Error: -q '$raw' -- expected no, agent, sync or auto, each optionally with ',degrade'." >&2; return 1 ;;
+    esac
+    QUIESCE_MODE="$mode"
+    QUIESCE_DEGRADE="$deg"
+    return 0
+}
+
+# The ONE name builder, so PUSH and PULL cannot drift. The marker goes between
+# the family and the timestamp -- `automated_daily_crash_2026-08-26_20-50-40` --
+# and that position is load-bearing in three places that were checked in the
+# frozen scripts rather than assumed:
+#
+#   * delsnaps.sh matches a family with a PREFIX comparison, so the degraded
+#     snapshot still belongs to `automated_daily` and is still pruned by that
+#     tier's retention;
+#   * delsnaps.sh orders candidates with `zfs list -s creation`, by creation
+#     time and not lexically, so an insert before the timestamp reorders nothing;
+#   * check-snap-age.sh uses the same prefix match, so the monitor still sees a
+#     fresh snapshot for the family and stays green.
+#
+# The last one is a DELIBERATE division of labour, not an oversight: the age
+# monitor answers "is there a recent snapshot" -- there is -- while the fact that
+# it is crash-consistent is reported by the run's own exit status and mail. An
+# age monitor that flagged it would re-report the same degradation every 15
+# minutes for the snapshot's whole life, which is the alert flood this estate
+# already measured once and removed.
+#
+# Fixed, not configurable: these snapshots travel between hosts (pvesr, and the
+# collector pulling from its sources), so a per-host name would mean different
+# things depending on where you were standing. The only reader is a human.
+quiesce_crash_message() {   # <message prefix> -> the prefix with the crash marker
+    local m="$1"
+    while [ "${m%_}" != "$m" ]; do m="${m%_}"; done
+    [ -n "$m" ] || { printf '%s' 'crash_'; return 0; }
+    printf '%s' "${m}_crash_"
+}
+
+# Called at every point the local path would otherwise refuse. Returns 0 only
+# when the run is left in a state a crash-consistent set may safely be taken
+# from: nothing of this run's own still on disk, and nothing still frozen.
+#
+# Returning 1 means the caller must do exactly what it did before -- refuse.
+quiesce_degrade_gate() {   # <recursive flag> <reason> -> 0 = the caller must degrade
+    local rflag="$1" reason="$2" ok=1 s
+    [ "${QUIESCE_DEGRADE:-0}" -eq 1 ] || return 1
+
+    # Roll back first. Anything this run created was made inside a freeze that
+    # has now failed somewhere, so it belongs to a set that will never be
+    # completed -- the same reasoning quiesce_abandon_set exists for. The only
+    # difference is that this one does not exit.
+    if ! quiesce_destroy_created "$rflag"; then
+        ok=0
+        log 0 "Quiesce: cannot degrade -- ROLLBACK INCOMPLETE. These snapshots were created by this run and could NOT be removed, and a crash-consistent set on top of a half-finished quiesced one would leave two overlapping answers to what the current tier snapshot is:"
+        for s in "${QUIESCE_CREATED[@]}"; do
+            log 0 "Quiesce:   $s   (remove with: zfs destroy $rflag $s)"
+        done
+    fi
+    # Thaw ALWAYS, and before deciding anything: a guest left frozen is an
+    # outage, and it must not depend on whether the cleanup worked.
+    quiesce_thaw_all || ok=0
+    if [ "$ok" -ne 1 ]; then
+        log 0 "Quiesce: NOT degrading despite ',degrade' -- this run left state behind (named above), and ',degrade' covers a failed freeze, never a failed cleanup. Refusing, exactly as it would without the qualifier."
+        return 1
+    fi
+    QUIESCE_DEGRADED=1
+    log 0 "Quiesce: $reason -- DEGRADING, as this job asked with ',degrade': nothing is frozen, nothing of this run is left on disk, and the snapshots about to be taken will be crash-consistent, with '_crash_' in their names and a non-zero exit status."
+    return 0
+}
+
 quiesce_abandon_set() {   # <recursive flag> <exit code when the rollback is clean>
     local rflag="$1" rc="${2:-3}" s
     if quiesce_destroy_created "$rflag"; then
@@ -2785,6 +2945,38 @@ quiesce_remote_run() {
             *)       log 2 "Quiesce[$host]: $line" ;;
         esac
     done <<< "$out"
+    # DEGRADE over ssh. The remote script is shipped and run by `bash -s`, so no
+    # function defined in this file exists over there and nothing can be called
+    # across the boundary -- the only thing that crosses it is an exit code. That
+    # turns out to be enough, because the remote script's existing contract
+    # ALREADY distinguishes the states that matter, and it does so structurally:
+    #
+    #   rc 3  refused before freezing anything (no privilege, no setsid, deadman
+    #         not armed). Nothing was frozen, nothing was created. This is the
+    #         code the measured pve9/pve1/pve2 failure returned.
+    #   rc 5  quiesce failed after that point -- but abandon_set has removed
+    #         every snapshot this run created and the EXIT trap has thawed every
+    #         guest it froze, because a failure in EITHER of those turns the code
+    #         into 7 or 6 respectively instead of reaching us as 5.
+    #
+    # So 3 and 5 both mean "the source host is in the state it was in before we
+    # asked", which is exactly the precondition for a crash-consistent set.
+    # Everything else is deliberately NOT degradable:
+    #   rc 4  `zfs snapshot` itself failed -- the crash snapshot would use the
+    #         same command on the same pool, so degrading would just fail again;
+    #   rc 6  a guest is still frozen -- an outage, and reviewer contract
+    #         condition 3 keeps it fatal;
+    #   rc 7  the rollback left snapshots behind -- condition 4;
+    #   other ssh or the far side broke, which is a link failure and must not be
+    #         reported as a quiesce policy decision.
+    if [ "${QUIESCE_DEGRADE:-0}" -eq 1 ]; then
+        case "$rc" in
+            3|5)
+                QUIESCE_DEGRADED=1
+                log 0 "Quiesce: $host could not quiesce (reason above) -- DEGRADING, as this job asked with ',degrade'. The source host is unchanged: nothing is frozen there and no snapshot of this run remains, so the set about to be taken will be crash-consistent, named with '_crash_', and reported with a non-zero exit status."
+                return 8 ;;
+        esac
+    fi
     case "$rc" in
         0) return 0 ;;
         3) log 0 "Quiesce: $host cannot run remote quiesce safely (see the reason above) -- nothing was frozen. Either re-pair with --as=root, or on that host run: deploy.sh --join <package> --allow-quiesce."; return 3 ;;

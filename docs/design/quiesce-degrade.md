@@ -1,9 +1,10 @@
 # Quiesce that fails: no snapshot, or a labelled crash-consistent one?
 
-Owner question, 2026-08-25, during the profile stage. Recorded now, implemented
-later: the engine change this needs is deliberately **not** part of the profile
-work, but the profile grammar is being shaped so the patch drops in without
-rewriting any profile.
+Owner question, 2026-08-25, during the profile stage. **BUILT 2026-08-26**,
+after a pre-review of the frozen engines authorised it (PR #165, marker
+`authorizes-frozen: lib-zfs-snap.sh snapsend.sh snapget.sh`). The sections below
+are kept in the order they were written -- the measurement, the hole, the shape
+-- and the last section says what was actually built and what it cost.
 
 ## What happens today, measured
 
@@ -88,34 +89,145 @@ This is also the first concrete content anyone has found for a host-level
 defaults file. Until now the argument against building one was that it would
 hold nothing; that argument no longer applies to this field.
 
-## Why it is not being implemented now
+## As built
 
-`-q` has three modes (`agent`, `sync`, `auto`) and a hard `exit 5`, and the
-engines are FROZEN. A fourth mode is a contract change: an entry in
-`docs/project/ENGINE-FREEZE.md`, a review **before** implementation, and
-`--refreeze`. It also changes what an operator gets at restore time, which is
-not something to fold into a profile commit.
+### The grammar
 
-## What the profile work must do now, so the patch drops in later
+`quiesce = <mode>[,degrade]`, exactly the spelling reserved above. One parser,
+`quiesce_parse_mode` in `lib-zfs-snap.sh`, used by both engines -- so `-q` cannot
+come to mean two things depending on which direction a relationship runs. It
+refuses `no,degrade` (a policy about a freeze that never happens), a misspelled
+qualifier and a repeated one. `gen-cron.sh`'s `lint_quiesce` splits the same
+grammar at config time, so a config that renders cleanly cannot fail at run time
+on this field, and `sync,degrade` on a pull is still refused for the reason bare
+`sync` is.
 
-1. **`quiesce` stays per TIER.** Already true and measured: production pve1 runs
-   `hourly` with no quiesce and `daily`/`weekly`/`monthly` with `quiesce = auto`.
-   Any profile shape that collapses quiesce to one per-profile value (as the
-   reviewer's `[data] quiesce = none` sketch does) makes this patch impossible
-   to express and cannot describe production either.
-2. **The spelling is reserved here**, so nobody invents a competing one:
-   `quiesce = <mode>[,degrade]`, extending the existing field rather than adding
-   a second one. A separate `quiesce_fallback` field would let the two disagree.
-3. **No profile writes `degrade` yet** -- `lint_quiesce` accepts `no|agent|sync|
-   auto` and would refuse it. Writing it early would produce profiles that do
-   not render.
+### The name
 
-## Acceptance criteria for the future patch
+`automated_daily_crash_2026-08-26_20-50-40`. Fixed, not configurable, built by
+one helper (`quiesce_crash_message`) for both directions. The marker sits between
+the family and the timestamp, and both halves of that sentence are load-bearing.
+Checked in the frozen scripts rather than assumed:
 
-- a failed freeze under `degrade` produces a snapshot whose NAME says it is
-  crash-consistent, and an alert;
-- a failed freeze WITHOUT `degrade` still takes no snapshot and still exits 5 --
-  the discriminator for that must survive;
-- retention treats the degraded snapshot as belonging to its tier (a hole in the
-  ladder is what this exists to prevent);
-- restore names the difference where the operator can see it before choosing.
+| property | why it holds |
+|---|---|
+| retention still prunes it with its tier | `delsnaps.sh` matches a family by PREFIX, and `automated_daily_crash_...` still starts with `automated_daily` |
+| "keep the newest N" is not reordered | `delsnaps.sh` orders candidates with `zfs list -s creation`, by time and not lexically |
+| the age monitor stays green | `check-snap-age.sh` uses the same prefix match |
+
+The third row looks like a hole and is a deliberate division of labour. The age
+monitor answers "is there a recent snapshot for this family" -- there is, and the
+green is correct. That it is crash-consistent is reported by the run's own exit
+status and mail. A monitor that flagged it would re-report the same degradation
+every 15 minutes for the snapshot's whole life, which is the alert flood this
+estate already measured once and removed.
+
+Fixed rather than configurable because these snapshots travel between hosts
+(pvesr, and the collector pulling from its sources), so a per-host name would
+mean different things depending on where you were standing. The only reader is a
+human.
+
+### What degrading does NOT excuse
+
+Three refusals stay fatal with the qualifier exactly as without it, and each is
+enforced rather than documented:
+
+- **a thaw that did not take** -- a guest left frozen is an outage, and an outage
+  is not improved by taking a snapshot afterwards;
+- **a foreign freeze found already in place** -- somebody else's window is not
+  ours to end, and we cannot say what application state it holds;
+- **a rollback that could not remove this run's own snapshots** -- a
+  crash-consistent set on top of a half-finished quiesced one leaves two
+  overlapping answers to "what is the current tier snapshot", which is
+  REV-20260802-030 again.
+
+Two further refusals stay fatal for a different reason: a mode that can never fit
+the guest (`agent` on a container, `sync` on a VM) is a config error that will
+never fix itself, and degrading it would tell the operator their guests are
+quiesced for as long as the config survives. `,degrade` answers "the freeze did
+not happen THIS TIME".
+
+### One coherent set
+
+`quiesce_degrade_gate` rolls back everything this run created inside the window
+and thaws everything it froze BEFORE it agrees to anything. Only then does the
+ordinary, unquiesced path take the whole set again under the marked name. No run
+ever mixes plain and `_crash_` names; that is why the gate returns a decision
+rather than the engines patching a name onto a partial set.
+
+### The remote half
+
+`snapget.sh` freezes on the SOURCE, and the code that does it is shipped over ssh
+and run by `bash -s` -- so no function in `lib-zfs-snap.sh` exists on the far
+side, and nothing can be called across the boundary. The only thing that crosses
+is an exit code.
+
+That turned out to be enough, because the remote script's existing contract
+already distinguishes the states that matter, and does so structurally:
+
+| remote rc | means | degradable |
+|---|---|---|
+| 3 | refused before freezing anything (no privilege, no `setsid`, deadman not armed) | **yes** |
+| 5 | quiesce failed, rollback and thaw both clean -- a failure in either turns this into 7 or 6 instead | **yes** |
+| 4 | `zfs snapshot` itself failed | no: the crash snapshot uses the same command |
+| 6 | a guest is still frozen | no: an outage |
+| 7 | the rollback left snapshots behind | no |
+| other | ssh or the far side broke | no: a link failure is not a quiesce policy decision |
+
+rc 3 is the case that was measured on pve9/pve1/pve2, 2026-08-25.
+
+**No line of the shipped remote script changed.** The first attempt at this patch
+did edit it -- a `quiesce_degrade_gate` call was placed at what looked like a
+local failure site and was in fact inside the heredoc -- which would have called
+an undefined function on the far host and broken remote quiesce outright. Written
+down because the file gives no visual warning at that boundary.
+
+### The status
+
+A successful degradation exits **8**, decided last and only on the otherwise
+clean path: a real transfer error outranks it. Returning non-zero BEFORE the
+transfer would keep the snapshot on the source and lose the very thing
+`,degrade` exists to preserve -- the durable copy on the far side.
+
+### Where the decision lives, as built
+
+`prod.conf` carries `quiesce = auto,degrade` on daily, weekly and monthly;
+hourly still has no quiesce at all, because an hourly freeze would stall every
+guest 24 times a day and losing one interval of twenty-four is not what this is
+for.
+
+The host `settings.ini` supplies `quiesce` ONLY when the tier named none. It
+cannot widen an explicit value: a tier that says `auto` keeps meaning
+fail-closed `auto`, and no host default turns it into `auto,degrade`.
+`settings_get` moved from `zfs-backup.sh` to `lib-cron.sh` for this -- the one
+file both `zfs-backup.sh` and `gen-cron.sh` already source, so the two cannot
+disagree about what a host said.
+
+## Acceptance criteria, answered
+
+- **a failed freeze under `degrade` produces a snapshot whose NAME says it is
+  crash-consistent, and an alert** -- met. The name is built by
+  `quiesce_crash_message`; the alert is the existing cron notifier, fired by the
+  distinct exit status 8.
+- **a failed freeze WITHOUT `degrade` still takes no snapshot and still exits
+  non-zero -- the discriminator must survive** -- met, and it is the assertion
+  the suite spends the most lines on. `test/quiesce` runs the SAME failure with
+  and without the qualifier at every site, local and remote, and a mutation that
+  removes the opt-in check fails ten pre-existing fail-closed assertions.
+- **retention treats the degraded snapshot as belonging to its tier** -- met by
+  the prefix property above, and asserted as a property rather than as a string.
+- **restore names the difference where the operator can see it before choosing**
+  -- NOT met here, and deliberately: restore is not built yet. The literal
+  `*_crash_*` name is what the restore view will show, which is why the marker is
+  in the name rather than in a sidecar record.
+
+## What is proven, and how
+
+| claim | evidence |
+|---|---|
+| the grammar accepts and refuses the right values | `test/quiesce`, both halves of the table, including the bare modes -- the first version of the parser rejected `auto` because `local raw="$1" mode="$raw"` leaves `mode` empty, and only the positive control caught it |
+| the gate refuses without the opt-in | `test/quiesce`, with a mutation control |
+| a failed thaw and a failed rollback stay fatal WITH the opt-in | `test/quiesce`, each with a mutation control |
+| the remote mapping degrades 3 and 5 and nothing else | `test/quiesce`, all seven codes in both directions |
+| push and pull produce the SAME degraded name | `test/runsuffix`, driving both engines' own `create_snapshot`, with an unmarked negative control |
+| a degraded run transfers, lands and exits 8 | **LIVE ONLY.** No suite on this box has ZFS. See the run recorded in `docs/PROJECT_STATUS.md`. |
