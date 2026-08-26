@@ -79,23 +79,37 @@ why the colon form produced an ambiguity and this one cannot.
 - **The grant stays per relationship.** The list chooses scope within a
   relationship the operator already has a grant for; it never widens it.
 
-## One namespace per invocation — settled
+## Three forms, and what "both sides" means
 
-Reviewer, 2026-08-26, answering the question this section used to leave open:
+A "mutually exclusive" rule was written here on 2026-08-26 and **withdrawn the
+same day**. It was the reviewer tightening an approved UX rather than recording
+the owner's decision, and it made the third form below impossible to write. The
+owner's decision allows all three:
 
-- `--source LIST` and `--target LIST` are **mutually exclusive**;
-- every member of one invocation is named in ONE namespace — the collector's or
-  the restored host's;
-- a mixed spelling is not needed: once one side is chosen, the recorded mapping
-  computes the other;
-- the resolver must resolve the **whole** list before the preview. A missing
-  member, an ambiguous one, a duplicate input, or two members leading to the same
-  target is a refusal **with no mutation whatsoever**;
-- only a complete, unambiguous plan reaches one preview and one confirmation.
+- `--source LIST` alone — the recorded mapping supplies the other side;
+- `--target LIST` alone — likewise;
+- **both, stated explicitly.**
 
-The mistake this removes is concrete: an operator naming two of a VM's disks as
-they exist on the collector and two as they exist on the host, and getting a plan
-that looks complete.
+Both sides is the operator being explicit about what the two sides ALREADY are.
+It is not remapping onto an arbitrary destination, and in this slice it cannot
+become that:
+
+- the two lists must have the **same length**;
+- they are read as **positional pairs**;
+- every pair must match the recorded relationship, and a mismatch is a refusal.
+
+Positional rather than set-wise, deliberately: writing the disks in a different
+order on the two sides says something the operator did not mean, and quietly
+sorting it out for them would hide the very mistake this form exists to let them
+state precisely.
+
+What still holds in every form: **the namespaces are not mixed WITHIN a list.**
+Each list is resolved in its own, so two of a VM's disks named on the collector
+and two on the host, in one list, cannot be written. And the whole thing resolves
+**before the preview** — a missing member, an ambiguity, a duplicate input, or
+two members leading to the same dataset is a refusal **with no mutation
+whatsoever**. Only a complete, unambiguous plan reaches one preview and one
+confirmation.
 
 ## As built
 

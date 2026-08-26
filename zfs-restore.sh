@@ -314,8 +314,13 @@ RESTORE_COPY_BASE_SNAP="" # the base snapshot on the COPY (full name), the incre
 RESTORE_SRC_BASE_SNAP=""  # the base snapshot on the SOURCE (full name), the rollback target
 RESTORE_SRC_BASE_TXG=""   # its createtxg -- the ONE order `zfs rollback` itself uses
 RESTORE_SET_STATE=unproven # ok once the complete newer-than-base set is proven
-restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows>
+restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot rows> [point label]
     local copy="$1" srcpath="$2" snaps="$3"
+    # $4 exists because the heading below used to state a POLICY, and under --at
+    # that policy is not the one in force. A preview that classifies the right
+    # snapshot under a caption naming a different rule is still telling the
+    # operator something untrue.
+    local point_label="${4:-domyslna polityka: NAJNOWSZY -> oryginalna sciezka}"
     RESTORE_STRATEGY=""; RESTORE_BASE_GUID=""; RESTORE_TARGET_SNAP=""
     RESTORE_TARGET_GUID=""; RESTORE_BLOCKERS=""; RESTORE_BLOCK_BOOKMARKS=""
     RESTORE_COPY_BASE_SNAP=""; RESTORE_SRC_BASE_SNAP=""; RESTORE_SRC_BASE_TXG=""
@@ -372,7 +377,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     latest="${tied%%	*}"
     latest_guid="${tied##*	}"
     RESTORE_TARGET_SNAP="${latest#*@}"; RESTORE_TARGET_GUID="$latest_guid"
-    echo "  Punkt docelowy (domyslna polityka: NAJNOWSZY -> oryginalna sciezka):"
+    echo "  Punkt docelowy ($point_label):"
     echo "    ${latest#*@}  guid=$latest_guid"
 
     if ! zfs list -H -o name "$srcpath" >/dev/null 2>&1; then
@@ -784,10 +789,12 @@ restore_resolve_fail() {   # <config> <label> <want> -> always dies
 # legal name. That is precisely the property `:` lacks -- a colon IS legal inside
 # a dataset name, which is what made `pve2:rpool/data` ambiguous.
 #
-# Reviewer contract, 2026-08-26: ONE NAMESPACE PER INVOCATION. `--source` and
-# `--target` are mutually exclusive, because the mistake this removes is an
-# operator naming two of a VM's disks on the collector and two on the host and
-# getting a plan that looks complete.
+# THE NAMESPACES ARE NOT MIXED WITHIN A LIST. Each list is resolved in its own,
+# so the mistake this removes -- two of a VM's disks named on the collector and
+# two on the host, in one list, with a plan that still looks complete -- cannot
+# be written. Naming BOTH lists is allowed and is something else entirely: the
+# operator stating explicitly what the two sides already are, checked pair by
+# pair against the record.
 #
 # And the whole list resolves BEFORE anything is shown, let alone done. A plan
 # that is right about three disks and silent about the fourth is not a plan.
@@ -846,8 +853,7 @@ restore_scope_resolve() {   # <config> <label> <namespace> <comma list>
         n="$(printf '%s\n' "$hits" | grep -c .)"
         [ "$n" -eq 1 ] || die "restore: '$member' matches $n datasets of relation '$label' in $config, and a recovery needs exactly one. Refusing rather than choosing; 'restore --plan' lists them."
 
-        src="${hits%%	*}"
-        copy="${hits##*	}"
+        IFS="$(printf '\t')" read -r src copy <<< "$hits"
         # Two DIFFERENT inputs that land on the same dataset -- possible because a
         # member may be named on either side and the mapping is not injective in
         # every config. Caught here rather than at execution, where the second
@@ -859,6 +865,39 @@ restore_scope_resolve() {   # <config> <label> <namespace> <comma list>
         done
         RESTORE_SCOPE_SRC+=("$src"); RESTORE_SCOPE_COPY+=("$copy")
     done
+    return 0
+}
+
+# BOTH sides named. Each list is resolved in its OWN namespace -- so the
+# namespaces are still not mixed WITHIN a list -- and then the two results are
+# compared position by position. Equal length, and pair i of one must be pair i
+# of the other.
+#
+# Positional, not set-wise, and that is deliberate: if the operator writes the
+# disks in a different order on the two sides they have said something they did
+# not mean, and quietly sorting it out for them would hide exactly the mistake
+# this form exists to let them state precisely.
+restore_scope_pair() {   # <config> <label> <source list> <target list>
+    local config="$1" label="$2" slist="$3" tlist="$4"
+    local -a p_src=() p_copy=()
+    local i n
+
+    restore_scope_resolve "$config" "$label" copy "$slist"
+    p_src=(${RESTORE_SCOPE_SRC[@]+"${RESTORE_SCOPE_SRC[@]}"})
+    p_copy=(${RESTORE_SCOPE_COPY[@]+"${RESTORE_SCOPE_COPY[@]}"})
+
+    restore_scope_resolve "$config" "$label" orig "$tlist"
+
+    n="${#p_src[@]}"
+    [ "$n" -eq "${#RESTORE_SCOPE_SRC[@]}" ] || die "restore: --source names $n dataset(s) and --target names ${#RESTORE_SCOPE_SRC[@]}. When both sides are given they are read as PAIRS, in order, so the two lists have to be the same length. Refusing rather than deciding which of them is the real scope."
+
+    for (( i=0; i<n; i++ )); do
+        if [ "${p_src[$i]}" != "${RESTORE_SCOPE_SRC[$i]}" ]; then
+            die "restore: pair $((i + 1)) does not match the recorded relationship. --source position $((i + 1)) belongs to '${p_src[$i]}', but --target position $((i + 1)) names '${RESTORE_SCOPE_SRC[$i]}'. Stating both sides says explicitly what they already ARE; it does not remap one onto the other. Either fix the order, or give one side and let the record supply the other."
+        fi
+    done
+    # Identical by the loop above, so either array is the answer; keep the one the
+    # single-sided path also leaves behind, so everything downstream reads one shape.
     return 0
 }
 
@@ -1639,23 +1678,28 @@ cmd_restore() {
         esac
         shift
     done
-    # ONE NAMESPACE PER INVOCATION (reviewer contract, 2026-08-26). The mistake
-    # this removes is an operator naming two of a VM's disks as they exist on the
-    # collector and two as they exist on the host, and getting a plan that looks
-    # complete. Once one side is chosen, the recorded mapping supplies the other.
+    # THREE forms, per the owner's decision: --source alone, --target alone, or
+    # BOTH stated explicitly. A short-lived "mutually exclusive" rule was written
+    # here on 2026-08-26 and withdrawn the same day -- it was the reviewer's
+    # tightening of an approved UX, not the owner's decision, and it made the
+    # explicit form impossible to write.
+    #
+    # What both-sides does NOT become is free remapping onto an arbitrary target:
+    # the pairs are POSITIONAL and every pair must match the recorded mapping.
+    # Saying both sides is the operator being explicit about what they already
+    # are, not asking for them to be changed.
     if [ -n "$at_raw" ] && [ -n "$snapshot" ]; then
         die "restore: --at and --snapshot both name a recovery point. --snapshot is one exact name for one dataset; --at is a time, resolved per dataset. Give one."
     fi
     [ -n "$at_raw" ] && at_epoch="$(restore_at_epoch "$at_raw")"
 
-    if [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then
-        die "restore: --source and --target are mutually exclusive. Name every dataset of this recovery in ONE namespace -- either as they exist on the collector (--source) or as they exist on the machine being restored (--target). Whichever you choose, the recorded relationship supplies the other side."
-    fi
-    if   [ -n "$scope_src" ]; then scope_ns=copy; scope_list="$scope_src"
-    elif [ -n "$scope_tgt" ]; then scope_ns=orig; scope_list="$scope_tgt"
+    local scope_any=0
+    if   [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then scope_any=1
+    elif [ -n "$scope_src" ]; then scope_any=1; scope_ns=copy; scope_list="$scope_src"
+    elif [ -n "$scope_tgt" ]; then scope_any=1; scope_ns=orig; scope_list="$scope_tgt"
     fi
 
-    if [ -n "$scope_list" ]; then
+    if [ "$scope_any" -eq 1 ]; then
         [ -n "$addr" ] || die "restore: --source/--target select datasets WITHIN a relationship, so the relationship has to be named too: restore <relation> --target <dataset>[,<dataset>...]"
         # The relationship name stands ALONE now. `label:dataset` said the same
         # thing a second way, and two ways to say one thing is how they come to
@@ -1668,7 +1712,11 @@ cmd_restore() {
         # THE WHOLE LIST, BEFORE ANYTHING IS SHOWN. A plan that is right about
         # three of a VM's disks and silent about the fourth is not a plan, and
         # this refuses without having touched anything.
-        restore_scope_resolve "$config" "$addr" "$scope_ns" "$scope_list"
+        if [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then
+            restore_scope_pair "$config" "$addr" "$scope_src" "$scope_tgt"
+        else
+            restore_scope_resolve "$config" "$addr" "$scope_ns" "$scope_list"
+        fi
         [ "${#RESTORE_SCOPE_SRC[@]}" -gt 0 ] || die "restore: the dataset list resolved to nothing"
         if [ -n "$snapshot" ]; then
             [ "${#RESTORE_SCOPE_SRC[@]}" -eq 1 ] || die "restore: --snapshot names ONE recovery point and this list selects ${#RESTORE_SCOPE_SRC[@]} datasets. Equal snapshot names are not one atomic event (measured on pve2), so a shared name across several datasets would claim something untrue. Restore them one at a time, or use --at, which resolves per dataset and says so."
@@ -1730,7 +1778,7 @@ cmd_restore() {
     done <<< "$(restore_relations "$config")"
     [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
 
-    local at_missing=0 at_ambig=0
+    local at_missing=0 at_ambig=0 at_row_ok=""
     echo
     echo "Plan odtworzenia (TYLKO ODCZYT -- nic nie zostalo zmienione):"
     if [ -n "$at_epoch" ]; then
@@ -1781,14 +1829,15 @@ cmd_restore() {
             echo "  Spojnosc:   INDEPENDENT (frontier, NIE punkt w czasie) -- kazdy dataset ma"
             echo "              wlasny najnowszy snapshot; czasy ponizej moga sie roznic i to nie jest blad."
         fi
+        at_row_ok=""
         if [ -n "$at_epoch" ]; then
             local at_row at_rc
             at_row="$(restore_at_pick "$at_epoch" "$snaps")"; at_rc=$?
             case "$at_rc" in
                 0)
                     local an ac ag
-                    an="${at_row%%	*}"; ag="${at_row##*	}"
-                    ac="$(printf '%s' "$at_row" | cut -f2)"
+                    IFS="$(printf '\t')" read -r an ac ag <<< "$at_row"
+                    at_row_ok="$at_row"
                     echo "  PUNKT --at:  ZADANO $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch")"
                     printf '               WYBRANO %s\n' "${an#*@}"
                     printf '               creation=%s  guid=%s\n' "$(date -d "@$ac" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ac")" "${ag:--}"
@@ -1819,7 +1868,25 @@ cmd_restore() {
             fi
             printf '    %s  guid=%-22s %s%s\n' "$human" "${sguid:--}" "${sname#*@}" "$flag"
         done <<< "$snaps"
-        restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$snaps"
+        # THE POINT --at CHOSE, not the newest one. Until this line existed the
+        # same preview could print `WYBRANO WANTED` and then classify
+        # CREATE/REWIND/REPLACE against the newest snapshot on the dataset --
+        # including one from AFTER the requested moment. Two answers to one
+        # question, in one screen, and the operator has no way to tell which of
+        # them the confirmation is about.
+        #
+        # And when --at resolved NOTHING, the classifier does not run at all: a
+        # strategy computed for the default latest would silently be the answer
+        # to a question the operator did not ask.
+        if [ -n "$at_epoch" ]; then
+            if [ -n "$at_row_ok" ]; then
+                restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$at_row_ok"                     "wybrany przez --at, NIE najnowszy -> oryginalna sciezka"
+            else
+                echo "  Strategia:  (POMINIETA -- --at nie wskazal punktu dla tego datasetu; nic nie jest klasyfikowane)"
+            fi
+        else
+            restore_plan_strategy "${copy[$i]}" "${src[$i]}" "$snaps"
+        fi
     done
     if [ "$shown" -eq 0 ]; then
         echo

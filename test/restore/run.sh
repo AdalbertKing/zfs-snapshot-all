@@ -1933,8 +1933,11 @@ n2="$(printf '%s\n' "$out2" | grep -c 'Zrodlo:')"
 if [ "$n2" = 2 ]; then ok "scope: the same two named on the collector side"
 else bad "scope: the same two named on the collector side" "expected 2, got $n2"; fi
 
-sc_refuses "scope: --source and --target are mutually exclusive" \
-    "mutually exclusive" pve2 --target rpool/data/vm-101-disk-0 --source hdd/store
+# The "mutually exclusive" assertion that stood here was removed with the rule
+# itself on 2026-08-26: it was the reviewer's tightening of an approved UX, not
+# the owner's decision, and it made the explicit both-sides form impossible to
+# write. What replaces it is the f3 block at the foot of this file, which proves
+# both sides ARE accepted and that they are checked pair by pair.
 sc_refuses "scope: a doubled comma is a refusal, not a shorter list" \
     "empty entry" pve2 --target rpool/data/vm-101-disk-0,,rpool/data/vm-101-disk-1
 sc_refuses "scope: the same dataset twice is a refusal" \
@@ -2077,6 +2080,127 @@ case "$at_both" in
     *"both name a recovery point"*) ok "at: --at and --snapshot together are refused" ;;
     *) bad "at: --at and --snapshot together are refused" "$(printf '%s' "$at_both" | head -2)" ;;
 esac
+
+# ============================================================================
+# REVIEW 2026-08-26 on a22f08a4 -- F1, F2, F3.
+# ============================================================================
+
+# --- F1: assert the RESOLVED VALUES, not the number of rows -----------------
+# The reported defect was not there -- the file carries a real TAB and the split
+# was measured correct -- but the criticism of the test stands: counting
+# `Zrodlo:` lines cannot tell a correct pair from a mangled one, and a mangled
+# pair is exactly what a `\t`-that-is-really-`t` would produce.
+f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f1_out" in
+    *"root@pve2:rpool/data/vm-101-disk-0"*) ok "f1: the ORIGINAL side resolves to its exact recorded value" ;;
+    *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Zrodlo | head -2)" ;;
+esac
+case "$f1_out" in
+    *"hdd/store"*) ok "f1: the COPY side resolves to its exact recorded value" ;;
+    *) bad "f1: the COPY side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep -i kopia | head -2)" ;;
+esac
+# The shape a broken tab-split would produce, named so the assertion cannot pass
+# by accident on a truncated value.
+# Anchored to the END of the line. The first cut looked for "Zrodlo:     roo"
+# as a SUBSTRING -- which the correct value `root@pve2:...` also contains, so it
+# failed against working code. That is the other way a test can be wrong.
+if printf '%s
+' "$f1_out" | grep -qE '^[[:space:]]*(Zrodlo|Kopia):[[:space:]]+(roo|ore)[[:space:]]*$'; then
+    bad "f1: and is not truncated at the letter t" "found a value cut down to roo or ore"
+else
+    ok "f1: and is not truncated at the letter t"
+fi
+
+# --- F2: the strategy classifies the point --at CHOSE -----------------------
+# A LOCAL (push) relationship, because the strategy short-circuits on a remote
+# source and would prove nothing.
+F2="$WORK/f2"; mkdir -p "$F2/bin"
+F2_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$F2/cfg" <<'F2CFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:rpool/data/x]
+	use_template = h
+	dst          = hdd/backup
+	pair_label   = loc
+F2CFG
+cat > "$F2/bin/zfs" <<F2STUB
+#!/bin/bash
+E=$F2_E
+for a in "\$@"; do ds="\$a"; done
+case "\$*" in
+  *"-t snapshot"*)
+      printf '%s@WANTED\t%s\tG2\n' "\$ds" "\$((E-3600))"
+      printf '%s@toonew\t%s\tG3\n' "\$ds" "\$((E+86400))" ;;
+  *) exit 1 ;;
+esac
+exit 0
+F2STUB
+chmod +x "$F2/bin/zfs"
+
+f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$F2/cfg" 2>&1)"
+# The block under "Punkt docelowy" is what the confirmation would be about.
+f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$f2_point" in
+    *WANTED*guid=G2*) ok "f2: the strategy classifies the point --at chose" ;;
+    *) bad "f2: the strategy classifies the point --at chose" "got: $f2_point" ;;
+esac
+case "$f2_point" in
+    *toonew*) bad "f2: ...and never the newest one, which is AFTER the moment" "got: $f2_point" ;;
+    *) ok "f2: ...and never the newest one, which is AFTER the moment" ;;
+esac
+# The caption over it stated a POLICY. Under --at that policy is not in force,
+# and a right answer under a wrong caption is still an untrue preview.
+case "$f2_out" in
+    *"domyslna polityka: NAJNOWSZY"*) bad "f2: the caption does not still claim the default-newest policy" ;;
+    *) ok "f2: the caption does not still claim the default-newest policy" ;;
+esac
+# NEGATIVE CONTROL: without --at the default policy is in force and says so, and
+# the newest IS the point -- otherwise the two assertions above would pass
+# against a build that had simply stopped classifying anything.
+f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --config="$F2/cfg" 2>&1)"
+f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$f2_ppoint" in
+    *toonew*) ok "f2: without --at the newest is still the point" ;;
+    *) bad "f2: without --at the newest is still the point" "got: $f2_ppoint" ;;
+esac
+case "$f2_plain" in
+    *"domyslna polityka: NAJNOWSZY"*) ok "f2: ...and the default caption is still shown" ;;
+    *) bad "f2: ...and the default caption is still shown" ;;
+esac
+# When --at resolved nothing for a dataset, no strategy is computed at all.
+f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+case "$f2_none" in
+    *"Strategia:  (POMINIETA"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
+    *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategia | head -2)" ;;
+esac
+
+# --- F3: both sides may be stated, and then they are PAIRED -----------------
+# The mutual exclusion was the reviewer's tightening of an approved UX and was
+# withdrawn. All three forms work; stating both is not remapping.
+f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Zrodlo:')"
+if [ "$f3_n" = 2 ]; then ok "f3: both sides stated explicitly is accepted"
+else bad "f3: both sides stated explicitly is accepted" "expected 2 datasets, got $f3_n" "$(printf '%s' "$f3_both" | head -3)"; fi
+
+f3_swap="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-1,rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f3_swap" in
+    *"pair 1 does not match the recorded relationship"*) ok "f3: a crossed pair is refused, not silently sorted out" ;;
+    *) bad "f3: a crossed pair is refused, not silently sorted out" "$(printf '%s' "$f3_swap" | head -2)" ;;
+esac
+f3_len="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+case "$f3_len" in
+    *"read as PAIRS, in order, so the two lists have to be the same length"*) ok "f3: lists of different lengths are refused" ;;
+    *) bad "f3: lists of different lengths are refused" "$(printf '%s' "$f3_len" | head -2)" ;;
+esac
+# And the single-sided forms still work, both ways round.
+f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --config="$SC/cfg" 2>&1)"
+case "$f3_s" in *"vm-101-disk-0"*) ok "f3: --source alone still works" ;; *) bad "f3: --source alone still works" ;; esac
+f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f3_t" in *"vm-101-disk-0"*) ok "f3: --target alone still works" ;; *) bad "f3: --target alone still works" ;; esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

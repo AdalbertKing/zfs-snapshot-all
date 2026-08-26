@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8967c8b5bb41b1d8 -->
+<!-- status-covers-digest: e0514a556fe1a335 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1750,6 +1750,39 @@
   **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
   zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
   nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
+
+- **RESTORE: trzy korekty po recenzji (2026-08-26).**
+
+  **`--at` klasyfikowalo inny snapshot, niz pokazywalo.** Podglad drukowal
+  `WYBRANO WANTED`, a `restore_plan_strategy` liczyl strategie na NAJNOWSZYM
+  snapshocie z pelnej listy — takze takim z PO zadanej chwili. Dwie odpowiedzi na
+  jedno pytanie w jednym ekranie, bez sposobu na rozpoznanie, ktorej dotyczy
+  potwierdzenie. Teraz do klasyfikatora idzie wylacznie wiersz wybrany przez
+  `--at`, a gdy `--at` nic nie wskazal, strategia w ogole sie nie liczy.
+  Znalezione przy tym samodzielnie: naglowek nad strategia dalej glosil
+  „domyslna polityka: NAJNOWSZY". Poprawna odpowiedz pod falszywym podpisem to
+  nadal falszywy podglad, wiec naglowek dostal parametr.
+
+  **Wykluczenie `--source`/`--target` wycofane.** Recenzent uznal, ze przekroczyl
+  role: to byla decyzja Ownera, nie jego. Dzialaja trzy formy — sam `--source`,
+  sam `--target`, albo **oba jawnie**. Podanie obu to NIE przemapowanie:
+  listy musza miec te sama dlugosc, sa czytane parami po kolei, a kazda para musi
+  zgadzac sie z zapisem relacji. Parami, nie zbiorami — inna kolejnosc po dwoch
+  stronach znaczy, ze operator powiedzial cos, czego nie chcial, a ciche
+  posortowanie zakryloby dokladnie ta pomylke.
+
+  **Zarzut o rozcinaniu wyniku po literze `t` zamiast po tabulatorze — odparty.**
+  W pliku jest prawdziwy tabulator; zmierzone, obie strony wychodza poprawnie.
+  Recenzent czytal diff, w ktorym tab wyglada jak `	`. Ale jego uwaga o TESCIE
+  byla trafna: asercja liczyla wiersze zamiast sprawdzac wartosci. Zapis zmieniony
+  na jeden jawny odczyt, a test na dokladne wartosci obu stron.
+
+  Przy okazji dwie wady w moich wlasnych testach: stara asercja wymuszajaca
+  wycofana regule, oraz kontrola szukajaca `Zrodlo:     roo` jako PODCIAGU —
+  a poprawna wartosc `root@pve2:...` tez to zawiera, wiec test padal na dzialajacym
+  kodzie. Zakotwiczona do konca linii.
+
+  `test/restore` 156/0.
 
 - **RESTORE: `--at` — punkt odtworzenia w czasie zegarowym (2026-08-26).**
   `restore pve2 --at "2026-08-10 12:00"`. Operator mysli chwila, nie nazwa
