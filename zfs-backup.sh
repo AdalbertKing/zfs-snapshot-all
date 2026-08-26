@@ -2396,6 +2396,28 @@ crontab_of_or_die() {   # <user> <outfile>
 # still called the relationship's own job a deletion. Measured on the real
 # lines out of a live crontab, not on a fixture -- the fixture had '-p 22' on
 # both sides, which the tool never produces.
+# A cron line's first five fields are WHEN, not WHAT.
+#
+# The guard below refuses an install that would stop a job from running, and it
+# decides "same job" by comparing line text. That made a SCHEDULE change look
+# like a deletion: the spreader moving a relationship from :37 to :55 produced
+# sixteen lines the guard could not match, and refused a previewed, confirmed
+# migration in which nothing was lost and nothing stopped.
+#
+# Same treatment as the endpoint normalizer above, and for the same reason:
+# normalize only the part that legitimately moves, compare everything else
+# verbatim -- script, flags, account, source, target, retention, pattern,
+# HostKeyAlias, notify text. A line whose COMMAND still appears is still being
+# run, which is precisely what this guard is asking.
+#
+# WHAT THIS DOES NOT PROTECT, said plainly: a job moved to a valid but
+# undesirable schedule is excused here. It always was -- a hand-edited config
+# could do it, and gen-cron lints the expression it renders. What the guard
+# still catches, unchanged, is a job that DISAPPEARS.
+schedule_normalized_identity() {
+    sed -E 's/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ /<SCHEDULE> /'
+}
+
 endpoint_normalized_identity() {
     sed -E -e 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/' \
            -e 's/"([^"@ ]+@)[^:" ]+:/"\1<ENDPOINT>:/g' \
@@ -2593,6 +2615,15 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             # looks similar" but "every dataset this line covered is still
             # covered, by an otherwise identical line". See line_coverage_absorbed.
             if printf '%s\n' "$proposed" | line_coverage_absorbed "$line"; then
+                continue
+            fi
+            # Third exemption: the job is still there, at a different minute.
+            # Both sides are normalized on the endpoint FIRST, so a run that
+            # changes the endpoint and the schedule together is still matched
+            # by what it actually is -- one job, moved twice.
+            if printf '%s\n' "$proposed_norm" \
+                 | schedule_normalized_identity | grep -qxF -- \
+                     "$(printf '%s\n' "$norm" | schedule_normalized_identity)"; then
                 continue
             fi
             still_lost="$still_lost$line
