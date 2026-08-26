@@ -1304,6 +1304,40 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
 # The SOURCE prune fragment: the normalized prune fragment with each use_template
 # identity rewritten to its source identity (exact, comma-list aware -- never a
 # substring rewrite that could couple ids sharing a prefix).
+# Where this profile keeps its RETENTION, which is not the same question as
+# where it keeps its ladder.
+#
+# REV F1 (2026-08-26), measured on pve1 while the lab was still running:
+#
+#     33 automated_hourly_   9 automated_daily_   3 automated_weekly_   3 automated_monthly_
+#
+# on the SOURCE, against zero [prune:account@host:...] sections in the
+# collector's config. An active pull CREATES those four families with
+# `snapget -m`; the inline prune from [dataset:] bounds only the collector's
+# COPY. Both remote-source emitters were gated on `PROFILE_GFS -eq 1`, which is
+# false for every flat profile, so `prod` created snapshots on a production host
+# and pruned none of them there. That is REV-20260811-102's original defect
+# reborn one profile shape over.
+#
+# The log line this used to print -- "the source's own snapshots stay the
+# source's business" -- was written for the PASSIVE case, where the family
+# genuinely belongs to somebody else. Applied to a pull that stamps the family
+# itself, it is a disclaimer for our own mess. Passive is filtered out by its
+# own branch long before this, so the shape gate was protecting nothing.
+#
+# A ladder profile keeps retention in [prune]; a flat profile keeps it in the
+# tiers its [dataset] references. Both are a fragment carrying use_template, so
+# the machinery below needs the right FILE, not a new mechanism.
+profile_retention_fragment() {   # -> path of the fragment carrying retention, or rc 1
+    [ -n "${PROFILE_LOADED:-}" ] || return 1
+    if profile_declares_ladder; then
+        printf '%s' "$PROFILE_PRUNE_FILE"; return 0
+    fi
+    [ -s "${PROFILE_DS_FILE:-}" ] || return 1
+    profile_emit "$PROFILE_DS_FILE" | grep -q 'use_template' || return 1
+    printf '%s' "$PROFILE_DS_FILE"
+}
+
 emit_source_prune_fragment() {   # <rendered prune fragment>
     profile_emit "$1" | while IFS= read -r line; do
         case "$line" in
@@ -1342,8 +1376,16 @@ append_source_templates_if_missing() {   # <workfile> <rendered prune fragment>
         # and check-snap-age.sh is local-only -- gen-cron.sh rejects monitor fields
         # on a remote scope outright. Source-age monitoring is the source host's own
         # concern, not the collector's; the collector monitors the TARGET.
+        # send_schedule/prefix go too, and for the same class of reason as the
+        # monitor fields: this template drives a REMOTE PRUNE scope. A ladder
+        # profile's prune tiers never carry them, so this is a no-op there --
+        # but a FLAT profile's tiers are self-contained (they create AND prune),
+        # and copying their creation half into a source-prune template would
+        # declare that the collector stamps snapshots on somebody else's host
+        # from a retention section.
         { printf '\n[template:%s]\n' "$src"
-          printf '%s\n' "$sec" | tail -n +2 | sed -E '/^[[:space:]]*monitor_(warn|crit)[[:space:]]*=/d'
+          printf '%s\n' "$sec" | tail -n +2 \
+            | sed -E '/^[[:space:]]*(monitor_(warn|crit)|send_schedule|prefix)[[:space:]]*=/d'
         } >> "$wf" || die "could not append [template:$src] to $wf"
     done < <(profile_prune_ref_ids "$2")
 }
@@ -1457,8 +1499,8 @@ source_prune_sflags() {
 # body: marker, the profile's SOURCE prune fragment, non-recursive scope, ssh_flags,
 # labels). Shared by the step-3 CREATE path and the step-5 retrofit so both write an
 # identical, independent, non-recursive source ladder.
-append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds>
-    local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6"
+append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds> <retention fragment>
+    local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6" retfrag="${7:-$PROFILE_PRUNE_FILE}"
     # Recursion here MIRRORS the pull's. A solid scope root pulls with -R, so
     # its children accumulate the tool-owned automated_ snapshots on the
     # source too -- a non-recursive source prune would cover the parent and
@@ -1472,7 +1514,7 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
         echo
         echo "[prune:$scope]"
         echo "	$marker"
-        emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+        emit_source_prune_fragment "$retfrag"
         echo "	recursive    = $rec"
         echo "	ssh_flags    = $sflags"
         echo "	pair_label   = $name"
@@ -1493,31 +1535,23 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
 emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     local workfile="$1" name="$2" marker="$3"; shift 3
     [ "$#" -gt 0 ] || return 0
-    [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
-    # The source retention is built from PROFILE_PRUNE_FILE (see
-    # append_source_templates_if_missing just below), so a profile that carries
-    # no prune fragment has nothing to build it FROM. Emitting anyway produced
-    # a [prune:account@host:ds] section with no use_template -- gen-cron rejects
-    # it, which is how this was found, and had it not been rejected it would
-    # have been a retention job that prunes by no rule at all.
+    # NO SHAPE GATE. `PROFILE_GFS -eq 1` used to stand here and it silently
+    # excused every flat profile from bounding the families it creates on the
+    # source -- see profile_retention_fragment for the measurement. What decides
+    # is whether this profile HAS retention to express, and both shapes do.
     #
-    # Returning here BEFORE capture/remove is deliberate: nothing is captured
-    # and nothing is removed, so a preserved source prune is not destroyed by a
-    # profile that could not have written one.
-    # ONLY when a profile is actually loaded. A preserving re-activation does not
-    # load one (REV-20260809-090 F1), and treating "not loaded" as "declares no
-    # ladder" made this function skip the capture/replay that MOVES an installed
-    # source prune to a new endpoint -- the relationship kept its old scope
-    # silently. Three CI assertions, REV-20260811-107's whole point.
-    if [ -n "${PROFILE_LOADED:-}" ] && ! profile_declares_ladder; then
-        log "source retention NOT generated for '$name': profile '$PROFILE_ACTIVE' declares no prune fragment -- its tiers prune their own families on the TARGET, and it names no policy for the remote source. The source's own snapshots stay the source's business."
-        return 0
-    fi
+    # An EMPTY fragment is not an error here: a preserving re-activation loads no
+    # profile at all (REV-20260809-090 F1) and must still reach the capture and
+    # replay below, which is what MOVES an installed source prune to a new
+    # endpoint (REV-20260811-107). Only the CREATE branch needs the fragment, and
+    # it fails closed there.
+    local retfrag=""
+    retfrag="$(profile_retention_fragment)" || retfrag=""
     # Pure config text -- no SSH here. The fail-closed grant check
     # (assert_source_prune_grant) runs in the FLOW, before the workfile is
     # published, so the two callers gate the INSTALL and this stays unit-testable
     # without a live host.
-    append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
+    [ -n "$retfrag" ] && append_source_templates_if_missing "$workfile" "$retfrag"
     # The source scope embeds the endpoint (account@host) in its SECTION HEADER, so
     # the scope is topology-derived like the [dataset:] `src` field and cannot be
     # refreshed in place -- the section must be rebuilt to move it. But the POLICY
@@ -1548,7 +1582,8 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
             # the policy from the profile.
-            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" || return 1
+            [ -n "$retfrag" ] || die "source retention for '$name' cannot be generated: profile '$PROFILE_ACTIVE' expresses no retention at all -- neither a [prune] fragment nor tiers its [dataset] references. Refusing to create a relationship that stamps snapshots on $LOAD_HOST and bounds none of them there."
+            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
@@ -1567,19 +1602,19 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
 emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local workfile="$1" name="$2"; shift 2
     [ "$#" -gt 0 ] || return 0
-    [ "${PROFILE_GFS:-1}" -eq 1 ] || return 0
-    # Same reason as emit_remote_source_prune, and the same "only when loaded"
-    # qualifier: not loaded is not the same fact as declares-no-ladder.
-    if [ -n "${PROFILE_LOADED:-}" ] && ! profile_declares_ladder; then
-        return 0
-    fi
+    # Same as emit_remote_source_prune: retention, not shape. This verb only ever
+    # CREATES (it is the retrofit for relationships installed before source
+    # retention existed), so an absent fragment is fatal rather than tolerated.
+    local retfrag
+    retfrag="$(profile_retention_fragment)" \
+        || die "audit-source-retention --apply: profile '$PROFILE_ACTIVE' expresses no retention -- there is nothing to add"
     local marker="# managed-by: zfs-backup.sh client=$name"
-    append_source_templates_if_missing "$workfile" "$PROFILE_PRUNE_FILE"
+    append_source_templates_if_missing "$workfile" "$retfrag"
     local sflags; sflags="$(source_prune_sflags)"
     local scope ds
     for scope in "$@"; do
         ds="${scope##*:}"
-        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" || return 1
+        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }
@@ -4771,7 +4806,12 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	dst          = $target"
             echo "	notify       = local-$(basename "$r")"
         done
-        if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
+        # Retention, not shape -- the same F1 correction as the remote path. A
+        # local backup stamps the SAME four families on its source datasets, and
+        # a flat profile bounded none of them there either.
+        local LB_RETFRAG=""
+        LB_RETFRAG="$(profile_retention_fragment)" || LB_RETFRAG=""
+        if [ -n "$LB_RETFRAG" ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
             # ensure_cron_config already put the target's prune templates in the
@@ -4781,7 +4821,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # retain only the target. REV-20260811-106 F1: the family is derived from
             # the templates the profile's prune fragment ACTUALLY references, not
             # from a `keep_*` naming convention, and fails closed if one is missing.
-            emit_source_template_family "$PROFILE_PRUNE_FILE" "$cand"
+            emit_source_template_family "$LB_RETFRAG" "$cand"
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
@@ -4792,7 +4832,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # up. REV-104 F1 / REV-106 F1: point use_template at the SOURCE
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
-                emit_source_prune_fragment "$PROFILE_PRUNE_FILE"
+                emit_source_prune_fragment "$LB_RETFRAG"
                 # Same reason as the send line: without its own minute, two
                 # source prunes with identical policy merge into one delsnaps
                 # line and the first one's identity changes underneath the

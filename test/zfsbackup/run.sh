@@ -7074,6 +7074,66 @@ else
         "rc=$mp_rc ladder=$(mp_ladder) tpl=$(grep -cE '^\[template:profile__prod__' "$MP/dir/jobs.conf")"
 fi
 
+# --- A FLAT PROFILE MUST BOUND THE FAMILIES IT CREATES ON THE SOURCE.
+#
+# REV F1, and it was measured on a PRODUCTION host while the lab ran: pve1
+# carried 33 automated_hourly_, 9 automated_daily_, 3 automated_weekly_ and
+# 3 automated_monthly_ snapshots, against ZERO [prune:account@host:...]
+# sections in the collector's config.
+#
+# An active pull CREATES those four families on the source with `snapget -m`.
+# The inline prune from [dataset:] bounds only the collector's COPY. Both remote
+# source emitters were gated on `PROFILE_GFS -eq 1`, false for every flat
+# profile, so `prod` stamped snapshots on a production host and pruned none of
+# them there -- REV-20260811-102's original defect, one profile shape over.
+#
+# The gate asked about SHAPE. What matters is whether the profile has retention
+# to express: a ladder profile keeps it in [prune], a flat one in the tiers its
+# [dataset] references. Both are fragments carrying use_template.
+echo 'PROFILE=default' >> "$MP/clients/mpc.conf"
+printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/src.conf"
+( PATH="$MP/bin:$PATH"
+  atomic_replace_and_install() { cp -f "$2" "$1"; }
+  assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+  assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+  assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
+  CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
+  SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
+  PROFILE_ACTIVE=default PROFILE_LOADED="" \
+  cmd_migrate_profile --config="$MP/dir/src.conf" --yes --profile=prod ) >/dev/null 2>&1
+
+if [ "$(grep -c '^\[prune:[^]]*@' "$MP/dir/src.conf")" -ge 1 ] \
+   && [ "$(grep -c '^\[template:profile__prod__src_' "$MP/dir/src.conf")" -eq 4 ]; then
+    ok "96o: a FLAT profile emits remote source retention for every family it creates"
+else
+    bad "96o: a FLAT profile emits remote source retention for every family it creates" \
+        "remote prune sections=$(grep -c '^\[prune:[^]]*@' "$MP/dir/src.conf") src templates=$(grep -c '^\[template:profile__prod__src_' "$MP/dir/src.conf")"
+fi
+
+# ...and a SOURCE template must not carry the creation half of its tier. A flat
+# tier is self-contained -- it creates AND prunes -- so copying it verbatim would
+# put send_schedule and prefix into a section whose whole job is a remote prune.
+# A ladder profile's prune tiers never carry them, which is why this could not
+# have been noticed before `prod`.
+if ! sed -n '/^\[template:profile__prod__src_/,/^\[/p' "$MP/dir/src.conf" \
+        | grep -qE '^[[:space:]]*(send_schedule|prefix)[[:space:]]*='; then
+    ok "96p: a derived SOURCE template carries retention only, never creation"
+else
+    bad "96p: a derived SOURCE template carries retention only, never creation" \
+        "$(sed -n '/^\[template:profile__prod__src_/,/^\[/p' "$MP/dir/src.conf" | grep -E 'send_schedule|prefix' | head -2)"
+fi
+
+# CONTROL: the result must still render. "The text looks right" is the
+# appearance this project keeps mistaking for the property, and a source prune
+# built from the wrong fragment is exactly how the empty-ladder defect showed
+# up -- as a gen-cron rejection.
+if bash "$REPO/gen-cron.sh" -c "$MP/dir/src.conf" >/dev/null 2>&1; then
+    ok "96q control: the config carrying flat source retention renders"
+else
+    bad "96q control: the config carrying flat source retention renders" \
+        "$(bash "$REPO/gen-cron.sh" -c "$MP/dir/src.conf" 2>&1 | tail -2)"
+fi
+
 # LAST IN THIS GROUP ON PURPOSE: the two assertions below move the client
 # record's PROFILE, and 96f/96h read it. Placed earlier, they turned 96h into a
 # silent no-op that still reported rc=0 -- a test passing because it did
@@ -7110,13 +7170,17 @@ mp_fresh_out="$( ( PATH="$MP/bin:$PATH"
       PROFILE_ACTIVE=default PROFILE_LOADED="" \
       cmd_migrate_profile --config="$MP/dir/fresh.conf" --yes --profile=prod ) 2>&1 )"
 mp_fresh_rc=$?
+# The LADDER only: a header with no '@' in it. Remote source retention is also a
+# [prune:] section (account@host:dataset), and counting both made this assertion
+# fail the moment F1 gave flat profiles the source prune they owed -- for a
+# reason that had nothing to do with what it tests.
 if [ "$mp_fresh_rc" -eq 0 ] \
-   && [ "$(grep -c '^\[prune:' "$MP/dir/fresh.conf")" -eq 0 ] \
+   && [ "$(grep -c '^\[prune:[^]@]*\]' "$MP/dir/fresh.conf")" -eq 0 ] \
    && bash "$REPO/gen-cron.sh" -c "$MP/dir/fresh.conf" >/dev/null 2>&1; then
     ok "96m: a FLAT profile on a fresh config emits no ladder and the result renders"
 else
     bad "96m: a FLAT profile on a fresh config emits no ladder and the result renders" \
-        "rc=$mp_fresh_rc prune_sections=$(grep -c '^\[prune:' "$MP/dir/fresh.conf")" \
+        "rc=$mp_fresh_rc ladder_sections=$(grep -c '^\[prune:[^]@]*\]' "$MP/dir/fresh.conf")" \
         "$(printf '%s' "$mp_fresh_out" | tail -2)"
 fi
 
