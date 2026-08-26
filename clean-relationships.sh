@@ -521,15 +521,15 @@ hold_verdict() {   # <snapshot>
     local snap="$1"
     hold_load_facts
     if printf '%s\n' "$HOLD_INFLIGHT_CLAIMS" | grep -qxF -- "$snap"; then
-        printf 'IN-USE   a transfer recorded this exact snapshot as in flight'
+        printf 'IN-USE inflight a transfer recorded this exact snapshot as in flight'
         return 0
     fi
     if [ "$HOLD_ENGINE_RUNNING" -eq 1 ]; then
-        printf 'UNPROVEN a transfer is running on this host and may own this hold'
+        printf 'UNPROVEN engine a transfer is running on this host and may own this hold'
         return 0
     fi
     if [ "$HOLD_LOCAL_RESUME" -eq 1 ]; then
-        printf 'UNPROVEN a dataset here carries a receive_resume_token, so some transfer means to continue'
+        printf 'UNPROVEN localtoken a dataset here carries a receive_resume_token, so some transfer means to continue'
         return 0
     fi
     # THE RECEIVING SIDE CANNOT BE EXCLUDED FROM HERE, and that is decisive.
@@ -551,7 +551,7 @@ hold_verdict() {   # <snapshot>
     # from 'nothing owns this hold', and the report says the different sentence.
     # Releasing is left to --release-hold, where a human supplies the judgement
     # this code cannot: they know whether that relationship still exists.
-    printf 'UNPROVEN nothing HERE claims it, but the receiver is not observable from this host (a pull target keeps its resume token on the far side, and /var/run does not survive a reboot)'
+    printf 'UNPROVEN remote nothing HERE claims it, but the receiver is not observable from this host (a pull target keeps its resume token on the far side, and /var/run does not survive a reboot)'
     return 0
 }
 
@@ -588,7 +588,7 @@ report_leaked_holds() {
                 # Healthy: a transfer running right now says this is its
                 # snapshot. Nothing to do and nothing to report as wrong.
                 printf '               ^ %s
-' "${v#* }" ;;
+' "${v#* * }" ;;
             *)
                 # Everything else is a finding. Not because we know it is
                 # abandoned -- since the review we deliberately do not claim
@@ -632,10 +632,24 @@ release_named_hold() {   # <snapshot>
     command -v "$ZFS_BIN" >/dev/null 2>&1 || die "no $ZFS_BIN on this host -- cannot release anything"
     "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" \
         || die "'$snap' does not carry a '$HOLD_TAG' hold -- nothing here to release. 'zfs holds $snap' will say what it does carry, and a hold that is not ours is not this tool's to touch."
+    # The REASON CODE, not the wording. hold_verdict prints
+    # "<class> <code> <reason>", and only ONE code may be overridden by a human:
+    # `remote`, the case where everything this host can see is clean and the only
+    # unknown is the far side. That is the judgement the operator has and the
+    # code does not.
+    #
+    # The other three are LOCAL facts, and the commit that introduced this verb
+    # said so in its own message -- while the gate only refused IN-USE, so
+    # `--release-hold --yes` would still have released a snapshot with a running
+    # transfer or a local resume token. Found in review, 2026-08-26.
     v="$(hold_verdict "$snap")"
-    case "$v" in
-        IN-USE*)
-            die "refusing: ${v#* }. Releasing now would pull the snapshot out from under a transfer that is still running." ;;
+    local vcode="${v#* }"; vcode="${vcode%% *}"
+    case "$vcode" in
+        remote) ;;
+        inflight)   die "refusing: a transfer recorded '$snap' as in flight. Releasing now would pull the snapshot out from under a transfer that is still running -- this is not the far side, it is this host saying so." ;;
+        engine)     die "refusing: a snapsend/snapget/zfs send is running on this host and may own this hold. Wait for it, or confirm it is not this snapshot's; --release-hold answers for the FAR side, not for facts visible here." ;;
+        localtoken) die "refusing: a dataset on this host carries a receive_resume_token, so some transfer means to continue. Clear or complete it first ('zfs receive -A <target>' abandons one); --release-hold does not override local evidence." ;;
+        *)          die "refusing: unrecognised verdict '$v' for '$snap' -- not releasing on an answer this code does not understand." ;;
     esac
     if [ "$ASSUME_YES" -ne 1 ]; then
         warn "would release $HOLD_TAG on $snap -- re-run with --yes to do it. Nothing was changed."

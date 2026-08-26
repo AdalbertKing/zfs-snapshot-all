@@ -919,6 +919,29 @@ case "$out" in
     *) bad "release: ...and says so" "$out" ;;
 esac
 
+# THE TWO DISCRIMINATORS THE REVIEW ASKED FOR. UNPROVEN covers three different
+# causes, and only ONE of them -- "the far side cannot be seen" -- is the
+# operator's to overrule. The other two are facts this host holds, and the gate
+# reads a reason CODE rather than the wording of the message.
+: > "$P/released"
+out=$(PROOF_PS="printf %s
+ /usr/local/bin/snapget.sh" proof_run --release-hold=tank/b@s2 --yes)
+if [ ! -s "$P/released" ]; then ok "release: refused while a local engine is running"
+else bad "release: refused while a local engine is running" "$(cat "$P/released")"; fi
+case "$out" in
+    *"running on this host"*) ok "release: ...and says it is THIS host saying so, not the far side" ;;
+    *) bad "release: ...and says it is THIS host saying so, not the far side" "$out" ;;
+esac
+
+: > "$P/released"
+out=$(PROOF_RESUME=1 proof_run --release-hold=tank/b@s2 --yes)
+if [ ! -s "$P/released" ]; then ok "release: refused while a LOCAL resume token exists"
+else bad "release: refused while a LOCAL resume token exists" "$(cat "$P/released")"; fi
+case "$out" in
+    *"receive_resume_token"*) ok "release: ...and names the token as the reason" ;;
+    *) bad "release: ...and names the token as the reason" "$out" ;;
+esac
+
 # A snapshot that carries no hold of ours is refused rather than "released".
 : > "$P/released"
 out=$(proof_run --release-hold=tank/nothing@here --yes)

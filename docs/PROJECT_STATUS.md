@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 754b60666d94267d -->
+<!-- status-covers-digest: 248d3a63934bb2e8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1878,9 +1878,26 @@
   hold, ktorego nie rosci nic biegnacego, blokuje `zfs destroy` i po cichu psuje
   retencje niezaleznie od tego, czyj jest.
 
-  `test/cleanrel` 68/0, w tym kontrprzykład recenzenta wprost: hold istnieje,
-  brak pliku in-flight, brak procesu — stan po restarcie — i `--purge-orphans
-  --yes` **nie wola `zfs release`**.
+  **Druga runda tej samej granicy.** `UNPROVEN` obejmowalo TRZY rozne przyczyny —
+  biegnacy silnik, lokalny token, nieobserwowalny odbiorca — a bramka recznego
+  zwolnienia odmawiala tylko dla `IN-USE`. Wiec `--release-hold --yes` zwolnilby
+  hold takze wtedy, gdy transfer biegl LOKALNIE. Wlasny komunikat commita mowil,
+  ze czlowiek odpowiada wylacznie za dalek**a** strone; kod tego nie egzekwowal.
+
+  Poprawione: `hold_verdict` zwraca **kod przyczyny** (`inflight`, `engine`,
+  `localtoken`, `remote`), a bramka czyta kod, **nie tresc komunikatu**.
+  Przejsc moze wylacznie `remote` — jedyny przypadek, w ktorym lokalnie jest
+  czysto, a nieznana jest tylko druga strona. Kod nierozpoznany tez odmawia.
+
+  Uwaga techniczna warta zapamietania: to nie moze byc zmienna globalna —
+  `hold_verdict` jest wolane w `$( )`, czyli w podpowloce, wiec cokolwiek
+  ustawione w srodku by zginelo. Kod jedzie w wypisywanym tekscie jako osobne
+  pole.
+
+  `test/cleanrel` 72/0, w tym kontrprzykład recenzenta wprost (hold istnieje,
+  brak pliku in-flight, brak procesu — stan po restarcie — a `--purge-orphans
+  --yes` **nie wola `zfs release`**) oraz dwa dyskryminatory na recznym
+  czasowniku: biegnacy silnik i lokalny token **nie daja sie nadpisac**.
 
   Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
   wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym
