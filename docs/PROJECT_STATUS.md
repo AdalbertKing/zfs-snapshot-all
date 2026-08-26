@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ecb305d7be21270f -->
+<!-- status-covers-digest: a72475fcb0879a4c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1783,6 +1783,36 @@
 
   **Cztery znaleziska**, w tym jedno o naszym silniku: wyciek holda
   `zfssnapall_inflight` blokowal sprzatanie przez cztery dni.
+
+  **F3 NAPRAWIONE (2026-08-26).** Diagnoza wyszla inaczej, niz zakladalem:
+  silnik trzyma hold CELOWO, gdy transfer padl z tokenem wznowienia — nastepny
+  przebieg potrzebuje dokladnie tego snapshotu, i to jest poprawne. Wada polega
+  na tym, ze **nikt nigdy nie zauwaza, gdy ten nastepny przebieg juz nie
+  przyjdzie**, bo relacje rozebrano. Czyli naprawa nalezy do sprzataczki, a nie
+  do zamrozonego silnika — i silnika nie tknieto.
+
+  `clean-relationships.sh` sprawdza teraz **caly host**, niezaleznie od listy
+  relacji (bo wyciek JE PRZEZYWA, wiec cokolwiek kluczowane na relacji minie
+  dokladnie ten przypadek). Jedno wywolanie `zfs get -t snapshot userrefs`
+  znajduje kazdy trzymany snapshot; `zfs holds` biegnie tylko dla nich, wiec
+  zdrowy host kosztuje jedno wywolanie.
+
+  **Zglasza tylko NASZ tag.** Hold pvesr na replikowanym datasecie jest nosny
+  dla cudzej replikacji, a ten projekt juz zmierzyl, ile kosztuje ruszenie go.
+  **I nie zwalnia automatycznie** — narzedzie nie odrozni wyciekniętego holdu od
+  chroniacego transfer, ktory wlasnie biegnie. Nazywa, podaje dokladna linie,
+  konczy. Ta sama zasada co przy danych.
+
+  Audyt **nie konczy sie czysto**, gdy cos jest trzymane: „nothing orphaned",
+  podczas gdy dataset po cichu nie daje sie przyciac, to falszywy spokoj, ktoremu
+  to narzedzie ma zapobiegac.
+
+  Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
+  wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym
+  kontrola, ze **sam wyciekly hold wystarczy**, zeby audyt nie byl czysty, i ze
+  cudzy tag jest niewidoczny. Tag dopisany do kontraktu `hold-tag` w deps.conf —
+  teraz pilnuje go graf, bo tag, ktory sie rozjedzie, sprawi, ze ten raport po
+  cichu nie pokaze nic, co jest nie do odroznienia od zdrowego hosta.
 
 - **RESTORE: trzy korekty po recenzji (2026-08-26).**
 

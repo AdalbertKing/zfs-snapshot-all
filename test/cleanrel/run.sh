@@ -536,6 +536,125 @@ else
     bad "purge with no tombstone: findings stay queued rather than being deleted with nowhere to go"         "w kolejce moich=$q_mine obcych=$q_other, w nagrobku=$t_arch (oczekiwano 2 / 1 / 0)"
 fi
 
+# ---------------------------------------------------------------------------
+# A HOLD OUTLIVES THE RELATIONSHIP THAT PLACED IT.
+#
+# Measured on pve9, 2026-08-26: a `zfssnapall_inflight` hold placed on
+# 2026-08-22 by a run that died was still there four days later, with zero jobs
+# on the host. `zfs destroy` refused with "dataset is busy" -- which names
+# neither the hold nor the tag -- and retention hit the same wall silently on
+# every run.
+#
+# The audit could not have found it: the hold's relationship was already gone,
+# so anything keyed on the relationship list misses exactly the case this
+# exists for. Hence a host-wide check, and hence these cases feed it through a
+# stubbed `zfs` rather than through the relationship fixtures.
+# ---------------------------------------------------------------------------
+T="$WORK/holds"; build_tree "$T"; mkdir -p "$T/bin"
+
+# A zfs that reports one held snapshot, held by OUR tag.
+cat > "$T/bin/zfs" <<'HELDEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*)
+      printf 'tank/a@s1\t0\n'
+      printf 'tank/b@s2\t1\n'
+      exit 0 ;;
+  "holds -H tank/b@s2")
+      printf 'tank/b@s2\tzfssnapall_inflight\t-\n'; exit 0 ;;
+  "holds -H"*) exit 0 ;;
+esac
+exit 1
+HELDEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) ok "holds: a held snapshot is reported" ;;
+    *) bad "holds: a held snapshot is reported" "$out" ;;
+esac
+case "$out" in
+    *"zfs release zfssnapall_inflight tank/b@s2"*|*"$T/bin/zfs release zfssnapall_inflight tank/b@s2"*)
+        ok "holds: ...with the exact release line for that snapshot" ;;
+    *) bad "holds: ...with the exact release line for that snapshot" "$out" ;;
+esac
+# The snapshot with userrefs=0 must not appear -- otherwise the report would be
+# "every snapshot on the host" and nobody would read it.
+case "$out" in
+    *"tank/a@s1"*) bad "holds: an unheld snapshot is not reported" "tank/a@s1 is in the output" ;;
+    *) ok "holds: an unheld snapshot is not reported" ;;
+esac
+# The verdict must not be clean. "nothing orphaned" while a dataset silently
+# cannot be pruned is the false all-clear this tool exists to prevent.
+case "$out" in
+    *"held snapshots were found"*|*"HELD SNAPSHOTS"*) ok "holds: the verdict names the finding" ;;
+    *) bad "holds: the verdict names the finding" "$out" ;;
+esac
+case "$out" in
+    *"nothing orphaned -- every trace"*) bad "holds: ...and does not claim nothing is wrong" ;;
+    *) ok "holds: ...and does not claim nothing is wrong" ;;
+esac
+
+# NOT OURS. pvesr and vzdump place holds too, and this project has already
+# measured what touching a pvesr hold costs -- it wedges replication for good.
+# A held snapshot whose tag is somebody else's must be invisible here.
+cat > "$T/bin/zfs" <<'FOREIGNEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/b@s2\t1\n'; exit 0 ;;
+  "holds -H tank/b@s2") printf 'tank/b@s2\tpvesr\t-\n'; exit 0 ;;
+esac
+exit 1
+FOREIGNEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) bad "holds: a FOREIGN hold is not ours to report" "$out" ;;
+    *) ok "holds: a FOREIGN hold is not ours to report" ;;
+esac
+case "$out" in
+    *"held snapshots were found"*) bad "holds: ...and does not spoil the verdict" ;;
+    *) ok "holds: ...and does not spoil the verdict" ;;
+esac
+
+# NEGATIVE CONTROL for the whole block: with nothing held, the section is
+# absent and the verdict is clean. Without this, every assertion above would
+# pass against a build that had simply stopped printing the section.
+cat > "$T/bin/zfs" <<'NONEEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/a@s1\t0\n'; exit 0 ;;
+esac
+exit 1
+NONEEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) bad "holds: nothing held means nothing reported" ;;
+    *) ok "holds: nothing held means nothing reported" ;;
+esac
+# On a tree with NO relationships the exit status can only come from the hold
+# check -- which is what makes it worth asserting here and nowhere above.
+E="$WORK/emptytree"; mkdir -p "$E/clients" "$E/peers" "$E/rel" "$E/keys" "$E/pairing" "$E/home" "$E/removed" "$E/bin"
+cp "$T/bin/zfs" "$E/bin/zfs"
+out=$(ZFS_BIN="$E/bin/zfs" run_cr "$E"); rc=$?
+if [ "$rc" -eq 0 ]; then ok "holds: nothing held on a bare host is a clean exit 0"
+else bad "holds: nothing held on a bare host is a clean exit 0" "rc=$rc" "$out"; fi
+# ...and the positive half of that same rc: one held snapshot alone turns it to 3.
+cat > "$E/bin/zfs" <<'ONEEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/b@s2	1
+'; exit 0 ;;
+  "holds -H tank/b@s2") printf 'tank/b@s2	zfssnapall_inflight	-
+'; exit 0 ;;
+esac
+exit 1
+ONEEOD
+chmod +x "$E/bin/zfs"
+out=$(ZFS_BIN="$E/bin/zfs" run_cr "$E"); rc=$?
+if [ "$rc" -eq 3 ]; then ok "holds: a leaked hold ALONE is enough to fail the audit"
+else bad "holds: a leaked hold ALONE is enough to fail the audit" "rc=$rc" "$out"; fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

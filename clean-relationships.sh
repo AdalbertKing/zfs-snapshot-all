@@ -75,6 +75,11 @@ TOMBSTONE_DIR="${TOMBSTONE_DIR:-/var/lib/zfs-snapshot-all/removed}"
 # result depend on the runner -- the exact flake test/pairgate already
 # documents, where a suite passed only on hosts that happened to lack `logger`.
 ZFS_BIN="${ZFS_BIN:-zfs}"
+# DUPLICATED from lib-zfs-snap.sh, which this script does not source -- the same
+# duplication delsnaps.sh already carries, and covered by the same `hold-tag`
+# contract in test/deps.conf. It is the tag OUR transfers place; pvesr and vzdump
+# place holds of their own and those are none of this tool's business.
+HOLD_TAG="${HOLD_TAG:-zfssnapall_inflight}"
 PAIRING_DIR="${PAIRING_DIR:-/root/scripts/pairing}"
 HOME_ROOT="${HOME_ROOT:-/home}"
 DEPLOY="${DEPLOY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy.sh}"
@@ -374,6 +379,61 @@ report() {
 # touches it, it is read-only, and its absence is a skip rather than an error:
 # the rest of the tool must keep working on a host where zfs is broken, which
 # is a state this tool is specifically for.
+# A HOLD OUTLIVES THE RELATIONSHIP THAT PLACED IT.
+#
+# The engine keeps `zfssnapall_inflight` deliberately when a transfer dies with a
+# resume token: the next run needs that exact snapshot. That is correct. What
+# nothing noticed until 2026-08-26 is the case where the next run is never coming
+# -- because the relationship was torn down, or the job was removed, or the lab it
+# belonged to was dismantled.
+#
+# Measured that day on pve9: a hold placed 2026-08-22 by a run that died was still
+# there four days later, with zero jobs on the host, and `zfs destroy` refused
+# with the famously unhelpful
+#
+#     cannot destroy snapshot ...: dataset is busy
+#
+# which names neither the hold nor the tag. Retention hits the same wall silently,
+# every run, and the pool grows.
+#
+# So this is reported host-wide and independently of the relationship list: the
+# leak OUTLIVES the relationship, so keying it on one would miss exactly the case
+# it exists for. One `zfs get` finds every held snapshot on the host; `zfs holds`
+# then runs only for those, so the cost is one call plus one per held snapshot --
+# and a healthy host has none.
+#
+# NOT released automatically. This tool cannot tell a leaked hold from one
+# protecting a transfer that is running right now, and releasing the second would
+# break a live backup. Same rule as data: name it, give the exact line, stop.
+report_leaked_holds() {
+    command -v "$ZFS_BIN" >/dev/null 2>&1 || return 0
+    local snap refs shown=0
+    while IFS="$(printf '\t')" read -r snap refs; do
+        [ -n "$snap" ] || continue
+        case "$refs" in ''|0|*[!0-9]*) continue ;; esac
+        # OURS only. A pvesr hold on a replicated dataset is load-bearing for
+        # somebody else's replication, and this project already measured what
+        # touching one costs.
+        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" || continue
+        if [ "$shown" -eq 0 ]; then
+            echo
+            echo "  HELD SNAPSHOTS -- ours, and possibly leaked"
+            echo "      A '$HOLD_TAG' hold is placed by a transfer and released when it"
+            echo "      finishes. One that outlived its run blocks 'zfs destroy' with"
+            echo "      'dataset is busy' -- which names neither the hold nor the tag --"
+            echo "      and silently fails retention on that dataset every run."
+            shown=1
+        fi
+        printf '      %s\n' "$snap"
+        printf '        %s release %s %s\n' "$ZFS_BIN" "$HOLD_TAG" "$snap"
+    done < <("$ZFS_BIN" get -H -o name,value -t snapshot userrefs 2>/dev/null)
+    if [ "$shown" -eq 1 ]; then
+        echo "      CHECK FIRST that no transfer is running -- a hold protecting a live"
+        echo "      one is not a leak:   ps -eo args | grep '[z]fs send'"
+    fi
+    return "$shown"
+}
+
 report_orphaned_data() {
     [ -d "$TOMBSTONE_DIR" ] || return 0
     local f ds line name shown=0
@@ -663,11 +723,22 @@ main() {
     echo "== relationship traces on $(hostname) =="
     report
     report_orphaned_data
+    local held=0
+    report_leaked_holds || held=1
 
     if [ "$PURGING" -eq 0 ]; then
         if [ "${#ORPHANS[@]}" -gt 0 ]; then
             log "${#ORPHANS[@]} orphan(s): ${ORPHANS[*]}"
             log "remove them with: $0 --purge-orphans --yes"
+            return 3
+        fi
+        if [ "$held" -eq 1 ]; then
+            # Not folded into the orphan count: a held snapshot is a different
+            # kind of finding and needs a different action. But it must not be
+            # reported under a clean exit either -- "nothing orphaned" while a
+            # dataset silently cannot be pruned is the false all-clear this tool
+            # exists to prevent.
+            log "no orphaned relationships, but held snapshots were found (above) -- retention on those datasets is failing silently"
             return 3
         fi
         log "nothing orphaned -- every trace on this host belongs to a live relationship"
