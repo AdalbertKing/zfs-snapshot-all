@@ -7245,21 +7245,58 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
         esac
     fi
 
+    # PREPARE the manifest before touching anything, so the only step left after
+    # the swap is a rename on the same filesystem. Writing it afterwards meant a
+    # failure there left the jobs re-capped and the manifest stale -- the same
+    # two-sources-of-truth split this command exists to end, just moved later in
+    # the sequence.
+    #
+    # And APPEND when the key is absent. The first version only rewrote a line
+    # that was already there: a manifest predating the field (or written by an
+    # older deploy.sh) silently kept no cap at all while the CONFIG got one, and
+    # `mv` reported success. My own test could not see it, because its fixture
+    # always started with PEER_SAVED_BANDWIDTH=2M.
+    local mtmp; mtmp=$(mktemp "$(dirname "$mpath")/.manifest.XXXXXX") \
+        || die "cannot write next to the pairing manifest $mpath -- nothing was changed"
+    if ! { awk -v v="$rate" '
+               /^PEER_SAVED_BANDWIDTH=/ { print "PEER_SAVED_BANDWIDTH=" v; seen=1; next }
+               { print }
+               END { if (!seen) print "PEER_SAVED_BANDWIDTH=" v }
+           ' "$mpath" > "$mtmp"; }; then
+        rm -f "$mtmp"
+        die "could not prepare the updated pairing manifest -- nothing was changed"
+    fi
+    # Our own rollback copy. atomic_replace_and_install keeps one only for its
+    # OWN failure paths and removes it on success, so a failure AFTER it returns
+    # has nothing to fall back on unless we kept a copy ourselves.
+    local rollback; rollback=$(mktemp "$(dirname "$cronfile")/.zfsbackup-rollback.XXXXXX") \
+        || { rm -f "$mtmp"; die "mktemp failed for the rollback copy -- nothing was changed"; }
+    cp -p "$cronfile" "$rollback" || { rm -f "$mtmp" "$rollback"; die "could not take a rollback copy of $cronfile -- nothing was changed"; }
+
     assert_cron_config_matches_installed "$cronfile"
     assert_no_foreign_managed_block "$workfile"
     assert_target_block_not_clobbered "$workfile"
     assert_config_readable_by_target "$cronfile"
     atomic_replace_and_install "$cronfile" "$workfile"
 
-    # The manifest LAST -- see the order note above.
-    local mtmp; mtmp=$(mktemp "$(dirname "$mpath")/.manifest.XXXXXX") || die "the jobs are re-capped, but mktemp failed for the manifest: set PEER_SAVED_BANDWIDTH=$rate in $mpath by hand"
-    if awk -v v="$rate" '/^PEER_SAVED_BANDWIDTH=/{print "PEER_SAVED_BANDWIDTH=" v; next} {print}' "$mpath" > "$mtmp" \
-       && mv -f "$mtmp" "$mpath"; then
-        chmod 0600 "$mpath" 2>/dev/null || :
-    else
+    # ALL TOGETHER OR NOTHING, which is what this command claims to be. A warn
+    # and a zero exit left the jobs on the new cap and the manifest on the old --
+    # exactly the divergence being fixed, and the next relationship written
+    # against this peer would have restored the old value from the manifest.
+    #
+    # The remaining step is a rename within one directory. If even that fails,
+    # put the CONFIG back and say so with a non-zero status, so config, crontab
+    # and manifest are left agreeing with each other.
+    if ! mv -f "$mtmp" "$mpath"; then
         rm -f "$mtmp"
-        warn "the jobs now run with '${rate:-<brak>}', but the pairing manifest could not be rewritten: set PEER_SAVED_BANDWIDTH=$rate in $mpath by hand, or the next relationship enrolled against '$peer' will inherit the old value"
+        local restored="restored"
+        cp -p "$rollback" "$cronfile" 2>/dev/null || restored="NOT restored"
+        gencron_as_target -c "$cronfile" --install >/dev/null 2>&1 || restored="config restored, CRONTAB NOT reinstalled"
+        rm -f "$rollback"
+        die "the pairing manifest $mpath could not be published, so the cap change was rolled back ($restored). Config, crontab and manifest are left on the OLD value '${old_rate:-<none>}'. Fix whatever prevents writing next to the manifest and re-run."
     fi
+    chmod 0600 "$mpath" 2>/dev/null || :
+    rm -f "$rollback"
 
     log "link cap for '$peer' is now '${rate:-<none>}' -- ${#tgt_name[@]} relationship(s) rewritten and installed in one transaction."
 }
