@@ -1246,12 +1246,30 @@ profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
 # the package (root's, the delegated account's, two in /tmp). A profiles.local/
 # beside the checkout would exist once per copy, and "where are this host's
 # profiles" would depend on which account ran the command.
-profile_file() {   # <name or path> -> the profile file to use
-    case "$1" in
-        */*) printf '%s' "$1"; return 0 ;;
+profile_file() {   # <file name or path> -> the profile file to use
+    local n="$1" d
+    case "$n" in */*) printf '%s' "$n"; return 0 ;; esac
+    # THE ARGUMENT IS A FILE NAME, taken literally. The first cut appended
+    # `.conf` to it, so `--profile=firma.conf` went looking for firma.conf.conf
+    # and only the extension-less shorthand worked -- the opposite of the
+    # instruction, which was that a profile is a file and you may name it.
+    for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+        [ -f "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }
+    done
+    # The shorthand survives as a compatible alias, because `--profile=default`
+    # is what every existing record, test and habit already says.
+    case "$n" in
+        *.conf) : ;;
+        *) for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+               [ -f "$d/$n.conf" ] && { printf '%s' "$d/$n.conf"; return 0; }
+           done ;;
     esac
-    [ -f "$PROFILE_USER_ROOT/$1.conf" ] && { printf '%s' "$PROFILE_USER_ROOT/$1.conf"; return 0; }
-    printf '%s' "$PROFILE_ROOT/$1.conf"
+    # Nothing matched. Answer with the package path so the refusal that follows
+    # names a place worth looking, rather than an empty string.
+    case "$n" in
+        *.conf) printf '%s' "$PROFILE_ROOT/$n" ;;
+        *)      printf '%s' "$PROFILE_ROOT/$n.conf" ;;
+    esac
 }
 
 # The name a profile is known BY, which is not the same thing as where it lives:

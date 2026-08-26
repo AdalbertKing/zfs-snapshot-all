@@ -7511,6 +7511,53 @@ else
     bad "96A roots control: a name the host does not override comes from the package" "got '$(pr_file default)'"
 fi
 
+# A PROFILE IS A FILE, SO ITS NAME IS A FILE NAME.
+#
+# The first resolver appended `.conf` to any argument without a '/', so
+# `--profile=firma.conf` went looking for firma.conf.conf and only the
+# extension-less shorthand worked. That is the opposite of the instruction it
+# was written for -- "profil to plik, mozemy podac jego nazwe" -- and the
+# shorthand is the alias, not the interface.
+cp "$REPO/profiles/prod.conf" "$UR/firma.conf"
+nm_case() { ( PROFILE_USER_ROOT="$UR"; profile_file "$1" ); }
+
+if [ "$(nm_case firma.conf)" = "$UR/firma.conf" ]; then
+    ok "96B name: a FILE NAME from the host's directory resolves to that file"
+else
+    bad "96B name: a file name from the host's directory resolves to that file" "got '$(nm_case firma.conf)'"
+fi
+
+if [ "$(nm_case default.conf)" = "$REPO/profiles/default.conf" ]; then
+    ok "96B name: a FILE NAME from the package resolves to that file"
+else
+    bad "96B name: a file name from the package resolves to that file" "got '$(nm_case default.conf)'"
+fi
+
+if [ "$(nm_case /tmp/somewhere/else.conf)" = "/tmp/somewhere/else.conf" ]; then
+    ok "96B name: an explicit path is taken as given, with nothing searched"
+else
+    bad "96B name: an explicit path is taken as given" "got '$(nm_case /tmp/somewhere/else.conf)'"
+fi
+
+# CONTROL: the extension-less shorthand still works, because every existing
+# client record, test and habit says --profile=default. Without this the three
+# above would pass against a build that simply stopped resolving names.
+if [ "$(nm_case default)" = "$REPO/profiles/default.conf" ]; then
+    ok "96B control: the extension-less shorthand still resolves"
+else
+    bad "96B control: the extension-less shorthand still resolves" "got '$(nm_case default)'"
+fi
+
+# ...and the NAME used for namespacing drops the extension either way, or a
+# profile addressed by file name would namespace its templates as
+# profile__firma.conf__hourly.
+if [ "$(profile_name_of "$UR/firma.conf")" = "firma" ] && [ "$(profile_name_of firma)" = "firma" ]; then
+    ok "96B name: the template namespace is the bare name, however the profile was addressed"
+else
+    bad "96B name: the template namespace is the bare name" \
+        "path='$(profile_name_of "$UR/firma.conf")' bare='$(profile_name_of firma)'"
+fi
+
 # ...and the digest follows the resolution, or an override would be invisible to
 # migrate-profile -- the whole point of today's F2b.
 d_fac="$( ( PROFILE_USER_ROOT="$WORK/nonexistent"; PROFILE_ACTIVE=prod; profile_digest ) )"
