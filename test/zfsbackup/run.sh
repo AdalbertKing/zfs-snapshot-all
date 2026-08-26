@@ -7695,7 +7695,11 @@ sb_run() {   # <rate or -> -> rc
       CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
       cmd_set_bandwidth --peer=10.5.5.5 "$arg" --config="$SB/dir/jobs.conf" --yes ) >/dev/null 2>&1
 }
-sb_caps()     { grep -c '^	bandwidth    = 8M$' "$SB/dir/jobs.conf"; }
+# Either spelling: the fixture writes an ALIGNED `bandwidth    = 2M`, while a
+# field this tool INSERTS is single-spaced (`bandwidth = 8M`). Pinning one of
+# them made two assertions fail for a reason unrelated to what they test.
+sb_capn()     { grep -cE "^	bandwidth[ 	]*= $1\$" "$SB/dir/jobs.conf"; }
+sb_caps()     { sb_capn 8M; }
 sb_manifest() { grep -m1 '^PEER_SAVED_BANDWIDTH=' "$SB/peerstate/10.5.5.5.conf" | cut -d= -f2-; }
 
 sb_run 8M
@@ -7711,6 +7715,48 @@ sb_run -
     && ok "pair-tx: an empty rate removes the field from every section and empties the manifest" \
     || bad "pair-tx: an empty rate removes the field everywhere" \
            "bandwidth lines left=$(grep -c '^	bandwidth' "$SB/dir/jobs.conf") manifest='$(sb_manifest)'"
+
+# (a) A MANIFEST THAT DOES NOT CARRY THE KEY YET.
+#
+# The first cut only REWROTE an existing PEER_SAVED_BANDWIDTH= line. A manifest
+# predating the field -- or written by an older deploy.sh -- kept no cap at all
+# while the CONFIG got one, and `mv` reported success either way. My own test
+# could not see it, because its fixture always started with the key present.
+# That is the more useful half of this assertion: a fixture that always contains
+# the thing under test cannot fail.
+printf 'PEER_SAVED_LOCAL_USER=root\n' > "$SB/peerstate/10.5.5.5.conf"
+sb_run 8M
+{ [ "$(sb_caps)" -eq 2 ] && [ "$(sb_manifest)" = "8M" ]; } \
+    && ok "pair-tx: the cap is APPENDED to a manifest that had no such key" \
+    || bad "pair-tx: the cap is appended to a manifest that had no such key" \
+           "sections at 8M=$(sb_caps) manifest='$(sb_manifest)'"
+
+# (b) A FORCED FAILURE OF THE MANIFEST PUBLISH.
+#
+# The first cut warned and exited zero, leaving the jobs on the new cap and the
+# manifest on the old -- the exact divergence this command exists to end, moved
+# later in the sequence. "One transaction" has to mean the failure case too.
+printf 'PEER_SAVED_LOCAL_USER=root\nPEER_SAVED_BANDWIDTH=2M\n' > "$SB/peerstate/10.5.5.5.conf"
+sb_run 2M
+sb_out="$( ( PATH="$SB/bin:$PATH"
+             # Fail ONLY the manifest rename, by its destination. Matching the
+             # last argument, because atomic_replace_and_install's own mv is
+             # stubbed below and must keep working.
+             mv() { local last="${!#}"; case "$last" in *peerstate*) return 1 ;; esac; command mv "$@"; }
+             atomic_replace_and_install() { command mv -f "$2" "$1"; }
+             assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+             assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+             show_activation_proposal() { :; }; gencron_as_target() { return 0; }
+             CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+             cmd_set_bandwidth --peer=10.5.5.5 --bandwidth=8M --config="$SB/dir/jobs.conf" --yes ) 2>&1 )"
+sb_rc=$?
+{ [ "$sb_rc" -ne 0 ] \
+  && [ "$(sb_capn 2M)" -eq 2 ] \
+  && [ "$(sb_manifest)" = "2M" ]; } \
+    && ok "pair-tx: a manifest publish failure ROLLS BACK -- config and manifest stay on the old cap, rc is non-zero" \
+    || bad "pair-tx: a manifest publish failure rolls back" \
+           "rc=$sb_rc sections at 2M=$(sb_capn 2M) manifest='$(sb_manifest)'" \
+           "$(printf '%s' "$sb_out" | tail -1)"
 
 # CONTROL: a peer with no pairing manifest is refused, and nothing moves --
 # without it the assertions above would pass against a build that rewrites
