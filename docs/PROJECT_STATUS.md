@@ -1751,6 +1751,39 @@
   zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
   nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
 
+- **LAB ZBUDOWANY OD ZERA: pve9 <- pve1 (2026-08-26).**
+  Szczegoly i znaleziska: `docs/project/LAB-REBUILD-20260826-FINDINGS.md`.
+
+  **Powod:** dwa argumenty projektowe o odtwarzaniu oparlem na parze
+  pve1<->pve9, a oba stalu na faktach, ktore byly **sladem po moich wlasnych
+  labach** — zaufanie root<->root (bo laby chodzily jako root) i „kolektor laczy
+  sie co godzine" (pve9 mial ZERO zadan, wszystkie rekordy `STATE=removed`).
+  Projekt oparty na skazonym labie pasowalby do labu.
+
+  **Stan po przebudowie:** pve9 bez ani jednego sladu relacji i z pusta pula;
+  pve1 bez sladow lab-owych, produkcja nietknieta, crontaby potwierdzone hashem.
+  Zaufanie ssh miedzy hostami usuniete w OBIE strony i sprawdzone.
+
+  **Nowa relacja `lab1`**, zalozona sciezka BEZ zaufania (`--manual-join`):
+  kolektor nie mogl siegnac do zrodla, wiec wygenerowal wsad, wsad zostal
+  przeniesiony, a zrodlo samo zatwierdzilo swoj zakres.
+
+  ```
+  pve1 hdd/labsrc/vm-900-disk-0 (6 MB) -> pve9 hdd/labcoll/192.168.28.9/hdd/labsrc/...
+       hdd/labsrc/vm-900-disk-1 (4 MB)
+  ```
+
+  Dwa dyski jednego goscia — celowo, bo to jest przypadek, ktorego potrzebuje
+  odtwarzanie. Seed potwierdzony GUID-em na trzech datasetach, nie komunikatem.
+
+  **Co lab od razu rozstrzygnal:** planer mowi „zrodlo jest ZDALNE". Kolektor
+  siega do zrodla kontem `zfsbackup-pve9`; **w druga strone nie ma nic**.
+  Odtwarzanie w trybie pull wymaga kanalu, ktorego nie ma i ktorego zaden
+  obecny czasownik nie zaklada — i to jest teraz fakt o prawdziwej relacji.
+
+  **Cztery znaleziska**, w tym jedno o naszym silniku: wyciek holda
+  `zfssnapall_inflight` blokowal sprzatanie przez cztery dni.
+
 - **RESTORE: trzy korekty po recenzji (2026-08-26).**
 
   **`--at` klasyfikowalo inny snapshot, niz pokazywalo.** Podglad drukowal
