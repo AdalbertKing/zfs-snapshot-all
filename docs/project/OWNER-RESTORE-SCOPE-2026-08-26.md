@@ -111,3 +111,31 @@ not fall back to "either".
 Both spellings work (`--target x` and `--target=x`) because both recorded
 contracts write the first one, and an option whose value is missing — or is
 itself the next flag — is refused rather than swallowed.
+
+## `--at` — as built
+
+`restore <relation> [--target ...|--source ...] --at "<time>"`.
+
+`date -d` is the only thing that turns the operator's words into a moment, so
+anything it accepts works and there is no second date grammar to disagree with
+it. A time it cannot read is a refusal, never a silent "now". `--at` and
+`--snapshot` together are refused: they are two ways of naming a recovery point.
+
+Selection is `creation`, **never the name** — the planner already shouts when the
+two disagree by more than two minutes, and choosing on the name would quietly
+pick the story over the fact.
+
+Three outcomes per dataset, and all three are printed:
+
+| outcome | what the plan says |
+|---|---|
+| resolved | the requested time, the chosen snapshot, its real `creation` and its GUID, side by side |
+| nothing old enough | named as **that dataset's** error; the others are still planned |
+| a tie on the greatest `creation` | refuses to choose, and says the name is not a tie-breaker |
+
+The heading is `PER-DATASET FRONTIER -- NIE atomowy stan calej relacji`, printed
+once above the plan rather than as a footnote: four disks of one VM is exactly
+the case where somebody assumes they were handed one instant.
+
+An incomplete plan **exits non-zero** (owner decision 7), because the exit status
+is the only part of this a cron job reads.

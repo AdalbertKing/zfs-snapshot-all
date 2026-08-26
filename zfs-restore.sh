@@ -874,6 +874,62 @@ restore_scope_fail() {   # <config> <label> <member> <namespace>
     esac
 }
 
+# ------------------------------------------------------------------------------
+# A RECOVERY POINT IN WALL-CLOCK TIME
+# ------------------------------------------------------------------------------
+# The operator thinks "the state at noon yesterday", not in snapshot names. So
+# `--at` takes a time and each dataset gets the snapshot with the greatest ZFS
+# `creation` AT OR BEFORE it.
+#
+# THREE RULES, and each of them is a refusal to tell a comforting story:
+#
+#   1. `creation`, NEVER the name. A snapshot called `automated_daily_2026-08-10_...`
+#      can have been created at some other time entirely -- renamed, made by hand
+#      following the convention, or taken while the clock was wrong. The planner
+#      already shouts when the two disagree by more than two minutes; selecting on
+#      the name would quietly pick the story over the fact.
+#   2. PER-DATASET FRONTIER, not a point in time. Every dataset resolves its own
+#      answer, and under a comma list -- four disks of one VM -- that is exactly
+#      the case where somebody will assume otherwise. The output says so in a
+#      heading, not in a footnote.
+#   3. A TIE IS FAIL-CLOSED. Two snapshots sharing the greatest `creation` at or
+#      before the time is genuinely ambiguous, and the snapshot NAME is not a
+#      tie-breaker -- picking the lexically later one would be rule 1 smuggled
+#      back in through the ordering.
+#
+# Reads the same `name<TAB>creation<TAB>guid` listing the planner already fetches,
+# so there is no second query and no second idea of what the snapshots are.
+restore_at_pick() {   # <epoch> <listing> -> prints the chosen row; 1 = none, 2 = tie
+    local want="$1" listing="$2"
+    local sname screat sguid best="" bestc="" ties=0
+    while IFS=$'\t' read -r sname screat sguid; do
+        [ -n "$sname" ] || continue
+        case "$screat" in ''|*[!0-9]*) continue ;; esac
+        [ "$screat" -le "$want" ] || continue
+        if [ -z "$bestc" ] || [ "$screat" -gt "$bestc" ]; then
+            bestc="$screat"; best="$sname	$screat	$sguid"; ties=1
+        elif [ "$screat" -eq "$bestc" ]; then
+            ties=$((ties + 1))
+        fi
+    done <<< "$listing"
+    [ -n "$best" ] || return 1
+    [ "$ties" -eq 1 ] || return 2
+    printf '%s\n' "$best"
+    return 0
+}
+
+# `date -d` is what turns the operator's words into an epoch, and it is
+# deliberately the ONLY thing that does: inventing a second date grammar here
+# would mean two answers to "what does 'yesterday 12:00' mean".
+restore_at_epoch() {   # <what the operator wrote> -> prints epoch, or dies
+    local raw="$1" e
+    e="$(date -d "$raw" +%s 2>/dev/null)" || e=""
+    case "$e" in
+        ''|*[!0-9]*) die "restore: --at '$raw' is not a time this system can read. date(1) parses it, so anything it takes works -- '2026-08-10 12:00', 'yesterday 12:00', '2 hours ago'. Refusing rather than guessing which moment was meant." ;;
+    esac
+    printf '%s' "$e"
+}
+
 restore_fence_capture() {   # <dataset> -> prints "<value> <source>"
     local ds="$1" val srcp
     val="$(zfs get -H -o value readonly "$ds" 2>/dev/null)"
@@ -1536,7 +1592,7 @@ cmd_restore() {
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list=""
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch=""
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -1556,6 +1612,9 @@ cmd_restore() {
             --plan)       plan=1 ;;
             --dataset=*)  dataset="${a#*=}" ;;
             --dataset)    need_val --dataset "${2:-}"; dataset="$2"; shift ;;
+            # Wall-clock, not a snapshot name (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13).
+            --at=*)       at_raw="${a#*=}" ;;
+            --at)         need_val --at "${2:-}"; at_raw="$2"; shift ;;
             # Owner decision 2026-08-26: the datasets of a relationship are named
             # by an exact path, in ONE namespace, several of them separated by
             # commas -- a VM with four virtual disks is one recovery, not four.
@@ -1584,6 +1643,11 @@ cmd_restore() {
     # this removes is an operator naming two of a VM's disks as they exist on the
     # collector and two as they exist on the host, and getting a plan that looks
     # complete. Once one side is chosen, the recorded mapping supplies the other.
+    if [ -n "$at_raw" ] && [ -n "$snapshot" ]; then
+        die "restore: --at and --snapshot both name a recovery point. --snapshot is one exact name for one dataset; --at is a time, resolved per dataset. Give one."
+    fi
+    [ -n "$at_raw" ] && at_epoch="$(restore_at_epoch "$at_raw")"
+
     if [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then
         die "restore: --source and --target are mutually exclusive. Name every dataset of this recovery in ONE namespace -- either as they exist on the collector (--source) or as they exist on the machine being restored (--target). Whichever you choose, the recorded relationship supplies the other side."
     fi
@@ -1643,6 +1707,8 @@ cmd_restore() {
     # a live dataset stays a SEPARATE verb (slice 3), never a flag on this one --
     # a --force that turns a safe command into a destructive one is exactly the
     # shape the plan refuses.
+    [ -n "$at_epoch" ] && plan=1
+
     if [ "$plan" -ne 1 ]; then
         [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Destructive recovery of the original path has no public grammar yet -- the owner is still deciding it."
         cmd_restore_safe "$dataset" "$snapshot" "$config" "$yes"
@@ -1664,8 +1730,17 @@ cmd_restore() {
     done <<< "$(restore_relations "$config")"
     [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
 
+    local at_missing=0 at_ambig=0
     echo
     echo "Plan odtworzenia (TYLKO ODCZYT -- nic nie zostalo zmienione):"
+    if [ -n "$at_epoch" ]; then
+        echo
+        echo "  PER-DATASET FRONTIER -- NIE atomowy stan calej relacji."
+        echo "  Kazdy dataset dostaje WLASNY najpozniejszy snapshot z chwili"
+        echo "  $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") lub wczesniejszej. Czasy ponizej moga sie roznic"
+        echo "  i to NIE jest blad -- to jest to, co naprawde zostalo zapisane."
+        echo "  Wybor idzie po wlasciwosci ZFS 'creation', NIGDY po nazwie snapshotu."
+    fi
     echo "  Config:     $config"
     [ -n "$dataset" ] && echo "  Filtr:      $dataset"
     local i shown=0
@@ -1706,6 +1781,31 @@ cmd_restore() {
             echo "  Spojnosc:   INDEPENDENT (frontier, NIE punkt w czasie) -- kazdy dataset ma"
             echo "              wlasny najnowszy snapshot; czasy ponizej moga sie roznic i to nie jest blad."
         fi
+        if [ -n "$at_epoch" ]; then
+            local at_row at_rc
+            at_row="$(restore_at_pick "$at_epoch" "$snaps")"; at_rc=$?
+            case "$at_rc" in
+                0)
+                    local an ac ag
+                    an="${at_row%%	*}"; ag="${at_row##*	}"
+                    ac="$(printf '%s' "$at_row" | cut -f2)"
+                    echo "  PUNKT --at:  ZADANO $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch")"
+                    printf '               WYBRANO %s\n' "${an#*@}"
+                    printf '               creation=%s  guid=%s\n' "$(date -d "@$ac" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$ac")" "${ag:--}"
+                    ;;
+                1)
+                    echo "  PUNKT --at:  BRAK -- ten dataset nie ma snapshotu z chwili $(date -d "@$at_epoch" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "$at_epoch") ani wczesniejszego."
+                    echo "               To jest BLAD TEGO DATASETU. Pozostale sa dalej planowane, a koncowy status przebiegu bedzie niezerowy."
+                    at_missing=$((at_missing + 1))
+                    ;;
+                2)
+                    echo "  PUNKT --at:  NIEJEDNOZNACZNE -- kilka snapshotow ma ten sam, najpozniejszy czas utworzenia w tej chwili."
+                    echo "               Odmowa wyboru: nazwa snapshotu NIE jest rozstrzygajaca (patrz --at powyzej)."
+                    echo "               Wskaz konkretny snapshot recznie albo podaj inna chwile."
+                    at_ambig=$((at_ambig + 1))
+                    ;;
+            esac
+        fi
         echo "  Snapshoty (czas z wlasciwosci ZFS 'creation', nie z nazwy):"
         local line sname screat sguid nts human flag
         while IFS=$'\t' read -r sname screat sguid; do
@@ -1727,6 +1827,17 @@ cmd_restore() {
     fi
     echo
     echo "To jest wylacznie plan odczytu. Zaden dataset, snapshot ani cron nie zostal dotkniety."
+    # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26): a run that
+    # could not answer for every dataset continues and REPORTS, but it does not
+    # exit 0. Nine of ten is not ten, and the exit status is the only part of
+    # this a cron job reads.
+    if [ "$at_missing" -gt 0 ] || [ "$at_ambig" -gt 0 ]; then
+        echo
+        echo "PODSUMOWANIE --at: $at_missing dataset(ow) bez snapshotu z tej chwili, $at_ambig niejednoznacznych."
+        echo "Plan jest NIEPELNY. Status niezerowy, zeby nie zostalo to zapisane jako czysty przebieg."
+        return 1
+    fi
+    return 0
 }
 
 # ------------------------------------------------------------------------------

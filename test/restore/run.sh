@@ -1957,6 +1957,127 @@ sc_refuses "scope: a flag whose value is the next flag is refused" \
 sc_ok "scope: --target takes its value as the next word" \
     "rpool/data/vm-101-disk-0" pve2 --target rpool/data/vm-101-disk-0
 
+# ============================================================================
+# --at -- a recovery point in wall-clock time, resolved PER DATASET
+#
+# Reviewer rule 4, 2026-08-26. Three properties, each with its own case, and the
+# fixture is built from the SAME `date -d` the code uses so the test cannot pass
+# by agreeing with itself about what "2026-08-10 12:00" means.
+#
+# The case that carries the block is `at1`: the wanted snapshot is neither the
+# newest nor the oldest. An implementation that took the newest, or the last
+# line, or the lexically greatest name passes nothing here.
+# ============================================================================
+AT="$WORK/at"; mkdir -p "$AT/bin"
+AT_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$AT/cfg" <<'ATCFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:hdd/store]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-0
+	pair_label   = pve2
+[dataset:hdd/store2]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-1
+	pair_label   = pve2
+[dataset:hdd/tie]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-2
+	pair_label   = pve2
+ATCFG
+# hdd/store  : one BEFORE, one just before (the answer), one AFTER
+# hdd/store2 : nothing at or before the moment
+# hdd/tie    : two sharing the greatest creation at or before it
+cat > "$AT/bin/zfs" <<ATSTUB
+#!/bin/bash
+E=$AT_E
+for a in "\$@"; do ds="\$a"; done
+case "\$*" in
+  *"-t snapshot"*)
+    case "\$ds" in
+      hdd/store)  printf '%s@old\t%s\tG1\n'    "\$ds" "\$((E-86400))"
+                  printf '%s@WANTED\t%s\tG2\n' "\$ds" "\$((E-3600))"
+                  printf '%s@toonew\t%s\tG3\n' "\$ds" "\$((E+86400))" ;;
+      hdd/store2) printf '%s@onlynew\t%s\tG9\n' "\$ds" "\$((E+3600))" ;;
+      hdd/tie)    printf '%s@twinA\t%s\tGA\n'  "\$ds" "\$((E-3600))"
+                  printf '%s@twinB\t%s\tGB\n'  "\$ds" "\$((E-3600))" ;;
+    esac ;;
+esac
+exit 0
+ATSTUB
+chmod +x "$AT/bin/zfs"
+
+at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_rc=$?
+
+# at1 -- neither the newest nor the oldest.
+case "$at_out" in
+    *"WYBRANO WANTED"*) ok "at: picks the greatest creation AT OR BEFORE the moment" ;;
+    *) bad "at: picks the greatest creation AT OR BEFORE the moment" "$(printf '%s' "$at_out" | grep -E 'WYBRANO|PUNKT' | head -3)" ;;
+esac
+case "$at_out" in
+    *"WYBRANO toonew"*) bad "at: ...and never a snapshot from AFTER it" "picked toonew" ;;
+    *) ok "at: ...and never a snapshot from AFTER it" ;;
+esac
+# The guid and the real creation travel with the choice: the operator has to be
+# able to check what they were given without trusting the name.
+case "$at_out" in
+    *"guid=G2"*) ok "at: ...and reports the chosen snapshot's guid and real creation" ;;
+    *) bad "at: ...and reports the chosen snapshot's guid and real creation" "$(printf '%s' "$at_out" | grep creation= | head -2)" ;;
+esac
+# The heading, because four disks of one VM is exactly where somebody assumes
+# they were handed one instant.
+case "$at_out" in
+    *"PER-DATASET FRONTIER"*) ok "at: says PER-DATASET FRONTIER in a heading, not a footnote" ;;
+    *) bad "at: says PER-DATASET FRONTIER in a heading, not a footnote" ;;
+esac
+# A dataset with nothing old enough is that dataset's error, and the run goes on.
+case "$at_out" in
+    *"BRAK -- ten dataset nie ma snapshotu"*) ok "at: a dataset with nothing old enough is named" ;;
+    *) bad "at: a dataset with nothing old enough is named" ;;
+esac
+case "$at_out" in
+    *"WYBRANO WANTED"*) ok "at: ...and the OTHER datasets are still planned" ;;
+    *) bad "at: ...and the OTHER datasets are still planned" ;;
+esac
+# A tie is fail-closed: the name is not a tie-breaker.
+case "$at_out" in
+    *"NIEJEDNOZNACZNE"*) ok "at: a tie on the greatest creation refuses to choose" ;;
+    *) bad "at: a tie on the greatest creation refuses to choose" ;;
+esac
+case "$at_out" in
+    *"WYBRANO twinA"*|*"WYBRANO twinB"*) bad "at: ...and does NOT break the tie by name" "picked one of the twins" ;;
+    *) ok "at: ...and does NOT break the tie by name" ;;
+esac
+# Owner decision 7: incomplete is not clean. The exit status is the only part of
+# this a cron job reads.
+if [ "$at_rc" -ne 0 ]; then ok "at: an incomplete plan exits non-zero"
+else bad "at: an incomplete plan exits non-zero" "rc=0"; fi
+
+# The positive control for that status: when every dataset resolves, rc is 0 --
+# otherwise the assertion above would pass against a plan that always failed.
+at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_ok_rc=$?
+if [ "$at_ok_rc" -eq 0 ]; then ok "at: a plan that resolves everything exits 0"
+else bad "at: a plan that resolves everything exits 0" "rc=$at_ok_rc" "$(printf '%s' "$at_ok_out" | tail -3)"; fi
+
+# A time nobody can parse is a refusal, not a silent "now".
+at_bad="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at 'wczoraj o poludniu' --config="$AT/cfg" 2>&1)"
+case "$at_bad" in
+    *"is not a time this system can read"*) ok "at: an unparseable time is refused" ;;
+    *) bad "at: an unparseable time is refused" "$(printf '%s' "$at_bad" | head -2)" ;;
+esac
+# Two ways of naming a recovery point is one too many.
+at_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --snapshot=x --config="$AT/cfg" 2>&1)"
+case "$at_both" in
+    *"both name a recovery point"*) ok "at: --at and --snapshot together are refused" ;;
+    *) bad "at: --at and --snapshot together are refused" "$(printf '%s' "$at_both" | head -2)" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d3ea6f468bf546d4 -->
+<!-- status-covers-digest: 8967c8b5bb41b1d8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1750,6 +1750,31 @@
   **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
   zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
   nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
+
+- **RESTORE: `--at` — punkt odtworzenia w czasie zegarowym (2026-08-26).**
+  `restore pve2 --at "2026-08-10 12:00"`. Operator mysli chwila, nie nazwa
+  snapshotu.
+
+  **Wybor idzie po wlasciwosci ZFS `creation`, NIGDY po nazwie.** Planer juz
+  krzyczy, gdy te dwie rzeczy roznia sie o wiecej niz dwie minuty; wybieranie po
+  nazwie znaczyloby cicho brac opowiesc zamiast faktu.
+
+  Trzy wyniki na dataset i wszystkie trzy sa wypisane: **rozstrzygniety** (zadany
+  czas, wybrany snapshot, jego prawdziwy `creation` i GUID obok siebie),
+  **brak czegokolwiek dosc starego** (blad TEGO datasetu, reszta dalej
+  planowana), **remis** na najpozniejszym `creation` (odmowa wyboru — nazwa nie
+  jest rozstrzygajaca).
+
+  Naglowek `PER-DATASET FRONTIER -- NIE atomowy stan calej relacji` idzie raz,
+  nad planem, a nie drobnym drukiem: cztery dyski jednej VM to dokladnie ten
+  przypadek, w ktorym ktos zalozy, ze dostal jedna chwile.
+
+  Niepelny plan konczy sie **statusem niezerowym** (decyzja Ownera nr 7) — status
+  wyjscia to jedyna czesc tego, ktora czyta cron.
+
+  `test/restore` 143/0. Przypadek nosny: szukany snapshot nie jest ani
+  najnowszy, ani najstarszy — implementacja biorąca ostatni, najnowszy albo
+  leksykalnie najwiekszy nie przechodzi nic z tego bloku.
 
 - **RESTORE: zakres odzyskiwania — relacja osobno, datasety po przecinkach
   (2026-08-26).** Decyzja wlasciciela: VM z czterema dyskami wirtualnymi to
