@@ -7569,6 +7569,75 @@ else
 fi
 
 
+# ===========================================================================
+# THIS HOST'S DEFAULTS: settings.ini
+#
+# For the handful of things that are neither policy nor topology. A profile says
+# what to keep; a relationship says where from and where to; neither can say "on
+# this machine a catch-up older than half an hour is too stale to reuse" -- that
+# is a property of the host and its link.
+#
+# Until now such values lived only in environment variables with built-in
+# defaults, which means they were settable by whoever remembered to export them
+# and by nobody else.
+#
+# NOT a second place to say what a profile already says. The tier holds a
+# decision, this file holds the default for when a tier is silent -- the same
+# layering server.conf's DEFAULT_TARGET already uses. A per-profile settings
+# file would rebuild the two-sources-of-truth problem this tree spent a day
+# removing from the bandwidth manifest; the profile IS the per-profile file.
+# ===========================================================================
+SI="$WORK/settings"; rm -rf "$SI"; mkdir -p "$SI"
+printf '# komentarz\ncatchup_max_age = 3600   # i komentarz w linii\npusty =\n' > "$SI/settings.ini"
+
+si_read() { ( SETTINGS_FILE="$1"; settings_get "$2" "$3" ); }
+
+if [ "$(si_read "$SI/settings.ini" catchup_max_age 1800)" = "3600" ]; then
+    ok "settings: a value is read from the file, and a trailing comment is not part of it"
+else
+    bad "settings: a value is read from the file without its trailing comment" \
+        "got '$(si_read "$SI/settings.ini" catchup_max_age 1800)'"
+fi
+
+# A key written with nothing after it means "I meant to set this" and getting
+# the built-in silently would hide the mistake -- the same rule the config
+# grammar already applies to blank fields. Falling back is what it does; the
+# point of pinning it is that the behaviour is CHOSEN, not accidental.
+if [ "$(si_read "$SI/settings.ini" pusty 1800)" = "1800" ]; then
+    ok "settings: a key present but blank falls back rather than resolving to nothing"
+else
+    bad "settings: a key present but blank falls back" "got '$(si_read "$SI/settings.ini" pusty 1800)'"
+fi
+
+if [ "$(si_read "$SI/settings.ini" nie_ma 1800)" = "1800" ] \
+   && [ "$(si_read "$SI/nie-ma-pliku.ini" catchup_max_age 1800)" = "1800" ]; then
+    ok "settings control: an absent key and an absent FILE both give the built-in default"
+else
+    bad "settings control: an absent key and an absent file give the built-in default" \
+        "key='$(si_read "$SI/settings.ini" nie_ma 1800)' file='$(si_read "$SI/nie-ma-pliku.ini" catchup_max_age 1800)'"
+fi
+
+# PRECEDENCE, end to end through the real assignment rather than through the
+# reader alone: environment, then file, then built-in. The environment wins
+# because that is what the suites use to pin a value -- a host file that could
+# override a test would make the test a liar.
+# unset FIRST: this suite sources zfs-backup.sh at the top, so CATCHUP_MAX_AGE
+# is already 1800 in the parent and a subshell inherits it. ${VAR:-...} then
+# keeps the inherited value -- correct behaviour, since an inherited variable IS
+# the environment layer, but it left the test unable to observe the file layer
+# it was written for.
+si_env() { ( unset CATCHUP_MAX_AGE; export SETTINGS_FILE="$1"; [ -n "$2" ] && export CATCHUP_MAX_AGE="$2"
+             . "$ZFSBACKUP" >/dev/null 2>&1 || true; printf '%s' "${CATCHUP_MAX_AGE:-BRAK}" ) }
+si_a="$(si_env "$SI/settings.ini" 99)"
+si_b="$(si_env "$SI/settings.ini" "")"
+si_c="$(si_env "$SI/nie-ma-pliku.ini" "")"
+if [ "$si_a" = "99" ] && [ "$si_b" = "3600" ] && [ "$si_c" = "1800" ]; then
+    ok "settings: precedence is environment, then the host file, then the built-in"
+else
+    bad "settings: precedence is environment, then the host file, then the built-in" \
+        "env='$si_a' file='$si_b' builtin='$si_c'"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
