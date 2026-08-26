@@ -7218,8 +7218,14 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
         done
     done
 
+    # gencron_as_target, NOT a bare gen-cron. The rule exists because a render by
+    # the wrong copy, as the wrong account, previews a block that will never be
+    # installed -- gen-cron bakes the running copy's paths and the target
+    # account's environment into every line. activate-client validates its
+    # candidate this way; so does this. Asking for an allow-list exemption would
+    # have been the easier fix and the wrong one.
     log "validating the re-capped config (working copy only, nothing real touched yet)..."
-    if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
         rm -f "$workfile"
         die "gen-cron.sh rejected the re-capped config -- $cronfile was NOT touched (see output above)"
     fi
