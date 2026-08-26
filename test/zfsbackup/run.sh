@@ -6934,8 +6934,11 @@ fi
 # --- the record follows the config. PROFILE is create-time provenance that
 #     seed_profile_context still reads: a record left saying `default` on a
 #     host now running `prod` sends the next seed at the wrong family root.
-if [ "$(grep -c '^PROFILE=prod$' "$MP/clients/mpc.conf")" -ge 1 ] \
-   && [ "$(tail -1 "$MP/clients/mpc.conf")" = "PROFILE=prod" ]; then
+# The LAST assignment of that field, which is what a `.`-sourced record actually
+# means -- not the last LINE of the file. The digest is appended after PROFILE,
+# so the literal tail check started failing for a reason unrelated to what this
+# assertion is about.
+if [ "$(grep '^PROFILE=' "$MP/clients/mpc.conf" | tail -1)" = "PROFILE=prod" ]; then
     ok "96e: the client record is moved to the destination profile, last-assignment-wins"
 else
     bad "96e: the client record is moved to the destination profile" \
@@ -7244,6 +7247,75 @@ if [ "$(grep -c '^\[prune:' "$MP/dir/freshg.conf")" -ge 1 ]; then
 else
     bad "96n control: a LADDER profile on a fresh config still emits its ladder" \
         "$(grep -cE '^\[' "$MP/dir/freshg.conf") sections, none of them prune"
+fi
+
+# --- AN EDITED PROFILE MUST BE APPLIABLE. A NAME IS NOT A VERSION.
+#
+# REV F2. profiles/prod/profile.conf opens with a promise: "an operator changes
+# a retention here and nowhere else". migrate-profile decided "already there"
+# from the record's PROFILE string alone, so the promise was false in exactly
+# the case that matters -- edit keep = 7 to keep = 10, re-run the command, get
+# "nothing to migrate", and the installed cron still carries -D7.
+#
+# The digest covers the operator's file AND the renderer's tier-letter table,
+# because `keep = 24` becomes `-H24` through that table: a table change alters
+# the installed policy without touching a byte of the profile, and a digest over
+# the file alone would call that unchanged.
+ED="$WORK/editedprofile"; rm -rf "$ED"; mkdir -p "$ED/clients" "$ED/peerstate" "$ED/keys" "$ED/dir" "$ED/root" "$ED/bin"
+cp -r "$REPO/profiles/prod" "$ED/root/prod"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$ED/bin/crontab"
+chmod +x "$ED/bin/crontab"
+for h in 10.9.9.8 10.9.9.9; do
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$ED/keys/${h}_known_hosts"
+done
+cat > "$ED/peerstate/10.9.9.8.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$ED" > "$ED/server.conf"
+printf '[defaults]\n\thost_label = edtest\n' > "$ED/dir/jobs.conf"
+{ printf 'CLIENT_NAME=edc\nPEER_HOST=10.9.9.8\nSTATE=active\n'
+  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
+  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
+  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$ED"
+} > "$ED/clients/edc.conf"
+
+ed_run() {
+    ( PATH="$ED/bin:$PATH"
+      atomic_replace_and_install() { cp -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
+      CLIENTS_DIR="$ED/clients" PEER_STATE_DIR="$ED/peerstate" PEER_KEY_DIR="$ED/keys" \
+      SERVER_CONF="$ED/server.conf" PROFILE_ROOT="$ED/root" \
+      PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_migrate_profile --config="$ED/dir/jobs.conf" --yes --profile=prod ) 2>&1
+}
+ed_daily() { awk '/^\[template:profile__prod__daily\]/{f=1;next} /^\[/{f=0} f&&/retain/{sub(/.*=[ \t]*/,"");print;exit}' "$ED/dir/jobs.conf"; }
+
+ed_run >/dev/null 2>&1
+ed_first="$(ed_daily)"
+
+# The no-op is real and must stay real: an UNCHANGED profile still says so.
+ed_out="$(ed_run)"
+if printf '%s' "$ed_out" | grep -q 'nothing to migrate'; then
+    ok "96t control: an UNCHANGED profile is still a no-op"
+else
+    bad "96t control: an unchanged profile is still a no-op" "$(printf '%s' "$ed_out" | tail -2)"
+fi
+
+# Now the operator edits the one file they are told to edit.
+sed -i 's/^\tkeep           = 7$/\tkeep           = 10/' "$ED/root/prod/profile.conf"
+ed_out="$(ed_run)"
+ed_second="$(ed_daily)"
+if ! printf '%s' "$ed_out" | grep -q 'nothing to migrate' \
+   && [ "$ed_first" = "-D7" ] && [ "$ed_second" = "-D10" ]; then
+    ok "96u: editing a retention in the profile is applied, not answered with 'nothing to migrate'"
+else
+    bad "96u: editing a retention in the profile is applied" \
+        "before='$ed_first' after='$ed_second'" "$(printf '%s' "$ed_out" | tail -2)"
 fi
 
 echo "--------------------------------------------"

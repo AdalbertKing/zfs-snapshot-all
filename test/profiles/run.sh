@@ -602,6 +602,50 @@ else
     bad "floors control: a fresh config is given the profile's own values" "got $r, keep9=$(grep -c 'keep = 9' "$FLOOR/fresh.conf")"
 fi
 
+# 6. PROVENANCE: "the operator hardened this" and "another profile says
+#    otherwise" are two different facts, and the asymmetric rule only belongs to
+#    the first (REV F5).
+#
+#    Profile A declares keep=10 and installs the floor. Profile B declares
+#    keep=2. Under the direction rule alone, B's weaker number is simply kept
+#    quietly -- which reproduces the very defect this whole section exists to
+#    end: an operator reading profile B sees a policy in force nowhere. The code
+#    could not tell A's floor from a hand-made one because the section carried
+#    no signature. Now it does.
+mkdir -p "$FLOOR/p/two"
+sed 's/^\tkeep = 2$/\tkeep = 2/' "$ROOT/profiles/default/profile.conf" > "$FLOOR/p/two/profile.conf"
+
+# The config as profile 'nine' (keep = 9) would have left it: signed.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\t# managed-by: zfs-backup.sh profile=nine\n\tkeep = 9\n' > "$FLOOR/owned.conf"
+r="$(floor_run "$FLOOR/owned.conf" two)"
+if [ "${r%%|*}" = "1" ]; then
+    ok "floors: a floor SIGNED by another profile is refused on any difference, not just a weaker one"
+else
+    bad "floors: a floor signed by another profile is refused on any difference" "got $r"
+fi
+
+# CONTROL, and it is the whole point of the split: the SAME numbers, unsigned,
+# are an operator's hardening and still stand. Without this the assertion above
+# would pass against a build that refused every difference again -- which is the
+# rule this tree already measured as too wide.
+printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\tkeep = 9\n' > "$FLOOR/unowned.conf"
+r="$(floor_run "$FLOOR/unowned.conf" two)"
+if [ "${r%%|*}" = "0" ] && [ "$(vz_keep "$FLOOR/unowned.conf")" = "9" ]; then
+    ok "floors control: the same stronger value UNSIGNED is the operator's and is kept"
+else
+    bad "floors control: the same stronger value unsigned is kept" \
+        "got $r, vzdump keep=$(vz_keep "$FLOOR/unowned.conf")"
+fi
+
+# ...and a floor this tool writes carries its signature, or none of the above
+# can ever be true on a real host.
+if grep -A2 '^\[excluded:vzdump\]' "$FLOOR/fresh.conf" | grep -q 'managed-by: zfs-backup.sh profile=nine'; then
+    ok "floors: a floor this tool installs records which profile declared it"
+else
+    bad "floors: a floor this tool installs records which profile declared it" \
+        "$(grep -A2 '^\[excluded:vzdump\]' "$FLOOR/fresh.conf")"
+fi
+
 # 5. A profile that contradicts ITSELF is refused earlier and more cheaply, and
 #    the message names the profile file rather than a composed temporary.
 mkdir -p "$FLOOR/p/selfdup"

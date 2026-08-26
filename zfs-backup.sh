@@ -1169,6 +1169,36 @@ load_active_profile() {
     return 0
 }
 
+# WHAT THIS RELATIONSHIP WAS GENERATED FROM, as one comparable value.
+#
+# REV F2. `migrate-profile --profile=prod` decided "already there" from the
+# record's PROFILE string alone, so the file's own promise -- "an operator
+# changes a retention here and nowhere else" -- was false for the case that
+# matters most: edit `keep = 7` to `keep = 10` in profiles/prod/profile.conf,
+# re-run the command, and it answers "nothing to migrate" while the installed
+# cron still carries -D7. A name is not a version.
+#
+# TWO INPUTS, because either one alone would lie:
+#
+#   profile.conf   what the operator edits. Catches every retention, schedule,
+#                  quiesce, monitor and version change.
+#   the tier-letter table (gen-cron --dump-tier-letters)
+#                  the RENDERER's contribution. `keep = 24` becomes `-H24`
+#                  through that table, so a table change alters the installed
+#                  policy without touching a byte of the profile. A digest over
+#                  the operator's file alone would call that "unchanged".
+#
+# Not a security hash and not trying to be: md5 is what this tree already uses
+# for the same job (delsnaps' lock key, clean-relationships' crontab
+# comparison). It answers "is this still the thing I generated from".
+profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
+    local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
+    [ -r "$dir/profile.conf" ] || return 1
+    local letters
+    letters="$(bash "$GENCRON" --dump-tier-letters 2>/dev/null)" || return 1
+    { cat "$dir/profile.conf"; printf '%s' "$letters"; } | md5sum | cut -d' ' -f1
+}
+
 # Phase 4: the profile choice is CREATE-time provenance, consulted only the
 # one time a relationship first renders its sections. A re-activation never
 # re-reads it -- same one-way handoff boundary REV-20260809-088/089 already
@@ -2129,10 +2159,22 @@ Resolve by hand: give the new relationship's profile a different template identi
                 _have="$(printf '%s' "$_have" | tr -d '[:space:]')"
                 _hr="$(floor_rank "$_have")" || die "[excluded:$prefix] in $file carries keep='$_have', which is neither a count nor 'all'. An unreadable floor cannot be compared with the profile's ($keep) and must not be guessed at -- gen-cron would refuse this file on the next render anyway. Fix that section by hand and re-run. No floor was written and nothing was installed."
                 _kr="$(floor_rank "$keep")" || die "profile '$PROFILE_ACTIVE' declares [excluded:$prefix] keep='$keep', which is neither a count nor 'all'"
+                # PROVENANCE DECIDES WHICH RULE APPLIES (REV F5).
+                local _owner
+                _owner="$(section_profile_marker "$file" "[excluded:$prefix]")"
+                if [ -n "$_owner" ] && [ "$_owner" != "$PROFILE_ACTIVE" ] && [ "$_hr" -ne "$_kr" ]; then
+                    # TWO PROFILES, TWO ANSWERS. Neither is an operator's
+                    # deliberate hardening, so the asymmetry has nothing to
+                    # protect and direction is irrelevant: one config cannot
+                    # fence a family two ways, and silently keeping either
+                    # number leaves the other profile displaying a policy that
+                    # is in force nowhere.
+                    die "[excluded:$prefix] in $file was declared by profile '$_owner' with keep=$_have, and profile '$PROFILE_ACTIVE' declares keep=$keep. A floor is CONFIG-WIDE, so one file cannot honour both, and neither is a hand-made decision this run may defer to. Make the two profiles agree on that family, or install them into separate configs, and re-run. No floor was written and nothing was installed."
+                fi
                 if [ "$_hr" -lt "$_kr" ]; then
                     die "[excluded:$prefix] in $file fences that family at keep=$_have, and profile '$PROFILE_ACTIVE' requires keep=$keep -- the config protects it LESS than the policy this relationship is being created under. Neither value is ours to pick: proceeding would give this relationship a weaker prune guard than its own profile declares, and raising the floor here would rewrite the prune command of every relationship already in this file. Make them agree, in the profile or in the config, and re-run. No floor was written and nothing was installed."
                 fi
-                [ "$_hr" -gt "$_kr" ] && log "[excluded:$prefix] in $file already fences that family at keep=$_have, more strongly than profile '$PROFILE_ACTIVE' asks (keep=$keep) -- keeping the operator's stronger value"
+                [ "$_hr" -gt "$_kr" ] && log "[excluded:$prefix] in $file already fences that family at keep=$_have, more strongly than profile '$PROFILE_ACTIVE' asks (keep=$keep) -- keeping it, because nothing marks it as another profile's declaration and an operator's hand-made hardening is theirs to keep"
             fi
         done
         # PASS 2: write what is genuinely missing. Nothing here can refuse any
@@ -2143,6 +2185,10 @@ Resolve by hand: give the new relationship's profile a different template identi
             {
                 echo
                 echo "[excluded:$prefix]"
+                # Provenance, in the same idiom as every other generated section.
+                # Without it the next profile cannot tell this floor from an
+                # operator's hand-made one -- see section_profile_marker.
+                echo "	# managed-by: zfs-backup.sh profile=$PROFILE_ACTIVE"
                 echo "	keep = ${floor_keeps[$_i]}"
             } >> "$file" || die "could not append [excluded:$prefix] to $file"
             log "added missing reserved-prefix protection [excluded:$prefix] (keep=${floor_keeps[$_i]}) to $file"
@@ -4463,6 +4509,33 @@ section_field() {   # <file> <exact header> <field>
 # call the strongest floor expressible unreadable, so rank them instead: `all`
 # outranks every count. Returns 1 for anything gen-cron would itself reject, so
 # an unreadable floor stays a finding rather than becoming a silent zero.
+# WHO WROTE THIS FLOOR, if anyone said.
+#
+# REV F5. The asymmetric rule ("a stronger config value stands, a weaker one is
+# refused") is right for an OPERATOR who deliberately hardened a family by hand.
+# Applied to a floor another PROFILE installed, it is wrong in a way that
+# reproduces the original defect: profile A declares keep=10, profile B declares
+# keep=2, B is installed second, B's number is quietly void, and an operator
+# reading profile B sees a policy in force nowhere.
+#
+# The code could not tell the two apart because the section carried no
+# provenance. Now a floor this tool writes says which profile declared it, in
+# the same `# managed-by:` idiom every other generated section already uses --
+# and a section without the marker is, by construction, not ours.
+#
+# Backward compatible on purpose: every floor installed before this reads as
+# unmarked, i.e. as the operator's, i.e. exactly the behaviour it has today.
+section_profile_marker() {   # <file> <exact header> -> declaring profile, or empty
+    awk -v h="$2" '
+        $0==h {f=1; next}
+        f && /^\[/ {exit}
+        f && /^[ \t]*# managed-by: zfs-backup.sh profile=/ {
+            sub(/^[ \t]*# managed-by: zfs-backup.sh profile=/, "")
+            print; exit
+        }
+    ' "$1" 2>/dev/null
+}
+
 floor_rank() {   # <keep value> -> comparable integer on stdout
     case "$1" in
         all)         printf '%s' 2147483647 ;;
@@ -7477,7 +7550,7 @@ cmd_activate() {
 # The `( : )` line beside each source is a shellcheck no-op. It isolates
 # NOTHING; anyone reading it as a subshell (I did) will make this mistake again.
 migrate_read_record() {   # <path> -- reset the fields this command reads, then source
-    STATE=""; PROFILE=""; CLIENT_NAME=""
+    STATE=""; PROFILE=""; CLIENT_NAME=""; PROFILE_DIGEST_RECORDED=""
     # shellcheck disable=SC1090
     . "$1"
 }
@@ -7544,13 +7617,24 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # profile it was created from (write_client_field PROFILE), which is the
     # fact this question is actually about. Records predating the field hold
     # "", which correctly reads as "not on the target".
-    local _f _on_target=1 _actives=0
+    # A NAME IS NOT A VERSION (REV F2). Matching PROFILE alone made an edited
+    # profile unappliable: change `keep = 7` to `keep = 10` in the one file the
+    # operator is told to edit, re-run this command, and it answered "nothing to
+    # migrate" while the installed cron still carried -D7. The digest is what
+    # makes "already on profile X" a statement about the policy rather than
+    # about a string.
+    #
+    # A record predating the field holds "" and therefore never matches, so an
+    # old relationship migrates once and gains its digest -- no special case.
+    local _f _on_target=1 _actives=0 _want_digest
+    _want_digest="$(profile_digest)" || _want_digest=""
     for _f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$_f" ] || continue
         migrate_read_record "$_f"
         [ "${STATE:-}" = active ] || continue
         _actives=$((_actives + 1))
         [ "${PROFILE:-}" = "$target_profile" ] || _on_target=0
+        [ -n "$_want_digest" ] && [ "${PROFILE_DIGEST_RECORDED:-}" != "$_want_digest" ] && _on_target=0
     done
     # A legacy config can hold records that already SAY `default` while the
     # sections are still flat per tier -- that is the original migration this
@@ -7558,7 +7642,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     local _legacy=0
     sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule" && _legacy=1
     if [ "$_on_target" -eq 1 ] && [ "$_actives" -gt 0 ] && [ "$_legacy" -eq 0 ]; then
-        log "$cronfile is already on profile '$target_profile' ($_actives active client(s)) -- nothing to migrate."
+        log "$cronfile is already on profile '$target_profile' ($_actives active client(s), profile unchanged since they were generated) -- nothing to migrate."
         return 0
     fi
 
@@ -7580,6 +7664,29 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     for t in standard_hourly standard_daily standard_weekly standard_monthly; do
         remove_template_section "$workfile" "$t"
     done
+    # AND THE DESTINATION'S OWN TEMPLATES, which is what makes an EDITED profile
+    # appliable rather than merely detectable (REV F2).
+    #
+    # ensure_cron_config's template block is additive by design: "what suppresses
+    # an append is THAT name already being present". Right for an endpoint
+    # refresh, and wrong here -- migrating from `prod` to `prod` after the
+    # operator changed keep = 7 to keep = 10 found profile__prod__daily already
+    # in the file, appended nothing, and left `retain = -D7` installed. The
+    # digest made the run HAPPEN; this makes it MEAN something. Measured: the
+    # assertion failed with before='-D7' after='-D7' until this loop existed.
+    #
+    # Safe because migrate-profile is the one verb where the profile is meant to
+    # win: the sections referencing these names are regenerated a few lines
+    # below, and the whole candidate is validated by the real gen-cron before
+    # anything is published.
+    while IFS= read -r t; do
+        # Trimmed in bash rather than through sed: the header is bracketed on
+        # both sides, and every layer of quoting between here and a sed script
+        # is another place for a backslash to go missing.
+        t="${t#\[template:}"; t="${t%\]}"
+        [ -n "$t" ] || continue
+        remove_template_section "$workfile" "$t"
+    done < <(grep -oE "^\[template:profile__${target_profile}__[^]]+\]" "$workfile" 2>/dev/null)
     # Everything ELSE orphaned is swept after the clients are rewritten, when it
     # is finally known what still references what -- see
     # remove_orphan_profile_templates.
@@ -7698,10 +7805,15 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
         [ -e "$_rf" ] || continue
         migrate_read_record "$_rf"
         [ "${STATE:-}" = active ] || continue
-        [ "${PROFILE:-}" = "$target_profile" ] && continue
+        # The digest moves with the name, or the next run would think the edit
+        # had not been applied and migrate the same host forever.
+        [ "${PROFILE:-}" = "$target_profile" ] \
+            && [ -n "$_want_digest" ] && [ "${PROFILE_DIGEST_RECORDED:-}" = "$_want_digest" ] && continue
         # Same idiom as activate-client: the record is `.`-sourced, so an
         # appended assignment is the update -- last one wins.
-        if { cat "$_rf"; write_client_field PROFILE "$target_profile"; } > "${_rf}.new" \
+        if { cat "$_rf"; write_client_field PROFILE "$target_profile"
+             [ -n "$_want_digest" ] && write_client_field PROFILE_DIGEST_RECORDED "$_want_digest"
+             : ; } > "${_rf}.new" \
              && mv -f "${_rf}.new" "$_rf"; then
             chmod 0600 "$_rf" 2>/dev/null || :
         else
