@@ -3616,8 +3616,8 @@ fi
 # editing one of three files. `mkprof_add <dir> <section> <lines...>` appends the
 # lines directly after that section header, which is where an operator would put
 # them and where the splitter expects them.
-mkprof_copy() {   # <target profile dir>
-    mkdir -p "$1"
+mkprof_copy() {   # <target profile, without the .conf>
+    mkdir -p "$(dirname "$1")"
     cp "$REPO/profiles/default.conf" "$1.conf"
 }
 mkprof_add() {    # <target profile dir> <section header> <line>
@@ -4345,7 +4345,7 @@ fi
 # directory present and valid, so it could not have caught either. These cross
 # the REAL cmd_activate_client()/ensure_cron_config() boundary.
 AP="$WORK/profilegone"
-mkdir -p "$AP/clients" "$AP/peerstate" "$AP/keys" "$AP/dir" "$AP/root/prof" "$AP/cap"
+mkdir -p "$AP/clients" "$AP/peerstate" "$AP/keys" "$AP/dir" "$AP/root" "$AP/cap"
 mkprof_copy "$AP/root/prof"
 # An extra template nothing references: the "otherwise-unused generated template
 # the operator removed" of the review's proof step 4. A referenced one could not
@@ -4419,7 +4419,7 @@ run_ap() {   # <profile-root> -> output; leaves the captured workfile in $AP/cap
 }
 
 # --- F1: the CREATE-time profile is gone. Reactivation must still work. ---
-mv "$AP/root/prof" "$AP/root/prof.gone"
+mv "$AP/root/prof.conf" "$AP/root/prof.gone"
 out=$(run_ap "$AP/root")
 if [ -f "$AP/cap/workfile" ] && case "$out" in *"profile 'prof'"*) false ;; *) true ;; esac; then
     ok "90 F1: reactivation gets past profile handling when the CREATE-time profile is gone"
@@ -4437,7 +4437,7 @@ else
     bad "90 F1: with no profile at all it still refreshes src and preserves installed policy" \
         "$([ -f "$AP/cap/workfile" ] && cat "$AP/cap/workfile" || echo '(no workfile captured)')"
 fi
-mv "$AP/root/prof.gone" "$AP/root/prof"
+mv "$AP/root/prof.gone" "$AP/root/prof.conf"
 
 # A profile that is PRESENT but no longer valid is the same class of dependency
 # -- an installed CONFIG must not stop being reactivatable because a file it no
@@ -4482,12 +4482,12 @@ ENDPOINT_LAN_HOST=10.7.7.9
 ENDPOINT_LAN_PORT=22
 CRON_CONFIG=$APC
 EOF
-mv "$AP/root/prof" "$AP/root/prof.gone"
+mv "$AP/root/prof.conf" "$AP/root/prof.gone"
 out=$( ( CLIENTS_DIR="$AP/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
          SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$AP/snapget-capture.sh" \
          PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
          cmd_activate_client apnew --yes ) 2>&1 ); rc=$?
-mv "$AP/root/prof.gone" "$AP/root/prof"
+mv "$AP/root/prof.gone" "$AP/root/prof.conf"
 if [ "$rc" -ne 0 ] && case "$out" in *"profile 'prof'"*) true ;; *) false ;; esac; then
     ok "90 a first activation with no profile still fails loudly at the additive boundary"
 else
@@ -4763,8 +4763,8 @@ fi
 
 # 3. A second, real, DIFFERENT profile name is validated and stored correctly
 # -- not just "default" happening to work.
-mkdir -p "$P53/profiles/altprofile"
-cp "$REPO/profiles/default.conf" "$P53/profiles/altprofile/"
+mkdir -p "$P53/profiles"
+cp "$REPO/profiles/default.conf" "$P53/profiles/altprofile.conf"
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   PROFILE_ROOT="$P53/profiles" \
   cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
@@ -4821,10 +4821,9 @@ fi
 # threaded through apply_client_profile_choice() on first activation -- exactly
 # the wiring under test.
 PC="$WORK/profilechoice"
-mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" \
-         "$PC/root/default" "$PC/root/alt"
+mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" "$PC/root"
 for p in default alt; do
-    cp "$REPO/profiles/default.conf" "$PC/root/$p/"
+    cp "$REPO/profiles/default.conf" "$PC/root/$p.conf"
 done
 # ALT's only difference is an observable, safe-to-render marker: the hourly
 # send cadence. If the candidate carries minute 7 it came from ALT's content,
@@ -5551,7 +5550,7 @@ fi
 # writing to the real /tmp and every case here passes for the wrong reason. The
 # positive control below is what caught that while this section was written.
 LK="$WORK/leak"
-mkdir -p "$LK/root/prof" "$LK/root/bad" "$LK/tmp"
+mkdir -p "$LK/root" "$LK/tmp"
 mkprof_copy "$LK/root/prof"
 # A profile that is COMPLETE (so it gets past the completeness check and reaches
 # lib-profile.sh's own mktemp'd schema dump) but INVALID: `src` is
