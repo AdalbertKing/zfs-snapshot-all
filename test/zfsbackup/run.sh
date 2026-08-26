@@ -7737,6 +7737,7 @@ sb_run 8M
 # manifest on the old -- the exact divergence this command exists to end, moved
 # later in the sequence. "One transaction" has to mean the failure case too.
 printf 'PEER_SAVED_LOCAL_USER=root\nPEER_SAVED_BANDWIDTH=2M\n' > "$SB/peerstate/10.5.5.5.conf"
+rm -f "$SB/reinstalled-from"
 sb_run 2M
 sb_out="$( ( PATH="$SB/bin:$PATH"
              # Fail ONLY the manifest rename, by its destination. Matching the
@@ -7746,16 +7747,30 @@ sb_out="$( ( PATH="$SB/bin:$PATH"
              atomic_replace_and_install() { command mv -f "$2" "$1"; }
              assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
              assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-             show_activation_proposal() { :; }; gencron_as_target() { return 0; }
+             show_activation_proposal() { :; }
+             # The CRONTAB is the third element of the declared transaction and
+             # the first version of this control did not look at it -- it checked
+             # config and manifest and stubbed this to a bare `return 0`, so
+             # "everything agrees" was asserted about two thirds of the claim.
+             # Record what the reinstall would have rendered FROM: the rollback
+             # restores the config first and reinstalls from it, so this file
+             # ends up holding the OLD cap if, and only if, both steps ran.
+             gencron_as_target() {
+                 case " $* " in
+                     *" --install "*) grep -m1 "^	bandwidth" "$SB/dir/jobs.conf" > "$SB/reinstalled-from" 2>/dev/null || : ;;
+                 esac
+                 return 0
+             }
              CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
              cmd_set_bandwidth --peer=10.5.5.5 --bandwidth=8M --config="$SB/dir/jobs.conf" --yes ) 2>&1 )"
 sb_rc=$?
 { [ "$sb_rc" -ne 0 ] \
   && [ "$(sb_capn 2M)" -eq 2 ] \
-  && [ "$(sb_manifest)" = "2M" ]; } \
-    && ok "pair-tx: a manifest publish failure ROLLS BACK -- config and manifest stay on the old cap, rc is non-zero" \
+  && [ "$(sb_manifest)" = "2M" ] \
+  && grep -q '2M' "$SB/reinstalled-from" 2>/dev/null; } \
+    && ok "pair-tx: a manifest publish failure ROLLS BACK -- config, crontab and manifest all stay on the old cap, rc is non-zero" \
     || bad "pair-tx: a manifest publish failure rolls back" \
-           "rc=$sb_rc sections at 2M=$(sb_capn 2M) manifest='$(sb_manifest)'" \
+           "rc=$sb_rc sections at 2M=$(sb_capn 2M) manifest='$(sb_manifest)' crontab-from='$(cat "$SB/reinstalled-from" 2>/dev/null | tr -d "\t")'" \
            "$(printf '%s' "$sb_out" | tail -1)"
 
 # CONTROL: a peer with no pairing manifest is refused, and nothing moves --
