@@ -6126,10 +6126,15 @@ got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
 #      the count is pinned rather than left to review.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-if [ "$writers" -eq 5 ] && [ "$resolvers" -eq 5 ]; then
-    ok "63g: all five config writers resolve through cron_context_resolve"
+# SIX since 2026-08-26: set-bandwidth joined them, rewriting every active
+# relationship of one pair in a single transaction. The number is pinned rather
+# than merely compared so that ADDING a config writer forces this line to be
+# edited -- which is the moment to prove the new writer is aimed at a config
+# instead of guessing one. Bumping it is the acknowledgement, not a formality.
+if [ "$writers" -eq 6 ] && [ "$resolvers" -eq 6 ]; then
+    ok "63g: all six config writers resolve through cron_context_resolve"
 else
-    bad "63g: all five config writers resolve through cron_context_resolve" \
+    bad "63g: all six config writers resolve through cron_context_resolve" \
         "atomic_replace_and_install call sites=$writers cron_context_resolve call sites=$resolvers"
 fi
 
