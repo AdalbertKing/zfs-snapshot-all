@@ -546,16 +546,24 @@ profile_keep_to_retain() {   # <canonical template name> <keep value> <letters f
     return 0
 }
 
-profile_validate_dir() {   # <profile dir> <gen-cron.sh path>
+# A PROFILE IS A FILE. Not a directory holding one file -- that shape was left
+# over from when a profile really was three (templates.conf, dataset.inc,
+# prune.inc). They collapsed into one on 2026-08-25 and the directory stayed on
+# out of habit, which is a wrapper around nothing.
+profile_validate_file() {   # <profile file> <gen-cron.sh path>
     PROFILE_ERR=""
-    local dir="$1" gen="$2" dump f
-    [ -d "$dir" ] || { PROFILE_ERR="no such profile directory: $dir"; return 1; }
-
-    # ONE FILE. A profile is `profile.conf` and nothing else -- see the header
-    # above profile_split_one_file for why the three internal artifacts stopped
-    # being the operator's interface.
-    if [ ! -r "$dir/profile.conf" ]; then
-        PROFILE_ERR="$dir/profile.conf is missing or unreadable -- a profile is exactly that one file"
+    local file="$1" gen="$2" dump f
+    # -f, NOT just -r. A DIRECTORY is readable, so an -r test waved one straight
+    # through and the failure surfaced further in as `read: Is a directory` from
+    # the splitter -- a crash where a sentence belonged. It is not a hypothetical
+    # input either: it is exactly what the previous layout put on disk, and
+    # anyone with a host still carrying profiles/<name>/ will type it.
+    if [ -d "$file" ]; then
+        PROFILE_ERR="$file is a directory -- a profile is a single file. The old layout kept it as <name>/profile.conf; point at that file, or at <name>.conf"
+        return 1
+    fi
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        PROFILE_ERR="$file is missing or unreadable -- a profile is exactly that one file"
         return 1
     fi
 
@@ -572,7 +580,7 @@ profile_validate_dir() {   # <profile dir> <gen-cron.sh path>
     vd="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt"; return 1; }
     vp="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt" "$vd"; return 1; }
     ve="$(mktemp)" || { PROFILE_ERR="mktemp failed"; rm -f "$dump" "$vt" "$vd" "$vp"; return 1; }
-    if ! profile_split_one_file "$dir/profile.conf" "$vt" "$vd" "$vp" "$ve"; then
+    if ! profile_split_one_file "$file" "$vt" "$vd" "$vp" "$ve"; then
         rm -f "$dump" "$vt" "$vd" "$vp" "$ve"; return 1
     fi
     # The excluded sections are validated together with the templates: they are

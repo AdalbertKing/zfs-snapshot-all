@@ -95,7 +95,7 @@ EOF
 chmod +x "$SF_DEPLOY"
 export SIMPLE_FLOW_PAIR_LOG="$SF/pair.log"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients"
     RELATIONSHIPS_DIR="$SF/relationships"
@@ -132,7 +132,7 @@ sf_live_conf="$SF/clients/pve2.conf"
 printf 'STATE=removed\nREMOVED_AT="2026-08-23 09:46:13"\n' >> "$sf_live_conf"
 : > "$SF/pair.log"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients"
     RELATIONSHIPS_DIR="$SF/relationships"
@@ -164,7 +164,7 @@ fi
 # else", and both halves are asserted here.
 addc() {   # <host> <target> -> combined output, rc in $rc
     out="$( (
-        profile_validate_dir() { return 0; }
+        profile_validate_file() { return 0; }
         read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
         CLIENTS_DIR="$SF/clients"
         RELATIONSHIPS_DIR="$SF/relationships"
@@ -220,7 +220,7 @@ done
 
 pair_lines_before=$(wc -l < "$SF/pair.log")
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$SF/clients-invalid"
     DEPLOY="$SF_DEPLOY"
@@ -3618,13 +3618,13 @@ fi
 # them and where the splitter expects them.
 mkprof_copy() {   # <target profile dir>
     mkdir -p "$1"
-    cp "$REPO/profiles/default/profile.conf" "$1/profile.conf"
+    cp "$REPO/profiles/default.conf" "$1.conf"
 }
 mkprof_add() {    # <target profile dir> <section header> <line>
     awk -v want="$2" -v add="$3" '
         { print }
         $0 == want && !done { print add; done=1 }
-    ' "$1/profile.conf" > "$1/profile.conf.new" && mv "$1/profile.conf.new" "$1/profile.conf"
+    ' "$1.conf" > "$1.conf.new" && mv "$1.conf.new" "$1.conf"
 }
 
 FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
@@ -3687,7 +3687,7 @@ FS_CAND="$FS/candidate.conf"
 ( . "$REPO/lib-profile.sh"
   _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
   bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
-  profile_split_one_file "$FS/p/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_split_one_file "$FS/p/prof.conf" "$_t" "$_d" "$_p" "$_e"
   profile_render_templates "$_t" prof "$FS/tpl.conf" "" "$_L" ) || true
 {
     # No [defaults] dst: this client PULLS -- the emitted section carries src --
@@ -4247,7 +4247,7 @@ fi
 # would be refused at the profile boundary and would prove nothing about the
 # handoff.
 mkprof_add "$P9/prof" '[dataset]' '\trecursive = yes'
-sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_PROFILEDRIFT_/' "$P9/prof/profile.conf"
+sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_PROFILEDRIFT_/' "$P9/prof.conf"
 out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
         && grep -q 'recursive    = flat' "$C9" \
@@ -4266,7 +4266,7 @@ P9_CAND="$P9/candidate.conf"
 ( . "$REPO/lib-profile.sh"
   _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
   bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
-  profile_split_one_file "$P9/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_split_one_file "$P9/prof.conf" "$_t" "$_d" "$_p" "$_e"
   profile_render_templates "$_t" prof "$P9/tpl.conf" "" "$_L" ) || true
 { printf '[defaults]\n\thost_label = p9test\n\n'; cat "$P9/tpl.conf"; printf '\n'; cat "$C9"; } > "$P9_CAND"
 gen_rc=0; gen_out="$(bash "$REPO/gen-cron.sh" -c "$P9_CAND" 2>&1)" || gen_rc=$?
@@ -4350,7 +4350,7 @@ mkprof_copy "$AP/root/prof"
 # An extra template nothing references: the "otherwise-unused generated template
 # the operator removed" of the review's proof step 4. A referenced one could not
 # tell F2 apart from gen-cron simply rejecting a dangling use_template.
-printf '\n[template:extra_unused]\n\tsend_schedule = 0 5 * * *\n\tprefix        = automated_extra_\n' >> "$AP/root/prof/profile.conf"
+printf '\n[template:extra_unused]\n\tsend_schedule = 0 5 * * *\n\tprefix        = automated_extra_\n' >> "$AP/root/prof.conf"
 
 for h in 10.7.7.8 10.7.7.9; do
     printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtl\n' "$h" \
@@ -4450,7 +4450,7 @@ else
     bad "90 F1: reactivation is unaffected by the CREATE-time profile becoming invalid" \
         "captured=$([ -f "$AP/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
 fi
-sed -i '/^	src = zfsbackup@nope:x$/d' "$AP/root/prof/profile.conf"
+sed -i '/^	src = zfsbackup@nope:x$/d' "$AP/root/prof.conf"
 
 # --- F2: a removed, otherwise-unused generated template stays removed. ---
 if grep -q "^\[template:profile__prof__extra_unused\]" "$APC"; then
@@ -4764,7 +4764,7 @@ fi
 # 3. A second, real, DIFFERENT profile name is validated and stored correctly
 # -- not just "default" happening to work.
 mkdir -p "$P53/profiles/altprofile"
-cp "$REPO/profiles/default/profile.conf" "$P53/profiles/altprofile/"
+cp "$REPO/profiles/default.conf" "$P53/profiles/altprofile/"
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   PROFILE_ROOT="$P53/profiles" \
   cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
@@ -4824,12 +4824,12 @@ PC="$WORK/profilechoice"
 mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" \
          "$PC/root/default" "$PC/root/alt"
 for p in default alt; do
-    cp "$REPO/profiles/default/profile.conf" "$PC/root/$p/"
+    cp "$REPO/profiles/default.conf" "$PC/root/$p/"
 done
 # ALT's only difference is an observable, safe-to-render marker: the hourly
 # send cadence. If the candidate carries minute 7 it came from ALT's content,
 # not just ALT's namespace string.
-sed -i 's/^\tsend_schedule  = 1 \* \* \* \*/\tsend_schedule  = 7 * * * */' "$PC/root/alt/profile.conf"
+sed -i 's/^\tsend_schedule  = 1 \* \* \* \*/\tsend_schedule  = 7 * * * */' "$PC/root/alt.conf"
 
 for h in 10.7.7.8 10.7.7.9; do
     printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$PC/keys/${h}_known_hosts"
@@ -5120,7 +5120,7 @@ fi
 ( PROFILE_ROOT="$P56"
   _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
   bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
-  profile_split_one_file "$P56/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_split_one_file "$P56/prof.conf" "$_t" "$_d" "$_p" "$_e"
   profile_render_templates "$_t" prof "$WORK/s3tpl.conf" "" "$_L" ) || true
 { printf '[defaults]\n\thost_label = pve9\n\n'; cat "$WORK/s3tpl.conf"; cat "$S3"; } > "$WORK/s3full.conf"
 s3_render="$(bash "$REPO/gen-cron.sh" -c "$WORK/s3full.conf" 2>"$WORK/s3.err")"; s3_rc=$?
@@ -5346,7 +5346,7 @@ AP="$WORK/apply5"; mkdir -p "$AP/clients"
 ( PROFILE_ROOT="$RP56"
   _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
   bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
-  profile_split_one_file "$RP56/prof/profile.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_split_one_file "$RP56/prof.conf" "$_t" "$_d" "$_p" "$_e"
   profile_render_templates "$_t" prof "$AP/tpl.conf" "" "$_L" ) || true
 # assemble the "installed" config, then STRIP the source prune section + its src_
 # templates to simulate a relationship installed BEFORE step 3
@@ -6842,8 +6842,8 @@ fi
 MP="$WORK/migrateprofile"
 rm -rf "$MP"; mkdir -p "$MP/clients" "$MP/peerstate" "$MP/keys" "$MP/dir" \
                        "$MP/root" "$MP/bin"
-cp -r "$REPO/profiles/default" "$MP/root/default"
-cp -r "$REPO/profiles/prod"    "$MP/root/prod"
+cp "$REPO/profiles/default.conf" "$MP/root/default.conf"
+cp "$REPO/profiles/prod.conf"    "$MP/root/prod.conf"
 printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$MP/bin/crontab"
 chmod +x "$MP/bin/crontab"
 for h in 10.9.9.8 10.9.9.9; do
@@ -7037,7 +7037,7 @@ fi
 # `prod` was a one-relationship-per-host profile -- which would have surfaced on
 # a live collector, on the second relationship, months from now.
 FZ="$WORK/frozenshape"; rm -rf "$FZ"; mkdir -p "$FZ/root" "$FZ/bin"
-cp -r "$REPO/profiles/prod" "$FZ/root/prod"; cp -r "$REPO/profiles/default" "$FZ/root/default"
+cp "$REPO/profiles/prod.conf" "$FZ/root/prod.conf"; cp "$REPO/profiles/default.conf" "$FZ/root/default.conf"
 printf '#!/bin/sh\nexit 0\n' > "$FZ/bin/crontab"; chmod +x "$FZ/bin/crontab"
 fz_gen() {   # <config> <profile> -> rc
     ( PATH="$FZ/bin:$PATH"; PROFILE_ROOT="$FZ/root"; PROFILE_ACTIVE="$2"; PROFILE_LOADED=""
@@ -7406,7 +7406,7 @@ fi
 
 # --- AN EDITED PROFILE MUST BE APPLIABLE. A NAME IS NOT A VERSION.
 #
-# REV F2. profiles/prod/profile.conf opens with a promise: "an operator changes
+# REV F2. profiles/prod.conf opens with a promise: "an operator changes
 # a retention here and nowhere else". migrate-profile decided "already there"
 # from the record's PROFILE string alone, so the promise was false in exactly
 # the case that matters -- edit keep = 7 to keep = 10, re-run the command, get
@@ -7417,7 +7417,7 @@ fi
 # the installed policy without touching a byte of the profile, and a digest over
 # the file alone would call that unchanged.
 ED="$WORK/editedprofile"; rm -rf "$ED"; mkdir -p "$ED/clients" "$ED/peerstate" "$ED/keys" "$ED/dir" "$ED/root" "$ED/bin"
-cp -r "$REPO/profiles/prod" "$ED/root/prod"
+cp "$REPO/profiles/prod.conf" "$ED/root/prod.conf"
 printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$ED/bin/crontab"
 chmod +x "$ED/bin/crontab"
 for h in 10.9.9.8 10.9.9.9; do
@@ -7462,7 +7462,7 @@ else
 fi
 
 # Now the operator edits the one file they are told to edit.
-sed -i 's/^\tkeep           = 7$/\tkeep           = 10/' "$ED/root/prod/profile.conf"
+sed -i 's/^\tkeep           = 7$/\tkeep           = 10/' "$ED/root/prod.conf"
 ed_out="$(ed_run)"
 ed_second="$(ed_daily)"
 if ! printf '%s' "$ed_out" | grep -q 'nothing to migrate' \
@@ -7472,6 +7472,56 @@ else
     bad "96u: editing a retention in the profile is applied" \
         "before='$ed_first' after='$ed_second'" "$(printf '%s' "$ed_out" | tail -2)"
 fi
+
+# ===========================================================================
+# TWO ROOTS: what we ship, and what this host decided.
+#
+#   <package>/profiles/            factory. Replaced wholesale by `git pull`,
+#                                  so a host must never edit it -- the next
+#                                  update would take the edit away in silence.
+#   /etc/zfs-snapshot-all/profiles local. Sits beside clients/, peers/ and the
+#                                  config these profiles generate, and survives
+#                                  every update because nothing in the checkout
+#                                  points at it.
+#
+# "Never carried to GitHub" is a consequence of the LOCATION, not a rule anyone
+# has to remember: /etc is not in the checkout, so no gesture -- not `git add
+# .`, not a stray commit -- can take a local profile upstream.
+#
+# The fleet decided this rather than convention: pve1 carries FOUR copies of the
+# package (root's, the delegated account's, and two in /tmp). A profiles.local/
+# beside the checkout would exist once per copy, and "where are this host's
+# profiles" would depend on which account ran the command.
+UR="$WORK/userroot"; rm -rf "$UR"; mkdir -p "$UR"
+sed 's/^\tkeep           = 7$/\tkeep           = 99/' "$REPO/profiles/prod.conf" > "$UR/prod.conf"
+
+pr_file() { ( PROFILE_USER_ROOT="$UR"; profile_file "$1" 2>/dev/null ); }
+
+if [ "$(pr_file prod)" = "$UR/prod.conf" ]; then
+    ok "96A roots: a name present in BOTH resolves to the host's own copy"
+else
+    bad "96A roots: a name present in both resolves to the host's copy" "got '$(pr_file prod)'"
+fi
+
+# CONTROL: a name the host does NOT override still resolves to the factory one.
+# Without this, the assertion above would pass against a build that always
+# answered with the user root, override or not.
+if [ "$(pr_file default)" = "$ROOT/profiles/default.conf" ]; then
+    ok "96A roots control: a name the host does not override still comes from the package"
+else
+    bad "96A roots control: a name the host does not override comes from the package" "got '$(pr_file default)'"
+fi
+
+# ...and the digest follows the resolution, or an override would be invisible to
+# migrate-profile -- the whole point of today's F2b.
+d_fac="$( ( PROFILE_USER_ROOT="$WORK/nonexistent"; PROFILE_ACTIVE=prod; profile_digest ) )"
+d_loc="$( ( PROFILE_USER_ROOT="$UR";              PROFILE_ACTIVE=prod; profile_digest ) )"
+if [ -n "$d_fac" ] && [ "$d_fac" != "$d_loc" ]; then
+    ok "96A roots: the digest follows the resolved directory, so an override is not silent"
+else
+    bad "96A roots: the digest follows the resolved directory" "factory='$d_fac' local='$d_loc'"
+fi
+
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

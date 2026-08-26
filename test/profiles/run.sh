@@ -3,7 +3,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GEN="$ROOT/gen-cron.sh"
-PROFILE="$ROOT/profiles/default"
+PROFILE="$ROOT/profiles/default.conf"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -13,7 +13,7 @@ ok() { echo "PASS: $*"; pass=$((pass+1)); }
 bad() { echo "FAIL: $*" >&2; fail=$((fail+1)); }
 
 # A profile is ONE file since 2026-08-25. This used to check three.
-if [ -r "$PROFILE/profile.conf" ]; then ok "default/profile.conf exists"; else bad "default/profile.conf missing"; fi
+if [ -r "$PROFILE" ]; then ok "default.conf exists"; else bad "default.conf missing"; fi
 for f in templates.conf dataset.inc prune.inc; do
     if [ -e "$PROFILE/$f" ]; then bad "default/$f still shipped -- the three-file layout was replaced, not doubled"; else ok "default/$f is gone (one file now)"; fi
 done
@@ -39,21 +39,22 @@ profile_schema_dump "$GEN" "$DUMPFILE" || { echo "cannot read the field schema: 
 validate_fragment() { profile_validate_fragment "$1" "$2" "$DUMPFILE"; }
 
 # ---------------------------------------------------------------------------
-# ONE FILE. A profile is profiles/<name>/profile.conf, and the three artifacts
-# the runtime consumes are produced from it. The suite therefore splits the
-# same way the runtime does, so the validator and renderer assertions below
-# keep testing what they always tested -- the content -- rather than the layout
-# it used to be stored in.
+# ONE FILE, and since 2026-08-26 that is literally all it is: profiles/<name>.conf.
+# The directory that used to hold it was left over from when a profile really
+# was three files, and a wrapper around nothing is worse than no wrapper. The
+# three artifacts the runtime consumes are still produced from it, and the suite
+# splits the same way the runtime does -- so the assertions below keep testing
+# the CONTENT rather than the layout it happens to be stored in.
 # ---------------------------------------------------------------------------
-psplit() {   # <profile dir> -> echoes "<tpl> <ds> <prune> <excl>" of temp files
+psplit() {   # <profile file> -> echoes "<tpl> <ds> <prune> <excl>" of temp files
     local d="$1" t x p2 e
     t="$(mktemp)"; x="$(mktemp)"; p2="$(mktemp)"; e="$(mktemp)"
-    profile_split_one_file "$d/profile.conf" "$t" "$x" "$p2" "$e" || return 1
+    profile_split_one_file "$d" "$t" "$x" "$p2" "$e" || return 1
     cat "$e" >> "$t"
     printf '%s %s %s %s' "$t" "$x" "$p2" "$e"
 }
 LETTERS="$(mktemp)"; bash "$GEN" --dump-tier-letters > "$LETTERS"
-PSPLIT_DEFAULT=($(psplit "$ROOT/profiles/default"))
+PSPLIT_DEFAULT=($(psplit "$ROOT/profiles/default.conf"))
 TPL_DEFAULT="${PSPLIT_DEFAULT[0]}"
 DS_DEFAULT="${PSPLIT_DEFAULT[1]}"
 PR_DEFAULT="${PSPLIT_DEFAULT[2]}"
@@ -215,10 +216,10 @@ if profile_validate_templates "$TPL_DEFAULT" "$DUMPFILE"; then
 else
     bad "the built-in profile's templates.conf passes the production validator" "$PROFILE_ERR"
 fi
-if profile_validate_dir "$PROFILE" "$GEN"; then
-    ok "profile_validate_dir accepts the built-in profile"
+if profile_validate_file "$PROFILE" "$GEN"; then
+    ok "profile_validate_file accepts the built-in profile"
 else
-    bad "profile_validate_dir accepts the built-in profile" "$PROFILE_ERR"
+    bad "profile_validate_file accepts the built-in profile" "$PROFILE_ERR"
 fi
 
 # --- the schema must NOT be narrowed (REV-076 point 4) ----------------------
@@ -250,55 +251,54 @@ echo
 
 # --- a profile is exactly three artifacts (REV-20260809-077 F1) --------------
 #
-# profile_validate_dir used to write `[ -f "$dir/x" ] && ! validate`, which
+# profile_validate_file used to write `[ -f "$dir/x" ] && ! validate`, which
 # reads as "if it exists and fails, complain" -- so a MISSING artifact returned
 # SUCCESS from the production boundary and an empty directory validated clean.
 # The suite could not see it, because it checked the shipped fixture's files
 # exist separately -- a different property, and one B1 would not inherit.
-mkprofile() {   # <which to omit|-> -> a profile dir in $TMP
-    local omit="$1" d="$TMP/prof.$$"
-    rm -rf "$d"; mkdir -p "$d"
-    [ "$omit" = profile.conf ] || cp "$PROFILE/profile.conf" "$d/"
+mkprofile() {   # -> a throwaway COPY of the shipped profile, as a file, in $TMP
+    local d="$TMP/prof.$$.$RANDOM.conf"
+    cp "$PROFILE" "$d"
     printf '%s' "$d"
 }
-refuses_dir() {   # <label> <omitted artifact>
-    local d; d="$(mkprofile "$2")"
-    if profile_validate_dir "$d" "$GEN"; then
-        bad "$1"
-    else
-        case "$PROFILE_ERR" in
-            *"$2"*) ok "$1" ;;
-            *) bad "$1" "refused, but the message does not name $2: $PROFILE_ERR" ;;
-        esac
-    fi
-    rm -rf "$d"
-}
 
-refuses_dir "negative: a profile without profile.conf is refused" profile.conf
-
-EMPTYD="$TMP/emptyprof"; rm -rf "$EMPTYD"; mkdir -p "$EMPTYD"
-if profile_validate_dir "$EMPTYD" "$GEN"; then
-    bad "negative: an EMPTY profile directory is refused"
+# REWRITTEN, not deleted, when a profile stopped being a directory (2026-08-26).
+# The property these assertions were built for -- the production boundary must
+# REFUSE something that is not a usable profile, rather than sail past it -- is
+# exactly the property that has to survive the layout change. Only the shapes
+# that can go wrong changed.
+if profile_validate_file "$TMP/no-such-profile.conf" "$GEN"; then
+    bad "negative: a missing profile file is refused"
 else
-    ok "negative: an EMPTY profile directory is refused"
-fi
-rm -rf "$EMPTYD"
-
-if profile_validate_dir "$TMP/no-such-profile-dir" "$GEN"; then
-    bad "negative: a missing profile directory is refused"
-else
-    ok "negative: a missing profile directory is refused"
+    case "$PROFILE_ERR" in
+        *"missing or unreadable"*) ok "negative: a missing profile file is refused" ;;
+        *) bad "negative: a missing profile file is refused" "wrong reason: $PROFILE_ERR" ;;
+    esac
 fi
 
-# The positive control that keeps the completeness rule honest: all three
-# present and valid still passes through the same call.
-COMPLETE="$(mkprofile -)"
-if profile_validate_dir "$COMPLETE" "$GEN"; then
-    ok "positive: a complete profile still validates"
+# A DIRECTORY is readable, so an -r test waved one through and the failure
+# surfaced further in as `read: Is a directory` from the splitter -- a crash
+# where a sentence belonged. Not a hypothetical input: it is precisely what the
+# PREVIOUS layout left on disk, so anyone with an older host will type it.
+DIRP="$TMP/olddirshape"; rm -rf "$DIRP"; mkdir -p "$DIRP"
+cp "$PROFILE" "$DIRP/profile.conf"
+if profile_validate_file "$DIRP" "$GEN"; then
+    bad "negative: a DIRECTORY is refused with a sentence, not a read error"
 else
-    bad "positive: a complete profile still validates" "$PROFILE_ERR"
+    case "$PROFILE_ERR" in
+        *"is a directory"*) ok "negative: a DIRECTORY is refused with a sentence, not a read error" ;;
+        *) bad "negative: a DIRECTORY is refused with a sentence" "wrong reason: $PROFILE_ERR" ;;
+    esac
 fi
-rm -rf "$COMPLETE"
+rm -rf "$DIRP"
+
+# CONTROL: the real file still validates, so the two refusals above are not a
+# boundary that rejects everything.
+if profile_validate_file "$PROFILE" "$GEN"; then
+    ok "negative control: the shipped profile file still validates"
+else
+    bad "negative control: the shipped profile file still validates" "$PROFILE_ERR"
+fi
 
 
 # ---- Slice B1: rendering a profile into effective CONFIG v4 -----------------
@@ -369,8 +369,8 @@ fi
 # A duplicate inside one profile is caught HERE, naming the profile. gen-cron
 # would also refuse the composed file, but its message names only a temporary
 # path and tells the operator nothing about which profile produced it.
-DUPP="$(mkprofile -)"
-printf '\n[template:standard_hourly]\n\tsend_schedule = 5 * * * *\n' >> "$DUPP/profile.conf"
+DUPP="$(mkprofile)"
+printf '\n[template:standard_hourly]\n\tsend_schedule = 5 * * * *\n' >> "$DUPP"
 if profile_render_templates "$(psplit "$DUPP" | cut -d" " -f1)" default "$RD/dup.conf"; then
     bad "render: a duplicate template inside one profile is refused"
 else
@@ -446,7 +446,7 @@ fi
 # of the colliding pair are refused at the boundary, before rendering -- which
 # is why "both profiles independently validate" cannot hold here and is not
 # claimed.
-COLL1="$(mkprofile -)"
+COLL1="$(mkprofile)"
 if profile_render_templates "$(psplit "$COLL1" | cut -d" " -f1)" 'a__b' "$RD/coll1.conf"; then
     bad "injectivity: a profile NAME carrying the separator is refused"
 else
@@ -459,9 +459,9 @@ rm -rf "$COLL1"
 
 # The other half: a native TEMPLATE name carrying the separator. Refused at
 # validation, so such a profile never reaches a runtime at all...
-COLL2="$(mkprofile -)"
-printf '\n[template:b__c]\n\tsend_schedule = 1 * * * *\n\tprefix = x_\n' >> "$COLL2/profile.conf"
-if profile_validate_dir "$COLL2" "$GEN"; then
+COLL2="$(mkprofile)"
+printf '\n[template:b__c]\n\tsend_schedule = 1 * * * *\n\tprefix = x_\n' >> "$COLL2"
+if profile_validate_file "$COLL2" "$GEN"; then
     bad "injectivity: a TEMPLATE name carrying the separator is refused at validation"
 else
     case "$PROFILE_ERR" in
@@ -503,10 +503,10 @@ fi
 # profile installed wins forever while the second one's declaration is quietly
 # void: an operator reading profile B sees a number in force nowhere.
 # ===========================================================================
-FLOOR="$TMP/floors"; rm -rf "$FLOOR"; mkdir -p "$FLOOR/p/nine" "$FLOOR/bin"
+FLOOR="$TMP/floors"; rm -rf "$FLOOR"; mkdir -p "$FLOOR/p" "$FLOOR/bin"
 printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$FLOOR/bin/crontab"
 chmod +x "$FLOOR/bin/crontab"
-sed 's/^\tkeep = 2$/\tkeep = 9/' "$ROOT/profiles/default/profile.conf" > "$FLOOR/p/nine/profile.conf"
+sed 's/^\tkeep = 2$/\tkeep = 9/' "$ROOT/profiles/default.conf" > "$FLOOR/p/nine.conf"
 
 floor_run() {   # <config file> [profile] -> "rc|<phrase hits>"
     local out rc
@@ -612,8 +612,7 @@ fi
 #    end: an operator reading profile B sees a policy in force nowhere. The code
 #    could not tell A's floor from a hand-made one because the section carried
 #    no signature. Now it does.
-mkdir -p "$FLOOR/p/two"
-sed 's/^\tkeep = 2$/\tkeep = 2/' "$ROOT/profiles/default/profile.conf" > "$FLOOR/p/two/profile.conf"
+sed 's/^\tkeep = 2$/\tkeep = 2/' "$ROOT/profiles/default.conf" > "$FLOOR/p/two.conf"
 
 # The config as profile 'nine' (keep = 9) would have left it: signed.
 printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\t# managed-by: zfs-backup.sh profile=nine\n\tkeep = 9\n' > "$FLOOR/owned.conf"
@@ -648,9 +647,8 @@ fi
 
 # 5. A profile that contradicts ITSELF is refused earlier and more cheaply, and
 #    the message names the profile file rather than a composed temporary.
-mkdir -p "$FLOOR/p/selfdup"
-{ cat "$ROOT/profiles/default/profile.conf"; printf '\n[excluded:vzdump]\n\tkeep = 5\n'; } > "$FLOOR/p/selfdup/profile.conf"
-if profile_validate_dir "$FLOOR/p/selfdup" "$GEN"; then
+{ cat "$ROOT/profiles/default.conf"; printf '\n[excluded:vzdump]\n\tkeep = 5\n'; } > "$FLOOR/p/selfdup.conf"
+if profile_validate_file "$FLOOR/p/selfdup.conf" "$GEN"; then
     bad "floors: a profile fencing one family twice is refused"
 else
     case "$PROFILE_ERR" in
@@ -658,6 +656,7 @@ else
         *) bad "floors: a profile fencing one family twice is refused" "wrong reason: $PROFILE_ERR" ;;
     esac
 fi
+
 
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

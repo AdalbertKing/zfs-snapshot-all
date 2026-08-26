@@ -210,7 +210,7 @@ export INST_PAIR_LOG="$WORK/inst/pair.log"
 #     TARGET/MODE are recorded; seed then activate run, in order, exactly once.
 : > "$INST_PAIR_LOG"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$WORK/10/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/10/relationships"
@@ -237,7 +237,7 @@ fi
 #     --datasets, no --target.
 : > "$INST_PAIR_LOG"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
     CLIENTS_DIR="$WORK/11/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/11/relationships"
@@ -263,7 +263,7 @@ fi
 #      remotely still flow. This is exactly what the retired `deploy` verb did.
 : > "$INST_PAIR_LOG"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/11b/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/11b/relationships"
@@ -288,7 +288,7 @@ fi
 
 # 11c. --manual-join opts the deferred form out of the automatic remote pairing.
 : > "$INST_PAIR_LOG"
-( profile_validate_dir() { return 0; }
+( profile_validate_file() { return 0; }
   read_server_conf() { DEFAULT_TARGET=""; }
   CLIENTS_DIR="$WORK/11c/clients"; mkdir -p "$CLIENTS_DIR"
   RELATIONSHIPS_DIR="$WORK/11c/relationships"; DEPLOY="$INST_DEPLOY"
@@ -325,7 +325,7 @@ fi
 # 12. Relationship name derives from the host (peer_label) when --name is
 #     omitted, and a valid IPv4 host is used as-is (already a legal name).
 : > "$INST_PAIR_LOG"
-( profile_validate_dir() { return 0; }
+( profile_validate_file() { return 0; }
   read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER="zfsbackup"; }
   CLIENTS_DIR="$WORK/12/clients"; mkdir -p "$CLIENTS_DIR"
   RELATIONSHIPS_DIR="$WORK/12/relationships"
@@ -541,7 +541,7 @@ fi
 #     LOCAL_USER had no way to name a delegated account through RUX at all).
 : > "$INST_PAIR_LOG"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
     CLIENTS_DIR="$WORK/19/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/19/relationships"
@@ -565,7 +565,7 @@ fi
 #     adopt/record/refuse contract the account refactor removed.
 : > "$INST_PAIR_LOG"; mkdir -p "$WORK/20/etc"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/20/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20/relationships"
@@ -588,7 +588,7 @@ fi
 #      relationship, not with a file.
 : > "$INST_PAIR_LOG"; mkdir -p "$WORK/20b/etc"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/20b/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20b/relationships"
@@ -610,7 +610,7 @@ fi
 #      is deploy.sh's default) and nothing is recorded.
 : > "$INST_PAIR_LOG"; mkdir -p "$WORK/20c/etc"
 out="$( (
-    profile_validate_dir() { return 0; }
+    profile_validate_file() { return 0; }
     read_server_conf() { DEFAULT_TARGET=""; }
     CLIENTS_DIR="$WORK/20c/clients"; mkdir -p "$CLIENTS_DIR"
     RELATIONSHIPS_DIR="$WORK/20c/relationships"

@@ -92,7 +92,23 @@ GENCRON="$SCRIPT_DIR/gen-cron.sh"
 LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
 LIBPROFILE="$SCRIPT_DIR/lib-profile.sh"
+# WHERE PROFILES LIVE, and the split is the one this tree already draws for
+# everything else (see the note above RELATIONSHIPS_DIR): the PACKAGE holds what
+# we ship, /etc holds what this host decided, /var/lib holds what is true right
+# now.
+#
+#   PROFILE_ROOT       FACTORY profiles, shipped with the package. Replaced
+#                      wholesale by `git pull`, so a host must never edit them --
+#                      the next update would silently take the edit away.
+#   PROFILE_USER_ROOT  the administrator's own, on this host. Survives every
+#                      update because nothing in the package points at it.
+#
+# "Never carried to GitHub" is therefore not a rule anyone has to remember. It
+# is a consequence of the LOCATION: /etc is not in the checkout, so there is no
+# gesture -- not `git add .`, not a stray commit -- that could take a local
+# profile upstream. A guarantee that needs discipline is not a guarantee.
 PROFILE_ROOT="${PROFILE_ROOT:-$SCRIPT_DIR/profiles}"
+PROFILE_USER_ROOT="${PROFILE_USER_ROOT:-/etc/zfs-snapshot-all/profiles}"
 # The name of the profile a deployment gets when nobody names one. Written once
 # and referred to, not spelled out at each of the six places that used to say
 # "default" in a literal -- with six copies, "what does a plain run do" was a
@@ -1124,11 +1140,11 @@ load_active_profile() {
     # trap can only ever reach the LAST set. The suite reloads inside one
     # subshell, so this is a live path, not a defensive nicety.
     profile_release_tmp
-    local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
+    local dir="$(profile_file "$PROFILE_ACTIVE")"
     # Validate before rendering. A profile that carries relationship-owned
     # fields must never reach a config, and finding that out from gen-cron
     # afterwards would mean it already had.
-    profile_validate_dir "$dir" "$GENCRON" || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_validate_file "$dir" "$GENCRON" || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     # Arm BEFORE the first allocation, not after the last. Arming afterwards
     # left a window in which allocation 2 or 3 could fail, `die` could exit, and
     # everything already allocated survived with no trap to reach it -- measured:
@@ -1155,12 +1171,12 @@ load_active_profile() {
     PROFILE_LETTERS_FILE=$(mktemp) || die "mktemp failed"
     bash "$GENCRON" --dump-tier-letters > "$PROFILE_LETTERS_FILE" 2>/dev/null \
         || die "profile '$PROFILE_ACTIVE': could not read the tier-letter table from gen-cron.sh -- refusing to translate a retention against a table this run cannot see"
-    profile_split_one_file "$dir/profile.conf" "$_psplit_t" "$_psplit_d" "$_psplit_p" "$PROFILE_EXCL_FILE" \
+    profile_split_one_file "$dir" "$_psplit_t" "$_psplit_d" "$_psplit_p" "$PROFILE_EXCL_FILE" \
         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_templates "$_psplit_t" "$PROFILE_ACTIVE" "$PROFILE_TPL_FILE" "" "$PROFILE_LETTERS_FILE" \
+    profile_render_templates "$_psplit_t" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_TPL_FILE" "" "$PROFILE_LETTERS_FILE" \
         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$_psplit_d" "$PROFILE_ACTIVE" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$_psplit_p" "$PROFILE_ACTIVE" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_d" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_p" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     # The split halves were scaffolding for this function alone: they never
     # leave it, so they are removed here rather than joining the release list,
     # which exists for the artifacts the REST of the run reads.
@@ -1202,14 +1218,48 @@ load_active_profile() {
 # for the same job (delsnaps' lock key, clean-relationships' crontab
 # comparison). It answers "is this still the thing I generated from".
 profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
-    local dir="$PROFILE_ROOT/$PROFILE_ACTIVE"
-    [ -r "$dir/profile.conf" ] || return 1
+    local dir="$(profile_file "$PROFILE_ACTIVE")"
+    [ -r "$dir" ] || return 1
     local letters
     letters="$(bash "$GENCRON" --dump-tier-letters 2>/dev/null)" || return 1
-    { cat "$dir/profile.conf"
+    { cat "$dir"
       printf '%s' "$letters"
       printf 'render-schema=%s' "${PROFILE_RENDER_SCHEMA:-0}"
     } | md5sum | cut -d' ' -f1
+}
+
+# A PROFILE IS A FILE, and you may say which one.
+#
+#   --profile=prod                 a NAME. Looked up as <name>.conf, first in
+#                                  this host's own directory, then in the
+#                                  package's.
+#   --profile=/path/to/mine.conf   a PATH. Anything containing '/' is taken as
+#                                  the file itself, and nothing is searched.
+#
+# The two directories are the split this tree already draws everywhere else:
+# the package holds what we ship and is replaced wholesale by `git pull`; /etc
+# holds what this host decided and survives every update. "Never carried to
+# GitHub" is therefore a consequence of the location, not a rule to remember --
+# /etc is not in the checkout.
+#
+# Decided by the fleet rather than by convention: pve1 carries FOUR copies of
+# the package (root's, the delegated account's, two in /tmp). A profiles.local/
+# beside the checkout would exist once per copy, and "where are this host's
+# profiles" would depend on which account ran the command.
+profile_file() {   # <name or path> -> the profile file to use
+    case "$1" in
+        */*) printf '%s' "$1"; return 0 ;;
+    esac
+    [ -f "$PROFILE_USER_ROOT/$1.conf" ] && { printf '%s' "$PROFILE_USER_ROOT/$1.conf"; return 0; }
+    printf '%s' "$PROFILE_ROOT/$1.conf"
+}
+
+# The name a profile is known BY, which is not the same thing as where it lives:
+# it namespaces every template the profile renders (profile__<name>__<tier>), so
+# it has to survive being given as a path and must never carry a '/'.
+profile_name_of() {   # <name or path> -> the bare name
+    local n="${1##*/}"
+    printf '%s' "${n%.conf}"
 }
 
 # Phase 4: the profile choice is CREATE-time provenance, consulted only the
@@ -1388,14 +1438,14 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
 # callers had exactly the same shape.
 #
 # So the repair is separate and is called PLAINLY, in the caller's own shell,
-# where an allocation survives. Guarded by profile_validate_dir rather than by
+# where an allocation survives. Guarded by profile_validate_file rather than by
 # load_active_profile's die(), because a re-activation must keep working after
 # its profile was renamed or removed (REV-20260809-090 F1).
 profile_reload_if_stale() {   # no output; repairs a loaded-but-unrendered profile
     [ -n "${PROFILE_LOADED:-}" ] || return 0
     [ -s "${PROFILE_PRUNE_FILE:-}" ] && return 0
     [ -s "${PROFILE_DS_FILE:-}" ]    && return 0
-    profile_validate_dir "$PROFILE_ROOT/$PROFILE_ACTIVE" "$GENCRON" >/dev/null 2>&1 || return 0
+    profile_validate_file "$(profile_file "$PROFILE_ACTIVE")" "$GENCRON" >/dev/null 2>&1 || return 0
     PROFILE_LOADED=""
     load_active_profile
 }
@@ -3083,7 +3133,7 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
         #
         # When it cannot be read, the config's own answer stands, which is the
         # behaviour that existed before this block.
-        if profile_validate_dir "$PROFILE_ROOT/$PROFILE_ACTIVE" "$GENCRON" >/dev/null 2>&1; then
+        if profile_validate_file "$(profile_file "$PROFILE_ACTIVE")" "$GENCRON" >/dev/null 2>&1; then
             load_active_profile
             if ! profile_declares_ladder; then
                 PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0
@@ -4897,7 +4947,7 @@ cmd_local_backup() {
         done
     done
 
-    # Choose the preset. load_active_profile calls profile_validate_dir, which
+    # Choose the preset. load_active_profile calls profile_validate_file, which
     # refuses a profile carrying any relationship-owned field before it can reach
     # a config, and dies with the profile named if it does not exist.
     PROFILE_ACTIVE="$profile"
@@ -5363,7 +5413,7 @@ cmd_add_client() {
     # unchanged: an operator who never heard of profiles gets exactly the
     # same "default" behaviour as before this flag existed.
     [ -n "$profile" ] || profile="$PROFILE_DEFAULT_NAME"
-    profile_validate_dir "$PROFILE_ROOT/$profile" "$GENCRON" \
+    profile_validate_file "$(profile_file "$profile")" "$GENCRON" \
         || die "add-client: --profile='$profile': $PROFILE_ERR"
     [ -n "$lan" ] || die "add-client requires --host=HOST[:PORT] (the address used for the initial seed)"
     # The ordinary product path is backup. Dataset discovery belongs to the
@@ -7769,7 +7819,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # command had before the flag existed, and a typo fails HERE rather than
     # halfway through rewriting a config.
     [ -n "$target_profile" ] || target_profile="$PROFILE_DEFAULT_NAME"
-    profile_validate_dir "$PROFILE_ROOT/$target_profile" "$GENCRON" \
+    profile_validate_file "$(profile_file "$target_profile")" "$GENCRON" \
         || die "migrate-profile: --profile='$target_profile': $PROFILE_ERR"
     # Point the loader at the DESTINATION before anything reads the profile.
     # emit_client_sections loads lazily and caches on PROFILE_LOADED, so the
