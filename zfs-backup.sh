@@ -1274,6 +1274,10 @@ profile_emit() {   # <rendered fragment>
 # construction, not a policy choice. Fail-closed on emptiness.
 profile_declares_ladder() {   # -> 0 when the loaded profile carries a [prune] fragment
     [ -n "${PROFILE_LOADED:-}" ] || return 1
+    # -s BEFORE reading, for the same stale-temp reason spelled out in
+    # profile_retention_fragment: an unreadable path here printed "No such file
+    # or directory" from profile_emit's redirection and made a shape question
+    # look like a crash.
     [ -s "${PROFILE_PRUNE_FILE:-}" ] || return 1
     profile_emit "$PROFILE_PRUNE_FILE" | grep -q '[^[:space:]]'
 }
@@ -1371,6 +1375,31 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
 # A ladder profile keeps retention in [prune]; a flat profile keeps it in the
 # tiers its [dataset] references. Both are a fragment carrying use_template, so
 # the machinery below needs the right FILE, not a new mechanism.
+# PROFILE_LOADED=1 WITH THE ARTIFACTS GONE IS A LIE, and it must be repaired by
+# a function nobody calls inside `$( )`.
+#
+# The suite renders profiles inside subshells; a subshell's EXIT trap releases
+# the temps and clears ITS copy of the variables, while the parent keeps the flag
+# and paths to files that no longer exist. Twice I tried to answer that inside
+# the resolver -- and the resolver's every caller reads it as
+# `frag="$(profile_retention_fragment)"`, which is ITSELF a subshell. The
+# re-render allocated fresh temps, the substitution ended, its trap removed them,
+# and the caller got a path to nothing. The test caught it; the production
+# callers had exactly the same shape.
+#
+# So the repair is separate and is called PLAINLY, in the caller's own shell,
+# where an allocation survives. Guarded by profile_validate_dir rather than by
+# load_active_profile's die(), because a re-activation must keep working after
+# its profile was renamed or removed (REV-20260809-090 F1).
+profile_reload_if_stale() {   # no output; repairs a loaded-but-unrendered profile
+    [ -n "${PROFILE_LOADED:-}" ] || return 0
+    [ -s "${PROFILE_PRUNE_FILE:-}" ] && return 0
+    [ -s "${PROFILE_DS_FILE:-}" ]    && return 0
+    profile_validate_dir "$PROFILE_ROOT/$PROFILE_ACTIVE" "$GENCRON" >/dev/null 2>&1 || return 0
+    PROFILE_LOADED=""
+    load_active_profile
+}
+
 # rc 0 = resolved (path on stdout); rc 2 = no profile is loaded, so there is
 # nothing to CREATE from and nothing to say about the policy; rc 1 = a profile
 # IS loaded and expresses no retention at all. The reviewer asked for exactly
@@ -1607,6 +1636,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
         return 0
     fi
     local retfrag=""
+    profile_reload_if_stale
     retfrag="$(profile_retention_fragment)" || retfrag=""
     # Pure config text -- no SSH here. The fail-closed grant check
     # (assert_source_prune_grant) runs in the FLOW, before the workfile is
@@ -1686,6 +1716,7 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     # section is the exact fail-open the finding names. It reported "nothing to
     # add" when what it meant was "I could not tell what to add".
     local retfrag rc
+    profile_reload_if_stale
     retfrag="$(profile_retention_fragment)"; rc=$?
     [ "$rc" -eq 0 ] || die "audit-source-retention --apply: profile '$PROFILE_ACTIVE' yielded no retention fragment ($([ "$rc" -eq 2 ] && printf 'no profile is loaded in this run' || printf 'the profile expresses no retention at all')). Refusing to report success while adding nothing -- the relationships this verb exists to bound would stay unbounded. Nothing was installed."
     local marker="# managed-by: zfs-backup.sh client=$name"
@@ -5031,6 +5062,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         # local backup stamps the SAME four families on its source datasets, and
         # a flat profile bounded none of them there either.
         local LB_RETFRAG=""
+        profile_reload_if_stale
         LB_RETFRAG="$(profile_retention_fragment)" || LB_RETFRAG=""
         if [ -n "$LB_RETFRAG" ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently

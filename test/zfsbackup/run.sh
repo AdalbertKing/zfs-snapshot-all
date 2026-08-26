@@ -7168,6 +7168,46 @@ fi
 #
 # The argument was wrong, not the code around it. These two assertions exist so
 # that the argument cannot be made again without failing.
+# A LOADED PROFILE WHOSE ARTIFACTS ARE GONE IS A STALE STATE, NOT A VERDICT.
+#
+# This one cost three attempts. The suite renders profiles inside subshells; a
+# subshell's EXIT trap releases the temps and clears ITS copy of the variables,
+# while the parent keeps PROFILE_LOADED=1 and paths to files that no longer
+# exist. I first read that as "no retention" and skipped silently, then as "no
+# retention" and refused -- both wrong, because the profile is fine and only the
+# rendering is missing. Repair the state: re-render once, non-fatally, and ask
+# again.
+# The verdict is formed INSIDE the subshell, because the re-rendered fragment is
+# a temp owned by that shell and its EXIT trap releases it on the way out. The
+# first version of this assertion returned the PATH and tested -s in the parent,
+# where the file was already gone -- the very phenomenon under test, one level
+# up, catching the test that was written for it.
+st_frag="$( ( PROFILE_ROOT="$REPO/profiles"; PROFILE_ACTIVE=default
+              PROFILE_LOADED=1
+              PROFILE_PRUNE_FILE=/nonexistent-prune
+              PROFILE_DS_FILE=/nonexistent-ds
+              profile_reload_if_stale
+              f="$(profile_retention_fragment)" && [ -s "$f" ] && printf 'RENDERED' ) )"
+if [ "$st_frag" = "RENDERED" ]; then
+    ok "96z: a stale profile state is re-rendered, not mistaken for an empty policy"
+else
+    bad "96z: a stale profile state is re-rendered" "got '${st_frag:-<nothing>}', expected RENDERED"
+fi
+
+# CONTROL: a profile that genuinely cannot be validated must still resolve to
+# nothing, or 96z would be indistinguishable from "always re-render and hope".
+st_none="$( ( PROFILE_ROOT="$WORK/no-such-profile-root"; PROFILE_ACTIVE=ghost
+              PROFILE_LOADED=1
+              PROFILE_PRUNE_FILE=/nonexistent-prune
+              PROFILE_DS_FILE=/nonexistent-ds
+              profile_reload_if_stale
+              f="$(profile_retention_fragment)" && [ -s "$f" ] && printf 'RENDERED' ) 2>/dev/null )"
+if [ -z "$st_none" ]; then
+    ok "96z2 control: an unvalidatable profile still resolves to nothing"
+else
+    bad "96z2 control: an unvalidatable profile still resolves to nothing" "got '$st_none'"
+fi
+
 SR="$WORK/srfailclosed"; rm -rf "$SR"; mkdir -p "$SR"
 printf '[defaults]\n\thost_label = sr\n' > "$SR/jobs.conf"
 sr_before="$(md5sum < "$SR/jobs.conf")"
