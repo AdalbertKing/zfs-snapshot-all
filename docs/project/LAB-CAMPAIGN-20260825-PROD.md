@@ -258,7 +258,44 @@ Diff crontaba: **-16 / +24**. Bieg verbatim ośmiu linii: **8/8 `rc=0`**.
    Reset był **listą nazw** — a pola numerowanego nie da się wyliczyć z góry.
    Teraz reset pamięta każdą nazwę, jaką przypisał którykolwiek rekord.
 
-## 4. Co ZOSTAJE żywe (do rozbiórki)
+## 4. ROZEBRANY (2026-08-26)
+
+Rozbiórka w odwrotnej kolejności niż budowa, z dowodem na każdym kroku.
+
+| krok | dowód |
+|---|---|
+| `remove-client p1`, `remove-client p2` | crontab pve9: **40 → 5 linii**, diff wobec bazy sprzed labu: **0 linii** |
+| `zfs destroy -r hdd/prodlab-k1`, `-k2` | pule pve9: `hdd`, `hdd/osrc` — jak w rekonesansie |
+| `rm -rf /root/zfs-stage` | dopiero PO usunięciu relacji: zainstalowane linie crona wskazywały na ten katalog |
+| `deploy.sh --revoke-quiesce=zfsbackup-pve9` na pve1 i pve2 | zdjęta whitelist i reguła sudoers; helper zostaje, bo jest **współdzielony** przez innych peerów |
+| `zfs destroy -r hdd/lab1prod` / `hdd/lab2prod` | zero datasetów z `lab` na obu źródłach |
+| `deploy.sh --leave=pve9` na pve1 i pve2 | usunięte konto, manifest joinu, plik scope i jego hash |
+| usunięte przypięte klucze hostów na pve9 | `/root/.ssh/pairing/` puste |
+| usunięty pusty `jobs.pve9.conf` | `/etc/zfs-snapshot-all/` zawiera znów tylko `clients` i `peers` |
+
+**Stan końcowy, zmierzony:**
+
+| host | crontab | datasety lab | ślady pary | konto |
+|---|---|---|---|---|
+| pve9 (kolektor) | diff **0** wobec bazy | brak | — | — |
+| pve1 (PRODUKCJA) | diff **0** | 0 | 0 | usunięte |
+| pve2 (PRODUKCJA) | diff **0** | 0 | 0 | usunięte |
+
+`pvesr status` na pve1: cztery zadania (`101-0`, `102-0`, `106-0`, `107-0`),
+wszystkie **OK**. Replikacja produkcyjna nietknięta przez całą kampanię — i ani
+razu nie założono `zfs hold` na datasecie replikowanym przez pvesr.
+
+Rekordy `p1` i `p2` zostają jako nagrobki ze `STATE=removed`, zgodnie z
+konwencją narzędzia (tak samo jak 20 rekordów z wcześniejszych kampanii).
+
+**Uwaga metodyczna z samej rozbiórki:** licząc aktywne relacje użyłem
+`grep -l "^STATE=active"`, co dało **20** — bo rekord jest dopisywany, więc
+zawiera całą HISTORIĘ pola `STATE`, a liczy się ostatni wpis. Poprawny odczyt
+dał **0**. To ten sam błąd, który popełniłem przy rekonesansie na starcie
+kampanii, i ta sama lekcja: rekord `.`-sourcowany znaczy „ostatnie
+przypisanie", nie „czy linia gdziekolwiek występuje".
+
+
 
 Lab **chodzi** — celowo, żeby zobaczyć tiki godzinowe.
 
