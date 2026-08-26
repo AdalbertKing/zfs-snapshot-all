@@ -7074,6 +7074,47 @@ else
         "rc=$mp_rc ladder=$(mp_ladder) tpl=$(grep -cE '^\[template:profile__prod__' "$MP/dir/jobs.conf")"
 fi
 
+# --- ONE SHELL, SEVERAL RECORDS: NO FIELD MAY SURVIVE INTO THE NEXT ONE.
+#
+# REV F3. A client record is a `.`-sourced file, so a field a record does NOT
+# carry keeps whatever the previous record left behind. cmd_migrate_profile
+# sources every record in one shell, three times over.
+#
+# Record A carries PROFILE=prod; record B is older and has no PROFILE field at
+# all. After `. A` then `. B`, B still reads prod -- a false "already on
+# profile" in the precheck, and a record that silently never gets its PROFILE
+# written in the post-install loop.
+#
+# This is the same defect the tree fixed for BANDWIDTH, and the comment in
+# load_client_and_connection names migrate-profile as a caller that needs the
+# reset. These loops were written without it. The `( : )` beside each source
+# reads like a subshell and is a shellcheck no-op -- which is how I made the
+# mistake in the first place.
+LK="$WORK/leakrecords"; rm -rf "$LK"; mkdir -p "$LK"
+printf 'CLIENT_NAME=a\nSTATE=active\nPROFILE=prod\n'  > "$LK/a.conf"
+printf 'CLIENT_NAME=b\nSTATE=active\n'                > "$LK/b.conf"
+
+leak_probe() {   # <reader function name> -> the PROFILE b ends up seeing
+    ( PROFILE=""; $1 "$LK/a.conf"; $1 "$LK/b.conf"; printf '%s' "${PROFILE:-<empty>}" )
+}
+if [ "$(leak_probe migrate_read_record)" = "<empty>" ]; then
+    ok "96r: a record without PROFILE does not inherit the previous record's"
+else
+    bad "96r: a record without PROFILE does not inherit the previous record's" \
+        "b saw PROFILE='$(leak_probe migrate_read_record)'"
+fi
+
+# CONTROL, and the reason 96r is not vacuous: the PLAIN source really does leak.
+# Without this the assertion would pass against any reader at all, including one
+# that never read the field.
+plain_source() { . "$1"; }
+if [ "$(leak_probe plain_source)" = "prod" ]; then
+    ok "96s control: the plain source leaks it, so 96r is testing something"
+else
+    bad "96s control: the plain source leaks it" \
+        "b saw '$(leak_probe plain_source)' -- expected the leak"
+fi
+
 # --- A FLAT PROFILE MUST BOUND THE FAMILIES IT CREATES ON THE SOURCE.
 #
 # REV F1, and it was measured on a PRODUCTION host while the lab ran: pve1

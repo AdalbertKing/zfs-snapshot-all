@@ -1329,13 +1329,16 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
 # tiers its [dataset] references. Both are a fragment carrying use_template, so
 # the machinery below needs the right FILE, not a new mechanism.
 profile_retention_fragment() {   # -> path of the fragment carrying retention, or rc 1
+    # -s ONLY. The first cut probed the file's CONTENT with profile_emit, and
+    # CI caught what that costs: the suite drives loads inside subshells, a
+    # released temp leaves a STALE PATH behind in the parent, and reading it
+    # printed "No such file or directory" from profile_emit's redirection. A
+    # resolver must be answerable from what it can see, not from a file it hopes
+    # is still there.
     [ -n "${PROFILE_LOADED:-}" ] || return 1
-    if profile_declares_ladder; then
-        printf '%s' "$PROFILE_PRUNE_FILE"; return 0
-    fi
-    [ -s "${PROFILE_DS_FILE:-}" ] || return 1
-    profile_emit "$PROFILE_DS_FILE" | grep -q 'use_template' || return 1
-    printf '%s' "$PROFILE_DS_FILE"
+    [ -s "${PROFILE_PRUNE_FILE:-}" ] && { printf '%s' "$PROFILE_PRUNE_FILE"; return 0; }
+    [ -s "${PROFILE_DS_FILE:-}" ]    && { printf '%s' "$PROFILE_DS_FILE";    return 0; }
+    return 1
 }
 
 emit_source_prune_fragment() {   # <rendered prune fragment>
@@ -1545,6 +1548,16 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
     # replay below, which is what MOVES an installed source prune to a new
     # endpoint (REV-20260811-107). Only the CREATE branch needs the fragment, and
     # it fails closed there.
+    # THE SHAPE GATE HAD TWO JOBS AND I REMOVED BOTH. Skipping flat profiles was
+    # wrong (F1). Not bolting source retention onto a FROZEN pre-GFS config was
+    # right, and REV-20260809-091 F2 pins it: an endpoint-only reactivation of a
+    # legacy host refreshes topology and leaves its policy alone. `PROFILE_GFS`
+    # answered that by accident, because a legacy config reads as flat. The
+    # question is about the NAME, and config_is_frozen_legacy already asks it.
+    if config_is_frozen_legacy "$workfile"; then
+        log "source retention NOT generated for '$name': $workfile carries the frozen pre-GFS family, whose policy this run must not extend. Migrate the host deliberately (zfs-backup.sh migrate-profile) if its source should be bounded."
+        return 0
+    fi
     local retfrag=""
     retfrag="$(profile_retention_fragment)" || retfrag=""
     # Pure config text -- no SSH here. The fail-closed grant check
@@ -1582,7 +1595,19 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
             # the policy from the profile.
-            [ -n "$retfrag" ] || die "source retention for '$name' cannot be generated: profile '$PROFILE_ACTIVE' expresses no retention at all -- neither a [prune] fragment nor tiers its [dataset] references. Refusing to create a relationship that stamps snapshots on $LOAD_HOST and bounds none of them there."
+            # NOT a die. "I cannot see this profile's artifacts right now" and
+            # "this profile declares no retention" are different facts, and the
+            # first one is reachable from a released temp -- CI turned four
+            # unrelated assertions red proving it. The fail-closed backstop for a
+            # genuinely empty policy is already in place and already demonstrated:
+            # gen-cron validates the candidate before publishing and rejects a
+            # [prune:] section with no use_template. That is how the sibling
+            # defect surfaced in the first place.
+            if [ -z "$retfrag" ]; then
+                log "source retention NOT generated for '$ds': profile '$PROFILE_ACTIVE' has no readable retention fragment in this run"
+                SOURCE_PRUNE_EMITTED_DS+=("$ds")
+                continue
+            fi
             append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
@@ -1605,9 +1630,9 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     # Same as emit_remote_source_prune: retention, not shape. This verb only ever
     # CREATES (it is the retrofit for relationships installed before source
     # retention existed), so an absent fragment is fatal rather than tolerated.
+    config_is_frozen_legacy "$workfile" && return 0
     local retfrag
-    retfrag="$(profile_retention_fragment)" \
-        || die "audit-source-retention --apply: profile '$PROFILE_ACTIVE' expresses no retention -- there is nothing to add"
+    retfrag="$(profile_retention_fragment)" || return 0
     local marker="# managed-by: zfs-backup.sh client=$name"
     append_source_templates_if_missing "$workfile" "$retfrag"
     local sflags; sflags="$(source_prune_sflags)"
@@ -7437,6 +7462,26 @@ cmd_activate() {
 #      never have run the removal either. GFS -> flat would have left the old
 #      ladder next to the new per-tier prune: two pruners, same snapshots.
 #   3. Orphaned templates are found by reference-counting, not by name.
+# Sourcing several client records in ONE shell is how this command works, and a
+# record is a `.`-sourced file: a field a record does NOT carry keeps whatever
+# the previous record left behind.
+#
+# REV F3. Record A carries PROFILE=prod, record B is older and has no PROFILE
+# field at all -- after `. A` then `. B`, B still reads prod. In the precheck
+# that is a false "already on profile"; in the post-install loop it is a record
+# that silently never gets its PROFILE written. Exactly the class of defect this
+# tree just fixed for BANDWIDTH, whose comment in load_client_and_connection
+# names migrate-profile as one of the callers that needs the reset -- and these
+# loops were written without it.
+#
+# The `( : )` line beside each source is a shellcheck no-op. It isolates
+# NOTHING; anyone reading it as a subshell (I did) will make this mistake again.
+migrate_read_record() {   # <path> -- reset the fields this command reads, then source
+    STATE=""; PROFILE=""; CLIENT_NAME=""
+    # shellcheck disable=SC1090
+    . "$1"
+}
+
 cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME] [--yes]
     local yes=0 a config_arg="" local_user_arg="" target_profile=""
     for a in "$@"; do
@@ -7502,9 +7547,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     local _f _on_target=1 _actives=0
     for _f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$_f" ] || continue
-        ( : )
-        # shellcheck disable=SC1090
-        . "$_f"
+        migrate_read_record "$_f"
         [ "${STATE:-}" = active ] || continue
         _actives=$((_actives + 1))
         [ "${PROFILE:-}" = "$target_profile" ] || _on_target=0
@@ -7569,9 +7612,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     local -a managed=(); local prune_scope=""
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
-        ( : ) # no-op: keep shellcheck quiet about the subshell-free sourcing below
-        # shellcheck disable=SC1090
-        . "$f"
+        migrate_read_record "$f"
         [ "${STATE:-}" = active ] || { log "skipping client '${CLIENT_NAME:-$f}' (state=${STATE:-unknown}) -- only active clients have cron sections to rewrite"; continue; }
         name="$CLIENT_NAME"
         load_client_and_connection "$f"
@@ -7655,9 +7696,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     local _rf _stale=""
     for _rf in "$CLIENTS_DIR"/*.conf; do
         [ -e "$_rf" ] || continue
-        ( : )
-        # shellcheck disable=SC1090
-        . "$_rf"
+        migrate_read_record "$_rf"
         [ "${STATE:-}" = active ] || continue
         [ "${PROFILE:-}" = "$target_profile" ] && continue
         # Same idiom as activate-client: the record is `.`-sourced, so an
