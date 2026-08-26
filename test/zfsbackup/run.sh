@@ -7133,6 +7133,30 @@ else
         "b saw '$(leak_probe plain_source)' -- expected the leak"
 fi
 
+# --- THE DIGEST MUST NOTICE THE RENDERER, NOT ONLY THE FILE.
+#
+# REV F2b. The first digest covered profile.conf and gen-cron's tier-letter
+# table -- the operator's file, and the table that turns `keep = 24` into -H24.
+# Both real, both insufficient: change HOW a profile is rendered (the
+# namespacing, the fragment split, the keep translation) and the installed
+# CONFIG changes while neither input moves. Same digest, different policy, and
+# migrate-profile answering "nothing to migrate".
+#
+# PROFILE_RENDER_SCHEMA is a number a human bumps, not a hash of lib-profile.sh,
+# because only a human knows whether the OUTPUT changed -- a hash would move on
+# a comment edit and migrate the whole fleet for nothing.
+dg_at() {   # <schema value> -> digest
+    ( PROFILE_ROOT="$REPO/profiles"; PROFILE_ACTIVE=prod
+      PROFILE_RENDER_SCHEMA="$1"; profile_digest )
+}
+dg_a="$(dg_at 1)"; dg_b="$(dg_at 1)"; dg_c="$(dg_at 99)"
+if [ -n "$dg_a" ] && [ "$dg_a" = "$dg_b" ] && [ "$dg_a" != "$dg_c" ]; then
+    ok "96y: the digest moves when the RENDERER's version moves, and not otherwise"
+else
+    bad "96y: the digest moves when the renderer's version moves" \
+        "same-input='$dg_a' vs '$dg_b'; bumped='$dg_c'"
+fi
+
 # --- CREATE MUST NOT SUCCEED WITHOUT SOURCE RETENTION.
 #
 # REV F1, second round, and the reviewer was right about the first one. I

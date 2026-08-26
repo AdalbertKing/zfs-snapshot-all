@@ -86,6 +86,22 @@ PROFILE_ERR=""
 # `standard_hourly` and `keep_hourly|daily|weekly|monthly`, all single
 # underscores, and the profile name in use is `default`. Nothing valid today is
 # refused by this rule.
+# THE RENDERER'S OWN VERSION, and it is part of what a relationship was
+# generated FROM.
+#
+# REV F2b. profile_digest first covered profile.conf and gen-cron's tier-letter
+# table -- the operator's file and the table that turns `keep = 24` into -H24.
+# That still misses this file: change how a fragment is rendered, how a template
+# is namespaced, or how a keep is translated, and the installed CONFIG changes
+# while profile.conf and the table do not. The digest would call that unchanged
+# and migrate-profile would answer "nothing to migrate".
+#
+# BUMP THIS whenever a change here alters what the same profile.conf renders to.
+# Not a hash of the file: a hash would move on a comment edit and force a
+# pointless migration across the fleet. A number a human sets is the honest
+# instrument, because only a human knows whether the OUTPUT changed.
+PROFILE_RENDER_SCHEMA=1
+
 PROFILE_NS_SEP='__'
 
 profile_ns_name() {   # <profile> <template> -> namespaced name

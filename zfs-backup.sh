@@ -1187,6 +1187,16 @@ load_active_profile() {
 #                  through that table, so a table change alters the installed
 #                  policy without touching a byte of the profile. A digest over
 #                  the operator's file alone would call that "unchanged".
+#   PROFILE_RENDER_SCHEMA (lib-profile.sh)
+#                  the renderer's own version. REV F2b: the first two inputs
+#                  still miss a change to HOW a profile is rendered -- the
+#                  namespacing, the fragment split, the keep translation. Same
+#                  file, same table, different installed CONFIG, identical
+#                  digest, and migrate-profile answering "nothing to migrate".
+#                  A number a human bumps rather than a hash of the library,
+#                  because only a human knows whether the OUTPUT changed; a
+#                  hash would move on a comment edit and migrate the fleet for
+#                  nothing.
 #
 # Not a security hash and not trying to be: md5 is what this tree already uses
 # for the same job (delsnaps' lock key, clean-relationships' crontab
@@ -1196,7 +1206,10 @@ profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
     [ -r "$dir/profile.conf" ] || return 1
     local letters
     letters="$(bash "$GENCRON" --dump-tier-letters 2>/dev/null)" || return 1
-    { cat "$dir/profile.conf"; printf '%s' "$letters"; } | md5sum | cut -d' ' -f1
+    { cat "$dir/profile.conf"
+      printf '%s' "$letters"
+      printf 'render-schema=%s' "${PROFILE_RENDER_SCHEMA:-0}"
+    } | md5sum | cut -d' ' -f1
 }
 
 # Phase 4: the profile choice is CREATE-time provenance, consulted only the
