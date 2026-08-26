@@ -7505,7 +7505,7 @@ fi
 # CONTROL: a name the host does NOT override still resolves to the factory one.
 # Without this, the assertion above would pass against a build that always
 # answered with the user root, override or not.
-if [ "$(pr_file default)" = "$ROOT/profiles/default.conf" ]; then
+if [ "$(pr_file default)" = "$REPO/profiles/default.conf" ]; then
     ok "96A roots control: a name the host does not override still comes from the package"
 else
     bad "96A roots control: a name the host does not override comes from the package" "got '$(pr_file default)'"
