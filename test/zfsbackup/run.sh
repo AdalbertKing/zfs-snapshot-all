@@ -6792,6 +6792,87 @@ else
     bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep 'ssh ' | head -1)"
 fi
 
+# NOTE ON WHERE THIS LIVES: test/linkfields lifts code fragments out of the
+# files under test and runs them in a temp script -- it never sources
+# zfs-backup.sh. Written there, every assertion below "passed" because
+# cmd_set_bandwidth did not exist: rc was 127, the config was untouched, and the
+# control read that as correct refusal. A test that cannot call the thing it
+# names is not a weak test, it is a false one.
+# --- 15. ONE TRANSACTION FOR THE WHOLE PAIR ---------------------------------
+#
+# REV F4b, owner's choice between the two shapes: the cap change becomes a
+# single previewed transaction over every relationship of the pair, rather than
+# the runtime learning to read the manifest (which would have meant CONFIG is no
+# longer the runtime truth).
+#
+# The defect being closed: the cap belongs to the PAIR and lives in the pairing
+# manifest, but an ACTIVE relationship carries it MATERIALISED in its [dataset:]
+# section and in the installed cron line. Rewriting the manifest alone left the
+# two disagreeing until somebody re-activated each relationship by hand,
+# remembering to, one at a time.
+SB="$WORK/setbw"; rm -rf "$SB"; mkdir -p "$SB/clients" "$SB/peerstate" "$SB/dir" "$SB/bin"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$SB/bin/crontab"
+chmod +x "$SB/bin/crontab"
+printf 'PEER_SAVED_LOCAL_USER=root\nPEER_SAVED_BANDWIDTH=2M\n' > "$SB/peerstate/10.5.5.5.conf"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$SB" > "$SB/server.conf"
+
+# TWO relationships across ONE link -- the shape the whole finding is about.
+{ printf '[defaults]\n\thost_label = sbtest\n\n'
+  printf '[template:hourly]\n\tsend_schedule  = 7 * * * *\n\tprefix         = automated_hourly_\n'
+  printf '\tnotify_word    = snapshot\n\tprune_schedule = 27 * * * *\n\tpattern        = automated_hourly\n\tkeep           = 24\n\n'
+  for n in one two; do
+    printf '[dataset:tank/backups/%s/tank/src]\n' "$n"
+    printf '\t# managed-by: zfs-backup.sh client=%s\n' "$n"
+    printf '\tuse_template = hourly\n\tsrc          = acct@10.5.5.5:tank/src\n'
+    printf '\tbandwidth    = 2M\n\trecursive    = flat\n\tpair_label   = %s\n\tnotify       = %s-at\n\n' "$n" "$n"
+  done
+} > "$SB/dir/jobs.conf"
+for n in one two; do
+  { printf 'CLIENT_NAME=%s\nPEER_HOST=10.5.5.5\nSTATE=active\n' "$n"
+    printf 'MANAGED_DATASETS=tank/backups/%s/tank/src\n' "$n"
+    printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$SB"
+  } > "$SB/clients/$n.conf"
+done
+
+sb_run() {   # <rate or -> -> rc
+    local arg="--bandwidth=$1"; [ "$1" = "-" ] && arg="--bandwidth="
+    ( PATH="$SB/bin:$PATH"
+      atomic_replace_and_install() { mv -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+      show_activation_proposal() { :; }
+      CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+      cmd_set_bandwidth --peer=10.5.5.5 "$arg" --config="$SB/dir/jobs.conf" --yes ) >/dev/null 2>&1
+}
+sb_caps()     { grep -c '^	bandwidth    = 8M$' "$SB/dir/jobs.conf"; }
+sb_manifest() { grep -m1 '^PEER_SAVED_BANDWIDTH=' "$SB/peerstate/10.5.5.5.conf" | cut -d= -f2-; }
+
+sb_run 8M
+{ [ "$(sb_caps)" -eq 2 ] && [ "$(sb_manifest)" = "8M" ]; } \
+    && ok "pair-tx: one command moves BOTH relationships and the manifest together" \
+    || bad "pair-tx: one command moves both relationships and the manifest" \
+           "sections at 8M=$(sb_caps) manifest='$(sb_manifest)'"
+
+# Removing a cap must take the LINE with it, not leave a stale one throttling
+# the link -- set_or_remove, not update.
+sb_run -
+{ [ "$(grep -c '^	bandwidth' "$SB/dir/jobs.conf")" -eq 0 ] && [ -z "$(sb_manifest)" ]; } \
+    && ok "pair-tx: an empty rate removes the field from every section and empties the manifest" \
+    || bad "pair-tx: an empty rate removes the field everywhere" \
+           "bandwidth lines left=$(grep -c '^	bandwidth' "$SB/dir/jobs.conf") manifest='$(sb_manifest)'"
+
+# CONTROL: a peer with no pairing manifest is refused, and nothing moves --
+# without it the assertions above would pass against a build that rewrites
+# sections for any string at all.
+cp "$SB/dir/jobs.conf" "$SB/before.conf"
+( PATH="$SB/bin:$PATH"
+  CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+  cmd_set_bandwidth --peer=10.9.9.9 --bandwidth=4M --config="$SB/dir/jobs.conf" --yes ) >/dev/null 2>&1
+sb_rc=$?
+{ [ "$sb_rc" -ne 0 ] && cmp -s "$SB/before.conf" "$SB/dir/jobs.conf"; } \
+    && ok "pair-tx control: an unpaired peer is refused and the config is untouched" \
+    || bad "pair-tx control: an unpaired peer is refused and the config is untouched" "rc=$sb_rc"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
