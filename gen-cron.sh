@@ -96,6 +96,8 @@ set -o pipefail
 #       notify       = <short label>
 #       flags        = <snapsend.sh flags, or snapget.sh flags when 'src' is set>
 #       flags_<tier> = <per-tier flags override>
+#       send_schedule_<tier>  = <per-tier send cadence override>
+#       prune_schedule_<tier> = <per-tier prune cadence override>
 #       bandwidth    = <mbuffer rate>      # LINK fields: what the transfer does
 #       compression  = zstd|gzip|none|default  # to the WIRE, named instead of
 #       cipher       = <ssh -c argument>   # hand-written into 'flags'. Section
@@ -114,9 +116,19 @@ set -o pipefail
 #                                          # inherited); on a [prune:] it
 #                                          # reaches ONLY the monitor -- prune
 #                                          # itself keeps running while paused.
-#       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
-#                                          # that owns this dataset before
-#                                          # snapshotting it (snapsend.sh -q)
+#       quiesce      = no|agent|sync|auto[,strict|,degrade]  # default no; quiesce
+#                                          # the Proxmox guest. A failed freeze
+#                                          # degrades to a crash-consistent
+#                                          # snapshot unless ',strict' is named.
+#                    [,degrade]            # that owns this dataset before
+#                                          # snapshotting it (snapsend.sh -q).
+#                                          # ',degrade' says what to do when the
+#                                          # freeze cannot happen: take the set
+#                                          # anyway, crash-consistent, named
+#                                          # <family>_crash_<timestamp>, and exit
+#                                          # 8 so cron reports it. Without it a
+#                                          # failed freeze means NO snapshot.
+#                                          # A failed thaw stays fatal either way.
 #       dst          = <target>            # PUSH: <zfs/path> is the local SOURCE,
 #                                          # snapsend.sh sends TO dst (remote if it
 #                                          # contains ':', else local-to-local).
@@ -557,7 +569,8 @@ maybe_add_autotune() {
     if [ -n "$flags" ]; then printf '%s -A' "$flags"; else printf -- '-A'; fi
 }
 
-# quiesce = agent|fs|auto|no. Unlike -A this is NOT inferred: whether a guest can
+# quiesce = agent|sync|auto|no, each optionally with ',degrade'. Unlike -A this
+# is NOT inferred: whether a guest can
 # be frozen depends on what runs inside it and how much a brief write stall costs
 # there, and neither is visible from a dataset name. So it is opt-in per dataset.
 #
@@ -588,18 +601,45 @@ maybe_add_autotune() {
 #           right place for it, but means a config can generate cleanly here and
 #           still need `--as=root` (or a sudo rule) on the peer to work.
 lint_quiesce() {
-    local want="$1" ctx="$2" direction="$3"
+    local want="$1" ctx="$2" direction="$3" mode="$1" qual=""
+    # `<mode>[,strict|,degrade]` (docs/design/quiesce-degrade.md). The qualifier
+    # is split off HERE so every rule below keeps reading a bare mode -- in
+    # particular the pull/sync rule, which must reject `sync,degrade` on a pull
+    # for exactly the reason it rejects `sync`. The engines parse the same
+    # grammar with quiesce_parse_mode (lib-zfs-snap.sh); this is the config-time
+    # half, and the two must accept the same set or a config would generate
+    # cleanly and fail at run time.
+    #
+    # Since the owner's 2026-08-27 direction the DEFAULT is to degrade -- a
+    # failed freeze still produces a snapshot, named `_crash_` and exiting 8 --
+    # so `,degrade` is accepted and redundant, and `,strict` is the field that
+    # actually changes anything: it restores the old refusal.
     case "$want" in
+        *,*)
+            mode="${want%%,*}"
+            qual="${want#*,}"
+            case "$qual" in
+                degrade|strict) ;;
+                *) die "$ctx: quiesce='$want' -- ',$qual' is not a qualifier. There are two, and each may appear at most once: ',strict' takes NO snapshot when the freeze fails, and ',degrade' takes a crash-consistent one -- which is the default since 2026-08-27, so writing it changes nothing." ;;
+            esac
+            case "$mode" in
+                no) die "$ctx: quiesce='no,$qual' -- ',$qual' says what to do when a freeze FAILS, and 'no' never freezes, so the pair asks for nothing. Either name the mode you want quiesced, or drop the field." ;;
+            esac ;;
+    esac
+    # `want` stays the RAW field from here on, so every message below quotes what
+    # the operator actually wrote; the rules read `mode`, which is the same thing
+    # with any qualifier removed.
+    case "$mode" in
         ""|no) return 0 ;;
         agent|auto)
             return 0
             ;;
         sync)
-            [ "$direction" = "pull" ] && die "$ctx: quiesce='sync' on a pull dataset -- sync is the CONTAINER fallback (a 'pct exec <id> -- sync' flush, not a freeze), and running it across an ssh hop buys nothing a push job on that host would not do better. Use quiesce=agent/auto for VMs, or run this dataset as a push job."
+            [ "$direction" = "pull" ] && die "$ctx: quiesce='$want' on a pull dataset -- sync is the CONTAINER fallback (a 'pct exec <id> -- sync' flush, not a freeze), and running it across an ssh hop buys nothing a push job on that host would not do better. Use quiesce=agent/auto for VMs, or run this dataset as a push job."
             return 0
             ;;
         fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;
-        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto" ;;
+        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto, each optionally with ',strict' or ',degrade'" ;;
     esac
 }
 
@@ -1174,9 +1214,15 @@ validate_field_names() {
         kind="${SECTION_KIND[$hdr]:-}"
         [ -n "$kind" ] || continue
         [ -n "${FIELD_OK[${kind}${SEP}${field}]+x}" ] && continue
-        # flags_<tier>: a per-tier override of 'flags', so the tier part cannot
-        # be enumerated ahead of time.
-        case "$field" in flags_*) [ "$kind" = "dataset" ] && continue ;; esac
+        # flags_<tier>, send_schedule_<tier>, prune_schedule_<tier>: per-tier
+        # overrides whose tier part cannot be enumerated ahead of time. The two
+        # schedules joined flags on 2026-08-26 so that a multi-cadence profile
+        # can be spread across the clock without one section-level value
+        # flattening every tier it names.
+        case "$field" in
+            flags_*|send_schedule_*|prune_schedule_*)
+                [ "$kind" = "dataset" ] && continue ;;
+        esac
         elsewhere="$(field_valid_elsewhere "$field")"
         if [ -n "$elsewhere" ]; then
             die "[$hdr] has '$field', which gen-cron.sh does not read in a [$kind:] section (it is valid in:$elsewhere). Move it, or remove it -- left here it does nothing at all."
@@ -1837,7 +1883,24 @@ build_dataset() {
         # against a family it never creates, at a cadence it never runs.
         local tier_created_prefix="" tier_creates=0 tier_send_schedule=""
         local send_schedule
-        if send_schedule="$(resolve_field send_schedule "$ds" "$tmpl" defaults)"; then
+        # PER TIER, like flags. A [dataset:] carrying several tiers with several
+        # cadences could not be staggered before: a single section-level
+        # send_schedule overrides EVERY tier it references, so writing one minute
+        # would have collapsed daily/weekly/monthly onto the hourly cadence. The
+        # spreader therefore wrote nothing at all, and every `prod` relationship
+        # on a collector fired in the same minute (measured on pve9: two
+        # relationships, two seconds apart).
+        #
+        # The tiered resolver was generic from the day it was written, and had
+        # exactly one caller until now. This is the second.
+        #
+        # Its NAME is deliberately not written next to a following word here.
+        # The allow-list test scrapes "<helper> <word>" out of this file and
+        # cannot tell a comment from code, so naming the helper in prose invents
+        # a field -- which is what the paragraph a few hundred lines up warns
+        # about, and what my first version of this comment did ("... has been
+        # generic" produced a field called `has`).
+        if send_schedule="$(resolve_field_tiered send_schedule "$tier" "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$send_schedule" "[dataset:$ds_path] tier=$tier" send_schedule
             tier_send_schedule="$send_schedule"
             local dst src prefix flags label raw_notify word notify direction remote_spec
@@ -1908,6 +1971,15 @@ build_dataset() {
             flags="$(maybe_add_autotune "$flags" "$remote_spec" "$autotune")"
             local quiesce
             quiesce="$(resolve_field quiesce "$ds" "$tmpl" defaults)" || quiesce=""
+            # ONLY when the tier said nothing. Reviewer contract, 2026-08-26: the
+            # host file is a fallback for silence, never a widening of something
+            # explicit -- a tier that says `auto` keeps meaning fail-closed
+            # `auto`, and no host default may quietly turn it into
+            # `auto,degrade`. That is why this tests for empty rather than
+            # merging, and why it runs BEFORE lint_quiesce: whatever the host
+            # file supplies has to survive exactly the same grammar as a value
+            # written in the config.
+            [ -n "$quiesce" ] || quiesce="$(settings_get quiesce "")"
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
             # Baseline render for --migrate-recursion: the recursion VALUE was
@@ -1950,7 +2022,9 @@ build_dataset() {
         # ---- inline self-prune (own path, non-recursive) ----
         # prune_schedule is the deliberate "yes, prune this dataset" signal.
         local prune_schedule
-        if prune_schedule="$(resolve_field prune_schedule "$ds" "$tmpl" defaults)"; then
+        # Per tier for the same reason as send_schedule above -- a flat profile
+        # prunes from its tiers, so its prune minutes need spreading too.
+        if prune_schedule="$(resolve_field_tiered prune_schedule "$tier" "$ds" "$tmpl" defaults)"; then
             lint_cron_schedule "$prune_schedule" "[dataset:$ds_path] tier=$tier" prune_schedule
             local pattern retain_flag plabel praw pnotify
             pattern="$(require_field pattern "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: prune_schedule is set but 'pattern' did not resolve (missing, or set but blank)"
@@ -2323,7 +2397,23 @@ group_inline_prune() {
         # with a non-recursive one would silently give one of them the wrong
         # scope, either leaving descendants unpruned or pruning descendants
         # nobody asked about.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}"
+        #
+        # 'notify' is in the key for exactly the same reason, one field later.
+        # The render below takes its label from members[0] and drops the rest,
+        # so a group spanning two relationships was swept correctly and
+        # REPORTED under one name. Measured on pve9, 2026-08-25: two prod
+        # relationships, four merged prune lines, every one of them announcing
+        # itself as "(p1-at)" -- a failure pruning p2's dataset would have sent
+        # an operator to look at p1. The estate has paid for misattributed
+        # alerts before (never blame the data for a link failure), and a
+        # retention job that names the wrong relationship is the same defect
+        # wearing the retention hat.
+        #
+        # MERGE ONLY WHAT CAN BE REPORTED AS ONE THING. The cost is one prune
+        # line per relationship per tier instead of one per tier -- which is
+        # what the SEND side already emits, so the two sides now match rather
+        # than one of them quietly folding relationships together.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -3228,6 +3318,16 @@ while [ $# -gt 0 ]; do
         # drift, and a test that fails for formatting reasons gets muted.
         --dump-fields)
             for _k in "${!FIELD_OK[@]}"; do printf '%s %s\n' "${_k%%${SEP}*}" "${_k#*${SEP}}"; done | sort
+            exit 0 ;;
+        # Same reason as --dump-fields, for the other table a profile has to
+        # agree with. A profile may write the ergonomic `keep = 24`, but its
+        # tier names are NAMESPACED before they reach this file, so the letter
+        # can no longer be derived here -- the profile renderer derives it and
+        # emits `retain`. Asking for the table instead of copying it keeps one
+        # authority: a letter added here is available there the same day, and a
+        # second copy cannot quietly disagree about what -W means.
+        --dump-tier-letters)
+            for _k in "${!TIER_LETTER[@]}"; do printf '%s %s\n' "$_k" "${TIER_LETTER[$_k]}"; done | sort
             exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (see -h)" ;;

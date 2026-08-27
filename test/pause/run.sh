@@ -524,6 +524,53 @@ check "V2 the crontab is completely untouched (both blocks still active)" "0" \
       "$(printf '%s\n' "$before_V" | cmp -s - "$(tab "$ME")"; echo $?)"
 check "V3 no pause header appears anywhere" "0" "$(grep -c "$PAUSE_BLOCK_MARKER" "$(tab "$ME")")"
 
+# ============================================================================
+# A DECISION IS NOT A PROVISIONING RUN.
+#
+# `--pause` was moved above Phase 1 because a maintenance window "has no business
+# pulling the repo, rewriting notify-fail.sh or reinstalling cron lines". Nothing
+# pinned that, so `--commit-scope` -- which is a decision about PERMISSIONS --
+# still sat at the dispatch near the foot of the file, after Phase 7.
+#
+# Measured on a PRODUCTION host, 2026-08-26: `deploy.sh --commit-scope=pve9`, run
+# to answer a permission question, added
+#
+#     0 8 * * * /root/scripts/check-pool-capacity.sh
+#
+# to root's crontab. The line is harmless. An operator being surprised by it is
+# not, and the next such verb would land the same way with nothing to catch it.
+#
+# So the ORDER is the assertion, checked in the file rather than by running a
+# verb that needs root, ZFS and a live manifest. Structural, and exact: the
+# dispatch line must come before the first phase that touches the host.
+# ============================================================================
+DEPLOY_SH="$REPO/deploy.sh"
+first_phase_line="$(grep -n 'log "Phase 1: dependencies"' "$DEPLOY_SH" | head -1 | cut -d: -f1)"
+if [ -n "$first_phase_line" ]; then
+    check "order: deploy.sh still has a first phase to compare against" "0" "0"
+else
+    check "order: deploy.sh still has a first phase to compare against" "0" "1"
+fi
+for verb in PAUSE_MODE RESUME_MODE COMMIT_SCOPE_MODE; do
+    vline="$(grep -n "^if \[ \"\\\$$verb\" -eq 1 \]; then" "$DEPLOY_SH" | head -1 | cut -d: -f1)"
+    if [ -n "$vline" ] && [ -n "$first_phase_line" ] && [ "$vline" -lt "$first_phase_line" ]; then
+        check "order: $verb is dispatched BEFORE the first host phase" "0" "0"
+    else
+        check "order: $verb is dispatched BEFORE the first host phase" "0" \
+              "1 (dispatch=${vline:-none} phase1=$first_phase_line)"
+    fi
+done
+# The negative half: --join is NOT expected here, and saying so keeps the
+# assertion honest. Enrolling a host legitimately provisions it, so a build that
+# hoisted every verb above the phases would be wrong in the other direction.
+jline="$(grep -n '^if \[ "\$JOIN_MODE" -eq 1 \]; then' "$DEPLOY_SH" | tail -1 | cut -d: -f1)"
+if [ -n "$jline" ] && [ "$jline" -gt "$first_phase_line" ]; then
+    check "order: --join still runs AFTER the phases, because enrolling provisions" "0" "0"
+else
+    check "order: --join still runs AFTER the phases, because enrolling provisions" "0" \
+          "1 (join=${jline:-none} phase1=$first_phase_line)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

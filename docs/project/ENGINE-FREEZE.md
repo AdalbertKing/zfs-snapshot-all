@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 734018bac437763fcd242e52b755f135f48bbe7e -->
-<!-- frozen: snapget.sh 100755 1a4dab0c5c9e65468bde2c331429046deb44ceff -->
+<!-- frozen: snapsend.sh 100755 0f280f2e3a8aec280d8c3a396a0a01fb27e71903 -->
+<!-- frozen: snapget.sh 100755 45667de1f6dc45663c09b60db6125209fb3f7c2c -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 065bc43d92729170bbfbf54c8dc273910c4b5a60 -->
+<!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -43,17 +43,121 @@ in the fleet executes nightly, they now have 619 assertions of live evidence
 behind them, and the cheapest way to lose that is a small edit that seemed
 obvious.
 
-## Authorization under the post-2026-08-15 regime
+## Authorization
 
-The reviewer and the REV pipeline were removed by the owner on 2026-08-15
-(`HANDOFF.md`), so points 1-3 below describe machinery that can no longer be
-exercised as written. The freeze itself stays -- its value (no frozen engine
-changes in passing) does not depend on who the authority is. The authority is
-now the OWNER: a frozen file changes only on an explicit owner direction, the
-change is recorded here in prose with the date and the direction it answers,
-and `--refreeze` re-pins the baseline as part of the same change.
+The owner removed the REV pipeline on 2026-08-15 (`HANDOFF.md`), and for a while
+that left only one live route. It no longer does. **Corrected 2026-08-26 at the
+reviewer's request**, because this section described a division of labour the
+project had already stopped using:
+
+| who | does what |
+|---|---|
+| **Owner** | directs the scope. A frozen file changes only on an explicit owner direction -- that has not changed and is not negotiable |
+| **Claude** | implements, and records the change here in prose with the date and the direction it answers |
+| **Reviewer** | performs the pre-review, and issues the `authorizes-frozen` marker when it authorises one |
+
+So BOTH routes below are live. They are not alternatives to each other in
+practice: the owner's direction is what makes a change legitimate, and the
+pre-review is what makes it safe. The 2026-08-26 quiesce-degrade entry went
+through both -- owner direction ("chcę dokończyć Quiesce"), then a pre-review
+that returned APPROVED WITH GUARDS and nine contract conditions, then the
+implementation, then `--refreeze`.
+
+The freeze itself is unchanged, and its value (no frozen engine changes in
+passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-27 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **the default answer to
+  a failed freeze is inverted.** Owner direction, verbatim: "Przemyslalem i chce,
+  zeby snapshots sie tworzyly domyslnie pomimo porazki flush buffers." A failed
+  freeze now takes a crash-consistent snapshot -- `_crash_` in the name, exit 8
+  -- without anybody having written a qualifier, and `,strict` is the per-tier
+  way back to the previous refusal.
+
+  Scope, so the entry is not larger than the change: `QUIESCE_DEGRADE` defaults
+  to `1` instead of `0`; `quiesce_parse_mode` gains `,strict` and reads *what was
+  written* rather than the resulting flag when rejecting a qualifier on `no`; the
+  two engines' `-q` help and three run-time log lines stop saying the operator
+  asked for something they now get by default. No gate, no rc mapping, no remote
+  script and no name builder was touched -- the sentence "what degrading does not
+  excuse" is true in exactly the words it already had.
+
+  The one line that would have broken the fleet, recorded because it was not
+  obvious until the parser was written out: `no` is both engines' built-in `-q`
+  value, so with the default at `1` a bare `no` is indistinguishable from
+  `no,degrade` unless the check reads the written qualifier. Reading the flag
+  there would have made every run in the estate refuse at startup on the next
+  hourly `git pull`. Caught by the suite's `bare no still parses` assertion,
+  which existed for the previous flip in the other direction.
+
+  This entry has the owner's direction and not a pre-review. The direction is
+  what makes it legitimate; the pre-review is what makes it safe, and it is
+  absent, so the risk is stated rather than covered: this changes what every
+  quiesced job in the fleet does on failure, on the next hourly pull, and the
+  `,degrade` already written into `prod.conf` and every generated crontab means
+  no line in production changes meaning today -- only tiers that carry a bare
+  `-q` mode do, and those degrade instead of refusing.
+
+- 2026-08-26 (lib-zfs-snap.sh): the PULL half of `,degrade` classified by CAUSE,
+  not only by cleanliness. Same authorization as the entry below it -- this is
+  that change corrected, not a new one. Found in review, and the reasoning error
+  is the part worth keeping: the entry below claimed the remote script's exit
+  codes already discriminated everything that mattered. They discriminate
+  CLEANLINESS -- 3 and 5 both mean "the source host is as we found it" -- and say
+  nothing about CAUSE. A foreign freeze and an impossible mode/guest pair are
+  clean too, `prep_one` returned 1 for every failure, the aggregator turned any
+  of them into `exit 5`, and the local side degraded every 5. So the same
+  configuration refused a foreign freeze on PUSH and degraded it on PULL.
+  `prep_one` now returns 2 for the never-degradable causes, the aggregator counts
+  the two classes separately, fatal outranks degradable, and the result is
+  `exit 9` -- which the local mapping will not degrade.
+  Carried in the same reading: `info=$(gq_status "$id")` discarded the command's
+  status, so an unreadable status gave an empty `kind`, fell into the "no guest
+  here -- skipping" arm and returned SUCCESS. A helper that could not answer
+  looked exactly like a host with nothing to freeze. Now an explicit failure, and
+  a degradable one -- the same answer its local twin gives.
+  The tests that missed this stubbed a ready-made rc, proving only that 5 becomes
+  8 and never asking what becomes a five. The new discriminators RUN the remote
+  classifier and carry its actual code through the local mapping; two existing
+  assertions moved from 5 to 9, deliberately, because that is the contract change.
+
+- 2026-08-26 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): `quiesce = <mode>,degrade`.
+  Owner direction: "nie. Chcę dokończyć Quiesce". **The first change on this list
+  that was PRE-REVIEWED**: submitted as a design before an engine line was
+  written, returned APPROVED WITH GUARDS with nine contract conditions and an
+  `authorizes-frozen` marker naming these three files and no others.
+  WHAT IT ANSWERS, measured rather than argued: on pve9/pve1/pve2 (2026-08-25)
+  the `prod` profile produced NOTHING for three of its four tiers, because a
+  delegated account could not reach the guests and every tier that asks for `-q`
+  refuses rather than snapshot. For an hourly tier that is one interval of
+  twenty-four. For daily, weekly and monthly it is the durable artifact.
+  WHAT CHANGED: `-q` accepts an optional `,degrade` qualifier, per tier, opted in
+  beforehand. Without it, EVERY existing refusal behaves exactly as before -- the
+  suite runs the same failure with and without the qualifier at every site, and a
+  mutation that removes the opt-in check fails ten pre-existing fail-closed
+  assertions. With it, a quiesce failure rolls back and thaws first, and only from
+  a proven-clean state takes the whole set again as `*_crash_*`, transfers it
+  normally, and exits 8 so cron reports it. A thaw that did not take, a foreign
+  freeze already in place, and a rollback that left snapshots behind all stay
+  fatal with the qualifier exactly as without it.
+  THE PART THAT NEEDED CARE: `snapget.sh`'s quiesce runs on the SOURCE, in a
+  script shipped over ssh and executed by `bash -s`, where no library function
+  exists. The first attempt placed a gate call inside that heredoc -- it reads
+  like local code and is not -- which would have broken remote quiesce outright.
+  Reverted before it shipped. The remote half needs no edit at all: the shipped
+  script's exit codes ALREADY distinguish "refused before freezing anything" (3)
+  and "rolled back and thawed cleanly" (5) from "still frozen" (6) and "rollback
+  incomplete" (7), structurally, because a failure in either cleanup turns 5 into
+  6 or 7. So the whole remote decision is an rc mapping on the local side, and
+  not one line of the shipped script changed.
+  No transfer semantics changed: every edit is a parse, a name, a decision about
+  whether to refuse, or a final status.
+  Regression tests: `test/quiesce` gains 53 assertions (the grammar table with
+  both halves, the gate with three mutation controls, and all seven remote codes
+  in both directions); `test/runsuffix` gains the push/pull name-parity control
+  with an unmarked negative control. The end-to-end -- a degraded run that
+  transfers, lands and exits 8 -- has no local coverage and is a LIVE obligation.
 
 - 2026-08-24 (snapget.sh, snapsend.sh): HOTFIX to the subtree verification
   landed hours earlier the same day. Independent review found it fail-open in
@@ -336,9 +440,12 @@ Owner-authorized refreezes:
 and object id, the same primitive REV-20260807-068 arrived at — against the
 baseline recorded above. A difference is refused, naming the file.
 
-There are two ways past that refusal. Only the second one is live.
+There are two ways past that refusal, and both are live -- see the table above
+for who owns which. This sentence used to say "only the second one is live" while
+labelling the first one "operative" and the second one "dormant", which was
+wrong in both directions.
 
-### The operative route: owner direction + `--refreeze`
+### The routine route: owner direction + `--refreeze`
 
 ```text
 # 1. the owner directs the change (or is told, in the same breath, that it
@@ -355,12 +462,14 @@ the baseline reset is not what makes the change visible -- the ENTRY is. A
 refreeze with no entry is exactly the silent engine edit this document exists to
 prevent, performed by the person the document was written for.
 
-### The dormant route: an authorising review
+### The reviewed route: an authorising pre-review
 
-Still implemented in `test/impact.sh`, and it cannot be exercised: it needs a
-reviewer, and the owner removed that role on 2026-08-15 (`HANDOFF.md`). Kept
-rather than deleted because the machinery is small, correct, and would work
-again if the role came back. The refusal lifts when **all** of:
+Implemented in `test/impact.sh`, and exercised for the first time on 2026-08-26:
+the quiesce-degrade change was submitted for pre-review BEFORE any engine line
+was written, and the reviewer returned an `authorizes-frozen` marker naming
+exactly the three files the change was allowed to touch -- and excluding
+`delsnaps.sh` and `check-snap-age.sh`, which the change had argued it did not
+need. The refusal lifts when **all** of:
 
 1. `unfreeze:` names a review that exists;
 2. that review is not CLOSED — a closed review was answered and the answer was

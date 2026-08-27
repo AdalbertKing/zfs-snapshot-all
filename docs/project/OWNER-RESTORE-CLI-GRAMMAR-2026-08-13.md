@@ -11,6 +11,13 @@ questions at the end of this file are the implementer's, raised so they are
 settled deliberately rather than by whatever the first implementation happens to
 do.
 
+> **PARTLY SUPERSEDED 2026-08-26.** The addressing form below --
+> `pve2:rpool/data` -- was replaced by
+> `docs/project/OWNER-RESTORE-SCOPE-2026-08-26.md`: the relationship name now
+> stands alone and the dataset arrives through `--source` / `--target`, with a
+> comma-separated list for several. That change dissolves open question 1 at the
+> foot of this file rather than answering it. Everything else here still stands.
+
 ## The shape
 
 Recovery is addressed by **relation name**, with an optional dataset after a

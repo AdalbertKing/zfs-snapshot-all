@@ -1,0 +1,75 @@
+# The shipped profiles
+
+A profile is an admin **template** — what to keep, how often, and whether the
+snapshot is coherent. It never says where from or where to; that belongs to the
+relationship.
+
+## The name tells you two things
+
+**The letters and digits are the retention.** `d30h24` keeps thirty daily and
+twenty-four hourly, and nothing else — no weekly, no monthly, because the name
+does not claim any. `test/profiles` asserts this against the `delsnaps` line the
+real generator renders, so a filename that lied would fail the suite rather than
+mislead somebody reading `ls`.
+
+**The case is the shape** (owner rule, 2026-08-27):
+
+| case | shape | prunes with |
+|---|---|---|
+| lowercase `d30h24` | one family **per tier**, each with its own prefix and its own counter | one `delsnaps` line per tier |
+| uppercase `D30H24` | **one family**, several counters over it — the GFS ladder | one `delsnaps -G` line |
+
+No uppercase profile is shipped yet. The distinction exists so that when one is,
+the two shapes are told apart from `ls` without opening either file.
+
+> **The two cases of one name may never both be shipped.** On a case-insensitive
+> filesystem — any Windows or macOS checkout — `D30H24.conf` and `d30h24.conf`
+> are the same file: writing one overwrites the other, and deleting it deletes
+> both. The Linux hosts would keep them apart, so the breakage would show up
+> only on a workstation, as a profile that quietly changed shape. `test/profiles`
+> refuses a catalogue containing both.
+
+`default`, `prod` and `passive` are named in prose instead and describe
+themselves in their own headers.
+
+## Why the shape matters: coherence
+
+A **ladder** cannot answer the coherence question. On a ladder the "daily"
+snapshot *is* an hourly snapshot the counter decided to keep — one object on
+disk serving several counters — so freezing the daily one means freezing all
+twenty-four, which stalls every guest on the host 24 times a day.
+
+**Per-tier** profiles can pay for the freeze once. So:
+
+> **the coarse tiers are coherent, the hourly one never is.**
+
+Asserted for the whole catalogue in `test/profiles`, against the rendered cron
+line rather than the `quiesce` field, because the field has to survive
+namespacing, template merging and the flags assembler before it becomes `-q` —
+and it is the `-q` the host runs.
+
+A failed freeze costs a name, not a snapshot: since 2026-08-27 the set is
+stamped anyway as `automated_daily_crash_<timestamp>` and the run exits 8, so
+cron reports it instead of filing it as clean. `,strict` is the way back for
+data where a crash-consistent copy is genuinely worthless. See
+`docs/design/quiesce-degrade.md`.
+
+## The catalogue
+
+| profile | creates | keeps | coherent tiers |
+|---|---|---|---|
+| `default` | one family, hourly | GFS ladder 24/7/4/12 | none — a ladder cannot |
+| `prod` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 6 | daily, weekly, monthly |
+| `d30h24` | two families: hourly, daily | 24 / 30 | daily |
+| `d7h24` | two families: hourly, daily | 24 / 7 | daily |
+| `d30` | one family, daily | 30 | daily |
+| `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
+
+`passive` has no `prefix` at all: it consumes snapshots another tool made, so
+there is no freeze of ours to take.
+
+## What every profile shares
+
+The `[excluded:]` floors — `__replicate_` (pvesr), `vzdump`, `__migration__` —
+are config-wide, identical in every file and identical on purpose. They are not
+any profile's opinion, and none of those families is ours to delete.

@@ -536,6 +536,420 @@ else
     bad "purge with no tombstone: findings stay queued rather than being deleted with nowhere to go"         "w kolejce moich=$q_mine obcych=$q_other, w nagrobku=$t_arch (oczekiwano 2 / 1 / 0)"
 fi
 
+# ---------------------------------------------------------------------------
+# A HOLD OUTLIVES THE RELATIONSHIP THAT PLACED IT.
+#
+# Measured on pve9, 2026-08-26: a `zfssnapall_inflight` hold placed on
+# 2026-08-22 by a run that died was still there four days later, with zero jobs
+# on the host. `zfs destroy` refused with "dataset is busy" -- which names
+# neither the hold nor the tag -- and retention hit the same wall silently on
+# every run.
+#
+# The audit could not have found it: the hold's relationship was already gone,
+# so anything keyed on the relationship list misses exactly the case this
+# exists for. Hence a host-wide check, and hence these cases feed it through a
+# stubbed `zfs` rather than through the relationship fixtures.
+# ---------------------------------------------------------------------------
+T="$WORK/holds"; build_tree "$T"; mkdir -p "$T/bin"
+
+# A zfs that reports one held snapshot, held by OUR tag.
+cat > "$T/bin/zfs" <<'HELDEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*)
+      printf 'tank/a@s1\t0\n'
+      printf 'tank/b@s2\t1\n'
+      exit 0 ;;
+  "holds -H tank/b@s2")
+      printf 'tank/b@s2\tzfssnapall_inflight\t-\n'; exit 0 ;;
+  "holds -H"*) exit 0 ;;
+esac
+exit 1
+HELDEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) ok "holds: a held snapshot is reported" ;;
+    *) bad "holds: a held snapshot is reported" "$out" ;;
+esac
+# The exact line is now the tool's own verb, not a raw `zfs release`: since the
+# review, nothing may be released without a human naming the snapshot, so the
+# line handed over is the one that does that.
+case "$out" in
+    *"--release-hold=tank/b@s2"*) ok "holds: ...with the exact release line for that snapshot" ;;
+    *) bad "holds: ...with the exact release line for that snapshot" "$out" ;;
+esac
+# The snapshot with userrefs=0 must not appear -- otherwise the report would be
+# "every snapshot on the host" and nobody would read it.
+case "$out" in
+    *"tank/a@s1"*) bad "holds: an unheld snapshot is not reported" "tank/a@s1 is in the output" ;;
+    *) ok "holds: an unheld snapshot is not reported" ;;
+esac
+# The verdict must not be clean. "nothing orphaned" while a dataset silently
+# cannot be pruned is the false all-clear this tool exists to prevent.
+case "$out" in
+    *"held snapshots were found"*|*"HELD SNAPSHOTS"*) ok "holds: the verdict names the finding" ;;
+    *) bad "holds: the verdict names the finding" "$out" ;;
+esac
+case "$out" in
+    *"nothing orphaned -- every trace"*) bad "holds: ...and does not claim nothing is wrong" ;;
+    *) ok "holds: ...and does not claim nothing is wrong" ;;
+esac
+
+# NOT OURS. pvesr and vzdump place holds too, and this project has already
+# measured what touching a pvesr hold costs -- it wedges replication for good.
+# A held snapshot whose tag is somebody else's must be invisible here.
+cat > "$T/bin/zfs" <<'FOREIGNEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/b@s2\t1\n'; exit 0 ;;
+  "holds -H tank/b@s2") printf 'tank/b@s2\tpvesr\t-\n'; exit 0 ;;
+esac
+exit 1
+FOREIGNEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) bad "holds: a FOREIGN hold is not ours to report" "$out" ;;
+    *) ok "holds: a FOREIGN hold is not ours to report" ;;
+esac
+case "$out" in
+    *"held snapshots were found"*) bad "holds: ...and does not spoil the verdict" ;;
+    *) ok "holds: ...and does not spoil the verdict" ;;
+esac
+
+# NEGATIVE CONTROL for the whole block: with nothing held, the section is
+# absent and the verdict is clean. Without this, every assertion above would
+# pass against a build that had simply stopped printing the section.
+cat > "$T/bin/zfs" <<'NONEEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/a@s1\t0\n'; exit 0 ;;
+esac
+exit 1
+NONEEOD
+chmod +x "$T/bin/zfs"
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T"); rc=$?
+case "$out" in
+    *"HELD SNAPSHOTS"*) bad "holds: nothing held means nothing reported" ;;
+    *) ok "holds: nothing held means nothing reported" ;;
+esac
+# On a tree with NO relationships the exit status can only come from the hold
+# check -- which is what makes it worth asserting here and nowhere above.
+E="$WORK/emptytree"; mkdir -p "$E/clients" "$E/peers" "$E/rel" "$E/keys" "$E/pairing" "$E/home" "$E/removed" "$E/bin"
+cp "$T/bin/zfs" "$E/bin/zfs"
+out=$(ZFS_BIN="$E/bin/zfs" run_cr "$E"); rc=$?
+if [ "$rc" -eq 0 ]; then ok "holds: nothing held on a bare host is a clean exit 0"
+else bad "holds: nothing held on a bare host is a clean exit 0" "rc=$rc" "$out"; fi
+# ...and the positive half of that same rc: one held snapshot alone turns it to 3.
+cat > "$E/bin/zfs" <<'ONEEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/b@s2	1
+'; exit 0 ;;
+  "holds -H tank/b@s2") printf 'tank/b@s2	zfssnapall_inflight	-
+'; exit 0 ;;
+esac
+exit 1
+ONEEOD
+chmod +x "$E/bin/zfs"
+out=$(ZFS_BIN="$E/bin/zfs" run_cr "$E"); rc=$?
+# Still a finding, and for a reason that survived the review: whoever owns it,
+# a hold nothing running claims blocks `zfs destroy` and fails retention on that
+# dataset silently. What changed is that we no longer assert it is abandoned.
+if [ "$rc" -eq 3 ]; then ok "holds: an unclaimed hold ALONE is enough to fail the audit"
+else bad "holds: an unclaimed hold ALONE is enough to fail the audit" "rc=$rc" "$out"; fi
+
+# ---------------------------------------------------------------------------
+# THE DATASET LINE IS THE ONLY THING LINKING DATA TO A DEAD RELATIONSHIP,
+# so it has to be correct and it has to say whether the data is still there.
+#
+# Found on pve1, 2026-08-26. These records are %q-quoted because they are
+# sourced as root elsewhere, so two datasets are stored separated by an ESCAPED
+# space. Splitting on whitespace reported the first one as `hdd/a/tree\` -- a
+# name that is not legal ZFS and cannot be pasted into the `zfs destroy` this
+# line exists to hand the operator.
+#
+# The carrying case is d2: an implementation that splits on whitespace produces
+# a trailing backslash and fails it, while every other assertion here would
+# still pass.
+# ---------------------------------------------------------------------------
+D="$WORK/dsnames"; mkdir -p "$D/clients" "$D/peers" "$D/rel" "$D/keys" "$D/pairing" "$D/home" "$D/removed" "$D/bin"
+printf 'CLIENT_NAME=demo\nSTATE=active\nMANAGED_DATASETS=hdd/a/tree\\ hdd/a/flat\nSTATE=removed\n' > "$D/clients/demo.conf"
+# tree EXISTS, flat does not -- so one report can show both labels.
+# The real call passes `--` before the name, so the stub matches the shape the
+# code actually uses rather than the one the test author remembered.
+cat > "$D/bin/zfs" <<'DSEOD'
+#!/bin/sh
+case "$*" in
+  *"list -H -o name"*" hdd/a/tree") exit 0 ;;
+esac
+exit 1
+DSEOD
+chmod +x "$D/bin/zfs"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+
+# d1 -- both members are reported, not one.
+n=$(printf '%s\n' "$out" | grep -c '^      data')
+if [ "$n" = 2 ]; then ok "dsnames: a %q-quoted pair is reported as TWO datasets"
+else bad "dsnames: a %q-quoted pair is reported as TWO datasets" "got $n" "$out"; fi
+
+# d2 -- THE carrying assertion. Anchored to the end of the field so it cannot
+# pass on a value that merely contains a backslash somewhere harmless.
+if printf '%s\n' "$out" | grep -qE 'data[[:space:]]+[^[:space:]]*\\([[:space:]]|$)'; then
+    bad "dsnames: no reported name ends in a backslash" "$(printf '%s' "$out" | grep data)"
+else
+    ok "dsnames: no reported name ends in a backslash"
+fi
+case "$out" in
+    *"hdd/a/tree"*) ok "dsnames: the first member survives the split intact" ;;
+    *) bad "dsnames: the first member survives the split intact" "$out" ;;
+esac
+case "$out" in
+    *"hdd/a/flat"*) ok "dsnames: ...and so does the second" ;;
+    *) bad "dsnames: ...and so does the second" "$out" ;;
+esac
+
+# d3 -- the audit says whether the data is STILL THERE. Without this the
+# destructive verb verified and the read-only one did not, so an operator could
+# not tell "gone" from "corrupted" from "still here".
+case "$out" in
+    *"hdd/a/tree   (PRESENT)"*) ok "dsnames: a dataset that exists is labelled PRESENT" ;;
+    *) bad "dsnames: a dataset that exists is labelled PRESENT" "$(printf '%s' "$out" | grep data)" ;;
+esac
+case "$out" in
+    *"hdd/a/flat   (ALREADY GONE)"*) ok "dsnames: a dataset that is gone is labelled ALREADY GONE" ;;
+    *) bad "dsnames: a dataset that is gone is labelled ALREADY GONE" "$(printf '%s' "$out" | grep data)" ;;
+esac
+
+# THE THIRD STATE. Without it a missing `zfs` leaves the line unlabelled, and an
+# unlabelled line reads exactly like a healthy one -- on the report an operator
+# acts on. Reviewer, 2026-08-26: absence of the tool must never mean presence of
+# the data.
+out=$(ZFS_BIN="$D/bin/definitely-not-here" run_cr "$D")
+case "$out" in
+    *"UNVERIFIABLE"*) ok "dsnames: no zfs on the host is UNVERIFIABLE, not silence" ;;
+    *) bad "dsnames: no zfs on the host is UNVERIFIABLE, not silence" "$(printf '%s' "$out" | grep data)" ;;
+esac
+case "$out" in
+    *PRESENT*) bad "dsnames: ...and never PRESENT" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "dsnames: ...and never PRESENT" ;;
+esac
+# A zfs that FAILS for some other reason is also unanswered, not absent.
+printf '#!/bin/sh
+exit 9
+' > "$D/bin/brokenzfs"; chmod +x "$D/bin/brokenzfs"
+out=$(ZFS_BIN="$D/bin/brokenzfs" run_cr "$D")
+case "$out" in
+    *"UNVERIFIABLE"*) ok "dsnames: a zfs that errors is UNVERIFIABLE, not ALREADY GONE" ;;
+    *) bad "dsnames: a zfs that errors is UNVERIFIABLE, not ALREADY GONE" "$(printf '%s' "$out" | grep data)" ;;
+esac
+case "$out" in
+    *"ALREADY GONE"*) bad "dsnames: ...and an error is not read as absence" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "dsnames: ...and an error is not read as absence" ;;
+esac
+
+# d4 -- an escape this code does NOT understand is named, not half-decoded.
+# A ZFS name cannot contain a backslash, so anything left after decoding means
+# the value is not what the reader thinks it is.
+printf 'CLIENT_NAME=odd\nSTATE=active\nMANAGED_DATASETS=hdd/a\\tweird\nSTATE=removed\n' > "$D/clients/odd.conf"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+case "$out" in
+    *SUSPECT*) ok "dsnames: an escape that is not the separator is flagged SUSPECT" ;;
+    *) bad "dsnames: an escape that is not the separator is flagged SUSPECT" "$(printf '%s' "$out" | grep -A1 odd)" ;;
+esac
+case "$out" in
+    *"do not paste it into a destroy"*) ok "dsnames: ...and says not to paste it into a destroy" ;;
+    *) bad "dsnames: ...and says not to paste it into a destroy" ;;
+esac
+
+# NEGATIVE CONTROL: a value with NO escapes must not be flagged, or the two
+# assertions above would pass against a build that flagged everything.
+rm -f "$D/clients/odd.conf"
+printf 'CLIENT_NAME=plain\nSTATE=active\nRUX_TARGET=hdd/a/tree\nSTATE=removed\n' > "$D/clients/plain.conf"
+out=$(ZFS_BIN="$D/bin/zfs" run_cr "$D")
+case "$out" in
+    *SUSPECT*) bad "dsnames: an ordinary name is NOT flagged" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "dsnames: an ordinary name is NOT flagged" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# "PROBABLY LEAKED" IS NOT A VERDICT.
+#
+# Reviewer, 2026-08-26: a hold may be called orphaned only against evidence --
+# no running engine, no in-flight record naming it, no resume token -- and it may
+# be released only in the explicit purge path.
+#
+# Age is deliberately NOT evidence, and these cases are what say so: the same
+# hold is IN-USE, UNPROVEN or ORPHANED depending only on the state around it.
+#
+# HOLD_PS_CMD is pinned in every case. Left to the real `ps`, the answer would
+# depend on whether a transfer happens to be running on the machine running the
+# tests -- the flake test/pairgate already documents.
+# ---------------------------------------------------------------------------
+P="$WORK/holdproof"
+mkdir -p "$P/clients" "$P/peers" "$P/rel" "$P/keys" "$P/pairing" "$P/home" "$P/removed" "$P/bin" "$P/home/acct/run"
+cat > "$P/bin/zfs" <<'PROOFEOD'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot userrefs"*) printf 'tank/b@s2\t1\n'; exit 0 ;;
+  "holds -H tank/b@s2") printf 'tank/b@s2\tzfssnapall_inflight\t-\n'; exit 0 ;;
+  *"receive_resume_token"*) [ -n "$FAKE_RESUME" ] && { echo "1-abc"; exit 0; }; exit 0 ;;
+  "release zfssnapall_inflight tank/b@s2") echo "RELEASED" >> "$FAKE_RELEASED"; exit 0 ;;
+esac
+exit 1
+PROOFEOD
+chmod +x "$P/bin/zfs"
+proof_run() {   # <extra env assignments as name=value...> -- echoes output
+    HOLD_PS_CMD="${PROOF_PS:-true}" FAKE_RESUME="${PROOF_RESUME:-}" \
+    FAKE_RELEASED="$P/released" ZFS_BIN="$P/bin/zfs" run_cr "$P" "$@"
+}
+
+# 1. Nothing running, nothing claimed, no token -> ORPHANED.
+: > "$P/released"
+out=$(proof_run)
+# NOT "ORPHANED". Everything this host can see has been checked and none of it
+# convicts -- which is a different sentence from "nothing owns this", and after
+# the review the tool says the different sentence. /var/run is not persistent,
+# so the absence of an in-flight record is absence of evidence.
+case "$out" in
+    *"UNPROVEN"*) ok "proof: with no local evidence the verdict is UNPROVEN, not ORPHANED" ;;
+    *) bad "proof: with no local evidence the verdict is UNPROVEN, not ORPHANED" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+esac
+
+# 2. An in-flight record naming THIS snapshot -> IN-USE. This is the direct
+#    claim and it convicts precisely: the file names the snapshot.
+printf 'tank/b@s2\n' > "$P/home/acct/run/snapget.sh.inflight-snap.deadbeef"
+out=$(proof_run)
+case "$out" in
+    *"IN-USE"*) ok "proof: an in-flight record naming it makes it IN-USE" ;;
+    *) bad "proof: an in-flight record naming it makes it IN-USE" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+esac
+case "$out" in
+    *"ORPHANED tank/b@s2"*) bad "proof: ...and it is NOT called orphaned" ;;
+    *) ok "proof: ...and it is NOT called orphaned" ;;
+esac
+# An in-flight record for a DIFFERENT snapshot must not protect this one --
+# otherwise any transfer anywhere would make every hold untouchable.
+printf 'tank/z@other\n' > "$P/home/acct/run/snapget.sh.inflight-snap.deadbeef"
+out=$(proof_run)
+# The property still matters: a record for ANOTHER snapshot must not make this
+# one IN-USE, or any transfer anywhere would make every hold untouchable.
+case "$out" in
+    *"IN-USE"*) bad "proof: a record naming a DIFFERENT snapshot does not protect this one" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+    *) ok "proof: a record naming a DIFFERENT snapshot does not protect this one" ;;
+esac
+rm -f "$P/home/acct/run/snapget.sh.inflight-snap.deadbeef"
+
+# 3. An engine running -> UNPROVEN. Nothing here can tell which hold it owns,
+#    so every verdict is withheld. Fail-closed.
+out=$(PROOF_PS="printf %s\\n /usr/local/bin/snapget.sh" proof_run)
+case "$out" in
+    *"UNPROVEN"*) ok "proof: a running engine makes the verdict UNPROVEN" ;;
+    *) bad "proof: a running engine makes the verdict UNPROVEN" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+esac
+
+# 4. A local resume token -> UNPROVEN. Some transfer means to continue.
+out=$(PROOF_RESUME=1 proof_run)
+case "$out" in
+    *"UNPROVEN"*) ok "proof: a local resume token makes the verdict UNPROVEN" ;;
+    *) bad "proof: a local resume token makes the verdict UNPROVEN" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+esac
+# The boundary is STATED, not implied: a token on a remote target cannot be seen.
+case "$out" in
+    *"REMOTE target cannot be seen"*) ok "proof: the report states what it could NOT check" ;;
+    *) bad "proof: the report states what it could NOT check" ;;
+esac
+
+# 5. NOTHING is released without a human naming the snapshot.
+#
+# The first cut let --purge-orphans release everything it had called ORPHANED.
+# Review killed it with a counterexample this suite now carries: /var/run is NOT
+# persistent, so a reboot removes the in-flight record while the ZFS hold and the
+# resume token on the REMOTE receiver both survive. "No local evidence" is then
+# indistinguishable from "nothing owns this", and the difference is a snapshot a
+# resume still needs.
+: > "$P/released"
+out=$(proof_run)   # audit
+if [ ! -s "$P/released" ]; then ok "release: the AUDIT never releases anything"
+else bad "release: the AUDIT never releases anything" "$(cat "$P/released")"; fi
+
+# THE COUNTEREXAMPLE, as specified in the review: a hold exists, no in-flight
+# file, no process -- the state a rebooted source is in -- and the receiver is
+# not observable. --purge-orphans --yes must not release it.
+: > "$P/released"
+out=$(proof_run --purge-orphans --yes)
+if [ ! -s "$P/released" ]; then ok "release: a rebooted source's hold is NOT swept by --purge-orphans"
+else bad "release: a rebooted source's hold is NOT swept by --purge-orphans" "$(cat "$P/released")"; fi
+case "$out" in
+    *"not observable from this host"*) ok "release: ...and the verdict says the receiver could not be seen" ;;
+    *) bad "release: ...and the verdict says the receiver could not be seen" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+esac
+case "$out" in
+    *ORPHANED*) bad "release: ...and it is never called ORPHANED on this evidence" "$(printf '%s' "$out" | grep -A2 HELD)" ;;
+    *) ok "release: ...and it is never called ORPHANED on this evidence" ;;
+esac
+
+# The named verb is the only way through, and it names the snapshot.
+: > "$P/released"
+out=$(proof_run --release-hold=tank/b@s2 --yes)
+if grep -q RELEASED "$P/released" 2>/dev/null; then ok "release: --release-hold releases the one named"
+else bad "release: --release-hold releases the one named" "$out"; fi
+case "$out" in
+    *"released zfssnapall_inflight on tank/b@s2"*) ok "release: ...and says which snapshot it released" ;;
+    *) bad "release: ...and says which snapshot it released" "$out" ;;
+esac
+
+# Without --yes it is a dry run, like every other destructive path here.
+: > "$P/released"
+out=$(proof_run --release-hold=tank/b@s2)
+if [ ! -s "$P/released" ]; then ok "release: --release-hold without --yes changes nothing"
+else bad "release: --release-hold without --yes changes nothing" "$(cat "$P/released")"; fi
+
+# The human is being asked about the FAR side only -- facts this host holds still
+# refuse. An in-flight record naming it means a transfer is running NOW.
+: > "$P/released"
+printf 'tank/b@s2\n' > "$P/home/acct/run/snapget.sh.inflight-snap.deadbeef"
+out=$(proof_run --release-hold=tank/b@s2 --yes)
+rm -f "$P/home/acct/run/snapget.sh.inflight-snap.deadbeef"
+if [ ! -s "$P/released" ]; then ok "release: refused when THIS host says a transfer holds it"
+else bad "release: refused when THIS host says a transfer holds it" "$(cat "$P/released")"; fi
+case "$out" in
+    *"still running"*) ok "release: ...and says so" ;;
+    *) bad "release: ...and says so" "$out" ;;
+esac
+
+# THE TWO DISCRIMINATORS THE REVIEW ASKED FOR. UNPROVEN covers three different
+# causes, and only ONE of them -- "the far side cannot be seen" -- is the
+# operator's to overrule. The other two are facts this host holds, and the gate
+# reads a reason CODE rather than the wording of the message.
+: > "$P/released"
+out=$(PROOF_PS="printf %s
+ /usr/local/bin/snapget.sh" proof_run --release-hold=tank/b@s2 --yes)
+if [ ! -s "$P/released" ]; then ok "release: refused while a local engine is running"
+else bad "release: refused while a local engine is running" "$(cat "$P/released")"; fi
+case "$out" in
+    *"running on this host"*) ok "release: ...and says it is THIS host saying so, not the far side" ;;
+    *) bad "release: ...and says it is THIS host saying so, not the far side" "$out" ;;
+esac
+
+: > "$P/released"
+out=$(PROOF_RESUME=1 proof_run --release-hold=tank/b@s2 --yes)
+if [ ! -s "$P/released" ]; then ok "release: refused while a LOCAL resume token exists"
+else bad "release: refused while a LOCAL resume token exists" "$(cat "$P/released")"; fi
+case "$out" in
+    *"receive_resume_token"*) ok "release: ...and names the token as the reason" ;;
+    *) bad "release: ...and names the token as the reason" "$out" ;;
+esac
+
+# A snapshot that carries no hold of ours is refused rather than "released".
+: > "$P/released"
+out=$(proof_run --release-hold=tank/nothing@here --yes)
+case "$out" in
+    *"does not carry"*) ok "release: a snapshot without our hold is refused, not silently ok" ;;
+    *) bad "release: a snapshot without our hold is refused, not silently ok" "$out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

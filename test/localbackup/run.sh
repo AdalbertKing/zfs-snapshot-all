@@ -284,9 +284,7 @@ fi
 # built-in default and renaming keep_ -> ret_ (preserves structure and tabs), then
 # prove the SOURCE family is still derived and distinct.
 mkdir -p "$WORK/profiles/custret"
-sed 's/keep_/ret_/g' "$REPO/profiles/default/templates.conf" > "$WORK/profiles/custret/templates.conf"
-cp "$REPO/profiles/default/dataset.inc"                        "$WORK/profiles/custret/dataset.inc"
-sed 's/keep_/ret_/g' "$REPO/profiles/default/prune.inc"      > "$WORK/profiles/custret/prune.inc"
+sed 's/keep_/ret_/g' "$REPO/profiles/default.conf" > "$WORK/profiles/custret.conf"
 run_custret() {  # like run(), but PROFILE_ROOT points at the temp custom profile
     ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$WORK/profiles" \
       cmd_local_backup "$@" ) 2>&1
@@ -857,11 +855,27 @@ gencron_callers=$(awk '
     /^[a-z_][a-z0-9_]*\(\) \{/ { fn = $1; sub(/\(\).*/, "", fn) }
     /bash "\$GENCRON"/          { print fn }
 ' "$ZB" | sort -u)
+# load_active_profile joined the list on 2026-08-25, and the distinction that
+# lets it in is worth stating: this rule exists because a PREVIEW rendered by
+# the wrong copy is a preview of a block that will never be installed --
+# gen-cron bakes the running copy's paths into every line. load_active_profile
+# does not render anything. It asks for a TABLE (--dump-tier-letters) so that
+# `keep = 24` in a profile can become `retain = -H24` without this tree keeping
+# a second copy of what -W means. Same class as lib-profile.sh asking for
+# --dump-fields, and the same reason: one schema authority.
+#
+# profile_digest joins on the same ticket (2026-08-26). It asks for the SAME
+# table, and for a reason that makes the rule's own point: `keep = 24` becomes
+# `-H24` through that table, so the table is part of what a relationship was
+# generated FROM. A digest that ignored it would call an installed policy
+# unchanged after the thing that renders it had changed.
 gencron_allowed="gencron_as_target
 cmd_activate_client
 cmd_audit_source_retention
 cmd_migrate_profile
-cmd_remove_client"
+cmd_remove_client
+load_active_profile
+profile_digest"
 gencron_unexpected=$(comm -23 <(printf '%s
 ' "$gencron_callers") <(printf '%s
 ' "$gencron_allowed" | sort))
@@ -1257,6 +1271,64 @@ refused "a changed threshold is a different job, not a merged one" "$MON_A" \
     '*/15 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 30m 150m 2>&1); rc=$?'
 refused "a changed schedule is a different job, not a merged one" "$MON_A" \
     '*/5 * * * * d=$(check-snap-age.sh "hdd/a,hdd/b" "automated_hourly" 90m 150m 2>&1); rc=$?'
+
+# ==============================================================================
+# THE DEFAULT PROFILE, HANDED TO THE SCRIPT EXPLICITLY.
+#
+# `--profile=default` and no --profile at all must produce the SAME deployment.
+# Until the default was a named constant that could not be asserted: the literal
+# "default" appeared in six places, so "what does a plain run do" was answered by
+# grepping rather than by running.
+#
+# This is also the test that the default profile is CRYSTALLISED -- everything a
+# plain deployment does is in the profile, nothing left hardwired beside it. The
+# reserved-family floors were the last thing that was: a literal list in
+# zfs-backup.sh, so the one policy every relationship on this estate runs under
+# was the one policy the profile could not describe.
+# ==============================================================================
+plan_config() {   # <extra args...> -> the candidate CONFIG, normalised
+    run "$@" 2>&1 \
+        | sed -n '/--- kandydat CONFIG v4/,/--- wygenerowany blok crona/p' \
+        | sed -E 's#/tmp/[A-Za-z0-9._]+#<TMP>#g'
+}
+
+imp="$(plan_config --source=rpool/data --target=hdd/backups --config="$WORK/id1.conf")"
+exp="$(plan_config --source=rpool/data --target=hdd/backups --config="$WORK/id2.conf" --profile=default)"
+if [ -n "$imp" ] && [ "$imp" = "$exp" ]; then
+    ok "default: an explicit --profile=default renders the identical CONFIG to no flag at all"
+else
+    bad "default: an explicit --profile=default renders the identical CONFIG" \
+        "$(diff <(printf '%s\n' "$imp") <(printf '%s\n' "$exp") | head -8)"
+fi
+
+# The floors are IN that config, and with the values the code used to hardwire.
+# Without this the assertion above would pass just as well against a build that
+# had stopped emitting them altogether -- identical, and identically wrong.
+missing=""
+for fam in __replicate_ vzdump __migration__; do
+    printf '%s\n' "$imp" | grep -qF "[excluded:$fam]" || missing="$missing $fam"
+done
+if [ -z "$missing" ] && [ "$(printf '%s\n' "$imp" | grep -c 'keep = 2')" -ge 3 ]; then
+    ok "default: the reserved families come from the PROFILE and keep the values the code used to hardwire"
+else
+    bad "default: the reserved families come from the profile with their values" \
+        "brakuje:${missing:-nic} keep2=$(printf '%s\n' "$imp" | grep -c 'keep = 2')"
+fi
+
+# A profile that does NOT declare them gets no floors -- that is what "editable
+# from the profile" means, and it is the half that proves the values are really
+# being read rather than still hardwired somewhere.
+NOFLOOR="$WORK/nofloor"
+mkdir -p "$NOFLOOR/bare"
+sed '/^\[excluded:/,$d' "$REPO/profiles/default.conf" > "$NOFLOOR/bare.conf"
+bare="$( PROFILE_ROOT="$NOFLOOR" run --source=rpool/data --target=hdd/backups \
+            --config="$WORK/id3.conf" --profile=bare 2>&1 )"
+if printf '%s' "$bare" | grep -qF '[excluded:__replicate_]'; then
+    bad "default: a profile that declares no reserved family gets no floor" \
+        "the floors appeared anyway -- they are still coming from somewhere other than the profile"
+else
+    ok "default: a profile that declares no reserved family gets no floor (the values really come from the profile)"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

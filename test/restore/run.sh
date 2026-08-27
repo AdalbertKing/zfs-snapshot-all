@@ -1870,6 +1870,426 @@ else
     bad "resolver: label:dataset still resolves when the dataset half itself carries a colon" "rc=$rc out=$out"
 fi
 
+# ============================================================================
+# WHICH DATASETS OF THE RELATIONSHIP -- `--source` / `--target`, comma-separated
+#
+# Owner decision 2026-08-26: a VM with four virtual disks is four datasets and
+# ONE recovery. Reviewer contract the same day: one namespace per invocation, and
+# the WHOLE list resolves before anything is shown.
+#
+# The pair that carries this block is sc5/sc6: the same dataset named on the
+# wrong side must be refused in BOTH directions. An implementation that let a
+# member match either side would pass every other case here.
+# ============================================================================
+SC="$WORK/scope"; mkdir -p "$SC"
+cat > "$SC/cfg" <<'CFGEOF'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:hdd/store]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-0
+	pair_label   = pve2
+[dataset:hdd/store2]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-1
+	pair_label   = pve2
+[dataset:hdd/other]
+	use_template = h
+	src          = root@pve1:rpool/data/x
+	pair_label   = pve1
+CFGEOF
+
+sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+sc_ok() {   # <desc> <expected substring> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(sc_run "$@")"
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+sc_refuses() {   # <desc> <expected substring of the refusal> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(sc_run "$@")"; local rc=$?
+    if [ "$rc" -eq 0 ]; then bad "$desc" "expected a refusal, got rc=0"; return; fi
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+
+# The case the decision exists for: two disks of one VM, one command.
+out="$(sc_run pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1)"
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 2 ]; then ok "scope: two disks of one VM in ONE command"
+else bad "scope: two disks of one VM in ONE command" "expected 2 datasets in the plan, got $n"; fi
+# ...and it must not have quietly included the relationship's other members or
+# another relationship's. Two, exactly two.
+case "$out" in
+    *"rpool/data/x"*) bad "scope: ...and nothing from another relationship" "rpool/data/x is in the plan" ;;
+    *) ok "scope: ...and nothing from another relationship" ;;
+esac
+
+# The same two, named on the collector side instead. Same plan.
+out2="$(sc_run pve2 --source hdd/store,hdd/store2)"
+n2="$(printf '%s\n' "$out2" | grep -c 'Zrodlo:')"
+if [ "$n2" = 2 ]; then ok "scope: the same two named on the collector side"
+else bad "scope: the same two named on the collector side" "expected 2, got $n2"; fi
+
+# The "mutually exclusive" assertion that stood here was removed with the rule
+# itself on 2026-08-26: it was the reviewer's tightening of an approved UX, not
+# the owner's decision, and it made the explicit both-sides form impossible to
+# write. What replaces it is the f3 block at the foot of this file, which proves
+# both sides ARE accepted and that they are checked pair by pair.
+sc_refuses "scope: a doubled comma is a refusal, not a shorter list" \
+    "empty entry" pve2 --target rpool/data/vm-101-disk-0,,rpool/data/vm-101-disk-1
+sc_refuses "scope: the same dataset twice is a refusal" \
+    "appears twice" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-0
+# sc5/sc6 -- the discriminating pair. Each name is legal in the OTHER namespace,
+# so an implementation that matched either side would accept both.
+sc_refuses "scope: a collector-side name is refused by --target" \
+    "if you meant where the copy lives, that is --source" pve2 --target hdd/store
+sc_refuses "scope: a host-side name is refused by --source" \
+    "if you meant the name on the machine being restored, that is --target" pve2 --source rpool/data/vm-101-disk-0
+sc_refuses "scope: a dataset of ANOTHER relationship is refused" \
+    "is not a dataset of relation 'pve2'" pve2 --target rpool/data/x
+sc_refuses "scope: the relationship has to be named too" \
+    "select datasets WITHIN a relationship" --target rpool/data/vm-101-disk-0
+sc_refuses "scope: label:dataset AND a flag is two ways of saying scope" \
+    "already names a dataset" pve2:rpool/data/vm-101-disk-0 --target rpool/data/vm-101-disk-1
+sc_refuses "scope: a flag whose value is the next flag is refused" \
+    "needs a value" pve2 --target --plan
+# The space form is what both recorded contracts spell, so it is not optional.
+sc_ok "scope: --target takes its value as the next word" \
+    "rpool/data/vm-101-disk-0" pve2 --target rpool/data/vm-101-disk-0
+
+# ============================================================================
+# --at -- a recovery point in wall-clock time, resolved PER DATASET
+#
+# Reviewer rule 4, 2026-08-26. Three properties, each with its own case, and the
+# fixture is built from the SAME `date -d` the code uses so the test cannot pass
+# by agreeing with itself about what "2026-08-10 12:00" means.
+#
+# The case that carries the block is `at1`: the wanted snapshot is neither the
+# newest nor the oldest. An implementation that took the newest, or the last
+# line, or the lexically greatest name passes nothing here.
+# ============================================================================
+AT="$WORK/at"; mkdir -p "$AT/bin"
+AT_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$AT/cfg" <<'ATCFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:hdd/store]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-0
+	pair_label   = pve2
+[dataset:hdd/store2]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-1
+	pair_label   = pve2
+[dataset:hdd/tie]
+	use_template = h
+	src          = root@pve2:rpool/data/vm-101-disk-2
+	pair_label   = pve2
+ATCFG
+# hdd/store  : one BEFORE, one just before (the answer), one AFTER
+# hdd/store2 : nothing at or before the moment
+# hdd/tie    : two sharing the greatest creation at or before it
+cat > "$AT/bin/zfs" <<ATSTUB
+#!/bin/bash
+E=$AT_E
+for a in "\$@"; do ds="\$a"; done
+case "\$*" in
+  *"-t snapshot"*)
+    case "\$ds" in
+      hdd/store)  printf '%s@old\t%s\tG1\n'    "\$ds" "\$((E-86400))"
+                  printf '%s@WANTED\t%s\tG2\n' "\$ds" "\$((E-3600))"
+                  printf '%s@toonew\t%s\tG3\n' "\$ds" "\$((E+86400))" ;;
+      hdd/store2) printf '%s@onlynew\t%s\tG9\n' "\$ds" "\$((E+3600))" ;;
+      hdd/tie)    printf '%s@twinA\t%s\tGA\n'  "\$ds" "\$((E-3600))"
+                  printf '%s@twinB\t%s\tGB\n'  "\$ds" "\$((E-3600))" ;;
+    esac ;;
+esac
+exit 0
+ATSTUB
+chmod +x "$AT/bin/zfs"
+
+at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_rc=$?
+
+# at1 -- neither the newest nor the oldest.
+case "$at_out" in
+    *"WYBRANO WANTED"*) ok "at: picks the greatest creation AT OR BEFORE the moment" ;;
+    *) bad "at: picks the greatest creation AT OR BEFORE the moment" "$(printf '%s' "$at_out" | grep -E 'WYBRANO|PUNKT' | head -3)" ;;
+esac
+case "$at_out" in
+    *"WYBRANO toonew"*) bad "at: ...and never a snapshot from AFTER it" "picked toonew" ;;
+    *) ok "at: ...and never a snapshot from AFTER it" ;;
+esac
+# The guid and the real creation travel with the choice: the operator has to be
+# able to check what they were given without trusting the name.
+case "$at_out" in
+    *"guid=G2"*) ok "at: ...and reports the chosen snapshot's guid and real creation" ;;
+    *) bad "at: ...and reports the chosen snapshot's guid and real creation" "$(printf '%s' "$at_out" | grep creation= | head -2)" ;;
+esac
+# The heading, because four disks of one VM is exactly where somebody assumes
+# they were handed one instant.
+case "$at_out" in
+    *"PER-DATASET FRONTIER"*) ok "at: says PER-DATASET FRONTIER in a heading, not a footnote" ;;
+    *) bad "at: says PER-DATASET FRONTIER in a heading, not a footnote" ;;
+esac
+# A dataset with nothing old enough is that dataset's error, and the run goes on.
+case "$at_out" in
+    *"BRAK -- ten dataset nie ma snapshotu"*) ok "at: a dataset with nothing old enough is named" ;;
+    *) bad "at: a dataset with nothing old enough is named" ;;
+esac
+case "$at_out" in
+    *"WYBRANO WANTED"*) ok "at: ...and the OTHER datasets are still planned" ;;
+    *) bad "at: ...and the OTHER datasets are still planned" ;;
+esac
+# A tie is fail-closed: the name is not a tie-breaker.
+case "$at_out" in
+    *"NIEJEDNOZNACZNE"*) ok "at: a tie on the greatest creation refuses to choose" ;;
+    *) bad "at: a tie on the greatest creation refuses to choose" ;;
+esac
+case "$at_out" in
+    *"WYBRANO twinA"*|*"WYBRANO twinB"*) bad "at: ...and does NOT break the tie by name" "picked one of the twins" ;;
+    *) ok "at: ...and does NOT break the tie by name" ;;
+esac
+# Owner decision 7: incomplete is not clean. The exit status is the only part of
+# this a cron job reads.
+if [ "$at_rc" -ne 0 ]; then ok "at: an incomplete plan exits non-zero"
+else bad "at: an incomplete plan exits non-zero" "rc=0"; fi
+
+# The positive control for that status: when every dataset resolves, rc is 0 --
+# otherwise the assertion above would pass against a plan that always failed.
+at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_ok_rc=$?
+if [ "$at_ok_rc" -eq 0 ]; then ok "at: a plan that resolves everything exits 0"
+else bad "at: a plan that resolves everything exits 0" "rc=$at_ok_rc" "$(printf '%s' "$at_ok_out" | tail -3)"; fi
+
+# A time nobody can parse is a refusal, not a silent "now".
+at_bad="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at 'wczoraj o poludniu' --config="$AT/cfg" 2>&1)"
+case "$at_bad" in
+    *"is not a time this system can read"*) ok "at: an unparseable time is refused" ;;
+    *) bad "at: an unparseable time is refused" "$(printf '%s' "$at_bad" | head -2)" ;;
+esac
+# Two ways of naming a recovery point is one too many.
+at_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --snapshot=x --config="$AT/cfg" 2>&1)"
+case "$at_both" in
+    *"both name a recovery point"*) ok "at: --at and --snapshot together are refused" ;;
+    *) bad "at: --at and --snapshot together are refused" "$(printf '%s' "$at_both" | head -2)" ;;
+esac
+
+# ============================================================================
+# REVIEW 2026-08-26 on a22f08a4 -- F1, F2, F3.
+# ============================================================================
+
+# --- F1: assert the RESOLVED VALUES, not the number of rows -----------------
+# The reported defect was not there -- the file carries a real TAB and the split
+# was measured correct -- but the criticism of the test stands: counting
+# `Zrodlo:` lines cannot tell a correct pair from a mangled one, and a mangled
+# pair is exactly what a `\t`-that-is-really-`t` would produce.
+f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f1_out" in
+    *"root@pve2:rpool/data/vm-101-disk-0"*) ok "f1: the ORIGINAL side resolves to its exact recorded value" ;;
+    *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Zrodlo | head -2)" ;;
+esac
+case "$f1_out" in
+    *"hdd/store"*) ok "f1: the COPY side resolves to its exact recorded value" ;;
+    *) bad "f1: the COPY side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep -i kopia | head -2)" ;;
+esac
+# The shape a broken tab-split would produce, named so the assertion cannot pass
+# by accident on a truncated value.
+# Anchored to the END of the line. The first cut looked for "Zrodlo:     roo"
+# as a SUBSTRING -- which the correct value `root@pve2:...` also contains, so it
+# failed against working code. That is the other way a test can be wrong.
+if printf '%s
+' "$f1_out" | grep -qE '^[[:space:]]*(Zrodlo|Kopia):[[:space:]]+(roo|ore)[[:space:]]*$'; then
+    bad "f1: and is not truncated at the letter t" "found a value cut down to roo or ore"
+else
+    ok "f1: and is not truncated at the letter t"
+fi
+
+# --- F2: the strategy classifies the point --at CHOSE -----------------------
+# A LOCAL (push) relationship, because the strategy short-circuits on a remote
+# source and would prove nothing.
+F2="$WORK/f2"; mkdir -p "$F2/bin"
+F2_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$F2/cfg" <<'F2CFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:rpool/data/x]
+	use_template = h
+	dst          = hdd/backup
+	pair_label   = loc
+F2CFG
+cat > "$F2/bin/zfs" <<F2STUB
+#!/bin/bash
+E=$F2_E
+for a in "\$@"; do ds="\$a"; done
+case "\$*" in
+  *"-t snapshot"*)
+      printf '%s@WANTED\t%s\tG2\n' "\$ds" "\$((E-3600))"
+      printf '%s@toonew\t%s\tG3\n' "\$ds" "\$((E+86400))" ;;
+  *) exit 1 ;;
+esac
+exit 0
+F2STUB
+chmod +x "$F2/bin/zfs"
+
+f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$F2/cfg" 2>&1)"
+# The block under "Punkt docelowy" is what the confirmation would be about.
+f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$f2_point" in
+    *WANTED*guid=G2*) ok "f2: the strategy classifies the point --at chose" ;;
+    *) bad "f2: the strategy classifies the point --at chose" "got: $f2_point" ;;
+esac
+case "$f2_point" in
+    *toonew*) bad "f2: ...and never the newest one, which is AFTER the moment" "got: $f2_point" ;;
+    *) ok "f2: ...and never the newest one, which is AFTER the moment" ;;
+esac
+# The caption over it stated a POLICY. Under --at that policy is not in force,
+# and a right answer under a wrong caption is still an untrue preview.
+case "$f2_out" in
+    *"domyslna polityka: NAJNOWSZY"*) bad "f2: the caption does not still claim the default-newest policy" ;;
+    *) ok "f2: the caption does not still claim the default-newest policy" ;;
+esac
+# NEGATIVE CONTROL: without --at the default policy is in force and says so, and
+# the newest IS the point -- otherwise the two assertions above would pass
+# against a build that had simply stopped classifying anything.
+f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --config="$F2/cfg" 2>&1)"
+f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$f2_ppoint" in
+    *toonew*) ok "f2: without --at the newest is still the point" ;;
+    *) bad "f2: without --at the newest is still the point" "got: $f2_ppoint" ;;
+esac
+case "$f2_plain" in
+    *"domyslna polityka: NAJNOWSZY"*) ok "f2: ...and the default caption is still shown" ;;
+    *) bad "f2: ...and the default caption is still shown" ;;
+esac
+# When --at resolved nothing for a dataset, no strategy is computed at all.
+f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+case "$f2_none" in
+    *"Strategia:  (POMINIETA"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
+    *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategia | head -2)" ;;
+esac
+
+# --- F3: both sides may be stated, and then they are PAIRED -----------------
+# The mutual exclusion was the reviewer's tightening of an approved UX and was
+# withdrawn. All three forms work; stating both is not remapping.
+f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Zrodlo:')"
+if [ "$f3_n" = 2 ]; then ok "f3: both sides stated explicitly is accepted"
+else bad "f3: both sides stated explicitly is accepted" "expected 2 datasets, got $f3_n" "$(printf '%s' "$f3_both" | head -3)"; fi
+
+f3_swap="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-1,rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f3_swap" in
+    *"pair 1 does not match the recorded relationship"*) ok "f3: a crossed pair is refused, not silently sorted out" ;;
+    *) bad "f3: a crossed pair is refused, not silently sorted out" "$(printf '%s' "$f3_swap" | head -2)" ;;
+esac
+f3_len="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+case "$f3_len" in
+    *"read as PAIRS, in order, so the two lists have to be the same length"*) ok "f3: lists of different lengths are refused" ;;
+    *) bad "f3: lists of different lengths are refused" "$(printf '%s' "$f3_len" | head -2)" ;;
+esac
+# And the single-sided forms still work, both ways round.
+f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --config="$SC/cfg" 2>&1)"
+case "$f3_s" in *"vm-101-disk-0"*) ok "f3: --source alone still works" ;; *) bad "f3: --source alone still works" ;; esac
+f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$f3_t" in *"vm-101-disk-0"*) ok "f3: --target alone still works" ;; *) bad "f3: --target alone still works" ;; esac
+
+# ============================================================================
+# --at must not cost the COMMON BASE (review follow-up, 2026-08-26)
+#
+# The first fix for F2 handed restore_plan_strategy a single row -- the one --at
+# chose. That got the target right and destroyed every base candidate, because
+# the SAME listing is walked a second time to find the newest snapshot whose GUID
+# also exists on the source. A dataset with a perfectly good older common base
+# was then classified "FULL on a live source -- no common base", which is the
+# opposite of the truth and, for a destructive verb, the dangerous direction.
+#
+# The discriminator the reviewer specified, verbatim: the source carries G1, the
+# copy has G1/G2/G3, --at picks G2, and the preview must show target G2 AND
+# common base G1 -- never FULL/no-base.
+# ============================================================================
+BB="$WORK/base"; mkdir -p "$BB/bin"
+BB_E="$(date -d '2026-08-10 12:00' +%s)"
+cat > "$BB/cfg" <<'BBCFG'
+[defaults]
+	host_label = coll
+[template:h]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:rpool/data/x]
+	use_template = h
+	dst          = hdd/backup
+	pair_label   = loc
+BBCFG
+# The source EXISTS and carries only G1. Every query the strategy makes is
+# answered in the shape it actually asks for -- an earlier draft of this stub
+# answered the `name,createtxg` query with three fields, and the run then
+# reported the base snapshot itself as a blocker. A stub that answers a
+# different question is a test that proves a different thing.
+cat > "$BB/bin/zfs" <<BBSTUB
+#!/bin/bash
+E=$BB_E
+args="\$*"
+case "\$args" in
+  "list -H -o name rpool/data/x")                exit 0 ;;
+  *"-o guid -d 1 rpool/data/x")                  echo G1; exit 0 ;;
+  *"-o name,guid,createtxg -d 1 rpool/data/x")   printf 'rpool/data/x@old\tG1\t100\n'; exit 0 ;;
+  *"-o name,createtxg -d 1 rpool/data/x")        printf 'rpool/data/x@old\t100\n'; exit 0 ;;
+  *"-t bookmark"*)                               exit 0 ;;
+  *"-o name,creation,guid"*"hdd/backup/rpool/data/x")
+      printf 'hdd/backup/rpool/data/x@old\t%s\tG1\n'    "\$((E-7200))"
+      printf 'hdd/backup/rpool/data/x@WANTED\t%s\tG2\n' "\$((E-3600))"
+      printf 'hdd/backup/rpool/data/x@toonew\t%s\tG3\n' "\$((E+86400))"
+      exit 0 ;;
+  *"written"*)                                   echo 0; exit 0 ;;
+esac
+exit 1
+BBSTUB
+chmod +x "$BB/bin/zfs"
+
+bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$BB/cfg" 2>&1)"
+bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$bb_point" in
+    *WANTED*guid=G2*) ok "base: --at still selects the target it chose" ;;
+    *) bad "base: --at still selects the target it chose" "got: $bb_point" ;;
+esac
+bb_base="$(printf '%s\n' "$bb_out" | sed -n '/Wspolna baza/,+1p' | tail -1)"
+case "$bb_base" in
+    *guid=G1*) ok "base: the OLDER common base survives --at" ;;
+    *) bad "base: the OLDER common base survives --at" "got: $bb_base" ;;
+esac
+case "$bb_out" in
+    *"Wspolnej bazy NIE MA"*) bad "base: and is never reported as FULL/no-base" ;;
+    *) ok "base: and is never reported as FULL/no-base" ;;
+esac
+case "$bb_out" in
+    *"INKREMENT"*) ok "base: so the classification is INKREMENT, not a full replacement" ;;
+    *) bad "base: so the classification is INKREMENT, not a full replacement" "$(printf '%s' "$bb_out" | grep Strategia | head -1)" ;;
+esac
+# A snapshot from AFTER the moment must not become the base either -- the filter
+# is "at or before", and it applies to both uses of the listing.
+case "$bb_base" in
+    *guid=G3*|*toonew*) bad "base: a snapshot from after the moment is not a base" "got: $bb_base" ;;
+    *) ok "base: a snapshot from after the moment is not a base" ;;
+esac
+# NEGATIVE CONTROL for the whole block: without --at the newest IS the target and
+# the base is still found, so these assertions are about --at and not about the
+# strategy having stopped working.
+bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --config="$BB/cfg" 2>&1)"
+bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
+case "$bb_ppoint" in
+    *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;
+    *) bad "base: without --at the newest is the target, as before" "got: $bb_ppoint" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

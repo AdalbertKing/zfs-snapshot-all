@@ -718,3 +718,148 @@ cron_replace_all_impl() {
     cron_markers_valid "$in" || return 1
     cron_write "$who" "$in"
 }
+
+###############################################################################
+# HOST SETTINGS
+###############################################################################
+# Here because this is the one file both zfs-backup.sh and gen-cron.sh source,
+# and both need the same answer. It is not crontab machinery; it is next to it.
+#
+# THIS HOST'S DEFAULTS, for the handful of things that are neither policy nor
+# topology: how the ENGINE behaves here.
+#
+# A profile says what to keep. A relationship says where from and where to.
+# Neither can say "on this machine, a catch-up older than half an hour is too
+# stale to reuse" -- that is a property of the host and its link, true for every
+# relationship on it and for none of the others.
+#
+# Until now such settings existed only as environment variables with built-in
+# defaults, which means they were settable by whoever remembered to export them
+# and by nobody else. `CATCHUP_MAX_AGE` is the first one moved here.
+#
+# NOT a second place to say what a profile already says. The quiesce-degrade
+# design (docs/design/quiesce-degrade.md) draws the line: the TIER holds the
+# decision, this file holds the DEFAULT for when a tier is silent. The same
+# layering server.conf's DEFAULT_TARGET already uses. A per-profile settings
+# file would be the two-sources-of-truth problem this tree spent a day removing
+# from the bandwidth manifest -- the profile IS the per-profile settings file.
+#
+# PRECEDENCE: environment, then this file, then the built-in default. The
+# environment wins because that is what the suites use to pin a value, and a
+# host file that could override a test would make the test a liar.
+#
+# Format: flat `key = value`, '#' starts a comment. No sections until something
+# needs one -- CONFIG v4 has sections because it describes many datasets; this
+# describes one host.
+SETTINGS_FILE="${SETTINGS_FILE:-/etc/zfs-snapshot-all/settings.ini}"
+settings_get() {   # <key> <built-in default> -> value
+    local key="$1" fallback="$2" v
+    [ -r "$SETTINGS_FILE" ] || { printf '%s' "$fallback"; return 0; }
+    v="$(awk -F= -v k="$key" '
+        { sub(/#.*/, "") }
+        {
+            key=$1; sub(/^[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
+            if (key == k && NF > 1) {
+                val=$0; sub(/^[^=]*=/, "", val)
+                sub(/^[ \t]+/, "", val); sub(/[ \t]+$/, "", val)
+                print val; exit
+            }
+        }' "$SETTINGS_FILE" 2>/dev/null)"
+    # An EMPTY value is a mistake, not an answer: a key written with nothing
+    # after it reads as "I meant to set this", and silently substituting the
+    # built-in default would hide it. Same rule the config grammar already
+    # applies to blank fields.
+    [ -n "$v" ] || v="$fallback"
+    printf '%s' "$v"
+}
+
+# The file settings_get reads, written once so a host HAS one to edit.
+#
+# Owner direction, 2026-08-27: "chce, zeby plik .ini zawieral (i czytal) wersje
+# Quiesce degrade". It read it already -- `quiesce` has been a settings_get key
+# since 2026-08-26 -- but no host had the file, so the key existed only in the
+# code that looked for it. A setting nobody can see is not a setting.
+#
+# NEVER OVERWRITES. Returns 1 and touches nothing if the path exists, because
+# this runs from every deploy and the file is meant to be edited by hand.
+#
+# 0644 deliberately: gen-cron.sh and zfs-backup.sh read it as the DELEGATED
+# ACCOUNT, not as root, and an unreadable settings file does not fail -- it falls
+# back to the built-in default, silently, which is the worst of both.
+settings_write_default() {   # <path> -> 0 written, 1 already there
+    local path="${1:-$SETTINGS_FILE}" dir tmp
+    [ -e "$path" ] && return 1
+    dir="$(dirname "$path")"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    tmp="$(mktemp "$dir/.settings.XXXXXX")" || return 1
+    cat > "$tmp" <<'SETTINGS_INI_EOF'
+# ============================================================================
+# THIS HOST'S ENGINE DEFAULTS
+#
+# Flat `key = value`. '#' starts a comment. No sections: this file describes ONE
+# HOST, unlike a CONFIG v4 file, which describes many datasets and therefore has
+# them.
+#
+# Read by gen-cron.sh and zfs-backup.sh through settings_get (lib-cron.sh).
+#
+# PRECEDENCE, highest first:
+#   1. the environment  (what the test suites pin, so a host file cannot make a
+#      test lie)
+#   2. this file
+#   3. the built-in default compiled into the code
+#
+# THIS IS NOT A SECOND PLACE TO SAY WHAT A PROFILE ALREADY SAYS. A profile says
+# what to keep and how; a relationship says where from and where to. This file is
+# for the handful of things that are neither -- properties of THIS MACHINE, true
+# for every relationship on it and for none of the others.
+#
+# Everything below is commented out, which means "use the built-in default".
+# Uncomment a line to override it on this host.
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# quiesce = no | agent | sync | auto     (optionally with ,strict or ,degrade)
+#
+# The host-wide default for tiers that name NO quiesce of their own. It cannot
+# override a tier that named one: `profiles/prod.conf` says `quiesce=auto,degrade`
+# on daily/weekly/monthly, and that stands whatever this file says.
+#
+# WHAT A FAILED FREEZE DOES, since the owner's direction of 2026-08-27:
+#
+#   THE SNAPSHOT IS STILL TAKEN. It is crash-consistent, its name carries
+#   `_crash_`, and the run exits 8 so cron mails you about it. A copy that
+#   exists and says what it is beats one that was never taken.
+#
+#   ',strict' is the way back, per tier: no snapshot, and the run fails. Use it
+#   where a crash-consistent copy is genuinely worthless -- a database whose
+#   restore procedure starts by discarding one.
+#
+#   ',degrade' is still accepted and now asks for exactly what it would get
+#   anyway. Every crontab this fleet generated since 2026-08-26 carries it.
+#
+# LEFT COMMENTED ON PURPOSE, and think before you uncomment it: this value
+# reaches EVERY tier that named no quiesce, and in `prod.conf` that is the
+# HOURLY one. Hourly has no quiesce deliberately -- a freeze 24 times a day
+# stalls every guest on the host 24 times a day, and losing one interval out of
+# twenty-four is not what the durable copies are for. Setting `quiesce` here
+# turns hourly quiescing on across the host.
+#
+#quiesce = auto
+
+
+# ----------------------------------------------------------------------------
+# catchup_max_age = <seconds>            (built-in: 1800)
+#
+# How stale a catch-up run may be and still be reused rather than restarted.
+# A property of this host and its link, which is why it lives here.
+#
+#catchup_max_age = 1800
+SETTINGS_INI_EOF
+    chmod 0644 "$tmp" 2>/dev/null
+    if ! mv -f "$tmp" "$path"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    return 0
+}

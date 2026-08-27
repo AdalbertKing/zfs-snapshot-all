@@ -221,17 +221,35 @@ check "priv: a guest whose state cannot be READ is not reported as stopped" "1" 
 ( PATH="$QP:$PATH"; cp "$QP/bin/qm-stopped" "$QP/qm"; quiesce_guest_status 107 2>/dev/null | grep -q 'running=no' )
 check "priv: a guest that really IS stopped still reads running=no" "0" "$?"
 
-# The consequence, which is the part that mattered: quiesce_prepare must REFUSE,
-# not skip. Exit 3 is the same code the remote path uses for "cannot quiesce",
-# and the cron lines alert on any non-zero.
+# The consequence, which is the part that mattered: quiesce_prepare must not
+# treat "could not ask" as "nothing to freeze here". What that costs the run is a
+# separate question with two answers since 2026-08-27, so both are checked, and
+# the pin is explicit: QUIESCE_DEGRADE is what a tier's `,strict` sets, and this
+# half is the strict one. Exit 3 is the same code the remote path uses for
+# "cannot quiesce", and the cron lines alert on any non-zero.
 cp "$QP/bin/qm-denied" "$QP/qm"
-out=$( PATH="$QP:$PATH"; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+out=$( PATH="$QP:$PATH"; QUIESCE_DEGRADE=0; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
        quiesce_prepare hdd/data/vm-107-disk-0 auto 2>&1 ); rc=$?
-check "priv: an unreadable guest state fails the run instead of skipping the freeze" "3" "$rc"
+check "priv: under ,strict an unreadable guest state fails the run" "3" "$rc"
 case "$out" in
     *"could not determine the state of guest 107"*)
         check "priv: ...and says which guest, not just that something failed" "0" "0" ;;
     *)  check "priv: ...and says which guest, not just that something failed" "0" "1 ($out)" ;;
+esac
+# THE DEFAULT HALF, and the owner's 2026-08-27 direction at the site that
+# produced it: a host where the account cannot read guest state is exactly what
+# was measured on pve9/pve1/pve2. It must DEGRADE -- which is not the same as
+# the skip this block exists to prevent, and the difference is checkable: a skip
+# is silent and succeeds, a degradation announces itself and is recorded.
+out=$( PATH="$QP:$PATH"; QUIESCE_DEGRADE=1; QUIESCE_DEGRADED=0; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+       quiesce_prepare hdd/data/vm-107-disk-0 auto >/dev/null 2>&1
+       printf '%s' "$QUIESCE_DEGRADED" )
+check "priv: by default an unreadable guest state degrades instead" "1" "$out"
+out=$( PATH="$QP:$PATH"; QUIESCE_DEGRADE=1; QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
+       quiesce_prepare hdd/data/vm-107-disk-0 auto 2>&1 )
+case "$out" in
+    *DEGRADING*) check "priv: ...and says so, so it is not a silent skip" "0" "0" ;;
+    *)           check "priv: ...and says so, so it is not a silent skip" "0" "1 ($out)" ;;
 esac
 
 # A stopped guest must stay an ordinary skip. The fix is about "could not ask",
@@ -270,13 +288,24 @@ exec "$@"
 STUB
 chmod +x "$QP/bin/id" "$QP/bin/helper-ok" "$QP/bin/sudo"
 
-# No usable helper -> refuse, and name the command that fixes it.
-out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=""; QUIESCE_HELPER="$QP/nonexistent"
+# No usable helper. Under ,strict: refuse, and name the command that fixes it.
+out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_DEGRADE=0; QUIESCE_VIA=""; QUIESCE_HELPER="$QP/nonexistent"
        quiesce_init auto 2>&1 ); rc=$?
-check "init: a non-root caller with no helper refuses instead of degrading" "3" "$rc"
+check "init: under ,strict a non-root caller with no helper refuses" "3" "$rc"
 case "$out" in
     *"--allow-quiesce"*) check "init: ...and names the deploy.sh grant" "0" "0" ;;
     *)                   check "init: ...and names the deploy.sh grant" "0" "1 ($out)" ;;
+esac
+# By default it degrades -- and STILL names the grant, because "you got a
+# crash-consistent snapshot" is not an answer to "why can this account not reach
+# the guests". Losing the remedy from the message is the way a degraded default
+# turns a fixable misconfiguration into a permanent one.
+out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_DEGRADE=1; QUIESCE_VIA=""; QUIESCE_HELPER="$QP/nonexistent"
+       quiesce_init auto 2>&1 ); rc=$?
+check "init: by default a non-root caller with no helper degrades" "1" "$rc"
+case "$out" in
+    *"--allow-quiesce"*) check "init: ...and the remedy is still in the message" "0" "0" ;;
+    *)                   check "init: ...and the remedy is still in the message" "0" "1 ($out)" ;;
 esac
 
 # A usable helper -> route through it.
@@ -311,10 +340,10 @@ esac
 exit 2
 STUB
 chmod +x "$QP/bin/helper-refuses"
-out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_VIA=helper; QUIESCE_HELPER="$QP/bin/helper-refuses"
+out=$( PATH="$QP/bin:$QP:$PATH"; QUIESCE_DEGRADE=0; QUIESCE_VIA=helper; QUIESCE_HELPER="$QP/bin/helper-refuses"
        QUIESCE_HANDLED=(); QUIESCE_FROZEN=()
        quiesce_prepare hdd/data/vm-102-disk-0 auto 2>&1 ); rc=$?
-check "init: a guest outside the account's whitelist fails the run" "3" "$rc"
+check "init: under ,strict a guest outside the account's whitelist fails the run" "3" "$rc"
 case "$out" in
     *"whitelist"*) check "init: ...and points at the whitelist, not at the guest being down" "0" "0" ;;
     *)             check "init: ...and points at the whitelist, not at the guest being down" "0" "1 ($out)" ;;
@@ -387,6 +416,17 @@ run_refuse() {   # <status line> [freeze-rc] -> prints "rc|<helper trace>|<zfs t
     printf '%s|%s|%s|%s' "$rc" "$(tr '\n' ',' < "$HELPER_TRACE")" "$(tr '\n' ',' < "$ZFS_TRACE")" "$out"
 }
 
+# PINNED STRICT for this whole block, and the pin is the point rather than a
+# convenience: everything below is about the SHAPE of a refusal -- which code,
+# which message, what was and was not touched on the way out -- and since
+# 2026-08-27 a refusal is what a tier asks for with `,strict`. The same failures
+# under the DEFAULT are checked in the degrade block further down, both halves,
+# so nothing here is being avoided by pinning it.
+#
+# Two of the cases below refuse either way (a foreign freeze, a mode that cannot
+# fit the guest) and are unaffected by the pin; that is asserted where it belongs,
+# with the degrade default explicitly set to 1.
+QUIESCE_DEGRADE=0
 r=$(run_refuse "id=106 kind=qemu running=yes frozen=yes")
 check "refuse: an already-frozen guest fails the run" "3" "${r%%|*}"
 case "$r" in
@@ -819,7 +859,12 @@ check "err1: and the run fails (5)" "5" "$rc"
 rq_reset 'exit 0'
 out=$(QFROZEN=yes rq_run2); rc=$?
 check "err2: an already-frozen guest does not snapshot" "no" "$(rq_snapshotted)"
-check "err2: and the run fails (5)" "5" "$rc"
+# 9, not 5, since 2026-08-26. Both codes mean "no snapshot"; the difference is
+# what the LOCAL side is then allowed to do with it. 5 is degradable under
+# `,degrade` and 9 is not, and a freeze somebody else established is the second
+# thing the contract keeps fatal. Until this split existed, the PULL path
+# degraded it while PUSH refused it.
+check "err2: and the run fails FATALLY (9), not degradably" "9" "$rc"
 case "$out" in *"ALREADY frozen"*) check "err2: and says why" "y" "y" ;;
    *) check "err2: and says why" "y" "n ($out)" ;; esac
 
@@ -883,7 +928,9 @@ chmod +x "$RQ_D/bin/zfs"
 rq_reset 'exit 0'
 out=$(QKIND=lxc rq_run2 agent); rc=$?
 check "err6: agent on a container does not snapshot" "no" "$(rq_snapshotted)"
-check "err6: and fails (5)" "5" "$rc"
+# 9 for the same reason as err2: a mode that cannot ever fit this guest is a
+# config error, not a freeze that failed today, so `,degrade` must not cover it.
+check "err6: and fails FATALLY (9), not degradably" "9" "$rc"
 
 # 7. several guests, one freeze fails: no snapshot, and the one that WAS frozen
 #    must not be left that way.
@@ -1484,6 +1531,427 @@ case "$pool_out" in
     *"not allowed to ask"*) check "gate: check_pool_health says why it could not answer" "0" "0" ;;
     *) check "gate: check_pool_health says why it could not answer" "0" "1"; echo "     got: $pool_out" ;;
 esac
+
+# ============================================================================
+# WHAT A FAILED FREEZE DOES. Reviewer contract of 2026-08-26 (PR #165), with the
+# default INVERTED by owner direction on 2026-08-27: a failed freeze now takes
+# the snapshot -- crash-consistent, `_crash_` in the name, exit 8 -- and
+# `,strict` is the per-tier way back to refusing.
+#
+# Every assertion below still has its NEGATIVE half in the same block. That
+# requirement did not change direction with the default: what used to need
+# proving was that the fail-closed door could be opened deliberately, and what
+# needs proving now is that `,strict` still shuts it.
+# ============================================================================
+
+# ---- the parser ------------------------------------------------------------
+# The positive half is not decoration: `local raw="$1" mode="$raw"` expands every
+# word before the builtin assigns any of them, so the first version of this
+# parser rejected `auto` -- the value production uses -- while accepting every
+# `,degrade` form. Only the bare modes catch that.
+pm() {   # <value> -> "mode/degrade" or "REJECT"
+    local v="$1"
+    # QUIESCE_DEGRADE is poisoned rather than pre-set to either answer: a parser
+    # path that forgot to assign it would otherwise read as whichever value this
+    # helper happened to choose, which is exactly how a default flip hides.
+    ( QUIESCE_MODE=""; QUIESCE_DEGRADE=9
+      quiesce_parse_mode "$v" 2>/dev/null || { printf 'REJECT'; exit 0; }
+      printf '%s/%s' "$QUIESCE_MODE" "$QUIESCE_DEGRADE" )
+}
+# THE OWNER'S 2026-08-27 DIRECTION, stated as the four bare modes. `auto` is the
+# one production runs, and it must degrade WITHOUT anyone having written a
+# qualifier -- that sentence is the whole change.
+check "degrade-parse: bare agent degrades by default"  "agent/1" "$(pm agent)"
+check "degrade-parse: bare sync degrades by default"   "sync/1"  "$(pm sync)"
+check "degrade-parse: bare auto degrades by default"   "auto/1"  "$(pm auto)"
+# `no` is the built-in -q value of both engines, so this line is what stands
+# between the flip and every run in the fleet refusing at startup: `no` takes no
+# qualifier, and it must still parse, and it must not claim to degrade -- nothing
+# is ever frozen, so nothing can fail to freeze.
+check "degrade-parse: bare no still parses, and does not degrade" "no/0" "$(pm no)"
+# NEGATIVE HALF. `,strict` is now the only qualifier that changes anything, and
+# it must restore the previous behaviour exactly.
+check "degrade-parse: auto,strict refuses to degrade"  "auto/0"  "$(pm auto,strict)"
+check "degrade-parse: agent,strict refuses to degrade" "agent/0" "$(pm agent,strict)"
+check "degrade-parse: sync,strict refuses to degrade"  "sync/0"  "$(pm sync,strict)"
+# COMPATIBILITY. `profiles/prod.conf` and every crontab generated since
+# 2026-08-26 carry `,degrade`; it must keep parsing, and mean what it always did.
+check "degrade-parse: auto,degrade still accepted"     "auto/1"  "$(pm auto,degrade)"
+check "degrade-parse: agent,degrade still accepted"    "agent/1" "$(pm agent,degrade)"
+check "degrade-parse: sync,degrade still accepted"     "sync/1"  "$(pm sync,degrade)"
+# The errors. A qualifier on `no` asks for a policy about a freeze that never
+# happens -- true of both spellings, and the message must name the one written.
+# The rest are typos in the one field that decides fail-open against fail-closed,
+# and must not be read as either half of themselves.
+check "degrade-parse: no,degrade is refused"  "REJECT"  "$(pm no,degrade)"
+check "degrade-parse: no,strict is refused"   "REJECT"  "$(pm no,strict)"
+check "degrade-parse: a misspelled ,degrade is refused"  "REJECT" "$(pm auto,Degrade)"
+check "degrade-parse: a misspelled ,strict is refused"   "REJECT" "$(pm auto,Strict)"
+check "degrade-parse: a repeated ,degrade is refused"    "REJECT" "$(pm auto,degrade,degrade)"
+check "degrade-parse: a repeated ,strict is refused"     "REJECT" "$(pm auto,strict,strict)"
+check "degrade-parse: mixed qualifiers are refused"      "REJECT" "$(pm auto,strict,degrade)"
+check "degrade-parse: an unknown qualifier is refused"   "REJECT" "$(pm auto,foo)"
+check "degrade-parse: an unknown mode is still refused"  "REJECT" "$(pm bogus)"
+# The message must name `,strict` where an operator will look for it -- the
+# rejection of an unknown qualifier is the one place a typo lands.
+qerr="$( ( quiesce_parse_mode auto,foo ) 2>&1 )"
+case "$qerr" in
+    *",strict"*) check "degrade-parse: the rejection names ',strict' as the way back" "y" "y" ;;
+    *)           check "degrade-parse: the rejection names ',strict' as the way back" "y" "n ($qerr)" ;;
+esac
+
+# THE BUILT-IN, read without the parser. Sourcing the library must leave
+# QUIESCE_DEGRADE at 1: quiesce_remote_run's rc mapping reads the VARIABLE, not
+# the parser, and a library whose default stayed 0 would degrade on PUSH and
+# refuse on PULL for the same configuration.
+libdef="$( env -u QUIESCE_DEGRADE bash -c 'source ./lib-zfs-snap.sh >/dev/null 2>&1; printf %s "$QUIESCE_DEGRADE"' )"
+check "degrade-default: the library's own default is 1" "1" "$libdef"
+# NEGATIVE CONTROL for that: the environment still wins, or the suites could not
+# pin the value and the assertion above would be measuring nothing.
+libenv="$( QUIESCE_DEGRADE=0 bash -c 'source ./lib-zfs-snap.sh >/dev/null 2>&1; printf %s "$QUIESCE_DEGRADE"' )"
+check "degrade-default: an environment value still overrides it" "0" "$libenv"
+
+# ---- the name --------------------------------------------------------------
+# The marker goes BETWEEN the family and the timestamp, and both halves of that
+# sentence are load-bearing: after the family so retention and the age monitor
+# still match by prefix, before the timestamp so `zfs list -s creation` ordering
+# is untouched.
+check "degrade-name: the marker follows the family" \
+      "automated_daily_crash_" "$(quiesce_crash_message automated_daily_)"
+check "degrade-name: a family written without its trailing _ gets one" \
+      "automated_daily_crash_" "$(quiesce_crash_message automated_daily)"
+check "degrade-name: an empty -m does not produce a leading _" \
+      "crash_" "$(quiesce_crash_message '')"
+# The property the frozen delsnaps.sh and check-snap-age.sh depend on, asserted
+# as a property rather than as a string: the degraded name is still a member of
+# the family the operator configured.
+degname="tank/a@$(quiesce_crash_message automated_daily_)2026-08-26_20-50-40"
+case "$degname" in
+    tank/a@automated_daily_*) check "degrade-name: still matches the family prefix" "0" "0" ;;
+    *) check "degrade-name: still matches the family prefix" "0" "1 ($degname)" ;;
+esac
+case "$degname" in
+    *crash_2026-08-26_20-50-40) check "degrade-name: the timestamp stays last" "0" "0" ;;
+    *) check "degrade-name: the timestamp stays last" "0" "1 ($degname)" ;;
+esac
+
+# ---- the gate --------------------------------------------------------------
+# quiesce_degrade_gate is the only thing that may say "take a crash-consistent
+# set instead". It says so only from a clean state, and the three ways of not
+# being clean are each checked here.
+gate() {   # <degrade> <created...> -> "rc|QUIESCE_DEGRADED|thawcalls"
+    local deg="$1" zfsrc="$2" thawrc="$3" ncreated="$4" nfrozen="$5"
+    ( QUIESCE_DEGRADE="$deg"; QUIESCE_DEGRADED=0
+      QUIESCE_CREATED=(); QUIESCE_FROZEN=(); QUIESCE_HANDLED=(); QUIESCE_PENDING_VMS=()
+      QUIESCE_THAW_FAILED=0; QUIESCE_FREEZE_EPOCH=0
+      [ "$ncreated" -gt 0 ] && QUIESCE_CREATED=(tank/a@s1)
+      [ "$nfrozen"  -gt 0 ] && QUIESCE_FROZEN=(qemu:106)
+      thawcalls=0
+      zfs() { return "$zfsrc"; }
+      quiesce_do_thaw() { thawcalls=$((thawcalls+1)); return "$thawrc"; }
+      log() { :; }
+      quiesce_degrade_gate "" "a test reason"; rc=$?
+      printf '%s|%s|%s' "$rc" "$QUIESCE_DEGRADED" "$thawcalls" )
+}
+# NEGATIVE CONTROL, and the most important line in this block: without the
+# opt-in the gate must refuse, so every caller keeps the behaviour it had.
+check "degrade-gate: without ,degrade it refuses"        "1|0|0" "$(gate 0 0 0 0 0)"
+check "degrade-gate: without ,degrade nothing is thawed" "1|0|0" "$(gate 0 0 0 0 1)"
+# The ordinary case: nothing created, nothing frozen -- quiesce_init and
+# quiesce_prepare both fail here, before a single guest is touched.
+check "degrade-gate: with ,degrade and a clean state it agrees" "0|1|0" "$(gate 1 0 0 0 0)"
+# Frozen guests are thawed BEFORE it agrees, and the thaw is proven by the call
+# count, not by the log line.
+check "degrade-gate: it thaws what this run froze before agreeing" "0|1|1" "$(gate 1 0 0 0 1)"
+# A thaw that did not take is an outage. Contract condition 3: still fatal.
+check "degrade-gate: a failed thaw is still fatal" "1|0|2" "$(gate 1 0 1 0 1)"
+# A rollback that left snapshots behind. Contract condition 4: still fatal,
+# because a crash set on top of a half-finished quiesced one leaves two
+# overlapping answers to what the current tier snapshot is.
+check "degrade-gate: a failed rollback is still fatal" "1|0|0" "$(gate 1 1 0 1 0)"
+# ...and it thaws anyway on the way out, because the cleanup failing must not
+# leave a guest frozen.
+check "degrade-gate: a failed rollback still thaws" "1|0|1" "$(gate 1 1 0 1 1)"
+# The clean rollback: the snapshot this run made inside the window is destroyed
+# and the gate agrees.
+check "degrade-gate: a clean rollback lets it agree" "0|1|0" "$(gate 1 0 0 1 0)"
+
+# THE TWO HALVES JOINED. Everything above tests the parser against a number and
+# the gate against a number; neither notices if the number stops travelling
+# between them. This runs the real parser on a real -q value and hands whatever
+# it produced to the real gate -- the behaviour the owner asked for, stated end
+# to end.
+pmgate() {   # <-q value> -> "rc|QUIESCE_DEGRADED"
+    local v="$1"
+    ( quiesce_parse_mode "$v" >/dev/null 2>&1 || { printf 'PARSE-REJECT'; exit 0; }
+      QUIESCE_DEGRADED=0
+      QUIESCE_CREATED=(); QUIESCE_FROZEN=(); QUIESCE_HANDLED=(); QUIESCE_PENDING_VMS=()
+      QUIESCE_THAW_FAILED=0; QUIESCE_FREEZE_EPOCH=0
+      zfs() { return 0; }
+      quiesce_do_thaw() { return 0; }
+      log() { :; }
+      quiesce_degrade_gate "" "a test reason"; rc=$?
+      printf '%s|%s' "$rc" "$QUIESCE_DEGRADED" )
+}
+check "degrade-chain: -q auto alone degrades a failed freeze" "0|1" "$(pmgate auto)"
+check "degrade-chain: -q auto,strict refuses it"              "1|0" "$(pmgate auto,strict)"
+check "degrade-chain: -q auto,degrade still degrades"         "0|1" "$(pmgate auto,degrade)"
+
+# ---- the local refusals that stay fatal ------------------------------------
+# `,degrade` answers "the freeze did not happen THIS TIME". It does not answer
+# "this guest is not the kind this mode can freeze" (a config error that will
+# never fix itself) and it does not answer "somebody else's freeze is in place".
+# run_refuse returns 3 for a refusal that exits, and 1 for one that degraded.
+QUIESCE_DEGRADE=1
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=yes")
+check "degrade-fatal: a foreign freeze is fatal even with ,degrade" "3" "${r%%|*}"
+r=$(run_refuse "id=102 kind=lxc running=yes frozen=unknown" 0 hdd/lxc/subvol-102-disk-0 agent)
+check "degrade-fatal: a mode that cannot fit the guest is fatal even with ,degrade" "3" "${r%%|*}"
+# ...while the runtime failures in the same function DO degrade, which is what
+# makes the two lines above a discrimination rather than a blanket refusal.
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=unknown")
+check "degrade-local: an unreachable agent degrades with ,degrade" "1" "${r%%|*}"
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=no" 1)
+check "degrade-local: a freeze that did not take degrades with ,degrade" "1" "${r%%|*}"
+QUIESCE_DEGRADE=0
+# The same two WITHOUT the opt-in: the negative half of the same discrimination.
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=unknown")
+check "degrade-local: an unreachable agent is still fatal without ,degrade" "3" "${r%%|*}"
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=no" 1)
+check "degrade-local: a freeze that did not take is still fatal without ,degrade" "3" "${r%%|*}"
+
+# ---- the diagnosis must survive the degradation ----------------------------
+# Found by this suite on 2026-08-27, immediately after the default was flipped,
+# and it is the defect the flip creates rather than one it exposes.
+#
+# Every one of these sites used to read
+#
+#     quiesce_degrade_gate "" "<short reason>" && return 1
+#     log 0 "<what is wrong, and the command that fixes it>"
+#     exit 3
+#
+# so the sentence carrying the REMEDY was reachable only on the path that
+# refused. Under the old default that path was the common one and nobody
+# noticed. Under the new one the operator gets "DEGRADING" every night, a
+# `_crash_` snapshot every night, and never the line saying that the account is
+# missing `--allow-quiesce` or that the guest is off the whitelist. A backup
+# that keeps working while dropping the reason it is worse is how a fixable
+# misconfiguration becomes permanent.
+#
+# So: the diagnosis is logged BEFORE the gate at every site, and these
+# assertions check the DEGRADING path, because the refusing path already had it.
+QUIESCE_DEGRADE=1
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=unknown")
+case "$r" in
+    *"could not read fsfreeze-status for running VM 106"*)
+        check "degrade-diag: an unreachable agent still says WHAT was unreadable" "0" "0" ;;
+    *)  check "degrade-diag: an unreachable agent still says WHAT was unreadable" "0" "1 ($r)" ;;
+esac
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=no" 1)
+case "$r" in
+    *"did not respond to fsfreeze-freeze"*)
+        check "degrade-diag: a freeze that did not take still says so" "0" "0" ;;
+    *)  check "degrade-diag: a freeze that did not take still says so" "0" "1 ($r)" ;;
+esac
+r=$(run_refuse "id=101 kind=lxc running=yes frozen=unknown" 1 "hdd/lxc/subvol-101-disk-0")
+case "$r" in
+    *"dirty pages were never pushed into ZFS"*)
+        check "degrade-diag: a failed container flush still says what was lost" "0" "0" ;;
+    *)  check "degrade-diag: a failed container flush still says what was lost" "0" "1 ($r)" ;;
+esac
+# NEGATIVE CONTROL for the three above: under ,strict the same runs must carry
+# the same diagnosis. Without this pair the assertions would pass against a
+# build that had simply moved the text into the gate's own message, which reads
+# the same here and would lose the per-site remedy everywhere else.
+QUIESCE_DEGRADE=0
+r=$(run_refuse "id=106 kind=qemu running=yes frozen=unknown")
+case "$r" in
+    *"could not read fsfreeze-status for running VM 106"*)
+        check "degrade-diag: ...and ,strict says exactly the same thing" "0" "0" ;;
+    *)  check "degrade-diag: ...and ,strict says exactly the same thing" "0" "1 ($r)" ;;
+esac
+# A REFUSAL SAYS NOTHING WAS TAKEN. The degrading path announces a crash-
+# consistent snapshot; the strict path must be equally explicit that there is no
+# snapshot at all, or the two outcomes are told apart only by an exit code.
+case "$r" in
+    *"NOTHING was snapshotted"*)
+        check "degrade-diag: ...and states that nothing was snapshotted" "0" "0" ;;
+    *)  check "degrade-diag: ...and states that nothing was snapshotted" "0" "1 ($r)" ;;
+esac
+
+# STRUCTURAL, and deliberately not a string check: the four sites above are the
+# ones this suite can drive without root or a Proxmox cluster, and there are six.
+# A future seventh must not reintroduce the shape. Every `quiesce_degrade_gate`
+# call in the library has to be preceded by a `log 0` line, so whatever it
+# decides, the operator has already been told what happened.
+gate_lines="$(grep -n 'quiesce_degrade_gate ""' "$REPO/lib-zfs-snap.sh" | cut -d: -f1)"
+bad_sites=0; n_sites=0
+for gl in $gate_lines; do
+    n_sites=$((n_sites + 1))
+    prev="$(sed -n "$((gl - 1))p" "$REPO/lib-zfs-snap.sh")"
+    case "$prev" in
+        *"log 0 "*) ;;
+        *) bad_sites=$((bad_sites + 1)); echo "     line $gl is preceded by: $prev" ;;
+    esac
+done
+check "degrade-diag: every gate site logs its diagnosis first" "0" "$bad_sites"
+# ...and the count is asserted too, so a build that DELETED the sites would not
+# pass the line above by having nothing left to check.
+if [ "$n_sites" -ge 6 ]; then
+    check "degrade-diag: ...at all six known sites" "0" "0"
+else
+    check "degrade-diag: ...at all six known sites" "0" "1 (found $n_sites)"
+fi
+
+# ---- the remote half -------------------------------------------------------
+# Nothing crosses the ssh boundary except an exit code: the remote script is
+# shipped and run by `bash -s`, so no function defined in the library exists over
+# there. The whole degrade decision for PULL is therefore this mapping, and it
+# rests on the remote script's own contract -- 3 means it refused before freezing
+# anything, 5 means it rolled back and thawed cleanly (a failure in either turns
+# 5 into 7 or 6). Everything else stays exactly as it was.
+rrun() {   # <ssh rc> <degrade> -> "rc|QUIESCE_DEGRADED"
+    local sshrc="$1" deg="$2"
+    ( QUIESCE_DEGRADE="$deg"; QUIESCE_DEGRADED=0; SSH_OPTS=()
+      ssh() { return "$sshrc"; }
+      log() { :; }
+      quiesce_remote_run u h auto "" 120 tank/a -- tank/a@s1 >/dev/null 2>&1; rc=$?
+      printf '%s|%s' "$rc" "$QUIESCE_DEGRADED" )
+}
+for rc in 0 3 4 5 6 7 255; do
+    case "$rc" in 255) want="1|0" ;; *) want="$rc|0" ;; esac
+    check "degrade-remote: without ,degrade rc $rc is unchanged" "$want" "$(rrun "$rc" 0)"
+done
+check "degrade-remote: rc 3 (refused before freezing) becomes 8" "8|1" "$(rrun 3 1)"
+check "degrade-remote: rc 5 (rolled back and thawed) becomes 8"  "8|1" "$(rrun 5 1)"
+check "degrade-remote: rc 0 stays 0"                             "0|0" "$(rrun 0 1)"
+# The four that must NOT degrade, each for its own reason: 4 is `zfs snapshot`
+# itself failing (the crash snapshot would use the same command), 6 is a guest
+# still frozen, 7 is a rollback that left snapshots behind, and 255 is ssh --
+# a link failure, which must never be reported as a quiesce policy decision.
+check "degrade-remote: rc 4 (the snapshot itself failed) stays fatal" "4|0" "$(rrun 4 1)"
+check "degrade-remote: rc 6 (a guest is still frozen) stays fatal"    "6|0" "$(rrun 6 1)"
+check "degrade-remote: rc 7 (rollback incomplete) stays fatal"        "7|0" "$(rrun 7 1)"
+check "degrade-remote: an ssh failure is not a degradable quiesce failure" "1|0" "$(rrun 255 1)"
+
+# ---- what the engines do with it -------------------------------------------
+# The end-to-end (a degraded run that transfers and lands) needs real pools and
+# is a LIVE obligation, not a suite. What is checked here is that both engines
+# reach the same three decisions from the same helper, since a drift between
+# push and pull is the failure mode this project has already paid for twice.
+for eng in snapsend.sh snapget.sh; do
+    grep -q 'quiesce_parse_mode "$QUIESCE" || exit 1' "$REPO/$eng" \
+        && check "degrade-engine: $eng parses -q through the shared parser" "0" "0" \
+        || check "degrade-engine: $eng parses -q through the shared parser" "0" "1"
+    grep -q 'SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"' "$REPO/$eng" \
+        && check "degrade-engine: $eng names the set through the shared builder" "0" "0" \
+        || check "degrade-engine: $eng names the set through the shared builder" "0" "1"
+    grep -q 'exit 8' "$REPO/$eng" \
+        && check "degrade-engine: $eng has a distinct final status for it" "0" "0" \
+        || check "degrade-engine: $eng has a distinct final status for it" "0" "1"
+    # Contract condition 6: the degraded exit is decided AFTER the transfer, on
+    # the otherwise-clean path only, so a real transfer error outranks it. If
+    # this ever moved above the FAILED_DATASETS test, a failed run would report
+    # 8 -- "degraded but delivered" -- while nothing was delivered.
+    deg_line=$(grep -n 'QUIESCE_DEGRADED:-0' "$REPO/$eng" | tail -1 | cut -d: -f1)
+    fail_line=$(grep -n 'if \[ ${#FAILED_DATASETS\[@\]} -gt 0 \]' "$REPO/$eng" | tail -1 | cut -d: -f1)
+    if [ -n "$deg_line" ] && [ -n "$fail_line" ] && [ "$deg_line" -gt "$fail_line" ]; then
+        check "degrade-engine: $eng decides rc 8 after the transfer verdict" "0" "0"
+    else
+        check "degrade-engine: $eng decides rc 8 after the transfer verdict" "0" "1 (deg=$deg_line fail=$fail_line)"
+    fi
+done
+
+# ============================================================================
+# ,degrade ACROSS THE SSH BOUNDARY -- the classifier composed with the mapping.
+#
+# The gap this closes, found in review on 428feb4f: the mapping tests above stub
+# a ready-made rc (`ssh() { return 5; }`) and so prove only that 5 becomes 8.
+# They never ask WHAT BECOMES A FIVE. The remote script collapsed every prep
+# failure into one code, so a foreign freeze and an impossible mode -- both kept
+# fatal on the PUSH path -- arrived as 5 and were degraded on PULL.
+#
+# So each case below RUNS the real remote classifier, takes the code it actually
+# produced, and carries THAT through the local mapping. Nothing is assumed about
+# which number a case produces; the number is measured and then composed.
+# ============================================================================
+
+# The sudo stub is redefined several times above; this is the one these cases
+# use, and it adds one knob the others did not need: a status read that FAILS,
+# as opposed to one that answers "absent".
+cat > "$RQ_D/bin/sudo" <<'STUB'
+#!/bin/bash
+echo "sudo $*" >> "$TRACE"
+[ "$1" = "-n" ] && shift
+shift
+st="${QSTATE:-/tmp/qstate}.${2:-x}"
+case "${1:-}" in
+  status) [ $# -eq 1 ] && { echo "OK account=peer"; exit 0; }
+          # The privilege probe above still succeeds -- what fails is reading a
+          # PARTICULAR guest, which is what a whitelist miss looks like.
+          [ -n "${QSTATUS_FAIL:-}" ] && exit 1
+          k="${QKIND:-qemu}"; [ "$2" = 200 ] && k=lxc
+          f="${QFROZEN:-}"
+          if [ -z "$f" ]; then f=no; [ -e "$st" ] && f=yes; fi
+          echo "id=$2 kind=$k running=yes frozen=$f"; exit 0 ;;
+  freeze) [ "${QFREEZE:-0}" = 0 ] && : > "$st"; exit "${QFREEZE:-0}" ;;
+  thaw)   [ "${QTHAW:-0}" = 0 ] && rm -f "$st"; exit "${QTHAW:-0}" ;;
+esac
+exit 1
+STUB
+chmod +x "$RQ_D/bin/sudo"
+
+# --- foreign freeze: fatal, and STAYS fatal through the mapping -------------
+rq_reset 'exit 0'
+out=$(QFROZEN=yes rq_run2); rc_foreign=$?
+check "pull-class: a foreign freeze takes no snapshot"        "no"   "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says FATAL (9)"      "9"    "$rc_foreign"
+check "pull-class: ...and ,degrade does NOT rescue it"        "9|0"  "$(rrun "$rc_foreign" 1)"
+check "pull-class: ...and without ,degrade it is unchanged"   "9|0"  "$(rrun "$rc_foreign" 0)"
+
+# --- impossible mode for the guest kind: same class -------------------------
+rq_reset 'exit 0'
+out=$(QKIND=lxc rq_run2 agent); rc_mode=$?
+check "pull-class: agent on a container takes no snapshot"    "no"   "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says FATAL (9)"      "9"    "$rc_mode"
+check "pull-class: ...and ,degrade does NOT rescue it"        "9|0"  "$(rrun "$rc_mode" 1)"
+
+# --- a real freeze failure: this one IS what ,degrade is for -----------------
+# The positive half. Without it the three assertions above would also pass
+# against a mapping that had simply stopped degrading anything at all.
+rq_reset 'exit 0'
+out=$(QFREEZE=1 rq_run2); rc_freeze=$?
+check "pull-class: a freeze that did not take takes no snapshot" "no"  "$(rq_snapshotted)"
+check "pull-class: ...and the classifier says DEGRADABLE (5)"    "5"   "$rc_freeze"
+check "pull-class: ...and ,degrade DOES rescue it"               "8|1" "$(rrun "$rc_freeze" 1)"
+check "pull-class: ...and without ,degrade it stays a refusal"   "5|0" "$(rrun "$rc_freeze" 0)"
+
+# --- a status that cannot be READ is not "no guest here" --------------------
+# The false-success branch: gq_status's exit code was discarded, an empty reply
+# gave an empty kind, and the `*` arm reported the guest absent and returned
+# SUCCESS -- so a helper that could not answer looked exactly like a host with
+# nothing to freeze, and the run called itself quiesced.
+rq_reset 'exit 0'
+out=$(QSTATUS_FAIL=1 rq_run2); rc_stat=$?
+check "pull-class: an unreadable guest status takes no snapshot" "no" "$(rq_snapshotted)"
+if [ "$rc_stat" -eq 0 ]; then
+    check "pull-class: ...and the run does NOT report success" "nonzero" "0"
+else
+    check "pull-class: ...and the run does NOT report success" "nonzero" "nonzero"
+fi
+case "$out" in
+    *"could not determine the state of guest"*)
+        check "pull-class: ...and says the status was unreadable, not 'no guest'" "y" "y" ;;
+    *)  check "pull-class: ...and says the status was unreadable, not 'no guest'" "y" "n ($out)" ;;
+esac
+case "$out" in
+    *"no guest 100 on the source host"*)
+        check "pull-class: ...and does NOT claim the guest is absent" "y" "n ($out)" ;;
+    *)  check "pull-class: ...and does NOT claim the guest is absent" "y" "y" ;;
+esac
+# It is a runtime failure, so it belongs to the degradable class -- the same
+# answer the local path gives for the same cause.
+check "pull-class: ...and it is DEGRADABLE (5), like its local twin" "5" "$rc_stat"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

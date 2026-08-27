@@ -57,6 +57,7 @@ set -uo pipefail
 #   clean-relationships.sh                      audit, read-only (default)
 #   clean-relationships.sh --purge=NAME|LABEL|ADDR --yes
 #   clean-relationships.sh --purge-orphans --yes
+#   clean-relationships.sh --release-hold=SNAPSHOT --yes
 #
 # Exit: 0 audit clean or purge done, 1 error, 2 usage, 3 orphans found (audit)
 # ------------------------------------------------------------------------------
@@ -75,6 +76,11 @@ TOMBSTONE_DIR="${TOMBSTONE_DIR:-/var/lib/zfs-snapshot-all/removed}"
 # result depend on the runner -- the exact flake test/pairgate already
 # documents, where a suite passed only on hosts that happened to lack `logger`.
 ZFS_BIN="${ZFS_BIN:-zfs}"
+# DUPLICATED from lib-zfs-snap.sh, which this script does not source -- the same
+# duplication delsnaps.sh already carries, and covered by the same `hold-tag`
+# contract in test/deps.conf. It is the tag OUR transfers place; pvesr and vzdump
+# place holds of their own and those are none of this tool's business.
+HOLD_TAG="${HOLD_TAG:-zfssnapall_inflight}"
 PAIRING_DIR="${PAIRING_DIR:-/root/scripts/pairing}"
 HOME_ROOT="${HOME_ROOT:-/home}"
 DEPLOY="${DEPLOY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy.sh}"
@@ -92,12 +98,14 @@ usage() {
 PURGE_TARGET=""
 PURGE_ORPHANS=0
 ASSUME_YES=0
+RELEASE_HOLD=""
 for a in "$@"; do
     case "$a" in
         -V|--version)   echo "$VERSION"; exit 0 ;;
         -h|--help)      usage 0 ;;
         --purge=*)      PURGE_TARGET="${a#*=}" ;;
         --purge-orphans) PURGE_ORPHANS=1 ;;
+        --release-hold=*) RELEASE_HOLD="${a#*=}" ;;
         --yes|-y)       ASSUME_YES=1 ;;
         *) echo "unknown option: $a" >&2; usage 2 ;;
     esac
@@ -282,11 +290,48 @@ _artefacts_raw() {
     # relationship, and once clients/lab4-direct.conf was gone nothing on the
     # host linked that dataset to anything at all. Removing data is a separate
     # decision with a separate blast radius, so this tool names it and stops.
-    for d in $(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
-                   "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
-               | cut -d= -f2- | tr -d "'\"" | tr ',' ' '); do
-        [ -n "$d" ] && echo "data	$d"
-    done
+    #
+    # THE SEPARATOR IS AN ESCAPED SPACE, and reading it as whitespace corrupts
+    # the name. These records are `%q`-quoted because they are sourced as root
+    # elsewhere, so a list of two datasets is stored as
+    #
+    #     MANAGED_DATASETS=hdd/a/tree\ hdd/a/flat
+    #
+    # The first version split on whitespace and reported `hdd/a/tree\` -- with a
+    # trailing backslash, which is not a legal ZFS name and cannot be pasted into
+    # the `zfs destroy` this line exists to hand the operator. Found on pve1,
+    # 2026-08-26.
+    #
+    # Decoded WITHOUT eval or source: this file is data and stays data. That is
+    # safe here for a reason worth stating rather than assuming -- a ZFS dataset
+    # name may contain only [A-Za-z0-9_.:/-] (measured: `zfs create hdd/x,y` is
+    # refused, "invalid character ','"), so neither a space nor a comma can occur
+    # INSIDE a name, and `\ ` in this field can only ever be the separator.
+    # Any OTHER backslash means the value is not what this code thinks it is, so
+    # it is reported as suspect instead of being quietly half-decoded.
+    local d exists
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        case "$d" in
+            *\\*) printf 'data\t%s   (SUSPECT: this name still contains a backslash after decoding -- do not paste it into a destroy)\n' "$d"
+                  continue ;;
+        esac
+        # F2: SAY whether it is still there. The audit used to print these
+        # straight from the record without asking ZFS ("costs no zfs call"),
+        # while the purge checked and said "ALREADY GONE". So the destructive
+        # verb verified and the read-only one did not -- and combined with the
+        # mangling above, an operator could not tell "this is gone" from "this
+        # name is corrupted" from "this dataset is still here".
+        # The VALUE only. Whether it still exists is printed by the reporter --
+        # this field is also read by the PURGE, which feeds it to `zfs list`, so
+        # a label appended here becomes part of a dataset name downstream. The
+        # first cut did exactly that and made the purge report an existing
+        # dataset as ALREADY GONE.
+        printf 'data	%s
+' "$d"
+    done < <(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
+                 "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
+             | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ',' '\n')
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
@@ -350,6 +395,33 @@ report() {
         echo "      $reason"
         if [ -n "$art" ]; then
             printf '%s\n' "$art" | while IFS=$'\t' read -r fam path; do
+                # F2: SAY whether the data is still there. The audit printed
+                # these straight from the record without asking ZFS, while the
+                # purge checked -- the destructive verb verified and the
+                # read-only one did not.
+                #
+                # THREE states, not two (reviewer, 2026-08-26). A missing `zfs`
+                # must never read as "it is there": an unlabelled line looks
+                # like a healthy one, and this report is what an operator acts
+                # on. rc 1 from `zfs list` is the dataset's absence, which it
+                # states in those words; any OTHER failure is the question not
+                # having been answered, and says so.
+                if [ "$fam" = data ]; then
+                    case "$path" in
+                        *SUSPECT*) : ;;   # already carries its own warning
+                        *)
+                            if ! command -v "$ZFS_BIN" >/dev/null 2>&1; then
+                                path="$path   (UNVERIFIABLE -- no $ZFS_BIN on this host)"
+                            else
+                                "$ZFS_BIN" list -H -o name -- "$path" >/dev/null 2>&1
+                                case $? in
+                                    0) path="$path   (PRESENT)" ;;
+                                    1) path="$path   (ALREADY GONE)" ;;
+                                    *) path="$path   (UNVERIFIABLE -- $ZFS_BIN could not answer)" ;;
+                                esac
+                            fi ;;
+                    esac
+                fi
                 printf '      %-9s %s\n' "$fam" "$path"
             done
         else
@@ -374,6 +446,247 @@ report() {
 # touches it, it is read-only, and its absence is a skip rather than an error:
 # the rest of the tool must keep working on a host where zfs is broken, which
 # is a state this tool is specifically for.
+# A HOLD OUTLIVES THE RELATIONSHIP THAT PLACED IT.
+#
+# The engine keeps `zfssnapall_inflight` deliberately when a transfer dies with a
+# resume token: the next run needs that exact snapshot. That is correct. What
+# nothing noticed until 2026-08-26 is the case where the next run is never coming
+# -- the relationship was torn down, the job removed, the lab dismantled.
+#
+# Measured that day on pve9: a hold placed 2026-08-22 by a run that died was still
+# there four days later, with zero jobs on the host, and `zfs destroy` refused with
+#
+#     cannot destroy snapshot ...: dataset is busy
+#
+# which names neither the hold nor the tag. Retention hits the same wall silently
+# on every run, and the pool grows.
+#
+# "PROBABLY LEAKED" IS NOT GOOD ENOUGH (reviewer, 2026-08-26). Age proves nothing:
+# a hold placed a second ago and one placed last week are equally innocent if a
+# transfer owns them. So a hold is called ORPHANED only against evidence, and the
+# evidence is the state the engine itself writes down:
+#
+#   * a RUNNING engine  -- any snapsend/snapget on this host could own any hold,
+#     and nothing here can tell which. One running process makes every verdict
+#     unproven, which is the fail-closed direction;
+#   * an IN-FLIGHT RECORD naming this snapshot -- `<engine>.inflight-snap.<key>`
+#     in the lock directory, written before the transfer and cleared after. This
+#     is the direct claim, and it is per SNAPSHOT, so it convicts precisely;
+#   * a RESUME TOKEN -- and this is the honest limit. The token is a property of
+#     the RECEIVING dataset, which for a pull relationship lives on another host
+#     this tool does not talk to. What can be checked is the local side; a local
+#     token anywhere means some transfer intends to continue, and that is enough
+#     to withhold the verdict. A remote one cannot be seen at all, and the report
+#     says so rather than implying the check was complete.
+#
+# Scanned in the lock directories the engines actually use: /var/run for root,
+# $HOME/run for a delegated account (lib-zfs-snap.sh's ZFS_SNAP_DEFAULT_LOCKDIR).
+HOLD_PS_CMD="${HOLD_PS_CMD:-ps -eo args=}"
+HOLD_FACTS_LOADED=0
+HOLD_ENGINE_RUNNING=0
+HOLD_LOCAL_RESUME=0
+HOLD_INFLIGHT_CLAIMS=""
+hold_load_facts() {
+    [ "$HOLD_FACTS_LOADED" -eq 1 ] && return 0
+    HOLD_FACTS_LOADED=1
+    # The process table, through a named command so a suite can pin it. Left as
+    # the real `ps` by default; overridable because otherwise this check's answer
+    # depends on whether a transfer happens to be running on the machine running
+    # the tests -- the exact flake test/pairgate already documents.
+    #
+    # A bracketed first character so the pattern cannot match the grep that is
+    # carrying it -- both are in the process table at the same moment.
+    if $HOLD_PS_CMD 2>/dev/null | grep -qE '[s]napsend\.sh|[s]napget\.sh|[z]fs send'; then
+        HOLD_ENGINE_RUNNING=1
+    fi
+    local d f
+    for d in /var/run "$HOME_ROOT"/*/run; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.inflight-snap.*; do
+            [ -f "$f" ] || continue
+            HOLD_INFLIGHT_CLAIMS="$HOLD_INFLIGHT_CLAIMS
+$(cat "$f" 2>/dev/null)"
+        done
+    done
+    if command -v "$ZFS_BIN" >/dev/null 2>&1; then
+        if "$ZFS_BIN" get -H -o value receive_resume_token 2>/dev/null | grep -qv '^-$'; then
+            HOLD_LOCAL_RESUME=1
+        fi
+    fi
+    return 0
+}
+
+# -> prints "ORPHANED" | "IN-USE <why>" | "UNPROVEN <why>"
+hold_verdict() {   # <snapshot>
+    local snap="$1"
+    hold_load_facts
+    if printf '%s\n' "$HOLD_INFLIGHT_CLAIMS" | grep -qxF -- "$snap"; then
+        printf 'IN-USE inflight a transfer recorded this exact snapshot as in flight'
+        return 0
+    fi
+    if [ "$HOLD_ENGINE_RUNNING" -eq 1 ]; then
+        printf 'UNPROVEN engine a transfer is running on this host and may own this hold'
+        return 0
+    fi
+    if [ "$HOLD_LOCAL_RESUME" -eq 1 ]; then
+        printf 'UNPROVEN localtoken a dataset here carries a receive_resume_token, so some transfer means to continue'
+        return 0
+    fi
+    # THE RECEIVING SIDE CANNOT BE EXCLUDED FROM HERE, and that is decisive.
+    #
+    # Found in review, 2026-08-26, and it is a P1 in the first cut of this:
+    # `/var/run` is NOT persistent. Reboot the source and the in-flight record
+    # is gone -- while the ZFS hold and the resume token on the REMOTE receiver
+    # both survive. The first version then saw no process, no local token and no
+    # record, called that ORPHANED, and released the snapshot the remote resume
+    # still needed.
+    #
+    # I had already WRITTEN that the remote side is invisible from here, and
+    # ruled on it anyway. Stating a boundary does not make a decision across it
+    # safe. Absence of a file in a tmpfs is absence of evidence, not evidence of
+    # absence.
+    #
+    # So ORPHANED is not concluded automatically. Everything this host can see
+    # has been checked and none of it convicts -- which is a different sentence
+    # from 'nothing owns this hold', and the report says the different sentence.
+    # Releasing is left to --release-hold, where a human supplies the judgement
+    # this code cannot: they know whether that relationship still exists.
+    printf 'UNPROVEN remote nothing HERE claims it, but the receiver is not observable from this host (a pull target keeps its resume token on the far side, and /var/run does not survive a reboot)'
+    return 0
+}
+
+# Every hold of OURS on this host, with its verdict. Returns 1 when at least one
+# is ORPHANED -- that is the finding; IN-USE and UNPROVEN are not.
+#
+# One `zfs get` finds every held snapshot; `zfs holds` runs only for those, so a
+# healthy host costs one call.
+#
+# NOT released here. This is the audit.
+report_leaked_holds() {
+    command -v "$ZFS_BIN" >/dev/null 2>&1 || return 0
+    local snap refs shown=0 v findings=0
+    while IFS="$(printf '\t')" read -r snap refs; do
+        [ -n "$snap" ] || continue
+        case "$refs" in ''|0|*[!0-9]*) continue ;; esac
+        # OURS only. A pvesr hold on a replicated dataset is load-bearing for
+        # somebody else's replication, and this project already measured what
+        # touching one costs.
+        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" || continue
+        v="$(hold_verdict "$snap")"
+        if [ "$shown" -eq 0 ]; then
+            echo
+            echo "  HELD SNAPSHOTS -- ours ('$HOLD_TAG')"
+            echo "      A hold is placed by a transfer and released when it finishes. One"
+            echo "      that outlived its run blocks 'zfs destroy' with 'dataset is busy'"
+            echo "      -- naming neither the hold nor the tag -- and silently fails"
+            echo "      retention on that dataset every run."
+            shown=1
+        fi
+        printf '      %-8s %s\n' "${v%% *}" "$snap"
+        case "$v" in
+            IN-USE*)
+                # Healthy: a transfer running right now says this is its
+                # snapshot. Nothing to do and nothing to report as wrong.
+                printf '               ^ %s
+' "${v#* * }" ;;
+            *)
+                # Everything else is a finding. Not because we know it is
+                # abandoned -- since the review we deliberately do not claim
+                # that -- but because a hold nothing running claims still blocks
+                # `zfs destroy` and still fails retention on that dataset every
+                # run, silently. The operator has to know, whoever owns it.
+                findings=$((findings + 1))
+                printf '               ^ %s
+' "${v#* }"
+                printf '               %s --release-hold=%s --yes
+' "$0" "$snap" ;;
+        esac
+    done < <("$ZFS_BIN" get -H -o name,value -t snapshot userrefs 2>/dev/null)
+    if [ "$shown" -eq 1 ]; then
+        echo "      A resume token on a REMOTE target cannot be seen from here, so a"
+        echo "      pull relationship's continuation is outside this evidence."
+        echo "      None of these is released automatically. If you know the"
+        echo "      relationship is gone, name the one you mean:"
+        echo "        $0 --release-hold=<snapshot> --yes"
+    fi
+    [ "$findings" -gt 0 ] && return 1
+    return 0
+}
+
+# ONE snapshot, named on the command line, and that is the whole point.
+#
+# The first cut let --purge-orphans release everything it had called ORPHANED.
+# Review killed that, correctly: this host cannot see a pull relationship's
+# receiver, so it cannot know whether a resume token still needs the snapshot,
+# and /var/run losing the in-flight record to a reboot is not evidence that
+# nothing does.
+#
+# What remains is a verb that supplies the missing judgement from the only place
+# it exists -- the operator, who knows whether that relationship is still alive.
+# They name the exact snapshot; nothing is inferred, nothing is swept.
+#
+# Still refused if anything THIS host can see says the hold is in use. The human
+# is being asked about the far side, not about facts the machine already holds.
+release_named_hold() {   # <snapshot>
+    local snap="$1" v
+    command -v "$ZFS_BIN" >/dev/null 2>&1 || die "no $ZFS_BIN on this host -- cannot release anything"
+    "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" \
+        || die "'$snap' does not carry a '$HOLD_TAG' hold -- nothing here to release. 'zfs holds $snap' will say what it does carry, and a hold that is not ours is not this tool's to touch."
+    # The REASON CODE, not the wording. hold_verdict prints
+    # "<class> <code> <reason>", and only ONE code may be overridden by a human:
+    # `remote`, the case where everything this host can see is clean and the only
+    # unknown is the far side. That is the judgement the operator has and the
+    # code does not.
+    #
+    # The other three are LOCAL facts, and the commit that introduced this verb
+    # said so in its own message -- while the gate only refused IN-USE, so
+    # `--release-hold --yes` would still have released a snapshot with a running
+    # transfer or a local resume token. Found in review, 2026-08-26.
+    v="$(hold_verdict "$snap")"
+    local vcode="${v#* }"; vcode="${vcode%% *}"
+    case "$vcode" in
+        remote) ;;
+        inflight)   die "refusing: a transfer recorded '$snap' as in flight. Releasing now would pull the snapshot out from under a transfer that is still running -- this is not the far side, it is this host saying so." ;;
+        engine)     die "refusing: a snapsend/snapget/zfs send is running on this host and may own this hold. Wait for it, or confirm it is not this snapshot's; --release-hold answers for the FAR side, not for facts visible here." ;;
+        localtoken) die "refusing: a dataset on this host carries a receive_resume_token, so some transfer means to continue. Clear or complete it first ('zfs receive -A <target>' abandons one); --release-hold does not override local evidence." ;;
+        *)          die "refusing: unrecognised verdict '$v' for '$snap' -- not releasing on an answer this code does not understand." ;;
+    esac
+    if [ "$ASSUME_YES" -ne 1 ]; then
+        warn "would release $HOLD_TAG on $snap -- re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+    if "$ZFS_BIN" release "$HOLD_TAG" "$snap" 2>/dev/null; then
+        log "released $HOLD_TAG on $snap"
+        return 0
+    fi
+    warn "could not release $HOLD_TAG on $snap -- it is still held; 'zfs holds $snap' will say who by"
+    return 1
+}
+
+# Kept, and now unreachable by design: hold_verdict no longer concludes ORPHANED,
+# so this releases nothing. Left in place rather than deleted because the day the
+# receiver becomes checkable -- a relational lookup of the real target, which is
+# the reviewer's other permitted route -- this is where that answer plugs in.
+release_orphaned_holds() {
+    command -v "$ZFS_BIN" >/dev/null 2>&1 || return 0
+    local snap refs v done_any=0
+    while IFS="$(printf '\t')" read -r snap refs; do
+        [ -n "$snap" ] || continue
+        case "$refs" in ''|0|*[!0-9]*) continue ;; esac
+        "$ZFS_BIN" holds -H "$snap" 2>/dev/null | cut -f2 | grep -qxF "$HOLD_TAG" || continue
+        v="$(hold_verdict "$snap")"
+        [ "${v%% *}" = ORPHANED ] || { log "  hold on $snap NOT released -- ${v#* }"; continue; }
+        if "$ZFS_BIN" release "$HOLD_TAG" "$snap" 2>/dev/null; then
+            log "  released $HOLD_TAG on $snap"
+        else
+            warn "  could not release $HOLD_TAG on $snap -- it is still held; 'zfs holds $snap' will say who by"
+        fi
+        done_any=1
+    done < <("$ZFS_BIN" get -H -o name,value -t snapshot userrefs 2>/dev/null)
+    [ "$done_any" -eq 1 ] || log "  no orphaned holds to release"
+    return 0
+}
+
 report_orphaned_data() {
     [ -d "$TOMBSTONE_DIR" ] || return 0
     local f ds line name shown=0
@@ -648,6 +961,12 @@ purge_one() {
 
 # ------------------------------------------------------------------------------
 main() {
+    # Named, single, and first: it answers a question about ONE snapshot and has
+    # nothing to do with the relationship inventory below.
+    if [ -n "$RELEASE_HOLD" ]; then
+        release_named_hold "$RELEASE_HOLD"
+        return $?
+    fi
     discover
 
     # Production safety: every crontab on this host, hashed before and after.
@@ -663,11 +982,22 @@ main() {
     echo "== relationship traces on $(hostname) =="
     report
     report_orphaned_data
+    local held=0
+    report_leaked_holds || held=1
 
     if [ "$PURGING" -eq 0 ]; then
         if [ "${#ORPHANS[@]}" -gt 0 ]; then
             log "${#ORPHANS[@]} orphan(s): ${ORPHANS[*]}"
             log "remove them with: $0 --purge-orphans --yes"
+            return 3
+        fi
+        if [ "$held" -eq 1 ]; then
+            # Not folded into the orphan count: a held snapshot is a different
+            # kind of finding and needs a different action. But it must not be
+            # reported under a clean exit either -- "nothing orphaned" while a
+            # dataset silently cannot be pruned is the false all-clear this tool
+            # exists to prevent.
+            log "no orphaned relationships, but held snapshots were found (above) -- retention on those datasets is failing silently"
             return 3
         fi
         log "nothing orphaned -- every trace on this host belongs to a live relationship"
@@ -677,7 +1007,21 @@ main() {
     local -a targets=()
     if [ "$PURGE_ORPHANS" -eq 1 ]; then
         targets=("${ORPHANS[@]}")
-        [ "${#targets[@]}" -gt 0 ] || { log "no orphans to purge"; return 0; }
+        # NOT a plain early return. A host can have zero orphaned relationships
+        # and still be carrying a leaked hold -- that is exactly the pve9 case
+        # this whole check came from -- and returning here would leave the only
+        # verb that can release it unreachable. Found by its own test.
+        if [ "${#targets[@]}" -eq 0 ]; then
+            log "no orphaned relationships to purge"
+            echo
+            log "orphaned holds ('$HOLD_TAG'):"
+            # NOT released here. This host cannot see a pull relationship's receiver,
+            # so it cannot know whether a resume token still needs the snapshot --
+            # and /var/run losing the in-flight record to a reboot proves nothing.
+            # They are listed; --release-hold=<snapshot> is where a human decides.
+            report_leaked_holds || :
+            return 0
+        fi
     else
         targets=("$PURGE_TARGET")
     fi
@@ -689,6 +1033,19 @@ main() {
 
     local t rc=0
     for t in "${targets[@]}"; do purge_one "$t" || rc=1; done
+
+    # A SEPARATE, NAMED STEP. Holds are not keyed on a relationship -- the leak
+    # outlives it -- so this is not part of purging any one of them; it is the
+    # explicit path the reviewer required, and it runs only here, only under
+    # --yes, and only on holds proven ORPHANED. Everything else is named and
+    # left alone.
+    echo
+    log "orphaned holds ('$HOLD_TAG'):"
+    # NOT released here. This host cannot see a pull relationship's receiver,
+    # so it cannot know whether a resume token still needs the snapshot --
+    # and /var/run losing the in-flight record to a reboot proves nothing.
+    # They are listed; --release-hold=<snapshot> is where a human decides.
+    report_leaked_holds || :
 
     echo
     log "crontab check (a relationship cleanup must not have touched these):"

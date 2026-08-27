@@ -107,6 +107,50 @@ env_out="$(gen "$pathcfg")"
 check "env out-ranks config"      "$env_out" "/REPO/snapsend.sh"
 rm -f "$pathcfg"
 
+# ---- the host settings file is a fallback, never a widening ----------------
+#
+# Reviewer contract, 2026-08-26: `settings.ini` supplies `quiesce` ONLY when the
+# tier named none. The second check is the one that matters -- a host default
+# that could turn an explicit fail-closed `auto` into `auto,degrade` would mean
+# an operator who wrote the safe value silently got the permissive one, which is
+# the exact failure `,degrade` is designed not to be.
+setcfg="$(mktemp)"; setini="$(mktemp)"
+cat > "$setini" <<'EOF'
+# a host that has decided crash-consistent beats nothing
+quiesce = auto,degrade
+EOF
+cat > "$setcfg" <<'EOF'
+[defaults]
+	host_label = t
+	dst        = backup/t
+[template:hourly]
+	send_schedule = 0 * * * *
+	prefix        = a_
+[dataset:tank/silent]
+	use_template = hourly
+	notify       = silent
+[dataset:tank/explicit]
+	use_template = hourly
+	quiesce      = auto
+	notify       = explicit
+EOF
+set_out="$(SETTINGS_FILE="$setini" gen "$setcfg")"
+silent_line="$(printf '%s\n' "$set_out" | grep -F '(silent)' | head -1)"
+explicit_line="$(printf '%s\n' "$set_out" | grep -F '(explicit)' | head -1)"
+check "settings fallback fills a silent tier"     "$silent_line"   "-q auto,degrade"
+check "settings does NOT widen an explicit auto"  "$explicit_line" "-q auto \""
+# ...and the negative control for the fallback itself: with no settings file the
+# silent tier must stay silent, or the first check above would pass against a
+# gen-cron that always emitted the qualifier.
+nofile_out="$(SETTINGS_FILE=/nonexistent/settings.ini gen "$setcfg")"
+nofile_line="$(printf '%s\n' "$nofile_out" | grep -F '(silent)' | head -1)"
+if printf '%s' "$nofile_line" | grep -qF -- '-q '; then
+    echo "FAIL paths/settings absent leaves the tier unquiesced"; printf '  %s\n' "$nofile_line" | head -1; fail=$((fail+1))
+else
+    echo "PASS paths/settings absent leaves the tier unquiesced"; pass=$((pass+1))
+fi
+rm -f "$setcfg" "$setini"
+
 # ---- allow-list vs the lookups in the code ----
 # Unknown fields are now rejected, which turns "add a field, forget the
 # allow-list" into a config that used to work and suddenly does not. This is

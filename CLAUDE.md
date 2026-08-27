@@ -34,7 +34,9 @@ While it remains active:
 3. Create or update `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md` with the implementation evidence.
 4. Address one logical finding per commit whenever findings can be separated safely.
 5. Add regression tests that fail on the reviewed base and pass after the fix.
-6. Run the impact graph and all available required suites before push.
+6. Before push: run `./test/impact.sh --verify` and, of the suites it lists, only
+   those the change directly exercises -- the ones you edited, or whose subject
+   you changed. Push and let CI run the rest. See "Which executor" below.
 7. Do not mark findings `CLOSED`; the reviewer owns technical closure.
 8. Never force-push or rewrite a published direct-main commit. Correct defects with a new forward commit.
 
@@ -72,8 +74,43 @@ A disagreement is valid. State it precisely and provide code, ZFS/OpenSSH docume
 - Treat config, manifest, archive, hostname, dataset, and remote values as data. Do not execute them with `source`, `eval`, or equivalent mechanisms.
 - Do not weaken host-key checking, delegated-account isolation, destructive-operation guards, or Proxmox-reserved-snapshot protections as a shortcut.
 - Do not use `test/run.sh --bless` until the output diff has been reviewed as an intentional contract change.
-- Run `./test/impact.sh` against the actual diff and report every required suite and manual obligation.
+- Run `./test/impact.sh` against the actual diff to LIST every required suite and
+  manual obligation, and report that list. Listing is not running.
 - Where the environment cannot run a required ZFS, remote-host, delegated-account, or destructive test, say so explicitly and leave the finding `IMPLEMENTED`, not `CLOSED`.
+
+## Which executor
+
+Owner direction, 2026-08-26: **stop stalling the project on test machinery.**
+Three executors, and the choice is not a matter of taste.
+
+| executor | for | cost here |
+|---|---|---|
+| **targeted local check** | pure-text logic; the discriminator for the thing being debugged | seconds |
+| **a live host** (pve9 and the other lab machines) | anything bash-real or ZFS-real | seconds -- native bash, real `flock`/`logger`/`zfs` |
+| **CI** | the whole battery | ~1-2 min, in parallel, for free |
+
+**This Windows box is not on that list for full suites.** One suite costs 13-25
+minutes here against seconds on a runner (`test/ci-suites.sh` says so in its own
+header), and it also LIES: `localbackup` gave 56/1 on Git Bash while CI was fully
+green on the same SHA. A serial local battery buys nothing and blocks the session
+for the duration.
+
+So:
+
+- run locally only a suite you **edited**, or whose subject you changed -- not
+  running a test you just wrote is its own defect;
+- everything else: push, and read CI once. `./test/gh-api.sh GET
+  "actions/runs?per_page=6"`, compare `head_sha`, move on;
+- **never block on the queue.** If GitHub has not scheduled the run, say so and
+  keep working. A red check is information; a queued check is not;
+- `./test/impact.sh --verify` / `--refreeze` / `--refresh-status` are NOT suite
+  runs. They take seconds and they are the freeze and status-digest gates. Keep
+  them;
+- when a negative control needs the same suite three times, that is a signal the
+  suite needs a section selector, not a signal to run it three times.
+
+Reporting rule: report on completion, not per iteration. One message with the
+result, not a running commentary on which suite is at which line.
 
 ## Project status document
 

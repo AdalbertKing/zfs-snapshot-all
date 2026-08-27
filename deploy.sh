@@ -3022,6 +3022,29 @@ if [ "$RESUME_MODE" -eq 1 ]; then
     exit $?
 fi
 
+# SAME RULE, and the reviewer's F4 decision of 2026-08-26: committing a scope is
+# a decision about PERMISSIONS. It has no business pulling the repo, rewriting
+# notify-fail.sh or installing cron lines -- and until this moved it did all
+# three, because the dispatch sat after Phase 7, near the foot of the file.
+#
+# Measured that day: `deploy.sh --commit-scope=pve9`, run on a PRODUCTION host to
+# answer a permission question, added `0 8 * * * check-pool-capacity.sh` to
+# root's crontab. The line is harmless; an operator being surprised by it is not.
+#
+# Safe this early because do_commit_scope depends on nothing the phases build:
+# it calls do_commit_scope_check (which reads the manifest and the scope file),
+# then `zfs allow`. It needs root and zfs, and both are properties of the host,
+# not of this script's provisioning.
+#
+# NOT changed here, and worth a separate decision: --draft-scope and --leave sit
+# at that same late dispatch and have the same shape -- a scope decision and a
+# teardown, neither of which provisions anything. --join is different: enrolling
+# a host legitimately sets it up.
+if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
+    do_commit_scope "$COMMIT_SCOPE_LABEL"
+    exit 0
+fi
+
 # ------------------------------------------------------------------------------
 log "Phase 1: dependencies"
 # ------------------------------------------------------------------------------
@@ -3172,6 +3195,37 @@ else
 fi
 
 fi   # end of CHECK_ONLY guard for Part 2
+
+# ------------------------------------------------------------------------------
+log "Phase 2a: host settings ($SETTINGS_FILE)"
+# ------------------------------------------------------------------------------
+# settings_get (lib-cron.sh) has read this file since 2026-08-26 and no host had
+# one, so its two keys existed only in the code looking for them. Owner
+# direction, 2026-08-27: the file must exist and must document what a failed
+# freeze now does.
+#
+# Written ONCE. Every line in it is commented, so a fresh file changes nothing
+# about how this host behaves -- it is there to be edited. Never overwritten,
+# because this runs from every deploy and an edited file is the point.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -r "$SETTINGS_FILE" ]; then
+        log "settings present: $SETTINGS_FILE"
+    else
+        warn "no $SETTINGS_FILE -- run without --check-only to write the documented default"
+    fi
+elif settings_write_default "$SETTINGS_FILE"; then
+    log "wrote $SETTINGS_FILE (all keys commented -- built-in defaults in force)"
+else
+    if [ -e "$SETTINGS_FILE" ]; then
+        log "$SETTINGS_FILE already exists -- left exactly as it is"
+        # An unreadable settings file does not fail; settings_get falls back to
+        # the built-in default silently, which is the one failure mode of this
+        # file worth a warning.
+        [ -r "$SETTINGS_FILE" ] || warn "$SETTINGS_FILE is not readable -- the delegated account will silently get built-in defaults instead of what it says"
+    else
+        warn "could not write $SETTINGS_FILE -- built-in defaults stay in force"
+    fi
+fi
 
 # ------------------------------------------------------------------------------
 log "Phase 6: verify the deployment"
@@ -6490,10 +6544,8 @@ if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
     do_draft_scope "$DRAFT_SCOPE_LABEL"
     exit 0
 fi
-if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
-    do_commit_scope "$COMMIT_SCOPE_LABEL"
-    exit 0
-fi
+# --commit-scope is NOT dispatched here any more; it runs before Phase 1, beside
+# --pause/--resume. See the block there for why.
 if [ "$LEAVE_MODE" -eq 1 ]; then
     do_leave "$LEAVE_LABEL"
     exit 0

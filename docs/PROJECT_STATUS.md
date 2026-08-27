@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 059b72d78a5a835a -->
+<!-- status-covers-digest: ed12da654953810c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1613,6 +1613,747 @@
   `test/linkfields`: **36/0**, z kontrola negatywna wobec poprzedniego
   `gen-cron.sh` wbudowana w kazdy przebieg — musi odrzucic wszystkie trzy pola
   jako nieznane.
+
+- **ETAP PROFILI, krok 3: `default` WYKRYSTALIZOWANY — rodziny zarezerwowane sa
+  trescia profilu, nie kodu (2026-08-25).**
+
+  Cel wlasciciela na faze 1: „profil `default`, ktory dokladnie odwzoruje obecne
+  ustawienie lab", podany do skryptu jawnie, z dowodem, ze lab idzie identycznie.
+
+  Ostatnia rzecza, ktorej w profilu nie bylo, byla lista rodzin zarezerwowanych —
+  literalne `"__replicate_" "vzdump" "__migration__"` z `keep=2` w
+  `ensure_cron_config`. Czyli **jedyna polityka, pod ktora chodzi KAZDA relacja
+  na tej flocie, byla jedyna, ktorej profil nie umial opisac**: „co robi domyslne
+  wdrozenie" odpowiadalo sie grepem po kodzie. Teraz sa w
+  `profiles/<nazwa>/templates.conf`, a kod nie zna zadnej rodziny z nazwy.
+
+  **Dowod fazy 1 na zywym hoscie** (pve9, worktree, host przywrocony do stanu
+  sprzed testu):
+
+  | przebieg | config | crontab |
+  |---|---|---|
+  | bez `--profile` | `02898f51` | `c3d2e41e` |
+  | `--profile=default` | `02898f51` | `c3d2e41e` |
+  | `diff` | **rc=0** | **rc=0** |
+
+  Oba `EXIT=0`, realny seed, cron odczytany zwrotnie, trzy sekcje `[excluded:]`
+  z `keep = 2` — podlogi przyszly z profilu, a nie zniknely.
+
+  **Konsekwencja projektowa, ktora wyszla dopiero z implementacji:** dwa rodzaje
+  sekcji **skladaja sie inaczej**. `[template:]` jest namespace'owany, wiec
+  renderowane pliki wolno **sklejac** — to wlasnie po to namespace istnieje.
+  `[excluded:]` jest wspoldzielony i celowo NIE zmienia nazwy, bo dwa profile
+  mowiace `__replicate_` mowia o tej samej rodzinie; sklejenie dawalo wiec
+  zduplikowana sekcje i `gen-cron` slusznie odmawial. Render rozdzielony na dwa
+  artefakty: szablony zostaja bezpieczne do konkatenacji, wspoldzielone ida
+  osobno do instalatora podlog, ktory dokłada tylko to, czego w configu nie ma.
+  **Regula ogolna: sekcje namespace'owane skladaja sie przez konkatenacje,
+  wspoldzielone przez ZGODNOSC.**
+
+  `default` przestal tez byc szescioma literalami w kodzie — jest jedna nazwana
+  stala `PROFILE_DEFAULT_NAME`. Dlatego „jawny default zachowuje sie jak brak
+  flagi" da sie w ogole asercjonowac, a nie tylko zalozyc.
+
+  **Jeszcze nie zrobione, nazwane wprost:** odmowa, gdy dwa profile deklaruja te
+  sama rodzine z ROZNYM `keep`. Dedup dziala, odmowa nie — a faza 2 czyni to
+  pilnym, bo beda dwa profile na jednym hoscie.
+
+- **KATALOG PROFILI: WIELKOSC LITER = KSZTALT, KOHERENCJA POZA GODZINOWA
+  (2026-08-27).** Regula wlasciciela, w jego slowach: *"male litery w nazwie,
+  czyli nie GFS (...) d30h24 powinny tworzyc 30 szt. daily i 24 szt hourly. Te
+  daily powinny byc coherentne. Gdyby byl D30H24, to bylby GFS."*
+
+  **Co bylo:** `d30h24`, `d7h24` i `d30` tworzyly JEDNA rodzine (`d30`:
+  `automated_daily_`, pozostale: `automated_hourly_`) i przycinaly ja drabina
+  GFS. „Dzienny" snapshot na takim hoscie **nie istnial jako osobny byt** — to
+  byl snapshot godzinowy, ktory licznik postanowil zatrzymac. Dlatego nie dalo
+  sie go zamrozic osobno: zamrozenie dziennego = zamrozenie wszystkich
+  dwudziestu czterech.
+
+  **Co jest:** trzy profile przebudowane na ksztalt `prod` — kazdy tier tworzy
+  wlasna rodzine i przycina wlasna rodzine, bez sekcji `[prune]` i bez `gfs`.
+  Zmierzone na renderze przez PRAWDZIWY `gen-cron.sh`:
+
+  | profil | tworzy | przycina | koherentne |
+  |---|---|---|---|
+  | `d30h24` | `automated_hourly_`, `automated_daily_` | `-H24`, `-D30` (dwie linie) | daily |
+  | `d7h24`  | `automated_hourly_`, `automated_daily_` | `-H24`, `-D7` | daily |
+  | `d30`    | `automated_daily_` | `-D30` | daily |
+  | `default`| bez zmian — `automated_hourly_` | drabina `-G -H24 -D7 -W4 -M12` | zadne (drabina nie moze) |
+
+  **Godzinowy nie jest zamrazany nigdzie** i to jest teraz asercja obejmujaca
+  CALY katalog, sprawdzana na wyrenderowanej linii crona (nie na polu `quiesce`
+  w profilu — pole musi jeszcze przejsc namespacing, scalanie szablonow
+  i asembler flag, zanim stanie sie `-q`, a to `-q` uruchamia host).
+
+  **Wielkosc liter jako kontrakt:** mala = rodzina na tier, wielka = drabina GFS.
+  Zadnego profilu z wielkiej litery jeszcze nie ma; rozroznienie istnieje, zeby
+  dalo sie je odczytac z `ls`. Obie polowy reguly maja asercje — wielka litera
+  bez `-G` odmawia, mala z `-G` odmawia.
+
+  **Znalezisko uboczne, zmierzone przez skasowanie pliku:** na systemie plikow
+  bez rozroznienia wielkosci liter (ta stacja, kazdy checkout na macOS)
+  `D30H24.conf` i `d30h24.conf` to **JEDEN plik** — zapis jednego nadpisuje
+  drugi, a skasowanie kasuje oba. Hosty linuksowe rozroznilyby je, wiec awaria
+  ujawnilaby sie wylacznie na stacji roboczej, jako profil, ktory po cichu
+  zmienil ksztalt. Suita odmawia katalogu zawierajacego obie wersje jednej nazwy.
+
+  **Nic w produkcji z tego nie wynika:** cztery zywe hosty jada na recznie
+  pisanych configach z `cron-configs/`, zaden nie odwoluje sie do tych profili.
+  Zmiana dotyczy relacji zakladanych OD TERAZ.
+
+  **Sprawdzone przy okazji, bo kontrakt `profile-config-schema` na to wskazuje:**
+  monitory `check-snap-age.sh` sa emitowane wewnatrz galezi prune, wiec dataset,
+  ktory przestaje przycinac, po cichu przestaje byc monitorowany. Po
+  przebudowie kazda rodzina ma swoj monitor z wlasnymi progami (`90m/150m`
+  godzinowy, `30h/48h` dzienny) — zweryfikowane na renderze. Asercja `zfsbackup`
+  o „dokladnie jednej drabinie `-G`" dotyczy profilu `default` i pozostaje
+  nietknieta. `zfs-backup.sh` juz umie profil bez fragmentu `[prune]`
+  (`profile_declares_ladder`, dodane gdy `prod` po raz pierwszy trafil na pve9),
+  wiec trzy przebudowane profile ida ta sama, sprawdzona sciezka.
+
+  **Dowody:** `test/profiles` **78/0** (nazwa = retencja liczona z UNII linii
+  `delsnaps`, nie z pierwszej; ksztalt vs wielkosc liter w czterech
+  kombinacjach; koherencja calego katalogu z dwiema kontrolami mutacyjnymi —
+  zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
+  `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
+  Katalog opisany w `profiles/README.md`.
+
+- **DOMYSLNA ODPOWIEDZ NA NIEUDANY QUIESCE — ODWROCONA (2026-08-27).**
+  Decyzja wlasciciela, doslownie: *"Przemyslalem i chce, zeby snapshots sie
+  tworzyly domyslnie pomimo porazki flush buffers."*
+
+  **Nieudany freeze BIERZE snapshot.** Crash-consistent, `_crash_` w nazwie,
+  rc 8, zeby cron to zglosil. Bez zadnego kwalifikatora, na kazdym tierze,
+  w obu silnikach. Nic w mechanice sie nie ruszylo — ruszyla strona, w ktora
+  patrzy `QUIESCE_DEGRADE`, gdy nikt nic nie powiedzial: `1`, nie `0`.
+
+  **`,strict` to droga powrotna**, per tier, i przywraca poprzednie zachowanie
+  co do joty: zaden snapshot, przebieg pada. Nie jest formalnoscia — to
+  wlasciwa odpowiedz dla danych, ktorych procedura odtwarzania zaczyna sie od
+  wyrzucenia kopii crash-consistent.
+
+  **`,degrade` dalej sie parsuje** i prosi teraz o to, co dostanie i tak.
+  Zostawione swiadomie: `profiles/prod.conf` i kazdy crontab wygenerowany od
+  2026-08-26 go niosa, wiec kwalifikator, ktory zaczalby sie wywalac, zamienilby
+  godzinny `git pull` w awarie calego estate. Praktyczna konsekwencja: **zadna
+  linia w produkcji nie zmienia dzis znaczenia** — zmieniaja je wylacznie tiery
+  z golym `-q <mode>`, ktore teraz degraduja zamiast odmawiac.
+
+  **Defekt, ktory ta zmiana WYTWORZYLA i ktory zlapala wlasna suita** — wart
+  zapamietania, bo nie widac go w diffie. Kazde z szesciu miejsc odmowy mialo
+  ksztalt `bramka && return 1` / `log 0 "<co jest zle + polecenie naprawcze>"` /
+  `exit 3`, wiec zdanie z LEKARSTWEM bylo osiagalne wylacznie na sciezce, ktora
+  odmawiala. Przy starym domysle to byla sciezka typowa i nikt tego nie zauwazyl.
+  Przy nowym operator dostaje `DEGRADING` co noc, snapshot `_crash_` co noc,
+  i nigdy zdania, ze konto nie ma `--allow-quiesce` albo ze gosc jest poza
+  whitelista. Backup, ktory dziala dalej i po cichu gubi powod, dla ktorego jest
+  gorszy, zamienia naprawialny blad konfiguracji w trwaly. Diagnoza jest teraz
+  logowana PRZED bramka we wszystkich szesciu miejscach; asercja jest
+  strukturalna (kazde wywolanie bramki musi byc poprzedzone `log 0`, plus
+  asercja liczby miejsc, zeby skasowanie ich nie przeszlo), z kontrola mutacyjna.
+
+  **`settings.ini` ISTNIEJE od tego dnia.** `settings_get` czytalo ten plik od
+  2026-08-26 na kazdym hoscie i na kazdym go nie znajdowalo, wiec oba jego klucze
+  zyly tylko w kodzie, ktory ich szukal. `deploy.sh` Faza 2a zapisuje go raz
+  (`settings_write_default` w `lib-cron.sh`), 0644 — bo czyta go KONTO
+  DELEGOWANE, a nieczytelny plik nie pada, tylko po cichu wraca do wbudowanego
+  domyslu. **Nigdy nie nadpisuje**: plik istnieje po to, zeby go recznie
+  edytowac. Wszystkie klucze w szablonie sa zakomentowane, wiec swiezo wdrozony
+  host zachowuje sie dokladnie tak jak przed jego pojawieniem sie.
+  `quiesce` jest zakomentowany z konkretnego powodu, wypisanego w samym pliku:
+  domysl hosta trafia do KAZDEGO tiera, ktory nie podal wlasnego, a w `prod.conf`
+  to jest tier HOURLY, ktory nie ma quiesce swiadomie. Odkomentowanie wlacza
+  zamrazanie kazdego goscia 24 razy na dobe.
+
+  **Dowody:** `test/quiesce` **265/0** (gramatyka z obiema polowami, domysl
+  biblioteki czytany w czystym srodowisku z kontrola srodowiskowa, laczenie
+  parsera z bramka end-to-end, przetrwanie diagnozy przy degradacji + kontrola
+  mutacyjna); `test/cron` **132/0** (sekcja Z: round-trip przez prawdziwe
+  `settings_get`, a nie grep szablonu; swiezy plik nie zmienia nic, odkomentowany
+  klucz dziala); `test/run.sh` **96/0** (nowy golden `quiesce-strict` z kontrola
+  negatywna w tym samym fixture, dwa nowe przypadki negatywne); `test/runsuffix`
+  **15/0**. Reszta baterii: CI.
+
+- **DEGRADACJA NIEUDANEGO QUIESCE — ZROBIONA (2026-08-26).**
+  `docs/design/quiesce-degrade.md` opisuje teraz stan zbudowany, nie plan.
+  **Domysl odwrocony dzien pozniej — patrz wpis powyzej.** Ponizszy opis
+  mechaniki jest dalej aktualny; nieaktualne jest tylko to, ktora z dwoch
+  odpowiedzi dostaje tier, ktory nie powiedzial nic.
+
+  **Co to naprawia, zmierzone:** w labie pve9/pve1/pve2 (2026-08-25) profil
+  `prod` wyprodukowal ZERO snapshotow dla trzech z czterech tierow, bo konto
+  delegowane nie moglo dosiegnac goscia, a kazdy tier proszacy o `-q` odmawia
+  zamiast zrobic snapshot. Dla `_hourly` to jeden interwal z dwudziestu czterech.
+  Dla `_daily`, `_weekly` i `_monthly` to trwaly artefakt, po ktory ten tier
+  istnieje.
+
+  **Co się zmienilo:** pole `quiesce` przyjmuje opcjonalny kwalifikator
+  `,degrade` — per tier, zadeklarowany z gory. **Bez niego nie zmienilo sie
+  nic**: kazda dotychczasowa odmowa zachowuje sie dokladnie tak jak wczesniej,
+  i to jest asercja, na ktora suita wydaje najwiecej linii (ta sama awaria
+  z kwalifikatorem i bez, w kazdym miejscu odmowy, lokalnie i zdalnie).
+  Z nim: nieudany quiesce najpierw **wycofuje** wszystko, co ten przebieg
+  zdazyl utworzyc, i **rozmraza** wszystko, co zamrozil — i dopiero z tak
+  udowodnionego czystego stanu bierze CALY zestaw ponownie jako
+  `automated_daily_crash_<stamp>`, przesyla go normalnie, weryfikuje ladowanie
+  i konczy sie **rc 8**, wiec notifier crona to zglasza.
+
+  **Czego `,degrade` NIE usprawiedliwia** (fatalne z kwalifikatorem tak samo jak
+  bez): nieudany thaw, zastany cudzy freeze, oraz rollback, ktory nie zdolal
+  usunac snapshotow tego przebiegu. Osobno fatalny zostaje tryb, ktory nigdy nie
+  pasuje do goscia (`agent` na kontenerze, `sync` na VM) — to blad konfiguracji,
+  ktory sam sie nie naprawi, a degradowanie go mowiloby operatorowi, ze jego
+  goscie sa quiesced tak dlugo, jak dlugo ten config przetrwa.
+
+  **Nazwa jest stala i niekonfigurowalna**, budowana jednym helperem dla PUSH
+  i PULL. Znacznik `_crash_` stoi miedzy rodzina a znacznikiem czasu, i obie
+  polowy tego zdania sa nosne: `delsnaps.sh` dopasowuje rodzine PREFIKSOWO
+  (wiec retencja dalej ja przycina), a porzadkuje po `zfs list -s creation`
+  (wiec wstawka niczego nie przestawia). `check-snap-age.sh` z tego samego
+  powodu zostaje ZIELONY — to swiadomy podzial pracy, nie dziura: monitor wieku
+  odpowiada na pytanie „czy jest swiezy snapshot", a to, ze jest
+  crash-consistent, raportuje status przebiegu i mail. Monitor zglaszalby to
+  co 15 minut przez cale zycie snapshotu, czyli powodz, ktora ten estate juz raz
+  zmierzyl i usunal.
+
+  **`prod.conf`**: `auto,degrade` na daily/weekly/monthly; `hourly` dalej bez
+  quiesce w ogole, bo godzinny freeze zatrzymywalby kazdego goscia 24 razy
+  dziennie, a strata jednego interwalu z dwudziestu czterech nie jest tym, po co
+  to powstalo.
+
+  **`settings.ini` hosta** podaje `quiesce` WYLACZNIE wtedy, gdy tier nie podal
+  zadnego. Nie moze nadpisac wartosci jawnej: tier, ktory mowi `auto,strict`,
+  dalej znaczy `auto,strict`, cokolwiek jest w pliku hosta. `settings_get`
+  przeniesione z `zfs-backup.sh` do `lib-cron.sh` — jedyny plik, ktory
+  `zfs-backup.sh` i `gen-cron.sh` i tak oba laduja, wiec nie moga sie roznic co
+  do tego, co powiedzial host. Sam plik powstal dopiero 2026-08-27 — patrz wpis
+  o odwroceniu domyslu.
+
+  **POPRAWKA tego samego dnia, znaleziona w recenzji:** zdanie ponizej bylo
+  bledne i warto zapamietac, na czym polegal blad rozumowania. Kody wyjscia
+  zdalnego skryptu rozrozniaja **CZYSTOSC STANU**, nie **PRZYCZYNE**. `3` i `5`
+  oba znacza „host jest taki, jakim go zastalismy" — i to jest dokladnie warunek
+  wstepny dla zestawu crash-consistent. Ale dwie odmowy, ktore kontrakt trzyma
+  fatalnymi — zastany cudzy freeze i tryb niepasujacy do goscia — TEZ sa czyste.
+  `prep_one` zwracalo 1 dla kazdej awarii, agregator robil z tego `exit 5`,
+  a strona lokalna degradowala kazde 5. Efekt: ta sama konfiguracja odmawiala
+  przy zastanym freeze na PUSH i degradowala go na PULL.
+  Poprawione: `prep_one` zwraca 2 dla przyczyn niedegradowalnych, agregator
+  liczy dwie klasy osobno, fatalna wygrywa — `exit 9`, ktorego mapowanie lokalne
+  nie degraduje. Przy okazji zamkniete: `info=$(gq_status "$id")` gubilo status
+  polecenia, wiec nieczytelny status dawal puste `kind` i wpadal w galaz
+  „no guest — skipping" ze statusem SUKCES; helper, ktory nie umial odpowiedziec,
+  wygladal jak host bez czego zamrazac.
+  Testy, ktore tego nie zlapaly, podstawialy gotowy rc — dowodzily wylacznie, ze
+  5 staje sie 8, i nigdy nie pytaly, **co** staje sie piatka. Nowe dyskryminatory
+  URUCHAMIAJA zdalny klasyfikator i przenosza jego faktyczny kod przez mapowanie
+  lokalne; dwie istniejace asercje przesuniete z 5 na 9 swiadomie, bo to jest ta
+  zmiana kontraktu. Kontrola negatywna: 12 asercji pada na bibliotece sprzed
+  poprawki.
+
+  **Zdalna polowa wymagala jednej zmiany klasyfikacji** w skrypcie wysylanym
+  przez ssh, i to jest najwazniejsza rzecz do zapamietania z tej laty. Pierwsze
+  podejscie wstawilo wywolanie bramki do tamtego heredoca — czyta sie jak kod
+  lokalny, a nie jest nim; po tamtej stronie nie istnieje zadna funkcja
+  z biblioteki, wiec zdalny quiesce przestalby dzialac przy pierwszym uzyciu.
+  Wycofane przed wyslaniem. Okazalo sie, ze kontrakt kodow wyjscia tamtego
+  skryptu JUZ rozroznia stany, o ktore chodzi, i to strukturalnie: `3` to
+  odmowa przed zamrozeniem czegokolwiek, `5` to awaria z czystym rollbackiem
+  i thaw (bo porazka ktoregokolwiek z nich zamienia `5` na `7` albo `6`).
+  Wiec cala decyzja to mapowanie rc po stronie lokalnej.
+
+  **Dowody:** `test/quiesce` +53 asercje (tabela gramatyki z obiema polowami,
+  bramka z trzema kontrolami mutacyjnymi, wszystkie siedem zdalnych kodow
+  w obu kierunkach); `test/runsuffix` — zgodnosc nazwy PUSH/PULL z kontrola
+  negatywna; `test/run.sh` — fallback z `settings.ini` plus kontrola, ze NIE
+  rozszerza jawnego `auto`; nowy golden `quiesce-degrade` i cztery przypadki
+  negatywne w `gen-cron.sh`.
+  **Czego nie udowodnil zaden test lokalny:** przebiegu od konca do konca —
+  zdegradowany snapshot, ktory przechodzi transfer i konczy sie rc 8. Ta maszyna
+  nie ma ZFS. To jest obowiazek NA ZYWO i jest opisany nizej.
+
+- **LAB ZBUDOWANY OD ZERA: pve9 <- pve1 (2026-08-26).**
+  Szczegoly i znaleziska: `docs/project/LAB-REBUILD-20260826-FINDINGS.md`.
+
+  **Powod:** dwa argumenty projektowe o odtwarzaniu oparlem na parze
+  pve1<->pve9, a oba stalu na faktach, ktore byly **sladem po moich wlasnych
+  labach** — zaufanie root<->root (bo laby chodzily jako root) i „kolektor laczy
+  sie co godzine" (pve9 mial ZERO zadan, wszystkie rekordy `STATE=removed`).
+  Projekt oparty na skazonym labie pasowalby do labu.
+
+  **Stan po przebudowie:** pve9 bez ani jednego sladu relacji i z pusta pula;
+  pve1 bez sladow lab-owych, produkcja nietknieta, crontaby potwierdzone hashem.
+  Zaufanie ssh miedzy hostami usuniete w OBIE strony i sprawdzone.
+
+  **Nowa relacja `lab1`**, zalozona sciezka BEZ zaufania (`--manual-join`):
+  kolektor nie mogl siegnac do zrodla, wiec wygenerowal wsad, wsad zostal
+  przeniesiony, a zrodlo samo zatwierdzilo swoj zakres.
+
+  ```
+  pve1 hdd/labsrc/vm-900-disk-0 (6 MB) -> pve9 hdd/labcoll/192.168.28.9/hdd/labsrc/...
+       hdd/labsrc/vm-900-disk-1 (4 MB)
+  ```
+
+  Dwa dyski jednego goscia — celowo, bo to jest przypadek, ktorego potrzebuje
+  odtwarzanie. Seed potwierdzony GUID-em na trzech datasetach, nie komunikatem.
+
+  **Co lab od razu rozstrzygnal:** planer mowi „zrodlo jest ZDALNE". Kolektor
+  siega do zrodla kontem `zfsbackup-pve9`; **w druga strone nie ma nic**.
+  Odtwarzanie w trybie pull wymaga kanalu, ktorego nie ma i ktorego zaden
+  obecny czasownik nie zaklada — i to jest teraz fakt o prawdziwej relacji.
+
+  **Cztery znaleziska**, w tym jedno o naszym silniku: wyciek holda
+  `zfssnapall_inflight` blokowal sprzatanie przez cztery dni.
+
+  **F3 NAPRAWIONE (2026-08-26).** Diagnoza wyszla inaczej, niz zakladalem:
+  silnik trzyma hold CELOWO, gdy transfer padl z tokenem wznowienia — nastepny
+  przebieg potrzebuje dokladnie tego snapshotu, i to jest poprawne. Wada polega
+  na tym, ze **nikt nigdy nie zauwaza, gdy ten nastepny przebieg juz nie
+  przyjdzie**, bo relacje rozebrano. Czyli naprawa nalezy do sprzataczki, a nie
+  do zamrozonego silnika — i silnika nie tknieto.
+
+  `clean-relationships.sh` sprawdza teraz **caly host**, niezaleznie od listy
+  relacji (bo wyciek JE PRZEZYWA, wiec cokolwiek kluczowane na relacji minie
+  dokladnie ten przypadek). Jedno wywolanie `zfs get -t snapshot userrefs`
+  znajduje kazdy trzymany snapshot; `zfs holds` biegnie tylko dla nich, wiec
+  zdrowy host kosztuje jedno wywolanie.
+
+  **Zglasza tylko NASZ tag.** Hold pvesr na replikowanym datasecie jest nosny
+  dla cudzej replikacji, a ten projekt juz zmierzyl, ile kosztuje ruszenie go.
+  **I nie zwalnia automatycznie** — narzedzie nie odrozni wyciekniętego holdu od
+  chroniacego transfer, ktory wlasnie biegnie. Nazywa, podaje dokladna linie,
+  konczy. Ta sama zasada co przy danych.
+
+  Audyt **nie konczy sie czysto**, gdy cos jest trzymane: „nothing orphaned",
+  podczas gdy dataset po cichu nie daje sie przyciac, to falszywy spokoj, ktoremu
+  to narzedzie ma zapobiegac.
+
+  **F1 i F2 NAPRAWIONE (2026-08-26).** Separator w rekordzie to ESCAPE'OWANA
+  SPACJA (`%q`), wiec dzielenie po bialych znakach dawalo `hdd/a/tree\` —
+  nazwe, ktorej nie da sie wkleic do `zfs destroy`, czyli dokladnie to, po co ta
+  linia istnieje. Dekodowane BEZ `eval` i `source`: plik pozostaje danymi.
+  Bezpieczne, i to nie z zalozenia — **zmierzone**, ze nazwa datasetu ZFS nie
+  moze zawierac ani spacji, ani przecinka (`zfs create hdd/x,y` odrzucone), wiec
+  `\ ` w tym polu moze byc wylacznie separatorem. Kazdy INNY backslash znaczy,
+  ze wartosc nie jest tym, czym kod ja uwaza — i jest oznaczana jako SUSPECT,
+  zamiast po cichu do polowy odkodowana.
+
+  F2: audyt **mowi teraz, czy dane jeszcze sa** (`still on disk` / `already
+  gone`). Wczesniej czasownik niszczacy weryfikowal, a czytajacy nie.
+
+  **Wada, ktora sam przy tym wprowadzilem i ktora zlapala istniejaca asercja:**
+  etykiete doklejalem do POLA, ktore dalej konsumuje purge — podawal ja do
+  `zfs list`, wiec pytal o nieistniejaca nazwe i raportowal istniejacy dataset
+  jako ALREADY GONE. Etykieta nalezy do miejsca, ktore WYPISUJE, nie do tego,
+  ktore produkuje. Przeniesiona do reportera.
+
+  `test/cleanrel` 47/0. Kontrola negatywna na wersji sprzed poprawki: **5
+  asercji pada**, a „dwa datasety" przechodzi tez tam — bo stare dzielenie tez
+  dawalo dwa wpisy, tylko pierwszy zepsuty. Dyskryminatorem jest backslash, nie
+  liczba wpisow.
+
+  **Zaostrzone po recenzji (2026-08-26).** „Prawdopodobnie wyciekl" nie jest
+  werdyktem, a WIEK niczego nie dowodzi. Hold jest uznawany za OSIEROCONY
+  dopiero wobec dowodow, ktore zapisuje sam silnik:
+
+  | fakt | skad |
+  |---|---|
+  | biegnie silnik | tablica procesow (`snapsend`/`snapget`/`zfs send`) |
+  | rekord in-flight nazywa TEN snapshot | `<silnik>.inflight-snap.<klucz>` w katalogu blokad |
+  | lokalny `receive_resume_token` | `zfs get` |
+
+  Trzy werdykty: **IN-USE** (rekord wskazuje ten snapshot), **UNPROVEN** (cos
+  biegnie albo jakis transfer chce kontynuowac — fail-closed) i **ORPHANED**.
+  **GRANICA POWIEDZIANA WPROST:** token wznowienia jest wlasnoscia CELU, wiec
+  przy relacji pull lezy na innym hoscie i stad go nie widac — raport to mowi,
+  zamiast sugerowac, ze sprawdzil wszystko.
+
+  **Zwalnianie tylko w jawnej sciezce `--purge --yes`**, z nazwaniem kazdego
+  snapshotu; audyt nie zwalnia nigdy. Sprawdzenie procesow idzie przez
+  `HOLD_PS_CMD`, zeby wynik testu nie zalezal od tego, czy na maszynie
+  testujacej akurat cos leci.
+
+  **Wada znaleziona przez wlasny test:** `--purge-orphans` wracalo wczesniej,
+  gdy nie bylo osieroconych RELACJI — wiec host z wyciekniętym holdem i bez
+  osieroconych relacji nie mial jak go zwolnic. Czyli **dokladnie przypadek
+  pve9, od ktorego cale to sprawdzenie sie zaczelo**.
+
+  **P1 ZNALEZIONY W RECENZJI I NAPRAWIONY (2026-08-26).** `/var/run` **nie
+  przezywa restartu**. Po reboocie zrodla plik in-flight znika, a hold ZFS
+  **i zdalny token wznowienia zostaja**. Pierwsza wersja widziala wtedy: brak
+  procesu, brak lokalnego tokenu, brak rekordu → ORPHANED → i zwalniala snapshot,
+  ktorego zdalne wznowienie wciaz potrzebowalo.
+
+  Napisalem w raporcie, ze zdalnej strony stad nie widac — i mimo to orzekalem po
+  jej drugiej stronie. **Nazwanie granicy nie czyni decyzji przez nia bezpieczna.**
+  Brak pliku w tmpfs to brak dowodu, nie dowod braku.
+
+  Poprawione: **ORPHANED nie jest juz wnioskowane automatycznie.** Werdykt brzmi
+  UNPROVEN z podaniem powodu — „nic TUTAJ tego nie rosci, ale odbiorcy stad nie
+  widac". Zwalnianie przeniesione do `--release-hold=<snapshot> --yes`, gdzie
+  czlowiek dostarcza osad, ktorego kod nie ma: wie, czy tamta relacja jeszcze
+  istnieje. Wciaz odmawia, jesli cokolwiek widoczne STAD mowi, ze hold jest w
+  uzyciu — pytamy o druga strone, nie o fakty, ktore maszyna juz ma.
+
+  Audyt **nadal nie konczy sie czysto**, i to sie nie zmienilo wraz z werdyktem:
+  hold, ktorego nie rosci nic biegnacego, blokuje `zfs destroy` i po cichu psuje
+  retencje niezaleznie od tego, czyj jest.
+
+  **Druga runda tej samej granicy.** `UNPROVEN` obejmowalo TRZY rozne przyczyny —
+  biegnacy silnik, lokalny token, nieobserwowalny odbiorca — a bramka recznego
+  zwolnienia odmawiala tylko dla `IN-USE`. Wiec `--release-hold --yes` zwolnilby
+  hold takze wtedy, gdy transfer biegl LOKALNIE. Wlasny komunikat commita mowil,
+  ze czlowiek odpowiada wylacznie za dalek**a** strone; kod tego nie egzekwowal.
+
+  Poprawione: `hold_verdict` zwraca **kod przyczyny** (`inflight`, `engine`,
+  `localtoken`, `remote`), a bramka czyta kod, **nie tresc komunikatu**.
+  Przejsc moze wylacznie `remote` — jedyny przypadek, w ktorym lokalnie jest
+  czysto, a nieznana jest tylko druga strona. Kod nierozpoznany tez odmawia.
+
+  Uwaga techniczna warta zapamietania: to nie moze byc zmienna globalna —
+  `hold_verdict` jest wolane w `$( )`, czyli w podpowloce, wiec cokolwiek
+  ustawione w srodku by zginelo. Kod jedzie w wypisywanym tekscie jako osobne
+  pole.
+
+  `test/cleanrel` 72/0, w tym kontrprzykład recenzenta wprost (hold istnieje,
+  brak pliku in-flight, brak procesu — stan po restarcie — a `--purge-orphans
+  --yes` **nie wola `zfs release`**) oraz dwa dyskryminatory na recznym
+  czasowniku: biegnacy silnik i lokalny token **nie daja sie nadpisac**.
+
+  Sprawdzone na zywo na pve9 obiema kontrolami: hold zalozony → zgloszony,
+  wyjscie 3; hold zwolniony → cisza, wyjscie 0. `test/cleanrel` 38/0, w tym
+  kontrola, ze **sam wyciekly hold wystarczy**, zeby audyt nie byl czysty, i ze
+  cudzy tag jest niewidoczny. Tag dopisany do kontraktu `hold-tag` w deps.conf —
+  teraz pilnuje go graf, bo tag, ktory sie rozjedzie, sprawi, ze ten raport po
+  cichu nie pokaze nic, co jest nie do odroznienia od zdrowego hosta.
+
+- **RESTORE: trzy korekty po recenzji (2026-08-26).**
+
+  **`--at` klasyfikowalo inny snapshot, niz pokazywalo.** Podglad drukowal
+  `WYBRANO WANTED`, a `restore_plan_strategy` liczyl strategie na NAJNOWSZYM
+  snapshocie z pelnej listy — takze takim z PO zadanej chwili. Dwie odpowiedzi na
+  jedno pytanie w jednym ekranie, bez sposobu na rozpoznanie, ktorej dotyczy
+  potwierdzenie. Teraz do klasyfikatora idzie wylacznie wiersz wybrany przez
+  `--at`, a gdy `--at` nic nie wskazal, strategia w ogole sie nie liczy.
+  Znalezione przy tym samodzielnie: naglowek nad strategia dalej glosil
+  „domyslna polityka: NAJNOWSZY". Poprawna odpowiedz pod falszywym podpisem to
+  nadal falszywy podglad, wiec naglowek dostal parametr.
+
+  **Wykluczenie `--source`/`--target` wycofane.** Recenzent uznal, ze przekroczyl
+  role: to byla decyzja Ownera, nie jego. Dzialaja trzy formy — sam `--source`,
+  sam `--target`, albo **oba jawnie**. Podanie obu to NIE przemapowanie:
+  listy musza miec te sama dlugosc, sa czytane parami po kolei, a kazda para musi
+  zgadzac sie z zapisem relacji. Parami, nie zbiorami — inna kolejnosc po dwoch
+  stronach znaczy, ze operator powiedzial cos, czego nie chcial, a ciche
+  posortowanie zakryloby dokladnie ta pomylke.
+
+  **Zarzut o rozcinaniu wyniku po literze `t` zamiast po tabulatorze — odparty.**
+  W pliku jest prawdziwy tabulator; zmierzone, obie strony wychodza poprawnie.
+  Recenzent czytal diff, w ktorym tab wyglada jak `	`. Ale jego uwaga o TESCIE
+  byla trafna: asercja liczyla wiersze zamiast sprawdzac wartosci. Zapis zmieniony
+  na jeden jawny odczyt, a test na dokladne wartosci obu stron.
+
+  Przy okazji dwie wady w moich wlasnych testach: stara asercja wymuszajaca
+  wycofana regule, oraz kontrola szukajaca `Zrodlo:     roo` jako PODCIAGU —
+  a poprawna wartosc `root@pve2:...` tez to zawiera, wiec test padal na dzialajacym
+  kodzie. Zakotwiczona do konca linii.
+
+  **Poprawka do poprawki (ta sama recenzja, druga runda).** Przekazanie strategii
+  WYLACZNIE wybranego wiersza naprawilo cel i zepsulo baze: ta sama lista jest
+  przechodzona DRUGI raz, zeby znalezc najnowszy snapshot, ktorego GUID istnieje
+  takze na zrodle — czyli wspolna baze dla przyrostu. Jeden wiersz = zero
+  kandydatow, wiec dataset z dobra starsza baza byl klasyfikowany jako „FULL na
+  ISTNIEJACE zrodlo, wspolnej bazy NIE MA". Dla czasownika niszczacego to jest
+  odwrotnosc prawdy w niebezpieczna strone.
+  Naprawa: strategia dostaje liste odfiltrowana do `creation <= creation(wybrany)`.
+  Maksimum tego, co zostaje, JEST wybranym punktem (remis na tej sekundzie i tak
+  jest wczesniej odrzucany), a wszystkie legalne starsze kandydatury zostaja.
+  Kontrola negatywna na wersji sprzed poprawki: 3 asercje padaja, a asercja o
+  samym celu dalej przechodzi — czyli rozrozniaja ten defekt, nie alarmuja na
+  wszystkim.
+
+  `test/restore` 162/0.
+
+- **RESTORE: `--at` — punkt odtworzenia w czasie zegarowym (2026-08-26).**
+  `restore pve2 --at "2026-08-10 12:00"`. Operator mysli chwila, nie nazwa
+  snapshotu.
+
+  **Wybor idzie po wlasciwosci ZFS `creation`, NIGDY po nazwie.** Planer juz
+  krzyczy, gdy te dwie rzeczy roznia sie o wiecej niz dwie minuty; wybieranie po
+  nazwie znaczyloby cicho brac opowiesc zamiast faktu.
+
+  Trzy wyniki na dataset i wszystkie trzy sa wypisane: **rozstrzygniety** (zadany
+  czas, wybrany snapshot, jego prawdziwy `creation` i GUID obok siebie),
+  **brak czegokolwiek dosc starego** (blad TEGO datasetu, reszta dalej
+  planowana), **remis** na najpozniejszym `creation` (odmowa wyboru — nazwa nie
+  jest rozstrzygajaca).
+
+  Naglowek `PER-DATASET FRONTIER -- NIE atomowy stan calej relacji` idzie raz,
+  nad planem, a nie drobnym drukiem: cztery dyski jednej VM to dokladnie ten
+  przypadek, w ktorym ktos zalozy, ze dostal jedna chwile.
+
+  Niepelny plan konczy sie **statusem niezerowym** (decyzja Ownera nr 7) — status
+  wyjscia to jedyna czesc tego, ktora czyta cron.
+
+  `test/restore` 143/0. Przypadek nosny: szukany snapshot nie jest ani
+  najnowszy, ani najstarszy — implementacja biorąca ostatni, najnowszy albo
+  leksykalnie najwiekszy nie przechodzi nic z tego bloku.
+
+- **RESTORE: zakres odzyskiwania — relacja osobno, datasety po przecinkach
+  (2026-08-26).** Decyzja wlasciciela: VM z czterema dyskami wirtualnymi to
+  cztery datasety i JEDNO odzyskiwanie. Cztery polecenia znaczylyby cztery
+  podglady, cztery potwierdzenia niszczace i okno, w ktorym maszyna jest
+  odtworzona w polowie — dla czegos, co dla czlowieka jest jednym obiektem.
+
+  ```
+  zfs-backup.sh restore pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1
+  ```
+
+  **Przecinek jest bezpieczny ZMIERZONYM faktem, nie konwencja.** ZFS nie
+  dopuszcza go w nazwie datasetu (pve9, 2026-08-26: `invalid character ','`),
+  wiec nie moze wystapic wewnatrz elementu listy i rozciecie po nim nie zniszczy
+  legalnej nazwy. Tego wlasnie brakuje dwukropkowi — dwukropek JEST legalny
+  w nazwie, i to on zrobil z `pve2:rpool/data` przypadek dwuznaczny.
+
+  **Skutek uboczny, wazniejszy niz sama lista:** nazwa relacji stoi teraz sama,
+  a dataset przychodzi flaga — wiec cala dwuznacznosc dwukropka **znika**, a nie
+  zostaje rozstrzygnieta. Plik `OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` jest
+  oznaczony jako czesciowo nieaktualny, nie przepisany.
+
+  **Jeden namespace na wywolanie** (recenzent, 2026-08-26): `--source`
+  i `--target` wykluczaja sie, cala lista musi sie rozwiazac PRZED podgladem,
+  a brak elementu, niejednoznacznosc, duplikat wejscia albo dwa elementy
+  prowadzace do tego samego celu to odmowa **bez zadnej mutacji**. Usuwa to
+  konkretna pomylke: operator nazywa dwa dyski VM po stronie kolektora, dwa po
+  stronie hosta i dostaje plan, ktory wyglada kompletnie.
+
+  Zaimplementowana jest **polowa rozstrzygajaca zakres**; plan jest tylko do
+  odczytu, wiec zadne drzwi niszczace sie tu nie otwieraja. Rozdzial namespace
+  siedzi w rdzeniu dopasowania (`restore_resolve_try` dostal argument
+  namespace), a stara forma pozycyjna dalej podaje pusty — bo powiedzenie, ktora
+  strone sie ma na mysli, jest calym sensem uzycia flagi.
+
+- **RESTORE: nazwa relacji musi wskazywac JEDNA relacje (2026-08-26).**
+  `zfs-restore.sh` odmawia przed czymkolwiek, jesli ktorys rekord w
+  `/etc/zfs-snapshot-all/clients/` deklaruje `CLIENT_NAME` inny niz wlasna nazwa
+  pliku. Powod jest prosty: adres `pve2:rpool/data` znaczy „relacja pve2", a
+  relacja to nazwa nadana przez operatora — moze wskazywac na dowolna maszyne,
+  takze na pve9. Jesli dwa pliki mowilyby „nazywam sie pve2", narzedzie
+  wybraloby ktorys i odtworzylo nie to, co trzeba. Na pve9 lezy ponad
+  piecdziesiat rekordow, wiec to nie jest teoretyczne.
+
+  Jedno porownanie wystarcza za caly warunek: dwa pliki w jednym katalogu nie
+  moga miec tej samej nazwy, wiec zgodnosc z nazwa pliku JEST jednoznacznoscia.
+  Petla szukajaca duplikatow byla martwym kodem w kostiumie zabezpieczenia i
+  zostala usunieta.
+
+  **Czego NIE zmieniono:** samego adresowania. `restore_resolve_token` juz
+  rozstrzyga dwuznacznosc dwukropka i juz odmawia adresowania po hoscie
+  (R-025) — ostrzej niz proponowala regula recenzenta, i zgodnie z decyzja
+  Ownera nr 1 (pull-first). Drugi parser bylby drugim sposobem czytania tego
+  samego argumentu.
+
+- **ETAP PROFILI, faza 2: JEDEN PLIK NATYWNY + profil `prod` odwzorowujacy
+  produkcje (2026-08-25).**
+
+  Decyzja wlasciciela po dyskusji z recenzentem: **jeden plik dla operatora,
+  bez tworzenia nowego jezyka**. Profil to `profiles/<nazwa>/profile.conf`;
+  trzy dotychczasowe artefakty pozostaja, ale jako **cel kompilacji**, nie jako
+  interfejs. Nikt nie powinien wiedziec, ze profil to trzy pliki, zeby zmienic
+  retencje.
+
+  **Co wziete z propozycji recenzenta:** jeden plik, naglowek `[profile]`
+  z wersja, oraz ergonomiczne `keep = 24` — tlumaczone na `retain = -H24` przy
+  renderowaniu, z **kanonicznej** nazwy tieru, przy uzyciu tabeli liter
+  pobranej z `gen-cron.sh --dump-tier-letters` (nowe), a nie jej kopii.
+
+  **Co zostawione ze swojego:** natywne nazwy sekcji i pol (jeden autorytet
+  schematu), oraz — co wazniejsze — **tworzenie i kasowanie nie sa zrosniete**.
+  Fuzja `[tier:]` z propozycji recenzenta umie opisac produkcje, ale **nie umie
+  opisac `default`**, ktory tworzy JEDNA rodzine i przycina ja CZTEREMA
+  licznikami w jednej drabinie GFS.
+
+  **Dowod, ze zmiana formatu niczego nie zmienila:** ten sam plan wyrenderowany
+  z builda `main` (trzy pliki) i z jednoplikowego — **94 linie kazdy,
+  IDENTYCZNE**.
+
+  **`profiles/prod/profile.conf`** — przepisany z zywego
+  `jobs.pve1.v4.conf` (odczyt 2026-08-25), nie zaprojektowany:
+
+  | tier | prefiks | retencja | quiesce | progi |
+  |---|---|---|---|---|
+  | hourly | `automated_hourly_` | 24 | — | 90m / 3h |
+  | daily | `automated_daily_` | 7 | **auto** | 30h / 48h |
+  | weekly | `automated_weekly_` | 4 | **auto** | 9d / 12d |
+  | monthly | `automated_monthly_` | 6 | **auto** | **brak** (zdjete 2026-07-22, strzelalo co 15 min) |
+
+  Brak progow miesiecznych jest przepisany **swiadomie**: profil, ktory po cichu
+  by je przywrocil, przywrocilby powodz. Nie ma tez bloku `[prune]` — kazdy tier
+  przycina wlasna rodzine wlasnym `prune_schedule`, wiec nie ma osobnej drabiny
+  do wyemitowania.
+
+  **`detect_profile_gfs` czyta teraz KSZTALT, nie nazwe.** Szukalo doslownego
+  `[template:standard_hourly]` i pytalo, czy ta sekcja ma `prune_schedule` — co
+  dzialalo wylacznie dla configow pisanych przez wbudowany `default`, a dla
+  profilu nazwanego jak produkcja (`hourly`, `daily`) odpowiadalo „drabina",
+  choc to plaski uklad per tier. Teraz rozstrzyga jeden fakt: czy szablon
+  TWORZY rodzine i PRZYCINA ja w tym samym miejscu. Zmierzone w czterech
+  kierunkach: drabina -> GFS, produkcyjny plaski -> plaski, **stary
+  `standard_hourly` plaski -> plaski** (zachowane), pusty config -> GFS.
+
+  **ZNANE OGRANICZENIE, nazwane wprost: rozrzut po osi czasu MILCZY dla profilu
+  wielotierowego.** Zmierzone: `default` -> `send_expr='1 * * * *'` (rozrzut
+  dziala), `prod` -> `send_expr=''` (rozrzut nie robi nic). Przyczyna jest
+  zaprojektowana: pole sekcji nadpisuje KAZDY tier, ktory `use_template`
+  wymienia, wiec wpisanie jednej minuty splaszczyloby dzienny, tygodniowy
+  i miesieczny na godzinne — pierwsza wersja rozrzutu tak wlasnie robila
+  i recenzja to zlapala. Skutek: kilka relacji z profilu `prod` na jednym
+  kolektorze uderzy w te same minuty.
+
+  **Rozwiazanie jest znane i tanie**, tylko nie tutaj: `resolve_field_tiered`
+  jest juz GENERYCZNE (sprawdza `<pole>_<tier>` na sekcji) i dzis wolane
+  wylacznie dla `flags`. Wpiecie go dla `send_schedule`/`prune_schedule`
+  pozwoli rozrzutowi pisac minute **per tier** (`send_schedule_hourly = 44 * * * *`),
+  zachowujac kadencje kazdego tieru. Osobny krok, bo wymaga liczenia kolizji
+  w trzech roznych oknach czasowych (godzina, doba, tydzien) — nowa logika,
+  ktorej nie wolno mieszac z transkrypcja.
+
+- **ETAP PROFILI, krok 5: `migrate-profile --profile=NAZWA`, i dziura, ktora
+  przy tym wyszla (2026-08-25).**
+
+  Cel byl prosty: „zaorac konfiguracje nowym profilem" nie mialo komendy.
+  `migrate-profile` istnialo, ale z **zaszytym** celem — legacy plaska retencja
+  -> drabina GFS — bo taka byla jedyna migracja w chwili jego powstania.
+  Admin chcacy przeniesc hosta z `default` na `prod` mial jedna droge: recznie
+  edytowac config, czyli dokladnie to, przed czym ta komenda mial chronic.
+
+  Uogolnienie wymagalo trzech rzeczy, ktore wersja zaszyta mogla pominac:
+
+  1. **`PROFILE_GFS` opisuje ZAINSTALOWANY config, nie profil.**
+     `detect_profile_gfs` czyta PLIK. W trakcie migracji to wciaz ksztalt,
+     **od ktorego** uciekamy. Wersja zaszyta ustawiala `PROFILE_GFS=1` i miala
+     racje, bo jej celem zawsze byla drabina. Dla dowolnego celu to znaczy, ze
+     `--profile=prod` wchodzil w galaz drabiny, a profil plaski nie ma bloku
+     `[prune]`, ktorym da sie ja wypelnic. Zmierzone, nie wydedukowane:
+     gen-cron odrzucil kandydata komunikatem `[prune:...] has no use_template`.
+     Teraz pytamy **cel**, tym samym detektorem, wycelowanym w wyrenderowane
+     szablony profilu.
+  2. **Sekcje `[prune:]` klienta sa zamiatane po MARKERZE, nie po sciezce.**
+     Drabina GFS siedzi na **rodzicu** datasetow, wiec `remove_managed_sections`
+     (dostaje sciezki datasetow) nie moze jej dosiegnac — a cala galaz emisji
+     drabiny jest pod `if PROFILE_GFS`, wiec migracja DO profilu plaskiego nie
+     uruchomilaby tez usuwania. `default -> prod` zostawilby stara drabine obok
+     nowego prune per tier: **dwa sprzatacze na tych samych snapshotach**.
+  3. **Osierocone szablony liczone przez referencje**, nie po nazwie.
+
+  **Dziura, ktora przy tym wyszla — powazniejsza niz sama migracja.**
+  `detect_profile_gfs` odpowiada na pytanie o KSZTALT („czy tiery sprzataja
+  same siebie?"). Odmowa w `ensure_cron_config` czytala te odpowiedz, ale
+  dotyczy pytania o NAZWE: zamrozonej rodziny `standard_*` sprzed
+  nazw przestrzennych. `prod` jest plaski **z definicji**, wiec wygladal jak
+  legacy. Skutek zmierzony sonda z kontrola pozytywna:
+
+  | krok | wynik |
+  |---|---|
+  | pierwsza generacja z profilu `prod` | 4 szablony zapisane, OK |
+  | **druga** generacja na tym samym configu | **FATAL: „uses the pre-GFS profile (standard_* still carries prune_schedule)"** |
+
+  Czyli `prod` byl profilem **jednej relacji na host** — a komunikat nazywal
+  rodzine, ktorej w tym pliku nie ma. Nie dotyczylo to wylacznie migracji:
+  to jest zwykla sciezka `activate-client` dla drugiego klienta. Wyszloby na
+  zywym kolektorze, przy drugiej relacji, za kilka miesiecy.
+
+  Rozwiazanie: rozdzielic dwa pytania. `config_is_frozen_legacy` pyta o NAZWE
+  (goly `standard_*` z `prune_schedule`), `detect_profile_gfs` dalej o ksztalt.
+  Bramka jest **zwezona, nie usunieta** — kontrola negatywna dowodzi, ze
+  prawdziwy pre-GFS config nadal jest odrzucany.
+
+  **Plik kandydata nie przezywa juz odmowy.** Kazda komenda transakcyjna
+  sprzatala swoja kopie robocza na wlasnych sciezkach bledu, ale zadna nie
+  siega `die()` podniesionego **wewnatrz wywolanej funkcji** — powloka konczy
+  sie spod wolajacego, a `.zfsbackup-work.XXXXXX` zostaje obok zywego configu
+  z prawami 0644. Zmierzone na poprzednim commicie: **1 plik zostaje**. Sprzatanie
+  wpiete w istniejacy handler `EXIT` (`_profile_arm_release` komponuje sie
+  ostroznie z handlerem konsumenta; drugi trap bylby kompozycja za duzo), a
+  `atomic_replace_and_install` zwalnia sledzenie na wejsciu — zwolnienie
+  sciezki, ktora stala sie zywym configiem, byloby katastrofa przebrana za
+  porzadki.
+
+  `test/zfsbackup`: **+12** asercji (96a-96l), w tym cztery kontrole. Kontrola
+  negatywna to pelne drzewo sprzed zmiany (`git archive HEAD`) z wlozonymi
+  nowymi testami: **9 pada**, a trzy kontrole („nieznany profil odmawia",
+  „prawdziwy legacy odmawia", „opublikowany config nie jest zamiatany")
+  przechodza po obu stronach. Asercja o wycieku zostala przerobiona na config
+  **legacy** wlasnie po to, by na starym buildzie padala z wlasciwego powodu, a
+  nie na nierozpoznanej fladze.
+
+  **Nie zrobione, nazwane:** migracja przepisuje rekordy klientow (`PROFILE=`)
+  **po** podmianie configu, bo to jedyny kierunek, ktorego nie da sie uczynic
+  atomowym; blad na tym etapie jest nazwany per rekord, nie polkniety.
+
+- **ETAP PROFILI, krok 4: sprzeczna podloga `[excluded:]` jest ODMAWIANA, ale
+  tylko w kierunku, ktory oslabia (2026-08-25).**
+
+  Domyka rzecz, ktora trzykrotnie zglaszalem jako niedokonczona. Sekcja
+  `[excluded:]` nie jest opinia profilu: `gen-cron` skleja wszystkie w JEDEN
+  fragment `PROTECT_FLAGS` doklejany do **kazdej** linii prune w pliku. Jeden
+  config nie moze wiec ogrodzic rodziny na dwa sposoby.
+
+  Dotad przy istniejacej sekcji instalator podlog po prostu **pomijal** swoja —
+  czyli pierwszy zainstalowany profil wygrywal na zawsze, a deklaracja drugiego
+  byla cicho niewazna: operator czytajacy profil B widzial liczbe, ktora nigdzie
+  nie obowiazuje.
+
+  **Pierwsze podejscie odmawialo na kazdej roznicy i bylo zle.** Wywrocilo
+  wlasnosc, ktora to drzewo juz raz rozstrzygnelo i przypielo testem: *„only
+  ADDS a missing floor, never narrows an operator's stronger keep"*
+  (REV-20260810-092). `keep` to **minimum**, wiec te dwie liczby nie sa
+  symetryczne — wiecej ochrony jest bezpieczne, mniej nie:
+
+  | sytuacja | zachowanie |
+  |---|---|
+  | ten sam `keep` | deduplikacja, cisza |
+  | config chroni **mocniej** niz profil prosi | zostaje **wartosc operatora**, jedna linia do logu |
+  | config chroni **slabiej** niz profil wymaga | **ODMOWA** nazywajaca obie wartosci i kierunek |
+  | `keep` nieczytelny dla `gen-cron` | odmowa jako *nieczytelny*, nie jako „slabszy" |
+  | sciezka dziedziczaca, config slabszy | **ostrzezenie**, nie odmowa — patrz nizej |
+  | profil sprzeczny **sam ze soba** | odmowa juz przy walidacji, nazywajaca plik |
+
+  Uzasadnienie kierunku: przy `config >= profil` zatrzymanie liczby z configu
+  nie kasuje niczego, na czym cokolwiek polega, a administrator, ktory
+  swiadomie podniosl podloge, zachowuje swoja decyzje. Przy `config < profil`
+  relacja pobieglaby za strazą slabsza niz deklaruje jej wlasna polityka,
+  a podniesienie podlogi tutaj przepisaloby komende prune **kazdej** relacji juz
+  obecnej w pliku (Gate 2) — zadna z tych rzeczy nie jest nasza do wyboru.
+
+  `keep = all` jest legalny dla `gen-cron` i jest najsilniejsza podloga, jaka da
+  sie wyrazic. Porownywany jako **tekst** wygladal po prostu „inaczej" niz `9`
+  i zostalby odrzucony jako konflikt; teraz jest **rangowany** i przebija kazda
+  liczbe. Wartosc, ktorej `gen-cron` sam by nie przyjal, nie jest rangowana jako
+  zero — bo „brak ochrony" udajacy „ochrone slabsza" to odmowa z niewlasciwego
+  powodu albo, gorzej, przepustka.
+
+  Na sciezce dziedziczacej przebieg **w ogole nie pisze podlog** — config ma juz
+  polityke relacji, wiec nowa relacja dziedziczy ja dokladnie tak, jak jest
+  zainstalowana. Odmowa uczynilaby tam host bezuzytecznym. Ale liczba z profilu
+  nie obowiazuje, a milczenie pozwoliloby wierzyc, ze obowiazuje — wiec silniej
+  ogrodzony config milczy, a slabszy daje ostrzezenie.
+
+  **Trzy wady znalezione we wlasnej poprawce**, wszystkie przez czytanie
+  komunikatu i testu zamiast ufania kodowi wyjscia: komunikat odmowy uzywal
+  `$config`, podczas gdy w tej funkcji zmienna nazywa sie `$file` — pod `set -u`
+  przebieg umieral **z niewlasciwego powodu**; sprawdzanie i pisanie bylo
+  w jednej petli, wiec konflikt na drugiej rodzinie odmawial po dopisaniu
+  pierwszej, a komunikat twierdzil, ze nic nie zmieniono (teraz sa **dwa
+  przebiegi**: najpierw sprawdzane sa wszystkie podlogi, dopiero potem pisana
+  ktorakolwiek — bramka, ktora mutuje zanim odmowi, nie jest bramka); i sama
+  regula symetryczna, ktora zlapal dopiero `test/zfsbackup` w CI.
+
+  `test/profiles`: **66/0** (+8), z asercjami na oba kierunki, na `all`
+  i na wartosc nieczytelna. `test/zfsbackup`: przypieta wlasnosc
+  REV-20260810-092 przechodzi **bez zmian w tescie** — to ona byla dowodem,
+  ze pierwsza wersja reguly byla za szeroka.
 
 - Batch A domyka findingi F1–F3 po PR #14: awaryjna instrukcja `--unpair` chroni wspólny blok crona (reinstalacja pozostałych reguł; bezpośrednie usunięcie bloku wyłącznie przy zerze reguł), test publicznego `remove-client` przechodzi przez wieloklientowy config i dowodzi, że własny dataset oraz oba prune'y znikają, a cudza konfiguracja i zadania zostają; osobny dyskryminator dowodzi, że przechwycenie zdalnej polityki źródłowej używa argumentu funkcji, nie przypadkowej zmiennej z zakresu wywołującego. Lokalne dowody: `zfsbackup` 414/0, pozostałe wymagane suity zielone poza istniejącym już na `main` wynikiem `quiescehelper` 117/2 (potwierdzone na czystym `0fec33b`). Live `deploy.sh --check-only` na obu kształtach hosta pozostaje obowiązkiem ręcznym.
 

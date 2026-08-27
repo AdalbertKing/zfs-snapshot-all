@@ -934,6 +934,187 @@ x_old_ran=$(grep -c 'engine ran' "$X_OLDLOG" 2>/dev/null); x_old_ran="${x_old_ra
 check "X7 control: the old shape IS mute under the same failure" \
       "engine=0" "engine=$x_old_ran"
 
+# ===========================================================================
+# Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
+#
+# Inline prune entities are grouped so that datasets sharing a schedule, a
+# family, a retention and a scope become ONE delsnaps.sh call. The render then
+# takes the notify label from members[0] and drops the rest.
+#
+# Measured on pve9, 2026-08-25, two prod relationships on one collector: four
+# merged prune lines, every one announcing itself as "(p1-at)" -- including the
+# ones sweeping p2's dataset. A failure pruning p2 would have sent an operator
+# to look at p1. The file already carries this exact argument for `recursive`
+# ("merging ... would silently give one of them the wrong scope"); notify was
+# the field it forgot.
+#
+# The config below is the shape that produced it: two relationships, same tier,
+# same retention, different notify.
+YD="$TMPD/mergelabel"; mkdir -p "$YD"
+cat > "$YD/jobs.conf" <<'YCONF'
+[defaults]
+	host_label = ytest
+
+[template:hourly]
+	send_schedule  = 37 * * * *
+	prefix         = automated_hourly_
+	notify_word    = snapshot
+	prune_schedule = 51 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:tank/a/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+
+[dataset:tank/b/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.2:tank/src
+	recursive    = flat
+	pair_label   = r2
+	notify       = r2-at
+YCONF
+
+y_render()  { bash "$1" -c "$YD/jobs.conf" 2>/dev/null; }
+y_count()   { printf '%s\n' "$1" | grep -c "delsnaps.sh"; }
+y_wrong()   { printf '%s\n' "$1" | grep "delsnaps.sh" | grep -c 'tank/b/tank/src[^|]*(r1-at)'; }
+y_merged()  { printf '%s\n' "$1" | grep "delsnaps.sh" | grep -c 'tank/a/tank/src,tank/b/tank/src'; }
+
+y_new="$(y_render "$GEN")"
+check "Y1: two relationships get two prune lines, not one shared one" \
+      "lines=2 merged=0" "lines=$(y_count "$y_new") merged=$(y_merged "$y_new")"
+
+check "Y2: no prune line sweeps one relationship's dataset under another's name" \
+      "wrong=0" "wrong=$(y_wrong "$y_new")"
+
+# CONTROL: the datasets of ONE relationship must still merge. Without this, Y1
+# would pass against a build that stopped grouping altogether -- which would
+# turn every collector's prune section into one line per dataset.
+cat > "$YD/same.conf" <<'YCONF'
+[defaults]
+	host_label = ytest
+
+[template:hourly]
+	send_schedule  = 37 * * * *
+	prefix         = automated_hourly_
+	notify_word    = snapshot
+	prune_schedule = 51 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:tank/a/tank/src]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+
+[dataset:tank/a/tank/src2]
+	use_template = hourly
+	src          = acct@10.0.0.1:tank/src2
+	recursive    = flat
+	pair_label   = r1
+	notify       = r1-at
+YCONF
+y_same="$(bash "$GEN" -c "$YD/same.conf" 2>/dev/null)"
+check "Y3 control: datasets of the SAME relationship still merge into one call" \
+      "lines=1" "lines=$(printf '%s\n' "$y_same" | grep -c delsnaps.sh)"
+
+# ============================================================================
+# Z -- settings.ini: THE FILE THE READER HAS BEEN READING SINCE NOBODY HAD ONE.
+#
+# settings_get has looked in /etc/zfs-snapshot-all/settings.ini since 2026-08-26.
+# No host had the file, so its two keys -- `catchup_max_age` and `quiesce` --
+# existed only in the code that looked for them. Owner direction, 2026-08-27:
+# the file must exist, and it must say what a failed freeze now does.
+#
+# Tested as a ROUND TRIP, deliberately: the writer's output is fed back to
+# settings_get, the real reader, instead of being grepped for the strings this
+# suite expects. A template that documented a key the parser cannot parse would
+# pass every grep and fail every host.
+# ============================================================================
+ZD="$TMPD/settingsini"
+mkdir -p "$ZD"
+
+( source "$LIB" >/dev/null 2>&1
+  settings_write_default "$ZD/etc/settings.ini" ) \
+  && ok "Z1 the writer creates the file" \
+  || bad "Z1 the writer creates the file" "settings_write_default returned non-zero"
+
+# Z2 -- it NEVER overwrites. This runs from every deploy, and the file exists to
+# be hand-edited; a writer that refreshed it would silently discard the edit.
+printf 'catchup_max_age = 42\n' > "$ZD/etc/settings.ini"
+if ( source "$LIB" >/dev/null 2>&1; settings_write_default "$ZD/etc/settings.ini" ); then
+    bad "Z2 an existing file is never overwritten" "the writer reported success on an existing path"
+else
+    ok "Z2 an existing file is never overwritten"
+fi
+z_kept="$( source "$LIB" >/dev/null 2>&1
+           SETTINGS_FILE="$ZD/etc/settings.ini" settings_get catchup_max_age 1800 )"
+check "Z2b ...and the hand-edited value survives it" "42" "$z_kept"
+
+# Back to a fresh template for the round trip.
+rm -f "$ZD/etc/settings.ini"
+( source "$LIB" >/dev/null 2>&1; settings_write_default "$ZD/etc/settings.ini" ) >/dev/null 2>&1
+
+# Z3 -- readable by somebody who is not root. gen-cron.sh and zfs-backup.sh read
+# this file AS THE DELEGATED ACCOUNT, and an unreadable settings file does not
+# fail: settings_get falls back to the built-in default, silently. Mode is the
+# only thing standing between an edited policy and a silently ignored one.
+z_mode="$(ls -l "$ZD/etc/settings.ini" | cut -c1-10)"
+case "$z_mode" in
+    -rw-r--r--) ok "Z3 the file is world-readable, so a non-root reader gets what it says" ;;
+    *)          bad "Z3 the file is world-readable, so a non-root reader gets what it says" "mode=$z_mode" ;;
+esac
+
+# Z4 -- A FRESH FILE CHANGES NOTHING. Every key in the template is commented, so
+# a host that has just been deployed behaves exactly as it did before it had the
+# file. This is the assertion that lets Phase 2a run on production unattended.
+z_q="$( source "$LIB" >/dev/null 2>&1
+        SETTINGS_FILE="$ZD/etc/settings.ini" settings_get quiesce "BUILTIN" )"
+check "Z4 a fresh file leaves quiesce at the built-in default" "BUILTIN" "$z_q"
+z_c="$( source "$LIB" >/dev/null 2>&1
+        SETTINGS_FILE="$ZD/etc/settings.ini" settings_get catchup_max_age 1800 )"
+check "Z4b ...and catchup_max_age too" "1800" "$z_c"
+
+# Z5 -- POSITIVE CONTROL, and the one that makes Z4 mean something: uncommenting
+# the documented line must actually take effect. Without this pair, a template
+# whose `quiesce` line was misspelled -- or commented in a way settings_get could
+# not later parse -- would pass Z4 for the wrong reason.
+sed -i 's/^#quiesce = auto$/quiesce = auto,strict/' "$ZD/etc/settings.ini"
+z_q2="$( source "$LIB" >/dev/null 2>&1
+         SETTINGS_FILE="$ZD/etc/settings.ini" settings_get quiesce "BUILTIN" )"
+check "Z5 uncommenting the documented quiesce line takes effect" "auto,strict" "$z_q2"
+sed -i 's/^#catchup_max_age = 1800$/catchup_max_age = 900/' "$ZD/etc/settings.ini"
+z_c2="$( source "$LIB" >/dev/null 2>&1
+         SETTINGS_FILE="$ZD/etc/settings.ini" settings_get catchup_max_age 1800 )"
+check "Z5b ...and so does catchup_max_age" "900" "$z_c2"
+
+# Z6 -- what the template SAYS about the value it documents. The whole point of
+# the file is that an operator reads it before uncommenting, and the one thing
+# they must not miss is that `quiesce` here reaches the tier that deliberately
+# has none. Checked as a property of the shipped text, not of a fixture copy.
+z_text="$( rm -f "$ZD/fresh.ini"
+           source "$LIB" >/dev/null 2>&1
+           settings_write_default "$ZD/fresh.ini" >/dev/null 2>&1
+           cat "$ZD/fresh.ini" )"
+case "$z_text" in
+    *HOURLY*) ok "Z6 the template warns that this key reaches the hourly tier" ;;
+    *)        bad "Z6 the template warns that this key reaches the hourly tier" "no mention of the hourly tier" ;;
+esac
+case "$z_text" in
+    *",strict"*) ok "Z6b ...and names ',strict' as the way to refuse a failed freeze" ;;
+    *)           bad "Z6b ...and names ',strict' as the way to refuse a failed freeze" "no mention of ,strict" ;;
+esac
+# The value the engines now use by default, stated in the file an operator reads.
+case "$z_text" in
+    *_crash_*) ok "Z6c ...and says a degraded snapshot is named '_crash_'" ;;
+    *)         bad "Z6c ...and says a degraded snapshot is named '_crash_'" "no mention of the marker" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
