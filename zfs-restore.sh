@@ -825,19 +825,28 @@ restore_scope_resolve() {   # <config> <label> <namespace> <comma list>
     RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=(); RESTORE_SCOPE_NS="$ns"
     [ -n "$list" ] || return 0
 
-    local rest="$list" member hits n src copy i
+    local rest="$list" member hits n src copy i more=1
     local -a seen_in=()
     # Split on commas WITHOUT `read -a`/IFS games: a member is everything up to
     # the next comma, and the loop ends when there is no comma left. Nothing here
     # can be tripped by whitespace, because a ZFS name cannot contain any.
-    while [ -n "$rest" ]; do
+    while [ "$more" -eq 1 ]; do
         case "$rest" in
             *,*) member="${rest%%,*}"; rest="${rest#*,}" ;;
-            *)   member="$rest"; rest="" ;;
+            *)   member="$rest"; more=0 ;;
         esac
-        # An empty member means a stray or doubled comma. Skipping it silently
-        # would turn `a,,b` into a two-dataset plan the operator did not write,
-        # and `a,b,` into one they might have meant to extend.
+        # An empty member means a stray, leading or TRAILING comma. Skipping one
+        # silently would turn `a,,b` into a two-dataset plan the operator did not
+        # write, and `a,b,` into one they might have meant to extend.
+        #
+        # REV-20260827-122 F2: this refusal was UNREACHABLE for the trailing case,
+        # and the comment above it already said the case had to be refused. The
+        # loop ran `while [ -n "$rest" ]`, so `a,` resolved `a`, emptied `rest`,
+        # and left before it could ever build the empty final member. The guard
+        # named the hole; the loop shape decided it could not be reached. Now the
+        # loop runs until the LAST member has been handled -- `more` is cleared
+        # when the tail carries no further comma -- so every member the operator
+        # wrote is examined, including the empty one their trailing comma wrote.
         [ -n "$member" ] || die "restore: the dataset list contains an empty entry ('$list') -- a stray or doubled comma. Every member must name a dataset; refusing rather than restoring a list that is not the one written."
 
         # Duplicate INPUT, before resolution: two identical names are either a

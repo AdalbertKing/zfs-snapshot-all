@@ -2,6 +2,14 @@
 
 Read `docs/AI_PROJECT_RULES.md`, `docs/internal/reviews/README.md`, and the active reviewer file before changing code.
 
+**Before every work round, read section 1 of `docs/internal/IMPLEMENTER-ERROR-LOG.md`.**
+Owner instruction, 2026-08-27. That section is the distilled rules, deliberately
+short; the entries under it are evidence, not a reading list. Every mistake goes
+in with its genesis, its cause and the rule it produces. A repeated mistake under
+an existing rule is a stronger signal than a new category -- it means the rule is
+not being applied -- so add it to that rule's evidence rather than inventing a
+new one.
+
 ## Default role
 
 The default role for Claude in this repository is **implementer**.
