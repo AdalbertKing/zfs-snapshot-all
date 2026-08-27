@@ -1352,6 +1352,35 @@ restore_remote_ahead() {   # <account@host> <target root> <recovery point name> 
         exit 0" 2>/dev/null
 }
 
+# Which snapshots does the target hold that are NEWER than the recovery point?
+#
+# The narrow question, kept apart from restore_remote_ahead's broad one on
+# purpose. "Differs from the point" decides whether to roll back -- live writes
+# count there, because they have to go. "Holds snapshots after the point"
+# decides something else entirely: whether the COPY is about to be ahead of the
+# source, which is what jams the next backup.
+#
+# Measured on the lab, 2026-08-27: a rollback that discarded only live writes
+# destroyed no snapshot, left the relationship perfectly in sync -- and the run
+# still closed by announcing that the next backup would refuse. It did not; it
+# succeeded. A false alarm delivered in the middle of a recovery is not a small
+# thing: the true version of that warning is the one telling an operator their
+# only copy of a period is about to be destroyed, and it is worth exactly as
+# much as its false positives leave it worth.
+#
+# Prints "<dataset>@<snapshot>" per line, oldest first. Empty means none.
+restore_remote_newer_snaps() {   # <account@host> <target root> <point> [depth]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
+            c=\$(zfs get -H -p -o value creation \"\$d@$point\" 2>/dev/null) || continue
+            [ -n \"\$c\" ] || continue
+            zfs list -H -p -t snapshot -o creation,name -s creation -d 1 \"\$d\" 2>/dev/null |
+                awk -v c=\"\$c\" '\$1 > c {print \$2}'
+        done
+        exit 0" 2>/dev/null
+}
+
 # IS EVERY DATASET OF THE SUBTREE ACTUALLY AT THE RECOVERY POINT NOW?
 #
 # Asked after the engine, because "the engine exited 0" and "the machine holds
@@ -1681,6 +1710,9 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # so the substitution is gone rather than escaped more carefully.
         local _rdepth=""
         if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _rdepth="-d 0"; fi
+        local _newer _newer_n
+        _newer="$(restore_remote_newer_snaps "$_peer" "$_tgt" "$point" "$_rdepth")"
+        _newer_n="$(printf '%s' "$_newer" | grep -c . )"
         _list="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" "zfs list -H -o name $_rdepth -r '$_tgt'" 2>/dev/null)"
         if [ -z "$_list" ]; then
             RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
@@ -1713,6 +1745,13 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
             return 1
         fi
+        # ONLY WHEN SNAPSHOTS ACTUALLY GO. A rollback that discards live
+        # writes destroys nothing the copy has, so the relationship stays in
+        # sync and the next backup runs -- measured on the lab, where the run
+        # announced a jam and the very next pull said "All datasets processed
+        # successfully". Asked before the rollback, because afterwards the
+        # answer is gone.
+        #
         # Recorded so the run can close by saying what this costs the BACKUP.
         # Rolling the source back to $point leaves the copy holding snapshots
         # the source no longer has, and the next pull of this relationship
@@ -1720,7 +1759,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # A recovery that silently leaves the machine's protection jammed is
         # half an operation; the operator finds out at the next backup, or at
         # the next monitor alarm, or not at all.
-        RESTORE_ROLLED_BACK+=("$src")
+        [ -n "$_newer" ] && RESTORE_ROLLED_BACK+=("$src -- ${_newer_n} snapshot(s): $(printf '%s' "$_newer" | tr '\n' ' ')")
     fi
 
     # ---- 6. the engine -----------------------------------------------------
@@ -1813,7 +1852,7 @@ restore_report_backup_cost() {
     [ "${#RESTORE_ROLLED_BACK[@]}" -gt 0 ] || return 0
     local d
     log 0 "restore: ---- what this costs the backup ----"
-    log 0 "restore: the source was rolled back, so the copy on this collector now holds snapshots the source no longer has, for:"
+    log 0 "restore: the source was rolled back past snapshots it had, so the copy on this collector now holds snapshots the source no longer has:"
     for d in "${RESTORE_ROLLED_BACK[@]}"; do
         log 0 "restore:   $d"
     done
