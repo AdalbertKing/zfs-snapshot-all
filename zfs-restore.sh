@@ -1464,6 +1464,22 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     # -t: the target is an EXACT dataset, not a base to append the copy's name
     # under. Without it the engine writes hdd/data/hdd/backups/<peer>/hdd/data --
     # measured on the lab before the flag existed.
+    # RECURSION. A relationship that covers a subtree must restore the subtree:
+    # sending only the parent leaves every child exactly as the disaster left it,
+    # while reporting success -- measured on the lab, where the two disks of the
+    # VM kept their damage and the run said "all datasets recovered".
+    #
+    # -r, not -R: one atomic recursive stream lands the whole subtree under the
+    # exact target, which is what -t means. -R expands into independent datasets
+    # each needing its own name, which is the mapping -t switches off, so the
+    # engines refuse that pair.
+    #
+    # For a restore the atomic form is the stronger guarantee, not a weaker one:
+    # the operator asked for the state at a point, and -r gives exactly that
+    # across the subtree rather than per dataset.
+    if zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
+        RESTORE_ENGINE_ARGV+=(-r)
+    fi
     RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
     # The relationship's own key, in the engine's flag spelling. Word-split
     # deliberately: these are flags and paths, none of which carry a space in
