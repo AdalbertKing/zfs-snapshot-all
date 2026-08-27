@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
-<!-- frozen: snapget.sh 100755 e050264cf50bdc1bea1b1b9cf55cafcbdef31678 -->
+<!-- frozen: snapget.sh 100755 8f9b49018a48653e52843a3310da675a9a54848c -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -67,6 +67,39 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-27 (snapget.sh): **the refusal named a remedy the account cannot run,
+  and the remedy that fits said nothing when it failed.** Same owner direction
+  as the entry below it ("az do braku zaciecia i koniecznych poprawek w kodzie").
+
+  DIAGNOSIS ONLY again. No input changes verdict, status or effect.
+
+  Measured on the lab, immediately after the entry below was proven. The
+  refusal ended "Force explicitly with -f". Run as the account that owns the
+  relationship, `-f` gives:
+
+      cannot create '...': dataset already exists
+      Hint: -f [...] requires root.
+
+  `-f` is the wrong size of hammer as well as unusable: it destroys the whole
+  copy and re-sends every byte, when what the situation needs is to drop the
+  handful of snapshots the source no longer has. `-F` (reconcile) does exactly
+  that -- and is what the message should have said.
+
+  `-F` then failed too, with no hint at all:
+
+      cannot unmount '/hdd/labcoll/.../vm-900-disk-0': permission denied
+      Transfer failed
+
+  ...while the SIBLING dataset, identical but not mounted, succeeded in the same
+  run. The hint that would have explained it was gated on `FORCE_FULL_SEND`, and
+  the cause is not `-f`: it is `recv -F`, which rolls back, which unmounts, which
+  a delegated account cannot do on Linux. The gate is now the actual cause
+  (`recv_force_flag` non-empty), and when the target is mounted and the caller is
+  not root the message says so and gives the one-off root command.
+
+  Proven by the same account finishing the pull unaided once the copy was
+  unmounted: "All datasets processed successfully".
 
 - 2026-08-27 (snapget.sh): **the copy being AHEAD is not the same event as
   something writing to it, and the refusal now says which one happened.**

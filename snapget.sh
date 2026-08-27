@@ -1655,7 +1655,7 @@ process_dataset() {
                         if [ "$_seen" -eq 1 ]; then _ahead="$_ahead$_t "; _n=$((_n+1)); fi
                         [ "$_t" = "$recv_base" ] && _seen=1
                     done
-                    log 0 "Refusing: '$tgt_dataset' holds $_n snapshot(s) NEWER than the common snapshot '@${recv_base}', which the source no longer has: $_ahead-- so this pull cannot continue from that point without destroying them. Nothing wrote to this copy (its own written=0); the SOURCE went backwards, which is what a restore to an earlier point does. Those snapshots may be the only remaining copy of the period the source rolled away. Force explicitly with -f to discard them and follow the source's new history."
+                    log 0 "Refusing: '$tgt_dataset' holds $_n snapshot(s) NEWER than the common snapshot '@${recv_base}', which the source no longer has: $_ahead-- so this pull cannot continue from that point without destroying them. Nothing wrote to this copy (its own written=0); the SOURCE went backwards, which is what a restore to an earlier point does. Those snapshots may be the only remaining copy of the period the source rolled away. Reconcile with -F, which destroys exactly those and then pulls the increment. (-f also clears it, by destroying and recreating the whole copy and re-sending all of it -- and -f needs root, which the account running this pull is not.)"
                 else
                     log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
                 fi
@@ -1718,7 +1718,28 @@ process_dataset() {
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {
         log 0 "Transfer failed"
-        [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: a full pull/-f-style receive does a forced rollback, which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, this run needed root."
+        # THE HINT USED TO REQUIRE -f, AND THE CAUSE DOES NOT.
+        #
+        # Any receive carrying -F does a forced rollback, and rolling back a
+        # MOUNTED dataset unmounts it first -- which a delegated account cannot
+        # do on Linux, with or without `zfs allow`. -f is only one of the ways
+        # to arrive at -F: the ordinary reconcile path (-F) gets there too, and
+        # so does resuming this pull's own prior work.
+        #
+        # Measured on the lab, 2026-08-27: reconciling a copy after a restore
+        # failed with a bare "cannot unmount [...] permission denied / Transfer
+        # failed" and no hint at all, because FORCE_FULL_SEND was 0. The
+        # sibling dataset, which was not mounted, went through in the same run
+        # -- so the output showed one success and one unexplained failure over
+        # a difference the message never mentioned.
+        if [ -n "$recv_force_flag" ]; then
+            local _mnt; _mnt=$(zfs get -H -o value mounted "$tgt_dataset" 2>/dev/null)
+            if [ "$_mnt" = "yes" ] && [ "$(id -u)" -ne 0 ]; then
+                log 0 "Hint: this receive carries -F (a forced rollback) and '$tgt_dataset' is MOUNTED. Rolling back a mounted dataset unmounts it first, and on Linux a non-root user cannot unmount even with full 'zfs allow' delegation -- so this run could not have succeeded whatever else is true. A collector's copies are not meant to be mounted; that is what canmount=noauto is for. Unmount it once as root: zfs unmount '$tgt_dataset' -- then this pull goes through as the delegated account, with no further root involvement."
+            else
+                log 0 "Hint: this receive carries -F (a forced rollback), which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, this run needed root."
+            fi
+        fi
         # Only keep the hold if it is actually still useful: a
         # receive_resume_token means the resume branch above will need this
         # exact source snapshot on a later run. Without one (e.g. zfs recv

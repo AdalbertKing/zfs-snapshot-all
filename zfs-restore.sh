@@ -1462,7 +1462,8 @@ restore_report_backup_cost() {
     log 0 "restore: the next backup of this relationship WILL REFUSE, naming those snapshots. That refusal is correct: they are the only remaining copy of the period the source rolled away."
     log 0 "restore: two ways out, and they are not equivalent --"
     log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
-    log 0 "restore:   discard them: re-run the pull with -f. The period that was rolled away then exists nowhere."
+    log 0 "restore:   discard them: re-run the pull with -F, which destroys exactly those snapshots and then pulls the increment. The period that was rolled away then exists nowhere."
+    log 0 "restore: -F rolls the copy back, so the copy must not be MOUNTED -- a delegated account cannot unmount on Linux. Collector copies carry canmount=noauto for that reason; if one is mounted, unmount it as root once."
 
 }
 
