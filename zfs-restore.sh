@@ -1093,6 +1093,28 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 }
 # ------------------------------------------------------------------------------
 # restore_one -- ONE dataset, from the copy back onto the machine it came from
+# What the TARGET already has. Under push the machine being written to is on the
+# far side, so the classification create/rewind/replace cannot be made from the
+# copy alone -- restore_plan_strategy says exactly that and returns `remote`.
+#
+# One ssh, two reads, and nothing written: does the dataset exist, and what is
+# the GUID of its newest snapshot. That is the whole question, because it is the
+# same question snapsend will answer for itself a moment later when it looks for
+# a common base -- this asks it early only so the right MODE can be named in the
+# grant check before anything is sent.
+#
+# Prints "absent", or the head GUID. Empty output means the host could not be
+# asked, which the caller must treat as unclassifiable rather than as absent --
+# "I could not reach it" and "there is nothing there" differ by an entire
+# destroyed dataset.
+restore_remote_state() {   # <account@host:dataset> -> "absent" | <guid> | nothing
+    local spec="$1" peer="${1%%:*}" ds="${1#*:}"
+    [ -n "$peer" ] && [ -n "$ds" ] && [ "$peer" != "$spec" ] || return 1
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" \
+        "zfs list -H -o name '$ds' >/dev/null 2>&1 || { echo absent; exit 0; }; \
+         zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1" 2>/dev/null
+}
+
 # ------------------------------------------------------------------------------
 #
 # This is the step that writes. Everything above it decides whether it may, and
@@ -1176,12 +1198,36 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # from snapshots NEWER than the recovery point would answer a different
     # question than the one being asked.
     local mode
-    if [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
-        local _cut
-        _cut="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '
-            { print } $1 == p { exit }')"
-        restore_plan_strategy "$copy" "$src" "$_cut" "$point" >/dev/null 2>&1 || :
-    fi
+    case "$src" in
+        *:*)
+            # REMOTE target: ask it. restore_plan_strategy answers `remote` here
+            # by design -- it is the read-only planner and does not open ssh.
+            local _st _guid
+            _st="$(restore_remote_state "$src")"
+            if [ -z "$_st" ]; then
+                RESTORE_ONE_VERDICT="could not read the state of '$src' -- the host did not answer"
+                log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: 'I could not reach it' and 'there is nothing there' differ by an entire destroyed dataset."
+                return 1
+            fi
+            if [ "$_st" = absent ]; then
+                RESTORE_STRATEGY=full-absent
+            else
+                # A common base exists when the target's head GUID is one this
+                # copy also carries at or before the recovery point. That is the
+                # same proof snapsend will require; asking early only names the
+                # mode for the grant.
+                _guid="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print; exit}')"
+                if [ -n "$_guid" ]; then RESTORE_STRATEGY=increment
+                else                     RESTORE_STRATEGY=full-live; fi
+            fi ;;
+        *)
+            if [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
+                local _cut
+                _cut="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '
+                    { print } $1 == p { exit }')"
+                restore_plan_strategy "$copy" "$src" "$_cut" "$point" >/dev/null 2>&1 || :
+            fi ;;
+    esac
     case "${RESTORE_STRATEGY:-}" in
         full-absent)                        mode=create ;;
         increment|rollback|discard-live)    mode=rewind ;;
