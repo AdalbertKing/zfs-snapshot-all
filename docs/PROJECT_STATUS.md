@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6498e037138be66e -->
+<!-- status-covers-digest: 3568b4626220bb2c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,62 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **ODTWARZANIE DZIALA OD KONCA DO KONCA — DOWIEDZIONE NA ZYWO (2026-08-27).**
+  Lab pve9 (kolektor) -> pve1, dwa dyski jednej VM, konto delegowane, prawdziwy
+  transfer. Jedna komenda:
+
+      zfs-backup.sh restore lab1 --at="2026-08-27 16:00" --yes
+
+  Pelny lancuch: **zgoda odczytana z celu przez bramke i wymuszona -> tryb
+  sklasyfikowany zdalnie po CALYM poddrzewie -> punkt wybrany po `creation` ->
+  cofniecie trzech datasetow -> transfer -> dane wrocily.** Plik podlozony jako
+  szkoda zniknal z obu dyskow.
+
+  **Warianty dowiedzione:** cala relacja (sama nazwa), wybrane datasety przez
+  `--target` (takze lista po przecinku), `--at` jako czas zegarowy, tryby
+  `rewind` i `rollback`. **Niedowiedzione na labie:** `create` (cel nie
+  istnieje) i `replace` (brak waznej bazy) — obie sciezki wymagaja zniszczenia
+  danych labowych, czego nie robilem.
+
+  **OSIEM wad, wszystkie znalezione przez lab, zadnej nie znalazl test:**
+
+  | # | wada | dlaczego test jej nie widzial |
+  |---|---|---|
+  | 1 | `log: command not found` — 34 wywolania w kodzie, funkcji brak | kazdy harness stubowal `log` |
+  | 2 | cel skladany jako `BAZA/nazwa` -> `hdd/labsrc/hdd/labcoll/...` | zaden test nie skladal prawdziwej sciezki |
+  | 3 | silnik bez klucza relacji | testy nie otwieraly ssh |
+  | 4 | wymog zgodnosci etykiet **niewykonalny** — kolektor nie zna etykiety peera | fikstura ja znala |
+  | 5 | konto relacji **nie ma** `receive` ani `rollback` | — |
+  | 6 | `$(...)` w zdalnej komendzie rozwijane LOKALNIE -> cofnieto 1 z 3 datasetow | quoting przez ssh |
+  | 7 | klasyfikacja czytala tylko korzen poddrzewa | dzieci byly w przod |
+  | 8 | `--deny-restore` zabieral `destroy` i `mount`, ktore naleza do BACKUPU | rewokacja nie byla mierzona po skutku |
+
+  **Trzy z nich (2, 6, 7) meldowaly SUKCES przy niewykonanej robocie.** Wada 8
+  jest odwrotna: cofniecie zgody po cichu psulo backup relacji i nic by tego nie
+  zglosilo az do nastepnego prune, ktory nic by nie zrobil.
+
+  **Wada 5 obala teze, ktora sam postawilem recenzentowi w #166.** Twierdzilem,
+  ze mozliwosc nadpisania juz istnieje i nic jej nie pilnuje. Nieprawda: konto
+  relacji ma wylacznie zestaw backupowy. Zgoda nadaje teraz brakujace
+  `receive,rollback,create,canmount,mountpoint` i zabiera **dokladnie je** przy
+  cofnieciu.
+
+  **Zmiana w zamrozonych silnikach:** `-t` (cel dokladny) w `snapsend` I
+  `snapget`, jednym commitem, na polecenie wlasciciela. Boolean, wolny w obu
+  optstringach, nie rusza kontraktu `FLAGS_ARG_LETTERS`; kompozycja celu dostaje
+  nowa PIERWSZA galaz, dwie istniejace sa bajt w bajt te same — kazdy przebieg
+  bez `-t` zachowuje sie jak dotad. Wpis w `ENGINE-FREEZE.md`, baseline
+  przepiety.
+
+  **Potwierdzone przy okazji, nie jako wada:** nazwy snapshotow i `creation`
+  rozjezdzaja sie miedzy hostami o strefe czasowa (ten sam snapshot: 16:51 na
+  kolektorze, 18:51 na celu). Dlatego `--at` rozwiazuje po `creation`, nigdy po
+  nazwie — dokladnie tak, jak planer to flaguje.
+
+  **Lab sprzatniety:** zgoda zabrana, uprawnienia backupu przywrocone recznie po
+  wadzie 8, oba hosty z powrotem na `main`.
+
 
 - **RESTORE: PRZEBIEG PO CALEJ RELACJI — IDZIE DALEJ PO PORAZCE (2026-08-27).**
   Decyzja wlasciciela 7. Implementer rekomendowal zatrzymanie na pierwszej
