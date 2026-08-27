@@ -1601,9 +1601,14 @@
   relacje, ktora o nic nie prosila — w kierunku, ktorego nikt nie zauwazy, bo
   transfer wolniejszy niz powinien nadal sie udaje.
 
-  `test/linkfields`: **45/0** (+10). Kontrola negatywna wobec `main`: **szesc
+  `test/linkfields`: **49/0**. Kontrola negatywna wobec `main`: **szesc
   asercji o pasmie pada**, a trzy kontrole „nie wolno odmowic" przechodza po obu
-  stronach.
+  stronach. Po rebase na `main` (etap profili krok 2 wszedl pierwszy) sekcja
+  10 z `main` — behawioralny test przeciekania limitu miedzy rekordami —
+  podnosi teraz rowniez `resolve_link_bandwidth`, bo funkcja pod testem
+  wola ja, odkad limit mieszka w manifescie. Kontrola mutacyjna: usuniecie
+  `BANDWIDTH=""` daje 47/2 — pada test behawioralny I grep zrodla, wiec
+  slabszy nie niesie ciezaru mocniejszego.
 
 - **ETAP PROFILI, krok 1: `flags` rozbite wzdluz osi LACZA (2026-08-25).**
 
