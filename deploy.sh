@@ -173,7 +173,11 @@ RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants
 # `mount` and `canmount` are here because a received dataset that cannot be
 # mounted is not a restored one; `create` because a subtree may need a level the
 # target no longer has.
-RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mount,destroy}"
+# `mountpoint` is here because a received stream carries properties and the
+# receive sets them. Without it the transfer still lands but says "cannot receive
+# mountpoint property: permission denied" -- a restore that put the data back and
+# not the property that says where it belongs. Measured on the lab 2026-08-27.
+RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mount,mountpoint,destroy}"
 
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
