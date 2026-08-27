@@ -32,6 +32,27 @@ LIBCOMMON="$SCRIPT_DIR/lib-backup-common.sh"
 # it at a recorder instead of a transfer.
 RESTORE_ENGINE="${RESTORE_ENGINE:-$SCRIPT_DIR/snapsend.sh}"
 
+# THE CONNECTION IS HANDED IN, not rebuilt here.
+#
+# A restore under push opens ssh to the machine being written to, and the key,
+# the known_hosts file and the port for that relationship are things zfs-backup.sh
+# already resolves (load_client_and_connection). Deriving them a second time in
+# this file would be two sources of truth about which key reaches which host --
+# and the failure mode of getting that wrong is a recovery aimed at the wrong
+# machine.
+#
+# So the caller exports RESTORE_SSH_OPTS as a plain string and this splits it.
+# Deliberately word-split: these are ssh flags, none of which can contain a
+# space in this project (paths are under /etc and /home, both space-free by the
+# installer's own rules), and an array cannot cross an `exec` boundary.
+#
+# Empty is legitimate: a LOCAL restore opens no connection at all.
+SSH_OPTS=()
+if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
+    # shellcheck disable=SC2206
+    SSH_OPTS=(${RESTORE_SSH_OPTS})
+fi
+
 # The rest of this file speaks in `echo`; the restore executor was written
 # against lib-zfs-snap.sh's `log <level> <message>`, which this script does not
 # source. Found on the lab, not in the suites -- every harness defined its own

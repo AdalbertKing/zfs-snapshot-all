@@ -9937,7 +9937,35 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # 2026-08-17 split -- it is the one operation whose active side writes
         # onto production, so it is not this file's code. Both spellings work
         # and behave identically; exec so exit codes pass through untouched.
-        restore)          shift; exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;
+        restore)
+            # THE CONNECTION IS RESOLVED HERE, where the paths are already known.
+            #
+            # A restore under push writes onto the machine being recovered, so it
+            # opens ssh to it -- with that relationship's key, its known_hosts and
+            # its port. This file owns those paths (load_client_and_connection);
+            # zfs-restore.sh deriving them a second time would be two answers to
+            # "which key reaches which host", and being wrong there aims a
+            # recovery at the wrong machine.
+            #
+            # Best-effort and silent on failure: a LOCAL restore needs no
+            # connection, `--plan` opens none, and an unresolvable relationship
+            # is refused by zfs-restore.sh with a better message than anything
+            # this dispatch could produce before it has parsed the arguments.
+            shift
+            if [ -n "${1:-}" ] && [ -r "$CLIENTS_DIR/${1%%:*}.conf" ]; then
+                if load_client_and_connection "$CLIENTS_DIR/${1%%:*}.conf" >/dev/null 2>&1; then
+                    # The same pinning the engines get (see the -K/-k/-O set
+                    # built for snapget), spelled as raw ssh flags because
+                    # zfs-restore.sh calls ssh directly rather than through an
+                    # engine. HostKeyAlias is not optional: the known_hosts file
+                    # is written against the alias, so without it strict checking
+                    # fails on a host that is correctly pinned.
+                    RESTORE_SSH_OPTS="-i ${LOAD_KEYFILE:-} -o UserKnownHostsFile=${LOAD_ALIAS_KH:-} -o HostKeyAlias=${LOAD_ALIAS:-} -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o StrictHostKeyChecking=yes -o BatchMode=yes"
+                    [ -n "${LOAD_PORT:-}" ] && RESTORE_SSH_OPTS="$RESTORE_SSH_OPTS -p $LOAD_PORT"
+                    export RESTORE_SSH_OPTS
+                fi
+            fi
+            exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         activate)         shift; cmd_activate "$@" ;;
