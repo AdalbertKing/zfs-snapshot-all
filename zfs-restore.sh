@@ -864,11 +864,66 @@ restore_resolve_try() {   # <config> <label> <want> [namespace: ""|copy|orig]
         local src_plain="${src_id#*@}"; src_plain="${src_plain#*:}"
         if [ -n "$label" ] && [ "$l" != "$label" ]; then continue; fi
         if [ -n "$want" ]; then
+            # A DESCENDANT OF A RECURSIVE RELATIONSHIP IS A MEMBER OF IT.
+            #
+            # The config records one section per relationship, and a recursive
+            # one covers a whole subtree under a single recorded name. Matching
+            # only the recorded string meant `--target` could name the parent
+            # and nothing else -- so on this estate, where a relationship is a
+            # VM's disks under one parent, the flag that exists to scope a
+            # recovery to some of them could not name any of them.
+            #
+            # Measured on the lab, 2026-08-27:
+            #   restore lab1 --target hdd/labsrc/vm-900-disk-0
+            #   FATAL: 'hdd/labsrc/vm-900-disk-0' is not a dataset of relation
+            #          'lab1'
+            # ...pointing at `restore --plan`, which lists the parent only, so
+            # the advice named a list that could not contain the answer. And the
+            # case it locked out is the ordinary one: one disk of a VM is
+            # damaged, the other has hours of good writes on it, and restoring
+            # the whole relation rolls both back.
+            #
+            # A DERIVATION, not a guess (R-025's line). Both sides of a
+            # recursive relationship carry the same subtree shape, so the
+            # child's copy location is the recorded copy plus the same relative
+            # path -- arithmetic on two recorded facts, no probing, no
+            # inference. Fenced to sections whose own `recursive` field says the
+            # subtree is covered: for a non-recursive one the child genuinely is
+            # not a member, and it still matches only what it records.
+            local _rel="" _matched=0
             case "$ns" in
-                copy) [ "$copy_loc" = "$want" ] || continue ;;
-                orig) [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || continue ;;
-                *)    [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue ;;
+                copy) [ "$copy_loc" = "$want" ] && _matched=1 ;;
+                orig) { [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ]; } && _matched=1 ;;
+                *)    { [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ]; } && _matched=1 ;;
             esac
+            if [ "$_matched" -eq 0 ]; then
+                local _recur; _recur="$(installed_dataset_field "$config" "$ds" recursive)"
+                case "$_recur" in
+                    yes|flat|1|true)
+                        case "$ns" in
+                            copy) [ "${want#"$copy_loc"/}"  != "$want" ] && _rel="${want#"$copy_loc"/}" ;;
+                            orig) [ "${want#"$src_plain"/}" != "$want" ] && _rel="${want#"$src_plain"/}" ;;
+                            *)    if   [ "${want#"$src_plain"/}" != "$want" ]; then _rel="${want#"$src_plain"/}"
+                                  elif [ "${want#"$copy_loc"/}"  != "$want" ]; then _rel="${want#"$copy_loc"/}"
+                                  fi ;;
+                        esac ;;
+                esac
+                [ -n "$_rel" ] || continue
+                # The copy has to be there. A descendant that was never captured
+                # is a typo, or a dataset created after the last backup, and both
+                # deserve "this relation does not cover it" rather than a plan
+                # that reaches the transfer before finding there is nothing to
+                # send. Asked only when the copy is LOCAL: a remote one would put
+                # an ssh round trip inside a resolver that has to stay a pure
+                # function of the config, and the per-dataset step already
+                # refuses on a copy with no snapshot.
+                case "$copy_loc" in
+                    *@*|*:*) : ;;
+                    *) zfs list -H -o name "${copy_loc}/${_rel}" >/dev/null 2>&1 || continue ;;
+                esac
+                src_id="${src_id}/${_rel}"
+                copy_loc="${copy_loc}/${_rel}"
+            fi
         fi
         printf '%s\t%s\n' "$src_id" "$copy_loc"
         hit=0
