@@ -3778,9 +3778,18 @@ schedule_tier_exprs() {   # <send|prune> -> "<tier>\t<cron expression>" per tier
     [ -n "$tpl" ] || return 0
     for one in ${tpl//,/ }; do
         [ -n "$one" ] || continue
+        # PROFILE_ACTIVE can be a PATH: cmd_migrate_profile sets it from
+        # --profile=, which accepts one, and the client record it then writes
+        # carries that same string for load_client_profile to read back. So
+        # this had the REV-20260827-122 F1 defect too, one site further on --
+        # it would build [template:profile__/tmp/mine.conf__hourly], find
+        # nothing, and `continue`. The comment above records what an empty
+        # answer here costs: no stagger at all, which a two-source lab caught
+        # in its first minute. Canonicalised at the point of use, the same way
+        # the renderer and the migration removal loop derive it.
         case "$one" in
             profile__*) sect="$one" ;;
-            *)          sect="profile__${PROFILE_ACTIVE}__${one}" ;;
+            *)          sect="profile__$(profile_name_of "$PROFILE_ACTIVE")__${one}" ;;
         esac
         expr=$(profile_template_section "$sect" 2>/dev/null | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
         [ -n "$expr" ] || continue
@@ -3815,9 +3824,18 @@ schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or no
         # hourly cadence; #149 turned it into "emit nothing", i.e. no stagger
         # at all. The two-source lab caught it in its first minute: both
         # relationships landed on the template's own :01. Accept both forms.
+        # PROFILE_ACTIVE can be a PATH: cmd_migrate_profile sets it from
+        # --profile=, which accepts one, and the client record it then writes
+        # carries that same string for load_client_profile to read back. So
+        # this had the REV-20260827-122 F1 defect too, one site further on --
+        # it would build [template:profile__/tmp/mine.conf__hourly], find
+        # nothing, and `continue`. The comment above records what an empty
+        # answer here costs: no stagger at all, which a two-source lab caught
+        # in its first minute. Canonicalised at the point of use, the same way
+        # the renderer and the migration removal loop derive it.
         case "$one" in
             profile__*) sect="$one" ;;
-            *)          sect="profile__${PROFILE_ACTIVE}__${one}" ;;
+            *)          sect="profile__$(profile_name_of "$PROFILE_ACTIVE")__${one}" ;;
         esac
         expr=$(profile_template_section "$sect" 2>/dev/null           | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
         # A tier that does not declare the field at all does not constrain it.
@@ -8179,6 +8197,27 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # refresh, and wrong here -- migrating from `prod` to `prod` after the
     # operator changed keep = 7 to keep = 10 found profile__prod__daily already
     # in the file, appended nothing, and left `retain = -D7` installed. The
+    # ONE identity for the templates, derived the way the RENDERER derives it.
+    #
+    # REV-20260827-122 F1: this loop interpolated $target_profile raw. Given a
+    # profile by path -- `--profile=/tmp/mine.conf`, which the same function
+    # accepts a few lines above -- it searched for
+    #     [template:profile__/tmp/mine.conf__...]
+    # while profile_render_templates had written
+    #     [template:profile__mine__...]
+    # so nothing matched and no old template was removed. ensure_cron_config is
+    # ADDITIVE, so the already-present old templates then suppressed the append
+    # of the edited policy, the candidate installed cleanly carrying the OLD
+    # retention, and the record was stamped with the NEW digest afterwards. The
+    # next run reads that digest and takes the "nothing to migrate" path. Silent
+    # divergence between what the records claim and what the crontab enforces,
+    # in RETENTION, which is the one number a backup is judged by.
+    #
+    # profile_name_of is the same helper the renderer uses, and its own comment
+    # says the name "has to survive being given as a path and must never carry a
+    # '/'" -- the rule existed; this site did not apply it.
+    local _tpl_ns; _tpl_ns="$(profile_name_of "$target_profile")"
+
     # digest made the run HAPPEN; this makes it MEAN something. Measured: the
     # assertion failed with before='-D7' after='-D7' until this loop existed.
     #
@@ -8193,7 +8232,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
         t="${t#\[template:}"; t="${t%\]}"
         [ -n "$t" ] || continue
         remove_template_section "$workfile" "$t"
-    done < <(grep -oE "^\[template:profile__${target_profile}__[^]]+\]" "$workfile" 2>/dev/null)
+    done < <(grep -oE "^\[template:profile__${_tpl_ns}__[^]]+\]" "$workfile" 2>/dev/null)
     # Everything ELSE orphaned is swept after the clients are rewritten, when it
     # is finally known what still references what -- see
     # remove_orphan_profile_templates.

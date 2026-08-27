@@ -63,13 +63,30 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
 # targeted --section run. The retention group (below the matching `fi`) is self-
 # contained and always eligible.
+# The profile-fixture helpers live ABOVE the full-suite-only guard, because the
+# self-contained group below it calls them. They were inside it until
+# 2026-08-27, so every targeted `--section` run died at the first call with
+# `mkprof_copy: command not found` and never reached the sections it had been
+# asked for -- the L0 execution REV-109 built, silently unusable.
+
+mkprof_copy() {   # <target profile, without the .conf>
+    mkdir -p "$(dirname "$1")"
+    cp "$REPO/profiles/default.conf" "$1.conf"
+}
+mkprof_add() {    # <target profile dir> <section header> <line>
+    awk -v want="$2" -v add="$3" '
+        { print }
+        $0 == want && !done { print add; done=1 }
+    ' "$1.conf" > "$1.conf.new" && mv "$1.conf.new" "$1.conf"
+}
+
 if [ -z "$ONLY_SECTION" ]; then
 
 # --- 1. client_name_valid ----------------------------------------------------
@@ -3616,16 +3633,6 @@ fi
 # editing one of three files. `mkprof_add <dir> <section> <lines...>` appends the
 # lines directly after that section header, which is where an operator would put
 # them and where the splitter expects them.
-mkprof_copy() {   # <target profile, without the .conf>
-    mkdir -p "$(dirname "$1")"
-    cp "$REPO/profiles/default.conf" "$1.conf"
-}
-mkprof_add() {    # <target profile dir> <section header> <line>
-    awk -v want="$2" -v add="$3" '
-        { print }
-        $0 == want && !done { print add; done=1 }
-    ' "$1.conf" > "$1.conf.new" && mv "$1.conf.new" "$1.conf"
-}
 
 FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
 mkprof_copy "$FS/p/prof"
@@ -7784,6 +7791,127 @@ sb_rc=$?
 { [ "$sb_rc" -ne 0 ] && cmp -s "$SB/before.conf" "$SB/dir/jobs.conf"; } \
     && ok "pair-tx control: an unpaired peer is refused and the config is untouched" \
     || bad "pair-tx control: an unpaired peer is refused and the config is untouched" "rc=$sb_rc"
+
+
+# ============================================================================
+# 122. REV-20260827-122 F1 -- a profile given BY PATH must have its own
+#      templates replaced, and the RENDERED retention must change with them.
+#
+# The removal loop interpolated $target_profile raw. Given `--profile=/tmp/x.conf`
+# -- a form the same function accepts a few lines earlier -- it searched for
+#     [template:profile__/tmp/x.conf__...]
+# while the renderer had written
+#     [template:profile__x__...]
+# so no old template was removed. ensure_cron_config is ADDITIVE, so the old
+# templates then suppressed the append of the edited policy: the candidate
+# installed cleanly carrying the OLD retention, and the client record was
+# stamped with the NEW digest afterwards. A second run reads that digest and
+# takes the "nothing to migrate" path forever.
+#
+# So the assertion is the RENDERED cron line, not the config fragment and not
+# the record: the reviewer's criterion 5 says so, and it is the right axis
+# anyway -- the fragment and the record were both already "correct" while the
+# crontab enforced something else. That gap IS the defect.
+#
+# Self-contained (REV-109 4.3): its own fixture, its own profile copy, nothing
+# inherited from the sections above.
+# ============================================================================
+M122="$WORK/rev122"
+rm -rf "$M122"; mkdir -p "$M122/clients" "$M122/peerstate" "$M122/keys" "$M122/dir" \
+                         "$M122/root" "$M122/bin" "$M122/custom"
+# A profile the operator keeps OUTSIDE the package tree and names by full path.
+# d30 is the honest choice: one tier, one counter, so the rendered retention is
+# a single unambiguous flag and a change to it cannot hide behind a ladder.
+cp "$REPO/profiles/d30.conf" "$M122/custom/mine.conf"
+cp "$REPO/profiles/default.conf" "$M122/root/default.conf"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$M122/bin/crontab"
+chmod +x "$M122/bin/crontab"
+for h in 10.9.9.8 10.9.9.9; do
+    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$M122/keys/${h}_known_hosts"
+done
+cat > "$M122/peerstate/10.9.9.8.conf" <<EOF
+PEER_SAVED_ACCOUNT=zfsbackup
+PEER_SAVED_TARGET=tank/backups
+PEER_SAVED_MODE=backup
+PEER_SAVED_DATASETS="rpool/data"
+EOF
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$M122" > "$M122/server.conf"
+printf '[defaults]\n\thost_label = r122\n' > "$M122/dir/jobs.conf"
+{ printf 'CLIENT_NAME=r122c\nPEER_HOST=10.9.9.8\nSTATE=active\n'
+  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
+  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
+  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$M122"
+} > "$M122/clients/r122c.conf"
+
+m122_run() {   # <args...> -> rc; the migrated config lands in $M122/dir/jobs.conf
+    ( PATH="$M122/bin:$PATH"
+      atomic_replace_and_install() { cp -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }
+      assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }
+      assert_config_readable_by_target() { :; }
+      assert_source_prune_grant() { :; }
+      assert_no_atomic_with_source_retention() { :; }
+      CLIENTS_DIR="$M122/clients" PEER_STATE_DIR="$M122/peerstate" PEER_KEY_DIR="$M122/keys" \
+      SERVER_CONF="$M122/server.conf" PROFILE_ROOT="$M122/root" \
+      PROFILE_ACTIVE=default PROFILE_LOADED="" \
+      cmd_migrate_profile --config="$M122/dir/jobs.conf" --yes "$@" ) 2>&1
+}
+# THE RENDERED retention: the installed config driven through the REAL generator,
+# which is what the host would actually run. Not the [template:] fragment.
+m122_retain() {
+    REPO_DIR=/REPO NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=/D CRON_LOG=/L \
+        bash "$REPO/gen-cron.sh" -c "$M122/dir/jobs.conf" 2>/dev/null \
+        | grep -oE ' -D[0-9]+' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# --- step 1: migrate onto the custom profile, BY PATH.
+m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
+_g="$m122_rc"
+if [ "$_g" = "0" ]; then ok "122a: a profile named by absolute path migrates at all"; else bad "122a: a profile named by absolute path migrates at all" "want [0] got [$_g]"; fi
+_g="$(m122_retain)"
+if [ "$_g" = "-D30" ]; then ok "122b: ...and renders the retention that profile declares"; else bad "122b: ...and renders the retention that profile declares" "want [-D30] got [$_g]"; fi
+# The template family carries the CANONICAL name, never the path -- that is the
+# identity the removal in step 2 has to match.
+if grep -qE '^\[template:profile__mine__' "$M122/dir/jobs.conf"; then
+    ok "122c: ...under the canonical namespace 'mine', not the path"
+else
+    bad "122c: ...under the canonical namespace 'mine', not the path" \
+        "$(grep -oE '^\[template:[^]]+\]' "$M122/dir/jobs.conf" | head -3)"
+fi
+
+# --- step 2: EDIT the profile and migrate again with the same path.
+#     This is the whole finding. On b0a3a289b7bfd2a9e89b8de75c5d600e382f6c0d the
+#     rendered retention stays -D30 while the run reports success.
+sed -i 's/^\tkeep           = 30$/\tkeep           = 10/' "$M122/custom/mine.conf"
+grep -q 'keep           = 10' "$M122/custom/mine.conf" \
+    && ok "122d: the fixture edit landed (keep 30 -> 10)" \
+    || bad "122d: the fixture edit landed" "$(grep -n 'keep' "$M122/custom/mine.conf" | head -2)"
+
+m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
+_g="$m122_rc"
+if [ "$_g" = "0" ]; then ok "122e: re-migrating an EDITED profile given by path succeeds"; else bad "122e: re-migrating an EDITED profile given by path succeeds" "want [0] got [$_g]"; fi
+# THE CARRYING ASSERTION.
+_g="$(m122_retain)"
+if [ "$_g" = "-D10" ]; then ok "122f: ...and the RENDERED retention actually changes to the edited value"; else bad "122f: ...and the RENDERED retention actually changes to the edited value" "want [-D10] got [$_g]"; fi
+# ...and the old family is gone rather than sitting beside the new one. An
+# orphan [template:] is a schedule definition in a live config that nothing
+# references -- and here it was the thing suppressing the new policy.
+n122="$(grep -cE '^\[template:profile__mine__daily\]' "$M122/dir/jobs.conf")"
+_g="$n122"
+if [ "$_g" = "1" ]; then ok "122g: ...exactly one 'daily' template, not the old one plus the new"; else bad "122g: ...exactly one 'daily' template, not the old one plus the new" "want [1] got [$_g]"; fi
+
+# --- step 3: criterion 4 -- an unchanged file is the REAL no-op path, and it is
+#     only meaningful because step 2 proved the policy really moved first.
+m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
+_g="$m122_rc"
+if [ "$_g" = "0" ]; then ok "122h: a third run with the unchanged file exits 0"; else bad "122h: a third run with the unchanged file exits 0" "want [0] got [$_g]"; fi
+case "$m122_out" in
+    *"nothing to migrate"*) ok "122i: ...and takes the no-op path by saying so" ;;
+    *) bad "122i: ...and takes the no-op path by saying so" "$(printf '%s' "$m122_out" | tail -2)" ;;
+esac
+_g="$(m122_retain)"
+if [ "$_g" = "-D10" ]; then ok "122j: ...leaving the edited retention in place"; else bad "122j: ...leaving the edited retention in place" "want [-D10] got [$_g]"; fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
