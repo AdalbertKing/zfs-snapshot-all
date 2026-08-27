@@ -2039,19 +2039,51 @@ restore_grant_parse() {   # <label we asked about> <the peer's answer> -> modes,
 # the operator to the machine that can.
 restore_grant_require() {   # <label> <peer answer> <needed mode> <target host, for the message>
     local label="$1" answer="$2" need="$3" host="${4:-the target host}" modes
+    # THE LABEL IN THE MESSAGE COMES FROM THE ANSWER, because the caller does
+    # not have one. restore_grant_parse accepts an empty label deliberately --
+    # the collector never records the peer-side name, which the peer chose at
+    # join time -- and every refusal below then interpolated that empty string
+    # straight into the remedy it printed:
+    #
+    #     restore: '...' grants relationship '' only 'create rewind'
+    #     restore:     deploy.sh --allow-restore= --replace
+    #
+    # Measured on the lab, 2026-08-27. The command is not merely unhelpful: an
+    # empty --allow-restore= is the exact input that fell past the grant dispatch
+    # in deploy.sh and started reinstalling the host (error log E1). The refusal
+    # was telling the operator to run it.
+    #
+    # zfs-pair-gate puts PAIR_LABEL in its answer and derives it from the KEY in
+    # its own forced command, so it is the authoritative name and it is already
+    # here. Used only for DISPLAY -- the authorisation decision is unchanged and
+    # still belongs to restore_grant_parse.
+    local shown="$label"
+    if [ -z "$shown" ]; then
+        shown="$(printf '%s
+' "$answer" | sed -n 's/^PAIR_LABEL=//p' | head -1)"
+    fi
+    local grant_cmd
+    if [ -n "$shown" ]; then
+        grant_cmd="deploy.sh --allow-restore=$shown"
+    else
+        # Still nothing. Then the message must not fabricate a command: name the
+        # one step that produces the missing word.
+        shown="<unknown -- that machine did not name it>"
+        grant_cmd="deploy.sh --allow-restore=<the label that machine knows this relationship by; PAIR-CONTROL status there prints it>"
+    fi
     case "$need" in
         create|rewind|replace) ;;
         *) log 0 "restore: '$need' is not a restore mode -- refusing rather than asking for something undefined"; return 1 ;;
     esac
 
     if ! modes="$(restore_grant_parse "$label" "$answer")"; then
-        log 0 "restore: '$host' did not publish a usable restore grant for relationship '$label', so it has NOT agreed to be written to. Nothing was changed."
+        log 0 "restore: '$host' did not publish a usable restore grant for relationship '$shown', so it has NOT agreed to be written to. Nothing was changed."
         log 0 "restore: if that machine really is the one to recover, grant it THERE, as root:"
         if [ "$need" = replace ]; then
-            log 0 "restore:     deploy.sh --allow-restore=$label --replace"
+            log 0 "restore:     $grant_cmd --replace"
             log 0 "restore: '--replace' is required here because this recovery would DESTROY data that machine holds now. Without it a grant only permits writing where there is free space."
         else
-            log 0 "restore:     deploy.sh --allow-restore=$label"
+            log 0 "restore:     $grant_cmd"
         fi
         log 0 "restore: this side cannot grant itself anything -- that is what makes the grant worth having."
         return 1
@@ -2061,12 +2093,12 @@ restore_grant_require() {   # <label> <peer answer> <needed mode> <target host, 
         *" $need "*) return 0 ;;
     esac
 
-    log 0 "restore: '$host' grants relationship '$label' only '$modes', and this recovery needs '$need'. Nothing was changed."
+    log 0 "restore: '$host' grants relationship '$shown' only '$modes', and this recovery needs '$need'. Nothing was changed."
     if [ "$need" = replace ]; then
         log 0 "restore: 'replace' DESTROYS data that is on that machine now and puts an older copy in its place. It is never implied by a grant -- it is named in one, deliberately, when nothing is broken:"
-        log 0 "restore:     deploy.sh --allow-restore=$label --replace     (run as root ON $host)"
+        log 0 "restore:     $grant_cmd --replace     (run as root ON $host)"
     else
-        log 0 "restore:     deploy.sh --allow-restore=$label     (run as root ON $host)"
+        log 0 "restore:     $grant_cmd     (run as root ON $host)"
     fi
     return 1
 }
