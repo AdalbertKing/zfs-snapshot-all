@@ -2422,22 +2422,44 @@ cmd_restore() {
             # that equal names are one atomic event (measured otherwise on pve2).
             [ "$_rc_n" -eq 1 ] || die "restore: '$addr' selects $_rc_n datasets -- with --snapshot give one dataset (label:dataset), not a whole relation"
             dataset=$(printf '%s' "$_rc_sel" | cut -f1)
-        else
-            plan=1
+        elif [ "$plan" -eq 1 ]; then
             if [ "$_rc_n" -eq 1 ]; then
                 dataset=$(printf '%s' "$_rc_sel" | cut -f1)
             else
                 addr_filter=$(printf '%s\n' "$_rc_sel" | cut -f1)
             fi
+        else
+            # THE WHOLE RELATION. Naming it alone means every dataset it covers
+            # -- which is what an operator recovering a machine actually asks
+            # for, and the form the owner's grammar puts first.
+            #
+            # It builds the same scope arrays a --source/--target list produces,
+            # so there is one runner, one per-dataset step and one report for
+            # every shape of this verb. The alternative -- a second loop for the
+            # whole-relation case -- is how two paths come to disagree about
+            # what a failure means.
+            RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
+            local _wr_s _wr_c
+            while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
+                [ -n "$_wr_s" ] || continue
+                RESTORE_SCOPE_SRC+=("$_wr_s"); RESTORE_SCOPE_COPY+=("$_wr_c")
+            done <<< "$_rc_sel"
+            RESTORE_AT_EPOCH="$at_epoch"
+            restore_run_scope
+            return $?
         fi
         config="$_rc_cfg"
     fi
 
-    # Phase 7 slice 2: a SAFE restore is the plain verb. Destructive replacement of
-    # a live dataset stays a SEPARATE verb (slice 3), never a flag on this one --
-    # a --force that turns a safe command into a destructive one is exactly the
-    # shape the plan refuses.
-    [ -n "$at_epoch" ] && plan=1
+    # `--at` used to force plan mode, because a recovery point was something the
+    # verb could describe and not reach. It reaches it now: the point is resolved
+    # per dataset by creation, proved unambiguous under the engine's own matching
+    # rule, and the target is rolled back to it when it sits further forward.
+    #
+    # The note this replaces said destructive recovery "has no public grammar
+    # yet -- the owner is still deciding it". He decided: the collector starts,
+    # the machine at risk publishes a grant naming the modes, and `--plan` is the
+    # read-only half of the same verb rather than a different one.
 
     if [ "$plan" -ne 1 ]; then
         [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Destructive recovery of the original path has no public grammar yet -- the owner is still deciding it."
