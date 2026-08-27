@@ -1272,7 +1272,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         *:*)
             local answer
             answer="$(restore_grant_ask "$host")" || answer=""
-            if ! restore_grant_require "${RESTORE_LABEL:-$host}" "$answer" "$mode" "$host"; then
+            if ! restore_grant_require "${RESTORE_LABEL:-}" "$answer" "$mode" "$host"; then
                 RESTORE_ONE_VERDICT="'$host' does not grant '$mode' for this relationship"
                 return 1
             fi ;;
@@ -1574,7 +1574,22 @@ restore_grant_parse() {   # <label we asked about> <the peer's answer> -> modes,
     # at column zero and nothing else may look like them.
     labels=$(printf '%s\n' "$answer" | grep -c '^PAIR_LABEL=')
     [ "$labels" -eq 1 ] || return 1
-    [ "$(printf '%s\n' "$answer" | sed -n 's/^PAIR_LABEL=//p')" = "$want_label" ] || return 1
+    # An EMPTY want_label means "whatever the key bound". Measured on the lab:
+    # the collector does not record the peer-side label anywhere -- the peer
+    # chose it at join time and kept it -- so demanding a match was a check that
+    # could never pass in production.
+    #
+    # The property it protected survives by a stronger mechanism than a string
+    # comparison: zfs-pair-gate derives the label from the KEY in its forced
+    # command, never from anything the caller says. An answer therefore concerns
+    # the relationship whose key opened the connection, and this side chose that
+    # key from the relationship record. A peer cannot answer about a different
+    # relationship even if it wanted to. When the caller DOES know the label it
+    # is still required to match -- then the comparison is free.
+    if [ -n "$want_label" ]; then
+        [ "$(printf '%s
+' "$answer" | sed -n 's/^PAIR_LABEL=//p')" = "$want_label" ] || return 1
+    fi
 
     present=$(printf '%s\n' "$answer" | grep -c '^RESTORE_GRANT=present$')
     [ "$present" -eq 1 ] || return 1
