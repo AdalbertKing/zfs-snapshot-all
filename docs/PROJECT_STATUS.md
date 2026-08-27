@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c29a9cab945c0bb0 -->
+<!-- status-covers-digest: 032c7216f6b05283 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1719,60 +1719,73 @@
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
 
-- **ODTWARZANIE DZIALA OD KONCA DO KONCA — DOWIEDZIONE NA ZYWO (2026-08-27).**
-  Lab pve9 (kolektor) -> pve1, dwa dyski jednej VM, konto delegowane, prawdziwy
-  transfer. Jedna komenda:
+- **ODTWARZANIE: DRUGI PRZEBIEG LABU. PIERWSZY MOWIL "DZIALA OD KONCA DO
+  KONCA" I BYLO TO PRAWDA WYLACZNIE DLA KSZTALTOW, KTORE PRZESZEDL (2026-08-27).**
 
-      zfs-backup.sh restore lab1 --at="2026-08-27 16:00" --yes
+  Pierwszy przebieg (pve9 kolektor -> pve1, dwa dyski jednej VM, konto
+  delegowane, prawdziwy transfer) znalazl osiem wad i zamknal sie zdaniem
+  "dowiedzione od konca do konca". Drugi przebieg tego samego dnia, na tym samym
+  labie, znalazl **czternascie kolejnych** — bo zaczal od rzeczy, ktorej pierwszy
+  nie zrobil ani razu: **uruchomil backup po odtworzeniu**, i uszkodzil dane w
+  sposob, w jaki uszkadza je awaria, czyli **bez snapshotu po szkodzie**.
 
-  Pelny lancuch: **zgoda odczytana z celu przez bramke i wymuszona -> tryb
-  sklasyfikowany zdalnie po CALYM poddrzewie -> punkt wybrany po `creation` ->
-  cofniecie trzech datasetow -> transfer -> dane wrocily.** Plik podlozony jako
-  szkoda zniknal z obu dyskow.
+  **Najgorsza z nich, i powod, dla ktorego ten wpis brzmi tak a nie inaczej:**
+  przy zwyklej szkodzie (skasowane pliki, zaden snapshot od tego czasu)
+  odtworzenie melduje `all 3 dataset(s) in scope recovered` i **nie zmienia
+  niczego**. Klasyfikator pytal, czy cel ma snapshot NOWSZY od punktu; nic nie
+  bylo nowsze, wiec nie bylo rollbacku, silnik dostal przyrost o dlugosci zero i
+  wyszedl z zerem. Pierwszy przebieg tego nie zobaczyl, bo tam kazda szkoda byla
+  po drodze zesnapshotowana przez backup.
 
-  **Warianty dowiedzione:** cala relacja (sama nazwa), wybrane datasety przez
-  `--target` (takze lista po przecinku), `--at` jako czas zegarowy, tryby
-  `rewind` i `rollback`. **Niedowiedzione na labie:** `create` (cel nie
-  istnieje) i `replace` (brak waznej bazy) — obie sciezki wymagaja zniszczenia
-  danych labowych, czego nie robilem.
+  **Wady drugiego przebiegu (F9-F22):**
 
-  **OSIEM wad, wszystkie znalezione przez lab, zadnej nie znalazl test:**
+  | # | wada |
+  |---|---|
+  | F9  | po odtworzeniu **nastepny backup relacji odmawia**, a odmowa obwinia pisarza, ktorego nie ma; samo odtworzenie o tym nie mowilo |
+  | F10 | odmowa podawala lekarstwo (`-f`), ktorego konto relacji **nie moze uruchomic**; `-F` przy tym milczalo o przyczynie |
+  | F11 | `restore` **nie znajdowal configu na zadnym hoscie floty** (`jobs.<host>.conf` zamiast `jobs.<host>.<konto>.conf`), a trzy `FATAL` po kolei **nie zatrzymywaly programu** — `die` w `$( )` konczy podpowloke |
+  | F12 | `--target` nie potrafil nazwac **zadnego dysku VM** — tylko rodzica |
+  | F13 | odtworzony system plikow wracal **niezamontowany** i nikt tego nie mowil |
+  | F14 | "jest i pusty" czytane jako "host nie odpowiedzial" |
+  | F15 | odmowa podpowiadala `deploy.sh --allow-restore=` **z pusta etykieta** — dokladnie wejscie z E1 w dzienniku bledow |
+  | F16 | `replace` byl nadawany, klasyfikowany i **pokonywany przez montowanie**, z podpowiedzia prowadzaca donikad |
+  | F17 | **meldunek sukcesu nie byl pomiarem** (wyzej) |
+  | F18 | rollback rodzica **zerowal przyrost**, wiec dziecko z tylu nie dostawalo nic |
+  | F19 | rodzic oceniany po dzieciach, ktore sa juz osobnymi pozycjami — werdykt zalezal od kolejnosci petli |
+  | F20 | sonda rozrozniala dwa przypadki, a **wywolujacy je z powrotem sklejal** (dwa razy, w tym samym pliku) |
+  | F21 | skasowanie snapshotow to **polowa** lekarstwa — zywy system plikow kopii zostaje z przodu |
+  | F22 | run **oglaszal zator, ktorego nie bylo**, w srodku odtwarzania |
 
-  | # | wada | dlaczego test jej nie widzial |
-  |---|---|---|
-  | 1 | `log: command not found` — 34 wywolania w kodzie, funkcji brak | kazdy harness stubowal `log` |
-  | 2 | cel skladany jako `BAZA/nazwa` -> `hdd/labsrc/hdd/labcoll/...` | zaden test nie skladal prawdziwej sciezki |
-  | 3 | silnik bez klucza relacji | testy nie otwieraly ssh |
-  | 4 | wymog zgodnosci etykiet **niewykonalny** — kolektor nie zna etykiety peera | fikstura ja znala |
-  | 5 | konto relacji **nie ma** `receive` ani `rollback` | — |
-  | 6 | `$(...)` w zdalnej komendzie rozwijane LOKALNIE -> cofnieto 1 z 3 datasetow | quoting przez ssh |
-  | 7 | klasyfikacja czytala tylko korzen poddrzewa | dzieci byly w przod |
-  | 8 | `--deny-restore` zabieral `destroy` i `mount`, ktore naleza do BACKUPU | rewokacja nie byla mierzona po skutku |
+  **Warianty przebiegniete i potwierdzone tresciowo** (kazdy sprawdzony przez
+  zawartosc plikow ORAZ `written@<punkt>`, nie przez kod wyjscia):
 
-  **Trzy z nich (2, 6, 7) meldowaly SUKCES przy niewykonanej robocie.** Wada 8
-  jest odwrotna: cofniecie zgody po cichu psulo backup relacji i nic by tego nie
-  zglosilo az do nastepnego prune, ktory nic by nie zrobil.
+  | wariant | wynik |
+  |---|---|
+  | `--plan`, cala relacja | tylko odczyt, nic nie ruszone |
+  | `--at` + cala relacja, cel do przodu | rollback trzech datasetow, tresc z punktu |
+  | `--at` + `--target` jeden dysk | tylko ten dysk; drugi nietkniety |
+  | `--target` lista po przecinku | oba, jeden do przodu i jeden do tylu w jednym biegu |
+  | cala relacja bez `--at` | najnowszy punkt, trzy datasety |
+  | **`create`** — dataset celu zniknal | odtworzony, wlasciwosci wrocily |
+  | **`replace`** — cel istnieje, brak wspolnej bazy | odmowa bez zgody -> zgoda -> wykonane |
+  | **brak zgody** | trzy odmowy, cel nietkniety |
+  | zator: kontrola dodatnia i ujemna | ostrzega dokladnie wtedy, gdy zator jest |
 
-  **Wada 5 obala teze, ktora sam postawilem recenzentowi w #166.** Twierdzilem,
-  ze mozliwosc nadpisania juz istnieje i nic jej nie pilnuje. Nieprawda: konto
-  relacji ma wylacznie zestaw backupowy. Zgoda nadaje teraz brakujace
-  `receive,rollback,create,canmount,mountpoint` i zabiera **dokladnie je** przy
-  cofnieciu.
+  **Petla domknieta bez zacięcia:** szkoda -> odtworzenie -> ostrzezenie
+  wymieniajace snapshoty -> **wypisana komenda uruchomiona doslownie** -> backup
+  przechodzi -> dane zgodne. To jest kryterium, ktorego pierwszy przebieg nie
+  postawil.
 
-  **Zmiana w zamrozonych silnikach:** `-t` (cel dokladny) w `snapsend` I
-  `snapget`, jednym commitem, na polecenie wlasciciela. Boolean, wolny w obu
-  optstringach, nie rusza kontraktu `FLAGS_ARG_LETTERS`; kompozycja celu dostaje
-  nowa PIERWSZA galaz, dwie istniejace sa bajt w bajt te same — kazdy przebieg
-  bez `-t` zachowuje sie jak dotad. Wpis w `ENGINE-FREEZE.md`, baseline
-  przepiety.
+  **Zmiany w zamrozonym silniku (`snapget.sh`), wylacznie diagnostyka:**
+  odmowa rozroznia teraz "kopia jest z przodu" od "ktos tu pisal", nazywa
+  snapshoty i podaje `zfs rollback -r`, a podpowiedz o `recv -F` jest bramkowana
+  faktyczna przyczyna zamiast `-f`. Zaden przebieg nie zmienia werdyktu, statusu
+  ani skutku. Wpisy w `ENGINE-FREEZE.md`, baseline przepiety.
 
-  **Potwierdzone przy okazji, nie jako wada:** nazwy snapshotow i `creation`
-  rozjezdzaja sie miedzy hostami o strefe czasowa (ten sam snapshot: 16:51 na
-  kolektorze, 18:51 na celu). Dlatego `--at` rozwiazuje po `creation`, nigdy po
-  nazwie — dokladnie tak, jak planer to flaguje.
-
-  **Lab sprzatniety:** zgoda zabrana, uprawnienia backupu przywrocone recznie po
-  wadzie 8, oba hosty z powrotem na `main`.
+  **Czego lab NIE dowiodl:** odtwarzania na inna maszyne lub inna sciezke
+  (wariant miedzyhostowy), relacji push (kopia zdalna — rozszerzanie zakresu do
+  poddrzewa i pomiar montowania sa dzis warunkowane lokalna kopia), oraz
+  odtwarzania kontenera/VM ktora faktycznie sie potem uruchamia.
 
 
 - **RESTORE: PRZEBIEG PO CALEJ RELACJI — IDZIE DALEJ PO PORAZCE (2026-08-27).**

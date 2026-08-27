@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10.*
+*Evidence: E4, E5, E6, E10, E17.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2.*
+*Evidence: E7, E2, E14, E16.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9.*
+*Evidence: E3, E9, E15.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -87,6 +87,18 @@ renderer already uses.
 
 *Evidence: E7, E3, E12.*
 
+### R12 — A pass proves the shapes it ran, and the report must name them
+
+Never write "proven end to end". Write which variants ran, which did not, and
+what each one measured. A campaign that exercised one shape of a problem has
+said nothing about the others, and the sentence "it works" is the mechanism by
+which that silence becomes a claim.
+
+The test of whether a pass is finished is not "did every step succeed". It is
+"what did I not try", answered out loud.
+
+*Evidence: E13.*
+
 ### R9, R10, R11 — on running suites
 
 Stated with their measurements in section 2b, because the case for them is the
@@ -99,6 +111,7 @@ cost data rather than an argument:
 ---
 
 ## 2. The entries
+
 
 ### E1 — `--allow-restore=` with an empty value provisioned the host
 **2026-08-27, restore grant.**
@@ -367,3 +380,112 @@ between what the code says it does and what it does was never measured.** The
 mechanisms that actually catch these — negative controls, the engine freeze, the
 status-digest gate, an owner asking "napewno?" — work because they force that
 measurement. Personal care does not scale; a control that fails loudly does.
+
+### E13 — "Proven end to end", after running one shape of the problem
+**2026-08-27, restore, second lab pass.**
+
+*Genesis.* The first restore lab found eight defects, ended green, and I reported
+it as working end to end. The owner asked for a second pass. It found **fourteen
+more**, and the first of them was reachable by doing the one thing the first pass
+never did: **running a backup after the restore**. The worst of them was reachable
+by damaging data the way a real failure damages it — deleting files with **no
+snapshot taken since** — at which point the verb reported
+`all 3 dataset(s) in scope recovered` and changed nothing.
+
+*Cause.* Every damage in the first pass had been snapshotted by a backup before
+the restore ran, so the classifier's question ("is anything NEWER than the
+point?") happened to be true every time. One shape, exercised repeatedly, read as
+coverage. And the pass ended where the restore ended, so the state it left the
+relationship in was never observed.
+
+*Rule.* **R12.** Two concrete habits fall out of it: run the NEXT operation the
+system would normally perform, because a verb's real output is the state it
+leaves behind; and construct the damage the way the failure does, not the way the
+fixture does.
+
+### E14 — A distinction written into a function, dropped by its caller. Twice, in one file, in one hour
+**2026-08-27, restore classification and verification.**
+
+*Genesis.* `restore_remote_state` returned `absent`, a GUID, or nothing — and
+nothing meant BOTH "the dataset exists and has no snapshots" and "the host did
+not answer". Fixed by adding a third answer (F14). An hour later
+`restore_remote_ahead`, whose own header says the caller can tell "nothing
+differs" from "I could not ask" by the exit status, was being called as
+`x="$(f ...)"; if [ -n "$x" ]` — status discarded (F20). An unanswered ssh read
+as a clean target: no rollback, an empty increment, a clean report.
+
+*Cause.* Producing a distinction feels like the work. Consuming it is the work.
+The comment above the function made the file *look* careful at exactly the line
+where it stopped being careful.
+
+*Rule.* **R3.** When a function's contract has more outcomes than a string, grep
+every call site and check that each reads all of them. In bash specifically:
+`x="$(f)"` throws away `$?` — if the contract has a status, capture it on the
+same line.
+
+### E15 — I read an outcome and called it a mechanism
+**2026-08-27, snapget `-F`.**
+
+*Genesis.* A pull refused because the copy was ahead. I ran `-F`, saw the refusal
+not appear, and shipped a message telling operators that `-F` "destroys exactly
+those snapshots and then pulls the increment". `-F` does nothing of the kind: it
+acts only on a name collision under a different GUID, and what it had actually
+done was escalate that run to a full re-pull. The next `-F`, against a state with
+no collision, refused like any other run and exposed it.
+
+*Cause.* One observation, one inference, no reading of the flag the message was
+about. The flag's own documentation was twenty lines above the code I was editing.
+
+*Rule.* **R6**, in its product form: an outcome tells you what happened, not why.
+Before describing a mechanism in a message an operator will act on, read the
+mechanism. A remedy printed by a tool is a promise made in the tool's name.
+
+### E16 — The remedy printed was the input that once broke a host
+**2026-08-27, restore grant refusal.**
+
+*Genesis.* Refusing an ungranted `replace`, the message printed
+`deploy.sh --allow-restore= --replace` — empty label, because the collector never
+records the peer's name for the relationship and the display took the caller's
+(deliberately empty) variable. That exact input is **E1**: `--allow-restore=` with
+no value fell past the grant dispatch and started reinstalling the machine.
+
+*Cause.* A value correct for a decision (empty means "whatever the key bound")
+was reused for display without asking whether it was printable. The authoritative
+label was in hand the whole time, in the peer's own answer.
+
+*Rule.* **R3**, plus: a message that contains a command is code. Check what it
+renders when its inputs are empty, exactly as you would check a code path.
+
+### E17 — Half a remedy, shipped twice, corrected by the step after the fix
+**2026-08-27, the copy-is-ahead jam.**
+
+*Genesis.* Three versions of one message. First `-f` (the account cannot run it).
+Then "destroy the named snapshots" (measured, rc=0 — and the very next pull
+refused again, because destroying a snapshot does not move the live filesystem,
+so the copy stayed exactly where those snapshots had left it). Finally
+`zfs rollback -r <copy>@<common>`, which does both halves in one command.
+
+*Cause.* Each fix was verified by the step that had failed, and not by the step
+after it. "The refusal is gone" is not "the operator can now get back to work".
+
+*Rule.* **R2** across a boundary in TIME: a fix is proven by the next operation
+the user would perform, not by the disappearance of the symptom. Run the workflow
+one step further than the bug.
+
+### E18 — A false alarm delivered in the middle of a recovery
+**2026-08-27, the "what this costs the backup" report.**
+
+*Genesis.* The run closed by telling the operator their next backup would refuse
+and their only copy of a period was at stake. The next backup succeeded. The
+record was written for every rollback, and a rollback that discards only live
+writes destroys no snapshot — which is the ordinary case, because the ordinary
+disaster is damage nobody has snapshotted yet.
+
+*Cause.* One flag answering two questions: "did we roll back" and "is the copy
+now ahead". Related, not the same, and the second is the one the warning is
+about.
+
+*Rule.* **R1**, from the other side: prove the guard does NOT fire when it should
+not. A warning is a claim, and a claim that is often wrong costs exactly what the
+true version of it was worth — here, telling somebody their last copy of a period
+is about to be destroyed.
