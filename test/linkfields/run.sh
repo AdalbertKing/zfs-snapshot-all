@@ -386,6 +386,11 @@ seq_load() {   # -> "<flag after A>|<flag after B>"
         echo 'active_endpoint_host_port() { echo "h 22"; }'
         echo 'ensure_alias_known_hosts() { echo /kh; }'
         echo 'resolve_mode_datasets() { :; }'
+        # resolve_link_bandwidth is lifted too, because the function under
+        # test now CALLS it -- since the cap moved to the pairing manifest it
+        # is no longer a bare variable read. Stubbing it would make the
+        # assertion measure the stub; lifting it keeps both halves real.
+        awk '/^resolve_link_bandwidth\(\) \{/,/^\}/' "$ZB"
         awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB"
         printf 'load_client_and_connection %q; A="$LOAD_BW_FLAG"\n' "$d/a.conf"
         printf 'load_client_and_connection %q; B="$LOAD_BW_FLAG"\n' "$d/b.conf"
