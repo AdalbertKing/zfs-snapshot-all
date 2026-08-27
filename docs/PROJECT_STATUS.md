@@ -1658,6 +1658,67 @@
   sama rodzine z ROZNYM `keep`. Dedup dziala, odmowa nie — a faza 2 czyni to
   pilnym, bo beda dwa profile na jednym hoscie.
 
+- **KATALOG PROFILI: WIELKOSC LITER = KSZTALT, KOHERENCJA POZA GODZINOWA
+  (2026-08-27).** Regula wlasciciela, w jego slowach: *"male litery w nazwie,
+  czyli nie GFS (...) d30h24 powinny tworzyc 30 szt. daily i 24 szt hourly. Te
+  daily powinny byc coherentne. Gdyby byl D30H24, to bylby GFS."*
+
+  **Co bylo:** `d30h24`, `d7h24` i `d30` tworzyly JEDNA rodzine (`d30`:
+  `automated_daily_`, pozostale: `automated_hourly_`) i przycinaly ja drabina
+  GFS. „Dzienny" snapshot na takim hoscie **nie istnial jako osobny byt** — to
+  byl snapshot godzinowy, ktory licznik postanowil zatrzymac. Dlatego nie dalo
+  sie go zamrozic osobno: zamrozenie dziennego = zamrozenie wszystkich
+  dwudziestu czterech.
+
+  **Co jest:** trzy profile przebudowane na ksztalt `prod` — kazdy tier tworzy
+  wlasna rodzine i przycina wlasna rodzine, bez sekcji `[prune]` i bez `gfs`.
+  Zmierzone na renderze przez PRAWDZIWY `gen-cron.sh`:
+
+  | profil | tworzy | przycina | koherentne |
+  |---|---|---|---|
+  | `d30h24` | `automated_hourly_`, `automated_daily_` | `-H24`, `-D30` (dwie linie) | daily |
+  | `d7h24`  | `automated_hourly_`, `automated_daily_` | `-H24`, `-D7` | daily |
+  | `d30`    | `automated_daily_` | `-D30` | daily |
+  | `default`| bez zmian — `automated_hourly_` | drabina `-G -H24 -D7 -W4 -M12` | zadne (drabina nie moze) |
+
+  **Godzinowy nie jest zamrazany nigdzie** i to jest teraz asercja obejmujaca
+  CALY katalog, sprawdzana na wyrenderowanej linii crona (nie na polu `quiesce`
+  w profilu — pole musi jeszcze przejsc namespacing, scalanie szablonow
+  i asembler flag, zanim stanie sie `-q`, a to `-q` uruchamia host).
+
+  **Wielkosc liter jako kontrakt:** mala = rodzina na tier, wielka = drabina GFS.
+  Zadnego profilu z wielkiej litery jeszcze nie ma; rozroznienie istnieje, zeby
+  dalo sie je odczytac z `ls`. Obie polowy reguly maja asercje — wielka litera
+  bez `-G` odmawia, mala z `-G` odmawia.
+
+  **Znalezisko uboczne, zmierzone przez skasowanie pliku:** na systemie plikow
+  bez rozroznienia wielkosci liter (ta stacja, kazdy checkout na macOS)
+  `D30H24.conf` i `d30h24.conf` to **JEDEN plik** — zapis jednego nadpisuje
+  drugi, a skasowanie kasuje oba. Hosty linuksowe rozroznilyby je, wiec awaria
+  ujawnilaby sie wylacznie na stacji roboczej, jako profil, ktory po cichu
+  zmienil ksztalt. Suita odmawia katalogu zawierajacego obie wersje jednej nazwy.
+
+  **Nic w produkcji z tego nie wynika:** cztery zywe hosty jada na recznie
+  pisanych configach z `cron-configs/`, zaden nie odwoluje sie do tych profili.
+  Zmiana dotyczy relacji zakladanych OD TERAZ.
+
+  **Sprawdzone przy okazji, bo kontrakt `profile-config-schema` na to wskazuje:**
+  monitory `check-snap-age.sh` sa emitowane wewnatrz galezi prune, wiec dataset,
+  ktory przestaje przycinac, po cichu przestaje byc monitorowany. Po
+  przebudowie kazda rodzina ma swoj monitor z wlasnymi progami (`90m/150m`
+  godzinowy, `30h/48h` dzienny) — zweryfikowane na renderze. Asercja `zfsbackup`
+  o „dokladnie jednej drabinie `-G`" dotyczy profilu `default` i pozostaje
+  nietknieta. `zfs-backup.sh` juz umie profil bez fragmentu `[prune]`
+  (`profile_declares_ladder`, dodane gdy `prod` po raz pierwszy trafil na pve9),
+  wiec trzy przebudowane profile ida ta sama, sprawdzona sciezka.
+
+  **Dowody:** `test/profiles` **78/0** (nazwa = retencja liczona z UNII linii
+  `delsnaps`, nie z pierwszej; ksztalt vs wielkosc liter w czterech
+  kombinacjach; koherencja calego katalogu z dwiema kontrolami mutacyjnymi —
+  zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
+  `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
+  Katalog opisany w `profiles/README.md`.
+
 - **DOMYSLNA ODPOWIEDZ NA NIEUDANY QUIESCE — ODWROCONA (2026-08-27).**
   Decyzja wlasciciela, doslownie: *"Przemyslalem i chce, zeby snapshots sie
   tworzyly domyslnie pomimo porazki flush buffers."*

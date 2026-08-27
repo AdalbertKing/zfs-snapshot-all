@@ -399,21 +399,25 @@ fi
 #
 # Only profiles named in that scheme are checked; default, passive and prod
 # describe themselves in prose and are covered by their own assertions.
-name_bad=""
-for f in "$ROOT"/profiles/*.conf; do
-    n="$(basename "$f" .conf)"
-    # the retention-named ones: letter+digits pairs, nothing else
-    printf '%s' "$n" | grep -qE '^([dhwmDHWM][0-9]+)+$' || continue
-
+# render_profile <profile file> <name> -> prints the cron block gen-cron makes
+#
+# Factored out on 2026-08-27, when profiles stopped having one shape. A ladder
+# profile carries a [prune] fragment and a per-tier profile does not, and the
+# caller must not have to know which: an EMPTY [prune:] section is not a
+# harmless no-op -- gen-cron refuses the file, and the refusal reaches the
+# assertion as "no delsnaps line", which reads like a retention bug.
+render_profile() {   # <file> <name>   -> 0 and the cron block, or 1 and PROFILE_ERR
+    local f="$1" n="$2" st sd sp se rt rd rp cfg
     st="$(mktemp)"; sd="$(mktemp)"; sp="$(mktemp)"; se="$(mktemp)"
-    profile_split_one_file "$f" "$st" "$sd" "$sp" "$se" || { name_bad="$name_bad $n(split);"; continue; }
+    profile_split_one_file "$f" "$st" "$sd" "$sp" "$se" || { PROFILE_ERR="split"; return 1; }
     cat "$se" >> "$st"
     rt="$TMP/nm.$n.tpl"; rd="$TMP/nm.$n.ds"; rp="$TMP/nm.$n.pr"
     # $LETTERS is not optional: without it `keep = 24` never becomes -H24 and
     # gen-cron refuses every tier. Learned by leaving it out.
-    profile_render_templates "$st" "$n" "$rt" "" "$LETTERS" || { name_bad="$name_bad $n(tpl:$PROFILE_ERR);"; continue; }
-    profile_render_fragment  "$sd" "$n" "$rd" || { name_bad="$name_bad $n(ds);"; continue; }
-    profile_render_fragment  "$sp" "$n" "$rp" || { name_bad="$name_bad $n(pr);"; continue; }
+    profile_render_templates "$st" "$n" "$rt" "" "$LETTERS" || return 1
+    profile_render_fragment  "$sd" "$n" "$rd" || return 1
+    : > "$rp"
+    [ -s "$sp" ] && { profile_render_fragment "$sp" "$n" "$rp" || return 1; }
     rm -f "$st" "$sd" "$sp" "$se"
 
     cfg="$TMP/nm.$n.conf"
@@ -422,29 +426,176 @@ for f in "$ROOT"/profiles/*.conf; do
       printf '\n[dataset:tank/x]\n'
       sed 's/^[[:space:]]*/\t/' "$rd"
       printf '\trecursive    = no\n\tnotify       = nm\n'
-      printf '\n[prune:tank/x]\n'
-      sed 's/^[[:space:]]*/\t/' "$rp"
-      printf '\trecursive    = no\n\tnotify       = nm\n'
+      # ONLY when the profile actually has one. See the note above.
+      if [ -s "$rp" ]; then
+          printf '\n[prune:tank/x]\n'
+          sed 's/^[[:space:]]*/\t/' "$rp"
+          printf '\trecursive    = no\n\tnotify       = nm\n'
+      fi
     } > "$cfg"
+    bash "$GEN" -c "$cfg" 2>/dev/null
+}
 
-    line="$(bash "$GEN" -c "$cfg" 2>/dev/null | grep -F 'delsnaps.sh' | head -1)"
-    [ -n "$line" ] || { name_bad="$name_bad $n(no delsnaps line);"; continue; }
+# THE CASE OF THE NAME IS THE SHAPE (owner rule, 2026-08-27). Lowercase means
+# one family per tier, each pruned by its own counter; uppercase means the GFS
+# ladder, one family under several counters. Asserted rather than left to the
+# header comment, because a convention nothing checks is decoration -- and this
+# one decides whether the daily tier can be frozen on its own.
+#
+# A FUNCTION rather than eight lines inside the loop, because the loop can only
+# ever reach the LOWERCASE half: no uppercase profile is shipped, and on a
+# case-insensitive filesystem (this workstation, and any macOS checkout) one
+# cannot even be added next to its lowercase twin -- `D30H24.conf` and
+# `d30h24.conf` are the same file, and writing one DELETES the other. Measured
+# here on 2026-08-27, by deleting d30h24.conf exactly that way. So the uppercase
+# half is exercised below against fixtures that never touch profiles/.
+shape_verdict() {   # <name> <promised flags> <delsnaps lines> -> sets SHAPE_ERR
+    local n="$1" want="$2" lines="$3" n_del n_want
+    SHAPE_ERR=""
+    n_del="$(printf '%s\n' "$lines" | grep -c .)"
+    if printf '%s' "$n" | grep -q '[A-Z]'; then
+        printf '%s' "$lines" | grep -q -- ' -G ' || SHAPE_ERR="$SHAPE_ERR $n(UPPERCASE but not a -G ladder);"
+        [ "$n_del" = 1 ] || SHAPE_ERR="$SHAPE_ERR $n(UPPERCASE but $n_del prune lines);"
+    else
+        printf '%s' "$lines" | grep -q -- ' -G ' && SHAPE_ERR="$SHAPE_ERR $n(lowercase but rendered a -G ladder);"
+        n_want="$(printf '%s' "$want" | wc -w)"
+        [ "$n_del" = "$n_want" ] || SHAPE_ERR="$SHAPE_ERR $n(lowercase: $n_want counters but $n_del prune lines);"
+    fi
+}
 
-    # what the NAME promises, in the engine's own spelling
+name_bad=""
+for f in "$ROOT"/profiles/*.conf; do
+    n="$(basename "$f" .conf)"
+    # the retention-named ones: letter+digits pairs, nothing else
+    printf '%s' "$n" | grep -qE '^([dhwmDHWM][0-9]+)+$' || continue
+
+    block="$(render_profile "$f" "$n")" || { name_bad="$name_bad $n(render:$PROFILE_ERR);"; continue; }
+    lines="$(printf '%s\n' "$block" | grep -F 'delsnaps.sh')"
+    [ -n "$lines" ] || { name_bad="$name_bad $n(no delsnaps line);"; continue; }
+
+    # EVERY delsnaps line, not the first. A ladder puts all its counters on one
+    # line; a per-tier profile puts one counter on each. Reading only the first
+    # would pass a two-family profile on the strength of half its retention --
+    # which is exactly what this assertion started doing on 2026-08-27, and it
+    # reported the failure as "missing -D30" rather than as its own blind spot.
     want="$(printf '%s' "$n" | sed -E 's/([dhwmDHWM])([0-9]+)/ -\U\1\E\2/g')"
     for flag in $want; do
-        case " $line " in *" $flag "*) : ;; *) name_bad="$name_bad $n(missing $flag);" ;; esac
+        case " $(printf '%s' "$lines" | tr '\n' ' ') " in
+            *" $flag "*) : ;;
+            *) name_bad="$name_bad $n(missing $flag);" ;;
+        esac
     done
-    # ...and NOTHING it does not promise
-    for got in $(printf '%s' "$line" | grep -oE ' -[HDWM][0-9]+'); do
+    # ...and NOTHING it does not promise, across all of them.
+    for got in $(printf '%s' "$lines" | grep -oE ' -[HDWM][0-9]+' | sort -u); do
         case " $want " in *" $got "*) : ;; *) name_bad="$name_bad $n(unpromised$got);" ;; esac
     done
+
+    shape_verdict "$n" "$want" "$lines"
+    name_bad="$name_bad$SHAPE_ERR"
 done
 if [ -z "$name_bad" ]; then
-    ok "naming: every retention-named profile renders exactly the counters its name promises"
+    ok "naming: every retention-named profile renders exactly the counters its name promises, in the shape its case declares"
 else
-    bad "naming: every retention-named profile renders exactly the counters its name promises" "$name_bad"
+    bad "naming: every retention-named profile renders exactly the counters its name promises, in the shape its case declares" "$name_bad"
 fi
+
+# ---------------------------------------------------------------------------
+# WHICH TIER IS FROZEN, across the whole shipped catalogue.
+#
+# Owner rule, 2026-08-27: the coarse tiers are coherent and the hourly one is
+# not. The reason is not taste -- an hourly freeze stalls every guest on the
+# host 24 times a day to buy consistency the daily tier already provides once.
+#
+# Checked against the CRON LINE gen-cron actually renders, not against the
+# `quiesce` field in the profile: the field has to survive namespacing, template
+# merging and the flags assembler before it becomes `-q`, and it is the `-q`
+# that the host runs.
+# ---------------------------------------------------------------------------
+q_bad=""
+for f in "$ROOT"/profiles/*.conf; do
+    n="$(basename "$f" .conf)"
+    block="$(render_profile "$f" "$n")" || { q_bad="$q_bad $n(render);"; continue; }
+    while IFS= read -r sl; do
+        [ -n "$sl" ] || continue
+        fam="$(printf '%s' "$sl" | sed -n -E 's/.*-m "([^"]*)".*/\1/p')"
+        has_q=no
+        case "$sl" in *' -q '*) has_q=yes ;; esac
+        case "$fam" in
+            automated_hourly_)
+                [ "$has_q" = no ] || q_bad="$q_bad $n(hourly is quiesced);" ;;
+            automated_daily_|automated_weekly_|automated_monthly_|automated_annual_)
+                [ "$has_q" = yes ] || q_bad="$q_bad $n($fam is not quiesced);" ;;
+        esac
+    done <<EOFQ
+$(printf '%s\n' "$block" | grep -F 'snapsend.sh')
+EOFQ
+done
+if [ -z "$q_bad" ]; then
+    ok "quiesce: every shipped profile freezes its coarse tiers and never its hourly one"
+else
+    bad "quiesce: every shipped profile freezes its coarse tiers and never its hourly one" "$q_bad"
+fi
+
+# NEGATIVE CONTROL for the pair above, and it is not optional: both loops report
+# by accumulating into a string, so a bug that rendered NOTHING -- or matched no
+# line -- would leave that string empty and print PASS. These assert that the
+# renderer this block depends on produced the lines it was reading.
+ctrl="$(render_profile "$ROOT/profiles/prod.conf" prod)"
+ctrl_snap="$(printf '%s\n' "$ctrl" | grep -cF 'snapsend.sh')"
+ctrl_q="$(printf '%s\n' "$ctrl" | grep -F 'snapsend.sh' | grep -c -- ' -q ')"
+check_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want $3, got $2"; fi; }
+check_eq "control: prod renders four create lines for the loop to read" "$ctrl_snap" "4"
+check_eq "control: ...three of which carry -q, so the loop had both cases" "$ctrl_q" "3"
+
+# ---------------------------------------------------------------------------
+# THE UPPERCASE HALF OF THE RULE, which no shipped profile can reach.
+#
+# Fed the delsnaps lines a ladder and a per-tier profile actually render (copied
+# from the two shapes above, not invented), so the verdict is checked against
+# real output shapes rather than against a string this test made up.
+# ---------------------------------------------------------------------------
+lad_line='21 * * * * ... /REPO/delsnaps.sh -G "tank/x" "automated_" -H24 -D30 2>"$e"; rc=$?'
+per_lines='21 * * * * ... /REPO/delsnaps.sh "tank/x" "automated_hourly" -H24 2>"$e"; rc=$?
+31 1 * * * ... /REPO/delsnaps.sh "tank/x" "automated_daily" -D30 2>"$e"; rc=$?'
+
+shape_verdict D30H24 ' -D30 -H24' "$lad_line"
+if [ -z "$SHAPE_ERR" ]; then ok "shape: an UPPERCASE name rendering a -G ladder is accepted"
+else bad "shape: an UPPERCASE name rendering a -G ladder is accepted" "$SHAPE_ERR"; fi
+
+shape_verdict D30H24 ' -D30 -H24' "$per_lines"
+if [ -n "$SHAPE_ERR" ]; then ok "shape: an UPPERCASE name rendering per-tier prunes is refused"
+else bad "shape: an UPPERCASE name rendering per-tier prunes is refused" "accepted it"; fi
+
+shape_verdict d30h24 ' -D30 -H24' "$per_lines"
+if [ -z "$SHAPE_ERR" ]; then ok "shape: a lowercase name rendering per-tier prunes is accepted"
+else bad "shape: a lowercase name rendering per-tier prunes is accepted" "$SHAPE_ERR"; fi
+
+shape_verdict d30h24 ' -D30 -H24' "$lad_line"
+if [ -n "$SHAPE_ERR" ]; then ok "shape: a lowercase name rendering a -G ladder is refused"
+else bad "shape: a lowercase name rendering a -G ladder is refused" "accepted it"; fi
+
+# ---------------------------------------------------------------------------
+# ...AND THE TWO CASES MAY NEVER BOTH BE SHIPPED.
+#
+# Not a style rule. On a case-insensitive filesystem `D30H24.conf` and
+# `d30h24.conf` are ONE file: adding the second silently overwrites the first,
+# and deleting it deletes both. The Linux hosts would keep them apart, so the
+# breakage would appear only on a workstation checkout -- as a profile that
+# quietly changed shape, which is the worst way to find out.
+# ---------------------------------------------------------------------------
+dup_case="$(for f in "$ROOT"/profiles/*.conf; do
+                basename "$f" .conf | tr 'A-Z' 'a-z'
+            done | sort | uniq -d)"
+if [ -z "$dup_case" ]; then
+    ok "naming: no two shipped profiles differ only in case"
+else
+    bad "naming: no two shipped profiles differ only in case" "$dup_case"
+fi
+# NEGATIVE CONTROL: the detector must actually detect. Same pipeline, a list
+# that does collide.
+dup_ctrl="$(printf 'd30h24\nD30H24\nprod\n' | tr 'A-Z' 'a-z' | sort | uniq -d)"
+if [ -n "$dup_ctrl" ]; then ok "naming: ...and the case-collision detector detects one"
+else bad "naming: ...and the case-collision detector detects one" "missed d30h24/D30H24"; fi
 
 # The property the whole scheme exists for: two profiles compose without
 # colliding. Same source templates, two names, one config gen-cron accepts.
