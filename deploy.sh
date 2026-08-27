@@ -177,7 +177,17 @@ RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants
 # receive sets them. Without it the transfer still lands but says "cannot receive
 # mountpoint property: permission denied" -- a restore that put the data back and
 # not the property that says where it belongs. Measured on the lab 2026-08-27.
-RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mount,mountpoint,destroy}"
+# ONLY what a backup does not already have. The backup set on a source is
+# bookmark,destroy,hold,mount,release,send,snapshot -- and `destroy` and `mount`
+# are in it. Listing them here made --deny-restore revoke them too, leaving the
+# account unable to prune its own snapshots or mount anything: the RESTORE was
+# taken back and the BACKUP broke with it.
+#
+# Measured on the lab 2026-08-27, while cleaning up: after one revoke the
+# account held bookmark,hold,release,send,snapshot. A grant that quietly narrows
+# the capability it was supposed to leave alone is worse than one that fails to
+# widen, because nothing reports it until the next prune does nothing.
+RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mountpoint}"
 
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
