@@ -3,7 +3,7 @@
 
 Status: **ACTIVE — V2.2 agreed and in use**
 
-Revision date: 2026-08-12
+Revision date: 2026-08-27
 Original V2 agreement: 2026-08-07
 
 This document consolidates:
@@ -16,7 +16,8 @@ This document consolidates:
 - Claude's V2.1 response (`71147eb`), which accepted all nine proposed deltas, five with amendments and none rejected;
 - the Reviewer's independent verification of the evidence behind those amendments;
 - the Reviewer V2.2 transport-profile proposal (`92af86c`);
-- Claude's V2.2 response (`0b25373`), Reviewer synthesis (`8953d86`) and Claude concurrence (`b2aecee`).
+- Claude's V2.2 response (`0b25373`), Reviewer synthesis (`8953d86`) and Claude concurrence (`b2aecee`);
+- the 2026-08-27 PR-as-handoff incident and publication-completion amendment.
 
 Where the V2.1 operational amendments or V2.2 transport/workspace rules below are more specific than earlier V2 wording, the newer rule controls. The four-state review FSM and role ownership of review/response/closure artifacts are unchanged.
 
@@ -879,6 +880,13 @@ Every profile must satisfy all of these:
 7. No profile creates a second hand-maintained inbox, ledger or routing table.
 8. Canonical publication is compare-and-swap against the published state the actor actually verified. If the ref moved, refresh and re-evaluate before publishing.
 9. A commit containing generated output such as `REVIEW_LEDGER.md` or `OPEN-THREADS.md` is **not replayed/rebased/merged forward as derived state** after losing a publication race. Integrate the peer's new canonical facts first, regenerate derived output from those facts, then commit the regenerated result.
+10. Publication is complete only after the active published ref contains the
+    role-owned artifact and regenerated views, and the publisher reads that ref
+    back and verifies the expected ledger state and next owner. A role branch,
+    open PR, green CI, mergeable PR, or commit not yet reachable from the
+    published ref is WIP, never a submission or handoff. Until read-back, the
+    publisher must report `not published, no handoff yet` rather than
+    `published`, `submitted`, `routed`, or `handed off`.
 
 The last rule follows from an observed V2 failure mode: Git can correctly replay a stale generated file even though the underlying facts changed. Generated output has no independent truth; its correct value is the value regenerated from current canonical facts.
 
@@ -902,7 +910,17 @@ published-ref: GitHub main
 reviewer-filesystem-access: none
 ```
 
-GitHub `main` is the canonical published state and transport. Fresh GitHub read plus the safe reviewer write/read-back probe remain Profile-A health checks. The current Owner-approved direct-main exception remains unchanged.
+GitHub `main` is the canonical published state and transport. Fresh GitHub read
+plus the safe reviewer write/read-back probe remain Profile-A health checks. The
+Owner revoked the temporary direct-main exception on 2026-08-14; short-lived
+branches and Pull Requests are mandatory.
+
+For Profile A, opening a PR starts publication but does not finish it. After
+required checks and review conditions pass, the role publishing a
+reviewer-owned artifact completes merge/auto-merge when authorised, then reads
+fresh `main` and verifies the intended artifact plus ledger transition. If merge
+cannot be completed, the PR remains WIP and the concrete blocker is reported;
+the peer is not routed to that branch.
 
 GitHub is not being removed or downgraded in this project.
 
@@ -919,6 +937,21 @@ main                    canonical published state
 Role branches may be used when a long-running thread benefits from early durable peer visibility without advancing `main`. They are not mandatory.
 
 **A role branch is never a submission.** Its existence, freshness or latest commit does not route work. A submission/review boundary exists only when the canonical role-owned artifact/ledger names the exact reachable SHA required by the protocol.
+
+The same is true of an unmerged PR built from that branch. CI and mergeability
+qualify the candidate for publication; only merge plus canonical `main`
+read-back completes the boundary.
+
+### Incident that fixed publication completion
+
+On 2026-08-27 the Reviewer opened green, mergeable PR #167 containing
+REV-20260827-122 and reported the review as published. Claude correctly read
+canonical `main`, where neither the review nor `OPEN | Claude` existed, so no
+handoff was visible. Merging the PR immediately made the expected ledger row
+visible. The failure was permitted by stale direct-main instructions in both
+agent entry files and by treating PR creation as completion despite the existing
+role-branch rule. Invariant 10 now makes the completion evidence explicit and
+symmetric: merge, fresh `main` read-back, expected ledger transition.
 
 This prevents branch WIP from becoming a second informal communication channel.
 
