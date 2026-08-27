@@ -9,6 +9,30 @@ set -o pipefail
 # Usage: snapget.sh [options] REMOTE_DATASETS [LOCAL_BASE]
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
+#   -t               The second argument is the EXACT dataset to write, not a
+#                    base to append the source name under.
+#
+#                    Default, unchanged: `snapget.sh host:A/B C/D` writes
+#                    `C/D/A/B`, and an omitted base writes `A/B` itself
+#                    (identity, which is what sync mode is). Both preserve the
+#                    source's name, which is right for a backup: a collector
+#                    holding twenty sources needs them to stay apart.
+#
+#                    A RESTORE is the one operation where that is wrong. The copy
+#                    lives at `hdd/backups/<peer>/hdd/data` and has to land back
+#                    as `hdd/data` -- neither mapping can say that, so before this
+#                    flag the engine composed a path nobody asked for. Measured on
+#                    the lab, 2026-08-27, which is where it was found.
+#
+#                    Refused with more than one dataset (one exact path cannot
+#                    receive several), without a base (there would be nothing to
+#                    be exact about) and with -R (flat-recursive expands into many
+#                    datasets, each of which needs its own name).
+#
+#                    Added to BOTH engines in one commit at the owner's
+#                    instruction. They are twins: a capability in one direction
+#                    and not the other is how the two drift, and test/twins
+#                    exists because that has happened before.
 #   -e               Use existing latest snapshot on source instead of creating a new one
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote source -- see "COMPRESSION DEFAULT" below,
@@ -461,6 +485,7 @@ human_bytes() {   # <bytes>
 }
 
 PORT=22
+TARGET_EXACT=0
 USE_EXISTING_SNAPSHOT=0
 declare -a EXCLUDE_SNAPS=()
 # -q: quiesce the Proxmox guest that owns each SOURCE dataset before
@@ -1872,13 +1897,14 @@ if [ $# -gt 0 ]; then
     set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
 fi
 
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
+while getopts "m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
         q) QUIESCE="$OPTARG";;
         Q) QUIESCE_DEADMAN="$OPTARG";;
+        t) TARGET_EXACT=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         E) EXCLUDE_SNAPS+=("$OPTARG");;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
@@ -2409,10 +2435,32 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     esac
 fi
 
+# -t REFUSES what it cannot mean. All three are decided before anything is sent,
+# because each of them would otherwise produce a target path nobody asked for --
+# and on a restore that path is a real dataset on a machine in trouble.
+if [ "$TARGET_EXACT" -eq 1 ]; then
+    if [ -z "$LOCAL_BASE" ]; then
+        echo "Error: -t says the second argument is the exact target, and there is no second argument. Give the dataset to write, or drop -t." >&2
+        exit 1
+    fi
+    if [ "${#DATASETS[@]}" -ne 1 ]; then
+        echo "Error: -t names ONE exact target and ${#DATASETS[@]} datasets were given. One path cannot receive several; run them one at a time." >&2
+        exit 1
+    fi
+    if [ "$FLAT_RECURSE" -eq 1 ]; then
+        echo "Error: -t and -R together. -R expands into many independent datasets and each needs its own name, which is the mapping -t exists to switch off. Use -r for one atomic recursive stream under the exact target, or drop -t." >&2
+        exit 1
+    fi
+fi
+
 declare -a FAILED_DATASETS=()
 ADOPT_SKIPPED=0
 for src_path in "${DATASETS[@]}"; do
-    if [ -n "$LOCAL_BASE" ]; then
+    if [ "$TARGET_EXACT" -eq 1 ]; then
+        # -t: the base IS the target. Same flag, same meaning, same commit as
+        # snapsend.sh -- see the note on the flag above.
+        dataset="$LOCAL_BASE"
+    elif [ -n "$LOCAL_BASE" ]; then
         dataset="${LOCAL_BASE}/${src_path}"
     else
         dataset="$src_path"

@@ -1461,7 +1461,18 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
         replace)       RESTORE_ENGINE_ARGV+=(-f) ;;
         *) log 0 "restore: '$mode' is not a restore mode -- refusing to build a command for an undefined one"; return 1 ;;
     esac
-    RESTORE_ENGINE_ARGV+=(-e -m "$point" "$copy" "$target")
+    # -t: the target is an EXACT dataset, not a base to append the copy's name
+    # under. Without it the engine writes hdd/data/hdd/backups/<peer>/hdd/data --
+    # measured on the lab before the flag existed.
+    RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
+    # The relationship's own key, in the engine's flag spelling. Word-split
+    # deliberately: these are flags and paths, none of which carry a space in
+    # this project. Empty for a local restore, which opens no connection.
+    if [ -n "${RESTORE_ENGINE_SSH:-}" ]; then
+        # shellcheck disable=SC2206
+        RESTORE_ENGINE_ARGV+=(${RESTORE_ENGINE_SSH})
+    fi
+    RESTORE_ENGINE_ARGV+=("$copy" "$target")
     return 0
 }
 

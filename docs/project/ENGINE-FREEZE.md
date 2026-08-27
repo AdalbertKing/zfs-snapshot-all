@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 0f280f2e3a8aec280d8c3a396a0a01fb27e71903 -->
-<!-- frozen: snapget.sh 100755 45667de1f6dc45663c09b60db6125209fb3f7c2c -->
+<!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
+<!-- frozen: snapget.sh 100755 e050264cf50bdc1bea1b1b9cf55cafcbdef31678 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -67,6 +67,36 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-27 (snapsend.sh AND snapget.sh, one commit): **`-t` -- the second
+  argument is the EXACT dataset, not a base to append the source name under.**
+  Owner direction, verbatim: "A. zmiany maja byc jednoczenie w snapsend i snapget
+  przeprowdzone."
+
+  Both engines composed the target as `BASE/<source name>`, or identity when the
+  base was omitted. Both preserve the source's name, which is right for a backup
+  -- a collector holding twenty sources needs them to stay apart. A RESTORE is
+  the one operation where it is wrong: the copy lives at
+  `hdd/backups/<peer>/hdd/data` and has to land back as `hdd/data`, and neither
+  mapping can say that.
+
+  FOUND ON THE LAB, not by reading. pve9 -> pve1, 2026-08-27: the grant was read
+  and enforced, the mode classified remotely as `rewind`, the recovery point
+  chosen -- and the engine then tried to create
+  `hdd/labsrc/hdd/labcoll/192.168.28.9/hdd/labsrc`. Every unit test passed
+  throughout, because none of them composed a real target path.
+
+  Both engines in ONE commit at the owner's instruction. They are twins, and
+  `test/twins` exists because a capability added to one direction and not the
+  other is how they drift. This is that rule applied before the drift instead of
+  after it.
+
+  Scope: one BOOLEAN flag, free in both optstrings, taking no argument -- so
+  gen-cron.sh's FLAGS_ARG_LETTERS contract is untouched. The composition gains a
+  new FIRST branch; the two existing branches are byte-identical, so every run
+  that does not pass `-t` behaves exactly as before. `-t` refuses what it cannot
+  mean: no base, more than one dataset, or `-R`.
+
 
 - 2026-08-27 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **the default answer to
   a failed freeze is inverted.** Owner direction, verbatim: "Przemyslalem i chce,

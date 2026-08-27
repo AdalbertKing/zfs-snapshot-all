@@ -9962,7 +9962,13 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                     # fails on a host that is correctly pinned.
                     RESTORE_SSH_OPTS="-i ${LOAD_KEYFILE:-} -o UserKnownHostsFile=${LOAD_ALIAS_KH:-} -o HostKeyAlias=${LOAD_ALIAS:-} -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o StrictHostKeyChecking=yes -o BatchMode=yes"
                     [ -n "${LOAD_PORT:-}" ] && RESTORE_SSH_OPTS="$RESTORE_SSH_OPTS -p $LOAD_PORT"
-                    export RESTORE_SSH_OPTS
+                    # The engine speaks its OWN flags for the same pinning
+                    # (-K/-k/-O), not raw ssh flags. Both forms are exported from
+                    # the one place that knows the paths, so they cannot disagree
+                    # about which key reaches which host.
+                    RESTORE_ENGINE_SSH="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+                    [ -n "${LOAD_PORT:-}" ] && RESTORE_ENGINE_SSH="$RESTORE_ENGINE_SSH -p $LOAD_PORT"
+                    export RESTORE_SSH_OPTS RESTORE_ENGINE_SSH
                 fi
             fi
             exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;
