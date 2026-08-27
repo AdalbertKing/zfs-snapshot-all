@@ -58,6 +58,9 @@ RESTORE_LANDED=()
 # Set when the whole-relation scope was expanded to one entry per dataset, so
 # the engine does not also recurse over what the scope already lists.
 RESTORE_SCOPE_EXPANDED=0
+# Whether the engine command built for the current dataset carries -r. The
+# verification after it must measure exactly what was sent, no more.
+RESTORE_ENGINE_RECURSED=0
 if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
     SSH_OPTS=(${RESTORE_SSH_OPTS})
@@ -1338,10 +1341,10 @@ restore_remote_state() {   # <account@host:dataset> -> "absent" | "bare" | <guid
 # Prints the datasets that differ, one per line. Empty means none does. A failed
 # read prints nothing AND returns non-zero, so the caller can tell "nothing to
 # do" from "I could not ask" -- they differ by an entire skipped rollback.
-restore_remote_ahead() {   # <account@host> <target root> <recovery point name>
-    local peer="$1" root="$2" point="$3"
+restore_remote_ahead() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
-        for d in \$(zfs list -H -o name -r '$root' 2>/dev/null); do
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
             w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
             case \"\$w\" in ''|-|0) continue ;; esac
             echo \"\$d\"
@@ -1366,10 +1369,10 @@ restore_remote_ahead() {   # <account@host> <target root> <recovery point name>
 #
 # Prints one "<dataset> <reason>" line per dataset that is NOT at the point.
 # Silence means every one of them is.
-restore_remote_off_point() {   # <account@host> <target root> <recovery point name>
-    local peer="$1" root="$2" point="$3"
+restore_remote_off_point() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
-        for d in \$(zfs list -H -o name -r '$root' 2>/dev/null); do
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
             w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
             case \"\$w\" in
                 0)  ;;
@@ -1520,7 +1523,14 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # so no rollback ran and the run reported success over the
                     # damage. See restore_remote_ahead's own header.
                     local _ahead
-                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point")"
+                    # Same depth rule as the verification below: when every
+                    # dataset is its own scope entry, this one answers for
+                    # itself. A parent would otherwise be rolled back because a
+                    # child differs, and that child is about to be handled on
+                    # its own line.
+                    local _adepth=""
+                    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _adepth="-d 0"; fi
+                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point" "$_adepth")"
                     if [ -n "$_ahead" ]; then
                         RESTORE_STRATEGY=rollback
                         RESTORE_ROLLBACK_TO="$point"
@@ -1648,7 +1658,9 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # A quoting mistake that silently narrows a destructive operation to a
         # third of its scope is exactly the kind this project keeps paying for,
         # so the substitution is gone rather than escaped more carefully.
-        _list="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" "zfs list -H -o name -r '$_tgt'" 2>/dev/null)"
+        local _rdepth=""
+        if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _rdepth="-d 0"; fi
+        _list="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" "zfs list -H -o name $_rdepth -r '$_tgt'" 2>/dev/null)"
         if [ -z "$_list" ]; then
             RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
@@ -1692,6 +1704,14 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
 
     # ---- 6. the engine -----------------------------------------------------
     log 0 "restore: $src <- $copy@$point  [$mode]"
+    # The engine warns that a dataset with children is being sent without -r.
+    # True, and not a problem here: those children are separate entries in this
+    # run, each with its own classification and its own line in the report. Said
+    # before the warning appears, so the operator is not left deciding whether a
+    # recovery just skipped half the machine.
+    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ] && [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 0 ]; then
+        log 1 "restore:   (children of $copy, if any, are their own entries in this run -- the engine's 'neither -r nor -R' warning below is expected)"
+    fi
     log 1 "restore:   ${RESTORE_ENGINE:-snapsend.sh} ${RESTORE_ENGINE_ARGV[*]}"
     if [ "${RESTORE_DRY_RUN:-0}" -eq 1 ]; then
         RESTORE_ONE_VERDICT="dry run -- the command above was NOT executed"
@@ -1716,7 +1736,16 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         case "$src" in
             *:*)
                 local _off
-                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point")"
+                # MEASURED OVER EXACTLY WHAT WAS SENT. When the scope lists
+                # every dataset separately, the parent's entry is the parent and
+                # nothing else -- verifying its whole subtree judged it on
+                # children that are their own entries, still queued, and made
+                # the verdict depend on loop order. Measured on the lab: the
+                # parent reported NOT DONE while both its children were
+                # recovered two lines further down.
+                local _vdepth=""
+                [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _vdepth="-d 0"
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth")"
                 if [ -n "$_off" ]; then
                     RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}:"
@@ -2010,9 +2039,11 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     # -r here would send the subtree a second time under a parent that is
     # already at the point. One dataset, one stream. See the expansion in
     # cmd_restore's whole-relation branch for why the scope grew.
+    RESTORE_ENGINE_RECURSED=0
     if [ "${RESTORE_SCOPE_EXPANDED:-0}" -ne 1 ] \
        && zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
         RESTORE_ENGINE_ARGV+=(-r)
+        RESTORE_ENGINE_RECURSED=1
     fi
     RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
     # The relationship's own key, in the engine's flag spelling. Word-split
