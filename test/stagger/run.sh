@@ -155,6 +155,7 @@ expr_for() {   # <use_template value> -> the cadence found, or nothing
       echo 'PROFILE_PRUNE_FILE=""'
       echo 'PROFILE_LOADED=1'
       echo 'PROFILE_ACTIVE=p'
+      awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       lift schedule_template_expr
       echo 'schedule_template_expr send'; } > "$t"
@@ -170,6 +171,49 @@ for form in "profile__p__hourly" "hourly"; do
         bad "the cadence is found for use_template='$form'" "got '$got', wanted '4 * * * *'"
     fi
 done
+
+# --- REV-20260827-122 F1, one site further on ---------------------------------
+# PROFILE_ACTIVE can be a PATH. cmd_migrate_profile sets it from `--profile=`,
+# which accepts one, and writes that same string into the client record that
+# load_client_profile later reads back. This lookup built
+#     [template:profile__${PROFILE_ACTIVE}__hourly]
+# raw, so a path produced [template:profile__/tmp/x/p.conf__hourly], matched
+# nothing, and fell through `continue` -- the empty answer whose cost the block
+# above already records: no stagger at all, both relationships on the template's
+# own minute.
+#
+# profile_name_of is lifted with the function under test, not stubbed: the fix
+# CALLS it, so a harness without it would return empty for the fixed code too
+# and this assertion would pass for the wrong reason.
+expr_for_active() {   # <PROFILE_ACTIVE> <use_template form> -> the cadence
+    local t; t=$(mktemp); local d; d=$(mktemp -d)
+    printf '\tuse_template = %s\n' "$2" > "$d/ds.inc"
+    printf '[template:profile__p__hourly]\n\tsend_schedule  = 4 * * * *\n' > "$d/tpl"
+    { echo 'set -u'
+      echo 'log() { :; }'
+      printf 'PROFILE_DS_FILE=%q\n' "$d/ds.inc"
+      printf 'PROFILE_TPL_FILE=%q\n' "$d/tpl"
+      echo 'PROFILE_PRUNE_FILE=""'
+      echo 'PROFILE_LOADED=1'
+      printf 'PROFILE_ACTIVE=%q\n' "$1"
+      awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      lift schedule_template_expr
+      echo 'schedule_template_expr send'; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -rf "$t" "$d"
+}
+got="$(expr_for_active p hourly)"
+if [ "$got" = "4 * * * *" ]; then ok "control: a bare profile name still finds the cadence"
+else bad "control: a bare profile name still finds the cadence" "got '$got'"; fi
+got="$(expr_for_active /tmp/whatever/p.conf hourly)"
+if [ "$got" = "4 * * * *" ]; then ok "F1: a profile named by PATH still finds the cadence (no silent loss of stagger)"
+else bad "F1: a profile named by PATH still finds the cadence" "got '$got' -- the path was interpolated into the template name"; fi
+# ...and a RELATIVE path, which is what an operator actually types.
+got="$(expr_for_active ./profiles/p.conf hourly)"
+if [ "$got" = "4 * * * *" ]; then ok "F1: ...and by a relative path"
+else bad "F1: ...and by a relative path" "got '$got'"; fi
+
 
 # --- diagnostics must not become the value ---------------------------------
 # Both helpers are CAPTURED by their caller ( x=$(schedule_...) ), and log()
@@ -190,6 +234,7 @@ two_tier_expr() {   # -> what schedule_template_expr returns when tiers disagree
       echo 'PROFILE_PRUNE_FILE=""'
       echo 'PROFILE_LOADED=1'
       echo 'PROFILE_ACTIVE=p'
+      awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       lift schedule_template_expr
       echo 'schedule_template_expr send'; } > "$t"

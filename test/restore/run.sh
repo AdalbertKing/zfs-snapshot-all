@@ -1940,6 +1940,53 @@ else bad "scope: the same two named on the collector side" "expected 2, got $n2"
 # both sides ARE accepted and that they are checked pair by pair.
 sc_refuses "scope: a doubled comma is a refusal, not a shorter list" \
     "empty entry" pve2 --target rpool/data/vm-101-disk-0,,rpool/data/vm-101-disk-1
+
+# REV-20260827-122 F2. The doubled-comma case above passed on the reviewed SHA
+# and hid the one next to it: the loop ran `while [ -n "$rest" ]`, so a list
+# ending in a comma resolved its last real member, emptied the tail, and left
+# BEFORE it could build the empty member the refusal was written for. The guard
+# named the hole and the loop shape decided it was unreachable.
+#
+# ON b0a3a289b7bfd2a9e89b8de75c5d600e382f6c0d these accept a SHORTER list:
+#   trailing-comma accepted=1 src=... copy=...
+# while the doubled and leading cases refuse there too -- which is exactly why
+# the existing coverage stayed green over it.
+sc_refuses "scope: a TRAILING comma is a refusal, not a shorter list" \
+    "empty entry" pve2 --target rpool/data/vm-101-disk-0,
+sc_refuses "scope: ...on --source as well" \
+    "empty entry" pve2 --source hdd/store,
+sc_refuses "scope: a LEADING comma is a refusal" \
+    "empty entry" pve2 --target ,rpool/data/vm-101-disk-0
+sc_refuses "scope: ...on --source as well" \
+    "empty entry" pve2 --source ,hdd/store
+sc_refuses "scope: a list that is nothing but a comma is a refusal" \
+    "empty entry" pve2 --target ,
+# A trailing comma after a MULTI-member list is the shape an unfinished edit
+# actually takes -- the operator wrote two disks and was about to write a third.
+sc_refuses "scope: a trailing comma after two members is still a refusal" \
+    "empty entry" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1,
+
+# ...and it refuses BEFORE anything is planned. Acceptance criterion 2: no plan
+# output, so no confirmation, no fence, no snapshot, nothing downstream can have
+# run. Checked on the output rather than assumed from the exit code.
+out="$(sc_run pve2 --target rpool/data/vm-101-disk-0, 2>&1)"
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 0 ]; then ok "scope: a trailing comma refuses BEFORE any plan is shown"
+else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lines were printed"; fi
+
+# POSITIVE CONTROL, and it is what makes the six refusals above mean something:
+# a well-formed list of the same length still resolves completely, in the order
+# written. Without this, a parser that refused every list would pass all of them.
+out="$(sc_run pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1)"
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 2 ]; then ok "scope control: the same list WITHOUT the trailing comma still resolves both"
+else bad "scope control: the same list without the trailing comma resolves both" "expected 2, got $n"; fi
+first="$(printf '%s\n' "$out" | grep 'Zrodlo:' | head -1)"
+case "$first" in
+    *vm-101-disk-0*) ok "scope control: ...and in the order written" ;;
+    *) bad "scope control: ...and in the order written" "$first" ;;
+esac
+
 sc_refuses "scope: the same dataset twice is a refusal" \
     "appears twice" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-0
 # sc5/sc6 -- the discriminating pair. Each name is legal in the OTHER namespace,

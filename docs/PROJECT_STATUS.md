@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ed12da654953810c -->
+<!-- status-covers-digest: c29a9cab945c0bb0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,69 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **REV-20260827-122: DWA BLOKERY P1 Z RECENZJI NAPRAWIONE (2026-08-27).**
+  Recenzent nie komentowal PR-a — otworzyl i zmergowal `#167` z formalnym
+  werdyktem CHANGES REQUIRED na `b0a3a28`. Odpowiedz:
+  `docs/internal/reviews/responses/REV-20260827-122.md`.
+
+  **F1 — migracja profilu podanego SCIEZKA nie wymieniala jego szablonow.**
+  Petla usuwania interpolowala `$target_profile` surowo, wiec dla
+  `--profile=/tmp/mine.conf` szukala `[template:profile__/tmp/mine.conf__...]`,
+  a renderer zapisal `[template:profile__mine__...]`. Nic nie pasowalo, nic nie
+  zostalo usuniete, `ensure_cron_config` jest ADDYTYWNE — wiec stare szablony
+  stlumily dopisanie edytowanej polityki, kandydat zainstalowal sie czysto ze
+  STARA retencja, a rekord dostal NOWY digest. Nastepny przebieg czyta ten
+  digest i idzie sciezka „nothing to migrate". Cicha rozbieznosc miedzy tym, co
+  twierdza rekordy, a tym, co egzekwuje crontab — w RETENCJI.
+
+  **Bylo w TRZECH miejscach, nie w jednym.** Recenzent nazwal jedno; grep za
+  regula znalazl dwa kolejne: `schedule_tier_exprs` i `schedule_template_expr`
+  budowaly `profile__${PROFILE_ACTIVE}__...` surowo, a `PROFILE_ACTIVE` **bywa
+  sciezka** (ustawia je `--profile=`, a rekord klienta niesie ten sam napis).
+  Koszt pustej odpowiedzi stamtad jest zapisany w komentarzu tuz nad tym kodem:
+  **brak rozrzutu harmonogramow** — wszystkie relacje na tej samej minucie, co
+  lab dwuzrodlowy zlapal w pierwszej minucie (#148/#149). Dowod, ze to byla wada
+  a nie interpretacja: renderer w tym samym pliku JUZ uzywal
+  `profile_name_of "$PROFILE_ACTIVE"`. Regula istniala; trzy miejsca jej nie
+  stosowaly.
+
+  **F2 — lista zakresu konczaca sie przecinkiem byla po cichu skracana.**
+  Komentarz nad straznikiem mowil wprost, ze `a,b,` ma byc odrzucone. Petla
+  szla `while [ -n "$rest" ]`, wiec dla `a,` rozwiazywala `a`, oproznila ogon
+  i wychodzila ZANIM zdazyla zbudowac pusty ostatni element, dla ktorego ten
+  straznik istnial. Nazwanie dziury nie jest jej zamknieciem.
+
+  **Kontrole negatywne na `b0a3a28`, obie dyskryminujace:**
+
+  | | naprawione | `b0a3a28` |
+  |---|---|---|
+  | F1: 122e „migracja sie udaje" | PASS | **PASS** |
+  | F1: 122f wyrenderowana retencja `-D30`→`-D10` | PASS | **FAIL** |
+  | F1: 122j i zostaje po trzecim przebiegu | PASS | **FAIL** |
+  | F2: `"a,"` | odmowa | **ACCEPTED (1 member)** |
+  | F2: `",a"` / `"a,,b"` / `"a,b,,"` | odmowa | odmowa |
+
+  122e przechodzace po obu stronach jest sednem: komenda melduje sukces, a
+  retencja nigdy sie nie rusza. F2 pokazuje, dlaczego istniejacy test podwojnego
+  przecinka byl zielony — tylko przypadek terminalny byl otwarty.
+
+  **Asercja F1 liczy sie na WYRENDEROWANEJ linii crona**, nie na fragmencie
+  configu ani na rekordzie, bo oba byly juz „poprawne", podczas gdy crontab
+  egzekwowal co innego. Ta luka JEST wada.
+
+  **Dwie wady higieny testow, obie moje, obie o krok od pojscia jako dowod:**
+  tryb celowany `--section` byl nieuzywalny (funkcje fikstur wewnatrz bloku
+  pomijanego przy takim przebiegu — egzekucja L0 z REV-109 po cichu zepsuta);
+  oraz siedem z dziesieciu moich nowych asercji uzywalo `check`, ktorego ta
+  suita nie definiuje — przebieg meldowal `PASS=138 FAIL=0`, a asercja niosaca
+  cale znalezisko nigdy nie ruszyla.
+
+  **Kaskada:** `zfsbackup` **488/0** (478 recenzenta + 10 nowych), `restore`
+  **171/0**, `stagger` **20/0**, `linkfields` **36/0**, `rerun` **16/0**,
+  `rux` **37/0**. `localbackup` na CI — udokumentowany jako niewiarygodny na tej
+  stacji. `./test/impact.sh --verify` zielone.
+
 
 - **DOMYSLNA ODPOWIEDZ NA NIEUDANY QUIESCE — ODWROCONA (2026-08-27).**
   Decyzja wlasciciela, doslownie: *"Przemyslalem i chce, zeby snapshots sie
