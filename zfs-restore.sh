@@ -1321,18 +1321,54 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # dataset of a subtree needs its own, because rollback is not recursive over
     # children -- so the loop is remote and explicit rather than implied.
     if [ "${RESTORE_STRATEGY:-}" = rollback ] && [ -n "${RESTORE_ROLLBACK_TO:-}" ]; then
-        local _peer="${src%%:*}" _tgt="${src#*:}"
+        local _peer="${src%%:*}" _tgt="${src#*:}" _ds _list _failed=0
         log 0 "restore: $src -- the target holds snapshots NEWER than $point; rolling it back to reach that point. They will be destroyed."
-        if ! ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
-             "for d in \$(zfs list -H -o name -r '$_tgt'); do \
-                  zfs list -H -o name \"\$d@$RESTORE_ROLLBACK_TO\" >/dev/null 2>&1 || continue; \
-                  zfs rollback -r \"\$d@$RESTORE_ROLLBACK_TO\" || exit 1; \
-              done" 2>/dev/null; then
-            RESTORE_ONE_VERDICT="the target could not be rolled back to $point"
+
+        # TWO ssh calls, and no remote command substitution in either.
+        #
+        # The first version put `$(zfs list ...)` inside the remote command. It
+        # expanded HERE, on the collector, where that dataset does not exist --
+        # so the loop was empty, nothing was rolled back, and the run reported
+        # success. What made it look like it had worked was the engine's own
+        # `recv -F` rolling back the one dataset it received into.
+        #
+        # Measured on the lab: the parent came back to the recovery point and
+        # both children kept the damage, while the report said all recovered.
+        # A quoting mistake that silently narrows a destructive operation to a
+        # third of its scope is exactly the kind this project keeps paying for,
+        # so the substitution is gone rather than escaped more carefully.
+        _list="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" "zfs list -H -o name -r '$_tgt'" 2>/dev/null)"
+        if [ -z "$_list" ]; then
+            RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+            return 1
+        fi
+        # Every dataset of the subtree, by name, one command. `zfs rollback` is
+        # not recursive over children -- -r there means "destroy the snapshots
+        # newer than this one", not "descend" -- so each needs its own.
+        while IFS= read -r _ds; do
+            [ -n "$_ds" ] || continue
+            if ! ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
+                 "zfs rollback -r '${_ds}@${RESTORE_ROLLBACK_TO}'" 2>/dev/null; then
+                # A dataset that never had this snapshot is not a failure: a
+                # child added after the recovery point legitimately has no such
+                # point to return to. One that HAS it and refuses is.
+                if ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
+                   "zfs list -H -o name '${_ds}@${RESTORE_ROLLBACK_TO}'" >/dev/null 2>&1; then
+                    log 0 "restore:   $_ds -- rollback to $RESTORE_ROLLBACK_TO REFUSED"
+                    _failed=1
+                else
+                    log 1 "restore:   $_ds has no $RESTORE_ROLLBACK_TO -- nothing to roll back to, left alone"
+                fi
+            else
+                log 1 "restore:   $_ds rolled back to $RESTORE_ROLLBACK_TO"
+            fi
+        done <<< "$_list"
+        if [ "$_failed" -eq 1 ]; then
+            RESTORE_ONE_VERDICT="the target could not be rolled back to $point (the datasets are named above)"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
             return 1
         fi
-        log 1 "restore: $src -- rolled back to $point"
     fi
 
     # ---- 6. the engine -----------------------------------------------------
