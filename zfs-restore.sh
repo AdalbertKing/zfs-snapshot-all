@@ -1304,34 +1304,80 @@ restore_remote_state() {   # <account@host:dataset> -> "absent" | "bare" | <guid
          g=\$(zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1); \
          [ -n \"\$g\" ] && echo \"\$g\" || echo bare" 2>/dev/null
 }
-
-# Does ANY dataset of the subtree hold a snapshot newer than the recovery point?
+# WHICH DATASETS OF THE SUBTREE DIFFER FROM THE RECOVERY POINT?
 #
-# The question the root alone cannot answer, and the reason it matters was
-# measured on the lab: after one restore the ROOT sat at the recovery point
-# while both children were still ahead, so a check that read only the root
-# classified the run as `increment`, skipped the rollback, and reported that
-# everything had been recovered while the damage sat untouched in the children.
+# This asked a narrower question -- "does it hold a snapshot NEWER than the
+# point" -- and that question has a false negative that costs the entire
+# recovery. Measured on the lab, 2026-08-27, on the most ordinary disaster
+# there is: files deleted from a live filesystem, no snapshot taken since.
 #
-# `creation` is the axis, on the FAR side, where the snapshots are. Names are
-# not compared: two hosts in different timezones write different names for the
-# same instant, which this estate has measured, and the whole point of resolving
-# a recovery point by creation is not to undo that here.
+#   hdd/labsrc: newest snapshot = the recovery point
+#               written@<point> = 73728
 #
-# Prints the datasets that are ahead, one per line. Empty means none is. A
-# failed read prints nothing AND returns non-zero, so the caller can tell "none
-# is ahead" from "I could not ask" -- they differ by an entire skipped rollback.
+# No snapshot was newer, so nothing was ahead, so no rollback ran; the engine
+# then had a zero-length increment to send and exited 0; and the run reported
+# "all 1 dataset(s) in scope recovered" over a filesystem that still had the
+# damage in it and the deleted files still missing. Success, reported, having
+# changed nothing.
+#
+# `written@<point>` answers the question that actually matters, and answers both
+# halves of it at once: it is non-zero when snapshots exist after the point AND
+# when the live filesystem has diverged from it -- which is the same thing from
+# the restore's side, because both are state that has to go before the dataset
+# is at that point again. `zfs rollback` removes either.
+#
+# It also answers a third case honestly: "-" means the dataset does not have
+# that snapshot at all, so there is no point to roll back TO. Those are skipped
+# here and caught by the verification after the run instead, where the right
+# answer is "this dataset was not recovered", not "roll it back to something it
+# does not have".
+#
+# Prints the datasets that differ, one per line. Empty means none does. A failed
+# read prints nothing AND returns non-zero, so the caller can tell "nothing to
+# do" from "I could not ask" -- they differ by an entire skipped rollback.
 restore_remote_ahead() {   # <account@host> <target root> <recovery point name>
     local peer="$1" root="$2" point="$3"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
         for d in \$(zfs list -H -o name -r '$root' 2>/dev/null); do
-            c=\$(zfs get -H -p -o value creation \"\$d@$point\" 2>/dev/null) || continue
-            [ -n \"\$c\" ] || continue
-            n=\$(zfs list -H -p -t snapshot -o creation -d 1 \"\$d\" 2>/dev/null | awk -v c=\"\$c\" '\$1 > c' | wc -l)
-            [ \"\$n\" -gt 0 ] && echo \"\$d\"
+            w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
+            case \"\$w\" in ''|-|0) continue ;; esac
+            echo \"\$d\"
         done
         exit 0" 2>/dev/null
 }
+
+# IS EVERY DATASET OF THE SUBTREE ACTUALLY AT THE RECOVERY POINT NOW?
+#
+# Asked after the engine, because "the engine exited 0" and "the machine holds
+# the data again" are not the same sentence, and the lab has now produced a run
+# where the first was true and the second was false.
+#
+# The measure is the same property, read again: at the point means
+# `written@<point>` is exactly 0 -- no snapshot after it and nothing written
+# since. Anything else is named and the dataset is reported NOT recovered.
+#
+#   0     at the point
+#   >0    still diverged -- the recovery did not land
+#   -     the dataset does not have that snapshot at all
+#   ''    could not be read
+#
+# Prints one "<dataset> <reason>" line per dataset that is NOT at the point.
+# Silence means every one of them is.
+restore_remote_off_point() {   # <account@host> <target root> <recovery point name>
+    local peer="$1" root="$2" point="$3"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name -r '$root' 2>/dev/null); do
+            w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
+            case \"\$w\" in
+                0)  ;;
+                -)  echo \"\$d does not have that snapshot\" ;;
+                '') echo \"\$d could not be read\" ;;
+                *)  echo \"\$d still differs from it by \$w bytes\" ;;
+            esac
+        done
+        exit 0" 2>/dev/null
+}
+
 
 # ------------------------------------------------------------------------------
 #
@@ -1463,12 +1509,19 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # and both children were still ahead, so a root-only check
                     # said `increment`, skipped the rollback, and called the run
                     # a success over untouched damage.
+                    #
+                    # And "differs from", not "is ahead of". The narrower
+                    # question missed the commonest disaster of all -- files
+                    # deleted from a live filesystem with no snapshot taken
+                    # since -- because nothing was newer, so nothing was ahead,
+                    # so no rollback ran and the run reported success over the
+                    # damage. See restore_remote_ahead's own header.
                     local _ahead
                     _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point")"
                     if [ -n "$_ahead" ]; then
                         RESTORE_STRATEGY=rollback
                         RESTORE_ROLLBACK_TO="$point"
-                        log 1 "restore: ahead of $point on the target: $(printf '%s' "$_ahead" | tr '\n' ' ')"
+                        log 1 "restore: differs from $point on the target: $(printf '%s' "$_ahead" | tr '\n' ' ')"
                     else
                         RESTORE_STRATEGY=increment
                     fi
@@ -1577,7 +1630,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # children -- so the loop is remote and explicit rather than implied.
     if [ "${RESTORE_STRATEGY:-}" = rollback ] && [ -n "${RESTORE_ROLLBACK_TO:-}" ]; then
         local _peer="${src%%:*}" _tgt="${src#*:}" _ds _list _failed=0
-        log 0 "restore: $src -- the target holds snapshots NEWER than $point; rolling it back to reach that point. They will be destroyed."
+        log 0 "restore: $src -- the target differs from $point (snapshots after it, writes since it, or both); rolling it back to reach that point. Whatever came after is destroyed."
 
         # TWO ssh calls, and no remote command substitution in either.
         #
@@ -1642,6 +1695,35 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         return 1
     fi
     if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
+        # "THE ENGINE EXITED 0" AND "THE MACHINE HOLDS THE DATA AGAIN" ARE NOT
+        # THE SAME SENTENCE, and the lab has produced a run where the first was
+        # true and the second was false: a zero-length increment sent to a
+        # dataset whose live filesystem still had the damage in it. Every
+        # protection in this file sat upstream of that -- the grant was read,
+        # the mode was classified, the point was proved unambiguous -- and none
+        # of them is a measurement of the result.
+        #
+        # So the result is measured. Every dataset of the subtree must be AT the
+        # recovery point: written@<point> exactly 0. Anything else is named, and
+        # the dataset is reported NOT recovered, which is what it is.
+        #
+        # A LOCAL target is skipped only because the remote probe is what exists;
+        # the same measurement locally is the next slice, not a decision that it
+        # does not matter.
+        case "$src" in
+            *:*)
+                local _off
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point")"
+                if [ -n "$_off" ]; then
+                    RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}:"
+                    printf '%s\n' "$_off" | while IFS= read -r _l; do
+                        [ -n "$_l" ] && log 0 "restore:   $_l"
+                    done
+                    log 0 "restore: reporting this as NOT recovered. A run that changed nothing must not be indistinguishable from one that worked."
+                    return 1
+                fi ;;
+        esac
         RESTORE_ONE_VERDICT="$mode from $point"
         return 0
     fi
