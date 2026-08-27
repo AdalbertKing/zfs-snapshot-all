@@ -1277,12 +1277,32 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 # asked, which the caller must treat as unclassifiable rather than as absent --
 # "I could not reach it" and "there is nothing there" differ by an entire
 # destroyed dataset.
-restore_remote_state() {   # <account@host:dataset> -> "absent" | <guid> | nothing
+# THREE ANSWERS, NOT TWO, AND SILENCE IS NOT ONE OF THEM.
+#
+# This used to print `absent`, or a GUID, or NOTHING for a dataset that exists
+# and holds no snapshots. Nothing is also what an unreachable host prints, so
+# the caller -- whose own comment says "'I could not reach it' and 'there is
+# nothing there' differ by an entire destroyed dataset" -- collapsed the two.
+#
+# Measured on the lab, 2026-08-27. A dataset was recreated empty at the target
+# path, which is a real disaster shape: something rebuilt the guest and the copy
+# is now the only history there is. The restore refused with "the host did not
+# answer". The host had answered, immediately and correctly. The right reading
+# is a target with no common base -- `replace`, a mode the grant governs and can
+# refuse for a stated reason, rather than a transport error that sends the
+# operator to go and look at the network.
+#
+#   absent             the dataset is not there
+#   bare               it is there and holds no snapshots -- no common base
+#   <guid>             its newest snapshot
+#   (empty, non-zero)  the question could not be asked
+restore_remote_state() {   # <account@host:dataset> -> "absent" | "bare" | <guid> | nothing
     local spec="$1" peer="${1%%:*}" ds="${1#*:}"
     [ -n "$peer" ] && [ -n "$ds" ] && [ "$peer" != "$spec" ] || return 1
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" \
         "zfs list -H -o name '$ds' >/dev/null 2>&1 || { echo absent; exit 0; }; \
-         zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1" 2>/dev/null
+         g=\$(zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1); \
+         [ -n \"\$g\" ] && echo \"\$g\" || echo bare" 2>/dev/null
 }
 
 # Does ANY dataset of the subtree hold a snapshot newer than the recovery point?
@@ -1409,6 +1429,11 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
             fi
             if [ "$_st" = absent ]; then
                 RESTORE_STRATEGY=full-absent
+            elif [ "$_st" = bare ]; then
+                # There, and empty. No snapshot means no common base can
+                # exist, so this is a full overwrite of live data --
+                # `replace`, the one mode the grant withholds by default.
+                RESTORE_STRATEGY=full-live
             else
                 # A common base exists when the target's head GUID is one this
                 # copy also carries at or before the recovery point. That is the
