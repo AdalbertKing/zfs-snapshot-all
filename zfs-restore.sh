@@ -58,6 +58,9 @@ RESTORE_LANDED=()
 # Set when the whole-relation scope was expanded to one entry per dataset, so
 # the engine does not also recurse over what the scope already lists.
 RESTORE_SCOPE_EXPANDED=0
+# The relationship this run is recovering, when the address named one. Used to
+# pause its scheduled jobs for the duration.
+RESTORE_RELATION_LABEL=""
 # Whether the engine command built for the current dataset carries -r. The
 # verification after it must measure exactly what was sent, no more.
 RESTORE_ENGINE_RECURSED=0
@@ -1930,6 +1933,73 @@ restore_report_mount_state() {
     log 0 "restore: not done for you on purpose: a recovery is not the moment to mount something without being asked."
 }
 
+# THE SCHEDULE KEEPS RUNNING WHILE A RECOVERY IS IN PROGRESS.
+#
+# Owner question, 2026-08-27: should the collector's cron not be paused while
+# the machine it backs up is being restored? It should, and the measurement
+# behind that is not hypothetical -- it happened during this lab. The
+# source-side prune fired at :21, applied its GFS retention to a source that a
+# restore had just rolled back, and destroyed
+# automated_hourly_2026-08-27_18-15-00 -- the recovery point itself. The
+# relationship was left with no common snapshot at all.
+#
+# Three jobs run from this collector against this relationship: the pull, the
+# prune of the copy, and the prune of the SOURCE over ssh. Every one of them can
+# collide with a recovery, and the two prunes are the ones that destroy things.
+#
+# WHICH PAUSE. Not the hard one. `disable-client` makes the PEER refuse this
+# relationship's data-plane commands -- and a push restore reaches that peer
+# through exactly those commands, so a hard disable would block the recovery it
+# was meant to protect. The logical pause is the right instrument: it stops the
+# jobs on this side, and leaves the channel this run needs open.
+#
+# WHAT IT ACTUALLY COVERS, said plainly because the honest answer is "not
+# enough": snapget.sh, snapsend.sh and check-snap-age.sh honour the marker via
+# -L. delsnaps.sh -- the only engine that DESTROYS -- has no -L and does not
+# read the marker at all, and gen-cron emits no -L on either prune line
+# (verified live on this collector: two prune jobs, zero carrying -L). So this
+# stops the backup and the monitor and does NOT stop the prune. It is worth
+# taking anyway, and it is worth saying what it leaves open rather than letting
+# the word "paused" imply the rest.
+#
+# Only what we took is given back. A relationship a human paused before this run
+# stays paused after it -- their decision is not this run's to undo.
+RESTORE_PAUSED_BY_US=""
+
+restore_pause_take() {   # <relation label>
+    local label="$1"
+    [ -n "$label" ] || return 0
+    [ -x "$SCRIPT_DIR/zfs-backup.sh" ] || { log 1 "restore: no zfs-backup.sh beside this script, so the relationship cannot be paused for the run"; return 0; }
+    if [ -f "/var/lib/zfs-snapshot-all/relationships/$label/paused" ]; then
+        log 0 "restore: '$label' is ALREADY paused -- leaving it that way, and not resuming it at the end. Somebody paused it deliberately."
+        return 0
+    fi
+    if bash "$SCRIPT_DIR/zfs-backup.sh" pause-client "$label" --reason="restore in progress" >/dev/null 2>&1; then
+        RESTORE_PAUSED_BY_US="$label"
+        log 0 "restore: paused '$label' for the duration of this run -- the scheduled pull and the monitor will skip."
+        log 0 "restore: NOT the prune. delsnaps.sh takes no -L and does not read the pause marker, so a scheduled prune can still destroy snapshots on either side while this runs -- measured on this estate, where one destroyed a recovery point mid-campaign. Consider pausing cron yourself for a long recovery."
+    else
+        log 0 "restore: could NOT pause '$label' (needs root on this collector). Going ahead: refusing a recovery because an orchestration switch failed would be the worse mistake. Be aware the scheduled pull may run against a machine that is mid-restore."
+    fi
+    return 0
+}
+
+restore_pause_release() {
+    [ -n "$RESTORE_PAUSED_BY_US" ] || return 0
+    local label="$RESTORE_PAUSED_BY_US"
+    RESTORE_PAUSED_BY_US=""
+    if bash "$SCRIPT_DIR/zfs-backup.sh" resume-client "$label" >/dev/null 2>&1; then
+        log 0 "restore: resumed '$label' -- the schedule takes over again."
+    else
+        log 0 "restore: WARNING -- '$label' was paused for this run and could NOT be resumed. Its backups are STOPPED until you run: zfs-backup.sh resume-client $label"
+    fi
+}
+
+# Also on the way out of an interrupted run: a relationship left paused by a
+# crash is a backup that silently stops, which is the failure this project has
+# spent the most time making impossible elsewhere.
+trap 'restore_pause_release' EXIT
+
 # ------------------------------------------------------------------------------
 #
 # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
@@ -1964,6 +2034,9 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     # process cannot inherit the first call's list.
     RESTORE_ROLLED_BACK=()
     RESTORE_LANDED=()
+    # Taken here, in the one runner every writing shape of this verb goes
+    # through, so no path can forget it. --plan never reaches this function.
+    restore_pause_take "${RESTORE_RELATION_LABEL:-}"
 
     if [ "$n" -eq 0 ]; then
         log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
@@ -2006,6 +2079,8 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
 
     restore_report_mount_state
     restore_report_backup_cost
+
+    restore_pause_release
 
     if [ "$bad_n" -eq 0 ]; then
         log 0 "restore: all $ok_n dataset(s) in scope recovered."
@@ -2924,6 +2999,9 @@ cmd_restore() {
 
     if [ "$scope_any" -eq 1 ]; then
         [ -n "$addr" ] || die "restore: --source/--target select datasets WITHIN a relationship, so the relationship has to be named too: restore <relation> --target <dataset>[,<dataset>...]"
+        # A bare address here IS the relationship label -- the parser refuses
+        # every other spelling above. Recorded so the runner can pause it.
+        RESTORE_RELATION_LABEL="$addr"
         # The relationship name stands ALONE now. `label:dataset` said the same
         # thing a second way, and two ways to say one thing is how they come to
         # disagree.
@@ -2992,6 +3070,7 @@ cmd_restore() {
             # every shape of this verb. The alternative -- a second loop for the
             # whole-relation case -- is how two paths come to disagree about
             # what a failure means.
+            RESTORE_RELATION_LABEL="$addr"
             RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
             local _wr_s _wr_c
             while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
