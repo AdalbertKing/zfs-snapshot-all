@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ed12da654953810c -->
+<!-- status-covers-digest: eb2745737b62bbbe -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,64 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **RESTORE: ZGODA (grant) — PIERWSZY KAWALEK, 2026-08-27.**
+
+  Decyzja wlasciciela o kierunku: **kolektor zaczyna** (*"Zacznij od push"*,
+  *"Kto zaczyna: kolektor"*). Sekcja 1 dokumentu
+  `OWNER-RESTORE-GRANT-AND-MODES-2026-08-26.md` mowila odwrotnie i zostala
+  poprawiona — powstala wczesniej tego samego dnia.
+
+  **Dlaczego to czyni zgode calym bezpieczenstwem, a nie dodatkiem:** przy
+  wariancie „maszyna prosi sama" nadpisywana maszyna bylaby ta, ktora prosi,
+  i zadne uprawnienie do pisania po cudzej maszynie nigdy nie musialoby
+  istniec. Przy push musi. Zgoda jest jedyna rzecza, ktora stoi miedzy
+  „kolektor odtworzy mnie, gdy poprosze" a „kolektor moze mnie nadpisac, kiedy
+  zechce".
+
+  **Znalezisko, ktore uksztaltowalo ten kawalek — projekt wskazywal zle
+  miejsce.** Dokument klad zgode w `relationships/<label>/` i w tym samym
+  akapicie pisal, ze katalog jest „root-owned, the account has read-only
+  access". **Nie jest.** `deploy.sh` robi go `root:<konto>` **0775**, celowo:
+  model wlasciciela z 2026-08-06 pozwala kluczowi relacji zdjac twarda pauze,
+  a zdjecie jej to unlink znacznika W TYM katalogu. Zgoda trzymana tam moglaby
+  wiec zostac **zalozona przez konto kolektora** — czyli to, przed czym ma
+  chronic. Zgody leza teraz we wlasnym drzewie `restore-grants/`, `root:root`,
+  konto tylko czyta. Asercja strukturalna pilnuje, ze nie wroci pod tamten
+  katalog, z kontrola negatywna sprawdzajaca, ze tamten NAPRAWDE jest
+  grupowo-zapisywalny (inaczej asercja bronilaby wymyslonego zagrozenia).
+
+  **Trzy czasowniki na maszynie zagrozonej**, lokalnie, jako root:
+  `deploy.sh --allow-restore=LABEL [--replace]`, `--deny-restore=LABEL`,
+  `--show-restore=LABEL`. `--show-restore` **nie wymaga roota** — pytanie „czy
+  cokolwiek moze mnie nadpisac" musi byc do zadania przez kazdego, kto stoi
+  przy maszynie.
+
+  **`replace` nigdy nie jest domyslne** (*"REPLACE jawnie przy nadawaniu"*).
+  Zwykla zgoda pozwala pisac tam, gdzie pusto. Kasowanie tego, co juz jest,
+  trzeba napisac wprost, wczesniej, gdy nic nie jest zepsute. Ponowne wydanie
+  zgody **nie poszerza** zywej zgody po cichu: rozne tryby = odmowa nazywajaca
+  obie wartosci i droge (`--deny-restore` najpierw); te same tryby = no-op
+  sukces, jak `disable` w bramce.
+
+  **Zgoda nie wygasa i nie jest jednorazowa** (*"usun expires i nonce"*) — bo
+  odtwarzanie moze trwac godzine albo weekend. Cena jest nazwana: zapomniana
+  zgoda zyje dalej, wiec bramka `zfs-pair-gate` raportuje ja w
+  `PAIR-CONTROL status`, w obu stanach relacji. Bramka **tylko czyta** —
+  asercja strukturalna zabrania jakiegokolwiek zapisu do drzewa zgod, plus trzy
+  proby wymuszenia zgody czasownikiem przez klucz kolektora.
+
+  **Defekt znaleziony przez wlasna suite:** `--allow-restore=` z PUSTA wartoscia
+  przelatywalo przez `[ -n "$LABEL" ]` i deploy.sh szedl dalej do Fazy 1 —
+  czasownik odpowiadajacy na pytanie o UPRAWNIENIA zaczynal instalowac pakiety
+  na hoscie. Dokladnie klasa F4 z 2026-08-26. Naprawione dyskryminatorem
+  `*_GIVEN`, tak jak `--bandwidth` juz to robi.
+
+  **`test/restoregrant` 44/0** (+1 SKIP: `chmod 000` nie odbiera prawa
+  wlascicielowi na tym systemie plikow — asercja zglasza to zamiast udawac).
+  Wykonawca odtwarzania NIE zostal ruszony; ten kawalek nie potrafi niczego
+  nadpisac.
+
 
 - **DOMYSLNA ODPOWIEDZ NA NIEUDANY QUIESCE — ODWROCONA (2026-08-27).**
   Decyzja wlasciciela, doslownie: *"Przemyslalem i chce, zeby snapshots sie
@@ -4035,6 +4093,7 @@ REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niez
 | `joinremote` | **8/8** (dokument podawał 7/7 — zmierzone 2026-08-06, suita jest deterministyczna, `needs = nothing`) | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
 | `pairgate` | **21/21** | `zfs-pair-gate.sh` — brama po stronie peera, stan `DISABLED` z ADR-0012 (pakiet hard-disable, krok 1 z `docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md`). Testowalna bez ssh, bo sshd wnosi dokładnie dwa wejścia: argv (etykieta z `command=`) i `SSH_ORIGINAL_COMMAND`. KAŻDY przypadek data-plane każe bramie uruchomić komendę, której jedynym efektem jest utworzenie pliku, i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem, że nic się nie wykonało. Przypięte: odmowa PRZED parsowaniem (wejście nieparsowalne dostaje tę samą odmowę, nie błąd składni); tożsamość z klucza, nie z żądania (żądanie podszywające się pod inną relację niczego nie zmienia); cztery rozróżnialne kody wyjścia 91/92/93 (255 zostaje własnością ssh); nieznana relacja i zła etykieta fail-CLOSED; druga relacja działa dalej; verby kontrolne to dokładne literały, nigdy dopasowanie po prefiksie; `enable` przywraca data-plane, co dowodzone jest realnym efektem ubocznym, nie raportem samej bramy. Druga połowa — czy sshd naprawdę trasuje prawdziwy klucz przez bramę — to obowiązek ręczny `pairgate-live` |
 | `pairgate` | **45/45** | brama peera `zfs-pair-gate.sh` + instalacja w `deploy.sh --join` (pakiet hard-disable). Sedno: każdy przypadek data-plane każe bramie uruchomić komendę tworzącą plik i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem. Przypięte: odmowa przed parsowaniem, tożsamość z klucza a nie z żądania, kody 91/92/93 rozróżnialne, fail-closed przy nieznanej relacji i złej etykiecie, verby kontrolne jako dokładne literały, logowanie do syslogu z zejściem do pliku wybieranym po WYNIKU a nie po obecności `logger` (REV-047 F1) i nigdy nie zanieczyszczające stderr wywołującego. Instalacja: migracja gołej linii klucza bez pozostawienia jej obok bramkowanej, cudze linie bajt w bajt, idempotencja, awaria commitu bez tknięcia pliku, i fail-closed na własności pliku — bo podmiana atomowa rootem odbiera kontu dostęp do własnego hosta (REV-049 F1) |
+| `restoregrant` | **44/44** (+1 SKIP) | zgoda na odtwarzanie: fakt na maszynie ZAGROZONEJ, ktory pozwala kolektorowi ja nadpisac. Sedno suity to sekcja 1 — MIEJSCE. Projekt klad zgode w `relationships/<label>/` i w tym samym akapicie twierdzil, ze katalog jest „root-owned, read-only for the account"; `deploy.sh` robi go `root:<konto>` **0775**, bo klucz relacji musi moc zdjac twarda pauze (unlink znacznika W TYM katalogu). Zgoda trzymana tam moglaby wiec zostac zalozona przez konto, przed ktorym chroni. Asercja strukturalna: drzewo zgod NIE moze lezec pod drzewem relacji, bramka czyta to samo drzewo, plus kontrola negatywna, ze tamten katalog NAPRAWDE jest grupowo-zapisywalny — inaczej regula bronilaby wymyslonego zagrozenia. Dalej: root wymagany do nadania i odebrania, `--show-restore` czytelny bez roota; nieznana relacja i zla etykieta odmawiaja i nic nie zapisuja (w tym `../etc` — nic poza drzewem); `replace` nigdy domyslne, poszerzenie zywej zgody ODMAWIA nazywajac obie wartosci, te same tryby to no-op sukces; brak `expires` i `nonce` sprawdzany gerpem; bramka raportuje zgode w obu stanach relacji i FAIL-CLOSED na kazdej wartosci, ktorej nie umie sparsowac (cztery smieci + kontrola pozytywna); bramka NIGDY nie tworzy zgody — trzy proby czasownikiem plus asercja strukturalna zakazujaca jakiegokolwiek zapisu do tego drzewa. Defekt znaleziony przez te suite: `--allow-restore=` z pusta wartoscia przelatywalo przez `[ -n ... ]` i deploy szedl do Fazy 1 — czasownik o UPRAWNIENIACH zaczynal instalowac pakiety (klasa F4); naprawione dyskryminatorem `*_GIVEN`. SKIP: `chmod 000` nie odbiera prawa wlascicielowi na Git Bash/NTFS, wiec asercja o nieczytelnym pliku zglasza pominiecie zamiast udawac, ze cos zmierzyla |
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `runsuffix` | **6/6** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |
 

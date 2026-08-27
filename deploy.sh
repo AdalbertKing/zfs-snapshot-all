@@ -136,6 +136,25 @@ ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 # before the pair-gate section that used to define it.
 PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 
+# WHERE A RESTORE GRANT LIVES, and it is deliberately NOT under
+# $PAIR_GATE_STATE_DIR/<label>.
+#
+# That directory is root:<account> mode 0775 -- group-WRITABLE by the delegated
+# account, on purpose: the owner's 2026-08-06 model lets the relationship's own
+# key lift a hard pause, and lifting it means unlinking a marker IN that
+# directory. Anything else placed there inherits that permission.
+#
+# A restore grant placed there could therefore be CREATED BY THE COLLECTOR'S OWN
+# ACCOUNT. The grant exists precisely to stop the collector authorising itself
+# to overwrite this machine, so putting it in a directory the collector can
+# write is not a weakness in the mechanism -- it is the mechanism doing nothing
+# at all. `docs/design/client-granted-restore.md` § 3 said "root-owned, the
+# account has read-only access" and named a path that is neither.
+#
+# So: a separate tree, root:root, world-readable and writable by nobody but
+# root. The gate runs AS the account and only ever reads it.
+RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants}"
+
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
 # Phase 4 used to do this with a plain `chgrp -R "$ALERT_GROUP"
@@ -225,6 +244,24 @@ LEAVE_LABEL=""
 # contend with while it is trying to re-establish replication in the other
 # direction. Goes through lib-cron.sh's own lock/read-back, same as every
 # other writer -- this is one more requester, not a bypass.
+# GIVEN is tracked apart from the value, and it is not a nicety. The dispatch
+# used to be `[ -n "$ALLOW_RESTORE_LABEL" ]`, so `--allow-restore=` with an
+# empty value fell straight through it and deploy.sh went on to Phase 1 and
+# started installing packages on the host. A verb that answers a PERMISSION
+# question must never provision the machine on its way past -- that is the
+# reviewer's F4 finding of 2026-08-26, and a typo is exactly how it recurs.
+# Same discriminator deploy.sh already uses for --bandwidth.
+ALLOW_RESTORE_GIVEN=0
+DENY_RESTORE_GIVEN=0
+SHOW_RESTORE_GIVEN=0
+ALLOW_RESTORE_LABEL=""
+DENY_RESTORE_LABEL=""
+SHOW_RESTORE_LABEL=""
+# `replace` is never implied. Owner direction 2026-08-26 ("REPLACE jawnie przy
+# nadawaniu"): a grant that lets the collector write into free space must not
+# also let it destroy what is already there. The operator says so when they are
+# calm, not when the machine is already broken.
+ALLOW_RESTORE_REPLACE=0
 PAUSE_MODE=0
 RESUME_MODE=0
 # Default --pause/--resume touch only OUR managed blocks (comment out the
@@ -370,6 +407,10 @@ while [ "$#" -gt 0 ]; do
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --pause)        PAUSE_MODE=1; shift ;;
+        --allow-restore=*) ALLOW_RESTORE_LABEL="${1#*=}"; ALLOW_RESTORE_GIVEN=1; shift ;;
+        --deny-restore=*)  DENY_RESTORE_LABEL="${1#*=}"; DENY_RESTORE_GIVEN=1; shift ;;
+        --show-restore=*)  SHOW_RESTORE_LABEL="${1#*=}"; SHOW_RESTORE_GIVEN=1; shift ;;
+        --replace)         ALLOW_RESTORE_REPLACE=1; shift ;;
         --resume)       RESUME_MODE=1; shift ;;
         --fullcron)     FULLCRON_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -2370,6 +2411,187 @@ if [ "$SELF_UPDATE" -eq 1 ]; then exec_deployed_update_control --self-update; do
 if [ "$ROLLBACK" -eq 1 ]; then exec_deployed_update_control --rollback; do_rollback; exit $?; fi
 if [ "$RESUME_UPDATES" -eq 1 ]; then exec_deployed_update_control --resume-updates; do_resume_updates; exit $?; fi
 
+# ==============================================================================
+# RESTORE GRANT -- the fact on THIS machine that lets a collector overwrite it
+# ==============================================================================
+#
+# Owner decision, 2026-08-26/27: the COLLECTOR starts a restore. It connects to
+# the broken machine and writes. That is the direction the owner chose, and it
+# is the reason this file exists at all: under the pull form the machine being
+# overwritten would have been the one asking, and no capability to write onto
+# another machine would ever have to exist.
+#
+# Under push it does. So the grant is the whole of the safety, and its two
+# properties are the ones that make it worth anything:
+#
+#   * it is created HERE, by root, locally, on the machine at risk -- never by
+#     the collector and never over the link;
+#   * `replace` is never implied. A grant lets the collector write into free
+#     space; destroying what is already there has to be said out loud, in the
+#     grant, at a moment when nothing is broken and nobody is in a hurry.
+#
+# The grant does not expire and is not single-use (owner: a recovery may take an
+# hour or a weekend, and a grant that dies mid-recovery dies at the worst
+# possible moment). The price of that is a grant left behind stays live, so
+# --show-restore exists and the gate reports it.
+restore_grant_label_ok() {   # <label>
+    case "${1:-}" in
+        ''|.|..)              return 1 ;;
+        *[!A-Za-z0-9._-]*)    return 1 ;;
+    esac
+    return 0
+}
+
+restore_grant_path() {   # <label>
+    printf '%s/%s' "$RESTORE_GRANT_DIR" "$1"
+}
+
+# The modes a grant permits, as a stable, comparable string.
+restore_grant_modes() {   # <replace 0|1>
+    if [ "${1:-0}" -eq 1 ]; then printf 'create rewind replace'; else printf 'create rewind'; fi
+}
+
+restore_grant_read_modes() {   # <path> -> the modes it records, or nothing
+    [ -r "$1" ] || return 1
+    sed -n 's/^RESTORE_GRANT_MODES="\(.*\)"$/\1/p' "$1" 2>/dev/null | head -1
+}
+
+do_allow_restore() {
+    local label="$ALLOW_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
+    restore_grant_label_ok "$label" \
+        || die "--allow-restore='$label' is not a valid relationship label (letters, digits, dot, dash, underscore)"
+
+    # The relationship has to EXIST here. A grant naming a relationship this
+    # host has never enrolled is a typo, and a typo that silently creates a
+    # live permission is the failure this whole mechanism is about.
+    [ -d "$PAIR_GATE_STATE_DIR/$label" ] \
+        || die "no relationship '$label' is enrolled on this host ($PAIR_GATE_STATE_DIR/$label does not exist) -- a grant for a relationship that does not exist would be a permission nobody can see. Check the label with: ls $PAIR_GATE_STATE_DIR"
+
+    local want; want="$(restore_grant_modes "$ALLOW_RESTORE_REPLACE")"
+    local gpath; gpath="$(restore_grant_path "$label")"
+
+    if [ -f "$gpath" ]; then
+        local have; have="$(restore_grant_read_modes "$gpath")" || have=""
+        if [ "$have" = "$want" ]; then
+            # Converges on a retry, the same way the gate's own `disable` verb
+            # does: re-asserting what is already true is a success, and the
+            # ORIGINAL grant time is the useful fact, so it is kept.
+            log "restore grant for '$label' already says exactly this ($want) -- nothing changed"
+            return 0
+        fi
+        die "a restore grant for '$label' already exists and says '${have:-<unreadable>}', not '$want'. Changing what a live grant permits is not a side effect of re-issuing it -- take it back first, deliberately:
+    $0 --deny-restore=$label
+  then grant again with the modes you want."
+    fi
+
+    mkdir -p "$RESTORE_GRANT_DIR" || die "could not create $RESTORE_GRANT_DIR"
+    # root:root, and NOT group-writable. See the comment on RESTORE_GRANT_DIR:
+    # the relationship's own state directory is group-writable by the delegated
+    # account by design, so a grant kept there could be written by the very
+    # account it exists to restrain.
+    chown root:root "$RESTORE_GRANT_DIR" 2>/dev/null || :
+    chmod 0755 "$RESTORE_GRANT_DIR" 2>/dev/null || :
+
+    local tmp; tmp="$(mktemp "$RESTORE_GRANT_DIR/.grant.XXXXXX")" || die "could not write in $RESTORE_GRANT_DIR"
+    {
+        printf '# Restore grant. Written by deploy.sh --allow-restore on this host.\n'
+        printf '# It permits the collector of relationship %s to restore ONTO this\n' "$label"
+        printf '# machine. It does not expire; take it back with:\n'
+        printf '#     deploy.sh --deny-restore=%s\n' "$label"
+        printf 'RESTORE_GRANT_LABEL="%s"\n' "$label"
+        printf 'RESTORE_GRANT_MODES="%s"\n' "$want"
+        printf 'RESTORE_GRANT_AT="%s"\n' "$(date -Is 2>/dev/null || date)"
+        printf 'RESTORE_GRANT_BY="%s@%s"\n' "${SUDO_USER:-root}" "$(hostname -s 2>/dev/null || hostname)"
+    } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
+    chown root:root "$tmp" 2>/dev/null || :
+    chmod 0644 "$tmp" 2>/dev/null || :
+    mv -f "$tmp" "$gpath" || { rm -f "$tmp"; die "could not install $gpath"; }
+
+    log "restore grant WRITTEN: $gpath"
+    log "  relationship: $label"
+    log "  permits:      $want"
+    if [ "$ALLOW_RESTORE_REPLACE" -eq 1 ]; then
+        warn "  REPLACE IS INCLUDED. The collector for '$label' may now DESTROY data on this machine and put an older copy in its place. That is what you asked for; it stays true until you run: $0 --deny-restore=$label"
+    else
+        log "  replace:      NO -- the collector may write where there is free space, and may not overwrite what is already here. Add --replace only if you mean it."
+    fi
+    log "  this grant does NOT expire. See it with: $0 --show-restore=$label"
+    return 0
+}
+
+do_deny_restore() {
+    local label="$DENY_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--deny-restore must run as root on this machine"
+    restore_grant_label_ok "$label" \
+        || die "--deny-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        # A no-op success, deliberately: the state the operator asked for is the
+        # state that exists. Making this an error would mean a second
+        # `--deny-restore` after a lost acknowledgement reports a failure while
+        # the machine is, in fact, exactly as safe as they wanted.
+        log "no restore grant for '$label' on this host -- nothing to take back"
+        return 0
+    fi
+    local had; had="$(restore_grant_read_modes "$gpath")" || had=""
+    rm -f "$gpath" || die "could not remove $gpath"
+    log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
+    log "  the collector for '$label' can no longer write onto this machine."
+    return 0
+}
+
+do_show_restore() {
+    local label="$SHOW_RESTORE_LABEL"
+    restore_grant_label_ok "$label" \
+        || die "--show-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        echo "RESTORE_GRANT=none"
+        echo "  no relationship '$label' may restore onto this machine."
+        return 0
+    fi
+    local modes at by
+    modes="$(restore_grant_read_modes "$gpath")" || modes=""
+    at="$(sed -n 's/^RESTORE_GRANT_AT="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    by="$(sed -n 's/^RESTORE_GRANT_BY="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    echo "RESTORE_GRANT=present"
+    echo "  relationship: $label"
+    echo "  permits:      ${modes:-<unreadable>}"
+    echo "  granted:      ${at:-unknown} by ${by:-unknown}"
+    case " ${modes:-} " in
+        *" replace "*)
+            echo "  WARNING: this grant includes REPLACE -- the collector may destroy data here."
+            echo "           It does not expire. Take it back with: $0 --deny-restore=$label" ;;
+        *)  echo "  replace:      no" ;;
+    esac
+    return 0
+}
+
+# A GRANT IS A DECISION ABOUT PERMISSIONS, so it dispatches here, beside
+# --pause, and not down among the host phases. That is the reviewer's F4 finding
+# of 2026-08-26 -- `--commit-scope` answered a permission question and installed
+# a capacity-check cron line on a production host on its way past -- applied
+# ahead of the same thing happening again.
+if [ "$ALLOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_allow_restore
+    exit $?
+fi
+if [ "$DENY_RESTORE_GIVEN" -eq 1 ]; then
+    do_deny_restore
+    exit $?
+fi
+if [ "$SHOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_show_restore
+    exit $?
+fi
+
+# Placed ABOVE the global root gate on purpose. --show-restore only READS,
+# and "is anything allowed to overwrite this machine?" is a question an
+# operator must be able to ask without becoming root first. The two verbs
+# that CHANGE a grant check for root themselves, and say why they need it --
+# which the generic "run as root" below cannot.
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
 [ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
@@ -2822,6 +3044,7 @@ do_pause_blocks_one() {   # <user>
     log "$user: paused ($count block(s))"
     return 0
 }
+
 
 do_pause() {
     local user rc=0
