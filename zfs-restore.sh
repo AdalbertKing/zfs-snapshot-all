@@ -54,6 +54,7 @@ SSH_OPTS=()
 # an array that only exists when a rollback happened would make the ordinary
 # no-rollback run die on the closing report.
 RESTORE_ROLLED_BACK=()
+RESTORE_LANDED=()
 if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
     SSH_OPTS=(${RESTORE_SSH_OPTS})
@@ -1609,6 +1610,63 @@ restore_report_backup_cost() {
 
 }
 
+# A RECOVERED FILESYSTEM THAT IS NOT MOUNTED IS NOT YET USABLE, AND THE RUN
+# USED TO END WITHOUT MENTIONING IT.
+#
+# Measured on the lab, 2026-08-27, restoring a dataset the disaster had removed
+# entirely. It came back with the right mountpoint and the right properties, the
+# run reported "all 1 dataset(s) in scope recovered" -- and /hdd/labsrc/
+# vm-900-disk-1 did not exist, because the dataset was not mounted.
+#
+# The cause is not a bug to fix silently: `canmount=noauto` travels in the
+# stream from the copy, and the collector sets it deliberately so that twenty
+# machines' filesystems do not mount themselves over each other on one host.
+# The right value on the copy is the wrong value on the machine being recovered,
+# and the stream cannot know which side it is landing on.
+#
+# So this REPORTS rather than mounts. A recovery is not the moment to mount
+# something automatically: the operator may want to look before the guest does,
+# the mountpoint may be occupied, and `canmount=noauto` may be exactly what that
+# dataset is supposed to carry. What they must not have to discover for
+# themselves is that the data is there and invisible.
+#
+# ZVOLs are skipped -- they have no mountpoint and nothing to say.
+restore_report_mount_state() {
+    [ "${#RESTORE_LANDED[@]}" -gt 0 ] || return 0
+    local d peer ds line name typ cm mnt said=0
+    for d in "${RESTORE_LANDED[@]}"; do
+        case "$d" in
+            *:*) peer="${d%%:*}"; ds="${d#*:}" ;;
+            *)   peer="";        ds="$d" ;;
+        esac
+        local out
+        if [ -n "$peer" ]; then
+            out="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "zfs list -H -o name,type,canmount,mounted -r '$ds'" 2>/dev/null)"
+        else
+            out="$(zfs list -H -o name,type,canmount,mounted -r "$ds" 2>/dev/null)"
+        fi
+        # An unreadable answer is not "everything is mounted". Say which it was.
+        if [ -z "$out" ]; then
+            log 0 "restore: could not read the mount state of '$d' after recovering it -- the data landed, but whether it is reachable is unverified."
+            said=1
+            continue
+        fi
+        while IFS=$'\t' read -r name typ cm mnt; do
+            [ "$typ" = filesystem ] || continue
+            [ "$mnt" = no ] || continue
+            if [ "$said" -eq 0 ]; then
+                log 0 "restore: ---- recovered, and not mounted ----"
+                said=1
+            fi
+            log 0 "restore:   $name (canmount=$cm) -- the data is there and the mountpoint is empty until it is mounted."
+        done <<< "$out"
+    done
+    [ "$said" -eq 1 ] || return 0
+    log 0 "restore: canmount=noauto travels in the stream from the copy, where it is correct -- a collector must not mount twenty machines' filesystems over each other. On the machine being recovered it is usually not what you want."
+    log 0 "restore: mount one now with:  zfs mount <dataset>    and to have it come back at boot:  zfs set canmount=on <dataset>"
+    log 0 "restore: not done for you on purpose: a recovery is not the moment to mount something without being asked."
+}
+
 # ------------------------------------------------------------------------------
 #
 # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
@@ -1642,6 +1700,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     # NOT local: restore_one appends to it. Reset here so a second call in one
     # process cannot inherit the first call's list.
     RESTORE_ROLLED_BACK=()
+    RESTORE_LANDED=()
 
     if [ "$n" -eq 0 ]; then
         log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
@@ -1667,6 +1726,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_SRC[$i]}"; rc=$?
         if [ "$rc" -eq 0 ]; then
             ok_n=$((ok_n + 1))
+            RESTORE_LANDED+=("${RESTORE_SCOPE_SRC[$i]}")
             verdict+=("OK       ${RESTORE_SCOPE_SRC[$i]}   ${RESTORE_ONE_VERDICT:-recovered}")
         else
             bad_n=$((bad_n + 1))
@@ -1681,6 +1741,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         log 0 "restore:   ${verdict[$i]}"
     done
 
+    restore_report_mount_state
     restore_report_backup_cost
 
     if [ "$bad_n" -eq 0 ]; then
