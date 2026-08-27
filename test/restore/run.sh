@@ -1902,7 +1902,28 @@ cat > "$SC/cfg" <<'CFGEOF'
 	pair_label   = pve1
 CFGEOF
 
-sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+# ---------------------------------------------------------------------------
+# WHY --plan APPEARS ON THESE CALLS, AND DID NOT USE TO
+#
+# Until 2026-08-27 a resolved scope was FORCED into plan mode: `--at` or
+# `--source/--target` set plan=1 unconditionally, because nothing downstream
+# could act on a resolved scope. These assertions were written against that, and
+# they inspect plan output ("Zrodlo:", "WYBRANO", the strategy captions) while
+# passing no --plan.
+#
+# That forcing is gone deliberately. The scope resolves and then RUNS, which is
+# the whole point of the verb, and it is proven on live hosts (pve9 -> pve1,
+# 2026-08-27, nine variants). So the assertions below have to ask for the plan
+# they are reading -- and the fact that they are read-only is now something the
+# call says rather than something the program imposes.
+#
+# The behaviour they used to pin -- "a scope never writes" -- is not silently
+# dropped. It is inverted and pinned the other way, at the foot of this section:
+# a scoped call WITHOUT --plan must reach the per-dataset runner. Deleting the
+# old assertion without adding that one would have left the change untested in
+# both directions.
+# ---------------------------------------------------------------------------
+sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --plan --config="$SC/cfg" 2>&1; }
 sc_ok() {   # <desc> <expected substring> <args...>
     local desc="$1" want="$2"; shift 2
     local out; out="$(sc_run "$@")"
@@ -1973,6 +1994,27 @@ out="$(sc_run pve2 --target rpool/data/vm-101-disk-0, 2>&1)"
 n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
 if [ "$n" = 0 ]; then ok "scope: a trailing comma refuses BEFORE any plan is shown"
 else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lines were printed"; fi
+
+# THE OTHER DIRECTION OF THE SAME CHANGE. A scoped call with no --plan must not
+# print a plan and stop: it must reach the per-dataset runner. Before 2026-08-27
+# it planned and returned, and every assertion above passed either way -- which
+# is exactly how a contract change slips through a suite that only pins one side
+# of it.
+#
+# Asserted on the RUNNER's own output, not on an exit code: this fixture has no
+# snapshots, so the run correctly gets as far as "nothing to restore from" and
+# reports it per dataset. That is the runner speaking, and the planner never
+# produces those lines.
+out="$(PATH="$WORK/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"per-dataset result"*) ok "scope: without --plan the scope RUNS, it does not plan" ;;
+    *) bad "scope: without --plan the scope RUNS, it does not plan" \
+           "expected the per-dataset runner's report" "got: $(printf '%s' "$out" | head -2)" ;;
+esac
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 0 ]; then ok "scope: ...and prints no plan while doing it"
+else bad "scope: ...and prints no plan while doing it" "$n plan lines were printed by a run"; fi
+
 
 # POSITIVE CONTROL, and it is what makes the six refusals above mean something:
 # a well-formed list of the same length still resolves completely, in the order
@@ -2061,7 +2103,7 @@ exit 0
 ATSTUB
 chmod +x "$AT/bin/zfs"
 
-at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 at_rc=$?
 
 # at1 -- neither the newest nor the oldest.
@@ -2110,7 +2152,7 @@ else bad "at: an incomplete plan exits non-zero" "rc=0"; fi
 
 # The positive control for that status: when every dataset resolves, rc is 0 --
 # otherwise the assertion above would pass against a plan that always failed.
-at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 at_ok_rc=$?
 if [ "$at_ok_rc" -eq 0 ]; then ok "at: a plan that resolves everything exits 0"
 else bad "at: a plan that resolves everything exits 0" "rc=$at_ok_rc" "$(printf '%s' "$at_ok_out" | tail -3)"; fi
@@ -2137,7 +2179,7 @@ esac
 # was measured correct -- but the criticism of the test stands: counting
 # `Zrodlo:` lines cannot tell a correct pair from a mangled one, and a mangled
 # pair is exactly what a `\t`-that-is-really-`t` would produce.
-f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --plan --config="$SC/cfg" 2>&1)"
 case "$f1_out" in
     *"root@pve2:rpool/data/vm-101-disk-0"*) ok "f1: the ORIGINAL side resolves to its exact recorded value" ;;
     *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Zrodlo | head -2)" ;;
@@ -2188,7 +2230,7 @@ exit 0
 F2STUB
 chmod +x "$F2/bin/zfs"
 
-f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$F2/cfg" 2>&1)"
+f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$F2/cfg" 2>&1)"
 # The block under "Punkt docelowy" is what the confirmation would be about.
 f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$f2_point" in
@@ -2208,7 +2250,7 @@ esac
 # NEGATIVE CONTROL: without --at the default policy is in force and says so, and
 # the newest IS the point -- otherwise the two assertions above would pass
 # against a build that had simply stopped classifying anything.
-f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --config="$F2/cfg" 2>&1)"
+f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --plan --config="$F2/cfg" 2>&1)"
 f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$f2_ppoint" in
     *toonew*) ok "f2: without --at the newest is still the point" ;;
@@ -2219,7 +2261,7 @@ case "$f2_plain" in
     *) bad "f2: ...and the default caption is still shown" ;;
 esac
 # When --at resolved nothing for a dataset, no strategy is computed at all.
-f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 case "$f2_none" in
     *"Strategia:  (POMINIETA"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
     *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategia | head -2)" ;;
@@ -2228,7 +2270,7 @@ esac
 # --- F3: both sides may be stated, and then they are PAIRED -----------------
 # The mutual exclusion was the reviewer's tightening of an approved UX and was
 # withdrawn. All three forms work; stating both is not remapping.
-f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --plan --config="$SC/cfg" 2>&1)"
 f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Zrodlo:')"
 if [ "$f3_n" = 2 ]; then ok "f3: both sides stated explicitly is accepted"
 else bad "f3: both sides stated explicitly is accepted" "expected 2 datasets, got $f3_n" "$(printf '%s' "$f3_both" | head -3)"; fi
@@ -2302,7 +2344,7 @@ exit 1
 BBSTUB
 chmod +x "$BB/bin/zfs"
 
-bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$BB/cfg" 2>&1)"
+bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$BB/cfg" 2>&1)"
 bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$bb_point" in
     *WANTED*guid=G2*) ok "base: --at still selects the target it chose" ;;
@@ -2330,7 +2372,7 @@ esac
 # NEGATIVE CONTROL for the whole block: without --at the newest IS the target and
 # the base is still found, so these assertions are about --at and not about the
 # strategy having stopped working.
-bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --config="$BB/cfg" 2>&1)"
+bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --plan --config="$BB/cfg" 2>&1)"
 bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$bb_ppoint" in
     *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;

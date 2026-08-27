@@ -111,13 +111,26 @@ source "$LIBCOMMON"
 # fail open. Proven both ways before shipping: with the kill the caller's next
 # line does not run and the status is 1; without it the line runs and the status
 # is 0.
-RESTORE_MAIN_PID=$$
-trap 'exit 1' TERM
-die() {
-    echo "FATAL: $*" >&2
-    [ "$BASHPID" = "$RESTORE_MAIN_PID" ] || kill -TERM "$RESTORE_MAIN_PID" 2>/dev/null
-    exit 1
-}
+# ARMED ONLY WHEN THIS FILE IS THE PROGRAM. `$$` is the shell that sourced it,
+# and a harness that sources this file to call its functions directly is that
+# shell -- so the signal would kill the harness instead of a run of this verb.
+# Measured immediately: test/restore/run.sh sources this file, and the first
+# `die` inside a `$( )` took the whole suite down with it, silently, before its
+# first assertion.
+#
+# When sourced, `die` therefore stays the shared lib's -- which is the fail-open
+# behaviour this fixes. That is stated here rather than papered over: a suite
+# that sources this file CANNOT observe the fatal-die property, and must not
+# claim to. It is proven where it was found, by running the program.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    RESTORE_MAIN_PID=$$
+    trap 'exit 1' TERM
+    die() {
+        echo "FATAL: $*" >&2
+        [ "$BASHPID" = "$RESTORE_MAIN_PID" ] || kill -TERM "$RESTORE_MAIN_PID" 2>/dev/null
+        exit 1
+    }
+fi
 
 # ------------------------------------------------------------------------------
 # A RELATIONSHIP NAME MUST IDENTIFY ONE RELATIONSHIP
@@ -1998,7 +2011,13 @@ restore_pause_release() {
 # Also on the way out of an interrupted run: a relationship left paused by a
 # crash is a backup that silently stops, which is the failure this project has
 # spent the most time making impossible elsewhere.
-trap 'restore_pause_release' EXIT
+#
+# Same fence as the die override above -- a harness that sources this file would
+# otherwise install an EXIT trap into ITS shell, and the explicit release in
+# restore_run_scope already covers every ordinary path.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    trap 'restore_pause_release' EXIT
+fi
 
 # ------------------------------------------------------------------------------
 #
