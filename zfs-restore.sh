@@ -1238,8 +1238,33 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # same proof snapsend will require; asking early only names the
                 # mode for the grant.
                 _guid="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print; exit}')"
-                if [ -n "$_guid" ]; then RESTORE_STRATEGY=increment
-                else                     RESTORE_STRATEGY=full-live; fi
+                if [ -z "$_guid" ]; then
+                    RESTORE_STRATEGY=full-live
+                else
+                    # The target's head is a snapshot this copy also has. Where
+                    # it sits RELATIVE TO THE RECOVERY POINT decides everything:
+                    #
+                    #   at or before the point -> an increment carries it forward
+                    #   AFTER the point        -> going back, which no send can
+                    #                             do. The target has to be rolled
+                    #                             back, and that DESTROYS the
+                    #                             snapshots between.
+                    #
+                    # Getting this wrong is not a failed transfer, it is a
+                    # transfer that cannot exist: `zfs send -I A..B` with B older
+                    # than A. Measured on the lab, where restoring to 15:51 while
+                    # the target sat at 16:51 classified as `increment` and would
+                    # have asked the engine for a stream backwards in time.
+                    local _pos_head _pos_point
+                    _pos_head="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print NR; exit}')"
+                    _pos_point="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '$1 == p {print NR; exit}')"
+                    if [ -n "$_pos_head" ] && [ -n "$_pos_point" ] && [ "$_pos_head" -gt "$_pos_point" ]; then
+                        RESTORE_STRATEGY=rollback
+                        RESTORE_ROLLBACK_TO="$point"
+                    else
+                        RESTORE_STRATEGY=increment
+                    fi
+                fi
             fi ;;
         *)
             if [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
@@ -1283,6 +1308,31 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     if ! restore_engine_argv "$copy" "$src" "$point" "$mode"; then
         RESTORE_ONE_VERDICT="could not build the engine command for mode '$mode'"
         return 1
+    fi
+
+    # ---- 6a. going backwards, if that is what was asked --------------------
+    # A recovery point OLDER than what the target holds cannot be reached by
+    # sending: the snapshots in between have to go. This is the destructive half
+    # of a restore, it is why `rewind` is a mode the grant names, and it happens
+    # only after that grant has been read and required.
+    #
+    # -r on the rollback, and -R on nothing: `zfs rollback -r` destroys the
+    # snapshots and bookmarks NEWER than the one named, on that dataset. Each
+    # dataset of a subtree needs its own, because rollback is not recursive over
+    # children -- so the loop is remote and explicit rather than implied.
+    if [ "${RESTORE_STRATEGY:-}" = rollback ] && [ -n "${RESTORE_ROLLBACK_TO:-}" ]; then
+        local _peer="${src%%:*}" _tgt="${src#*:}"
+        log 0 "restore: $src -- the target holds snapshots NEWER than $point; rolling it back to reach that point. They will be destroyed."
+        if ! ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
+             "for d in \$(zfs list -H -o name -r '$_tgt'); do \
+                  zfs list -H -o name \"\$d@$RESTORE_ROLLBACK_TO\" >/dev/null 2>&1 || continue; \
+                  zfs rollback -r \"\$d@$RESTORE_ROLLBACK_TO\" || exit 1; \
+              done" 2>/dev/null; then
+            RESTORE_ONE_VERDICT="the target could not be rolled back to $point"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
+            return 1
+        fi
+        log 1 "restore: $src -- rolled back to $point"
     fi
 
     # ---- 6. the engine -----------------------------------------------------
