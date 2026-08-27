@@ -68,6 +68,36 @@ passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
 
+- 2026-08-27 (snapget.sh): **the copy being AHEAD is not the same event as
+  something writing to it, and the refusal now says which one happened.**
+  Owner direction, verbatim: "Testuj dalej. Rob nowy lab. [...] portem je
+  odzyskuj az do braku zaciecia i koniecznych poprawek w kodzie."
+
+  DIAGNOSIS ONLY. No behaviour changes: the same input is refused, at the same
+  place, with the same exit status, and `-f` remains the same way out. What
+  changes is the sentence the operator reads.
+
+  Found on the lab, 2026-08-27, in the state a restore leaves behind. A restore
+  had rolled the SOURCE back an hour. The copy still held the snapshot of the
+  period that had been rolled away, so `written@<common>` on the copy was 14.5K
+  and the pull refused with "something wrote to this target [...] if this is a
+  live guest disk [...] investigate."
+
+  Nothing had written to it. The copy's own `written` was **0** -- its
+  filesystem was byte-identical to its newest snapshot. The 14.5K was a
+  SNAPSHOT, and `written@` cannot tell the two apart because it counts
+  everything after the point, whatever made it.
+
+  The two causes are opposites. A rogue writer means the copy is contaminated
+  and `-f` restores its integrity. A copy that is ahead means the copy is the
+  only surviving record of a period the source destroyed, and `-f` is the one
+  command that ends it. Sending the operator to look for a live guest that is
+  not there is the least of it.
+
+  Discriminated from data the function already holds: if the common point is
+  not the target's LAST snapshot, the excess is snapshots. They are then named,
+  because they are exactly what `-f` would destroy.
+
 - 2026-08-27 (snapsend.sh AND snapget.sh, one commit): **`-t` -- the second
   argument is the EXACT dataset, not a base to append the source name under.**
   Owner direction, verbatim: "A. zmiany maja byc jednoczenie w snapsend i snapget

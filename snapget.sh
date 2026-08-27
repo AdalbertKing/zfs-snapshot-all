@@ -1628,6 +1628,34 @@ process_dataset() {
             if [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
                     log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
+                elif [ "${#tgt_snaps[@]}" -gt 0 ] && [ "${tgt_snaps[-1]}" != "$recv_base" ]; then
+                    # THE COPY IS AHEAD, AND NOTHING WROTE TO IT.
+                    #
+                    # `written@<common>` counts everything after the common
+                    # point, and a SNAPSHOT taken after it counts the same as a
+                    # rogue writer. The two have opposite causes and opposite
+                    # remedies, and until this branch existed both got the
+                    # sentence below -- which sends the operator hunting for a
+                    # live guest that is not there.
+                    #
+                    # Measured on the lab, 2026-08-27: after a restore rolled
+                    # the SOURCE back to an earlier point, this copy still held
+                    # the snapshot of the damaged period. The dataset's own
+                    # `written` was 0 -- its filesystem was byte-identical to
+                    # its newest snapshot -- while `written@common` was 14.5K.
+                    # Nothing had written to it. The source had gone backwards.
+                    #
+                    # Discriminated from data already in hand: if the common
+                    # point is not the target's LAST snapshot, the excess is
+                    # snapshots, not writes. Naming them matters because they
+                    # are what -f destroys, and after a restore they are the
+                    # only remaining copy of the period that was rolled away.
+                    local _ahead="" _n=0 _t _seen=0
+                    for _t in "${tgt_snaps[@]}"; do
+                        if [ "$_seen" -eq 1 ]; then _ahead="$_ahead$_t "; _n=$((_n+1)); fi
+                        [ "$_t" = "$recv_base" ] && _seen=1
+                    done
+                    log 0 "Refusing: '$tgt_dataset' holds $_n snapshot(s) NEWER than the common snapshot '@${recv_base}', which the source no longer has: $_ahead-- so this pull cannot continue from that point without destroying them. Nothing wrote to this copy (its own written=0); the SOURCE went backwards, which is what a restore to an earlier point does. Those snapshots may be the only remaining copy of the period the source rolled away. Force explicitly with -f to discard them and follow the source's new history."
                 else
                     log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
                 fi

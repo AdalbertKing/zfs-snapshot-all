@@ -48,6 +48,12 @@ RESTORE_ENGINE="${RESTORE_ENGINE:-$SCRIPT_DIR/snapsend.sh}"
 #
 # Empty is legitimate: a LOCAL restore opens no connection at all.
 SSH_OPTS=()
+
+# Datasets whose target was rolled back during this run. Declared here, at file
+# scope, because restore_report_backup_cost reads its length under `set -u` and
+# an array that only exists when a rollback happened would make the ordinary
+# no-rollback run die on the closing report.
+RESTORE_ROLLED_BACK=()
 if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
     SSH_OPTS=(${RESTORE_SSH_OPTS})
@@ -1403,6 +1409,14 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
             return 1
         fi
+        # Recorded so the run can close by saying what this costs the BACKUP.
+        # Rolling the source back to $point leaves the copy holding snapshots
+        # the source no longer has, and the next pull of this relationship
+        # refuses on exactly that -- correctly, because -F would destroy them.
+        # A recovery that silently leaves the machine's protection jammed is
+        # half an operation; the operator finds out at the next backup, or at
+        # the next monitor alarm, or not at all.
+        RESTORE_ROLLED_BACK+=("$src")
     fi
 
     # ---- 6. the engine -----------------------------------------------------
@@ -1425,6 +1439,33 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
 
 # ------------------------------------------------------------------------------
 # THE WHOLE-RELATION RUN -- continue past a failure, and report per dataset
+# What the recovery cost the BACKUP, said out loud at the end of the run.
+#
+# Measured on the lab, 2026-08-27: a restore rolled the source back an hour, the
+# recovery was correct and complete, and the NEXT hourly pull of that same
+# relationship refused -- because the copy still held the snapshot of the period
+# that had just been rolled away, and continuing would have destroyed it. That
+# refusal is right. What was wrong is that nothing said it was coming: the
+# restore reported a clean run and left the machine's protection jammed until
+# somebody read a cron log.
+#
+# So the run closes by naming it. Not a warning about a risk -- a statement of a
+# state that now exists, with the two ways out and what each one costs.
+restore_report_backup_cost() {
+    [ "${#RESTORE_ROLLED_BACK[@]}" -gt 0 ] || return 0
+    local d
+    log 0 "restore: ---- what this costs the backup ----"
+    log 0 "restore: the source was rolled back, so the copy on this collector now holds snapshots the source no longer has, for:"
+    for d in "${RESTORE_ROLLED_BACK[@]}"; do
+        log 0 "restore:   $d"
+    done
+    log 0 "restore: the next backup of this relationship WILL REFUSE, naming those snapshots. That refusal is correct: they are the only remaining copy of the period the source rolled away."
+    log 0 "restore: two ways out, and they are not equivalent --"
+    log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
+    log 0 "restore:   discard them: re-run the pull with -f. The period that was rolled away then exists nowhere."
+
+}
+
 # ------------------------------------------------------------------------------
 #
 # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
@@ -1455,6 +1496,9 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
 restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0
     local -a verdict=()
+    # NOT local: restore_one appends to it. Reset here so a second call in one
+    # process cannot inherit the first call's list.
+    RESTORE_ROLLED_BACK=()
 
     if [ "$n" -eq 0 ]; then
         log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
@@ -1493,6 +1537,8 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     for (( i=0; i<${#verdict[@]}; i++ )); do
         log 0 "restore:   ${verdict[$i]}"
     done
+
+    restore_report_backup_cost
 
     if [ "$bad_n" -eq 0 ]; then
         log 0 "restore: all $ok_n dataset(s) in scope recovered."
