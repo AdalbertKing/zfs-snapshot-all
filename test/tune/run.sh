@@ -9,9 +9,10 @@
 # runs on the dev box too -- unlike test/snapsend/run.sh, which needs a PVE host.
 #
 # The one thing that IS exercised for real is tune_probe_stream, via a stub
-# `zfs` on PATH. Its rates depend on wall-clock timing, so the assertions are
-# properties (ratio is correct, comp never exceeds raw, the probe succeeds at
-# all) rather than numbers -- see the comment at that section.
+# `zfs` on PATH -- and, since 2026-08-27, a stub `date` as well. Its rates used
+# to depend on wall-clock timing, which flaked three times in CI; the clock is
+# now pinned, so the durations are an INPUT and the rates are exact numbers.
+# See the comment at that section for why that is also the better test.
 #
 # Usage: ./run.sh     (override the library under test with LIB=)
 
@@ -209,10 +210,26 @@ unset -f ssh
 check "apply: a cached link needs no probe" "1" "$COMPRESSION"
 
 # --- tune_probe_stream ------------------------------------------------------
-# Real execution against a stub `zfs`. Rates come from wall-clock timing, so the
-# assertions are properties rather than numbers: the ratio is arithmetic and
-# exact, while comp/raw are only required to obey the clamp. The >1.5x reject
-# needs a controlled clock to trigger on demand and is not covered here.
+# Real execution against a stub `zfs`, and a PINNED CLOCK.
+#
+# The rates used to come from real wall-clock timing, and that flaked three
+# times in CI (runs 139/5ff1b0b, 156/a34f4a9, and again on f0ef39b at 8 MB)
+# with the same two failures every time. The cause was never the sample size:
+# `date +%s.%N` has real nanoseconds on a Linux runner, but tune_probe_stream
+# rounds the difference with awk `printf "%.4f"`, so ANY interval under 100 us
+# is already zero when its own rt<=0/ct<=0 guard sees it -- and the `zfs` here
+# is a stub, so there is no disk to wait on. Raising the sample from 1 MB to
+# 8 MB made the window narrower and bought two weeks, not a fix.
+#
+# The real fix belongs in the rounding, which lives in a FROZEN file. So the
+# clock is pinned here instead (owner direction, 2026-08-27), which is the
+# better test anyway: these assertions are about the ARITHMETIC -- rb/cb, and
+# the clamp -- not about how fast a runner happens to be. A test whose subject
+# is arithmetic has no business depending on a stopwatch.
+#
+# Pinning it also buys the case the previous comment named as uncovered: the
+# >1.5x skew reject now has a controlled clock and IS exercised below, in both
+# directions.
 
 mkdir -p "$TMPD/bin"
 cat > "$TMPD/bin/zfs" <<'STUB'
@@ -232,20 +249,68 @@ case "$cmd" in
 esac
 STUB
 chmod +x "$TMPD/bin/zfs"
+
+# The pinned clock. tune_probe_stream calls `date +%s.%N` exactly four times per
+# probe -- t0 t1 around the raw pass, t2 t3 around the compressed one -- inside
+# the `sh -c` snippet it builds, so a stub on PATH is enough to reach it and no
+# frozen code has to move.
+#
+# ONLY `+%s.%N` is answered. Every other invocation falls through to the real
+# date, so putting this on PATH cannot disturb the rest of the suite (line 52's
+# `date +%s` among them).
+#
+# FAKE_RAW_DT and FAKE_COMP_DT are the two intervals, in seconds, and they are
+# the whole point: the durations become an INPUT to the test instead of an
+# accident of the runner. comp/raw is exactly rt/ct in the library's own
+# arithmetic (both rates divide the SAME rb), so those two numbers steer the
+# clamp and the skew reject directly.
+cat > "$TMPD/bin/date" <<'CLOCK'
+#!/bin/sh
+if [ "${1:-}" != "+%s.%N" ]; then
+    for d in /bin/date /usr/bin/date /usr/local/bin/date; do
+        [ -x "$d" ] && exec "$d" "$@"
+    done
+    echo "date: no real date to fall through to" >&2; exit 127
+fi
+c="${FAKE_CLOCK_FILE:?FAKE_CLOCK_FILE unset}"
+n=$(cat "$c" 2>/dev/null || echo 0)
+n=$((n + 1))
+[ "$n" -gt 4 ] && n=1
+echo "$n" > "$c"
+awk -v n="$n" -v r="${FAKE_RAW_DT:-0.5}" -v c="${FAKE_COMP_DT:-0.5}" 'BEGIN{
+    b = 1756280000
+    if      (n == 1) t = b
+    else if (n == 2) t = b + r
+    else if (n == 3) t = b + r + 1
+    else             t = b + r + 1 + c
+    printf "%.9f\n", t
+}'
+CLOCK
+chmod +x "$TMPD/bin/date"
 PATH="$TMPD/bin:$PATH"
-# 1 MB flaked twice in CI (runs 139/5ff1b0b, 156/a34f4a9): on a fast, idle
-# runner the transfer can finish inside the granularity the duration is rounded
-# to, and tune_probe_stream's own rt<=0/ct<=0 guard -- which exists to refuse
-# dividing by a zero duration -- then rejects a real measurement as
-# unmeasurable. The granularity is not the clock's: `date +%s.%N` has real
-# nanoseconds on a Linux runner, but tune_probe_stream rounds the difference
-# with awk `printf "%.4f"`, so anything under 100 us IS zero by the time the
-# guard sees it -- and the `zfs` here is a stub, so there is no disk to wait on.
-# Reproduced locally by stubbing `date` to return a fixed timestamp: the same
-# two checks fail the same way. 8 MB keeps the suite fast while giving real
-# I/O (plus, for the compressible case, a real gzip fork) enough work that the
-# duration cannot round to zero; the arithmetic still does not care about the
-# exact value.
+export FAKE_CLOCK_FILE="$TMPD/fakeclock"
+: > "$FAKE_CLOCK_FILE"
+# Exported, not merely set: the probe runs its snippet through `sh -c`, which
+# inherits only the environment. A plain shell variable reaches the stub on
+# nobody's machine and the pin would silently do nothing -- the failure mode
+# being a test that passes for the old, flaky reason.
+export FAKE_RAW_DT=0.5 FAKE_COMP_DT=0.5
+
+# THE PIN IS ITSELF CHECKED FIRST. Everything below rests on the stub actually
+# being the thing that answers, and a stub that was shadowed, unreadable or
+# falling through would leave real timings in place -- which is exactly the
+# state this block exists to leave behind, and it would look like a pass.
+clk1="$(date +%s.%N)"; clk2="$(date +%s.%N)"
+check "probe: the clock stub is what answers +%s.%N" "0.5000" \
+      "$(awk -v a="$clk1" -v b="$clk2" 'BEGIN{printf "%.4f", b-a}')"
+: > "$FAKE_CLOCK_FILE"
+check "probe: ...and any other date invocation is still the real one" "ok" \
+      "$(date +%Y 2>/dev/null | grep -qE '^[0-9]{4}$' && echo ok || echo 'fell through wrongly')"
+: > "$FAKE_CLOCK_FILE"
+
+# No longer load-bearing for the clock -- 8 MB was the flake mitigation and the
+# pin replaced it. Kept because the compressible case below wants real bytes
+# through a real gzip; lower it deliberately if the suite ever needs the second.
 TUNE_SAMPLE_MB=8
 
 # COMPRESS_PIPE=cat is a compressor that compresses nothing: ratio must come out
@@ -256,9 +321,45 @@ check "probe: an incompressible stream still yields a measurement" "0" "$?"
 check "probe: a no-op compressor measures a ratio of 1" "1.0000" "$(echo "$out" | cut -d' ' -f1)"
 check "probe: comp never exceeds raw (the clamp holds)" "clamped" \
       "$(echo "$out" | awk '{print ($3 <= $2 * 1.0001) ? "clamped" : "leaked " $3 " > " $2}')"
+# The rate is now a KNOWN number rather than whatever the runner managed:
+# 8 MB in 0.5 s is 16 MB/s, and asserting it proves the pin reaches the maths
+# and not merely the guard.
+check "probe: the pinned duration produces the arithmetic rate" "16.0000" \
+      "$(echo "$out" | cut -d' ' -f2)"
+
+# ---- what the flake actually was, now a test ------------------------------
+# An interval that rounds to zero. This is the CI failure of runs 139, 156 and
+# f0ef39b reproduced deterministically: the library refuses, correctly, because
+# it will not divide by a zero duration. The three red CI runs were this guard
+# doing its job on a measurement that was real but too fast to see.
+FAKE_RAW_DT=0.00001 FAKE_COMP_DT=0.5 tune_probe_stream "tank/incompressible" >/dev/null 2>&1
+check "probe: an interval too short to measure is refused, not guessed" "1" "$?"
+: > "$FAKE_CLOCK_FILE"
+FAKE_RAW_DT=0.5 FAKE_COMP_DT=0.00001 tune_probe_stream "tank/incompressible" >/dev/null 2>&1
+check "probe: ...on the compressed pass too" "1" "$?"
+: > "$FAKE_CLOCK_FILE"
+
+# ---- the >1.5x skew reject, uncovered until the clock could be pinned -----
+# comp/raw is exactly rt/ct here (both rates divide the same rb), so a raw pass
+# twice as slow as the compressed one claims compression made the SOURCE produce
+# bytes 2x faster -- impossible, and the signature of one pass reading off disk
+# while the next read off ARC. Refuse rather than cache a lie for a week.
+FAKE_RAW_DT=1.0 FAKE_COMP_DT=0.5 tune_probe_stream "tank/incompressible" >/dev/null 2>&1
+check "probe: a 2x skew between the two passes is rejected" "1" "$?"
+: > "$FAKE_CLOCK_FILE"
+# NEGATIVE CONTROL, and the reason the reject is a threshold rather than a rule:
+# a SMALL excess is expected -- the two passes are not symmetric -- and must be
+# clamped and kept, not thrown away. 1.25x is under the 1.5x line.
+out=$(FAKE_RAW_DT=1.0 FAKE_COMP_DT=0.8 tune_probe_stream "tank/incompressible" 2>/dev/null)
+check "probe: a 1.25x excess is kept, not rejected" "0" "$?"
+check "probe: ...and clamped to raw rather than reported above it" "clamped" \
+      "$(echo "$out" | awk '{print ($3 <= $2 * 1.0001) ? "clamped" : "leaked " $3 " > " $2}')"
+: > "$FAKE_CLOCK_FILE"
+export FAKE_RAW_DT=0.5 FAKE_COMP_DT=0.5
 
 if command -v gzip >/dev/null; then
     COMPRESS_PIPE="gzip -1 -c"
+    : > "$FAKE_CLOCK_FILE"
     out=$(tune_probe_stream "tank/compressible")
     check "probe: a compressible stream yields a measurement" "0" "$?"
     check "probe: a real compressor reports a ratio above 1" "yes" \
