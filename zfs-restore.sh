@@ -1530,7 +1530,28 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # its own line.
                     local _adepth=""
                     if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _adepth="-d 0"; fi
-                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point" "$_adepth")"
+                    # THE EXIT STATUS, NOT ONLY THE STRING.
+                    #
+                    # restore_remote_ahead's own header promises the caller can
+                    # tell "nothing differs" from "I could not ask" -- empty and
+                    # zero versus empty and non-zero. The caller then tested
+                    # `[ -n "$_ahead" ]` and threw the status away, so an ssh
+                    # that never answered read as a target that needs nothing:
+                    # no rollback, an empty increment, and a clean report over
+                    # untouched damage.
+                    #
+                    # The same shape as F14 two hours earlier, in the same file:
+                    # a function that carefully distinguishes two cases, and a
+                    # caller that collapses them again. Writing the distinction
+                    # into the probe is half the work; the half that decides
+                    # anything is reading it.
+                    local _arc
+                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point" "$_adepth")"; _arc=$?
+                    if [ "$_arc" -ne 0 ]; then
+                        RESTORE_ONE_VERDICT="could not ask '$src' whether it differs from $point"
+                        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: an unanswered question is not a clean target, and treating it as one is how a restore reports success over damage it never looked at."
+                        return 1
+                    fi
                     if [ -n "$_ahead" ]; then
                         RESTORE_STRATEGY=rollback
                         RESTORE_ROLLBACK_TO="$point"
@@ -1745,7 +1766,15 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # recovered two lines further down.
                 local _vdepth=""
                 [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _vdepth="-d 0"
-                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth")"
+                local _orc
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth")"; _orc=$?
+                if [ "$_orc" -ne 0 ]; then
+                    # Same rule on the way out. "I could not check" is not
+                    # "it is fine", and this is the last chance to say so.
+                    RESTORE_ONE_VERDICT="the engine reported success and the result could NOT be verified -- '$src' did not answer"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Reporting it as not done: the transfer may well have worked, and nobody here has seen that it did."
+                    return 1
+                fi
                 if [ -n "$_off" ]; then
                     RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}:"
