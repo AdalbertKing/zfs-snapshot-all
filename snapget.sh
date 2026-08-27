@@ -245,6 +245,12 @@ set -o pipefail
 #                    with an /etc/qemu/fsfreeze-hook, application-) consistent
 #                    one.
 #
+#                    A FAILED FREEZE STILL TAKES THE SNAPSHOT (owner direction,
+#                    2026-08-27): crash-consistent, `_crash_` in the name, exit
+#                    8 so cron reports it. Append `,strict` -- `-q auto,strict`
+#                    -- to refuse and take nothing instead. `,degrade` is still
+#                    accepted and now asks for what it would get anyway.
+#
 #                    THE GUEST IS ON THE FAR SIDE, so unlike snapsend.sh's -q
 #                    the entire freeze -> atomic snapshot -> thaw sequence runs
 #                    in ONE remote invocation, carrying its own EXIT trap and a
@@ -1996,9 +2002,9 @@ if [ -z "$MESSAGE" ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
     log 0 "WARNING: no -m given -- the new snapshot will be named with a bare timestamp, no prefix. No pattern-based delsnaps.sh retention job will ever match it, so it accumulates forever unless something specifically targets it."
 fi
 
-# `-q <mode>[,degrade]`. The same parser snapsend.sh uses, so the qualifier
+# `-q <mode>[,strict|,degrade]`. The same parser snapsend.sh uses, so a qualifier
 # cannot come to mean two things depending on which direction a relationship
-# runs; it prints its own message on `no,degrade`, on a misspelled qualifier and
+# runs; it prints its own message on `no,<qual>`, on a misspelled qualifier and
 # on a repeated one. QUIESCE afterwards holds the BARE mode, which is what the
 # remote script's own `case "$mode/$kind"` expects to receive over ssh.
 quiesce_parse_mode "$QUIESCE" || exit 1
@@ -2395,7 +2401,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
            # unquiesced, through create_snapshot() -- which uses RUN_SUFFIX, the
            # same suffix the push path uses, under the same crash marker.
            SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
-           log 0 "Quiesce: continuing WITHOUT quiesce, as ',degrade' asked. This run's source snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup." ;;
+           log 0 "Quiesce: continuing WITHOUT quiesce -- the default since 2026-08-27; name ',strict' on this tier to refuse instead. This run's source snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup." ;;
         *) # Same refusal as the local path: someone who asked for -q must
            # never silently receive a crash-consistent snapshot instead.
            log 0 "Quiesce: refusing to continue with unquiesced snapshots"

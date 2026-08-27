@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 248d3a63934bb2e8 -->
+<!-- status-covers-digest: ed12da654953810c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1658,8 +1658,67 @@
   sama rodzine z ROZNYM `keep`. Dedup dziala, odmowa nie — a faza 2 czyni to
   pilnym, bo beda dwa profile na jednym hoscie.
 
+- **DOMYSLNA ODPOWIEDZ NA NIEUDANY QUIESCE — ODWROCONA (2026-08-27).**
+  Decyzja wlasciciela, doslownie: *"Przemyslalem i chce, zeby snapshots sie
+  tworzyly domyslnie pomimo porazki flush buffers."*
+
+  **Nieudany freeze BIERZE snapshot.** Crash-consistent, `_crash_` w nazwie,
+  rc 8, zeby cron to zglosil. Bez zadnego kwalifikatora, na kazdym tierze,
+  w obu silnikach. Nic w mechanice sie nie ruszylo — ruszyla strona, w ktora
+  patrzy `QUIESCE_DEGRADE`, gdy nikt nic nie powiedzial: `1`, nie `0`.
+
+  **`,strict` to droga powrotna**, per tier, i przywraca poprzednie zachowanie
+  co do joty: zaden snapshot, przebieg pada. Nie jest formalnoscia — to
+  wlasciwa odpowiedz dla danych, ktorych procedura odtwarzania zaczyna sie od
+  wyrzucenia kopii crash-consistent.
+
+  **`,degrade` dalej sie parsuje** i prosi teraz o to, co dostanie i tak.
+  Zostawione swiadomie: `profiles/prod.conf` i kazdy crontab wygenerowany od
+  2026-08-26 go niosa, wiec kwalifikator, ktory zaczalby sie wywalac, zamienilby
+  godzinny `git pull` w awarie calego estate. Praktyczna konsekwencja: **zadna
+  linia w produkcji nie zmienia dzis znaczenia** — zmieniaja je wylacznie tiery
+  z golym `-q <mode>`, ktore teraz degraduja zamiast odmawiac.
+
+  **Defekt, ktory ta zmiana WYTWORZYLA i ktory zlapala wlasna suita** — wart
+  zapamietania, bo nie widac go w diffie. Kazde z szesciu miejsc odmowy mialo
+  ksztalt `bramka && return 1` / `log 0 "<co jest zle + polecenie naprawcze>"` /
+  `exit 3`, wiec zdanie z LEKARSTWEM bylo osiagalne wylacznie na sciezce, ktora
+  odmawiala. Przy starym domysle to byla sciezka typowa i nikt tego nie zauwazyl.
+  Przy nowym operator dostaje `DEGRADING` co noc, snapshot `_crash_` co noc,
+  i nigdy zdania, ze konto nie ma `--allow-quiesce` albo ze gosc jest poza
+  whitelista. Backup, ktory dziala dalej i po cichu gubi powod, dla ktorego jest
+  gorszy, zamienia naprawialny blad konfiguracji w trwaly. Diagnoza jest teraz
+  logowana PRZED bramka we wszystkich szesciu miejscach; asercja jest
+  strukturalna (kazde wywolanie bramki musi byc poprzedzone `log 0`, plus
+  asercja liczby miejsc, zeby skasowanie ich nie przeszlo), z kontrola mutacyjna.
+
+  **`settings.ini` ISTNIEJE od tego dnia.** `settings_get` czytalo ten plik od
+  2026-08-26 na kazdym hoscie i na kazdym go nie znajdowalo, wiec oba jego klucze
+  zyly tylko w kodzie, ktory ich szukal. `deploy.sh` Faza 2a zapisuje go raz
+  (`settings_write_default` w `lib-cron.sh`), 0644 — bo czyta go KONTO
+  DELEGOWANE, a nieczytelny plik nie pada, tylko po cichu wraca do wbudowanego
+  domyslu. **Nigdy nie nadpisuje**: plik istnieje po to, zeby go recznie
+  edytowac. Wszystkie klucze w szablonie sa zakomentowane, wiec swiezo wdrozony
+  host zachowuje sie dokladnie tak jak przed jego pojawieniem sie.
+  `quiesce` jest zakomentowany z konkretnego powodu, wypisanego w samym pliku:
+  domysl hosta trafia do KAZDEGO tiera, ktory nie podal wlasnego, a w `prod.conf`
+  to jest tier HOURLY, ktory nie ma quiesce swiadomie. Odkomentowanie wlacza
+  zamrazanie kazdego goscia 24 razy na dobe.
+
+  **Dowody:** `test/quiesce` **265/0** (gramatyka z obiema polowami, domysl
+  biblioteki czytany w czystym srodowisku z kontrola srodowiskowa, laczenie
+  parsera z bramka end-to-end, przetrwanie diagnozy przy degradacji + kontrola
+  mutacyjna); `test/cron` **132/0** (sekcja Z: round-trip przez prawdziwe
+  `settings_get`, a nie grep szablonu; swiezy plik nie zmienia nic, odkomentowany
+  klucz dziala); `test/run.sh` **96/0** (nowy golden `quiesce-strict` z kontrola
+  negatywna w tym samym fixture, dwa nowe przypadki negatywne); `test/runsuffix`
+  **15/0**. Reszta baterii: CI.
+
 - **DEGRADACJA NIEUDANEGO QUIESCE — ZROBIONA (2026-08-26).**
   `docs/design/quiesce-degrade.md` opisuje teraz stan zbudowany, nie plan.
+  **Domysl odwrocony dzien pozniej — patrz wpis powyzej.** Ponizszy opis
+  mechaniki jest dalej aktualny; nieaktualne jest tylko to, ktora z dwoch
+  odpowiedzi dostaje tier, ktory nie powiedzial nic.
 
   **Co to naprawia, zmierzone:** w labie pve9/pve1/pve2 (2026-08-25) profil
   `prod` wyprodukowal ZERO snapshotow dla trzech z czterech tierow, bo konto
@@ -1703,10 +1762,12 @@
   to powstalo.
 
   **`settings.ini` hosta** podaje `quiesce` WYLACZNIE wtedy, gdy tier nie podal
-  zadnego. Nie moze rozszerzyc wartosci jawnej: tier, ktory mowi `auto`, dalej
-  znaczy fail-closed `auto`. `settings_get` przeniesione z `zfs-backup.sh` do
-  `lib-cron.sh` — jedyny plik, ktory `zfs-backup.sh` i `gen-cron.sh` i tak oba
-  laduja, wiec nie moga sie roznic co do tego, co powiedzial host.
+  zadnego. Nie moze nadpisac wartosci jawnej: tier, ktory mowi `auto,strict`,
+  dalej znaczy `auto,strict`, cokolwiek jest w pliku hosta. `settings_get`
+  przeniesione z `zfs-backup.sh` do `lib-cron.sh` — jedyny plik, ktory
+  `zfs-backup.sh` i `gen-cron.sh` i tak oba laduja, wiec nie moga sie roznic co
+  do tego, co powiedzial host. Sam plik powstal dopiero 2026-08-27 — patrz wpis
+  o odwroceniu domyslu.
 
   **POPRAWKA tego samego dnia, znaleziona w recenzji:** zdanie ponizej bylo
   bledne i warto zapamietac, na czym polegal blad rozumowania. Kody wyjscia

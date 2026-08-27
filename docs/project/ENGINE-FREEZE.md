@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 af8f0b8c50f782ba97037a5bbbd39b4bdfe046d9 -->
-<!-- frozen: snapget.sh 100755 bae6fbc3e6aa51817bdf9690a51412a74ca8ddda -->
+<!-- frozen: snapsend.sh 100755 0f280f2e3a8aec280d8c3a396a0a01fb27e71903 -->
+<!-- frozen: snapget.sh 100755 45667de1f6dc45663c09b60db6125209fb3f7c2c -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 bd0a7f54ae408fb7545cdad6c03994c69f6fd4db -->
+<!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -67,6 +67,37 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-27 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **the default answer to
+  a failed freeze is inverted.** Owner direction, verbatim: "Przemyslalem i chce,
+  zeby snapshots sie tworzyly domyslnie pomimo porazki flush buffers." A failed
+  freeze now takes a crash-consistent snapshot -- `_crash_` in the name, exit 8
+  -- without anybody having written a qualifier, and `,strict` is the per-tier
+  way back to the previous refusal.
+
+  Scope, so the entry is not larger than the change: `QUIESCE_DEGRADE` defaults
+  to `1` instead of `0`; `quiesce_parse_mode` gains `,strict` and reads *what was
+  written* rather than the resulting flag when rejecting a qualifier on `no`; the
+  two engines' `-q` help and three run-time log lines stop saying the operator
+  asked for something they now get by default. No gate, no rc mapping, no remote
+  script and no name builder was touched -- the sentence "what degrading does not
+  excuse" is true in exactly the words it already had.
+
+  The one line that would have broken the fleet, recorded because it was not
+  obvious until the parser was written out: `no` is both engines' built-in `-q`
+  value, so with the default at `1` a bare `no` is indistinguishable from
+  `no,degrade` unless the check reads the written qualifier. Reading the flag
+  there would have made every run in the estate refuse at startup on the next
+  hourly `git pull`. Caught by the suite's `bare no still parses` assertion,
+  which existed for the previous flip in the other direction.
+
+  This entry has the owner's direction and not a pre-review. The direction is
+  what makes it legitimate; the pre-review is what makes it safe, and it is
+  absent, so the risk is stated rather than covered: this changes what every
+  quiesced job in the fleet does on failure, on the next hourly pull, and the
+  `,degrade` already written into `prod.conf` and every generated crontab means
+  no line in production changes meaning today -- only tiers that carry a bare
+  `-q` mode do, and those degrade instead of refusing.
 
 - 2026-08-26 (lib-zfs-snap.sh): the PULL half of `,degrade` classified by CAUSE,
   not only by cleanliness. Same authorization as the entry below it -- this is

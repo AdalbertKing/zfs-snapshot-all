@@ -3197,6 +3197,37 @@ fi
 fi   # end of CHECK_ONLY guard for Part 2
 
 # ------------------------------------------------------------------------------
+log "Phase 2a: host settings ($SETTINGS_FILE)"
+# ------------------------------------------------------------------------------
+# settings_get (lib-cron.sh) has read this file since 2026-08-26 and no host had
+# one, so its two keys existed only in the code looking for them. Owner
+# direction, 2026-08-27: the file must exist and must document what a failed
+# freeze now does.
+#
+# Written ONCE. Every line in it is commented, so a fresh file changes nothing
+# about how this host behaves -- it is there to be edited. Never overwritten,
+# because this runs from every deploy and an edited file is the point.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ -r "$SETTINGS_FILE" ]; then
+        log "settings present: $SETTINGS_FILE"
+    else
+        warn "no $SETTINGS_FILE -- run without --check-only to write the documented default"
+    fi
+elif settings_write_default "$SETTINGS_FILE"; then
+    log "wrote $SETTINGS_FILE (all keys commented -- built-in defaults in force)"
+else
+    if [ -e "$SETTINGS_FILE" ]; then
+        log "$SETTINGS_FILE already exists -- left exactly as it is"
+        # An unreadable settings file does not fail; settings_get falls back to
+        # the built-in default silently, which is the one failure mode of this
+        # file worth a warning.
+        [ -r "$SETTINGS_FILE" ] || warn "$SETTINGS_FILE is not readable -- the delegated account will silently get built-in defaults instead of what it says"
+    else
+        warn "could not write $SETTINGS_FILE -- built-in defaults stay in force"
+    fi
+fi
+
+# ------------------------------------------------------------------------------
 log "Phase 6: verify the deployment"
 # ------------------------------------------------------------------------------
 cd "$REPO_DIR" || die "cannot cd into $REPO_DIR"

@@ -6,6 +6,47 @@ after a pre-review of the frozen engines authorised it (PR #165, marker
 are kept in the order they were written -- the measurement, the hole, the shape
 -- and the last section says what was actually built and what it cost.
 
+**The answer changed on 2026-08-27.** Read the next section first: the machinery
+below is unchanged, but the DEFAULT it runs under is now the opposite one, and
+several sentences further down describe how it read for one day.
+
+## The default, inverted -- owner direction, 2026-08-27
+
+> "Przemyslalem i chce, zeby snapshots sie tworzyly domyslnie pomimo porazki
+> flush buffers."
+
+A failed freeze **takes the snapshot**. Crash-consistent, `_crash_` in the name,
+exit 8 so cron reports it. No qualifier required, on any tier, in either engine.
+
+Nothing about the machinery moved. What moved is which way `QUIESCE_DEGRADE`
+points when nobody said: `1`, not `0`. The reasoning the original built-in stood
+on is still in this document and is still correct as far as it goes -- a caller
+who asked for application consistency and silently got crash consistency is worse
+off than one whose job failed loudly, **because only the second one finds out**.
+The owner's judgement is that the emphasis was on the wrong half of that
+sentence. The objection was to SILENCE, and the three-way announcement built on
+2026-08-26 -- the name, the exit status, the log line -- already removes it. What
+was left was a fail-closed default paying for a problem that had been solved,
+and the measured price of that default was three of four tiers producing nothing
+at all.
+
+**`,strict` is the way back**, per tier, and it restores the previous behaviour
+exactly: no snapshot, run fails. It is not a formality. It is the right answer
+for data whose restore procedure begins by discarding a crash-consistent copy,
+and a tier that means it should say so.
+
+**`,degrade` still parses and now asks for what it would get anyway.** Kept
+rather than retired for two reasons, and the first is not stylistic:
+`profiles/prod.conf` and every crontab this fleet has generated since 2026-08-26
+carry it, and a qualifier that started erroring would turn the hourly `git pull`
+into an estate-wide outage. The second is that on a cron line read at 3am,
+spelled-out intent beats an implied default.
+
+**What did NOT change**, and is unaffected by which way the default points: a
+failed thaw, a foreign freeze already in place, and a rollback that left this
+run's snapshots behind all stay fatal. Those were never about the qualifier --
+see "What degrading does NOT excuse" below, which still reads correctly.
+
 ## What happens today, measured
 
 `snapsend.sh -q auto` on a guest that cannot be frozen:
@@ -93,14 +134,21 @@ hold nothing; that argument no longer applies to this field.
 
 ### The grammar
 
-`quiesce = <mode>[,degrade]`, exactly the spelling reserved above. One parser,
-`quiesce_parse_mode` in `lib-zfs-snap.sh`, used by both engines -- so `-q` cannot
-come to mean two things depending on which direction a relationship runs. It
-refuses `no,degrade` (a policy about a freeze that never happens), a misspelled
-qualifier and a repeated one. `gen-cron.sh`'s `lint_quiesce` splits the same
-grammar at config time, so a config that renders cleanly cannot fail at run time
-on this field, and `sync,degrade` on a pull is still refused for the reason bare
-`sync` is.
+`quiesce = <mode>[,strict|,degrade]`. One parser, `quiesce_parse_mode` in
+`lib-zfs-snap.sh`, used by both engines -- so `-q` cannot come to mean two things
+depending on which direction a relationship runs. A bare mode degrades;
+`,strict` refuses; `,degrade` is accepted and redundant. It refuses a qualifier
+on `no` in either spelling (a policy about a freeze that never happens), a
+misspelled qualifier, a repeated one, and a mixed pair. `gen-cron.sh`'s
+`lint_quiesce` splits the same grammar at config time, so a config that renders
+cleanly cannot fail at run time on this field, and `sync,degrade` on a pull is
+still refused for the reason bare `sync` is.
+
+One consequence of the flip is worth stating because it is easy to get backwards
+while reading the code: the `no` arm checks **what was written**, not the
+resulting flag. With the default at `1`, a bare `no` is indistinguishable from
+`no,degrade` by flag alone -- and `no` is both engines' built-in `-q` value, so
+reading the flag there would have refused every run in the fleet at startup.
 
 ### The name
 
@@ -230,11 +278,25 @@ guest 24 times a day and losing one interval of twenty-four is not what this is
 for.
 
 The host `settings.ini` supplies `quiesce` ONLY when the tier named none. It
-cannot widen an explicit value: a tier that says `auto` keeps meaning
-fail-closed `auto`, and no host default turns it into `auto,degrade`.
-`settings_get` moved from `zfs-backup.sh` to `lib-cron.sh` for this -- the one
-file both `zfs-backup.sh` and `gen-cron.sh` already source, so the two cannot
-disagree about what a host said.
+cannot override an explicit value: a tier that says `auto,strict` keeps meaning
+`auto,strict` whatever the host file says. `settings_get` moved from
+`zfs-backup.sh` to `lib-cron.sh` for this -- the one file both `zfs-backup.sh`
+and `gen-cron.sh` already source, so the two cannot disagree about what a host
+said.
+
+**The file itself did not exist until 2026-08-27.** `settings_get` had read that
+path since the day before, on every host, and found nothing on all of them, so
+both its keys lived only in the code looking for them. `deploy.sh` Phase 2a now
+writes it once, from `settings_write_default` in `lib-cron.sh`, and never
+overwrites it -- the file exists to be hand-edited. Every key in the shipped
+template is commented out, so a freshly deployed host behaves exactly as it did
+before it had the file; the template is documentation with a working parser
+behind it, not a policy change smuggled in as a default.
+
+`quiesce` is commented for a specific reason, spelled out in the file: the host
+default reaches **every tier that named no quiesce**, and in `prod.conf` that is
+the HOURLY one, which has none deliberately. Uncommenting it turns on freezing
+every guest on the host 24 times a day.
 
 ## Acceptance criteria, answered
 
@@ -242,11 +304,12 @@ disagree about what a host said.
   crash-consistent, and an alert** -- met. The name is built by
   `quiesce_crash_message`; the alert is the existing cron notifier, fired by the
   distinct exit status 8.
-- **a failed freeze WITHOUT `degrade` still takes no snapshot and still exits
+- **a failed freeze under `strict` still takes no snapshot and still exits
   non-zero -- the discriminator must survive** -- met, and it is the assertion
   the suite spends the most lines on. `test/quiesce` runs the SAME failure with
-  and without the qualifier at every site, local and remote, and a mutation that
-  removes the opt-in check fails ten pre-existing fail-closed assertions.
+  and without the qualifier at every site, local and remote. Restated on
+  2026-08-27 without weakening it: what the discriminator distinguishes did not
+  change, only which side of it is reached by saying nothing.
 - **retention treats the degraded snapshot as belonging to its tier** -- met by
   the prefix property above, and asserted as a property rather than as a string.
 - **restore names the difference where the operator can see it before choosing**
@@ -259,7 +322,11 @@ disagree about what a host said.
 | claim | evidence |
 |---|---|
 | the grammar accepts and refuses the right values | `test/quiesce`, both halves of the table, including the bare modes -- the first version of the parser rejected `auto` because `local raw="$1" mode="$raw"` leaves `mode` empty, and only the positive control caught it |
-| the gate refuses without the opt-in | `test/quiesce`, with a mutation control |
+| the gate refuses under `,strict` | `test/quiesce`, with a mutation control |
+| a bare mode degrades, and `no` still parses | `test/quiesce` `degrade-parse`, with the library's own default read in a clean environment and an env-override negative control |
+| the parser's answer actually reaches the gate | `test/quiesce` `degrade-chain` -- the real parser on a real `-q` value, handed to the real gate. The blocks either side of it each test one half against a number, and neither would notice the number ceasing to travel between them |
+| `,strict` and `,degrade` render into the cron line unaltered | `test/run.sh` goldens `quiesce-strict` and `quiesce-degrade`, each carrying an unqualified negative control in the same fixture |
+| a fresh `settings.ini` changes nothing, and an uncommented key does | `test/cron` section Z, as a round trip through `settings_get` rather than a grep of the template |
 | a failed thaw and a failed rollback stay fatal WITH the opt-in | `test/quiesce`, each with a mutation control |
 | the remote mapping degrades 3 and 5 and nothing else | `test/quiesce`, all seven codes in both directions |
 | push and pull produce the SAME degraded name | `test/runsuffix`, driving both engines' own `create_snapshot`, with an unmarked negative control |

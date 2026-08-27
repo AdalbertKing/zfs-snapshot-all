@@ -344,6 +344,16 @@ set -o pipefail
 #                            buffered, and nothing more.
 #                      auto  pick per guest from its type
 #
+#                    A FAILED FREEZE STILL TAKES THE SNAPSHOT (owner direction,
+#                    2026-08-27). It is crash-consistent, carries `_crash_` in
+#                    its name, and the run exits 8 so cron reports it rather
+#                    than calling it a clean backup. Append `,strict` --
+#                    `-q auto,strict` -- for the opposite: no snapshot at all,
+#                    and the run fails, which is the right answer for data whose
+#                    restore procedure begins by discarding a crash-consistent
+#                    copy. `,degrade` is still accepted and now asks for what it
+#                    would get anyway.
+#
 #                    The dataset-to-guest mapping is the Proxmox naming
 #                    convention (vm-<id>-disk-N, subvol-<id>-disk-N); anything
 #                    else owns no guest and is snapshotted normally. Under -r the
@@ -1931,12 +1941,13 @@ for _pat in "${EXCLUDE_PATTERNS[@]}"; do
     fi
 done
 
-# `-q <mode>[,degrade]`. quiesce_parse_mode (lib-zfs-snap.sh) is the ONE parser
-# for both engines, so the qualifier cannot come to mean two things; it prints
-# its own message on anything it does not accept, including `no,degrade`, a
+# `-q <mode>[,strict|,degrade]`. quiesce_parse_mode (lib-zfs-snap.sh) is the ONE
+# parser for both engines, so a qualifier cannot come to mean two things; it
+# prints its own message on anything it does not accept, including `no,<qual>`, a
 # misspelled qualifier and a repeated one. QUIESCE afterwards holds the BARE
 # mode, which is what every quiesce function below already expects, and
-# QUIESCE_DEGRADE holds the opt-in.
+# QUIESCE_DEGRADE holds the answer to a failed freeze -- 1 by default since
+# 2026-08-27, 0 only when the tier wrote `,strict`.
 quiesce_parse_mode "$QUIESCE" || exit 1
 QUIESCE="$QUIESCE_MODE"
 
@@ -2437,7 +2448,7 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # again -- every dataset, none of them quiesced, all of them saying so in
         # their names. No run ever mixes plain and `_crash_` names.
         SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
-        log 0 "Quiesce: continuing WITHOUT quiesce, as ',degrade' asked. This run's snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup."
+        log 0 "Quiesce: continuing WITHOUT quiesce -- the default since 2026-08-27; name ',strict' on this tier to refuse instead. This run's snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup."
     elif [ $quiesce_snap_failed -eq 0 ]; then
         USE_EXISTING_SNAPSHOT=1
         # Separate from USE_EXISTING_SNAPSHOT because the snapshot-only branch in

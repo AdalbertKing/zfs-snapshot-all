@@ -116,7 +116,10 @@ set -o pipefail
 #                                          # inherited); on a [prune:] it
 #                                          # reaches ONLY the monitor -- prune
 #                                          # itself keeps running while paused.
-#       quiesce      = no|agent|sync|auto  # default no; quiesce the Proxmox guest
+#       quiesce      = no|agent|sync|auto[,strict|,degrade]  # default no; quiesce
+#                                          # the Proxmox guest. A failed freeze
+#                                          # degrades to a crash-consistent
+#                                          # snapshot unless ',strict' is named.
 #                    [,degrade]            # that owns this dataset before
 #                                          # snapshotting it (snapsend.sh -q).
 #                                          # ',degrade' says what to do when the
@@ -599,23 +602,28 @@ maybe_add_autotune() {
 #           still need `--as=root` (or a sudo rule) on the peer to work.
 lint_quiesce() {
     local want="$1" ctx="$2" direction="$3" mode="$1" qual=""
-    # `<mode>,degrade` (docs/design/quiesce-degrade.md). The qualifier is split
-    # off HERE so every rule below keeps reading a bare mode -- in particular the
-    # pull/sync rule, which must reject `sync,degrade` on a pull for exactly the
-    # reason it rejects `sync`. The engines parse the same grammar with
-    # quiesce_parse_mode (lib-zfs-snap.sh); this is the config-time half, and the
-    # two must accept the same set or a config would generate cleanly and fail at
-    # run time.
+    # `<mode>[,strict|,degrade]` (docs/design/quiesce-degrade.md). The qualifier
+    # is split off HERE so every rule below keeps reading a bare mode -- in
+    # particular the pull/sync rule, which must reject `sync,degrade` on a pull
+    # for exactly the reason it rejects `sync`. The engines parse the same
+    # grammar with quiesce_parse_mode (lib-zfs-snap.sh); this is the config-time
+    # half, and the two must accept the same set or a config would generate
+    # cleanly and fail at run time.
+    #
+    # Since the owner's 2026-08-27 direction the DEFAULT is to degrade -- a
+    # failed freeze still produces a snapshot, named `_crash_` and exiting 8 --
+    # so `,degrade` is accepted and redundant, and `,strict` is the field that
+    # actually changes anything: it restores the old refusal.
     case "$want" in
         *,*)
             mode="${want%%,*}"
             qual="${want#*,}"
             case "$qual" in
-                degrade) ;;
-                *) die "$ctx: quiesce='$want' -- ',$qual' is not a qualifier. The only one is ',degrade', and it may appear once: agent,degrade / sync,degrade / auto,degrade." ;;
+                degrade|strict) ;;
+                *) die "$ctx: quiesce='$want' -- ',$qual' is not a qualifier. There are two, and each may appear at most once: ',strict' takes NO snapshot when the freeze fails, and ',degrade' takes a crash-consistent one -- which is the default since 2026-08-27, so writing it changes nothing." ;;
             esac
             case "$mode" in
-                no) die "$ctx: quiesce='no,degrade' -- ',degrade' says what to do when a freeze FAILS, and 'no' never freezes, so the pair asks for nothing. Either name the mode you want quiesced, or drop the field." ;;
+                no) die "$ctx: quiesce='no,$qual' -- ',$qual' says what to do when a freeze FAILS, and 'no' never freezes, so the pair asks for nothing. Either name the mode you want quiesced, or drop the field." ;;
             esac ;;
     esac
     # `want` stays the RAW field from here on, so every message below quotes what
@@ -631,7 +639,7 @@ lint_quiesce() {
             return 0
             ;;
         fs) die "$ctx: quiesce=fs is gone -- ZFS does not implement FIFREEZE, so no ZFS mountpoint can be frozen from the host. Use quiesce=sync for containers (a flush, not a freeze)" ;;
-        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto, each optionally with ',degrade'" ;;
+        *) die "$ctx: quiesce='$want' -- expected no, agent, sync or auto, each optionally with ',strict' or ',degrade'" ;;
     esac
 }
 
