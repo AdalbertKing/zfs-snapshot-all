@@ -78,6 +78,37 @@ log() {   # <level> <message...>
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
 
+# `die` FROM INSIDE A COMMAND SUBSTITUTION HAD TO END THE PROGRAM, AND DID NOT.
+#
+# lib-backup-common.sh's die is `echo >&2; exit 1`, which is correct in the main
+# shell and a no-op everywhere this file actually uses it: `config="$(pick ...)"`
+# runs pick in a SUBSHELL, so the exit kills the subshell, the assignment gets
+# the empty string, and the caller carries on.
+#
+# Measured on the lab, 2026-08-27, running `restore lab1 --plan` on a real
+# collector. It printed THREE consecutive FATALs -- no config, then "'lab1' is
+# not a relation label in ''" (note the empty config it had already refused
+# over), then "no cron config known" -- and exited 0. A recovery verb that
+# prints FATAL and returns success is worse than one that crashes.
+#
+# Fixed here rather than in the shared lib: this is the program where continuing
+# past a refusal writes onto production data, and the same change to
+# zfs-backup.sh's ~9000 lines is not something a lab evening can prove safe.
+# The general case is worth a review; this file cannot wait for it.
+#
+# $$ is the MAIN shell's pid even inside $( ); $BASHPID is the current shell's.
+# They differ exactly when we are in a subshell, which is the case that used to
+# fail open. Proven both ways before shipping: with the kill the caller's next
+# line does not run and the status is 1; without it the line runs and the status
+# is 0.
+RESTORE_MAIN_PID=$$
+trap 'exit 1' TERM
+die() {
+    echo "FATAL: $*" >&2
+    [ "$BASHPID" = "$RESTORE_MAIN_PID" ] || kill -TERM "$RESTORE_MAIN_PID" 2>/dev/null
+    exit 1
+}
+
 # ------------------------------------------------------------------------------
 # A RELATIONSHIP NAME MUST IDENTIFY ONE RELATIONSHIP
 # ------------------------------------------------------------------------------
@@ -723,6 +754,46 @@ restore_relations() {   # <config>
 # deterministic LOCAL file naming convention every other part of this tooling
 # writes and reads, not a network address inferred from a name. If the file is
 # not there either, the refusal still says exactly what to pass.
+# THE CONFIG BELONGS TO AN ACCOUNT, NOT ONLY TO A HOST.
+#
+# This returned `jobs.<host>.conf` and nothing else, which is root's historical
+# name. Since the fleet moved to delegated accounts (2026-08-01) the installed
+# file is `jobs.<host>.<account>.conf` -- zfs-backup.sh's default_cron_config
+# has said so since LAB6-F2, and this was a second, older implementation of the
+# same rule that never learned it.
+#
+# Measured on the lab, 2026-08-27: `restore lab1 --plan` on pve9 refused with
+# "tried [...] /etc/zfs-snapshot-all/jobs.pve9.conf" while
+# /etc/zfs-snapshot-all/jobs.pve9.zfsbackup.conf sat in the same directory. The
+# public restore surface was unusable on every host in this estate.
+#
+# Candidates, most specific first, one per line. The accounts come from OUR OWN
+# records -- the peer manifests and client records this host wrote -- never from
+# /home or passwd: an account exists for reasons unrelated to this project, and
+# treating one as ours because it has a home directory is a local fact standing
+# in for a decision (the reasoning cron_known_accounts already carries).
+restore_config_candidates() {
+    local h; h=$(hostname -s 2>/dev/null || hostname)
+    local f u
+    {
+        printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.conf"
+        for f in /etc/zfs-snapshot-all/peers/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            [ -n "$u" ] && [ "$u" != root ] && printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
+        done
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            [ -n "$u" ] && [ "$u" != root ] && printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
+        done
+    } 2>/dev/null | awk 'NF && !seen[$0]++'
+}
+
+# Kept as the name the refusals quote: the historical, host-only spelling.
 restore_default_config() {
     local h; h=$(hostname -s 2>/dev/null || hostname)
     printf '%s' "/etc/zfs-snapshot-all/jobs.${h}.conf"
@@ -864,8 +935,24 @@ restore_pick_config() {   # <explicit --config or ""> <what for> -> prints the p
     local want="$1" what="$2" c
     c="$want"
     [ -n "$c" ] || c="${CRON_CONFIG:-}"
-    [ -n "$c" ] || { c=$(restore_default_config); [ -r "$c" ] || c=""; }
-    [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against (tried \$CRON_CONFIG and $(restore_default_config)) -- pass --config=FILE"
+    if [ -z "$c" ]; then
+        local -a found=()
+        local cand
+        while IFS= read -r cand; do
+            [ -r "$cand" ] && found+=("$cand")
+        done < <(restore_config_candidates)
+        # More than one is a QUESTION, not a default. Two accounts on one host
+        # each carry their own relationships, and picking for the operator would
+        # aim a recovery using the other one's records. Refuse and name them.
+        if [ "${#found[@]}" -gt 1 ]; then
+            die "restore: this host has more than one installed config and nothing in this command says which:
+$(printf '    %s
+' "${found[@]}")Each belongs to a different account and carries different relationships, so choosing for you could aim a recovery by the wrong records. Name it: --config=<path>. Nothing was read and nothing was changed."
+        fi
+        [ "${#found[@]}" -eq 1 ] && c="${found[0]}"
+    fi
+    [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against -- tried \$CRON_CONFIG and these, none readable:
+$(restore_config_candidates | sed 's/^/    /')Pass --config=FILE."
     printf '%s' "$c"
 }
 
