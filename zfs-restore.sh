@@ -1820,8 +1820,8 @@ restore_report_backup_cost() {
     log 0 "restore: the next backup of this relationship WILL REFUSE, naming those snapshots. That refusal is correct: they are the only remaining copy of the period the source rolled away."
     log 0 "restore: two ways out, and they are not equivalent --"
     log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
-    log 0 "restore:   discard them: zfs destroy each one on the copy, then re-run the pull. The account that owns the relationship can do that -- no root, and nothing is re-sent. The period that was rolled away then exists nowhere."
-    log 0 "restore: the refusal itself names the snapshots, so no list has to be reconstructed. -f would also clear it, by destroying the copy and re-sending every byte, and -f needs root."
+    log 0 "restore:   discard them: zfs rollback -r <copy>@<the point this restore used>, one per dataset. That drops those snapshots AND returns the copy to the point, which is what the next pull needs -- destroying the snapshots alone leaves the copy's filesystem where they left it and the pull refuses again. No root, nothing re-sent. The period that was rolled away then exists nowhere."
+    log 0 "restore: the refusal names the snapshots and the common point, so no list has to be reconstructed. -f would also clear it, by destroying the copy and re-sending every byte, and -f needs root."
 
 }
 

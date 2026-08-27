@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
-<!-- frozen: snapget.sh 100755 4ae1df2757cae91e35c94434b8388d4ef03fee8f -->
+<!-- frozen: snapget.sh 100755 94a189172a3dc9e431e9bf01da58a97b89d595b8 -->
 <!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -85,8 +85,20 @@ Owner-authorized refreezes:
   copy and re-sends every byte, when what the situation needs is to drop the
   handful of snapshots the source no longer has. Those are already NAMED in the
   refusal, and the account that owns the relationship can destroy them --
-  measured, rc=0, no root and nothing re-sent. That is what the message says
-  now.
+  measured, rc=0, no root and nothing re-sent.
+
+  **And destroying them is not enough either -- corrected again, same evening.**
+  Following that advice on the lab cleared the snapshot refusal and produced the
+  other one: "has 15872 written since the common snapshot". Destroying a
+  snapshot does not move the live filesystem, so the copy stayed where those
+  snapshots had left it, one refusal ahead. `zfs rollback -r <copy>@<common>`
+  does both halves in one command -- drops the snapshots and returns the
+  filesystem to the point -- and the relationship account can run it. Proven by
+  the pull then going through unaided: "All datasets processed successfully".
+
+  Both branches of the guard now name that command, including the
+  something-wrote-here branch, where it is the way out once the divergence is
+  known to be expected.
 
   **`-F` is not it, and the first version of this entry said it was.** I ran
   `-F`, watched the refusal not fire, and concluded reconcile had dropped the
