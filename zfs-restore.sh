@@ -1069,6 +1069,89 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     [ "$snaps" = dirty ] && left="${left:+$left oraz }techniczne snapshoty tego przebiegu (wypisane wyzej)"
     die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
+# ------------------------------------------------------------------------------
+# THE WHOLE-RELATION RUN -- continue past a failure, and report per dataset
+# ------------------------------------------------------------------------------
+#
+# Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
+# recommended stopping at the first failure; the owner overruled, and the
+# reasoning is what makes continuing safe rather than merely convenient:
+#
+#   a recovery is not a deployment. Stopping at the first failure leaves the
+#   operator with a half-restored machine AND no information about the rest, at
+#   the moment they most need the complete picture. Continuing produces the same
+#   partial state plus the map.
+#
+# Two obligations follow, and they are not decoration:
+#
+#   * the report is a PER-DATASET VERDICT, never a count. "7/10" tells an
+#     operator nothing they can act on at 3am; the three names do;
+#   * the exit status distinguishes "everything" from "not everything". Nine of
+#     ten is not ten, and on a machine being recovered the exit status is the
+#     part a wrapper reads.
+#
+# TWO CODES, not three. 0 means every dataset in scope was recovered; 1 means it
+# was not. The planner already uses exactly that contract for an incomplete
+# `--at`, and a third code separating "some" from "none" would be a contract the
+# owner did not ask for -- the distinction that matters operationally is in the
+# report, where it can name datasets instead of counting them.
+#
+# An EMPTY scope is a refusal, not a clean run. "Nothing matched" exiting 0 is
+# how a mistyped scope becomes a recovery someone believes happened.
+restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
+    local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0
+    local -a verdict=()
+
+    if [ "$n" -eq 0 ]; then
+        log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
+        return 1
+    fi
+
+    # restore_one is the per-dataset step, and it is the NEXT slice. Refusing
+    # here rather than noting the gap in a comment: a function that calls an
+    # undefined one fails at the moment it is first used, which for a recovery
+    # verb is the worst moment there is. Structural, so it cannot be forgotten
+    # -- and it disappears on its own the day the step exists.
+    if ! declare -F restore_one >/dev/null 2>&1; then
+        log 0 "restore: the per-dataset step is not built yet, so this cannot recover anything. Nothing was changed. (restore_one, the next slice.)"
+        return 1
+    fi
+
+
+    for (( i=0; i<n; i++ )); do
+        RESTORE_ONE_VERDICT=""
+        # The failure of one dataset must not end the run: that is the whole of
+        # decision 7. `|| :` is deliberate and is the only place in this
+        # function where a non-zero status is not propagated immediately.
+        restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_SRC[$i]}"; rc=$?
+        if [ "$rc" -eq 0 ]; then
+            ok_n=$((ok_n + 1))
+            verdict+=("OK       ${RESTORE_SCOPE_SRC[$i]}   ${RESTORE_ONE_VERDICT:-recovered}")
+        else
+            bad_n=$((bad_n + 1))
+            verdict+=("NOT DONE ${RESTORE_SCOPE_SRC[$i]}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+        fi
+    done
+
+    # Printed on EVERY path, including the one where nothing worked. A run that
+    # recovered nothing still owes the operator the map of what it tried.
+    log 0 "restore: per-dataset result"
+    for (( i=0; i<${#verdict[@]}; i++ )); do
+        log 0 "restore:   ${verdict[$i]}"
+    done
+
+    if [ "$bad_n" -eq 0 ]; then
+        log 0 "restore: all $ok_n dataset(s) in scope recovered."
+        return 0
+    fi
+    if [ "$ok_n" -eq 0 ]; then
+        log 0 "restore: NOTHING was recovered -- all $bad_n dataset(s) are named above with the reason."
+        return 1
+    fi
+    log 0 "restore: PARTIAL -- $ok_n recovered, $bad_n did not. The machine is in a mixed state and the datasets that did NOT recover are named above. Exit status is non-zero for exactly that reason: nine of ten is not ten."
+    return 1
+}
+
 
 # ------------------------------------------------------------------------------
 # DRIVING THE ENGINE -- what a restore actually runs, and the guard in front of it

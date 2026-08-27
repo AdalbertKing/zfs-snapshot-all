@@ -461,6 +461,102 @@ for m in create rewind; do case "$(argv $m)" in *-f*) n_f=$((n_f+1)) ;; esac; do
 check "argv: -f appears for replace and for nothing else" "0" "$n_f"
 
 
+# ---------------------------------------------------------------------------
+# 10. A WHOLE-RELATION RUN: continue past a failure, and report per dataset.
+#
+# Owner decision 7. The implementer recommended stopping at the first failure;
+# the owner overruled, because a recovery is not a deployment -- stopping leaves
+# a half-restored machine AND no information about the rest, exactly when the
+# complete picture is most needed.
+#
+# What that obliges is what is asserted: the run continues, the report names
+# datasets rather than counting them, and nine of ten does not exit 0.
+#
+# restore_one is stubbed per case: the subject here is the LOOP and the verdict,
+# not what a single dataset does.
+# ---------------------------------------------------------------------------
+rs() {   # <rc list, space separated> -> "<rc>|<report>"
+    ( set -u
+      log(){ shift; printf '%s\n' "$*"; }
+      eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
+      RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
+      k=0; for r in $1; do k=$((k+1))
+          RESTORE_SCOPE_SRC+=("rpool/ds$k"); RESTORE_SCOPE_COPY+=("hdd/copy$k"); done
+      RCS=($1); IDX=0
+      restore_one() { local r="${RCS[$IDX]}"; IDX=$((IDX+1))
+                      RESTORE_ONE_VERDICT="reason-for-$2"; return "$r"; }
+      out="$(restore_run_scope)"; rc=$?
+      printf '%s|%s' "$rc" "$out" )
+}
+rs_rc()  { printf '%s' "${1%%|*}"; }
+rs_out() { printf '%s' "${1#*|}"; }
+
+r="$(rs "0 0 0")"
+check "run: every dataset recovered exits 0" "0" "$(rs_rc "$r")"
+if has "all 3 dataset(s) in scope recovered" "$(rs_out "$r")"; then
+    ok "run: ...and says so"
+else bad "run: ...and says so" "$(rs_out "$r")"; fi
+
+# THE CARRYING ASSERTION for decision 7: the dataset AFTER the failure was still
+# attempted, and its result is in the report. A run that stopped would have no
+# line for ds3 at all.
+r="$(rs "0 1 0")"
+check "run: nine of ten does not exit 0" "1" "$(rs_rc "$r")"
+if has "rpool/ds3" "$(rs_out "$r")"; then
+    ok "run: the run CONTINUES past a failure -- the dataset after it is still attempted"
+else bad "run: the run continues past a failure" "ds3 is missing from: $(rs_out "$r")"; fi
+if has "NOT DONE rpool/ds2" "$(rs_out "$r")"; then
+    ok "run: ...and the one that failed is named, not counted"
+else bad "run: ...and the one that failed is named" "$(rs_out "$r")"; fi
+if has "PARTIAL -- 2 recovered, 1 did not" "$(rs_out "$r")"; then
+    ok "run: ...and the summary says the machine is in a mixed state"
+else bad "run: ...and the summary says the machine is in a mixed state" "$(rs_out "$r")"; fi
+# The reason travels from the per-dataset step into the report. Without this the
+# table would be two columns of names and no way to act on them.
+if has "reason-for-rpool/ds2" "$(rs_out "$r")"; then
+    ok "run: ...carrying the reason the step gave, not a generic failure"
+else bad "run: ...carrying the reason the step gave" "$(rs_out "$r")"; fi
+
+# Everything failed. The report is still owed -- a run that recovered nothing
+# still has to hand over the map of what it tried.
+r="$(rs "1 1")"
+check "run: nothing recovered exits 1" "1" "$(rs_rc "$r")"
+if has "NOTHING was recovered" "$(rs_out "$r")"; then
+    ok "run: ...and says nothing was recovered, in those words"
+else bad "run: ...and says nothing was recovered" "$(rs_out "$r")"; fi
+if has "NOT DONE rpool/ds1" "$(rs_out "$r")" && has "NOT DONE rpool/ds2" "$(rs_out "$r")"; then
+    ok "run: ...and still prints the per-dataset table"
+else bad "run: ...and still prints the per-dataset table" "$(rs_out "$r")"; fi
+
+# An empty scope. "Nothing matched" exiting 0 is how a mistyped scope becomes a
+# recovery somebody believes happened.
+r="$(rs "")"
+check "run: an EMPTY scope is a refusal, not a clean run over nothing" "1" "$(rs_rc "$r")"
+if has "not a completed recovery" "$(rs_out "$r")"; then
+    ok "run: ...and says why, rather than exiting quietly"
+else bad "run: ...and says why" "$(rs_out "$r")"; fi
+
+# POSITIVE CONTROL for the exit-status rule: it must be capable of returning 0.
+# Without this every assertion above would pass against a function that always
+# failed -- which is the shape a fail-closed rewrite would most plausibly take.
+check "run control: the all-recovered path really can exit 0" "0" "$(rs_rc "$(rs "0")")"
+
+# The per-dataset step is the next slice, and its absence is STRUCTURAL rather
+# than a note in a comment: a function that calls an undefined one fails at the
+# moment it is first used, which for a recovery verb is the worst moment there
+# is. This pair disappears on its own the day the step exists -- the second half
+# is what proves the guard is about restore_one and not about refusing always.
+nostep="$( set -u
+  log(){ shift; printf '%s\n' "$*"; }
+  eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
+  RESTORE_SCOPE_SRC=(rpool/a); RESTORE_SCOPE_COPY=(hdd/a)
+  restore_run_scope; printf '|%s' $? )"
+if has "not built yet" "$nostep"; then ok "run: with no per-dataset step it refuses instead of calling an undefined function"
+else bad "run: with no per-dataset step it refuses" "$nostep"; fi
+check "run: ...and exits non-zero" "1" "${nostep##*|}"
+
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

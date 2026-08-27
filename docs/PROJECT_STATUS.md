@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6c942013d83c9fbc -->
+<!-- status-covers-digest: ee4c107ab3309a24 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,40 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **RESTORE: PRZEBIEG PO CALEJ RELACJI — IDZIE DALEJ PO PORAZCE (2026-08-27).**
+  Decyzja wlasciciela 7. Implementer rekomendowal zatrzymanie na pierwszej
+  porazce; wlasciciel to odrzucil, bo **odtwarzanie to nie wdrozenie**:
+  zatrzymanie zostawia maszyne w polowie odtworzona I bez informacji o reszcie,
+  dokladnie wtedy, gdy pelny obraz jest najbardziej potrzebny.
+
+  Co to obliguje, i to jest asercjonowane: raport jest **werdyktem per dataset**,
+  nie liczbą — „7/10" nie mowi operatorowi o 3 w nocy niczego, czym moglby
+  dzialac, a trzy nazwy tak; a **dziewiec z dziesieciu nie konczy sie zerem**.
+
+  **Dwa kody, nie trzy.** `0` = kazdy dataset w zakresie odtworzony, `1` =
+  nie kazdy. Planer uzywa dokladnie tego kontraktu przy niepelnym `--at`, a
+  trzeci kod dzielacy „czesc" od „nic" bylby kontraktem, o ktory wlasciciel nie
+  prosil — ta roznica jest w RAPORCIE, gdzie moze nazywac datasety zamiast je
+  liczyc.
+
+  **Pusty zakres to odmowa, nie czysty przebieg.** „Nic nie pasowalo" konczace
+  sie zerem to sposob, w jaki literowka w zakresie staje sie odtworzeniem, w
+  ktore ktos uwierzyl.
+
+  **Brak kroku per-dataset jest STRUKTURALNY, nie opisany w komentarzu.**
+  `restore_one` to nastepny kawalek; `restore_run_scope` sprawdza `declare -F`
+  i odmawia, zamiast wolac nieistniejaca funkcje — bo taka awaria przychodzi w
+  chwili pierwszego uzycia, a dla czasownika odtwarzajacego to najgorsza z
+  mozliwych chwil. Bramka znika sama w dniu, w ktorym krok powstanie; para
+  asercji z kontrola pilnuje, ze dotyczy `restore_one`, a nie „odmawiaj zawsze".
+
+  **Kontrola mutacyjna:** `break` na pierwszej porazce (zlamanie decyzji 7) psuje
+  **trzy** asercje, w tym te nosna — dataset PO porazce nadal jest probowany i
+  jest w raporcie.
+
+  `test/restoregrant` **94/0** (+15). Nadal **nic tu nie potrafi zapisac**.
+
 
 - **RESTORE: CO SILNIK DOSTANIE DO WYKONANIA (2026-08-27).**
   Transport odtwarzania to `snapsend.sh` — silnik push puszczony w drugą stronę
