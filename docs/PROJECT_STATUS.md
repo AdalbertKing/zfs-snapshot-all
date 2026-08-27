@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 032c7216f6b05283 -->
+<!-- status-covers-digest: dd3f31ccc2665aa5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1781,6 +1781,27 @@
   snapshoty i podaje `zfs rollback -r`, a podpowiedz o `recv -F` jest bramkowana
   faktyczna przyczyna zamiast `-f`. Zaden przebieg nie zmienia werdyktu, statusu
   ani skutku. Wpisy w `ENGINE-FREEZE.md`, baseline przepiety.
+
+  **HARMONOGRAM NA CZAS ODTWARZANIA (pytanie wlasciciela, 2026-08-27).** Cron
+  kolektora biegl przez cala kampanie i **skasowal punkt odtworzenia**: prune
+  zrodla o :21 zastosowal drabine GFS do zrodla swiezo cofnietego przez restore
+  i usunal `automated_hourly_2026-08-27_18-15-00`. Relacja zostala bez wspolnego
+  snapshotu.
+
+  `restore` bierze teraz **pauze logiczna** relacji na czas biegu i oddaja ja
+  wylacznie wtedy, gdy sam ja zalozyl; pauze czlowieka zostawia. **Nie** pauze
+  twarda: `disable-client` blokuje u peera te same komendy data-plane, ktorymi
+  restore pod push dociera do maszyny — twarde wylaczenie zablokowaloby samo
+  odtworzenie.
+
+  **Czego ta pauza NIE obejmuje, i run to mowi:** `delsnaps.sh` nie ma `-L`, nie
+  czyta znacznika, a gen-cron nie emituje `-L` w liniach prune (zmierzone: dwa
+  zadania prune, zero z `-L`). Pauza zatrzymuje pull i monitor, nie zatrzymuje
+  retencji. Sam `pause-client` juz to zglasza; restore powtarza to tam, gdzie
+  czyta operator odtwarzania. W produkcji drabina GFS ogranicza szkode (24
+  godzinne), wiec odtworzenie w oknie godzin jest bezpieczne; ryzyko rosnie przy
+  dlugim odtwarzaniu i przy punktach starszych niz najgestszy szczebel.
+
 
   **Czego lab NIE dowiodl:** odtwarzania na inna maszyne lub inna sciezke
   (wariant miedzyhostowy), relacji push (kopia zdalna — rozszerzanie zakresu do
