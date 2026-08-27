@@ -366,6 +366,101 @@ if has "is not a restore mode" "$out"; then ok "peer: an undefined mode is refus
 else bad "peer: an undefined mode is refused" "$out"; fi
 
 
+# ---------------------------------------------------------------------------
+# 9. WHAT THE RESTORE ACTUALLY RUNS, and the guard in front of it.
+#
+# The transport is snapsend.sh -- the push engine driven in the other direction
+# (owner direction). Two things stand between "the operator picked a recovery
+# point" and "the engine sends one", and both are here.
+#
+# `-e` is documented as "use existing LATEST snapshot", which reads like the
+# engine gets no instruction about which. It filters by `-m` first and takes the
+# newest survivor, so a FULL name leaves exactly one candidate. That behaviour is
+# what makes a chosen recovery point expressible WITHOUT changing a frozen
+# engine, so this suite pins the contract it depends on.
+# ---------------------------------------------------------------------------
+lift_r() { sed -n "/^$1() {/,/^}/p" "$RESTORE"; }
+pt() {   # <wanted name> <candidates> -> "OK" or the refusal text
+    ( set -u
+      log(){ shift; printf '%s\n' "$*"; }
+      eval "$(lift_r restore_point_unique)"
+      if restore_point_unique "$1" "$2"; then printf 'OK'; fi )
+}
+argv() {   # <mode> -> the argv, or "REFUSED"
+    ( set -u
+      log(){ :; }
+      eval "$(lift_r restore_engine_argv)"
+      if restore_engine_argv hdd/copy/vm acct@pve1:rpool/data/vm SNAPNAME "$1" >/dev/null 2>&1
+      then printf '%s' "${RESTORE_ENGINE_ARGV[*]}"; else printf 'REFUSED'; fi )
+}
+
+CAND="automated_daily_2026-08-20_18-00-04
+automated_daily_2026-08-22_18-00-04
+automated_daily_2026-08-23_18-00-01
+automated_hourly_2026-08-22_18-00-04"
+
+check "point: a full snapshot name is unambiguous" "OK" \
+      "$(pt automated_daily_2026-08-22_18-00-04 "$CAND")"
+# The family prefix is what a cron job passes and what an operator might type by
+# habit. For a RESTORE it is three answers, so it is refused rather than resolved
+# to the newest -- the engine would silently take that one.
+out="$(pt automated_daily_ "$CAND")"
+if has "matches 3 snapshots" "$out"; then ok "point: a family prefix is refused, not resolved to the newest"
+else bad "point: a family prefix is refused, not resolved to the newest" "$out"; fi
+if has "automated_daily_2026-08-23_18-00-01" "$out"; then
+    ok "point: ...and the refusal names what it matched"
+else bad "point: ...and the refusal names what it matched" "$out"; fi
+out="$(pt automated_daily_1999-01-01_00-00-00 "$CAND")"
+if has "matches no snapshot" "$out"; then ok "point: a name that is not there is refused"
+else bad "point: a name that is not there is refused" "$out"; fi
+out="$(pt "" "$CAND")"
+if has "no recovery point was chosen" "$out"; then ok "point: an empty choice is refused, not delegated to the engine"
+else bad "point: an empty choice is refused" "$out"; fi
+
+# THE DISCRIMINATING PAIR, and the reason this guard exists at all.
+#
+# snapsend selects with `grep "^$MESSAGE"` -- a REGEX. Every name this project
+# generates is regex-inert, but passive relationships adopt names from foreign
+# systems and a '.' matches any character. An implementation that checked
+# uniqueness with `grep -F` or `=` would pass the first of these and send a
+# DIFFERENT snapshot than the one chosen, which looks exactly like success.
+DOTS="snap.2026
+snapX2026
+snap.2026b"
+out="$(pt "snap.2026" "$DOTS")"
+if has "matches 3 snapshots" "$out"; then ok "point: a '.' in the name is measured the way the ENGINE matches, not literally"
+else bad "point: a '.' in the name is measured the way the engine matches" "$out"; fi
+if has "regular expression" "$out"; then ok "point: ...and the refusal says why three, not just that it is three"
+else bad "point: ...and the refusal says why three" "$out"; fi
+check "point control: a name with no metacharacter is still unambiguous" "OK" \
+      "$(pt snapX2026 "$DOTS")"
+
+# ---- the command ----------------------------------------------------------
+# The mode is a classification, so the flags are DERIVED from it here rather
+# than supplied beside it. Two truths about one run is what that prevents.
+check "argv: create sends without -f" \
+      "-e -m SNAPNAME hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv create)"
+check "argv: rewind sends without -f -- snapsend finds the base itself" \
+      "-e -m SNAPNAME hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv rewind)"
+check "argv: replace carries -f, which is what destroys the target" \
+      "-f -e -m SNAPNAME hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv replace)"
+check "argv: an undefined mode builds no command at all" "REFUSED" "$(argv obliterate)"
+# The two invariants that hold on EVERY form: a restore never creates a snapshot
+# on the copy (-e), and never lets the engine choose the point (-m).
+for m in create rewind replace; do
+    a="$(argv $m)"
+    case "$a" in
+        *"-e -m SNAPNAME"*) ok "argv: $m carries -e and the exact point" ;;
+        *) bad "argv: $m carries -e and the exact point" "$a" ;;
+    esac
+done
+# ...and -f appears ONLY for replace. Without this the three assertions above
+# would pass against a builder that always destroyed the target.
+n_f=0
+for m in create rewind; do case "$(argv $m)" in *-f*) n_f=$((n_f+1)) ;; esac; done
+check "argv: -f appears for replace and for nothing else" "0" "$n_f"
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

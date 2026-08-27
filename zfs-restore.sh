@@ -1070,6 +1070,84 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
 
+# ------------------------------------------------------------------------------
+# DRIVING THE ENGINE -- what a restore actually runs, and the guard in front of it
+# ------------------------------------------------------------------------------
+#
+# The transport is `snapsend.sh`, at the owner's direction: restore under push is
+# the push engine run in the other direction, so it arrives with bookmarks,
+# resume tokens, compression, the bandwidth cap and the PVE-reserved-snapshot
+# refusal already proven. No new transfer code, and the frozen engine is not
+# touched.
+#
+# THE KNOB WAS ALREADY THERE, and it is worth recording how close this came to a
+# needless change to a frozen file. `-e` is documented as "use existing latest
+# snapshot", which reads like "the newest, and you get no say". The
+# implementation filters the candidate list by `-m` FIRST and takes the newest of
+# what survives (snapsend.sh, the `if [ -n "$MESSAGE" ]` block inside the
+# USE_EXISTING_SNAPSHOT branch). So a FULL snapshot name passed as `-m` leaves
+# exactly one candidate, and that one is sent. Measured before relying on it.
+#
+# WHICH MAKES THE MATCH RULE PART OF THIS CONTRACT. The engine selects with
+# `grep "^$MESSAGE"` -- a REGEX, anchored only at the front. Every name this
+# project generates is regex-inert, but a passive relationship adopts names from
+# a foreign system, and a `.` in one of those matches any character. Measured:
+# against `snap.2026`, `snapX2026` and `snap.2026b`, the pattern `^snap.2026`
+# matches all three.
+#
+# So the layer that CHOOSES the recovery point must prove the choice is
+# unambiguous before handing it over, using the engine's own rule rather than an
+# approximation of it. A restore that silently sent a different snapshot than the
+# one the operator picked is the failure this guard exists for, and it would look
+# like success.
+restore_point_unique() {   # <exact snapshot name> <candidate names, one per line> -> 0 = unambiguous
+    local want="$1" candidates="$2" hits
+    [ -n "$want" ] || { log 0 "restore: no recovery point was chosen -- refusing to let the engine pick one"; return 1; }
+
+    # The engine's own selector, verbatim. Not `grep -F`, not `=`: this must
+    # answer the question "what will snapsend do", and snapsend uses a regex.
+    hits="$(printf '%s\n' "$candidates" | grep -c "^$want" 2>/dev/null)" || hits=0
+    case "$hits" in
+        1)  return 0 ;;
+        0)  log 0 "restore: the chosen recovery point '$want' matches no snapshot on the copy. Nothing was changed."
+            return 1 ;;
+    esac
+    log 0 "restore: '$want' matches $hits snapshots on the copy, not one. The engine selects with a regular expression anchored at the front (grep \"^\$MESSAGE\"), so a name carrying '.' or another metacharacter can cover its neighbours -- and sending a different snapshot than the one chosen would look exactly like success. Refusing. The matches are:"
+    printf '%s\n' "$candidates" | grep "^$want" 2>/dev/null | while IFS= read -r _m; do
+        log 0 "restore:   $_m"
+    done
+    return 1
+}
+
+# The mode is a CLASSIFICATION, never an operator choice (owner decision 4,
+# OWNER-RESTORE-GRANT-AND-MODES-2026-08-26): the data says which of the three
+# this is, the grant says whether it is permitted, and only then does the engine
+# get flags. Deriving the flags HERE, from the same classification the grant was
+# checked against, is what stops there being two truths about one run -- the
+# planner's and the command line's.
+#
+#   create   target absent            -> ordinary send; snapsend creates it
+#   rewind   common base, GUID-proven -> ordinary incremental; snapsend finds it
+#   replace  no valid base            -> -f, which destroys the target and sends full
+#
+# `-e` and `-m <exact name>` are on every form: a restore never creates a
+# snapshot on the copy, and never lets the engine choose the point.
+restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapshot> <mode>
+    local copy="$1" target="$2" point="$3" mode="$4"
+    [ -n "$copy" ]   || { log 0 "restore: no copy dataset to send from"; return 1; }
+    [ -n "$target" ] || { log 0 "restore: no target to send to"; return 1; }
+    [ -n "$point" ]  || { log 0 "restore: no recovery point"; return 1; }
+
+    RESTORE_ENGINE_ARGV=()
+    case "$mode" in
+        create|rewind) ;;
+        replace)       RESTORE_ENGINE_ARGV+=(-f) ;;
+        *) log 0 "restore: '$mode' is not a restore mode -- refusing to build a command for an undefined one"; return 1 ;;
+    esac
+    RESTORE_ENGINE_ARGV+=(-e -m "$point" "$copy" "$target")
+    return 0
+}
+
 # Phase 7 -- the destructive execution step itself, INTERNAL ONLY.
 #
 # Everything before this has proven the strategy, measured and confirmed the loss

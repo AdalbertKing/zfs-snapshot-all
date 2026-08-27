@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5218a9ed3b8849ca -->
+<!-- status-covers-digest: 6c942013d83c9fbc -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,41 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **RESTORE: CO SILNIK DOSTANIE DO WYKONANIA (2026-08-27).**
+  Transport odtwarzania to `snapsend.sh` — silnik push puszczony w drugą stronę
+  (decyzja wlasciciela). Przychodzi z bookmarkami, wznawianiem, kompresja,
+  limitem pasma i ochrona snapshotow Proxmoxa; **zamrozony plik nietkniety**.
+
+  **Galka juz istniala** i warto zapisac, jak blisko bylo niepotrzebnej zmiany
+  w zamrozonym silniku. `-e` jest udokumentowane jako „use existing LATEST
+  snapshot", co czyta sie jak „silnik wybiera sam". Implementacja **najpierw
+  filtruje kandydatow przez `-m`** i dopiero z tego bierze najnowszego — wiec
+  PELNA nazwa snapshotu podana jako `-m` zostawia dokladnie jednego. Zmierzone
+  przed oparciem sie na tym. Pytanie wlasciciela („napewno jej nie
+  przewidzielismy?") jest tym, co zatrzymalo zmiane.
+
+  **I dlatego regula dopasowania jest czescia kontraktu.** Silnik wybiera przez
+  `grep "^$MESSAGE"` — REGEX zakotwiczony tylko z przodu. Kazda nazwa, ktora ten
+  projekt generuje, jest obojetna dla regexa, ale tryb pasywny adoptuje nazwy
+  z cudzych systemow, a `.` dopasowuje dowolny znak. Zmierzone: wobec
+  `snap.2026` / `snapX2026` / `snap.2026b` wzorzec `^snap.2026` trafia
+  **wszystkie trzy**.
+
+  `restore_point_unique` dowodzi wiec jednoznacznosci **regula silnika**, nie
+  jej przyblizeniem — implementacja uzywajaca `grep -F` albo `=` przepuscilaby
+  pierwszy przypadek i wyslala INNY snapshot niz wybrany, co wyglada dokladnie
+  jak sukces. To jest para dyskryminujaca w suicie.
+
+  `restore_engine_argv` wyprowadza flagi **z klasyfikacji**, a nie obok niej
+  (decyzja wlasciciela 4): `create`/`rewind` bez `-f`, `replace` z `-f` (to on
+  niszczy cel), a `-e` i `-m <dokladna nazwa>` na kazdej formie — odtwarzanie
+  nigdy nie tworzy snapshotu na kopii i nigdy nie pozwala silnikowi wybrac
+  punktu. Kontrola: `-f` pojawia sie wylacznie dla `replace`.
+
+  `test/restoregrant` **79/0** (+16). Ten kawalek **dalej nie potrafi nic
+  zapisac** — buduje komende i odmawia; wykonawcy nie ma.
+
 
 - **RESTORE: ZGODA (grant) — PIERWSZY KAWALEK, 2026-08-27.**
 
