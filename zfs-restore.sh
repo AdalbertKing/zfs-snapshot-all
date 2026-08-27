@@ -1512,6 +1512,53 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         *)  log 1 "restore: $src is on this machine, so no grant is asked for -- the host at risk is the one running this." ;;
     esac
 
+    # ---- 4b. replace needs the target UNMOUNTED, and only replace does -----
+    #
+    # `replace` is the mode with no common base, so the engine runs a full send
+    # with -f: destroy the target and recreate it. Destroying a MOUNTED dataset
+    # unmounts it first, and on Linux a delegated account cannot unmount even
+    # with full `zfs allow` -- so on the delegated fleet this mode could be
+    # granted, classified and refused by physics, several seconds in.
+    #
+    # Measured on the lab, 2026-08-27. The grant said replace, the mode
+    # classified as replace, and the engine came back with:
+    #
+    #     cannot create 'hdd/labsrc/vm-900-disk-1': dataset already exists
+    #     Hint: [...] -f requires root on 192.168.28.9.
+    #
+    # That hint is true and it is a dead end: nobody can "run it as root on
+    # 192.168.28.9" -- the collector reaches that machine through a forced
+    # command as the relationship account, by design. What is actually needed is
+    # ONE unmount, by root, on the machine being recovered. The same restore then
+    # goes through as the delegated account, which is how the second attempt
+    # succeeded.
+    #
+    # Asked BEFORE the engine, not diagnosed after it: a destructive mode that
+    # cannot complete should change nothing at all, and the operator should get
+    # the one command that unblocks it rather than a hint pointing nowhere.
+    # Only on `replace`: the other modes do not destroy the dataset, and paying
+    # an ssh round trip on every ordinary recovery to answer a question only
+    # this one asks would be a cost for nothing.
+    if [ "$mode" = replace ]; then
+        case "$src" in
+            *:*)
+                local _tgt_ds="${src#*:}" _ms
+                _ms="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" \
+                       "zfs list -H -o mounted,type '$_tgt_ds'" 2>/dev/null)"
+                case "$_ms" in
+                    "")  log 1 "restore: could not read whether '$_tgt_ds' is mounted on '$host' -- going ahead; the engine will say if it cannot proceed." ;;
+                    yes*filesystem)
+                        RESTORE_ONE_VERDICT="'$_tgt_ds' is MOUNTED on '$host', and 'replace' destroys and recreates it"
+                        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                        log 0 "restore: destroying a mounted dataset unmounts it first, and on Linux a delegated account cannot unmount -- with or without 'zfs allow'. This is not something this side can work around."
+                        log 0 "restore: one command, as root ON $host, and then re-run this restore unchanged:"
+                        log 0 "restore:     zfs unmount '$_tgt_ds'"
+                        log 0 "restore: nothing else needs root: the transfer itself runs as the relationship account."
+                        return 1 ;;
+                esac ;;
+        esac
+    fi
+
     # ---- 5. the command ----------------------------------------------------
     if ! restore_engine_argv "$copy" "$src" "$point" "$mode"; then
         RESTORE_ONE_VERDICT="could not build the engine command for mode '$mode'"
