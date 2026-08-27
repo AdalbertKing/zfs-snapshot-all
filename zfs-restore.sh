@@ -55,6 +55,9 @@ SSH_OPTS=()
 # no-rollback run die on the closing report.
 RESTORE_ROLLED_BACK=()
 RESTORE_LANDED=()
+# Set when the whole-relation scope was expanded to one entry per dataset, so
+# the engine does not also recurse over what the scope already lists.
+RESTORE_SCOPE_EXPANDED=0
 if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
     SSH_OPTS=(${RESTORE_SSH_OPTS})
@@ -2001,7 +2004,14 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     # For a restore the atomic form is the stronger guarantee, not a weaker one:
     # the operator asked for the state at a point, and -r gives exactly that
     # across the subtree rather than per dataset.
-    if zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
+    #
+    # ...unless the SCOPE already lists every descendant, in which case each of
+    # them is its own entry with its own classification and its own report, and
+    # -r here would send the subtree a second time under a parent that is
+    # already at the point. One dataset, one stream. See the expansion in
+    # cmd_restore's whole-relation branch for why the scope grew.
+    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -ne 1 ] \
+       && zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
         RESTORE_ENGINE_ARGV+=(-r)
     fi
     RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
@@ -2879,6 +2889,41 @@ cmd_restore() {
             while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
                 [ -n "$_wr_s" ] || continue
                 RESTORE_SCOPE_SRC+=("$_wr_s"); RESTORE_SCOPE_COPY+=("$_wr_c")
+                # EVERY DATASET OF THE SUBTREE, EACH ON ITS OWN.
+                #
+                # The recorded name covers a subtree, and this used to hand that
+                # one name to the runner and rely on the engine's recursive
+                # stream to carry the children. Measured on the lab, 2026-08-27,
+                # that fails in a way nothing upstream can see: the rollback
+                # brings the PARENT to the recovery point, which makes the
+                # recursive incremental from that parent a zero-length stream,
+                # and a child sitting BEHIND the point is never sent anything.
+                # The engine exits 0 over it.
+                #
+                # The child got behind by a supported operation -- an earlier
+                # `restore <relation> --target <one disk>`, which is the whole
+                # reason --target exists. So the state is not exotic; it is what
+                # using this tool produces.
+                #
+                # One dataset per entry makes each one its own question, which is
+                # what every other decision in this file already is: classified
+                # on its own state, granted on its own mode, reported on its own
+                # line. A child behind the point is then simply an increment.
+                #
+                # Only when the copy is LOCAL. A remote copy would need an ssh
+                # round trip here, and the collector case -- where the copies are
+                # local by construction -- is the one this estate runs.
+                case "$_wr_c" in
+                    *@*|*:*) : ;;
+                    *)  local _sub
+                        while IFS= read -r _sub; do
+                            [ -n "$_sub" ] || continue
+                            [ "$_sub" = "$_wr_c" ] && continue
+                            RESTORE_SCOPE_COPY+=("$_sub")
+                            RESTORE_SCOPE_SRC+=("${_wr_s}${_sub#"$_wr_c"}")
+                            RESTORE_SCOPE_EXPANDED=1
+                        done < <(zfs list -H -o name -r "$_wr_c" 2>/dev/null) ;;
+                esac
             done <<< "$_rc_sel"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
