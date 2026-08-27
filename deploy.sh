@@ -155,6 +155,26 @@ PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationsh
 # root. The gate runs AS the account and only ever reads it.
 RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants}"
 
+# WHAT A RESTORE NEEDS THAT A BACKUP NEVER DID, measured on the lab 2026-08-27.
+#
+# The relationship account on a SOURCE holds the backup set:
+#     bookmark,destroy,hold,mount,release,send,snapshot
+# It can read its data out and manage its own snapshots. It cannot `receive` and
+# it cannot `rollback`, so a collector reaching that account today physically
+# cannot overwrite the machine -- which corrects a claim made earlier in this
+# work, that the capability already existed and was merely ungated. It does not
+# exist.
+#
+# That is a better design than the one assumed, and it is the reason the grant
+# issues BOTH halves together: the file that says "you may" and the delegation
+# that makes it possible. Neither alone lets a restore happen, and revoking
+# takes both back, so the window is exactly the grant's lifetime.
+#
+# `mount` and `canmount` are here because a received dataset that cannot be
+# mounted is not a restored one; `create` because a subtree may need a level the
+# target no longer has.
+RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mount,destroy}"
+
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
 # Phase 4 used to do this with a plain `chgrp -R "$ALERT_GROUP"
@@ -2468,6 +2488,23 @@ do_allow_restore() {
     [ -d "$PAIR_GATE_STATE_DIR/$label" ] \
         || die "no relationship '$label' is enrolled on this host ($PAIR_GATE_STATE_DIR/$label does not exist) -- a grant for a relationship that does not exist would be a permission nobody can see. Check the label with: ls $PAIR_GATE_STATE_DIR"
 
+    # WHO and WHAT, from the file that already recorded them: the peer manifest
+    # this host wrote when it was joined. Same source as the backup delegation,
+    # so a restore can never be granted on a wider scope than the relationship
+    # was ever given, and nothing has to be typed twice at three in the morning.
+    #
+    # Read through peer_manifest_path and sourced, the way every other reader in
+    # this file does it. A hand-rolled parser here would be a second opinion
+    # about the manifest's format.
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    [ -r "$_pm" ] || die "--allow-restore=$label: no pairing manifest at $_pm -- this host has no record of that relationship, so there is nobody to delegate to and no scope to delegate over."
+    # shellcheck disable=SC1090
+    . "$_pm"
+    local account="${PEER_JOIN_ACCOUNT:-}"
+    local RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    [ -n "$account" ] || die "--allow-restore=$label: the manifest names no account, so a grant file would say yes to nobody."
+    [ -n "$RESTORE_GRANT_DATASETS" ] || die "--allow-restore=$label: the manifest records no granted datasets, so the restore would have no scope. Refusing rather than guessing one."
+
     local want; want="$(restore_grant_modes "$ALLOW_RESTORE_REPLACE")"
     local gpath; gpath="$(restore_grant_path "$label")"
 
@@ -2508,6 +2545,23 @@ do_allow_restore() {
     chmod 0644 "$tmp" 2>/dev/null || :
     mv -f "$tmp" "$gpath" || { rm -f "$tmp"; die "could not install $gpath"; }
 
+    # THE DELEGATION, and it is not a convenience: without it the grant is a file
+    # saying yes next to an account that cannot act. Done AFTER the file, so a
+    # failure here leaves a grant that refuses rather than a capability nobody
+    # declared -- the safe order of the two.
+    local _rg_ds _rg_failed=0
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ]; then
+        for _rg_ds in $RESTORE_GRANT_DATASETS; do
+            zfs allow -u "$account" "$RESTORE_ZFS_PERMS" -- "$_rg_ds" 2>/dev/null \
+                || { warn "could not delegate ($RESTORE_ZFS_PERMS) to '$account' on '$_rg_ds'"; _rg_failed=1; }
+        done
+        if [ "$_rg_failed" -eq 0 ]; then
+            log "  delegated:    $RESTORE_ZFS_PERMS to '$account' on: $RESTORE_GRANT_DATASETS"
+        else
+            warn "  the grant FILE is written but the delegation is incomplete -- a restore will be refused by ZFS, not by the grant. Fix the allow above and re-run."
+        fi
+    fi
+
     log "restore grant WRITTEN: $gpath"
     log "  relationship: $label"
     log "  permits:      $want"
@@ -2535,7 +2589,29 @@ do_deny_restore() {
         return 0
     fi
     local had; had="$(restore_grant_read_modes "$gpath")" || had=""
+    # The same two facts, from the same file and the same reader, so the revoke
+    # undoes exactly what the grant did rather than a set typed a second time.
+    local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    if [ -r "$_pm" ]; then
+        # shellcheck disable=SC1090
+        . "$_pm"
+        RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
+        RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    fi
     rm -f "$gpath" || die "could not remove $gpath"
+    # Both halves, and the delegation first: while it is still delegated the
+    # account CAN act, so removing that is the half that actually closes the
+    # window. The file is the declaration; the allow is the capability.
+    local _rd_ds
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
+        for _rd_ds in $RESTORE_GRANT_DATASETS; do
+            zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null \
+                || warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+        done
+        log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+    fi
+
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     log "  the collector for '$label' can no longer write onto this machine."
     return 0
