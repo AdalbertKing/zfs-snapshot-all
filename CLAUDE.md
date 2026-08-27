@@ -2,6 +2,14 @@
 
 Read `docs/AI_PROJECT_RULES.md`, `docs/internal/reviews/README.md`, and the active reviewer file before changing code.
 
+**Before every work round, read section 1 of `docs/internal/IMPLEMENTER-ERROR-LOG.md`.**
+Owner instruction, 2026-08-27. That section is the distilled rules, deliberately
+short; the entries under it are evidence, not a reading list. Every mistake goes
+in with its genesis, its cause and the rule it produces. A repeated mistake under
+an existing rule is a stronger signal than a new category -- it means the rule is
+not being applied -- so add it to that rule's evidence rather than inventing a
+new one.
+
 ## Default role
 
 The default role for Claude in this repository is **implementer**.
@@ -26,21 +34,27 @@ A rejection/follow-up normally does **not** edit Claude's response file: the Rev
 
 ## Current delivery mode
 
-`docs/AI_PROJECT_RULES.md` records an active, temporary owner-approved direct-main exception.
-While it remains active:
+The Owner revoked the temporary direct-main exception on 2026-08-14. The normal
+branch-and-Pull-Request workflow in `docs/AI_PROJECT_RULES.md` is mandatory.
 
-1. A branch and Pull Request are preferred when practical but are not required.
-2. Claude may commit a reviewed logical change directly to `main`.
-3. Create or update `docs/internal/reviews/responses/REV-YYYYMMDD-NNN.md` with the implementation evidence.
-4. Address one logical finding per commit whenever findings can be separated safely.
-5. Add regression tests that fail on the reviewed base and pass after the fix.
-6. Before push: run `./test/impact.sh --verify` and, of the suites it lists, only
-   those the change directly exercises -- the ones you edited, or whose subject
-   you changed. Push and let CI run the rest. See "Which executor" below.
-7. Do not mark findings `CLOSED`; the reviewer owns technical closure.
-8. Never force-push or rewrite a published direct-main commit. Correct defects with a new forward commit.
+Create or update the matching response artifact, use logical commits, add the
+discriminating regression, run the targeted checks plus `./test/impact.sh
+--verify`, and let CI run the broader battery as described below. Do not mark a
+finding `CLOSED`; the Reviewer owns technical closure. Never force-push or
+rewrite published history.
 
-When the owner revokes the exception, return to the normal branch and Pull Request workflow described in `docs/AI_PROJECT_RULES.md`.
+**An open Pull Request is not a submission.** Green CI, a mergeable PR, and a
+Claude role branch visible on GitHub are still WIP. A response/implementation is
+submitted to the Reviewer only after the authorised merge boundary has completed
+and a fresh read of canonical `main` proves all of these facts:
+
+1. the exact implementation SHA named by the response is reachable from `main`;
+2. `main` contains the response and regenerated views;
+3. `REVIEW_LEDGER.md` on `main` shows `IMPLEMENTED | Reviewer` for that REV.
+
+If the implementation PR is waiting for Reviewer inspection, branch protection,
+checks, or merge authority, report that exact state. Do not claim `submitted`,
+`published`, or `handed to Reviewer` until the `main` read-back above succeeds.
 
 ## Response file
 
@@ -129,7 +143,7 @@ Where a change replaces a design the document describes, **rewrite that section*
 
 ## Delivery evidence
 
-For a Pull Request or direct-main delivery, record:
+For every Pull Request delivery, record:
 
 - review/finding IDs;
 - root cause;

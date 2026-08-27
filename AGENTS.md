@@ -16,16 +16,25 @@ Unless the owner explicitly requests implementation:
 
 ## Current delivery mode
 
-`docs/AI_PROJECT_RULES.md` records an active, temporary owner-approved direct-main exception.
-While it remains active:
+The Owner revoked the temporary direct-main exception on 2026-08-14.
+The branch-and-Pull-Request workflow in `docs/AI_PROJECT_RULES.md` is mandatory.
 
-- the reviewer may publish review and closure Markdown directly to `main`;
-- review Claude's exact direct-main commit range when no Pull Request exists;
-- do not treat the absence of a Pull Request as a defect by itself;
-- still require logical commits, exact evidence, tests, and forward-only corrections;
-- do not rewrite Claude's response file or published history.
+For a reviewer-owned review, rejection, approval, closure, or protocol change,
+**an open Pull Request is not publication**. Green CI, a mergeable PR, and a role
+branch visible on GitHub are still WIP. Publication is complete only when all of
+these facts have been read back from fresh GitHub state:
 
-When the owner revokes the exception, return to branch-and-Pull-Request review publication.
+1. the Pull Request is merged into canonical `main`;
+2. `main` contains the intended role-owned artifact and regenerated views;
+3. `REVIEW_LEDGER.md` on `main` shows the expected state and next owner.
+
+The reviewer publishing a reviewer-owned artifact is responsible for carrying
+that boundary through merge/auto-merge after required checks, when authorised.
+The rule against merging one's own **implementation** does not turn a
+reviewer-owned review PR into a handoff. If the reviewer cannot complete the
+merge, report exactly `PR open — not published, no handoff yet` and name the
+blocker. Never claim `published`, `routed`, or `handed off`, and never expect
+Claude to read a reviewer branch or unmerged PR.
 
 ## Review publication
 
@@ -45,6 +54,9 @@ Each finding must contain:
 - assumptions and uncertainty.
 
 Do not mark an issue fixed from a commit message alone. Inspect the actual diff and evidence.
+
+After publication, perform the fresh `main` read-back defined above before
+reporting completion to the Owner.
 
 ## Review responses
 

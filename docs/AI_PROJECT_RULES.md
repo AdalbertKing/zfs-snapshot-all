@@ -89,6 +89,28 @@ The normal workflow above is mandatory:
 - phone operation is supported by automation around branches/PRs, not by weakening
   the canonical-state gate.
 
+### Publication completion — no PR-as-handoff
+
+A branch or Pull Request is transport WIP, not the published review state. This
+remains true when the PR is green, mergeable, or waiting only for a merge click.
+
+A role-owned review transition is complete only after the publisher performs a
+fresh read of canonical `main` and verifies all three facts:
+
+1. the PR was merged and `main` advanced to a commit carrying the intended
+   role-owned artifact;
+2. the regenerated `REVIEW_LEDGER.md` and `OPEN-THREADS.md` are present on that
+   same published state;
+3. the ledger row names the expected state and next owner.
+
+Until then, the only truthful status is `PR open — not published, no handoff
+yet`. The publisher must not report `published`, `submitted`, `routed`, or
+`handed off`, and the next actor is not required to inspect role branches or
+unmerged PRs. After required checks and review conditions pass, the publisher of
+a reviewer-owned artifact must complete merge/auto-merge when authorised or
+report the concrete merge blocker. This does not permit an implementer to bypass
+the required review of implementation code.
+
 The GitHub branch-protection setting may lag this rule briefly while a signed-in
 settings session is arranged. That is a deployment gap, not an extension of the
 old exception: agents must follow branch/PR publication immediately.
@@ -142,7 +164,7 @@ Protocol verification is included in that gate; normal operation must not depend
 
 ## Required evidence
 
-Every implementation delivery, whether a Pull Request or direct-main commit, must state:
+Every implementation delivery must state:
 
 - review and finding IDs addressed;
 - root cause;

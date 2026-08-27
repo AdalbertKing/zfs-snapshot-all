@@ -27,9 +27,19 @@ manually after V2 cutover.
 
 ## Work pickup / handoff
 
-Routing is only useful if the next agent actually refreshes and reads it.
-Therefore **before either agent says it has no work / nothing from the other
-agent**, it must refresh the published `main` and inspect the generated
+Handoff has two symmetric halves: the publisher must complete canonical
+publication, and the recipient must refresh and read it.
+
+For the publisher, a role branch or Pull Request is not a handoff — including a
+green and mergeable PR. Publication is complete only after the PR is merged and
+a fresh read of `main` shows both the intended artifact and the expected ledger
+row/state/next owner. If that read-back has not succeeded, report `PR open — not
+published, no handoff yet`; never report `published`, `submitted`, `routed`, or
+`handed off`.
+
+For the recipient, routing is only useful if the next agent actually refreshes
+and reads it. Therefore **before either agent says it has no work / nothing from
+the other agent**, it must refresh the published `main` and inspect the generated
 `REVIEW_LEDGER.md`.
 
 For Claude specifically:
@@ -114,7 +124,8 @@ remembering two independent verification commands.
 
 Representative lifecycle:
 
-1. Reviewer publishes the canonical `REV-YYYYMMDD-NNN.md`.
+1. Reviewer merges the canonical `REV-YYYYMMDD-NNN.md` publication and reads
+   back `OPEN | Claude` from the ledger on `main`; only then is it handed off.
 2. Claude creates/extends exactly one matching response and submits an exact
    implementation SHA.
 3. Generated ledger shows `IMPLEMENTED`, owner `Reviewer`.
