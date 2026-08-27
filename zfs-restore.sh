@@ -25,6 +25,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Shared with zfs-backup.sh: die/warn, the server conf, and the installed-config
 # field reader. Sourced, not copied -- see lib-backup-common.sh's header.
 LIBCOMMON="$SCRIPT_DIR/lib-backup-common.sh"
+# The transport. snapsend.sh is the push engine, and a restore is that engine
+# driven in the other direction -- so it arrives with bookmarks, resume tokens,
+# compression, the bandwidth cap and the PVE-reserved-snapshot refusal already
+# proven, and the frozen file is not touched. Overridable so a suite can point
+# it at a recorder instead of a transfer.
+RESTORE_ENGINE="${RESTORE_ENGINE:-$SCRIPT_DIR/snapsend.sh}"
 [ -r "$LIBCOMMON" ] || { echo "cannot read $LIBCOMMON -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
@@ -1070,6 +1076,151 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
 # ------------------------------------------------------------------------------
+# restore_one -- ONE dataset, from the copy back onto the machine it came from
+# ------------------------------------------------------------------------------
+#
+# This is the step that writes. Everything above it decides whether it may, and
+# everything below it is snapsend.sh doing what it already does.
+#
+# The order is the design, and it is not arrangeable: nothing is asked of the
+# far side until the near side has proved it knows exactly what it would send.
+#
+#   1. the recovery point, resolved from the COPY's snapshots
+#   2. the point is unambiguous under the ENGINE's own matching rule
+#   3. the mode, CLASSIFIED from the data (never an operator choice)
+#   4. the grant, read from the target, requiring that exact mode
+#   5. the command, with flags DERIVED from the classification
+#   6. the engine
+#
+# Steps 1-3 are local and free. Step 4 is the only question asked of another
+# machine, and it is asked once the answer can be acted on -- asking first would
+# mean holding a permission while still deciding what to do with it.
+#
+# THE MODE MAPPING, from the planner's strategy to the three the grant names:
+#
+#   full-absent                          -> create    nothing there to lose
+#   increment | rollback | discard-live   -> rewind    a GUID-proven base exists
+#   full-live | unproven                  -> replace   no valid base; full overwrite
+#   ambiguous | remote | anything else    -> refuse
+#
+# `rollback` and `discard-live` remove divergent state, which is destructive in
+# the ordinary sense -- but they are `rewind` here because a proven common base
+# is what makes them a rewind rather than an overwrite, and that distinction is
+# the one owner decision 4 draws. `unproven` lands in `replace` deliberately:
+# unproven means the base could not be established, and sending an increment
+# from a base nobody proved is the one failure that corrupts instead of refusing.
+restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
+    local copy="$1" src="$2"
+    RESTORE_ONE_VERDICT=""
+
+    # ---- 1. the recovery point --------------------------------------------
+    # Rows, not names: restore_plan_strategy needs creation and guid, and --at
+    # resolves by creation because that is when the data was captured. A name
+    # can disagree with it -- measured on this estate, where two hosts in
+    # different timezones write different names for the same instant.
+    local rows snaps point
+    rows=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null)
+    if [ -z "$rows" ]; then
+        RESTORE_ONE_VERDICT="the copy '$copy' has no snapshot to restore from"
+        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+        return 1
+    fi
+    snaps=$(printf '%s\n' "$rows" | awk -F'\t' '{print $1}' | awk -F'@' '{print $2}')
+
+    if [ -n "${RESTORE_AT_EPOCH:-}" ]; then
+        # Per dataset, nearest at-or-before -- for a FLAT relation each dataset
+        # has its own frontier, so "the state at 12:00" is not one instant across
+        # the subtree. A tie refuses rather than picking by list order.
+        local _row
+        _row="$(restore_at_pick "$RESTORE_AT_EPOCH" "$rows")"; local _prc=$?
+        case "$_prc" in
+            0) point="$(printf '%s' "$_row" | awk -F'\t' '{print $1}' | awk -F'@' '{print $2}')" ;;
+            2) RESTORE_ONE_VERDICT="two snapshots share the newest creation time at or before --at, so the recovery point is a tie"
+               log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing rather than resolving it by list order."
+               return 1 ;;
+            *) RESTORE_ONE_VERDICT="nothing on '$copy' was captured at or before --at"
+               log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+               return 1 ;;
+        esac
+    else
+        point="${RESTORE_POINT_NAME:-}"
+        [ -n "$point" ] || point="$(printf '%s\n' "$snaps" | tail -1)"
+    fi
+
+    # ---- 2. unambiguous under the engine's rule ----------------------------
+    if ! restore_point_unique "$point" "$snaps"; then
+        RESTORE_ONE_VERDICT="the recovery point '$point' is not unambiguous on '$copy'"
+        return 1
+    fi
+
+    # ---- 3. the mode, classified ------------------------------------------
+    # The strategy is computed HERE rather than handed in, so the runner needs
+    # to know nothing about it and one dataset's classification cannot leak into
+    # the next. The listing is filtered to the chosen point: a strategy derived
+    # from snapshots NEWER than the recovery point would answer a different
+    # question than the one being asked.
+    local mode
+    if [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
+        local _cut
+        _cut="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '
+            { print } $1 == p { exit }')"
+        restore_plan_strategy "$copy" "$src" "$_cut" "$point" >/dev/null 2>&1 || :
+    fi
+    case "${RESTORE_STRATEGY:-}" in
+        full-absent)                        mode=create ;;
+        increment|rollback|discard-live)    mode=rewind ;;
+        full-live|unproven)                 mode=replace ;;
+        ambiguous)
+            RESTORE_ONE_VERDICT="the recovery point on '$copy' is ambiguous, so no mode can be classified"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: guessing would destroy state under a decision nobody took."
+            return 1 ;;
+        *)
+            RESTORE_ONE_VERDICT="no strategy was established for '$src' (got '${RESTORE_STRATEGY:-<none>}')"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing to act on an undetermined state."
+            return 1 ;;
+    esac
+
+    # ---- 4. the grant ------------------------------------------------------
+    # The one question asked of the far side. A LOCAL target needs none: the
+    # machine at risk is this one, and whoever is running this already has root
+    # on it -- which is the whole argument the pull form would have rested on.
+    local host="${src%%:*}"
+    case "$src" in
+        *:*)
+            local answer
+            answer="$(restore_grant_ask "$host")" || answer=""
+            if ! restore_grant_require "${RESTORE_LABEL:-$host}" "$answer" "$mode" "$host"; then
+                RESTORE_ONE_VERDICT="'$host' does not grant '$mode' for this relationship"
+                return 1
+            fi ;;
+        *)  log 1 "restore: $src is on this machine, so no grant is asked for -- the host at risk is the one running this." ;;
+    esac
+
+    # ---- 5. the command ----------------------------------------------------
+    if ! restore_engine_argv "$copy" "$src" "$point" "$mode"; then
+        RESTORE_ONE_VERDICT="could not build the engine command for mode '$mode'"
+        return 1
+    fi
+
+    # ---- 6. the engine -----------------------------------------------------
+    log 0 "restore: $src <- $copy@$point  [$mode]"
+    log 1 "restore:   ${RESTORE_ENGINE:-snapsend.sh} ${RESTORE_ENGINE_ARGV[*]}"
+    if [ "${RESTORE_DRY_RUN:-0}" -eq 1 ]; then
+        RESTORE_ONE_VERDICT="dry run -- the command above was NOT executed"
+        return 1
+    fi
+    if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
+        RESTORE_ONE_VERDICT="$mode from $point"
+        return 0
+    fi
+    # The engine's own diagnosis has already gone to stderr; do not paraphrase
+    # it. What is added here is WHICH dataset it belonged to, because the caller
+    # is looping and the operator is reading one report at the end.
+    RESTORE_ONE_VERDICT="the engine failed on '$mode' from $point (its own message is above)"
+    return 1
+}
+
+# ------------------------------------------------------------------------------
 # THE WHOLE-RELATION RUN -- continue past a failure, and report per dataset
 # ------------------------------------------------------------------------------
 #
@@ -1230,6 +1381,22 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     RESTORE_ENGINE_ARGV+=(-e -m "$point" "$copy" "$target")
     return 0
 }
+
+# Ask the target what it permits. ONE question, over the relationship's own ssh
+# path, answered by zfs-pair-gate -- which derives the relationship from the KEY,
+# so this cannot ask about a relationship it does not hold a key for.
+#
+# Fails CLOSED and silently here: an unreachable host, a refused command, a
+# timeout and a host that answered nothing all produce the same empty string,
+# and restore_grant_parse then refuses. The diagnosis belongs to the caller,
+# which knows which dataset it was for; a message printed here would arrive
+# without that context and be repeated per dataset.
+restore_grant_ask() {   # <account@host> -> the gate's answer, or nothing
+    local peer="$1"
+    [ -n "$peer" ] || return 1
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "PAIR-CONTROL status" 2>/dev/null
+}
+
 
 # Phase 7 -- the destructive execution step itself, INTERNAL ONLY.
 #
@@ -1978,9 +2145,22 @@ cmd_restore() {
         if [ -n "$snapshot" ]; then
             [ "${#RESTORE_SCOPE_SRC[@]}" -eq 1 ] || die "restore: --snapshot names ONE recovery point and this list selects ${#RESTORE_SCOPE_SRC[@]} datasets. Equal snapshot names are not one atomic event (measured on pve2), so a shared name across several datasets would claim something untrue. Restore them one at a time, or use --at, which resolves per dataset and says so."
             dataset="${RESTORE_SCOPE_SRC[0]}"
-        else
-            plan=1
+        elif [ "$plan" -eq 1 ]; then
             addr_filter="$(printf '%s\n' "${RESTORE_SCOPE_SRC[@]}")"
+        else
+            # THE DOOR. Until now a resolved scope was forced into plan mode,
+            # because nothing could act on it -- `plan=1` sat here with no
+            # explanation because there was no alternative to explain.
+            #
+            # `--plan` is the read-only mode and stays exactly what it was. Its
+            # ABSENCE now means do it: the operator named a relationship, named
+            # the datasets, optionally named a time, and the machine at risk has
+            # already published a grant saying this collector may write to it.
+            # Asking again here would be the fourth time the same question is
+            # put, and the first three were asked when nothing was on fire.
+            RESTORE_AT_EPOCH="$at_epoch"
+            restore_run_scope
+            return $?
         fi
         addr=""
     fi

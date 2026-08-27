@@ -557,6 +557,120 @@ check "run: ...and exits non-zero" "1" "${nostep##*|}"
 
 
 
+# ---------------------------------------------------------------------------
+# 11. restore_one -- the step that writes, and everything that stops it.
+#
+# The engine is replaced by a RECORDER: it appends its argv and exits with a
+# chosen status. So every case below can assert two things at once -- the
+# verdict, and whether the engine was invoked at all.
+#
+# `printf`, not `echo`, in that recorder. An earlier probe used echo and lost
+# the `-e` from every argv it recorded, which made a correct builder look like
+# it was dropping a flag. The instrument has to be measured too.
+# ---------------------------------------------------------------------------
+RONE="$TMPD/rone"; rm -rf "$RONE"; mkdir -p "$RONE"
+{ printf '#!/bin/sh\n'
+  printf 'printf "%%s " "$@" >> %s/ran; printf "\n" >> %s/ran\n' "$RONE" "$RONE"
+  printf 'exit ${ENGINE_RC:-0}\n'; } > "$RONE/eng"
+chmod +x "$RONE/eng"
+
+r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict>|<argv>"
+    : > "$RONE/ran"
+    ( set -u
+      log(){ shift; printf '%s\n' "$*" >&2; }
+      eval "$(sed -n '/^restore_point_unique() {/,/^}/p;/^restore_engine_argv() {/,/^}/p;/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p;/^restore_one() {/,/^}/p' "$RESTORE")"
+      zfs(){ case "$*" in
+               *"-t snapshot"*) [ "${NOSNAP:-0}" -eq 1 ] && return 0
+                                printf 'hdd/copy@automated_daily_2026-08-20_18-00-04\n'
+                                printf 'hdd/copy@automated_daily_2026-08-22_18-00-04\n'
+                                printf 'hdd/copy@automated_daily_2026-08-23_18-00-01\n' ;;
+             esac; }
+      restore_grant_ask(){ printf '%s' "$2"; }
+      RESTORE_ENGINE="$RONE/eng" ENGINE_RC="${5:-0}" RESTORE_LABEL=lab1 \
+      RESTORE_STRATEGY="$1" RESTORE_POINT_NAME="$3" \
+      restore_one hdd/copy "${4:-zfsbackup@pve1:rpool/data}" >/dev/null 2>&1
+      printf '%s|%s' "$?" "$RESTORE_ONE_VERDICT" ) > "$RONE/res"
+    printf '%s|%s' "$(cat "$RONE/res")" "$(tr -d '\n' < "$RONE/ran")"
+}
+# restore_grant_ask is stubbed to echo its SECOND argument, so the harness can
+# hand a different answer per case without a file. The real one takes one.
+r1x() { r1 "$1" "$2" "$3" "${4:-}" "${5:-0}"; }
+GOODG="PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=create rewind replace"
+rc_of()   { printf '%s' "${1%%|*}"; }
+verd_of() { local t="${1#*|}"; printf '%s' "${t%|*}"; }
+argv_of() { printf '%s' "${1##*|}"; }
+
+# ---- the three modes reach the engine with the flags their classification says
+r="$(r1 full-absent "$GOODG" "" )"
+check "one: full-absent classifies as create" "0" "$(rc_of "$r")"
+case "$(argv_of "$r")" in
+    "-e -m automated_daily_2026-08-23_18-00-01 hdd/copy zfsbackup@pve1:rpool/data "*)
+        ok "one: ...and the engine is called with -e and the exact point, no -f" ;;
+    *) bad "one: ...and the engine is called with -e and the exact point, no -f" "$(argv_of "$r")" ;;
+esac
+r="$(r1 increment "$GOODG" "")"
+check "one: a proven common base classifies as rewind" "0" "$(rc_of "$r")"
+case "$(argv_of "$r")" in *-f*) bad "one: ...and rewind does NOT carry -f" "$(argv_of "$r")" ;;
+                          *)    ok "one: ...and rewind does NOT carry -f" ;; esac
+r="$(r1 unproven "$GOODG" "")"
+check "one: an UNPROVEN base classifies as replace, not rewind" "0" "$(rc_of "$r")"
+case "$(argv_of "$r")" in -f*) ok "one: ...and replace carries -f, which is what destroys the target" ;;
+                          *)   bad "one: ...and replace carries -f" "$(argv_of "$r")" ;; esac
+
+# ---- THE CARRYING ASSERTIONS: every refusal leaves the engine untouched -----
+# A refusal that still ran the engine would be the worst possible defect here --
+# a message saying no, next to a transfer that happened.
+for case_desc in \
+    "no grant at all|increment|PAIR_LABEL=lab1
+RESTORE_GRANT=none|" \
+    "a grant without the needed mode|unproven|PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=create rewind|" \
+    "an ambiguous recovery point|ambiguous|$GOODG|" \
+    "no strategy at all||$GOODG|" \
+    "a point that matches several|increment|$GOODG|automated_daily_"
+do
+    d="${case_desc%%|*}"; rest="${case_desc#*|}"
+    st="${rest%%|*}"; rest="${rest#*|}"
+    gr="${rest%|*}"; pt="${rest##*|}"
+    r="$(r1 "$st" "$gr" "$pt")"
+    check "one: $d refuses" "1" "$(rc_of "$r")"
+    if [ -z "$(argv_of "$r")" ]; then ok "one: ...and the engine was never invoked"
+    else bad "one: $d -- the engine RAN despite the refusal" "$(argv_of "$r")"; fi
+done
+
+# ---- a LOCAL target asks for no grant --------------------------------------
+# The machine at risk is this one, and whoever runs this already has root on it.
+r="$(r1 increment "" "" hdd/local/target)"
+check "one: a local target needs no grant" "0" "$(rc_of "$r")"
+case "$(argv_of "$r")" in *hdd/local/target*) ok "one: ...and still reaches the engine" ;;
+                          *) bad "one: ...and still reaches the engine" "$(argv_of "$r")" ;; esac
+
+# ---- the engine's own failure ----------------------------------------------
+r="$(r1 increment "$GOODG" "" zfsbackup@pve1:rpool/data 1)"
+check "one: a failing engine is a failing dataset" "1" "$(rc_of "$r")"
+if has "the engine failed" "$(verd_of "$r")"; then
+    ok "one: ...and the verdict says so without paraphrasing the engine"
+else bad "one: ...and the verdict says so" "$(verd_of "$r")"; fi
+
+# ---- a copy with nothing on it ---------------------------------------------
+r="$( : > "$RONE/ran"
+      ( set -u
+        log(){ shift; printf '%s\n' "$*" >&2; }
+        eval "$(sed -n '/^restore_point_unique() {/,/^}/p;/^restore_engine_argv() {/,/^}/p;/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p;/^restore_one() {/,/^}/p' "$RESTORE")"
+        zfs(){ :; }
+        restore_grant_ask(){ printf '%s' "$GOODG"; }
+        RESTORE_ENGINE="$RONE/eng" RESTORE_STRATEGY=increment \
+        restore_one hdd/copy zfsbackup@pve1:rpool/data >/dev/null 2>&1
+        printf '%s|%s' "$?" "$RESTORE_ONE_VERDICT" )
+      printf '|%s' "$(tr -d '\n' < "$RONE/ran")" )"
+check "one: a copy with no snapshot at all refuses" "1" "$(rc_of "$r")"
+if [ -z "$(argv_of "$r")" ]; then ok "one: ...without touching the engine"
+else bad "one: ...without touching the engine" "$(argv_of "$r")"; fi
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
