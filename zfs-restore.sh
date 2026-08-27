@@ -31,6 +31,22 @@ LIBCOMMON="$SCRIPT_DIR/lib-backup-common.sh"
 # proven, and the frozen file is not touched. Overridable so a suite can point
 # it at a recorder instead of a transfer.
 RESTORE_ENGINE="${RESTORE_ENGINE:-$SCRIPT_DIR/snapsend.sh}"
+
+# The rest of this file speaks in `echo`; the restore executor was written
+# against lib-zfs-snap.sh's `log <level> <message>`, which this script does not
+# source. Found on the lab, not in the suites -- every harness defined its own
+# log() stub, so the absence was invisible to all of them. That is the whole
+# argument for testing a transfer on real hosts.
+#
+# STDERR on purpose: restore_grant_parse and restore_point_unique have their
+# value read through $( ), and a diagnostic printed on stdout would BECOME the
+# value -- silently, and in the direction that looks like success.
+log() {   # <level> <message...>
+    local lvl="${1:-0}"; shift
+    [ "${VERBOSE:-1}" -ge "$lvl" ] && printf '%s
+' "$*" >&2
+    return 0
+}
 [ -r "$LIBCOMMON" ] || { echo "cannot read $LIBCOMMON -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
