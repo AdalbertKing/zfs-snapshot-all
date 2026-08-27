@@ -1127,6 +1127,102 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 #        NOT as it was found. Also a broken incremental or a failed final check.
 # A diagnosis is printed to stderr. The caller owns the fence and the
 # technical-snapshot cleanup.
+# ------------------------------------------------------------------------------
+# THE GRANT CHECK -- the collector reading the target's permission to overwrite it
+# ------------------------------------------------------------------------------
+#
+# Owner decision, 2026-08-26/27: the COLLECTOR starts a restore and writes onto
+# the machine being recovered. So the machine at risk is not the one running the
+# command, and the only thing standing between "restore me when I ask" and
+# "overwrite me whenever you like" is a fact that machine published itself:
+# a restore grant (deploy.sh --allow-restore, see test/restoregrant).
+#
+# WHAT MAKES THIS PARSER SECURITY CODE RATHER THAN STRING HANDLING: its input
+# arrives from ANOTHER MACHINE, over ssh, and the decision it produces is
+# "may I destroy that machine's data". Every ambiguity therefore resolves to NO.
+# The shapes that must not be readable as a yes:
+#
+#   * two RESTORE_GRANT_MODES lines -- a peer that answers twice has not
+#     answered once, and taking either would be picking on the peer's behalf;
+#   * an answer whose PAIR_LABEL is not the relationship we asked about -- the
+#     gate derives the label from the KEY, so a mismatch means the answer is
+#     about something else and cannot authorise this;
+#   * `present` with no modes, modes with no `present`, or a modes value
+#     carrying anything but lowercase letters and single spaces;
+#   * no answer at all, an empty answer, an ssh banner with nothing in it.
+#
+# The ONLY yes is: exactly one PAIR_LABEL matching, exactly one
+# RESTORE_GRANT=present, exactly one well-formed RESTORE_GRANT_MODES.
+restore_grant_parse() {   # <label we asked about> <the peer's answer> -> modes, or nothing (rc 1)
+    local want_label="$1" answer="$2" labels modes present
+
+    [ -n "$answer" ] || return 1
+
+    # Exactly one of each key. `grep -c` on an anchored pattern, so a line the
+    # peer indented or appended text to does not count -- the gate emits these
+    # at column zero and nothing else may look like them.
+    labels=$(printf '%s\n' "$answer" | grep -c '^PAIR_LABEL=')
+    [ "$labels" -eq 1 ] || return 1
+    [ "$(printf '%s\n' "$answer" | sed -n 's/^PAIR_LABEL=//p')" = "$want_label" ] || return 1
+
+    present=$(printf '%s\n' "$answer" | grep -c '^RESTORE_GRANT=present$')
+    [ "$present" -eq 1 ] || return 1
+
+    [ "$(printf '%s\n' "$answer" | grep -c '^RESTORE_GRANT_MODES=')" -eq 1 ] || return 1
+    modes=$(printf '%s\n' "$answer" | sed -n 's/^RESTORE_GRANT_MODES=//p')
+
+    # Whitelist. This value decides whether data gets destroyed; it came off a
+    # wire; and it is about to be compared against a mode name. Anything that is
+    # not lowercase letters and single spaces is not something this project
+    # writes, so it is not a grant.
+    case "$modes" in
+        ''|*[!a-z\ ]*|' '*|*' ') return 1 ;;
+        *'  '*)                  return 1 ;;
+    esac
+    printf '%s' "$modes"
+    return 0
+}
+
+# -> 0 when the peer's answer authorises <mode> for <label>; 1 otherwise, having
+#    said exactly what is missing and where to fix it.
+#
+# The remedy is always a command to run ON THE TARGET, never here. That is the
+# whole point: this side cannot grant itself anything, so the message must send
+# the operator to the machine that can.
+restore_grant_require() {   # <label> <peer answer> <needed mode> <target host, for the message>
+    local label="$1" answer="$2" need="$3" host="${4:-the target host}" modes
+    case "$need" in
+        create|rewind|replace) ;;
+        *) log 0 "restore: '$need' is not a restore mode -- refusing rather than asking for something undefined"; return 1 ;;
+    esac
+
+    if ! modes="$(restore_grant_parse "$label" "$answer")"; then
+        log 0 "restore: '$host' did not publish a usable restore grant for relationship '$label', so it has NOT agreed to be written to. Nothing was changed."
+        log 0 "restore: if that machine really is the one to recover, grant it THERE, as root:"
+        if [ "$need" = replace ]; then
+            log 0 "restore:     deploy.sh --allow-restore=$label --replace"
+            log 0 "restore: '--replace' is required here because this recovery would DESTROY data that machine holds now. Without it a grant only permits writing where there is free space."
+        else
+            log 0 "restore:     deploy.sh --allow-restore=$label"
+        fi
+        log 0 "restore: this side cannot grant itself anything -- that is what makes the grant worth having."
+        return 1
+    fi
+
+    case " $modes " in
+        *" $need "*) return 0 ;;
+    esac
+
+    log 0 "restore: '$host' grants relationship '$label' only '$modes', and this recovery needs '$need'. Nothing was changed."
+    if [ "$need" = replace ]; then
+        log 0 "restore: 'replace' DESTROYS data that is on that machine now and puts an older copy in its place. It is never implied by a grant -- it is named in one, deliberately, when nothing is broken:"
+        log 0 "restore:     deploy.sh --allow-restore=$label --replace     (run as root ON $host)"
+    else
+        log 0 "restore:     deploy.sh --allow-restore=$label     (run as root ON $host)"
+    fi
+    return 1
+}
+
 restore_execute() {   # <src> <copy> <this run's own technical snapshots, full names...>
     local src="$1" copy="$2"; shift 2
     local own="" s
@@ -1387,7 +1483,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 
     case "$RESTORE_STRATEGY" in
         remote)
-            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE. Ten czasownik dziala tylko lokalnie -- odtworzenie na zdalny host wymaga decyzji o tym, kto wykonuje zniszczenie po tamtej stronie, a tej decyzji nie ma." ;;
+            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE, a zdalny wykonawca jeszcze nie istnieje. To, czego brakowalo tu wczesniej -- KTO wykonuje zniszczenie po tamtej stronie -- jest juz rozstrzygniete: kolektor zaczyna, a maszyna zagrozona publikuje zgode (deploy.sh --allow-restore). Sprawdzenie tej zgody jest zbudowane i przetestowane (restore_grant_require). Brakuje ostatniego kawalka: samego przeslania i zniszczenia po tamtej stronie. Nic nie zmieniono." ;;
         full-absent|full-live)
             die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost. Nie istnieje w tym wycinku i nie bedzie udawane przyrostem." ;;
         ambiguous)

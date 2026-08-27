@@ -276,6 +276,96 @@ else
     ok "gate: nothing in the gate writes into the grant tree"
 fi
 
+# ---------------------------------------------------------------------------
+# 8. THE COLLECTOR'S SIDE: reading the answer, and refusing on anything unclear.
+#
+# This parser's input arrives from ANOTHER MACHINE over ssh, and the decision it
+# produces is "may I destroy that machine's data". So every ambiguity resolves to
+# NO, and the cases below are the shapes that must not be readable as a yes.
+#
+# The functions are lifted from the real file rather than stubbed -- the whole
+# point is what the shipped code does with a hostile answer.
+# ---------------------------------------------------------------------------
+RESTORE="${RESTORE:-$REPO/zfs-restore.sh}"
+parse() {   # <label> <answer> -> the modes, or "NO"
+    ( set -u
+      log(){ :; }
+      eval "$(sed -n '/^restore_grant_parse() {/,/^}/p' "$RESTORE")"
+      restore_grant_parse "$1" "$2" 2>/dev/null || printf 'NO' )
+}
+require() {   # <label> <answer> <mode> -> "OK" or the refusal text
+    ( set -u
+      log(){ shift; printf '%s\n' "$*"; }
+      eval "$(sed -n '/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p' "$RESTORE")"
+      if restore_grant_require "$1" "$2" "$3" pve1; then printf 'OK'; fi )
+}
+GOOD="PAIR_STATE=ACTIVE
+PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=create rewind replace"
+
+check "peer: a well-formed answer is read" "create rewind replace" "$(parse lab1 "$GOOD")"
+# An ssh banner before the gate's own output must not break a real answer --
+# and this is the positive control for every NO below.
+check "peer: ...even behind an ssh banner" "create rewind replace" "$(parse lab1 "Welcome to pve1
+$GOOD")"
+
+# The refusals, each for its own reason.
+check "peer: no answer at all is NOT a grant"           "NO" "$(parse lab1 "")"
+check "peer: an absent grant is NOT a grant"            "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT=none")"
+# THE ONE THAT MATTERS MOST: the gate derives the label from the KEY, so an
+# answer about a different relationship cannot authorise this one. Without this
+# check a collector holding one key could act on another relationship's grant.
+check "peer: an answer about a DIFFERENT relationship is refused" "NO" "$(parse lab1 "PAIR_LABEL=other
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=replace")"
+check "peer: two modes lines are refused, not resolved" "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=create
+RESTORE_GRANT_MODES=create rewind replace")"
+check "peer: two label lines are refused"               "NO" "$(parse lab1 "PAIR_LABEL=lab1
+PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=replace")"
+check "peer: present with no modes is refused"          "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT=present")"
+check "peer: modes without present is refused"          "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT_MODES=replace")"
+check "peer: a shell metacharacter in modes is refused" "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=replace; rm -rf /")"
+check "peer: uppercase modes are refused"               "NO" "$(parse lab1 "PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=REPLACE")"
+# Indented keys are not the gate speaking: it emits at column zero, so anything
+# else claiming to be a grant line is something else's output.
+check "peer: indented keys are not the gate speaking"   "NO" "$(parse lab1 "  PAIR_LABEL=lab1
+  RESTORE_GRANT=present
+  RESTORE_GRANT_MODES=replace")"
+
+# ---- and the decision on top of it ----------------------------------------
+check "peer: a full grant authorises replace" "OK" "$(require lab1 "$GOOD" replace)"
+check "peer: ...and rewind"                   "OK" "$(require lab1 "$GOOD" rewind)"
+NOREP="PAIR_LABEL=lab1
+RESTORE_GRANT=present
+RESTORE_GRANT_MODES=create rewind"
+out="$(require lab1 "$NOREP" replace)"
+if has "needs 'replace'" "$out"; then ok "peer: a grant without replace does NOT authorise replace"
+else bad "peer: a grant without replace does not authorise replace" "$out"; fi
+check "peer: ...but it still authorises rewind" "OK" "$(require lab1 "$NOREP" rewind)"
+# The remedy is a command for the OTHER machine. This side cannot grant itself
+# anything, so a refusal that pointed here would be worse than useless.
+if has "ON pve1" "$out"; then ok "peer: ...and the remedy names the machine that must run it"
+else bad "peer: ...and the remedy names the machine that must run it" "$out"; fi
+if has "--replace" "$out"; then ok "peer: ...and the exact flag it needs"
+else bad "peer: ...and the exact flag it needs" "$out"; fi
+# A mode this project does not define is refused rather than asked for.
+out="$(require lab1 "$GOOD" obliterate)"
+if has "is not a restore mode" "$out"; then ok "peer: an undefined mode is refused"
+else bad "peer: an undefined mode is refused" "$out"; fi
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
