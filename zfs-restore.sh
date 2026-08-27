@@ -1136,6 +1136,34 @@ restore_remote_state() {   # <account@host:dataset> -> "absent" | <guid> | nothi
          zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1" 2>/dev/null
 }
 
+# Does ANY dataset of the subtree hold a snapshot newer than the recovery point?
+#
+# The question the root alone cannot answer, and the reason it matters was
+# measured on the lab: after one restore the ROOT sat at the recovery point
+# while both children were still ahead, so a check that read only the root
+# classified the run as `increment`, skipped the rollback, and reported that
+# everything had been recovered while the damage sat untouched in the children.
+#
+# `creation` is the axis, on the FAR side, where the snapshots are. Names are
+# not compared: two hosts in different timezones write different names for the
+# same instant, which this estate has measured, and the whole point of resolving
+# a recovery point by creation is not to undo that here.
+#
+# Prints the datasets that are ahead, one per line. Empty means none is. A
+# failed read prints nothing AND returns non-zero, so the caller can tell "none
+# is ahead" from "I could not ask" -- they differ by an entire skipped rollback.
+restore_remote_ahead() {   # <account@host> <target root> <recovery point name>
+    local peer="$1" root="$2" point="$3"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name -r '$root' 2>/dev/null); do
+            c=\$(zfs get -H -p -o value creation \"\$d@$point\" 2>/dev/null) || continue
+            [ -n \"\$c\" ] || continue
+            n=\$(zfs list -H -p -t snapshot -o creation -d 1 \"\$d\" 2>/dev/null | awk -v c=\"\$c\" '\$1 > c' | wc -l)
+            [ \"\$n\" -gt 0 ] && echo \"\$d\"
+        done
+        exit 0" 2>/dev/null
+}
+
 # ------------------------------------------------------------------------------
 #
 # This is the step that writes. Everything above it decides whether it may, and
@@ -1255,12 +1283,18 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # than A. Measured on the lab, where restoring to 15:51 while
                     # the target sat at 16:51 classified as `increment` and would
                     # have asked the engine for a stream backwards in time.
-                    local _pos_head _pos_point
-                    _pos_head="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print NR; exit}')"
-                    _pos_point="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '$1 == p {print NR; exit}')"
-                    if [ -n "$_pos_head" ] && [ -n "$_pos_point" ] && [ "$_pos_head" -gt "$_pos_point" ]; then
+                    # THE WHOLE SUBTREE, not the root. A root sitting at the
+                    # recovery point says nothing about its children, and the
+                    # lab proved it: after one restore the root was at the point
+                    # and both children were still ahead, so a root-only check
+                    # said `increment`, skipped the rollback, and called the run
+                    # a success over untouched damage.
+                    local _ahead
+                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point")"
+                    if [ -n "$_ahead" ]; then
                         RESTORE_STRATEGY=rollback
                         RESTORE_ROLLBACK_TO="$point"
+                        log 1 "restore: ahead of $point on the target: $(printf '%s' "$_ahead" | tr '\n' ' ')"
                     else
                         RESTORE_STRATEGY=increment
                     fi
