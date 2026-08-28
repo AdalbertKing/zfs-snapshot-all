@@ -341,6 +341,15 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
 Client state control:
   zfs-backup.sh pause-client NAME [--reason=TEXT]
   zfs-backup.sh resume-client NAME
+  zfs-backup.sh move-to-client FROM ONTO [--yes]
+                                    The relationship's MACHINE was replaced. Hands the
+                                    copy over to ONTO's machine: the copy does not move
+                                    on disk, only which machine it is backed up from --
+                                    so no re-seed. REFUSES until ONTO already holds the
+                                    copy, proven by guid per dataset; recover it there
+                                    first (restore FROM ONTO). Pauses FROM afterwards
+                                    and keeps its record. Does not retire the old
+                                    machine, and says so.
   zfs-backup.sh disable-client NAME [--reason=TEXT]
   zfs-backup.sh enable-client NAME
 
@@ -8998,6 +9007,280 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
+# ==============================================================================
+# move-to-client -- the relationship's machine is replaced; the COPY stays put
+# ==============================================================================
+#
+# Owner decision, 2026-08-28 (docs/project/OWNER-MOVE-TO-CLIENT-2026-08-28.md):
+# a relationship whose machine is being replaced is not cloned, it MOVES. The
+# copy on this collector stays exactly where it is; what changes is which
+# machine the relationship points at.
+#
+# The shape this exists to avoid is the expensive one. Pairing the new machine
+# and letting it build its own copy costs a full re-seed: after recovering 10 TB
+# onto it, the next backup sends the same 10 TB back, because the two copies
+# share no snapshot. Moving the copy keeps ONE lineage across the machine swap,
+# which is also the honest description of what happened -- the data did not
+# change custodian, the machine under it did.
+#
+# This verb does NOT recover. It refuses until the data is already on the new
+# machine, and the GUID proof below is what it refuses on. Recovery and
+# hand-over are different failure domains: a recovery takes hours and may need
+# several attempts, the hand-over is seconds and transactional. Composed, they
+# make a verb that can be half-done in two incompatible ways, and a verb that
+# both produces the proof's condition and checks it is checking its own work.
+#
+# It does not retire the old relationship either -- it PAUSES it. A pause is
+# reversible and a retirement is not, and a move that dies halfway has to leave
+# a state the operator can walk back out of.
+#
+# And it decides nothing else. The old machine may still be alive and stops
+# being backed up; this says so plainly and does not require anyone to declare a
+# retirement or answer a question the tool invented. The admin has a tool.
+
+# Does the destination machine actually hold this copy? By GUID, per dataset.
+#
+# THE WHOLE SAFETY OF THE OPERATION. Without it move-to-client is a config edit
+# that silently repoints a backup at a machine which does not have the data, and
+# nothing discovers that until the next pull -- by which time the old
+# relationship is paused and the new one has no common base.
+#
+# GUID and not name: a name is what a host chose to call a snapshot, and this
+# estate has measured two hosts writing different names for the same instant.
+# The GUID is what `zfs send -I` will match on, so it is the thing that decides
+# whether the next backup is an increment or a re-seed.
+#
+# Prints nothing and returns 0 when proven; prints the reason and returns 1
+# otherwise. An unreadable answer is a refusal, never a pass.
+move_guid_proof() {   # <copy dataset> <destination path> <account@host>
+    local copy="$1" destpath="$2" peer="$3" snap guid remote
+    snap=$(zfs list -H -t snapshot -o name -s creation -d 1 "$copy" 2>/dev/null | tail -1)
+    [ -n "$snap" ] || { echo "    $copy has no snapshot at all, so there is nothing to prove it by"; return 1; }
+    snap="${snap#*@}"
+    guid=$(zfs get -H -o value guid "${copy}@${snap}" 2>/dev/null)
+    [ -n "$guid" ] || { echo "    could not read the guid of ${copy}@${snap} on this collector"; return 1; }
+    remote=$(ssh -n "${LOAD_SSH_OPTS[@]}" "$peer" \
+        "zfs get -H -o value guid '${destpath}@${snap}'" 2>/dev/null)
+    if [ -z "$remote" ]; then
+        echo "    ${destpath}@${snap} is not on ${peer%%@*}'s machine -- the copy's newest snapshot has not been recovered there"
+        return 1
+    fi
+    if [ "$remote" != "$guid" ]; then
+        echo "    ${destpath}@${snap} exists there but is a DIFFERENT snapshot (guid $remote, expected $guid) -- same name, other data"
+        return 1
+    fi
+    return 0
+}
+
+# Re-tag one section's managed-by marker. Not a field, so update_section_field
+# cannot do it: it is the second line of the section and it is what
+# section_owned_by reads to decide whose section this is. Changing it IS the
+# hand-over; everything else in this verb follows from it.
+section_retag_client() {   # <file> <exact header> <old name> <new name>
+    local file="$1" want="$2" old="$3" new="$4"
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v want="$want" -v old="# managed-by: zfs-backup.sh client=$old" \
+        -v new="# managed-by: zfs-backup.sh client=$new" '
+        $0 == want { emit=1; print; next }
+        emit && /^\[/ { emit=0 }
+        emit {
+            line=$0; sub(/^[ \t]+/, "", line)
+            if (line == old) { print new; hit=1; next }
+        }
+        { print }
+        END { exit(hit ? 0 : 3) }
+    ' "$file" > "$tmp"
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then rm -f "$tmp"; return "$rc"; fi
+    cat "$tmp" > "$file" && rm -f "$tmp"
+}
+
+# Swap the transport inside a flags string, leaving everything else byte for
+# byte. Rewriting the whole field would be easier and would silently drop the
+# bandwidth cap, the autotune flag and anything else a profile put there -- so
+# only the four things that name the OTHER MACHINE are touched: the key, the
+# known_hosts file, the host-key alias and the relationship label.
+move_reflag() {   # <old flags string> <new label>
+    local f="$1" newlabel="$2"
+    f=$(printf '%s' "$f" | sed -E \
+        -e "s#(-K )[^ ]+#\1${LOAD_KEYFILE}#" \
+        -e "s#(-k )[^ ]+#\1${LOAD_ALIAS_KH}#" \
+        -e "s#(-O HostKeyAlias=)[^ ]+#\1${LOAD_ALIAS}#" \
+        -e "s#(-L )[^ ]+#\1${newlabel}#")
+    printf '%s' "$f"
+}
+
+# Rename ONE section header, leaving its body untouched. The source-side
+# [prune:] scope carries the peer INSIDE the header --
+# [prune:acct@old-host:pool/ds] -- so a hand-over has to move the header, not
+# just a field. Refuses (3) when the header is not there rather than writing
+# nothing, for the same reason update_section_field does: a silent no-op would
+# leave the relationship pruning the OLD machine with no error.
+section_rename_header() {   # <file> <old header> <new header>
+    local file="$1" old="$2" new="$3"
+    grep -qxF "$old" "$file" 2>/dev/null || return 3
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v old="$old" -v new="$new" '$0 == old { print new; next } { print }' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$file" && rm -f "$tmp"
+}
+
+cmd_move_to_client() {   # <from> <onto> [--yes]
+    local from="" to="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            -*) die "move-to-client: unknown option '$a'" ;;
+            *)  if   [ -z "$from" ]; then from="$a"
+                elif [ -z "$to" ];   then to="$a"
+                else die "move-to-client: takes exactly two relationships -- the one to move FROM and the one to move ONTO. Got a third: '$a'."
+                fi ;;
+        esac
+    done
+    [ -n "$from" ] && [ -n "$to" ] || die "uzycie: zfs-backup.sh move-to-client <from> <onto> [--yes]
+Moves a relationship's COPY to a different machine's relationship. The copy does
+not move on disk -- what changes is which machine it is backed up from. The data
+must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
+    [ "$from" != "$to" ] || die "move-to-client: '$from' onto itself is not a move."
+
+    local from_rec="$CLIENTS_DIR/$from.conf" to_rec="$CLIENTS_DIR/$to.conf"
+    [ -r "$from_rec" ] || die "move-to-client: no relationship record for '$from' ($from_rec). 'zfs-backup.sh status' lists them."
+    [ -r "$to_rec" ]   || die "move-to-client: no relationship record for '$to' ($to_rec). Pair the new machine first -- the destination is a relationship this host already holds a key for, not a hostname."
+
+    # What <from> manages, read from its own record -- the same source
+    # remove-client reads, so the two verbs cannot disagree about what belongs
+    # to a relationship.
+    local mds mps rec_cfg rec_user
+    mds=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${MANAGED_DATASETS:-}" )
+    mps=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${MANAGED_PRUNE_SCOPE:-}" )
+    rec_cfg=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${CRON_CONFIG:-}" )
+    rec_user=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+    [ -n "$mds" ] || die "move-to-client: '$from' records no managed datasets, so there is nothing to hand over."
+
+    read_server_conf
+    cron_context_resolve adopt "" "" "$rec_cfg" "$rec_user"
+    local cronfile="$CRON_CTX_FILE"
+    [ -n "$cronfile" ] && [ -r "$cronfile" ] || die "move-to-client: no readable installed config for '$from' (${cronfile:-none resolved}) -- nothing to rewrite."
+
+    # The DESTINATION's connection: its key, its pinned host key, its port. Every
+    # question below is asked of that machine, and the flags written into the
+    # config are built from these same values, so the proof and the installed job
+    # cannot end up talking to different hosts.
+    load_client_and_connection "$to_rec" || die "move-to-client: could not load the connection for '$to'."
+    load_ssh_opts
+    local peer="${LOAD_ACCOUNT}@${LOAD_HOST}"
+
+    echo ">>> move-to-client: '$from' -> '$to'"
+    echo ">>>   the copy stays where it is; what moves is which machine it is backed up from."
+    echo ">>>   destination: $peer"
+    echo
+
+    # ---- THE PROOF, before a single signpost is touched --------------------
+    echo ">>> proving '$to' already holds the copy (by guid, per dataset)"
+    local ds srcfield destpath failed=0 proven=0
+    for ds in $mds; do
+        srcfield="$(section_field "$cronfile" "[dataset:$ds]" src)"
+        [ -n "$srcfield" ] || { echo "    [dataset:$ds] records no src -- cannot tell what path it should hold"; failed=1; continue; }
+        destpath="${srcfield#*@}"; destpath="${destpath#*:}"
+        if move_guid_proof "$ds" "$destpath" "$peer"; then
+            echo "    OK  $ds  ->  $peer:$destpath"
+            proven=$((proven + 1))
+        else
+            failed=1
+        fi
+    done
+    if [ "$failed" -ne 0 ]; then
+        die "move-to-client: NOTHING was changed. The datasets above are not on '$to' yet, so switching the backup over would point it at a machine without the data -- and nothing would discover that until the next pull, by which time '$from' is paused and '$to' has no common base.
+Recover them first:
+    zfs-backup.sh restore $from $to
+then run this again."
+    fi
+    echo ">>>   $proven dataset(s) proven present."
+    echo
+
+    # ---- the rewrite, on a workfile ---------------------------------------
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "move-to-client: mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cat "$cronfile" > "$workfile" || die "move-to-client: could not copy $cronfile"
+
+    local hdr newsrc newflags rc
+    for ds in $mds; do
+        hdr="[dataset:$ds]"
+        section_owned_by "$workfile" "$hdr" "$from" "$ds" \
+            || die "move-to-client: $hdr is not recorded as managed by '$from'. Refusing to take over a section this relationship does not own."
+        srcfield="$(section_field "$workfile" "$hdr" src)"
+        destpath="${srcfield#*@}"; destpath="${destpath#*:}"
+        newsrc="${peer}:${destpath}"
+        update_section_field "$workfile" "$hdr" src "$newsrc" \
+            || die "move-to-client: could not rewrite src in $hdr (rc=$?)"
+        newflags="$(move_reflag "$(section_field "$workfile" "$hdr" flags)" "$to")"
+        [ -z "$newflags" ] || update_section_field "$workfile" "$hdr" flags "$newflags" \
+            || die "move-to-client: could not rewrite flags in $hdr"
+        set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" \
+            || die "move-to-client: could not rewrite pair_label in $hdr"
+        section_retag_client "$workfile" "$hdr" "$from" "$to" \
+            || die "move-to-client: could not re-tag $hdr as managed by '$to' (rc=$?)"
+        echo ">>>   $hdr  src -> $newsrc"
+    done
+
+    # The prune scopes. Two shapes, and they move differently: a COLLECTOR-side
+    # scope is a local path and keeps its header, while a SOURCE-side scope
+    # carries the peer inside the header and has to be renamed outright.
+    local sc newhdr
+    for sc in $mps; do
+        hdr="[prune:$sc]"
+        grep -qxF "$hdr" "$workfile" 2>/dev/null || continue
+        case "$sc" in
+            *@*:*)
+                destpath="${sc#*@}"; destpath="${destpath#*:}"
+                newhdr="[prune:${peer}:${destpath}]"
+                newflags="$(move_reflag "$(section_field "$workfile" "$hdr" ssh_flags)" "$to")"
+                [ -z "$newflags" ] || update_section_field "$workfile" "$hdr" ssh_flags "$newflags" \
+                    || die "move-to-client: could not rewrite ssh_flags in $hdr"
+                set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" || die "move-to-client: pair_label in $hdr"
+                section_retag_client "$workfile" "$hdr" "$from" "$to" || die "move-to-client: re-tag $hdr"
+                if [ "$newhdr" != "$hdr" ]; then
+                    section_rename_header "$workfile" "$hdr" "$newhdr" \
+                        || die "move-to-client: could not rename $hdr to $newhdr (rc=$?)"
+                fi
+                echo ">>>   $hdr  ->  $newhdr" ;;
+            *)
+                set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" || die "move-to-client: pair_label in $hdr"
+                section_retag_client "$workfile" "$hdr" "$from" "$to" || die "move-to-client: re-tag $hdr"
+                echo ">>>   $hdr  stays (collector-side scope), now '$to'" ;;
+        esac
+    done
+    echo
+
+    # ---- preview, confirm, install ----------------------------------------
+    show_activation_proposal "$cronfile" "$workfile" || die "move-to-client: the proposed config could not be previewed -- nothing has been changed."
+    if [ "$yes" -ne 1 ]; then
+        printf "Wykonac to przeniesienie? [t/N] "
+        local ans; read -r ans
+        case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
+    fi
+    atomic_replace_and_install "$cronfile" "$workfile" || die "move-to-client: the install failed -- see above. The config and crontab were rolled back together."
+
+    # ---- and only now, the old relationship stands down --------------------
+    # AFTER the install, deliberately. Pausing first would stop the old
+    # machine's backups for however long the install takes, and if the install
+    # then failed the operator would be left with a paused relationship and an
+    # unchanged config -- a state that looks like a half-move and is not one.
+    if cmd_pause_client "$from" --reason="moved to '$to' on $(date -Is)" >/dev/null 2>&1; then
+        echo ">>> '$from' PAUSED -- its record and its manifest are untouched, and resume-client brings it back."
+    else
+        warn "the move is installed, but '$from' could NOT be paused. Its schedule still points at the old machine and will now find its sections gone. Pause it by hand: zfs-backup.sh pause-client $from"
+    fi
+
+    echo
+    echo ">>> done. What is now true:"
+    echo ">>>   the copy is unchanged on disk and is backed up from $peer."
+    echo ">>>   '$to' carries the schedule; '$from' is paused and keeps its record."
+    echo "!!!   the OLD machine is no longer backed up by anything. If it is still"
+    echo "!!!   running and still matters, that is now yours to decide -- this verb"
+    echo "!!!   does not retire it and has not touched it."
+}
+
 cmd_remove_client() {
     local name="${1:-}"
     [ -n "$name" ] || die "remove-client requires a client name"
@@ -10074,6 +10357,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
+        move-to-client)   shift; cmd_move_to_client "$@" ;;
         resume-client)    shift; cmd_resume_client "$@" ;;
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;
