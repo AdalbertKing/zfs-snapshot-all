@@ -111,38 +111,61 @@ This is the same line the estate already draws elsewhere (the tool does not
 restrict destructive operations an administrator is entitled to perform) and it
 applies to prompts and preconditions as much as to guards.
 
-## Open — under discussion
+## SETTLED: separate verbs, plus one sentence
 
-**Does `move-to-client` run the recovery itself, or refuse until the data is
-there?** Not decided.
+Owner decision, 2026-08-28: **"Przyjmujemy twoja rekomendacje."**
 
-The implementer's recommendation is SEPARATE, for a reason that is not
-aesthetic: recovery and hand-over are two different failure domains. A recovery
-takes hours and may need several attempts (mount, grant, replace), each its own
-conversation; the hand-over is seconds, local, and transactional. Composed, they
-produce a verb that can be half-done in two incompatible ways, and an operator
-mid-incident has to work out which half stopped.
+`move-to-client` does NOT run the recovery. It refuses until the data is there,
+and the GUID proof is what it refuses on.
 
-The GUID proof is the natural seam -- it is precisely the question "is the data
-there yet". A verb that both produces that condition and checks it is checking
-its own work.
+Recovery and hand-over are two different failure domains. A recovery takes hours
+and may need several attempts (mount, grant, replace), each its own conversation
+with the operator; the hand-over is seconds, local, and transactional. Composed,
+they make a verb that can be half-done in two incompatible ways, and someone
+mid-incident has to work out which half stopped. The GUID proof is the natural
+seam -- it is precisely "is the data there yet", and a verb that both produces
+that condition and checks it is checking its own work. Eight of the fourteen
+defects the 2026-08-27 restore lab found were exactly that shape.
 
-This project has already settled the same tension once: `activate` is an
-idempotent composite over `set-endpoint` / `verify-endpoint` / `final-catchup` /
-`activate-client`, and its own usage text says to invoke the steps directly only
-to recover a stuck activation. Separate, resumable steps; a composite on top if
-one is wanted.
+### The one argument for composing them, and the cheaper answer to it
 
-Following the principle recorded above, a composite should NOT be built ahead of
-use. Walk the path by hand first; a composite designed before anyone has run the
-steps is exactly the automaton the owner rejected.
+Composing would make the order impossible to get wrong. That matters, because
+the half-done state is SILENT: a recovery with no hand-over leaves data on a
+machine nothing points at, while the old relationship keeps running and looks
+healthy. Nobody finds out.
 
-**What the open question forces either way:** `move-to-client` must be
-IDEMPOTENT. Run against sections that have already moved it says so and exits
-zero -- not an error, not a second move. That is also the answer to "what if it
-dies halfway": if it stops between re-recording the sections and installing the
-crontab, the config says new and the crontab says old, and a re-run resolves it.
-Without idempotence that state has no exit but a hand edit.
+The answer is a sentence, not a composite. **`restore` closes by saying that the
+data landed on a machine no relationship points at, and names `move-to-client`
+as the next step.** The tool reports; the admin decides -- the principle recorded
+above, applied instead of worked around.
+
+### What would reopen this
+
+If the move turned out to have to happen inside the SAME pause as the recovery
+-- that is, if resuming the schedule between them corrupted the state. It should
+not: the new relationship is paused anyway, and the old one still points at the
+old machine, which still holds its own data. That is a lab question, not a
+reading question, and it gets answered on the lab before any of this is trusted.
+
+### Both verbs are idempotent
+
+`move-to-client` run against sections that have already moved says so and exits
+zero -- not an error, not a second move. That is also what makes "it died
+halfway" recoverable: if it stops between re-recording the sections and
+installing the crontab, the config says new and the crontab says old, and a
+re-run resolves it. Without idempotence that state has no exit but a hand edit.
+
+## Implementation order
+
+1. **Open the cross-host restore grammar.** `restore A:ds B:ds`, where B is a
+   relation label -- never a hostname. Nothing else in this scenario can be
+   expressed, let alone tested, until this exists. The destination relationship
+   supplies the address, the key, the account, the grant and the pause; the
+   SOURCE relationship supplies the copy that is read.
+2. **The closing sentence on `restore`**, which only has a case to report once
+   step 1 exists.
+3. **`move-to-client`**, with the GUID proof as its precondition.
+4. **The lab**, end to end, including the question in "What would reopen this".
 
 ## Not decided by this document
 
