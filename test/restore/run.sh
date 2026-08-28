@@ -2066,7 +2066,7 @@ xh_refuses() {   # <desc> <substring> <args...>
 }
 
 xh_refuses "xhost: a destination that is not a relation is refused, not read as a host" \
-    "is not a relationship this host records" pve2 nosuchrelation
+    "is not one this host records" pve2 nosuchrelation
 xh_refuses "xhost: a transport address is refused as a destination" \
     "not a transport address" pve2 root@pve3
 xh_refuses "xhost: --plan and a destination are refused together" \

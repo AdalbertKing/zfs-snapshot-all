@@ -10343,7 +10343,20 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                     # about which key reaches which host.
                     RESTORE_ENGINE_SSH="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
                     [ -n "${LOAD_PORT:-}" ] && RESTORE_ENGINE_SSH="$RESTORE_ENGINE_SSH -p $LOAD_PORT"
-                    export RESTORE_SSH_OPTS RESTORE_ENGINE_SSH
+                    # AND WHO IT IS. A destination relationship only has to be
+                    # PAIRED, not activated: it contributes a machine to write
+                    # to, and that is in its client record, not in the config.
+                    #
+                    # Reading it from the config instead would force the twin to
+                    # be activated first -- and an activated twin owns its own
+                    # (empty) copy sections, so after move-to-client it would own
+                    # two sets: the real copy it took over and the empty one it
+                    # was born with, both pulling the same source into different
+                    # places. Found by walking the lab setup on paper before
+                    # running it.
+                    RESTORE_DEST_PEER="${LOAD_ACCOUNT:-}@${LOAD_HOST:-}"
+                    [ "$RESTORE_DEST_PEER" = "@" ] && RESTORE_DEST_PEER=""
+                    export RESTORE_SSH_OPTS RESTORE_ENGINE_SSH RESTORE_DEST_PEER
                 fi
             fi
             exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;

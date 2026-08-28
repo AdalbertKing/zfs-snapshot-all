@@ -2144,9 +2144,26 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
         return 0
     fi
 
-    local peer
-    peer="$(restore_dest_peer "$config" "${onto%%:*}")" || \
-        die "restore: '${onto%%:*}' is not a relationship this host records, so there is no machine to recover onto. Relations come from 'restore --plan'. It is NOT read as a hostname, deliberately -- guessing is how a recovery lands on the wrong machine."
+    # HANDED IN BY THE FILE THAT OWNS THE ENDPOINTS, exactly like the ssh
+    # options beside it. zfs-backup.sh resolved the destination's client record
+    # to open the connection; the account@host it used is the same one the
+    # transfer must be addressed to, so taking a second answer from the config
+    # here would be two opinions about which machine this recovery is aimed at.
+    #
+    # It also means a destination only has to be PAIRED, not activated. An
+    # activated twin owns its own (empty) copy sections, so after
+    # move-to-client it would own two sets -- the real copy it took over and
+    # the empty one it was born with, both pulling the same source into
+    # different places. Found by walking the lab setup on paper before running
+    # it.
+    #
+    # The config lookup stays as the fallback for a destination that IS in the
+    # config but whose record the dispatch could not read.
+    local peer="${RESTORE_DEST_PEER:-}"
+    if [ -z "$peer" ]; then
+        peer="$(restore_dest_peer "$config" "${onto%%:*}")" || \
+            die "restore: the destination relationship '${onto%%:*}' is not one this host records, so there is no machine to recover onto. Pair it first -- a destination is a relationship this collector already holds a key for, not a hostname, and it is NOT read as one: guessing is how a recovery lands on the wrong machine."
+    fi
 
     # The two roots. Empty when the form is bare, in which case the source path
     # is kept verbatim.
