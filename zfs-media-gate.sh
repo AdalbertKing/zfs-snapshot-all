@@ -1,44 +1,58 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-# zfs-media-gate.sh -- is the removable replica's medium here right now?
+# zfs-media-gate.sh -- the import/export bracket around a replica onto removable
+# media.
 #
-# A replica onto rotating media is a relationship whose target is DELIBERATELY
-# absent most of the time: the disk is in a safe, in a car, or at the other site.
-# Every other relationship in this package treats an unreachable target as a
-# fault, because for them it is one. For this one it is the normal state, and
-# saying so is the whole job of this file.
+# THE SHAPE, from the owner (2026-08-28), modelled on FerroBackup's replica: a
+# source may have several replica targets -- three in the case that prompted
+# this -- and two of them are pools on disks that get unplugged and carried
+# away. So a write to one of those is bracketed:
 #
-# It answers one question and changes nothing:
+#     zpool import  ->  sync  ->  zpool export
 #
-#   exit 0   the medium is here and the landing dataset exists -- run the job
-#   exit 1   it is not -- skip the job, quietly, and record that we skipped
+# and the disk can be pulled the moment the run ends. Triggered from cron, or by
+# something firing when the medium is inserted; this file does not care which.
 #
-# The generated cron line reads that status, so a skipped run is not a failed
-# run: no alert, no non-zero exit, and the job's own log carries one line saying
-# which medium was missing and when it was last seen.
+# THE TRANSFER ITSELF IS NOT NEW. A replica onto a local pool is what
+# `zfs-backup.sh local-backup` already installs -- snapsend to a local target.
+# What was missing is everything around it, and one thing in particular:
 #
-# WHY A SEPARATE FILE, and not a flag on the engines. The engines are frozen, and
-# this is not a transfer decision -- it is a decision about whether to start one.
-# It is the same shape as zfs-pair-gate: a small, single-purpose program that
-# answers a question the big ones should not have to grow a branch for.
+#     THE ABSENCE OF ONE MEDIUM IS NOT AN ERROR.
 #
-# WHAT IT DOES NOT DO. It does not import, export, mount or touch the pool. An
-# operator plugs a disk in and takes it out; this only ever looks.
+# It is a disk in a safe. Every other relationship in this package treats an
+# unreachable target as a fault because for them it is one; here it is the
+# normal state most of the time, and one replica being away must not fail the
+# run, alarm anyone, or affect the other two.
 #
-#   zfs-media-gate.sh <pool-or-dataset> <label> [--stats FILE] [--quiet]
+#   zfs-media-gate.sh attach <pool> <label>   import if needed; 0 = go, 1 = away
+#   zfs-media-gate.sh detach <pool> <label>   export, but ONLY if we imported it
+#   zfs-media-gate.sh status <pool> <label>   look, change nothing
+#
+# ONLY WHAT WE TOOK. If the pool was already imported when `attach` ran, it was
+# somebody else's decision -- a person looking at it, another job, an operator
+# mid-task -- and `detach` leaves it alone. Exporting a pool this run did not
+# import would yank the floor out from under whoever did. Same discipline as the
+# restore's pause, and for the same reason.
 # ------------------------------------------------------------------------------
 set -uo pipefail
 
-VERSION='v1.0'
+VERSION='v1.1'
 
 usage() {
-    echo "Usage: $0 <pool-or-dataset> <label> [--stats FILE] [--quiet]" >&2
-    echo "  exit 0: the medium is present and the dataset exists" >&2
-    echo "  exit 1: it is absent -- the caller should skip its job without alerting" >&2
+    cat >&2 <<'EOF'
+Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--stats FILE] [--quiet]
+
+  attach   import the pool if it is not already imported.
+             0  the medium is here -- run the job
+             1  it is not here -- skip the job, quietly, WITHOUT alerting
+             2  something is wrong and a human is needed
+  detach   export the pool, but only if this tool imported it.
+  status   report presence; change nothing.
+EOF
     exit 2
 }
 
-TARGET=""; LABEL=""; STATS=""; QUIET=0
+VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -V|--version) echo "$VERSION"; exit 0 ;;
@@ -46,65 +60,124 @@ while [ "$#" -gt 0 ]; do
         --quiet)      QUIET=1; shift ;;
         --stats)      STATS="${2:-}"; shift 2 ;;
         --stats=*)    STATS="${1#--stats=}"; shift ;;
+        --dataset)    DATASET="${2:-}"; shift 2 ;;
+        --dataset=*)  DATASET="${1#--dataset=}"; shift ;;
         -*)           echo "unknown option: $1" >&2; usage ;;
-        *)            if   [ -z "$TARGET" ]; then TARGET="$1"
-                      elif [ -z "$LABEL" ];  then LABEL="$1"
+        *)            if   [ -z "$VERB" ];  then VERB="$1"
+                      elif [ -z "$POOL" ];  then POOL="$1"
+                      elif [ -z "$LABEL" ]; then LABEL="$1"
                       else echo "too many arguments: $1" >&2; usage
                       fi; shift ;;
     esac
 done
-[ -n "$TARGET" ] && [ -n "$LABEL" ] || usage
+[ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
+case "$VERB" in attach|detach|status) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
 
-# A label is a directory name under /var/lib and it reaches a log line. Same
-# charset as every other label in this package, checked here rather than
-# assumed: this program runs from cron with whatever the generator wrote.
-case "$LABEL" in
-    *[!A-Za-z0-9._-]*) echo "zfs-media-gate: '$LABEL' is not a valid relationship label" >&2; exit 2 ;;
-esac
+# A pool name and a label both reach a shell command and a file path. Checked
+# here rather than assumed: this runs from cron with whatever the generator
+# wrote, and from udev with whatever the rule passed.
+case "$LABEL" in *[!A-Za-z0-9._-]*) echo "zfs-media-gate: '$LABEL' is not a valid label" >&2; exit 2 ;; esac
+case "$POOL"  in *[!A-Za-z0-9._:-]*|''|-*) echo "zfs-media-gate: '$POOL' is not a valid pool name" >&2; exit 2 ;; esac
 
 command -v zfs   >/dev/null || { echo "zfs-media-gate: 'zfs' not found in PATH" >&2; exit 2; }
 command -v zpool >/dev/null || { echo "zfs-media-gate: 'zpool' not found in PATH" >&2; exit 2; }
 
 STATE_DIR="${MEDIA_STATE_DIR:-/var/lib/zfs-snapshot-all/media}"
 SEEN="$STATE_DIR/$LABEL.last-seen"
+OURS="$STATE_DIR/$LABEL.imported-by-us"
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s - %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
-
-emit() {   # <status> -- same schema as the engines' stats lines
+emit() {
     [ -n "$STATS" ] || return 0
-    printf '{"time":"%s","script":"%s","dataset":"%s","label":"%s","status":"%s"}\n' \
-        "$(date -u +%FT%TZ)" "$(basename "$0")" "$TARGET" "$LABEL" "$1" \
+    printf '{"time":"%s","script":"%s","pool":"%s","label":"%s","verb":"%s","status":"%s"}\n' \
+        "$(date -u +%FT%TZ)" "$(basename "$0")" "$POOL" "$LABEL" "$VERB" "$1" \
         >> "$STATS" 2>/dev/null || true
 }
+imported() { zpool list -H -o name "$POOL" >/dev/null 2>&1; }
 
-# THE POOL FIRST, THEN THE DATASET, and the two are reported differently.
-#
-# "The disk is not plugged in" and "the disk is here but the dataset I was told
-# to write to is not on it" are not the same event, and only the first is
-# normal. The second means the wrong medium is in the slot, or somebody renamed
-# something -- and an operator who is handed one message for both will treat the
-# dangerous one as routine.
-POOL="${TARGET%%/*}"
-
-if ! zpool list -H -o name "$POOL" >/dev/null 2>&1; then
-    last="never"
-    [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
-    say "SKIPPED: medium for '$LABEL' is not here -- pool '$POOL' is not imported (last seen: $last). Nothing was run and nothing is wrong; plug it in and the next scheduled run catches up."
-    emit skipped_absent
-    exit 1
-fi
-
-if ! zfs list -H -o name "$TARGET" >/dev/null 2>&1; then
-    say "REFUSING: pool '$POOL' IS imported but '$TARGET' is not on it. That is not an absent medium -- it is the wrong one, or the dataset was renamed or destroyed. Not skipping quietly: this needs a human."
+# The dataset check, run after the pool is in. "The disk is not plugged in" and
+# "a disk IS in the slot but not the one I was told to write to" are different
+# events and only the first is normal -- the second is the wrong medium, or a
+# rename, or a destroy. An operator handed one message for both learns to treat
+# the dangerous one as routine.
+check_dataset() {
+    [ -n "$DATASET" ] || return 0
+    zfs list -H -o name "$DATASET" >/dev/null 2>&1 && return 0
+    say "REFUSING: pool '$POOL' is imported but '$DATASET' is not on it. That is not an absent medium -- it is the wrong one, or the dataset was renamed or destroyed. A human is needed."
     emit wrong_medium
-    exit 2
-fi
+    return 2
+}
 
-# Present. Record when, because "how long has this disk been away" is the
-# question an operator actually asks, and nothing else in the package keeps it.
-if mkdir -p "$STATE_DIR" 2>/dev/null; then
-    date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || true
-fi
-say "medium for '$LABEL' is present ($TARGET)"
-emit present
-exit 0
+case "$VERB" in
+
+status)
+    if imported; then
+        check_dataset || exit $?
+        say "medium '$POOL' for '$LABEL' is present"
+        emit present; exit 0
+    fi
+    last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
+    say "medium '$POOL' for '$LABEL' is away (last seen: $last)"
+    emit absent; exit 1
+    ;;
+
+attach)
+    if imported; then
+        # Somebody else's decision. Recorded as NOT ours so detach leaves it.
+        rm -f "$OURS" 2>/dev/null || :
+        check_dataset || exit $?
+        mkdir -p "$STATE_DIR" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
+        say "medium '$POOL' for '$LABEL' was ALREADY imported -- using it, and detach will leave it as it found it."
+        emit present_not_ours; exit 0
+    fi
+
+    # AMBIGUITY IS A REFUSAL, NOT A CHOICE. Rotated media are usually identical
+    # disks holding a pool of the same name, and if two are plugged in at once
+    # `zpool import` sees two candidates. Picking one would mean writing this
+    # replica onto whichever disk ZFS happened to list first -- and the operator
+    # would have no way to know which.
+    cand="$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
+    if [ "$cand" -gt 1 ]; then
+        say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
+        emit ambiguous; exit 2
+    fi
+
+    if ! zpool import "$POOL" 2>/dev/null; then
+        last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
+        say "SKIPPED: medium '$POOL' for '$LABEL' is not here (last seen: $last). Nothing was run and nothing is wrong -- plug it in and the next run catches up."
+        emit skipped_absent; exit 1
+    fi
+
+    if ! check_dataset; then
+        # We imported it and cannot use it. Put it back the way we found it
+        # rather than leaving a pool imported that nobody asked for.
+        zpool export "$POOL" 2>/dev/null || say "and '$POOL' could NOT be exported again -- it is imported and unusable; look at it before pulling the disk."
+        exit 2
+    fi
+    mkdir -p "$STATE_DIR" 2>/dev/null && { date '+%Y-%m-%d %H:%M:%S' > "$SEEN"; : > "$OURS"; } 2>/dev/null || :
+    say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
+    emit imported; exit 0
+    ;;
+
+detach)
+    if [ ! -f "$OURS" ]; then
+        say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
+        emit left_alone; exit 0
+    fi
+    if ! imported; then
+        rm -f "$OURS" 2>/dev/null || :
+        say "'$POOL' is already gone -- nothing to export."
+        emit already_gone; exit 0
+    fi
+    # THE ONE FAILURE THAT MUST BE LOUD. An un-exported pool on a disk somebody
+    # is about to unplug is how a replica gets corrupted, and this is the last
+    # moment anything can say so.
+    if zpool export "$POOL" 2>/dev/null; then
+        rm -f "$OURS" 2>/dev/null || :
+        say "exported '$POOL' -- the disk can be unplugged."
+        emit exported; exit 0
+    fi
+    say "WARNING: could not export '$POOL'. DO NOT UNPLUG THE DISK. Something still holds the pool -- a mounted dataset, an open file, a running send. Find it (zpool export shows the reason above), then export by hand."
+    emit export_failed; exit 2
+    ;;
+esac
