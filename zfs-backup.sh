@@ -9176,17 +9176,27 @@ must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
     # What <from> manages, read from its own record -- the same source
     # remove-client reads, so the two verbs cannot disagree about what belongs
     # to a relationship.
-    local mds mps rec_cfg rec_user
-    mds=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${MANAGED_DATASETS:-}" )
-    mps=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${MANAGED_PRUNE_SCOPE:-}" )
-    rec_cfg=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${CRON_CONFIG:-}" )
+    # The record answers two questions and no more: WHICH config, and as WHICH
+    # account. What the relationship OWNS is asked of the config, because the
+    # marker there is the authority -- see config_sections_of_client, and the
+    # source-side prune the record's lists do not carry.
+    local rec_cfg rec_user
+    rec_cfg=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${CRON_CONFIG:-}" )
     rec_user=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
-    [ -n "$mds" ] || die "move-to-client: '$from' records no managed datasets, so there is nothing to hand over."
 
     read_server_conf
     cron_context_resolve adopt "" "" "$rec_cfg" "$rec_user"
     local cronfile="$CRON_CTX_FILE"
     [ -n "$cronfile" ] && [ -r "$cronfile" ] || die "move-to-client: no readable installed config for '$from' (${cronfile:-none resolved}) -- nothing to rewrite."
+
+    local mds="" mps="" _h
+    while IFS= read -r _h; do
+        case "$_h" in
+            "[dataset:"*) _h="${_h#[dataset:}"; mds="$mds ${_h%]}" ;;
+            "[prune:"*)   _h="${_h#[prune:}";   mps="$mps ${_h%]}" ;;
+        esac
+    done < <(config_sections_of_client "$cronfile" "$from")
+    [ -n "$mds" ] || die "move-to-client: $cronfile marks no [dataset:] section as managed by '$from', so there is nothing to hand over."
 
     # The DESTINATION's connection: its key, its pinned host key, its port. Every
     # question below is asked of that machine, and the flags written into the
@@ -9289,6 +9299,34 @@ then run this again."
         case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
     fi
     atomic_replace_and_install "$cronfile" "$workfile" || die "move-to-client: the install failed -- see above. The config and crontab were rolled back together."
+
+    # ---- the RECORDS follow the sections -----------------------------------
+    #
+    # Measured on the lab, 2026-08-28: the first move rewrote the config and
+    # left both records where they were, so the destination recorded no managed
+    # datasets at all and a second move refused with "nothing to hand over" --
+    # for a relationship that by then owned everything. `status` and
+    # remove-client read the same fields, so both would have been wrong about
+    # who owns what.
+    #
+    # Appended, not rewritten: a client record is an append-only log of
+    # decisions and the last value of a key wins when it is sourced. That is how
+    # every other verb writes to it, and it keeps the history of the move
+    # visible in the file rather than erasing it.
+    {
+        write_client_field MANAGED_DATASETS    "${mds# }"
+        write_client_field MANAGED_PRUNE_SCOPE "${mps# }"
+        write_client_field CRON_CONFIG         "$cronfile"
+        write_client_field LOCAL_USER          "${CRON_CTX_USER:-}"
+        write_client_field MOVED_FROM          "$from"
+        write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
+    } >> "$to_rec" || warn "the move is installed but '$to' could not record what it now owns -- fix $to_rec by hand before the next move"
+    {
+        write_client_field MANAGED_DATASETS    ""
+        write_client_field MANAGED_PRUNE_SCOPE ""
+        write_client_field MOVED_TO            "$to"
+        write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
+    } >> "$from_rec" || warn "the move is installed but '$from' still records the sections it gave away -- fix $from_rec by hand"
 
     # ---- and only now, the old relationship stands down --------------------
     # AFTER the install, deliberately. Pausing first would stop the old
