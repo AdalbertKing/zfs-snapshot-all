@@ -1804,8 +1804,58 @@
   Zmierzone na labie: najpierw "2 z 2 bez -L", po regeneracji "wszystkie 2
   niosa -L".
 
-  **KOLEJNOSC WDROZENIA JEST TWARDA: najpierw kod, potem crontaby.** Stary
-  `delsnaps` dostajac `-L` traktuje je jako pierwszy argument pozycyjny i
+  **KOLEJNOSC WDROZENIA (zatwierdzona 2026-08-28): NAJPIERW KOD, POTEM
+  CRONTABY.** Stary `delsnaps` dostajac `-L` traktuje je jako pierwszy argument
+  pozycyjny i **pada z rc=1** (zmierzone) — nic nie kasuje, ale caly prune tej
+  relacji staje i alarmuje az do aktualizacji kodu. Awaria glosna i bezpieczna,
+  ale awaria.
+
+  Kroki, w tej kolejnosci:
+
+  1. gałąź trafia na `main` (recenzent);
+  2. hosty **same** pobieraja kod — godzinny `git pull --ff-only origin main`
+     jest mechanizmem wdrozenia w tym projekcie; nic sie nie kopiuje recznie;
+  3. potwierdzic na hoscie, ze `delsnaps.sh -h` wymienia `-L`, **zanim**
+     ktokolwiek dotknie crontaba;
+  4. dopiero wtedy regeneracja: `gen-cron.sh -c <zainstalowany config>
+     --install` **uruchomiona jako konto relacji** (nie root — REPO_DIR
+     wyprowadza sie z miejsca, gdzie lezy skrypt);
+  5. przed instalacja zrobic kopie: `crontab -l -u <konto> > kopia`, po niej
+     zdiffowac. Jedna linia poza zarzadzanym blokiem — godzinny self-update
+     `git pull` — **ma przetrwac**; jesli znika, cofnac z kopii.
+
+  **ILE TO REALNIE DOTYCZY — PRZEGLAD FLOTY (tylko odczyt, 2026-08-28):**
+
+  | host | konto | linie prune | z `-L` | `pair_label` w configu |
+  |---|---|---|---|---|
+  | 192.168.28.8 pve2 | zfsbackup | 4 | 0 | **0** |
+  | 192.168.28.9 pve1 (metropolis) | zfsbackup | 4 | 0 | **0** |
+  | 192.168.28.99 pve9 | zfsbackup | 2 | 0 | 3 |
+  | 192.168.11.10 pve0 | zfsbackup | 12 | 0 | **0** |
+  | 192.168.11.11 pve1 | root + zfsbackup | 3 + 1 | 0 | **0** |
+
+  **Wniosek, ktory zmienia rozmiar tej roboty: regeneracja crontabow na
+  produkcji nie zmieni ANI JEDNEJ linii.** gen-cron emituje `-L` wylacznie tam,
+  gdzie sekcja niesie `pair_label`, a produkcja pracuje na starych configach v4,
+  ktore nie deklaruja relacji. Jedynym hostem, na ktorym cokolwiek sie zmieni,
+  jest **pve9** (kolektor labu). Pułapka kolejnosci z punktu wyzej jest
+  prawdziwa co do zasady i **nie ma dzis celu na flocie**.
+
+  **WIEKSZE ZNALEZISKO PRZY OKAZJI, DO DECYZJI WLASCICIELA: pauza logiczna jest
+  na produkcji BEZWLADNA.** Zmierzone: 26 linii wysylkowych na trzech hostach
+  (pve2 4, pve1 8, pve0 14) i **zero** z nich niesie `-L`. Do tego pve2 i pve1
+  maja **0 rekordow klientow** (sa strona obslugiwana, nie kolektorem).
+  `pause-client` na tych hostach albo nie ma czego zapauzowac, albo zapisze
+  znacznik, ktorego zadne zadanie nie czyta.
+
+  To nie jest regresja z tej rundy — tak bylo od poczatku modelu relacji;
+  produkcja po prostu nigdy na niego nie przeszla. Znaczy jednak dwie rzeczy:
+  odtwarzanie relacji produkcyjnej dzis i tak nie zadziala (config nie deklaruje
+  etykiety, wiec `restore <etykieta>` nie ma czego rozwiazac), a wymog pauzy,
+  ktory wlasnie stal sie twardy, jest na tych hostach nie do spelnienia.
+  Migracja produkcji na configi z `pair_label` to osobny etap.
+
+
   **pada z rc=1** (zmierzone) — nic nie kasuje, ale caly prune tej relacji
   staje i alarmuje az do aktualizacji kodu. Awaria glosna i bezpieczna, ale
   awaria. Regenerowac crontaby dopiero po tym, jak `-L` jest na hostach.
