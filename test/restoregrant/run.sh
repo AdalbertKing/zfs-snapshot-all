@@ -500,6 +500,22 @@ rs() {   # <rc list, space separated> -> "<rc>|<report>"
     ( set -u
       log(){ shift; printf '%s\n' "$*"; }
       eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
+      # The four collaborators this loop calls, stubbed for the same reason
+      # restore_one is: the subject here is the LOOP and the verdict.
+      #
+      # restore_pause_take is the one that matters to say out loud. Since
+      # 2026-08-27 a restore REFUSES when the relationship's schedule cannot be
+      # stood down -- owner decision, grant and pause both -- and that
+      # precondition is real, not a formality: with no stub this harness
+      # produced "NOTHING was attempted" for every case, which is the guard
+      # working. It is stubbed here rather than satisfied because a loop test
+      # has nothing to say about it, and it IS satisfied and asserted in both
+      # directions in test/restore/run.sh, where a real marker in a temp
+      # RELATIONSHIPS_DIR stands the schedule down the way production does.
+      restore_pause_take() { return 0; }
+      restore_pause_release() { :; }
+      restore_report_mount_state() { :; }
+      restore_report_backup_cost() { :; }
       RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
       k=0; for r in $1; do k=$((k+1))
           RESTORE_SCOPE_SRC+=("rpool/ds$k"); RESTORE_SCOPE_COPY+=("hdd/copy$k"); done

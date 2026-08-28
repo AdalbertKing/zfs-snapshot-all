@@ -451,10 +451,10 @@ emit_stats() {
 
 # Function to display script usage
 usage() {
-    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
-    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
-    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
-    echo "   or: $0 -G [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... <comma-separated list of datasets> <pattern> -H<N> -D<N> -W<N> -M<N> -Y<N>  (cascading GFS ladder, see header)"
+    echo "Usage: $0 [-R] [-n] [-F] [-v] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... [-L LABEL] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>"
+    echo "   or: $0 [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... [-L LABEL] <comma-separated list of datasets> <pattern> -Y<count> -M<count> -W<count> -D<count> -H<count>"
+    echo "   or: $0 -B [-R] [-n] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... [-L LABEL] <comma-separated list of datasets> <pattern> -y<years> -m<months> -w<weeks> -d<days> -h<hours>  (prune BOOKMARKS, age-based only)"
+    echo "   or: $0 -G [-R] [-n] [-F] [-p PORT] [-k known_hosts] [-c CIPHER] [-K KEYFILE] [-O ssh_opt]... [-P prefix:keep]... [-L LABEL] <comma-separated list of datasets> <pattern> -H<N> -D<N> -W<N> -M<N> -Y<N>  (cascading GFS ladder, see header)"
     echo "   dataset entries may be remote: [user@]host:dataset (user defaults to root)"
     echo "   -F clear-cut: zfs destroy -R (also removes descendant snapshots and dependent clones)"
     echo "   -B bookmark mode: prune snapsend.sh/snapget.sh's per-target bookmarks instead of snapshots"
@@ -960,6 +960,8 @@ if [ "$#" -lt 3 ]; then
 fi
 
 recurse=false
+# -L, the relationship this invocation belongs to. Empty means ungated.
+PAIR_LABEL=""
 
 # Consume leading option flags, in any order. -p/-k take an argument and accept
 # both the split (-p 2222) and attached (-p2222) forms. Anything that is not a
@@ -987,6 +989,8 @@ while [ "$#" -gt 0 ]; do
         -O) EXTRA_SSH_OPTS+=("$2"); shift 2 ;;
         -P) PROTECT_SPECS+=("$2"); shift 2 ;;
         -P*) PROTECT_SPECS+=("${1#-P}"); shift ;;
+        -L) PAIR_LABEL="$2"; shift 2 ;;
+        -L*) PAIR_LABEL="${1#-L}"; shift ;;
         *) break ;;
     esac
 done
@@ -1024,6 +1028,49 @@ datasets_list="$1"
 shift
 pattern="$1"
 shift
+
+# -L: THE PAUSE REACHES THE DESTRUCTIVE ENGINE TOO.
+#
+# Owner direction, 2026-08-27: "pausa ma wstrzymac wszelkie operacje cronowe
+# naszego pakietu z prunem wlacznie."
+#
+# snapsend.sh, snapget.sh and check-snap-age.sh have honoured the pause marker
+# since REV-20260804-045. This file -- the only one that DESTROYS -- did not,
+# and gen-cron emitted no -L on either prune line, so `pause-client` stopped the
+# backup and the monitor and left retention running on both sides of the
+# relationship.
+#
+# That is not theoretical. Measured on the lab, 2026-08-27: during a restore
+# campaign the source-side prune fired at :21, applied its GFS ladder to a
+# source a restore had just rolled back, and destroyed the recovery point
+# itself. The relationship was left with no common snapshot at all.
+#
+# Deliberately NOT "disable cron": the host's crontab carries jobs that are not
+# ours, and stopping the daemon to pause one relationship would stop those too.
+# The switch has to live in our own jobs, per relationship, which is what the
+# marker already is.
+#
+# Same contract as the other three, to the letter -- same marker path, same
+# charset rule, same exit 0 so cron stays quiet, and its own stats status so a
+# skipped prune can never be read back as a prune that ran. A run that OMITS -L
+# is not gated: logical pause is an orchestration switch, not a security
+# boundary, and this file does not pretend otherwise either.
+#
+# Placed here, after the arguments are named and before any ssh, any listing and
+# any destroy: a paused prune must not even ask the far side what it holds.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+if [ -n "$PAIR_LABEL" ]; then
+    case "$PAIR_LABEL" in
+        *[!A-Za-z0-9._-]*)
+            echo "Error: -L '$PAIR_LABEL' -- a relationship label is letters, digits, dot, dash, underscore only." >&2
+            exit 1 ;;
+    esac
+    if [ -f "$RELATIONSHIPS_DIR/$PAIR_LABEL/paused" ]; then
+        echo "SKIPPED: relationship $PAIR_LABEL is paused -- no snapshot was destroyed (resume: zfs-backup.sh resume-client $PAIR_LABEL)" >&2
+        emit_stats "$datasets_list" "$pattern" "skipped_paused" "0" 0 0
+        exit 0
+    fi
+fi
 
 # Built once, used by every ssh invocation in run_zfs. Default (-k omitted) is
 # StrictHostKeyChecking=accept-new, matching snapsend.sh/snapget.sh: trust the

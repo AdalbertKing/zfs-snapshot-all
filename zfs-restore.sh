@@ -1968,34 +1968,99 @@ restore_report_mount_state() {
 # was meant to protect. The logical pause is the right instrument: it stops the
 # jobs on this side, and leaves the channel this run needs open.
 #
-# WHAT IT ACTUALLY COVERS, said plainly because the honest answer is "not
-# enough": snapget.sh, snapsend.sh and check-snap-age.sh honour the marker via
-# -L. delsnaps.sh -- the only engine that DESTROYS -- has no -L and does not
-# read the marker at all, and gen-cron emits no -L on either prune line
-# (verified live on this collector: two prune jobs, zero carrying -L). So this
-# stops the backup and the monitor and does NOT stop the prune. It is worth
-# taking anyway, and it is worth saying what it leaves open rather than letting
-# the word "paused" imply the rest.
+# A PRECONDITION, NOT A COURTESY. Owner decision, 2026-08-27: "kazdy restore
+# musi zostac poprzedzony pauza. Grant i pausa. [...] dopiero wtedy maszyna jest
+# gotowa do przyjmowania backupow z kolektora."
+#
+# Two things make a machine ready to be written to, and they answer different
+# questions. The GRANT is the target's consent: that machine agreed to receive
+# this. The PAUSE is the schedule standing down: nothing else is going to touch
+# either side while the recovery runs. A restore with one and not the other is
+# either unauthorised or racing.
+#
+# So a pause that cannot be taken REFUSES the run. The first version of this
+# warned and continued, on the reasoning that refusing a recovery over an
+# orchestration switch would be the worse mistake. The owner decided otherwise,
+# and the lab is the argument: the schedule destroyed a recovery point during a
+# recovery, and "we warned you" is not a state anybody can act on at 3am.
+#
+# WHAT IT COVERS. Since 2026-08-27, all four: snapget.sh, snapsend.sh,
+# check-snap-age.sh and -- new, and the reason this changed -- delsnaps.sh, the
+# only engine that destroys. What the marker cannot do by itself is reach a
+# crontab that was generated before delsnaps had -L, so the coverage is
+# MEASURED on the installed crontab rather than assumed; see
+# restore_pause_coverage.
 #
 # Only what we took is given back. A relationship a human paused before this run
 # stays paused after it -- their decision is not this run's to undo.
 RESTORE_PAUSED_BY_US=""
 
+# Overridable for the same reason snapsend.sh, snapget.sh and delsnaps.sh make
+# it overridable -- one spelling of where the marker lives, and a harness that
+# wants to test the paused path can create a REAL pause instead of being handed
+# a way around the check.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+
 restore_pause_take() {   # <relation label>
     local label="$1"
     [ -n "$label" ] || return 0
     [ -x "$SCRIPT_DIR/zfs-backup.sh" ] || { log 1 "restore: no zfs-backup.sh beside this script, so the relationship cannot be paused for the run"; return 0; }
-    if [ -f "/var/lib/zfs-snapshot-all/relationships/$label/paused" ]; then
+    if [ -f "$RELATIONSHIPS_DIR/$label/paused" ]; then
         log 0 "restore: '$label' is ALREADY paused -- leaving it that way, and not resuming it at the end. Somebody paused it deliberately."
         return 0
     fi
     if bash "$SCRIPT_DIR/zfs-backup.sh" pause-client "$label" --reason="restore in progress" >/dev/null 2>&1; then
         RESTORE_PAUSED_BY_US="$label"
-        log 0 "restore: paused '$label' for the duration of this run -- the scheduled pull and the monitor will skip."
-        log 0 "restore: NOT the prune. delsnaps.sh takes no -L and does not read the pause marker, so a scheduled prune can still destroy snapshots on either side while this runs -- measured on this estate, where one destroyed a recovery point mid-campaign. Consider pausing cron yourself for a long recovery."
-    else
-        log 0 "restore: could NOT pause '$label' (needs root on this collector). Going ahead: refusing a recovery because an orchestration switch failed would be the worse mistake. Be aware the scheduled pull may run against a machine that is mid-restore."
+        log 0 "restore: paused '$label' for the duration of this run -- the scheduled pull, the prune and the monitor will all skip."
+        restore_pause_coverage "$label"
+        return 0
     fi
+    log 0 "restore: could NOT pause '$label', so this recovery does not start. A restore needs BOTH: the target's grant, and this relationship's schedule stood down -- otherwise the pull, the prune and the monitor keep running against data that is being rewritten underneath them."
+    log 0 "restore: pausing writes $RELATIONSHIPS_DIR/$label/paused and needs root on THIS collector. Take it yourself and re-run:"
+    log 0 "restore:     zfs-backup.sh pause-client $label --reason='restore'"
+    log 0 "restore: a pause you took stays yours -- this run will not lift it at the end."
+    return 1
+}
+
+# IS THE PAUSE ACTUALLY COVERING THE PRUNE, on this host, right now?
+#
+# The marker is only as good as the jobs that read it. delsnaps.sh gained -L on
+# 2026-08-27 and gen-cron emits it -- but a crontab generated before that still
+# carries prune lines with no -L, and those keep destroying snapshots through
+# any pause. That is not a hypothetical: it is the state this estate was in when
+# the prune destroyed a recovery point mid-campaign.
+#
+# So it is measured rather than assumed, on the installed crontab, and reported
+# as a count of lines that cannot be gated at all. Attribution is deliberately
+# not attempted: a delsnaps line WITHOUT -L belongs to no relationship as far as
+# the pause is concerned, which is exactly what makes it dangerous, and guessing
+# which one it was meant for would be the same class of mistake as the guessing
+# this file refuses everywhere else.
+#
+# Advisory: it reports and does not refuse. The pause IS in effect for
+# everything that reads it, the grant has been checked, and stopping a recovery
+# over a stale crontab would strand the operator with no way forward but the one
+# this message already gives them.
+restore_pause_coverage() {   # <relation label>
+    local label="$1" u n=0 total=0 line
+    for u in root "${SUDO_USER:-}" zfsbackup "zfsbackup-$label"; do
+        [ -n "$u" ] || continue
+        while IFS= read -r line; do
+            case "$line" in
+                *delsnaps.sh*)
+                    total=$((total + 1))
+                    case "$line" in *" -L "*) ;; *) n=$((n + 1)) ;; esac ;;
+            esac
+        done < <(crontab -l -u "$u" 2>/dev/null)
+    done
+    [ "$total" -gt 0 ] || return 0
+    if [ "$n" -eq 0 ]; then
+        log 1 "restore: all $total prune line(s) in the installed crontab carry -L, so the pause reaches them."
+        return 0
+    fi
+    log 0 "restore: WARNING -- $n of $total prune line(s) in this host's crontab carry NO -L, so the pause does NOT stop them. They can destroy snapshots on either side while this recovery runs."
+    log 0 "restore: that is a crontab generated before delsnaps.sh had -L (2026-08-27). Regenerate it: zfs-backup.sh gen-cron --install (or re-run activate-client for the relationships involved)."
+    log 0 "restore: until then, the only complete stop is to hold the whole crontab off for the recovery -- which also stops jobs that are not ours, so it is a decision, not a default."
     return 0
 }
 
@@ -2055,10 +2120,6 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     # process cannot inherit the first call's list.
     RESTORE_ROLLED_BACK=()
     RESTORE_LANDED=()
-    # Taken here, in the one runner every writing shape of this verb goes
-    # through, so no path can forget it. --plan never reaches this function.
-    restore_pause_take "${RESTORE_RELATION_LABEL:-}"
-
     if [ "$n" -eq 0 ]; then
         log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
         return 1
@@ -2071,6 +2132,22 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     # -- and it disappears on its own the day the step exists.
     if ! declare -F restore_one >/dev/null 2>&1; then
         log 0 "restore: the per-dataset step is not built yet, so this cannot recover anything. Nothing was changed. (restore_one, the next slice.)"
+        return 1
+    fi
+
+    # LAST OF THE PRECONDITIONS, AND AFTER THE STRUCTURAL ONES ON PURPOSE.
+    #
+    # This is the one runner every writing shape of the verb goes through, so no
+    # path can forget it; --plan never reaches this function. But it is taken
+    # after the two checks above, not before: pausing a live relationship and
+    # then releasing it again for a run that was going to refuse anyway is real
+    # churn on a real host, and a pause that appears and vanishes in the same
+    # second is the kind of thing an operator later cannot explain.
+    #
+    # Owner decision, 2026-08-27: grant AND pause. A restore does not start
+    # unless this relationship's schedule is standing down.
+    if ! restore_pause_take "${RESTORE_RELATION_LABEL:-}"; then
+        log 0 "restore: NOTHING was attempted -- the relationship's schedule could not be stood down (above)."
         return 1
     fi
 

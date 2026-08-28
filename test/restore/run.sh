@@ -2010,7 +2010,8 @@ else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lin
 # snapshots, so the run correctly gets as far as "nothing to restore from" and
 # reports it per dataset. That is the runner speaking, and the planner never
 # produces those lines.
-out="$(PATH="$WORK/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+mkdir -p "$SC/rel/pve2" && : > "$SC/rel/pve2/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
 case "$out" in
     *"per-dataset result"*) ok "scope: without --plan the scope RUNS, it does not plan" ;;
     *) bad "scope: without --plan the scope RUNS, it does not plan" \
@@ -2019,6 +2020,24 @@ esac
 n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
 if [ "$n" = 0 ]; then ok "scope: ...and prints no plan while doing it"
 else bad "scope: ...and prints no plan while doing it" "$n plan lines were printed by a run"; fi
+
+# THE PRECONDITION, BOTH WAYS ROUND. Owner decision 2026-08-27: a restore needs
+# the target's grant AND the relationship's schedule stood down. The run above
+# proves it proceeds when the pause is in place; this proves it refuses when it
+# is not, and that it refuses BEFORE touching anything.
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel-none" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"could NOT pause"*) ok "pause: a restore that cannot stand the schedule down refuses" ;;
+    *) bad "pause: a restore that cannot stand the schedule down refuses" "got: $(printf '%s' "$out" | head -2)" ;;
+esac
+case "$out" in
+    *"per-dataset result"*) bad "pause: ...and refuses BEFORE the runner touches a dataset" "the runner ran anyway" ;;
+    *) ok "pause: ...and refuses BEFORE the runner touches a dataset" ;;
+esac
+case "$out" in
+    *"pause-client pve2"*) ok "pause: ...and names the command that unblocks it" ;;
+    *) bad "pause: ...and names the command that unblocks it" "got: $(printf '%s' "$out" | head -3)" ;;
+esac
 
 
 # POSITIVE CONTROL, and it is what makes the six refusals above mean something:
@@ -2291,9 +2310,9 @@ case "$f3_len" in
     *) bad "f3: lists of different lengths are refused" "$(printf '%s' "$f3_len" | head -2)" ;;
 esac
 # And the single-sided forms still work, both ways round.
-f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --config="$SC/cfg" 2>&1)"
+f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --plan --config="$SC/cfg" 2>&1)"
 case "$f3_s" in *"vm-101-disk-0"*) ok "f3: --source alone still works" ;; *) bad "f3: --source alone still works" ;; esac
-f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --plan --config="$SC/cfg" 2>&1)"
 case "$f3_t" in *"vm-101-disk-0"*) ok "f3: --target alone still works" ;; *) bad "f3: --target alone still works" ;; esac
 
 # ============================================================================

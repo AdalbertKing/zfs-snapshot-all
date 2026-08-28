@@ -1112,14 +1112,34 @@ _allow_fields defaults  host_label repo_dir notify_script warn_script \
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
 # pair_label names the RELATIONSHIP (zfs-backup.sh client) a section belongs
-# to (REV-20260804-045). On a [dataset:] it reaches the transfer command
-# (-L) and that dataset's staleness monitor; on a [prune:] it reaches ONLY
-# the section's staleness monitor -- the delsnaps line itself is never
-# gated, because retention of what already landed stays correct while a
-# relationship is paused; only new transfers and the alarms about their
-# absence stop. Deliberately NOT in POLICY_FIELDS: no template/defaults
-# inheritance -- a label that silently spread to unrelated sections would
-# make one pause skip a stranger's backup.
+# to (REV-20260804-045). It reaches the transfer command, the staleness
+# monitor, AND the delsnaps line -- every job this package puts in a crontab
+# for that relationship.
+#
+# THE PRUNE LINE USED TO BE UNGATED, AND THAT REASONING IS WORTH KEEPING,
+# because it was right about the case it considered and wrong about the one
+# it did not. It said: "retention of what already landed stays correct while
+# a relationship is paused; only new transfers and the alarms about their
+# absence stop." True for an ordinary pause. False for the reason a pause is
+# most needed.
+#
+# Measured on the lab, 2026-08-27: during a restore campaign the source-side
+# prune fired at :21, applied its GFS ladder to a source the restore had just
+# rolled back, and destroyed the recovery point itself. The relationship was
+# left with no common snapshot at all. "Retention stays correct" assumed the
+# data underneath it was not moving; a restore is exactly when it is.
+#
+# Owner direction, 2026-08-27: "pausa ma wstrzymac wszelkie operacje cronowe
+# naszego pakietu z prunem wlacznie." delsnaps.sh gained -L for it and the
+# freeze was lifted for that change.
+#
+# NOT by disabling cron: the host's crontab carries jobs that are not ours,
+# and stopping the daemon to pause one relationship stops those too. The
+# switch stays per relationship, inside our own jobs.
+#
+# Deliberately NOT in POLICY_FIELDS: no template/defaults inheritance -- a
+# label that silently spread to unrelated sections would make one pause skip
+# a stranger's backup.
 # A [dataset:] reads all of POLICY_FIELDS off itself except the two wording
 # fields build_dataset deliberately takes from the TEMPLATE only: notify_word
 # (the noun in the synthesized text, a property of the tier) and
@@ -1146,7 +1166,7 @@ _allow_fields dataset   use_template pair_label recursive \
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
-_allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify
+_allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2055,7 +2075,7 @@ build_dataset() {
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}")
+            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
             # ---- monitor (rides this same pattern and the same scope) ----
@@ -2245,7 +2265,7 @@ build_prune_section() {
             retain_flag="$RESOLVED_RETAIN"
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
             die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
@@ -2287,7 +2307,7 @@ build_prune_section() {
             gplabel="$(resolve_field notify "$sec" "" "")" || gplabel=""
             gpnotify="$(notify_text "$host_label" "gfs" "prune" "$gplabel")"
         fi
-        GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
+        GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
         SCOPE_PATTERNS+=("${scope}${SEP}${gfs_pattern}")
     fi
 }
@@ -2359,7 +2379,17 @@ build_bookmark_prune_section() {
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune-bookmarks:$scope]" "$scope"
 
-    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${ssh_flags}")
+    # The same relationship gate as every other prune line. A bookmark is what
+    # a restore falls back to when the snapshot itself is gone, so a bookmark
+    # prune still running through a recovery can take the last thing standing.
+    local pair_label
+    pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
+    if [ -n "$pair_label" ]; then
+        case "$pair_label" in
+            *[!A-Za-z0-9._-]*) die "[prune-bookmarks:$scope]: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only (it becomes delsnaps -L and a directory name under /var/lib/zfs-snapshot-all/relationships)" ;;
+        esac
+    fi
+    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${ssh_flags}${SEP}${pair_label}")
 }
 ###############################################################################
 #END 3.5
@@ -2389,9 +2419,9 @@ group_send() {
 group_inline_prune() {
     declare -gA INLINE_PRUNE_GROUPS=()
     declare -ga INLINE_PRUNE_GROUP_ORDER=()
-    local e ds tier pattern retain schedule notify recursive key
+    local e ds tier pattern retain schedule notify recursive pairlbl key
     for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "$e"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "$e"
         # 'recursive' is IN the key. A delsnaps.sh line carries -R or it does
         # not, for every dataset it names -- so merging a recursive dataset
         # with a non-recursive one would silently give one of them the wrong
@@ -2413,7 +2443,14 @@ group_inline_prune() {
         # line per relationship per tier instead of one per tier -- which is
         # what the SEND side already emits, so the two sides now match rather
         # than one of them quietly folding relationships together.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}"
+        # pair_label joins the key for the same reason 'notify' did one field
+        # earlier: the line carries ONE -L, so a group spanning two
+        # relationships would gate both on one of them -- and a pause taken for
+        # a restore would leave the other relationship's retention running
+        # under a label that says it is stopped. In practice 'notify' already
+        # separates them; this makes the property structural rather than
+        # incidental to how the notify text happens to be built.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2684,25 +2721,26 @@ job_cron_line() {
 # share a parent is still a list, not a subtree, and collapsing it to a sweep
 # would prune snapshots nobody named.
 emit_inline_prune() {
-    local key list ds tier pattern retain schedule notify recursive
+    local key list ds tier pattern retain schedule notify recursive pairlbl
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
         list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "${members[0]}"
 
         local -a targets=()
-        local m mds mtier mpat mret msch mnot mrec
+        local m mds mtier mpat mret msch mnot mrec mlbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec <<< "$m"
+            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec mlbl <<< "$m"
             targets+=("$mds")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local rflag=""
+        local rflag="" lflag=""
         [ "$recursive" = "1" ] && rflag="-R "
-        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -2710,14 +2748,15 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut sshflags
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags <<< "$e"
-        local flag="" fflag="" sflag=""
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -2725,14 +2764,15 @@ emit_prune_sections() {
 # gfs=yes sections: one combined delsnaps.sh -G line per section, covering
 # every contributing tier's retain count at once (see build_prune_section).
 emit_gfs_prune_sections() {
-    local e scope pattern retain schedule notify recursive clearcut sshflags
+    local e scope pattern retain schedule notify recursive clearcut sshflags pairlbl
     for e in "${GFS_PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags <<< "$e"
-        local flag="" fflag="" sflag=""
+        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }

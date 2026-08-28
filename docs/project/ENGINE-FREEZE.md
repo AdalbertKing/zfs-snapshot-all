@@ -2,7 +2,7 @@
 
 <!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
 <!-- frozen: snapget.sh 100755 94a189172a3dc9e431e9bf01da58a97b89d595b8 -->
-<!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
+<!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
 <!-- unfreeze: - -->
@@ -67,6 +67,43 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-27 (delsnaps.sh): **`-L` -- the pause reaches the engine that
+  destroys.** Owner direction, verbatim: "Jesli nalezy uzupelnic silnik, czyli
+  delsnaps o te funkcje i go odmrozic. Zrob to. pausa ma wstrzymac wszelkie
+  operacje cronowe naszego pakietu z prunem wlacznie."
+
+  This is a BEHAVIOUR change, not a diagnostic one, and it is the first on this
+  file since the freeze.
+
+  snapsend.sh, snapget.sh and check-snap-age.sh have honoured the logical pause
+  marker since REV-20260804-045. delsnaps.sh did not, and gen-cron emitted no
+  `-L` on any prune line -- by an explicit decision recorded in gen-cron.sh:
+  "retention of what already landed stays correct while a relationship is
+  paused; only new transfers and the alarms about their absence stop."
+
+  That reasoning was right about the case it considered and wrong about the one
+  it did not. Measured on the lab, 2026-08-27: during a restore campaign the
+  source-side prune fired at :21, applied its GFS ladder to a source the restore
+  had just rolled back, and destroyed the recovery point itself. The
+  relationship was left with no common snapshot at all. "Retention stays
+  correct" assumes the data underneath it is not moving; a restore is precisely
+  when it is.
+
+  Scope: one flag taking an argument, free in delsnaps' own parser, in both the
+  split and attached spellings its neighbours already accept. The gate is the
+  same contract as the other three engines, to the letter -- same marker path,
+  same charset rule, exit 0 so cron stays quiet, and its own `skipped_paused`
+  stats status so a skipped prune can never be read back as a prune that ran. A
+  run that omits `-L` is not gated: logical pause is an orchestration switch,
+  not a security boundary, and this file does not pretend otherwise either.
+
+  Placed after the arguments are named and before any ssh, any listing and any
+  destroy: a paused prune must not even ask the far side what it holds.
+
+  Considered and rejected: stopping cron. The host's crontab carries jobs that
+  are not ours, and stopping the daemon to pause one relationship stops those
+  too -- the owner named that trap before I could walk into it.
 
 - 2026-08-27 (snapget.sh): **the refusal named a remedy the account cannot run,
   and the remedy that fits said nothing when it failed.** Same owner direction
