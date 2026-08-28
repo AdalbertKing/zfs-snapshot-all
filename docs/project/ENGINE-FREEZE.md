@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
-<!-- frozen: snapget.sh 100755 94a189172a3dc9e431e9bf01da58a97b89d595b8 -->
+<!-- frozen: snapget.sh 100755 4a929fff18b262e0b1c1e309f4268e86d39ec403 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -67,6 +67,36 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-28 (snapget.sh): **the remedy this file prints destroys bookmarks, and
+  did not say so.** Owner direction: "Tak" -- to the implementer's proposal after
+  the measurement below.
+
+  DIAGNOSIS ONLY. Same refusal, same status, same way out; one sentence added to
+  each of the two branches that name `zfs rollback -r`.
+
+  Measured on the lab, 2026-08-28, on real ZFS:
+
+      recv -F, target NOT diverged      bookmark survives
+      recv -F, target diverged (rolled  bookmark SURVIVES -- recv destroys
+        back, snapshot destroyed)         snapshots, not bookmarks
+      zfs rollback -r to an earlier     bookmark DESTROYED
+        point
+
+  So the automatic path is safe and the MANUAL remedy is the one that kills
+  them -- and this file is where an operator is told to run it.
+
+  It matters because of what a bookmark on a copy is for. `record_send_bookmark`
+  leaves one per target, and for a replica onto removable media that bookmark is
+  the anchor the disk returns to: it lets a month-old disk take an increment
+  instead of a full re-seed, and it works even though the snapshot it points at
+  was pruned long ago. Measured the same afternoon: with the anchor gone and no
+  common snapshot left, the engine fails with "destination has snapshots (eg.
+  ...) must destroy them to overwrite it" -- loud and safe, and the only way
+  forward is -f, which re-seeds the whole disk.
+
+  The sentence names the command to look first (zfs list -t bookmark -d 1), so
+  the loss is a decision rather than a surprise.
 
 - 2026-08-27 (delsnaps.sh): **`-L` -- the pause reaches the engine that
   destroys.** Owner direction, verbatim: "Jesli nalezy uzupelnic silnik, czyli

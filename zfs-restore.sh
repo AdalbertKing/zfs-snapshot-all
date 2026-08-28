@@ -1960,6 +1960,7 @@ restore_report_backup_cost() {
     log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
     log 0 "restore:   discard them: zfs rollback -r <copy>@<the point this restore used>, one per dataset. That drops those snapshots AND returns the copy to the point, which is what the next pull needs -- destroying the snapshots alone leaves the copy's filesystem where they left it and the pull refuses again. No root, nothing re-sent. The period that was rolled away then exists nowhere."
     log 0 "restore: the refusal names the snapshots and the common point, so no list has to be reconstructed. -f would also clear it, by destroying the copy and re-sending every byte, and -f needs root."
+    log 0 "restore: and BEFORE running that rollback -- it destroys BOOKMARKS on the copy as well as snapshots (measured 2026-08-28; zfs recv -F does not). A bookmark on a copy is the anchor a replica onto removable media comes back to, so losing it turns that disk's next return into a full re-seed. List them first: zfs list -t bookmark -d 1 <copy>."
 
 }
 
