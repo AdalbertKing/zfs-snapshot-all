@@ -571,8 +571,10 @@ R120=REV-20260814-120
 APPROVAL=211d378628886c0683f817af31454f442dc3ada7
 APPROVED_IMPL=46c13a6c132f8ff7428876e6806ee2fd5709a583
 world t13
-printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
-    "$R120" "$APPROVED_IMPL" "$R120" > "$W/docs/internal/reviews/$R120.md"
+# Deliberately use the protocol's minimum reviewer header. Closure must derive
+# the canonical response path exactly as approval and the state generator do.
+printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+    "$R120" "$APPROVED_IMPL" > "$W/docs/internal/reviews/$R120.md"
 respond "$R120" IMPLEMENTED "$TIP"
 if tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP"; then
     bad "closure refuses when the approval covered a superseded implementation" "it succeeded"

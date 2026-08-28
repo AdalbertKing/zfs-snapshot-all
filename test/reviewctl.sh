@@ -653,7 +653,10 @@ tx_close() {   # <rev> <approval-commit> <expected-parent>
     approved_impl="$(git -C "$g" show "$acommit:docs/internal/reviews/$rev.md" 2>/dev/null \
                      | sed -n 's|^<!-- reviewed-implementation: *\([^ ][^>]*[^ ]\) *-->$|\1|p' | head -1)"
     local rpath rimpl
-    rpath="$(hdr "$rfile" response)"
+    # Same canonical-path rule as approval: `response:` is not part of the
+    # minimum reviewer header and cannot be a hidden prerequisite for closing
+    # a state the generator and approval writer both accept.
+    rpath="docs/internal/reviews/responses/$rev.md"
     rimpl="$(hdr "$REPO/$rpath" implementation)"
     [ -n "$rimpl" ] || tx_die "$rev: the response carries no implementation header, so there is nothing a closure can be checked against"
     [ "$approved_impl" = "$rimpl" ] \
