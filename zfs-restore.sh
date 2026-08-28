@@ -2007,6 +2007,10 @@ restore_pause_take() {   # <relation label>
     [ -x "$SCRIPT_DIR/zfs-backup.sh" ] || { log 1 "restore: no zfs-backup.sh beside this script, so the relationship cannot be paused for the run"; return 0; }
     if [ -f "$RELATIONSHIPS_DIR/$label/paused" ]; then
         log 0 "restore: '$label' is ALREADY paused -- leaving it that way, and not resuming it at the end. Somebody paused it deliberately."
+        # Coverage is a property of the PAUSE, not of who took it. Reported here
+        # too, or a recovery that ran under somebody else's pause would be the
+        # one that never heard the crontab was not gated.
+        restore_pause_coverage "$label"
         return 0
     fi
     if bash "$SCRIPT_DIR/zfs-backup.sh" pause-client "$label" --reason="restore in progress" >/dev/null 2>&1; then
