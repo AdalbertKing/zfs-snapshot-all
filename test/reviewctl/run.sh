@@ -175,8 +175,26 @@ if [ -n "$ORPHAN" ]; then
       *"$R"*implementation*"$ORPHAN"*) ok "the refusal names the REV, the field and the SHA" ;;
       *) bad "the refusal names the REV, the field and the SHA" "$msg" ;;
     esac
+
+    # The same commit is valid while checking a PR candidate that contains it.
+    # Without this prospective boundary, the implementation PR cannot carry
+    # its generated ledger update: origin/main rejects the SHA until after the
+    # merge, guaranteeing a stale handoff or a second repair PR.
+    REVIEWCTL_REPO="$W" REVIEWCTL_PUBREF="$ORPHAN" "$CTL" --generate >/dev/null 2>&1
+    candidate_state="$(awk -F'|' -v r=" $R " '$2==r {gsub(/^ +| +$/,"",$3); print $3}' "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+    [ "$candidate_state" = IMPLEMENTED ] \
+        && ok "the same commit is accepted from a candidate ref that contains it" \
+        || bad "the same commit is accepted from a candidate ref that contains it" "got=$candidate_state"
 else
     bad "a REAL commit that is not on the published branch is refused" "could not build an orphan commit"
+fi
+
+world p4b; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED "$sha1"
+msg="$(REVIEWCTL_REPO="$W" REVIEWCTL_PUBREF=not-a-real-ref "$CTL" --generate 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$msg" in *"not-a-real-ref"*) true;; *) false;; esac; then
+    ok "an invalid candidate publication ref fails closed and is named"
+else
+    bad "an invalid candidate publication ref fails closed and is named" "$msg"
 fi
 
 # The reviewer's own header is held to the same standard -- a review that pins
@@ -383,8 +401,11 @@ OLD="$(git -C "$REPO" rev-parse origin/main~3)"
 # a world holding one submitted-but-unreviewed REV
 txworld() {   # <name>
     world "$1"
-    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
-        "$R" "$OLD" "$R" > "$W/docs/internal/reviews/$R.md"
+    # Use exactly the minimum reviewer header promised by PROTOCOL.md. The
+    # transactional writer must derive the canonical response path from REV;
+    # an optional legacy `response:` pointer cannot be a hidden precondition.
+    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+        "$R" "$OLD" > "$W/docs/internal/reviews/$R.md"
     respond "$R" IMPLEMENTED "$sha1"
 }
 tx()      { REVIEWCTL_REPO="$W" "$CTL" "$@" >"$TMPD/out" 2>&1; }

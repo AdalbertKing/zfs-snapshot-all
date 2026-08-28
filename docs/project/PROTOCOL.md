@@ -3,7 +3,7 @@
 
 Status: **ACTIVE — V2.2 agreed and in use**
 
-Revision date: 2026-08-27
+Revision date: 2026-08-28
 Original V2 agreement: 2026-08-07
 
 This document consolidates:
@@ -887,8 +887,13 @@ Every profile must satisfy all of these:
     published ref is WIP, never a submission or handoff. Until read-back, the
     publisher must report `not published, no handoff yet` rather than
     `published`, `submitted`, `routed`, or `handed off`.
+11. Pre-merge verification checks generated review state against the candidate
+    publication ref (`HEAD` in Profile-A PR CI), so commits contained by the PR
+    are valid before they reach `main`. Post-merge read-back checks canonical
+    `main`. Using `main` for both boundaries makes a correct same-PR handoff
+    impossible; using the candidate for both would mistake WIP for publication.
 
-The last rule follows from an observed V2 failure mode: Git can correctly replay a stale generated file even though the underlying facts changed. Generated output has no independent truth; its correct value is the value regenerated from current canonical facts.
+Invariant 9 follows from an observed V2 failure mode: Git can correctly replay a stale generated file even though the underlying facts changed. Generated output has no independent truth; its correct value is the value regenerated from current canonical facts.
 
 ## Profile health-check contract
 
@@ -952,6 +957,14 @@ visible. The failure was permitted by stale direct-main instructions in both
 agent entry files and by treating PR creation as completion despite the existing
 role-branch rule. Invariant 10 now makes the completion evidence explicit and
 symmetric: merge, fresh `main` read-back, expected ledger transition.
+
+The next implementation exposed a second half of the same fault: PR #168
+contained a valid response and implementation SHA, but `impact.sh --verify` no
+longer invoked `reviewctl`, so CI stayed green while canonical routing remained
+stale. The check had been removed during the temporary protocol retirement and
+was not restored when V2 became active again. It now verifies the PR candidate
+against `HEAD`; full-history CI makes the reachability proof meaningful, and
+the merge/read-back rule above remains the publication boundary.
 
 This prevents branch WIP from becoming a second informal communication channel.
 

@@ -24,6 +24,7 @@ VERSION='v1.1'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONF="${IMPACT_CONF:-$SCRIPT_DIR/deps.conf}"
+REVIEWCTL="${REVIEWCTL:-$SCRIPT_DIR/reviewctl.sh}"
 
 die() { echo "impact.sh: $*" >&2; exit 1; }
 
@@ -340,8 +341,7 @@ verify() {
     no_conflict_markers || rc=1
     status_freshness || rc=1
     engine_freeze || rc=1
-    # protocol_verify (the review-ledger check) was removed here on 2026-08-20 --
-    # see the block above `status_freshness` for why, and how to run it by hand.
+    protocol_verify || rc=1
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
     return $rc
@@ -375,31 +375,19 @@ verify() {
 # was explicitly rejected, and rightly -- it would fail on rewording and pass
 # on the thing that matters.
 #
-# THE REVIEW-LEDGER CHECK USED TO RUN HERE, AND NO LONGER DOES (2026-08-20).
-#
-# `protocol_verify` ran `test/reviewctl.sh --verify` as part of --verify, which
-# is a required CI check, which made the coherence of docs/internal/reviews/ a
-# merge gate. HANDOFF.md retired the review protocol on 2026-08-15 -- "No
-# reviewer. No REV files, no REVIEW_LEDGER.md routing, no response files" -- so
-# for five days the gate policed a process nobody was running. The apparatus
-# outliving its own abolition is the specific failure that reset was meant to
-# end.
-#
-# What it cost, beyond the seconds: this check is the ONLY reason the graph job
-# needed `fetch-depth: 0`. reviewctl asserts that every commit-bearing review
-# header names a SHA reachable from the published branch, so CI had to clone the
-# entire history of the repository to validate an archive.
-#
-# NOTHING WAS DELETED. reviewctl.sh, its own suite, and all 127 REV files with
-# their 119 responses stay exactly where they are -- they are the project's
-# history and the owner's decision is that they go, if ever, at the end. What
-# changed is only that they stopped being a condition for merging:
-#
-#     ./test/reviewctl.sh --verify        # on demand, whenever it is wanted
-#
-# Removing the call rather than wrapping it in a flag is deliberate. An
-# opt-in gate that defaults to off is still a gate someone re-enables by
-# accident, and the honest statement is that this is not checked any more.
+# The review protocol was reactivated after its temporary 2026-08-15 retirement,
+# so its derived views are once again part of the normal gate. In PR CI the
+# reachability boundary is the candidate HEAD: an implementation commit carried
+# by the PR is not on origin/main yet, but must be an ancestor of what would be
+# merged. Canonical publication remains a separate post-merge main read-back.
+protocol_verify() {
+    echo "== review ledger and routing match the publication candidate"
+    if [ ! -x "$REVIEWCTL" ]; then
+        echo "  reviewctl is missing or not executable: $REVIEWCTL"
+        return 1
+    fi
+    REVIEWCTL_PUBREF=HEAD "$REVIEWCTL" --verify
+}
 
 STATUS_FILE="docs/PROJECT_STATUS.md"
 RDIR_FREEZE="$REPO/docs/internal/reviews"
