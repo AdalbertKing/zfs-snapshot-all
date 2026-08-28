@@ -58,13 +58,18 @@ hdr() {   # <file> <field>
 #
 # The publication ref is origin/main when a remote-tracking branch exists, and
 # HEAD otherwise (a clone with no remote can still check internal coherence).
+# REVIEWCTL_PUBREF may name a prospective publication ref, notably HEAD in PR
+# CI. That lets one PR carry both a response and the derived routing views even
+# though its implementation commit is, correctly, not reachable from main yet.
+# The override changes only the reachability vantage point; canonical
+# publication still requires a post-merge read-back from main.
 # GITREPO is the PROJECT repository, which is not always $REPO: REVIEWCTL_REPO
 # relocates the ARTIFACT tree so the suite can build throwaway layouts, but the
 # SHAs in those artifacts always name commits of the project. So resolve git
 # from the relocated tree when it happens to be a checkout, and from this
 # script's own location otherwise.
 GITREPO=""
-PUBREF=""
+PUBREF="${REVIEWCTL_PUBREF:-}"
 gitrepo() {
     [ -n "$GITREPO" ] && { echo "$GITREPO"; return; }
     if git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -75,13 +80,18 @@ gitrepo() {
     echo "$GITREPO"
 }
 pubref() {
-    [ -n "$PUBREF" ] && { echo "$PUBREF"; return; }
-    if git -C "$(gitrepo)" rev-parse --verify -q origin/main >/dev/null 2>&1; then
-        PUBREF=origin/main
-    else
-        PUBREF=HEAD
+    local ref="$PUBREF" g
+    g="$(gitrepo)"
+    if [ -z "$ref" ]; then
+        if git -C "$g" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+            ref=origin/main
+        else
+            ref=HEAD
+        fi
     fi
-    echo "$PUBREF"
+    git -C "$g" rev-parse --verify -q "$ref^{commit}" >/dev/null 2>&1 \
+        || { echo "reviewctl: publication ref '$ref' does not resolve to a commit" >&2; return 1; }
+    echo "$ref"
 }
 
 # REV-20260809-080 F1. A commit-bearing header must be CANONICAL before any
@@ -128,7 +138,10 @@ require_commit() {   # <rev> <field> <value>
         err "$rev: $field names $sha but there is no git repository to resolve it against; refusing to publish an unverifiable commit reference"
         return 1
     fi
-    ref="$(pubref)"
+    if ! ref="$(pubref)"; then
+        err "$rev: cannot validate $field against the publication ref"
+        return 1
+    fi
     if ! git -C "$g" cat-file -e "${sha}^{commit}" 2>/dev/null; then
         err "$rev: $field names $sha, which is not a commit in this repository"
         return 1
@@ -482,7 +495,7 @@ tx_sha_ok() {   # <label> <value> -- canonical AND reachable, or refuse
         || tx_die "$label names $sha but there is no git repository to resolve it against; refusing to write an unverifiable commit reference"
     git -C "$g" cat-file -e "${sha}^{commit}" 2>/dev/null \
         || tx_die "$label names $sha, which is not a commit in this repository"
-    ref="$(pubref)"
+    ref="$(pubref)" || tx_die "cannot validate $label against the publication ref"
     git -C "$g" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null \
         || tx_die "$label names $sha, which is a commit but is not reachable from $ref -- unpushed, or rewritten and orphaned"
 }
@@ -564,8 +577,13 @@ tx_approve() {   # <rev> <impl-sha> <expected-parent>
     # This is the REV-120 failure in one line: the closure prose approved 46c13a6
     # while the header still pointed at the round-1 SHA.
     local pfile pimpl
-    pfile="$REPO/$(hdr "$rfile" response)"
-    [ -f "$pfile" ] || tx_die "$rev: the review names response '$(hdr "$rfile" response)', which does not exist -- there is nothing to approve"
+    # Response filenames are canonical by Principle 4. Do not require the
+    # optional legacy `response:` pointer: it is absent from the protocol's
+    # minimum reviewer header, and the generator already discovers the same
+    # canonical file by REV identity. Requiring it only in the writer made a
+    # state that generated as IMPLEMENTED impossible to approve.
+    pfile="$RDIR/responses/$rev.md"
+    [ -f "$pfile" ] || tx_die "$rev: canonical response ${pfile#$REPO/} does not exist -- there is nothing to approve"
     pimpl="$(hdr "$pfile" implementation)"
     [ -n "$pimpl" ] || tx_die "$rev: the response carries no implementation header -- nothing has been submitted to approve"
     [ "$pimpl" = "$impl" ] || tx_die "$rev: --implementation is $impl but the response currently submits $pimpl -- approve what was submitted, or ask for a resubmission"
