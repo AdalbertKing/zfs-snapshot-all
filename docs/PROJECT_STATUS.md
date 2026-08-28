@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f84559895f3e3214 -->
+<!-- status-covers-digest: 3c31d42cbe3bef18 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1718,6 +1718,70 @@
   zamrozony godzinowy i niezamrozony dzienny oba padaja; kontrola pozytywna na
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
+
+- **ODTWARZANIE NA INNA MASZYNE I `move-to-client` — DOWIEDZIONE NA TRZECH
+  HOSTACH (2026-08-28).** pve9 (kolektor) trzyma kopie relacji `lab1` z pve1.
+  Sparowano pve2 jako `lab2`, odtworzono na nia cala relacje, przekazano jej
+  kopie, i wrocono.
+
+  **Scenariusz wlasciciela, zrealizowany w calosci:** relacja, ktorej maszyna
+  jest wymieniana, **nie jest klonowana — przenosi sie**. Kopia zostaje na
+  kolektorze; zmienia sie to, z ktorej maszyny jest backupowana.
+
+      zfs-backup.sh restore lab1 lab2      # odzysk na nowa maszyne
+      zfs-backup.sh move-to-client lab1 lab2   # przekazanie kopii
+
+  **Dowod, o ktory chodzilo:** po przeniesieniu kopia miala **22 snapshoty** —
+  najstarszy z ery pve1, najnowszy z pierwszego backupu z pve2 — **jedna ciagla
+  linia przez podmiane maszyny**, 10,1 MB, zero ponownego seedu. To jest cala
+  teza tej decyzji: "bez sensu by bylo kopiowanie w te i we wte".
+
+  **Cztery wady, wszystkie z labu:**
+
+  | # | wada |
+  |---|---|
+  | F23 | `replace` na **korzeniu nadanego zakresu** niszczyl sama delegacje — `zfs allow` siedzi NA datasecie, a odtworzenie go wymaga praw na rodzicu, ktorych konto delegowane nie ma. Zostawilo cel bez datasetu, bez zgody i bez mozliwosci zrobienia jednego i drugiego |
+  | F24 | ...i nie musialo: **pusty dataset przyjmuje pelny strumien przez `recv -F`**. `replace` siegal po `-f` w obu podprzypadkach, a to dwie rozne roboty. Rozdzielenie ich sprawia, ze zwykla awaria (swieza maszyna, pusty dataset) jest w ogole odzyskiwalna |
+  | F25 | **prune ZRODLA zostawal na starej maszynie** — enumerowalem sekcje z rekordu relacji, a jego listy nie niosa zakresu `konto@host:sciezka`. Po przekazaniu kasowalby snapshoty na maszynie, ktorej relacja juz nie obejmuje |
+  | F26 | **rekordy nie jechaly z sekcjami** — cel nie zapisywal, co teraz posiada, wiec drugie przeniesienie odmawialo "nie ma czego przekazac" dla relacji, ktora miala wszystko |
+
+  **Dowod po GUID zadzialal na stanie, ktorego nie ustawialem:** przy powrocie
+  kopia byla juz do przodu (backup z pve2), pve1 nie mial najnowszego snapshotu
+  — `move-to-client` odmowil i podal komende naprawcza. Dokladnie po to jest.
+
+  **OBA KIERUNKI TRYBU, ZMIERZONE:**
+
+  | cel | tryb | dowod |
+  |---|---|---|
+  | pve2 — pusty dataset, swieza maszyna | `replace` (full-bare) + `create` dla dzieci | pelny strumien przez `recv -F`, bez niszczenia datasetu |
+  | pve1 — MA dane i wspolna baze | **`rewind`** | **przyrost na istniejaca linie**: 27 snapshotow, najstarszy `2026-08-27_14-51-01` sprzed calej kampanii, 10,6 MB |
+
+  Ten drugi wiersz jest pomiarem, nie deklaracja: gdyby to byl pelny wysyl z
+  `-f`, dataset zostalby zniszczony i odtworzony, a snapshoty z 27 sierpnia by
+  nie istnialy.
+
+
+  **Gramatyka miedzyhostowa otwarta:** `restore A B` (te same sciezki) i
+  `restore A:ds B:ds2`. Cel to **etykieta relacji, nigdy nazwa hosta** — czyli
+  maszyna, z ktora kolektor jest juz sparowany, ma przypiety klucz i moze
+  poprosic o zgode. Zero nowej klasy adresu. Cel musi byc tylko **sparowany**,
+  nie aktywowany.
+
+  **Odzysk i przekazanie zostaja osobne** (decyzja wlasciciela): to dwie rozne
+  dziedziny awarii, a dowod po GUID jest naturalnym szwem — czasownik, ktory sam
+  ten warunek wytwarza i sprawdza, sprawdza wlasna robote. Zamiast zlozenia:
+  `restore` konczy zdaniem, ze dane sa na maszynie, do ktorej nic nie pokazuje,
+  i podaje nastepny krok.
+
+  **Znaleziona przy okazji wada NIE z tej rundy:** `deploy.sh --commit-scope=`
+  **nigdy nie dzialalo** — wola `do_commit_scope` w linii 3044, a funkcja jest
+  zdefiniowana w 5552. Na `main` tak samo. Sciezka `--join` wola ja pozniej,
+  wiec tam dziala. Nie naprawione, bo to osobna sprawa.
+
+  **Lab sprzatniety:** pve2 bez danych, bez konta, bez zgod, relacja rozebrana
+  (`--leave`); pve9 z `lab1` czynna i `lab2` wycofana; wszystkie trzy hosty na
+  `main`; cron bez sladu po pve2.
+
 
 - **ODTWARZANIE: DRUGI PRZEBIEG LABU. PIERWSZY MOWIL "DZIALA OD KONCA DO
   KONCA" I BYLO TO PRAWDA WYLACZNIE DLA KSZTALTOW, KTORE PRZESZEDL (2026-08-27).**
