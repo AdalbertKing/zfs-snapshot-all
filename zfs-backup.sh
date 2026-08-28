@@ -9991,8 +9991,42 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             # is refused by zfs-restore.sh with a better message than anything
             # this dispatch could produce before it has parsed the arguments.
             shift
-            if [ -n "${1:-}" ] && [ -r "$CLIENTS_DIR/${1%%:*}.conf" ]; then
-                if load_client_and_connection "$CLIENTS_DIR/${1%%:*}.conf" >/dev/null 2>&1; then
+            # WHICH RELATIONSHIP'S CONNECTION: the one being WRITTEN TO, which is
+            # not always the one being read from.
+            #
+            # `restore A:ds B:ds` recovers relation A's copy onto relation B's
+            # machine (owner grammar, 2026-08-13). The copy is local to this
+            # collector and opens no connection; the ssh goes to B. So when there
+            # is a second address, it decides the key, the known_hosts and the
+            # port -- not the first.
+            #
+            # FOUND BY THE PROPERTY, NOT BY THE GRAMMAR. The first version of
+            # this walked the arguments counting bare words, which is a second
+            # opinion about the grammar living outside the parser that owns it --
+            # and it was wrong immediately: the split form `--at 2026-08-10
+            # 12:00` puts a bare word in the argument list that is a TIME, not an
+            # address.
+            #
+            # So it asks the only question this dispatch actually cares about:
+            # is there a readable client record under this word? A time is not.
+            # A dataset path is not. A relation label is. The LAST such word wins,
+            # which is the destination when there are two and the source when
+            # there is one -- today's behaviour, unchanged, for every existing
+            # form.
+            #
+            # zfs-restore.sh remains the only place that decides what the words
+            # MEAN. If this picks a connection the parser then disagrees with,
+            # the failure is a refused ssh against a named host, not a silent
+            # recovery aimed somewhere else.
+            local _rc_conn="" _rc_a
+            for _rc_a in "$@"; do
+                case "$_rc_a" in
+                    -*) continue ;;
+                esac
+                [ -r "$CLIENTS_DIR/${_rc_a%%:*}.conf" ] && _rc_conn="$_rc_a"
+            done
+            if [ -n "$_rc_conn" ]; then
+                if load_client_and_connection "$CLIENTS_DIR/${_rc_conn%%:*}.conf" >/dev/null 2>&1; then
                     # The same pinning the engines get, spelled as raw ssh
                     # flags because zfs-restore.sh calls ssh directly rather than
                     # through an engine -- and BUILT BY THE ONE BUILDER, not by

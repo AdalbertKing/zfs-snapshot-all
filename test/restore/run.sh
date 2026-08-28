@@ -2039,6 +2039,85 @@ case "$out" in
     *) bad "pause: ...and names the command that unblocks it" "got: $(printf '%s' "$out" | head -3)" ;;
 esac
 
+# ===========================================================================
+# CROSS-HOST: recovering onto a DIFFERENT machine (owner grammar 2026-08-13,
+# opened 2026-08-28)
+#
+#   restore A    B        every dataset of A onto B's machine, SAME paths
+#   restore A:ds B:ds2    that dataset (and its subtree) onto B, under ds2
+#
+# B is a RELATION LABEL, never a hostname. That is what keeps this inside
+# R-025: the destination is a machine this collector is already paired with,
+# has already pinned, and can already ask for a grant -- there is no way to
+# name a machine it has never met.
+#
+# The fixture's two relations are pve2 (two datasets) and pve1 (one), so
+# "pve2 onto pve1's machine" is expressible without inventing anything.
+# ===========================================================================
+
+# The refusals first, because every one of them is a recovery that would
+# otherwise land somewhere nobody wrote down.
+xh() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+xh_refuses() {   # <desc> <substring> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(xh "$@")"; local rc=$?
+    if [ "$rc" -eq 0 ]; then bad "$desc" "expected a refusal, got rc=0"; return; fi
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+
+xh_refuses "xhost: a destination that is not a relation is refused, not read as a host" \
+    "is not a relationship this host records" pve2 nosuchrelation
+xh_refuses "xhost: a transport address is refused as a destination" \
+    "not a transport address" pve2 root@pve3
+xh_refuses "xhost: --plan and a destination are refused together" \
+    "The planner reads" pve2 pve1 --plan
+xh_refuses "xhost: --target and a destination are refused together" \
+    "select datasets WITHIN one relationship" pve2 pve1 --target rpool/data/vm-101-disk-0
+xh_refuses "xhost: --snapshot and a destination are refused together" \
+    "resolved on the SOURCE relation's copy" pve2 pve1 --snapshot=x
+xh_refuses "xhost: a half-specified pair is refused (source names a dataset, destination does not)" \
+    "a half-specified pair" pve2:rpool/data/vm-101-disk-0 pve1
+xh_refuses "xhost: ...and the other way round" \
+    "Either name both sides" pve2 pve1:rpool/other
+xh_refuses "xhost: three addresses are refused" \
+    "one relation to read, at most one to write" pve2 pve1 pve0
+
+# THE MAPPING. Asserted on the runner's per-dataset report, which names the
+# DESTINATION -- the machine being written to -- rather than the recorded
+# source. The fixture has no snapshots, so each dataset gets as far as "no
+# snapshot to restore from"; that is the runner speaking, and it prints the
+# address the recovery was aimed at, which is the thing under test.
+#
+# The pause is satisfied with a REAL marker for the destination relation,
+# because the destination is the machine at risk and its schedule is the one
+# that has to stand down.
+mkdir -p "$SC/rel/pve1" && : > "$SC/rel/pve1/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2 pve1 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"root@pve1:rpool/data/vm-101-disk-0"*) ok "xhost: a bare pair keeps the SOURCE path on the destination machine" ;;
+    *) bad "xhost: a bare pair keeps the SOURCE path on the destination machine" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+case "$out" in
+    *"root@pve1:rpool/data/vm-101-disk-1"*) ok "xhost: ...for every dataset of the relation, not just the first" ;;
+    *) bad "xhost: ...for every dataset of the relation, not just the first" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+# ...and it must not have aimed at the ORIGINAL machine, which is the failure
+# this whole form exists to avoid: a cross-host recovery that quietly went home.
+case "$out" in
+    *"root@pve2:rpool/data"*) bad "xhost: ...and nothing was aimed at the source machine" "pve2 appears as a destination" ;;
+    *) ok "xhost: ...and nothing was aimed at the source machine" ;;
+esac
+
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2:rpool/data/vm-101-disk-0 pve1:rpool/elsewhere --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"root@pve1:rpool/elsewhere"*) ok "xhost: a named pair lands on the named destination path" ;;
+    *) bad "xhost: a named pair lands on the named destination path" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+case "$out" in
+    *"vm-101-disk-1"*) bad "xhost: ...and only the dataset that was named" "the sibling came along" ;;
+    *) ok "xhost: ...and only the dataset that was named" ;;
+esac
+
 
 # POSITIVE CONTROL, and it is what makes the six refusals above mean something:
 # a well-formed list of the same length still resolves completely, in the order

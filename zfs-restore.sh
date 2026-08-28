@@ -65,6 +65,9 @@ RESTORE_LANDED=()
 # comparison could be. See restore_grant_parse's header.
 RESTORE_LABEL=""
 RESTORE_SCOPE_EXPANDED=0
+# Where each dataset in scope is WRITTEN. Equals the recorded source unless a
+# destination relation was named -- see restore_scope_dest.
+RESTORE_SCOPE_DEST=()
 # The relationship this run is recovering, when the address named one. Used to
 # pause its scheduled jobs for the duration.
 RESTORE_RELATION_LABEL=""
@@ -2090,6 +2093,81 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     trap 'restore_pause_release' EXIT
 fi
 
+# WHERE DOES A DESTINATION RELATION LIVE?
+#
+# `restore A B` recovers relation A's copy onto relation B's machine. B supplies
+# one thing here and it is the only thing: the transport -- account@host. Its
+# dataset paths are NOT consulted, because the owner's grammar says the bare
+# form keeps the SOURCE paths, and the pair form names the destination path
+# explicitly. Reading B's paths and mapping onto them would be a third opinion
+# about where the data goes, which is one more than there should be.
+#
+# Taken from B's first recorded section, which is where every other reader in
+# this file gets a relationship's transport. A relation that records nothing has
+# no machine to name, and that is a refusal rather than a default.
+restore_dest_peer() {   # <config> <destination label> -> account@host
+    local config="$1" label="$2" rows first
+    rows="$(restore_resolve_try "$config" "$label" "" orig)" || return 1
+    first="$(printf '%s\n' "$rows" | head -1 | cut -f1)"
+    case "$first" in
+        *@*:*) printf '%s' "${first%%:*}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# THE DESTINATION FOR EVERY DATASET IN SCOPE.
+#
+# Fills RESTORE_SCOPE_DEST[] alongside RESTORE_SCOPE_SRC[]. With no destination
+# it is the recorded source, element for element -- which is what every restore
+# before 2026-08-28 did, so that path is unchanged rather than reimplemented.
+#
+# The two forms, and both come straight from the owner's grammar of 2026-08-13:
+#
+#   restore A    B        every dataset of A onto B, KEEPING THE SOURCE PATHS
+#   restore A:ds B:ds2    that dataset (and its subtree) onto B, under ds2
+#
+# The subtree case is why this is a relative-path rule rather than a rename: an
+# `A:ds` that covers children expands to all of them (see the expansion in
+# cmd_restore), and each child has to land under ds2 at the same relative
+# position. Arithmetic on two named paths -- no probing, no inference.
+restore_scope_dest() {   # <config> <source address> <destination address or "">
+    local config="$1" from="$2" onto="$3"
+    RESTORE_SCOPE_DEST=()
+    local i n="${#RESTORE_SCOPE_SRC[@]}"
+
+    if [ -z "$onto" ]; then
+        for (( i=0; i<n; i++ )); do RESTORE_SCOPE_DEST+=("${RESTORE_SCOPE_SRC[$i]}"); done
+        return 0
+    fi
+
+    local peer
+    peer="$(restore_dest_peer "$config" "${onto%%:*}")" || \
+        die "restore: '${onto%%:*}' is not a relationship this host records, so there is no machine to recover onto. Relations come from 'restore --plan'. It is NOT read as a hostname, deliberately -- guessing is how a recovery lands on the wrong machine."
+
+    # The two roots. Empty when the form is bare, in which case the source path
+    # is kept verbatim.
+    local from_root="" onto_root=""
+    case "$from" in *:*) from_root="${from#*:}" ;; esac
+    case "$onto" in *:*) onto_root="${onto#*:}" ;; esac
+
+    local srcpath rel
+    for (( i=0; i<n; i++ )); do
+        srcpath="${RESTORE_SCOPE_SRC[$i]}"
+        srcpath="${srcpath#*@}"; srcpath="${srcpath#*:}"
+        if [ -n "$onto_root" ]; then
+            rel=""
+            if [ "$srcpath" != "$from_root" ]; then
+                rel="${srcpath#"$from_root"}"
+                [ "$rel" != "$srcpath" ] || die "restore: '${RESTORE_SCOPE_SRC[$i]}' is not under '$from_root', so there is no position to give it under '$onto_root'. Refusing rather than inventing one."
+            fi
+            RESTORE_SCOPE_DEST+=("${peer}:${onto_root}${rel}")
+        else
+            RESTORE_SCOPE_DEST+=("${peer}:${srcpath}")
+        fi
+    done
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 #
 # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
@@ -2161,14 +2239,14 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         # The failure of one dataset must not end the run: that is the whole of
         # decision 7. `|| :` is deliberate and is the only place in this
         # function where a non-zero status is not propagated immediately.
-        restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_SRC[$i]}"; rc=$?
+        restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}"; rc=$?
         if [ "$rc" -eq 0 ]; then
             ok_n=$((ok_n + 1))
-            RESTORE_LANDED+=("${RESTORE_SCOPE_SRC[$i]}")
-            verdict+=("OK       ${RESTORE_SCOPE_SRC[$i]}   ${RESTORE_ONE_VERDICT:-recovered}")
+            RESTORE_LANDED+=("${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}")
+            verdict+=("OK       ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-recovered}")
         else
             bad_n=$((bad_n + 1))
-            verdict+=("NOT DONE ${RESTORE_SCOPE_SRC[$i]}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+            verdict+=("NOT DONE ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
         fi
     done
 
@@ -3030,7 +3108,7 @@ cmd_restore() {
     # identify one relationship each cannot answer "which relationship is X",
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
-    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
+    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
     local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch=""
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
@@ -3068,13 +3146,26 @@ cmd_restore() {
             --yes|-y)     yes=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
-                # Positional token: the public address (relation label,
-                # label:dataset, or a managed path). Resolved AFTER the loop,
-                # when --config is known. One address per invocation -- a
-                # second positional is the cross-host destination, which
-                # follows under R-025 once this door is reviewed.
-                [ -z "$addr" ] || die "restore: got two addresses ('$addr' and '$a') -- the cross-host destination form is not open yet (R-025 sequencing); one address per call"
-                addr="$a" ;;
+                # Positional tokens: the public addresses. Resolved AFTER the
+                # loop, when --config is known.
+                #
+                # ONE address is the relation (or one dataset of it) to recover,
+                # back onto its own machine. TWO is the cross-host form the
+                # owner's grammar of 2026-08-13 reserved and this opens:
+                #
+                #   restore A:ds B:ds   that dataset, onto relation B's machine
+                #   restore A    B      every dataset of A onto B, SAME PATHS
+                #
+                # B is a RELATION LABEL, never a hostname -- which is what keeps
+                # this consistent with R-025. The destination machine is reached
+                # by a relationship this collector already holds a key for, has
+                # already pinned, and can already ask for a grant. There is no
+                # new class of address here, and no way to name a machine this
+                # host has never been paired with.
+                if [ -z "$addr" ]; then addr="$a"
+                elif [ -z "$dest_addr" ]; then dest_addr="$a"
+                else die "restore: got three addresses ('$addr', '$dest_addr' and '$a'). The form is: restore <from> [<onto>] -- one relation to read, at most one to write."
+                fi ;;
         esac
         shift
     done
@@ -3088,6 +3179,28 @@ cmd_restore() {
     # the pairs are POSITIONAL and every pair must match the recorded mapping.
     # Saying both sides is the operator being explicit about what they already
     # are, not asking for them to be changed.
+    # THE DESTINATION'S REFUSALS, all decided before anything is resolved.
+    #
+    # Each of these would otherwise produce a recovery aimed somewhere nobody
+    # wrote down, which on this verb is the whole failure mode.
+    if [ -n "$dest_addr" ]; then
+        case "$dest_addr" in
+            *@*) die "restore: '$dest_addr' looks like user@host -- a destination is a RELATION this collector is already paired with, not a transport address (R-025). Pair the new machine first, then name it by its label." ;;
+        esac
+        [ "$plan" -eq 0 ] || die "restore: --plan and a destination. The planner reads; it has nothing to say about a machine it would not write to. Drop one."
+        { [ -z "$scope_src" ] && [ -z "$scope_tgt" ]; } || die "restore: --source/--target select datasets WITHIN one relationship, and a second address names a different one. Say it the way the grammar does: restore <from>[:<dataset>] <onto>[:<dataset>]."
+        [ -z "$snapshot" ] || die "restore: --snapshot names one exact snapshot on one copy; with a destination the recovery point is still resolved on the SOURCE relation's copy, so say --at instead, or drop the destination."
+        case "$addr" in
+            *:*) case "$dest_addr" in
+                     *:*) ;;
+                     *) die "restore: '$addr' names a dataset and '$dest_addr' does not. Name both sides, or neither -- a half-specified pair is the shape that lands data on a path nobody chose." ;;
+                 esac ;;
+            *)  case "$dest_addr" in
+                    *:*) die "restore: '$dest_addr' names a dataset and '$addr' does not. Either name both sides, or give two bare relations -- which recovers every dataset of '$addr' onto '${dest_addr}' at the SAME paths." ;;
+                esac ;;
+        esac
+    fi
+
     if [ -n "$at_raw" ] && [ -n "$snapshot" ]; then
         die "restore: --at and --snapshot both name a recovery point. --snapshot is one exact name for one dataset; --at is a time, resolved per dataset. Give one."
     fi
@@ -3103,7 +3216,19 @@ cmd_restore() {
         [ -n "$addr" ] || die "restore: --source/--target select datasets WITHIN a relationship, so the relationship has to be named too: restore <relation> --target <dataset>[,<dataset>...]"
         # A bare address here IS the relationship label -- the parser refuses
         # every other spelling above. Recorded so the runner can pause it.
-        RESTORE_RELATION_LABEL="$addr"
+        # THE LABEL, not the address. `restore lab1:hdd/x` puts a dataset in
+        # $addr, and a relationship label is letters, digits, dot, dash and
+        # underscore -- so pause-client would refuse it, and since the pause
+        # became a precondition on 2026-08-28 that refusal would take the
+        # whole recovery with it. Introduced by the precondition and caught
+        # while wiring the destination; the label form never reached the
+        # lab, which ran whole relations.
+        #
+        # And when there is a DESTINATION, the machine at risk is that one --
+        # it is the one being written to, so it is the one whose schedule has
+        # to stand down.
+        RESTORE_RELATION_LABEL="${dest_addr%%:*}"
+        [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
         # The relationship name stands ALONE now. `label:dataset` said the same
         # thing a second way, and two ways to say one thing is how they come to
         # disagree.
@@ -3137,6 +3262,7 @@ cmd_restore() {
             # already published a grant saying this collector may write to it.
             # Asking again here would be the fourth time the same question is
             # put, and the first three were asked when nothing was on fire.
+            restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
             return $?
@@ -3172,7 +3298,19 @@ cmd_restore() {
             # every shape of this verb. The alternative -- a second loop for the
             # whole-relation case -- is how two paths come to disagree about
             # what a failure means.
-            RESTORE_RELATION_LABEL="$addr"
+            # THE LABEL, not the address. `restore lab1:hdd/x` puts a dataset in
+            # $addr, and a relationship label is letters, digits, dot, dash and
+            # underscore -- so pause-client would refuse it, and since the pause
+            # became a precondition on 2026-08-28 that refusal would take the
+            # whole recovery with it. Introduced by the precondition and caught
+            # while wiring the destination; the label form never reached the
+            # lab, which ran whole relations.
+            #
+            # And when there is a DESTINATION, the machine at risk is that one --
+            # it is the one being written to, so it is the one whose schedule has
+            # to stand down.
+            RESTORE_RELATION_LABEL="${dest_addr%%:*}"
+            [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
             RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
             local _wr_s _wr_c
             while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
@@ -3214,6 +3352,7 @@ cmd_restore() {
                         done < <(zfs list -H -o name -r "$_wr_c" 2>/dev/null) ;;
                 esac
             done <<< "$_rc_sel"
+            restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
             return $?
