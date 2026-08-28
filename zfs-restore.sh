@@ -57,6 +57,13 @@ RESTORE_ROLLED_BACK=()
 RESTORE_LANDED=()
 # Set when the whole-relation scope was expanded to one entry per dataset, so
 # the engine does not also recurse over what the scope already lists.
+# DELIBERATELY NEVER ASSIGNED, and declared here so that is visible rather than
+# looking like an omission. The collector does not record the peer-side label --
+# the peer chose it at join time and kept it -- so the grant check asks about
+# "whatever relationship this key opened". zfs-pair-gate derives that from the
+# KEY in its own forced command, which is a stronger guarantee than a string
+# comparison could be. See restore_grant_parse's header.
+RESTORE_LABEL=""
 RESTORE_SCOPE_EXPANDED=0
 # The relationship this run is recovering, when the address named one. Used to
 # pause its scheduled jobs for the duration.
@@ -816,12 +823,6 @@ restore_config_candidates() {
     } 2>/dev/null | awk 'NF && !seen[$0]++'
 }
 
-# Kept as the name the refusals quote: the historical, host-only spelling.
-restore_default_config() {
-    local h; h=$(hostname -s 2>/dev/null || hostname)
-    printf '%s' "/etc/zfs-snapshot-all/jobs.${h}.conf"
-}
-
 restore_resolve_token() {   # <config> <token>
     local config="$1" tok="$2"
     case "$tok" in
@@ -1030,7 +1031,8 @@ $(printf '    %s
         [ "${#found[@]}" -eq 1 ] && c="${found[0]}"
     fi
     [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against -- tried \$CRON_CONFIG and these, none readable:
-$(restore_config_candidates | sed 's/^/    /')Pass --config=FILE."
+$(restore_config_candidates | sed 's/^/    /')
+Pass --config=FILE."
     printf '%s' "$c"
 }
 
@@ -3155,10 +3157,18 @@ cmd_restore() {
     fi
 
     read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || { config=$(restore_default_config); [ -r "$config" ] || config=""; }
-    [ -n "$config" ] || die "restore --plan: no cron config known -- pass --config=FILE or run setup-server"
-    [ -r "$config" ] || die "restore --plan: cannot read $config"
+    # THE SAME RESOLVER AS EVERY OTHER PATH. This site had its own copy of the
+    # old rule -- CRON_CONFIG, else jobs.<host>.conf -- so F11's fix reached
+    # `restore <label>` and not this one, and this is the form the refusals send
+    # operators to: "'restore --plan' lists the labels". On a delegated-account
+    # host it answered "no cron config known" while the config sat in the same
+    # directory under the account's name.
+    #
+    # The same defect at a second site, found by a dead-code sweep rather than
+    # by the fix: after F11 nothing should still have been calling
+    # restore_default_config, and something was. R3 -- grep every site that
+    # should honour the rule, do not assume the one you edited was the only one.
+    config="$(restore_pick_config "$config" "this plan")"
 
     # Collect (source, copy-location, kind) triples from the installed CONFIG.
     local -a src=() copy=() kind=() cons=()

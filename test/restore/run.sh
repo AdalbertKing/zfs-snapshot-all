@@ -93,8 +93,13 @@ out="$(run "$cfg")"; rc=$?
 out="$(run "$cfg" --plan --bogus)"; rc=$?
 [ "$rc" -ne 0 ] && ok "an unknown option refuses" || bad "an unknown option refuses" "rc=$rc"
 
+# The wording moved on 2026-08-27: this path had its OWN copy of the config
+# rule (CRON_CONFIG, else jobs.<host>.conf) and could not see a delegated
+# account's file, so it now calls restore_pick_config like every other path.
+# What is pinned is the substance -- it refuses, and it names what to pass --
+# rather than the sentence that used to carry it.
 out="$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" cmd_restore --plan ) 2>&1 )"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'no cron config known'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'no readable installed config'; } \
     && ok "no config and no server.conf refuses rather than guessing" \
     || bad "no config and no server.conf refuses rather than guessing" "rc=$rc"
 
