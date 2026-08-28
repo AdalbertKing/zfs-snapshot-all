@@ -1549,10 +1549,32 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
             if [ "$_st" = absent ]; then
                 RESTORE_STRATEGY=full-absent
             elif [ "$_st" = bare ]; then
-                # There, and empty. No snapshot means no common base can
-                # exist, so this is a full overwrite of live data --
-                # `replace`, the one mode the grant withholds by default.
-                RESTORE_STRATEGY=full-live
+                # THERE, AND EMPTY -- and that is not the same overwrite as
+                # "there, with a history that does not match".
+                #
+                # Both are `replace` to the grant: both put an older copy over
+                # what a machine holds now, and that is the decision the owner
+                # gates. They differ in what the ENGINE has to do, and the
+                # difference decides whether the recovery is possible at all.
+                #
+                # A dataset with no snapshots takes a full stream through
+                # `zfs recv -F` directly: no destroy, no re-create, and the only
+                # permission needed is `receive`. Measured on the lab
+                # 2026-08-28, sending into a freshly paired machine's empty
+                # scope root -- "All datasets processed successfully".
+                #
+                # A dataset WITH a mismatched history cannot: recv refuses a
+                # full stream onto existing snapshots, so that one really does
+                # need -f, which destroys and recreates.
+                #
+                # Keeping them apart is what makes the ordinary disaster
+                # recoverable. The fresh-machine case -- pair it, recover onto
+                # it -- lands on an empty dataset every time, and -f could never
+                # have done it: destroying the scope root destroys the
+                # delegation, and recreating it needs permission on the parent
+                # that a delegated account does not have (F23, same lab, same
+                # afternoon, learned by doing it).
+                RESTORE_STRATEGY=full-bare
             else
                 # A common base exists when the target's head GUID is one this
                 # copy also carries at or before the recovery point. That is the
@@ -1639,7 +1661,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     case "${RESTORE_STRATEGY:-}" in
         full-absent)                        mode=create ;;
         increment|rollback|discard-live)    mode=rewind ;;
-        full-live|unproven)                 mode=replace ;;
+        full-live|full-bare|unproven)       mode=replace ;;
         ambiguous)
             RESTORE_ONE_VERDICT="the recovery point on '$copy' is ambiguous, so no mode can be classified"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: guessing would destroy state under a decision nobody took."
@@ -1718,7 +1740,13 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # applies to. A child of a granted dataset is fine: its parent
                 # survives the destroy and carries the delegation.
                 local _tgt_ds="${src#*:}" _ms
+                # Only when -f is actually going to run. `full-bare` reaches
+                # the same dataset through recv -F and destroys nothing, so
+                # refusing it here would block the one shape this whole verb
+                # exists for: a fresh machine, paired, with an empty dataset
+                # waiting.
                 local _g
+                if [ "${RESTORE_STRATEGY:-}" != full-bare ]; then
                 for _g in ${RESTORE_GRANT_SCOPE:-}; do
                     [ "$_g" = "$_tgt_ds" ] || continue
                     RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"
@@ -1729,6 +1757,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     log 0 "restore:   or destroy and recreate '$_tgt_ds' there as root, then re-grant: deploy.sh --commit-scope=<label> and deploy.sh --allow-restore=<label> --replace"
                     return 1
                 done
+                fi
                 _ms="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" \
                        "zfs list -H -o mounted,type '$_tgt_ds'" 2>/dev/null)"
                 case "$_ms" in
@@ -2432,7 +2461,12 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
     RESTORE_ENGINE_ARGV=()
     case "$mode" in
         create|rewind) ;;
-        replace)       RESTORE_ENGINE_ARGV+=(-f) ;;
+        replace)
+            # -f ONLY for the sub-case that needs it. `full-bare` is an empty
+            # dataset: recv -F fills it, and -f would destroy the very dataset
+            # the delegation hangs on. See the classification above.
+            [ "${RESTORE_STRATEGY:-}" = full-bare ] || RESTORE_ENGINE_ARGV+=(-f)
+            ;;
         *) log 0 "restore: '$mode' is not a restore mode -- refusing to build a command for an undefined one"; return 1 ;;
     esac
     # -t: the target is an EXACT dataset, not a base to append the copy's name
