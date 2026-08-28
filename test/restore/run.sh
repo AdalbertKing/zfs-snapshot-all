@@ -2118,6 +2118,30 @@ case "$out" in
     *) ok "xhost: ...and only the dataset that was named" ;;
 esac
 
+# THE HAND-OVER SENTENCE. A cross-host recovery leaves the data on one machine
+# and the backup pointing at another, and that split is silent -- the old
+# relationship keeps running and looks healthy. Owner decision 2026-08-28: the
+# run says so and names the next step; it does not compose the hand-over into
+# itself.
+case "$out" in
+    *"went to a DIFFERENT machine"*) ok "xhost: the run says the recovery went elsewhere" ;;
+    *) bad "xhost: the run says the recovery went elsewhere" "got: $(printf '%s' "$out" | tail -3)" ;;
+esac
+case "$out" in
+    *"move-to-client pve2 pve1"*) ok "xhost: ...and names the step that switches the backup over" ;;
+    *) bad "xhost: ...and names the step that switches the backup over" "got: $(printf '%s' "$out" | tail -3)" ;;
+esac
+# NEGATIVE CONTROL, and it is the one that makes the two above mean something: a
+# recovery back onto the relation's own machine has no hand-over to do and must
+# not say it does.
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel2" bash "$ZB" pve2 --config="$SC/cfg" 2>&1)"
+mkdir -p "$SC/rel2/pve2" && : > "$SC/rel2/pve2/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel2" bash "$ZB" pve2 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"went to a DIFFERENT machine"*) bad "xhost control: a same-machine recovery says nothing about a hand-over" "it did" ;;
+    *) ok "xhost control: a same-machine recovery says nothing about a hand-over" ;;
+esac
+
 
 # POSITIVE CONTROL, and it is what makes the six refusals above mean something:
 # a well-formed list of the same length still resolves completely, in the order

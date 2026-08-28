@@ -68,6 +68,10 @@ RESTORE_SCOPE_EXPANDED=0
 # Where each dataset in scope is WRITTEN. Equals the recorded source unless a
 # destination relation was named -- see restore_scope_dest.
 RESTORE_SCOPE_DEST=()
+# The relationship whose COPY is being read. Equal to RESTORE_RELATION_LABEL
+# unless the recovery is aimed at another machine, in which case that one is the
+# destination and this one is where the data came from.
+RESTORE_SOURCE_LABEL=""
 # The relationship this run is recovering, when the address named one. Used to
 # pause its scheduled jobs for the duration.
 RESTORE_RELATION_LABEL=""
@@ -2168,6 +2172,34 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
     return 0
 }
 
+# A CROSS-HOST RECOVERY IS HALF AN OPERATION, AND THE OTHER HALF IS SILENT.
+#
+# The data is on the new machine. The copy it came from is still recorded
+# against the OLD relationship, so the schedule still backs up the old machine
+# and everything looks healthy -- while the machine that now holds the data is
+# backed up by nobody. Nothing discovers that until somebody goes looking.
+#
+# Owner decision, 2026-08-28: this is answered with a sentence, not by composing
+# the hand-over into this verb. Recovery and hand-over are different failure
+# domains, and the tool reports rather than deciding for the admin. So the run
+# closes by saying exactly what is now true and naming the next step.
+#
+# Said on EVERY cross-host run, including the ones that failed: a partial
+# recovery leaves the same split, and the operator needs to know which machine
+# holds what before they decide anything.
+restore_report_handover() {
+    local n="${#RESTORE_SCOPE_DEST[@]}" i moved=0
+    for (( i=0; i<n; i++ )); do
+        [ "${RESTORE_SCOPE_DEST[$i]}" = "${RESTORE_SCOPE_SRC[$i]:-}" ] || moved=1
+    done
+    [ "$moved" -eq 1 ] || return 0
+    log 0 "restore: ---- this recovery went to a DIFFERENT machine ----"
+    log 0 "restore: the data is there. The copy it came from is still recorded against '${RESTORE_SOURCE_LABEL:-the source relationship}', so the schedule still backs up the OLD machine and the one you just recovered onto is backed up by nobody."
+    log 0 "restore: nothing here changed that, on purpose -- switching the backup over is its own step, with its own proof that this machine really holds the copy:"
+    log 0 "restore:     zfs-backup.sh move-to-client ${RESTORE_SOURCE_LABEL:-<from>} ${RESTORE_RELATION_LABEL:-<onto>}"
+    log 0 "restore: until then both relationships are as they were, and '${RESTORE_RELATION_LABEL:-the destination}' stays paused."
+}
+
 # ------------------------------------------------------------------------------
 #
 # Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
@@ -2258,6 +2290,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     done
 
     restore_report_mount_state
+    restore_report_handover
     restore_report_backup_cost
 
     restore_pause_release
@@ -3229,6 +3262,7 @@ cmd_restore() {
         # to stand down.
         RESTORE_RELATION_LABEL="${dest_addr%%:*}"
         [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
+        RESTORE_SOURCE_LABEL="${addr%%:*}"
         # The relationship name stands ALONE now. `label:dataset` said the same
         # thing a second way, and two ways to say one thing is how they come to
         # disagree.
@@ -3311,6 +3345,7 @@ cmd_restore() {
             # to stand down.
             RESTORE_RELATION_LABEL="${dest_addr%%:*}"
             [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
+            RESTORE_SOURCE_LABEL="${addr%%:*}"
             RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
             local _wr_s _wr_c
             while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
