@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16.*
+*Evidence: E7, E2, E14, E16, E19.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -489,3 +489,35 @@ about.
 not. A warning is a claim, and a claim that is often wrong costs exactly what the
 true version of it was worth — here, telling somebody their last copy of a period
 is about to be destroyed.
+
+### E19 — A fourth opinion about ssh flags, missing the property the other three carry
+**2026-08-27, restore connection handoff.**
+
+*Genesis.* zfs-restore.sh needs its ssh options as a STRING (they cross an
+`exec`), so I wrote one: key, alias, known_hosts, StrictHostKeyChecking,
+BatchMode. It shipped without `ConnectTimeout` or `ServerAlive*`. A restore
+aimed at a peer that never answers the SYN would have sat about 130 seconds per
+call -- and a restore opens several probes per dataset before it transfers
+anything, so that is minutes of silence in front of somebody recovering a
+machine. This estate has already paid for that hang once (#44/#45/#46) and
+built a counting assertion against it: test/zfsbackup counts ConnectTimeout and
+ServerAlive against the BatchMode groups. It went 4 / 3 / 3 and failed.
+
+*Cause.* `load_ssh_opts` builds exactly this set, bounded, and eight callers use
+it. I did not look, because what I needed was "a string" and what existed was
+"an array" -- so the shape of the container hid the fact that the content was
+already written. The comment I wrote even said "the same pinning the engines
+get", which was the moment to go and read what the engines get.
+
+*Rule.* **R8.** And a sharper form of it for this shape: when a file already
+builds three of something and you are writing the fourth, you are not writing a
+new thing, you are copying an existing one -- so copy the whole contract, or
+better, call the builder. Adding the three missing options would have fixed the
+instance; using `load_ssh_opts` removed the class, because a fourth opinion
+cannot drift from the other three if it does not exist.
+
+*Also worth naming:* the assertion caught this on CI, four commits after I
+introduced it, because I deferred the big suite to CI (correct by R9) and then
+did not read CI until the end. R9 says run only what you edited; it does not say
+read the result late. When you add a member of a class some suite exists to
+guard, that suite is the one to run -- policy or no policy.

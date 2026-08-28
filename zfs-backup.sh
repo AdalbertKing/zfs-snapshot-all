@@ -9993,14 +9993,33 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             shift
             if [ -n "${1:-}" ] && [ -r "$CLIENTS_DIR/${1%%:*}.conf" ]; then
                 if load_client_and_connection "$CLIENTS_DIR/${1%%:*}.conf" >/dev/null 2>&1; then
-                    # The same pinning the engines get (see the -K/-k/-O set
-                    # built for snapget), spelled as raw ssh flags because
-                    # zfs-restore.sh calls ssh directly rather than through an
-                    # engine. HostKeyAlias is not optional: the known_hosts file
-                    # is written against the alias, so without it strict checking
-                    # fails on a host that is correctly pinned.
-                    RESTORE_SSH_OPTS="-i ${LOAD_KEYFILE:-} -o UserKnownHostsFile=${LOAD_ALIAS_KH:-} -o HostKeyAlias=${LOAD_ALIAS:-} -o GlobalKnownHostsFile=/dev/null -o CheckHostIP=no -o StrictHostKeyChecking=yes -o BatchMode=yes"
-                    [ -n "${LOAD_PORT:-}" ] && RESTORE_SSH_OPTS="$RESTORE_SSH_OPTS -p $LOAD_PORT"
+                    # The same pinning the engines get, spelled as raw ssh
+                    # flags because zfs-restore.sh calls ssh directly rather than
+                    # through an engine -- and BUILT BY THE ONE BUILDER, not by
+                    # a second hand-written copy of the same option set.
+                    #
+                    # This WAS a hand-written string, and it shipped without
+                    # ConnectTimeout or ServerAlive* -- so a restore aimed at a
+                    # peer that never answers the SYN would have sat ~130s per
+                    # call, which is the hang this estate already paid for
+                    # (#44/#45/#46) and built a counting assertion against.
+                    # test/zfsbackup counts those options against the BatchMode
+                    # groups, and that count is what caught it.
+                    #
+                    # Adding the three missing options would have fixed the
+                    # instance. Using load_ssh_opts removes the class: there is
+                    # one place that decides how this host reaches a peer, every
+                    # other caller already uses it, and a fourth opinion about
+                    # ssh flags cannot drift from the other three if it does not
+                    # exist.
+                    #
+                    # Joined with "*" rather than passed as an array because it
+                    # crosses an exec boundary into zfs-restore.sh, which
+                    # word-splits it back -- see that file's own note on why
+                    # that is safe here (these are flags and paths, and neither
+                    # carries a space by this installer's own rules).
+                    load_ssh_opts
+                    RESTORE_SSH_OPTS="${LOAD_SSH_OPTS[*]}"
                     # The engine speaks its OWN flags for the same pinning
                     # (-K/-k/-O), not raw ssh flags. Both forms are exported from
                     # the one place that knows the paths, so they cannot disagree
