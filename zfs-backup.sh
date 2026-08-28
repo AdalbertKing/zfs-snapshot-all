@@ -9124,6 +9124,33 @@ section_rename_header() {   # <file> <old header> <new header>
     cat "$tmp" > "$file" && rm -f "$tmp"
 }
 
+# Every section the config marks as belonging to one relationship.
+#
+# NOT the client record's MANAGED_DATASETS/MANAGED_PRUNE_SCOPE. Those list the
+# collector-side paths, and a relationship owns more than that: the SOURCE-side
+# [prune:acct@host:path] section is not in either list, because its scope is not
+# a local path.
+#
+# Measured on the lab, 2026-08-28, in the diff of the first real move: the
+# transfer line and the monitor moved to the new machine and the source-side
+# prune stayed pointing at the OLD one -- so after the hand-over it would have
+# gone on destroying snapshots on a machine the relationship no longer covers,
+# on schedule, under a relationship that is supposed to be stopped.
+#
+# The marker is the authority on ownership -- it is what section_owned_by reads
+# and what the re-tag rewrites -- so asking the config directly cannot miss a
+# shape the record does not happen to track.
+config_sections_of_client() {   # <file> <client name> -> one exact header per line
+    local file="$1" name="$2"
+    awk -v marker="# managed-by: zfs-backup.sh client=$name" '
+        /^\[/ { hdr=$0; next }
+        {
+            line=$0; sub(/^[ \t]+/, "", line)
+            if (line == marker && hdr != "") { print hdr; hdr="" }
+        }
+    ' "$file"
+}
+
 cmd_move_to_client() {   # <from> <onto> [--yes]
     local from="" to="" yes=0 a
     for a in "$@"; do
@@ -9226,10 +9253,12 @@ then run this again."
     # The prune scopes. Two shapes, and they move differently: a COLLECTOR-side
     # scope is a local path and keeps its header, while a SOURCE-side scope
     # carries the peer inside the header and has to be renamed outright.
-    local sc newhdr
-    for sc in $mps; do
-        hdr="[prune:$sc]"
-        grep -qxF "$hdr" "$workfile" 2>/dev/null || continue
+    # Every [prune:] the config marks as this relationship's, collector-side and
+    # source-side alike. $mps (the record's list) carries only the local scopes.
+    local newhdr sc
+    while IFS= read -r hdr; do
+        case "$hdr" in "[prune:"*) ;; *) continue ;; esac
+        sc="${hdr#[prune:}"; sc="${sc%]}"
         case "$sc" in
             *@*:*)
                 destpath="${sc#*@}"; destpath="${destpath#*:}"
@@ -9249,7 +9278,7 @@ then run this again."
                 section_retag_client "$workfile" "$hdr" "$from" "$to" || die "move-to-client: re-tag $hdr"
                 echo ">>>   $hdr  stays (collector-side scope), now '$to'" ;;
         esac
-    done
+    done < <(config_sections_of_client "$workfile" "$from")
     echo
 
     # ---- preview, confirm, install ----------------------------------------
