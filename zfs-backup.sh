@@ -10301,7 +10301,13 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             # MEAN. If this picks a connection the parser then disagrees with,
             # the failure is a refused ssh against a named host, not a silent
             # recovery aimed somewhere else.
-            local _rc_conn="" _rc_a
+            # NOT `local`: this dispatch is at top level, not inside a
+            # function, and bash refuses `local` there -- "can only be used in a
+            # function", printed on every restore run. It did not break the
+            # connection resolution (the assignments below still happened), so
+            # the only symptom was a line of noise in front of a recovery, which
+            # is exactly where noise costs the most.
+            _rc_conn=""; _rc_a=""
             for _rc_a in "$@"; do
                 case "$_rc_a" in
                     -*) continue ;;

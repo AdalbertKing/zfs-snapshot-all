@@ -2554,6 +2554,21 @@ do_allow_restore() {
         printf 'RESTORE_GRANT_MODES="%s"\n' "$want"
         printf 'RESTORE_GRANT_AT="%s"\n' "$(date -Is 2>/dev/null || date)"
         printf 'RESTORE_GRANT_BY="%s@%s"\n' "${SUDO_USER:-root}" "$(hostname -s 2>/dev/null || hostname)"
+        # WHAT the grant covers, not only what it permits. Until 2026-08-28 this
+        # file recorded the modes and left the scope implicit -- readable only by
+        # going back to the pairing manifest it was built from.
+        #
+        # The collector needs it, for one reason that is not bookkeeping:
+        # `replace` destroys a dataset and recreates it, and a `zfs allow` lives
+        # ON the dataset. Replacing the ROOT of the delegated scope therefore
+        # destroys the delegation, and recreating it needs permission on the
+        # PARENT -- which a delegated account does not have and should not.
+        # Measured on the lab that day: it left the target with no dataset, no
+        # grant, and no way for the account to make either.
+        #
+        # So the roots travel with the grant, and the restore refuses that one
+        # shape before the engine runs.
+        printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
     } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
     chown root:root "$tmp" 2>/dev/null || :
     chmod 0644 "$tmp" 2>/dev/null || :

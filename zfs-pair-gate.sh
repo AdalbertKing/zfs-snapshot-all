@@ -121,6 +121,23 @@ restore_grant_line() {   # <label>
         ''|*[!a-z\ ]*) printf 'RESTORE_GRANT=none\n'; return 0 ;;
     esac
     printf 'RESTORE_GRANT=present\nRESTORE_GRANT_MODES=%s\n' "$modes"
+    # AND THE SCOPE IT COVERS. The collector needs the roots, not out of
+    # tidiness: `replace` destroys a dataset and recreates it, and a zfs allow
+    # lives ON the dataset -- so replacing the ROOT of the delegated scope
+    # destroys the delegation, and recreating it needs permission on the parent
+    # that a delegated account does not have. Measured on the lab 2026-08-28,
+    # where it left the target with no dataset, no grant and no way back.
+    #
+    # Same whitelist discipline as the modes above, and the same fail-closed
+    # direction: a scope this host cannot parse is reported as EMPTY rather than
+    # as something. An empty scope makes the collector refuse that one shape,
+    # which is the safe way to be wrong.
+    local sc
+    sc=$(sed -n 's/^RESTORE_GRANT_DATASETS=\"\(.*\)\"$/\1/p' "$f" 2>/dev/null | head -1)
+    case "$sc" in
+        *[!A-Za-z0-9/_.:-\ ]*) sc="" ;;
+    esac
+    printf 'RESTORE_GRANT_DATASETS=%s\n' "$sc"
     return 0
 }
 GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"

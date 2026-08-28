@@ -72,6 +72,10 @@ RESTORE_SCOPE_DEST=()
 # unless the recovery is aimed at another machine, in which case that one is the
 # destination and this one is where the data came from.
 RESTORE_SOURCE_LABEL=""
+# The datasets the target machine granted, as its gate reported them. Empty when
+# it reported none, which makes the replace-on-scope-root refusal below inert --
+# the safe way to be wrong about a shape that only matters when it is present.
+RESTORE_GRANT_SCOPE=""
 # The relationship this run is recovering, when the address named one. Used to
 # pause its scheduled jobs for the duration.
 RESTORE_RELATION_LABEL=""
@@ -1692,7 +1696,39 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     if [ "$mode" = replace ]; then
         case "$src" in
             *:*)
+                # REPLACING THE ROOT OF A DELEGATED SCOPE DESTROYS THE
+                # DELEGATION ITSELF, and the account cannot put it back.
+                #
+                # `replace` runs the engine with -f, which destroys the target
+                # dataset and recreates it. A `zfs allow` lives ON a dataset:
+                # destroy it and the grant goes with it. Recreating it then
+                # needs `create` on the PARENT -- which a delegated account
+                # deliberately does not have, because that permission is the
+                # whole scope boundary.
+                #
+                # Measured on the lab, 2026-08-28, and it is not a near miss.
+                # A cross-host recovery aimed at a freshly paired machine
+                # destroyed hdd/labsrc there, failed to recreate it, and left
+                # the relationship unable to receive anything: no dataset, no
+                # delegation, and no permission to make either. Repairing it
+                # took root on the target and a re-grant.
+                #
+                # So it is refused BEFORE the engine, from the grant's own
+                # answer -- the scope it names is exactly the set of roots this
+                # applies to. A child of a granted dataset is fine: its parent
+                # survives the destroy and carries the delegation.
                 local _tgt_ds="${src#*:}" _ms
+                local _g
+                for _g in ${RESTORE_GRANT_SCOPE:-}; do
+                    [ "$_g" = "$_tgt_ds" ] || continue
+                    RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                    log 0 "restore: replace destroys the dataset and recreates it, but a 'zfs allow' lives ON the dataset -- destroying it takes the grant away, and recreating it needs permission on the PARENT, which a delegated account does not have and should not."
+                    log 0 "restore: two ways round it, and both are decisions somebody takes on '$host':"
+                    log 0 "restore:   recover the CHILDREN instead -- their parent survives and carries the delegation:  restore <from> <onto>:${_tgt_ds}/<child>"
+                    log 0 "restore:   or destroy and recreate '$_tgt_ds' there as root, then re-grant: deploy.sh --commit-scope=<label> and deploy.sh --allow-restore=<label> --replace"
+                    return 1
+                done
                 _ms="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" \
                        "zfs list -H -o mounted,type '$_tgt_ds'" 2>/dev/null)"
                 case "$_ms" in
@@ -2628,6 +2664,14 @@ restore_grant_require() {   # <label> <peer answer> <needed mode> <target host, 
         *) log 0 "restore: '$need' is not a restore mode -- refusing rather than asking for something undefined"; return 1 ;;
     esac
 
+    # The SCOPE travels with the answer since 2026-08-28. Kept in a global
+    # rather than returned, because restore_grant_parse's contract is the mode
+    # list and widening it would make every caller handle two values to use one.
+    #
+    # Read WITHOUT the whitelist the gate already applied: the gate is the side
+    # that owns the file and it reports an unparseable scope as empty. Applying
+    # a second opinion here would be two answers to one question.
+    RESTORE_GRANT_SCOPE=$(printf '%s\n' "$answer" | sed -n 's/^RESTORE_GRANT_DATASETS=//p' | head -1)
     if ! modes="$(restore_grant_parse "$label" "$answer")"; then
         log 0 "restore: '$host' did not publish a usable restore grant for relationship '$shown', so it has NOT agreed to be written to. Nothing was changed."
         log 0 "restore: if that machine really is the one to recover, grant it THERE, as root:"
