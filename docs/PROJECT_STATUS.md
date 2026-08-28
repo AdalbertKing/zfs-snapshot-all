@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e5e56a6482f996d9 -->
+<!-- status-covers-digest: 077a09ca7611b6e7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1781,6 +1781,35 @@
   snapshoty i podaje `zfs rollback -r`, a podpowiedz o `recv -F` jest bramkowana
   faktyczna przyczyna zamiast `-f`. Zaden przebieg nie zmienia werdyktu, statusu
   ani skutku. Wpisy w `ENGINE-FREEZE.md`, baseline przepiety.
+
+  **PAUZA OBEJMUJE TERAZ PRUNE, A ODTWORZENIE JEJ WYMAGA (2026-08-27).**
+  Decyzja wlasciciela: "kazdy restore musi zostac poprzedzony pauza. Grant i
+  pausa." Oraz: "pausa ma wstrzymac wszelkie operacje cronowe naszego pakietu z
+  prunem wlacznie."
+
+  `delsnaps.sh` dostal `-L` i czyta znacznik pauzy — **zmiana zachowania w
+  zamrozonym silniku**, pierwsza na tym pliku, na wyrazne polecenie wlasciciela
+  (wpis w `ENGINE-FREEZE.md`). gen-cron emituje `-L` na wszystkich czterech
+  ksztaltach linii prune: inline, `[prune:]`, GFS `[prune:]` i
+  `[prune-bookmarks:]` (ta ostatnia sekcja dostala `pair_label` do gramatyki —
+  bookmark jest tym, na co restore spada, gdy snapshotu juz nie ma).
+
+  **Nie przez wylaczenie crona:** crontab hosta niesie zadania, ktore nie sa
+  nasze. Przelacznik zostaje per relacja, w naszych wlasnych zadaniach.
+
+  `restore` **odmawia**, gdy nie da sie zalozyc pauzy, i podaje komende. Pauzy
+  zalozonej przez czlowieka nie zdejmuje. Zasieg pauzy jest **mierzony, nie
+  zakladany**: run liczy linie prune w zainstalowanym crontabie bez `-L` i je
+  zglasza, bo crontab wygenerowany przed ta zmiana przycina mimo pauzy.
+  Zmierzone na labie: najpierw "2 z 2 bez -L", po regeneracji "wszystkie 2
+  niosa -L".
+
+  **KOLEJNOSC WDROZENIA JEST TWARDA: najpierw kod, potem crontaby.** Stary
+  `delsnaps` dostajac `-L` traktuje je jako pierwszy argument pozycyjny i
+  **pada z rc=1** (zmierzone) — nic nie kasuje, ale caly prune tej relacji
+  staje i alarmuje az do aktualizacji kodu. Awaria glosna i bezpieczna, ale
+  awaria. Regenerowac crontaby dopiero po tym, jak `-L` jest na hostach.
+
 
   **HARMONOGRAM NA CZAS ODTWARZANIA (pytanie wlasciciela, 2026-08-27).** Cron
   kolektora biegl przez cala kampanie i **skasowal punkt odtworzenia**: prune
