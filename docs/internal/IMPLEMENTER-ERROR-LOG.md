@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11.*
+*Evidence: E11, E20.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -521,3 +521,27 @@ introduced it, because I deferred the big suite to CI (correct by R9) and then
 did not read CI until the end. R9 says run only what you edited; it does not say
 read the result late. When you add a member of a class some suite exists to
 guard, that suite is the one to run -- policy or no policy.
+
+### E20 — A 488/0 that measured no single tree
+**2026-08-28, test/zfsbackup in the background.**
+
+*Genesis.* I started the big suite in the background against the tree as it
+stood, then -- while it ran -- edited `zfs-backup.sh` to fix the ssh options CI
+had just failed on. The suite finished PASS=488 FAIL=0, including the very
+assertion that had been red.
+
+*Cause.* E11 was editing a suite while it was RUNNING. This is the same rule one
+step out: I edited the suite's SUBJECT. `test/zfsbackup` greps `zfs-backup.sh`
+at assertion time, so section 7a read the file in whatever state it was in when
+the run reached it -- after the fix, as it happens. Earlier sections read the
+file before it. The number is a mix of two trees and is a measurement of
+neither.
+
+It would have been just as easy to go the other way: an assertion that passed
+early and a file that broke later reads as green over a defect.
+
+*Rule.* **R5.** A suite measures a tree, so the tree has to hold still for it.
+If a fix cannot wait, kill the run rather than let it produce a number that
+looks like evidence. The authority for this change is CI on 31e6ccd and 7e13dd6,
+which ran against a fixed checkout -- not the local 488/0, which I am recording
+here precisely because it looked like the better number.
