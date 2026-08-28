@@ -36,7 +36,8 @@ machine under it did.
    datasets are absent, so the mode is `create` and the destructive `replace`
    gate stays closed.
 3. **`move-to-client`** — the copy's sections are re-recorded against the new
-   relationship, cron is regenerated, and the old relationship is stopped.
+   relationship, cron is regenerated, and the old relationship is PAUSED (see
+   the decision below: paused, not retired).
 
 Moving BEFORE recovering points the schedule at an empty machine. The next pull
 would find no common snapshot and either refuse or full-send, which is the
@@ -64,30 +65,84 @@ result. This verb must measure.
 - the source-side prune, which addresses the peer and must follow it;
 - the monitor;
 - the crontab, regenerated from the changed config;
-- the old relationship's record, stopped.
+- the old relationship, PAUSED -- its record and its peer manifest stay exactly
+  where they are.
 
 `zfs-backup.sh:8991` refuses a section at a path another client manages unless
 that path was previously recorded as managed by that name. That guard is
 correct and is exactly why this has to be a deliberate handover verb rather than
 a config edit: the re-recording is the operation.
 
-`remove-client <old>` afterwards finds nothing of its own left to remove,
-because the sections moved. It retires the record, which is what it should do.
+If the operator later decides to retire the old relationship, `remove-client
+<old>` finds nothing of its own left to remove, because the sections moved --
+so it takes out the record and stops there. That is a separate decision, taken
+later, by a person. The move does not take it for them.
 
-## Open — owner's call, not decided here
+## Stopping the old relationship: a PAUSE, and nothing heavier
 
-1. **Does `move-to-client` run the recovery itself, or refuse until the data is
-   there?** The argument for refusing: composing a destructive recovery into a
-   config operation makes one verb that can fail halfway in two different
-   domains. Two verbs, each separately verifiable, is the shape the rest of this
-   tool takes.
-2. **What "stopped" means for the old relationship** — paused indefinitely,
-   disabled at the peer, or the record retired outright. The sections are gone
-   from it either way.
-3. **The old machine may still be alive.** After the move it stops being backed
-   up. That is correct when it is being replaced and dangerous when it is not.
-   Should the verb require the retirement to be stated, or is saying loudly what
-   it did enough?
+Owner decision, 2026-08-28: **pause is enough.**
+
+> "Pauza wystarczy, bo co jesli padnie w trakcie."
+
+That is the reasoning, and it settles the question on its own. A pause is
+reversible; retiring a record is not. A move that dies halfway has to leave a
+state the operator can walk back out of, and "the old relationship is paused"
+is exactly that state -- resume it and the old machine is protected again while
+you work out what went wrong.
+
+Retiring the record is a separate decision the operator can take later, once the
+move is known to have worked. The verb does not take it for them.
+
+## After pausing, the verb SAYS what it did. It does not decide anything else
+
+Owner decision, 2026-08-28, and it is a principle rather than a detail of this
+verb:
+
+> "Wystarczy po zapauzowaniu powiedziec co zrobil. Admin ma narzedzie, a nie
+> nadinteligentnego samograja wyprzedzajacego jego mysli, co nigdy dobrze nie
+> zadziala."
+
+So: the old machine may still be alive after the move, and it stops being backed
+up. The verb states that plainly and does not require the operator to declare a
+retirement, prove the machine is dead, or answer a question the tool invented.
+It reports; the admin decides.
+
+This is the same line the estate already draws elsewhere (the tool does not
+restrict destructive operations an administrator is entitled to perform) and it
+applies to prompts and preconditions as much as to guards.
+
+## Open — under discussion
+
+**Does `move-to-client` run the recovery itself, or refuse until the data is
+there?** Not decided.
+
+The implementer's recommendation is SEPARATE, for a reason that is not
+aesthetic: recovery and hand-over are two different failure domains. A recovery
+takes hours and may need several attempts (mount, grant, replace), each its own
+conversation; the hand-over is seconds, local, and transactional. Composed, they
+produce a verb that can be half-done in two incompatible ways, and an operator
+mid-incident has to work out which half stopped.
+
+The GUID proof is the natural seam -- it is precisely the question "is the data
+there yet". A verb that both produces that condition and checks it is checking
+its own work.
+
+This project has already settled the same tension once: `activate` is an
+idempotent composite over `set-endpoint` / `verify-endpoint` / `final-catchup` /
+`activate-client`, and its own usage text says to invoke the steps directly only
+to recover a stuck activation. Separate, resumable steps; a composite on top if
+one is wanted.
+
+Following the principle recorded above, a composite should NOT be built ahead of
+use. Walk the path by hand first; a composite designed before anyone has run the
+steps is exactly the automaton the owner rejected.
+
+**What the open question forces either way:** `move-to-client` must be
+IDEMPOTENT. Run against sections that have already moved it says so and exits
+zero -- not an error, not a second move. That is also the answer to "what if it
+dies halfway": if it stops between re-recording the sections and installing the
+crontab, the config says new and the crontab says old, and a re-run resolves it.
+Without idempotence that state has no exit but a hand edit.
 
 ## Not decided by this document
 
