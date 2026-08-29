@@ -3760,6 +3760,69 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## LAB: TRZY REPLIKI NA DYSKACH WYMIENNYCH -- STOI (pve9, 2026-08-29)
+
+Przestrzen labowa zbudowana na polecenie wlasciciela. pve9 to VM 109 na pve2;
+dolozone trzy dyski wirtualne 2 GB z numerami seryjnych USB-A/USB-B/USB-C, wiec
+maja stabilne sciezki w `/dev/disk/by-id` -- dokladnie jak prawdziwy dysk USB.
+Weszly na goraco, bez restartu.
+
+| nosnik | pula | rola |
+|---|---|---|
+| USB-A | `usbrep1` | tygodniowy, rotacja |
+| USB-B | `usbrep2` | tygodniowy, rotacja |
+| USB-C | `usbrep3` | kwartalny |
+
+**Zrodlo repliki to prawdziwe kopie z INNEJ maszyny**, nie material syntetyczny:
+`hdd/labcoll/192.168.28.9/hdd/labsrc/vm-900-disk-{0,1}` -- dwa wolumeny VM 900,
+ktore pve1 (28.9) wysyla tu co godzine. W chwili labu 75 snapshotow, najstarszy
+z 2026-08-29.
+
+Konfiguracja to trzy sekcje `[replica:]` na jednym zrodle -- czego grammar do
+dzisiaj nie umial wyrazic (`duplicate section [dataset:hdd/labcoll]`).
+
+### Co zostalo dowiedzione, na prawdziwym urzadzeniu
+
+| | teza | pomiar |
+|---|---|---|
+| 1 | bramka znajduje PRAWDZIWY dysk bez podpowiadania sciezki | `attach usbrep1` -> `imported`, bez `--dir`; tamta poprawka dotyczyla wylacznie puli plikowej |
+| 2 | pelna klamra na wygenerowanej linii crona | trzy linie, kazda `rc=0`, pula wyeksportowana po transferze |
+| 3 | caly zbior kopii z innej maszyny laduje na nosniku | `usbrep1/replica/hdd/labcoll/192.168.28.9/hdd/labsrc/vm-900-disk-{0,1}` |
+| 4 | **wyjecie dysku nie jest bledem** | `qm set 109 --delete scsi2`; zadanie: `SKIPPED ... Nothing was run and nothing is wrong`, `rc=0`, zero maili |
+| 5 | nieobecnosc jednego nie dotyka pozostalych | `usbrep2` przeszedl normalnie, gdy USB-A byl wyjety |
+| 6 | **dysk wracajacy po utracie wspolnego punktu bierze INKREMENT** | patrz nizej |
+| 7 | kazdy nosnik ma wlasna kotwice | trzy `#tgt-` na `hdd/labcoll`, po jednej na medium |
+
+### Punkt 6 -- kryterium jest dysk, nie log
+
+Skasowana na zrodle **cala** rodzina `replica_` -- czyli retencja odebrala
+wspolny punkt wszystkim trzem replikom naraz. Zostaly same kotwice. Po ponownym
+wpieciu USB-A i jednym przelocie:
+
+```
+snapshotow na kopii PRZED:  6
+snapshotow na kopii PO:    12
+kazdy stary snapshot wraz z GUID: NADAL OBECNY
+```
+
+Przesiew od zera musialby przyjsc z `recv -F`, ktory zmiotlby je co do jednego.
+Nie zmiotl -- wiec byl inkrement, zakotwiczony w bookmarku. Generowana linia nie
+niesie `-v`, wiec log tego NIE mowi; dowod jest wylacznie na dysku i tak ma byc.
+
+### Wady znalezione przez ten lab
+
+| | wada |
+|---|---|
+| R1 | grammar nie umial wyrazic dwoch replik jednego zrodla. Dodany typ sekcji `[replica:]` -- replika to inny RODZAJ zadania (bez monitora, bez prune zrodla, bez relacji), a nie drugi `dst` |
+| R2 | `cron2conf.sh` odrzucal CALY crontab przy pierwszej linii z klamra, bo nie zaczyna sie ona od sciezki do `snapsend.sh`. Wada MOJA, wprowadzona razem z klamra; ta sama klasa co `-L` tego samego dnia |
+
+### Stan po labie
+
+Lab **stoi** i jest odtwarzalny: linie w `/root/replines.txt`, config w
+`/root/replab.conf`. Crontab pve9 celowo **nietkniety** -- instalacja bloku z
+niekanonicznej sciezki configu to zmiana, ktorej wlasciciel nie zlecil, a jeden
+pisarz crontaba jest regula tego pakietu.
+
 ## LAB: replika na nosnik wymienny -- ZALICZONY (pve0, 2026-08-29)
 
 Obowiazek reczny `mediagate-live` wykonany. Pula plikowa `rotlab` na `/root/rotlab.img`
