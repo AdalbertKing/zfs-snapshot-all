@@ -294,6 +294,31 @@ check "E2 a REQUESTED container includes itself (named is wanted)" "yes" "$stanz
 stanza=$(awk '/^\[dataset:hdd\/LXC\]/{f=1;next} f&&/^include_parent/{print $3; exit}' "$TMPD/peers/demo.scope")
 check "E3 control: the estate draft still treats a container as a branch" "no" "$stanza"
 
+# ---- the draft records WHAT IT WAS BUILT FROM --------------------------------
+#
+# A draft is reused on a later --join rather than rebuilt, so the request it
+# answered has to travel with it. Without that, a draft built when the collector
+# named nothing -- a proposal covering the whole estate -- is reused against a
+# request naming one dataset, and the acceptance screen shows a one-dataset ask
+# above a nine-dataset grant. Measured on pve9, 2026-08-29.
+#
+# A sidecar rather than a header line: the scope file is hashed and enumerated,
+# and a comment inside it would have to be excluded from both.
+# The request travels in the MANIFEST, not the environment: do_draft_scope
+# declares PEER_JOIN_DATASETS local and sources the manifest over it, so an
+# exported variable would be silently discarded -- the first cut of this test
+# did exactly that and took the whole suite down with a die().
+cat > "$TMPD/peers/stamp.conf" <<EOF
+PEER_JOIN_ROLE="pull"
+PEER_JOIN_AS="delegated"
+PEER_JOIN_ACCOUNT="zfsbackup-pve1"
+PEER_JOIN_DATASETS="hdd/LXC"
+EOF
+out=$(do_draft_scope stamp 2>&1); rc=$?
+check "the stamped draft succeeds" "0" "$rc"
+check "THE DRAFT RECORDS THE REQUEST BESIDE IT" "0" "$([ -f "$TMPD/peers/stamp.scope.request" ]; echo $?)"
+check "...and it holds what the collector asked for" "hdd/LXC" "$(cat "$TMPD/peers/stamp.scope.request" 2>/dev/null)"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1523,6 +1523,22 @@ do_draft_scope() {
         rm -f "$tmp"
         die "could not write $sfile"
     fi
+    # WHAT THIS DRAFT WAS BUILT FROM, recorded beside it.
+    #
+    # A draft is reused on a later --join rather than regenerated, which is
+    # right: it is a consent document the administrator may have edited by
+    # hand, and silently rebuilding it would throw those edits away. But the
+    # collector's request can change between attempts -- re-run add-client with
+    # --datasets, hand over a new package -- and then the acceptance screen
+    # showed the CURRENT request beside a count and a grant computed from the
+    # STALE draft. Measured on pve9, 2026-08-29: "the collector asked for
+    # hdd/movelab/src" printed directly above "acceptance grants rights on 9
+    # dataset(s)", with nothing saying the draft predated the request.
+    #
+    # A sidecar rather than a line in the file: the scope file is hashed and
+    # enumerated, and a header comment would have to be excluded from both.
+    printf '%s
+' "$named" > "$sfile.request" 2>/dev/null         || die "drafted the scope but could not record the request it was built from ($sfile.request) -- refusing to leave a draft whose origin cannot be checked on the next run"
     log "drafted $sfile: ${#active[@]} active dataset(s) from ${#pools[@]} pool(s)"
     log "scope draft is ready for review"
 }
@@ -6177,6 +6193,35 @@ guided_join_scope() {   # <label>
     fi
     if [ ! -e "$sfile" ]; then
         do_draft_scope "$label"
+    else
+        # THE DRAFT IS REUSED, SO IT MUST STILL ANSWER THE SAME QUESTION.
+        #
+        # Fail closed, and only in the direction that matters: a draft built
+        # when the collector named nothing is a proposal covering the whole
+        # estate, and reusing it against a request that names one dataset is
+        # how a one-dataset ask turns into a nine-dataset grant with the
+        # operator looking straight at both numbers. Refusing costs one command;
+        # the alternative costs a delegated account rights over the host.
+        # Only a PROVEN mismatch refuses. A missing sidecar means the draft
+        # predates this check -- every host mid-join at upgrade time has one --
+        # and turning that into a refusal would block work on evidence nobody
+        # has. It is said out loud instead, next to the request line the
+        # operator is already reading.
+        local _want _had
+        _want="${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+        if [ ! -r "$sfile.request" ]; then
+            echo "!!! Szkic zakresu $sfile pochodzi sprzed zapisywania prosby, wiec" >&2
+            echo "!!! NIE zostal sprawdzony wzgledem tego, o co kolektor prosi teraz." >&2
+            echo "!!! Porownaj ponizsza liste z linia 'Kolektor prosil o:' sam." >&2
+        else
+        _had="$(cat "$sfile.request" 2>/dev/null)"
+        if [ "$_had" != "$_want" ]; then
+            echo "!!! Szkic zakresu $sfile powstal dla INNEJ prosby niz obecna." >&2
+            echo "!!!   szkic zbudowano dla: ${_had:-(nic -- caly majatek hosta)}" >&2
+            echo "!!!   kolektor prosi teraz o: ${_want:-(nic -- caly majatek hosta)}" >&2
+            die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft by hand if its contents are still what you mean, and re-run --commit-scope=$label)."
+        fi
+        fi
     fi
 
     while :; do
