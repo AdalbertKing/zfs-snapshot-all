@@ -2438,6 +2438,25 @@ build_replica_section() {
     local schedule; schedule="$(ini_get "$sec" schedule)"
     lint_cron_schedule "$schedule" "[replica:$name]" schedule
 
+    # A REPLICA THAT RUNS MORE THAN ONCE A DAY IS EXPOSING THE MEDIUM MORE THAN
+    # ONCE A DAY, and that is the whole cost model here: the disk can only be
+    # hurt while its pool is imported, so the number of runs IS the exposure.
+    # Measured on the lab, 2026-08-29: a medium pulled while imported hung the
+    # host until it was reset. The owner's model is once a night, after the daily
+    # tier, or on insertion -- not an online mirror.
+    #
+    # Said, not refused. Someone may genuinely want a replica onto a fixed disk
+    # every hour, and that is their call to make with the cost in front of them.
+    case "$schedule" in
+        *'*'*' '*' '*' '*' '*) ;;   # checked below by field, this is just a guard
+    esac
+    local _min _hr
+    _min="${schedule%% *}"; _hr="$(printf '%s' "$schedule" | awk '{print $2}')"
+    case "$_hr" in
+        *'*'*|*,*|*-*)
+            warn "[replica:$name]: schedule='$schedule' runs more than once a day. Every run imports '$name''s medium, and a medium can only be harmed while its pool is imported -- on the lab, pulling one mid-run hung the host until it was reset. A replica is meant to run once a night after the daily tier, or when the disk is plugged in. Keeping it is your call; the cost is the number of runs." ;;
+    esac
+
     # A FAMILY OF ITS OWN, and this is the owner's point (2026-08-28): the
     # replica's snapshots must not be mistaken for the source's. They exist on
     # the copy and not on the machine the data came from, so sharing the

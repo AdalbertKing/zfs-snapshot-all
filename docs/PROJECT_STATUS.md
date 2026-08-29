@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2b02825695ca08f5 -->
+<!-- status-covers-digest: f6b935b22ada1549 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -3759,6 +3759,66 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## MODEL REPLIKI: RAZ NA DOBE, OPCJONALNIE PO WLOZENIU (2026-08-29)
+
+Decyzja wlasciciela po labie wyrwania: replika **nie jest lustrem online**.
+Harmonogram raz na dobe, w nocy, po dziennym tierze -- albo od razu po podlaczeniu
+dysku. Po skonczonej operacji pula sie eksportuje i dysk jest w stanie
+bezpiecznego odlaczenia.
+
+Uzasadnienie jest to samo, ktore wyszlo z pomiarow: nosnikowi mozna zaszkodzic
+**wylacznie wtedy, gdy jego pula jest zaimportowana**, wiec liczba biegow JEST
+ekspozycja. Godzinowa replika wystawiala dysk 24 razy na dobe bez powodu.
+
+### Co sie zmienilo
+
+| | |
+|---|---|
+| domyslny harmonogram `add-replica` | `30 2 * * *` zamiast godzinowego. Dzienny tier wysyla o 01:11 w dostarczanych profilach (00:11 w `prod`), wiec 02:30 jest po nim i wciaz w nocy |
+| generator | **mowi**, gdy harmonogram repliki chodzi czesciej niz raz na dobe, z kosztem. Nie odmawia -- replika na dysk staly moze tego chciec, i to decyzja admina z cena przed oczami |
+| drugi wyzwalacz | `install-media-trigger` -- regula udev uruchamiajaca `run-replicas`, gdy pojawi sie dysk z etykieta ZFS |
+
+### Wyzwalacz po wlozeniu jest OPCJONALNY
+
+Wyrazne polecenie wlasciciela: ma byc opcjonalny, a nie domyslny razem z tym z
+harmonogramu. `add-replica` **nigdy** nie dotyka udev, a host, ktory chce tylko
+nocnego biegu, po prostu nigdy nie uruchamia tego czasownika. Sa niezalezne:
+zadne nie instaluje, nie implikuje ani nie wymaga drugiego. `remove-media-trigger`
+cofa zgode -- usuwa wylacznie plik napisany przez to narzedzie i nie rusza crona.
+
+Oba naraz nic nie kosztuja: dysk wlozony wieczorem robi swoj bieg, a nocny bieg
+znajduje potem zero zapisanych bajtow i **w ogole nie importuje nosnika**.
+
+Regula udev uzywa `systemd-run --no-block` i to nie jest opcja: udev serializuje
+zdarzenia urzadzen, wiec regula czekajaca na backup zatrzymalaby kazde inne
+zdarzenie na maszynie na czas transferu.
+
+Dowiedzione na pve9: `udevadm trigger` uruchomil jednostke
+`zfs-replica-insert-sdd1`, ta wykonala `run-replicas` i zakonczyla sie czysto.
+
+### `sync=always` -- ZMIERZONE, NIEROZSTRZYGNIETE
+
+200 MB na nosnik, cztery biegi na przemian:
+
+```
+standard  21.9 s      always  19.6 s
+standard  15.3 s      always  20.0 s
+```
+
+**Rozrzut wewnatrz trybu `standard` (21,9 vs 15,3) jest wiekszy niz roznica
+miedzy trybami.** Pomiar tonie w szumie i nie pokazuje kosztu -- ale nie pokazuje
+tez korzysci, a stanowisko badawcze jest tu najmniej reprezentatywne z mozliwych:
+dysk wirtualny na szybkiej puli hosta, czyli dokladnie ten przypadek, w ktorym ZIL
+nic nie kosztuje. Na prawdziwym talerzowym USB to samo pokretlo boli najbardziej.
+
+Nie wiadomo tez, czy `zfs receive` w ogole honoruje `sync` -- dokumentacja mowi
+"kazdy zapis przez ZIL", ale sciezka recv jest osobna i nie znalazlem
+rozstrzygniecia.
+
+**Wniosek: nie wlaczam tego domyslnie.** Warunek wlasciciela byl jasny -- jesli
+transfer oberwie, nie chcemy tego -- a ja nie mam liczby, ktora by pokazala, ze
+nie oberwie tam, gdzie to naprawde dziala.
 
 ## LAB: WYRWANIE NOSNIKA -- ZDIAGNOZOWANE (pve9, 2026-08-29)
 
