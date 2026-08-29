@@ -300,9 +300,26 @@ parse_delsnaps_cmd() {
     if [[ "$rest" == "-G "* ]]; then C_MODE="gfs"; rest="${rest#-G }"
     elif [[ "$rest" == "-B "* ]]; then C_MODE="bookmark"; rest="${rest#-B }"
     fi
-    C_RECURSIVE=0; C_CLEARCUT=0; C_PROTECT=""
+    # -L and the ssh flags were missing entirely, and the consequence was not a
+    # lost field: `rest` then still began with '-L', the quoted-scope check below
+    # failed, parse_delsnaps_cmd returned 1, and the caller rejected the WHOLE
+    # crontab with "unrecognized job line". One paused relationship anywhere on a
+    # host made this tool useless for that host -- exactly as the pause rolls out
+    # across the estate.
+    C_RECURSIVE=0; C_CLEARCUT=0; C_PROTECT=""; C_PAIR_LABEL=""; C_SSHFLAGS=""
     while :; do
         if [[ "$rest" == "-R "* ]]; then C_RECURSIVE=1; rest="${rest#-R }"; continue; fi
+        if [[ "$rest" == "-L "* ]]; then
+            rest="${rest#-L }"; C_PAIR_LABEL="${rest%% *}"; rest="${rest#* }"; continue
+        fi
+        # The five options gen-cron's ssh_flags accept-list allows, each taking
+        # a value. Order-independent on purpose: this reads what is there rather
+        # than re-asserting the emitter's current sequence.
+        if [[ "$rest" =~ ^(-p|-k|-c|-K|-O)\  ]]; then
+            local _o="${rest%% *}"; rest="${rest#* }"
+            local _v="${rest%% *}"; rest="${rest#* }"
+            C_SSHFLAGS="${C_SSHFLAGS}${C_SSHFLAGS:+ }$_o $_v"; continue
+        fi
         if [ "$C_MODE" != "bookmark" ] && [[ "$rest" == "-F "* ]]; then C_CLEARCUT=1; rest="${rest#-F }"; continue; fi
         if [[ "$rest" == '-P "'* ]]; then
             rest="${rest#-P \"}"
@@ -389,11 +406,11 @@ classify_lines() {
             if parse_delsnaps_cmd "$CMD"; then
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
                 case "$C_MODE" in
-                    prune) PRUNE_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}") ;;
-                    gfs)   GFS_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}") ;;
+                    prune) PRUNE_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
+                    gfs)   GFS_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
                     bookmark)
                         parse_notify_text "$NOTIFY" || die "cannot parse bookmark notify text: '$NOTIFY'"
-                        BOOK_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${N_LABEL}") ;;
+                        BOOK_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${N_LABEL}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
                 esac
                 continue
             fi
@@ -425,9 +442,12 @@ classify_lines() {
         done
     fi
     if [ -z "$HOST_LABEL" ]; then
-        local e notify
+        # Named fields, not "the last one": notify stopped being last when
+        # pair_label and ssh_flags were appended, and ${e##*SEP} would have
+        # silently started reading ssh_flags as a notify string.
+        local e notify _d
         for e in "${PRUNE_E[@]}"; do
-            notify="${e##*"$SEP"}"
+            IFS="$SEP" read -r _d _d _d _d _d _d _d notify _d _d <<< "$e"
             parse_notify_text "$notify" && { HOST_LABEL="$N_HOST"; break; }
         done
     fi
@@ -496,7 +516,7 @@ build_excluded_sections() {
     local e protect_csv tok prefix keep
     declare -A seen=()
     for e in "${PRUNE_E[@]}" "${GFS_E[@]}"; do
-        IFS="$SEP" read -r _ _ _ _ _ _ protect_csv _ <<< "$e"
+        IFS="$SEP" read -r _ _ _ _ _ _ protect_csv _ _ _ <<< "$e"
         [ -n "$protect_csv" ] || continue
         local IFS_SAVE="$IFS"; IFS=','
         for tok in $protect_csv; do
@@ -601,8 +621,10 @@ declare -A SCOPE_VARIANTS=()   # scope -> space-joined set of "rec:cc" seen
 build_prune_buckets() {
     local e sched scope pattern retain rec cc protect notify bkey
     for e in "${PRUNE_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify <<< "$e"
-        bkey="${scope}${SEP}${rec}${SEP}${cc}"
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "$e"
+        # pair_label and ssh_flags join the bucket key: a [prune:] section
+        # carries ONE of each, so tiers that disagree cannot share a section.
+        bkey="${scope}${SEP}${rec}${SEP}${cc}${SEP}${plbl}${SEP}${sshf}"
         if [ -z "${PRUNE_BUCKET[$bkey]+x}" ]; then
             PRUNE_BUCKET["$bkey"]=""
             PRUNE_BUCKET_ORDER+=("$bkey")
@@ -632,10 +654,12 @@ emit_prune_and_monitor_sections() {
         local key="$SECTION_KEY"
         [ "$rec" = "1" ] && section_set_field "$key" recursive yes
         [ "$cc" = "1" ] && section_set_field "$key" clear_cut yes
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         members="${PRUNE_BUCKET[$bkey]}"
         while IFS= read -r line; do
             [ -n "$line" ] || continue
-            IFS="$SEP" read -r sched _ pattern retain _ _ protect notify <<< "$line"
+            IFS="$SEP" read -r sched _ pattern retain _ _ protect notify _ _ <<< "$line"
             local mon_warn="" mon_crit="" mon_tier="" mon_label=""
             local midx match_idx=-1
             for midx in "${!MON_E[@]}"; do
@@ -679,9 +703,9 @@ declare -A MON_USED=()
 
 # ---- gfs sections ----
 build_gfs_sections() {
-    local e sched scope pattern retain rec cc protect notify part
+    local e sched scope pattern retain rec cc protect notify plbl sshf part
     for e in "${GFS_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify <<< "$e"
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "$e"
         if [ -n "${SECTION_SEEN[prune${SEP}${scope}]+x}" ]; then
             warn "UNREPRESENTABLE: gfs prune on scope '$scope' collides with an existing [prune:$scope] section (different tiers there already claim that name) -- left out; merge by hand."
             continue
@@ -690,6 +714,8 @@ build_gfs_sections() {
         local key="$SECTION_KEY"
         section_set_field "$key" gfs yes
         section_set_field "$key" gfs_pattern "$pattern"
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         section_set_field "$key" pattern "$pattern"
         section_set_field "$key" prune_schedule "$sched"
         section_set_field "$key" notify_raw_prune "$notify"
@@ -708,15 +734,17 @@ build_gfs_sections() {
 
 # ---- bookmark sections ----
 build_bookmark_sections() {
-    local e sched scope pattern age rec label
+    local e sched scope pattern age rec label plbl sshf
     for e in "${BOOK_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern age rec label <<< "$e"
+        IFS="$SEP" read -r sched scope pattern age rec label plbl sshf <<< "$e"
         get_section prune-bookmarks "$scope"
         local key="$SECTION_KEY"
         section_set_field "$key" schedule "$sched"
         section_set_field "$key" age "$age"
         [ "$pattern" != "tgt-" ] && section_set_field "$key" pattern "$pattern"
         [ "$rec" = "1" ] && section_set_field "$key" recursive yes
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         section_set_field "$key" notify "$label"
     done
 }

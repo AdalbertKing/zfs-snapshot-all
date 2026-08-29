@@ -2522,10 +2522,18 @@ group_monitor() {
 group_bookmark_prune() {
     declare -gA BOOKMARK_PRUNE_GROUPS=()
     declare -ga BOOKMARK_PRUNE_GROUP_ORDER=()
-    local e scope pattern age schedule notify recursive sshflags key
+    local e scope pattern age schedule notify recursive sshflags pairlbl key
+    # EVERY field is named. `read` puts the unread remainder in the LAST
+    # variable, so a reader one name short does not fail -- it silently glues
+    # the extra field onto ssh_flags. That is what happened here when
+    # pair_label was appended to this tuple: the rendered line carried
+    # `-p 2222<SEP>relacja1` as if it were a port. Third time in this file for
+    # the same family; see the error log's R3 and E21.
     for e in "${BOOKMARK_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags pairlbl <<< "$e"
+        # pair_label is IN the key: -L becomes part of the emitted command, so
+        # two scopes belonging to different relationships cannot share a line.
+        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}${SEP}${pairlbl}"
         [ -z "${BOOKMARK_PRUNE_GROUPS[$key]+x}" ] && BOOKMARK_PRUNE_GROUP_ORDER+=("$key")
         BOOKMARK_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2540,6 +2548,60 @@ group_bookmark_prune() {
 # operations target the SAME literal scope and one pattern is a prefix of (or
 # equal to) the other, a single snapshot could match both retention rules.
 # Checked on the final resolved (scope, pattern) pairs collected in build.
+# A [prune-bookmarks:] scope that covers the SOURCE of a removable replica.
+#
+# `record_send_bookmark` leaves one bookmark per target, named tgt-<8 hex>, on
+# the SOURCE dataset. For an ordinary target that bookmark is a convenience. For
+# a disk that gets unplugged it is the whole feature: when the medium comes back
+# after the collector's retention has pruned the last common snapshot, that
+# bookmark is the only thing left anchoring an incremental send. Without it the
+# next run is a full re-seed, which on the ten-terabyte case this was built for
+# is the difference between minutes and days.
+#
+# And -B is aimed squarely at it. Its whole premise is that a bookmark nobody
+# refreshed within the threshold is orphaned -- true for a decommissioned VM,
+# false for a disk in a safe, which is refreshed only when it is plugged in. A
+# medium rotated quarterly against `-d30` is indistinguishable, to -B, from a
+# job that no longer exists.
+#
+# WARN, DO NOT REFUSE, AND DO NOT QUIETLY EXCLUDE. Both tempting alternatives
+# take the decision away from the administrator: a refusal blocks a config that
+# may be exactly what was meant, and a silent exclusion leaves a prune rule that
+# does not do what it says. Say what the collision is and let the person who
+# owns the disks decide.
+validate_media_anchor_prune() {
+    local e ds media _f
+    local b scope pattern age recursive _g hit
+    local -a removable=()
+    for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r ds _f _f _f _f _f _f _f _f media _f <<< "$e"
+        [ "$media" = removable ] && removable+=("$ds")
+    done
+    [ "${#removable[@]}" -gt 0 ] || return 0
+
+    for b in "${BOOKMARK_PRUNE_ENTITIES[@]+"${BOOKMARK_PRUNE_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r scope pattern age _g _g recursive _g _g <<< "$b"
+        # Could this pattern match a name of the form tgt-<hash>? delsnaps
+        # matches by literal string prefix, so either the pattern is a prefix of
+        # "tgt-" (it matches every anchor) or "tgt-" is a prefix of the pattern
+        # (it matches some of them). Anything else cannot touch an anchor and is
+        # not worth a word.
+        case "tgt-" in
+            "$pattern"*) : ;;
+            *) case "$pattern" in "tgt-"*) : ;; *) continue ;; esac ;;
+        esac
+        for ds in "${removable[@]}"; do
+            hit=0
+            [ "$scope" = "$ds" ] && hit=1
+            [ "$recursive" = "1" ] && case "$ds" in "$scope"/*) hit=1 ;; esac
+            [ "$hit" -eq 1 ] || continue
+            warn "[prune-bookmarks:$scope] covers '$ds', the source of a replica onto REMOVABLE media, and its pattern '$pattern' can match the tgt- anchor bookmark that replica depends on."
+            warn "  That anchor is refreshed only when the disk is plugged in, so a medium rotated less often than '$age' looks orphaned to -B and is pruned. The next sync after the disk returns is then a FULL re-seed instead of an increment."
+            warn "  Not refused, and nothing has been excluded for you: narrow the scope, lengthen the age past your longest rotation, or accept the re-seed. It is your disk rotation, not the generator's to guess."
+        done
+    done
+}
+
 validate_retain_patterns() {
     local -a scopes=() patterns=()
     local pair scope pattern
@@ -2962,26 +3024,38 @@ emit_monitor() {
 # age.sh watches snapshot staleness, not bookmarks) and not part of the
 # same-scope pattern-overlap check (different ZFS object type than snapshots).
 emit_bookmark_prune() {
-    local key list scope pattern age schedule notify recursive sshflags
+    local key list scope pattern age schedule notify recursive sshflags pairlbl
     for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
         list="${BOOKMARK_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags pairlbl <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mage msch mnot mrec msshf
+        local m mscope mpat mage msch mnot mrec msshf mlbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mage msch mnot mrec msshf <<< "$m"
+            IFS="$SEP" read -r mscope mpat mage msch mnot mrec msshf mlbl <<< "$m"
             targets+=("$mscope")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local flag="" sflag=""
+        local flag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${sflag}\"$joined\" \"$pattern\" $age"
+        # -L goes AFTER -R, matching the other three prune shapes. The order
+        # is not cosmetic: cron2conf.sh parses these lines back into a config by
+        # literal flag position, and its own comment pins "-L follows -R". Emit
+        # them the other way round and the inverse tool silently misreads the
+        # scope.
+        #
+        # -L at all, because this was the ONE prune shape missing it. The owner's
+        # requirement was that a pause stops every cron operation of this
+        # package, prune included; bookmark prune is the shape that destroys
+        # the #tgt- anchors a removable replica needs to come back as an
+        # increment, so it was the worst possible one to leave running.
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${lflag}${sflag}\"$joined\" \"$pattern\" $age"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -3876,6 +3950,7 @@ group_inline_prune
 group_bookmark_prune
 group_monitor
 validate_retain_patterns
+validate_media_anchor_prune
 validate_transfer_semantics
 
 if [ "${RECONCILE:-0}" -eq 1 ]; then

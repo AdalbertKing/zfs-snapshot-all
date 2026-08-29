@@ -322,6 +322,102 @@ check "G4: a stuck export is reported, not swallowed" "2" "$LINE_RC"
 runline 0 0 0
 check "G5: a clean run is clean" "0" "$LINE_RC"
 
+# ---------------------------------------------------------------------------
+# H. THE ANCHOR AND THE THING THAT PRUNES IT
+#
+# `record_send_bookmark` leaves one tgt-<hash> bookmark on the SOURCE. For a
+# removable replica that bookmark is the entire feature: after the collector's
+# retention has eaten the last common snapshot, it is the only thing left
+# anchoring an incremental send, and the media lab measured exactly that.
+#
+# -B exists to prune bookmarks nobody refreshed. A disk in a safe is refreshed
+# only when it is plugged in, so to -B a quarterly medium and a decommissioned
+# VM look identical. Two things had to be true and neither was:
+#
+#   * a pause must stop it -- bookmark prune was the ONE prune shape that never
+#     emitted -L, so the shape that destroys anchors was the shape that ignored
+#     the pause. Its tuple gained pair_label and three readers were left one
+#     name short, which does not fail: `read` puts the remainder in the LAST
+#     name, so the label was glued onto ssh_flags and rendered as a port;
+#   * the generator must SAY when a prune scope covers a removable source. It
+#     warns; it does not refuse and does not silently exclude, because which
+#     disks rotate how often is the administrator's fact, not the generator's.
+# ---------------------------------------------------------------------------
+mkconf() {   # <file> <media|-> <bm-scope> <bm-pattern> <recursive 0|1> <pair_label|->
+    {
+        printf '[defaults]\n\thost_label = lab\n\n'
+        printf '[template:hourly]\n\tsend_schedule  = 5 * * * *\n'
+        printf '\tprefix         = automated_hourly_\n\tnotify_word    = snapshot\n'
+        printf '\tprune_schedule = 35 * * * *\n\tpattern        = automated_hourly\n\tkeep           = 24\n\n'
+        printf '[dataset:tank/a]\n\tuse_template = hourly\n\tnotify       = a\n'
+        printf '\tdst          = rotpool/replica\n'
+        [ "$2" != "-" ] && printf '\tmedia        = %s\n' "$2"
+        [ "$6" != "-" ] && printf '\tpair_label   = %s\n' "$6"
+        printf '\n[prune-bookmarks:%s]\n\tschedule   = 45 4 * * *\n\tage        = -d30\n' "$3"
+        printf '\tpattern    = %s\n\tnotify     = bookmarks\n\tssh_flags  = -p 2222\n' "$4"
+        [ "$5" = "1" ] && printf '\trecursive  = yes\n'
+        [ "$6" != "-" ] && printf '\tpair_label = %s\n' "$6"
+    } > "$1"
+}
+gen() {   # <conf> -> stdout in GEN_OUT, stderr in GEN_ERR
+    GEN_OUT="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT \
+                   -u CRON_LOG -u DIGEST_SCHEDULE bash "$GEN" -c "$1" 2>"$TMPD/gen.err")"
+    GEN_ERR="$(cat "$TMPD/gen.err")"
+}
+warned() { case "$GEN_ERR" in *"anchor bookmark that replica depends on"*) return 0 ;; *) return 1 ;; esac; }
+
+# H1. The collision itself.
+mkconf "$TMPD/h1.conf" removable tank/a "tgt-" 0 -
+gen "$TMPD/h1.conf"
+warned && ok "H1: A PRUNE SCOPE OVER A REMOVABLE SOURCE IS REPORTED" \
+        || bad "H1: A PRUNE SCOPE OVER A REMOVABLE SOURCE IS REPORTED" "$GEN_ERR"
+case "$GEN_ERR" in
+    *"FULL re-seed"*) ok "H1: ...naming the consequence, not just the overlap" ;;
+    *) bad "H1: ...naming the consequence, not just the overlap" "$GEN_ERR" ;;
+esac
+case "$GEN_ERR" in
+    *"nothing has been excluded for you"*) ok "H1: ...and saying it decided nothing on the admin's behalf" ;;
+    *) bad "H1: ...and saying it decided nothing on the admin's behalf" "$GEN_ERR" ;;
+esac
+[ -n "$GEN_OUT" ] && ok "H1: ...and the config is still generated -- a warning, not a refusal" \
+                  || bad "H1: ...and the config is still generated -- a warning, not a refusal"
+
+# H2/H3/H4. THE NEGATIVE SIDE. A guard that only ever fires is not a guard.
+mkconf "$TMPD/h2.conf" - tank/a "tgt-" 0 -
+gen "$TMPD/h2.conf"
+warned && bad "H2: an ordinary target is NOT warned about" "$GEN_ERR" \
+       || ok "H2: an ordinary target is NOT warned about"
+
+mkconf "$TMPD/h3.conf" removable tank/a "automated_" 0 -
+gen "$TMPD/h3.conf"
+warned && bad "H3: a pattern that cannot match tgt- is NOT warned about" "$GEN_ERR" \
+       || ok "H3: a pattern that cannot match tgt- is NOT warned about"
+
+mkconf "$TMPD/h4.conf" removable tank "tgt-" 0 -
+gen "$TMPD/h4.conf"
+warned && bad "H4: a PARENT scope without recursive does not reach the child" "$GEN_ERR" \
+       || ok "H4: a PARENT scope without recursive does not reach the child"
+
+# H5. ...but with recursive it does, and that is the shape a real config uses.
+mkconf "$TMPD/h5.conf" removable tank "tgt-" 1 -
+gen "$TMPD/h5.conf"
+warned && ok "H5: a recursive parent scope DOES reach the child" \
+        || bad "H5: a recursive parent scope DOES reach the child" "$GEN_ERR"
+
+# H6/H7. The tuple readers. Measured on the rendered line, because that is where
+# the glued field showed itself: `-p 2222relacja1` as a port.
+mkconf "$TMPD/h6.conf" removable tank/a "tgt-" 0 relacja1
+gen "$TMPD/h6.conf"
+BMLINE="$(printf '%s\n' "$GEN_OUT" | grep -o 'delsnaps\.sh -B[^|]*' | head -1)"
+case "$BMLINE" in
+    *"-L relacja1"*) ok "H6: BOOKMARK PRUNE CARRIES -L, SO THE PAUSE REACHES IT" ;;
+    *) bad "H6: BOOKMARK PRUNE CARRIES -L, SO THE PAUSE REACHES IT" "$BMLINE" ;;
+esac
+case "$BMLINE" in
+    *"-p 2222 "*) ok "H7: ...and ssh_flags survive intact, with no field glued on" ;;
+    *) bad "H7: ...and ssh_flags survive intact, with no field glued on" "$BMLINE" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
