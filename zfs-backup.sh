@@ -450,7 +450,11 @@ peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
 # Logical pause is an ORCHESTRATION feature, not a security boundary: a
 # command that omits -L is not blocked. The hard-disable half of REV-045
 # (peer-side SSH gate) is deliberately NOT implemented in this stage.
-RELATIONSHIPS_DIR="/var/lib/zfs-snapshot-all/relationships"
+# Overridable in the same form CLIENTS_DIR already uses. Not a new capability:
+# it is what lets a suite drive the pause-aware refusals below without a live
+# /var/lib, and the refusal that reads this was previously untestable for
+# exactly that reason.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 pause_marker_path() { echo "$RELATIONSHIPS_DIR/$1/paused"; }
 client_paused() { [ -f "$(pause_marker_path "$1")" ]; }
 # Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
@@ -9551,6 +9555,29 @@ must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
     local from_rec="$CLIENTS_DIR/$from.conf" to_rec="$CLIENTS_DIR/$to.conf"
     [ -r "$from_rec" ] || die "move-to-client: no relationship record for '$from' ($from_rec). 'zfs-backup.sh status' lists them."
     [ -r "$to_rec" ]   || die "move-to-client: no relationship record for '$to' ($to_rec). Pair the new machine first -- the destination is a relationship this host already holds a key for, not a hostname."
+
+    # A PAUSED DESTINATION WOULD RECEIVE A SCHEDULE THAT DOES NOT RUN.
+    #
+    # Found on the moveclient-live lab, 2026-08-29. The verb pauses the SOURCE at
+    # the end, and never asks about the destination. Move A onto B and then later
+    # B back onto A, and A is still paused from the first move: it takes the
+    # sections, the crontab is installed, the verb prints "'A' carries the
+    # schedule" -- and every one of those jobs exits SKIPPED, because the pause is
+    # a property of the label they now carry. Measured: snapget answered
+    # "SKIPPED: relationship alfa is paused" on the very line the hand-over had
+    # just installed.
+    #
+    # That is false health of the exact kind this package keeps finding, and the
+    # tool announces it as success.
+    #
+    # Refused rather than resumed. A paused destination is the NORMAL state
+    # mid-restore -- pause the twin, restore onto it, hand the schedule over --
+    # so lifting the pause silently would be the tool overruling the very
+    # transaction the administrator opened. It says which command ends it, and
+    # stops before touching anything.
+    if client_paused "$to"; then
+        die "move-to-client: '$to' is PAUSED, so the schedule this would hand it could not run -- every job carrying '-L $to' exits SKIPPED. That is the normal state while a machine is being restored onto; end it deliberately when the restore is done: zfs-backup.sh resume-client $to. Nothing has been changed."
+    fi
 
     # What <from> manages, read from its own record -- the same source
     # remove-client reads, so the two verbs cannot disagree about what belongs
