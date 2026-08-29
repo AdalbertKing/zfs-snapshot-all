@@ -1213,7 +1213,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix notify media recursive flags
+_allow_fields replica  source dst schedule prefix notify media recursive flags history
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2467,7 +2467,52 @@ build_replica_section() {
     local flags; flags="$(resolve_field flags "$sec" "" "")" || flags=""
     lint_flags "$flags" "[replica:$name]"
 
-    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${flags}")
+    # history -- HOW MUCH OF THE GAP TRAVELS, when a common snapshot survived.
+    #
+    # Owner's question, 2026-08-29: for a disk that was in a safe for a quarter,
+    # dragging every snapshot in between may be exactly wrong -- or exactly the
+    # point. There is no default that is right for both of his own disks:
+    #
+    #   * the weekly rotating pair carries the current state, and the snapshots
+    #     that happened while it was in the drawer are cheap but pointless;
+    #   * the quarterly disk IS the archive, and the full history is arguably
+    #     the whole reason for fetching it out.
+    #
+    # So it is stated, not guessed. `all` keeps zfs send -I, the default this
+    # package has always had; `newest` is -i; `auto:N` is -T N, which measures
+    # the gap in the DATASET'S OWN snapshot intervals rather than wall-clock.
+    #
+    # It only bites when a common snapshot still exists. Once retention has
+    # eaten it the engine falls back to the bookmark anchor, and a bookmark
+    # carries no data -- the send is one diff whatever this field says.
+    #
+    # THE COST, because a field that hides it would be worse than no field: with
+    # `newest` or `auto`, the copy gets HOLES. Snapshots taken between two
+    # visits of the medium never reach it. What is already on the disk stays.
+    local history hist_flags=""
+    history="$(resolve_field history "$sec" "" "")" || history=""
+    case "$history" in
+        ''|all)   hist_flags="" ;;
+        newest)   hist_flags="-i" ;;
+        auto:*)   local _n="${history#auto:}"
+                  case "$_n" in
+                      ''|*[!0-9]*) die "[replica:$name]: history='$history' -- auto: takes a count of the dataset's own snapshot intervals, e.g. auto:3" ;;
+                  esac
+                  [ "$_n" -gt 0 ] 2>/dev/null || die "[replica:$name]: history='$history' -- auto:0 would switch on the first run, which is what 'newest' says plainly"
+                  hist_flags="-T $_n" ;;
+        auto)     die "[replica:$name]: history='auto' needs the count it switches at, e.g. auto:3 -- how many of this dataset's own snapshot intervals may pass before the run stops carrying intermediates" ;;
+        *)        die "[replica:$name]: history='$history' -- expected 'all' (every snapshot in between, zfs send -I, the default), 'newest' (only the diff to the newest, -i) or 'auto:N' (-T N: let the engine decide, measured in this dataset's own snapshot intervals)" ;;
+    esac
+    # TWO ANSWERS TO ONE QUESTION IS A REFUSAL, not a precedence rule. Somebody
+    # who wrote both meant one of them, and picking for them is how a config
+    # comes to mean something other than it reads.
+    if [ -n "$hist_flags" ]; then
+        case " $flags " in
+            *" -i "*|*" -T "*) die "[replica:$name]: history='$history' and 'flags' both decide how much of the gap travels ('$flags'). Say it once -- keep 'history' and drop -i/-T from flags." ;;
+        esac
+    fi
+
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}")
 }
 
 build_bookmark_prune_section() {
@@ -3150,11 +3195,12 @@ emit_monitor() {
 # would either export a pool the other still needs or skip the other every time
 # one disk is out. That is the same reason 'media' sits in the send group key.
 emit_replicas() {
-    local e name source dst schedule prefix notify media recursive flags cmd
+    local e name source dst schedule prefix notify media recursive hist flags cmd
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r name source dst schedule prefix notify media recursive flags <<< "$e"
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags <<< "$e"
         cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
         [ "$recursive" = "1" ] && cmd="$cmd -R"
+        [ -n "$hist" ] && cmd="$cmd $hist"
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$source\" \"$dst\""
         cmd="$(media_bracket "$media" "$dst" "$name" "$cmd")"

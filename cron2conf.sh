@@ -456,9 +456,23 @@ classify_lines() {
                 # these lines.
                 [ -n "$HOST_LABEL" ] || HOST_LABEL="$N_HOST"
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
-                local _rec=0
-                case " $C_FLAGS " in *" -R "*) _rec=1 ;; esac
-                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${_rec}${SEP}${N_LABEL}")
+                local _rec=0 _hist="" _rest="" _tok _want=0
+                # -R is the section's own 'recursive', not a transfer flag, and
+                # -i/-T are the 'history' field. Everything else is genuinely
+                # flags and was being DROPPED here -- a replica with -b would
+                # have come back without its bandwidth cap.
+                for _tok in $C_FLAGS; do
+                    if [ "$_want" -eq 1 ]; then _hist="$_hist $_tok"; _want=0; continue; fi
+                    case "$_tok" in
+                        -R) _rec=1 ;;
+                        -i) _hist="newest" ;;
+                        -T) _hist="auto:"; _want=1 ;;
+                        *)  _rest="${_rest:+$_rest }$_tok" ;;
+                    esac
+                done
+                # `-T 3` arrives as two tokens; the count is glued back on here.
+                case "$_hist" in "auto: "*) _hist="auto:${_hist#auto: }" ;; esac
+                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${_rec}${SEP}${N_LABEL}${SEP}${_hist}${SEP}${_rest}")
                 continue
             fi
             if parse_send_cmd "$CMD"; then
@@ -802,9 +816,9 @@ build_gfs_sections() {
 # that turned one into the other would hand the next reader a config claiming a
 # backup relationship where there is only a copy.
 build_replica_sections() {
-    local e sched label source dst prefix media rec notify
+    local e sched label source dst prefix media rec notify hist flags
     for e in "${REPL_E[@]+"${REPL_E[@]}"}"; do
-        IFS="$SEP" read -r sched label source dst prefix media rec notify <<< "$e"
+        IFS="$SEP" read -r sched label source dst prefix media rec notify hist flags <<< "$e"
         get_section replica "$label"
         local key="$SECTION_KEY"
         section_set_field "$key" source "$source"
@@ -813,6 +827,11 @@ build_replica_sections() {
         section_set_field "$key" prefix "$prefix"
         [ -n "$media" ] && section_set_field "$key" media "$media"
         [ "$rec" = "1" ] && section_set_field "$key" recursive yes
+        # 'all' is the default and gen-cron emits nothing for it, so writing it
+        # back would be a field the original config never had -- and the
+        # round-trip diff would start reporting a change that is not one.
+        [ -n "$hist" ] && section_set_field "$key" history "$hist"
+        [ -n "$flags" ] && section_set_field "$key" flags "$flags"
         [ -n "$notify" ] && [ "$notify" != "$label" ] && section_set_field "$key" notify "$notify"
     done
 }

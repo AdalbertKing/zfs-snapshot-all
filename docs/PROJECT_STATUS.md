@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2b9af00889e94c5f -->
+<!-- status-covers-digest: d67e81278e053d72 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -3759,6 +3759,62 @@
 > quiesce *zrobił*, a nie na sprawdzeniu, czy się *udało*. Gdyby zatrzymać się
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
+
+## REPLIKI Z WYSOKIEGO POZIOMU (2026-08-29)
+
+Polecenie wlasciciela: ma byc konfigurowalne z gory, **bo docelowo idzie w GUI**.
+To nie jest prosba o wygode, tylko ograniczenie ksztaltu -- formularz nie edytuje
+pliku INI i nie da sie mu kazac wkleic `zpool create`.
+
+| czasownik | co robi |
+|---|---|
+| `add-replica NAZWA --source= --dst= [...]` | **upsert** sekcji `[replica:]`; domyslnie PLAN, `--install` podmienia config i crontab razem |
+| `list-replicas [--json]` | inwentarz + zywy stan nosnika |
+| `remove-replica NAZWA [--install]` | zdejmuje zadanie; **kopii na nosniku nie rusza** |
+
+`--json` idzie ta sama konwencja co `progress --json`, ktore juz jest w tym
+projekcie zadeklarowane jako warstwa danych pod GUI.
+
+### Cztery stany nosnika, nie dwa
+
+Bramka odpowiada „czy pula jest zaimportowana" -- wlasciwe pytanie dla zadania,
+ktore zaraz bedzie pisac, i **niewlasciwe dla czlowieka patrzacego na liste**:
+dysk lezacy w kieszeni z wyeksportowana pula czytalby sie jako `away`, czyli jak
+dysk w sejfie. Listowanie rozroznia `here` / `available` / `away` /
+`wrong_medium`, i robi to **poza** bramka, zeby nie ruszac kontraktu kodow
+wyjscia, na ktorym stoja linie crona.
+
+### Odmowy, ktore znalazl wlasny lab
+
+Pozwolilem wskazac ten sam nosnik dwa razy -- najlatwiejszy blad do popelnienia w
+formularzu. Skutek jest gorszy niz wyglada: znacznik wlasnosci bramki jest **per
+etykieta**, wiec oba zadania uznalyby, ze zaimportowaly pule, i to, ktore
+skonczy pierwsze, wyeksportowaloby ja spod drugiego W TRAKCIE ZAPISU. Odmawiane
+w obie strony: ten sam `dst` i ta sama PULA pod inna etykieta.
+
+### `history` -- ile luki jedzie, gdy wspolny snapshot przezyl
+
+Pytanie wlasciciela: dla dysku nieobecnego kwartal ciagniecie wszystkich
+snapshotow po drodze bywa bez sensu.
+
+**W tym konkretnym przypadku pytanie jest bezprzedmiotowe** -- gdy retencja zjadla
+wspolny snapshot, silnik spada na kotwice-bookmark, a bookmark nie niesie danych:
+wysylka to jeden diff i inaczej byc nie moze. Pole gryzie tylko wtedy, gdy
+wspolny snapshot PRZEZYL.
+
+| wartosc | flaga | znaczenie |
+|---|---|---|
+| `all` (domyslne) | `-I` | kazdy snapshot po drodze |
+| `newest` | `-i` | tylko roznica do najnowszego |
+| `auto:N` | `-T N` | silnik decyduje, mierzac w WLASNYCH interwalach datasetu |
+
+Bez domyslnej „inteligencji", bo dwa dyski tego samego wlasciciela chca czegos
+przeciwnego: para tygodniowa niesie stan biezacy, a dysk kwartalny JEST archiwum.
+Koszt powiedziany wprost w kodzie i w pomocy: przy `newest`/`auto` kopia dostaje
+DZIURY -- snapshoty powstale miedzy wizytami nosnika nigdy tam nie trafia.
+
+`history` i `flags` naraz to **odmowa**, nie regula pierwszenstwa: kto napisal
+oba, mial na mysli jedno.
 
 ## LAB: TRZY REPLIKI NA DYSKACH WYMIENNYCH -- STOI (pve9, 2026-08-29)
 

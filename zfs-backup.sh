@@ -298,6 +298,32 @@ Usage:
                                     before install. Backup-mode only; --target optional
                                     (proposed at pick time). --manual-join opts into the
                                     explicit two-sided form. Same resumability as above.
+Replicas -- more copies of what this host already holds, usually onto disks
+that get unplugged. Every field is a flag, and add-replica is an upsert, so a
+front end never edits the config file:
+  zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
+                                    [--schedule='10 * * * *'] [--prefix=replica_]
+                                    [--recursive=yes|no] [--fixed|--removable]
+                                    [--history=all|newest|auto:N]
+                                    [--notify=TEXT] [--plan|--install] [--yes]
+                                    Plans by default; --install swaps the config and
+                                    the crontab together. --removable (the default)
+                                    brackets the run in zpool import/export, so a
+                                    disk in a safe is a quiet skip, never an alert.
+                                    Prepare the medium once, by hand, before the
+                                    first run: zpool create POOL <device> and
+                                    zfs create POOL/BASE. That dataset is what tells
+                                    the gate the RIGHT disk is in the slot.
+  zfs-backup.sh list-replicas [--json]
+                                    Inventory plus live medium state: here (imported),
+                                    available (in the slot, not imported), away (in a
+                                    safe), wrong_medium (a disk IS in the slot and it
+                                    is not this one). --json is the GUI data layer,
+                                    same contract as `progress --json`.
+  zfs-backup.sh remove-replica NAME [--install]
+                                    Stops the job. The copy on that medium is left
+                                    alone -- it is still a copy.
+
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
                                     Default: backup mode; source datasets are discovered
@@ -4799,6 +4825,343 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
         ''|*[!0-9]*) return 1 ;;
         *)           printf '%s' "$1" ;;
     esac
+}
+
+
+###############################################################################
+# REPLICAS -- the high-level face of [replica:] sections.
+#
+# Owner's direction, 2026-08-29: this has to be configurable from the top,
+# because it is going into a GUI. That is not a request for convenience, it is a
+# constraint on the shape: a form cannot hand-edit an INI file and cannot be told
+# to paste `zpool create`. So every field of a [replica:] section is a flag here,
+# add-replica is an UPSERT (the GUI's "save" is one call whether the row is new
+# or edited), and the listing has a machine-readable form -- the same contract
+# `progress --json` already sets as this project's data layer.
+#
+# What these verbs do NOT do is invent orchestration. The candidate config, the
+# rendered preview and the atomic swap are the same three helpers local-backup
+# and activate-client use, in the same order: plan by default, install only when
+# asked.
+###############################################################################
+
+# Replace or append one [replica:NAME] block in a config file, in place.
+# Everything outside the block is preserved byte for byte -- a config carries
+# other people's sections and comments somebody wrote by hand.
+replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history>
+    local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
+    local history="${10:-}"
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v want="[replica:$name]" '
+        $0 == want { skip=1; next }
+        skip && /^[[]/ { skip=0 }
+        skip { next }
+        { print }
+    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    {
+        printf '\n'
+        printf '[replica:%s]\n' "$name"
+        printf '\tsource    = %s\n' "$source"
+        printf '\tdst       = %s\n' "$dst"
+        printf '\tschedule  = %s\n' "$sched"
+        printf '\tprefix    = %s\n' "$pref"
+        [ -n "$media" ]  && printf '\tmedia     = %s\n' "$media"
+        [ "$rec" = "1" ] && printf '\trecursive = yes\n'
+        # 'all' is gen-cron's default and it emits nothing for it, so writing it
+        # would put a field in the file that changes nothing.
+        [ -n "$history" ] && [ "$history" != "all" ] && printf '\thistory   = %s\n' "$history"
+        [ -n "$notify" ] && printf '\tnotify    = %s\n' "$notify"
+        :
+    } >> "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    return 0
+}
+
+cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
+    local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
+    local config="" do_install=0 assume_yes=0 a _ans
+    for a in "$@"; do
+        case "$a" in
+            --source=*)    source="${a#*=}" ;;
+            --dst=*)       dst="${a#*=}" ;;
+            --schedule=*)  sched="${a#*=}" ;;
+            --prefix=*)    pref="${a#*=}" ;;
+            --notify=*)    notify="${a#*=}" ;;
+            # HOW MUCH OF THE GAP TRAVELS when a common snapshot survived.
+            # Validated here as well as in gen-cron, so a typo fails at the
+            # command line instead of after the config has been composed.
+            --history=*)   history="${a#*=}"
+                           case "$history" in
+                               all|newest) ;;
+                               auto:*)     case "${history#auto:}" in
+                                               ''|*[!0-9]*) die "add-replica: --history=$history -- auto: takes a count, e.g. --history=auto:3" ;;
+                                           esac ;;
+                               *) die "add-replica: --history=$history -- expected 'all' (every snapshot in between, the default), 'newest' (only the diff to the newest) or 'auto:N' (let the engine decide, measured in this dataset's own snapshot intervals). It only matters when a common snapshot survived: once retention has eaten it, the bookmark anchors a single diff whatever this says." ;;
+                           esac ;;
+            --config=*)    config="${a#*=}" ;;
+            --recursive=*) case "${a#*=}" in yes|1|true) rec=1 ;; no|0|false) rec=0 ;; *) die "add-replica: --recursive takes yes or no" ;; esac ;;
+            # A replica onto a target that is ALWAYS there is a legitimate third
+            # copy -- another pool in the same box. It simply does not get the
+            # import/export bracket, and must not, or every run would export a
+            # pool nobody asked to unmount.
+            --fixed)       media="" ;;
+            --removable)   media="removable" ;;
+            --plan)        do_install=0 ;;
+            --install)     do_install=1 ;;
+            --yes|-y)      assume_yes=1 ;;
+            -*)            die "add-replica: unknown option '$a'" ;;
+            *)             if [ -z "$name" ]; then name="$a"; else die "add-replica: takes exactly one name; got a second: '$a'"; fi ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
+    case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
+    [ -n "$source" ] || die "add-replica: --source= names the dataset on THIS host to copy"
+    [ -n "$dst" ]    || die "add-replica: --dst= names the base dataset on the medium, e.g. usbrep1/replica"
+    [ -n "$sched" ]  || sched="10 * * * *"
+
+    # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
+    zfs list -H -o name "$source" >/dev/null 2>&1 \
+        || die "add-replica: '$source' is not a dataset on this host. A replica copies what this machine already holds."
+
+    # THE MEDIUM MAY BE IN A SAFE, AND THAT IS NOT AN ERROR.
+    #
+    # The base dataset on the target is what tells the gate the RIGHT disk is in
+    # the slot, so when the pool is here it is checked and a mismatch refused.
+    # When the pool is absent it CANNOT be checked -- and refusing would mean
+    # fetching a disk out of the safe merely to add a line to a config. It is
+    # said out loud instead, which is the rule the join scope follows too.
+    local pool="${dst%%/*}"
+    if zpool list -H -o name "$pool" >/dev/null 2>&1; then
+        zfs list -H -o name "$dst" >/dev/null 2>&1 \
+            || die "add-replica: pool '$pool' is imported but '$dst' is not on it. That dataset is what identifies the medium, so this is either the wrong disk or one that was never prepared: zfs create $dst"
+    elif zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
+        # In the slot, just not imported. Saying "not here" about a disk the
+        # operator can see would be the same falsehood the listing used to tell.
+        warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
+    else
+        warn "medium '$pool' is not here, so '$dst' could not be checked. That is normal for a disk in a safe -- but if it was never prepared, the first run will refuse it as the wrong medium. Prepare it once: zpool create $pool <device> && zfs create $dst"
+    fi
+
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+
+    # ONE MEDIUM, ONE REPLICA. Two hazards, both refused, and both are what a
+    # form produces the first time somebody picks the same disk twice:
+    #
+    #   * the same dst -- two jobs writing one dataset, each with its own
+    #     snapshot family, racing;
+    #   * the same POOL under a different label -- worse, and not obvious. The
+    #     gate's ownership marker is per LABEL, so the two jobs each believe
+    #     they imported the pool, and whichever finishes first exports it out
+    #     from under the other mid-write.
+    #
+    # Checked against the INSTALLED config and skipping this replica's own
+    # section, so re-running add-replica for an existing name stays an upsert
+    # rather than a collision with itself.
+    if [ -f "$config" ]; then
+        local _other _odst _opool
+        while IFS="$(printf '	')" read -r _other _odst; do
+            [ -n "$_other" ] || continue
+            [ "$_other" = "$name" ] && continue
+            [ "$_odst" = "$dst" ]                 && die "add-replica: [replica:$_other] already writes to '$dst'. Two replicas onto one target would race, each with its own snapshot family. Give this one its own dataset, or edit '$_other'."
+            _opool="${_odst%%/*}"
+            [ "$_opool" = "$pool" ]                 && die "add-replica: [replica:$_other] already uses the medium '$pool' (as $_odst). The media gate records ownership per LABEL, so two labels on one pool would each believe they imported it -- and whichever finished first would export it out from under the other, mid-write. One medium, one replica."
+        done <<REPEOF
+$(awk '
+    /^\[replica:/ { if (n!="" && d!="") print n "\t" d
+                    n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); d=""; next }
+    /^\[/ { if (n!="" && d!="") print n "	" d; n=""; d=""; next }
+    n != "" { line=$0; sub(/^[ 	]+/,"",line); k=line; sub(/[ 	]*=.*$/,"",k); v=line; sub(/^[^=]*=[ 	]*/,"",v); if (k=="dst") d=v }
+    END { if (n!="" && d!="") print n "	" d }
+' "$config")
+REPEOF
+    fi
+
+    local cand; cand=$(mktemp) || die "mktemp failed"
+    chmod 0644 "$cand" 2>/dev/null || :
+    if [ -f "$config" ]; then
+        cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read $config to plan against it"; }
+    else
+        assert_config_not_claimed_if_missing "$config"
+        printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
+            || { rm -f "$cand"; die "could not create the candidate config"; }
+    fi
+    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" \
+        || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
+
+    show_activation_proposal "$config" "$cand" || {
+        rm -f "$cand"
+        die "gen-cron.sh could not render the proposed config -- nothing was touched"
+    }
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        rm -f "$cand"
+        return 0
+    fi
+    if [ "$assume_yes" -ne 1 ]; then
+        _ans=""
+        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
+    fi
+    atomic_replace_and_install "$config" "$cand" \
+        || die "add-replica: the install failed -- see above. The config and crontab were rolled back together."
+    log "replica '$name' installed: $source -> $dst"
+}
+
+
+# list-replicas [--json] -- the inventory, plus whether each medium is HERE.
+#
+# --json is the product, not a convenience, for the same reason it is on
+# `progress`: a GUI must not scrape human text. The two are deliberately the
+# same shape of answer -- one object, one array of records, fields named after
+# the config fields they came from -- so a front end learns the convention once.
+#
+# `present` is asked of the gate rather than inferred, because the gate is the
+# one piece that knows the difference between "the pool is not imported" and
+# "the pool is imported but this is the WRONG disk". A listing that flattened
+# those two into a boolean would hide the only dangerous one.
+cmd_list_replicas() {
+    local as_json=0 config="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)     as_json=1 ;;
+            --config=*) config="${a#*=}" ;;
+            -*)         die "list-replicas: unknown option '$a'" ;;
+            *)          die "list-replicas: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "list-replicas: no readable config at $config"
+
+    # Parsed with awk rather than sourced: a config is data, never a program.
+    local rows; rows=$(awk '
+        /^\[replica:/ {
+            if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist)
+            name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
+            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; next
+        }
+        /^\[/ { if (name != "") { print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist); name="" } next }
+        name != "" {
+            line=$0; sub(/^[ \t]+/,"",line)
+            k=line; sub(/[ \t]*=.*$/,"",k)
+            v=line; sub(/^[^=]*=[ \t]*/,"",v)
+            if (k=="source") src=v
+            else if (k=="dst") dst=v
+            else if (k=="schedule") sched=v
+            else if (k=="prefix") pref=v
+            else if (k=="media") media=v
+            else if (k=="recursive") rec=v
+            else if (k=="history") hist=v
+        }
+        END { if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist) }
+    ' "$config")
+
+    local gate="$SCRIPT_DIR/zfs-media-gate.sh"
+    local name src dst sched pref media rec hist pool present last first=1
+    if [ "$as_json" -eq 1 ]; then printf '{"replicas":['; fi
+    if [ -z "$rows" ]; then
+        if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
+        return 0
+    fi
+    while IFS="$(printf '\t')" read -r name src dst sched pref media rec hist; do
+        [ -n "$name" ] || continue
+        pool="${dst%%/*}"
+        present="unknown"; last=""
+        if [ -x "$gate" ]; then
+            if "$gate" status "$pool" "$name" --dataset "$dst" --quiet >/dev/null 2>&1; then
+                present="here"
+            else
+                case "$?" in
+                    1) present="away" ;;
+                    2) present="wrong_medium" ;;
+                esac
+            fi
+        fi
+        # THREE STATES, NOT TWO. The gate answers "is this pool imported", which
+        # is the right question for a job that is about to write. It is the
+        # wrong one for a person looking at a list: a disk sitting in the slot
+        # with its pool exported would read as "away", i.e. as a disk in a safe,
+        # and that is the single most misleading thing a front end could show.
+        # Asked here rather than in the gate so its exit contract, which the
+        # generated cron lines depend on, is left exactly as it is.
+        if [ "$present" = "away" ]; then
+            if zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
+                present="available"
+            fi
+        fi
+        [ -r "/var/lib/zfs-snapshot-all/media/$name.last-seen" ] \
+            && last="$(cat "/var/lib/zfs-snapshot-all/media/$name.last-seen" 2>/dev/null)"
+        if [ "$as_json" -eq 1 ]; then
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            printf '{"name":"%s","source":"%s","dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s"}' \
+                "$name" "$src" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last"
+        else
+            printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
+            [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
+        fi
+    done <<EOF
+$rows
+EOF
+    if [ "$as_json" -eq 1 ]; then printf ']}\n'; fi
+    return 0
+}
+
+# remove-replica NAME -- drop the section and reinstall the block.
+#
+# THE DATA ON THE MEDIUM IS NOT TOUCHED, and the message says so. Removing a
+# replica means stopping the job that feeds it; the copy on that disk is still a
+# copy, and deciding it is worthless is not this command's call to make.
+cmd_remove_replica() {
+    local name="" config="" do_install=0 assume_yes=0 a _ans
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            --yes|-y)   assume_yes=1 ;;
+            -*)         die "remove-replica: unknown option '$a'" ;;
+            *)          if [ -z "$name" ]; then name="$a"; else die "remove-replica: takes exactly one name"; fi ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "remove-replica: no readable config at $config"
+    grep -qxF "[replica:$name]" "$config" \
+        || die "remove-replica: there is no [replica:$name] in $config. 'zfs-backup.sh list-replicas' shows what is there."
+
+    local cand; cand=$(mktemp) || die "mktemp failed"
+    chmod 0644 "$cand" 2>/dev/null || :
+    awk -v want="[replica:$name]" '
+        $0 == want { skip=1; next }
+        skip && /^[[]/ { skip=0 }
+        skip { next }
+        { print }
+    ' "$config" > "$cand" || { rm -f "$cand"; die "could not compose the config without [replica:$name]"; }
+
+    show_activation_proposal "$config" "$cand" || { rm -f "$cand"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        rm -f "$cand"
+        return 0
+    fi
+    if [ "$assume_yes" -ne 1 ]; then
+        _ans=""
+        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
+    fi
+    atomic_replace_and_install "$config" "$cand" \
+        || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
+    log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }
 
 cmd_local_backup() {
@@ -10371,6 +10734,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         --source=*|--target=*) rux_entry "$@" ;;
         --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
+        add-replica)      shift; cmd_add_replica "$@" ;;
+        list-replicas)    shift; cmd_list_replicas "$@" ;;
+        remove-replica)   shift; cmd_remove_replica "$@" ;;
         # Forwarded, not implemented: restore lives in zfs-restore.sh since the
         # 2026-08-17 split -- it is the one operation whose active side writes
         # onto production, so it is not this file's code. Both spellings work
