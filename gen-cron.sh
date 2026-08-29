@@ -3056,8 +3056,13 @@ media_bracket() {   # <media field> <target path> <label> <command> [source] [pr
     # imported, so a run with nothing to send should not open one.
     local srcopt=""
     [ -n "$src" ] && [ -n "$pref" ] && srcopt=" --source $src --prefix $pref"
-    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
-        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$gate" "$pool" "${label:-media}"
+    # detach is told the ENGINE's status, and the source/prefix with it. That is
+    # what lets it record -- while the pool is still imported, the only moment
+    # its guid is readable -- which snapshot THIS medium now holds, and only
+    # after a transfer that actually succeeded. REV-20260829-126 F1: without a
+    # per-medium fact the no-work fast path skipped rotated media for ever.
+    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$gate" "$pool" "${label:-media}" "$srcopt"
 }
 
 job_cron_line() {

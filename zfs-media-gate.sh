@@ -62,7 +62,8 @@ EOF
 # removable disk was reported "not here" while sitting in /root. Repeatable,
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
-SOURCE=""; PREFIX=""
+_skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""
+SOURCE=""; PREFIX=""; ENGINE_RC=""
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -77,6 +78,8 @@ while [ "$#" -gt 0 ]; do
         --dir=*)      IMPORT_DIRS+=(-d "${1#--dir=}"); shift ;;
         --source)     SOURCE="${2:-}"; shift 2 ;;
         --source=*)   SOURCE="${1#--source=}"; shift ;;
+        --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
+        --engine-rc=*) ENGINE_RC="${1#--engine-rc=}"; shift ;;
         --prefix)     PREFIX="${2:-}"; shift 2 ;;
         --prefix=*)   PREFIX="${1#--prefix=}"; shift ;;
         -*)           echo "unknown option: $1" >&2; usage ;;
@@ -138,6 +141,26 @@ bounded_export() {
     zpool export "$POOL" 2>/dev/null
 }
 pool_guid() { zpool get -H -o value guid "$POOL" 2>/dev/null; }
+
+# The GUID of the medium in the slot, WITHOUT importing it. `zpool import`'s scan
+# prints `id: <guid>` for every importable pool, which is what makes a per-medium
+# decision possible before the import window is opened at all.
+scan_guid() {
+    zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '
+        $1=="pool:" { inpool = ($2==p) }
+        inpool && $1=="id:" { print $2; exit }'
+}
+
+# The newest snapshot of the replica family on the source root. This is what a
+# successful run has just put on the medium, and what a later run compares
+# against to decide whether that medium is still current.
+newest_source_snap() {
+    [ -n "$SOURCE" ] && [ -n "$PREFIX" ] || return 1
+    zfs list -H -t snapshot -o name -d 1 "$SOURCE" 2>/dev/null \
+        | grep "@${PREFIX}" | tail -1 | sed 's/.*@//'
+}
+
+SYNCED="$STATE_DIR/$LABEL.synced"
 
 # Is the marker OURS, and about the pool that is in the slot right now?
 #
@@ -244,6 +267,32 @@ attach)
     # imports and lets the engine decide. A check that skips a real backup
     # because it could not read a number would be far worse than one that
     # occasionally imports for nothing.
+    #
+    # REV-20260829-126 F1. The first cut of this asked only whether the SOURCE
+    # was quiet, and skipped on that alone. That is not a fact about the disk in
+    # the slot, and rotation is exactly where the difference bites:
+    #
+    #   medium A is synced through replica_s1 and carried off;
+    #   medium B is inserted and takes the source to replica_s2;
+    #   the source then goes quiet, so written@replica_s2 is zero;
+    #   medium A comes back -- and was skipped, for ever, while still at s1.
+    #
+    # The log said there was nothing to copy, and the off-site copy silently
+    # stopped advancing. On an archival dataset that is permanent.
+    #
+    # So the fast path now needs a fact about the MEDIUM, and it must be one that
+    # can be had without importing it -- or the optimisation would cost the very
+    # window it exists to avoid. Two things make that possible:
+    #
+    #   * `zpool import`'s scan prints each importable pool's GUID without
+    #     importing anything, so the disk in the slot can be identified;
+    #   * this run records, after a VERIFIED transfer, which source snapshot the
+    #     medium of that GUID then held.
+    #
+    # Skipping therefore requires all three: the recorded GUID is the disk in the
+    # slot, the snapshot it recorded is still the newest of the family, and
+    # nothing has been written since. Anything else -- no record, unreadable,
+    # a different disk, an older snapshot -- imports and lets the engine decide.
     if [ -n "$SOURCE" ] && [ -n "$PREFIX" ]; then
         _work=unknown
         if zfs list -H -o name "$SOURCE" >/dev/null 2>&1; then
@@ -262,9 +311,33 @@ attach)
 $(zfs list -H -o name -r "$SOURCE" 2>/dev/null)
 EOF
         fi
+        # A quiet source is necessary and NOT sufficient. Everything below is
+        # about the medium, and every branch of it fails OPEN.
         if [ "$_work" = no ]; then
-            say "SKIPPED: nothing has been written to '$SOURCE' since the last '$PREFIX' snapshot, so there is nothing to copy onto '$POOL' -- and the medium is left alone rather than imported for an empty run. Every minute this pool is NOT imported is a minute the disk can be pulled safely."
-            emit skipped_nothing_to_do; exit 1
+            _skip=no
+            if [ ! -r "$SYNCED" ]; then
+                say "'$SOURCE' is quiet, but there is no record of what '$POOL' last received, so this run cannot tell a current medium from a rotated stale one. Importing to let the engine decide."
+            else
+                _rec_guid="$(sed -n 's/^guid=//p' "$SYNCED" 2>/dev/null | head -1)"
+                _rec_snap="$(sed -n 's/^snap=//p' "$SYNCED" 2>/dev/null | head -1)"
+                _now_guid="$(scan_guid)"
+                _new_snap="$(newest_source_snap)"
+                if [ -z "$_rec_guid" ] || [ -z "$_rec_snap" ]; then
+                    say "the record of what '$POOL' last received is unreadable, so it proves nothing. Importing to let the engine decide."
+                elif [ -z "$_now_guid" ]; then
+                    say "'$SOURCE' is quiet, but the medium for '$POOL' could not be identified without importing it. Importing rather than assuming it is the same disk."
+                elif [ "$_rec_guid" != "$_now_guid" ]; then
+                    say "'$SOURCE' is quiet, but the disk in the slot (guid $_now_guid) is NOT the one this record describes (guid $_rec_guid) -- a rotated medium that may be behind. Importing to let the engine decide."
+                elif [ -z "$_new_snap" ] || [ "$_rec_snap" != "$_new_snap" ]; then
+                    say "'$SOURCE' is quiet, but this medium last received '${_rec_snap}' and the family is now at '${_new_snap:-unknown}' -- it is behind. Importing to bring it up."
+                else
+                    _skip=yes
+                fi
+            fi
+            if [ "$_skip" = yes ]; then
+                say "SKIPPED: this medium (guid $_now_guid) already holds '$_rec_snap', which is still the newest '$PREFIX' snapshot, and nothing has been written to '$SOURCE' since. Nothing to copy, so the disk is left alone -- every minute this pool is NOT imported is a minute it can be pulled safely."
+                emit skipped_nothing_to_do; exit 1
+            fi
         fi
     fi
 
@@ -423,6 +496,23 @@ detach)
     # Captured from the call itself. Reading $? after the `if` gives the status
     # of the COMPLETED if-statement -- zero when the branch was not taken -- so
     # the timeout could never be told apart from an ordinary refusal.
+    # THE RECORD ADVANCES HERE, AND ONLY HERE.
+    #
+    # Written while the pool is still imported, because that is the only moment
+    # its GUID can be read, and only when THIS run both owned the import and the
+    # engine reported success. A run that skipped, failed, or was somebody else's
+    # import leaves the record exactly as it was -- an unproved medium must never
+    # be recorded as current.
+    if [ "$ENGINE_RC" = 0 ] && [ -n "$SOURCE" ] && [ -n "$PREFIX" ]; then
+        _now_guid="$(pool_guid)"
+        _new_snap="$(newest_source_snap)"
+        if [ -n "$_now_guid" ] && [ -n "$_new_snap" ]; then
+            mkdir -p "$STATE_DIR" 2>/dev/null && \
+                printf 'guid=%s\nsnap=%s\n' "$_now_guid" "$_new_snap" > "$SYNCED" 2>/dev/null || \
+                say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than trusting a record it does not have."
+        fi
+    fi
+
     bounded_export; _erc=$?
     if [ "$_erc" -eq 0 ]; then
         rm -f "$OURS" 2>/dev/null || :
