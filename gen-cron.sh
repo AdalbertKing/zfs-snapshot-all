@@ -2168,9 +2168,13 @@ build_prune_section() {
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune:$scope]" "$scope"
 
-    # REV-20260804-045: reaches ONLY this section's staleness monitor below.
-    # The delsnaps line itself is never gated by logical pause -- see the
-    # comment at the field allow-list.
+    # REV-20260804-045 said this reached ONLY the staleness monitor, because the
+    # delsnaps line was never gated by the logical pause. That stopped being
+    # true when delsnaps.sh gained -L: the label now reaches BOTH the monitor
+    # and the prune, and the prune exits before any listing, SSH or destroy
+    # while the pause stands. Corrected under REV-20260829-124 F2 -- a comment
+    # describing the opposite of the code is how the next reader reintroduces
+    # the gap.
     local pair_label
     pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
     if [ -n "$pair_label" ]; then

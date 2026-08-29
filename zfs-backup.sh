@@ -8511,13 +8511,18 @@ cmd_pause_client() {
     chmod 0644 "$marker.new" || { rm -f "$marker.new"; die "could not chmod $marker.new"; }
     mv "$marker.new" "$marker" || { rm -f "$marker.new"; die "could not commit $marker"; }
     log "client '$name' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship $name is paused' before any snapshot/SSH work."
-    # Said out loud because the old wording ("managed jobs") was read as all of
-    # them, and retention is managed too. Measured on metropolis 2026-08-20: a
-    # paused relationship still ran both of its delsnaps lines, the one over the
-    # SOURCE included. That is not a generator oversight -- the label becomes
-    # snapget/snapsend/check-snap-age -L, and delsnaps.sh has no such flag at
-    # all -- so the honest move is to name the gap rather than imply it away.
-    log "NOT covered: retention. This relationship's delsnaps lines carry no '-L' and keep pruning on schedule, on the source as well as the target. The GFS ladder bounds what that can erode, so a pause measured in hours or days cannot cost you the common base; a pause left running for months could."
+    # RETENTION IS NOW INSIDE THE PAUSE, AND THIS LINE HAD TO CHANGE WITH IT.
+    #
+    # It used to read "NOT covered: retention ... delsnaps lines carry no '-L'
+    # and keep pruning on schedule", which was true and measured on metropolis
+    # 2026-08-20. On the owner's direction delsnaps.sh gained -L and the
+    # generator now emits it on all four prune shapes, so the sentence became
+    # the exact inverse of the code -- REV-20260829-124 F2. An operator reading
+    # it during a pause would believe retention was still eroding the common
+    # base and could take recovery action that is both unnecessary and, if it
+    # means resuming early, actively wrong.
+    log "Covered: retention too. This relationship's delsnaps lines carry '-L $name' and exit before any listing, SSH or destroy while the pause stands -- on the source as well as the target."
+    log "NOT covered: an engine invoked BY HAND without -L. The pause is a property of the relationship label, so a manual snapsend/snapget/delsnaps that does not name the label is outside it by construction, and deliberately so: the pause exists to stop the schedule, not to take the machine away from the administrator sitting at it."
     # In-flight contract (REV-045 boundary 4): a run already past its
     # preflight finishes -- pause gates the NEXT run, it kills nothing.
     local running

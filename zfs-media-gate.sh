@@ -60,7 +60,7 @@ EOF
 # Found on the lab, 2026-08-29: a file-backed pool used to stand in for a
 # removable disk was reported "not here" while sitting in /root. Repeatable,
 # passed straight through to `zpool import -d`.
-VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0
+VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -105,6 +105,46 @@ emit() {
         >> "$STATS" 2>/dev/null || true
 }
 imported() { zpool list -H -o name "$POOL" >/dev/null 2>&1; }
+pool_guid() { zpool get -H -o value guid "$POOL" 2>/dev/null; }
+
+# Is the marker OURS, and about the pool that is in the slot right now?
+#
+# REV-20260829-124 F1. The already-imported branch of `attach` used to begin
+# with `rm -f "$OURS"`, on the reasoning that a pool already imported was
+# somebody else's decision. That is true exactly once: when we never imported
+# it. It is false after our OWN run was interrupted between attach and detach --
+# a kill, a reboot, an overlapping retry -- and there the marker is the only
+# fact that says the pool is ours to put away. Deleting it turned a
+# package-owned import into an apparently foreign one, so the following detach
+# reported success without exporting, and every retry after that did the same.
+# The disk stayed live indefinitely while the job said it was safe to unplug.
+#
+# The marker therefore records the pool's GUID. A marker whose GUID matches the
+# pool in the slot is our interrupted run resuming. A marker whose GUID does NOT
+# match means a different pool of the same name is in the slot while we still
+# hold ownership of another one -- rotated media share a name, so this is
+# reachable -- and there the answer is to stop, not to guess: exporting would
+# hit the wrong disk and deleting the marker would discard the evidence that we
+# still owe an export somewhere.
+#
+# The one case this cannot see: our run died, an operator exported the pool and
+# imported it again themselves, and the GUID is naturally identical. We will
+# treat that as ours and export it. Nothing observable distinguishes the two,
+# the reviewer's criterion 1 asks for exactly this, and the window is only ever
+# open between an interrupted attach and the next run.
+# 0 = ours, and it is this pool.  1 = no marker, so foreign.
+# 2 = a marker exists that this run cannot confirm against the pool in the slot.
+#     NOT the same as 1, and the distinction is the whole point: 1 means we owe
+#     nothing, 2 means we owe an export on SOME medium and must not guess which.
+marker_is_ours() {
+    [ -f "$OURS" ] || return 1
+    local want cur
+    want="$(sed -n 's/^guid=//p' "$OURS" 2>/dev/null | head -1)"
+    cur="$(pool_guid)"
+    [ -n "$want" ] && [ -n "$cur" ] || return 2
+    [ "$want" = "$cur" ] || return 2
+    return 0
+}
 
 # The dataset check, run after the pool is in. "The disk is not plugged in" and
 # "a disk IS in the slot but not the one I was told to write to" are different
@@ -134,8 +174,18 @@ status)
 
 attach)
     if imported; then
-        # Somebody else's decision. Recorded as NOT ours so detach leaves it.
-        rm -f "$OURS" 2>/dev/null || :
+        marker_is_ours; _own=$?
+        case "$_own" in
+            0)  # Our own interrupted run. The marker STAYS.
+                check_dataset || exit $?
+                mkdir -p "$STATE_DIR" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
+                say "medium '$POOL' for '$LABEL' is already imported AND carries this package's ownership marker -- a previous run was interrupted before it could export. Keeping ownership; this run will export it when it is done."
+                emit present_ours_resumed; exit 0 ;;
+            2)  # A marker exists and we cannot match it to the pool in the slot.
+                say "REFUSING: '$LABEL' still holds an ownership marker for '$POOL', but this run cannot match it to the pool that is imported now (marker guid: $(sed -n 's/^guid=//p' "$OURS" 2>/dev/null | head -1 | sed 's/^$/none/'); pool guid: $(pool_guid | sed 's/^$/unreadable/')). Exporting could hit the wrong disk and clearing the marker would discard the only record that an export is still owed. A human is needed."
+                emit ownership_ambiguous; exit 2 ;;
+        esac
+        # No marker at all: somebody else's import, and it stays that way.
         check_dataset || exit $?
         mkdir -p "$STATE_DIR" 2>/dev/null && date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
         say "medium '$POOL' for '$LABEL' was ALREADY imported -- using it, and detach will leave it as it found it."
@@ -177,7 +227,9 @@ attach)
     #
     # So a failure here is a hard error, and the error path first puts the
     # machine back the way it found it.
-    if ! mkdir -p "$STATE_DIR" 2>/dev/null || ! : > "$OURS" 2>/dev/null; then
+    if ! mkdir -p "$STATE_DIR" 2>/dev/null || ! printf 'pool=%s
+guid=%s
+' "$POOL" "$(pool_guid)" > "$OURS" 2>/dev/null; then
         say "could not record that this run imported '$POOL' (state dir: $STATE_DIR). Without that marker nothing would ever export it again, so this run will not proceed as if it had one."
         if zpool export "$POOL" 2>/dev/null; then
             say "'$POOL' was exported again -- the machine is as it was before this run, and nothing was transferred."

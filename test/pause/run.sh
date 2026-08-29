@@ -571,6 +571,55 @@ else
           "1 (join=${jline:-none} phase1=$first_phase_line)"
 fi
 
+# ---------------------------------------------------------------------------
+# REV-20260829-124 F2 -- WHAT THE PAUSE TELLS THE OPERATOR MUST MATCH WHAT IT DOES
+#
+# The pause reaching the prune was a behaviour change; the sentence pause-client
+# prints was not changed with it, so for a while the tool said
+#
+#     "NOT covered: retention. This relationship's delsnaps lines carry no '-L'
+#      and keep pruning on schedule"
+#
+# while the generated delsnaps lines carried -L and delsnaps.sh exited before
+# any listing, SSH or destroy. That is worse than a stale doc: an operator
+# reading it during a pause believes retention is still eroding the common base
+# and may resume early to "save" it -- taking the exact action the pause exists
+# to make unnecessary.
+#
+# Asserted on the SOURCE, because the sentence is a literal in the script and no
+# stub can make cmd_pause_client's happy path run without a live relationship.
+# The two halves are pinned separately: the claim that must be gone, and the
+# claim that must be there.
+# ONLY the log lines. The comment above the change quotes the old sentence on
+# purpose, to record what it used to say and why it moved -- and an assertion
+# that cannot tell a comment from output would force that history out of the
+# file to stay green. What the operator reads is what is logged.
+_pc="$(awk '/^cmd_pause_client\(\)/,/^}/' "$REPO/zfs-backup.sh" | grep -E '^[[:space:]]*log ')"
+case "$_pc" in
+    *"carry no '-L'"*|*"NOT covered: retention"*)
+        bad "pause text: the stale 'retention is NOT covered' claim is gone" "still present" ;;
+    *)  ok "pause text: the stale 'retention is NOT covered' claim is gone" ;;
+esac
+case "$_pc" in
+    *"Covered: retention too"*)
+        ok "PAUSE TEXT: IT SAYS RETENTION IS INSIDE THE PAUSE" ;;
+    *)  bad "PAUSE TEXT: IT SAYS RETENTION IS INSIDE THE PAUSE" "no such wording" ;;
+esac
+# ...and it still names the one thing that genuinely is outside: a hand-run
+# engine with no -L. Dropping that would swap one untrue reassurance for another.
+case "$_pc" in
+    *"NOT covered: an engine invoked BY HAND without -L"*)
+        ok "pause text: ...and still names the manual invocation as outside it" ;;
+    *)  bad "pause text: ...and still names the manual invocation as outside it" "no such wording" ;;
+esac
+# The generator's own comment claimed the delsnaps line was never gated. A
+# comment that contradicts the code is how the next reader puts the gap back.
+case "$(cat "$REPO/gen-cron.sh")" in
+    *"delsnaps line itself is never gated by logical pause"*)
+        bad "generator comment: the 'never gated' claim is gone" "still present" ;;
+    *)  ok "generator comment: the 'never gated' claim is gone" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

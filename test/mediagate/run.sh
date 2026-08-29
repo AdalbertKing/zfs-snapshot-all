@@ -41,7 +41,11 @@ cat > "$BIN/zpool" <<'ZP'
 # "name" there. The first version of this stub read $4 and reported every pool
 # as absent, which made five assertions fail in ways that looked like code bugs.
 for a in "$@"; do last="$a"; done
+# `zpool get -H -o value guid POOL`. POOL_GUID lets a test put a DIFFERENT disk
+# of the same name in the slot, which is what separates "our interrupted run"
+# from "we still owe an export on another medium".
 case "$1 $2" in
+  "get -H") echo "${POOL_GUID:-11111111}"; exit 0 ;;
   "list -H")
       for p in $POOLS; do [ "$p" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -71,7 +75,7 @@ ZF
 chmod +x "$BIN/zpool" "$BIN/zfs"
 
 export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
-export POOLS IMPORTABLE DATASETS EXPORT_FAILS=""
+export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
 g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
@@ -417,6 +421,79 @@ case "$BMLINE" in
     *"-p 2222 "*) ok "H7: ...and ssh_flags survive intact, with no field glued on" ;;
     *) bad "H7: ...and ssh_flags survive intact, with no field glued on" "$BMLINE" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# I. REV-20260829-124 F1 -- THE INTERRUPTED RUN
+#
+# Every case above looks at one run in isolation. This one is a LIFECYCLE: our
+# attach succeeds, the run dies before detach (kill, reboot, overlapping retry),
+# and a later run finds the pool already imported.
+#
+# `attach` used to open its already-imported branch with `rm -f "$OURS"`, on the
+# reasoning that a pool already imported was somebody else's decision. True
+# exactly once -- when we never imported it. After our OWN interrupted run the
+# marker is the only fact saying the pool is ours to put away, and deleting it
+# turned a package-owned import into an apparently foreign one: the following
+# detach reported success without exporting, and so did every retry after it.
+# The disk stayed live indefinitely while the job said it was safe to unplug.
+# ---------------------------------------------------------------------------
+: > "$EXPORTED_LOG"; : > "$IMPORTED_LOG"
+rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica"; POOL_GUID=11111111
+
+# 1. our attach, which imports it and takes ownership
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "I: our attach imports it" "0" "$rc"
+[ -f "$STATE/rep.imported-by-us" ] && ok "I: ...and records ownership" || bad "I: ...and records ownership"
+
+# 2. ...and now the run DIES. No detach. The pool stays imported.
+POOLS="hdd rotpool"; IMPORTABLE=""
+
+# 3. the retry finds it imported. The marker must survive.
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "I: the retry's attach still exits 0" "0" "$rc"
+[ -f "$STATE/rep.imported-by-us" ] \
+    && ok "I1: THE OWNERSHIP MARKER SURVIVES THE RETRY" \
+    || bad "I1: THE OWNERSHIP MARKER SURVIVES THE RETRY"
+has "interrupted before it could export" "$out" \
+    && ok "I2: ...and the run says WHY it still owns it" \
+    || bad "I2: ...and the run says WHY it still owns it" "$out"
+
+# 4. and this time detach must actually export.
+: > "$EXPORTED_LOG"
+out="$(g detach rotpool rep)"; rc=$?
+check "I: the retry's detach exits 0" "0" "$rc"
+check "I3: THE POOL IS EXPORTED, NOT LEFT LIVE" "rotpool" "$(cat "$EXPORTED_LOG")"
+[ -f "$STATE/rep.imported-by-us" ] \
+    && bad "I4: ...and the marker is cleared only AFTER that export" "marker still there" \
+    || ok "I4: ...and the marker is cleared only AFTER that export"
+
+# 5. THE OTHER SIDE. A foreign import with no marker of ours is still foreign.
+: > "$EXPORTED_LOG"
+rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
+POOLS="hdd rotpool"; IMPORTABLE=""
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "I5: a foreign import is still recognised as foreign" "0" "$rc"
+has "ALREADY imported" "$out" && ok "I5: ...and says so" || bad "I5: ...and says so" "$out"
+out="$(g detach rotpool rep)"; rc=$?
+check "I5: AND IS STILL NOT EXPORTED" "" "$(cat "$EXPORTED_LOG")"
+
+# 6. A marker we cannot match to the pool in the slot. Rotated media share a
+#    name, so this is a DIFFERENT disk while we still owe an export on another.
+#    Fail closed: exporting would hit the wrong disk, and clearing the marker
+#    would throw away the only record that an export is owed.
+: > "$EXPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""; POOL_GUID=99999999    # a different disk, same name
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "I6: AN UNMATCHABLE MARKER FAILS CLOSED" "2" "$rc"
+check "I6: ...exporting nothing" "" "$(cat "$EXPORTED_LOG")"
+[ -f "$STATE/rep.imported-by-us" ] \
+    && ok "I6: ...and keeping the evidence that an export is still owed" \
+    || bad "I6: ...and keeping the evidence that an export is still owed"
+rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
+POOL_GUID=11111111
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
