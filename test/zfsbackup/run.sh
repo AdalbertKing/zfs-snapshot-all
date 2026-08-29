@@ -7802,6 +7802,40 @@ esac
 _g="$(m122_retain)"
 if [ "$_g" = "-D10" ]; then ok "122j: ...leaving the edited retention in place"; else bad "122j: ...leaving the edited retention in place" "want [-D10] got [$_g]"; fi
 
+# THE INSTALLED BLOCK'S SOURCE IS CHECKED BEFORE IT IS REPLACED.
+#
+# There is one managed block per crontab, so whichever config last rendered it
+# owns the whole thing -- and a command resolving to a different config replaces
+# every job the first one installed, including ones it has never heard of.
+#
+# Measured on pve9, 2026-08-29: three replica jobs installed from
+# /root/replab.conf vanished when remove-client ran and resolved elsewhere.
+# Nothing said a word; they were noticed only because a hash in an unrelated
+# audit line was the one from before they existed.
+#
+# Asserted structurally -- the guard is wired into the single door every writer
+# goes through -- and that is what this can honestly claim. Its runtime behaviour
+# was checked on the lab: installing from /root/other.conf over a block rendered
+# from /root/replab.conf printed both paths and what would be lost.
+if grep -q '^warn_if_block_has_other_source()' "$ZFSBACKUP"; then
+    ok "block-source guard: the check exists"
+else
+    bad "block-source guard: the check exists"
+fi
+_air="$(awk '/^atomic_replace_and_install\(\)/,/^}/' "$ZFSBACKUP")"
+case "$_air" in
+    *warn_if_block_has_other_source*)
+        ok "BLOCK-SOURCE GUARD: CALLED FROM THE ONE DOOR EVERY WRITER USES" ;;
+    *)  bad "BLOCK-SOURCE GUARD: CALLED FROM THE ONE DOOR EVERY WRITER USES" \
+            "atomic_replace_and_install does not call it, so a writer could replace a foreign block silently" ;;
+esac
+# It must compare with the SAME normaliser the missing-config guard uses, or the
+# two would disagree about what "a different file" means.
+case "$(awk '/^warn_if_block_has_other_source\(\)/,/^}/' "$ZFSBACKUP")" in
+    *normalize_cron_source*) ok "block-source guard: shares the path normaliser" ;;
+    *) bad "block-source guard: shares the path normaliser" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

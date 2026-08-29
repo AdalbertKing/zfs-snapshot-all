@@ -4352,6 +4352,33 @@ path follow whoever runs the block. Nothing has been changed."
 # gen-cron.sh without --install prints the block to stdout, so both sides of the
 # cron diff are rendered the same way and a difference is real rather than a
 # formatting artifact.
+# THE INSTALLED BLOCK REMEMBERS WHICH CONFIG WROTE IT, AND SO SHOULD WE.
+#
+# There is ONE managed block in a crontab, and whichever config last rendered it
+# owns the whole thing. So a command that resolves to config B silently replaces
+# every line config A had put there -- including jobs B has never heard of.
+#
+# Measured the hard way on pve9, 2026-08-29: three replica jobs installed from
+# /root/replab.conf vanished when `remove-client` ran and resolved to the
+# canonical /etc/zfs-snapshot-all config instead. Nothing said a word; the
+# crontab simply had three fewer jobs, and the only reason it was noticed was a
+# hash in an unrelated audit line.
+#
+# The block already carries `# Source: <path>` on its second line. Comparing it
+# costs one grep and turns a silent replacement into a sentence.
+warn_if_block_has_other_source() {   # <config about to be installed>
+    local want="$1" have
+    have="$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')"
+    [ -n "$have" ] || return 0
+    # Same normaliser the missing-config guard uses, so the two agree on what
+    # "a different file" means rather than each having an opinion.
+    [ "$(normalize_cron_source "$have")" != "$(normalize_cron_source "$want")" ] || return 0
+    warn "the managed block currently installed was rendered from a DIFFERENT config:"
+    warn "    installed from: $have"
+    warn "    about to install from: $want"
+    warn "  There is one managed block per crontab, so this replaces every job the other config put there -- including any this one does not describe. If both are meant to be live, they belong in one file."
+}
+
 show_activation_proposal() {   # <current config> <proposed config>
     local cronfile="$1" workfile="$2" before after rc=0
     before=$(mktemp) || return 1
@@ -4458,6 +4485,9 @@ _restore_target_crontab() {   # <file>
 }
 
 atomic_replace_and_install() {
+    # Before anything is swapped: is this block somebody else's? Said here rather
+    # than in each caller, because this is the one door they all go through.
+    warn_if_block_has_other_source "${1:-}"
     local realfile="$1" workfile="$2"
     # From here the candidate is THIS function's: every path below either moves
     # it into place or removes it explicitly, so the exit-time net must let go
