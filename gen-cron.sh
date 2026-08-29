@@ -3561,10 +3561,15 @@ reconcile_label() {   # <dataset> -> " (qm/104)" or ""
 reconcile_receive_roots() {   # -> one root per line
     local e ds tier sched remote rest
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r ds tier sched remote rest <<< "$e"
+        # NAMED, not "whatever is left ends in pull". This matched the TAIL of
+        # the tuple, so appending a field to it -- media, 2026-08-29 -- made
+        # every pull section stop being recognised, silently, in a coverage
+        # report whose whole job is to say what is not covered. The suite caught
+        # it; the shape did not have to be catchable.
+        IFS="$SEP" read -r ds tier sched remote _prefix _flags _notify _label _dir _rest <<< "$e"
         [ -n "$ds" ] || continue
-        case "$rest" in
-            *"${SEP}pull") 
+        case "${SEP}${_dir}" in
+            "${SEP}pull") 
                 # A VALID pull section's own path ALREADY ends with the literal
                 # remote dataset name -- emit_send enforces that contract -- so
                 # the local receive root is the section dataset itself.
@@ -3666,7 +3671,9 @@ do_reconcile() {
     # LANDS.
     local e etier esched eremote eprefix eflags enotify elabel edir
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r ds etier esched eremote eprefix eflags enotify elabel edir <<< "$e"
+        # Same reason as above: edir was the LAST variable, so read gave it the
+        # whole remainder once the tuple grew.
+        IFS="$SEP" read -r ds etier esched eremote eprefix eflags enotify elabel edir _erest <<< "$e"
         [ -n "$ds" ] || continue
         [ "$edir" = "pull" ] && continue
         if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then

@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19.*
+*Evidence: E7, E2, E14, E16, E19, E21.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -545,3 +545,26 @@ If a fix cannot wait, kill the run rather than let it produce a number that
 looks like evidence. The authority for this change is CI on 31e6ccd and 7e13dd6,
 which ran against a fixed checkout -- not the local 488/0, which I am recording
 here precisely because it looked like the better number.
+
+### E21 — I appended a field to a tuple; two readers assumed the old last one
+**2026-08-29, gen-cron send entities.**
+
+*Genesis.* `media` went on the end of SEND_ENTITIES. Two consumers broke, both
+silently: one matched the tuple's TAIL (`case "$rest" in *"${SEP}pull")`), and
+one gave its last variable the whole remainder, because that is what `read`
+does. Every pull section stopped being recognised -- in a coverage report whose
+entire job is to say what is NOT covered.
+
+*Cause.* I changed a shared data shape and looked only at the code I was
+editing. The tuple has no schema; its readers each encode their own assumption
+about it, and "direction is last" was one of them, written nowhere.
+
+*Rule.* **R3.** When a shared structure grows, grep every reader of it, not
+every reader you remembered. And the concrete idiom: a positional tuple should
+be read by NAMING every field with a trailing catch-all, never by matching its
+tail -- the first breaks loudly when the shape changes, the second does not
+break at all.
+
+*Caught by:* the reconcile suite, on CI, three commits after I introduced it.
+Locally I had run the golden suite and the generator suites and they were all
+green, because none of them exercises a pull section's coverage.
