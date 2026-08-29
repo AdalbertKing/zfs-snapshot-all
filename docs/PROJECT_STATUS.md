@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f6b935b22ada1549 -->
+<!-- status-covers-digest: e5d517c0b2624fe2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -3760,6 +3760,39 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## JEDEN BLOK, JEDEN WLASCICIEL -- cicha utrata zadan (2026-08-29)
+
+Znalezione przez sprzatanie po labie, nie przez test. `remove-client alfa` i
+`remove-client beta` zdjely przy okazji **trzy zadania replik**, ktorych nie
+dotyczyly. Nic o tym nie powiedzialy; zauwazylem, bo hash crontaba w niezwiazanej
+linii audytu byl ten sam co PRZED zainstalowaniem replik.
+
+Mechanizm: w crontabie jest **jeden** zarzadzany blok, wiec ten config, ktory go
+ostatnio wyrenderowal, jest wlascicielem calosci. Polecenie rozwiazujace sie na
+config B zastepuje kazda linie, ktora wstawil config A -- lacznie z zadaniami, o
+ktorych B nigdy nie slyszal.
+
+Czesciowo sam to na siebie sciagnalem, podajac `--config=/root/replab.conf` dla
+labu zamiast kanonicznej sciezki. W normalnym wdrozeniu jest jeden config na
+(host, konto) i kolizja nie powstaje. Ale cisza przy podmianie jest wada
+niezaleznie od tego, kto ustawil sciezki.
+
+**Blok od zawsze niesie `# Source: <sciezka>` w drugiej linii** -- porownanie
+kosztuje jednego grepa. `atomic_replace_and_install`, czyli jedyne drzwi, przez
+ktore przechodza wszyscy pisarze, mowi teraz oba adresy i co zniknie. Nie
+odmawia: migracja configu na inna sciezke jest czynnoscia dozwolona, tylko nie
+ma byc niema.
+
+Sprawdzone na zywo: instalacja z `/root/other.conf` na bloku wyrenderowanym z
+`/root/replab.conf` wypisala obie sciezki i ostrzezenie. W suicie przypiete
+**strukturalnie** -- ze straznik istnieje, jest wolany z tych jedynych drzwi i
+uzywa tego samego normalizatora sciezek co straznik brakujacego configu -- i tyle
+ta suita moze uczciwie twierdzic.
+
+Przy okazji potwierdzil sie INNY, wczesniejszy straznik, ktory dziala lepiej:
+proba wpiecia repliki do configu prowadzacego crontab konta `zfsbackup`, przy
+biegu rozwiazanym na `root`, zostala **odmowiona** z opisem obu wyjsc.
+
 ## MODEL REPLIKI: RAZ NA DOBE, OPCJONALNIE PO WLOZENIU (2026-08-29)
 
 Decyzja wlasciciela po labie wyrwania: replika **nie jest lustrem online**.
@@ -3797,7 +3830,37 @@ zdarzenie na maszynie na czas transferu.
 Dowiedzione na pve9: `udevadm trigger` uruchomil jednostke
 `zfs-replica-insert-sdd1`, ta wykonala `run-replicas` i zakonczyla sie czysto.
 
-### `sync=always` -- ZMIERZONE, NIEROZSTRZYGNIETE
+### `sync=always` -- ROZSTRZYGNIETE: NIE DOTYCZY TRANSFERU
+
+Domysl wlasciciela byl sensowny i wart sprawdzenia: inna polityka `sync`
+skrocilaby okno, w ktorym dane wygladajace na zapisane nie sa jeszcze na
+nosniku. **Nie skroci, bo nie dotyczy tej sciezki.**
+
+Dwa pierwsze podejscia byly bezwartosciowe i tak je opisalem: czasy transferu pod
+`standard` i `always` nie roznily sie, a `always` wychodzil nawet SZYBCIEJ, co
+jest fizycznie bez sensu -- czyli pomiar nie mierzyl pokretla. Rozstrzygnela
+dopiero KONTROLA, ktora nie jest transferem, na nosniku zdlawionym przez
+hipervizor do 35 MB/s i 110 IOPS zapisu (mniej wiecej talerzowy USB):
+
+```
+zwykly zapis 64 MB    sync=standard   2.4 s
+zwykly zapis 64 MB    sync=always     5.5 s     <- pokretlo DZIALA, kosztuje 2,3x
+zapis oflag=dsync     sync=standard   5.6 s
+zapis oflag=dsync     sync=always     5.6 s     <- juz synchroniczny, bez zmian
+```
+
+Skoro pokretlo dziala i kosztuje 2,3x na zwyklym zapisie, a czasy TRANSFERU sie
+nie ruszaja, to `zfs receive` go nie honoruje -- jego zapisy ida prosto do grup
+transakcji, z pominieciem ZIL.
+
+**Wniosek: `sync=always` na datasecie repliki nie skroci okna transferu ani o
+sekunde, a ukarze kazdy inny zapis do tego datasetu 2,3-krotnie. Nie
+przyjmujemy.** To odpowiedz rozstrzygnieta, nie „nie dalo sie zmierzyc".
+
+Nosnik `usbrep3` zostaje zdlawiony w konfiguracji VM -- lab jest przez to
+blizszy prawdziwemu dyskowi USB niz byl.
+
+### `sync=always` -- pierwszy, nierozstrzygniety pomiar (zachowany)
 
 200 MB na nosnik, cztery biegi na przemian:
 
