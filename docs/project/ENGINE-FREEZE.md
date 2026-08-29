@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 cf9a66797d7a7e270c5cfe396980cd84ddb2382c -->
-<!-- frozen: snapget.sh 100755 4a929fff18b262e0b1c1e309f4268e86d39ec403 -->
+<!-- frozen: snapsend.sh 100755 d8c8c4743f0374c829e7661493b99f95faaa7c1c -->
+<!-- frozen: snapget.sh 100755 2b61ddb2d40f9ca7b454d877591447bc097a4c28 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -67,6 +67,44 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-29 (snapsend.sh, snapget.sh): **the log announced a creation that did
+  not happen.** Owner direction: "Tak" -- to the implementer's report from the
+  removable-media lab.
+
+  LOG TRUTH ONLY. No behaviour changes: the same guard decides whether the
+  dataset is created, the same failure aborts the same way, and the remote path
+  still costs exactly ONE ssh round trip.
+
+  Both engines logged, unconditionally, before doing anything:
+
+      log 2 "Creating target dataset: $tgt_dataset"
+
+  and it was wrong three ways at once.
+
+  1. The creation below it is guarded by `zfs list ... || zfs create ...`, so on
+     every incremental run -- which is every run after the first -- it announced
+     a creation that did not occur. Observed on pve9 during the media lab: the
+     line appeared while the copy was demonstrably NOT recreated, because the
+     target's older snapshots survived the transfer.
+  2. With `-w` the dataset actually created is `$create_target`, the PARENT of
+     `$tgt_dataset`. The line named the wrong path.
+  3. It ran BEFORE `$create_target` was computed, so it could not have named the
+     right one even in principle.
+
+  Now each branch says what it did: `Created target dataset: $create_target` or
+  `Target dataset already exists: $create_target`. On the remote side the
+  existing single `ssh` reports which branch it took rather than being asked a
+  second time -- the round-trip count is part of this package's contract and was
+  not going to be spent on a log line.
+
+  Why it was worth unfreezing for a message. An operator watching a nightly job
+  saw "Creating target dataset" every night and had no way to tell a first seed
+  from an increment -- the one thing that line could usefully have told them. A
+  log that says the same thing whatever happened is not information, and this
+  project has spent the day removing exactly that shape from `detach`, from
+  `pause-client`, and from a test that recorded a PASS unconditionally.
+
 
 - 2026-08-28 (snapget.sh): **the remedy this file prints destroys bookmarks, and
   did not say so.** Owner direction: "Tak" -- to the implementer's proposal after
