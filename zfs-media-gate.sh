@@ -40,7 +40,7 @@ VERSION='v1.1'
 
 usage() {
     cat >&2 <<'EOF'
-Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--stats FILE] [--quiet]
+Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--dir DIR]... [--stats FILE] [--quiet]
 
   attach   import the pool if it is not already imported.
              0  the medium is here -- run the job
@@ -52,7 +52,16 @@ EOF
     exit 2
 }
 
+# WHERE TO LOOK FOR THE DISK. `zpool import` scans /dev by default, which is
+# right for a disk in a slot and wrong for anything else -- and when it is
+# wrong the pool is simply not found, so a medium that IS present reads as
+# away and the job skips for ever without saying anything is amiss.
+#
+# Found on the lab, 2026-08-29: a file-backed pool used to stand in for a
+# removable disk was reported "not here" while sitting in /root. Repeatable,
+# passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0
+IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -V|--version) echo "$VERSION"; exit 0 ;;
@@ -62,6 +71,8 @@ while [ "$#" -gt 0 ]; do
         --stats=*)    STATS="${1#--stats=}"; shift ;;
         --dataset)    DATASET="${2:-}"; shift 2 ;;
         --dataset=*)  DATASET="${1#--dataset=}"; shift ;;
+        --dir)        IMPORT_DIRS+=(-d "${2:-}"); shift 2 ;;
+        --dir=*)      IMPORT_DIRS+=(-d "${1#--dir=}"); shift ;;
         -*)           echo "unknown option: $1" >&2; usage ;;
         *)            if   [ -z "$VERB" ];  then VERB="$1"
                       elif [ -z "$POOL" ];  then POOL="$1"
@@ -136,13 +147,13 @@ attach)
     # `zpool import` sees two candidates. Picking one would mean writing this
     # replica onto whichever disk ZFS happened to list first -- and the operator
     # would have no way to know which.
-    cand="$(zpool import 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
+    cand="$(zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
     if [ "$cand" -gt 1 ]; then
         say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
         emit ambiguous; exit 2
     fi
 
-    if ! zpool import "$POOL" 2>/dev/null; then
+    if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "$POOL" 2>/dev/null; then
         last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
         say "SKIPPED: medium '$POOL' for '$LABEL' is not here (last seen: $last). Nothing was run and nothing is wrong -- plug it in and the next run catches up."
         emit skipped_absent; exit 1
