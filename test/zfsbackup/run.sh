@@ -6128,15 +6128,38 @@ got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
     && ok "63f: it falls back to the pairing manifest when the record predates the field" \
     || bad "63f: it falls back to the pairing manifest when the record predates the field" "got=$got"
 
-# 63g. every config writer goes through the one decision layer. A writer that
-#      re-derives its own answer is the exact shape this extraction removed, so
-#      the count is pinned rather than left to review.
+# 63g. Every config writer goes through the one decision layer. A writer that
+#      re-derives its own answer is the exact shape this extraction removed.
+#
+#      ASSERTED PER FUNCTION, not by equal counts. Equal counts were a proxy that
+#      held only while writers were the sole callers of the resolver, and it
+#      stopped holding on 2026-08-29 when list-replicas -- a READER -- had to
+#      resolve too, so that a front end is shown the same config an install would
+#      write. The proxy then failed for a case that is correct, which is how a
+#      tripwire gets loosened to go green. Checking the real property instead
+#      makes it stronger: a reader may resolve without writing, but no writer may
+#      write without resolving.
+writer_gap=$(awk '
+    /^[a-z_]+\(\) \{/ { fn=$1; has_w=0; has_r=0; next }
+    /^\}/ { if (fn != "" && has_w && !has_r) print fn; fn=""; next }
+    fn != "" && /^[ \t]*atomic_replace_and_install / { has_w=1 }
+    fn != "" && /^[ \t]*cron_context_resolve [a-z]/  { has_r=1 }
+' "$ZFSBACKUP")
+if [ -z "$writer_gap" ]; then
+    ok "63g: EVERY function that installs a config also resolved the context first"
+else
+    bad "63g: EVERY function that installs a config also resolved the context first" \
+        "writes without resolving: $(printf '%s' "$writer_gap" | tr '\n' ' ')"
+fi
+# ...and the counts stay pinned on top of it, because the property above cannot
+# see a writer that resolves in a HELPER it calls -- correct, but no longer the
+# one decision layer. A new number here is a prompt to look, not a failure to
+# paper over.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-# Six since 2026-08-29: move-to-client writes the config too, and goes through
-# cron_context_resolve like the other five. The number is what makes a NEW
-# writer that re-derives its own answer visible, so it moves with them.
-if [ "$writers" -eq 6 ] && [ "$resolvers" -eq 6 ]; then
+# 8 writers / 9 resolvers since 2026-08-29: add-replica and remove-replica write,
+# list-replicas only reads and resolves. The asymmetry is the reader.
+if [ "$writers" -eq 8 ] && [ "$resolvers" -eq 9 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
