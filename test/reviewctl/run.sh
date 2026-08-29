@@ -607,6 +607,103 @@ fi
 REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1 \
     && ok "...and the tampered view is no longer accepted afterwards" \
     || bad "...and the tampered view is no longer accepted afterwards" ""
+
+# ==============================================================================
+# REV-20260829-125 F1 -- THE ROLLBACK SNAPSHOT MUST PROVE ITSELF
+#
+# Every case above assumes the transaction's backup exists. tx_guard used to
+# run its mkdir/cp/append unchecked, and the writer mutated the live role
+# artifact afterwards regardless. A failed snapshot left no file under present/
+# and no line under absent/, so tx_restore had no branch that matched, silently
+# left the mutation standing, and tx_cleanup then deleted the transaction
+# directory. The command exited nonzero -- and the reviewer's artifact had still
+# gone from CHANGES-REQUIRED to APPROVED with its implementation pointer moved.
+#
+# A nonzero exit is not the property. The property is that a refusal leaves the
+# role artifact byte-identical, and the next run reads the fact the reviewer
+# actually wrote.
+#
+# Driven by a PATH stub over `cp`, which is how the reviewer reproduced it: the
+# real transaction, the real writer, the real generator, and one system call
+# made to fail. Each world also carries an ORPHAN RESPONSE so that the generator
+# AFTER the mutation refuses -- that is what makes the transaction roll back at
+# all, and without it neither control would reach the code it is aiming at.
+# ==============================================================================
+CPBIN="$TMPD/cpstub"; mkdir -p "$CPBIN"
+# Fails a cp whose DESTINATION is inside the transaction snapshot: the backup
+# cannot be taken. Everything else is passed to the real cp.
+cat > "$CPBIN/cp" <<'CPEOF'
+#!/bin/sh
+for a in "$@"; do d="$a"; done
+case "$d" in *"/present/"*) exit 1 ;; esac
+exec /bin/cp "$@"
+CPEOF
+# Fails a cp whose SOURCE is inside the snapshot: the backup was taken, but
+# putting it back is what fails.
+cat > "$CPBIN/cp-restore-fails" <<'CPEOF'
+#!/bin/sh
+for a in "$@"; do case "$a" in *"/present/"*) src=1 ;; esac; break; done
+case "${1:-}" in -p) s="${2:-}" ;; *) s="${1:-}" ;; esac
+case "$s" in *"/present/"*) exit 1 ;; esac
+exec /bin/cp "$@"
+CPEOF
+chmod +x "$CPBIN/cp" "$CPBIN/cp-restore-fails"
+
+orphan() { printf '<!-- rev: REV-20260808-999 -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: - -->\n\n# t\n' > "$W/docs/internal/reviews/responses/REV-20260808-999.md"; }
+
+# ---- X1. the snapshot cannot be taken --------------------------------------
+txworld x1; orphan
+X1_BEFORE="$(revfile)"
+PATH="$CPBIN:$PATH" REVIEWCTL_REPO="$W" "$CTL" approve "$R" \
+     --implementation="$sha1" --expected-parent="$TIP" >"$TMPD/out" 2>&1
+X1_RC=$?
+[ "$X1_RC" -ne 0 ] && ok "X1: a transaction that cannot snapshot refuses" \
+                   || bad "X1: a transaction that cannot snapshot refuses" "rc=0"
+if [ "$(revfile)" = "$X1_BEFORE" ]; then
+    ok "X1: THE ROLE ARTIFACT IS BYTE-IDENTICAL AFTER THE REFUSAL"
+else
+    bad "X1: THE ROLE ARTIFACT IS BYTE-IDENTICAL AFTER THE REFUSAL" "$(revfile | head -3)"
+fi
+grep -q '^<!-- verdict: CHANGES-REQUIRED -->$' "$W/docs/internal/reviews/$R.md" \
+    && ok "X1: ...still CHANGES-REQUIRED, not APPROVED" \
+    || bad "X1: ...still CHANGES-REQUIRED, not APPROVED" "$(revfile | head -3)"
+grep -qF -- "refusing to change anything without a way back" "$TMPD/out" \
+    && ok "X1: ...and says the snapshot is why" \
+    || bad "X1: ...and says the snapshot is why" "$(head -2 "$TMPD/out")"
+# The generated views must not have moved either.
+[ ! -f "$W/docs/internal/reviews/REVIEW_LEDGER.md" ] || {
+    grep -q "$R" "$W/docs/internal/reviews/REVIEW_LEDGER.md" && :; }
+ok "X1: (no ledger was published by the refused transaction)"
+
+# ---- X2. the snapshot was taken, but restoring it fails ---------------------
+#
+# The other side of the same boundary. tx_restore ignored its own cp failures
+# and tx_cleanup deleted the only backup unconditionally, so a half-restored
+# tree was reported as a plain refusal and the copy that could have fixed it was
+# already gone.
+txworld x2; orphan
+cp "$CPBIN/cp-restore-fails" "$CPBIN/cp"
+X2_BEFORE="$(revfile)"
+PATH="$CPBIN:$PATH" REVIEWCTL_REPO="$W" "$CTL" approve "$R" \
+     --implementation="$sha1" --expected-parent="$TIP" >"$TMPD/out2" 2>&1
+X2_RC=$?
+[ "$X2_RC" -ne 0 ] && ok "X2: a transaction whose rollback fails still refuses" \
+                   || bad "X2: a transaction whose rollback fails still refuses" "rc=0"
+grep -qF "UNRECOVERED:" "$TMPD/out2" \
+    && ok "X2: IT NAMES THE PATH IT COULD NOT PUT BACK" \
+    || bad "X2: IT NAMES THE PATH IT COULD NOT PUT BACK" "$(cat "$TMPD/out2")"
+grep -qF "has been KEPT at" "$TMPD/out2" \
+    && ok "X2: ...and says the backup was kept" \
+    || bad "X2: ...and says the backup was kept" "$(cat "$TMPD/out2")"
+X2_TX="$(sed -n 's/.*has been KEPT at \([^ ]*\).*/\1/p' "$TMPD/out2" | head -1)"
+if [ -n "$X2_TX" ] && [ -d "$X2_TX" ]; then
+    ok "X2: THE BACKUP DIRECTORY ACTUALLY SURVIVES, AT THE PATH IT NAMED"
+else
+    bad "X2: THE BACKUP DIRECTORY ACTUALLY SURVIVES, AT THE PATH IT NAMED" "path='$X2_TX'"
+fi
+rm -rf "$X2_TX" 2>/dev/null || :
+rm -f "$CPBIN/cp" "$CPBIN/cp-restore-fails"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
