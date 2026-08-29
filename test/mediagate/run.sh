@@ -57,7 +57,9 @@ case "$1 $2" in
 esac
 case "$1" in
   import)
-      [ -z "${2:-}" ] && { for p in $IMPORTABLE; do echo "  pool: $p"; done; exit 0; }
+      # The real scan prints `id: <guid>` under each pool, which is how a
+      # medium is identified WITHOUT importing it.
+      [ -z "${2:-}" ] && { for p in $IMPORTABLE; do echo "  pool: $p"; echo "    id: ${POOL_GUID:-11111111}"; done; exit 0; }
       for p in $IMPORTABLE; do
           if [ "$p" = "$2" ]; then echo "$2" >> "$IMPORTED_LOG"; exit 0; fi
       done
@@ -641,64 +643,118 @@ has "DO NOT UNPLUG" "$out" && bad "K: ...and does NOT also say the opposite" "$o
                            || ok "K: ...and does NOT also say the opposite"
 
 # ---------------------------------------------------------------------------
-# L. SHORTENING THE WINDOW: a run with nothing to send must not open one
+# L. SHORTENING THE WINDOW -- but only on a fact about THIS medium
 #
-# The window in which pulling this disk can hang the host is exactly the window
-# in which its pool is imported -- three host resets on the lab established that
-# it cannot be made safe, only short. It was being opened on EVERY run, including
-# the ones with nothing to copy: on a source that is quiet most of the day, the
-# disk was exposed once an hour for no reason.
+# The window in which pulling a disk can hang the host is exactly the window in
+# which its pool is imported, so a run with nothing to send should not open one.
+# The first cut of this asked only whether the SOURCE was quiet and skipped on
+# that alone -- and REV-20260829-126 F1 showed what that costs in the shape this
+# feature exists for, rotation:
 #
-# So "is there anything to do" is answered on the SOURCE, before the medium is
-# touched. `written@<snap>` is the predicate -- bytes written since that
-# snapshot -- and zero across the subtree means the last replica snapshot still
-# describes the source exactly.
+#   medium A is synced through replica_s1 and carried off;
+#   medium B is inserted and takes the source to replica_s2;
+#   the source goes quiet, so written@replica_s2 is zero;
+#   medium A comes back -- and was skipped, for ever, while still at s1.
+#
+# A quiet source is necessary and not sufficient. The fast path now also needs
+# the disk in the slot to BE the one a verified transfer recorded, and that
+# record to still name the newest snapshot of the family. Everything else fails
+# open to the engine.
 # ---------------------------------------------------------------------------
-: > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
-# tank/src must be in DATASETS: the pre-check's first question is whether the
-# source exists at all, and a source the stub denies makes the check fail OPEN --
-# which is correct behaviour, and would have made L1 pass for the wrong reason.
+SYNCFILE="$STATE/rep.synced"
 POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a"
-SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
+SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_s2"; SRC_WRITTEN=0; POOL_GUID=11111111
 
-out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
-check "L1: nothing written -> the run is skipped" "1" "$rc"
-check "L1: AND THE MEDIUM IS NEVER IMPORTED" "" "$(cat "$IMPORTED_LOG")"
-has "nothing to copy" "$out" && ok "L1: ...saying why, not just that it skipped" \
-                             || bad "L1: ...saying why, not just that it skipped" "$out"
-has "pulled safely" "$out" && ok "L1: ...and why that is worth doing" \
-                           || bad "L1: ...and why that is worth doing" "$out"
-
-# L2. THE OTHER SIDE, or L1 would also pass against a gate that never imports.
+# L1. THE OPTIMISATION ITSELF: a medium independently proved current.
 : > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L1: a medium proved current is skipped" "1" "$rc"
+check "L1: AND IS NEVER IMPORTED" "" "$(cat "$IMPORTED_LOG")"
+has "already holds" "$out" && ok "L1: ...saying which snapshot it already holds" \
+                           || bad "L1: ...saying which snapshot it already holds" "$out"
+has "pulled safely" "$out" && ok "L1: ...and why leaving it alone is worth doing" \
+                           || bad "L1: ...and why leaving it alone is worth doing" "$out"
+
+# L2. THE FINDING. Rotation: this disk is the one recorded, but the family has
+#     moved on since it was last here. It is BEHIND and must be brought up.
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap=replica_s1\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L2: A ROTATED MEDIUM BEHIND THE FAMILY IS IMPORTED, NOT SKIPPED" "0" "$rc"
+check "L2: ...and it really was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+has "it is behind" "$out" && ok "L2: ...saying it is behind, and by what" \
+                          || bad "L2: ...saying it is behind, and by what" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+# L3. The other rotation half: the right snapshot, but a DIFFERENT disk in the
+#     slot. Two media of one pool name is the normal rotated shape.
+: > "$IMPORTED_LOG"
+printf 'guid=99999999\nsnap=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L3: A DIFFERENT DISK OF THE SAME POOL NAME IS IMPORTED" "0" "$rc"
+has "NOT the one this record describes" "$out" && ok "L3: ...saying both guids" \
+                                               || bad "L3: ...saying both guids" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+# L4/L5/L6. EVERY OTHER SHAPE FAILS OPEN. Absent, unreadable, and a source that
+#     is not quiet -- none of them may ever read as "current".
+: > "$IMPORTED_LOG"; rm -f "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L4: no record at all -> imported" "0" "$rc"
+has "no record of what" "$out" && ok "L4: ...and says the record is missing" \
+                               || bad "L4: ...and says the record is missing" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+: > "$IMPORTED_LOG"
+printf 'garbage\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L5: an unreadable record -> imported" "0" "$rc"
+has "unreadable" "$out" && ok "L5: ...and says so" || bad "L5: ...and says so" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap=replica_s2\n' > "$SYNCFILE"
 SRC_WRITTEN=4096
 out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
-check "L2: something written -> it DOES import" "0" "$rc"
-check "L2: ...and the medium was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
-POOLS="hdd rotpool"; IMPORTABLE=""
-g detach rotpool rep >/dev/null 2>&1
+check "L6: source not quiet -> imported even with a current record" "0" "$rc"
+SRC_WRITTEN=0
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
 
-# L3. FAIL OPEN. No snapshot of this family yet is a FIRST SEED, not an idle
-#     source, and a check that could not read a number must never be the reason
-#     a backup did not run.
+# L7. Without --source/--prefix the check does not run at all: opt-in, and every
+#     existing caller keeps its behaviour byte for byte.
 : > "$IMPORTED_LOG"
-POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP=""; SRC_WRITTEN=0
-out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
-check "L3: NO PRIOR SNAPSHOT -> imports anyway (a first seed)" "0" "$rc"
-check "L3: ...and it really imported" "rotpool" "$(cat "$IMPORTED_LOG")"
-POOLS="hdd rotpool"; IMPORTABLE=""
-g detach rotpool rep >/dev/null 2>&1
-
-# L4. Without --source/--prefix nothing changes: the check is opt-in, and every
-#     existing caller keeps its behaviour exactly.
-: > "$IMPORTED_LOG"
-POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
 out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
-check "L4: no --source given -> the check does not run" "0" "$rc"
-check "L4: ...and the medium is imported as before" "rotpool" "$(cat "$IMPORTED_LOG")"
+check "L7: no --source given -> the check does not run" "0" "$rc"
+check "L7: ...and the medium is imported as before" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+
+# L8. THE RECORD ADVANCES ONLY AFTER A VERIFIED TRANSFER, and is written while
+#     the pool is still imported -- the only moment its guid can be read.
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
 POOLS="hdd rotpool"; IMPORTABLE=""
-g detach rotpool rep >/dev/null 2>&1
-SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""
+g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 1 >/dev/null 2>&1
+[ -f "$SYNCFILE" ] && bad "L8: A FAILED TRANSFER DOES NOT ADVANCE THE RECORD" "it was written" \
+                   || ok "L8: A FAILED TRANSFER DOES NOT ADVANCE THE RECORD"
+
+POOLS="hdd"; IMPORTABLE="rotpool"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 0 >/dev/null 2>&1
+if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && grep -q '^snap=replica_s2$' "$SYNCFILE"; then
+    ok "L8: a verified transfer records this medium's guid AND what it now holds"
+else
+    bad "L8: a verified transfer records this medium's guid AND what it now holds" "$(cat "$SYNCFILE" 2>/dev/null)"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
