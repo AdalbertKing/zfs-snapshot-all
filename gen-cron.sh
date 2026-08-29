@@ -3024,15 +3024,21 @@ emit_send() {
 # The pool is the first component of the target path -- that is what gets
 # imported, and the full path is passed as --dataset so the gate can tell an
 # absent disk from the WRONG disk in the slot.
-media_bracket() {   # <media field> <target path> <label> <command>
-    local media="$1" target="$2" label="$3" cmd="$4"
+media_bracket() {   # <media field> <target path> <label> <command> [source] [prefix]
+    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}"
     [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
     [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
     local pool="${target%%/*}"
     [ -n "$pool" ] || { printf '%s' "$cmd"; return 0; }
     local gate="$REPO_DIR/zfs-media-gate.sh"
-    printf '( %s attach %s %s --dataset %s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
-        "$gate" "$pool" "${label:-media}" "$target" "$cmd" "$gate" "$pool" "${label:-media}"
+    # --source/--prefix let attach answer 'is there anything to copy' on the
+    # SOURCE, before the medium is touched at all. The window in which pulling
+    # this disk can hang the host is exactly the window in which its pool is
+    # imported, so a run with nothing to send should not open one.
+    local srcopt=""
+    [ -n "$src" ] && [ -n "$pref" ] && srcopt=" --source $src --prefix $pref"
+    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$gate" "$pool" "${label:-media}"
 }
 
 job_cron_line() {
@@ -3203,7 +3209,7 @@ emit_replicas() {
         [ -n "$hist" ] && cmd="$cmd $hist"
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$source\" \"$dst\""
-        cmd="$(media_bracket "$media" "$dst" "$name" "$cmd")"
+        cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix")"
         JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }

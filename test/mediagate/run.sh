@@ -76,6 +76,16 @@ cat > "$BIN/zfs" <<'ZF'
 #!/bin/sh
 for a in "$@"; do last="$a"; done
 case "$*" in
+  # The pre-check walks the subtree, finds each dataset's newest snapshot of the
+  # replica family, and asks how much has been written since it. SRC_TREE lists
+  # the subtree, SRC_SNAP is the family snapshot (empty = none, the first-seed
+  # case), SRC_WRITTEN is the byte count.
+  *"list -H -o name -r"*)
+      for d in ${SRC_TREE:-}; do echo "$d"; done; exit 0 ;;
+  *"list -H -t snapshot -o name -d 1"*)
+      [ -n "${SRC_SNAP:-}" ] && echo "$last@${SRC_SNAP}"; exit 0 ;;
+  *"get -H -p -o value written@"*)
+      echo "${SRC_WRITTEN:-0}"; exit 0 ;;
   *"list -H -o name"*)
       for d in $DATASETS; do [ "$d" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -84,7 +94,7 @@ ZF
 chmod +x "$BIN/zpool" "$BIN/zfs"
 
 export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
-export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS
+export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS SRC_TREE SRC_SNAP SRC_WRITTEN
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
 g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
@@ -629,6 +639,66 @@ has "SAFE TO UNPLUG" "$out" && ok "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS S
                             || bad "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS SAFE TO UNPLUG" "$out"
 has "DO NOT UNPLUG" "$out" && bad "K: ...and does NOT also say the opposite" "$out" \
                            || ok "K: ...and does NOT also say the opposite"
+
+# ---------------------------------------------------------------------------
+# L. SHORTENING THE WINDOW: a run with nothing to send must not open one
+#
+# The window in which pulling this disk can hang the host is exactly the window
+# in which its pool is imported -- three host resets on the lab established that
+# it cannot be made safe, only short. It was being opened on EVERY run, including
+# the ones with nothing to copy: on a source that is quiet most of the day, the
+# disk was exposed once an hour for no reason.
+#
+# So "is there anything to do" is answered on the SOURCE, before the medium is
+# touched. `written@<snap>` is the predicate -- bytes written since that
+# snapshot -- and zero across the subtree means the last replica snapshot still
+# describes the source exactly.
+# ---------------------------------------------------------------------------
+: > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+# tank/src must be in DATASETS: the pre-check's first question is whether the
+# source exists at all, and a source the stub denies makes the check fail OPEN --
+# which is correct behaviour, and would have made L1 pass for the wrong reason.
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a"
+SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
+
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L1: nothing written -> the run is skipped" "1" "$rc"
+check "L1: AND THE MEDIUM IS NEVER IMPORTED" "" "$(cat "$IMPORTED_LOG")"
+has "nothing to copy" "$out" && ok "L1: ...saying why, not just that it skipped" \
+                             || bad "L1: ...saying why, not just that it skipped" "$out"
+has "pulled safely" "$out" && ok "L1: ...and why that is worth doing" \
+                           || bad "L1: ...and why that is worth doing" "$out"
+
+# L2. THE OTHER SIDE, or L1 would also pass against a gate that never imports.
+: > "$IMPORTED_LOG"
+SRC_WRITTEN=4096
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L2: something written -> it DOES import" "0" "$rc"
+check "L2: ...and the medium was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# L3. FAIL OPEN. No snapshot of this family yet is a FIRST SEED, not an idle
+#     source, and a check that could not read a number must never be the reason
+#     a backup did not run.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP=""; SRC_WRITTEN=0
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L3: NO PRIOR SNAPSHOT -> imports anyway (a first seed)" "0" "$rc"
+check "L3: ...and it really imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# L4. Without --source/--prefix nothing changes: the check is opt-in, and every
+#     existing caller keeps its behaviour exactly.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "L4: no --source given -> the check does not run" "0" "$rc"
+check "L4: ...and the medium is imported as before" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -40,7 +40,8 @@ VERSION='v1.1'
 
 usage() {
     cat >&2 <<'EOF'
-Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--dir DIR]... [--stats FILE] [--quiet]
+Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--dir DIR]...
+                         [--source DS --prefix P] [--stats FILE] [--quiet]
 
   attach   import the pool if it is not already imported.
              0  the medium is here -- run the job
@@ -61,6 +62,7 @@ EOF
 # removable disk was reported "not here" while sitting in /root. Repeatable,
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
+SOURCE=""; PREFIX=""
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -73,6 +75,10 @@ while [ "$#" -gt 0 ]; do
         --dataset=*)  DATASET="${1#--dataset=}"; shift ;;
         --dir)        IMPORT_DIRS+=(-d "${2:-}"); shift 2 ;;
         --dir=*)      IMPORT_DIRS+=(-d "${1#--dir=}"); shift ;;
+        --source)     SOURCE="${2:-}"; shift 2 ;;
+        --source=*)   SOURCE="${1#--source=}"; shift ;;
+        --prefix)     PREFIX="${2:-}"; shift 2 ;;
+        --prefix=*)   PREFIX="${1#--prefix=}"; shift ;;
         -*)           echo "unknown option: $1" >&2; usage ;;
         *)            if   [ -z "$VERB" ];  then VERB="$1"
                       elif [ -z "$POOL" ];  then POOL="$1"
@@ -211,6 +217,57 @@ status)
     ;;
 
 attach)
+    # NOTHING TO SEND MEANS NOTHING TO RISK.
+    #
+    # The window in which pulling this disk can hang the host is exactly the
+    # window in which its pool is imported. The bracket already keeps that to the
+    # length of one run -- but it opened it on EVERY run, including the ones with
+    # nothing to copy. On a source that is quiet most of the day that is the disk
+    # exposed once an hour for no reason at all.
+    #
+    # So the question "is there anything to do" is answered on the SOURCE, before
+    # the medium is touched. `written@<snap>` is the predicate: bytes written to
+    # a dataset since that snapshot. Zero across the whole subtree means the last
+    # replica snapshot still describes the source exactly, and the run would copy
+    # nothing.
+    #
+    # `written@` LAGS BY A TRANSACTION GROUP, and that is accepted rather than
+    # worked around. Data written seconds ago may still read as zero until the
+    # txg commits (zfs_txg_timeout, 5s by default) -- measured again here while
+    # proving this check, and already on record for this project. The worst it
+    # can cost is ONE skipped run on an hourly schedule; the data is not lost and
+    # the next run carries it. Forcing a sync to get a fresher number would mean
+    # this check writing to the pool it exists to leave alone.
+    #
+    # Fail OPEN, deliberately. Anything unexpected -- no prior snapshot of this
+    # family (a first seed), an unreadable property, a source that is not there --
+    # imports and lets the engine decide. A check that skips a real backup
+    # because it could not read a number would be far worse than one that
+    # occasionally imports for nothing.
+    if [ -n "$SOURCE" ] && [ -n "$PREFIX" ]; then
+        _work=unknown
+        if zfs list -H -o name "$SOURCE" >/dev/null 2>&1; then
+            _work=no
+            while IFS= read -r _ds; do
+                [ -n "$_ds" ] || continue
+                _snap="$(zfs list -H -t snapshot -o name -d 1 "$_ds" 2>/dev/null | grep "@${PREFIX}" | tail -1)"
+                if [ -z "$_snap" ]; then _work=unknown; break; fi
+                _w="$(zfs get -H -p -o value "written@${_snap##*@}" "$_ds" 2>/dev/null)"
+                case "$_w" in
+                    ''|*[!0-9]*) _work=unknown; break ;;
+                    0) : ;;
+                    *) _work=yes; break ;;
+                esac
+            done <<EOF
+$(zfs list -H -o name -r "$SOURCE" 2>/dev/null)
+EOF
+        fi
+        if [ "$_work" = no ]; then
+            say "SKIPPED: nothing has been written to '$SOURCE' since the last '$PREFIX' snapshot, so there is nothing to copy onto '$POOL' -- and the medium is left alone rather than imported for an empty run. Every minute this pool is NOT imported is a minute the disk can be pulled safely."
+            emit skipped_nothing_to_do; exit 1
+        fi
+    fi
+
     if imported; then
         marker_is_ours; _own=$?
         case "$_own" in
