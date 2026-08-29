@@ -2698,12 +2698,24 @@ emit_send() {
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""
         # The LANDING dataset, not just the pool: snapsend composes dst/src, and
-        # the gate's wrong-medium check is only worth anything if it looks at
-        # the dataset the write would actually land in. With several members
-        # merged there is no single landing path, so the pool is all that can
-        # honestly be checked and the gate degrades to a presence test.
+        # WHAT IDENTIFIES THE MEDIUM IS THE BASE, NOT THE LANDING PATH.
+        #
+        # This used to hand the gate "$dst/$src" -- where the write actually
+        # lands -- on the theory that checking the real destination is the
+        # honest check. It is the opposite. That leaf is created BY the engine,
+        # so on a freshly prepared disk it does not exist yet, and the gate
+        # answered the very first sync with "pool is imported but DATASET is not
+        # on it -- it is the wrong one". The right disk, refused as the wrong
+        # one, and under the status rules above that refusal alerts. A new
+        # removable disk could never be seeded. Proven live on pve0, 2026-08-29.
+        #
+        # The base is what the administrator creates once when preparing the
+        # disk, so it exists before the first write and stays for the life of
+        # the medium: exactly the property an identity check needs. A different
+        # disk carrying a pool of the same name but not that dataset is still
+        # caught, which is the case the check exists for. Where the base IS the
+        # pool root the test degrades to presence, which is honest.
         _mb_target="$dst"
-        [ "${#members[@]}" -eq 1 ] && [ -n "$dst" ] && _mb_target="$dst/$src"
         cmd="$(media_bracket "$media" "$_mb_target" "${plabel:-$label}" "$cmd")"
 
         JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify_out")")
@@ -2758,15 +2770,27 @@ emit_send() {
 # The shape is `if attach; then ENGINE; fi; detach`, and each piece of that is
 # deliberate:
 #
-#   * `if` and not `&&` -- the gate exits 1 when the disk is away, and that must
-#     leave the LINE's status zero. With `&&` the line would inherit 1 and the
-#     job would alert every night the disk is in a safe, which is the whole
-#     thing this field exists to stop.
+#   * A SUBSHELL, and that is not cosmetic. job_cron_line puts this into a slot
+#     built for ONE command: `CMD 2>"$e"; rc=$?`. This used to emit a bare
+#     `if ...; fi; detach` sequence there, and both halves of the wrapper then
+#     bound to the LAST command only -- so the engine's stderr never reached
+#     "$e" (it went to cron's own stderr, i.e. the mail flood this package
+#     exists to stop) and `rc=$?` was detach's status. Proven live on pve0,
+#     2026-08-29: the engine exited 1 and the line reported 0.
 #   * detach runs OUTSIDE the `if`, so a failed transfer still puts the pool
 #     back. A disk left imported after a failure is a disk somebody unplugs.
-#   * detach's own status is discarded here: it says DO NOT UNPLUG loudly on
-#     stderr when an export fails, and that lands in the job log. Letting it
-#     fail the line as well would report a transfer that succeeded as a failure.
+#   * THE STATUS IS CHOSEN, NOT INHERITED. The whole point of this field is to
+#     separate the one silence that is correct from every noise that is not:
+#       attach 0 -> the engine ran, and the LINE reports what the ENGINE said;
+#       attach 1 -> the disk is in a safe. Silence. This case, and only this;
+#       attach 2 -> the WRONG disk is in the slot, or the import could not be
+#                   recorded. Not an absent medium, and it alerts.
+#     A bracket returning 0 for all three suppresses real backup failures,
+#     which is worse than having no bracket at all.
+#   * detach's failure raises too, when nothing worse already has: the pool is
+#     still imported on a disk somebody is about to unplug, and its DO NOT
+#     UNPLUG lands in the mail body. A confusing alert after a good transfer
+#     beats silence about a replica about to be corrupted.
 #
 # The pool is the first component of the target path -- that is what gets
 # imported, and the full path is passed as --dataset so the gate can tell an
@@ -2778,7 +2802,7 @@ media_bracket() {   # <media field> <target path> <label> <command>
     local pool="${target%%/*}"
     [ -n "$pool" ] || { printf '%s' "$cmd"; return 0; }
     local gate="$REPO_DIR/zfs-media-gate.sh"
-    printf 'if %s attach %s %s --dataset %s; then %s; fi; %s detach %s %s' \
+    printf '( %s attach %s %s --dataset %s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
         "$gate" "$pool" "${label:-media}" "$target" "$cmd" "$gate" "$pool" "${label:-media}"
 }
 

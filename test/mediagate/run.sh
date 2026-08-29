@@ -208,6 +208,120 @@ check "F2: ...and if it cannot be exported either, still nonzero" "2" "$rc"
 has "DO NOT UNPLUG" "$out" && ok "F2: ...carrying DO NOT UNPLUG" || bad "F2: ...carrying DO NOT UNPLUG" "$out"
 EXPORT_FAILS=""
 
+# ---------------------------------------------------------------------------
+# G. THE GENERATED LINE, RUN WHOLE
+#
+# Everything above tests the gate. Nothing above tested the CRON LINE the
+# generator wraps around it, and that gap hid two defects that a passing suite
+# happily shipped:
+#
+#   * the bracket was emitted as a bare `if ...; fi; detach` sequence into a
+#     slot job_cron_line builds for ONE command (`CMD 2>"$e"; rc=$?`), so both
+#     halves of the wrapper bound to `detach` alone. The engine's stderr missed
+#     the log and went to cron's own stderr, and a failed transfer reported
+#     success. Measured on pve0: engine rc=1, line rc=0;
+#   * the gate was handed the LANDING path, which the engine creates, so a
+#     freshly prepared disk was refused as the wrong medium on its first sync.
+#
+# So this section renders the real line with the real generator and RUNS it,
+# stubbing only the gate and the engine so their statuses can be dictated.
+# ---------------------------------------------------------------------------
+GEN="${GEN:-$REPO/gen-cron.sh}"
+STUB="$TMPD/stubrepo"; mkdir -p "$STUB"
+cat > "$STUB/zfs-media-gate.sh" <<'SG'
+#!/bin/bash
+case "$1" in
+  attach) echo "GATE-ATTACH" >&2; exit "${STUB_ATTACH_RC:-0}" ;;
+  detach) echo "GATE-DETACH" >&2; exit "${STUB_DETACH_RC:-0}" ;;
+esac
+exit 0
+SG
+cat > "$STUB/snapsend.sh" <<'SE'
+#!/bin/bash
+echo "ENGINE-RAN" >&2
+exit "${STUB_ENGINE_RC:-0}"
+SE
+cat > "$STUB/notify.sh" <<'SN'
+#!/bin/bash
+echo "NOTIFIED" >> "$NOTIFY_LOG"
+SN
+chmod +x "$STUB"/*.sh
+
+cat > "$TMPD/media.conf" <<'MC'
+[defaults]
+	host_label = lab
+
+[template:hourly]
+	send_schedule  = 5 * * * *
+	prefix         = automated_hourly_
+	notify_word    = replica
+	prune_schedule = 35 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:tank/a]
+	use_template = hourly
+	notify       = a
+	dst          = rotpool/replica
+	media        = removable
+MC
+
+CRONOUT="$(REPO_DIR="$STUB" CRON_LOG="$TMPD/cron.log" NOTIFY_SCRIPT="$STUB/notify.sh" \
+           bash "$GEN" -c "$TMPD/media.conf" 2>&1 | grep 'zfs-media-gate.sh attach' | head -1)"
+[ -n "$CRONOUT" ] && ok "G: the generator emits a bracketed line for media=removable" \
+                  || bad "G: the generator emits a bracketed line for media=removable"
+
+# The gate is handed the BASE the admin prepares, never the leaf the engine makes.
+# The needle carries no leading dashes: `has` is a plain case-glob, not getopt,
+# and the first cut of this passed "--" as the needle, matching every time.
+has "dataset rotpool/replica;" "$CRONOUT" \
+    && ok "G: THE GATE CHECKS THE BASE, NOT THE LANDING PATH" \
+    || bad "G: THE GATE CHECKS THE BASE, NOT THE LANDING PATH" "$CRONOUT"
+
+# Strip the five schedule fields; what is left is exactly what cron runs.
+LINE="$(printf '%s\n' "$CRONOUT" | sed -E 's/^([^ ]+ ){5}//')"
+
+# Sets LINE_RC and LINE_LOG in the caller.
+runline() {   # <attach rc> <engine rc> <detach rc>
+    : > "$TMPD/cron.log"; : > "$TMPD/notify.log"
+    STUB_ATTACH_RC="$1" STUB_ENGINE_RC="$2" STUB_DETACH_RC="$3" \
+    NOTIFY_LOG="$TMPD/notify.log" bash -c "$LINE" >/dev/null 2>&1
+    LINE_LOG="$(cat "$TMPD/cron.log" 2>/dev/null)"
+    LINE_NOTIFIED="$(cat "$TMPD/notify.log" 2>/dev/null)"
+    # NOT the shell's exit status. The wrapper ends in `rm -f "$e"`, so the
+    # line itself always exits 0 and cron's own status is meaningless here --
+    # what decides whether anyone is told is the `rc` job_cron_line captures
+    # from the command and writes into the log. Asserting $? instead was this
+    # section's first mistake, and it made all four cases look identical.
+    LINE_RC="$(printf '%s' "$LINE_LOG" | grep -o 'rc=[0-9][0-9]*' | tail -1 | cut -d= -f2)"
+}
+
+# 1. THE DISK IS IN A SAFE. The one silence this field exists to buy.
+runline 1 0 0
+check "G1: disk away -> the job records success" "0" "$LINE_RC"
+check "G1: ...and nobody is mailed" "" "$LINE_NOTIFIED"
+
+# 2. THE DISK IS IN AND THE TRANSFER FAILED. This must NOT be silent -- it is
+#    the defect the live run found: engine 1, line 0.
+runline 0 1 0
+check "G2: THE ENGINE'S FAILURE IS THE LINE'S FAILURE" "1" "$LINE_RC"
+has "ENGINE-RAN" "$LINE_LOG" && ok "G2: ...and the engine's stderr reached the job log" \
+                             || bad "G2: ...and the engine's stderr reached the job log" "$LINE_LOG"
+[ -n "$LINE_NOTIFIED" ] && ok "G2: ...and somebody is mailed" \
+                        || bad "G2: ...and somebody is mailed"
+
+# 3. THE WRONG DISK IS IN THE SLOT. Not an absent medium; it alerts.
+runline 2 0 0
+check "G3: the wrong medium alerts rather than skipping" "2" "$LINE_RC"
+
+# 4. THE TRANSFER WORKED BUT THE POOL WOULD NOT EXPORT. DO NOT UNPLUG.
+runline 0 0 2
+check "G4: a stuck export is reported, not swallowed" "2" "$LINE_RC"
+
+# 5. Everything worked.
+runline 0 0 0
+check "G5: a clean run is clean" "0" "$LINE_RC"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
