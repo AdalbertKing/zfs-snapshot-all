@@ -6157,9 +6157,12 @@ fi
 # paper over.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-# 8 writers / 9 resolvers since 2026-08-29: add-replica and remove-replica write,
-# list-replicas only reads and resolves. The asymmetry is the reader.
-if [ "$writers" -eq 8 ] && [ "$resolvers" -eq 9 ]; then
+# 8 writers / 11 resolvers since 2026-08-29. The writers did not move; the gap
+# is READERS, and it keeps widening for the right reason: list-replicas,
+# run-replicas and install-media-trigger all have to resolve the same config an
+# install would write, so that what they show or run is what cron would.
+# Equality was never the property -- the per-function check above is.
+if [ "$writers" -eq 8 ] && [ "$resolvers" -eq 11 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

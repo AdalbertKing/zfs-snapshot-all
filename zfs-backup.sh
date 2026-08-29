@@ -302,7 +302,11 @@ Replicas -- more copies of what this host already holds, usually onto disks
 that get unplugged. Every field is a flag, and add-replica is an upsert, so a
 front end never edits the config file:
   zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
-                                    [--schedule='10 * * * *'] [--prefix=replica_]
+                                    Default schedule is 02:30 nightly, after the
+                                    daily tier: a replica is not an online mirror,
+                                    and every run is a window in which the medium
+                                    is at risk.
+                                    [--schedule='30 2 * * *'] [--prefix=replica_]
                                     [--recursive=yes|no] [--fixed|--removable]
                                     [--history=all|newest|auto:N]
                                     [--notify=TEXT] [--plan|--install] [--yes]
@@ -320,6 +324,21 @@ front end never edits the config file:
                                     safe), wrong_medium (a disk IS in the slot and it
                                     is not this one). --json is the GUI data layer,
                                     same contract as `progress --json`.
+  zfs-backup.sh run-replicas [--config=F]
+                                    Run every replica job now. A medium that is
+                                    not here skips quietly, so this is safe to
+                                    fire on any insertion.
+  zfs-backup.sh install-media-trigger [--install]
+                                    OPTIONAL, and not implied by anything. A udev
+                                    rule that runs the replicas when a disk
+                                    carrying a ZFS label appears. add-replica
+                                    never touches udev; a host that only wants the
+                                    nightly run never runs this. Running both is
+                                    fine -- the nightly run then finds nothing
+                                    written and skips without importing.
+  zfs-backup.sh remove-media-trigger [--install]
+                                    Take that opt-in back. Removes only the rule
+                                    this tool wrote; cron entries are untouched.
   zfs-backup.sh remove-replica NAME [--install]
                                     Stops the job. The copy on that medium is left
                                     alone -- it is still a copy.
@@ -4881,6 +4900,149 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
     return 0
 }
 
+
+# run-replicas -- every [replica:] job in the config, once, now.
+#
+# The owner's second trigger, 2026-08-29: "or immediately when the disk is
+# plugged in". This is what udev calls; it is also what an administrator runs by
+# hand after carrying a disk back from the safe.
+#
+# It does not reimplement the job. It renders the config through the SAME
+# generator cron uses and runs the lines it produced, so there is exactly one
+# description of what a replica run is. A medium that is not here skips quietly
+# on its own -- that is the gate's whole contract -- so this can fire on every
+# insertion without knowing which disk arrived.
+cmd_run_replicas() {
+    local config="" a
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            -*)         die "run-replicas: unknown option '$a'" ;;
+            *)          die "run-replicas: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "run-replicas: no readable config at $config"
+
+    local block rc=0 n=0
+    block="$(gencron_as_target -c "$config")" \
+        || die "run-replicas: the config could not be rendered -- nothing was run"
+    # The replica lines and only those: a bracketed job is a replica by
+    # construction, because media_bracket is the only thing that emits one.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        n=$((n+1))
+        # Strip the five schedule fields; what is left is what cron runs.
+        bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1
+    done <<EOF
+$(printf '%s' "$block" | grep 'zfs-media-gate.sh attach')
+EOF
+    [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
+    return "$rc"
+}
+
+# install-media-trigger -- fire the replicas when a disk appears.
+#
+# OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the
+# insertion trigger is opt-in and must not arrive together with the schedule.
+# `add-replica` never touches udev, and a host that only ever wants the nightly
+# run simply never runs this verb. The two are independent: neither installs,
+# implies or requires the other.
+#
+# ITS OWN VERB for the same reason. A udev rule is a durable change to how this
+# machine reacts to hardware, which is a different layer from a cron entry; one
+# command that quietly altered both would be one command too clever. The rule is
+# printed before it is written, and writing it needs --install like everything
+# else here.
+#
+# Running both is fine and costs nothing: a disk inserted in the evening runs its
+# job, and the nightly run then finds nothing written since and skips without
+# importing the medium at all.
+cmd_install_media_trigger() {
+    local config="" do_install=0 rules=/etc/udev/rules.d/90-zfs-replica.rules a
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            --rules=*)  rules="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            -*)         die "install-media-trigger: unknown option '$a'" ;;
+            *)          die "install-media-trigger: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "install-media-trigger: no readable config at $config"
+    grep -q '^\[replica:' "$config" \
+        || die "install-media-trigger: $config has no [replica:] sections, so there is nothing for an inserted disk to trigger. Add one first: zfs-backup.sh add-replica ..."
+
+    command -v systemd-run >/dev/null 2>&1 \
+        || die "install-media-trigger: systemd-run is not on this host. The rule must not run the job itself -- a udev rule that blocks holds up every other device event on the machine -- and systemd-run --no-block is how it hands the work off."
+
+    local body
+    body="$(cat <<EOF
+# Managed by zfs-backup.sh install-media-trigger -- do not hand-edit.
+#
+# Fires when a disk carrying a ZFS label appears. It does NOT know which replica
+# the disk belongs to and does not need to: run-replicas tries them all and every
+# medium that is not present skips quietly.
+#
+# --no-block is not optional. udev serialises device events, so a rule that waits
+# for a backup would stall every other device on this machine for the length of
+# the transfer.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
+  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k $SCRIPT_DIR/zfs-backup.sh run-replicas --config=$config"
+EOF
+)"
+    echo ">>> reguła do zapisania w $rules:"
+    echo "------------------------------------------------------------"
+    printf '%s\n' "$body"
+    echo "------------------------------------------------------------"
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zapisane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        return 0
+    fi
+    printf '%s\n' "$body" > "$rules" || die "install-media-trigger: could not write $rules"
+    chmod 0644 "$rules" 2>/dev/null || :
+    udevadm control --reload-rules 2>/dev/null || warn "rule written, but 'udevadm control --reload-rules' failed -- it takes effect after the next reload or reboot"
+    log "media trigger installed at $rules -- plugging in a replica disk now runs its job, and the run exports the pool again when it is done."
+}
+
+# remove-media-trigger -- take the opt-in back.
+#
+# An option that cannot be undone is not an option. This removes only the file
+# this tool wrote, and says so rather than sweeping /etc/udev/rules.d for
+# anything that looks related.
+cmd_remove_media_trigger() {
+    local rules=/etc/udev/rules.d/90-zfs-replica.rules do_install=0 a
+    for a in "$@"; do
+        case "$a" in
+            --rules=*)  rules="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            -*)         die "remove-media-trigger: unknown option '$a'" ;;
+            *)          die "remove-media-trigger: takes no positional arguments" ;;
+        esac
+    done
+    [ -f "$rules" ] || { log "no media trigger installed at $rules -- nothing to remove."; return 0; }
+    grep -q 'Managed by zfs-backup.sh install-media-trigger' "$rules" \
+        || die "remove-media-trigger: $rules exists but was not written by this tool. Refusing to delete somebody else's udev rule -- look at it and remove it by hand if it is yours."
+    if [ "$do_install" -ne 1 ]; then
+        echo ">>> do usuniecia: $rules"
+        echo "To jest wylacznie plan -- nic nie zostalo usuniete."
+        echo "Aby usunac: powtorz to samo polecenie z --install."
+        return 0
+    fi
+    rm -f "$rules" || die "remove-media-trigger: could not remove $rules"
+    udevadm control --reload-rules 2>/dev/null || warn "rule removed, but 'udevadm control --reload-rules' failed -- it stops applying after the next reload or reboot"
+    log "media trigger removed. Replicas now run only on their schedule; the cron entries are untouched."
+}
+
 cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
     local config="" do_install=0 assume_yes=0 a _ans
@@ -4921,7 +5083,17 @@ cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
     case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
     [ -n "$source" ] || die "add-replica: --source= names the dataset on THIS host to copy"
     [ -n "$dst" ]    || die "add-replica: --dst= names the base dataset on the medium, e.g. usbrep1/replica"
-    [ -n "$sched" ]  || sched="10 * * * *"
+    # ONCE A NIGHT, AFTER THE DAILY TIER -- not hourly.
+    #
+    # Owner's model, 2026-08-29: a replica is not an online mirror. The medium is
+    # only at risk while its pool is imported, and every run opens that window,
+    # so the number of runs IS the exposure. The daily tier sends at 01:11 in the
+    # shipped profiles (00:11 in prod), so 02:30 is comfortably after it and
+    # still inside the night.
+    #
+    # A replica that wanted to be closer to live would not be a replica; it would
+    # be a second backup relationship, and those already exist.
+    [ -n "$sched" ]  || sched="30 2 * * *"
 
     # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
     zfs list -H -o name "$source" >/dev/null 2>&1 \
@@ -10764,6 +10936,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;
         remove-replica)   shift; cmd_remove_replica "$@" ;;
+        run-replicas)     shift; cmd_run_replicas "$@" ;;
+        install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
+        remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;
         # Forwarded, not implemented: restore lives in zfs-restore.sh since the
         # 2026-08-17 split -- it is the one operation whose active side writes
         # onto production, so it is not this file's code. Both spellings work

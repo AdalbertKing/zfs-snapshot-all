@@ -45,7 +45,13 @@ for a in "$@"; do last="$a"; done
 # of the same name in the slot, which is what separates "our interrupted run"
 # from "we still owe an export on another medium".
 case "$1 $2" in
-  "get -H") echo "${POOL_GUID:-11111111}"; exit 0 ;;
+  "get -H")
+      # The property is an argument, not a position: guid and failmode both
+      # arrive as `zpool get -H -o value <prop> <pool>`.
+      for a in "$@"; do
+          [ "$a" = failmode ] && { echo "${POOL_FAILMODE:-continue}"; exit 0; }
+      done
+      echo "${POOL_GUID:-11111111}"; exit 0 ;;
   "list -H")
       for p in $POOLS; do [ "$p" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -58,6 +64,9 @@ case "$1" in
       exit 1 ;;
   export)
       echo "$2" >> "$EXPORTED_LOG"
+      # A pull-while-imported does not make export FAIL -- it makes it never
+      # return. Slept, so the real `timeout` in the gate is what is under test.
+      [ -n "${EXPORT_HANGS:-}" ] && sleep 5
       [ -n "${EXPORT_FAILS:-}" ] && exit 1
       exit 0 ;;
 esac
@@ -67,6 +76,16 @@ cat > "$BIN/zfs" <<'ZF'
 #!/bin/sh
 for a in "$@"; do last="$a"; done
 case "$*" in
+  # The pre-check walks the subtree, finds each dataset's newest snapshot of the
+  # replica family, and asks how much has been written since it. SRC_TREE lists
+  # the subtree, SRC_SNAP is the family snapshot (empty = none, the first-seed
+  # case), SRC_WRITTEN is the byte count.
+  *"list -H -o name -r"*)
+      for d in ${SRC_TREE:-}; do echo "$d"; done; exit 0 ;;
+  *"list -H -t snapshot -o name -d 1"*)
+      [ -n "${SRC_SNAP:-}" ] && echo "$last@${SRC_SNAP}"; exit 0 ;;
+  *"get -H -p -o value written@"*)
+      echo "${SRC_WRITTEN:-0}"; exit 0 ;;
   *"list -H -o name"*)
       for d in $DATASETS; do [ "$d" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -75,7 +94,7 @@ ZF
 chmod +x "$BIN/zpool" "$BIN/zfs"
 
 export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
-export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID
+export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS SRC_TREE SRC_SNAP SRC_WRITTEN
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
 g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
@@ -536,6 +555,150 @@ has "removed without a detach" "$out" \
 
 rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
 POOL_GUID=11111111
+
+# ---------------------------------------------------------------------------
+# J. WHAT A MEDIUM PULLED MID-RUN DOES, and why detach must be bounded
+#
+# Measured on pve9, 2026-08-29, by actually pulling the device out from under a
+# running kernel (`echo 1 > /sys/block/sdX/device/delete`, which is as close to a
+# yanked cable as a VM gets):
+#
+#   * pulled between runs, pool exported     no harm
+#   * pulled with the pool imported, idle    `zpool export` sat in
+#                                            uninterruptible sleep for ELEVEN
+#                                            MINUTES, unkillable; re-inserting
+#                                            the disk did not free it, because
+#                                            the kernel gave it a NEW device node
+#   * pulled DURING a 300 MB write           the whole HOST went unreachable and
+#                                            needed a hard reset
+#
+# The third is arithmetic, not fragility: zfs_txg_timeout was 5s and
+# zfs_dirty_data_max 393 MB on that host, so the entire payload was in RAM with
+# nowhere to go when the vdev vanished.
+#
+# What makes the second one a PACKAGE problem rather than a ZFS one: `detach`
+# runs OUTSIDE the generated bracket's `if`, so a cron job that meets it hangs
+# forever -- holding its flock, refusing every later run as contended, and never
+# alerting, because a job that never exits never reports a status.
+# ---------------------------------------------------------------------------
+: > "$EXPORTED_LOG"
+POOLS="hdd rotpool"; IMPORTABLE=""; DATASETS="hdd rotpool/replica"; POOL_GUID=11111111
+printf 'pool=rotpool\nguid=11111111\n' > "$STATE/rep.imported-by-us"
+EXPORT_HANGS=1
+out="$(MEDIA_EXPORT_TIMEOUT=1 g detach rotpool rep)"; rc=$?
+EXPORT_HANGS=""
+check "J1: AN EXPORT THAT NEVER RETURNS IS ABANDONED, NOT WAITED ON" "2" "$rc"
+has "DO NOT UNPLUG" "$out" && ok "J1: ...still saying DO NOT UNPLUG" \
+                           || bad "J1: ...still saying DO NOT UNPLUG" "$out"
+has "did not finish within" "$out" && ok "J1: ...and that it was a timeout, not a refusal" \
+                                   || bad "J1: ...and that it was a timeout, not a refusal" "$out"
+has "pulled DURING a run" "$out" && ok "J1: ...naming the cause an operator can act on" \
+                                 || bad "J1: ...naming the cause an operator can act on" "$out"
+rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
+
+# J2. failmode. Warned on import, never rewritten: it is a property of the
+#     administrator's pool, and silently changing how someone else's data behaves
+#     under failure is not this tool's call.
+: > "$EXPORTED_LOG"; : > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_FAILMODE=wait
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "J2: a wait-failmode medium still imports" "0" "$rc"
+has "failmode=wait" "$out" && ok "J2: ...but the foot-gun is named" \
+                           || bad "J2: ...but the foot-gun is named" "$out"
+has "zpool set failmode=continue" "$out" && ok "J2: ...with the command that changes it" \
+                                         || bad "J2: ...with the command that changes it" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# J3. THE NEGATIVE SIDE. A pool already set to continue is not nagged about it.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_FAILMODE=continue
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+has "failmode=wait" "$out" && bad "J3: a pool already on continue is NOT nagged" "$out" \
+                           || ok "J3: a pool already on continue is NOT nagged"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+POOL_FAILMODE=""
+
+# K. THE SENTENCE FOR THE PERSON STANDING AT THE MACHINE.
+#
+# Nothing in software can make a surprise removal safe -- the lab spent three
+# host resets establishing that, and upstream OpenZFS has open issues for it.
+# What CAN be done is to say which side of the window you are on, in words, so
+# that "is it safe to pull this?" has an answer that is not a guess.
+: > "$EXPORTED_LOG"
+POOLS="hdd rotpool"; IMPORTABLE=""; DATASETS="hdd rotpool/replica"
+out="$(g status rotpool rep --dataset rotpool/replica)"
+has "DO NOT UNPLUG" "$out" && ok "K: an IMPORTED medium says DO NOT UNPLUG" \
+                           || bad "K: an IMPORTED medium says DO NOT UNPLUG" "$out"
+has "hang this host" "$out" && ok "K: ...and what pulling it now would cost" \
+                            || bad "K: ...and what pulling it now would cost" "$out"
+POOLS="hdd"; IMPORTABLE="rotpool"
+out="$(g status rotpool rep --dataset rotpool/replica)"
+has "SAFE TO UNPLUG" "$out" && ok "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS SAFE TO UNPLUG" \
+                            || bad "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS SAFE TO UNPLUG" "$out"
+has "DO NOT UNPLUG" "$out" && bad "K: ...and does NOT also say the opposite" "$out" \
+                           || ok "K: ...and does NOT also say the opposite"
+
+# ---------------------------------------------------------------------------
+# L. SHORTENING THE WINDOW: a run with nothing to send must not open one
+#
+# The window in which pulling this disk can hang the host is exactly the window
+# in which its pool is imported -- three host resets on the lab established that
+# it cannot be made safe, only short. It was being opened on EVERY run, including
+# the ones with nothing to copy: on a source that is quiet most of the day, the
+# disk was exposed once an hour for no reason.
+#
+# So "is there anything to do" is answered on the SOURCE, before the medium is
+# touched. `written@<snap>` is the predicate -- bytes written since that
+# snapshot -- and zero across the subtree means the last replica snapshot still
+# describes the source exactly.
+# ---------------------------------------------------------------------------
+: > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+# tank/src must be in DATASETS: the pre-check's first question is whether the
+# source exists at all, and a source the stub denies makes the check fail OPEN --
+# which is correct behaviour, and would have made L1 pass for the wrong reason.
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a"
+SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
+
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L1: nothing written -> the run is skipped" "1" "$rc"
+check "L1: AND THE MEDIUM IS NEVER IMPORTED" "" "$(cat "$IMPORTED_LOG")"
+has "nothing to copy" "$out" && ok "L1: ...saying why, not just that it skipped" \
+                             || bad "L1: ...saying why, not just that it skipped" "$out"
+has "pulled safely" "$out" && ok "L1: ...and why that is worth doing" \
+                           || bad "L1: ...and why that is worth doing" "$out"
+
+# L2. THE OTHER SIDE, or L1 would also pass against a gate that never imports.
+: > "$IMPORTED_LOG"
+SRC_WRITTEN=4096
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L2: something written -> it DOES import" "0" "$rc"
+check "L2: ...and the medium was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# L3. FAIL OPEN. No snapshot of this family yet is a FIRST SEED, not an idle
+#     source, and a check that could not read a number must never be the reason
+#     a backup did not run.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP=""; SRC_WRITTEN=0
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "L3: NO PRIOR SNAPSHOT -> imports anyway (a first seed)" "0" "$rc"
+check "L3: ...and it really imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# L4. Without --source/--prefix nothing changes: the check is opt-in, and every
+#     existing caller keeps its behaviour exactly.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; SRC_SNAP="replica_2026-08-29"; SRC_WRITTEN=0
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "L4: no --source given -> the check does not run" "0" "$rc"
+check "L4: ...and the medium is imported as before" "rotpool" "$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

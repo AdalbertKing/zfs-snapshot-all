@@ -1380,7 +1380,19 @@ process_dataset() {
     record_inflight_snap "$tgt_dataset" "$src_dataset" "$snapshot"
 
     if [ $FORCE_FULL_SEND -ne 1 ]; then
-        log 2 "Creating target dataset: $tgt_dataset"
+        # SAY WHAT HAPPENED, NOT WHAT MIGHT. This used to log "Creating target
+        # dataset: $tgt_dataset" here, unconditionally, and it was wrong three
+        # ways at once: the creation below is guarded by `zfs list || zfs
+        # create`, so on every incremental run it announced a creation that did
+        # not happen; with -w the dataset actually created is the PARENT
+        # ($create_target), not $tgt_dataset; and the line ran before
+        # $create_target was even computed. Reported from the media lab
+        # 2026-08-29 and fixed on the owner's explicit direction -- see
+        # docs/internal/ENGINE-FREEZE.md.
+        #
+        # An operator watching a nightly job saw "Creating target dataset" every
+        # single night and had no way to tell a first seed from an increment,
+        # which is the one thing that line could usefully have told them.
         # canmount=noauto: a freshly created target starts unmounted and stays
         # that way across zfs receive's own mount/unmount cycles. On Linux,
         # unprivileged users can't mount/unmount at all (unlike illumos), so
@@ -1411,8 +1423,13 @@ process_dataset() {
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         }
-        zfs list "$create_target" >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT "$create_target" || {
-            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1; }
+        if zfs list "$create_target" >/dev/null 2>&1; then
+            log 2 "Target dataset already exists: $create_target"
+        elif zfs create -o canmount=$TARGET_CANMOUNT "$create_target"; then
+            log 2 "Created target dataset: $create_target"
+        else
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1
+        fi
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
