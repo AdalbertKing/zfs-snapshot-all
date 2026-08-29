@@ -65,7 +65,7 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20260814-120 | CLOSED | - | 46c13a6c132f8ff7428876e6806ee2fd5709a583 | 46c13a6c132f8ff7428876e6806ee2fd5709a583 | responses/REV-20260814-120.md | - |
 | REV-20260814-121 | CLOSED | - | 170ce5ff1b74d70281d6e1e1f2c65e23a36f1c1f | 170ce5ff1b74d70281d6e1e1f2c65e23a36f1c1f | responses/REV-20260814-121.md | - |
 | REV-20260827-122 | CLOSED | - | dbd133c699eb166dacae371ecd0a809ecc3f77fa | dbd133c699eb166dacae371ecd0a809ecc3f77fa | responses/REV-20260827-122.md | - |
-| REV-20260829-123 | APPROVED | Reviewer | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-123.md | write the closure artifact |
-| REV-20260829-124 | APPROVED | Reviewer | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-124.md | write the closure artifact |
-| REV-20260829-125 | APPROVED | Reviewer | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-125.md | write the closure artifact |
+| REV-20260829-123 | CLOSED | - | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-123.md | - |
+| REV-20260829-124 | CLOSED | - | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-124.md | - |
+| REV-20260829-125 | CLOSED | - | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | de69fd0922eb4fd7c7e33db2b4b2a8d41c0f51ba | responses/REV-20260829-125.md | - |
 | REV-20260829-126 | OPEN | Claude | - | - | - | implement and respond |
