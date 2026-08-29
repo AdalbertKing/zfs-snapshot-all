@@ -154,7 +154,30 @@ attach)
         zpool export "$POOL" 2>/dev/null || say "and '$POOL' could NOT be exported again -- it is imported and unusable; look at it before pulling the disk."
         exit 2
     fi
-    mkdir -p "$STATE_DIR" 2>/dev/null && { date '+%Y-%m-%d %H:%M:%S' > "$SEEN"; : > "$OURS"; } 2>/dev/null || :
+    # RECORDING THAT WE IMPORTED IT IS NOT BEST-EFFORT.
+    #
+    # REV-20260829-123 F2. This whole write used to end in `|| :`, so an
+    # unwritable state directory produced exit 0 and the message that this run
+    # would export the pool again -- while leaving no marker. `detach` then read
+    # the missing marker as "somebody else imported it", left the pool active,
+    # and also exited 0. A successful bracket could therefore leave a pool
+    # imported while the job reported success: exactly when an operator believes
+    # the disk is safe to unplug.
+    #
+    # So a failure here is a hard error, and the error path first puts the
+    # machine back the way it found it.
+    if ! mkdir -p "$STATE_DIR" 2>/dev/null || ! : > "$OURS" 2>/dev/null; then
+        say "could not record that this run imported '$POOL' (state dir: $STATE_DIR). Without that marker nothing would ever export it again, so this run will not proceed as if it had one."
+        if zpool export "$POOL" 2>/dev/null; then
+            say "'$POOL' was exported again -- the machine is as it was before this run, and nothing was transferred."
+            emit import_unrecorded
+        else
+            say "WARNING: could not export '$POOL' either. DO NOT UNPLUG THE DISK. The pool is imported, unrecorded, and this run cannot put it back -- export it by hand."
+            emit import_unrecorded_stuck
+        fi
+        exit 2
+    fi
+    date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
     emit imported; exit 0
     ;;

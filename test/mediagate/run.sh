@@ -165,6 +165,34 @@ check "export fails: exits 2" "2" "$rc"
 has "DO NOT UNPLUG" "$out" && ok "export fails: ...and says DO NOT UNPLUG THE DISK" || bad "export fails: ...and says DO NOT UNPLUG THE DISK" "$out"
 EXPORT_FAILS=""
 
+# ---------------------------------------------------------------------------
+# 8. REV-20260829-123 F2 -- a successful import whose ownership cannot be
+#    recorded must NOT report success.
+#
+# Without the marker, detach reads the pool as somebody else's, leaves it
+# imported and exits 0 -- so a successful bracket would end with a pool active
+# while the job says it is done, exactly when an operator believes the disk is
+# safe to unplug. Both compensating outcomes are covered, because the one that
+# cannot put the pool back is the one that must shout.
+# ---------------------------------------------------------------------------
+: > "$EXPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica"
+UNWRITABLE="$TMPD/nope/deeper"
+: > "$TMPD/nope"          # a FILE where the state dir would have to be
+out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$UNWRITABLE" bash "$GATE" attach rotpool rep --dataset rotpool/replica 2>&1)"; rc=$?
+check "F2: an import whose ownership cannot be recorded is NOT success" "2" "$rc"
+has "will not proceed" "$out" && ok "F2: ...and says why it stops" || bad "F2: ...and says why it stops" "$out"
+check "F2: ...and the pool it imported is exported again" "rotpool" "$(cat "$EXPORTED_LOG")"
+has "as it was before this run" "$out" && ok "F2: ...and says the machine was put back" || bad "F2: ...and says the machine was put back" "$out"
+
+# ...and when the compensating export ALSO fails, the disk must not be pulled.
+: > "$EXPORTED_LOG"
+EXPORT_FAILS=1
+out="$(PATH="$BIN:$PATH" MEDIA_STATE_DIR="$UNWRITABLE" EXPORT_FAILS=1 bash "$GATE" attach rotpool rep --dataset rotpool/replica 2>&1)"; rc=$?
+check "F2: ...and if it cannot be exported either, still nonzero" "2" "$rc"
+has "DO NOT UNPLUG" "$out" && ok "F2: ...carrying DO NOT UNPLUG" || bad "F2: ...carrying DO NOT UNPLUG" "$out"
+EXPORT_FAILS=""
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

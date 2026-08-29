@@ -9291,42 +9291,75 @@ then run this again."
     done < <(config_sections_of_client "$workfile" "$from")
     echo
 
-    # ---- preview, confirm, install ----------------------------------------
-    show_activation_proposal "$cronfile" "$workfile" || die "move-to-client: the proposed config could not be previewed -- nothing has been changed."
-    if [ "$yes" -ne 1 ]; then
-        printf "Wykonac to przeniesienie? [t/N] "
-        local ans; read -r ans
-        case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
-    fi
-    atomic_replace_and_install "$cronfile" "$workfile" || die "move-to-client: the install failed -- see above. The config and crontab were rolled back together."
+    # ---- the record transitions, PREPARED BEFORE ANYTHING GOES LIVE --------
+    #
+    # REV-20260829-123 F1. This used to install the config and both crontabs
+    # first and append to the records afterwards, with a failed append reduced
+    # to a warning -- so a full disk or a read-only /etc could leave the new
+    # sections installed while the destination's record said it owned nothing,
+    # or leave both records claiming the same datasets. `status`, a second move
+    # and remove-client all read those records, so the next administrative
+    # action would have operated on false ownership. And the command carried on
+    # to pause the old relationship and print success over it.
+    #
+    # Both new records are now written IN FULL, into temporary files in the same
+    # directory as the originals, before a single live byte is replaced. That is
+    # what proves the directory is writable and has room. What is left after the
+    # install is a rename within one directory -- and if even that fails, the
+    # rollback below puts the config, both crontabs and both records back, and
+    # the old relationship is never paused.
+    local to_tmp from_tmp
+    to_tmp="$(mktemp "$(dirname "$to_rec")/.movebak.XXXXXX")"     || die "move-to-client: mktemp failed next to $to_rec -- nothing has been changed."
+    from_tmp="$(mktemp "$(dirname "$from_rec")/.movebak.XXXXXX")" || { rm -f "$to_tmp"; die "move-to-client: mktemp failed next to $from_rec -- nothing has been changed."; }
+    _mv_cleanup() { rm -f "$to_tmp" "$from_tmp" 2>/dev/null || :; }
 
-    # ---- the RECORDS follow the sections -----------------------------------
-    #
-    # Measured on the lab, 2026-08-28: the first move rewrote the config and
-    # left both records where they were, so the destination recorded no managed
-    # datasets at all and a second move refused with "nothing to hand over" --
-    # for a relationship that by then owned everything. `status` and
-    # remove-client read the same fields, so both would have been wrong about
-    # who owns what.
-    #
-    # Appended, not rewritten: a client record is an append-only log of
-    # decisions and the last value of a key wins when it is sourced. That is how
-    # every other verb writes to it, and it keeps the history of the move
-    # visible in the file rather than erasing it.
     {
+        cat "$to_rec"
         write_client_field MANAGED_DATASETS    "${mds# }"
         write_client_field MANAGED_PRUNE_SCOPE "${mps# }"
         write_client_field CRON_CONFIG         "$cronfile"
         write_client_field LOCAL_USER          "${CRON_CTX_USER:-}"
         write_client_field MOVED_FROM          "$from"
         write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
-    } >> "$to_rec" || warn "the move is installed but '$to' could not record what it now owns -- fix $to_rec by hand before the next move"
+    } > "$to_tmp" || { _mv_cleanup; die "move-to-client: could not write '$to'\''s new record -- nothing has been changed."; }
     {
+        cat "$from_rec"
         write_client_field MANAGED_DATASETS    ""
         write_client_field MANAGED_PRUNE_SCOPE ""
         write_client_field MOVED_TO            "$to"
         write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
-    } >> "$from_rec" || warn "the move is installed but '$from' still records the sections it gave away -- fix $from_rec by hand"
+    } > "$from_tmp" || { _mv_cleanup; die "move-to-client: could not write '$from'\''s new record -- nothing has been changed."; }
+    [ -s "$to_tmp" ] && [ -s "$from_tmp" ] || { _mv_cleanup; die "move-to-client: a prepared record came out empty -- refusing to install a config whose ownership records cannot follow it. Nothing has been changed."; }
+
+    # Byte copies to go back to, because atomic_replace_and_install discards its
+    # own backups once it succeeds.
+    local cfg_bak rec_to_bak rec_from_bak cron_bak
+    cfg_bak="$(mktemp)"; rec_to_bak="$(mktemp)"; rec_from_bak="$(mktemp)"; cron_bak="$(mktemp)"
+    cp -p "$cronfile" "$cfg_bak" && cp -p "$to_rec" "$rec_to_bak" && cp -p "$from_rec" "$rec_from_bak" \
+        || { _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"; die "move-to-client: could not take a rollback copy of the config and records -- nothing has been changed."; }
+    crontab_for_target > "$cron_bak" 2>/dev/null || :
+
+    # ---- preview, confirm, install ----------------------------------------
+    show_activation_proposal "$cronfile" "$workfile" || { _mv_cleanup; die "move-to-client: the proposed config could not be previewed -- nothing has been changed."; }
+    if [ "$yes" -ne 1 ]; then
+        printf "Wykonac to przeniesienie? [t/N] "
+        local ans; read -r ans
+        case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
+    fi
+    atomic_replace_and_install "$cronfile" "$workfile" || { _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"; die "move-to-client: the install failed -- see above. The config and crontab were rolled back together, and neither record was touched."; }
+
+    # A rename within one directory, after the content was already written
+    # there. If it still fails, everything goes back and nothing is paused.
+    if ! mv -f "$to_tmp" "$to_rec" || ! mv -f "$from_tmp" "$from_rec"; then
+        warn "move-to-client: the config and crontab installed, but the ownership records could not be put in place. Rolling BOTH back so nothing is left claiming what it does not own."
+        cp -p "$cfg_bak" "$cronfile"      || warn "CRITICAL: could not restore $cronfile from $cfg_bak -- fix by hand"
+        cp -p "$rec_to_bak" "$to_rec"     || warn "CRITICAL: could not restore $to_rec -- fix by hand"
+        cp -p "$rec_from_bak" "$from_rec" || warn "CRITICAL: could not restore $from_rec -- fix by hand"
+        [ -s "$cron_bak" ] && { _restore_target_crontab "$cron_bak" || warn "CRITICAL: could not restore the crontab from $cron_bak -- restore by hand as $(cron_target_user): crontab $cron_bak"; }
+        _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"
+        die "move-to-client: NOTHING was moved. '$from' has NOT been paused and still owns its sections."
+    fi
+    rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak" 2>/dev/null || :
 
     # ---- and only now, the old relationship stands down --------------------
     # AFTER the install, deliberately. Pausing first would stop the old

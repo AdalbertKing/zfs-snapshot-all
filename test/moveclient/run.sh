@@ -212,6 +212,80 @@ case "$(CLIENTS_DIR=$TMPD/none zb aaa bbb)" in
     *) bad "cli: an unknown source relationship is refused by name" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# 6. REV-20260829-123 F1 -- the ownership records must be PREPARED AND PROVEN
+#    before a single live byte is replaced.
+#
+# The verb used to install the config and both crontabs first and append to the
+# records afterwards, with a failed append reduced to a warning. A read-only
+# records directory would then leave the new sections installed while the
+# destination's record said it owned nothing -- and the command carried on to
+# pause the old relationship and print success over it.
+#
+# Exercised through the real verb with an UNWRITABLE records directory, which
+# is the cheapest honest injection: it makes the preparation fail, and the
+# assertion is that nothing downstream ran.
+# ---------------------------------------------------------------------------
+RO="$TMPD/ro"; mkdir -p "$RO"
+cat > "$RO/aaa.conf" <<'RECEOF'
+CLIENT_NAME=aaa
+CRON_CONFIG=/nonexistent/jobs.conf
+RECEOF
+cp "$RO/aaa.conf" "$RO/bbb.conf"
+chmod 0555 "$RO" 2>/dev/null || :
+
+# THESE FOUR DO NOT DISCRIMINATE against the reviewed SHA, and saying so is the
+# point. On 3a78b1dc the verb also refuses here -- earlier, at config
+# resolution, for a different reason -- so they pass on both. They still pin
+# something worth pinning (a refusal never pauses and never prints success),
+# but the byte-restoration proof the review asks for needs the verb driven all
+# the way to publication, which needs a real config, real records, a real
+# crontab and the account's gen-cron. That is a lab, and it is run as one; see
+# the manual obligation moveclient-live.
+#
+# The two assertions after them DO discriminate, and they are the ordering
+# itself -- which is what criterion 1 actually asks for.
+out="$(CLIENTS_DIR="$RO" zb aaa bbb --yes)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "F1: a move that cannot prepare its records refuses"
+else bad "F1: a move that cannot prepare its records refuses" "rc=0"; fi
+case "$out" in
+    *"nothing has been changed"*|*"no readable installed config"*)
+        ok "F1: ...and says nothing was changed" ;;
+    *)  bad "F1: ...and says nothing was changed" "$(printf '%s' "$out" | tail -2)" ;;
+esac
+# THE ONE THAT MATTERS: whatever it refused on, it must not have gone on to
+# pause the relationship or announce success.
+case "$out" in
+    *"PAUSED"*) bad "F1: ...and did NOT pause the old relationship" "it paused" ;;
+    *) ok "F1: ...and did NOT pause the old relationship" ;;
+esac
+case "$out" in
+    *">>> done."*) bad "F1: ...and did NOT print the successful final state" "it did" ;;
+    *) ok "F1: ...and did NOT print the successful final state" ;;
+esac
+chmod 0755 "$RO" 2>/dev/null || :
+
+# STRUCTURAL, and it is what the reviewer's criterion 1 actually asks for: the
+# record contents are written before atomic_replace_and_install is called at
+# all. Asserted on the source, because no stub can prove an ordering that only
+# shows itself when a disk fills up mid-command.
+_seq="$(awk '/^cmd_move_to_client\(\)/,/^}/' "$ZB")"
+_prep=$(printf '%s
+' "$_seq" | grep -n 'to_tmp="$(mktemp' | head -1 | cut -d: -f1)
+_inst=$(printf '%s
+' "$_seq" | grep -n 'atomic_replace_and_install' | head -1 | cut -d: -f1)
+if [ -n "$_prep" ] && [ -n "$_inst" ] && [ "$_prep" -lt "$_inst" ]; then
+    ok "F1: the records are prepared BEFORE the config is replaced"
+else
+    bad "F1: the records are prepared BEFORE the config is replaced" "prepare=$_prep install=$_inst"
+fi
+# ...and a failed rename rolls the config and both records back rather than
+# leaving the install standing.
+case "$_seq" in
+    *"NOTHING was moved"*) ok "F1: a failed record rename rolls everything back" ;;
+    *) bad "F1: a failed record rename rolls everything back" "no rollback path found" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
