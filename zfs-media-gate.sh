@@ -194,14 +194,27 @@ attach)
     ;;
 
 detach)
+    # PRESENCE IS THE FIRST QUESTION, OWNERSHIP THE SECOND.
+    #
+    # Found on the lab, 2026-08-29. These two tests used to run the other way
+    # round, so the commonest case of all -- the disk is in a safe, attach
+    # skipped, and detach still runs because it sits outside the `if` -- was
+    # answered with "leaving 'rotlab' imported: this run did not import it".
+    # The pool was not imported. It was not there at all.
+    #
+    # That is the line an operator reads every single night a medium is out,
+    # and it says the opposite of the truth: it describes a pool left active on
+    # a disk, which is the one state that makes unplugging dangerous. Whoever
+    # eventually meets a REAL "leaving imported" -- somebody else's import, mid
+    # task -- will have been taught for months that it means nothing.
+    if ! imported; then
+        rm -f "$OURS" 2>/dev/null || :
+        say "'$POOL' is not imported -- nothing to export."
+        emit already_gone; exit 0
+    fi
     if [ ! -f "$OURS" ]; then
         say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
         emit left_alone; exit 0
-    fi
-    if ! imported; then
-        rm -f "$OURS" 2>/dev/null || :
-        say "'$POOL' is already gone -- nothing to export."
-        emit already_gone; exit 0
     fi
     # THE ONE FAILURE THAT MUST BE LOUD. An un-exported pool on a disk somebody
     # is about to unplug is how a replica gets corrupted, and this is the last

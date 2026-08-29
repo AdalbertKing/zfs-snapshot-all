@@ -100,6 +100,21 @@ has "SKIPPED" "$out" && ok "away: ...and says SKIPPED, not failed" || bad "away:
 has "nothing is wrong" "$out" && ok "away: ...and says so in as many words" || bad "away: ...and says so in as many words" "$out"
 check "away: nothing was exported" "" "$(cat "$EXPORTED_LOG")"
 
+# THE LINE AN OPERATOR READS MOST OFTEN. detach sits OUTSIDE the generated
+# `if`, so it runs on every night the disk is in a safe -- far more often than
+# on any night it is plugged in. It used to answer that with "leaving 'rotpool'
+# imported: this run did not import it", because it asked who owned the pool
+# before asking whether the pool was there at all.
+#
+# It is not a cosmetic slip. It names the one state in which unplugging the
+# disk corrupts the replica, so it teaches whoever reads the log that the real
+# warning means nothing. Found live on pve0, 2026-08-29.
+out="$(g detach rotpool rep)"; rc=$?
+check "away: detach exits 0" "0" "$rc"
+check "away: nothing was exported by detach either" "" "$(cat "$EXPORTED_LOG")"
+has "not imported" "$out" && ok "AWAY: DETACH SAYS THE POOL IS NOT IMPORTED" || bad "AWAY: DETACH SAYS THE POOL IS NOT IMPORTED" "$out"
+has "leaving" "$out" && bad "AWAY: AND DOES NOT CLAIM IT LEFT ONE IMPORTED" "$out" || ok "AWAY: AND DOES NOT CLAIM IT LEFT ONE IMPORTED"
+
 # ---------------------------------------------------------------------------
 # 3. THE MEDIUM IS HERE -- imported by us, and given back
 # ---------------------------------------------------------------------------
