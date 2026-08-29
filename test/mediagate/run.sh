@@ -492,6 +492,48 @@ check "I6: ...exporting nothing" "" "$(cat "$EXPORTED_LOG")"
 [ -f "$STATE/rep.imported-by-us" ] \
     && ok "I6: ...and keeping the evidence that an export is still owed" \
     || bad "I6: ...and keeping the evidence that an export is still owed"
+
+# I7. THE HALF THAT WAS MISSING, and the reviewer was right that its absence made
+#     I6 prove less than it looked like it proved.
+#
+#     `detach` runs OUTSIDE the generated bracket's `if` -- deliberately, so a
+#     failed transfer still puts the pool back. So the run does not stop at
+#     attach's refusal: detach executes two statements later, on the very medium
+#     attach just refused. It used to ask only whether the marker FILE existed,
+#     and would therefore export that wrong disk and delete the marker recording
+#     what we still owe an export on. The refusal was undone by the next line.
+#
+#     Driven through the REAL gate, both verbs, with the wrong medium still in
+#     the slot -- not through the bracket's stubs, which cannot show an export
+#     that should not have happened.
+: > "$EXPORTED_LOG"
+out="$(g detach rotpool rep)"; rc=$?
+check "I7: DETACH REFUSES THE MEDIUM ATTACH JUST REFUSED" "2" "$rc"
+check "I7: ...AND EXPORTS NOTHING" "" "$(cat "$EXPORTED_LOG")"
+[ -f "$STATE/rep.imported-by-us" ] \
+    && ok "I7: ...and the ownership marker SURVIVES the refusal" \
+    || bad "I7: ...and the ownership marker SURVIVES the refusal" "it was deleted"
+has "does not match the pool currently imported" "$out" \
+    && ok "I7: ...saying which guid it holds and which it found" \
+    || bad "I7: ...saying which guid it holds and which it found" "$out"
+
+# I8. The medium was pulled while we still held it. Nothing can be exported --
+#     the pool went with the disk -- but an unclean removal is exactly the event
+#     that can leave that copy needing a scrub, and nothing else would mention
+#     it. The marker is still cleared, or every later run would fail closed for
+#     a disk that no longer exists.
+: > "$EXPORTED_LOG"
+POOLS="hdd"; IMPORTABLE=""; POOL_GUID=11111111
+printf 'pool=rotpool\nguid=11111111\n' > "$STATE/rep.imported-by-us"
+out="$(g detach rotpool rep)"; rc=$?
+check "I8: a medium pulled while held is not an error" "0" "$rc"
+has "removed without a detach" "$out" \
+    && ok "I8: ...but it IS said out loud" \
+    || bad "I8: ...but it IS said out loud" "$out"
+[ -f "$STATE/rep.imported-by-us" ] \
+    && bad "I8: ...and the marker is cleared, or every later run fails closed" "still there" \
+    || ok "I8: ...and the marker is cleared, or every later run fails closed"
+
 rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
 POOL_GUID=11111111
 

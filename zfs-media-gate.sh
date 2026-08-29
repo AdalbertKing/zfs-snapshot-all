@@ -260,14 +260,42 @@ detach)
     # eventually meets a REAL "leaving imported" -- somebody else's import, mid
     # task -- will have been taught for months that it means nothing.
     if ! imported; then
-        rm -f "$OURS" 2>/dev/null || :
+        # A marker here means the medium went away while this package still
+        # held it -- pulled without a detach, or the host went down mid-run.
+        # Said out loud, because an unclean removal is exactly the event that
+        # can leave the pool on that disk needing a scrub, and nothing else
+        # would ever mention it. The marker is still cleared: the pool is gone
+        # with the disk, there is nothing left to export, and keeping it would
+        # fail every future run closed for a medium that no longer exists.
+        if [ -f "$OURS" ]; then
+            say "WARNING: '$POOL' is no longer imported, but this package still held it -- the medium was removed without a detach, or a run was cut short. Nothing can be exported now. If that disk was pulled while a transfer was running, check it before trusting the copy on it."
+            rm -f "$OURS" 2>/dev/null || :
+            emit gone_while_held; exit 0
+        fi
         say "'$POOL' is not imported -- nothing to export."
         emit already_gone; exit 0
     fi
-    if [ ! -f "$OURS" ]; then
-        say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
-        emit left_alone; exit 0
-    fi
+
+    # OWNERSHIP IS A MATCH, NOT THE PRESENCE OF A FILE.
+    #
+    # REV-20260829-124 follow-up. This asked only whether the marker EXISTED,
+    # and `detach` runs outside the generated bracket's `if` -- on purpose, so a
+    # failed transfer still puts the pool back. Put together, `attach` could
+    # refuse a wrong same-named medium with exit 2 and this could export that
+    # very medium two statements later, deleting the marker that recorded what
+    # we actually still owe an export on. The refusal was undone by the line
+    # that follows it.
+    #
+    # So the same three-way answer `attach` uses: ours and this pool, nobody's,
+    # or a marker that cannot be matched to what is in the slot. Only the first
+    # exports.
+    marker_is_ours; _own=$?
+    case "$_own" in
+        1)  say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
+            emit left_alone; exit 0 ;;
+        2)  say "REFUSING to export '$POOL': this package holds an ownership marker that does not match the pool currently imported under that name (marker guid: $(sed -n 's/^guid=//p' "$OURS" 2>/dev/null | head -1 | sed 's/^$/none/'); pool guid: $(pool_guid | sed 's/^$/unreadable/')). Exporting would hit a disk this run never imported, and clearing the marker would discard the record that an export is still owed elsewhere. A human is needed."
+            emit export_refused_ambiguous; exit 2 ;;
+    esac
     # THE ONE FAILURE THAT MUST BE LOUD. An un-exported pool on a disk somebody
     # is about to unplug is how a replica gets corrupted, and this is the last
     # moment anything can say so.
