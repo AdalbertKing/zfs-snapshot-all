@@ -382,6 +382,51 @@ parse_notify_text() {
 ###############################################################################
 #END 3
 
+# THE REMOVABLE-MEDIA BRACKET, taken back off.
+#
+# gen-cron wraps a replica job in
+#
+#   ( GATE attach POOL LABEL --dataset D; a=$?; if [ $a -eq 0 ]; then ENGINE;
+#     m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; GATE detach POOL LABEL;
+#     d=$?; [ $m -ne 0 ] && exit $m; exit $d )
+#
+# so the command no longer begins with a path to snapsend.sh, and every parser
+# below refused it -- which made the caller reject the WHOLE crontab as
+# unrecognized. One replica job on a host and this tool was useless for that
+# host, the same failure the -L work hit earlier the same day.
+#
+# Sets C_MEDIA_POOL / C_MEDIA_LABEL / C_MEDIA_DATASET / C_MEDIA_INNER, so the
+# parsers that follow see the call they already know how to read.
+#
+# It SETS rather than echoes, and the caller must not wrap it in $( ). The first
+# cut did, and every C_MEDIA_* assignment landed in the subshell and was gone by
+# the time the caller read it -- the sections came out as [replica:] with no
+# name, all three collapsed into one. The same trap test/linkfields/run.sh
+# records in its own header.
+C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""
+unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
+    local cmd="$1"
+    C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""
+    case "$cmd" in
+        "( "*"/zfs-media-gate.sh attach "*) ;;
+        *) return 1 ;;
+    esac
+    local head="${cmd#*/zfs-media-gate.sh attach }"
+    C_MEDIA_POOL="${head%% *}";  head="${head#* }"
+    C_MEDIA_LABEL="${head%% *}"; head="${head#* }"
+    case "$head" in
+        "--dataset "*) head="${head#--dataset }"; C_MEDIA_DATASET="${head%%;*}" ;;
+    esac
+    # The engine sits between the `then` and the `; m=$?` that captures its
+    # status -- taken by those two anchors rather than by counting fields,
+    # because the engine's own arguments are quoted and contain spaces.
+    local inner="${cmd#*; then }"
+    inner="${inner%%; m=\$?; elif*}"
+    [ -n "$inner" ] || return 1
+    C_MEDIA_INNER="$inner"
+    return 0
+}
+
 ###############################################################################
 #BEGIN 4 [CLASSIFY EVERY LINE INTO ENTITIES]
 ###############################################################################
@@ -390,6 +435,7 @@ declare -a PRUNE_E=()     # sched<SEP>scope<SEP>pattern<SEP>retain<SEP>recursive
 declare -a GFS_E=()       # sched<SEP>scope<SEP>pattern<SEP>retain_parts<SEP>recursive<SEP>clearcut<SEP>protect<SEP>notify
 declare -a BOOK_E=()      # sched<SEP>scope<SEP>pattern<SEP>age<SEP>recursive<SEP>notify
 declare -a MON_E=()       # sched<SEP>scope<SEP>pattern<SEP>warn<SEP>crit<SEP>recursive<SEP>notify
+declare -a REPL_E=()      # sched<SEP>label<SEP>source<SEP>dst<SEP>prefix<SEP>media<SEP>recursive<SEP>notify
 DG_FOUND=0
 
 REPO_DIR="" CRON_LOG="" NOTIFY_SCRIPT="" WARN_SCRIPT="" DIGEST_SCRIPT="" HOST_LABEL=""
@@ -398,6 +444,23 @@ classify_lines() {
     local line
     for line in "${BLOCK_LINES[@]}"; do
         if parse_job_envelope "$line"; then
+            # A bracketed job is a replica onto removable media. Unwrapped
+            # first, so the engine parsers below see the call they expect.
+            if unwrap_media_bracket "$CMD"; then
+                CMD="$C_MEDIA_INNER"
+                parse_send_cmd "$CMD" || die "a removable-media job whose inner command is not snapsend.sh: $line"
+                parse_notify_text "$NOTIFY" || die "cannot parse replica notify text: '$NOTIFY'"
+                # A crontab may hold replicas and nothing else -- a host that
+                # only carries copies of what it already has. Taken here rather
+                # than in the send/prune/monitor sweep below, which never sees
+                # these lines.
+                [ -n "$HOST_LABEL" ] || HOST_LABEL="$N_HOST"
+                REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
+                local _rec=0
+                case " $C_FLAGS " in *" -R "*) _rec=1 ;; esac
+                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${_rec}${SEP}${N_LABEL}")
+                continue
+            fi
             if parse_send_cmd "$CMD"; then
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
                 SEND_E+=("${SCHED}${SEP}${C_FLAGS}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}${NOTIFY}")
@@ -458,7 +521,7 @@ classify_lines() {
             parse_notify_text "$notify" && { HOST_LABEL="$N_HOST"; break; }
         done
     fi
-    [ -n "$HOST_LABEL" ] || die "could not determine host_label -- no send/prune/monitor line had parseable notify text"
+    [ -n "$HOST_LABEL" ] || die "could not determine host_label -- no send/prune/monitor/replica line had parseable notify text"
 }
 ###############################################################################
 #END 4
@@ -732,6 +795,28 @@ build_gfs_sections() {
     done
 }
 
+# ---- replica sections ----
+#
+# A replica is reconstructed as the [replica:] section it came from, not as a
+# [dataset:] with a local dst: the two mean different things, and a round-trip
+# that turned one into the other would hand the next reader a config claiming a
+# backup relationship where there is only a copy.
+build_replica_sections() {
+    local e sched label source dst prefix media rec notify
+    for e in "${REPL_E[@]+"${REPL_E[@]}"}"; do
+        IFS="$SEP" read -r sched label source dst prefix media rec notify <<< "$e"
+        get_section replica "$label"
+        local key="$SECTION_KEY"
+        section_set_field "$key" source "$source"
+        section_set_field "$key" dst "$dst"
+        section_set_field "$key" schedule "$sched"
+        section_set_field "$key" prefix "$prefix"
+        [ -n "$media" ] && section_set_field "$key" media "$media"
+        [ "$rec" = "1" ] && section_set_field "$key" recursive yes
+        [ -n "$notify" ] && [ "$notify" != "$label" ] && section_set_field "$key" notify "$notify"
+    done
+}
+
 # ---- bookmark sections ----
 build_bookmark_sections() {
     local e sched scope pattern age rec label plbl sshf
@@ -804,6 +889,7 @@ build_prune_buckets
 emit_prune_and_monitor_sections
 build_gfs_sections
 build_bookmark_sections
+build_replica_sections
 
 RESULT="$(render_config)"
 if [ -n "$OUTFILE" ]; then
