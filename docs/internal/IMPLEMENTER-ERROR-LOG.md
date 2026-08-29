@@ -97,7 +97,12 @@ which that silence becomes a claim.
 The test of whether a pass is finished is not "did every step succeed". It is
 "what did I not try", answered out loud.
 
-*Evidence: E13.*
+A special case worth naming because it keeps happening: **testing the piece I
+wrote instead of what comes out of it.** A component with a thorough suite,
+wired into a caller with none, is an untested feature with a reassuring number
+attached.
+
+*Evidence: E13, E22.*
 
 ### R9, R10, R11 — on running suites
 
@@ -568,3 +573,47 @@ break at all.
 *Caught by:* the reconcile suite, on CI, three commits after I introduced it.
 Locally I had run the golden suite and the generator suites and they were all
 green, because none of them exercises a pull section's coverage.
+
+
+### E22 — 34/0 on the gate, and the line it was wired into had never once been run
+
+**Genesis.** The removable-media replica. I wrote `zfs-media-gate.sh` and a suite
+for it: attach, detach, the wrong medium, two disks of the same name, a failed
+export, ownership recorded, ownership NOT recorded. 34 assertions, 0 failures,
+every branch of the gate covered in both directions. The gate was fine.
+
+Then the lab on pve0 ran the thing an operator would actually run -- the cron
+line the generator emits -- and it had two defects, either of which alone would
+have made the feature worse than not having it:
+
+* the bracket was emitted as a command SEQUENCE (`if ...; fi; detach`) into a
+  slot `job_cron_line` builds for ONE command (`CMD 2>"$e"; rc=$?`). Both halves
+  of the wrapper bound to `detach` alone. So the engine's stderr never reached
+  the job log -- it went to cron's own stderr, the mail flood this package
+  exists to prevent -- and the recorded status was detach's. Measured: engine
+  exited 1, the job logged rc=0, nobody was told. The whole point of the field
+  is to buy ONE silence, the disk in a safe. It was buying all of them,
+  including "your backup failed";
+* the gate was handed the LANDING path, which the engine creates. On a freshly
+  prepared disk it does not exist yet, so the first sync was refused as "the
+  wrong medium" -- the right disk, refused, and after the first fix, alerting.
+  A new removable disk could never be seeded.
+
+**Cause.** I tested the component I wrote and never the thing it produces. The
+gate's suite could not have caught either defect: neither lives in the gate.
+They live in eleven characters of generated shell, and nothing anywhere executed
+that text. I read the rendered line several times while writing it and it looked
+right -- which is exactly the reading that a subshell's absence survives.
+
+The same day, a third one from the same root: `detach` asked who owned the pool
+before asking whether the pool was there, so the commonest case of all -- the
+disk in a safe -- was answered with "leaving POOL imported". The suite passed on
+BOTH orders. It asserted the exit status and never the sentence, so it was not
+discriminating anything; it was counting.
+
+**Rule.** R12, plus its new special case. A component suite is not a feature
+suite. Run what the user runs: the generated line, executed, with only the leaf
+commands stubbed -- `test/mediagate/run.sh` section G now does exactly that, and
+the old bracket fails it. And when an assertion passes on both sides of a change,
+it is not evidence, whatever the total says (R6).
+
