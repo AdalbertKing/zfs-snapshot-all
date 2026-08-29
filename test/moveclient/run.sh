@@ -287,6 +287,66 @@ case "$_seq" in
     *) bad "F1: a failed record rename rolls everything back" "no rollback path found" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A PAUSED DESTINATION WOULD RECEIVE A SCHEDULE THAT DOES NOT RUN
+#
+# Found on the moveclient-live lab, 2026-08-29, and only because the lab ran the
+# verb TWICE. The first move pauses its source; move back later and that source
+# is the destination, still paused. It takes the sections, the crontab installs,
+# the verb prints "'alfa' carries the schedule" -- and every job carrying
+# '-L alfa' exits SKIPPED, because the pause is a property of the label they now
+# hold. Measured on pve9: snapget answered
+#
+#     SKIPPED: relationship alfa is paused (resume: zfs-backup.sh resume-client alfa)
+#
+# on the very line the hand-over had just installed. The tool announced a
+# successful hand-over of an inert schedule -- false health, announced as
+# success, which is the shape this package keeps finding.
+#
+# Refused rather than resumed: a paused destination is the NORMAL state while a
+# machine is being restored onto, so lifting it silently would be the tool
+# overruling the transaction the administrator opened.
+# ---------------------------------------------------------------------------
+PAUSEDIR="$TMPD/rels"
+mkdir -p "$PAUSEDIR/bbb"
+: > "$PAUSEDIR/bbb/paused"
+mkdir -p "$TMPD/cli"
+printf 'CLIENT_NAME=aaa\nCRON_CONFIG=/nonexistent/jobs.conf\n' > "$TMPD/cli/aaa.conf"
+printf 'CLIENT_NAME=bbb\nCRON_CONFIG=/nonexistent/jobs.conf\n' > "$TMPD/cli/bbb.conf"
+
+out="$(CLIENTS_DIR="$TMPD/cli" RELATIONSHIPS_DIR="$PAUSEDIR" zb aaa bbb --yes)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "paused destination: the move refuses"
+else bad "paused destination: the move refuses" "rc=0"; fi
+case "$out" in
+    *"is PAUSED"*) ok "PAUSED DESTINATION: NAMED AS THE REASON" ;;
+    *) bad "PAUSED DESTINATION: NAMED AS THE REASON" "$(printf '%s' "$out" | tail -1)" ;;
+esac
+case "$out" in
+    *"exits SKIPPED"*) ok "paused destination: ...saying what the handed schedule would do" ;;
+    *) bad "paused destination: ...saying what the handed schedule would do" "$(printf '%s' "$out" | tail -1)" ;;
+esac
+case "$out" in
+    *"resume-client bbb"*) ok "paused destination: ...and naming the command that ends it" ;;
+    *) bad "paused destination: ...and naming the command that ends it" "$(printf '%s' "$out" | tail -1)" ;;
+esac
+# THE REFUSAL MUST COME BEFORE ANYTHING ELSE IS JUDGED. These records point at a
+# config that does not exist, so a build without this check refuses too -- for
+# the WRONG reason. Asserting the reason is what makes this discriminate.
+case "$out" in
+    *"no readable installed config"*) bad "paused destination: refused for the pause, not for the config" "$out" ;;
+    *) ok "paused destination: refused for the pause, not for the config" ;;
+esac
+
+# THE NEGATIVE SIDE: an unpaused destination gets past this check and fails
+# later, on its own merits. Without it the assertions above would also pass
+# against a build that refused every move.
+rm -f "$PAUSEDIR/bbb/paused"
+out="$(CLIENTS_DIR="$TMPD/cli" RELATIONSHIPS_DIR="$PAUSEDIR" zb aaa bbb --yes)"
+case "$out" in
+    *"is PAUSED"*) bad "unpaused destination: NOT refused for a pause" "$out" ;;
+    *) ok "unpaused destination: NOT refused for a pause" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

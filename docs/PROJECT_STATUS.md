@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c6c025f1ee29dd9e -->
+<!-- status-covers-digest: 01e19b2beacb0ab3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -3760,6 +3760,54 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## LAB: moveclient-live -- WYKONANY (pve9 + pve9b, 2026-08-29)
+
+Obowiazek reczny `moveclient-live` zamkniety. Wymagal DRUGIEJ maszyny: silnik
+odmawia transferu, gdy `machine-id` obu stron sa identyczne (`CRITICAL: identical
+machine-id ... loopback transfer attempt`), wiec jedna VM nie mogla tego zrobic
+sama ze soba. Bliznik pve9b to VM 110 na pve2 -- klon 109 z **przegenerowanym**
+`machine-id`, zdjetymi dyskami wymiennymi i wyczyszczonym panstwem po pve9.
+
+Pelna, prawdziwa relacja: `add-client` -> `deploy.sh --join` (zakres zawezony do
+jednego datasetu) -> `seed` przez siec -> `activate`. Dopiero na tym `move-to-client`
+ma co przenosic.
+
+### Kryterium 3 REV-123 F1 -- dowod bajtowy
+
+Wstrzykniecie to stub `mv` na PATH, ktory zawodzi **wylacznie** przy
+przemianowaniu, ktorego celem jest rekord klienta. To trafia dokladnie w moment,
+o ktory chodzi: config i oba crontaby sa juz zainstalowane (log pokazuje
+`crontab updated`, a zaraz po nim wycofanie).
+
+| wariant | co pada | wynik |
+|---|---|---|
+| 1 | PIERWSZE przemianowanie | rc=1; config, oba rekordy, crontab i stan pauzy bajt w bajt |
+| 2 | pierwsze przechodzi, **DRUGIE** pada | rc=1; to samo -- wycofanie cofnelo takze to, co juz zapisalo |
+| kontrola pozytywna | nic nie pada | ruch przechodzi i zmienia wszystkie trzy pliki |
+
+Kontrola pozytywna jest tu warunkiem, nie ozdoba: bez niej „nic sie nie zmienilo"
+moglo znaczyc, ze czasownik nigdy nie dotarl do publikacji.
+
+### Wada znaleziona przez ten lab
+
+Lab uruchomil czasownik DWA razy i dopiero to ja pokazalo. `move-to-client`
+pauzuje ZRODLO i nigdy nie pyta o CEL. Przenies A na B, a pozniej B z powrotem na
+A -- i A jest wciaz zapauzowane z pierwszego ruchu. Bierze sekcje, crontab sie
+instaluje, czasownik pisze `'alfa' carries the schedule`, a kazde zadanie z
+`-L alfa` konczy sie SKIPPED, bo pauza jest wlasnoscia etykiety, ktora wlasnie
+dostaly. Zmierzone: `snapget` odpowiedzial
+`SKIPPED: relationship alfa is paused` na linii, ktora przekazanie dopiero co
+zainstalowalo. **Falszywe zdrowie oglaszane jako sukces.**
+
+Odmowa, nie ciche wznowienie: zapauzowany cel to NORMALNY stan w trakcie
+odtwarzania na niego, wiec zdjecie pauzy samo z siebie byloby narzedziem
+unieważniającym transakcję, ktora admin otworzyl. Komunikat nazywa polecenie,
+ktore ja konczy.
+
+`RELATIONSHIPS_DIR` jest teraz nadpisywalny w tej samej formie co `CLIENTS_DIR` --
+nie nowa mozliwosc, tylko warunek testowalnosci: bez tego odmowa czytajaca ten
+katalog nie dala sie sterowac z suity.
+
 ## REPLIKI Z WYSOKIEGO POZIOMU (2026-08-29)
 
 Polecenie wlasciciela: ma byc konfigurowalne z gory, **bo docelowo idzie w GUI**.
@@ -4635,7 +4683,7 @@ REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niez
 | `joinremote` | **8/8** (dokument podawał 7/7 — zmierzone 2026-08-06, suita jest deterministyczna, `needs = nothing`) | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
 | `pairgate` | **21/21** | `zfs-pair-gate.sh` — brama po stronie peera, stan `DISABLED` z ADR-0012 (pakiet hard-disable, krok 1 z `docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md`). Testowalna bez ssh, bo sshd wnosi dokładnie dwa wejścia: argv (etykieta z `command=`) i `SSH_ORIGINAL_COMMAND`. KAŻDY przypadek data-plane każe bramie uruchomić komendę, której jedynym efektem jest utworzenie pliku, i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem, że nic się nie wykonało. Przypięte: odmowa PRZED parsowaniem (wejście nieparsowalne dostaje tę samą odmowę, nie błąd składni); tożsamość z klucza, nie z żądania (żądanie podszywające się pod inną relację niczego nie zmienia); cztery rozróżnialne kody wyjścia 91/92/93 (255 zostaje własnością ssh); nieznana relacja i zła etykieta fail-CLOSED; druga relacja działa dalej; verby kontrolne to dokładne literały, nigdy dopasowanie po prefiksie; `enable` przywraca data-plane, co dowodzone jest realnym efektem ubocznym, nie raportem samej bramy. Druga połowa — czy sshd naprawdę trasuje prawdziwy klucz przez bramę — to obowiązek ręczny `pairgate-live` |
 | `pairgate` | **45/45** | brama peera `zfs-pair-gate.sh` + instalacja w `deploy.sh --join` (pakiet hard-disable). Sedno: każdy przypadek data-plane każe bramie uruchomić komendę tworzącą plik i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem. Przypięte: odmowa przed parsowaniem, tożsamość z klucza a nie z żądania, kody 91/92/93 rozróżnialne, fail-closed przy nieznanej relacji i złej etykiecie, verby kontrolne jako dokładne literały, logowanie do syslogu z zejściem do pliku wybieranym po WYNIKU a nie po obecności `logger` (REV-047 F1) i nigdy nie zanieczyszczające stderr wywołującego. Instalacja: migracja gołej linii klucza bez pozostawienia jej obok bramkowanej, cudze linie bajt w bajt, idempotencja, awaria commitu bez tknięcia pliku, i fail-closed na własności pliku — bo podmiana atomowa rootem odbiera kontu dostęp do własnego hosta (REV-049 F1) |
-| `moveclient` | **35/0** | `move-to-client`: relacja, ktorej maszyna zostala WYMIENIONA, oddaje kopie nowej — kopia nie rusza sie z dysku, zmienia sie tylko to, z ktorej maszyny jest backupowana, wiec nie ma ponownego seedu. Suita pokrywa trzy czyste przeksztalcenia (flagi, znacznik `managed-by`, naglowek sekcji) DOKLADNIE, a dowod po GUID przez stuby — czyli jego LOGIKE: brak snapshotu odmawia, niezgodny GUID odmawia, zgodny przechodzi, a nieczytelna odpowiedz NIGDY nie jest przepustka. To, ze ZFS zachowuje GUID przez send/recv, jest wlasnoscia ZFS i nalezy do labu. Podmiana flag zamienia cztery rzeczy (klucz, known_hosts, alias, etykieta) i zostawia reszte bajt w bajt — przepisanie calego pola skasowaloby po cichu limit pasma. Przepiecie znacznika ma kontrole ujemna: gdy znacznika nie ma, zwraca 3, a nie cichy no-op |
+| `moveclient` | **41/0** | `move-to-client`: relacja, ktorej maszyna zostala WYMIENIONA, oddaje kopie nowej — kopia nie rusza sie z dysku, zmienia sie tylko to, z ktorej maszyny jest backupowana, wiec nie ma ponownego seedu. Suita pokrywa trzy czyste przeksztalcenia (flagi, znacznik `managed-by`, naglowek sekcji) DOKLADNIE, a dowod po GUID przez stuby — czyli jego LOGIKE: brak snapshotu odmawia, niezgodny GUID odmawia, zgodny przechodzi, a nieczytelna odpowiedz NIGDY nie jest przepustka. To, ze ZFS zachowuje GUID przez send/recv, jest wlasnoscia ZFS i nalezy do labu. Podmiana flag zamienia cztery rzeczy (klucz, known_hosts, alias, etykieta) i zostawia reszte bajt w bajt — przepisanie calego pola skasowaloby po cichu limit pasma. Przepiecie znacznika ma kontrole ujemna: gdy znacznika nie ma, zwraca 3, a nie cichy no-op |
 | `mediagate` | **79/0** | klamra `import`/`export` wokol repliki na nosnik WYMIENNY. Asercja, dla ktorej ta suita istnieje, to ta o NIE-eksportowaniu: pula, ktorej ten przebieg nie zaimportowal, nalezy do tego, kto to zrobil, i wyeksportowanie jej wyrwaloby mu grunt spod nog — sprawdzone w obie strony, bo straznik widzacy tylko przypadek bezpieczny nie jest straznikiem. Dalej: brak nosnika to `exit 1` i slowo SKIPPED, nie awaria; pula zaimportowana BEZ oczekiwanego datasetu to `exit 2` — zly dysk w kieszeni, nie brak dysku; dwie pule tej samej nazwy to dwa dyski naraz i odmowa zamiast wyboru (rotowane nosniki zwykle maja te sama nazwe); nieudany eksport krzyczy DO NOT UNPLUG. `zpool`/`zfs` sa stubowane, wiec sprawdzana jest DECYZJA, nie ZFS. Sekcja G idzie dalej i uruchamia CALA wygenerowana linie crona z prawdziwego `gen-cron.sh`, stubujac tylko bramke i silnik — bo dwie wady przeszly obok suity, ktora badala sama bramke: klamra wstawiona jako ciag polecen w miejsce na JEDNO powodowala, ze `2>"$e"` i `rc=$?` wiazaly sie tylko z `detach` (silnik konczyl 1, zadanie zapisywalo rc=0 i nikt nie dostawal maila), a bramce podawano sciezke DOCELOWA, ktora tworzy silnik, wiec swiezo przygotowany dysk byl przy pierwszym biegu odrzucany jako „zly nosnik". Obie maja kontrole ujemna. Sekcja H pilnuje KOTWICY: `[prune-bookmarks:]` obejmujacy zrodlo repliki wymiennej jest zglaszany (z konsekwencja: nastepny bieg po powrocie dysku bedzie PELNYM przesiewem), ale nie odmawiany i nie wykluczany po cichu — rotacja dyskow to fakt admina, nie generatora. Strona negatywna jest rowna wazna i sprawdzana: zwykly cel, wzorzec nie mogacy trafic w `tgt-`, oraz zakres rodzica bez `recursive` NIE sa zglaszane. **Sekcja I (REV-124 F1)** to jedyny test CYKLU ZYCIA, a nie pojedynczego biegu: nasz `attach` przechodzi, bieg ginie przed `detach`, kolejny zastaje pule zaimportowana. Znacznik wlasnosci musi PRZEZYC ten retry — wczesniej byl kasowany, bo „pula juz zaimportowana" czytano jako „czyjas decyzja", co jest prawda dokladnie raz: gdy sami jej nie importowalismy. Skutkiem bylo, ze `detach` zglaszal sukces bez eksportu, i tak samo kazda nastepna proba: dysk zostawal zywy w nieskonczonosc, a zadanie mowilo, ze mozna go wyjac. Znacznik niesie teraz GUID puli; niezgodny GUID (rotowane nosniki dziela nazwe) to odmowa, nie zgadywanie |
 | `restoregrant` | **44/44** (+1 SKIP) | zgoda na odtwarzanie: fakt na maszynie ZAGROZONEJ, ktory pozwala kolektorowi ja nadpisac. Sedno suity to sekcja 1 — MIEJSCE. Projekt klad zgode w `relationships/<label>/` i w tym samym akapicie twierdzil, ze katalog jest „root-owned, read-only for the account"; `deploy.sh` robi go `root:<konto>` **0775**, bo klucz relacji musi moc zdjac twarda pauze (unlink znacznika W TYM katalogu). Zgoda trzymana tam moglaby wiec zostac zalozona przez konto, przed ktorym chroni. Asercja strukturalna: drzewo zgod NIE moze lezec pod drzewem relacji, bramka czyta to samo drzewo, plus kontrola negatywna, ze tamten katalog NAPRAWDE jest grupowo-zapisywalny — inaczej regula bronilaby wymyslonego zagrozenia. Dalej: root wymagany do nadania i odebrania, `--show-restore` czytelny bez roota; nieznana relacja i zla etykieta odmawiaja i nic nie zapisuja (w tym `../etc` — nic poza drzewem); `replace` nigdy domyslne, poszerzenie zywej zgody ODMAWIA nazywajac obie wartosci, te same tryby to no-op sukces; brak `expires` i `nonce` sprawdzany gerpem; bramka raportuje zgode w obu stanach relacji i FAIL-CLOSED na kazdej wartosci, ktorej nie umie sparsowac (cztery smieci + kontrola pozytywna); bramka NIGDY nie tworzy zgody — trzy proby czasownikiem plus asercja strukturalna zakazujaca jakiegokolwiek zapisu do tego drzewa. Defekt znaleziony przez te suite: `--allow-restore=` z pusta wartoscia przelatywalo przez `[ -n ... ]` i deploy szedl do Fazy 1 — czasownik o UPRAWNIENIACH zaczynal instalowac pakiety (klasa F4); naprawione dyskryminatorem `*_GIVEN`. SKIP: `chmod 000` nie odbiera prawa wlascicielowi na Git Bash/NTFS, wiec asercja o nieczytelnym pliku zglasza pominiecie zamiast udawac, ze cos zmierzyla |
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
