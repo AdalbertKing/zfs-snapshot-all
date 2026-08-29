@@ -1019,7 +1019,7 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|prune-bookmarks|excluded) : ;;
+                    template|dataset|prune|prune-bookmarks|replica|excluded) : ;;
                     *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
@@ -1187,6 +1187,33 @@ _allow_fields dataset   use_template pair_label recursive media \
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
+
+# [replica:<name>] -- ANOTHER COPY OF WHAT THIS HOST ALREADY HOLDS.
+#
+# Owner's shape, 2026-08-28/29, modelled on FerroBackup: a source may have
+# SEVERAL replica targets -- three in the case that prompted this, two of them
+# weekly rotating disks and one a quarterly disk in a safe.
+#
+# WHY A SECTION TYPE AND NOT ANOTHER dst ON [dataset:]. A [dataset:] section is
+# keyed by its path and there can only be one per path, so three replicas of one
+# source cannot be spelled there at all -- `duplicate section` (measured while
+# building the pve9 lab, 2026-08-29). Loosening that key was the alternative and
+# it is the worse one: managed-by ownership, the staleness monitor, prune
+# co-location, reconcile and cron2conf all assume one section per dataset, and
+# every one of them would have to learn a second answer.
+#
+# A replica is also a different KIND of job, which is what makes the separate
+# type honest rather than a workaround:
+#   * it has no staleness monitor -- freshness is a property of the primary
+#     copy, and alerting twice on one late backup is how alerts get ignored;
+#   * it does not prune its source; the source is our own copy, pruned by
+#     whatever already owns it;
+#   * it belongs to no client relationship, so it carries no pair_label and no
+#     managed-by marker;
+#   * and there are N of them, which is the whole point.
+#
+# The name in the header is just a label -- it names the medium, not a dataset.
+_allow_fields replica  source dst schedule prefix notify media recursive flags
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -1194,7 +1221,7 @@ _allow_fields excluded  keep
 # it" and needs a different fix.
 field_valid_elsewhere() {
     local field="$1" k out=""
-    for k in defaults template dataset prune prune-bookmarks excluded; do
+    for k in defaults template dataset prune prune-bookmarks replica excluded; do
         [ -n "${FIELD_OK[${k}${SEP}${field}]+x}" ] && out="$out [$k:]"
     done
     printf '%s' "$out"
@@ -1780,6 +1807,7 @@ build_entities() {
     declare -ga PRUNE_SEC_ENTITIES=()
     declare -ga GFS_PRUNE_SEC_ENTITIES=()
     declare -ga BOOKMARK_PRUNE_ENTITIES=()
+    declare -ga REPLICA_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
@@ -1801,6 +1829,7 @@ build_entities() {
             dataset)         build_dataset "$section" "$name" "$host_label" ;;
             prune)            build_prune_section "$section" "$name" "$host_label" ;;
             prune-bookmarks)  build_bookmark_prune_section "$section" "$name" "$host_label" ;;
+            replica)          build_replica_section "$section" "$name" "$host_label" ;;
         esac
     done
 }
@@ -2352,6 +2381,95 @@ build_prune_section() {
 # scope, unrelated to any send/prune tier's own cadence. Reads fields
 # directly off the section (ini_has/ini_get), not through resolve_field's
 # dataset/template/defaults layering -- there is no layering to do here.
+# build_replica_section SECTION_HEADER NAME HOST_LABEL
+#
+# [replica:<name>] -- one more copy of a dataset this host already holds, most
+# often onto a disk that gets unplugged. See the field allow-list above for why
+# this is a section type of its own rather than a second dst on [dataset:].
+#
+# Deliberately NOT inherited from [template:]. A template carries a backup
+# policy -- retention tiers, prune schedules, a monitor -- and a replica has
+# none of those; letting it use_template would mean silently ignoring most of
+# what the template says, which is how a config comes to mean something other
+# than it reads.
+build_replica_section() {
+    local sec="$1" name="$2" host_label="$3"
+
+    case "$name" in
+        ''|*[!A-Za-z0-9._-]*) die "[replica:$name]: the name is a label for the medium -- letters, digits, dot, dash, underscore only (it becomes the notify text and the media gate's state file name)" ;;
+    esac
+
+    ini_has "$sec" source || die "[replica:$name] has no 'source' -- name the dataset on THIS host to copy (a replica copies what we already hold; it does not reach for a remote)"
+    local source; source="$(ini_get "$sec" source)"
+    case "$source" in
+        */*) ;;
+        *) die "[replica:$name]: source='$source' is a pool name, not a dataset -- name the dataset to copy" ;;
+    esac
+    case "$source" in
+        *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: source='$source' is not a valid ZFS dataset name" ;;
+    esac
+
+    ini_has "$sec" dst || die "[replica:$name] has no 'dst' -- the base dataset on the target medium, e.g. usbrep1/replica"
+    local dst; dst="$(ini_get "$sec" dst)"
+    # LOCAL ONLY, and refused rather than quietly accepted. A remote replica is
+    # a backup relationship and belongs in [dataset:] with a pair_label, where
+    # it gets the monitor and the pause a remote link needs. Accepting a
+    # user@host here would produce a job with neither.
+    case "$dst" in
+        *:*) die "[replica:$name]: dst='$dst' names a remote target. A replica is a LOCAL copy of what this host already holds; a copy onto another machine is a backup relationship and belongs in a [dataset:] section with a pair_label, so that it gets the staleness monitor and the pause that a remote link needs." ;;
+    esac
+    case "$dst" in
+        */*) ;;
+        *) die "[replica:$name]: dst='$dst' is a pool name, not a dataset. Name the base dataset the administrator prepares on the medium (e.g. ${dst}/replica) -- that dataset existing is what tells the gate the RIGHT disk is in the slot, and a pool root cannot say that." ;;
+    esac
+    case "$dst" in
+        *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: dst='$dst' is not a valid ZFS dataset name" ;;
+    esac
+    # The source cannot be inside its own target, or every run would copy the
+    # previous run's copy.
+    case "$dst" in
+        "$source"|"$source"/*) die "[replica:$name]: dst='$dst' is inside source='$source' -- each run would copy the previous run's copy" ;;
+    esac
+    case "$source" in
+        "$dst"/*) die "[replica:$name]: source='$source' is inside dst='$dst' -- the target holds the source" ;;
+    esac
+
+    ini_has "$sec" schedule || die "[replica:$name] has no 'schedule'"
+    local schedule; schedule="$(ini_get "$sec" schedule)"
+    lint_cron_schedule "$schedule" "[replica:$name]" schedule
+
+    # A FAMILY OF ITS OWN, and this is the owner's point (2026-08-28): the
+    # replica's snapshots must not be mistaken for the source's. They exist on
+    # the copy and not on the machine the data came from, so sharing the
+    # incoming family's prefix would make the collector's own retention and
+    # staleness reasoning answer for snapshots it never took.
+    local prefix; prefix="$(resolve_field prefix "$sec" "" "")" || prefix=""
+    [ -n "$prefix" ] || die "[replica:$name] has no 'prefix' -- a replica takes its own snapshot family, separate from the one it is copying, so that the copy's snapshots are never confused with the source's"
+    case "$prefix" in
+        *[!A-Za-z0-9._-]*) die "[replica:$name]: prefix='$prefix' -- letters, digits, dot, dash, underscore only (it becomes part of a snapshot name)" ;;
+    esac
+
+    # Composed here, like every other section type, so the emitter has nothing
+    # to assemble and $host_label does not have to be in scope at emit time.
+    local label notify
+    label="$(resolve_field notify "$sec" "" "")" || label=""
+    [ -n "$label" ] || label="$name"
+    notify="$(notify_text "$host_label" "replica" "copy" "$label")"
+
+    local media; media="$(resolve_field media "$sec" "" "")" || media=""
+    case "$media" in
+        ''|removable) ;;
+        *) die "[replica:$name]: media='$media' -- the only value is 'removable' (the target is a disk that gets unplugged, so the run is bracketed by zpool import/export and an absent disk is a skip rather than a failure). Leave the field out for a target that is always there." ;;
+    esac
+
+    local recursive; resolve_bool_field recursive "$sec" "" "[replica:$name]" 0; recursive="$BOOL_FIELD"
+
+    local flags; flags="$(resolve_field flags "$sec" "" "")" || flags=""
+    lint_flags "$flags" "[replica:$name]"
+
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${flags}")
+}
+
 build_bookmark_prune_section() {
     local sec="$1" scope="$2" host_label="$3"
 
@@ -3027,6 +3145,23 @@ emit_monitor() {
 # group, listing every member scope BY FULL PATH. Not monitored (check-snap-
 # age.sh watches snapshot staleness, not bookmarks) and not part of the
 # same-scope pattern-overlap check (different ZFS object type than snapshots).
+# One cron line per [replica:] section. Never grouped: each replica names its
+# own medium, and the import/export bracket wraps the whole line, so merging two
+# would either export a pool the other still needs or skip the other every time
+# one disk is out. That is the same reason 'media' sits in the send group key.
+emit_replicas() {
+    local e name source dst schedule prefix notify media recursive flags cmd
+    for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive flags <<< "$e"
+        cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
+        [ "$recursive" = "1" ] && cmd="$cmd -R"
+        [ -n "$flags" ] && cmd="$cmd $flags"
+        cmd="$cmd \"$source\" \"$dst\""
+        cmd="$(media_bracket "$media" "$dst" "$name" "$cmd")"
+        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+    done
+}
+
 emit_bookmark_prune() {
     local key list scope pattern age schedule notify recursive sshflags pairlbl
     for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
@@ -3967,6 +4102,7 @@ emit_inline_prune
 emit_prune_sections
 emit_gfs_prune_sections
 emit_bookmark_prune
+emit_replicas
 emit_monitor
 
 # MONITOR_LINES counts too. A config made only of monitor carriers
