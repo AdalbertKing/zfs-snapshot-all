@@ -1111,6 +1111,26 @@ _allow_fields defaults  host_label repo_dir notify_script warn_script \
                         digest_script cron_log $DEFAULTS_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
+# media = removable  -- THIS TARGET IS A DISK THAT GETS UNPLUGGED.
+#
+# Owner's shape, 2026-08-28, modelled on FerroBackup's replica: a source may
+# have several replica targets and some of them are pools on disks carried away
+# to a safe. For those, the transfer is bracketed --
+#
+#     zfs-media-gate.sh attach  ->  the engine  ->  zfs-media-gate.sh detach
+#
+# -- so the pool is imported before the write and exported after it, and the
+# disk can be pulled the moment the run ends.
+#
+# THE POINT OF THE FIELD IS THE ABSENT CASE. Without it, a target that is not
+# there is a failed job and an alert; with it, it is a disk in a safe. The gate
+# exits 1, the generated line reads that and skips, and nothing alarms. One
+# replica being away must not affect the other two.
+#
+# Anything other than `removable` is refused rather than ignored: a typo here
+# would silently produce an ordinary job that alerts every night the disk is
+# out.
+#
 # pair_label names the RELATIONSHIP (zfs-backup.sh client) a section belongs
 # to (REV-20260804-045). It reaches the transfer command, the staleness
 # monitor, AND the delsnaps line -- every job this package puts in a crontab
@@ -1161,7 +1181,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # that do not share a destination, so there is no layer above the section where
 # a link value would be true for everything that inherited it.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label recursive \
+_allow_fields dataset   use_template pair_label recursive media \
                         bandwidth compression cipher $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
@@ -1827,6 +1847,17 @@ build_dataset() {
         esac
     fi
 
+    # media = removable: this target is a disk that gets unplugged. Anything
+    # else is refused rather than ignored -- a typo here would silently produce
+    # an ordinary job that alerts every night the disk is out, which is the
+    # exact noise this field exists to remove.
+    local media
+    media="$(resolve_field media "$ds" "" "")" || media=""
+    case "$media" in
+        ''|removable) ;;
+        *) die "[dataset:$ds_path]: media='$media' -- the only value is 'removable' (the target is a disk that gets unplugged, so the run is bracketed by zpool import/export and an absent disk is a skip rather than a failure). Leave the field out for an ordinary target." ;;
+    esac
+
     # REV-20260807-054: recursion, declared ONCE for the whole section. The
     # three lines a [dataset:] can generate -- transfer, inline prune, monitor
     # -- all read this, which is the entire point: the old shape let the
@@ -2036,7 +2067,7 @@ build_dataset() {
             # which one it is for emit_send. Kept in the SAME slot rather than
             # adding a parallel field so group_send's existing key shape needs only
             # one addition (direction itself) instead of two.
-            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}")
+            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}${SEP}${media}${SEP}${pair_label}")
         fi
 
         # ---- inline self-prune (own path, non-recursive) ----
@@ -2406,11 +2437,15 @@ group_send() {
     declare -ga SEND_GROUP_ORDER=()
     local e ds tier schedule dst prefix flags notify label direction key
     for e in "${SEND_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "$e"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "$e"
         # direction is IN the key: a push and a pull could otherwise share an
         # identical (schedule,remote-spec,prefix,flags) tuple by coincidence and
         # merge into one line that calls the wrong script for half its members.
-        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}"
+        # 'media' is IN the key. The import/export bracket wraps the whole cron
+        # line, so a removable target merged with an ordinary one would either
+        # export a pool the other job still needs, or skip that other job every
+        # time the disk is out. They are different lines by construction.
+        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}${SEP}${media}${SEP}${plabel}"
         [ -z "${SEND_GROUPS[$key]+x}" ] && SEND_GROUP_ORDER+=("$key")
         SEND_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2566,7 +2601,7 @@ validate_transfer_semantics() {
         list="${SEND_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "${members[0]}"
         [ "$direction" = "pull" ] || continue
         if [ "${#members[@]}" -gt 1 ]; then
             die "[dataset:$ds] and other section(s) all resolved the identical src='$dst' -- pull datasets cannot be merged (snapget.sh needs one local destination per literal remote name). Give each a distinct remote path, or split them onto different schedules/prefixes/flags."
@@ -2585,7 +2620,7 @@ emit_send() {
         list="${SEND_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "${members[0]}"
 
         # Pull never groups: 'dst' here holds 'src's raw value, a LITERAL
         # remote name, so two different local datasets could only land in the
@@ -2605,6 +2640,7 @@ emit_send() {
             [ -n "$flags" ] && cmd="$cmd $flags"
             cmd="$cmd \"$dst\""
             [ -n "$local_base" ] && cmd="$cmd \"$local_base\""
+            cmd="$(media_bracket "$media" "$local_base" "${plabel:-$label}" "$cmd")"
             JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
             continue
         fi
@@ -2617,7 +2653,7 @@ emit_send() {
             local -a datasets=() notifies=()
             local m mds mtier msch mdst mpre mflg mnot mlab mdir
             for m in "${members[@]}"; do
-                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
+                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir mmed mplb <<< "$m"
                 datasets+=("$mds")
                 notifies+=("$mnot")
             done
@@ -2637,7 +2673,7 @@ emit_send() {
                 local -a lseen=()
                 local f2 e2
                 for m in "${members[@]}"; do
-                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
+                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir mmed mplb <<< "$m"
                     [ -z "$mlab" ] && continue
                     f2=0
                     for e2 in "${lseen[@]}"; do [ "$e2" = "$mlab" ] && f2=1 && break; done
@@ -2661,6 +2697,14 @@ emit_send() {
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""
+        # The LANDING dataset, not just the pool: snapsend composes dst/src, and
+        # the gate's wrong-medium check is only worth anything if it looks at
+        # the dataset the write would actually land in. With several members
+        # merged there is no single landing path, so the pool is all that can
+        # honestly be checked and the gate degrades to a presence test.
+        _mb_target="$dst"
+        [ "${#members[@]}" -eq 1 ] && [ -n "$dst" ] && _mb_target="$dst/$src"
+        cmd="$(media_bracket "$media" "$_mb_target" "${plabel:-$label}" "$cmd")"
 
         JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify_out")")
     done
@@ -2706,6 +2750,38 @@ emit_send() {
 # command never runs at all -- silently, with no output to carry the reason. The
 # fallback lands beside the cron log instead, which is normally a different
 # filesystem from TMPDIR, so a full /tmp can no longer swallow a backup whole.
+# THE IMPORT/EXPORT BRACKET around one job whose target is a removable disk.
+#
+# Returns the command unchanged for an ordinary target, so every existing line
+# is byte-identical and this can only affect a section that asked for it.
+#
+# The shape is `if attach; then ENGINE; fi; detach`, and each piece of that is
+# deliberate:
+#
+#   * `if` and not `&&` -- the gate exits 1 when the disk is away, and that must
+#     leave the LINE's status zero. With `&&` the line would inherit 1 and the
+#     job would alert every night the disk is in a safe, which is the whole
+#     thing this field exists to stop.
+#   * detach runs OUTSIDE the `if`, so a failed transfer still puts the pool
+#     back. A disk left imported after a failure is a disk somebody unplugs.
+#   * detach's own status is discarded here: it says DO NOT UNPLUG loudly on
+#     stderr when an export fails, and that lands in the job log. Letting it
+#     fail the line as well would report a transfer that succeeded as a failure.
+#
+# The pool is the first component of the target path -- that is what gets
+# imported, and the full path is passed as --dataset so the gate can tell an
+# absent disk from the WRONG disk in the slot.
+media_bracket() {   # <media field> <target path> <label> <command>
+    local media="$1" target="$2" label="$3" cmd="$4"
+    [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
+    [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
+    local pool="${target%%/*}"
+    [ -n "$pool" ] || { printf '%s' "$cmd"; return 0; }
+    local gate="$REPO_DIR/zfs-media-gate.sh"
+    printf 'if %s attach %s %s --dataset %s; then %s; fi; %s detach %s %s' \
+        "$gate" "$pool" "${label:-media}" "$target" "$cmd" "$gate" "$pool" "${label:-media}"
+}
+
 job_cron_line() {
     local schedule="$1" cmd="$2" notify="$3"
     printf '%s echo "$(date -Is) ZFS-JOB BEGIN %s" >>%s; e=$(mktemp 2>/dev/null) || e=%s.err.$$; %s 2>"$e"; rc=$?; cat "$e" >>%s; echo "$(date -Is) ZFS-JOB END %s rc=$rc" >>%s; [ $rc -ne 0 ] && %s "%s" "$(tail -n %s "$e")" 2>>%s; rm -f "$e"' \
