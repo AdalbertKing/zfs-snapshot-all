@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17.*
+*Evidence: E4, E5, E6, E10, E17, E23.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -617,3 +617,42 @@ commands stubbed -- `test/mediagate/run.sh` section G now does exactly that, and
 the old bracket fails it. And when an assertion passes on both sides of a change,
 it is not evidence, whatever the total says (R6).
 
+
+### E23 — I reported an infrastructure fault from a probe the design never uses
+
+**Genesis.** Closing out the day's queue, I had listed as an open item:
+"metropolis: pve1 (28.9) does not accept pve9's key -- a leftover from an
+earlier lab." It came from one command:
+
+    pve9 $ ssh root@192.168.28.9        -> Permission denied (publickey)
+
+I reported that to the owner twice, in two separate summaries, as an
+infrastructure problem awaiting attention.
+
+**It was not a problem at all.** The relationship between those two hosts is
+healthy and has been all along: pve9 PULLS from metropolis hourly, and the
+backups were arriving on schedule the whole time I was calling the link broken --
+`automated_hourly_2026-08-29_17-51-01` had landed 47 minutes before I wrote it
+down again. Measured with the identity the job actually uses:
+
+    su zfsbackup -c 'ssh -i pairing-192.168.28.9_ed25519 ... zfsbackup-pve9@192.168.28.9 "zfs list ..."'
+    hdd/labsrc
+    rc=0
+
+**Cause.** I probed root-to-root. The package does not use root-to-root, and has
+not since the fleet migrated to delegated accounts on 2026-08-01. A relationship
+runs as its own account with a per-peer pairing key, a pinned `HostKeyAlias`, and
+its own `known_hosts` -- and the ABSENCE of root trust between two hosts is the
+point of that design, not a defect in it. I tested the one path the architecture
+deliberately does not have, and read its refusal as a fault.
+
+Two further tells I walked past. `crontab -l` as root showed no job for that
+peer, which should have prompted "then who is fetching this, and as whom?"
+instead of confirming the fault. And a `grep -c "28\.9"` returned 4, which I
+took as matches -- they were `28.98`, a different host entirely.
+
+**Rule.** R2, and this is the sharpest form of it yet: the boundary is not only
+host-to-host, it is IDENTITY. State which account and which key a probe used,
+because "cannot connect" is meaningless without it. Before reporting a link
+broken, find the job that uses it and run what IT runs. If no job uses the path
+being probed, that is the finding -- not the refusal.
