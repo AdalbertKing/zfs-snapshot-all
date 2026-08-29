@@ -6133,10 +6133,13 @@ got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
 #      the count is pinned rather than left to review.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-if [ "$writers" -eq 5 ] && [ "$resolvers" -eq 5 ]; then
-    ok "63g: all five config writers resolve through cron_context_resolve"
+# Six since 2026-08-29: move-to-client writes the config too, and goes through
+# cron_context_resolve like the other five. The number is what makes a NEW
+# writer that re-derives its own answer visible, so it moves with them.
+if [ "$writers" -eq 6 ] && [ "$resolvers" -eq 6 ]; then
+    ok "63g: all six config writers resolve through cron_context_resolve"
 else
-    bad "63g: all five config writers resolve through cron_context_resolve" \
+    bad "63g: all six config writers resolve through cron_context_resolve" \
         "atomic_replace_and_install call sites=$writers cron_context_resolve call sites=$resolvers"
 fi
 
@@ -6542,7 +6545,14 @@ got=$(fam_probe "")
 # return anything", so there is one implementation for both questions.
 #
 # The implementation is the single remote `zfs list -H -t snapshot` in the file.
+# TWO probe implementations now, and they answer questions on opposite sides:
+# source_family_newest asks a REMOTE source over ssh, local_newest_snapshot asks
+# this collector's own copy (move-to-client's guid proof, 2026-08-29). The
+# remote one cannot serve the local case -- it always opens ssh to
+# LOAD_ACCOUNT@LOAD_HOST. Both are NAMED functions with their callers counted
+# below, so a third, hand-rolled one still trips this.
 n_impl=$(grep -c 'zfs list -H -t snapshot' "$ZFSBACKUP")
+n_local=$(grep -c 'local_newest_snapshot "\$' "$ZFSBACKUP")
 # The old idiom must be gone entirely, not merely reduced -- a lingering
 # `grep -q '@automated_'` would be a second existence test with its own depth.
 n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
@@ -6550,10 +6560,10 @@ n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
 n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # the wrapper itself, plus activate-client's rehearsal (the ex-copy).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
-if [ "$n_impl" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
+if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
     ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
 else
-    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
+    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
 fi
 
 # 67c2. the activation rehearsal specifically: it must not re-derive the depth.

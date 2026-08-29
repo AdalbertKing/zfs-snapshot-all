@@ -9052,9 +9052,20 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
 #
 # Prints nothing and returns 0 when proven; prints the reason and returns 1
 # otherwise. An unreadable answer is a refusal, never a pass.
+# The newest snapshot of a LOCAL dataset.
+#
+# source_family_newest answers the same question for a REMOTE source and cannot
+# be reused: it always opens ssh to LOAD_ACCOUNT@LOAD_HOST, and what
+# move_guid_proof needs is the collector's own copy, on this machine. So this is
+# a second probe -- named, in one place, rather than inlined, so the assertion
+# that pins "one probe implementation per side" keeps biting if a third appears.
+local_newest_snapshot() {   # <dataset> -> newest snapshot name, or nothing
+    zfs list -H -t snapshot -o name -s creation -d 1 "$1" 2>/dev/null | tail -1
+}
+
 move_guid_proof() {   # <copy dataset> <destination path> <account@host>
     local copy="$1" destpath="$2" peer="$3" snap guid remote
-    snap=$(zfs list -H -t snapshot -o name -s creation -d 1 "$copy" 2>/dev/null | tail -1)
+    snap=$(local_newest_snapshot "$copy")
     [ -n "$snap" ] || { echo "    $copy has no snapshot at all, so there is nothing to prove it by"; return 1; }
     snap="${snap#*@}"
     guid=$(zfs get -H -o value guid "${copy}@${snap}" 2>/dev/null)

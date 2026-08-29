@@ -37,6 +37,7 @@ check() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1" "want [$2] got [$3]"; 
 eval "$(sed -n '/^move_reflag() {/,/^}/p'           "$ZB")"
 eval "$(sed -n '/^section_retag_client() {/,/^}/p'  "$ZB")"
 eval "$(sed -n '/^section_rename_header() {/,/^}/p' "$ZB")"
+eval "$(sed -n '/^local_newest_snapshot() {/,/^}/p' "$ZB")"
 eval "$(sed -n '/^move_guid_proof() {/,/^}/p'       "$ZB")"
 
 # ---------------------------------------------------------------------------
