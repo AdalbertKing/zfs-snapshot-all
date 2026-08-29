@@ -188,13 +188,25 @@ check_dataset() {
 case "$VERB" in
 
 status)
+    # THE ONE SENTENCE AN OPERATOR STANDING AT THE MACHINE NEEDS.
+    #
+    # Measured on the lab, 2026-08-29: pulling this disk while the pool is
+    # imported is not a recoverable inconvenience. It hung `zpool export` in
+    # unkillable sleep, and pulling during a write took the whole host down --
+    # and so did the documented recovery (rescan the bus), twice. Upstream
+    # OpenZFS has open issues for exactly this; the standing advice everywhere
+    # is the same one: export before you unplug.
+    #
+    # Since no software here can make a surprise removal safe, the useful thing
+    # is to make the WINDOW visible. The bracket already keeps it to the length
+    # of one run; this says, in words, which side of it you are on.
     if imported; then
         check_dataset || exit $?
-        say "medium '$POOL' for '$LABEL' is present"
+        say "medium '$POOL' for '$LABEL' is present -- DO NOT UNPLUG: the pool is imported and pulling it now can hang this host until it is reset."
         emit present; exit 0
     fi
     last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
-    say "medium '$POOL' for '$LABEL' is away (last seen: $last)"
+    say "medium '$POOL' for '$LABEL' is away (last seen: $last) -- SAFE TO UNPLUG: the pool is not imported."
     emit absent; exit 1
     ;;
 

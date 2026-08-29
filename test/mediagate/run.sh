@@ -610,6 +610,26 @@ POOLS="hdd rotpool"; IMPORTABLE=""
 g detach rotpool rep >/dev/null 2>&1
 POOL_FAILMODE=""
 
+# K. THE SENTENCE FOR THE PERSON STANDING AT THE MACHINE.
+#
+# Nothing in software can make a surprise removal safe -- the lab spent three
+# host resets establishing that, and upstream OpenZFS has open issues for it.
+# What CAN be done is to say which side of the window you are on, in words, so
+# that "is it safe to pull this?" has an answer that is not a guess.
+: > "$EXPORTED_LOG"
+POOLS="hdd rotpool"; IMPORTABLE=""; DATASETS="hdd rotpool/replica"
+out="$(g status rotpool rep --dataset rotpool/replica)"
+has "DO NOT UNPLUG" "$out" && ok "K: an IMPORTED medium says DO NOT UNPLUG" \
+                           || bad "K: an IMPORTED medium says DO NOT UNPLUG" "$out"
+has "hang this host" "$out" && ok "K: ...and what pulling it now would cost" \
+                            || bad "K: ...and what pulling it now would cost" "$out"
+POOLS="hdd"; IMPORTABLE="rotpool"
+out="$(g status rotpool rep --dataset rotpool/replica)"
+has "SAFE TO UNPLUG" "$out" && ok "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS SAFE TO UNPLUG" \
+                            || bad "K: A MEDIUM WHOSE POOL IS NOT IMPORTED SAYS SAFE TO UNPLUG" "$out"
+has "DO NOT UNPLUG" "$out" && bad "K: ...and does NOT also say the opposite" "$out" \
+                           || ok "K: ...and does NOT also say the opposite"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
