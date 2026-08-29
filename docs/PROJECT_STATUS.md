@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0d8e275d7ff14c1c -->
+<!-- status-covers-digest: 25e96f4127a07797 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -3760,6 +3760,65 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## LAB: WYRWANIE NOSNIKA -- ZDIAGNOZOWANE (pve9, 2026-08-29)
+
+Wlasciciel: fizycznego wypiecia nie da sie sprawdzic na VM, ale da sie je dobrze
+zasymulowac, jesli dyski sa wypinalne komendami Linuksa. Sa:
+`echo 1 > /sys/block/sdX/device/delete` wyjmuje urzadzenie spod dzialajacego
+jadra bez unmounta, bez eksportu i bez ostrzezenia -- blizej szarpniecia kabla
+niz odpiecie na hipervizorze, ktore jest uporzadkowanym usunieciem urzadzenia.
+
+### Trzy pomiary
+
+| kiedy wyrwano | skutek |
+|---|---|
+| miedzy biegami, pula wyeksportowana | bez szkody |
+| przy puli zaimportowanej, bezczynnej | `zpool export` w nieprzerywalnym snie **11 minut** i dalej; nie da sie zabic; ponowne wpiecie NIE pomaga, bo jadro nadaje wracajacemu dyskowi NOWY wezel |
+| **w trakcie zapisu 300 MB** | caly HOST przestal odpowiadac, konieczny twardy reset |
+
+### Dlaczego -- to arytmetyka, nie kruchosc ZFS-a
+
+Na tym hoscie: `zfs_txg_timeout` = 5 s, `zfs_dirty_data_max` = **393 MB**
+(10% z 3927 MB RAM). Transfer mial 300 MB, wiec **miescil sie w calosci w oknie
+brudnych danych** -- w chwili wyrwania praktycznie caly ladunek wisial w RAM i
+nie mial dokad pojsc. Przy 10 MB (pierwszy pomiar) dane byly juz zapisane i
+zawisl wylacznie eksport.
+
+Czego pomiary NIE pokazaly, i nie bede tego twierdzil: silnik **nie zglosil
+falszywego sukcesu**. W pierwszym tescie transfer naprawde zdazyl sie skonczyc
+przed wyrwaniem (snapshoty `yank_` sa na nosniku); w drugim nie zdazyl nic
+zglosic, bo host padl pod nim.
+
+### Co z tego wynika dla pakietu
+
+Drugi wiersz tabeli to problem PAKIETU, nie ZFS-a: `detach` stoi **poza** klamra
+`if`, wiec zadanie crona, ktore na to trafi, **wisi na zawsze** -- trzyma swoj
+flock, kazdy nastepny bieg tego zadania jest odrzucany jako sporny, i nic nie
+alarmuje, bo zadanie, ktore nigdy nie konczy, nigdy nie raportuje statusu. Cicha,
+trwala smierc zadania backupu.
+
+Dwa zabezpieczenia, oba w bramce:
+
+- **eksport ograniczony czasem** (`MEDIA_EXPORT_TIMEOUT`, domyslnie 90 s). Timeout
+  nie naprawia wejscia/wyjscia -- nie moze -- ale zamienia nieprzerywalna cisze w
+  glosna, niezerowa odpowiedz, ktora nazywa dysk i mowi, zeby go nie wyjmowac;
+- **ostrzezenie o `failmode=wait`** przy imporcie. ZFS domyslnie czeka, co jest
+  wlasciwe dla dysku, ktory nigdzie sie nie wybiera, i niewlasciwe dla takiego,
+  ktorego sensem jest bycie wyjmowanym. **Ostrzezone, nie zmienione**: failmode to
+  wlasnosc puli admina, a ciche przepisanie tego, jak cudze dane zachowuja sie
+  pod awaria, nie jest decyzja tego narzedzia.
+
+Sekcja J suity `mediagate` pilnuje obu; kontrola: wersja z `main` wywraca szesc
+asercji.
+
+### Otwarte
+
+Polityka `sync`/buforowania dla nosnikow wymiennych -- hipoteza wlasciciela, ze
+inne ustawienia zmniejszylyby okno. `sync=always` na datasecie repliki jest
+kandydatem: skraca okno, w ktorym dane wygladajace na zapisane nie sa jeszcze na
+nosniku. Koszt przepustowosci NIEZMIERZONY, wiec nie rekomenduje tego jako
+domyslnego, dopoki nie bedzie liczby.
+
 ## LAB: moveclient-live -- WYKONANY (pve9 + pve9b, 2026-08-29)
 
 Obowiazek reczny `moveclient-live` zamkniety. Wymagal DRUGIEJ maszyny: silnik
@@ -4684,7 +4743,7 @@ REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niez
 | `pairgate` | **21/21** | `zfs-pair-gate.sh` — brama po stronie peera, stan `DISABLED` z ADR-0012 (pakiet hard-disable, krok 1 z `docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md`). Testowalna bez ssh, bo sshd wnosi dokładnie dwa wejścia: argv (etykieta z `command=`) i `SSH_ORIGINAL_COMMAND`. KAŻDY przypadek data-plane każe bramie uruchomić komendę, której jedynym efektem jest utworzenie pliku, i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem, że nic się nie wykonało. Przypięte: odmowa PRZED parsowaniem (wejście nieparsowalne dostaje tę samą odmowę, nie błąd składni); tożsamość z klucza, nie z żądania (żądanie podszywające się pod inną relację niczego nie zmienia); cztery rozróżnialne kody wyjścia 91/92/93 (255 zostaje własnością ssh); nieznana relacja i zła etykieta fail-CLOSED; druga relacja działa dalej; verby kontrolne to dokładne literały, nigdy dopasowanie po prefiksie; `enable` przywraca data-plane, co dowodzone jest realnym efektem ubocznym, nie raportem samej bramy. Druga połowa — czy sshd naprawdę trasuje prawdziwy klucz przez bramę — to obowiązek ręczny `pairgate-live` |
 | `pairgate` | **45/45** | brama peera `zfs-pair-gate.sh` + instalacja w `deploy.sh --join` (pakiet hard-disable). Sedno: każdy przypadek data-plane każe bramie uruchomić komendę tworzącą plik i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem. Przypięte: odmowa przed parsowaniem, tożsamość z klucza a nie z żądania, kody 91/92/93 rozróżnialne, fail-closed przy nieznanej relacji i złej etykiecie, verby kontrolne jako dokładne literały, logowanie do syslogu z zejściem do pliku wybieranym po WYNIKU a nie po obecności `logger` (REV-047 F1) i nigdy nie zanieczyszczające stderr wywołującego. Instalacja: migracja gołej linii klucza bez pozostawienia jej obok bramkowanej, cudze linie bajt w bajt, idempotencja, awaria commitu bez tknięcia pliku, i fail-closed na własności pliku — bo podmiana atomowa rootem odbiera kontu dostęp do własnego hosta (REV-049 F1) |
 | `moveclient` | **41/0** | `move-to-client`: relacja, ktorej maszyna zostala WYMIENIONA, oddaje kopie nowej — kopia nie rusza sie z dysku, zmienia sie tylko to, z ktorej maszyny jest backupowana, wiec nie ma ponownego seedu. Suita pokrywa trzy czyste przeksztalcenia (flagi, znacznik `managed-by`, naglowek sekcji) DOKLADNIE, a dowod po GUID przez stuby — czyli jego LOGIKE: brak snapshotu odmawia, niezgodny GUID odmawia, zgodny przechodzi, a nieczytelna odpowiedz NIGDY nie jest przepustka. To, ze ZFS zachowuje GUID przez send/recv, jest wlasnoscia ZFS i nalezy do labu. Podmiana flag zamienia cztery rzeczy (klucz, known_hosts, alias, etykieta) i zostawia reszte bajt w bajt — przepisanie calego pola skasowaloby po cichu limit pasma. Przepiecie znacznika ma kontrole ujemna: gdy znacznika nie ma, zwraca 3, a nie cichy no-op |
-| `mediagate` | **79/0** | klamra `import`/`export` wokol repliki na nosnik WYMIENNY. Asercja, dla ktorej ta suita istnieje, to ta o NIE-eksportowaniu: pula, ktorej ten przebieg nie zaimportowal, nalezy do tego, kto to zrobil, i wyeksportowanie jej wyrwaloby mu grunt spod nog — sprawdzone w obie strony, bo straznik widzacy tylko przypadek bezpieczny nie jest straznikiem. Dalej: brak nosnika to `exit 1` i slowo SKIPPED, nie awaria; pula zaimportowana BEZ oczekiwanego datasetu to `exit 2` — zly dysk w kieszeni, nie brak dysku; dwie pule tej samej nazwy to dwa dyski naraz i odmowa zamiast wyboru (rotowane nosniki zwykle maja te sama nazwe); nieudany eksport krzyczy DO NOT UNPLUG. `zpool`/`zfs` sa stubowane, wiec sprawdzana jest DECYZJA, nie ZFS. Sekcja G idzie dalej i uruchamia CALA wygenerowana linie crona z prawdziwego `gen-cron.sh`, stubujac tylko bramke i silnik — bo dwie wady przeszly obok suity, ktora badala sama bramke: klamra wstawiona jako ciag polecen w miejsce na JEDNO powodowala, ze `2>"$e"` i `rc=$?` wiazaly sie tylko z `detach` (silnik konczyl 1, zadanie zapisywalo rc=0 i nikt nie dostawal maila), a bramce podawano sciezke DOCELOWA, ktora tworzy silnik, wiec swiezo przygotowany dysk byl przy pierwszym biegu odrzucany jako „zly nosnik". Obie maja kontrole ujemna. Sekcja H pilnuje KOTWICY: `[prune-bookmarks:]` obejmujacy zrodlo repliki wymiennej jest zglaszany (z konsekwencja: nastepny bieg po powrocie dysku bedzie PELNYM przesiewem), ale nie odmawiany i nie wykluczany po cichu — rotacja dyskow to fakt admina, nie generatora. Strona negatywna jest rowna wazna i sprawdzana: zwykly cel, wzorzec nie mogacy trafic w `tgt-`, oraz zakres rodzica bez `recursive` NIE sa zglaszane. **Sekcja I (REV-124 F1)** to jedyny test CYKLU ZYCIA, a nie pojedynczego biegu: nasz `attach` przechodzi, bieg ginie przed `detach`, kolejny zastaje pule zaimportowana. Znacznik wlasnosci musi PRZEZYC ten retry — wczesniej byl kasowany, bo „pula juz zaimportowana" czytano jako „czyjas decyzja", co jest prawda dokladnie raz: gdy sami jej nie importowalismy. Skutkiem bylo, ze `detach` zglaszal sukces bez eksportu, i tak samo kazda nastepna proba: dysk zostawal zywy w nieskonczonosc, a zadanie mowilo, ze mozna go wyjac. Znacznik niesie teraz GUID puli; niezgodny GUID (rotowane nosniki dziela nazwe) to odmowa, nie zgadywanie |
+| `mediagate` | **87/0** | klamra `import`/`export` wokol repliki na nosnik WYMIENNY. Asercja, dla ktorej ta suita istnieje, to ta o NIE-eksportowaniu: pula, ktorej ten przebieg nie zaimportowal, nalezy do tego, kto to zrobil, i wyeksportowanie jej wyrwaloby mu grunt spod nog — sprawdzone w obie strony, bo straznik widzacy tylko przypadek bezpieczny nie jest straznikiem. Dalej: brak nosnika to `exit 1` i slowo SKIPPED, nie awaria; pula zaimportowana BEZ oczekiwanego datasetu to `exit 2` — zly dysk w kieszeni, nie brak dysku; dwie pule tej samej nazwy to dwa dyski naraz i odmowa zamiast wyboru (rotowane nosniki zwykle maja te sama nazwe); nieudany eksport krzyczy DO NOT UNPLUG. `zpool`/`zfs` sa stubowane, wiec sprawdzana jest DECYZJA, nie ZFS. Sekcja G idzie dalej i uruchamia CALA wygenerowana linie crona z prawdziwego `gen-cron.sh`, stubujac tylko bramke i silnik — bo dwie wady przeszly obok suity, ktora badala sama bramke: klamra wstawiona jako ciag polecen w miejsce na JEDNO powodowala, ze `2>"$e"` i `rc=$?` wiazaly sie tylko z `detach` (silnik konczyl 1, zadanie zapisywalo rc=0 i nikt nie dostawal maila), a bramce podawano sciezke DOCELOWA, ktora tworzy silnik, wiec swiezo przygotowany dysk byl przy pierwszym biegu odrzucany jako „zly nosnik". Obie maja kontrole ujemna. Sekcja H pilnuje KOTWICY: `[prune-bookmarks:]` obejmujacy zrodlo repliki wymiennej jest zglaszany (z konsekwencja: nastepny bieg po powrocie dysku bedzie PELNYM przesiewem), ale nie odmawiany i nie wykluczany po cichu — rotacja dyskow to fakt admina, nie generatora. Strona negatywna jest rowna wazna i sprawdzana: zwykly cel, wzorzec nie mogacy trafic w `tgt-`, oraz zakres rodzica bez `recursive` NIE sa zglaszane. **Sekcja I (REV-124 F1)** to jedyny test CYKLU ZYCIA, a nie pojedynczego biegu: nasz `attach` przechodzi, bieg ginie przed `detach`, kolejny zastaje pule zaimportowana. Znacznik wlasnosci musi PRZEZYC ten retry — wczesniej byl kasowany, bo „pula juz zaimportowana" czytano jako „czyjas decyzja", co jest prawda dokladnie raz: gdy sami jej nie importowalismy. Skutkiem bylo, ze `detach` zglaszal sukces bez eksportu, i tak samo kazda nastepna proba: dysk zostawal zywy w nieskonczonosc, a zadanie mowilo, ze mozna go wyjac. Znacznik niesie teraz GUID puli; niezgodny GUID (rotowane nosniki dziela nazwe) to odmowa, nie zgadywanie |
 | `restoregrant` | **44/44** (+1 SKIP) | zgoda na odtwarzanie: fakt na maszynie ZAGROZONEJ, ktory pozwala kolektorowi ja nadpisac. Sedno suity to sekcja 1 — MIEJSCE. Projekt klad zgode w `relationships/<label>/` i w tym samym akapicie twierdzil, ze katalog jest „root-owned, read-only for the account"; `deploy.sh` robi go `root:<konto>` **0775**, bo klucz relacji musi moc zdjac twarda pauze (unlink znacznika W TYM katalogu). Zgoda trzymana tam moglaby wiec zostac zalozona przez konto, przed ktorym chroni. Asercja strukturalna: drzewo zgod NIE moze lezec pod drzewem relacji, bramka czyta to samo drzewo, plus kontrola negatywna, ze tamten katalog NAPRAWDE jest grupowo-zapisywalny — inaczej regula bronilaby wymyslonego zagrozenia. Dalej: root wymagany do nadania i odebrania, `--show-restore` czytelny bez roota; nieznana relacja i zla etykieta odmawiaja i nic nie zapisuja (w tym `../etc` — nic poza drzewem); `replace` nigdy domyslne, poszerzenie zywej zgody ODMAWIA nazywajac obie wartosci, te same tryby to no-op sukces; brak `expires` i `nonce` sprawdzany gerpem; bramka raportuje zgode w obu stanach relacji i FAIL-CLOSED na kazdej wartosci, ktorej nie umie sparsowac (cztery smieci + kontrola pozytywna); bramka NIGDY nie tworzy zgody — trzy proby czasownikiem plus asercja strukturalna zakazujaca jakiegokolwiek zapisu do tego drzewa. Defekt znaleziony przez te suite: `--allow-restore=` z pusta wartoscia przelatywalo przez `[ -n ... ]` i deploy szedl do Fazy 1 — czasownik o UPRAWNIENIACH zaczynal instalowac pakiety (klasa F4); naprawione dyskryminatorem `*_GIVEN`. SKIP: `chmod 000` nie odbiera prawa wlascicielowi na Git Bash/NTFS, wiec asercja o nieczytelnym pliku zglasza pominiecie zamiast udawac, ze cos zmierzyla |
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `runsuffix` | **6/6** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |

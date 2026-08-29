@@ -45,7 +45,13 @@ for a in "$@"; do last="$a"; done
 # of the same name in the slot, which is what separates "our interrupted run"
 # from "we still owe an export on another medium".
 case "$1 $2" in
-  "get -H") echo "${POOL_GUID:-11111111}"; exit 0 ;;
+  "get -H")
+      # The property is an argument, not a position: guid and failmode both
+      # arrive as `zpool get -H -o value <prop> <pool>`.
+      for a in "$@"; do
+          [ "$a" = failmode ] && { echo "${POOL_FAILMODE:-continue}"; exit 0; }
+      done
+      echo "${POOL_GUID:-11111111}"; exit 0 ;;
   "list -H")
       for p in $POOLS; do [ "$p" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -58,6 +64,9 @@ case "$1" in
       exit 1 ;;
   export)
       echo "$2" >> "$EXPORTED_LOG"
+      # A pull-while-imported does not make export FAIL -- it makes it never
+      # return. Slept, so the real `timeout` in the gate is what is under test.
+      [ -n "${EXPORT_HANGS:-}" ] && sleep 5
       [ -n "${EXPORT_FAILS:-}" ] && exit 1
       exit 0 ;;
 esac
@@ -75,7 +84,7 @@ ZF
 chmod +x "$BIN/zpool" "$BIN/zfs"
 
 export IMPORTED_LOG="$TMPD/imported" EXPORTED_LOG="$TMPD/exported"
-export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID
+export POOLS IMPORTABLE DATASETS EXPORT_FAILS="" POOL_GUID POOL_FAILMODE EXPORT_HANGS
 : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
 
 g() { PATH="$BIN:$PATH" MEDIA_STATE_DIR="$STATE" bash "$GATE" "$@" 2>&1; }
@@ -536,6 +545,70 @@ has "removed without a detach" "$out" \
 
 rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
 POOL_GUID=11111111
+
+# ---------------------------------------------------------------------------
+# J. WHAT A MEDIUM PULLED MID-RUN DOES, and why detach must be bounded
+#
+# Measured on pve9, 2026-08-29, by actually pulling the device out from under a
+# running kernel (`echo 1 > /sys/block/sdX/device/delete`, which is as close to a
+# yanked cable as a VM gets):
+#
+#   * pulled between runs, pool exported     no harm
+#   * pulled with the pool imported, idle    `zpool export` sat in
+#                                            uninterruptible sleep for ELEVEN
+#                                            MINUTES, unkillable; re-inserting
+#                                            the disk did not free it, because
+#                                            the kernel gave it a NEW device node
+#   * pulled DURING a 300 MB write           the whole HOST went unreachable and
+#                                            needed a hard reset
+#
+# The third is arithmetic, not fragility: zfs_txg_timeout was 5s and
+# zfs_dirty_data_max 393 MB on that host, so the entire payload was in RAM with
+# nowhere to go when the vdev vanished.
+#
+# What makes the second one a PACKAGE problem rather than a ZFS one: `detach`
+# runs OUTSIDE the generated bracket's `if`, so a cron job that meets it hangs
+# forever -- holding its flock, refusing every later run as contended, and never
+# alerting, because a job that never exits never reports a status.
+# ---------------------------------------------------------------------------
+: > "$EXPORTED_LOG"
+POOLS="hdd rotpool"; IMPORTABLE=""; DATASETS="hdd rotpool/replica"; POOL_GUID=11111111
+printf 'pool=rotpool\nguid=11111111\n' > "$STATE/rep.imported-by-us"
+EXPORT_HANGS=1
+out="$(MEDIA_EXPORT_TIMEOUT=1 g detach rotpool rep)"; rc=$?
+EXPORT_HANGS=""
+check "J1: AN EXPORT THAT NEVER RETURNS IS ABANDONED, NOT WAITED ON" "2" "$rc"
+has "DO NOT UNPLUG" "$out" && ok "J1: ...still saying DO NOT UNPLUG" \
+                           || bad "J1: ...still saying DO NOT UNPLUG" "$out"
+has "did not finish within" "$out" && ok "J1: ...and that it was a timeout, not a refusal" \
+                                   || bad "J1: ...and that it was a timeout, not a refusal" "$out"
+has "pulled DURING a run" "$out" && ok "J1: ...naming the cause an operator can act on" \
+                                 || bad "J1: ...naming the cause an operator can act on" "$out"
+rm -f "$STATE/rep.imported-by-us" 2>/dev/null || :
+
+# J2. failmode. Warned on import, never rewritten: it is a property of the
+#     administrator's pool, and silently changing how someone else's data behaves
+#     under failure is not this tool's call.
+: > "$EXPORTED_LOG"; : > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_FAILMODE=wait
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+check "J2: a wait-failmode medium still imports" "0" "$rc"
+has "failmode=wait" "$out" && ok "J2: ...but the foot-gun is named" \
+                           || bad "J2: ...but the foot-gun is named" "$out"
+has "zpool set failmode=continue" "$out" && ok "J2: ...with the command that changes it" \
+                                         || bad "J2: ...with the command that changes it" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+
+# J3. THE NEGATIVE SIDE. A pool already set to continue is not nagged about it.
+: > "$IMPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_FAILMODE=continue
+out="$(g attach rotpool rep --dataset rotpool/replica)"; rc=$?
+has "failmode=wait" "$out" && bad "J3: a pool already on continue is NOT nagged" "$out" \
+                           || ok "J3: a pool already on continue is NOT nagged"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep >/dev/null 2>&1
+POOL_FAILMODE=""
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

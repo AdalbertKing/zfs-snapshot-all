@@ -60,7 +60,7 @@ EOF
 # Found on the lab, 2026-08-29: a file-backed pool used to stand in for a
 # removable disk was reported "not here" while sitting in /root. Repeatable,
 # passed straight through to `zpool import -d`.
-VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0
+VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -105,6 +105,32 @@ emit() {
         >> "$STATS" 2>/dev/null || true
 }
 imported() { zpool list -H -o name "$POOL" >/dev/null 2>&1; }
+
+# HOW LONG AN EXPORT MAY TAKE BEFORE IT IS CALLED STUCK.
+#
+# Measured on the lab, 2026-08-29: with the ZFS default failmode=wait, pulling a
+# medium mid-run left `zpool export` in uninterruptible sleep for ELEVEN MINUTES
+# and still going -- unkillable, and re-inserting the disk did not free it,
+# because the kernel gave the returning disk a NEW device node while ZFS was
+# still waiting on the old one.
+#
+# That matters far beyond one command. `detach` runs OUTSIDE the generated
+# bracket's `if`, so a cron job that meets this hangs FOREVER: it holds its
+# flock, every later run of the same job is refused as contended, and nothing
+# alerts, because a job that never exits never reports a status. Silent,
+# permanent death of a backup job -- the exact shape this package keeps hunting.
+#
+# So the export is bounded. A timeout is not a fix for the underlying I/O -- it
+# cannot be -- but it converts an unkillable silence into a loud, non-zero
+# answer that names the disk and tells the operator not to unplug it.
+MEDIA_EXPORT_TIMEOUT="${MEDIA_EXPORT_TIMEOUT:-90}"
+bounded_export() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$MEDIA_EXPORT_TIMEOUT" zpool export "$POOL" 2>/dev/null
+        return $?
+    fi
+    zpool export "$POOL" 2>/dev/null
+}
 pool_guid() { zpool get -H -o value guid "$POOL" 2>/dev/null; }
 
 # Is the marker OURS, and about the pool that is in the slot right now?
@@ -212,7 +238,7 @@ attach)
     if ! check_dataset; then
         # We imported it and cannot use it. Put it back the way we found it
         # rather than leaving a pool imported that nobody asked for.
-        zpool export "$POOL" 2>/dev/null || say "and '$POOL' could NOT be exported again -- it is imported and unusable; look at it before pulling the disk."
+        bounded_export || say "and '$POOL' could NOT be exported again -- it is imported and unusable; look at it before pulling the disk."
         exit 2
     fi
     # RECORDING THAT WE IMPORTED IT IS NOT BEST-EFFORT.
@@ -231,7 +257,7 @@ attach)
 guid=%s
 ' "$POOL" "$(pool_guid)" > "$OURS" 2>/dev/null; then
         say "could not record that this run imported '$POOL' (state dir: $STATE_DIR). Without that marker nothing would ever export it again, so this run will not proceed as if it had one."
-        if zpool export "$POOL" 2>/dev/null; then
+        if bounded_export; then
             say "'$POOL' was exported again -- the machine is as it was before this run, and nothing was transferred."
             emit import_unrecorded
         else
@@ -241,6 +267,32 @@ guid=%s
         exit 2
     fi
     date '+%Y-%m-%d %H:%M:%S' > "$SEEN" 2>/dev/null || :
+
+    # failmode ON A DISK THAT LEAVES THE BUILDING.
+    #
+    # ZFS defaults to failmode=wait, which is right for a disk that is not going
+    # anywhere and wrong for one whose whole purpose is to be unplugged. Measured
+    # on the lab, 2026-08-29, on this exact shape:
+    #
+    #   * pulled between runs, pool exported      no harm
+    #   * pulled with the pool imported, idle     `zpool export` hung in
+    #                                             uninterruptible sleep, 11+ min,
+    #                                             unkillable
+    #   * pulled DURING a 300 MB write            the whole HOST went unreachable
+    #                                             and needed a hard reset
+    #
+    # The third is not ZFS being fragile, it is arithmetic: zfs_txg_timeout is 5s
+    # and zfs_dirty_data_max was 393 MB on that host, so the entire payload was
+    # sitting in RAM with nowhere to go when the vdev vanished.
+    #
+    # WARNED, NOT CHANGED. failmode is a property of the administrator's pool and
+    # silently rewriting it would be this tool deciding how someone else's data
+    # behaves under failure. The command is right there.
+    _fm="$(zpool get -H -o value failmode "$POOL" 2>/dev/null)"
+    if [ "$_fm" = wait ]; then
+        say "note: '$POOL' has failmode=wait, the ZFS default. On a disk that gets unplugged that turns a pull-while-imported into an unkillable hang rather than an error -- measured on the lab. Consider: zpool set failmode=continue $POOL"
+    fi
+
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
     emit imported; exit 0
     ;;
@@ -299,10 +351,18 @@ detach)
     # THE ONE FAILURE THAT MUST BE LOUD. An un-exported pool on a disk somebody
     # is about to unplug is how a replica gets corrupted, and this is the last
     # moment anything can say so.
-    if zpool export "$POOL" 2>/dev/null; then
+    # Captured from the call itself. Reading $? after the `if` gives the status
+    # of the COMPLETED if-statement -- zero when the branch was not taken -- so
+    # the timeout could never be told apart from an ordinary refusal.
+    bounded_export; _erc=$?
+    if [ "$_erc" -eq 0 ]; then
         rm -f "$OURS" 2>/dev/null || :
         say "exported '$POOL' -- the disk can be unplugged."
         emit exported; exit 0
+    fi
+    if [ "$_erc" -eq 124 ]; then
+        say "WARNING: exporting '$POOL' did not finish within ${MEDIA_EXPORT_TIMEOUT}s and was abandoned. DO NOT UNPLUG THE DISK. This is what a medium pulled DURING a run looks like: ZFS is waiting for a device that is not coming back, and with failmode=wait that wait has no end. The pool is still imported. Reconnect the disk if it was removed, then export by hand; if the export itself is stuck in uninterruptible sleep, only a reboot clears it."
+        emit export_timeout; exit 2
     fi
     say "WARNING: could not export '$POOL'. DO NOT UNPLUG THE DISK. Something still holds the pool -- a mounted dataset, an open file, a running send. Find it (zpool export shows the reason above), then export by hand."
     emit export_failed; exit 2
