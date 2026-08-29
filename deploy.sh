@@ -136,6 +136,59 @@ ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 # before the pair-gate section that used to define it.
 PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 
+# WHERE A RESTORE GRANT LIVES, and it is deliberately NOT under
+# $PAIR_GATE_STATE_DIR/<label>.
+#
+# That directory is root:<account> mode 0775 -- group-WRITABLE by the delegated
+# account, on purpose: the owner's 2026-08-06 model lets the relationship's own
+# key lift a hard pause, and lifting it means unlinking a marker IN that
+# directory. Anything else placed there inherits that permission.
+#
+# A restore grant placed there could therefore be CREATED BY THE COLLECTOR'S OWN
+# ACCOUNT. The grant exists precisely to stop the collector authorising itself
+# to overwrite this machine, so putting it in a directory the collector can
+# write is not a weakness in the mechanism -- it is the mechanism doing nothing
+# at all. `docs/design/client-granted-restore.md` § 3 said "root-owned, the
+# account has read-only access" and named a path that is neither.
+#
+# So: a separate tree, root:root, world-readable and writable by nobody but
+# root. The gate runs AS the account and only ever reads it.
+RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants}"
+
+# WHAT A RESTORE NEEDS THAT A BACKUP NEVER DID, measured on the lab 2026-08-27.
+#
+# The relationship account on a SOURCE holds the backup set:
+#     bookmark,destroy,hold,mount,release,send,snapshot
+# It can read its data out and manage its own snapshots. It cannot `receive` and
+# it cannot `rollback`, so a collector reaching that account today physically
+# cannot overwrite the machine -- which corrects a claim made earlier in this
+# work, that the capability already existed and was merely ungated. It does not
+# exist.
+#
+# That is a better design than the one assumed, and it is the reason the grant
+# issues BOTH halves together: the file that says "you may" and the delegation
+# that makes it possible. Neither alone lets a restore happen, and revoking
+# takes both back, so the window is exactly the grant's lifetime.
+#
+# `mount` and `canmount` are here because a received dataset that cannot be
+# mounted is not a restored one; `create` because a subtree may need a level the
+# target no longer has.
+# `mountpoint` is here because a received stream carries properties and the
+# receive sets them. Without it the transfer still lands but says "cannot receive
+# mountpoint property: permission denied" -- a restore that put the data back and
+# not the property that says where it belongs. Measured on the lab 2026-08-27.
+# ONLY what a backup does not already have. The backup set on a source is
+# bookmark,destroy,hold,mount,release,send,snapshot -- and `destroy` and `mount`
+# are in it. Listing them here made --deny-restore revoke them too, leaving the
+# account unable to prune its own snapshots or mount anything: the RESTORE was
+# taken back and the BACKUP broke with it.
+#
+# Measured on the lab 2026-08-27, while cleaning up: after one revoke the
+# account held bookmark,hold,release,send,snapshot. A grant that quietly narrows
+# the capability it was supposed to leave alone is worse than one that fails to
+# widen, because nothing reports it until the next prune does nothing.
+RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mountpoint}"
+
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
 # Phase 4 used to do this with a plain `chgrp -R "$ALERT_GROUP"
@@ -225,6 +278,24 @@ LEAVE_LABEL=""
 # contend with while it is trying to re-establish replication in the other
 # direction. Goes through lib-cron.sh's own lock/read-back, same as every
 # other writer -- this is one more requester, not a bypass.
+# GIVEN is tracked apart from the value, and it is not a nicety. The dispatch
+# used to be `[ -n "$ALLOW_RESTORE_LABEL" ]`, so `--allow-restore=` with an
+# empty value fell straight through it and deploy.sh went on to Phase 1 and
+# started installing packages on the host. A verb that answers a PERMISSION
+# question must never provision the machine on its way past -- that is the
+# reviewer's F4 finding of 2026-08-26, and a typo is exactly how it recurs.
+# Same discriminator deploy.sh already uses for --bandwidth.
+ALLOW_RESTORE_GIVEN=0
+DENY_RESTORE_GIVEN=0
+SHOW_RESTORE_GIVEN=0
+ALLOW_RESTORE_LABEL=""
+DENY_RESTORE_LABEL=""
+SHOW_RESTORE_LABEL=""
+# `replace` is never implied. Owner direction 2026-08-26 ("REPLACE jawnie przy
+# nadawaniu"): a grant that lets the collector write into free space must not
+# also let it destroy what is already there. The operator says so when they are
+# calm, not when the machine is already broken.
+ALLOW_RESTORE_REPLACE=0
 PAUSE_MODE=0
 RESUME_MODE=0
 # Default --pause/--resume touch only OUR managed blocks (comment out the
@@ -370,6 +441,10 @@ while [ "$#" -gt 0 ]; do
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --pause)        PAUSE_MODE=1; shift ;;
+        --allow-restore=*) ALLOW_RESTORE_LABEL="${1#*=}"; ALLOW_RESTORE_GIVEN=1; shift ;;
+        --deny-restore=*)  DENY_RESTORE_LABEL="${1#*=}"; DENY_RESTORE_GIVEN=1; shift ;;
+        --show-restore=*)  SHOW_RESTORE_LABEL="${1#*=}"; SHOW_RESTORE_GIVEN=1; shift ;;
+        --replace)         ALLOW_RESTORE_REPLACE=1; shift ;;
         --resume)       RESUME_MODE=1; shift ;;
         --fullcron)     FULLCRON_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -1448,6 +1523,22 @@ do_draft_scope() {
         rm -f "$tmp"
         die "could not write $sfile"
     fi
+    # WHAT THIS DRAFT WAS BUILT FROM, recorded beside it.
+    #
+    # A draft is reused on a later --join rather than regenerated, which is
+    # right: it is a consent document the administrator may have edited by
+    # hand, and silently rebuilding it would throw those edits away. But the
+    # collector's request can change between attempts -- re-run add-client with
+    # --datasets, hand over a new package -- and then the acceptance screen
+    # showed the CURRENT request beside a count and a grant computed from the
+    # STALE draft. Measured on pve9, 2026-08-29: "the collector asked for
+    # hdd/movelab/src" printed directly above "acceptance grants rights on 9
+    # dataset(s)", with nothing saying the draft predated the request.
+    #
+    # A sidecar rather than a line in the file: the scope file is hashed and
+    # enumerated, and a header comment would have to be excluded from both.
+    printf '%s
+' "$named" > "$sfile.request" 2>/dev/null         || die "drafted the scope but could not record the request it was built from ($sfile.request) -- refusing to leave a draft whose origin cannot be checked on the next run"
     log "drafted $sfile: ${#active[@]} active dataset(s) from ${#pools[@]} pool(s)"
     log "scope draft is ready for review"
 }
@@ -2370,6 +2461,258 @@ if [ "$SELF_UPDATE" -eq 1 ]; then exec_deployed_update_control --self-update; do
 if [ "$ROLLBACK" -eq 1 ]; then exec_deployed_update_control --rollback; do_rollback; exit $?; fi
 if [ "$RESUME_UPDATES" -eq 1 ]; then exec_deployed_update_control --resume-updates; do_resume_updates; exit $?; fi
 
+# ==============================================================================
+# RESTORE GRANT -- the fact on THIS machine that lets a collector overwrite it
+# ==============================================================================
+#
+# Owner decision, 2026-08-26/27: the COLLECTOR starts a restore. It connects to
+# the broken machine and writes. That is the direction the owner chose, and it
+# is the reason this file exists at all: under the pull form the machine being
+# overwritten would have been the one asking, and no capability to write onto
+# another machine would ever have to exist.
+#
+# Under push it does. So the grant is the whole of the safety, and its two
+# properties are the ones that make it worth anything:
+#
+#   * it is created HERE, by root, locally, on the machine at risk -- never by
+#     the collector and never over the link;
+#   * `replace` is never implied. A grant lets the collector write into free
+#     space; destroying what is already there has to be said out loud, in the
+#     grant, at a moment when nothing is broken and nobody is in a hurry.
+#
+# The grant does not expire and is not single-use (owner: a recovery may take an
+# hour or a weekend, and a grant that dies mid-recovery dies at the worst
+# possible moment). The price of that is a grant left behind stays live, so
+# --show-restore exists and the gate reports it.
+restore_grant_label_ok() {   # <label>
+    case "${1:-}" in
+        ''|.|..)              return 1 ;;
+        *[!A-Za-z0-9._-]*)    return 1 ;;
+    esac
+    return 0
+}
+
+restore_grant_path() {   # <label>
+    printf '%s/%s' "$RESTORE_GRANT_DIR" "$1"
+}
+
+# The modes a grant permits, as a stable, comparable string.
+restore_grant_modes() {   # <replace 0|1>
+    if [ "${1:-0}" -eq 1 ]; then printf 'create rewind replace'; else printf 'create rewind'; fi
+}
+
+restore_grant_read_modes() {   # <path> -> the modes it records, or nothing
+    [ -r "$1" ] || return 1
+    sed -n 's/^RESTORE_GRANT_MODES="\(.*\)"$/\1/p' "$1" 2>/dev/null | head -1
+}
+
+do_allow_restore() {
+    local label="$ALLOW_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
+    restore_grant_label_ok "$label" \
+        || die "--allow-restore='$label' is not a valid relationship label (letters, digits, dot, dash, underscore)"
+
+    # The relationship has to EXIST here. A grant naming a relationship this
+    # host has never enrolled is a typo, and a typo that silently creates a
+    # live permission is the failure this whole mechanism is about.
+    [ -d "$PAIR_GATE_STATE_DIR/$label" ] \
+        || die "no relationship '$label' is enrolled on this host ($PAIR_GATE_STATE_DIR/$label does not exist) -- a grant for a relationship that does not exist would be a permission nobody can see. Check the label with: ls $PAIR_GATE_STATE_DIR"
+
+    # WHO and WHAT, from the file that already recorded them: the peer manifest
+    # this host wrote when it was joined. Same source as the backup delegation,
+    # so a restore can never be granted on a wider scope than the relationship
+    # was ever given, and nothing has to be typed twice at three in the morning.
+    #
+    # Read through peer_manifest_path and sourced, the way every other reader in
+    # this file does it. A hand-rolled parser here would be a second opinion
+    # about the manifest's format.
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    [ -r "$_pm" ] || die "--allow-restore=$label: no pairing manifest at $_pm -- this host has no record of that relationship, so there is nobody to delegate to and no scope to delegate over."
+    # shellcheck disable=SC1090
+    . "$_pm"
+    local account="${PEER_JOIN_ACCOUNT:-}"
+    local RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    [ -n "$account" ] || die "--allow-restore=$label: the manifest names no account, so a grant file would say yes to nobody."
+    [ -n "$RESTORE_GRANT_DATASETS" ] || die "--allow-restore=$label: the manifest records no granted datasets, so the restore would have no scope. Refusing rather than guessing one."
+
+    local want; want="$(restore_grant_modes "$ALLOW_RESTORE_REPLACE")"
+    local gpath; gpath="$(restore_grant_path "$label")"
+
+    if [ -f "$gpath" ]; then
+        local have; have="$(restore_grant_read_modes "$gpath")" || have=""
+        if [ "$have" = "$want" ]; then
+            # Converges on a retry, the same way the gate's own `disable` verb
+            # does: re-asserting what is already true is a success, and the
+            # ORIGINAL grant time is the useful fact, so it is kept.
+            log "restore grant for '$label' already says exactly this ($want) -- nothing changed"
+            return 0
+        fi
+        die "a restore grant for '$label' already exists and says '${have:-<unreadable>}', not '$want'. Changing what a live grant permits is not a side effect of re-issuing it -- take it back first, deliberately:
+    $0 --deny-restore=$label
+  then grant again with the modes you want."
+    fi
+
+    mkdir -p "$RESTORE_GRANT_DIR" || die "could not create $RESTORE_GRANT_DIR"
+    # root:root, and NOT group-writable. See the comment on RESTORE_GRANT_DIR:
+    # the relationship's own state directory is group-writable by the delegated
+    # account by design, so a grant kept there could be written by the very
+    # account it exists to restrain.
+    chown root:root "$RESTORE_GRANT_DIR" 2>/dev/null || :
+    chmod 0755 "$RESTORE_GRANT_DIR" 2>/dev/null || :
+
+    local tmp; tmp="$(mktemp "$RESTORE_GRANT_DIR/.grant.XXXXXX")" || die "could not write in $RESTORE_GRANT_DIR"
+    {
+        printf '# Restore grant. Written by deploy.sh --allow-restore on this host.\n'
+        printf '# It permits the collector of relationship %s to restore ONTO this\n' "$label"
+        printf '# machine. It does not expire; take it back with:\n'
+        printf '#     deploy.sh --deny-restore=%s\n' "$label"
+        printf 'RESTORE_GRANT_LABEL="%s"\n' "$label"
+        printf 'RESTORE_GRANT_MODES="%s"\n' "$want"
+        printf 'RESTORE_GRANT_AT="%s"\n' "$(date -Is 2>/dev/null || date)"
+        printf 'RESTORE_GRANT_BY="%s@%s"\n' "${SUDO_USER:-root}" "$(hostname -s 2>/dev/null || hostname)"
+        # WHAT the grant covers, not only what it permits. Until 2026-08-28 this
+        # file recorded the modes and left the scope implicit -- readable only by
+        # going back to the pairing manifest it was built from.
+        #
+        # The collector needs it, for one reason that is not bookkeeping:
+        # `replace` destroys a dataset and recreates it, and a `zfs allow` lives
+        # ON the dataset. Replacing the ROOT of the delegated scope therefore
+        # destroys the delegation, and recreating it needs permission on the
+        # PARENT -- which a delegated account does not have and should not.
+        # Measured on the lab that day: it left the target with no dataset, no
+        # grant, and no way for the account to make either.
+        #
+        # So the roots travel with the grant, and the restore refuses that one
+        # shape before the engine runs.
+        printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
+    } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
+    chown root:root "$tmp" 2>/dev/null || :
+    chmod 0644 "$tmp" 2>/dev/null || :
+    mv -f "$tmp" "$gpath" || { rm -f "$tmp"; die "could not install $gpath"; }
+
+    # THE DELEGATION, and it is not a convenience: without it the grant is a file
+    # saying yes next to an account that cannot act. Done AFTER the file, so a
+    # failure here leaves a grant that refuses rather than a capability nobody
+    # declared -- the safe order of the two.
+    local _rg_ds _rg_failed=0
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ]; then
+        for _rg_ds in $RESTORE_GRANT_DATASETS; do
+            zfs allow -u "$account" "$RESTORE_ZFS_PERMS" -- "$_rg_ds" 2>/dev/null \
+                || { warn "could not delegate ($RESTORE_ZFS_PERMS) to '$account' on '$_rg_ds'"; _rg_failed=1; }
+        done
+        if [ "$_rg_failed" -eq 0 ]; then
+            log "  delegated:    $RESTORE_ZFS_PERMS to '$account' on: $RESTORE_GRANT_DATASETS"
+        else
+            warn "  the grant FILE is written but the delegation is incomplete -- a restore will be refused by ZFS, not by the grant. Fix the allow above and re-run."
+        fi
+    fi
+
+    log "restore grant WRITTEN: $gpath"
+    log "  relationship: $label"
+    log "  permits:      $want"
+    if [ "$ALLOW_RESTORE_REPLACE" -eq 1 ]; then
+        warn "  REPLACE IS INCLUDED. The collector for '$label' may now DESTROY data on this machine and put an older copy in its place. That is what you asked for; it stays true until you run: $0 --deny-restore=$label"
+    else
+        log "  replace:      NO -- the collector may write where there is free space, and may not overwrite what is already here. Add --replace only if you mean it."
+    fi
+    log "  this grant does NOT expire. See it with: $0 --show-restore=$label"
+    return 0
+}
+
+do_deny_restore() {
+    local label="$DENY_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--deny-restore must run as root on this machine"
+    restore_grant_label_ok "$label" \
+        || die "--deny-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        # A no-op success, deliberately: the state the operator asked for is the
+        # state that exists. Making this an error would mean a second
+        # `--deny-restore` after a lost acknowledgement reports a failure while
+        # the machine is, in fact, exactly as safe as they wanted.
+        log "no restore grant for '$label' on this host -- nothing to take back"
+        return 0
+    fi
+    local had; had="$(restore_grant_read_modes "$gpath")" || had=""
+    # The same two facts, from the same file and the same reader, so the revoke
+    # undoes exactly what the grant did rather than a set typed a second time.
+    local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    if [ -r "$_pm" ]; then
+        # shellcheck disable=SC1090
+        . "$_pm"
+        RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
+        RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    fi
+    rm -f "$gpath" || die "could not remove $gpath"
+    # Both halves, and the delegation first: while it is still delegated the
+    # account CAN act, so removing that is the half that actually closes the
+    # window. The file is the declaration; the allow is the capability.
+    local _rd_ds
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
+        for _rd_ds in $RESTORE_GRANT_DATASETS; do
+            zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null \
+                || warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+        done
+        log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+    fi
+
+    log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
+    log "  the collector for '$label' can no longer write onto this machine."
+    return 0
+}
+
+do_show_restore() {
+    local label="$SHOW_RESTORE_LABEL"
+    restore_grant_label_ok "$label" \
+        || die "--show-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        echo "RESTORE_GRANT=none"
+        echo "  no relationship '$label' may restore onto this machine."
+        return 0
+    fi
+    local modes at by
+    modes="$(restore_grant_read_modes "$gpath")" || modes=""
+    at="$(sed -n 's/^RESTORE_GRANT_AT="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    by="$(sed -n 's/^RESTORE_GRANT_BY="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    echo "RESTORE_GRANT=present"
+    echo "  relationship: $label"
+    echo "  permits:      ${modes:-<unreadable>}"
+    echo "  granted:      ${at:-unknown} by ${by:-unknown}"
+    case " ${modes:-} " in
+        *" replace "*)
+            echo "  WARNING: this grant includes REPLACE -- the collector may destroy data here."
+            echo "           It does not expire. Take it back with: $0 --deny-restore=$label" ;;
+        *)  echo "  replace:      no" ;;
+    esac
+    return 0
+}
+
+# A GRANT IS A DECISION ABOUT PERMISSIONS, so it dispatches here, beside
+# --pause, and not down among the host phases. That is the reviewer's F4 finding
+# of 2026-08-26 -- `--commit-scope` answered a permission question and installed
+# a capacity-check cron line on a production host on its way past -- applied
+# ahead of the same thing happening again.
+if [ "$ALLOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_allow_restore
+    exit $?
+fi
+if [ "$DENY_RESTORE_GIVEN" -eq 1 ]; then
+    do_deny_restore
+    exit $?
+fi
+if [ "$SHOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_show_restore
+    exit $?
+fi
+
+# Placed ABOVE the global root gate on purpose. --show-restore only READS,
+# and "is anything allowed to overwrite this machine?" is a question an
+# operator must be able to ask without becoming root first. The two verbs
+# that CHANGE a grant check for root themselves, and say why they need it --
+# which the generic "run as root" below cannot.
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
 [ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
@@ -2822,6 +3165,7 @@ do_pause_blocks_one() {   # <user>
     log "$user: paused ($count block(s))"
     return 0
 }
+
 
 do_pause() {
     local user rc=0
@@ -5849,6 +6193,35 @@ guided_join_scope() {   # <label>
     fi
     if [ ! -e "$sfile" ]; then
         do_draft_scope "$label"
+    else
+        # THE DRAFT IS REUSED, SO IT MUST STILL ANSWER THE SAME QUESTION.
+        #
+        # Fail closed, and only in the direction that matters: a draft built
+        # when the collector named nothing is a proposal covering the whole
+        # estate, and reusing it against a request that names one dataset is
+        # how a one-dataset ask turns into a nine-dataset grant with the
+        # operator looking straight at both numbers. Refusing costs one command;
+        # the alternative costs a delegated account rights over the host.
+        # Only a PROVEN mismatch refuses. A missing sidecar means the draft
+        # predates this check -- every host mid-join at upgrade time has one --
+        # and turning that into a refusal would block work on evidence nobody
+        # has. It is said out loud instead, next to the request line the
+        # operator is already reading.
+        local _want _had
+        _want="${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+        if [ ! -r "$sfile.request" ]; then
+            echo "!!! Szkic zakresu $sfile pochodzi sprzed zapisywania prosby, wiec" >&2
+            echo "!!! NIE zostal sprawdzony wzgledem tego, o co kolektor prosi teraz." >&2
+            echo "!!! Porownaj ponizsza liste z linia 'Kolektor prosil o:' sam." >&2
+        else
+        _had="$(cat "$sfile.request" 2>/dev/null)"
+        if [ "$_had" != "$_want" ]; then
+            echo "!!! Szkic zakresu $sfile powstal dla INNEJ prosby niz obecna." >&2
+            echo "!!!   szkic zbudowano dla: ${_had:-(nic -- caly majatek hosta)}" >&2
+            echo "!!!   kolektor prosi teraz o: ${_want:-(nic -- caly majatek hosta)}" >&2
+            die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft by hand if its contents are still what you mean, and re-run --commit-scope=$label)."
+        fi
+        fi
     fi
 
     while :; do

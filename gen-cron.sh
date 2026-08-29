@@ -1019,7 +1019,7 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|prune-bookmarks|excluded) : ;;
+                    template|dataset|prune|prune-bookmarks|replica|excluded) : ;;
                     *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
@@ -1111,15 +1111,55 @@ _allow_fields defaults  host_label repo_dir notify_script warn_script \
                         digest_script cron_log $DEFAULTS_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields template  $POLICY_FIELDS
+# media = removable  -- THIS TARGET IS A DISK THAT GETS UNPLUGGED.
+#
+# Owner's shape, 2026-08-28, modelled on FerroBackup's replica: a source may
+# have several replica targets and some of them are pools on disks carried away
+# to a safe. For those, the transfer is bracketed --
+#
+#     zfs-media-gate.sh attach  ->  the engine  ->  zfs-media-gate.sh detach
+#
+# -- so the pool is imported before the write and exported after it, and the
+# disk can be pulled the moment the run ends.
+#
+# THE POINT OF THE FIELD IS THE ABSENT CASE. Without it, a target that is not
+# there is a failed job and an alert; with it, it is a disk in a safe. The gate
+# exits 1, the generated line reads that and skips, and nothing alarms. One
+# replica being away must not affect the other two.
+#
+# Anything other than `removable` is refused rather than ignored: a typo here
+# would silently produce an ordinary job that alerts every night the disk is
+# out.
+#
 # pair_label names the RELATIONSHIP (zfs-backup.sh client) a section belongs
-# to (REV-20260804-045). On a [dataset:] it reaches the transfer command
-# (-L) and that dataset's staleness monitor; on a [prune:] it reaches ONLY
-# the section's staleness monitor -- the delsnaps line itself is never
-# gated, because retention of what already landed stays correct while a
-# relationship is paused; only new transfers and the alarms about their
-# absence stop. Deliberately NOT in POLICY_FIELDS: no template/defaults
-# inheritance -- a label that silently spread to unrelated sections would
-# make one pause skip a stranger's backup.
+# to (REV-20260804-045). It reaches the transfer command, the staleness
+# monitor, AND the delsnaps line -- every job this package puts in a crontab
+# for that relationship.
+#
+# THE PRUNE LINE USED TO BE UNGATED, AND THAT REASONING IS WORTH KEEPING,
+# because it was right about the case it considered and wrong about the one
+# it did not. It said: "retention of what already landed stays correct while
+# a relationship is paused; only new transfers and the alarms about their
+# absence stop." True for an ordinary pause. False for the reason a pause is
+# most needed.
+#
+# Measured on the lab, 2026-08-27: during a restore campaign the source-side
+# prune fired at :21, applied its GFS ladder to a source the restore had just
+# rolled back, and destroyed the recovery point itself. The relationship was
+# left with no common snapshot at all. "Retention stays correct" assumed the
+# data underneath it was not moving; a restore is exactly when it is.
+#
+# Owner direction, 2026-08-27: "pausa ma wstrzymac wszelkie operacje cronowe
+# naszego pakietu z prunem wlacznie." delsnaps.sh gained -L for it and the
+# freeze was lifted for that change.
+#
+# NOT by disabling cron: the host's crontab carries jobs that are not ours,
+# and stopping the daemon to pause one relationship stops those too. The
+# switch stays per relationship, inside our own jobs.
+#
+# Deliberately NOT in POLICY_FIELDS: no template/defaults inheritance -- a
+# label that silently spread to unrelated sections would make one pause skip
+# a stranger's backup.
 # A [dataset:] reads all of POLICY_FIELDS off itself except the two wording
 # fields build_dataset deliberately takes from the TEMPLATE only: notify_word
 # (the noun in the synthesized text, a property of the tier) and
@@ -1141,12 +1181,39 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # that do not share a destination, so there is no layer above the section where
 # a link value would be true for everything that inherited it.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label recursive \
+_allow_fields dataset   use_template pair_label recursive media \
                         bandwidth compression cipher $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
-_allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify
+_allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
+
+# [replica:<name>] -- ANOTHER COPY OF WHAT THIS HOST ALREADY HOLDS.
+#
+# Owner's shape, 2026-08-28/29, modelled on FerroBackup: a source may have
+# SEVERAL replica targets -- three in the case that prompted this, two of them
+# weekly rotating disks and one a quarterly disk in a safe.
+#
+# WHY A SECTION TYPE AND NOT ANOTHER dst ON [dataset:]. A [dataset:] section is
+# keyed by its path and there can only be one per path, so three replicas of one
+# source cannot be spelled there at all -- `duplicate section` (measured while
+# building the pve9 lab, 2026-08-29). Loosening that key was the alternative and
+# it is the worse one: managed-by ownership, the staleness monitor, prune
+# co-location, reconcile and cron2conf all assume one section per dataset, and
+# every one of them would have to learn a second answer.
+#
+# A replica is also a different KIND of job, which is what makes the separate
+# type honest rather than a workaround:
+#   * it has no staleness monitor -- freshness is a property of the primary
+#     copy, and alerting twice on one late backup is how alerts get ignored;
+#   * it does not prune its source; the source is our own copy, pruned by
+#     whatever already owns it;
+#   * it belongs to no client relationship, so it carries no pair_label and no
+#     managed-by marker;
+#   * and there are N of them, which is the whole point.
+#
+# The name in the header is just a label -- it names the medium, not a dataset.
+_allow_fields replica  source dst schedule prefix notify media recursive flags history
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -1154,7 +1221,7 @@ _allow_fields excluded  keep
 # it" and needs a different fix.
 field_valid_elsewhere() {
     local field="$1" k out=""
-    for k in defaults template dataset prune prune-bookmarks excluded; do
+    for k in defaults template dataset prune prune-bookmarks replica excluded; do
         [ -n "${FIELD_OK[${k}${SEP}${field}]+x}" ] && out="$out [$k:]"
     done
     printf '%s' "$out"
@@ -1740,6 +1807,7 @@ build_entities() {
     declare -ga PRUNE_SEC_ENTITIES=()
     declare -ga GFS_PRUNE_SEC_ENTITIES=()
     declare -ga BOOKMARK_PRUNE_ENTITIES=()
+    declare -ga REPLICA_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
@@ -1761,6 +1829,7 @@ build_entities() {
             dataset)         build_dataset "$section" "$name" "$host_label" ;;
             prune)            build_prune_section "$section" "$name" "$host_label" ;;
             prune-bookmarks)  build_bookmark_prune_section "$section" "$name" "$host_label" ;;
+            replica)          build_replica_section "$section" "$name" "$host_label" ;;
         esac
     done
 }
@@ -1806,6 +1875,17 @@ build_dataset() {
             *[!A-Za-z0-9._-]*) die "[dataset:$ds_path]: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only (it becomes snapget/snapsend/check-snap-age -L and a directory name under /var/lib/zfs-snapshot-all/relationships)" ;;
         esac
     fi
+
+    # media = removable: this target is a disk that gets unplugged. Anything
+    # else is refused rather than ignored -- a typo here would silently produce
+    # an ordinary job that alerts every night the disk is out, which is the
+    # exact noise this field exists to remove.
+    local media
+    media="$(resolve_field media "$ds" "" "")" || media=""
+    case "$media" in
+        ''|removable) ;;
+        *) die "[dataset:$ds_path]: media='$media' -- the only value is 'removable' (the target is a disk that gets unplugged, so the run is bracketed by zpool import/export and an absent disk is a skip rather than a failure). Leave the field out for an ordinary target." ;;
+    esac
 
     # REV-20260807-054: recursion, declared ONCE for the whole section. The
     # three lines a [dataset:] can generate -- transfer, inline prune, monitor
@@ -2016,7 +2096,7 @@ build_dataset() {
             # which one it is for emit_send. Kept in the SAME slot rather than
             # adding a parallel field so group_send's existing key shape needs only
             # one addition (direction itself) instead of two.
-            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}")
+            SEND_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${send_schedule}${SEP}${remote_spec}${SEP}${prefix}${SEP}${flags}${SEP}${notify}${SEP}${label}${SEP}${direction}${SEP}${media}${SEP}${pair_label}")
         fi
 
         # ---- inline self-prune (own path, non-recursive) ----
@@ -2055,7 +2135,7 @@ build_dataset() {
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}")
+            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
             # ---- monitor (rides this same pattern and the same scope) ----
@@ -2117,9 +2197,13 @@ build_prune_section() {
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune:$scope]" "$scope"
 
-    # REV-20260804-045: reaches ONLY this section's staleness monitor below.
-    # The delsnaps line itself is never gated by logical pause -- see the
-    # comment at the field allow-list.
+    # REV-20260804-045 said this reached ONLY the staleness monitor, because the
+    # delsnaps line was never gated by the logical pause. That stopped being
+    # true when delsnaps.sh gained -L: the label now reaches BOTH the monitor
+    # and the prune, and the prune exits before any listing, SSH or destroy
+    # while the pause stands. Corrected under REV-20260829-124 F2 -- a comment
+    # describing the opposite of the code is how the next reader reintroduces
+    # the gap.
     local pair_label
     pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
     if [ -n "$pair_label" ]; then
@@ -2245,7 +2329,7 @@ build_prune_section() {
             retain_flag="$RESOLVED_RETAIN"
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
             die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
@@ -2287,7 +2371,7 @@ build_prune_section() {
             gplabel="$(resolve_field notify "$sec" "" "")" || gplabel=""
             gpnotify="$(notify_text "$host_label" "gfs" "prune" "$gplabel")"
         fi
-        GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}")
+        GFS_PRUNE_SEC_ENTITIES+=("${scope}${SEP}${gfs_pattern}${SEP}${gfs_retain_parts}${SEP}${gfs_schedule}${SEP}${gpnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
         SCOPE_PATTERNS+=("${scope}${SEP}${gfs_pattern}")
     fi
 }
@@ -2297,6 +2381,140 @@ build_prune_section() {
 # scope, unrelated to any send/prune tier's own cadence. Reads fields
 # directly off the section (ini_has/ini_get), not through resolve_field's
 # dataset/template/defaults layering -- there is no layering to do here.
+# build_replica_section SECTION_HEADER NAME HOST_LABEL
+#
+# [replica:<name>] -- one more copy of a dataset this host already holds, most
+# often onto a disk that gets unplugged. See the field allow-list above for why
+# this is a section type of its own rather than a second dst on [dataset:].
+#
+# Deliberately NOT inherited from [template:]. A template carries a backup
+# policy -- retention tiers, prune schedules, a monitor -- and a replica has
+# none of those; letting it use_template would mean silently ignoring most of
+# what the template says, which is how a config comes to mean something other
+# than it reads.
+build_replica_section() {
+    local sec="$1" name="$2" host_label="$3"
+
+    case "$name" in
+        ''|*[!A-Za-z0-9._-]*) die "[replica:$name]: the name is a label for the medium -- letters, digits, dot, dash, underscore only (it becomes the notify text and the media gate's state file name)" ;;
+    esac
+
+    ini_has "$sec" source || die "[replica:$name] has no 'source' -- name the dataset on THIS host to copy (a replica copies what we already hold; it does not reach for a remote)"
+    local source; source="$(ini_get "$sec" source)"
+    case "$source" in
+        */*) ;;
+        *) die "[replica:$name]: source='$source' is a pool name, not a dataset -- name the dataset to copy" ;;
+    esac
+    case "$source" in
+        *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: source='$source' is not a valid ZFS dataset name" ;;
+    esac
+
+    ini_has "$sec" dst || die "[replica:$name] has no 'dst' -- the base dataset on the target medium, e.g. usbrep1/replica"
+    local dst; dst="$(ini_get "$sec" dst)"
+    # LOCAL ONLY, and refused rather than quietly accepted. A remote replica is
+    # a backup relationship and belongs in [dataset:] with a pair_label, where
+    # it gets the monitor and the pause a remote link needs. Accepting a
+    # user@host here would produce a job with neither.
+    case "$dst" in
+        *:*) die "[replica:$name]: dst='$dst' names a remote target. A replica is a LOCAL copy of what this host already holds; a copy onto another machine is a backup relationship and belongs in a [dataset:] section with a pair_label, so that it gets the staleness monitor and the pause that a remote link needs." ;;
+    esac
+    case "$dst" in
+        */*) ;;
+        *) die "[replica:$name]: dst='$dst' is a pool name, not a dataset. Name the base dataset the administrator prepares on the medium (e.g. ${dst}/replica) -- that dataset existing is what tells the gate the RIGHT disk is in the slot, and a pool root cannot say that." ;;
+    esac
+    case "$dst" in
+        *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: dst='$dst' is not a valid ZFS dataset name" ;;
+    esac
+    # The source cannot be inside its own target, or every run would copy the
+    # previous run's copy.
+    case "$dst" in
+        "$source"|"$source"/*) die "[replica:$name]: dst='$dst' is inside source='$source' -- each run would copy the previous run's copy" ;;
+    esac
+    case "$source" in
+        "$dst"/*) die "[replica:$name]: source='$source' is inside dst='$dst' -- the target holds the source" ;;
+    esac
+
+    ini_has "$sec" schedule || die "[replica:$name] has no 'schedule'"
+    local schedule; schedule="$(ini_get "$sec" schedule)"
+    lint_cron_schedule "$schedule" "[replica:$name]" schedule
+
+    # A FAMILY OF ITS OWN, and this is the owner's point (2026-08-28): the
+    # replica's snapshots must not be mistaken for the source's. They exist on
+    # the copy and not on the machine the data came from, so sharing the
+    # incoming family's prefix would make the collector's own retention and
+    # staleness reasoning answer for snapshots it never took.
+    local prefix; prefix="$(resolve_field prefix "$sec" "" "")" || prefix=""
+    [ -n "$prefix" ] || die "[replica:$name] has no 'prefix' -- a replica takes its own snapshot family, separate from the one it is copying, so that the copy's snapshots are never confused with the source's"
+    case "$prefix" in
+        *[!A-Za-z0-9._-]*) die "[replica:$name]: prefix='$prefix' -- letters, digits, dot, dash, underscore only (it becomes part of a snapshot name)" ;;
+    esac
+
+    # Composed here, like every other section type, so the emitter has nothing
+    # to assemble and $host_label does not have to be in scope at emit time.
+    local label notify
+    label="$(resolve_field notify "$sec" "" "")" || label=""
+    [ -n "$label" ] || label="$name"
+    notify="$(notify_text "$host_label" "replica" "copy" "$label")"
+
+    local media; media="$(resolve_field media "$sec" "" "")" || media=""
+    case "$media" in
+        ''|removable) ;;
+        *) die "[replica:$name]: media='$media' -- the only value is 'removable' (the target is a disk that gets unplugged, so the run is bracketed by zpool import/export and an absent disk is a skip rather than a failure). Leave the field out for a target that is always there." ;;
+    esac
+
+    local recursive; resolve_bool_field recursive "$sec" "" "[replica:$name]" 0; recursive="$BOOL_FIELD"
+
+    local flags; flags="$(resolve_field flags "$sec" "" "")" || flags=""
+    lint_flags "$flags" "[replica:$name]"
+
+    # history -- HOW MUCH OF THE GAP TRAVELS, when a common snapshot survived.
+    #
+    # Owner's question, 2026-08-29: for a disk that was in a safe for a quarter,
+    # dragging every snapshot in between may be exactly wrong -- or exactly the
+    # point. There is no default that is right for both of his own disks:
+    #
+    #   * the weekly rotating pair carries the current state, and the snapshots
+    #     that happened while it was in the drawer are cheap but pointless;
+    #   * the quarterly disk IS the archive, and the full history is arguably
+    #     the whole reason for fetching it out.
+    #
+    # So it is stated, not guessed. `all` keeps zfs send -I, the default this
+    # package has always had; `newest` is -i; `auto:N` is -T N, which measures
+    # the gap in the DATASET'S OWN snapshot intervals rather than wall-clock.
+    #
+    # It only bites when a common snapshot still exists. Once retention has
+    # eaten it the engine falls back to the bookmark anchor, and a bookmark
+    # carries no data -- the send is one diff whatever this field says.
+    #
+    # THE COST, because a field that hides it would be worse than no field: with
+    # `newest` or `auto`, the copy gets HOLES. Snapshots taken between two
+    # visits of the medium never reach it. What is already on the disk stays.
+    local history hist_flags=""
+    history="$(resolve_field history "$sec" "" "")" || history=""
+    case "$history" in
+        ''|all)   hist_flags="" ;;
+        newest)   hist_flags="-i" ;;
+        auto:*)   local _n="${history#auto:}"
+                  case "$_n" in
+                      ''|*[!0-9]*) die "[replica:$name]: history='$history' -- auto: takes a count of the dataset's own snapshot intervals, e.g. auto:3" ;;
+                  esac
+                  [ "$_n" -gt 0 ] 2>/dev/null || die "[replica:$name]: history='$history' -- auto:0 would switch on the first run, which is what 'newest' says plainly"
+                  hist_flags="-T $_n" ;;
+        auto)     die "[replica:$name]: history='auto' needs the count it switches at, e.g. auto:3 -- how many of this dataset's own snapshot intervals may pass before the run stops carrying intermediates" ;;
+        *)        die "[replica:$name]: history='$history' -- expected 'all' (every snapshot in between, zfs send -I, the default), 'newest' (only the diff to the newest, -i) or 'auto:N' (-T N: let the engine decide, measured in this dataset's own snapshot intervals)" ;;
+    esac
+    # TWO ANSWERS TO ONE QUESTION IS A REFUSAL, not a precedence rule. Somebody
+    # who wrote both meant one of them, and picking for them is how a config
+    # comes to mean something other than it reads.
+    if [ -n "$hist_flags" ]; then
+        case " $flags " in
+            *" -i "*|*" -T "*) die "[replica:$name]: history='$history' and 'flags' both decide how much of the gap travels ('$flags'). Say it once -- keep 'history' and drop -i/-T from flags." ;;
+        esac
+    fi
+
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}")
+}
+
 build_bookmark_prune_section() {
     local sec="$1" scope="$2" host_label="$3"
 
@@ -2359,7 +2577,17 @@ build_bookmark_prune_section() {
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
     lint_ssh_flags "$ssh_flags" "[prune-bookmarks:$scope]" "$scope"
 
-    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${ssh_flags}")
+    # The same relationship gate as every other prune line. A bookmark is what
+    # a restore falls back to when the snapshot itself is gone, so a bookmark
+    # prune still running through a recovery can take the last thing standing.
+    local pair_label
+    pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
+    if [ -n "$pair_label" ]; then
+        case "$pair_label" in
+            *[!A-Za-z0-9._-]*) die "[prune-bookmarks:$scope]: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only (it becomes delsnaps -L and a directory name under /var/lib/zfs-snapshot-all/relationships)" ;;
+        esac
+    fi
+    BOOKMARK_PRUNE_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${age}${SEP}${schedule}${SEP}${notify}${SEP}${recursive}${SEP}${ssh_flags}${SEP}${pair_label}")
 }
 ###############################################################################
 #END 3.5
@@ -2376,11 +2604,15 @@ group_send() {
     declare -ga SEND_GROUP_ORDER=()
     local e ds tier schedule dst prefix flags notify label direction key
     for e in "${SEND_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "$e"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "$e"
         # direction is IN the key: a push and a pull could otherwise share an
         # identical (schedule,remote-spec,prefix,flags) tuple by coincidence and
         # merge into one line that calls the wrong script for half its members.
-        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}"
+        # 'media' is IN the key. The import/export bracket wraps the whole cron
+        # line, so a removable target merged with an ordinary one would either
+        # export a pool the other job still needs, or skip that other job every
+        # time the disk is out. They are different lines by construction.
+        key="${schedule}${SEP}${dst}${SEP}${prefix}${SEP}${flags}${SEP}${direction}${SEP}${media}${SEP}${plabel}"
         [ -z "${SEND_GROUPS[$key]+x}" ] && SEND_GROUP_ORDER+=("$key")
         SEND_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2389,9 +2621,9 @@ group_send() {
 group_inline_prune() {
     declare -gA INLINE_PRUNE_GROUPS=()
     declare -ga INLINE_PRUNE_GROUP_ORDER=()
-    local e ds tier pattern retain schedule notify recursive key
+    local e ds tier pattern retain schedule notify recursive pairlbl key
     for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "$e"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "$e"
         # 'recursive' is IN the key. A delsnaps.sh line carries -R or it does
         # not, for every dataset it names -- so merging a recursive dataset
         # with a non-recursive one would silently give one of them the wrong
@@ -2413,7 +2645,14 @@ group_inline_prune() {
         # line per relationship per tier instead of one per tier -- which is
         # what the SEND side already emits, so the two sides now match rather
         # than one of them quietly folding relationships together.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}"
+        # pair_label joins the key for the same reason 'notify' did one field
+        # earlier: the line carries ONE -L, so a group spanning two
+        # relationships would gate both on one of them -- and a pause taken for
+        # a restore would leave the other relationship's retention running
+        # under a label that says it is stopped. In practice 'notify' already
+        # separates them; this makes the property structural rather than
+        # incidental to how the notify text happens to be built.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2450,10 +2689,18 @@ group_monitor() {
 group_bookmark_prune() {
     declare -gA BOOKMARK_PRUNE_GROUPS=()
     declare -ga BOOKMARK_PRUNE_GROUP_ORDER=()
-    local e scope pattern age schedule notify recursive sshflags key
+    local e scope pattern age schedule notify recursive sshflags pairlbl key
+    # EVERY field is named. `read` puts the unread remainder in the LAST
+    # variable, so a reader one name short does not fail -- it silently glues
+    # the extra field onto ssh_flags. That is what happened here when
+    # pair_label was appended to this tuple: the rendered line carried
+    # `-p 2222<SEP>relacja1` as if it were a port. Third time in this file for
+    # the same family; see the error log's R3 and E21.
     for e in "${BOOKMARK_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "$e"
-        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags pairlbl <<< "$e"
+        # pair_label is IN the key: -L becomes part of the emitted command, so
+        # two scopes belonging to different relationships cannot share a line.
+        key="${schedule}${SEP}${pattern}${SEP}${age}${SEP}${recursive}${SEP}${sshflags}${SEP}${pairlbl}"
         [ -z "${BOOKMARK_PRUNE_GROUPS[$key]+x}" ] && BOOKMARK_PRUNE_GROUP_ORDER+=("$key")
         BOOKMARK_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -2468,6 +2715,60 @@ group_bookmark_prune() {
 # operations target the SAME literal scope and one pattern is a prefix of (or
 # equal to) the other, a single snapshot could match both retention rules.
 # Checked on the final resolved (scope, pattern) pairs collected in build.
+# A [prune-bookmarks:] scope that covers the SOURCE of a removable replica.
+#
+# `record_send_bookmark` leaves one bookmark per target, named tgt-<8 hex>, on
+# the SOURCE dataset. For an ordinary target that bookmark is a convenience. For
+# a disk that gets unplugged it is the whole feature: when the medium comes back
+# after the collector's retention has pruned the last common snapshot, that
+# bookmark is the only thing left anchoring an incremental send. Without it the
+# next run is a full re-seed, which on the ten-terabyte case this was built for
+# is the difference between minutes and days.
+#
+# And -B is aimed squarely at it. Its whole premise is that a bookmark nobody
+# refreshed within the threshold is orphaned -- true for a decommissioned VM,
+# false for a disk in a safe, which is refreshed only when it is plugged in. A
+# medium rotated quarterly against `-d30` is indistinguishable, to -B, from a
+# job that no longer exists.
+#
+# WARN, DO NOT REFUSE, AND DO NOT QUIETLY EXCLUDE. Both tempting alternatives
+# take the decision away from the administrator: a refusal blocks a config that
+# may be exactly what was meant, and a silent exclusion leaves a prune rule that
+# does not do what it says. Say what the collision is and let the person who
+# owns the disks decide.
+validate_media_anchor_prune() {
+    local e ds media _f
+    local b scope pattern age recursive _g hit
+    local -a removable=()
+    for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r ds _f _f _f _f _f _f _f _f media _f <<< "$e"
+        [ "$media" = removable ] && removable+=("$ds")
+    done
+    [ "${#removable[@]}" -gt 0 ] || return 0
+
+    for b in "${BOOKMARK_PRUNE_ENTITIES[@]+"${BOOKMARK_PRUNE_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r scope pattern age _g _g recursive _g _g <<< "$b"
+        # Could this pattern match a name of the form tgt-<hash>? delsnaps
+        # matches by literal string prefix, so either the pattern is a prefix of
+        # "tgt-" (it matches every anchor) or "tgt-" is a prefix of the pattern
+        # (it matches some of them). Anything else cannot touch an anchor and is
+        # not worth a word.
+        case "tgt-" in
+            "$pattern"*) : ;;
+            *) case "$pattern" in "tgt-"*) : ;; *) continue ;; esac ;;
+        esac
+        for ds in "${removable[@]}"; do
+            hit=0
+            [ "$scope" = "$ds" ] && hit=1
+            [ "$recursive" = "1" ] && case "$ds" in "$scope"/*) hit=1 ;; esac
+            [ "$hit" -eq 1 ] || continue
+            warn "[prune-bookmarks:$scope] covers '$ds', the source of a replica onto REMOVABLE media, and its pattern '$pattern' can match the tgt- anchor bookmark that replica depends on."
+            warn "  That anchor is refreshed only when the disk is plugged in, so a medium rotated less often than '$age' looks orphaned to -B and is pruned. The next sync after the disk returns is then a FULL re-seed instead of an increment."
+            warn "  Not refused, and nothing has been excluded for you: narrow the scope, lengthen the age past your longest rotation, or accept the re-seed. It is your disk rotation, not the generator's to guess."
+        done
+    done
+}
+
 validate_retain_patterns() {
     local -a scopes=() patterns=()
     local pair scope pattern
@@ -2529,7 +2830,7 @@ validate_transfer_semantics() {
         list="${SEND_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "${members[0]}"
         [ "$direction" = "pull" ] || continue
         if [ "${#members[@]}" -gt 1 ]; then
             die "[dataset:$ds] and other section(s) all resolved the identical src='$dst' -- pull datasets cannot be merged (snapget.sh needs one local destination per literal remote name). Give each a distinct remote path, or split them onto different schedules/prefixes/flags."
@@ -2548,7 +2849,7 @@ emit_send() {
         list="${SEND_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier schedule dst prefix flags notify label direction media plabel <<< "${members[0]}"
 
         # Pull never groups: 'dst' here holds 'src's raw value, a LITERAL
         # remote name, so two different local datasets could only land in the
@@ -2568,6 +2869,7 @@ emit_send() {
             [ -n "$flags" ] && cmd="$cmd $flags"
             cmd="$cmd \"$dst\""
             [ -n "$local_base" ] && cmd="$cmd \"$local_base\""
+            cmd="$(media_bracket "$media" "$local_base" "${plabel:-$label}" "$cmd")"
             JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
             continue
         fi
@@ -2580,7 +2882,7 @@ emit_send() {
             local -a datasets=() notifies=()
             local m mds mtier msch mdst mpre mflg mnot mlab mdir
             for m in "${members[@]}"; do
-                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
+                IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir mmed mplb <<< "$m"
                 datasets+=("$mds")
                 notifies+=("$mnot")
             done
@@ -2600,7 +2902,7 @@ emit_send() {
                 local -a lseen=()
                 local f2 e2
                 for m in "${members[@]}"; do
-                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir <<< "$m"
+                    IFS="$SEP" read -r mds mtier msch mdst mpre mflg mnot mlab mdir mmed mplb <<< "$m"
                     [ -z "$mlab" ] && continue
                     f2=0
                     for e2 in "${lseen[@]}"; do [ "$e2" = "$mlab" ] && f2=1 && break; done
@@ -2624,6 +2926,26 @@ emit_send() {
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""
+        # The LANDING dataset, not just the pool: snapsend composes dst/src, and
+        # WHAT IDENTIFIES THE MEDIUM IS THE BASE, NOT THE LANDING PATH.
+        #
+        # This used to hand the gate "$dst/$src" -- where the write actually
+        # lands -- on the theory that checking the real destination is the
+        # honest check. It is the opposite. That leaf is created BY the engine,
+        # so on a freshly prepared disk it does not exist yet, and the gate
+        # answered the very first sync with "pool is imported but DATASET is not
+        # on it -- it is the wrong one". The right disk, refused as the wrong
+        # one, and under the status rules above that refusal alerts. A new
+        # removable disk could never be seeded. Proven live on pve0, 2026-08-29.
+        #
+        # The base is what the administrator creates once when preparing the
+        # disk, so it exists before the first write and stays for the life of
+        # the medium: exactly the property an identity check needs. A different
+        # disk carrying a pool of the same name but not that dataset is still
+        # caught, which is the case the check exists for. Where the base IS the
+        # pool root the test degrades to presence, which is honest.
+        _mb_target="$dst"
+        cmd="$(media_bracket "$media" "$_mb_target" "${plabel:-$label}" "$cmd")"
 
         JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify_out")")
     done
@@ -2669,6 +2991,50 @@ emit_send() {
 # command never runs at all -- silently, with no output to carry the reason. The
 # fallback lands beside the cron log instead, which is normally a different
 # filesystem from TMPDIR, so a full /tmp can no longer swallow a backup whole.
+# THE IMPORT/EXPORT BRACKET around one job whose target is a removable disk.
+#
+# Returns the command unchanged for an ordinary target, so every existing line
+# is byte-identical and this can only affect a section that asked for it.
+#
+# The shape is `if attach; then ENGINE; fi; detach`, and each piece of that is
+# deliberate:
+#
+#   * A SUBSHELL, and that is not cosmetic. job_cron_line puts this into a slot
+#     built for ONE command: `CMD 2>"$e"; rc=$?`. This used to emit a bare
+#     `if ...; fi; detach` sequence there, and both halves of the wrapper then
+#     bound to the LAST command only -- so the engine's stderr never reached
+#     "$e" (it went to cron's own stderr, i.e. the mail flood this package
+#     exists to stop) and `rc=$?` was detach's status. Proven live on pve0,
+#     2026-08-29: the engine exited 1 and the line reported 0.
+#   * detach runs OUTSIDE the `if`, so a failed transfer still puts the pool
+#     back. A disk left imported after a failure is a disk somebody unplugs.
+#   * THE STATUS IS CHOSEN, NOT INHERITED. The whole point of this field is to
+#     separate the one silence that is correct from every noise that is not:
+#       attach 0 -> the engine ran, and the LINE reports what the ENGINE said;
+#       attach 1 -> the disk is in a safe. Silence. This case, and only this;
+#       attach 2 -> the WRONG disk is in the slot, or the import could not be
+#                   recorded. Not an absent medium, and it alerts.
+#     A bracket returning 0 for all three suppresses real backup failures,
+#     which is worse than having no bracket at all.
+#   * detach's failure raises too, when nothing worse already has: the pool is
+#     still imported on a disk somebody is about to unplug, and its DO NOT
+#     UNPLUG lands in the mail body. A confusing alert after a good transfer
+#     beats silence about a replica about to be corrupted.
+#
+# The pool is the first component of the target path -- that is what gets
+# imported, and the full path is passed as --dataset so the gate can tell an
+# absent disk from the WRONG disk in the slot.
+media_bracket() {   # <media field> <target path> <label> <command>
+    local media="$1" target="$2" label="$3" cmd="$4"
+    [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
+    [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
+    local pool="${target%%/*}"
+    [ -n "$pool" ] || { printf '%s' "$cmd"; return 0; }
+    local gate="$REPO_DIR/zfs-media-gate.sh"
+    printf '( %s attach %s %s --dataset %s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+        "$gate" "$pool" "${label:-media}" "$target" "$cmd" "$gate" "$pool" "${label:-media}"
+}
+
 job_cron_line() {
     local schedule="$1" cmd="$2" notify="$3"
     printf '%s echo "$(date -Is) ZFS-JOB BEGIN %s" >>%s; e=$(mktemp 2>/dev/null) || e=%s.err.$$; %s 2>"$e"; rc=$?; cat "$e" >>%s; echo "$(date -Is) ZFS-JOB END %s rc=$rc" >>%s; [ $rc -ne 0 ] && %s "%s" "$(tail -n %s "$e")" 2>>%s; rm -f "$e"' \
@@ -2684,25 +3050,26 @@ job_cron_line() {
 # share a parent is still a list, not a subtree, and collapsing it to a sweep
 # would prune snapshots nobody named.
 emit_inline_prune() {
-    local key list ds tier pattern retain schedule notify recursive
+    local key list ds tier pattern retain schedule notify recursive pairlbl
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
         list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "${members[0]}"
 
         local -a targets=()
-        local m mds mtier mpat mret msch mnot mrec
+        local m mds mtier mpat mret msch mnot mrec mlbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec <<< "$m"
+            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec mlbl <<< "$m"
             targets+=("$mds")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local rflag=""
+        local rflag="" lflag=""
         [ "$recursive" = "1" ] && rflag="-R "
-        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -2710,14 +3077,15 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut sshflags
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags <<< "$e"
-        local flag="" fflag="" sflag=""
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -2725,14 +3093,15 @@ emit_prune_sections() {
 # gfs=yes sections: one combined delsnaps.sh -G line per section, covering
 # every contributing tier's retain count at once (see build_prune_section).
 emit_gfs_prune_sections() {
-    local e scope pattern retain schedule notify recursive clearcut sshflags
+    local e scope pattern retain schedule notify recursive clearcut sshflags pairlbl
     for e in "${GFS_PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags <<< "$e"
-        local flag="" fflag="" sflag=""
+        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -2821,27 +3190,57 @@ emit_monitor() {
 # group, listing every member scope BY FULL PATH. Not monitored (check-snap-
 # age.sh watches snapshot staleness, not bookmarks) and not part of the
 # same-scope pattern-overlap check (different ZFS object type than snapshots).
+# One cron line per [replica:] section. Never grouped: each replica names its
+# own medium, and the import/export bracket wraps the whole line, so merging two
+# would either export a pool the other still needs or skip the other every time
+# one disk is out. That is the same reason 'media' sits in the send group key.
+emit_replicas() {
+    local e name source dst schedule prefix notify media recursive hist flags cmd
+    for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags <<< "$e"
+        cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
+        [ "$recursive" = "1" ] && cmd="$cmd -R"
+        [ -n "$hist" ] && cmd="$cmd $hist"
+        [ -n "$flags" ] && cmd="$cmd $flags"
+        cmd="$cmd \"$source\" \"$dst\""
+        cmd="$(media_bracket "$media" "$dst" "$name" "$cmd")"
+        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+    done
+}
+
 emit_bookmark_prune() {
-    local key list scope pattern age schedule notify recursive sshflags
+    local key list scope pattern age schedule notify recursive sshflags pairlbl
     for key in "${BOOKMARK_PRUNE_GROUP_ORDER[@]}"; do
         list="${BOOKMARK_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern age schedule notify recursive sshflags pairlbl <<< "${members[0]}"
 
         local -a targets=()
-        local m mscope mpat mage msch mnot mrec msshf
+        local m mscope mpat mage msch mnot mrec msshf mlbl
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mscope mpat mage msch mnot mrec msshf <<< "$m"
+            IFS="$SEP" read -r mscope mpat mage msch mnot mrec msshf mlbl <<< "$m"
             targets+=("$mscope")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local flag="" sflag=""
+        local flag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ -n "$sshflags" ] && sflag="$sshflags "
-        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${sflag}\"$joined\" \"$pattern\" $age"
+        # -L goes AFTER -R, matching the other three prune shapes. The order
+        # is not cosmetic: cron2conf.sh parses these lines back into a config by
+        # literal flag position, and its own comment pins "-L follows -R". Emit
+        # them the other way round and the inverse tool silently misreads the
+        # scope.
+        #
+        # -L at all, because this was the ONE prune shape missing it. The owner's
+        # requirement was that a pause stops every cron operation of this
+        # package, prune included; bookmark prune is the shape that destroys
+        # the #tgt- anchors a removable replica needs to come back as an
+        # increment, so it was the worst possible one to leave running.
+        [ -n "$pairlbl" ] && lflag="-L $pairlbl "
+        local cmd="$REPO_DIR/delsnaps.sh -B ${flag}${lflag}${sflag}\"$joined\" \"$pattern\" $age"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -3445,10 +3844,15 @@ reconcile_label() {   # <dataset> -> " (qm/104)" or ""
 reconcile_receive_roots() {   # -> one root per line
     local e ds tier sched remote rest
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r ds tier sched remote rest <<< "$e"
+        # NAMED, not "whatever is left ends in pull". This matched the TAIL of
+        # the tuple, so appending a field to it -- media, 2026-08-29 -- made
+        # every pull section stop being recognised, silently, in a coverage
+        # report whose whole job is to say what is not covered. The suite caught
+        # it; the shape did not have to be catchable.
+        IFS="$SEP" read -r ds tier sched remote _prefix _flags _notify _label _dir _rest <<< "$e"
         [ -n "$ds" ] || continue
-        case "$rest" in
-            *"${SEP}pull") 
+        case "${SEP}${_dir}" in
+            "${SEP}pull") 
                 # A VALID pull section's own path ALREADY ends with the literal
                 # remote dataset name -- emit_send enforces that contract -- so
                 # the local receive root is the section dataset itself.
@@ -3550,7 +3954,9 @@ do_reconcile() {
     # LANDS.
     local e etier esched eremote eprefix eflags enotify elabel edir
     for e in "${SEND_ENTITIES[@]+"${SEND_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r ds etier esched eremote eprefix eflags enotify elabel edir <<< "$e"
+        # Same reason as above: edir was the LAST variable, so read gave it the
+        # whole remainder once the tuple grew.
+        IFS="$SEP" read -r ds etier esched eremote eprefix eflags enotify elabel edir _erest <<< "$e"
         [ -n "$ds" ] || continue
         [ "$edir" = "pull" ] && continue
         if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
@@ -3729,6 +4135,7 @@ group_inline_prune
 group_bookmark_prune
 group_monitor
 validate_retain_patterns
+validate_media_anchor_prune
 validate_transfer_semantics
 
 if [ "${RECONCILE:-0}" -eq 1 ]; then
@@ -3741,6 +4148,7 @@ emit_inline_prune
 emit_prune_sections
 emit_gfs_prune_sections
 emit_bookmark_prune
+emit_replicas
 emit_monitor
 
 # MONITOR_LINES counts too. A config made only of monitor carriers

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c29a9cab945c0bb0 -->
+<!-- status-covers-digest: c6c025f1ee29dd9e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1719,6 +1719,364 @@
   `prod`, ze petla w ogole czytala linie). `localbackup`: CI.
   Katalog opisany w `profiles/README.md`.
 
+- **ODTWARZANIE NA INNA MASZYNE I `move-to-client` — DOWIEDZIONE NA TRZECH
+  HOSTACH (2026-08-28).** pve9 (kolektor) trzyma kopie relacji `lab1` z pve1.
+  Sparowano pve2 jako `lab2`, odtworzono na nia cala relacje, przekazano jej
+  kopie, i wrocono.
+
+  **Scenariusz wlasciciela, zrealizowany w calosci:** relacja, ktorej maszyna
+  jest wymieniana, **nie jest klonowana — przenosi sie**. Kopia zostaje na
+  kolektorze; zmienia sie to, z ktorej maszyny jest backupowana.
+
+      zfs-backup.sh restore lab1 lab2      # odzysk na nowa maszyne
+      zfs-backup.sh move-to-client lab1 lab2   # przekazanie kopii
+
+  **Dowod, o ktory chodzilo:** po przeniesieniu kopia miala **22 snapshoty** —
+  najstarszy z ery pve1, najnowszy z pierwszego backupu z pve2 — **jedna ciagla
+  linia przez podmiane maszyny**, 10,1 MB, zero ponownego seedu. To jest cala
+  teza tej decyzji: "bez sensu by bylo kopiowanie w te i we wte".
+
+  **Cztery wady, wszystkie z labu:**
+
+  | # | wada |
+  |---|---|
+  | F23 | `replace` na **korzeniu nadanego zakresu** niszczyl sama delegacje — `zfs allow` siedzi NA datasecie, a odtworzenie go wymaga praw na rodzicu, ktorych konto delegowane nie ma. Zostawilo cel bez datasetu, bez zgody i bez mozliwosci zrobienia jednego i drugiego |
+  | F24 | ...i nie musialo: **pusty dataset przyjmuje pelny strumien przez `recv -F`**. `replace` siegal po `-f` w obu podprzypadkach, a to dwie rozne roboty. Rozdzielenie ich sprawia, ze zwykla awaria (swieza maszyna, pusty dataset) jest w ogole odzyskiwalna |
+  | F25 | **prune ZRODLA zostawal na starej maszynie** — enumerowalem sekcje z rekordu relacji, a jego listy nie niosa zakresu `konto@host:sciezka`. Po przekazaniu kasowalby snapshoty na maszynie, ktorej relacja juz nie obejmuje |
+  | F26 | **rekordy nie jechaly z sekcjami** — cel nie zapisywal, co teraz posiada, wiec drugie przeniesienie odmawialo "nie ma czego przekazac" dla relacji, ktora miala wszystko |
+
+  **Dowod po GUID zadzialal na stanie, ktorego nie ustawialem:** przy powrocie
+  kopia byla juz do przodu (backup z pve2), pve1 nie mial najnowszego snapshotu
+  — `move-to-client` odmowil i podal komende naprawcza. Dokladnie po to jest.
+
+  **OBA KIERUNKI TRYBU, ZMIERZONE:**
+
+  | cel | tryb | dowod |
+  |---|---|---|
+  | pve2 — pusty dataset, swieza maszyna | `replace` (full-bare) + `create` dla dzieci | pelny strumien przez `recv -F`, bez niszczenia datasetu |
+  | pve1 — MA dane i wspolna baze | **`rewind`** | **przyrost na istniejaca linie**: 27 snapshotow, najstarszy `2026-08-27_14-51-01` sprzed calej kampanii, 10,6 MB |
+
+  Ten drugi wiersz jest pomiarem, nie deklaracja: gdyby to byl pelny wysyl z
+  `-f`, dataset zostalby zniszczony i odtworzony, a snapshoty z 27 sierpnia by
+  nie istnialy.
+
+
+  **Gramatyka miedzyhostowa otwarta:** `restore A B` (te same sciezki) i
+  `restore A:ds B:ds2`. Cel to **etykieta relacji, nigdy nazwa hosta** — czyli
+  maszyna, z ktora kolektor jest juz sparowany, ma przypiety klucz i moze
+  poprosic o zgode. Zero nowej klasy adresu. Cel musi byc tylko **sparowany**,
+  nie aktywowany.
+
+  **Odzysk i przekazanie zostaja osobne** (decyzja wlasciciela): to dwie rozne
+  dziedziny awarii, a dowod po GUID jest naturalnym szwem — czasownik, ktory sam
+  ten warunek wytwarza i sprawdza, sprawdza wlasna robote. Zamiast zlozenia:
+  `restore` konczy zdaniem, ze dane sa na maszynie, do ktorej nic nie pokazuje,
+  i podaje nastepny krok.
+
+  **Znaleziona przy okazji wada NIE z tej rundy:** `deploy.sh --commit-scope=`
+  **nigdy nie dzialalo** — wola `do_commit_scope` w linii 3044, a funkcja jest
+  zdefiniowana w 5552. Na `main` tak samo. Sciezka `--join` wola ja pozniej,
+  wiec tam dziala. Nie naprawione, bo to osobna sprawa.
+
+  **Lab sprzatniety:** pve2 bez danych, bez konta, bez zgod, relacja rozebrana
+  (`--leave`); pve9 z `lab1` czynna i `lab2` wycofana; wszystkie trzy hosty na
+  `main`; cron bez sladu po pve2.
+
+
+- **ODTWARZANIE: DRUGI PRZEBIEG LABU. PIERWSZY MOWIL "DZIALA OD KONCA DO
+  KONCA" I BYLO TO PRAWDA WYLACZNIE DLA KSZTALTOW, KTORE PRZESZEDL (2026-08-27).**
+
+  Pierwszy przebieg (pve9 kolektor -> pve1, dwa dyski jednej VM, konto
+  delegowane, prawdziwy transfer) znalazl osiem wad i zamknal sie zdaniem
+  "dowiedzione od konca do konca". Drugi przebieg tego samego dnia, na tym samym
+  labie, znalazl **czternascie kolejnych** — bo zaczal od rzeczy, ktorej pierwszy
+  nie zrobil ani razu: **uruchomil backup po odtworzeniu**, i uszkodzil dane w
+  sposob, w jaki uszkadza je awaria, czyli **bez snapshotu po szkodzie**.
+
+  **Najgorsza z nich, i powod, dla ktorego ten wpis brzmi tak a nie inaczej:**
+  przy zwyklej szkodzie (skasowane pliki, zaden snapshot od tego czasu)
+  odtworzenie melduje `all 3 dataset(s) in scope recovered` i **nie zmienia
+  niczego**. Klasyfikator pytal, czy cel ma snapshot NOWSZY od punktu; nic nie
+  bylo nowsze, wiec nie bylo rollbacku, silnik dostal przyrost o dlugosci zero i
+  wyszedl z zerem. Pierwszy przebieg tego nie zobaczyl, bo tam kazda szkoda byla
+  po drodze zesnapshotowana przez backup.
+
+  **Wady drugiego przebiegu (F9-F22):**
+
+  | # | wada |
+  |---|---|
+  | F9  | po odtworzeniu **nastepny backup relacji odmawia**, a odmowa obwinia pisarza, ktorego nie ma; samo odtworzenie o tym nie mowilo |
+  | F10 | odmowa podawala lekarstwo (`-f`), ktorego konto relacji **nie moze uruchomic**; `-F` przy tym milczalo o przyczynie |
+  | F11 | `restore` **nie znajdowal configu na zadnym hoscie floty** (`jobs.<host>.conf` zamiast `jobs.<host>.<konto>.conf`), a trzy `FATAL` po kolei **nie zatrzymywaly programu** — `die` w `$( )` konczy podpowloke |
+  | F12 | `--target` nie potrafil nazwac **zadnego dysku VM** — tylko rodzica |
+  | F13 | odtworzony system plikow wracal **niezamontowany** i nikt tego nie mowil |
+  | F14 | "jest i pusty" czytane jako "host nie odpowiedzial" |
+  | F15 | odmowa podpowiadala `deploy.sh --allow-restore=` **z pusta etykieta** — dokladnie wejscie z E1 w dzienniku bledow |
+  | F16 | `replace` byl nadawany, klasyfikowany i **pokonywany przez montowanie**, z podpowiedzia prowadzaca donikad |
+  | F17 | **meldunek sukcesu nie byl pomiarem** (wyzej) |
+  | F18 | rollback rodzica **zerowal przyrost**, wiec dziecko z tylu nie dostawalo nic |
+  | F19 | rodzic oceniany po dzieciach, ktore sa juz osobnymi pozycjami — werdykt zalezal od kolejnosci petli |
+  | F20 | sonda rozrozniala dwa przypadki, a **wywolujacy je z powrotem sklejal** (dwa razy, w tym samym pliku) |
+  | F21 | skasowanie snapshotow to **polowa** lekarstwa — zywy system plikow kopii zostaje z przodu |
+  | F22 | run **oglaszal zator, ktorego nie bylo**, w srodku odtwarzania |
+
+  **Warianty przebiegniete i potwierdzone tresciowo** (kazdy sprawdzony przez
+  zawartosc plikow ORAZ `written@<punkt>`, nie przez kod wyjscia):
+
+  | wariant | wynik |
+  |---|---|
+  | `--plan`, cala relacja | tylko odczyt, nic nie ruszone |
+  | `--at` + cala relacja, cel do przodu | rollback trzech datasetow, tresc z punktu |
+  | `--at` + `--target` jeden dysk | tylko ten dysk; drugi nietkniety |
+  | `--target` lista po przecinku | oba, jeden do przodu i jeden do tylu w jednym biegu |
+  | cala relacja bez `--at` | najnowszy punkt, trzy datasety |
+  | **`create`** — dataset celu zniknal | odtworzony, wlasciwosci wrocily |
+  | **`replace`** — cel istnieje, brak wspolnej bazy | odmowa bez zgody -> zgoda -> wykonane |
+  | **brak zgody** | trzy odmowy, cel nietkniety |
+  | zator: kontrola dodatnia i ujemna | ostrzega dokladnie wtedy, gdy zator jest |
+
+  **Petla domknieta bez zacięcia:** szkoda -> odtworzenie -> ostrzezenie
+  wymieniajace snapshoty -> **wypisana komenda uruchomiona doslownie** -> backup
+  przechodzi -> dane zgodne. To jest kryterium, ktorego pierwszy przebieg nie
+  postawil.
+
+  **Zmiany w zamrozonym silniku (`snapget.sh`), wylacznie diagnostyka:**
+  odmowa rozroznia teraz "kopia jest z przodu" od "ktos tu pisal", nazywa
+  snapshoty i podaje `zfs rollback -r`, a podpowiedz o `recv -F` jest bramkowana
+  faktyczna przyczyna zamiast `-f`. Zaden przebieg nie zmienia werdyktu, statusu
+  ani skutku. Wpisy w `ENGINE-FREEZE.md`, baseline przepiety.
+
+  **PAUZA OBEJMUJE TERAZ PRUNE, A ODTWORZENIE JEJ WYMAGA (2026-08-27).**
+  Decyzja wlasciciela: "kazdy restore musi zostac poprzedzony pauza. Grant i
+  pausa." Oraz: "pausa ma wstrzymac wszelkie operacje cronowe naszego pakietu z
+  prunem wlacznie."
+
+  `delsnaps.sh` dostal `-L` i czyta znacznik pauzy — **zmiana zachowania w
+  zamrozonym silniku**, pierwsza na tym pliku, na wyrazne polecenie wlasciciela
+  (wpis w `ENGINE-FREEZE.md`). gen-cron emituje `-L` na wszystkich czterech
+  ksztaltach linii prune: inline, `[prune:]`, GFS `[prune:]` i
+  `[prune-bookmarks:]` (ta ostatnia sekcja dostala `pair_label` do gramatyki —
+  bookmark jest tym, na co restore spada, gdy snapshotu juz nie ma).
+
+  **Nie przez wylaczenie crona:** crontab hosta niesie zadania, ktore nie sa
+  nasze. Przelacznik zostaje per relacja, w naszych wlasnych zadaniach.
+
+  `restore` **odmawia**, gdy nie da sie zalozyc pauzy, i podaje komende. Pauzy
+  zalozonej przez czlowieka nie zdejmuje. Zasieg pauzy jest **mierzony, nie
+  zakladany**: run liczy linie prune w zainstalowanym crontabie bez `-L` i je
+  zglasza, bo crontab wygenerowany przed ta zmiana przycina mimo pauzy.
+  Zmierzone na labie: najpierw "2 z 2 bez -L", po regeneracji "wszystkie 2
+  niosa -L".
+
+  **KOLEJNOSC WDROZENIA (zatwierdzona 2026-08-28): NAJPIERW KOD, POTEM
+  CRONTABY.** Stary `delsnaps` dostajac `-L` traktuje je jako pierwszy argument
+  pozycyjny i **pada z rc=1** (zmierzone) — nic nie kasuje, ale caly prune tej
+  relacji staje i alarmuje az do aktualizacji kodu. Awaria glosna i bezpieczna,
+  ale awaria.
+
+  Kroki, w tej kolejnosci:
+
+  1. gałąź trafia na `main` (recenzent);
+  2. hosty **same** pobieraja kod — godzinny `git pull --ff-only origin main`
+     jest mechanizmem wdrozenia w tym projekcie; nic sie nie kopiuje recznie;
+  3. potwierdzic na hoscie, ze `delsnaps.sh -h` wymienia `-L`, **zanim**
+     ktokolwiek dotknie crontaba;
+  4. dopiero wtedy regeneracja: `gen-cron.sh -c <zainstalowany config>
+     --install` **uruchomiona jako konto relacji** (nie root — REPO_DIR
+     wyprowadza sie z miejsca, gdzie lezy skrypt);
+  5. przed instalacja zrobic kopie: `crontab -l -u <konto> > kopia`, po niej
+     zdiffowac. Jedna linia poza zarzadzanym blokiem — godzinny self-update
+     `git pull` — **ma przetrwac**; jesli znika, cofnac z kopii.
+
+  **ILE TO REALNIE DOTYCZY — PRZEGLAD FLOTY (tylko odczyt, 2026-08-28):**
+
+  | host | konto | linie prune | z `-L` | `pair_label` w configu |
+  |---|---|---|---|---|
+  | 192.168.28.8 pve2 | zfsbackup | 4 | 0 | **0** |
+  | 192.168.28.9 pve1 (metropolis) | zfsbackup | 4 | 0 | **0** |
+  | 192.168.28.99 pve9 | zfsbackup | 2 | 0 | 3 |
+  | 192.168.11.10 pve0 | zfsbackup | 12 | 0 | **0** |
+  | 192.168.11.11 pve1 | root + zfsbackup | 3 + 1 | 0 | **0** |
+
+  **Wniosek, ktory zmienia rozmiar tej roboty: regeneracja crontabow na
+  produkcji nie zmieni ANI JEDNEJ linii.** gen-cron emituje `-L` wylacznie tam,
+  gdzie sekcja niesie `pair_label`, a produkcja pracuje na starych configach v4,
+  ktore nie deklaruja relacji. Jedynym hostem, na ktorym cokolwiek sie zmieni,
+  jest **pve9** (kolektor labu). Pułapka kolejnosci z punktu wyzej jest
+  prawdziwa co do zasady i **nie ma dzis celu na flocie**.
+
+  **WIEKSZE ZNALEZISKO PRZY OKAZJI, DO DECYZJI WLASCICIELA: pauza logiczna jest
+  na produkcji BEZWLADNA.** Zmierzone: 26 linii wysylkowych na trzech hostach
+  (pve2 4, pve1 8, pve0 14) i **zero** z nich niesie `-L`. Do tego pve2 i pve1
+  maja **0 rekordow klientow** (sa strona obslugiwana, nie kolektorem).
+  `pause-client` na tych hostach albo nie ma czego zapauzowac, albo zapisze
+  znacznik, ktorego zadne zadanie nie czyta.
+
+  To nie jest regresja z tej rundy — tak bylo od poczatku modelu relacji;
+  produkcja po prostu nigdy na niego nie przeszla. Znaczy jednak dwie rzeczy:
+  odtwarzanie relacji produkcyjnej dzis i tak nie zadziala (config nie deklaruje
+  etykiety, wiec `restore <etykieta>` nie ma czego rozwiazac), a wymog pauzy,
+  ktory wlasnie stal sie twardy, jest na tych hostach nie do spelnienia.
+  Migracja produkcji na configi z `pair_label` to osobny etap.
+
+
+  **pada z rc=1** (zmierzone) — nic nie kasuje, ale caly prune tej relacji
+  staje i alarmuje az do aktualizacji kodu. Awaria glosna i bezpieczna, ale
+  awaria. Regenerowac crontaby dopiero po tym, jak `-L` jest na hostach.
+
+
+  **HARMONOGRAM NA CZAS ODTWARZANIA (pytanie wlasciciela, 2026-08-27).** Cron
+  kolektora biegl przez cala kampanie i **skasowal punkt odtworzenia**: prune
+  zrodla o :21 zastosowal drabine GFS do zrodla swiezo cofnietego przez restore
+  i usunal `automated_hourly_2026-08-27_18-15-00`. Relacja zostala bez wspolnego
+  snapshotu.
+
+  `restore` bierze teraz **pauze logiczna** relacji na czas biegu i oddaja ja
+  wylacznie wtedy, gdy sam ja zalozyl; pauze czlowieka zostawia. **Nie** pauze
+  twarda: `disable-client` blokuje u peera te same komendy data-plane, ktorymi
+  restore pod push dociera do maszyny — twarde wylaczenie zablokowaloby samo
+  odtworzenie.
+
+  **Czego ta pauza NIE obejmuje, i run to mowi:** `delsnaps.sh` nie ma `-L`, nie
+  czyta znacznika, a gen-cron nie emituje `-L` w liniach prune (zmierzone: dwa
+  zadania prune, zero z `-L`). Pauza zatrzymuje pull i monitor, nie zatrzymuje
+  retencji. Sam `pause-client` juz to zglasza; restore powtarza to tam, gdzie
+  czyta operator odtwarzania. W produkcji drabina GFS ogranicza szkode (24
+  godzinne), wiec odtworzenie w oknie godzin jest bezpieczne; ryzyko rosnie przy
+  dlugim odtwarzaniu i przy punktach starszych niz najgestszy szczebel.
+
+
+  **Czego lab NIE dowiodl:** odtwarzania na inna maszyne lub inna sciezke
+  (wariant miedzyhostowy), relacji push (kopia zdalna — rozszerzanie zakresu do
+  poddrzewa i pomiar montowania sa dzis warunkowane lokalna kopia), oraz
+  odtwarzania kontenera/VM ktora faktycznie sie potem uruchamia.
+
+
+- **RESTORE: PRZEBIEG PO CALEJ RELACJI — IDZIE DALEJ PO PORAZCE (2026-08-27).**
+  Decyzja wlasciciela 7. Implementer rekomendowal zatrzymanie na pierwszej
+  porazce; wlasciciel to odrzucil, bo **odtwarzanie to nie wdrozenie**:
+  zatrzymanie zostawia maszyne w polowie odtworzona I bez informacji o reszcie,
+  dokladnie wtedy, gdy pelny obraz jest najbardziej potrzebny.
+
+  Co to obliguje, i to jest asercjonowane: raport jest **werdyktem per dataset**,
+  nie liczbą — „7/10" nie mowi operatorowi o 3 w nocy niczego, czym moglby
+  dzialac, a trzy nazwy tak; a **dziewiec z dziesieciu nie konczy sie zerem**.
+
+  **Dwa kody, nie trzy.** `0` = kazdy dataset w zakresie odtworzony, `1` =
+  nie kazdy. Planer uzywa dokladnie tego kontraktu przy niepelnym `--at`, a
+  trzeci kod dzielacy „czesc" od „nic" bylby kontraktem, o ktory wlasciciel nie
+  prosil — ta roznica jest w RAPORCIE, gdzie moze nazywac datasety zamiast je
+  liczyc.
+
+  **Pusty zakres to odmowa, nie czysty przebieg.** „Nic nie pasowalo" konczace
+  sie zerem to sposob, w jaki literowka w zakresie staje sie odtworzeniem, w
+  ktore ktos uwierzyl.
+
+  **Brak kroku per-dataset jest STRUKTURALNY, nie opisany w komentarzu.**
+  `restore_one` to nastepny kawalek; `restore_run_scope` sprawdza `declare -F`
+  i odmawia, zamiast wolac nieistniejaca funkcje — bo taka awaria przychodzi w
+  chwili pierwszego uzycia, a dla czasownika odtwarzajacego to najgorsza z
+  mozliwych chwil. Bramka znika sama w dniu, w ktorym krok powstanie; para
+  asercji z kontrola pilnuje, ze dotyczy `restore_one`, a nie „odmawiaj zawsze".
+
+  **Kontrola mutacyjna:** `break` na pierwszej porazce (zlamanie decyzji 7) psuje
+  **trzy** asercje, w tym te nosna — dataset PO porazce nadal jest probowany i
+  jest w raporcie.
+
+  `test/restoregrant` **94/0** (+15). Nadal **nic tu nie potrafi zapisac**.
+
+
+- **RESTORE: CO SILNIK DOSTANIE DO WYKONANIA (2026-08-27).**
+  Transport odtwarzania to `snapsend.sh` — silnik push puszczony w drugą stronę
+  (decyzja wlasciciela). Przychodzi z bookmarkami, wznawianiem, kompresja,
+  limitem pasma i ochrona snapshotow Proxmoxa; **zamrozony plik nietkniety**.
+
+  **Galka juz istniala** i warto zapisac, jak blisko bylo niepotrzebnej zmiany
+  w zamrozonym silniku. `-e` jest udokumentowane jako „use existing LATEST
+  snapshot", co czyta sie jak „silnik wybiera sam". Implementacja **najpierw
+  filtruje kandydatow przez `-m`** i dopiero z tego bierze najnowszego — wiec
+  PELNA nazwa snapshotu podana jako `-m` zostawia dokladnie jednego. Zmierzone
+  przed oparciem sie na tym. Pytanie wlasciciela („napewno jej nie
+  przewidzielismy?") jest tym, co zatrzymalo zmiane.
+
+  **I dlatego regula dopasowania jest czescia kontraktu.** Silnik wybiera przez
+  `grep "^$MESSAGE"` — REGEX zakotwiczony tylko z przodu. Kazda nazwa, ktora ten
+  projekt generuje, jest obojetna dla regexa, ale tryb pasywny adoptuje nazwy
+  z cudzych systemow, a `.` dopasowuje dowolny znak. Zmierzone: wobec
+  `snap.2026` / `snapX2026` / `snap.2026b` wzorzec `^snap.2026` trafia
+  **wszystkie trzy**.
+
+  `restore_point_unique` dowodzi wiec jednoznacznosci **regula silnika**, nie
+  jej przyblizeniem — implementacja uzywajaca `grep -F` albo `=` przepuscilaby
+  pierwszy przypadek i wyslala INNY snapshot niz wybrany, co wyglada dokladnie
+  jak sukces. To jest para dyskryminujaca w suicie.
+
+  `restore_engine_argv` wyprowadza flagi **z klasyfikacji**, a nie obok niej
+  (decyzja wlasciciela 4): `create`/`rewind` bez `-f`, `replace` z `-f` (to on
+  niszczy cel), a `-e` i `-m <dokladna nazwa>` na kazdej formie — odtwarzanie
+  nigdy nie tworzy snapshotu na kopii i nigdy nie pozwala silnikowi wybrac
+  punktu. Kontrola: `-f` pojawia sie wylacznie dla `replace`.
+
+  `test/restoregrant` **79/0** (+16). Ten kawalek **dalej nie potrafi nic
+  zapisac** — buduje komende i odmawia; wykonawcy nie ma.
+
+
+- **RESTORE: ZGODA (grant) — PIERWSZY KAWALEK, 2026-08-27.**
+
+  Decyzja wlasciciela o kierunku: **kolektor zaczyna** (*"Zacznij od push"*,
+  *"Kto zaczyna: kolektor"*). Sekcja 1 dokumentu
+  `OWNER-RESTORE-GRANT-AND-MODES-2026-08-26.md` mowila odwrotnie i zostala
+  poprawiona — powstala wczesniej tego samego dnia.
+
+  **Dlaczego to czyni zgode calym bezpieczenstwem, a nie dodatkiem:** przy
+  wariancie „maszyna prosi sama" nadpisywana maszyna bylaby ta, ktora prosi,
+  i zadne uprawnienie do pisania po cudzej maszynie nigdy nie musialoby
+  istniec. Przy push musi. Zgoda jest jedyna rzecza, ktora stoi miedzy
+  „kolektor odtworzy mnie, gdy poprosze" a „kolektor moze mnie nadpisac, kiedy
+  zechce".
+
+  **Znalezisko, ktore uksztaltowalo ten kawalek — projekt wskazywal zle
+  miejsce.** Dokument klad zgode w `relationships/<label>/` i w tym samym
+  akapicie pisal, ze katalog jest „root-owned, the account has read-only
+  access". **Nie jest.** `deploy.sh` robi go `root:<konto>` **0775**, celowo:
+  model wlasciciela z 2026-08-06 pozwala kluczowi relacji zdjac twarda pauze,
+  a zdjecie jej to unlink znacznika W TYM katalogu. Zgoda trzymana tam moglaby
+  wiec zostac **zalozona przez konto kolektora** — czyli to, przed czym ma
+  chronic. Zgody leza teraz we wlasnym drzewie `restore-grants/`, `root:root`,
+  konto tylko czyta. Asercja strukturalna pilnuje, ze nie wroci pod tamten
+  katalog, z kontrola negatywna sprawdzajaca, ze tamten NAPRAWDE jest
+  grupowo-zapisywalny (inaczej asercja bronilaby wymyslonego zagrozenia).
+
+  **Trzy czasowniki na maszynie zagrozonej**, lokalnie, jako root:
+  `deploy.sh --allow-restore=LABEL [--replace]`, `--deny-restore=LABEL`,
+  `--show-restore=LABEL`. `--show-restore` **nie wymaga roota** — pytanie „czy
+  cokolwiek moze mnie nadpisac" musi byc do zadania przez kazdego, kto stoi
+  przy maszynie.
+
+  **`replace` nigdy nie jest domyslne** (*"REPLACE jawnie przy nadawaniu"*).
+  Zwykla zgoda pozwala pisac tam, gdzie pusto. Kasowanie tego, co juz jest,
+  trzeba napisac wprost, wczesniej, gdy nic nie jest zepsute. Ponowne wydanie
+  zgody **nie poszerza** zywej zgody po cichu: rozne tryby = odmowa nazywajaca
+  obie wartosci i droge (`--deny-restore` najpierw); te same tryby = no-op
+  sukces, jak `disable` w bramce.
+
+  **Zgoda nie wygasa i nie jest jednorazowa** (*"usun expires i nonce"*) — bo
+  odtwarzanie moze trwac godzine albo weekend. Cena jest nazwana: zapomniana
+  zgoda zyje dalej, wiec bramka `zfs-pair-gate` raportuje ja w
+  `PAIR-CONTROL status`, w obu stanach relacji. Bramka **tylko czyta** —
+  asercja strukturalna zabrania jakiegokolwiek zapisu do drzewa zgod, plus trzy
+  proby wymuszenia zgody czasownikiem przez klucz kolektora.
+
+  **Defekt znaleziony przez wlasna suite:** `--allow-restore=` z PUSTA wartoscia
+  przelatywalo przez `[ -n "$LABEL" ]` i deploy.sh szedl dalej do Fazy 1 —
+  czasownik odpowiadajacy na pytanie o UPRAWNIENIA zaczynal instalowac pakiety
+  na hoscie. Dokladnie klasa F4 z 2026-08-26. Naprawione dyskryminatorem
+  `*_GIVEN`, tak jak `--bandwidth` juz to robi.
+
+  **`test/restoregrant` 44/0** (+1 SKIP: `chmod 000` nie odbiera prawa
+  wlascicielowi na tym systemie plikow — asercja zglasza to zamiast udawac).
+  Wykonawca odtwarzania NIE zostal ruszony; ten kawalek nie potrafi niczego
+  nadpisac.
 - **REV-20260827-122: DWA BLOKERY P1 Z RECENZJI NAPRAWIONE (2026-08-27).**
   Recenzent nie komentowal PR-a — otworzyl i zmergowal `#167` z formalnym
   werdyktem CHANGES REQUIRED na `b0a3a28`. Odpowiedz:
@@ -3402,6 +3760,185 @@
 > na `rc=0`, host robiłby od tej nocy kopie crash-consistent, twierdząc w logu,
 > że są zamrożone.
 
+## REPLIKI Z WYSOKIEGO POZIOMU (2026-08-29)
+
+Polecenie wlasciciela: ma byc konfigurowalne z gory, **bo docelowo idzie w GUI**.
+To nie jest prosba o wygode, tylko ograniczenie ksztaltu -- formularz nie edytuje
+pliku INI i nie da sie mu kazac wkleic `zpool create`.
+
+| czasownik | co robi |
+|---|---|
+| `add-replica NAZWA --source= --dst= [...]` | **upsert** sekcji `[replica:]`; domyslnie PLAN, `--install` podmienia config i crontab razem |
+| `list-replicas [--json]` | inwentarz + zywy stan nosnika |
+| `remove-replica NAZWA [--install]` | zdejmuje zadanie; **kopii na nosniku nie rusza** |
+
+`--json` idzie ta sama konwencja co `progress --json`, ktore juz jest w tym
+projekcie zadeklarowane jako warstwa danych pod GUI.
+
+### Cztery stany nosnika, nie dwa
+
+Bramka odpowiada „czy pula jest zaimportowana" -- wlasciwe pytanie dla zadania,
+ktore zaraz bedzie pisac, i **niewlasciwe dla czlowieka patrzacego na liste**:
+dysk lezacy w kieszeni z wyeksportowana pula czytalby sie jako `away`, czyli jak
+dysk w sejfie. Listowanie rozroznia `here` / `available` / `away` /
+`wrong_medium`, i robi to **poza** bramka, zeby nie ruszac kontraktu kodow
+wyjscia, na ktorym stoja linie crona.
+
+### Odmowy, ktore znalazl wlasny lab
+
+Pozwolilem wskazac ten sam nosnik dwa razy -- najlatwiejszy blad do popelnienia w
+formularzu. Skutek jest gorszy niz wyglada: znacznik wlasnosci bramki jest **per
+etykieta**, wiec oba zadania uznalyby, ze zaimportowaly pule, i to, ktore
+skonczy pierwsze, wyeksportowaloby ja spod drugiego W TRAKCIE ZAPISU. Odmawiane
+w obie strony: ten sam `dst` i ta sama PULA pod inna etykieta.
+
+### `history` -- ile luki jedzie, gdy wspolny snapshot przezyl
+
+Pytanie wlasciciela: dla dysku nieobecnego kwartal ciagniecie wszystkich
+snapshotow po drodze bywa bez sensu.
+
+**W tym konkretnym przypadku pytanie jest bezprzedmiotowe** -- gdy retencja zjadla
+wspolny snapshot, silnik spada na kotwice-bookmark, a bookmark nie niesie danych:
+wysylka to jeden diff i inaczej byc nie moze. Pole gryzie tylko wtedy, gdy
+wspolny snapshot PRZEZYL.
+
+| wartosc | flaga | znaczenie |
+|---|---|---|
+| `all` (domyslne) | `-I` | kazdy snapshot po drodze |
+| `newest` | `-i` | tylko roznica do najnowszego |
+| `auto:N` | `-T N` | silnik decyduje, mierzac w WLASNYCH interwalach datasetu |
+
+Bez domyslnej „inteligencji", bo dwa dyski tego samego wlasciciela chca czegos
+przeciwnego: para tygodniowa niesie stan biezacy, a dysk kwartalny JEST archiwum.
+Koszt powiedziany wprost w kodzie i w pomocy: przy `newest`/`auto` kopia dostaje
+DZIURY -- snapshoty powstale miedzy wizytami nosnika nigdy tam nie trafia.
+
+`history` i `flags` naraz to **odmowa**, nie regula pierwszenstwa: kto napisal
+oba, mial na mysli jedno.
+
+## LAB: TRZY REPLIKI NA DYSKACH WYMIENNYCH -- STOI (pve9, 2026-08-29)
+
+Przestrzen labowa zbudowana na polecenie wlasciciela. pve9 to VM 109 na pve2;
+dolozone trzy dyski wirtualne 2 GB z numerami seryjnych USB-A/USB-B/USB-C, wiec
+maja stabilne sciezki w `/dev/disk/by-id` -- dokladnie jak prawdziwy dysk USB.
+Weszly na goraco, bez restartu.
+
+| nosnik | pula | rola |
+|---|---|---|
+| USB-A | `usbrep1` | tygodniowy, rotacja |
+| USB-B | `usbrep2` | tygodniowy, rotacja |
+| USB-C | `usbrep3` | kwartalny |
+
+**Zrodlo repliki to prawdziwe kopie z INNEJ maszyny**, nie material syntetyczny:
+`hdd/labcoll/192.168.28.9/hdd/labsrc/vm-900-disk-{0,1}` -- dwa wolumeny VM 900,
+ktore pve1 (28.9) wysyla tu co godzine. W chwili labu 75 snapshotow, najstarszy
+z 2026-08-29.
+
+Konfiguracja to trzy sekcje `[replica:]` na jednym zrodle -- czego grammar do
+dzisiaj nie umial wyrazic (`duplicate section [dataset:hdd/labcoll]`).
+
+### Co zostalo dowiedzione, na prawdziwym urzadzeniu
+
+| | teza | pomiar |
+|---|---|---|
+| 1 | bramka znajduje PRAWDZIWY dysk bez podpowiadania sciezki | `attach usbrep1` -> `imported`, bez `--dir`; tamta poprawka dotyczyla wylacznie puli plikowej |
+| 2 | pelna klamra na wygenerowanej linii crona | trzy linie, kazda `rc=0`, pula wyeksportowana po transferze |
+| 3 | caly zbior kopii z innej maszyny laduje na nosniku | `usbrep1/replica/hdd/labcoll/192.168.28.9/hdd/labsrc/vm-900-disk-{0,1}` |
+| 4 | **wyjecie dysku nie jest bledem** | `qm set 109 --delete scsi2`; zadanie: `SKIPPED ... Nothing was run and nothing is wrong`, `rc=0`, zero maili |
+| 5 | nieobecnosc jednego nie dotyka pozostalych | `usbrep2` przeszedl normalnie, gdy USB-A byl wyjety |
+| 6 | **dysk wracajacy po utracie wspolnego punktu bierze INKREMENT** | patrz nizej |
+| 7 | kazdy nosnik ma wlasna kotwice | trzy `#tgt-` na `hdd/labcoll`, po jednej na medium |
+
+### Punkt 6 -- kryterium jest dysk, nie log
+
+Skasowana na zrodle **cala** rodzina `replica_` -- czyli retencja odebrala
+wspolny punkt wszystkim trzem replikom naraz. Zostaly same kotwice. Po ponownym
+wpieciu USB-A i jednym przelocie:
+
+```
+snapshotow na kopii PRZED:  6
+snapshotow na kopii PO:    12
+kazdy stary snapshot wraz z GUID: NADAL OBECNY
+```
+
+Przesiew od zera musialby przyjsc z `recv -F`, ktory zmiotlby je co do jednego.
+Nie zmiotl -- wiec byl inkrement, zakotwiczony w bookmarku. Generowana linia nie
+niesie `-v`, wiec log tego NIE mowi; dowod jest wylacznie na dysku i tak ma byc.
+
+### Wady znalezione przez ten lab
+
+| | wada |
+|---|---|
+| R1 | grammar nie umial wyrazic dwoch replik jednego zrodla. Dodany typ sekcji `[replica:]` -- replika to inny RODZAJ zadania (bez monitora, bez prune zrodla, bez relacji), a nie drugi `dst` |
+| R2 | `cron2conf.sh` odrzucal CALY crontab przy pierwszej linii z klamra, bo nie zaczyna sie ona od sciezki do `snapsend.sh`. Wada MOJA, wprowadzona razem z klamra; ta sama klasa co `-L` tego samego dnia |
+
+### Stan po labie
+
+Lab **stoi** i jest odtwarzalny: linie w `/root/replines.txt`, config w
+`/root/replab.conf`. Crontab pve9 celowo **nietkniety** -- instalacja bloku z
+niekanonicznej sciezki configu to zmiana, ktorej wlasciciel nie zlecil, a jeden
+pisarz crontaba jest regula tego pakietu.
+
+## LAB: replika na nosnik wymienny -- ZALICZONY (pve0, 2026-08-29)
+
+Obowiazek reczny `mediagate-live` wykonany. Pula plikowa `rotlab` na `/root/rotlab.img`
+w roli dysku wyjmowanego, zrodlo `rpool/mediasrc`. Host wrocil na `main`, po labie
+nie zostal zaden dataset, pula ani obraz.
+
+### Co zostalo dowiedzione
+
+| | teza | pomiar |
+|---|---|---|
+| 1 | wyeksportowana pula czyta sie jako NIEOBECNA, nie jako awaria | `status` -> `is away (last seen: ...)`, `rc=1` |
+| 2 | `attach` importuje i zapisuje wlasnosc | `imported-by-us` + `last-seen` w katalogu stanu |
+| 3 | `detach` eksportuje to, co ten przebieg wzial | `exported ... the disk can be unplugged`, znacznik skasowany |
+| 4 | **dysk wracajacy po dlugiej nieobecnosci bierze INKREMENT z kotwicy** | patrz nizej |
+| 5 | brak dysku nie alarmuje | cala linia crona `rc=0`, `SKIPPED`, `Nothing was run and nothing is wrong` |
+| 6 | awaria transferu przy WLOZONYM dysku alarmuje | silnik `rc=1` -> linia `rc=1`, pula mimo to wyeksportowana |
+| 7 | swiezo przygotowany dysk daje sie zasiac | liscia `rotlab/replica/rpool/mediasrc` nie bylo; powstal, `rc=0` |
+
+### Punkt 4 -- dowod, ze to inkrement, a nie przesiew od zera
+
+Retencja zjadla na zrodle snapshot, ktory trzyma kopia. Zostala sama kotwica:
+
+```
+zrodlo po czystce:   rpool/mediasrc@automated_hourly2026-08-29_10-00-00
+kotwica:             rpool/mediasrc#tgt-2e1a6b9f   guid 6543254757722584541
+kopia trzyma:        rotlab/replica@automated_hourly2026-08-29_09-08-25   guid 6543254757722584541
+```
+
+GUID zgodny co do cyfry — kotwica i snapshot kopii to ten sam punkt. Po ponownym
+imporcie i synchronizacji:
+
+```
+No common snapshot, but a bookmark still anchors an incremental: rpool/mediasrc#tgt-2e1a6b9f
+```
+
+**Kryterium zaliczenia nie jest jednak ten log, tylko dysk.** Przesiew od zera
+musialby przyjsc z `-F` i zmiesc snapshoty celu. Stary snapshot PRZEZYL, doszedl
+nowy, tresc pliku ma obie linie (`dane v1` + `dane v2`), a kotwica przesunela sie
+na nowy punkt (`guid 13701617897984100`) zachowujac nazwe.
+
+### Wady znalezione przez lab, wszystkie naprawione z kontrola ujemna
+
+| | wada | dlaczego suita jej nie widziala |
+|---|---|---|
+| M1 | `zpool import` skanuje domyslnie `/dev`, wiec dysk OBECNY, ale poza ta sciezka, czytal sie jako nieobecny i zadanie pomijalo sie w nieskonczonosc bez slowa. Dodane `--dir` | stub `zpool` nie ma pojecia o sciezkach urzadzen |
+| M2 | `detach` pytal KTO jest wlascicielem puli, zanim spytal CZY pula w ogole jest. Przy dysku w sejfie — czyli w przypadku najczestszym ze wszystkich — odpowiadal `leaving 'rotlab' imported`. To zdanie nazywa jedyny stan, w ktorym wyjecie dysku niszczy replike, wiec uczylo admina, ze prawdziwe ostrzezenie nic nie znaczy | suita przechodzila przy OBU kolejnosciach; niczego nie rozstrzygala |
+| M3 | klamra byla wstawiana jako CIAG polecen w miejsce, ktore `job_cron_line` buduje pod JEDNO (`CMD 2>"$e"; rc=$?`), wiec `2>"$e"` i `rc=$?` wiazaly sie tylko z `detach`: stderr silnika szedl na stderr crona (ten sam zalew maili, ktoremu pakiet ma zapobiegac), a nieudany transfer zapisywal `rc=0` i nikt nie dostawal maila. Sens pola `media` polega na kupieniu JEDNEJ ciszy — kupowalo wszystkie. Teraz podpowloka i status WYBRANY, nie odziedziczony | suita badala bramke, nigdy linii |
+| M4 | bramce podawano sciezke DOCELOWA, ktora tworzy silnik. Na swiezo przygotowanym dysku jej nie ma, wiec pierwsza synchronizacja byla odrzucana jako „zly nosnik" — wlasciwy dysk, odrzucony, i po M3 jeszcze alarmujacy. Nowego nosnika nie dalo sie zasiac. Tozsamoscia nosnika jest BAZA, ktora admin zaklada raz | jw. |
+
+M3 i M4 to jedna rodzina: **testowalem czesc, ktora napisalem, a nie to, co z niej
+wychodzi.** Sekcja G suity uruchamia teraz cala linie z prawdziwego `gen-cron.sh`.
+
+### Zgloszone, nie naprawione
+
+`snapsend.sh` loguje `Creating target dataset: <cel>` zanim sprawdzi, czy cel
+istnieje — przy kazdej kolejnej synchronizacji mowi, ze tworzy dataset, ktorego
+nie tworzy (kopia nie zostala odtworzona, stary snapshot przezyl). To wada opisu,
+nie dzialania, i siedzi w ZAMROZONYM silniku: bez wyraznego polecenia wlasciciela
+i wpisu w `ENGINE-FREEZE.md` nie ruszam.
+
 ## KAMPANIA: lab pasywny pve2>pve9 -- ZALICZONA (2026-08-23/24)
 
 Wachlarz trzech relacji pasywnych z jednego zrodla, kazda innego ksztaltu, na
@@ -4070,10 +4607,10 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `scope` | **34/34** | gramatyka pliku zakresu (REV-033 F2): sekcje `[dataset:]`, `include_parent`/`include_children`/`exclude`/`exclude_tree`, odmowy z numerem linii oraz decyzja „czy ten dataset jest w zakresie" |
 | `cron` | **137/137** (+8 sekcja X: markery `ZFS-JOB BEGIN/END` w generowanej linii + fallback `mktemp`, znalezione na żywo 2026-08-17; +2 sekcja V: tryb pliku zamka, znaleziony na zywo 2026-08-06) | **Sekcja X — linia crona świadkiem własnego przebiegu.** Znalezione na żywo: 2026-08-09 tygodniowy job CT 103 na pve2 wystartował i nie zostawił śladu w ŻADNYM z trzech instrumentów naraz — nic w `cron.log`, brak rekordu w logu statystyk (więc nie doszedł do `emit_stats`, który odpala się nawet dla `skipped_lock`/`skipped_paused`), brak maila (rc nigdy nie było ≠ 0). Dataset przeszedł 14 dni bez kopii tygodniowej; jedynym powodem, dla którego ktokolwiek się dowiedział, było `check-snap-age` eskalujące do CRITICAL pięć dni później. Przyczyna strukturalna: wszystkie instrumenty żyją WEWNĄTRZ silnika, więc przebieg umierający zanim silnik naprawdę wystartuje jest niewidoczny dla wszystkich trzech jednocześnie — jedynym miejscem, które może to zaświadczyć, jest sama linia crona. `job_cron_line` emituje teraz `ZFS-JOB BEGIN <label>` przed komendą i `ZFS-JOB END <label> rc=$rc` po niej (BEGIN bez END = sygnatura tej klasy, `grep ZFS-JOB cron.log`); dwie linie na przebieg to świadomy koszt, bo sam kod wyjścia nie zapisałby 9 sierpnia niczego — awaria nastąpiła zanim jakikolwiek kod wyjścia zaistniał. `date -Is`, nie `date +FORMAT`: cron czyta nieescapowane `%` jako koniec komendy plus stdin, więc format string cicho ucinałby każdą linię (X5 to pinuje). Gołe `e=$(mktemp)` zastąpione fallbackiem obok logu: przy awarii `mktemp` `$e` było PUSTE, `2>"$e"` wywalało się i komenda nie wykonywała się w ogóle — mechanizm odtwarzający sygnaturę z 9 sierpnia co do joty, zmierzony w X6 (nowy kształt: silnik działa, oba markery) z pozytywną kontrolą X7 (stary kształt pod tą samą awarią: silnik nie rusza, log pusty). Linia monitora celowo NIEoznaczona (X3) — chodzi co 15 min i już raportuje stan przez ramiona rc. X0 pinuje, że config w ogóle coś wyemitował: pusty `$X_OUT` nie ma brakujących markerów, gołego `mktemp` ani zbłąkanego `%`, więc X1/X4/X5 przechodziły „zerem na zerze" — dokładnie to zrobiły przy pierwszym uruchomieniu kontroli przez `$GEN`. Czerwone na kodzie sprzed zmiany: X1, X2, X4, X6. **Reszta sekcji: `lib-cron.sh`** — jedyny pisarz crontaba: blok zastępowany w miejscu, wszystko poza nim bajt w bajt, markery zepsute odrzucane a nie naprawiane, `crontab(1)` zaślepiony (także tryb „przyjmuje zapis i przechowuje co innego"), zamek per-użytkownik z wymuszonym przeplotem dwóch procesów (REV-034 F2, +14), całościowy zapis `cron_replace_all` z odczytem zwrotnym (REV-034 F3, +9), jeden stały katalog blokad bez fallbacku per-caller (REV-035, +8, część SKIP na tej maszynie). Od REV-036 F5 biblioteka sama rozpoznaje zapauzowany kształt (`cron_fullcron_paused`/`cron_block_paused`) i odmawia przez `cron_paused_guard` w `cron_block_install_impl`/`cron_block_ensure_line_impl`/`cron_block_remove_impl` — ćwiczone przez `pause` (sekcje S/T), nie tu |
 | `profiles` | **39/39** | granica profilu (REV-073, EGZEKWOWANA od REV-076). Regula „profil nie posiada topologii” zyla wylacznie w tej suicie: zaden kod produkcyjny nie odwolywal sie do `profiles/`, a `validate_fragment` bylo zdefiniowane wewnatrz pliku testowego. Do tego `templates.conf` bylo sprawdzane tylko pod katem ksztaltu naglowka, wiec profil mogl niesc `dst` i suita przechodzila. ZMIERZONE: dopisanie `dst = hdd/evil` do wbudowanego profilu zostawia STARA suite na 22/22, a poprawiona odmawia z podaniem pliku, linii i pola. Teraz `lib-profile.sh` jest walidatorem PRODUKCYJNYM, a suita wola jego — test nie moze poblogoslawic reguly, ktorej produkcja nie wykonuje. Schemat CONFIG v4 celowo NIE zostal zawezony: `src`/`dst` w `[template:]` sa legalne i pve0 uzywa tego produkcyjnie (`[template:vm_archive]` z `dst = hdd/backups/pve1`), bo szablon to konstrukcja WDROZENIA, a profil jest szablonem OGRANICZONYM. Nazwy pol nadal czytane z `--dump-fields`, nigdy powtorzone. +6 (REV-20260809-077 F1): `profile_validate_dir` ZAWODZILA OTWARCIE na niekompletnym profilu. Napisalem `[ -f "$dir/x" ] && ! validate`, co znaczy „jesli istnieje i padnie, zglos” — wiec BRAKUJACY artefakt zwracal sukces z granicy produkcyjnej, a pusty katalog walidowal sie czysto. Suita tego nie widziala, bo sprawdzala osobno, ze pliki wbudowanego profilu istnieja — inna wlasnosc, ktorej B1 by nie odziedziczyl. Profil to DOKLADNIE trzy artefakty i kompletnosc nalezy do tej samej granicy; przeniesienie jej do wolajacego odtworzyloby problem, ktory usunela REV-076. Kontrola wobec `bd9de5a`: **4 asercje padaja** (trzy brakujace artefakty i pusty katalog); brak katalogu i kontrola pozytywna przechodza tam tez i sa pokryciem regresyjnym |
-| `reviewctl` | **36/36** (PROTOCOL V2) | maszyna stanów recenzji: stan jest **wyprowadzany** z nagłówków maszynowych w plikach recenzji/odpowiedzi/domknięcia, a `REVIEW_LEDGER.md` i `OPEN-THREADS.md` są generowane. Przypina macierz akceptacji z protokołu — w tym dwa przypadki, których ręcznie utrzymywana tabela nie mogłaby złapać: akceptacja wskazująca **inny** commit niż zgłoszony, i domknięcie bez akceptacji. Dwa realne błędy w samym generatorze wyszły z tych testów, w tym fail-open: stan liczony w podstawieniu poleceń gubił błędy w podpowłoce i zapisywał ledger z rc=0. +11 (REV-20260807-067): nagłówek niosący commit musi nazywać commit **osiągalny z opublikowanej gałęzi**. Osiągalność, nie rozwiązywalność — SHA, które wywołało tę recenzję, JEST prawdziwym commitem w klonie implementera, osieroconym przez przepisanie, więc `git cat-file -e` by je przepuścił, a recenzent i tak dostawał z GitHuba „No commit found". Przypadek sieroty buduje własny wiszący commit przez `git commit-tree`, zamiast polegać na tym, który akurat istnieje lokalnie. Trzy pola: `implementation`, `reviewed-implementation`, `closed-by`. Brak repozytorium git = odmowa, nie cisza. Kontrola negatywna wobec `2620824`: **6 nowych asercji pada, 22 strukturalne przechodzą**. +6 (REV-20260808-070 F4): STAN DOSTAW. Pod wyjatkiem direct-main implementer laduje pierwszy, ale marszruta byla wyprowadzana WYLACZNIE z artefaktow REV — wiec dostawa bez REV-a byla niewidzialna: `OPEN-THREADS.md` mowil, ze nie ma nic do zrobienia, gdy Etap 3 lezal na `main` bez werdyktu. Jedna linia `<!-- delivered: <sha> opis -->` w `docs/project/DELIVERIES.md` staje sie praca przypisana recenzentowi, az zostanie wyczyszczona JAWNIE: albo recenzent otworzy REV o tym SHA, albo zapisze `no-review-required`. SHA podlega tej samej regule osiagalnosci co SHA implementacji. +2: wada znaleziona przez UZYWANIE mechanizmu — czyszczenie dostawy zalezalo od tego, ze jakis REV AKTUALNIE wskazuje ten SHA, a `reviewed-implementation` jest wskaznikiem RUCHOMYM: recenzent przesuwa go na kazde kolejne zgloszenie. Gdy watek posunal sie dalej, dostawa wracala jako niezrecenzowana — i robilaby tak juz zawsze. „Zostalo zrecenzowane” to fakt o przeszlosci i musi byc zapisany jako fakt: znacznik `<!-- reviewed-by: <sha> REV-... -->` |
+| `reviewctl` | **92/0** (PROTOCOL V2) | maszyna stanów recenzji: stan jest **wyprowadzany** z nagłówków maszynowych w plikach recenzji/odpowiedzi/domknięcia, a `REVIEW_LEDGER.md` i `OPEN-THREADS.md` są generowane. Przypina macierz akceptacji z protokołu — w tym dwa przypadki, których ręcznie utrzymywana tabela nie mogłaby złapać: akceptacja wskazująca **inny** commit niż zgłoszony, i domknięcie bez akceptacji. Dwa realne błędy w samym generatorze wyszły z tych testów, w tym fail-open: stan liczony w podstawieniu poleceń gubił błędy w podpowłoce i zapisywał ledger z rc=0. +11 (REV-20260807-067): nagłówek niosący commit musi nazywać commit **osiągalny z opublikowanej gałęzi**. Osiągalność, nie rozwiązywalność — SHA, które wywołało tę recenzję, JEST prawdziwym commitem w klonie implementera, osieroconym przez przepisanie, więc `git cat-file -e` by je przepuścił, a recenzent i tak dostawał z GitHuba „No commit found". Przypadek sieroty buduje własny wiszący commit przez `git commit-tree`, zamiast polegać na tym, który akurat istnieje lokalnie. Trzy pola: `implementation`, `reviewed-implementation`, `closed-by`. Brak repozytorium git = odmowa, nie cisza. Kontrola negatywna wobec `2620824`: **6 nowych asercji pada, 22 strukturalne przechodzą**. +6 (REV-20260808-070 F4): STAN DOSTAW. Pod wyjatkiem direct-main implementer laduje pierwszy, ale marszruta byla wyprowadzana WYLACZNIE z artefaktow REV — wiec dostawa bez REV-a byla niewidzialna: `OPEN-THREADS.md` mowil, ze nie ma nic do zrobienia, gdy Etap 3 lezal na `main` bez werdyktu. Jedna linia `<!-- delivered: <sha> opis -->` w `docs/project/DELIVERIES.md` staje sie praca przypisana recenzentowi, az zostanie wyczyszczona JAWNIE: albo recenzent otworzy REV o tym SHA, albo zapisze `no-review-required`. SHA podlega tej samej regule osiagalnosci co SHA implementacji. +2: wada znaleziona przez UZYWANIE mechanizmu — czyszczenie dostawy zalezalo od tego, ze jakis REV AKTUALNIE wskazuje ten SHA, a `reviewed-implementation` jest wskaznikiem RUCHOMYM: recenzent przesuwa go na kazde kolejne zgloszenie. Gdy watek posunal sie dalej, dostawa wracala jako niezrecenzowana — i robilaby tak juz zawsze. „Zostalo zrecenzowane” to fakt o przeszlosci i musi byc zapisany jako fakt: znacznik `<!-- reviewed-by: <sha> REV-... -->` | **Sekcje X1/X2 (REV-125 F1, 2026-08-29)**: transakcja musi UDOWODNIC swoja migawke. `tx_guard` wykonywal `mkdir`/`cp`/dopisanie bez sprawdzania, a pisarz i tak mutowal zywy artefakt roli — nieudana migawka nie zostawiala nic pod `present/` ani pod `absent/`, wiec `tx_restore` nie mial pasujacej galezi, po cichu zostawial mutacje, a `tx_cleanup` kasowal katalog transakcji. Polecenie konczylo sie bledem, a werdykt recenzenta i tak przechodzil z CHANGES-REQUIRED na APPROVED z przesunietym wskaznikiem implementacji. Niezerowy kod wyjscia NIE jest ta wlasnoscia — wlasnoscia jest, ze po odmowie artefakt jest bajt w bajt ten sam. Sterowane stubem `cp` na PATH, tak jak odtworzyl to recenzent: prawdziwa transakcja, prawdziwy pisarz, prawdziwy generator, jedno wywolanie systemowe zepsute. X2 to druga strona tej samej granicy — gdy odtworzenie zawiedzie, kazda sciezka jest nazwana i kopia zapasowa ZOSTAJE, bo to jedyny caly egzemplarz faktow recenzenta. Kontrola: `reviewctl.sh` z kanonicznego `main` (identyczny z `e33b667`) wywraca szesc asercji, w tym te o bajtowej identycznosci — czyli odtwarza znalezisko.
 | `monitor` | **24/24** (nowa, REV-056) | `check-snap-age.sh`: gdy nic nie pasuje do wzorca, wiek liczony z `creation` DATASETU przez tę samą drabinkę progów — świeży dataset czyta się OK, trzydniowy bez kopii nadal CRITICAL. Nieodczytany znacznik czasu to UNKNOWN, nigdy zmyślony wiek (dotyczy też ścieżki pasującego snapshotu, gdzie ten sam błąd siedział wcześniej). `zfs` to zaślepka w `PATH`, wszystkie czasy jako offset od jednego `NOW` — bez roota, bez ZFS-a, bez wyścigu z zegarem |
 | `migrate` | **52/52** lokalnie i jako root na Linuksie, **54/54** jako konto delegowane (REV-057 + REV-058) | `gen-cron.sh --migrate-recursion`: wykrywanie przez ten sam przebieg opcji co walidator (`-m R-daily_` nietykane, `-Rv 3` rozdzielane), porównanie trójstronne z kontrolą jako pierwszą, zapis transakcyjny. Każdy przypadek odmowy sprawdza sumę kontrolną pliku źródłowego, nie tylko komunikat. Sekcja G (REV-058) odtwarza topologię root + konto delegowane zaślepkami `crontab`/`getent`/`id`: kontrola znajduje blok po linii `# Source:` u dowolnego użytkownika, a nieczytelny crontab, nieczytelna lista użytkowników i dwa pasujące bloki — odmawiają przed zapisem. D4 (nieudany zapis) wymaga nie-roota — pod rootem SKIP, bo root omija prawa katalogu |
-| `cron2conf` | **18/18** (+7 korpus `fixtures-legacy/`, 2026-08-17) | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze. **Od 2026-08-17 dwa korpusy:** `fixtures/` w kształcie z markerami `ZFS-JOB` (bieżące wyjście generatora) i `fixtures-legacy/` w kształcie sprzed markerów. To drugie nie jest historią — wdrożenie to godzinowy `git pull`, więc host trzyma stary blok zarządzany aż coś uruchomi tam `--install`, i **cała flota jest dziś w tym stanie**. Narzędzie istnieje po to, żeby odbudować utracony config (pve2 tego raz potrzebował), więc odmowa na kształcie, który host faktycznie ma, psuła by je dokładnie w jedynej sytuacji, do której służy. `strip_witness_markers` w `cron2conf.sh` normalizuje nowy kształt do klasycznego przed parsowaniem; z markerów nie odzyskuje się NIC — etykieta i tak wraca z argumentów notify, więc są świadkiem, nie konfiguracją. Kontrola: wersja `cron2conf.sh` sprzed zmiany **odmawia wprost** (exit 1) na nowym kształcie zamiast cicho wyprodukować zły config, a `legacy/corpus-is-pre-marker` pilnuje, żeby marker nie wciekł do korpusu starego kształtu i nie zamienił tych siedmiu testów w porównanie nowego kształtu z samym sobą |
+| `cron2conf` | **27/0** | odtwarzanie configu z crontaba — round-trip przez prawdziwy `gen-cron.sh`, przypadki negatywne/ostrzegawcze. **Od 2026-08-17 dwa korpusy:** `fixtures/` w kształcie z markerami `ZFS-JOB` (bieżące wyjście generatora) i `fixtures-legacy/` w kształcie sprzed markerów. To drugie nie jest historią — wdrożenie to godzinowy `git pull`, więc host trzyma stary blok zarządzany aż coś uruchomi tam `--install`, i **cała flota jest dziś w tym stanie**. Narzędzie istnieje po to, żeby odbudować utracony config (pve2 tego raz potrzebował), więc odmowa na kształcie, który host faktycznie ma, psuła by je dokładnie w jedynej sytuacji, do której służy. `strip_witness_markers` w `cron2conf.sh` normalizuje nowy kształt do klasycznego przed parsowaniem; z markerów nie odzyskuje się NIC — etykieta i tak wraca z argumentów notify, więc są świadkiem, nie konfiguracją. Kontrola: wersja `cron2conf.sh` sprzed zmiany **odmawia wprost** (exit 1) na nowym kształcie zamiast cicho wyprodukować zły config, a `legacy/corpus-is-pre-marker` pilnuje, żeby marker nie wciekł do korpusu starego kształtu i nie zamienił tych siedmiu testów w porównanie nowego kształtu z samym sobą. **Fixture `paused-prune-bookmark` (2026-08-29)** przypina kształt, ktory pauza wprowadza na flote: linie prune z `-L` BEZ `-R`, oraz `-B -R -L <etykieta> -p <port>`. Parser nie znal ani `-L` przy `delsnaps`, ani flag ssh, a skutkiem nie bylo zgubione pole — `rest` zaczynal sie wtedy od `-L`, sprawdzenie cudzyslowu nie przechodzilo i narzedzie odrzucalo CALY crontab jako nierozpoznany. Jedna zapauzowana relacja na hoscie czynila je bezuzytecznym dla tego hosta, czyli dokladnie w miare wdrazania pauzy. Kontrola: `cron2conf.sh` z `main` odmawia na tym fixture | **Fixture `replica-removable` (2026-08-29)** przypina klamre nosnika: zadanie repliki nie zaczyna sie od sciezki do `snapsend.sh`, tylko od `( ... zfs-media-gate.sh attach ...`, wiec kazdy parser go odrzucal i narzedzie wywalalo CALY crontab. Ta sama klasa co `-L` tego samego dnia, tyle ze wada byla moja — wprowadzona razem z klamra. Kontrola: `cron2conf.sh` sprzed zmiany konczy na tym fixture bledem.
 | `cleanrel` | **23/23** (nowa, 2026-08-20) | `clean-relationships.sh`: audyt i usuwanie śladów po relacjach. Każdy przypadek to kształt ZMIERZONY podczas rozbiórki 2026-08-20, nie wymyślony — bo narzędzie powstało dlatego, że ręczne sprzątanie coś przegapiło, więc jego testami są właśnie te rzeczy, które zostały przegapione. Pinuje trzy tożsamości jednej relacji (nazwa / adres / etykieta) i obie asymetrie, których nie widać w żadnym kodzie: `peers/` kluczowane dwojako przy `remove-client` usuwającym tylko wariant po adresie, oraz jeden z czterech plików klucza (`_alias_known_hosts`, ten podawany do `-k`) przeżywający usunięcie. Własności bezpieczeństwa jako testy: domyślnie tylko odczyt, usuwanie wymaga celu I `--yes`, LIVE wygrywa przy jakimkolwiek dowodzie, `--leave` przed ręcznym sprzątaniem, `rmdir` odmawiający przy niepustym katalogu, `id` a nie właściciel katalogu (recykling UID), `known_hosts` i datasety nazywane a nie kasowane, konto `zfsbackup` bez sufiksu wykluczone. Dwa przypadki dopisane po tym, jak test NA LABIE pokazał to, czego piaskownica nie mogła: duplikat w liście artefaktów (domyślna nazwa relacji JEST adresem, więc tożsamość i adres to ten sam ciąg) oraz mylące odmówienie `--leave` przy wyciekłym holdzie `zfssnapall_inflight` — jego treść zakłada trwający transfer, a przy wycieku nic nigdy się nie dokończy. W pełni w piaskownicy: każda ścieżka systemowa nadpisywalna, co jest jednocześnie tym, co rozluźnia wymóg roota i pozwala w ogóle przetestować ścieżkę usuwania | **Nagrobek i wykrywanie osieroconych danych (2026-08-20, po dyskusji z właścicielem):** purge zapisuje, JAKIE datasety należały do relacji, **zanim** cokolwiek usunie — bo to właśnie usuwany rekord był jedynym miejscem, które je nazywało (`hdd/lab4direct` przeżył swoją relację i po skasowaniu confa nic na hoście już go z niczym nie łączyło). Gdy relacja MA dane, a zapisu nie da się wykonać, purge **odmawia** — usunięcie ostatniej rzeczy nazywającej te dane, nie zostawiając niczego, co je nazywa, to dokładnie ta awaria, której nagrobek ma zapobiec. Audyt zgłasza datasety, o których nagrobek mówi, że należały do zniknionej relacji, a które nadal są na dysku — twierdzenie pochodzi z REKORDU, nigdy z kształtu nazwy. To jedyne miejsce w pliku wołające `zfs`, wyłącznie do odczytu, a jego brak jest pominięciem z uzasadnieniem, nie błędem. **Nie kasuje danych po żadnej stronie** — decyzja właściciela: na kolektorze kopia bywa jedynym egzemplarzem właśnie w chwili śmierci relacji, a `RUX_TARGET` jest wspólnym korzeniem wielu peerów, więc `destroy -r` na nim zabrałby cudze kopie. |
 | `localbackup` | **50/50** (Faza 5 slice 1 + **slice 2 instalacja transakcyjna `da3e831`**; +6 REV-097; +2 REV-098; +5 REV-101; +5 REV-102 krok 2 lokalny; +4 REV-20260811-104 F1 niezależne szablony) | `zfs-backup.sh --source/--target` (bare, kanoniczne; `local-backup` alias) — wysokopoziomowy LOKALNY workflow source→target, wycinek PLANOWANIA (read-only, jak `restore --plan`). **REV-097:** F1 — źródło musi ISTNIEĆ w ZFS (`zfs list`, stub w teście), brakujące = twarda odmowa całości bez fallbacku; F2 — kandydat komponowany ADDYTYWNIE nad istniejącym CONFIG celu (istniejący job A zachowany bajt-w-bajt, wyrenderowany cron niesie A+B, overlap odmawia, brakujący CONFIG roszczony przez zainstalowany blok = fail-closed odmowa przez WSPÓLNY guard `assert_config_not_claimed_if_missing` wyodrębniony z `ensure_cron_config`); F3 — kanoniczne publiczne wejście to bare `--source/--target`, alias `local-backup` sięga tej samej logiki. **REV-098:** guard overlapu rozwija listy przez przecinki (`[prune:a,b,c]` — jak `config_datasets()`) i sprawdza każdego członka osobno; regresja pinuje odmowę przy overlapie z NIE-pierwszym członkiem `[prune:rpool/other,rpool/data]` + kontrolę że rozłączne żądanie obok tej samej wielościeżkowej sekcji dalej przechodzi (nie „każdy przecinek = konflikt"). Pinuje: odmowę nakładania w OBU kierunkach (cel pod źródłem, źródło pod celem, równe — backup nie może lądować w tym co backupuje; czysty test prefiksu ze `/`, odporny na `data` vs `database`), odmowę zdalnego (`:` = LOCAL only; `@host` łapie char-check), brak `--source`/`--target` i nieznany `--profile` odmawiają, kandydat CONFIG v4 renderuje się przez PRAWDZIWY `gen-cron.sh` z lokalnym `dst=` send (bez `:`) i znamespace'owanymi szablonami domyślnego profilu + drabiną GFS, jedna faktyczna nota przy wspólnej puli (nie zakaz), a planowanie NIE instaluje niczego (stub `crontab` w PATH nigdy nie wołany). Instalacja transakcyjna = kolejny wycinek. **REV-101:** multi-source WHAT — `--source=a,b,c` (i akumulacja powtórzonych flag, bez last-one-wins), każdy root walidowany (missing→refuse całości bez partiala), overlap parent/child w zbiorze odmawia, duplikat kanonizowany do jednego, po jednym `[dataset:root]` na root + jeden `[prune:target]`, gen-cron merge'uje w jedną comma-joined linię send (kształt jak golden `tiered.conf`). **REV-102 (krok 2, lokalny):** kandydat niesie teraz DWIE niezależne retencje — `[prune:root]` per root (ograniczenie `automated_hourly_` na ŹRÓDLE, drabina GFS z `prune.inc`) ORAZ `[prune:target]` (magazyn) — z tej samej drabiny przy CREATE, ale osobne edytowalne sekcje; wyrenderowany cron ma dwie osobne linie delsnaps (source i target scope), manualne snapshoty przeżywają (pattern `automated_`, nie `*`); kontrola out-of-band vs baza `5423518` = 0 sekcji source-prune (defekt), nowy kod = 1. **F2 (recenzja kroku 2):** source-prune był `recursive=yes` (→ `delsnaps -R`) mimo że `[dataset:root]` jest non-recursive — wchodził w dzieci (`root/vm-101`) i mógł kasować `automated_` spoza pokrycia relacji; poprawione na non-recursive (`delsnaps -G` bez `-R`, tylko nazwany dataset), test pinuje brak `-R` + kontrolę „dziecko przeżywa". **REV-104 F1:** source i target referowały TE SAME szablony (`profile__default__keep_*`) → edycja jednej strony zmieniała obie; teraz source dostaje odrębną rodzinę `profile__default__src_keep_*` (te same wartości przy CREATE, różna tożsamość, rename `__keep_`→`__src_keep_` namespace-agnostic). Testy: mutacja tylko source → zmiana source, target nietknięty (i odwrotnie); negctl: wspólna rodzina łączy obie (load-bearing). Remote-PULL/grant/migracja/real-ZFS = kroki 3–5 (REV-102 OPEN). **Faza 5 slice 2 (Gate 5) — WDROŻONA na main `da3e831`, DOSTAWA DO RECENZJI:** `--install` (+`--yes`) domyka planer do instalacji. Kolejność JEST kontraktem: podgląd → potwierdzenie → **SEED** → instalacja → odczyt zwrotny. Seed idzie PRZED cronem, bo właściwość akceptacyjna brzmi „nieudany/odrzucony seed nie zostawia nowego uprawnionego crona i da się ponowić"; instalacja przed seedem zostawiłaby godzinowe zadanie wskazujące na nienawiązaną relację. **Plan pozostaje domyślny** — `--install` to jawny czasownik, polecenie ze slice 1 działa bajt w bajt tak samo. Zero nowej orkiestracji: `show_activation_proposal`, cztery asercje przedinstalacyjne i `atomic_replace_and_install` to TE SAME helpery co `activate-client`. **Żadnego trwałego rekordu relacji lokalnej** — `CLIENTS_DIR` trzyma tylko klientów zdalnych, a zainstalowany CONFIG plus blok crona JUŻ są stanem; „active" to opis wyprowadzony, nie token. **Prefiks snapshotów seeda czytany z WYRENDEROWANEGO kandydata**, nie zaszyty — druga kopia prefiksu to mechanizm, którym seed po cichu rozjechałby się z linią crona, zakładając rodzinę snapshotów, której zainstalowany prune nigdy nie dopasuje; brak odczytu = odmowa, nie zgadywanie. Testy pinują KOLEJNOŚĆ (`SEED` przed `INSTALL`), nie samą obecność obu. **Dowód na żywym ZFS (pve1, 2026-08-12 16:02, crontab w piaskownicy):** 12 MB źródła zaseedowane realnym `snapsend`, dataset i snapshot celu powstały, zainstalowany blok niósł dokładnie trzy oczekiwane linie (send godzinowy, prune ŹRÓDŁA non-recursive, prune CELU rekurencyjny — podział retencji REV-102 nietknięty), istniejący `[defaults]` operatora przeżył, produkcyjny crontab nietknięty; lab skasowany. **Luka nazwana wprost:** transakcja crona nie była wykonana na PRAWDZIWYM spoolu — na obu żywych hostach oznaczałoby to zapis produkcyjnego crontaba; użyte helpery są identyczne z tymi, których `activate-client` używa produkcyjnie codziennie. **Druga luka, defekt w samej dostawie:** blok `Usage:` w `zfs-backup.sh` nadal opisuje tę komendę jako „plan/preview only", a `--install` i `--yes` nie są w nim wymienione — pomoc kłamie o zachowaniu narzędzia. Znalezione po zgłoszeniu `da3e831`; ŚWIADOMIE nienaprawione za plecami zgłoszonego SHA (protokół: nie modyfikuj zgłoszonej granicy akceptacyjnej, dopóki należy do recenzenta), **NAPRAWIONE** w REV-20260812-112 F1 (`0697f01`): blok `Usage:` opisuje teraz cały kontrakt w miejscu (bez `--install` planuje i nic nie instaluje; `--install` seeduje a potem instaluje crona transakcyjnie; `--yes|-y` pomija potwierdzenie). Dwie asercje, bo jedna nie łapie kształtu tego defektu: Usage MUSI wymieniać `--install` i `--yes/-y`, ORAZ stara bezwarunkowa fraza „plan/preview only" MUSI zniknąć — pomoc, która tylko dopisuje flagi i dalej nazywa komendę podglądową, przeszłaby pierwszą i nadal myliła. Druga asercja od razu się przydała: moje pierwsze sformułowanie zostawiło tę frazę w gałęzi warunkowej i test padł, więc przeredagowałem tekst zamiast rozluźniać test. `localbackup` **52/52**, `zfsbackup` 401/401 (pve1). **Defekt procesowy, nie produktowy:** REV-112 jest NIEWIDOCZNY dla `reviewctl` — plik recenzenta używa front-mattera YAML, a parser (`test/reviewctl.sh:41`) czyta formę `<!-- pole: wartość -->`, więc ledger nie ma wiersza 112 mimo `routing: Claude` w pliku. Trzecie dziś zamrożenie routingu przez nagłówek. Plik recenzenta nietknięty; moja odpowiedź celowo trzyma udokumentowaną formę. **Faza 5 slice 3 — WDROŻONA na main `04d79ae`, DOSTAWA DO RECENZJI:** `--target` można pominąć. Logika nie jest nowa — `propose_backup_target()` WYCIĄGNIĘTE z `setup-server` i współdzielone, żeby dwa miejsca nie rozjechały się w dwie różne idee tego, gdzie lądują backupy. Helper zwraca cel RAZEM z pochodzeniem i to ono niesie całą własność bezpieczeństwa: `default` (DEFAULT_TARGET z server.conf — świadoma wcześniejsza decyzja operatora) vs `heuristic` (zgadnięte z układu pul w tym przebiegu). Zgadnięty cel jest proponowany, ETYKIETOWANY jako zgadnięty i pokazany — ale **nie da się go zainstalować przez `--yes`**: operator albo nazywa cel, albo potwierdza interaktywnie. Zagrożenie z ekstrakcji obsłużone wprost: `die()` helpera przy niejednoznacznych pulach wykonuje się w podpowłoce podstawienia, więc wywołujący, który by je zpipe’ował lub zignorował status, przeleciałby przez odmowę z pustym celem — oba wywołania łapią `|| die`, a test pinuje, że odmowa jest TERMINALNA (plan nie powstaje). Kontrola dyskryminująca: ten sam pominięty `--target`, to samo `--yes`, różnica wyłącznie w pochodzeniu — guard odrzucający po prostu „`--yes` gdy pominięto `--target`" przeszedłby wszystko inne i padł na niej. `localbackup` **57/57**, `zfsbackup` 401/401 (pve1; druga suita to regresja na ekstrakcji z `setup-server`). **REV-20260812-112 ZAMKNIĘTY** (`0697f01`), **Gate 5 OSIĄGNIĘTA**, dostawa slice 3 wyczyszczona formalnie przez recenzenta (`reviewed-by: 04d79ae4… reviewer-clean-no-finding`). Bez ZFS/sieci/crontaba w suicie |
 | `rux` | **23/23** (PR #26, 2026-08-16; +2 `--local-user=` fix znaleziony w RUX-4) | `zfs-backup.sh --source=/--target=/--mode=` — RUX, `docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md`. **`--local-user=NAME` znaleziony brakujący na żywym RUX-4** (pve2-metropolis, kolektor bez `server.conf` — `add-client`'s Batch B guard odmawiał, bo RUX nie miał jak przekazać konta delegowanego); dodany jako CREATE-time passthrough do `add-client`, bez `--local-user` odmowa dalej dochodzi do operatora nietknięta (pinowane osobno). Pins: lokalny `--source` (bez `:`) trafia do `cmd_local_backup` bajt w bajt; `--source=HOST:DATASET` parsuje backup (`--target` wymagany) i sync (`--mode=sync`, bez `--target`, żadnego drugiego `--target`); nieprawidłowa/dwuznaczna składnia `--source` odmawia; bez `--install` NIC nie dotyka żadnego z hostów (brak `CLIENTS_DIR`, brak wywołania `deploy.sh`); świeża relacja: `add-client` (z `--datasets=`/`--target` dla backup, `--mode=sync` dla sync) → `seed` → `activate`, w tej kolejności, RUX_SOURCE/TARGET/MODE zapisane w rekordzie klienta; pasująca istniejąca relacja jest WZNAWIANA (bez drugiego `add-client`); sprzeczne fakty (ten sam host, inny target/mode) odmawiają, nic nie wywołane; relacja NIE założona przez RUX (brak `RUX_SOURCE`) odmawia zamiast cicho przejąć; dwuznaczny host (dwie relacje) odmawia i prosi o `--name`, `--name=` rozstrzyga; `rux_verify_requested_scope` odmawia PRZED seedem, gdy to, co peer faktycznie przyznał (`PEER_SAVED_DATASETS`), nie pokrywa żądanego datasetu — sprawdzone zarówno dla braku pokrycia jak i dla pokrycia przez rodzica. Zero nowego silnika: cały orkiestracyjny ogon (`deploy_continue_lifecycle`) wydzielony z `cmd_deploy` i współdzielony z nim; `rux_verify_requested_scope` tylko CZYTA istniejący manifest peera, nigdy nie nadaje grantu. Suita pure/text: `deploy.sh`, `cmd_seed`, `cmd_activate` zaślepione — kontrakt to orkiestracja, nie ponowny dowód silnika `add-client`/`seed`/`activate` (ten już ma `zfsbackup`/`localbackup`/`zfsbackup-live-pair`). **RUX-4 LIVE-PROVEN 2026-08-16.** Prawdziwy trzyhostowy łańcuch (metropolis pve2↔pve1 + 11.x pve0↔pve1) nie jest osiągalny — dwa klastry są na osobnych VPN, brak wzajemnej trasy sieciowej (potwierdzone: `ping`/`ssh` z metropolis na 11.x = timeout). Zamiast tego dwa NIEZALEŻNE dowody dwuhostowe, każdy throwaway dataset, każdy sprzątnięty do zera po fakcie: **Kampania A (backup)** pve2-metropolis (kolektor) ← pve1-metropolis (źródło), `--source=192.168.28.9:hdd/ruxproof-src --target=hdd/ruxproof-target --local-user=zfsbackup --install` — realny `--join-remotely` (zablokowany raz przez osierocony manifest peera po dawnej relacji `i9b`, posprzątany `deploy.sh --leave=pve2` — TO był prawdziwy, nienazwany wcześniej dług techniczny, nie coś co ten dowód wytworzył), zawężenie draft-scope z pełnej listy 18 datasetów (w tym prawdziwa produkcja: `hdd/vm-disks`, `hdd/backups`, `rpool/data`) do WYŁĄCZNIE throwaway datasetu przed `--commit-scope`, realny transfer, **md5 identyczny ze źródłem**, zainstalowany cron dokładnie 4 linie jak przewidziane. **Kampania B (sync)** pve0 (kolektor) ← pve1 11.x (źródło), `--source=192.168.11.11:rpool/ruxproof-sync-src --mode=sync --local-user=zfsbackup --install` — `--join-remotely` przeszedł automatycznie za pierwszym razem, target = DOKŁADNIE ta sama ścieżka co źródło (`rpool/ruxproof-sync-src`, identity mapping potwierdzone), **md5 identyczny**. **Realne znalezisko silnika (nie defekt RUX, właściwość `deploy.sh --pair` sprzed tej zmiany):** próba trzeciej relacji (sync) do TEGO SAMEGO adresu peera co Kampania A (pve1-metropolis, 192.168.28.9) padła na `peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS` — jeden adres peera niesie JEDNĄ konfigurację parowania (klucz/rola/tryb/dataset), więc "jeden peer, dwie niezależne relacje (backup+sync)" nie jest dziś wspierane przez `deploy.sh --pair`, niezależnie od RUX; `rux_verify_requested_scope` poprawnie złapał niedopasowanie i odmówił PRZED seedem zamiast cicho zaseedować zły dataset — dlatego Kampania B poszła na inną parę hostów. Po dowodzie: `remove-client` na obu kolektorach, `deploy.sh --leave=LABEL` na obu źródłach (konta `zfsbackup-pve2`/`zfsbackup-pve0` usunięte, granty cofnięte), wszystkie 5 throwaway datasetów zniszczone, crontaby na pve0/pve2 **bajt-w-bajt identyczne** z zapisanym stanem sprzed testu (`diff` = 0), relacja produkcyjna `i9a` na pve1-metropolis nietknięta. `manual:rux-live-chain` w `test/deps.conf` zaktualizowany o wynik zamiast czystej deklaracji obowiązku |
@@ -4093,11 +4630,14 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niezależną pozostałość w GATE 2, nie w Fazie 3. `[excluded:]` to sekcja NICZYJA — `gen-cron.sh` skleja wszystkie w jeden `PROTECT_FLAGS` i dokleja go do KAŻDEJ generowanej linii prune w pliku — więc doklejenie brakującego progu przy dodawaniu nowej relacji przepisywało realne polecenie prune relacji już zainstalowanych, czyli łamało dokładnie tę własność, dla której Gate 2 istnieje („dodaj jedną nową niezależną relację → stare bez zmian"). Moja własna asercja z REV-091 nie mogła tego złapać: biegła na fixture zawierającym wyłącznie `[defaults]`, gdzie „instaluje progi" i „mutuje wspólną politykę" są nierozróżnialne, bo nie było czego zaburzyć. Naprawa wg czterech punktów recenzji: `config_has_relationship_policy()` (prawda, gdy istnieje jakakolwiek sekcja `[dataset:]`/`[prune:]`) plus czwarty parametr `global_policy_mode` (domyślnie `auto`, `always` dla `migrate-profile`). Gałęzi „odmów zamiast mutować" świadomie NIE zbudowałem i napisałem dlaczego: `[excluded:]` to jednolita polityka globalna, więc nowa relacja przy brakującym progu jest dokładnie w tym stanie, w którym już są wszystkie istniejące — nie ma konfiguracji, w której nowej nie da się bezpiecznie utworzyć, a stare działają dalej; krok 6 dowodu samej recenzji wymaga zresztą, żeby B powstało w tym stanie. Jedna rzecz ponad wymagane minimum, zgłoszona do odrzucenia: ścieżka odmawiająca naprawy OSTRZEGA, wymieniając brakujące progi — dziedziczenie zainstalowanej polityki jest poprawne, dziedziczenie jej po cichu nie. Asercje celowo na RENDEROWANYM poleceniu `delsnaps.sh`, nie na tekście configu: `PROTECT_FLAGS` powstaje po stronie generatora, więc równość sekcji nie testowałaby tego, co Gate 2 naprawdę obiecuje. Uboczna zmiana zachowania, nazwana wprost: ponowne uruchomienie `setup-server` na zapełnionym CONFIG-u też przestaje odtwarzać progi globalne. REV-20260810-091 (sekcja 51, +7, ZAMKNIĘTY): po REV-090 `ensure_cron_config()` nadal robiła dwie rzeczy bezwarunkowo — doklejała ogólnokonfiguracyjne progi `[excluded:]` i odmawiała na configu pre-GFS — więc `needs_profile=0` nie znaczyło „tylko topologia". Oba pod tę samą bramkę; detekcja pre-GFS zostaje bezwarunkowa (`PROFILE_GFS` czytają dalej kształt prune i podsumowanie), warunkowa jest sama odmowa. Pierwsza wersja bramki F1 była napisana jako `[ ... ] && \` przed pętlą `for` — jako OSTATNIA instrukcja funkcji ustawiałaby jej kod wyjścia na 1 przy zamkniętej bramce, czyli dokładnie ten kształt fail-open, dla którego otwarto REV-084; zamienione na jawny `if` + jawny `return 0`. Kontrola negatywna wobec `e26adc57…`: 343/346, te trzy to dokładnie nowe asercje dyskryminujące; pozostałe cztery (dwa warunki wstępne + dwie asercje, że próg i odmowa NADAL działają tam, gdzie polityka jest generowana) przechodzą po obu stronach z założenia. REV-20260810-090 (sekcja 50, +6, ZAMKNIĘTY): REV-089 zatrzymał regenerację TREŚCI sekcji, ale `cmd_activate_client()` dalej wołał `ensure_cron_config()`, która dalej bezwarunkowo ładowała profil (F1) i dalej doklejała brakujące szablony (F2). Mój dowód przy REV-089 nie mógł tego złapać: sekcja 49 wołała `emit_client_sections()` bezpośrednio i przez cały czas trzymała profil obecny i poprawny — zależność siedziała w wywołującym, którego nie przekroczyłem. LEKCJA: gdy własność brzmi „X nie zależy od Y", test musi USUNĄĆ Y; edytowanie Y i sprawdzanie, że nic się nie zmieniło, to słabsze twierdzenie wyglądające tak samo w zielonej suicie. Naprawa: profil jako zależność LENIWA, `client_section_plan()` jako jedyna implementacja podziału zachowaj/regeneruj (żaden profil nie jest czytany, żeby odpowiedzieć „czy profil jest potrzebny" — to byłoby cykliczne). Kontrola negatywna wobec `c5f04ab0…`: 335/339. REV-20260809-089 (sekcja 49, +11, ZAMKNIĘTY): `emit_client_sections()` przy KAŻDYM wywołaniu usuwał i odtwarzał wszystkie sekcje relacji z AKTUALNEGO profilu — poprawne dokładnie raz, przy CREATE, i cichy kasownik polityki przy każdej późniejszej re-aktywacji. Znalezione przez audyt ścieżki re-aktywacji pod kątem samej własności Fazy 3, spisane jako dyskusja PRZED implementacją (funkcja ma najdłuższą historię recenzji w repo: REV-034 F3, 036, 045, 033 U7/U9/U11, 083) i potwierdzone niezależnie jako REV-089 P1. Naprawa wg wymaganej korekty: pierwsza aktywacja bez zmian (pełna generacja), re-aktywacja bierze zainstalowaną sekcję za bazę i odświeża w miejscu WYŁĄCZNIE `src` i `flags`. Zbiór pól topologicznych wyprowadzony z kontraktów, nie zgadnięty: funkcja pisze od siebie cztery pola, `src`/`flags` zależą od `LOAD_ACCOUNT`/`LOAD_HOST`/`LOAD_FLAGS` (czyli dokładnie tego, co zmienia `set-endpoint`), a `pair_label`/`notify` są czystymi funkcjami nazwy relacji i ścieżki datasetu — nazwy relacji nie da się zmienić (nie ma komendy rename), a dataset o zmienionej ścieżce to inny dataset, który i tak trafia do gałęzi regeneracji; więc nadpisanie ich mogłoby zapisać wyłącznie identyczną wartość, a pozostawienie ich dodatkowo chroni edycję operatora. Sekcje `[prune:]` nie niosą żadnego pola topologicznego, więc własna sekcja prune nie jest ruszana wcale; w trybie sync `[dataset:]` i `[prune:]` leżą pod TĄ SAMĄ ścieżką, więc zachowanie jednej połowy bez drugiej pozwoliłoby prune ominąć sprawdzenie własności — stąd wymóg, żeby OBIE były własne, inaczej para jest regenerowana. Sprawdzenia znacznika własności i fail-closed bez zmian: sekcja, której klient nie jest właścicielem, nadal jest odrzucana, nigdy adoptowana po samym nagłówku. Dodano jedną NOWĄ odmowę: własna sekcja bez pola `src` nie da się odświeżyć, a ciche nic-nie-zrobienie zostawiłoby relację wskazującą stary endpoint z zerowym kodem wyjścia. `migrate-profile` przekazuje `1` jawnie — regeneracja z profilu jest całym sensem tej komendy, a odziedziczenie domyślnego `0` zamieniłoby ją w no-op (lekcja REV-088 F1 zastosowana w drugą stronę). Kontrola negatywna wobec recenzowanej bazy `8d0dc243…`: 328/333, a te 5 to dokładnie nowe asercje dyskryminujące (krok 5, 6, 6b, 7b i odmowa braku `src`). Pisząc krok 6 pierwsza wersja wyrażała dryf profilu WYMYŚLONYM polem — granica profilu je odrzuciła, więc wywołanie umierało i test „przechodziłby" udowadniając wyłącznie, że niepoprawny profil jest odrzucany; poprawione na pola PRAWDZIWE (`recursive` w `dataset.inc`, zmieniony `gfs_pattern` w `prune.inc`). REV-20260809-088 (+1 nad audytem Fazy 2): pierwsza wersja luki nr 6 (poniżej) wsadziła porównanie treści do `ensure_cron_config()`, wywoływanej przy KAŻDEJ (re)aktywacji — zamieniając regułę kolizji w momencie CREATE w stały bramkarz dryfu profilu, łamiąc jawną zasadę jednokierunkowego przekazania (PROFIL -> generuj raz -> CONFIG v4 -> prawda wykonawcza) i uzgodnioną już własność Fazy 3 ("re-aktywacja zachowuje zainstalowaną politykę"). Do tego porównanie było bajtowe, nie semantyczne, wbrew jawnemu brzmieniu Gate 2 ("identyczny szablon SEMANTYCZNIE może być użyty ponownie"). Naprawione (`20f333d9`): `ensure_cron_config()` dostała parametr `check_new_template_collision` (domyślnie 0, sprawdzenie wyłączone), `cmd_activate_client()` przekazuje `1` WYŁĄCZNIE gdy `STATE` przed wywołaniem było `endpoint_verified` (czyli to naprawdę pierwsza aktywacja NOWEJ relacji, nie re-aktywacja już aktywnej). Porównanie znormalizowane przez `profile_emit` (istniejący normalizator tej samej gramatyki pól) i posortowane — różnice w formatowaniu/kolejności pól już nie kolidują. Kontrola negatywna wobec `5f2201c5` (recenzowanej wersji z błędem): 3 z 4 nowych asercji padają z przewidzianych powodów. Przy okazji poprawiono odwołania SHA w `ACTIVE-WORK-PLAN.md`/`DELIVERIES.md` — rebase w międzyczasie zmienił hash commita, a dokumentacja nie została odświeżona (REV-088 F3). REV-20260809-086 (sekcja 48, +4): żywy dowód na metropolis pve1/pve2 pokazał, że pierwotnie planowana druga próba (ta sama nazwa klienta) odmawia na sprawdzeniu unikalności nazwy w `add-client`, PRZED `cmd_seed()` — więc wcale nie dowodziła nowego guarda z REV-085. Poprawiona kampania: druga, RÓŻNIE nazwana relacja, bez własnego `add-client`/parowania, dziedzicząca manifest peera pierwszej (jeden manifest na peera, nie na relację — sam ten fakt był nieoczekiwany), trafia realnie do `cmd_seed()` i zostaje odrzucona przez `assert_no_coverage_overlap()` z nazwaniem konfliktu; CONFIG, crontab i całe poddrzewo ZFS potwierdzone bit-w-bit bez zmian. Przy okazji znaleziony i naprawiony NIEZALEŻNY bug: `read_server_conf()` bezwarunkowo zeruje `CRON_CONFIG` PO wczytaniu rekordu klienta, więc na hoście bez `server.conf` (dokładnie ten przypadek) `remove-client` i re-aktywacja `activate-client` cicho gubiły odczytaną wartość — dla re-aktywacji oznaczałoby to zapis do ŚWIEŻO przeliczonej domyślnej ścieżki configu zamiast do faktycznie zainstalowanej. Naprawione (sekcja 48, kontrola negatywna: 4 nowe asercje padają na starym kodzie). REV-20260809-085 (sekcja 47, +4): `cmd_seed()` wykonywał PRAWDZIWY, nie-suchy odbiór `snapget.sh` bez żadnego sprawdzenia pokrycia — jedyny guard (`assert_no_coverage_overlap`) siedział wewnątrz `emit_client_sections()`, osiąganej dopiero przy `activate-client`, już PO realnym transferze. Przestrzeń nazw trybu backup to `peer_label(PEER_HOST)` (`LOAD_LABEL`), NIE nazwa klienta — więc dwie różnie nazwane relacje do tego samego peera dzielą tę samą przestrzeń `target/label`. Własna wcześniejsza teza implementera w dyskusji live-proof, że nakładanie w trybie backup jest „strukturalnie nieosiągalne", była błędna z dokładnie tego powodu. Naprawa: `cmd_seed()` liczy docelowe ścieżki kandydata zaraz po `load_client_and_connection()` (już po `resolve_mode_datasets`) i wywołuje TEN SAM `assert_no_coverage_overlap()` przed pętlą transferu — bez drugiej implementacji nakładania; guard w `emit_client_sections()` zostaje jako obrona w głębi. Pisanie testu ujawniło kolejny fakt: prawdziwy `MANAGED_PRUNE_SCOPE` klienta GFS to CAŁE poddrzewo `target/label` (rekurencyjnie) — więc dla jednego peera+targetu, gdy istnieje jedna relacja GFS, KAŻDY dataset pod tym samym peerem+targetem już jest objęty; przypadek „rozłączny" w teście musiał użyć INNEGO peera, nie innego datasetu. Kontrola negatywna wobec `f1c4b960`: stary kod wywołuje prawdziwy odbiornik (realny transfer by się wykonał), nowy odmawia z zerem wywołań. Wymagany dowód na żywo (odmowa PRZED jakimkolwiek nowym stanem po stronie odbioru) jeszcze niewykonany — patrz odpowiedź REV-085. REV-20260809-083/084 (sekcje 45/46, +18 nad 292): `coverage_conflicts()`/`assert_no_coverage_overlap()` odmawiają dodania relacji, gdy jej żądana ścieżka jest rodzicem, dzieckiem lub dokładnym trafieniem pokrycia innej AKTYWNEJ relacji — sprawdzane PRZED pierwszą mutacją working configu (sekcja 45, REV-083 F1). Naprawiona wersja: rekord, którego nie da się odczytać/sparsować (albo który parsuje się, ale nie nazywa `CLIENT_NAME`) odmawia, zamiast być cicho pominięty jako „brak konfliktu" — pierwotny `|| exit 0` był fail-open (sekcja 46, REV-084 F1). Sam ten fix ujawnił dwie kolejne wady PRZED pierwszym zielonym przebiegiem: (1) status wyjścia podpowłoki per-rekord, raz skonsumowany przez `|| { ...; return 2; }`, był statusem OSTATNIEGO `path_overlaps && printf` w pętli — dla każdego rekordu, którego OSTATNIA para ścieżek się nie nakłada, to 1 (fałsz), więc każdy zwykły rozłączny rekord raportował się jako „nieczytelny"; naprawa dodaje jawny `exit 0` na końcu podpowłoki, bo konflikty płyną przez wydrukowane linie, nie przez kod wyjścia; (2) `assert_no_coverage_overlap()` odrzucał diagnostykę `coverage_conflicts()` nazywającą zepsuty plik i zawsze umierał z tym samym ogólnym komunikatem — REV-084 wprost wymaga, żeby komunikat nazywał rekord, więc teraz go nazywa. Kontrola negatywna wobec `90bb026` (kopiowanego do korzenia repo, żeby `SCRIPT_DIR` rozwiązał biblioteki): stary kod zwraca rc=0 i brak wyjścia dla nieparsowalnego rekordu, poprawiony rc=2 z nazwaną ścieżką. Wymagany dowód na żywo z REV-083 (nadpisanie pokrycia na prawdziwym hoście, odczyt zwrotny CONFIG/crontaba) NIE wykonany w tej sesji — patrz `docs/internal/reviews/responses/REV-20260809-083.md`, sekcja „required bounded live-host proof". REV-20260804-042/043 (+8 netto): sekcja "clobber" (26) przepisana pod endpoint-normalized identity — jeden job endpoint-switch przechodzi, dwa joby tego samego klienta z jednym porzuconym pod nowym adresem nadal odmawia (kontrprzykład recenzenta), oba zachowane przechodzi, zmiana source datasetu obok endpointu NIE jest maskowana jako endpoint-only, inny klient nadal odmawia. Warstwa orkiestracji `zfs-backup.sh` (+45 tego wieczoru: wykonywalność bloku, listy przecinkowe, uprawnienia i quiesce wyprowadzane z zadań; sekcja 25 przepisana pod `cron_replace_all`, REV-034 F3). Sekcja 35 (+3, REV-036 F5 follow-up): `migrate-to-account` odmawia, gdy którykolwiek crontab jest zapauzowany (`deploy.sh --pause`) — sprawdzane na starcie preflight, przed jakąkolwiek pracą. REV-033 plasterek 6 (+16): sekcja 36 `resolve_mode_datasets` przez zaślepiony `ssh` (fetch scope+hash, weryfikacja T3, zdalny `zfs list -r`, no-op dla klienta z listą i dla klienta bez `--mode`), sekcja 37 walidacja `add-client --mode=`, plus rozszerzenie sekcji 4 (próg `keep=2` dla trzech prefiksów, idempotencja, nie zawęża silniejszego `keep`) i sekcji 5/5b (znacznik własności U11: zgodny znacznik, odmowa bez znacznika i bez wcześniejszego zapisu, zgodność wsteczna przez `MANAGED_DATASETS`, odmowa gdy znacznik nazywa innego klienta). REV-033 plasterek 7 (+2, F4): sekcja 38 — pin tekstu podpowiedzi po `seed` (już nie sugeruje `set-endpoint` jako obowiązkowego), plus `cmd_verify_endpoint` przez zaślepiony wyłącznie `$SNAPGET` (nie `ssh`) z fixture klient+manifest+przypięty klucz — potwierdza, że diagnostyka stderr nieudanego sprawdzenia (np. "CONNECTION-level failure") dociera do operatora zamiast być wyciszana. REV-033 plasterek 8 (+6, F3/U7/U8): sekcja 39 — `snapget_local_base`/`client_local_path` dla obu trybów, `emit_client_sections` (sync) generuje `[dataset:]`/`[prune:]` po gołej ścieżce źródła z `recursive = no` wszędzie, `is_previously_managed` czyta wielowartościowy `MANAGED_PRUNE_SCOPE` jako listę, `add-client --mode=sync` odmawia (U8, przez podstawiony `PVE_NODES_DIR`) / nie odmawia (brak dopasowania węzła) przy enrollmencie. Korekta U9 (+6 netto, po przepisaniu fixture'ów bramki na nowe CLI): `active_endpoint_host_port`/`endpoint_display` dla obu kształtów rekordu, no-op `set-endpoint` na już aktualnym adresie, zapis `ENDPOINT_KNOWN` przy realnym przełączeniu, wciągnięcie uśpionego slotu klienta legacy, awans `verify-endpoint` na znanego kandydata (i odwrotnie — adres, co przestał odpowiadać, sam staje się kandydatem), odmowa z wymienieniem wszystkich wypróbowanych adresów gdy żaden nie odpowiada. Plasterek 9 (+2, U10): `add-client --join-remotely` przekazuje flagę do `deploy.sh --pair` przez podstawiony `$DEPLOY` przechwytujący argv (ten sam wzorzec co `$SNAPGET` w sekcjach 38/39), obecną tylko gdy podana. Plasterek 10 (+3, korekty ról): sekcja 41 — source-grep piny na poprawioną treść trzech komunikatów (`seed`, `final-catchup`, `verify-endpoint`), gdzie "the source" mylnie nazywało peera zaraz obok już poprawnego "this collector". REV-20260804-039 F1: komunikat błędu `add-client` po nieudanym/przerwanym `--pair` mówi teraz wprost, że retry TEJ SAMEJ komendy jest bezpieczny (żywo dowiedzione, patrz nagłówek). Sekcja 23b (+7, REV-20260804-041): `remove-client` na OSTATNIM kliencie — wymuszona awaria podmiany pliku configu PO udanym usunięciu bloku crona (`mv` zaślepiony tylko dla tego jednego wywołania) potwierdza: kod wychodzi niezerowo, `deploy.sh --unpair` nigdy nie jest wywoływany (skrypt-znacznik jako dowód, nie dopasowanie tekstu), rekord klienta i stary config zostają nietknięte, komunikat nazywa dokładny stan mieszany, a retry (prawdziwy `mv`) kończy się czysto z `STATE=removed` |
 | `quiescehelper` | **119/119** | granica uprzywilejowana helpera + transakcja grantu + **nadanie dla konta lokalnego (+14)** |
 | `join` | **82/82** | walidacja paczki `--join`, granica zaufania; +12 dla `--commit-scope-check` (REV-033 slice 2), +10 dla `--draft-scope-check` (REV-033 plasterek 4), +13 dla `PEER_CONF_MODE`/`--mode` (REV-033 plasterek 5), +5 dla `PEER_CONF_REMOTE_JOIN`/`--join-remotely` (REV-033 plasterek 9, U10) — pole `yes`/nieznana wartość/brak (legacy), `--join-check` je wypisuje, flaga CLI się parsuje. Plasterek 3 (`b7e0478`, revoke-on-narrow) celowo BEZ testu ze stubem `zfs` — ten sam wybór co dla samej pętli grantu w plasterku 2: fałszywy `zfs` dowodziłby wierności własnemu stubowi, nie prawdziwego `zfs allow`/`unallow`/`holds`. `do_pair`'s own scp/ssh/`ssh -t` orchestration (plasterek 9) tym samym wyborem BEZ stubu — patrz addendum "Slice 9". Zweryfikowane na żywo na metropolis pve2, patrz addendum "Slice 3" w odpowiedzi REV-20260802-033 |
-| `pause` | **74/74** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
-| `draftscope` | **26/26** | `deploy.sh --draft-scope` (REV-033 plasterek 4): generuje plik zakresu z prawdziwego inwentarza ZFS peera — domyślnie aktywne datasety jeden poziom pod każdą pulą, poza znanymi systemowymi (`ROOT`, `swap`) i samym korzeniem puli, plus pełny inwentarz jako komentarz. Przeciw stubowanemu `zpool`/`zfs` (ekstrakcja funkcji jak `test/pause`) — właściwy grant/`zfs allow` zostaje bez zmian nietestowany stubem (ta sama zasada co plasterek 2/3). Drugi draft dla tej samej etykiety odmawia zamiast nadpisać; host z samymi systemowymi datasetami odmawia zamiast zapisać pusty plik. +4 (ENROLMENT-AGREED T5): spis rodzin snapshotów jako komentarz obok inwentarza datasetów |
+| `pause` | **83/0** | `deploy.sh --pause`/`--resume` na okno serwisowe (wymiana dysku, migracja VM). Domyślnie: zakomentowanie TYLKO ciała bloków tego pakietu (markery `lib-cron.sh`, jawny rejestr `PAUSE_KNOWN_BLOCKS`, obcy blok o tej samej gramatyce nietykany — REV-036 F4) w miejscu, wszystko inne w crontabie (roota i konta) chodzi dalej — jednym zapisem przez `cron_replace_all_impl`, nie po bloku (REV-036 F2). `--fullcron` przywraca dawne zachowanie: cały crontab zapisany i zastąpiony jednym placeholderem, stan zapisywany DURABLE przed zamianą crontaba (REV-036 F1) i porównywany bajt-po-bajcie przy resume (REV-036 F3). `--resume` sam rozpoznaje, w którym trybie dany user został zatrzymany; ręczna linia dopisana wewnątrz zapauzowanego bloku w oknie przeżywa resume, nie jest cicho gubiona. `lib-cron.sh` sam odmawia KAŻDEMU zwykłemu pisarzowi (nie tylko `deploy.sh`) nadpisania zapauzowanego kształtu (REV-036 F5) |
+| `draftscope` | **35/0** | `deploy.sh --draft-scope` (REV-033 plasterek 4): generuje plik zakresu z prawdziwego inwentarza ZFS peera — domyślnie aktywne datasety jeden poziom pod każdą pulą, poza znanymi systemowymi (`ROOT`, `swap`) i samym korzeniem puli, plus pełny inwentarz jako komentarz. Przeciw stubowanemu `zpool`/`zfs` (ekstrakcja funkcji jak `test/pause`) — właściwy grant/`zfs allow` zostaje bez zmian nietestowany stubem (ta sama zasada co plasterek 2/3). Drugi draft dla tej samej etykiety odmawia zamiast nadpisać; host z samymi systemowymi datasetami odmawia zamiast zapisać pusty plik. +4 (ENROLMENT-AGREED T5): spis rodzin snapshotów jako komentarz obok inwentarza datasetów |
 | `joinremote` | **8/8** (dokument podawał 7/7 — zmierzone 2026-08-06, suita jest deterministyczna, `needs = nothing`) | `deploy.sh`'s `remote_scope_stage` (REV-20260804-037 F1, znaleziony przez automatycznego recenzenta w trakcie kampanii live plasterka 10/zadania 26): substage draft/edit/check edytora `--join-remotely` uruchamiany przez `ssh -t`. Stary kod łączył draft i edytor gołym `;` — edytor otwierał się nawet po nieudanym drafcie (mógł stworzyć pusty/częściowy plik zakresu, który generator potem odmawia nadpisać) i `2>/dev/null` gubił jedyną diagnostykę tłumaczącą dlaczego. `$remote_ok` ustawiane od razu po `--join` nigdy nie było rewidowane — nieudany edytor tylko ostrzegał, a końcowe podsumowanie nadal nazywało zakres "zredagowanym". Naprawione: wydzielona funkcja `remote_scope_stage` (ekstrahowalna sed-range jak `do_draft_scope`) zwraca rozróżnialne kody (0=gotowe i zweryfikowane `--commit-scope-check`, 2=draft padł PRZED edytorem, 3=edytor padł, 4=zapis nie przeszedł walidacji po edycji), `do_pair`'s podsumowanie drukuje osobną instrukcję odzysku dla każdego stanu. Przeciw stubowanemu `ssh` (ta sama technika co stubowany `zpool`/`zfs` w `draftscope`): wymuszony brak drafta NIE wywołuje edytora i NIE tworzy pliku (dokładnie wada z F1), istniejący zakres pomija draft, awaria edytora/walidacji nigdy nie twierdzi "gotowe". `do_pair`/`do_join`'s prawdziwe działania (`useradd`, `zfs allow`, transfer po ssh) pozostają bez lokalnego testu z tego samego powodu co zawsze — patrz nagłówek `test/join/run.sh` |
 | `pairgate` | **21/21** | `zfs-pair-gate.sh` — brama po stronie peera, stan `DISABLED` z ADR-0012 (pakiet hard-disable, krok 1 z `docs/project/HARD-DISABLE-CAMPAIGN-PLAN.md`). Testowalna bez ssh, bo sshd wnosi dokładnie dwa wejścia: argv (etykieta z `command=`) i `SSH_ORIGINAL_COMMAND`. KAŻDY przypadek data-plane każe bramie uruchomić komendę, której jedynym efektem jest utworzenie pliku, i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem, że nic się nie wykonało. Przypięte: odmowa PRZED parsowaniem (wejście nieparsowalne dostaje tę samą odmowę, nie błąd składni); tożsamość z klucza, nie z żądania (żądanie podszywające się pod inną relację niczego nie zmienia); cztery rozróżnialne kody wyjścia 91/92/93 (255 zostaje własnością ssh); nieznana relacja i zła etykieta fail-CLOSED; druga relacja działa dalej; verby kontrolne to dokładne literały, nigdy dopasowanie po prefiksie; `enable` przywraca data-plane, co dowodzone jest realnym efektem ubocznym, nie raportem samej bramy. Druga połowa — czy sshd naprawdę trasuje prawdziwy klucz przez bramę — to obowiązek ręczny `pairgate-live` |
 | `pairgate` | **45/45** | brama peera `zfs-pair-gate.sh` + instalacja w `deploy.sh --join` (pakiet hard-disable). Sedno: każdy przypadek data-plane każe bramie uruchomić komendę tworzącą plik i sprawdza, że pliku NIE MA — „wypisała odmowę" nie jest dowodem. Przypięte: odmowa przed parsowaniem, tożsamość z klucza a nie z żądania, kody 91/92/93 rozróżnialne, fail-closed przy nieznanej relacji i złej etykiecie, verby kontrolne jako dokładne literały, logowanie do syslogu z zejściem do pliku wybieranym po WYNIKU a nie po obecności `logger` (REV-047 F1) i nigdy nie zanieczyszczające stderr wywołującego. Instalacja: migracja gołej linii klucza bez pozostawienia jej obok bramkowanej, cudze linie bajt w bajt, idempotencja, awaria commitu bez tknięcia pliku, i fail-closed na własności pliku — bo podmiana atomowa rootem odbiera kontu dostęp do własnego hosta (REV-049 F1) |
+| `moveclient` | **35/0** | `move-to-client`: relacja, ktorej maszyna zostala WYMIENIONA, oddaje kopie nowej — kopia nie rusza sie z dysku, zmienia sie tylko to, z ktorej maszyny jest backupowana, wiec nie ma ponownego seedu. Suita pokrywa trzy czyste przeksztalcenia (flagi, znacznik `managed-by`, naglowek sekcji) DOKLADNIE, a dowod po GUID przez stuby — czyli jego LOGIKE: brak snapshotu odmawia, niezgodny GUID odmawia, zgodny przechodzi, a nieczytelna odpowiedz NIGDY nie jest przepustka. To, ze ZFS zachowuje GUID przez send/recv, jest wlasnoscia ZFS i nalezy do labu. Podmiana flag zamienia cztery rzeczy (klucz, known_hosts, alias, etykieta) i zostawia reszte bajt w bajt — przepisanie calego pola skasowaloby po cichu limit pasma. Przepiecie znacznika ma kontrole ujemna: gdy znacznika nie ma, zwraca 3, a nie cichy no-op |
+| `mediagate` | **79/0** | klamra `import`/`export` wokol repliki na nosnik WYMIENNY. Asercja, dla ktorej ta suita istnieje, to ta o NIE-eksportowaniu: pula, ktorej ten przebieg nie zaimportowal, nalezy do tego, kto to zrobil, i wyeksportowanie jej wyrwaloby mu grunt spod nog — sprawdzone w obie strony, bo straznik widzacy tylko przypadek bezpieczny nie jest straznikiem. Dalej: brak nosnika to `exit 1` i slowo SKIPPED, nie awaria; pula zaimportowana BEZ oczekiwanego datasetu to `exit 2` — zly dysk w kieszeni, nie brak dysku; dwie pule tej samej nazwy to dwa dyski naraz i odmowa zamiast wyboru (rotowane nosniki zwykle maja te sama nazwe); nieudany eksport krzyczy DO NOT UNPLUG. `zpool`/`zfs` sa stubowane, wiec sprawdzana jest DECYZJA, nie ZFS. Sekcja G idzie dalej i uruchamia CALA wygenerowana linie crona z prawdziwego `gen-cron.sh`, stubujac tylko bramke i silnik — bo dwie wady przeszly obok suity, ktora badala sama bramke: klamra wstawiona jako ciag polecen w miejsce na JEDNO powodowala, ze `2>"$e"` i `rc=$?` wiazaly sie tylko z `detach` (silnik konczyl 1, zadanie zapisywalo rc=0 i nikt nie dostawal maila), a bramce podawano sciezke DOCELOWA, ktora tworzy silnik, wiec swiezo przygotowany dysk byl przy pierwszym biegu odrzucany jako „zly nosnik". Obie maja kontrole ujemna. Sekcja H pilnuje KOTWICY: `[prune-bookmarks:]` obejmujacy zrodlo repliki wymiennej jest zglaszany (z konsekwencja: nastepny bieg po powrocie dysku bedzie PELNYM przesiewem), ale nie odmawiany i nie wykluczany po cichu — rotacja dyskow to fakt admina, nie generatora. Strona negatywna jest rowna wazna i sprawdzana: zwykly cel, wzorzec nie mogacy trafic w `tgt-`, oraz zakres rodzica bez `recursive` NIE sa zglaszane. **Sekcja I (REV-124 F1)** to jedyny test CYKLU ZYCIA, a nie pojedynczego biegu: nasz `attach` przechodzi, bieg ginie przed `detach`, kolejny zastaje pule zaimportowana. Znacznik wlasnosci musi PRZEZYC ten retry — wczesniej byl kasowany, bo „pula juz zaimportowana" czytano jako „czyjas decyzja", co jest prawda dokladnie raz: gdy sami jej nie importowalismy. Skutkiem bylo, ze `detach` zglaszal sukces bez eksportu, i tak samo kazda nastepna proba: dysk zostawal zywy w nieskonczonosc, a zadanie mowilo, ze mozna go wyjac. Znacznik niesie teraz GUID puli; niezgodny GUID (rotowane nosniki dziela nazwe) to odmowa, nie zgadywanie |
+| `restoregrant` | **44/44** (+1 SKIP) | zgoda na odtwarzanie: fakt na maszynie ZAGROZONEJ, ktory pozwala kolektorowi ja nadpisac. Sedno suity to sekcja 1 — MIEJSCE. Projekt klad zgode w `relationships/<label>/` i w tym samym akapicie twierdzil, ze katalog jest „root-owned, read-only for the account"; `deploy.sh` robi go `root:<konto>` **0775**, bo klucz relacji musi moc zdjac twarda pauze (unlink znacznika W TYM katalogu). Zgoda trzymana tam moglaby wiec zostac zalozona przez konto, przed ktorym chroni. Asercja strukturalna: drzewo zgod NIE moze lezec pod drzewem relacji, bramka czyta to samo drzewo, plus kontrola negatywna, ze tamten katalog NAPRAWDE jest grupowo-zapisywalny — inaczej regula bronilaby wymyslonego zagrozenia. Dalej: root wymagany do nadania i odebrania, `--show-restore` czytelny bez roota; nieznana relacja i zla etykieta odmawiaja i nic nie zapisuja (w tym `../etc` — nic poza drzewem); `replace` nigdy domyslne, poszerzenie zywej zgody ODMAWIA nazywajac obie wartosci, te same tryby to no-op sukces; brak `expires` i `nonce` sprawdzany gerpem; bramka raportuje zgode w obu stanach relacji i FAIL-CLOSED na kazdej wartosci, ktorej nie umie sparsowac (cztery smieci + kontrola pozytywna); bramka NIGDY nie tworzy zgody — trzy proby czasownikiem plus asercja strukturalna zakazujaca jakiegokolwiek zapisu do tego drzewa. Defekt znaleziony przez te suite: `--allow-restore=` z pusta wartoscia przelatywalo przez `[ -n ... ]` i deploy szedl do Fazy 1 — czasownik o UPRAWNIENIACH zaczynal instalowac pakiety (klasa F4); naprawione dyskryminatorem `*_GIVEN`. SKIP: `chmod 000` nie odbiera prawa wlascicielowi na Git Bash/NTFS, wiec asercja o nieczytelnym pliku zglasza pominiecie zamiast udawac, ze cos zmierzyla |
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `runsuffix` | **6/6** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |
 
@@ -4139,7 +4679,7 @@ hdd/rs-src/c@oldcorr_2026-08-08_04-24-11
 
 Sonda z NIEPOPRAWNYM trybem jest tu jedyną obserwacją rozróżniającą: poprawny tryb milczy niezależnie od tego, czy token jest daną, czy opcją. `git log` jako root na hostach 11.x odmawia przez `safe.directory` (repo należy do `zfsbackup`) — to kontrola własności po stronie roota, nie problem wdrożenia; commit odczytany jako konto delegowane.
 | `alertmail` | **18/18** | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
-| `joinmanifest` | **10/10** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. +3 (REV-20260804-040): pole `PEER_JOIN_ACCOUNT_UID` — manifest z zapisanym UID weryfikuje się dokładnie przy zgodności, odmawia przy niezgodności, manifest legacy bez tego pola nadal weryfikuje się gdy UID nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze |
+| `joinmanifest` | **27/0** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. +3 (REV-20260804-040): pole `PEER_JOIN_ACCOUNT_UID` — manifest z zapisanym UID weryfikuje się dokładnie przy zgodności, odmawia przy niezgodności, manifest legacy bez tego pola nadal weryfikuje się gdy UID nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze | **Zbuforowany szkic zakresu (2026-08-29)**: szkic jest ponownie uzywany przy kolejnym `--join`, i slusznie — to dokument zgody, ktory admin mogl recznie edytowac, a ciche przebudowanie skasowaloby te edycje. Ale prosba kolektora moze sie miedzy probami ZMIENIC, i wtedy ekran akceptacji pokazywal biezaca prosbe tuz nad liczba i nadaniem policzonymi ze STAREGO szkicu. Zmierzone na pve9 przy budowie labu move-to-client: pierwszy join bez `--datasets` narysowal caly majatek, `add-client` powtorzono z `--datasets=hdd/movelab/src`, a nastepny join wypisal „Kolektor prosil o: hdd/movelab/src" i cztery linie nizej „Przyjecie nada ... na 9 dataset(ach)". Prosba o jeden dataset i nadanie na dziewieciu, jednoczesnie na ekranie. Szkic niesie teraz metryczke z prosba, ktora go zrodzila; DOWIEDZIONA rozbieznosc odmawia, brak metryczki (kazdy host w trakcie joinu w chwili aktualizacji) jest glosno mowiony, nie zamieniany w odmowe na dowodzie, ktorego nikt nie ma.
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-04 na metropolis
 pve1 przy `4ebfa11`** (i wcześniej przy `d8bb52a`, `244ec0d`, `55d33a2`) — pierwszy

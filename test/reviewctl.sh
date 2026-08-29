@@ -445,42 +445,84 @@ render_threads() {
 # =============================================================================
 
 TXDIR=""
-tx_cleanup() { [ -n "$TXDIR" ] && rm -rf "$TXDIR"; TXDIR=""; }
+TX_KEEP=0
+# The backup is deleted only when it is provably no longer needed. If
+# restoration could not complete, this directory is the ONLY remaining copy of
+# the reviewer's facts, and removing it turns a recoverable failure into a lost
+# artifact -- REV-20260829-125 F1, second half.
+tx_cleanup() {
+    [ -n "$TXDIR" ] || return 0
+    if [ "$TX_KEEP" -eq 1 ]; then
+        echo "reviewctl: the transaction backup has been KEPT at $TXDIR -- it holds the only intact copy of the paths listed above. Restore them by hand from there, then remove it." >&2
+    else
+        rm -rf "$TXDIR"
+    fi
+    TXDIR=""
+}
 tx_die() {   # <message...>
-    tx_restore
+    tx_restore || TX_KEEP=1
     echo "reviewctl: $*" >&2
     tx_cleanup
     exit 1
 }
 
-# Snapshot before touching. A file that does not exist yet is recorded as absent,
-# so restoring means deleting it -- a refusal must not leave a closure artifact
-# lying around any more than it may leave a half-written one.
+# SNAPSHOT IS A HARD PRECONDITION, NOT A BEST EFFORT.
+#
+# REV-20260829-125 F1. Every step here used to run unchecked, and the writer
+# mutated the live role artifact afterwards regardless. A failed snapshot left
+# no file under present/ and no line under absent/, so tx_restore had no branch
+# that matched and silently left the mutation standing -- then tx_cleanup
+# deleted the transaction directory and the command exited nonzero. Reproduced
+# by the reviewer: the command refused, and the artifact still went from
+# CHANGES-REQUIRED to APPROVED with its implementation pointer advanced. A
+# nonzero exit is not enough, because the next run reads the mutated fact.
+#
+# A file that does not exist yet is recorded as absent, so restoring means
+# deleting it -- a refusal must not leave a closure artifact lying around any
+# more than it may leave a half-written one.
+#
+# A path joins TX_FILES only AFTER its snapshot exists, so tx_restore's
+# invariant holds by construction: every entry has either a present/ copy or an
+# absent/ record.
 declare -a TX_FILES=()
 tx_guard() {   # <file...>
-    local f
+    local f rel
     for f in "$@"; do
-        TX_FILES+=("$f")
+        rel="${f#$REPO/}"
         if [ -f "$f" ]; then
-            mkdir -p "$TXDIR/present/$(dirname "${f#$REPO/}")"
-            cp -p "$f" "$TXDIR/present/${f#$REPO/}"
+            mkdir -p "$TXDIR/present/$(dirname "$rel")"                 || tx_die "cannot create the transaction snapshot directory for '$rel' -- refusing to change anything without a way back"
+            cp -p "$f" "$TXDIR/present/$rel"                 || tx_die "cannot copy '$f' into the transaction snapshot -- refusing to change anything without a way back"
+            [ -f "$TXDIR/present/$rel" ]                 || tx_die "the transaction snapshot of '$f' is not there after copying it -- refusing to change anything without a way back"
         else
-            mkdir -p "$TXDIR/absent"
-            printf '%s\n' "$f" >> "$TXDIR/absent/list"
+            mkdir -p "$TXDIR/absent"                 || tx_die "cannot create the transaction's absent-file directory -- refusing to change anything without a way back"
+            printf '%s
+' "$f" >> "$TXDIR/absent/list"                 || tx_die "cannot record '$f' as absent in the transaction -- refusing to change anything without a way back"
         fi
+        TX_FILES+=("$f")
     done
 }
+# Returns nonzero if ANY path could not be put back, and names each one. The
+# caller keeps the backup on a nonzero return: a half-restored state nobody is
+# told about is the exact failure this transaction exists to prevent.
 tx_restore() {
     [ -n "$TXDIR" ] || return 0
-    local f
+    local f rel bad=0
     for f in "${TX_FILES[@]:-}"; do
         [ -n "$f" ] || continue
-        if [ -f "$TXDIR/present/${f#$REPO/}" ]; then
-            cp -p "$TXDIR/present/${f#$REPO/}" "$f"
+        rel="${f#$REPO/}"
+        if [ -f "$TXDIR/present/$rel" ]; then
+            if ! cp -p "$TXDIR/present/$rel" "$f"; then
+                echo "reviewctl: UNRECOVERED: '$f' could not be restored from $TXDIR/present/$rel" >&2
+                bad=1
+            fi
         elif [ -f "$TXDIR/absent/list" ] && grep -qxF "$f" "$TXDIR/absent/list"; then
-            rm -f "$f"
+            if ! rm -f "$f"; then
+                echo "reviewctl: UNRECOVERED: '$f' did not exist before this run and could not be removed again" >&2
+                bad=1
+            fi
         fi
     done
+    return "$bad"
 }
 
 tx_sha_ok() {   # <label> <value> -- canonical AND reachable, or refuse

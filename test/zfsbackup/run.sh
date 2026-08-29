@@ -6128,15 +6128,41 @@ got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
     && ok "63f: it falls back to the pairing manifest when the record predates the field" \
     || bad "63f: it falls back to the pairing manifest when the record predates the field" "got=$got"
 
-# 63g. every config writer goes through the one decision layer. A writer that
-#      re-derives its own answer is the exact shape this extraction removed, so
-#      the count is pinned rather than left to review.
+# 63g. Every config writer goes through the one decision layer. A writer that
+#      re-derives its own answer is the exact shape this extraction removed.
+#
+#      ASSERTED PER FUNCTION, not by equal counts. Equal counts were a proxy that
+#      held only while writers were the sole callers of the resolver, and it
+#      stopped holding on 2026-08-29 when list-replicas -- a READER -- had to
+#      resolve too, so that a front end is shown the same config an install would
+#      write. The proxy then failed for a case that is correct, which is how a
+#      tripwire gets loosened to go green. Checking the real property instead
+#      makes it stronger: a reader may resolve without writing, but no writer may
+#      write without resolving.
+writer_gap=$(awk '
+    /^[a-z_]+\(\) \{/ { fn=$1; has_w=0; has_r=0; next }
+    /^\}/ { if (fn != "" && has_w && !has_r) print fn; fn=""; next }
+    fn != "" && /^[ \t]*atomic_replace_and_install / { has_w=1 }
+    fn != "" && /^[ \t]*cron_context_resolve [a-z]/  { has_r=1 }
+' "$ZFSBACKUP")
+if [ -z "$writer_gap" ]; then
+    ok "63g: EVERY function that installs a config also resolved the context first"
+else
+    bad "63g: EVERY function that installs a config also resolved the context first" \
+        "writes without resolving: $(printf '%s' "$writer_gap" | tr '\n' ' ')"
+fi
+# ...and the counts stay pinned on top of it, because the property above cannot
+# see a writer that resolves in a HELPER it calls -- correct, but no longer the
+# one decision layer. A new number here is a prompt to look, not a failure to
+# paper over.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-if [ "$writers" -eq 5 ] && [ "$resolvers" -eq 5 ]; then
-    ok "63g: all five config writers resolve through cron_context_resolve"
+# 8 writers / 9 resolvers since 2026-08-29: add-replica and remove-replica write,
+# list-replicas only reads and resolves. The asymmetry is the reader.
+if [ "$writers" -eq 8 ] && [ "$resolvers" -eq 9 ]; then
+    ok "63g: all six config writers resolve through cron_context_resolve"
 else
-    bad "63g: all five config writers resolve through cron_context_resolve" \
+    bad "63g: all six config writers resolve through cron_context_resolve" \
         "atomic_replace_and_install call sites=$writers cron_context_resolve call sites=$resolvers"
 fi
 
@@ -6542,7 +6568,14 @@ got=$(fam_probe "")
 # return anything", so there is one implementation for both questions.
 #
 # The implementation is the single remote `zfs list -H -t snapshot` in the file.
+# TWO probe implementations now, and they answer questions on opposite sides:
+# source_family_newest asks a REMOTE source over ssh, local_newest_snapshot asks
+# this collector's own copy (move-to-client's guid proof, 2026-08-29). The
+# remote one cannot serve the local case -- it always opens ssh to
+# LOAD_ACCOUNT@LOAD_HOST. Both are NAMED functions with their callers counted
+# below, so a third, hand-rolled one still trips this.
 n_impl=$(grep -c 'zfs list -H -t snapshot' "$ZFSBACKUP")
+n_local=$(grep -c 'local_newest_snapshot "\$' "$ZFSBACKUP")
 # The old idiom must be gone entirely, not merely reduced -- a lingering
 # `grep -q '@automated_'` would be a second existence test with its own depth.
 n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
@@ -6550,10 +6583,10 @@ n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
 n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # the wrapper itself, plus activate-client's rehearsal (the ex-copy).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
-if [ "$n_impl" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
+if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
     ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
 else
-    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
+    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
 fi
 
 # 67c2. the activation rehearsal specifically: it must not re-derive the depth.

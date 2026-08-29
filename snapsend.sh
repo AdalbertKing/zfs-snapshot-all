@@ -9,6 +9,31 @@ set -o pipefail
 # Usage: snapsend.sh [options] DATASETS [REMOTE]
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
+#   -t               The second argument is the EXACT dataset to write, not a
+#                    base to append the source name under.
+#
+#                    Default, unchanged: `snapsend.sh A/B host:C/D` writes
+#                    `host:C/D/A/B`, and an omitted base writes `A/B` itself
+#                    (identity, which is what sync mode is). Both preserve the
+#                    source's name, which is right for a backup: a collector
+#                    holding twenty sources needs them to stay apart.
+#
+#                    A RESTORE is the one operation where that is wrong. The copy
+#                    lives at `hdd/backups/<peer>/hdd/data` and has to land back
+#                    as `hdd/data` -- neither mapping can say that, so before this
+#                    flag the engine composed `hdd/data/hdd/backups/<peer>/hdd/data`
+#                    and created an ancestor path nobody asked for. Measured on
+#                    the lab, 2026-08-27, which is where it was found.
+#
+#                    Refused with more than one dataset (one exact path cannot
+#                    receive several), without a base (there would be nothing to
+#                    be exact about) and with -R (flat-recursive expands into many
+#                    datasets, each of which needs its own name).
+#
+#                    Added to BOTH engines in one commit at the owner's
+#                    instruction. They are twins: a capability that exists in one
+#                    direction and not the other is how the two drift, and
+#                    test/twins exists because that has happened before.
 #   -e               Use existing latest snapshot instead of creating a new one
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote target -- see "COMPRESSION DEFAULT" below,
@@ -558,6 +583,7 @@ human_bytes() {   # <bytes>
 }
 
 PORT=22
+TARGET_EXACT=0
 USE_EXISTING_SNAPSHOT=0
 declare -a EXCLUDE_SNAPS=()
 # -q: quiesce the Proxmox guest that owns each dataset before snapshotting it.
@@ -1850,11 +1876,12 @@ if [ $# -gt 0 ]; then
     set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
 fi
 
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:E:" opt; do
+while getopts "m:ezZgNl:v:rRtniHj:uUfwVp:k:Aq:T:o:x:c:b:FX:SK:O:L:E:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
+        t) TARGET_EXACT=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         E) EXCLUDE_SNAPS+=("$OPTARG");;
         q) QUIESCE="$OPTARG";;
@@ -2472,13 +2499,35 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     fi
 fi
 
+# -t REFUSES what it cannot mean. All three are decided before anything is sent,
+# because each of them would otherwise produce a target path nobody asked for --
+# and on a restore that path is a real dataset on a machine in trouble.
+if [ "$TARGET_EXACT" -eq 1 ]; then
+    if [ -z "$TARGET_BASE" ]; then
+        echo "Error: -t says the second argument is the exact target, and there is no second argument. Give the dataset to write, or drop -t." >&2
+        exit 1
+    fi
+    if [ "${#DATASETS[@]}" -ne 1 ]; then
+        echo "Error: -t names ONE exact target and ${#DATASETS[@]} datasets were given. One path cannot receive several; run them one at a time." >&2
+        exit 1
+    fi
+    if [ "$FLAT_RECURSE" -eq 1 ]; then
+        echo "Error: -t and -R together. -R expands into many independent datasets and each needs its own name, which is the mapping -t exists to switch off. Use -r for one atomic recursive stream under the exact target, or drop -t." >&2
+        exit 1
+    fi
+fi
+
 declare -a FAILED_DATASETS=()
 for dataset in "${DATASETS[@]}"; do
     if [ $AUTOTUNE_ACTIVE -eq 1 ]; then
         COMPRESSION=$COMPRESSION_BASE
         tune_apply "$REMOTE_USER@$REMOTE_HOST" "$dataset"
     fi
-    if [ -n "$TARGET_BASE" ]; then
+    if [ "$TARGET_EXACT" -eq 1 ]; then
+        # -t: the base IS the target. See the flag's own note above; this is the
+        # restore direction, where preserving the source's name is exactly wrong.
+        tgt_path="$TARGET_BASE"
+    elif [ -n "$TARGET_BASE" ]; then
         tgt_path="${TARGET_BASE}/${dataset}"
     else
         tgt_path="$dataset"

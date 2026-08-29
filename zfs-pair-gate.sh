@@ -94,6 +94,52 @@ RC_DISABLED=93
 # /var/lib, never /run or /tmp: a disable that a reboot silently cleared would
 # be the worst possible failure mode for a security state.
 RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+
+# Restore grants live in their OWN root-owned tree, not under
+# $RELATIONSHIPS_DIR/<label>. That directory is group-writable by this very
+# account (the owner's model lets the relationship key lift a hard pause, which
+# means unlinking a marker inside it), so a grant kept there could be written by
+# the account the grant exists to restrain. This gate only ever READS it.
+RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants}"
+
+# What this relationship is permitted to restore onto this host, as a line for
+# PAIR-CONTROL status. Absent grant -> "none", which is the answer that must
+# come out of every failure mode here: an unreadable or malformed grant is not a
+# grant, and reporting anything else would be this host telling the collector it
+# may overwrite it on the strength of a file nobody could parse.
+restore_grant_line() {   # <label>
+    local f="$RESTORE_GRANT_DIR/$1" modes=""
+    [ -f "$f" ] && [ -r "$f" ] || { printf 'RESTORE_GRANT=none\n'; return 0; }
+    modes=$(sed -n 's/^RESTORE_GRANT_MODES="\(.*\)"$/\1/p' "$f" 2>/dev/null | head -1)
+    # Whitelist, not blacklist: this string is printed straight back to the
+    # collector, and it came out of a file. Anything that is not lowercase
+    # letters and single spaces is not a mode list this host wrote, so it is
+    # reported as no grant at all -- the fail-closed direction, and the only
+    # honest one. Saying "present" on the strength of a file nobody could parse
+    # would be this machine telling a collector it may overwrite it.
+    case "$modes" in
+        ''|*[!a-z\ ]*) printf 'RESTORE_GRANT=none\n'; return 0 ;;
+    esac
+    printf 'RESTORE_GRANT=present\nRESTORE_GRANT_MODES=%s\n' "$modes"
+    # AND THE SCOPE IT COVERS. The collector needs the roots, not out of
+    # tidiness: `replace` destroys a dataset and recreates it, and a zfs allow
+    # lives ON the dataset -- so replacing the ROOT of the delegated scope
+    # destroys the delegation, and recreating it needs permission on the parent
+    # that a delegated account does not have. Measured on the lab 2026-08-28,
+    # where it left the target with no dataset, no grant and no way back.
+    #
+    # Same whitelist discipline as the modes above, and the same fail-closed
+    # direction: a scope this host cannot parse is reported as EMPTY rather than
+    # as something. An empty scope makes the collector refuse that one shape,
+    # which is the safe way to be wrong.
+    local sc
+    sc=$(sed -n 's/^RESTORE_GRANT_DATASETS=\"\(.*\)\"$/\1/p' "$f" 2>/dev/null | head -1)
+    case "$sc" in
+        *[!A-Za-z0-9/_.:-\ ]*) sc="" ;;
+    esac
+    printf 'RESTORE_GRANT_DATASETS=%s\n' "$sc"
+    return 0
+}
 GATE_LOG="${GATE_LOG:-/var/log/zfs-pair-gate.log}"
 
 # One line per decision. Never the command's data, never a key: the label, the
@@ -198,6 +244,7 @@ if [ "$DISABLED" -eq 1 ]; then
             at=$(sed -n 's/^DISABLED_AT="\(.*\)"$/\1/p' "$STATE_DIR/disabled" 2>/dev/null)
             printf 'PAIR_STATE=DISABLED\nPAIR_LABEL=%s\nDISABLED_AT=%s\nDISABLED_REASON=%s\n' \
                 "$LABEL" "${at:-unknown}" "${reason:-}"
+            restore_grant_line "$LABEL"
             gate_log "$LABEL" control "verb=status"
             exit 0 ;;
         "PAIR-CONTROL disable")
@@ -231,6 +278,7 @@ fi
 case "$REQ" in
     "PAIR-CONTROL status")
         printf 'PAIR_STATE=ACTIVE\nPAIR_LABEL=%s\n' "$LABEL"
+        restore_grant_line "$LABEL"
         gate_log "$LABEL" control "verb=status"
         exit 0 ;;
     "PAIR-CONTROL enable")
