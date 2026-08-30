@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1c63030cb7944b10 -->
+<!-- status-covers-digest: facb0b0e6933b375 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4151,6 +4151,44 @@ opisac tylko jedno z nich.
 Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
 wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
 linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### ROZRZUT OMIJAL JEDYNE ZADANIE, KTORE NAPRAWDE WALCZY O LACZE (2026-08-30)
+
+Pytanie wlasciciela: „to juz przecial dzialalo, jaki jest z tym problem?".
+Odpowiedz: dzialalo i dziala -- ale nigdy nie objelo tego zadania.
+
+`63f69eb` rozrzucil relacje po zegarze, a jego wlasny pomiar nazwal koszt:
+*„all at :01 and all pruning at :21 ... a thundering herd on the link, the
+source's disks and sshd"*. Dostaly minute: wysylka i przycinanie **lokalne**.
+`append_source_prune_create` -- jedyna sekcja otwierajaca sesje SSH do hosta
+zrodlowego, czyli jedyna dotykajaca WSZYSTKICH trzech rzeczy z tamtego zdania --
+nie zostala w tym commicie tknieta ani razu (`git show 63f69eb | grep -c
+append_source_prune_create` = 0). Luka jest wiec dokladnie odwrocona wzgledem
+intencji.
+
+Zmierzone na labie, dwie relacje: wysylki :57 i :01, przycinania lokalne :17 i
+:21, i **oba** przycinania zrodel na :21 razem z lokalnym -- trzy zadania, dwa z
+nich po SSH do roznych hostow, w jednej minucie. Odtworzylo sie identycznie po
+odbudowie, wiec jest deterministyczne, nie przypadkowe.
+
+Zmierzony skutek przy DWOCH zrodlach: cztery zadania odpalone w tej samej
+chwili ruszyly w ciagu 4 ms, bieglo **rownolegle** (501/535/1772/1815 ms),
+wszystkie `rc=0`. Przy tej skali nie boli; przy dziesieciu to dziesiec
+jednoczesnych sesji SSH.
+
+**Naprawa: trzeci slot.** `+40` zachowuje 20-minutowy odstep, ktory profil mial
+miedzy wysylka a przycinaniem, i stawia to kolejne 20 od obu -- trzy rowno
+rozlozone minuty na relacje zamiast dwoch i kupki. Wyrazenie jest PRZEKAZYWANE
+z miejsca, gdzie minuta juz jest policzona, nie liczone drugi raz:
+`schedule_pick_minute` czyta zainstalowany crontab i po zainstalowaniu linii
+wysylki odpowiedzialoby inaczej.
+
+Puste wyrazenie znaczy „dziedzicz z szablonu" -- czyli to, co robi kazda sekcja
+zapisana wczesniej. Emiter piszacy minute zawsze przesunalby zadania na hostach,
+ktore o to nie prosily; kontrola w suicie pilnuje wlasnie tego.
+
+Suita `stagger` miala dwadziescia przypadkow i **ani jednego** patrzacego na
+przycinanie zrodla. Teraz 26/0, 25/1 bez linii emitujacej.
 
 ### NOSNIK Z CUDZA LINIA JEST ODMAWIANY, TYMI SLOWAMI (2026-08-30)
 

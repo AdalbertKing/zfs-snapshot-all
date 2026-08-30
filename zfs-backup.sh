@@ -1716,8 +1716,13 @@ source_prune_sflags() {
 # body: marker, the profile's SOURCE prune fragment, non-recursive scope, ssh_flags,
 # labels). Shared by the step-3 CREATE path and the step-5 retrofit so both write an
 # identical, independent, non-recursive source ladder.
-append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds> <retention fragment>
+append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds> <retention fragment> [prune schedule expr]
     local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6" retfrag="${7:-$PROFILE_PRUNE_FILE}"
+    # EMPTY MEANS "inherit the template", which is what every section written
+    # before this did. Passed in rather than derived here: schedule_pick_minute
+    # reads the INSTALLED crontab, so calling it a second time inside one run
+    # can answer differently once the send line is in place.
+    local schedexpr="${8:-}"
     # Recursion here MIRRORS the pull's. A solid scope root pulls with -R, so
     # its children accumulate the tool-owned automated_ snapshots on the
     # source too -- a non-recursive source prune would cover the parent and
@@ -1732,6 +1737,7 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
         echo "[prune:$scope]"
         echo "	$marker"
         emit_source_prune_fragment "$retfrag"
+        [ -n "$schedexpr" ] && echo "	prune_schedule = $schedexpr"
         echo "	recursive    = $rec"
         echo "	ssh_flags    = $sflags"
         echo "	pair_label   = $name"
@@ -1749,8 +1755,8 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
 # delegated account must already hold `destroy` on each source (delegated by
 # deploy.sh --commit-scope) -- we verify, we do NOT widen. Only the (re)generated
 # datasets, so a preserved re-activation opens no SSH and rewrites nothing.
-emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
-    local workfile="$1" name="$2" marker="$3"; shift 3
+emit_remote_source_prune() {   # <workfile> <name> <marker> <prune schedule expr> <source-ds...>
+    local workfile="$1" name="$2" marker="$3" schedexpr="$4"; shift 4
     [ "$#" -gt 0 ] || return 0
     # NO SHAPE GATE. `PROFILE_GFS -eq 1` used to stand here and it silently
     # excused every flat profile from bounding the families it creates on the
@@ -1825,7 +1831,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
             # reasons to stop before publishing, and neither is a reason to
             # publish a relationship that prunes nothing on the source.
             [ -n "$retfrag" ] || die "refusing to create source retention for '$ds': profile '$PROFILE_ACTIVE' yielded no retention fragment. Either it declares none at all, or its rendered artifacts are not readable in this run. This relationship would create automated_* families on ${LOAD_HOST:-the source} and bound none of them there -- which is the defect REV-20260811-102 exists to prevent. Nothing was installed."
-            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
+            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "$schedexpr" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
@@ -1862,7 +1868,7 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local scope ds
     for scope in "$@"; do
         ds="${scope##*:}"
-        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
+        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "$schedexpr" || return 1
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }
@@ -3378,6 +3384,27 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
     stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
+    # A THIRD SLOT, for the prune that reaches the SOURCE over SSH.
+    #
+    # 63f69eb spread relationships "across the clock instead of stacking them on
+    # one minute", and its own measurement named the cost: "all at :01 and all
+    # pruning at :21 ... a thundering herd on the link, the source's disks and
+    # sshd". It gave a minute to the send and to the LOCAL prune, and never
+    # touched append_source_prune_create -- so the one job class that opens an
+    # SSH session to the source, and therefore hits all three of the things that
+    # sentence lists, was the one left stacked.
+    #
+    # Measured on the lab, 2026-08-30, two relationships: sends at :57 and :01,
+    # local prunes at :17 and :21, and BOTH source prunes at :21 with the local
+    # one -- three jobs, two of them over SSH to different hosts, in one minute.
+    # It reproduced identically on a rebuild, so it is deterministic, not luck.
+    #
+    # +40 keeps the 20-minute gap the profile already had between send and
+    # prune, and puts this a further 20 from both: three evenly spaced slots per
+    # relationship rather than two and a pile-up.
+    local stagger_src stagger_src_prune_expr
+    stagger_src=$(( (stagger_min + 40) % 60 ))
+    stagger_src_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_src")
     # WHEN THE TIERS DISAGREE, SPREAD THEM ONE BY ONE instead of not at all.
     #
     # A section-level send_schedule overrides every tier the section names, so a
@@ -3594,7 +3621,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     elif [ "${RECURSION:-}" = atomic ]; then
         log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
     else
-        emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+        emit_remote_source_prune "$workfile" "$name" "$marker" "$stagger_src_prune_expr" ${prune_src[@]+"${prune_src[@]}"} || return 1
     fi
     return 0
 }
