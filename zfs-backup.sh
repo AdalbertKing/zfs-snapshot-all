@@ -1755,8 +1755,15 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
 # delegated account must already hold `destroy` on each source (delegated by
 # deploy.sh --commit-scope) -- we verify, we do NOT widen. Only the (re)generated
 # datasets, so a preserved re-activation opens no SSH and rewrites nothing.
-emit_remote_source_prune() {   # <workfile> <name> <marker> <prune schedule expr> <source-ds...>
-    local workfile="$1" name="$2" marker="$3" schedexpr="$4"; shift 4
+emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] <source-ds...>
+    local workfile="$1" name="$2" marker="$3"; shift 3
+    # NAMED, not a fourth positional, and that is a correction rather than a
+    # taste: the tail of this function is a variadic dataset list, so a new
+    # positional in front of it silently eats the first DATASET. Measured --
+    # the first cut did exactly that, the list came out empty, and the section
+    # was not emitted at all. A dataset name can never look like --schedule=.
+    local schedexpr=""
+    case "${1:-}" in --schedule=*) schedexpr="${1#--schedule=}"; shift ;; esac
     [ "$#" -gt 0 ] || return 0
     # NO SHAPE GATE. `PROFILE_GFS -eq 1` used to stand here and it silently
     # excused every flat profile from bounding the families it creates on the
@@ -3621,7 +3628,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     elif [ "${RECURSION:-}" = atomic ]; then
         log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
     else
-        emit_remote_source_prune "$workfile" "$name" "$marker" "$stagger_src_prune_expr" ${prune_src[@]+"${prune_src[@]}"} || return 1
+        emit_remote_source_prune "$workfile" "$name" "$marker" --schedule="$stagger_src_prune_expr" ${prune_src[@]+"${prune_src[@]}"} || return 1
     fi
     return 0
 }

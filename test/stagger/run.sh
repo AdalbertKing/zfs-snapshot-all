@@ -343,6 +343,18 @@ for base in 0 45 57; do
     fi
 done
 
+# THE FLAG MUST NOT BE A POSITIONAL, and the first cut made it one.
+# emit_remote_source_prune ends in a variadic dataset list, so a fourth
+# positional in front of that list eats the first DATASET: the list came out
+# empty, the function returned early, and no section was written at all.
+#
+# NOT re-tested here. test/zfsbackup already drives that function with its real
+# dependencies, and it is what caught this -- as a CONTROL failing ("96x
+# control: a readable fragment still produces the source prune section"), which
+# is exactly the assertion that trap breaks. Lifting a function with that many
+# dependencies into this suite would mean a stub per dependency, and a harness
+# that elaborate is a second implementation to keep true, not a test.
+
 echo "--------------------------------------------"
 echo "stagger: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
