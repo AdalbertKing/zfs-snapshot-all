@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9d3ddbd60ac450d4 -->
+<!-- status-covers-digest: a676d55b481cf5ed -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4227,49 +4227,44 @@ i nie wolno go ruszac -- kontrola N2 istnieje wlasnie po to.
 
 mediagate 134/0, 126/8 z odwroconym warunkiem.
 
-### `deploy.sh --commit-scope` JEST MARTWY NA main (2026-08-30) -- OTWARTE
+### `--commit-scope` I `--leave` -- DYSPOZYTORY PRZENIESIONE (2026-08-30)
 
-Zmierzone na pve2, hoscie produkcyjnym, na wydaniu `2a1b147`:
+`deploy.sh --commit-scope=LABEL` byl **martwy na main**. Zmierzone na pve2,
+hoscie produkcyjnym:
 
 ```
 ./deploy.sh --commit-scope=nieistnieje
 ./deploy.sh: line 3388: do_commit_scope: command not found
 ```
 
-bash definiuje funkcje w miare czytania, a `do_commit_scope` stoi w ~5921 --
-**za** dyspozytorem. Przeniesienie przed Faze 1 z 2026-08-26 zamienilo „nadaje
-uprawnienia i przy okazji provisionuje host" na „nie uruchamia sie wcale".
-Nikt tego nie zlapal, bo `--join` dochodzi do `do_commit_scope` z wlasnego
-dyspozytora u stopy pliku, gdzie definicja juz istnieje -- i dlatego dzisiejsze
-wdrozenie labu przeszlo bez potkniecia.
+bash definiuje funkcje w miare czytania, a ta stala w ~5900 -- **za**
+dyspozytorem. Przeniesienie z 2026-08-26 przed Faze 1 bylo sluszne co do
+intencji (odpowiadanie na pytanie o uprawnienia nie ma prawa ciagnac repo i
+przepisywac crona), ale zamienilo "provisionuje, gdy nie powinien" na "nie
+uruchamia sie wcale". Nikt tego nie zlapal, bo `--join` dochodzi do tej samej
+funkcji z wlasnego dyspozytora u stopy pliku, wiec kazde wdrozenie dzialalo.
 
-**Naprawa jest ograniczona, ale nie jednolinijkowa.** Domkniecie to 8 funkcji
-(`commit_scope_dataset_held`, `do_commit_scope`, `join_scope_is_committed`,
-`join_scope_enumerate`, `join_scope_summary`, `join_human_bytes`,
-`guided_join_scope`, `do_leave`) **plus** deklaracje, ktore one czytaja --
-przede wszystkim `COMMIT_SCOPE_HOLD_TAG`, decydujacy o tym, czy dataset jest
-trzymany, zanim odbierze mu sie nadanie. Przeniesienie samych funkcji
-zostawiloby ten tag pusty w chwili wywolania.
+`--leave` mial druga polowe tego samego problemu: wywolywany za wszystkimi
+siedmioma fazami, wiec **ciagnal repo na maszynie, ktora sie rozbiera**, a
+checkout stojacy na galezi nie dawal sie opuscic w ogole (`fatal: Not possible
+to fast-forward`). Dotyczylo to takze `remove-client`, ktory siega po `--unpair`
+ta sama droga.
 
-Nie zrobione w tej rundzie swiadomie: to restrukturyzacja 7000-liniowego
-skryptu dzialajacego jako root i nalezy jej sie osobna, spokojna decyzja.
+**Naprawa.** Domkniecie policzone, nie zgadniete: 25 funkcji, z czego 8 ponizej
+dyspozytora, przeniesione ponad niego razem z jedyna globalna, ktora czytaja --
+`COMMIT_SCOPE_HOLD_TAG`, decydujaca o tym, czy dataset jest trzymany, zanim
+odbierze mu sie nadanie. Nazwy `PEER_JOIN_*`, ktore wygladaly na globalne,
+okazaly sie liniami heredoca zapisujacego manifest.
 
-### `--leave` PROVISIONUJE HOST, KTORY WLASNIE OPUSZCZASZ (2026-08-30) -- OTWARTE
+Oba czasowniki koncza teraz przed Faza 1. Test w suicie `pairgate` pilnuje, ze
+**docieraja do swoich funkcji** (`command not found` to dokladnie to, co ma byc
+niemozliwe) i ze **nie provisionuja hosta po drodze** -- z kontrola, ze zwykly
+bieg nadal wchodzi w fazy, bo bez niej te asercje przeszlyby na buildzie, ktory
+przestal provisionowac w ogole. Te przypadki byly NIEMOZLIWE do napisania przed
+przeniesieniem -- sandbox nie przechodzil Fazy 1 -- i wlasnie dlatego nic nie
+pilnowalo tej regresji.
 
-Ten sam ksztalt, ta sama przyczyna, jeszcze nieprzeniesione. `--leave` jest
-wywolywany za wszystkimi siedmioma fazami, wiec **ciagnie repo na maszynie,
-ktora sie rozbiera**. Checkout stojacy na galezi nie da sie opuscic w ogole:
-
-```
-Phase 2: deploy the repo into /root/scripts/zfs-snapshot-all
-fatal: Not possible to fast-forward, aborting.
-FATAL: git pull --ff-only failed
-```
-
-Na zwyklym hoscie konczy sie powodzeniem, przepisawszy po drodze
-`notify-fail.sh` i dodawszy hostowe linie crona. Zostaje u stopy pliku, gdzie
-**dziala**, dopoki przeniesienie wyzej nie zostanie zrobione razem z naprawa
-`--commit-scope` -- te dwie rzeczy sa jednym problemem.
+pairgate 83/0, 80/3 bez przeniesienia.
 
 ### `--leave` ZOSTAWIAL KATALOG BRAMKI GRUPY SKASOWANEGO KONTA (2026-08-30)
 

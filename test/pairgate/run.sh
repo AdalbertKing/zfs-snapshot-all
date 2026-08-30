@@ -751,6 +751,74 @@ fi
 fi
 fi
 
+# ---------------------------------------------------------------------------
+# THE TEARDOWN VERBS RUN WITHOUT PROVISIONING THE HOST, and until 2026-08-30
+# one of them did not run at all.
+#
+# Measured on pve2, a production host on main:
+#
+#     ./deploy.sh --commit-scope=nieistnieje
+#     ./deploy.sh: line 3388: do_commit_scope: command not found
+#
+# bash defines functions as it reads; the 2026-08-26 move of that dispatch
+# before Phase 1 put the CALL above the DEFINITION. Nothing caught it because
+# --join reaches the same function from its own dispatch at the foot of the
+# file, so every enrolment kept working.
+#
+# --leave had the other half of the same problem: dispatched behind all seven
+# phases, so tearing a relationship off a host PULLED THE REPO on the machine
+# being torn down, and a checkout on a branch could not be left at all.
+#
+# These cases were IMPOSSIBLE to write before the move -- a sandbox could not
+# get past Phase 1 -- which is precisely why nothing pinned the regression.
+LV="$WORK/verbs"; mkdir -p "$LV/peers" "$LV/rel/pve9" "$LV/bin"
+# deploy.sh refuses to start as anyone but root, deliberately and with no env
+# escape. Stubbed here and only `id -u`.
+cat > "$LV/bin/id" <<'IDEOF'
+#!/bin/sh
+[ "$1" = "-u" ] && { echo 0; exit 0; }
+exit 1
+IDEOF
+chmod +x "$LV/bin/id"
+run_verb() { PATH="$LV/bin:$PATH" PEER_STATE_DIR="$LV/peers" PAIR_GATE_STATE_DIR="$LV/rel"              bash "$REPO/deploy.sh" "$@" 2>&1; }
+
+# THE CARRYING ASSERTIONS: each verb REACHES its function. "command not found"
+# is what this is here to make impossible; a manifest complaint is the verb
+# working.
+out="$(run_verb --commit-scope=nieistnieje)"
+case "$out" in
+    *"command not found"*) bad "verbs: --commit-scope reaches its function" "$out" ;;
+    *"no pairing manifest"*) ok "verbs: --commit-scope reaches its function" ;;
+    *) bad "verbs: --commit-scope reaches its function" "$out" ;;
+esac
+out="$(run_verb --leave=nieistnieje)"
+case "$out" in
+    *"command not found"*) bad "verbs: --leave reaches its function" "$out" ;;
+    *"no join manifest"*)  ok "verbs: --leave reaches its function" ;;
+    *) bad "verbs: --leave reaches its function" "$out" ;;
+esac
+
+# ...and NEITHER runs the provisioning phases on the way. A teardown that pulls
+# the repo on the host being torn down cannot complete when that checkout has
+# diverged -- measured on pve9 -- and on an ordinary host it rewrites scripts
+# and adds cron lines nobody asked for.
+for v in --commit-scope=nieistnieje --leave=nieistnieje; do
+    out="$(run_verb "$v")"
+    case "$out" in
+        *"Phase 1"*) bad "verbs: $v does not provision the host first" "$out" ;;
+        *) ok "verbs: $v does not provision the host first" ;;
+    esac
+done
+
+# THE CONTROL, and it is not decoration: the two assertions above would also
+# pass on a build that had stopped provisioning ENTIRELY. An ordinary run must
+# still enter the phases.
+out="$(run_verb --check-only)"
+case "$out" in
+    *"Phase 1"*) ok "verbs: control -- an ordinary run still runs the phases" ;;
+    *) bad "verbs: control -- an ordinary run still runs the phases" "$out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
