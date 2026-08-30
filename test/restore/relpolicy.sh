@@ -1,0 +1,179 @@
+#!/bin/bash
+# Relation-level restore failure policy -- D + B.
+#
+#   ./test/restore/relpolicy.sh                                  # standalone
+#   ZB=/path/to/mutated/zfs-restore.sh ./test/restore/relpolicy.sh   # negative control
+#
+# Sourced by test/restore/run.sh as its last section, so the default battery and
+# its case count are unchanged.
+#
+# It is a separate FILE for one reason: a negative control has to run these cases
+# against a deliberately broken tree, and at least twice -- once with the
+# pre-flight loop removed, once with the continue-past-failure loop removed. The
+# planner battery this used to live in takes over ten minutes on the
+# implementer's box, so folding the control into it is how a control quietly
+# stops being run. Here it costs seconds, which is the only cost at which a
+# control actually gets run.
+#
+# The ZB override is the control's lever: it names which zfs-restore.sh the cases
+# are extracted from, so a mutated copy can be measured without touching the tree.
+
+if ! declare -F ok >/dev/null 2>&1; then
+    set -u
+    _rp_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO="${REPO:-$(cd "$_rp_dir/../.." && pwd)}"
+    ZB="${ZB:-$REPO/zfs-restore.sh}"
+    [ -r "$ZB" ] || { echo "cannot find zfs-restore.sh at $ZB" >&2; exit 1; }
+    WORK="${WORK:-$(mktemp -d)}"; trap 'rm -rf "$WORK"' EXIT
+    PASS=0; FAIL=0
+    ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
+    bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
+    _rp_standalone=1
+fi
+# ---------------------------------------------------------------------------
+# RELATION-LEVEL FAILURE POLICY -- D + B (owner's decision, 2026-08-30)
+#
+# The execution primitive takes ONE dataset. A relationship can span several,
+# and nothing said what a run over five of them does when the third fails.
+#
+#   D  pre-flight the WHOLE scope; refuse before the first mutation if any
+#      dataset cannot be restored, naming EVERY one that failed;
+#   B  then execute, and do not stop at a failure -- give back what can be
+#      given back.
+#
+# What is tested here is the POLICY, so the primitive is stubbed: these cases
+# decide what happens around it, and stubbing it is what lets a failure be
+# CHOSEN rather than contrived. The primitive's own behaviour is covered by the
+# 190-odd cases above.
+RP="$WORK/relpolicy"; mkdir -p "$RP"
+
+# Drive the policy with a stubbed primitive whose answer per dataset is read
+# from a table: <dataset>=<rc>. Pre-flight and execution are distinguished by
+# RESTORE_PREFLIGHT_ONLY, exactly as the real one distinguishes them.
+run_policy() {   # <preflight table> <exec table> <dataset...>
+    local pf="$1" ex="$2"; shift 2
+    local t; t=$(mktemp)
+    {
+        echo 'set -u'
+        printf 'PF=%q\n' "$pf"
+        printf 'EX=%q\n' "$ex"
+        echo 'log() { shift; printf "%s\n" "$*" >&2; }'
+        echo 'die() { printf "%s\n" "$*" >&2; exit 1; }'
+        # the stub: look the dataset up in whichever table applies
+        cat <<'STUB'
+restore_replace_internal() {
+    local ds="$1" tbl
+    # EVERY execution is recorded, not only a failing one. The first version of
+    # this stub printed only on refusal, and "no dataset was executed" then
+    # passed against a tree with NO pre-flight at all whenever the execution
+    # table happened to be clean. An assertion that cannot fail is not one.
+    if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
+        tbl="$PF"
+    else
+        tbl="$EX"; printf 'exec: %s\n' "$ds" >&2
+    fi
+    local rc=0
+    while IFS='=' read -r k v; do
+        [ "$k" = "$ds" ] && rc="$v"
+    done < "$tbl"
+    [ "$rc" = 0 ] || printf 'stub: %s odmawia (rc=%s)\n' "$ds" "$rc" >&2
+    return "$rc"
+}
+STUB
+        awk -v want="restore_replace_preflight() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
+        awk -v want="restore_replace_relation_internal() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
+        printf 'restore_replace_relation_internal /dev/null yes'
+        for d in "$@"; do printf ' %q' "$d"; done
+        printf '\n'
+    } > "$t"
+    # RETURNED, not assigned to a global: the caller reads this through
+    # `out="$(run_policy ...)"`, which is a SUBSHELL -- a variable set here
+    # would never reach it. Same trap as unwrap_media_bracket in cron2conf.sh,
+    # whose header records it for the same reason.
+    bash "$t" 2>&1
+    local rc=$?
+    rm -f "$t"
+    return "$rc"
+}
+
+# D1 -- one bad dataset in five refuses the whole run BEFORE anything runs.
+printf 'a=0\nb=0\nc=1\nd=0\ne=0\n' > "$RP/pf"
+printf 'a=0\nb=0\nc=0\nd=0\ne=0\n' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c d e)"; rc=$?
+case "$rc" in
+    2) ok "D1: one unrestorable dataset refuses the whole relation" ;;
+    *) bad "D1: one unrestorable dataset refuses the whole relation" "rc=$rc" "$out" ;;
+esac
+case "$out" in
+    *"ODMOWA przed dotknieciem"*) ok "D1: ...before anything is touched, in those words" ;;
+    *) bad "D1: ...before anything is touched, in those words" "$out" ;;
+esac
+# THE CARRYING ASSERTION: the primitive must not have been ENTERED for real.
+# Asserted from the stub's own execution record, so a tree that skipped pre-flight
+# and simply ran all five cleanly fails here -- which is what the control proves.
+case "$out" in
+    *"exec: "*) bad "D1: ...and no dataset was executed" "$out" ;;
+    *) ok "D1: ...and no dataset was executed" ;;
+esac
+
+# D2 -- EVERY bad one is named, not just the first. An operator fixing them one
+# round-trip at a time is an operator who stops trusting the tool.
+printf 'a=0\nb=1\nc=1\nd=0\ne=1\n' > "$RP/pf"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c d e)"
+n=0
+for x in b c e; do case "$out" in *"$x: "*) n=$((n+1)) ;; esac; done
+if [ "$n" -eq 3 ]; then ok "D2: all three unrestorable datasets are named, not just the first"
+else bad "D2: all three unrestorable datasets are named, not just the first" "named $n of 3" "$out"; fi
+case "$out" in
+    *"3 z 5"*) ok "D2: ...and the count says how many of how many" ;;
+    *) bad "D2: ...and the count says how many of how many" "$out" ;;
+esac
+
+# B1 -- a clean scope runs every dataset.
+printf 'a=0\nb=0\nc=0\n' > "$RP/pf"
+printf 'a=0\nb=0\nc=0\n' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"; rc=$?
+case "$rc$out" in
+    0*"odtworzone 3/3"*) ok "B1: a scope that passes pre-flight restores every dataset" ;;
+    *) bad "B1: a scope that passes pre-flight restores every dataset" "rc=$rc" "$out" ;;
+esac
+
+# B2 -- THE CARRYING ASSERTION FOR B. A transport failure on the middle dataset
+# must NOT stop the ones after it: that is the whole difference between this
+# policy and "stop at the first failure".
+printf 'a=0\nb=0\nc=0\n' > "$RP/pf"
+printf 'a=0\nb=1\nc=0\n' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"; rc=$?
+case "$out" in
+    *"odtworzone 2/3"*) ok "B2: A FAILURE MID-SCOPE DOES NOT STOP THE REST" ;;
+    *) bad "B2: A FAILURE MID-SCOPE DOES NOT STOP THE REST" "$out" ;;
+esac
+case "$rc" in
+    1) ok "B2: ...and the run still reports failure" ;;
+    *) bad "B2: ...and the run still reports failure" "rc=$rc" ;;
+esac
+case "$out" in
+    *"nietkniete"*b*) ok "B2: ...naming the one that was refused before destruction" ;;
+    *) bad "B2: ...naming the one that was refused before destruction" "$out" ;;
+esac
+
+# B3 -- 'changed' is NOT the same as 'untouched', and outranks it. A dataset
+# whose destruction began and whose transfer then broke is the only state that
+# needs a human, and it must not be buried in a count with the ones the run
+# never began.
+printf 'a=0\nb=2\nc=0\n' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"; rc=$?
+case "$out" in
+    *"ZMIENIONE I NIEDOKONCZONE"*b*) ok "B3: a half-destroyed dataset is called out separately" ;;
+    *) bad "B3: a half-destroyed dataset is called out separately" "$out" ;;
+esac
+case "$rc" in
+    2) ok "B3: ...and it outranks an ordinary failure in the exit status" ;;
+    *) bad "B3: ...and it outranks an ordinary failure in the exit status" "rc=$rc" ;;
+esac
+
+if [ "${_rp_standalone:-0}" = 1 ]; then
+    echo "--------------------------------------------"
+    echo "PASS=$PASS FAIL=$FAIL"
+    [ "$FAIL" -eq 0 ]
+fi
