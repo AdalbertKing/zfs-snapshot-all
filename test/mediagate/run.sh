@@ -874,6 +874,39 @@ else
 fi
 SRC_SNAP_tank_other="replica_s2"
 
+# M8. TWO MEDIA IN THE SLOT MUST REFUSE, EVEN WHEN THE RECORD LOOKS CURRENT.
+#
+# REV-20260829-126 round 2. The ambiguity refusal used to sit AFTER this fast
+# path, and scan_guid() prints the FIRST candidate and exits -- so with a record
+# matching that first GUID the gate answered SKIPPED and never reached the
+# refusal. Two disks in at once produced a silent skip attributed to whichever
+# one ZFS happened to list first.
+#
+# The preconditions are the discriminator. M7 and the ambiguity case elsewhere
+# each pass on the broken build: one has two media but no current record, the
+# other a current record but one medium. Only both together expose the order.
+SRC_SNAP_tank_src="replica_s2"; export SRC_SNAP_tank_src
+SRC_TREE_tank_src="tank/src"; export SRC_TREE_tank_src
+SRC_WRITTEN_tank_src=0; export SRC_WRITTEN_tank_src
+DATASETS="hdd rotpool/replica tank/src"
+POOLS="hdd"; IMPORTABLE="rotpool rotpool"; POOL_GUID=11111111
+: > "$IMPORTED_LOG"
+printf 'guid=11111111
+snap:tank/src=replica_s2
+' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "M8: TWO MEDIA + A CURRENT RECORD -> REFUSE, not skip" "2" "$rc"
+has "are available to import" "$out" && ok "M8: ...with the ambiguity refusal"                                      || bad "M8: ...with the ambiguity refusal" "$out"
+has "SKIPPED" "$out" && bad "M8: ...and NEVER the no-work skip" "$out"                      || ok "M8: ...and NEVER the no-work skip"
+check "M8: ...and nothing was imported" "" "$(cat "$IMPORTED_LOG")"
+IMPORTABLE="rotpool"
+rm -f "$SYNCFILE"
+# ...and hand the section state back exactly as M7 expects to find it.
+DATASETS="hdd rotpool/replica tank/src tank/other"
+SRC_TREE_tank_other="tank/other"; export SRC_TREE_tank_other
+SRC_SNAP_tank_other="replica_s2"; export SRC_SNAP_tank_other
+SRC_WRITTEN_tank_other=0; export SRC_WRITTEN_tank_other
+
 # M7. THE COMMA LIST IS THE SAME THING SAID SHORTER, and it exists for a
 #     measured reason: the generated cron line is checked against cron's
 #     1000-byte command limit, and `--source ` in front of every dataset, twice
@@ -937,6 +970,34 @@ has "different --dst" "$out" && ok "N1: ...and the two choices, without making e
 # has to leave it that way, or a run that refused would also be a run that
 # armed the hang it exists to avoid.
 has "rotpool" "$(cat "$EXPORTED_LOG")" && ok "N1: ...and the pool is exported again, so the disk is safe to pull"                                        || bad "N1: ...and the pool is exported again, so the disk is safe to pull" "$(cat "$EXPORTED_LOG")"
+
+# N1b. AND THE EXPORT AFTERWARDS MAY FAIL.
+#
+# REV-20260829-126 F2. The refusal ran `bounded_export || :` and then deleted
+# the ownership marker unconditionally -- an ATTEMPT read as a success. With a
+# failing export the pool stays imported while the evidence is gone, so the
+# bracket's detach can no longer prove this run imported it and must not export
+# it: a temporary failure becomes a permanently imported removable pool with no
+# retry path.
+#
+# N1 above covers only the successful-export branch, which is why exact-head CI
+# was green on the defect.
+POOLS="hdd"; IMPORTABLE="rotpool"
+rm -f "$STATE/rep.imported-by-us"
+: > "$EXPORTED_LOG"
+EXPORT_FAILS=1
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+EXPORT_FAILS=""
+check "N1b: a lineage refusal whose export FAILS still exits 2" "2" "$rc"
+if [ -f "$STATE/rep.imported-by-us" ]; then
+    ok "N1b: THE OWNERSHIP MARKER SURVIVES, so detach can still export it"
+else
+    bad "N1b: THE OWNERSHIP MARKER SURVIVES, so detach can still export it" "marker deleted"
+fi
+has "DO NOT UNPLUG" "$out" && ok "N1b: ...and the operator is warned the pool is still imported"                            || bad "N1b: ...and the operator is warned the pool is still imported" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+rm -f "$STATE/rep.imported-by-us"
 
 # N2. THE CONTROL. Same shape, but the medium's newest snapshot IS one the
 #     source still has -- an ordinary incremental, which must proceed.
