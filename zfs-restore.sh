@@ -2951,6 +2951,103 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 # by name, as part of the approved set), so a refusal still leaves the source
 # byte-identical to how it was found and a success leaves nothing of this run
 # behind.
+# ------------------------------------------------------------------------------
+# RELATION-LEVEL DESTRUCTIVE RESTORE -- the failure policy, D + B.
+#
+# A relationship can span several datasets. The execution primitive below takes
+# ONE, and until now nothing said what a run over five of them does when the
+# third fails. That question has exactly one wrong answer -- decide it at the
+# moment it happens -- so it is decided here, and the owner chose the shape
+# (2026-08-30):
+#
+#   D  PRE-FLIGHT THE WHOLE SCOPE FIRST. Every dataset is resolved, planned and
+#      put through every refusal the single-dataset verb has, WITHOUT touching
+#      anything. If any one of them cannot be restored, the run refuses before
+#      the first mutation and names EVERY dataset that failed the check, not
+#      just the first -- an operator fixing them one round-trip at a time is an
+#      operator who stops trusting the tool.
+#
+#   B  THEN EXECUTE, AND CONTINUE PAST A FAILURE. Whatever can be recovered is
+#      recovered, and the run reports what each dataset ended as.
+#
+# Why B and not "stop at the first failure": with D in front, the predictable
+# reasons to fail -- no common base, an ambiguous recovery point, an atomic
+# relation, a remote source -- are all gone before anything is touched. What is
+# left is transport: a broken link, a full pool. Those hit one dataset, not the
+# plan, and giving back four of five beats giving back two.
+#
+# THE THREE PER-DATASET OUTCOMES ARE KEPT DISTINCT, because they are not
+# degrees of the same thing: `untouched` is a dataset the run never began,
+# `restored` is one verified by GUID, and `changed` is one whose destruction
+# started and whose transfer then broke. The last is the only state that needs
+# a human, and burying it in a count would be the one summary worth nothing.
+#
+# NO PUBLIC GRAMMAR HERE. The CLI is still the owner's open decision
+# (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md); this is the internal policy the
+# grammar will eventually call, exactly as the execution primitive below was
+# built ahead of it.
+
+# The read-only half of the single-dataset verb: resolve, plan, and run every
+# refusal -- stopping BEFORE the first mutation, which is the technical
+# snapshot. Run in a SUBSHELL by the caller, so the existing `die` texts and
+# control flow are reused verbatim rather than re-implemented as return codes;
+# re-stating those refusals here is how the two copies would drift.
+restore_replace_preflight() {   # <dataset> <config> -> 0 restorable, non-zero with the reason on stderr
+    RESTORE_PREFLIGHT_ONLY=1 restore_replace_internal "$1" "$2" no
+}
+
+# <config> <yes> <dataset...>
+restore_replace_relation_internal() {
+    local config="$1" yes="$2"; shift 2
+    [ "$#" -gt 0 ] || die "restore (relacja): nie podano ani jednego datasetu"
+
+    local ds rc
+    local -a bad=()
+    # A predictable /tmp/.rp.$$ was the first spelling here. Two runs in
+    # different PID namespaces collide on it, and anyone on the box can plant a
+    # symlink under that name beforehand -- so the reason a dataset was refused
+    # would be written wherever the symlink points, and read back from there.
+    local rperr; rperr="$(mktemp)" || die "restore (relacja): nie moge utworzyc pliku tymczasowego"
+    # ---- D: every dataset, before anything is touched --------------------
+    for ds in "$@"; do
+        if ! ( restore_replace_preflight "$ds" "$config" ) 2>"$rperr"; then
+            bad+=("$ds: $(tr -d '
+' < "$rperr" | sed 's/  */ /g')")
+        fi
+        : > "$rperr"
+    done
+    rm -f "$rperr"
+    if [ "${#bad[@]}" -gt 0 ]; then
+        log 0 "restore (relacja): ODMOWA przed dotknieciem czegokolwiek -- ${#bad[@]} z $# datasetow nie da sie odtworzyc:"
+        for ds in "${bad[@]}"; do log 0 "  $ds"; done
+        log 0 "Nic nie zostalo zmienione. Napraw wszystkie powyzsze i powtorz -- ta lista jest pelna, nie pierwsza z brzegu."
+        return 2
+    fi
+
+    # ---- B: execute, and do not stop at the first failure ----------------
+    local -a done_ok=() done_changed=() done_failed=()
+    for ds in "$@"; do
+        restore_replace_internal "$ds" "$config" "$yes"; rc=$?
+        case "$rc" in
+            0) done_ok+=("$ds") ;;
+            # The primitive's own distinction, carried up unchanged: 1 means it
+            # refused or failed before destroying anything, 2 means destruction
+            # began and the dataset is NOT as it was found.
+            2) done_changed+=("$ds") ;;
+            *) done_failed+=("$ds") ;;
+        esac
+    done
+
+    log 0 "restore (relacja): odtworzone ${#done_ok[@]}/$#"
+    [ "${#done_failed[@]}" -gt 0 ] && log 0 "  nietkniete (odmowa lub awaria przed zniszczeniem): ${done_failed[*]}"
+    if [ "${#done_changed[@]}" -gt 0 ]; then
+        log 0 "  ZMIENIONE I NIEDOKONCZONE -- wymagaja czlowieka: ${done_changed[*]}"
+        return 2
+    fi
+    [ "${#done_failed[@]}" -eq 0 ] || return 1
+    return 0
+}
+
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -3027,6 +3124,18 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     # It is NOT preservation and must never be described as such: it is part of
     # the set the execution step destroys by name. It is a measurement, and the
     # operator text says measurement.
+    # THE READ-ONLY HALF ENDS HERE. Everything above resolved the
+    # relationship, picked the recovery point, chose a strategy and ran every
+    # refusal; the snapshot below is the first thing this verb changes.
+    #
+    # The relation-level policy pre-flights each dataset by running exactly
+    # that prefix and stopping at this line, so its refusals ARE these
+    # refusals -- same code, same texts, no second copy to drift. Set only by
+    # restore_replace_preflight, never by an operator.
+    if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
+        return 0
+    fi
+
     local stamp="$$-$(date +%s)-${RANDOM}"
     local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
 
