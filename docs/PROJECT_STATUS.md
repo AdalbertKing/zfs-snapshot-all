@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b72575e5c2fa4548 -->
+<!-- status-covers-digest: 9d3ddbd60ac450d4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4348,6 +4348,25 @@ rozumowanie, ktore ma glosno paść, gdy przestanie byc prawdziwe.
 nazywa kazde polecenie powyzej 1000 bajtow z jego dlugoscia. Diagnoza PO
 awarii, nigdy bramka przed nia -- wlasny limit zmyslony przed czasem odrzucalby
 linie, ktore inny cron by przyjal.
+
+#### I drugi raz to samo: bit wykonywalnosci
+
+`zfs-job.sh` poszedl na main jako **100644**. Wdrozyl sie na cztery wydania
+jako `-rw-r--r--`, a wygenerowana linia crona wywoluje go BEZPOSREDNIO -- kazde
+zarzadzane zadanie na kazdym hoscie padloby na `Permission denied`. Nie jedno
+zadanie: wszystkie, bo koperta jest wspoldzielona.
+
+Ten box to Git Bash na Windowsie: drzewo robocze nie niesie bitu do zapisania,
+wiec `chmod +x` przed `git add` nie zmienia niczego w indeksie, a `test -x`
+lokalnie przechodzi. Trzeba `git update-index --chmod=+x`.
+
+**Projekt juz to wiedzial** -- `impact.sh` ma kontrole "declared suites exist
+and are executable", ktorej komentarz opisuje dokladnie ten mechanizm. Byla
+zastosowana tylko do SUIT. Rozszerzona teraz na wdrazane skrypty, z regula
+"shebang plus nie `lib-*.sh` znaczy 100755", i **od razu zlapala zastany
+przypadek**: `zfs-restore.sh` mial 100644. Dzis dziala, bo `zfs-backup.sh` wola
+go przez `exec bash`, ale plik z shebangiem deklaruje, ze ma byc uruchamiany
+wprost, i pierwsze takie wywolanie by go wywrocilo.
 
 #### Przy okazji: `.gitignore` odmowil dodania nowego skryptu
 
