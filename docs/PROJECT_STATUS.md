@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 330a8e8f073868e2 -->
+<!-- status-covers-digest: 39c0632abeb83213 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1334,6 +1334,33 @@
   przez `exec` do `zfs-restore.sh`, oba wejścia dowiedzione bajt w bajt
   identyczne. `test/restore` źródłuje odtąd `zfs-restore.sh`; macierz CI
   wyprowadza się z `deps.conf`, więc suita zostaje w CI bez zmian workflow.
+
+- **Restore destruktywny: polityka relacji nad wieloma datasetami — D+B
+  (decyzja właściciela, 2026-08-30).** Silnik niszczący brał zawsze JEDEN
+  dataset, a relacja obejmuje ich kilka; nigdzie nie było powiedziane, co robi
+  bieg po pięciu, gdy trzeci odpada. Teraz jest to jedno zachowanie, wewnętrzne
+  (publicznych drzwi nadal nie ma — gramatyka CLI to wisząca decyzja
+  właściciela):
+  **D** — najpierw pre-flight CAŁEGO zakresu, zatrzymany dokładnie na linii,
+  gdzie kończy się czytanie, przed pierwszą mutacją; jeżeli którykolwiek dataset
+  nie da się odtworzyć, bieg odmawia i wymienia **wszystkie** złe, nie pierwszy
+  z brzegu. Pre-flight uruchamia **ten sam kod**, nie kopię decyzji
+  (`RESTORE_PREFLIGHT_ONLY=1` na tej samej funkcji), więc jego odmowy *są*
+  odmowami wykonania i nie mogą się z nimi rozjechać.
+  **B** — po przejściu pre-flightu wykonanie NIE zatrzymuje się na awarii;
+  oddaje to, co da się oddać. Trzy stany są trzymane osobno, bo nie są stopniami
+  tego samego: `odtworzone`, `nietkniete` (odmowa lub awaria PRZED zniszczeniem)
+  i `ZMIENIONE I NIEDOKONCZONE` — dataset, którego niszczenie ruszyło, a
+  transfer się urwał. Ostatni jest jedynym wymagającym człowieka i **wygrywa w
+  kodzie wyjścia** (2), żeby nie utonął w liczniku.
+  Dowód: `test/restore/relpolicy.sh` 11/11, plus **dwie kontrole negatywne**,
+  każda zabijająca dokładnie swoją połowę i nic poza nią — drzewo bez pętli
+  pre-flightu wywala 5 przypadków D i zero B; drzewo zatrzymujące się na
+  pierwszej awarii wywala 5 przypadków B i zero D. Sekcja mieszka w osobnym
+  pliku (źródłowanym przez `test/restore/run.sh`, więc liczba przypadków suity
+  bez zmian) **wyłącznie po to**, żeby kontrola negatywna kosztowała sekundy
+  przez `ZB=`, a nie dziesięć minut całej baterii — kontrola, która tyle kosztuje,
+  przestaje być uruchamiana.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
