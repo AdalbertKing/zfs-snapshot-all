@@ -4962,6 +4962,21 @@ cmd_run_replicas() {
     local block rc=0 n=0
     block="$(gencron_as_target -c "$config")" \
         || die "run-replicas: the config could not be rendered -- nothing was run"
+    # THE BLOCK NAMES ITS LONG PATHS ONCE, and cron is what normally puts those
+    # names in the environment. This runs the same line WITHOUT cron, so the
+    # assignments have to be carried across or `$ZSA_REPO/zfs-media-gate.sh`
+    # becomes `/zfs-media-gate.sh` and the job runs nothing at all.
+    #
+    # Exported from the rendered block itself rather than rebuilt from this
+    # script's own idea of the paths: the block is what would run, and the two
+    # must not be able to disagree.
+    local _vline
+    while IFS= read -r _vline; do
+        [ -n "$_vline" ] || continue
+        export "${_vline%%=*}=${_vline#*=}"
+    done <<EOF
+$(printf '%s' "$block" | grep -E '^ZSA_[A-Z]+=')
+EOF
     # The replica lines and only those: a bracketed job is a replica by
     # construction, because media_bracket is the only thing that emits one.
     while IFS= read -r line; do

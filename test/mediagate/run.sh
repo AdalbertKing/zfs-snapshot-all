@@ -867,6 +867,32 @@ else
 fi
 SRC_SNAP_tank_other="replica_s2"
 
+# M7. THE COMMA LIST IS THE SAME THING SAID SHORTER, and it exists for a
+#     measured reason: the generated cron line is checked against cron's
+#     1000-byte command limit, and `--source ` in front of every dataset, twice
+#     per line, is 18 bytes per source spent on nothing. Measured on pve9
+#     2026-08-30 -- the ONE-source replica line was already 934 characters and
+#     a second source took it to 1160, which cron refused outright.
+#
+#     M7b is the carrying case: the comma form must be as strict as the
+#     repeated form, not merely accepted.
+SRC_SNAP_tank_other="replica_s2"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src,tank/other --prefix replica_)"; rc=$?
+check "M7: a comma list skips exactly as two --source flags do" "1" "$rc"
+check "M7: ...and the pool was never imported" "" "$(cat "$IMPORTED_LOG")"
+
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s1\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src,tank/other --prefix replica_)"; rc=$?
+check "M7b: A COMMA LIST IS AS STRICT: one member behind -> IMPORTED" "0" "$rc"
+has "tank/other" "$out" && ok "M7b: ...naming the member that is behind" \
+                        || bad "M7b: ...naming the member that is behind" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 unset SRC_TREE_tank_src SRC_TREE_tank_other SRC_SNAP_tank_src SRC_SNAP_tank_other
 unset SRC_WRITTEN_tank_src SRC_WRITTEN_tank_other

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7bba5cc59cbbc29c -->
+<!-- status-covers-digest: 74ca9597fb86de78 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4151,6 +4151,56 @@ opisac tylko jedno z nich.
 Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
 wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
 linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### CALY ESTATE STAL NA 85-93% TWARDEGO LIMITU CRONA (2026-08-30)
+
+Znalezione przez wdrozenie, nie przez suite. Druga replika nie dala sie
+zainstalowac -- `crontab(1)` odmowil, a wywolujacy zglosil tylko rollback bez
+przyczyny. Prawdziwym powodem bylo `command too long`: vixie-cron przyjmuje
+polecenie do **1000 bajtow**.
+
+Zmierzone na pve9, na **zwyklym** wdrozeniu z dwoma relacjami:
+
+| linia | znakow polecenia | zapas |
+|---|---|---|
+| backup `snapget` (src9) | 890 | 110 |
+| backup `snapget` (src8) | 889 | 111 |
+| przycinanie zrodla, z flagami ssh | 846 | 154 |
+| replika, JEDNO zrodlo | 934 | 66 |
+| replika, DWA zrodla | 1160 | **-160, odmowa** |
+
+To nie jest problem repliki. Dluzsza nazwa hosta, glebsza sciezka datasetu albo
+jedna flaga ssh wiecej i **zwykle zadanie backupu przestaje sie instalowac**, z
+tym samym nieczytelnym komunikatem.
+
+**Naprawa.** Tluste sa sciezki: katalog repozytorium wystepuje w linii repliki
+trzy razy, log cztery, skrypt powiadomien raz. Cron eksportuje wlasne
+przypisania zmiennych z crontaba do srodowiska zadania, a powloka je rozwija --
+**zmierzone na pve9, nie zalozone**. Blok nazywa je wiec raz:
+
+```
+ZSA_REPO=/root/scripts/zfs-snapshot-all
+ZSA_LOG=/root/scripts/cron.log
+ZSA_NOTIFY=/root/scripts/notify-fail.sh
+ZSA_WARN=/root/scripts/notify-warn.sh
+```
+
+Kupuje to ~140 bajtow na linii i nie kosztuje nic w czasie biegu. Replika z
+dwoma zrodlami zeszla z 1051 do **901**.
+
+Dodatkowo, ta sama runda: lista po przecinku zamiast powtarzanego `--source`
+(18 bajtow na zrodlo, dwa razy w linii) i **petla** zamiast powtarzania calego
+wywolania silnika (~130 bajtow na zrodlo wobec ~27 za jeszcze jeden cytowany
+dataset).
+
+`cron_write` **diagnozuje** teraz odmowe zamiast ja tylko przekazywac: po
+niepowodzeniu przeglada wejscie i nazywa kazde polecenie powyzej 1000 bajtow z
+jego dlugoscia. Diagnoza PO awarii, nigdy bramka przed nia -- wlasny limit
+zmyslony przed czasem odrzucalby linie, ktore inny cron by przyjal.
+
+`run-replicas` eksportuje te przypisania z wyrenderowanego bloku przed
+uruchomieniem linii: wykonuje ja BEZ crona, wiec bez tego `$ZSA_REPO/...`
+staloby sie `/...` i zadanie nie uruchomiloby niczego.
 
 ### Audyt relacji mowil ALREADY GONE o zywych danych (2026-08-30)
 

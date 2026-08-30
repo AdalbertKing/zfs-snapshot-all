@@ -142,6 +142,7 @@ read_input() {
 }
 
 declare -a BLOCK_LINES=()
+ZSA_REPO="" ZSA_LOG="" ZSA_NOTIFY="" ZSA_WARN=""
 extract_block() {
     local text in_block=0 line
     text="$(read_input)" || die "failed to read input"
@@ -153,6 +154,28 @@ extract_block() {
         [ "$in_block" -eq 1 ] || continue
         [[ "$line" == "# Source:"* ]] && continue
         [ -z "$(trim "$line")" ] && continue
+        # THE BLOCK NAMES ITS LONG PATHS ONCE.
+        #
+        # gen-cron.sh emits `ZSA_REPO=`, `ZSA_LOG=`, `ZSA_NOTIFY=` and
+        # `ZSA_WARN=` ahead of the jobs and writes `$ZSA_REPO/snapget.sh` in
+        # the commands, because cron refuses a command over 1000 bytes and an
+        # ordinary two-relationship host was already at 890. Every parser below
+        # matches on real paths, so the assignments are collected here and put
+        # back before anything else sees the line -- textually, and only for
+        # these four names, so nothing else in the command is touched.
+        #
+        # A crontab written before this exists carries no assignments and no
+        # `$ZSA_` either, so it takes this path unchanged.
+        case "$line" in
+            ZSA_REPO=*)   ZSA_REPO="${line#ZSA_REPO=}";     continue ;;
+            ZSA_LOG=*)    ZSA_LOG="${line#ZSA_LOG=}";       continue ;;
+            ZSA_NOTIFY=*) ZSA_NOTIFY="${line#ZSA_NOTIFY=}"; continue ;;
+            ZSA_WARN=*)   ZSA_WARN="${line#ZSA_WARN=}";     continue ;;
+        esac
+        [ -n "$ZSA_NOTIFY" ] && line="${line//\$ZSA_NOTIFY/$ZSA_NOTIFY}"
+        [ -n "$ZSA_WARN" ]   && line="${line//\$ZSA_WARN/$ZSA_WARN}"
+        [ -n "$ZSA_REPO" ]   && line="${line//\$ZSA_REPO/$ZSA_REPO}"
+        [ -n "$ZSA_LOG" ]    && line="${line//\$ZSA_LOG/$ZSA_LOG}"
         BLOCK_LINES+=("$line")
     done <<< "$text"
     [ "${#BLOCK_LINES[@]}" -gt 0 ] || die "no '$MARKER_BEGIN_PREFIX' ... '$MARKER_END' block found in the input"
@@ -425,28 +448,48 @@ unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
     # share one import/export window:
     #
     #   one     CMD; m=$?
-    #   several m=0; CMD; r=$?; [ $m -eq 0 ] && m=$r; CMD; r=$?; [ $m -eq 0 ] && m=$r
+    #   several m=0; for s in "A" "B"; do CMD "$s" DST; r=$?; [ $m -eq 0 ] && m=$r; done
     #
     # The `elif` anchor is common to both; the old `; m=$?; elif` anchor was
     # not, and against the second shape it matched nothing and returned the
     # whole tail as if it were one engine call.
+    #
+    # A LOOP AND NOT THE CALL REPEATED, because the line is measured against
+    # cron's 1000-byte command limit: repeating the whole invocation costs
+    # ~130 bytes per source against ~27 for one more quoted dataset. Measured
+    # on pve9, 2026-08-30 -- the ONE-source line is already 934 characters.
     local inner="${cmd#*; then }"
     inner="${inner%%; elif [ \$a -eq 1 ]*}"
     [ -n "$inner" ] || return 1
     C_MEDIA_INNERS=()
-    local _marker='; r=$?; [ $m -eq 0 ] && m=$r'
     case "$inner" in
-        "m=0; "*)
-            local _rest="${inner#m=0; }" _piece
-            while [ -n "$_rest" ]; do
-                case "$_rest" in
-                    *"$_marker"*)
-                        _piece="${_rest%%"$_marker"*}"
-                        [ -n "$_piece" ] && C_MEDIA_INNERS+=("$_piece")
-                        _rest="${_rest#*"$_marker"}"
-                        _rest="${_rest#; }" ;;
-                    *)  C_MEDIA_INNERS+=("$_rest"); _rest="" ;;
+        'm=0; for s in '*)
+            local _list="${inner#m=0; for s in }"
+            local _body="${_list#*; do }"
+            _list="${_list%%; do *}"
+            # QUOTED, because `[ $m -eq 0 ]` in an unquoted pattern is a glob
+            # character class, not that text -- the first cut of this matched
+            # nothing and handed the whole loop body to the engine parser.
+            local _tail='; r=$?; [ $m -eq 0 ] && m=$r; done'
+            _body="${_body%%"$_tail"*}"
+            [ -n "$_body" ] || return 1
+            # The list is `"A" "B" "C"`. Split on the quotes rather than on
+            # whitespace: this is the one place a dataset name arrives quoted,
+            # and unquoting by hand is how a name would get mangled.
+            local _one _srcs=()
+            while [ -n "$_list" ]; do
+                case "$_list" in
+                    \"*) _list="${_list#\"}"; _one="${_list%%\"*}"; _list="${_list#*\"}"
+                         [ -n "$_one" ] && _srcs+=("$_one")
+                         _list="${_list# }" ;;
+                    *) break ;;
                 esac
+            done
+            [ "${#_srcs[@]}" -gt 0 ] || return 1
+            # Put each source back where the loop variable stood, so the engine
+            # parsers below see the call they expect.
+            for _one in "${_srcs[@]}"; do
+                C_MEDIA_INNERS+=("${_body/\"\$s\"/\"$_one\"}")
             done ;;
         *)  C_MEDIA_INNERS+=("${inner%; m=\$?}") ;;
     esac

@@ -3085,13 +3085,12 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # One --source per dataset: the fast path is a conjunction over all of them
     # (a medium current for one source and behind on another must NOT skip), so
     # the gate has to be told each one.
+    # ONE flag carrying the comma list, not one flag per dataset. The line is
+    # measured against cron's 1000-byte command limit and appears twice
+    # (attach and detach), so a repeated `--source ` costs 18 bytes per source
+    # for nothing. The gate splits on commas; a ZFS name cannot contain one.
     local srcopt=""
-    if [ -n "$src" ] && [ -n "$pref" ]; then
-        local -a _bs=(); local _b
-        IFS=',' read -ra _bs <<< "$src"
-        for _b in "${_bs[@]}"; do [ -n "$_b" ] && srcopt="$srcopt --source $_b"; done
-        srcopt="$srcopt --prefix $pref"
-    fi
+    [ -n "$src" ] && [ -n "$pref" ] && srcopt=" --source $src --prefix $pref"
     # The caller may already have captured the engine status into $m -- a
     # replica with several sources folds N statuses into one, and only it knows
     # how. Everything else hands over a plain command and this adds the capture.
@@ -3298,11 +3297,20 @@ emit_replicas() {
             fi
             cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
         else
-            cmd="m=0"
-            for s in "${srcs[@]}"; do
-                one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$s" "$dst")"
-                cmd="$cmd; $one; r=\$?; [ \$m -eq 0 ] && m=\$r"
-            done
+            # A LOOP, not the engine call repeated. Same reason as the comma
+            # list above: cron refuses a command over 1000 bytes, and repeating
+            # the whole invocation costs ~130 bytes per source against ~27 for
+            # one more quoted dataset in the `for` list. Measured on pve9,
+            # 2026-08-30: the ONE-source line is already 934 characters, so the
+            # repeated form put two sources at 1160 and cron said
+            # "command too long".
+            local quoted=""
+            for s in "${srcs[@]}"; do quoted="$quoted \"$s\""; done
+            # replica_engine_cmd quotes its source argument, so passing the
+            # literal $s yields "$s" in the emitted line -- expanded by the
+            # shell cron runs it in, and quoted there, which is what we want.
+            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst")"
+            cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
             if [ "$media" = removable ]; then
                 cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
             else
@@ -3381,18 +3389,65 @@ generate_block() {
 # The same content WITHOUT the markers -- what lib-cron.sh installs, since the
 # markers are the library's business and it refuses a body carrying its own
 # (a nested marker would make the next block's extent ambiguous).
+# THE LINES ARE MEASURED AGAINST A HARD LIMIT, and the estate was already near
+# it. cron refuses a command over 1000 bytes and says only "command too long",
+# which reaches the operator as an install that rolled back for no stated
+# reason.
+#
+# Measured on pve9, 2026-08-30, on an ORDINARY two-source deployment -- not a
+# contrived one:
+#
+#     890  backup (snapget, one relationship)
+#     889  backup (the other)
+#     846  source-side prune, carrying its ssh flags
+#     934  replica, ONE source
+#
+# 85-93% of the ceiling. A longer hostname, a deeper dataset path or one more
+# ssh flag and a NORMAL backup job stops installing. A second source on the
+# replica took it to 1160 and cron refused it outright, which is how this was
+# found at all.
+#
+# The paths are the fat: the repo dir appears three times in a replica line and
+# twice in every other, the log four times, the notify script once. cron exports
+# a crontab's own variable assignments into each job's environment and the shell
+# that runs the command expands them (measured on pve9, not assumed), so naming
+# them once buys ~140 bytes per line and costs nothing at run time.
+#
+# The names are deliberately ugly and prefixed: they live in the operator's
+# crontab and must not collide with anything already there. They also remain in
+# scope for lines BELOW this block -- an unused variable, which is why the
+# values are paths and not behaviour.
+block_path_vars() {
+    [ -n "${REPO_DIR:-}" ]      && echo "ZSA_REPO=$REPO_DIR"
+    [ -n "${CRON_LOG:-}" ]      && echo "ZSA_LOG=$CRON_LOG"
+    [ -n "${NOTIFY_SCRIPT:-}" ] && echo "ZSA_NOTIFY=$NOTIFY_SCRIPT"
+    [ -n "${WARN_SCRIPT:-}" ]   && echo "ZSA_WARN=$WARN_SCRIPT"
+    return 0
+}
+
+# Longest value first, so a path that is a prefix of another cannot eat it.
+block_shorten() {
+    local s="$1"
+    [ -n "${NOTIFY_SCRIPT:-}" ] && s="${s//$NOTIFY_SCRIPT/\$ZSA_NOTIFY}"
+    [ -n "${WARN_SCRIPT:-}" ]   && s="${s//$WARN_SCRIPT/\$ZSA_WARN}"
+    [ -n "${REPO_DIR:-}" ]      && s="${s//$REPO_DIR/\$ZSA_REPO}"
+    [ -n "${CRON_LOG:-}" ]      && s="${s//$CRON_LOG/\$ZSA_LOG}"
+    printf '%s' "$s"
+}
+
 generate_block_body() {
     echo "# Source: $CONFIG -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
+    block_path_vars
     local line
-    for line in "${JOB_LINES[@]}"; do echo "$line"; done
+    for line in "${JOB_LINES[@]}"; do echo "$(block_shorten "$line")"; done
     if [ "${#JOB_LINES[@]}" -gt 0 ] && [ "${#RETAIN_LINES[@]}" -gt 0 ]; then
         echo ""
     fi
-    for line in "${RETAIN_LINES[@]}"; do echo "$line"; done
+    for line in "${RETAIN_LINES[@]}"; do echo "$(block_shorten "$line")"; done
     if { [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ]; } && [ "${#MONITOR_LINES[@]}" -gt 0 ]; then
         echo ""
     fi
-    for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
+    for line in "${MONITOR_LINES[@]}"; do echo "$(block_shorten "$line")"; done
     # NO DIGEST LINE HERE ANY MORE (2026-08-22). It used to be emitted at this
     # point, gated on `[ "${#MONITOR_LINES[@]}" -gt 0 ] && digest_script != none`,
     # and that gate is where pve9 went silent: 15 findings queued since the
