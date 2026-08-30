@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: facb0b0e6933b375 -->
+<!-- status-covers-digest: 776fc6b8f60ef2f9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4189,6 +4189,16 @@ ktore o to nie prosily; kontrola w suicie pilnuje wlasnie tego.
 
 Suita `stagger` miala dwadziescia przypadkow i **ani jednego** patrzacego na
 przycinanie zrodla. Teraz 26/0, 25/1 bez linii emitujacej.
+
+Pierwsze podejscie do tej naprawy **zepsulo emisje sekcji** i CI powiedzialo to
+w najuczciwszy mozliwy sposob -- padnieciem KONTROLI (`96x control: a readable
+fragment still produces the source prune section`).
+`emit_remote_source_prune` konczy sie **zmienna lista datasetow**, wiec czwarty
+argument pozycyjny przed ta lista zjada pierwszy DATASET: lista wychodzi pusta,
+`[ "$#" -gt 0 ] || return 0` odpala i sekcja nie powstaje w ogole. Poprawione
+tak, zeby ten blad byl niemozliwy, a nie tylko cofniety: `--schedule=EXPR`,
+parsowane po argumentach stalych. Nazwa datasetu nigdy tak nie wyglada, a
+wywolanie bez flagi zachowuje sie jak dotad.
 
 ### NOSNIK Z CUDZA LINIA JEST ODMAWIANY, TYMI SLOWAMI (2026-08-30)
 
