@@ -365,6 +365,28 @@ attach)
     # slot, the snapshot it recorded is still the newest of the family, and
     # nothing has been written since. Anything else -- no record, unreadable,
     # a different disk, an older snapshot -- imports and lets the engine decide.
+    # COUNTED BEFORE ANY GUID IS CONSULTED, and that ordering is the whole
+    # point. REV-20260829-126 round 2: this block used to sit AFTER the
+    # no-work fast path below, so with a current per-medium record the gate
+    # read scan_guid() -- which prints the FIRST candidate and exits -- matched
+    # it, and returned SKIPPED without ever reaching the refusal. Two disks in
+    # at once then produced a silent skip attributed to whichever one ZFS
+    # happened to list first.
+    #
+    # My own live check missed it because I ran it with NO record: the fast
+    # path never fired, control reached the refusal, and the refusal worked.
+    # The preconditions are what make the ordering visible.
+    # AMBIGUITY IS A REFUSAL, NOT A CHOICE. Rotated media are usually identical
+    # disks holding a pool of the same name, and if two are plugged in at once
+    # `zpool import` sees two candidates. Picking one would mean writing this
+    # replica onto whichever disk ZFS happened to list first -- and the operator
+    # would have no way to know which.
+    cand="$(zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
+    if [ "$cand" -gt 1 ]; then
+        say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
+        emit ambiguous; exit 2
+    fi
+
     # WITH SEVERAL SOURCES EVERY ONE OF THEM HAS TO BE QUIET AND PROVED.
     # The job copies all of them in one window, so one source with work to do
     # is reason enough to open it -- and one source this medium is behind on is
@@ -447,16 +469,6 @@ EOF
         emit present_not_ours; exit 0
     fi
 
-    # AMBIGUITY IS A REFUSAL, NOT A CHOICE. Rotated media are usually identical
-    # disks holding a pool of the same name, and if two are plugged in at once
-    # `zpool import` sees two candidates. Picking one would mean writing this
-    # replica onto whichever disk ZFS happened to list first -- and the operator
-    # would have no way to know which.
-    cand="$(zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
-    if [ "$cand" -gt 1 ]; then
-        say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
-        emit ambiguous; exit 2
-    fi
 
     if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "$POOL" 2>/dev/null; then
         last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
@@ -567,8 +579,25 @@ EOF
             say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"
             say "  the source is at:  $(printf '%s' "$_ssnaps" | tail -1)"
             say "  Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r $_tgt' and let the next run seed afresh. This tool will not choose between somebody's two backups."
-            bounded_export >/dev/null 2>&1 || :
-            rm -f "$OURS" 2>/dev/null || :
+            # THE MARKER GOES ONLY IF THE EXPORT REALLY HAPPENED.
+            #
+            # REV-20260829-126 F2. This ran `bounded_export || :` and then
+            # deleted $OURS unconditionally -- treating an ATTEMPT as a success.
+            # When export fails or hits the timeout the pool stays imported
+            # while the ownership evidence is gone, so the bracket's detach can
+            # no longer prove this run imported it and must not export it. A
+            # temporary failure became a permanently imported removable pool
+            # with no retry path.
+            #
+            # Ownership evidence may be cleared only after export is KNOWN to
+            # have succeeded; otherwise the marker stays, so detach can finish
+            # the job, and the operator gets the same DO NOT UNPLUG warning
+            # every other failed export emits.
+            if bounded_export >/dev/null 2>&1; then
+                rm -f "$OURS" 2>/dev/null || :
+            else
+                say "DO NOT UNPLUG '$POOL': the refusal above stands, but exporting the pool afterwards did not succeed, so it is STILL IMPORTED. The ownership marker is kept so this run's detach can export it; pulling the disk now can hang this host."
+            fi
             emit lineage_mismatch; exit 2
         done
     fi
