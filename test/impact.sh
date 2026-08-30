@@ -278,6 +278,28 @@ verify() {
         fi
     done
 
+    echo "== every shipped script the hosts EXECUTE is executable in the index"
+    # THE SAME LESSON AS THE SUITE CHECK ABOVE, and it took a live near-miss to
+    # notice it was only half applied. zfs-job.sh went to main as 100644,
+    # deployed to four checkouts as -rw-r--r--, and the generated cron line
+    # invokes it DIRECTLY: every managed job on every host would have failed
+    # with Permission denied. Not one job -- all of them, because the envelope
+    # is shared.
+    #
+    # A shebang is the file SAYING it is meant to run directly, so that is the
+    # rule: shebang, not a lib-*.sh (those are sourced), therefore 100755. The
+    # INDEX mode, never the working copy: git on Windows records no exec bit,
+    # so `chmod +x` before `git add` changes nothing and `test -x` passes
+    # locally while the host gets a file it cannot run.
+    local _m _f
+    while read -r _m _ _ _f; do
+        case "$_f" in lib-*.sh) continue ;; esac
+        head -1 "$REPO/$_f" 2>/dev/null | grep -q "^#!" || continue
+        [ "$_m" = 100755 ] && continue
+        echo "  NOT EXECUTABLE IN THE INDEX: $_f (mode $_m) -- it has a shebang, so a host will try to run it directly. Fix with: git update-index --chmod=+x $_f"
+        rc=1
+    done < <(git -C "$REPO" ls-files -s "*.sh" 2>/dev/null | grep -v "/")
+
     echo "== CI runs every suite that needs nothing but bash"
     # The workflow used to name its suites inline, under a comment asserting the
     # list equalled the `needs = nothing` set. It did not -- 7 against 29 -- and
