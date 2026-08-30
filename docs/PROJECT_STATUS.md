@@ -4227,6 +4227,44 @@ i nie wolno go ruszac -- kontrola N2 istnieje wlasnie po to.
 
 mediagate 134/0, 126/8 z odwroconym warunkiem.
 
+### WARSTWA POMIAROWA JEST KOMPLETNA -- dwa moje bledne zgloszenia (2026-08-30)
+
+Zglosilem wlascicielowi dwie luki, ktorych nie ma. Obie sa tu opisane, bo
+wersja z lukami zdazyla trafic do jego decyzji.
+
+**Objetosci i przepustowosc SA zapisywane.** Czytalem 119 rekordow `progress`,
+naliczylem `wire_bytes > 0` w zerze przypadkow i `rate_bps > 0` w zerze, i
+uznalem, ze pola sa w schemacie, ale nikt ich nie wypelnia.
+`progress_watch` tyka **co 2 sekundy**, a kazdy transfer w mojej probie trwal
+0-1 s i niosl kilka MB. Jeden bieg na 600 MB rozstrzygnal:
+
+```
+total_bytes = 630279464   done_bytes = 551425752
+wire_bytes  = 617611264   rate_bps   = 116537608   (6 s)
+```
+
+Dwa podsekundowe datasety w TYM SAMYM biegu zostaly na zerach, dokladnie jak z
+projektu wynika. `done_bytes` to co silnik wepchnal w rure, `wire_bytes` to co
+wyszlo z hosta -- roznica jest kompresja; `-1` znaczy "niemierzalne tutaj"
+(push trzyma swoj mbuffer po STRONIE ZDALNEJ), nigdy 0, zeby brak pomiaru nie
+czytal sie jako bezczynne lacze.
+
+**Rekordy SA sprzatane.** `progress_reap()` jest wolana przez OBA silniki przy
+kazdym biegu, trzyma 7 dni i pomija rekordy w stanie `running`. Najstarszy
+rekord na hoscie mial rowno siedem dni -- to byl dzialajacy sprzatacz, ktory
+przeczytalem jako jego brak, bo grepowalem slowa, ktorych sie spodziewalem
+(`clean`, `prune`, `rm -f`), zamiast rzeczy (`progress_`).
+
+Zapisane w bledniku jako **E24, pod R6**: zero, pusty grep i brakujace pole to
+tez odczyty, a odczyt jest dowodem tylko wobec kontroli, ktora dalaby wynik
+przeciwny.
+
+**Co z tego zostaje dla GUI:** warstwa danych jest gotowa i nie wymaga zmian.
+`ZFS-JOB BEGIN/END` daje czas i `rc` per zadanie z pelna historia, a
+`progress --json` daje per dataset tryb, czas, objetosc i przepustowosc -- dla
+transferow dluzszych niz tick, czyli dla wszystkich, ktore w GUI kogokolwiek
+zainteresuja.
+
 ### `--commit-scope` I `--leave` -- DYSPOZYTORY PRZENIESIONE (2026-08-30)
 
 `deploy.sh --commit-scope=LABEL` byl **martwy na main**. Zmierzone na pve2,
