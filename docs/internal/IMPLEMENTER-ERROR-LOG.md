@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15.*
+*Evidence: E3, E9, E15, E24.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -656,3 +656,47 @@ host-to-host, it is IDENTITY. State which account and which key a probe used,
 because "cannot connect" is meaningless without it. Before reporting a link
 broken, find the job that uses it and run what IT runs. If no job uses the path
 being probed, that is the finding -- not the refusal.
+
+### E24 — I called two working mechanisms missing, from readings of zero
+
+**Genesis.** Closing the lab round I handed the owner three open items. Two of
+them were mine, not the package's.
+
+*"Objetosci i przepustowosci nie ma."* I read 119 progress records and counted:
+
+    wire_bytes  > 0 :  0 / 119
+    rate_bps    > 0 :  0 / 119
+
+and reported that the schema has the fields but nothing fills them — a gap to
+close before the GUI. **The mechanism is complete.** `progress_watch` parses
+`size`/progress lines for total and done, reads mbuffer's own log for wire, and
+computes rate between ticks. It ticks every 2 seconds; every transfer in my
+sample lasted 0-1 second and moved a few MB. One 600 MB run settled it:
+
+    total_bytes = 630279464   done_bytes = 551425752
+    wire_bytes  = 617611264   rate_bps   = 116537608   (6 s)
+
+and the two sub-second datasets in the SAME run stayed at zero, exactly as the
+design implies.
+
+*"Rekordy rosna bez ograniczenia."* I grepped for cleanup patterns, found
+nothing, and extrapolated to ~100k files a year. `progress_reap()` exists, is
+called by BOTH engines on every run, keeps 7 days and skips records still
+running. The oldest record on the host was seven days old — the reaper
+working, which I read as its absence.
+
+**Cause.** A reading of zero is a reading, and I treated it as a fact about the
+code. I never asked what a NON-zero would have required: a transfer longer than
+the sampler's tick, and a file older than the reaper's window. Neither existed
+in anything I looked at. The grep for the reaper was the same mistake in the
+other direction — I searched for words I expected (`clean`, `prune`, `rm -f`)
+instead of for the thing (`progress_`), and concluded from my own vocabulary.
+
+The cost was not only noise: I put both on the owner's list as work to do, and
+he approved doing it. Two of the three items he authorised did not exist.
+
+**Rule.** R6, from the other side. A zero, an empty grep and a missing field
+are results, and a result is evidence only against a control that would have
+produced the opposite. Before reporting a mechanism absent: build the case that
+should exercise it, and only then say what you saw.
+
