@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fd0d114b10ebe45f -->
+<!-- status-covers-digest: 7bba5cc59cbbc29c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4105,12 +4105,71 @@ pliku INI i nie da sie mu kazac wkleic `zpool create`.
 
 | czasownik | co robi |
 |---|---|
-| `add-replica NAZWA --source= --dst= [...]` | **upsert** sekcji `[replica:]`; domyslnie PLAN, `--install` podmienia config i crontab razem |
+| `add-replica NAZWA --source= [--source= ...] --dst= [...]` | **upsert** sekcji `[replica:]`; domyslnie PLAN, `--install` podmienia config i crontab razem |
 | `list-replicas [--json]` | inwentarz + zywy stan nosnika |
-| `remove-replica NAZWA [--install]` | zdejmuje zadanie; **kopii na nosniku nie rusza** |
+| `remove-replica NAZWA [--install] [--yes]` | zdejmuje zadanie; **kopii na nosniku nie rusza** |
 
 `--json` idzie ta sama konwencja co `progress --json`, ktore juz jest w tym
-projekcie zadeklarowane jako warstwa danych pod GUI.
+projekcie zadeklarowane jako warstwa danych pod GUI. Od 2026-08-30 niesie tez
+`"sources"` jako TABLICE obok surowego `"source"`, zeby front nie parsowal
+gramatyki configu.
+
+### Trzy wady znalezione przy rozbiorce labu (2026-08-30)
+
+Wszystkie trzy lezaly na drodze, ktora GUI musi przejsc.
+
+**Nie dalo sie usunac OSTATNIEJ repliki.** Config mial trzy, dwie zeszly,
+trzecia padla na `no send/prune/monitor rules resolved` -- i zadanie zostalo w
+harmonogramie, wskazujac na skasowany dataset. Ta straz jest sluszna, gdy ktos
+podaje generatorowi oprozniony config, i bledna jako odpowiedz na „usun ostatnie
+zadanie", gdzie pustka JEST wynikiem. `remove-client` rozwiazal to samo dawno
+temu, wiec `remove-replica` uzywa jego odpowiedzi: najpierw `cron_block_remove`,
+potem podmiana configu -- w tej kolejnosci, bo odwrotna zostawia config
+opisujacy zero zadan przy zywych liniach crona.
+
+**`--yes` dzialalo, ale nie bylo w pomocy.** `--install` czytalo `/dev/tty`,
+czego nie wysteruje ani cron, ani `ssh -T`, ani front.
+
+**Replika niosla tylko JEDEN dataset**, a druga sekcja `[replica:]` na ten sam
+dysk jest odmawiana z dobrego powodu (dwa zadania dzielace pule eksportuja ja
+sobie spod rak w trakcie zapisu). Teraz `--source` jest powtarzalne, pole
+`source` jest lista, a N wywolan silnika idzie w **JEDNA** klamre
+import/eksport: oknem jest ekspozycja, wiec klamra na kazde zrodlo osobno
+otwieralaby N okien, nie oszczedzajac nic.
+
+Zlozony status to **pierwszy niezerowy wygrywa** -- `m` trafia do
+`detach --engine-rc`, a zero tam przesuwa zapis mowiacy, ze ten nosnik jest
+aktualny. Jeden dataset, ktory sie nie skopiowal, to jeden dataset, dla ktorego
+nosnik aktualny NIE jest.
+
+Szybka sciezka bramki stala sie przez to koniunkcja: zrodla rozjezdzaja sie
+niezaleznie, wiec nosnik bywa aktualny dla jednego i tydzien do tylu dla
+drugiego. Pominiecie wymaga, by KAZDE zrodlo bylo ciche i KAZDE udowodnione na
+tym GUID-zie; zapis trzyma jedna linie na dataset, bo pojedyncze `snap=` moglo
+opisac tylko jedno z nich.
+
+Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
+wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
+linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### Audyt relacji mowil ALREADY GONE o zywych danych (2026-08-30)
+
+Ta sama rozbiorka, inne narzedzie. `clean-relationships.sh` na pve1 wypisal:
+
+```
+data  hdd/labsrc hdd/labsrc/vm-900-disk-0 hdd/labsrc/vm-900-disk-1  (ALREADY GONE)
+```
+
+Wszystkie trzy istnialy. Rekord po stronie ZRODLA nie jest `%q`-cytowany tak jak
+kolektora: `PEER_JOIN_GRANTED_DATASETS="a b c"` -- w cudzyslowie, przez GOLE
+spacje. Rozdzielacz znal `\ ` i przecinek, wiec trzy nazwy poszly do `zfs list`
+jako jedna i wrocily jako nieobecne.
+
+Kierunek awarii jest tym zlym: to jest raport, na ktorym czlowiek sprzatajacy
+hosta podejmuje decyzje, powiedzial mu ze danych juz nie ma, a purge czyta to
+samo pole. Wlasny komentarz pliku od dawna stwierdzal, ze legalna nazwa ZFS nie
+moze zawierac spacji -- wniosek, ze gola spacja ZAWSZE jest rozdzielaczem, nigdy
+nie zostal wyciagniety.
 
 ### Cztery stany nosnika, nie dwa
 

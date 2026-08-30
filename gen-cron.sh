@@ -2399,15 +2399,39 @@ build_replica_section() {
         ''|*[!A-Za-z0-9._-]*) die "[replica:$name]: the name is a label for the medium -- letters, digits, dot, dash, underscore only (it becomes the notify text and the media gate's state file name)" ;;
     esac
 
+    # SOURCE IS A LIST. One medium often holds more than one thing worth
+    # keeping, and the alternative -- a second [replica:] section onto the same
+    # disk -- is refused on purpose by add-replica's one-medium-one-replica
+    # check, because two jobs sharing a pool export it out from under each
+    # other mid-write. So the list belongs on the job.
+    #
+    # Comma-separated, the same list separator the rest of this config uses
+    # (monitor_exclude, the bookmark-prune scope list). Every entry is validated
+    # on its own: a typo in the second dataset must fail here, not at 02:30.
     ini_has "$sec" source || die "[replica:$name] has no 'source' -- name the dataset on THIS host to copy (a replica copies what we already hold; it does not reach for a remote)"
     local source; source="$(ini_get "$sec" source)"
-    case "$source" in
-        */*) ;;
-        *) die "[replica:$name]: source='$source' is a pool name, not a dataset -- name the dataset to copy" ;;
-    esac
-    case "$source" in
-        *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: source='$source' is not a valid ZFS dataset name" ;;
-    esac
+    local -a rsources=(); local _rs
+    IFS=',' read -ra rsources <<< "$source"
+    [ "${#rsources[@]}" -gt 0 ] || die "[replica:$name]: source is empty"
+    for _rs in "${rsources[@]}"; do
+        [ -n "$_rs" ] || die "[replica:$name]: source='$source' has an empty entry -- a stray comma"
+        case "$_rs" in
+            */*) ;;
+            *) die "[replica:$name]: source='$_rs' is a pool name, not a dataset -- name the dataset to copy" ;;
+        esac
+        case "$_rs" in
+            *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: source='$_rs' is not a valid ZFS dataset name" ;;
+        esac
+    done
+    # THE SAME DATASET TWICE would send it twice into the same target in one
+    # run, the second send finding the first one's snapshot already there.
+    local _i _j
+    for ((_i=0; _i<${#rsources[@]}; _i++)); do
+        for ((_j=_i+1; _j<${#rsources[@]}; _j++)); do
+            [ "${rsources[_i]}" = "${rsources[_j]}" ] \
+                && die "[replica:$name]: source lists '${rsources[_i]}' twice"
+        done
+    done
 
     ini_has "$sec" dst || die "[replica:$name] has no 'dst' -- the base dataset on the target medium, e.g. usbrep1/replica"
     local dst; dst="$(ini_get "$sec" dst)"
@@ -2426,13 +2450,16 @@ build_replica_section() {
         *[!A-Za-z0-9._:/-]*|-*) die "[replica:$name]: dst='$dst' is not a valid ZFS dataset name" ;;
     esac
     # The source cannot be inside its own target, or every run would copy the
-    # previous run's copy.
-    case "$dst" in
-        "$source"|"$source"/*) die "[replica:$name]: dst='$dst' is inside source='$source' -- each run would copy the previous run's copy" ;;
-    esac
-    case "$source" in
-        "$dst"/*) die "[replica:$name]: source='$source' is inside dst='$dst' -- the target holds the source" ;;
-    esac
+    # previous run's copy. Checked per source: with a list it is the SECOND
+    # entry that a single check would wave through.
+    for _rs in "${rsources[@]}"; do
+        case "$dst" in
+            "$_rs"|"$_rs"/*) die "[replica:$name]: dst='$dst' is inside source='$_rs' -- each run would copy the previous run's copy" ;;
+        esac
+        case "$_rs" in
+            "$dst"/*) die "[replica:$name]: source='$_rs' is inside dst='$dst' -- the target holds the source" ;;
+        esac
+    done
 
     ini_has "$sec" schedule || die "[replica:$name] has no 'schedule'"
     local schedule; schedule="$(ini_get "$sec" schedule)"
@@ -3043,8 +3070,8 @@ emit_send() {
 # The pool is the first component of the target path -- that is what gets
 # imported, and the full path is passed as --dataset so the gate can tell an
 # absent disk from the WRONG disk in the slot.
-media_bracket() {   # <media field> <target path> <label> <command> [source] [prefix]
-    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}"
+media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status]
+    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}"
     [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
     [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
     local pool="${target%%/*}"
@@ -3054,15 +3081,29 @@ media_bracket() {   # <media field> <target path> <label> <command> [source] [pr
     # SOURCE, before the medium is touched at all. The window in which pulling
     # this disk can hang the host is exactly the window in which its pool is
     # imported, so a run with nothing to send should not open one.
+    #
+    # One --source per dataset: the fast path is a conjunction over all of them
+    # (a medium current for one source and behind on another must NOT skip), so
+    # the gate has to be told each one.
     local srcopt=""
-    [ -n "$src" ] && [ -n "$pref" ] && srcopt=" --source $src --prefix $pref"
+    if [ -n "$src" ] && [ -n "$pref" ]; then
+        local -a _bs=(); local _b
+        IFS=',' read -ra _bs <<< "$src"
+        for _b in "${_bs[@]}"; do [ -n "$_b" ] && srcopt="$srcopt --source $_b"; done
+        srcopt="$srcopt --prefix $pref"
+    fi
+    # The caller may already have captured the engine status into $m -- a
+    # replica with several sources folds N statuses into one, and only it knows
+    # how. Everything else hands over a plain command and this adds the capture.
+    local capture="; m=\$?"
+    [ "$caps" = "1" ] && capture=""
     # detach is told the ENGINE's status, and the source/prefix with it. That is
     # what lets it record -- while the pool is still imported, the only moment
     # its guid is readable -- which snapshot THIS medium now holds, and only
     # after a transfer that actually succeeded. REV-20260829-126 F1: without a
     # per-medium fact the no-work fast path skipped rotated media for ever.
-    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s; m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
-        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$gate" "$pool" "${label:-media}" "$srcopt"
+    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt"
 }
 
 job_cron_line() {
@@ -3226,16 +3267,64 @@ emit_monitor() {
 # one disk is out. That is the same reason 'media' sits in the send group key.
 emit_replicas() {
     local e name source dst schedule prefix notify media recursive hist flags cmd
+    local -a srcs=(); local s one
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
         IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags <<< "$e"
-        cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
-        [ "$recursive" = "1" ] && cmd="$cmd -R"
-        [ -n "$hist" ] && cmd="$cmd $hist"
-        [ -n "$flags" ] && cmd="$cmd $flags"
-        cmd="$cmd \"$source\" \"$dst\""
-        cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix")"
+        IFS=',' read -ra srcs <<< "$source"
+        # ONE ENGINE CALL PER SOURCE, ALL INSIDE ONE BRACKET.
+        #
+        # The shape depends on the count, and deliberately:
+        #
+        #   one source  ->  CMD; m=$?
+        #                   byte-identical to what every deployed host already
+        #                   carries. A list is a new capability; it is not a
+        #                   reason to rewrite every existing replica line.
+        #
+        #   several     ->  m=0; CMD; r=$?; [ $m -eq 0 ] && m=$r; CMD; r=$? ...
+        #                   THE FIRST NON-ZERO WINS. A later success must not
+        #                   mask an earlier failure: m is what detach is told
+        #                   through --engine-rc, and a zero there advances the
+        #                   record that says this medium is current. One
+        #                   dataset that failed to copy is one dataset the
+        #                   medium is NOT current for.
+        #
+        # Every source is still attempted even after one fails -- the same
+        # reason a flat -R send does not abort its siblings.
+        cmd=""
+        if [ "${#srcs[@]}" -le 1 ]; then
+            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst")"
+            if [ "$media" = removable ]; then
+                cmd="$cmd; m=\$?"
+            fi
+            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
+        else
+            cmd="m=0"
+            for s in "${srcs[@]}"; do
+                one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$s" "$dst")"
+                cmd="$cmd; $one; r=\$?; [ \$m -eq 0 ] && m=\$r"
+            done
+            if [ "$media" = removable ]; then
+                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
+            else
+                # NO BRACKET, so nothing else would carry the folded status out:
+                # the line's rc would be that of the last `[ $m -eq 0 ]` test,
+                # which is not the engines' verdict. A subshell that exits $m is
+                # the whole of what the bracket contributes here.
+                cmd="( $cmd; exit \$m )"
+            fi
+        fi
         JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
+}
+
+# One snapsend.sh call for one source of a replica job.
+replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst>
+    local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" c
+    c="$REPO_DIR/snapsend.sh -m \"$prefix\""
+    [ "$recursive" = "1" ] && c="$c -R"
+    [ -n "$hist" ] && c="$c $hist"
+    [ -n "$flags" ] && c="$c $flags"
+    printf '%s "%s" "%s"' "$c" "$src" "$dst"
 }
 
 emit_bookmark_prune() {

@@ -406,7 +406,7 @@ parse_notify_text() {
 C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""
 unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
     local cmd="$1"
-    C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""
+    C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""; C_MEDIA_INNERS=()
     case "$cmd" in
         "( "*"/zfs-media-gate.sh attach "*) ;;
         *) return 1 ;;
@@ -417,13 +417,41 @@ unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
     case "$head" in
         "--dataset "*) head="${head#--dataset }"; C_MEDIA_DATASET="${head%%;*}" ;;
     esac
-    # The engine sits between the `then` and the `; m=$?` that captures its
-    # status -- taken by those two anchors rather than by counting fields,
-    # because the engine's own arguments are quoted and contain spaces.
+    # The engine sits between the `then` and the `elif` -- taken by those two
+    # anchors rather than by counting fields, because the engine's own
+    # arguments are quoted and contain spaces.
+    #
+    # TWO SHAPES, because a replica job may name several sources and they all
+    # share one import/export window:
+    #
+    #   one     CMD; m=$?
+    #   several m=0; CMD; r=$?; [ $m -eq 0 ] && m=$r; CMD; r=$?; [ $m -eq 0 ] && m=$r
+    #
+    # The `elif` anchor is common to both; the old `; m=$?; elif` anchor was
+    # not, and against the second shape it matched nothing and returned the
+    # whole tail as if it were one engine call.
     local inner="${cmd#*; then }"
-    inner="${inner%%; m=\$?; elif*}"
+    inner="${inner%%; elif [ \$a -eq 1 ]*}"
     [ -n "$inner" ] || return 1
-    C_MEDIA_INNER="$inner"
+    C_MEDIA_INNERS=()
+    local _marker='; r=$?; [ $m -eq 0 ] && m=$r'
+    case "$inner" in
+        "m=0; "*)
+            local _rest="${inner#m=0; }" _piece
+            while [ -n "$_rest" ]; do
+                case "$_rest" in
+                    *"$_marker"*)
+                        _piece="${_rest%%"$_marker"*}"
+                        [ -n "$_piece" ] && C_MEDIA_INNERS+=("$_piece")
+                        _rest="${_rest#*"$_marker"}"
+                        _rest="${_rest#; }" ;;
+                    *)  C_MEDIA_INNERS+=("$_rest"); _rest="" ;;
+                esac
+            done ;;
+        *)  C_MEDIA_INNERS+=("${inner%; m=\$?}") ;;
+    esac
+    [ "${#C_MEDIA_INNERS[@]}" -gt 0 ] || return 1
+    C_MEDIA_INNER="${C_MEDIA_INNERS[0]}"
     return 0
 }
 
@@ -449,6 +477,22 @@ classify_lines() {
             if unwrap_media_bracket "$CMD"; then
                 CMD="$C_MEDIA_INNER"
                 parse_send_cmd "$CMD" || die "a removable-media job whose inner command is not snapsend.sh: $line"
+                # EVERY engine call in the bracket, folded back into the one
+                # section that produced them. They came from a single
+                # [replica:] so they must agree on everything except the
+                # source -- if they do not, this line was not written by
+                # gen-cron.sh and guessing which one is authoritative would be
+                # the wrong thing to do quietly.
+                local _rsrc="$C_SRC" _rdst="$C_DST" _rpref="$C_PREFIX" _rflags="$C_FLAGS" _k
+                for ((_k=1; _k<${#C_MEDIA_INNERS[@]}; _k++)); do
+                    parse_send_cmd "${C_MEDIA_INNERS[_k]}" \
+                        || die "a removable-media job whose inner command is not snapsend.sh: ${C_MEDIA_INNERS[_k]}"
+                    [ "$C_DST"    = "$_rdst"   ] || die "a replica bracket whose engine calls disagree on the target: '$_rdst' vs '$C_DST'"
+                    [ "$C_PREFIX" = "$_rpref"  ] || die "a replica bracket whose engine calls disagree on the snapshot prefix: '$_rpref' vs '$C_PREFIX'"
+                    [ "$C_FLAGS"  = "$_rflags" ] || die "a replica bracket whose engine calls disagree on the flags: '$_rflags' vs '$C_FLAGS'"
+                    _rsrc="$_rsrc,$C_SRC"
+                done
+                C_SRC="$_rsrc"; C_DST="$_rdst"; C_PREFIX="$_rpref"; C_FLAGS="$_rflags"
                 parse_notify_text "$NOTIFY" || die "cannot parse replica notify text: '$NOTIFY'"
                 # A crontab may hold replicas and nothing else -- a host that
                 # only carries copies of what it already has. Taken here rather

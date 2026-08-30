@@ -41,7 +41,11 @@ VERSION='v1.1'
 usage() {
     cat >&2 <<'EOF'
 Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--dir DIR]...
-                         [--source DS --prefix P] [--stats FILE] [--quiet]
+                         [--source DS]... [--prefix P] [--stats FILE] [--quiet]
+
+  --source is repeatable: one job may copy several datasets onto the same
+  medium, inside ONE import/export window. The no-work fast path then needs
+  every one of them quiet AND proved current on this medium.
 
   attach   import the pool if it is not already imported.
              0  the medium is here -- run the job
@@ -62,8 +66,16 @@ EOF
 # removable disk was reported "not here" while sitting in /root. Repeatable,
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
-_skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""
+_skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""; _src=""
 SOURCE=""; PREFIX=""; ENGINE_RC=""
+# --source is REPEATABLE. One replica job may copy several datasets onto the
+# same medium, and it must do so inside ONE import/export window: the window is
+# the exposure, so a job with three sources that bracketed each one separately
+# would open three windows to save nothing.
+#
+# SOURCE stays as the FIRST source purely so the existing messages keep naming
+# something concrete; every decision below reads SOURCES.
+SOURCES=()
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -76,8 +88,8 @@ while [ "$#" -gt 0 ]; do
         --dataset=*)  DATASET="${1#--dataset=}"; shift ;;
         --dir)        IMPORT_DIRS+=(-d "${2:-}"); shift 2 ;;
         --dir=*)      IMPORT_DIRS+=(-d "${1#--dir=}"); shift ;;
-        --source)     SOURCE="${2:-}"; shift 2 ;;
-        --source=*)   SOURCE="${1#--source=}"; shift ;;
+        --source)     SOURCES+=("${2:-}"); shift 2 ;;
+        --source=*)   SOURCES+=("${1#--source=}"); shift ;;
         --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
         --engine-rc=*) ENGINE_RC="${1#--engine-rc=}"; shift ;;
         --prefix)     PREFIX="${2:-}"; shift 2 ;;
@@ -92,6 +104,9 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
 case "$VERB" in attach|detach|status) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
+
+# SOURCE is the first one, for the messages that name a dataset.
+[ "${#SOURCES[@]}" -gt 0 ] && SOURCE="${SOURCES[0]}"
 
 # A pool name and a label both reach a shell command and a file path. Checked
 # here rather than assumed: this runs from cron with whatever the generator
@@ -154,10 +169,50 @@ scan_guid() {
 # The newest snapshot of the replica family on the source root. This is what a
 # successful run has just put on the medium, and what a later run compares
 # against to decide whether that medium is still current.
-newest_source_snap() {
-    [ -n "$SOURCE" ] && [ -n "$PREFIX" ] || return 1
-    zfs list -H -t snapshot -o name -d 1 "$SOURCE" 2>/dev/null \
+newest_source_snap() {   # [dataset] -- defaults to the first source
+    local _nds="${1:-$SOURCE}"
+    [ -n "$_nds" ] && [ -n "$PREFIX" ] || return 1
+    zfs list -H -t snapshot -o name -d 1 "$_nds" 2>/dev/null \
         | grep "@${PREFIX}" | tail -1 | sed 's/.*@//'
+}
+
+# What this medium last received, one line per source:
+#
+#     guid=<pool guid>
+#     snap:<dataset>=<snapshot name>
+#
+# One line per source and not one line for the job, because the sources advance
+# independently: a medium can be current for one dataset and a week behind on
+# another, and a single `snap=` could only ever describe one of them. Skipping
+# needs EVERY source proved, so the file has to be able to fail per source.
+#
+# A record written before this format (`snap=<name>`, no dataset) carries no
+# per-source fact, so it matches nothing and the medium is imported. That is
+# the same direction every other unreadable record takes -- one extra import
+# per medium, once.
+record_snap_for() {   # <dataset> -> the snapshot this medium was recorded holding
+    local _rds="$1"
+    [ -r "$SYNCED" ] || return 1
+    awk -v ds="snap:$_rds=" 'index($0, ds)==1 { print substr($0, length(ds)+1); found=1; exit } END{ exit !found }' "$SYNCED"
+}
+
+record_write() {   # <guid> -- every source, or nothing at all
+    local _wg="$1" _wds _ws _wtmp
+    [ -n "$_wg" ] || return 1
+    [ "${#SOURCES[@]}" -gt 0 ] || return 1
+    _wtmp="$SYNCED.new"
+    mkdir -p "$STATE_DIR" 2>/dev/null || return 1
+    : > "$_wtmp" 2>/dev/null || return 1
+    printf 'guid=%s\n' "$_wg" >> "$_wtmp" 2>/dev/null || { rm -f "$_wtmp"; return 1; }
+    for _wds in "${SOURCES[@]}"; do
+        _ws="$(newest_source_snap "$_wds")"
+        # A source with no snapshot of this family cannot be recorded as
+        # delivered. Write nothing rather than a partial record -- a partial
+        # one would let a later run skip on the sources it does name.
+        [ -n "$_ws" ] || { rm -f "$_wtmp"; return 1; }
+        printf 'snap:%s=%s\n' "$_wds" "$_ws" >> "$_wtmp" 2>/dev/null || { rm -f "$_wtmp"; return 1; }
+    done
+    mv -f "$_wtmp" "$SYNCED" 2>/dev/null || { rm -f "$_wtmp"; return 1; }
 }
 
 SYNCED="$STATE_DIR/$LABEL.synced"
@@ -293,10 +348,14 @@ attach)
     # slot, the snapshot it recorded is still the newest of the family, and
     # nothing has been written since. Anything else -- no record, unreadable,
     # a different disk, an older snapshot -- imports and lets the engine decide.
-    if [ -n "$SOURCE" ] && [ -n "$PREFIX" ]; then
-        _work=unknown
-        if zfs list -H -o name "$SOURCE" >/dev/null 2>&1; then
-            _work=no
+    # WITH SEVERAL SOURCES EVERY ONE OF THEM HAS TO BE QUIET AND PROVED.
+    # The job copies all of them in one window, so one source with work to do
+    # is reason enough to open it -- and one source this medium is behind on is
+    # reason enough not to skip, however current the others are.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
+        _work=no
+        for _src in "${SOURCES[@]}"; do
+            if ! zfs list -H -o name "$_src" >/dev/null 2>&1; then _work=unknown; break; fi
             while IFS= read -r _ds; do
                 [ -n "$_ds" ] || continue
                 _snap="$(zfs list -H -t snapshot -o name -d 1 "$_ds" 2>/dev/null | grep "@${PREFIX}" | tail -1)"
@@ -308,9 +367,10 @@ attach)
                     *) _work=yes; break ;;
                 esac
             done <<EOF
-$(zfs list -H -o name -r "$SOURCE" 2>/dev/null)
+$(zfs list -H -o name -r "$_src" 2>/dev/null)
 EOF
-        fi
+            [ "$_work" = no ] || break
+        done
         # A quiet source is necessary and NOT sufficient. Everything below is
         # about the medium, and every branch of it fails OPEN.
         if [ "$_work" = no ]; then
@@ -319,23 +379,33 @@ EOF
                 say "'$SOURCE' is quiet, but there is no record of what '$POOL' last received, so this run cannot tell a current medium from a rotated stale one. Importing to let the engine decide."
             else
                 _rec_guid="$(sed -n 's/^guid=//p' "$SYNCED" 2>/dev/null | head -1)"
-                _rec_snap="$(sed -n 's/^snap=//p' "$SYNCED" 2>/dev/null | head -1)"
                 _now_guid="$(scan_guid)"
-                _new_snap="$(newest_source_snap)"
-                if [ -z "$_rec_guid" ] || [ -z "$_rec_snap" ]; then
+                if [ -z "$_rec_guid" ]; then
                     say "the record of what '$POOL' last received is unreadable, so it proves nothing. Importing to let the engine decide."
                 elif [ -z "$_now_guid" ]; then
                     say "'$SOURCE' is quiet, but the medium for '$POOL' could not be identified without importing it. Importing rather than assuming it is the same disk."
                 elif [ "$_rec_guid" != "$_now_guid" ]; then
                     say "'$SOURCE' is quiet, but the disk in the slot (guid $_now_guid) is NOT the one this record describes (guid $_rec_guid) -- a rotated medium that may be behind. Importing to let the engine decide."
-                elif [ -z "$_new_snap" ] || [ "$_rec_snap" != "$_new_snap" ]; then
-                    say "'$SOURCE' is quiet, but this medium last received '${_rec_snap}' and the family is now at '${_new_snap:-unknown}' -- it is behind. Importing to bring it up."
                 else
+                    # Per source, and the first one that fails ends it. A record
+                    # written in the pre-multi-source format names no dataset,
+                    # so record_snap_for finds nothing and this imports.
                     _skip=yes
+                    for _src in "${SOURCES[@]}"; do
+                        _rec_snap="$(record_snap_for "$_src")" || _rec_snap=""
+                        _new_snap="$(newest_source_snap "$_src")"
+                        if [ -z "$_rec_snap" ]; then
+                            say "'$_src' is quiet, but this medium's record does not say what it holds for that dataset, so it proves nothing about it. Importing to let the engine decide."
+                            _skip=no; break
+                        elif [ -z "$_new_snap" ] || [ "$_rec_snap" != "$_new_snap" ]; then
+                            say "'$_src' is quiet, but this medium last received '${_rec_snap}' and the family is now at '${_new_snap:-unknown}' -- it is behind. Importing to bring it up."
+                            _skip=no; break
+                        fi
+                    done
                 fi
             fi
             if [ "$_skip" = yes ]; then
-                say "SKIPPED: this medium (guid $_now_guid) already holds '$_rec_snap', which is still the newest '$PREFIX' snapshot, and nothing has been written to '$SOURCE' since. Nothing to copy, so the disk is left alone -- every minute this pool is NOT imported is a minute it can be pulled safely."
+                say "SKIPPED: this medium (guid $_now_guid) is already current for every source of this job (${SOURCES[*]}), and nothing has been written to any of them since. Nothing to copy, so the disk is left alone -- every minute this pool is NOT imported is a minute it can be pulled safely."
                 emit skipped_nothing_to_do; exit 1
             fi
         fi
@@ -503,12 +573,10 @@ detach)
     # engine reported success. A run that skipped, failed, or was somebody else's
     # import leaves the record exactly as it was -- an unproved medium must never
     # be recorded as current.
-    if [ "$ENGINE_RC" = 0 ] && [ -n "$SOURCE" ] && [ -n "$PREFIX" ]; then
+    if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
         _now_guid="$(pool_guid)"
-        _new_snap="$(newest_source_snap)"
-        if [ -n "$_now_guid" ] && [ -n "$_new_snap" ]; then
-            mkdir -p "$STATE_DIR" 2>/dev/null && \
-                printf 'guid=%s\nsnap=%s\n' "$_now_guid" "$_new_snap" > "$SYNCED" 2>/dev/null || \
+        if [ -n "$_now_guid" ]; then
+            record_write "$_now_guid" || \
                 say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than trusting a record it does not have."
         fi
     fi

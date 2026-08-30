@@ -339,9 +339,12 @@ front end never edits the config file:
   zfs-backup.sh remove-media-trigger [--install]
                                     Take that opt-in back. Removes only the rule
                                     this tool wrote; cron entries are untouched.
-  zfs-backup.sh remove-replica NAME [--install]
+  zfs-backup.sh remove-replica NAME [--install] [--yes]
                                     Stops the job. The copy on that medium is left
-                                    alone -- it is still a copy.
+                                    alone -- it is still a copy. Removing the LAST
+                                    job in the config removes the whole managed
+                                    cron block: an empty schedule is a legal
+                                    outcome of a removal, not a broken config.
 
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
@@ -5073,12 +5076,20 @@ cmd_remove_media_trigger() {
     log "media trigger removed. Replicas now run only on their schedule; the cron entries are untouched."
 }
 
-cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
+cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [...]
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
     local config="" do_install=0 assume_yes=0 a _ans
+    # --source IS REPEATABLE, and also takes a comma list, so a front end can
+    # send either shape. One medium often holds more than one thing worth
+    # keeping, and a second [replica:] onto the same disk is refused further
+    # down for a good reason: two jobs sharing a pool export it out from under
+    # each other mid-write. The list belongs on the job.
+    local -a sources=() _sp=()
+    local _s1
     for a in "$@"; do
         case "$a" in
-            --source=*)    source="${a#*=}" ;;
+            --source=*)    IFS=',' read -ra _sp <<< "${a#*=}"
+                           for _s1 in "${_sp[@]}"; do [ -n "$_s1" ] && sources+=("$_s1"); done ;;
             --dst=*)       dst="${a#*=}" ;;
             --schedule=*)  sched="${a#*=}" ;;
             --prefix=*)    pref="${a#*=}" ;;
@@ -5109,9 +5120,17 @@ cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
             *)             if [ -z "$name" ]; then name="$a"; else die "add-replica: takes exactly one name; got a second: '$a'"; fi ;;
         esac
     done
-    [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET [--source=DATASET2 ...] --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
     case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
-    [ -n "$source" ] || die "add-replica: --source= names the dataset on THIS host to copy"
+    [ "${#sources[@]}" -gt 0 ] || die "add-replica: --source= names the dataset on THIS host to copy (repeat it for more than one)"
+    local _i _j
+    for ((_i=0; _i<${#sources[@]}; _i++)); do
+        for ((_j=_i+1; _j<${#sources[@]}; _j++)); do
+            [ "${sources[_i]}" = "${sources[_j]}" ] \
+                && die "add-replica: '${sources[_i]}' is named twice -- one run would send it into '$dst' twice"
+        done
+    done
+    source="$(IFS=,; printf '%s' "${sources[*]}")"
     [ -n "$dst" ]    || die "add-replica: --dst= names the base dataset on the medium, e.g. usbrep1/replica"
     # ONCE A NIGHT, AFTER THE DAILY TIER -- not hourly.
     #
@@ -5126,8 +5145,13 @@ cmd_add_replica() {   # <name> --source=DS --dst=POOL/BASE [...]
     [ -n "$sched" ]  || sched="30 2 * * *"
 
     # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
-    zfs list -H -o name "$source" >/dev/null 2>&1 \
-        || die "add-replica: '$source' is not a dataset on this host. A replica copies what this machine already holds."
+    # Every one of them, checked here: with a list it is the second entry a
+    # single check waves through, and the cost of that is discovered at 02:30.
+    local _s2
+    for _s2 in "${sources[@]}"; do
+        zfs list -H -o name "$_s2" >/dev/null 2>&1 \
+            || die "add-replica: '$_s2' is not a dataset on this host. A replica copies what this machine already holds."
+    done
 
     # THE MEDIUM MAY BE IN A SAFE, AND THAT IS NOT AN ERROR.
     #
@@ -5305,8 +5329,21 @@ cmd_list_replicas() {
         if [ "$as_json" -eq 1 ]; then
             [ "$first" -eq 1 ] || printf ','
             first=0
-            printf '{"name":"%s","source":"%s","dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s"}' \
-                "$name" "$src" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last"
+            # "source" stays the raw field, so a reader written against the
+            # one-dataset shape keeps working; "sources" is the array a front
+            # end should use, and it has one element when there is one source.
+            # Emitting only the string would make a GUI parse a config grammar.
+            local _js _jfirst=1 _jarr=""
+            while IFS= read -r _js; do
+                [ -n "$_js" ] || continue
+                [ "$_jfirst" -eq 1 ] || _jarr="$_jarr,"
+                _jfirst=0
+                _jarr="$_jarr\"$_js\""
+            done <<JSRC
+$(printf '%s' "$src" | tr ',' '\n')
+JSRC
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
@@ -5318,11 +5355,40 @@ EOF
     return 0
 }
 
+# Does this config still describe any JOB?
+#
+# gen-cron.sh resolves cron lines from [dataset:], [prune:], [prune-bookmarks:]
+# and [replica:]. [defaults], [template:] and [excluded:] are policy: they
+# describe HOW a job would run and emit nothing on their own. A file holding
+# only those is not a corrupt config, it is an EMPTY SCHEDULE.
+config_has_job_sections() {   # <file>
+    grep -qE '^\[(dataset|prune|prune-bookmarks|replica):' "$1"
+}
+
 # remove-replica NAME -- drop the section and reinstall the block.
 #
 # THE DATA ON THE MEDIUM IS NOT TOUCHED, and the message says so. Removing a
 # replica means stopping the job that feeds it; the copy on that disk is still a
 # copy, and deciding it is worthless is not this command's call to make.
+#
+# REMOVING THE LAST JOB HAD TO GO THROUGH gen-cron.sh AND COULD NOT.
+# Measured on pve9, 2026-08-30, tearing a lab down: the config held three
+# replicas, two came out, and the third died with
+#
+#     gen-cron.sh: error: no send/prune/monitor rules resolved from ...
+#     FATAL: gen-cron.sh could not render the proposed config -- nothing was touched
+#
+# leaving a scheduled job pointing at a dataset that no longer existed. That
+# guard is RIGHT when someone hands gen-cron.sh an emptied config -- it is a
+# config that lost its contents -- and wrong as the answer to "remove the last
+# job", where empty is the requested result.
+#
+# remove-client solved exactly this and the fix here is to use its answer, not
+# a second one: ask the shared cron writer to remove the zfs-backup-managed
+# block, THEN swap the config. Cron first, for its reason: if the config
+# swapped first and the cron removal then failed, the config would describe
+# zero jobs while the real cron lines survived, with nothing left recording
+# what they were.
 cmd_remove_replica() {
     local name="" config="" do_install=0 assume_yes=0 a _ans
     for a in "$@"; do
@@ -5352,7 +5418,18 @@ cmd_remove_replica() {
         { print }
     ' "$config" > "$cand" || { rm -f "$cand"; die "could not compose the config without [replica:$name]"; }
 
-    show_activation_proposal "$config" "$cand" || { rm -f "$cand"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
+    local empties_schedule=0
+    config_has_job_sections "$cand" || empties_schedule=1
+
+    if [ "$empties_schedule" -eq 1 ]; then
+        echo
+        echo "'$name' is the LAST job in $config."
+        echo "Removing it leaves no send, prune or replica rule at all, so the whole"
+        echo "zfs-backup-managed block would be removed from $(cron_target_user)'s crontab."
+        echo "Nothing else in that crontab is touched, and no dataset is touched."
+    else
+        show_activation_proposal "$config" "$cand" || { rm -f "$cand"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
+    fi
     if [ "$do_install" -ne 1 ]; then
         echo
         echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
@@ -5365,8 +5442,20 @@ cmd_remove_replica() {
         read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
         case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
     fi
-    atomic_replace_and_install "$config" "$cand" \
-        || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
+    if [ "$empties_schedule" -eq 1 ]; then
+        if ! cron_block_remove "$(cron_target_user)" zfs-backup-managed; then
+            rm -f "$cand"
+            die "remove-replica: could not remove the zfs-backup-managed cron block for $(cron_target_user): ${CRON_ERR:-unknown error} -- $config was NOT touched. Re-running remove-replica is safe once this is resolved."
+        fi
+        chmod 0644 "$cand" 2>/dev/null || :
+        if ! mv -f "$cand" "$config"; then
+            rm -f "$cand"
+            die "remove-replica: the zfs-backup-managed cron block for $(cron_target_user) has ALREADY been removed, but $config could not be updated to match (it still describes '$name'). Fix whatever blocked the rename, then re-run remove-replica -- cron_block_remove is idempotent, only this config swap remains."
+        fi
+    else
+        atomic_replace_and_install "$config" "$cand" \
+            || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
+    fi
     log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }
 

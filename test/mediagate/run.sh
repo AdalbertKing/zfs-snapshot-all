@@ -82,12 +82,24 @@ case "$*" in
   # replica family, and asks how much has been written since it. SRC_TREE lists
   # the subtree, SRC_SNAP is the family snapshot (empty = none, the first-seed
   # case), SRC_WRITTEN is the byte count.
+  # PER-DATASET OVERRIDES. A replica job may name several sources, and the
+  # cases that matter are the ones where they DISAGREE -- one current, one
+  # behind. A single global SRC_SNAP cannot express that, so each of the three
+  # is looked up as SRC_<thing>_<dataset with non-alphanumerics as _> first and
+  # falls back to the global. Every existing case sets only the globals and is
+  # unaffected.
   *"list -H -o name -r"*)
-      for d in ${SRC_TREE:-}; do echo "$d"; done; exit 0 ;;
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "t=\${SRC_TREE_$v-__u__}"; [ "$t" = "__u__" ] && t="${SRC_TREE:-}"
+      for d in $t; do echo "$d"; done; exit 0 ;;
   *"list -H -t snapshot -o name -d 1"*)
-      [ -n "${SRC_SNAP:-}" ] && echo "$last@${SRC_SNAP}"; exit 0 ;;
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "s=\${SRC_SNAP_$v-__u__}"; [ "$s" = "__u__" ] && s="${SRC_SNAP:-}"
+      [ -n "$s" ] && echo "$last@${s}"; exit 0 ;;
   *"get -H -p -o value written@"*)
-      echo "${SRC_WRITTEN:-0}"; exit 0 ;;
+      v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
+      eval "w=\${SRC_WRITTEN_$v-__u__}"; [ "$w" = "__u__" ] && w="${SRC_WRITTEN:-0}"
+      echo "$w"; exit 0 ;;
   *"list -H -o name"*)
       for d in $DATASETS; do [ "$d" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -667,19 +679,21 @@ SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_s2"; SRC_WRITTEN=0; POOL_GUID=
 
 # L1. THE OPTIMISATION ITSELF: a medium independently proved current.
 : > "$IMPORTED_LOG"
-printf 'guid=11111111\nsnap=replica_s2\n' > "$SYNCFILE"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\n' > "$SYNCFILE"
 out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
 check "L1: a medium proved current is skipped" "1" "$rc"
 check "L1: AND IS NEVER IMPORTED" "" "$(cat "$IMPORTED_LOG")"
-has "already holds" "$out" && ok "L1: ...saying which snapshot it already holds" \
-                           || bad "L1: ...saying which snapshot it already holds" "$out"
+has "already current for every source" "$out" && ok "L1: ...saying the medium is current for every source" \
+                           || bad "L1: ...saying the medium is current for every source" "$out"
+has "tank/src" "$out" && ok "L1: ...and naming them, so the log says WHAT was proved" \
+                      || bad "L1: ...and naming them, so the log says WHAT was proved" "$out"
 has "pulled safely" "$out" && ok "L1: ...and why leaving it alone is worth doing" \
                            || bad "L1: ...and why leaving it alone is worth doing" "$out"
 
 # L2. THE FINDING. Rotation: this disk is the one recorded, but the family has
 #     moved on since it was last here. It is BEHIND and must be brought up.
 : > "$IMPORTED_LOG"
-printf 'guid=11111111\nsnap=replica_s1\n' > "$SYNCFILE"
+printf 'guid=11111111\nsnap:tank/src=replica_s1\n' > "$SYNCFILE"
 out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
 check "L2: A ROTATED MEDIUM BEHIND THE FAMILY IS IMPORTED, NOT SKIPPED" "0" "$rc"
 check "L2: ...and it really was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
@@ -691,7 +705,7 @@ POOLS="hdd"; IMPORTABLE="rotpool"
 # L3. The other rotation half: the right snapshot, but a DIFFERENT disk in the
 #     slot. Two media of one pool name is the normal rotated shape.
 : > "$IMPORTED_LOG"
-printf 'guid=99999999\nsnap=replica_s2\n' > "$SYNCFILE"
+printf 'guid=99999999\nsnap:tank/src=replica_s2\n' > "$SYNCFILE"
 out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
 check "L3: A DIFFERENT DISK OF THE SAME POOL NAME IS IMPORTED" "0" "$rc"
 has "NOT the one this record describes" "$out" && ok "L3: ...saying both guids" \
@@ -718,7 +732,7 @@ POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
 POOLS="hdd"; IMPORTABLE="rotpool"
 
 : > "$IMPORTED_LOG"
-printf 'guid=11111111\nsnap=replica_s2\n' > "$SYNCFILE"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\n' > "$SYNCFILE"
 SRC_WRITTEN=4096
 out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
 check "L6: source not quiet -> imported even with a current record" "0" "$rc"
@@ -748,12 +762,114 @@ POOLS="hdd"; IMPORTABLE="rotpool"
 g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
 POOLS="hdd rotpool"; IMPORTABLE=""
 g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 0 >/dev/null 2>&1
-if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && grep -q '^snap=replica_s2$' "$SYNCFILE"; then
+if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && grep -q '^snap:tank/src=replica_s2$' "$SYNCFILE"; then
     ok "L8: a verified transfer records this medium's guid AND what it now holds"
 else
     bad "L8: a verified transfer records this medium's guid AND what it now holds" "$(cat "$SYNCFILE" 2>/dev/null)"
 fi
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+
+# ---------------------------------------------------------------------------
+# M. SEVERAL SOURCES, ONE MEDIUM, ONE WINDOW
+#
+# Owner requirement, 2026-08-30: a replica job must be able to carry a second
+# dataset. The window in which pulling the disk can hang the host is exactly
+# the window in which its pool is imported, so N sources must share ONE
+# import/export -- bracketing each separately would open N windows to save
+# nothing.
+#
+# That makes the fast path a conjunction. The sources advance independently, so
+# a medium can be current for one and a week behind on another, and skipping is
+# only correct when EVERY source is quiet and EVERY source is proved. M2 is the
+# carrying case: it is exactly L1 with a second source that is behind, and an
+# implementation that checks only the first passes everything else here.
+# ---------------------------------------------------------------------------
+SRC_TREE_tank_src="tank/src"; SRC_TREE_tank_other="tank/other"
+export SRC_TREE_tank_src SRC_TREE_tank_other
+SRC_SNAP_tank_src="replica_s2"; SRC_SNAP_tank_other="replica_s2"
+export SRC_SNAP_tank_src SRC_SNAP_tank_other
+SRC_WRITTEN_tank_src=0; SRC_WRITTEN_tank_other=0
+export SRC_WRITTEN_tank_src SRC_WRITTEN_tank_other
+DATASETS="hdd rotpool/replica tank/src tank/other"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+
+# M1. Both sources quiet AND both proved -> skipped, no import.
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --source tank/other --prefix replica_)"; rc=$?
+check "M1: two sources, both proved current -> skipped" "1" "$rc"
+check "M1: ...and the pool was never imported" "" "$(cat "$IMPORTED_LOG")"
+has "tank/other" "$out" && ok "M1: ...and the log names every source it proved" \
+                        || bad "M1: ...and the log names every source it proved" "$out"
+
+# M2. THE CARRYING CASE. First source current, SECOND one behind on this medium.
+#     A gate that stops at the first source skips here and the second dataset
+#     never advances again.
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s1\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --source tank/other --prefix replica_)"; rc=$?
+check "M2: ONE SOURCE BEHIND ON THIS MEDIUM -> IMPORTED, NOT SKIPPED" "0" "$rc"
+check "M2: ...and it really was imported" "rotpool" "$(cat "$IMPORTED_LOG")"
+has "tank/other" "$out" && ok "M2: ...naming the source that is behind" \
+                        || bad "M2: ...naming the source that is behind" "$out"
+has "replica_s1" "$out" && ok "M2: ...and what it is behind at" \
+                        || bad "M2: ...and what it is behind at" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+# M3. One source NOT quiet is enough to open the window, however current the
+#     record is for both.
+: > "$IMPORTED_LOG"
+SRC_WRITTEN_tank_other=8192
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --source tank/other --prefix replica_)"; rc=$?
+check "M3: one source with work -> imported" "0" "$rc"
+SRC_WRITTEN_tank_other=0
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+# M4. A record that names only ONE of the two proves nothing about the other.
+#     This is also the pre-multi-source record shape: it fails open.
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --source tank/other --prefix replica_)"; rc=$?
+check "M4: a record silent about one source -> imported" "0" "$rc"
+has "does not say what it holds" "$out" && ok "M4: ...and says the record is silent about it" \
+                                        || bad "M4: ...and says the record is silent about it" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+
+# M5. A verified transfer records EVERY source, in one file, keyed by dataset.
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep --source tank/src --source tank/other --prefix replica_ --engine-rc 0 >/dev/null 2>&1
+if grep -q '^snap:tank/src=replica_s2$' "$SYNCFILE" 2>/dev/null \
+   && grep -q '^snap:tank/other=replica_s2$' "$SYNCFILE" 2>/dev/null; then
+    ok "M5: a verified transfer records every source separately"
+else
+    bad "M5: a verified transfer records every source separately" "$(cat "$SYNCFILE" 2>/dev/null)"
+fi
+
+# M6. A source with no snapshot of the family cannot be recorded as delivered,
+#     and a PARTIAL record is worse than none -- it would let the next run skip
+#     on the sources it does name. Nothing is written at all.
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+POOLS="hdd"; IMPORTABLE="rotpool"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+SRC_SNAP_tank_other=""
+g detach rotpool rep --source tank/src --source tank/other --prefix replica_ --engine-rc 0 >/dev/null 2>&1
+if [ -s "$SYNCFILE" ]; then
+    bad "M6: a source with nothing to record leaves NO partial record" "$(cat "$SYNCFILE")"
+else
+    ok "M6: a source with nothing to record leaves NO partial record"
+fi
+SRC_SNAP_tank_other="replica_s2"
+
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+unset SRC_TREE_tank_src SRC_TREE_tank_other SRC_SNAP_tank_src SRC_SNAP_tank_other
+unset SRC_WRITTEN_tank_src SRC_WRITTEN_tank_other
 SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
 
 echo "--------------------------------------------"

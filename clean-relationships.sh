@@ -297,6 +297,21 @@ _artefacts_raw() {
     #
     #     MANAGED_DATASETS=hdd/a/tree\ hdd/a/flat
     #
+    # ...ON THE COLLECTOR. The SOURCE half does not use %q. Measured on pve1,
+    # 2026-08-30, on a live lab relationship:
+    #
+    #     PEER_JOIN_GRANTED_DATASETS="hdd/labsrc hdd/labsrc/vm-900-disk-0 ..."
+    #
+    # -- double-quoted, separated by BARE spaces. Neither separator this code
+    # knew, so all three names stayed glued into one string, `zfs list` was
+    # asked for a dataset of that name, and the audit answered ALREADY GONE for
+    # three datasets that were all present. That is the failure direction that
+    # matters: an operator clearing a host is told the data is already gone and
+    # leaves live data behind, and the purge reads the same field.
+    #
+    # A bare space is therefore ALSO always a separator, for the reason already
+    # stated below: no legal ZFS name can contain one.
+    #
     # The first version split on whitespace and reported `hdd/a/tree\` -- with a
     # trailing backslash, which is not a legal ZFS name and cannot be pasted into
     # the `zfs destroy` this line exists to hand the operator. Found on pve1,
@@ -331,7 +346,7 @@ _artefacts_raw() {
 ' "$d"
     done < <(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
                  "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
-             | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ',' '\n')
+             | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ', \t' '\n\n\n')
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
