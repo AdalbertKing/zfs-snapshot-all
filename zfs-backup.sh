@@ -1875,7 +1875,17 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local scope ds
     for scope in "$@"; do
         ds="${scope##*:}"
-        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "$schedexpr" || return 1
+        # NO SCHEDULE, deliberately. This is the RETROFIT: it adds the bounded
+        # source prune an existing relationship was missing, and nothing else.
+        # A minute here would move a job on a host that never asked for it --
+        # the same thing the empty-expression control in test/stagger exists to
+        # forbid. The stagger belongs to CREATE, where the minute is chosen.
+        #
+        # Passed as an explicit empty string rather than left out: `schedexpr`
+        # is a local of emit_remote_source_prune, a DIFFERENT function, and
+        # bash would have handed this one whatever that caller happened to
+        # have in scope. CI caught it as 57b, the byte-identical assertion.
+        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "" || return 1
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }
