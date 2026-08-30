@@ -164,8 +164,13 @@ extract_block() {
         # back before anything else sees the line -- textually, and only for
         # these four names, so nothing else in the command is touched.
         #
-        # A crontab written before this exists carries no assignments and no
-        # `$ZSA_` either, so it takes this path unchanged.
+        # KEPT DELIBERATELY, and it is transitional. The assignments were on
+        # main only briefly -- they shortened the line by naming its paths, and
+        # were replaced by zfs-job.sh when it turned out a line copied out of the
+        # crontab no longer ran by hand. Hosts installed during that window carry
+        # them until something reinstalls there, and deployment is an hourly
+        # `git pull`, so this must keep reading them. A crontab from before or
+        # after that window has neither and takes this path unchanged.
         case "$line" in
             ZSA_REPO=*)   ZSA_REPO="${line#ZSA_REPO=}";     continue ;;
             ZSA_LOG=*)    ZSA_LOG="${line#ZSA_LOG=}";       continue ;;
@@ -234,9 +239,58 @@ strip_witness_markers() {
 # parse_job_envelope LINE -- the common wrapper job_cron_line() puts around
 # every send/prune line. Sets SCHED/CMD/CRONLOG/NOTIFYSCRIPT/NOTIFY/DETAIL on
 # success, returns 1 (leaves nothing set) if LINE does not match the shape.
+# THE ENVELOPE IS A SCRIPT NOW, and this reads that shape first.
+#
+# gen-cron.sh emits `<repo>/zfs-job.sh "<label>" --log=.. --notify=.. --detail=N
+# -- <command>` because the inline envelope was 336 characters repeated in every
+# line and cron caps a command at 1000. What it does NOT do is hide anything:
+# the engine command is still there after `--`, which is why this tool keeps
+# working at all.
+#
+# Tried FIRST and falling through to the inline form, which is not politeness to
+# old code: deployment is an hourly `git pull`, so a host keeps the block it was
+# last installed with until something reinstalls it. Both shapes are live at the
+# same time on the same estate.
+parse_job_envelope_script() {
+    local line="$1" rest
+    case "$line" in *"/zfs-job.sh "*) ;; *) return 1 ;; esac
+    # FIVE FIELDS, not "up to the first slash": a schedule may be `*/15 * * * *`
+    # and cutting at the slash would take the schedule apart.
+    SCHED="$(printf '%s' "$line" | awk '{print $1, $2, $3, $4, $5}')"
+    [ -n "$SCHED" ] || return 1
+    rest="${line#*/zfs-job.sh }"
+    # The label is double-quoted and cannot contain a double quote: notify_text
+    # builds it from a host label and a config word, both validated.
+    case "$rest" in \"*) ;; *) return 1 ;; esac
+    rest="${rest#\"}"; NOTIFY="${rest%%\"*}"; rest="${rest#*\"}"
+    CRONLOG=""; NOTIFYSCRIPT=""; DETAIL=""
+    rest="${rest# }"
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            "--log="*)     rest="${rest#--log=}";    CRONLOG="${rest%% *}";      rest="${rest#* }" ;;
+            "--notify="*)  rest="${rest#--notify=}"; NOTIFYSCRIPT="${rest%% *}"; rest="${rest#* }" ;;
+            "--detail="*)  rest="${rest#--detail=}"; DETAIL="${rest%% *}";       rest="${rest#* }" ;;
+            "-- "*)        CMD="${rest#-- }"; break ;;
+            *) return 1 ;;
+        esac
+    done
+    [ -n "${CMD:-}" ] || return 1
+    # A media bracket is shell syntax and travels as `/bin/sh -c '...'`, because
+    # zfs-job.sh execs its argument list and a bare `(` is not a command. The
+    # parsers below expect the bracket itself.
+    local _shq="'"   # one single quote, kept in a variable so the case stays readable
+    case "$CMD" in
+        "/bin/sh -c $_shq("*)
+            CMD="${CMD#/bin/sh -c $_shq}"
+            CMD="${CMD%$_shq}" ;;
+    esac
+    return 0
+}
+
 parse_job_envelope() {
     local line
     line="$(strip_witness_markers "$1")"
+    parse_job_envelope_script "$line" && return 0
     local D1=' e=$(mktemp); ' D2=' 2>"$e"; rc=$?; cat "$e" >>' D3='; [ $rc -ne 0 ] && ' D4=' "' D5='" "$(tail -n '
     [[ "$line" == *"$D1"* ]] || return 1
     SCHED="${line%%"$D1"*}"; local rest="${line#*"$D1"}"

@@ -862,21 +862,29 @@ X_OUT=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=
 x_jobs=$(printf '%s\n' "$X_OUT" | grep -cE '(snapsend|snapget|delsnaps)\.sh')
 check "X0 the probe config really did emit its engine lines" "2" "$x_jobs"
 
-# X1: every line that RUNS an engine carries both markers. Counted, not grepped
-# for presence: a single marker on one of two job lines would pass a presence
-# check and still leave the other mute.
-x_begin=$(printf '%s\n' "$X_OUT" | grep -c 'ZFS-JOB BEGIN')
-x_end=$(printf '%s\n' "$X_OUT" | grep -c 'ZFS-JOB END')
-check "X1 every engine job line records BEGIN and END" \
-      "jobs=2 begin=2 end=2" \
-      "jobs=$x_jobs begin=$x_begin end=$x_end"
+# X1: every line that RUNS an engine goes through the envelope, and carries a
+# label. Counted, not grepped for presence: one wrapped line out of two would
+# pass a presence check and leave the other mute.
+#
+# THE MARKERS ARE NO LONGER IN THE LINE. Since 2026-08-30 the envelope is
+# zfs-job.sh -- 336 characters repeated in every job had put an ordinary host
+# at 890 of cron's 1000-byte limit -- so BEGIN/END are written at RUN time.
+# What the line can still be asked is that every engine job is wrapped; that
+# the markers and the rc actually appear is asserted by EXECUTION in X6 below,
+# which is a stronger claim than the grep it replaces.
+x_wrapped=$(printf '%s\n' "$X_OUT" | grep -cE '/zfs-job[.]sh "[^"]+" ')
+check "X1 every engine job line goes through the envelope, with a label" \
+      "jobs=2 wrapped=2" \
+      "jobs=$x_jobs wrapped=$x_wrapped"
 
-# X2: the END marker carries the exit code. Without rc the marker proves the
-# line finished but not whether the backup did anything.
-case "$X_OUT" in
-    *'ZFS-JOB END x hourly backup rc=$rc'*) ok "X2 the END marker carries the exit code" ;;
-    *) bad "X2 the END marker carries the exit code" "no 'END ... rc=\$rc' in the emitted block" ;;
-esac
+# X2: the line hands the envelope everything it needs -- where to log, whom to
+# call, how much detail. Without any one of them the envelope silently falls
+# back to ITS OWN defaults, which are derived from where it sits and are not
+# necessarily this config's paths: the job would run and its record would go
+# somewhere nobody is reading.
+x_flags=$(printf '%s\n' "$X_OUT" | grep -cE ' --log=[^ ]+ --notify=[^ ]+ --detail=[0-9]+ -- ')
+check "X2 the envelope is told the log, the notify script and the detail depth" \
+      "2" "$x_flags"
 
 # X3: the monitor line is deliberately NOT marked. It runs every 15 minutes and
 # already reports its own state through the rc arms; marking it would add ~192
@@ -901,35 +909,30 @@ x_pct=$(printf '%s\n' "$X_OUT" | grep -v '^#' | grep -c '%')
 check "X5 no unescaped % in the emitted block" "0" "$x_pct"
 
 # X6: the property itself, executed rather than pattern-matched -- and executed
-# against a mktemp that fails, since a probe run under a WORKING mktemp passes
-# for both the old and the new shape and so proves nothing.
+# against a mktemp that FAILS, since a probe under a working mktemp passes for
+# every shape and so proves nothing.
+#
+# THE ENVELOPE IS A SCRIPT NOW, so the line is regenerated with REPO_DIR
+# pointing at a directory holding the REAL zfs-job.sh beside a stub engine.
+# That is closer to the intent this case always had than the sed it replaces:
+# swapping the engine path textually only ever existed to leave the rest of the
+# line untouched, and a sed that stops matching leaves the whole thing running
+# against nothing -- engine=0, markers=0, silently, which is the exact
+# signature X6 exists to catch. It has now caught it twice, both times as its
+# own harness rotting rather than the code.
 X_W="$TMPD/x-work"; mkdir -p "$X_W/bin" "$X_W/repo"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$X_W/bin/mktemp"; chmod +x "$X_W/bin/mktemp"
-printf '#!/usr/bin/env bash\necho "engine ran" >&2\nexit 0\n' > "$X_W/repo/snapsend.sh"
+printf '#!/usr/bin/env bash\necho \"engine ran\" >&2\nexit 0\n' > "$X_W/repo/snapsend.sh"
 chmod +x "$X_W/repo/snapsend.sh"
+cp "$REPO/zfs-job.sh" "$X_W/repo/zfs-job.sh"; chmod +x "$X_W/repo/zfs-job.sh"
 X_LOG="$X_W/cron.log"
 
-# Take the REAL emitted line, drop the 5 schedule fields, and run it -- so this
-# tests what gen-cron.sh actually writes, not a paraphrase.
-#
-# THE PATHS ARE NOW POINTED AT BY THE BLOCK'S OWN VARIABLES. gen-cron.sh names
-# the long ones once (ZSA_REPO/ZSA_LOG/ZSA_NOTIFY/ZSA_WARN) because cron caps a
-# command at 1000 bytes and an ordinary host was already at 890; cron exports
-# those assignments into the job's environment and the shell expands them.
-#
-# So the redirection is done by SETTING THE VARIABLES, not by sed-ing the line.
-# That is closer to the intent this case always had -- swapping the engine path
-# textually was only ever a way to leave the rest of the line untouched, and a
-# sed that no longer matches leaves the whole thing running with unset paths,
-# which is exactly how this case failed when the variables arrived: engine=0,
-# markers=0, silently, which is the very signature X6 exists to catch.
-x_line=$(printf '%s\n' "$X_OUT" | grep 'snapsend.sh' | head -1 |
+X_OUT6=$(REPO_DIR="$X_W/repo" NOTIFY_SCRIPT=/bin/true WARN_SCRIPT=/bin/true DIGEST_SCRIPT=none \
+         CRON_LOG="$X_LOG" bash "$GEN" -c "$TMPD/x.conf" 2>&1)
+x_line=$(printf '%s\n' "$X_OUT6" | grep 'snapsend.sh' | head -1 |
          sed -e 's|^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* ||')
 : > "$X_LOG"
-( PATH="$X_W/bin:$PATH" \
-  ZSA_REPO="$X_W/repo" ZSA_LOG="$X_LOG" ZSA_NOTIFY=/bin/true ZSA_WARN=/bin/true
-  export ZSA_REPO ZSA_LOG ZSA_NOTIFY ZSA_WARN
-  eval "$x_line" ) >/dev/null 2>&1
+( PATH="$X_W/bin:$PATH"; eval "$x_line" ) >/dev/null 2>&1
 x_ran=$(grep -c 'engine ran' "$X_LOG" 2>/dev/null); x_ran="${x_ran:-0}"
 x_marks=$(grep -c 'ZFS-JOB' "$X_LOG" 2>/dev/null); x_marks="${x_marks:-0}"
 check "X6 a failing mktemp no longer swallows the run" \

@@ -3101,15 +3101,54 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # its guid is readable -- which snapshot THIS medium now holds, and only
     # after a transfer that actually succeeded. REV-20260829-126 F1: without a
     # per-medium fact the no-work fast path skipped rotated media for ever.
-    printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
-        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt"
+    # SHELL SYNTAX, so it is handed to a shell EXPLICITLY.
+    #
+    # This is a subshell with control flow, not a command with arguments, and
+    # since the envelope moved into zfs-job.sh (which execs "$@") a bare `(` in
+    # the argument list is a syntax error rather than a bracket. It goes through
+    # `sh -c` as ONE argument -- which is what cron did with the whole line
+    # before, so the semantics are unchanged.
+    #
+    # Single-quoted, and REFUSED rather than mangled if it could not be: every
+    # value reaching this text is validated to [A-Za-z0-9._:/-] elsewhere, so a
+    # single quote cannot occur -- and "cannot occur because of a check
+    # somewhere else" is exactly the reasoning that should fail loudly if it
+    # ever stops being true.
+    local _body
+    _body=$(printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
+        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt")
+    case "$_body" in
+        *"'"*) die "media_bracket: the bracket generated for this job contains a single quote, which cannot be quoted for sh -c. Something reached it that the name validation should have refused: $_body" ;;
+    esac
+    printf "/bin/sh -c '%s'" "$_body"
 }
 
+# THE ENVELOPE IS A SCRIPT, not 336 characters repeated in every line.
+#
+# cron refuses a command over 1000 bytes and says only "command too long",
+# which reaches the operator as an install that rolled back for no stated
+# reason. Measured on pve9, 2026-08-30, on an ORDINARY two-relationship host:
+# backups at 890 and 889, a source-side prune at 846, a one-source replica at
+# 934. A second source on the replica reached 1160 and was refused outright.
+#
+# The first attempt shortened the PATHS instead, naming them once as crontab
+# variables. It bought ~140 bytes and cost more than it bought: a line copied
+# out of the crontab and run by hand -- what an admin does to diagnose a job --
+# died with `$ZSA_LOG: ambiguous redirect`. Owner's call, and the measurement
+# agrees: the envelope is a THIRD of every line and the paths never were the
+# problem.
+#
+# So the envelope moved to zfs-job.sh and the ENGINE COMMAND stays in plain
+# sight. The line is self-contained -- copy it, run it, it behaves as cron runs
+# it -- nothing is hidden from `crontab -l`, and cron2conf.sh still reads the
+# engine call back out of it.
+#
+# The command goes after `--` and is NOT quoted as a unit: zfs-job.sh execs
+# "$@", so the words the generator emitted are the words that run, with no
+# second round of shell parsing to get wrong.
 job_cron_line() {
     local schedule="$1" cmd="$2" notify="$3"
-    printf '%s echo "$(date -Is) ZFS-JOB BEGIN %s" >>%s; e=$(mktemp 2>/dev/null) || e=%s.err.$$; %s 2>"$e"; rc=$?; cat "$e" >>%s; echo "$(date -Is) ZFS-JOB END %s rc=$rc" >>%s; [ $rc -ne 0 ] && %s "%s" "$(tail -n %s "$e")" 2>>%s; rm -f "$e"' \
-        "$schedule" "$notify" "$CRON_LOG" "$CRON_LOG" "$cmd" "$CRON_LOG" \
-        "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT" "$notify" "$DETAIL_LINES" "$CRON_LOG"
+    printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "$cmd"
 }
 
 # Inline prune: one delsnaps line per (schedule,pattern,retain,recursive) group,
@@ -3389,65 +3428,18 @@ generate_block() {
 # The same content WITHOUT the markers -- what lib-cron.sh installs, since the
 # markers are the library's business and it refuses a body carrying its own
 # (a nested marker would make the next block's extent ambiguous).
-# THE LINES ARE MEASURED AGAINST A HARD LIMIT, and the estate was already near
-# it. cron refuses a command over 1000 bytes and says only "command too long",
-# which reaches the operator as an install that rolled back for no stated
-# reason.
-#
-# Measured on pve9, 2026-08-30, on an ORDINARY two-source deployment -- not a
-# contrived one:
-#
-#     890  backup (snapget, one relationship)
-#     889  backup (the other)
-#     846  source-side prune, carrying its ssh flags
-#     934  replica, ONE source
-#
-# 85-93% of the ceiling. A longer hostname, a deeper dataset path or one more
-# ssh flag and a NORMAL backup job stops installing. A second source on the
-# replica took it to 1160 and cron refused it outright, which is how this was
-# found at all.
-#
-# The paths are the fat: the repo dir appears three times in a replica line and
-# twice in every other, the log four times, the notify script once. cron exports
-# a crontab's own variable assignments into each job's environment and the shell
-# that runs the command expands them (measured on pve9, not assumed), so naming
-# them once buys ~140 bytes per line and costs nothing at run time.
-#
-# The names are deliberately ugly and prefixed: they live in the operator's
-# crontab and must not collide with anything already there. They also remain in
-# scope for lines BELOW this block -- an unused variable, which is why the
-# values are paths and not behaviour.
-block_path_vars() {
-    [ -n "${REPO_DIR:-}" ]      && echo "ZSA_REPO=$REPO_DIR"
-    [ -n "${CRON_LOG:-}" ]      && echo "ZSA_LOG=$CRON_LOG"
-    [ -n "${NOTIFY_SCRIPT:-}" ] && echo "ZSA_NOTIFY=$NOTIFY_SCRIPT"
-    [ -n "${WARN_SCRIPT:-}" ]   && echo "ZSA_WARN=$WARN_SCRIPT"
-    return 0
-}
-
-# Longest value first, so a path that is a prefix of another cannot eat it.
-block_shorten() {
-    local s="$1"
-    [ -n "${NOTIFY_SCRIPT:-}" ] && s="${s//$NOTIFY_SCRIPT/\$ZSA_NOTIFY}"
-    [ -n "${WARN_SCRIPT:-}" ]   && s="${s//$WARN_SCRIPT/\$ZSA_WARN}"
-    [ -n "${REPO_DIR:-}" ]      && s="${s//$REPO_DIR/\$ZSA_REPO}"
-    [ -n "${CRON_LOG:-}" ]      && s="${s//$CRON_LOG/\$ZSA_LOG}"
-    printf '%s' "$s"
-}
-
 generate_block_body() {
     echo "# Source: $CONFIG -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead"
-    block_path_vars
     local line
-    for line in "${JOB_LINES[@]}"; do echo "$(block_shorten "$line")"; done
+    for line in "${JOB_LINES[@]}"; do echo "$line"; done
     if [ "${#JOB_LINES[@]}" -gt 0 ] && [ "${#RETAIN_LINES[@]}" -gt 0 ]; then
         echo ""
     fi
-    for line in "${RETAIN_LINES[@]}"; do echo "$(block_shorten "$line")"; done
+    for line in "${RETAIN_LINES[@]}"; do echo "$line"; done
     if { [ "${#JOB_LINES[@]}" -gt 0 ] || [ "${#RETAIN_LINES[@]}" -gt 0 ]; } && [ "${#MONITOR_LINES[@]}" -gt 0 ]; then
         echo ""
     fi
-    for line in "${MONITOR_LINES[@]}"; do echo "$(block_shorten "$line")"; done
+    for line in "${MONITOR_LINES[@]}"; do echo "$line"; done
     # NO DIGEST LINE HERE ANY MORE (2026-08-22). It used to be emitted at this
     # point, gated on `[ "${#MONITOR_LINES[@]}" -gt 0 ] && digest_script != none`,
     # and that gate is where pve9 went silent: 15 findings queued since the
