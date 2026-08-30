@@ -282,6 +282,12 @@ cat > "$STUB/notify.sh" <<'SN'
 #!/bin/bash
 echo "NOTIFIED" >> "$NOTIFY_LOG"
 SN
+# The REAL envelope, beside the stubs. Since 2026-08-30 the generated line
+# calls $REPO_DIR/zfs-job.sh instead of carrying 336 characters of inline
+# echo/mktemp/notify, so a harness that stubs everything BUT that is testing a
+# line it has made unrunnable. Copying the real one means these cases exercise
+# the envelope as cron does, with only the gate and the engine faked.
+cp "$REPO/zfs-job.sh" "$STUB/zfs-job.sh"
 chmod +x "$STUB"/*.sh
 
 cat > "$TMPD/media.conf" <<'MC'
@@ -306,13 +312,6 @@ MC
 BLOCKOUT="$(REPO_DIR="$STUB" CRON_LOG="$TMPD/cron.log" NOTIFY_SCRIPT="$STUB/notify.sh" \
            bash "$GEN" -c "$TMPD/media.conf" 2>&1)"
 CRONOUT="$(printf '%s\n' "$BLOCKOUT" | grep 'zfs-media-gate.sh attach' | head -1)"
-# THE BLOCK NAMES ITS LONG PATHS ONCE, and cron is what puts those names into
-# the job's environment. This harness runs the line WITHOUT cron, so the
-# assignments are carried across here -- taken from the block just generated,
-# never rebuilt from this script's own idea of the paths, so the two cannot
-# disagree. Without them $ZSA_LOG is empty, the redirect writes nowhere, and
-# every case in this section reads as 'no rc at all'.
-BLOCKVARS="$(printf '%s\n' "$BLOCKOUT" | grep -E '^ZSA_[A-Z]+=')"
 [ -n "$CRONOUT" ] && ok "G: the generator emits a bracketed line for media=removable" \
                   || bad "G: the generator emits a bracketed line for media=removable"
 
@@ -330,7 +329,7 @@ LINE="$(printf '%s\n' "$CRONOUT" | sed -E 's/^([^ ]+ ){5}//')"
 runline() {   # <attach rc> <engine rc> <detach rc>
     : > "$TMPD/cron.log"; : > "$TMPD/notify.log"
     STUB_ATTACH_RC="$1" STUB_ENGINE_RC="$2" STUB_DETACH_RC="$3" \
-    NOTIFY_LOG="$TMPD/notify.log" bash -c "$(printf '%s\n' "$BLOCKVARS" | sed 's/^/export /'); $LINE" >/dev/null 2>&1
+    NOTIFY_LOG="$TMPD/notify.log" bash -c "$LINE" >/dev/null 2>&1
     LINE_LOG="$(cat "$TMPD/cron.log" 2>/dev/null)"
     LINE_NOTIFIED="$(cat "$TMPD/notify.log" 2>/dev/null)"
     # NOT the shell's exit status. The wrapper ends in `rm -f "$e"`, so the

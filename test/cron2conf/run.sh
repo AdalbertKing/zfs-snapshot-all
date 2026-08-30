@@ -30,21 +30,44 @@ pass=0 fail=0
 extract_block() {
     # strip markers/Source/blank lines, sort -- order-insensitive comparison
     #
-    # THE PATH VARIABLES ARE EXPANDED BACK before comparing, and the claim this
-    # test makes is what says why: what must survive a round trip is the set of
-    # JOBS, not the bytes they are spelled in. gen-cron.sh names the long paths
-    # once (`ZSA_REPO=` and friends) because cron refuses a command over 1000
-    # bytes and a plain two-relationship host was already at 890 -- so the
-    # emitted line says `$ZSA_REPO/snapget.sh` where a fixture, and every
-    # crontab written before that, says the path in full.
-    #
-    # Expanding here keeps the legacy corpus meaningful: those crontabs are on
-    # real hosts until their next install, and "still round-trips" has to mean
-    # the same jobs come back, not that nothing about the spelling changed.
+    grep -v '^# BEGIN\|^# END\|^# Source:' | sed '/^[[:space:]]*$/d' | tr -d '' | sort
+}
+
+# THE ENVELOPE IS EXCLUDED FROM BOTH SIDES, which is what this section's own
+# claim above already says: what must round-trip is the set of JOBS. Since
+# 2026-08-30 the envelope is not even in the line -- it moved to zfs-job.sh,
+# because 336 characters repeated in every job put an ordinary host at 890 of
+# cron's 1000-byte limit -- so a legacy crontab regenerates with a DIFFERENT
+# envelope by design, and comparing envelopes would only ever assert that the
+# generator has not changed.
+#
+# Compared instead: the schedule and the ENGINE COMMAND of every line, which
+# is everything the config actually determines. Monitor lines carry their own
+# envelope, which did not change, and pass through untouched -- so they are
+# still compared in full.
+to_jobs() {
     awk '
-        /^ZSA_[A-Z]+=/ { split($0, kv, "="); v[substr(kv[1],1)] = substr($0, index($0,"=")+1); next }
-        { for (k in v) { gsub("\\$" k, v[k]) } print }
-    ' | grep -v '^# BEGIN\|^# END\|^# Source:' | sed '/^[[:space:]]*$/d' | tr -d '\r' | sort
+        index($0, "/zfs-job.sh ") > 0 {
+            s = $1 " " $2 " " $3 " " $4 " " $5
+            i = index($0, " -- ")
+            c = substr($0, i + 4)
+            if (substr(c, 1, 12) == "/bin/sh -c \x27") c = substr(c, 13, length(c) - 13)
+            print s " " c; next
+        }
+        index($0, "e=$(mktemp") > 0 {
+            s = $1 " " $2 " " $3 " " $4 " " $5
+            # anchored on the mktemp, then the FIRST "; " after it: the command
+            # begins there in both the pre-marker shape and the marker one.
+            i = index($0, "e=$(mktemp")
+            c = substr($0, i)
+            j = index(c, "; ")
+            c = substr(c, j + 2)
+            j = index(c, " 2>\"$e\"")
+            if (j > 0) c = substr(c, 1, j - 1)
+            print s " " c; next
+        }
+        { print }
+    '
 }
 
 # ---- round-trip ----
@@ -90,11 +113,6 @@ done
 # only situation it is for. The comparison strips the markers from the rendered
 # side rather than requiring them absent: what must round-trip is the set of
 # JOBS, and the markers are witness, not configuration.
-strip_markers() {
-    sed -E -e 's/^([^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+) echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*" >>[^;]*; /\1 /' \
-           -e 's/e=\$\(mktemp 2>\/dev\/null\) \|\| e=[^;]*;/e=$(mktemp);/' \
-           -e 's/; echo "\$\(date -Is\) ZFS-JOB END [^"]*" >>[^;]*;/;/'
-}
 
 for cf in "$DIR"/fixtures-legacy/*.crontab; do
     [ -e "$cf" ] || continue
@@ -107,8 +125,8 @@ for cf in "$DIR"/fixtures-legacy/*.crontab; do
     fi
     rendered="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
                 bash "$GEN" -c "$conf" 2>&1)"
-    want="$(extract_block < "$cf")"
-    got="$(printf '%s\n' "$rendered" | strip_markers | extract_block)"
+    want="$(to_jobs < "$cf" | extract_block)"
+    got="$(printf '%s\n' "$rendered" | to_jobs | extract_block)"
     # THE DIGEST LINE IS NOT A RELATIONSHIP JOB AND MUST NOT COME BACK.
     #
     # Every host in the estate still has one INSIDE its old managed block --

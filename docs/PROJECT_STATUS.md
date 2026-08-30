@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3c5b09d1b0ad3817 -->
+<!-- status-covers-digest: b72575e5c2fa4548 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4292,51 +4292,76 @@ na zywo na pve9.
 
 Znalezione przez wdrozenie, nie przez suite. Druga replika nie dala sie
 zainstalowac -- `crontab(1)` odmowil, a wywolujacy zglosil tylko rollback bez
-przyczyny. Prawdziwym powodem bylo `command too long`: vixie-cron przyjmuje
-polecenie do **1000 bajtow**.
+przyczyny. Powodem bylo `command too long`: vixie-cron przyjmuje polecenie do
+**1000 bajtow**.
 
-Zmierzone na pve9, na **zwyklym** wdrozeniu z dwoma relacjami:
+Zmierzone na pve9, na ZWYKLYM wdrozeniu z dwoma relacjami:
 
-| linia | znakow polecenia | zapas |
+| linia | znakow | zapas |
 |---|---|---|
-| backup `snapget` (src9) | 890 | 110 |
-| backup `snapget` (src8) | 889 | 111 |
+| backup `snapget` | 890 | 110 |
+| backup `snapget` (druga relacja) | 889 | 111 |
 | przycinanie zrodla, z flagami ssh | 846 | 154 |
 | replika, JEDNO zrodlo | 934 | 66 |
-| replika, DWA zrodla | 1160 | **-160, odmowa** |
+| replika, DWA zrodla | 1160 | **odmowa** |
 
-To nie jest problem repliki. Dluzsza nazwa hosta, glebsza sciezka datasetu albo
-jedna flaga ssh wiecej i **zwykle zadanie backupu przestaje sie instalowac**, z
-tym samym nieczytelnym komunikatem.
+To nie byl problem repliki. Dluzsza nazwa hosta, glebsza sciezka datasetu albo
+jedna flaga ssh wiecej i **zwykle zadanie backupu przestaje sie instalowac**.
 
-**Naprawa.** Tluste sa sciezki: katalog repozytorium wystepuje w linii repliki
-trzy razy, log cztery, skrypt powiadomien raz. Cron eksportuje wlasne
-przypisania zmiennych z crontaba do srodowiska zadania, a powloka je rozwija --
-**zmierzone na pve9, nie zalozone**. Blok nazywa je wiec raz:
+#### Pierwsze podejscie bylo zlym interesem i zostalo cofniete
+
+Skrocilem SCIEZKI, nazywajac je raz jako zmienne crontaba (`ZSA_REPO` i
+rodzina). Kupilo 140 bajtow i kosztowalo wiecej: **linia skopiowana z crontaba
+i uruchomiona z reki przestala dzialac** -- `$ZSA_LOG: ambiguous redirect`. A
+to jest odruch admina przy diagnozie zadania. Wlasciciel odrzucil ten
+kompromis; pomiar przyznaje mu racje.
+
+#### Wlasciwe miejsce to KOPERTA, nie sciezki
+
+| | znakow |
+|---|---|
+| linia ze zmiennymi | 901 |
+| ta sama ze sciezkami wprost | 1051 -- ponad limit |
+| **sama koperta** (echo BEGIN/END, mktemp, cat, notify, sprzatanie) | **336** |
+
+Koperta to jedna trzecia kazdej linii, powtarzana w KAZDYM zadaniu. Przeniesiona
+do `zfs-job.sh`:
 
 ```
-ZSA_REPO=/root/scripts/zfs-snapshot-all
-ZSA_LOG=/root/scripts/cron.log
-ZSA_NOTIFY=/root/scripts/notify-fail.sh
-ZSA_WARN=/root/scripts/notify-warn.sh
+30 2 * * * /sciezka/zfs-job.sh "pve9 replica copy (weekly)"              --log=... --notify=... --detail=8 -- <polecenie silnika>
 ```
 
-Kupuje to ~140 bajtow na linii i nie kosztuje nic w czasie biegu. Replika z
-dwoma zrodlami zeszla z 1051 do **901**.
+**Polecenie silnika zostaje widoczne w crontabie**, linia jest samowystarczalna
+(skopiuj i uruchom -- zachowa sie jak pod cronem), a `cron2conf.sh` dalej czyta
+z niej wywolanie silnika. Replika dwuzrodlowa: **796 znakow**. Zmienne `ZSA_*`
+usuniete z generatora; `cron2conf.sh` **czyta je nadal**, bo hosty zainstalowane
+w tym krotkim oknie maja je do najblizszej reinstalacji.
 
-Dodatkowo, ta sama runda: lista po przecinku zamiast powtarzanego `--source`
-(18 bajtow na zrodlo, dwa razy w linii) i **petla** zamiast powtarzania calego
-wywolania silnika (~130 bajtow na zrodlo wobec ~27 za jeszcze jeden cytowany
-dataset).
+Klamra nosnika to skladnia powloki, nie polecenie z argumentami, wiec jedzie
+przez `sh -c` jako JEDEN argument -- tak samo, jak cron traktowal cala linie
+wczesniej. Cudzyslow pojedynczy, i **odmowa zamiast kalectwa**, gdyby kiedys
+trafil tam apostrof: kazda wartosc jest walidowana do `[A-Za-z0-9._:/-]`, a
+"nie moze wystapic, bo gdzies indziej jest kontrola" to dokladnie to
+rozumowanie, ktore ma glosno paść, gdy przestanie byc prawdziwe.
 
-`cron_write` **diagnozuje** teraz odmowe zamiast ja tylko przekazywac: po
-niepowodzeniu przeglada wejscie i nazywa kazde polecenie powyzej 1000 bajtow z
-jego dlugoscia. Diagnoza PO awarii, nigdy bramka przed nia -- wlasny limit
-zmyslony przed czasem odrzucalby linie, ktore inny cron by przyjal.
+`cron_write` **diagnozuje** odmowe zamiast ja przekazywac: po niepowodzeniu
+nazywa kazde polecenie powyzej 1000 bajtow z jego dlugoscia. Diagnoza PO
+awarii, nigdy bramka przed nia -- wlasny limit zmyslony przed czasem odrzucalby
+linie, ktore inny cron by przyjal.
 
-`run-replicas` eksportuje te przypisania z wyrenderowanego bloku przed
-uruchomieniem linii: wykonuje ja BEZ crona, wiec bez tego `$ZSA_REPO/...`
-staloby sie `/...` i zadanie nie uruchomiloby niczego.
+#### Przy okazji: `.gitignore` odmowil dodania nowego skryptu
+
+`.gitignore` jest lista dozwolonych. `git add zfs-job.sh` zostal odrzucony, a
+sprawdzenie systematyczne pokazalo **trzy dalsze pliki** w tym samym stanie --
+`zfs-media-gate.sh`, `lib-cron.sh`, `lib-scope.sh` -- sledzone wylacznie
+dlatego, ze git juz o nich wiedzial. Plik sam dokumentuje, ze ta pulapka ugryzla
+juz dwa razy (`deploy.sh`, `profiles/`). Poniewaz wdrozenie to godzinowy `git
+pull`, skrypt ktory nie trafi do repozytorium to **kazda linia crona na kazdym
+hoscie padajaca naraz**. Wszystkie cztery dopisane, z jednolinijkowym testem w
+komentarzu.
+
+cron 132/0, golden 96/0, cron2conf 28/0, mediagate 134/0, stagger 26/0,
+cleanrel 87/0, pairgate 78/0.
 
 ### Audyt relacji mowil ALREADY GONE o zywych danych (2026-08-30)
 

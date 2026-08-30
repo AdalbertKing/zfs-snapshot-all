@@ -28,6 +28,20 @@
 !zfs-pair-gate.sh
 !cron2conf.sh
 !clean-relationships.sh
+!zfs-media-gate.sh
+!lib-cron.sh
+!lib-scope.sh
+!zfs-job.sh
+# THE THIRD, FOURTH AND FIFTH TIME. zfs-media-gate.sh, lib-cron.sh and
+# lib-scope.sh were in exactly the state the deploy.sh note below describes:
+# tracked only because git already knew them, with no rule here that would
+# admit them again. Found 2026-08-30 while adding zfs-job.sh, whose `git add`
+# was refused outright -- and since deployment is an hourly `git pull`, a core
+# script that never reaches the repository is every cron line on every host
+# failing at once. Checked systematically now rather than one file at a time:
+#     for f in $(git ls-files "*.sh" | grep -v /); do
+#         grep -qxF "!$f" .gitignore || echo "MISSING: $f"
+#     done
 # deploy_new_server.sh / deploy_backup_user.sh were merged into deploy.sh and no
 # longer exist; the entries are gone with them. deploy.sh itself was missing
 # here and only stayed tracked because .gitignore does not apply to files git

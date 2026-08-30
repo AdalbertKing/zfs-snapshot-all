@@ -99,21 +99,12 @@ cat > "$pathcfg" <<'EOF'
 EOF
 noenv_out="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG \
     bash "$GEN" -c "$pathcfg" 2>&1)"
-# THE PATH IS NAMED ONCE AND REFERENCED, not pasted into every command.
-# gen-cron.sh emits ZSA_REPO/ZSA_LOG/ZSA_NOTIFY ahead of the jobs because cron
-# caps a command at 1000 bytes and an ordinary host was already at 890. So the
-# claim -- "the configured repo_dir is what the jobs actually use" -- is checked
-# in both halves: the value lands in the assignment, and the command references
-# it. Checking only the concatenation would have passed on a build that emitted
-# the assignment and then hardcoded something else in the line.
-check "repo_dir from config"      "$noenv_out" "ZSA_REPO=/home/zfsbackup/zfs-snapshot-all"
-check "repo_dir is referenced"    "$noenv_out" "\$ZSA_REPO/snapsend.sh"
+check "repo_dir from config"      "$noenv_out" "/home/zfsbackup/zfs-snapshot-all/snapsend.sh"
 check "notify_script from config" "$noenv_out" "/home/zfsbackup/notify-fail.sh"
 check "cron_log from config"      "$noenv_out" "/home/zfsbackup/cron.log"
 # The other half of the contract: an explicit environment variable still wins.
 env_out="$(gen "$pathcfg")"
-check "env out-ranks config"      "$env_out" "ZSA_REPO=/REPO"
-check "env out-ranks config (referenced)" "$env_out" "\$ZSA_REPO/snapsend.sh"
+check "env out-ranks config"      "$env_out" "/REPO/snapsend.sh"
 rm -f "$pathcfg"
 
 # ---- the host settings file is a fallback, never a widening ----------------
