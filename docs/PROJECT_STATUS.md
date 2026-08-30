@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a18060c8cd512cfd -->
+<!-- status-covers-digest: 1c63030cb7944b10 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4151,6 +4151,33 @@ opisac tylko jedno z nich.
 Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
 wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
 linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### NOSNIK Z CUDZA LINIA JEST ODMAWIANY, TYMI SLOWAMI (2026-08-30)
+
+Znalezione przez CZYSTY PRZELOT: rozbiorka labu do zera i odbudowa od nowa.
+Dysk wciaz niosl replike relacji, ktora wlasnie zostala zdjeta, a odbudowane
+datasety kolektora dostaly **nowa rodzine snapshotow bez wspolnego przodka**.
+Silnik nie moze ani wyslac przyrostu (brak wspolnego snapshotu), ani zasiac od
+nowa (cel ma snapshoty), wiec operator dostawal co noc:
+
+```
+cannot receive new filesystem stream: destination has snapshots
+(eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
+```
+
+Prawda, o ZFS-ie, i milczaca o decyzji, ktora stoi przed czlowiekiem.
+
+**Zachowanie pakietu bylo poprawne** -- ZFS nie ma prawa nadpisac cudzych
+snapshotow. Wada byla DIAGNOZA. Bramka sprawdza teraz przy `attach`, czy cel na
+nosniku dzieli ze zrodlem **jakikolwiek** snapshot rodziny; gdy nie dzieli
+zadnego, odmawia z `rc=2`, nazywa obie rodziny, stawia wybor (inny `--dst` albo
+`zfs destroy -r <cel>`) i **eksportuje pule z powrotem**, zeby odmowa nie
+zostawila uzbrojonego zawieszenia, ktoremu ma zapobiegac.
+
+Tylko przy ZERO wspolnych snapshotow. Cel dzielacy cokolwiek to zwykly przyrost
+i nie wolno go ruszac -- kontrola N2 istnieje wlasnie po to.
+
+mediagate 134/0, 126/8 z odwroconym warunkiem.
 
 ### `deploy.sh --commit-scope` JEST MARTWY NA main (2026-08-30) -- OTWARTE
 

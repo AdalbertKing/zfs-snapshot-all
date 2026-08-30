@@ -901,6 +901,57 @@ has "tank/other" "$out" && ok "M7b: ...naming the member that is behind" \
 POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
 POOLS="hdd"; IMPORTABLE="rotpool"
 
+# ---------------------------------------------------------------------------
+# N. A MEDIUM CARRYING A DIFFERENT LINEAGE IS REFUSED, IN THOSE WORDS.
+#
+# Measured on pve9, 2026-08-30, on a clean teardown-and-rebuild: the disk still
+# held the replica of the relationship that had just been removed, the rebuilt
+# collector datasets carried a brand new snapshot family, and the two shared
+# nothing. The engine can neither send an increment (no common snapshot) nor
+# seed afresh (the target has snapshots), so the operator got, nightly:
+#
+#     cannot receive new filesystem stream: destination has snapshots
+#     (eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
+#
+# True, about ZFS, and silent on the decision in front of them.
+#
+# N2 is the control and it is the one that matters: a target sharing ANY
+# snapshot of the family is an ordinary incremental, and a check that fired on
+# "the newest names differ" would break every second run of every replica.
+SRC_TREE_tank_src="tank/src"; export SRC_TREE_tank_src
+SRC_SNAP_tank_src="replica_new"; export SRC_SNAP_tank_src
+SRC_WRITTEN_tank_src=0; export SRC_WRITTEN_tank_src
+DATASETS="hdd rotpool/replica rotpool/replica/tank/src tank/src"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+
+# N1. The medium holds a family the source has never heard of.
+SRC_SNAP_rotpool_replica_tank_src="replica_old"; export SRC_SNAP_rotpool_replica_tank_src
+: > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "N1: A MEDIUM HOLDING A DIFFERENT LINEAGE IS REFUSED" "2" "$rc"
+has "REFUSING" "$out" && ok "N1: ...in those words" || bad "N1: ...in those words" "$out"
+has "replica_old" "$out" && ok "N1: ...naming what the medium holds" || bad "N1: ...naming what the medium holds" "$out"
+has "replica_new" "$out" && ok "N1: ...and where the source is" || bad "N1: ...and where the source is" "$out"
+has "different --dst" "$out" && ok "N1: ...and the two choices, without making either"                              || bad "N1: ...and the two choices, without making either" "$out"
+# The disk must not be left imported by a refusal: attach found it exported and
+# has to leave it that way, or a run that refused would also be a run that
+# armed the hang it exists to avoid.
+has "rotpool" "$(cat "$EXPORTED_LOG")" && ok "N1: ...and the pool is exported again, so the disk is safe to pull"                                        || bad "N1: ...and the pool is exported again, so the disk is safe to pull" "$(cat "$EXPORTED_LOG")"
+
+# N2. THE CONTROL. Same shape, but the medium's newest snapshot IS one the
+#     source still has -- an ordinary incremental, which must proceed.
+SRC_SNAP_rotpool_replica_tank_src="replica_new"; export SRC_SNAP_rotpool_replica_tank_src
+: > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+POOLS="hdd"; IMPORTABLE="rotpool"
+rm -f "$STATE/rep.imported-by-us"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "N2: a target sharing a snapshot is NOT refused" "0" "$rc"
+has "REFUSING" "$out" && bad "N2: ...and nothing is said about lineage" "$out"                       || ok "N2: ...and nothing is said about lineage"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
+unset SRC_SNAP_rotpool_replica_tank_src
+
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 unset SRC_TREE_tank_src SRC_TREE_tank_other SRC_SNAP_tank_src SRC_SNAP_tank_other
 unset SRC_WRITTEN_tank_src SRC_WRITTEN_tank_other
