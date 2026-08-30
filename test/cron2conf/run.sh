@@ -29,7 +29,22 @@ pass=0 fail=0
 
 extract_block() {
     # strip markers/Source/blank lines, sort -- order-insensitive comparison
-    grep -v '^# BEGIN\|^# END\|^# Source:' | sed '/^[[:space:]]*$/d' | tr -d '\r' | sort
+    #
+    # THE PATH VARIABLES ARE EXPANDED BACK before comparing, and the claim this
+    # test makes is what says why: what must survive a round trip is the set of
+    # JOBS, not the bytes they are spelled in. gen-cron.sh names the long paths
+    # once (`ZSA_REPO=` and friends) because cron refuses a command over 1000
+    # bytes and a plain two-relationship host was already at 890 -- so the
+    # emitted line says `$ZSA_REPO/snapget.sh` where a fixture, and every
+    # crontab written before that, says the path in full.
+    #
+    # Expanding here keeps the legacy corpus meaningful: those crontabs are on
+    # real hosts until their next install, and "still round-trips" has to mean
+    # the same jobs come back, not that nothing about the spelling changed.
+    awk '
+        /^ZSA_[A-Z]+=/ { split($0, kv, "="); v[substr(kv[1],1)] = substr($0, index($0,"=")+1); next }
+        { for (k in v) { gsub("\\$" k, v[k]) } print }
+    ' | grep -v '^# BEGIN\|^# END\|^# Source:' | sed '/^[[:space:]]*$/d' | tr -d '\r' | sort
 }
 
 # ---- round-trip ----

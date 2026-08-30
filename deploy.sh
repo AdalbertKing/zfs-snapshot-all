@@ -3380,14 +3380,51 @@ fi
 # then `zfs allow`. It needs root and zfs, and both are properties of the host,
 # not of this script's provisioning.
 #
-# NOT changed here, and worth a separate decision: --draft-scope and --leave sit
-# at that same late dispatch and have the same shape -- a scope decision and a
-# teardown, neither of which provisions anything. --join is different: enrolling
-# a host legitimately sets it up.
+# NOT changed here, and worth a separate decision: --draft-scope sits at that
+# same late dispatch and has the same shape -- a scope decision that provisions
+# nothing. --join is different: enrolling a host legitimately sets it up.
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
     do_commit_scope "$COMMIT_SCOPE_LABEL"
     exit 0
 fi
+
+# --leave BELONGS HERE TOO and is NOT moved yet, because moving it the obvious
+# way is how the dispatch above broke.
+#
+# Measured 2026-08-30, tearing the lab down: `--leave` runs behind all seven
+# phases, so it PULLS THE REPO on the machine being torn down. A checkout on a
+# branch could not be left at all --
+#
+#     Phase 2: deploy the repo into /root/scripts/zfs-snapshot-all
+#     fatal: Not possible to fast-forward, aborting.
+#     FATAL: git pull --ff-only failed
+#
+# -- the teardown blocked by a code UPDATE it never needed, on the one host the
+# command exists to disentangle. On an ordinary host it succeeds instead,
+# having rewritten notify-fail.sh and added host cron lines on the way out.
+#
+# AND THE DISPATCH ABOVE DOES NOT WORK. Measured the same day, on pve2 running
+# main:
+#
+#     ./deploy.sh --commit-scope=nieistnieje
+#     ./deploy.sh: line 3388: do_commit_scope: command not found
+#
+# bash defines functions as it reads, and do_commit_scope is defined at ~5921 --
+# after this point. The 2026-08-26 move traded "provisions when it shouldn't"
+# for "does not run at all", and nothing caught it because --join reaches
+# do_commit_scope from its own dispatch at the foot of the file, where the
+# definition already exists.
+#
+# The bounded fix is to move the definitions above this point, and it is not a
+# one-liner: the closure is 8 functions (commit_scope_dataset_held,
+# do_commit_scope, join_scope_is_committed, join_scope_enumerate,
+# join_scope_summary, join_human_bytes, guided_join_scope, do_leave) plus the
+# declarations they read -- COMMIT_SCOPE_HOLD_TAG above all, which is what
+# decides whether a dataset is held before its grant is taken away. Moving the
+# functions without it would leave that tag empty at call time.
+#
+# So --leave stays at the foot, where it WORKS, until that move is made
+# deliberately.
 
 # ------------------------------------------------------------------------------
 log "Phase 1: dependencies"
@@ -6629,6 +6666,33 @@ do_leave() {
 
     rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
     log "leave: removed the join manifest and any scope file/hash for '$label'"
+
+    # THE PAIR GATE'S STATE DIRECTORY, which --leave used to leave behind while
+    # saying "fully torn down". Found on pve1 and pve2 tearing the lab down,
+    # 2026-08-30: clean-relationships.sh immediately called the same label an
+    # ORPHAN, so the package contradicted itself one command apart, and an
+    # operator who follows the documented teardown is then told there is
+    # residue -- which trains them to ignore the audit.
+    #
+    # The concrete part is worse than the noise. The directory is group-owned
+    # by the account this function has just deleted (measured: drwxrwsr-x,
+    # group 1001, setgid, and the very next --join on that host was handed uid
+    # 1001 again). A later, unrelated relationship therefore inherits group
+    # write on ANOTHER label's gate directory -- the one holding its `disabled`
+    # marker, which is the hard-disable boundary.
+    #
+    # Removed only when EMPTY, and that is not timidity: a non-empty gate dir
+    # holds live state for this label (a disable somebody set), and deleting
+    # that silently would lift a block this command was never asked to lift.
+    # It is named instead.
+    local gdir="$PAIR_GATE_STATE_DIR/$label"
+    if [ -d "$gdir" ]; then
+        if rmdir "$gdir" 2>/dev/null; then
+            log "leave: removed the pair-gate state directory $gdir"
+        else
+            warn "leave: $gdir is not empty, so it was left in place -- it still holds state for '$label' (a disable marker, most likely). Look at it and remove it by hand: ls -la $gdir"
+        fi
+    fi
     log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."
 }
 
@@ -6917,8 +6981,9 @@ if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
     do_draft_scope "$DRAFT_SCOPE_LABEL"
     exit 0
 fi
-# --commit-scope is NOT dispatched here any more; it runs before Phase 1, beside
-# --pause/--resume. See the block there for why.
+# --commit-scope is dispatched before Phase 1, beside --pause/--resume -- see
+# the block there, including why that dispatch is currently broken. --leave is
+# still dispatched HERE, at the foot, where its definition already exists.
 if [ "$LEAVE_MODE" -eq 1 ]; then
     do_leave "$LEAVE_LABEL"
     exit 0

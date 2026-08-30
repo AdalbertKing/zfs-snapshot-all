@@ -76,6 +76,17 @@ SOURCE=""; PREFIX=""; ENGINE_RC=""
 # SOURCE stays as the FIRST source purely so the existing messages keep naming
 # something concrete; every decision below reads SOURCES.
 SOURCES=()
+# A ZFS dataset name cannot contain a comma (measured: `zfs create hdd/x,y` is
+# refused, "invalid character ','"), so a comma here is always a separator and
+# never part of a name.
+_msrc_add() {
+    local _a _v="$1"
+    while [ -n "$_v" ]; do
+        _a="${_v%%,*}"
+        [ -n "$_a" ] && SOURCES+=("$_a")
+        case "$_v" in *,*) _v="${_v#*,}" ;; *) _v="" ;; esac
+    done
+}
 IMPORT_DIRS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -88,8 +99,14 @@ while [ "$#" -gt 0 ]; do
         --dataset=*)  DATASET="${1#--dataset=}"; shift ;;
         --dir)        IMPORT_DIRS+=(-d "${2:-}"); shift 2 ;;
         --dir=*)      IMPORT_DIRS+=(-d "${1#--dir=}"); shift ;;
-        --source)     SOURCES+=("${2:-}"); shift 2 ;;
-        --source=*)   SOURCES+=("${1#--source=}"); shift ;;
+        # Repeatable AND comma-separated, because the generated cron line is
+        # measured in characters against a hard limit: cron refuses a command
+        # over 1000 bytes, and `--source ` in front of every dataset, twice per
+        # line (attach and detach), is 18 bytes per source spent on nothing.
+        # Measured on pve9 2026-08-30 -- the one-source replica line was
+        # already 934 characters.
+        --source)     _msrc_add "${2:-}"; shift 2 ;;
+        --source=*)   _msrc_add "${1#--source=}"; shift ;;
         --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
         --engine-rc=*) ENGINE_RC="${1#--engine-rc=}"; shift ;;
         --prefix)     PREFIX="${2:-}"; shift 2 ;;

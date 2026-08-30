@@ -903,22 +903,33 @@ check "X5 no unescaped % in the emitted block" "0" "$x_pct"
 # X6: the property itself, executed rather than pattern-matched -- and executed
 # against a mktemp that fails, since a probe run under a WORKING mktemp passes
 # for both the old and the new shape and so proves nothing.
-X_W="$TMPD/x-work"; mkdir -p "$X_W/bin"
+X_W="$TMPD/x-work"; mkdir -p "$X_W/bin" "$X_W/repo"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$X_W/bin/mktemp"; chmod +x "$X_W/bin/mktemp"
-printf '#!/usr/bin/env bash\necho "engine ran" >&2\nexit 0\n' > "$X_W/engine.sh"; chmod +x "$X_W/engine.sh"
+printf '#!/usr/bin/env bash\necho "engine ran" >&2\nexit 0\n' > "$X_W/repo/snapsend.sh"
+chmod +x "$X_W/repo/snapsend.sh"
 X_LOG="$X_W/cron.log"
 
-# Take the REAL emitted line, drop the 5 schedule fields, and swap ONLY the
-# engine path -- so this tests what gen-cron.sh actually writes, not a
-# paraphrase. Swapping the whole `snapsend.sh ... 2>"$e"` span instead would
-# take the redirect out with it and the probe would measure my sed, not the
-# emitted line (it did, the first time).
+# Take the REAL emitted line, drop the 5 schedule fields, and run it -- so this
+# tests what gen-cron.sh actually writes, not a paraphrase.
+#
+# THE PATHS ARE NOW POINTED AT BY THE BLOCK'S OWN VARIABLES. gen-cron.sh names
+# the long ones once (ZSA_REPO/ZSA_LOG/ZSA_NOTIFY/ZSA_WARN) because cron caps a
+# command at 1000 bytes and an ordinary host was already at 890; cron exports
+# those assignments into the job's environment and the shell expands them.
+#
+# So the redirection is done by SETTING THE VARIABLES, not by sed-ing the line.
+# That is closer to the intent this case always had -- swapping the engine path
+# textually was only ever a way to leave the rest of the line untouched, and a
+# sed that no longer matches leaves the whole thing running with unset paths,
+# which is exactly how this case failed when the variables arrived: engine=0,
+# markers=0, silently, which is the very signature X6 exists to catch.
 x_line=$(printf '%s\n' "$X_OUT" | grep 'snapsend.sh' | head -1 |
-         sed -e 's|^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* ||' \
-             -e "s|/R/snapsend.sh|$X_W/engine.sh|" \
-             -e "s|/L|$X_LOG|g")
+         sed -e 's|^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* ||')
 : > "$X_LOG"
-( PATH="$X_W/bin:$PATH"; eval "$x_line" ) >/dev/null 2>&1
+( PATH="$X_W/bin:$PATH" \
+  ZSA_REPO="$X_W/repo" ZSA_LOG="$X_LOG" ZSA_NOTIFY=/bin/true ZSA_WARN=/bin/true
+  export ZSA_REPO ZSA_LOG ZSA_NOTIFY ZSA_WARN
+  eval "$x_line" ) >/dev/null 2>&1
 x_ran=$(grep -c 'engine ran' "$X_LOG" 2>/dev/null); x_ran="${x_ran:-0}"
 x_marks=$(grep -c 'ZFS-JOB' "$X_LOG" 2>/dev/null); x_marks="${x_marks:-0}"
 check "X6 a failing mktemp no longer swallows the run" \

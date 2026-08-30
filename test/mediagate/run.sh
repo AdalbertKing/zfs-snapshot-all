@@ -303,8 +303,16 @@ cat > "$TMPD/media.conf" <<'MC'
 	media        = removable
 MC
 
-CRONOUT="$(REPO_DIR="$STUB" CRON_LOG="$TMPD/cron.log" NOTIFY_SCRIPT="$STUB/notify.sh" \
-           bash "$GEN" -c "$TMPD/media.conf" 2>&1 | grep 'zfs-media-gate.sh attach' | head -1)"
+BLOCKOUT="$(REPO_DIR="$STUB" CRON_LOG="$TMPD/cron.log" NOTIFY_SCRIPT="$STUB/notify.sh" \
+           bash "$GEN" -c "$TMPD/media.conf" 2>&1)"
+CRONOUT="$(printf '%s\n' "$BLOCKOUT" | grep 'zfs-media-gate.sh attach' | head -1)"
+# THE BLOCK NAMES ITS LONG PATHS ONCE, and cron is what puts those names into
+# the job's environment. This harness runs the line WITHOUT cron, so the
+# assignments are carried across here -- taken from the block just generated,
+# never rebuilt from this script's own idea of the paths, so the two cannot
+# disagree. Without them $ZSA_LOG is empty, the redirect writes nowhere, and
+# every case in this section reads as 'no rc at all'.
+BLOCKVARS="$(printf '%s\n' "$BLOCKOUT" | grep -E '^ZSA_[A-Z]+=')"
 [ -n "$CRONOUT" ] && ok "G: the generator emits a bracketed line for media=removable" \
                   || bad "G: the generator emits a bracketed line for media=removable"
 
@@ -322,7 +330,7 @@ LINE="$(printf '%s\n' "$CRONOUT" | sed -E 's/^([^ ]+ ){5}//')"
 runline() {   # <attach rc> <engine rc> <detach rc>
     : > "$TMPD/cron.log"; : > "$TMPD/notify.log"
     STUB_ATTACH_RC="$1" STUB_ENGINE_RC="$2" STUB_DETACH_RC="$3" \
-    NOTIFY_LOG="$TMPD/notify.log" bash -c "$LINE" >/dev/null 2>&1
+    NOTIFY_LOG="$TMPD/notify.log" bash -c "$(printf '%s\n' "$BLOCKVARS" | sed 's/^/export /'); $LINE" >/dev/null 2>&1
     LINE_LOG="$(cat "$TMPD/cron.log" 2>/dev/null)"
     LINE_NOTIFIED="$(cat "$TMPD/notify.log" 2>/dev/null)"
     # NOT the shell's exit status. The wrapper ends in `rm -f "$e"`, so the
@@ -866,6 +874,32 @@ else
     ok "M6: a source with nothing to record leaves NO partial record"
 fi
 SRC_SNAP_tank_other="replica_s2"
+
+# M7. THE COMMA LIST IS THE SAME THING SAID SHORTER, and it exists for a
+#     measured reason: the generated cron line is checked against cron's
+#     1000-byte command limit, and `--source ` in front of every dataset, twice
+#     per line, is 18 bytes per source spent on nothing. Measured on pve9
+#     2026-08-30 -- the ONE-source replica line was already 934 characters and
+#     a second source took it to 1160, which cron refused outright.
+#
+#     M7b is the carrying case: the comma form must be as strict as the
+#     repeated form, not merely accepted.
+SRC_SNAP_tank_other="replica_s2"
+POOLS="hdd"; IMPORTABLE="rotpool"; POOL_GUID=11111111
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s2\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src,tank/other --prefix replica_)"; rc=$?
+check "M7: a comma list skips exactly as two --source flags do" "1" "$rc"
+check "M7: ...and the pool was never imported" "" "$(cat "$IMPORTED_LOG")"
+
+: > "$IMPORTED_LOG"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\nsnap:tank/other=replica_s1\n' > "$SYNCFILE"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src,tank/other --prefix replica_)"; rc=$?
+check "M7b: A COMMA LIST IS AS STRICT: one member behind -> IMPORTED" "0" "$rc"
+has "tank/other" "$out" && ok "M7b: ...naming the member that is behind" \
+                        || bad "M7b: ...naming the member that is behind" "$out"
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
+POOLS="hdd"; IMPORTABLE="rotpool"
 
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 unset SRC_TREE_tank_src SRC_TREE_tank_other SRC_SNAP_tank_src SRC_SNAP_tank_other

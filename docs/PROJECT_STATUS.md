@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7bba5cc59cbbc29c -->
+<!-- status-covers-digest: a18060c8cd512cfd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4151,6 +4151,117 @@ opisac tylko jedno z nich.
 Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
 wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
 linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### `deploy.sh --commit-scope` JEST MARTWY NA main (2026-08-30) -- OTWARTE
+
+Zmierzone na pve2, hoscie produkcyjnym, na wydaniu `2a1b147`:
+
+```
+./deploy.sh --commit-scope=nieistnieje
+./deploy.sh: line 3388: do_commit_scope: command not found
+```
+
+bash definiuje funkcje w miare czytania, a `do_commit_scope` stoi w ~5921 --
+**za** dyspozytorem. Przeniesienie przed Faze 1 z 2026-08-26 zamienilo „nadaje
+uprawnienia i przy okazji provisionuje host" na „nie uruchamia sie wcale".
+Nikt tego nie zlapal, bo `--join` dochodzi do `do_commit_scope` z wlasnego
+dyspozytora u stopy pliku, gdzie definicja juz istnieje -- i dlatego dzisiejsze
+wdrozenie labu przeszlo bez potkniecia.
+
+**Naprawa jest ograniczona, ale nie jednolinijkowa.** Domkniecie to 8 funkcji
+(`commit_scope_dataset_held`, `do_commit_scope`, `join_scope_is_committed`,
+`join_scope_enumerate`, `join_scope_summary`, `join_human_bytes`,
+`guided_join_scope`, `do_leave`) **plus** deklaracje, ktore one czytaja --
+przede wszystkim `COMMIT_SCOPE_HOLD_TAG`, decydujacy o tym, czy dataset jest
+trzymany, zanim odbierze mu sie nadanie. Przeniesienie samych funkcji
+zostawiloby ten tag pusty w chwili wywolania.
+
+Nie zrobione w tej rundzie swiadomie: to restrukturyzacja 7000-liniowego
+skryptu dzialajacego jako root i nalezy jej sie osobna, spokojna decyzja.
+
+### `--leave` PROVISIONUJE HOST, KTORY WLASNIE OPUSZCZASZ (2026-08-30) -- OTWARTE
+
+Ten sam ksztalt, ta sama przyczyna, jeszcze nieprzeniesione. `--leave` jest
+wywolywany za wszystkimi siedmioma fazami, wiec **ciagnie repo na maszynie,
+ktora sie rozbiera**. Checkout stojacy na galezi nie da sie opuscic w ogole:
+
+```
+Phase 2: deploy the repo into /root/scripts/zfs-snapshot-all
+fatal: Not possible to fast-forward, aborting.
+FATAL: git pull --ff-only failed
+```
+
+Na zwyklym hoscie konczy sie powodzeniem, przepisawszy po drodze
+`notify-fail.sh` i dodawszy hostowe linie crona. Zostaje u stopy pliku, gdzie
+**dziala**, dopoki przeniesienie wyzej nie zostanie zrobione razem z naprawa
+`--commit-scope` -- te dwie rzeczy sa jednym problemem.
+
+### `--leave` ZOSTAWIAL KATALOG BRAMKI GRUPY SKASOWANEGO KONTA (2026-08-30)
+
+Naprawione. `deploy.sh --leave` pisal „'pve9' fully torn down on this host", a
+`clean-relationships.sh` sekunde pozniej nazywal ta sama etykiete ORPHAN --
+pakiet przeczacy sobie o jedno polecenie. Zdarzylo sie na pve1 **i** pve2.
+
+Halas byl mniejsza czescia. Katalog nalezy do grupy konta, ktore `--leave`
+wlasnie skasowal (zmierzone: `drwxrwsr-x`, grupa 1001, setgid), a nastepny
+`--join` na tym hoscie dostal uid 1001 ponownie. Pozniejsza, niezwiazana
+relacja dziedziczylaby zapis do katalogu bramki **cudzej** etykiety -- tego,
+w ktorym lezy znacznik `disabled`, czyli granica twardego wylaczenia.
+
+Usuwany tylko gdy PUSTY, i to nie jest ostroznosc: niepusty katalog trzyma zywy
+stan tej etykiety (czyjes wylaczenie), a ciche skasowanie go zdjeloby blokade,
+o ktorej zdjecie nikt nie prosil. Jest wiec nazywany. Obie galezie sprawdzone
+na zywo na pve9.
+
+### CALY ESTATE STAL NA 85-93% TWARDEGO LIMITU CRONA (2026-08-30)
+
+Znalezione przez wdrozenie, nie przez suite. Druga replika nie dala sie
+zainstalowac -- `crontab(1)` odmowil, a wywolujacy zglosil tylko rollback bez
+przyczyny. Prawdziwym powodem bylo `command too long`: vixie-cron przyjmuje
+polecenie do **1000 bajtow**.
+
+Zmierzone na pve9, na **zwyklym** wdrozeniu z dwoma relacjami:
+
+| linia | znakow polecenia | zapas |
+|---|---|---|
+| backup `snapget` (src9) | 890 | 110 |
+| backup `snapget` (src8) | 889 | 111 |
+| przycinanie zrodla, z flagami ssh | 846 | 154 |
+| replika, JEDNO zrodlo | 934 | 66 |
+| replika, DWA zrodla | 1160 | **-160, odmowa** |
+
+To nie jest problem repliki. Dluzsza nazwa hosta, glebsza sciezka datasetu albo
+jedna flaga ssh wiecej i **zwykle zadanie backupu przestaje sie instalowac**, z
+tym samym nieczytelnym komunikatem.
+
+**Naprawa.** Tluste sa sciezki: katalog repozytorium wystepuje w linii repliki
+trzy razy, log cztery, skrypt powiadomien raz. Cron eksportuje wlasne
+przypisania zmiennych z crontaba do srodowiska zadania, a powloka je rozwija --
+**zmierzone na pve9, nie zalozone**. Blok nazywa je wiec raz:
+
+```
+ZSA_REPO=/root/scripts/zfs-snapshot-all
+ZSA_LOG=/root/scripts/cron.log
+ZSA_NOTIFY=/root/scripts/notify-fail.sh
+ZSA_WARN=/root/scripts/notify-warn.sh
+```
+
+Kupuje to ~140 bajtow na linii i nie kosztuje nic w czasie biegu. Replika z
+dwoma zrodlami zeszla z 1051 do **901**.
+
+Dodatkowo, ta sama runda: lista po przecinku zamiast powtarzanego `--source`
+(18 bajtow na zrodlo, dwa razy w linii) i **petla** zamiast powtarzania calego
+wywolania silnika (~130 bajtow na zrodlo wobec ~27 za jeszcze jeden cytowany
+dataset).
+
+`cron_write` **diagnozuje** teraz odmowe zamiast ja tylko przekazywac: po
+niepowodzeniu przeglada wejscie i nazywa kazde polecenie powyzej 1000 bajtow z
+jego dlugoscia. Diagnoza PO awarii, nigdy bramka przed nia -- wlasny limit
+zmyslony przed czasem odrzucalby linie, ktore inny cron by przyjal.
+
+`run-replicas` eksportuje te przypisania z wyrenderowanego bloku przed
+uruchomieniem linii: wykonuje ja BEZ crona, wiec bez tego `$ZSA_REPO/...`
+staloby sie `/...` i zadanie nie uruchomiloby niczego.
 
 ### Audyt relacji mowil ALREADY GONE o zywych danych (2026-08-30)
 

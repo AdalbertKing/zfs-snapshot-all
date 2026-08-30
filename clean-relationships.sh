@@ -400,7 +400,13 @@ report() {
         orphan_addrs="$orphan_addrs$id"$'\n'
     done
     ids=$(printf '%s\n' "${!SEEN_NAME[@]}" "${!SEEN_LABEL[@]}" $orphan_addrs | grep -v '^$' | sort -u)
-    [ -n "$ids" ] || { log "no relationship traces on this host at all"; return 0; }
+    # "no RELATIONSHIP traces", and the qualifier is the fix. This sentence used
+    # to read as "nothing is here", and on pve9 (2026-08-30) it was printed on a
+    # host carrying 35 archived records and three scheduled replica jobs against
+    # a dataset the same run had just called orphaned. The sections below say
+    # what this line does not cover, so a reader keeps reading.
+    [ -n "$ids" ] || log "no relationship traces on this host (archived records and replica jobs are reported separately below)"
+    [ -n "$ids" ] || return 0
     while read -r id; do
         [ -n "$id" ] || continue
         IFS=$'\t' read -r verdict reason <<< "$(classify "$id")"
@@ -445,6 +451,116 @@ report() {
         [ "$verdict" = ORPHAN ] && { ORPHANS+=("$id"); n=$((n+1)); }
     done <<< "$ids"
     echo
+    return 0
+}
+
+# report_archived_records -- the records add-client set aside when a name was
+# reused, which this audit could not see.
+#
+# Measured on pve9, 2026-08-30: `clean-relationships.sh` ended with "no
+# relationship traces on this host at all" while THIRTY-FIVE
+# `<name>.conf.removed-<ts>` files sat in the clients directory, carrying peer
+# addresses, delegated account names, dataset paths and key fingerprints from a
+# week of labs.
+#
+# Archiving them is right and is not what this fixes -- a removed relationship's
+# history is worth keeping, and the suffix deliberately does not match `*.conf`
+# so no scanner mistakes one for a live record. What was wrong is the SENTENCE:
+# a tool whose whole job is "what is on this host" said nothing is, while
+# something was. They are reported and never removed: deleting a record is the
+# operator's call, and this tool does not delete records it did not create.
+report_archived_records() {
+    local f n=0 oldest="" newest=""
+    for f in "$CLIENTS_DIR"/*.conf.removed-*; do
+        [ -e "$f" ] || continue
+        n=$((n+1))
+        [ -z "$oldest" ] && oldest="$(basename "$f")"
+        newest="$(basename "$f")"
+    done
+    [ "$n" -gt 0 ] || return 0
+    echo
+    echo "  ARCHIVED RECORDS ($n)"
+    echo "      Relationships that were removed and whose NAME was later reused."
+    echo "      Not live, not orphaned, and not this tool's to delete -- but they"
+    echo "      name peers, delegated accounts, datasets and key fingerprints, so"
+    echo "      they are said out loud rather than left to be discovered."
+    echo "      oldest: $oldest"
+    echo "      newest: $newest"
+    echo "      Read one before deciding: cat $CLIENTS_DIR/$oldest"
+    return 0
+}
+
+# report_replica_jobs -- the scheduled work this audit did not know existed.
+#
+# Measured on pve9, 2026-08-30: the audit reported `hdd/labcoll` under DATA
+# WITHOUT A RELATIONSHIP and then ended with "no relationship traces on this
+# host at all" -- while THREE replica jobs in root's crontab were still
+# scheduled to copy that very dataset onto removable media. They fire, find
+# nothing, and alert.
+#
+# The audit could not see them for two reasons, and both are fixed here:
+#
+#   * a replica is a [replica:] section, a section type that did not exist when
+#     this tool was written, and it is not a relationship -- so nothing looked;
+#   * the config driving them need not live under /etc/zfs-snapshot-all at all.
+#     The managed block names it on its own second line ("# Source: <path>"),
+#     which this tool HASHED for its production-safety check and never read.
+#
+# Reported, never removed. `zfs-backup.sh remove-replica` owns that, and the
+# copy on the medium is a copy.
+report_replica_jobs() {
+    local u tab src line name sources dst n=0
+    for u in root $(ls -1 "$HOME_ROOT" 2>/dev/null); do
+        id "$u" >/dev/null 2>&1 || continue
+        tab="$(crontab -l -u "$u" 2>/dev/null)" || continue
+        [ -n "$tab" ] || continue
+        src="$(printf '%s\n' "$tab" | sed -n 's/^# Source: \(.*\) -- DO NOT EDIT.*$/\1/p' | head -1)"
+        [ -n "$src" ] || continue
+        if [ ! -r "$src" ]; then
+            echo
+            echo "  SCHEDULE WITHOUT ITS CONFIG ($u)"
+            echo "      $u's managed block says it was generated from $src,"
+            echo "      and that file is not readable. The jobs still run; nothing"
+            echo "      on this host can regenerate or amend them."
+            n=$((n+1))
+            continue
+        fi
+        while IFS= read -r line; do
+            case "$line" in
+                '[replica:'*']') name="${line#\[replica:}"; name="${name%\]}" ;;
+                *) continue ;;
+            esac
+            sources="$(awk -v want="[replica:$name]" '
+                $0 == want { inb=1; next }
+                inb && /^[[]/ { exit }
+                inb && $1 == "source" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+            ' "$src")"
+            dst="$(awk -v want="[replica:$name]" '
+                $0 == want { inb=1; next }
+                inb && /^[[]/ { exit }
+                inb && $1 == "dst" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+            ' "$src")"
+            [ "$n" -eq 0 ] && { echo; echo "  REPLICA JOBS (scheduled, not relationships)"; }
+            n=$((n+1))
+            echo "      $name  ($u)  -> ${dst:-?}"
+            echo "        config: $src"
+            local one missing=""
+            while IFS= read -r one; do
+                [ -n "$one" ] || continue
+                if command -v "$ZFS_BIN" >/dev/null 2>&1 \
+                   && ! "$ZFS_BIN" list -H -o name -- "$one" >/dev/null 2>&1; then
+                    missing="$missing $one"
+                fi
+            done <<EOF
+$(printf '%s' "$sources" | tr ',' '\n')
+EOF
+            if [ -n "$missing" ]; then
+                echo "        !! SOURCE GONE:$missing -- this job runs nightly and will alert"
+            else
+                echo "        source: ${sources:-?}"
+            fi
+        done < "$src"
+    done
     return 0
 }
 
@@ -996,6 +1112,8 @@ main() {
 
     echo "== relationship traces on $(hostname) =="
     report
+    report_archived_records
+    report_replica_jobs
     report_orphaned_data
     local held=0
     report_leaked_holds || held=1
