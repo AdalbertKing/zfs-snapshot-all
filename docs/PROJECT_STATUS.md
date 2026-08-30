@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a18060c8cd512cfd -->
+<!-- status-covers-digest: 3c5b09d1b0ad3817 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -4151,6 +4151,81 @@ opisac tylko jedno z nich.
 Ksztalt linii dla jednego zrodla zostal **bajt w bajt** taki, jaki nosza
 wdrozone hosty. Lista to nowa mozliwosc, nie powod do przepisania istniejacych
 linii. `cron2conf.sh` czyta oba ksztalty z powrotem.
+
+### ROZRZUT OMIJAL JEDYNE ZADANIE, KTORE NAPRAWDE WALCZY O LACZE (2026-08-30)
+
+Pytanie wlasciciela: „to juz przecial dzialalo, jaki jest z tym problem?".
+Odpowiedz: dzialalo i dziala -- ale nigdy nie objelo tego zadania.
+
+`63f69eb` rozrzucil relacje po zegarze, a jego wlasny pomiar nazwal koszt:
+*„all at :01 and all pruning at :21 ... a thundering herd on the link, the
+source's disks and sshd"*. Dostaly minute: wysylka i przycinanie **lokalne**.
+`append_source_prune_create` -- jedyna sekcja otwierajaca sesje SSH do hosta
+zrodlowego, czyli jedyna dotykajaca WSZYSTKICH trzech rzeczy z tamtego zdania --
+nie zostala w tym commicie tknieta ani razu (`git show 63f69eb | grep -c
+append_source_prune_create` = 0). Luka jest wiec dokladnie odwrocona wzgledem
+intencji.
+
+Zmierzone na labie, dwie relacje: wysylki :57 i :01, przycinania lokalne :17 i
+:21, i **oba** przycinania zrodel na :21 razem z lokalnym -- trzy zadania, dwa z
+nich po SSH do roznych hostow, w jednej minucie. Odtworzylo sie identycznie po
+odbudowie, wiec jest deterministyczne, nie przypadkowe.
+
+Zmierzony skutek przy DWOCH zrodlach: cztery zadania odpalone w tej samej
+chwili ruszyly w ciagu 4 ms, bieglo **rownolegle** (501/535/1772/1815 ms),
+wszystkie `rc=0`. Przy tej skali nie boli; przy dziesieciu to dziesiec
+jednoczesnych sesji SSH.
+
+**Naprawa: trzeci slot.** `+40` zachowuje 20-minutowy odstep, ktory profil mial
+miedzy wysylka a przycinaniem, i stawia to kolejne 20 od obu -- trzy rowno
+rozlozone minuty na relacje zamiast dwoch i kupki. Wyrazenie jest PRZEKAZYWANE
+z miejsca, gdzie minuta juz jest policzona, nie liczone drugi raz:
+`schedule_pick_minute` czyta zainstalowany crontab i po zainstalowaniu linii
+wysylki odpowiedzialoby inaczej.
+
+Puste wyrazenie znaczy „dziedzicz z szablonu" -- czyli to, co robi kazda sekcja
+zapisana wczesniej. Emiter piszacy minute zawsze przesunalby zadania na hostach,
+ktore o to nie prosily; kontrola w suicie pilnuje wlasnie tego.
+
+Suita `stagger` miala dwadziescia przypadkow i **ani jednego** patrzacego na
+przycinanie zrodla. Teraz 26/0, 25/1 bez linii emitujacej.
+
+Pierwsze podejscie do tej naprawy **zepsulo emisje sekcji** i CI powiedzialo to
+w najuczciwszy mozliwy sposob -- padnieciem KONTROLI (`96x control: a readable
+fragment still produces the source prune section`).
+`emit_remote_source_prune` konczy sie **zmienna lista datasetow**, wiec czwarty
+argument pozycyjny przed ta lista zjada pierwszy DATASET: lista wychodzi pusta,
+`[ "$#" -gt 0 ] || return 0` odpala i sekcja nie powstaje w ogole. Poprawione
+tak, zeby ten blad byl niemozliwy, a nie tylko cofniety: `--schedule=EXPR`,
+parsowane po argumentach stalych. Nazwa datasetu nigdy tak nie wyglada, a
+wywolanie bez flagi zachowuje sie jak dotad.
+
+### NOSNIK Z CUDZA LINIA JEST ODMAWIANY, TYMI SLOWAMI (2026-08-30)
+
+Znalezione przez CZYSTY PRZELOT: rozbiorka labu do zera i odbudowa od nowa.
+Dysk wciaz niosl replike relacji, ktora wlasnie zostala zdjeta, a odbudowane
+datasety kolektora dostaly **nowa rodzine snapshotow bez wspolnego przodka**.
+Silnik nie moze ani wyslac przyrostu (brak wspolnego snapshotu), ani zasiac od
+nowa (cel ma snapshoty), wiec operator dostawal co noc:
+
+```
+cannot receive new filesystem stream: destination has snapshots
+(eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
+```
+
+Prawda, o ZFS-ie, i milczaca o decyzji, ktora stoi przed czlowiekiem.
+
+**Zachowanie pakietu bylo poprawne** -- ZFS nie ma prawa nadpisac cudzych
+snapshotow. Wada byla DIAGNOZA. Bramka sprawdza teraz przy `attach`, czy cel na
+nosniku dzieli ze zrodlem **jakikolwiek** snapshot rodziny; gdy nie dzieli
+zadnego, odmawia z `rc=2`, nazywa obie rodziny, stawia wybor (inny `--dst` albo
+`zfs destroy -r <cel>`) i **eksportuje pule z powrotem**, zeby odmowa nie
+zostawila uzbrojonego zawieszenia, ktoremu ma zapobiegac.
+
+Tylko przy ZERO wspolnych snapshotow. Cel dzielacy cokolwiek to zwykly przyrost
+i nie wolno go ruszac -- kontrola N2 istnieje wlasnie po to.
+
+mediagate 134/0, 126/8 z odwroconym warunkiem.
 
 ### `deploy.sh --commit-scope` JEST MARTWY NA main (2026-08-30) -- OTWARTE
 

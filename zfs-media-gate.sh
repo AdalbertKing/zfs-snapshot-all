@@ -522,6 +522,57 @@ guid=%s
         say "note: '$POOL' has failmode=wait, the ZFS default. On a disk that gets unplugged that turns a pull-while-imported into an unkillable hang rather than an error -- measured on the lab. Consider: zpool set failmode=continue $POOL"
     fi
 
+    # A MEDIUM THAT HOLDS SOMEBODY ELSE'S LINEAGE CANNOT BE WRITTEN, and the
+    # error ZFS gives for it names the wrong layer.
+    #
+    # Measured on pve9, 2026-08-30, on a clean teardown-and-rebuild: the disk
+    # still carried the replica of the relationship that had just been removed,
+    # the rebuilt collector datasets carry a brand new snapshot family, and the
+    # two share nothing. The engine can neither send an increment (no common
+    # snapshot) nor seed afresh (the target has snapshots), so every night the
+    # operator gets
+    #
+    #     cannot receive new filesystem stream: destination has snapshots
+    #     (eg. ...@replica_2026-08-30_11-18-29) must destroy them to overwrite it
+    #
+    # which is true, is about ZFS, and says nothing about the decision in front
+    # of them. Refusing HERE means the engine never runs and the log carries one
+    # cause instead of a stream of receive errors -- and rc 2 is already this
+    # verb's "something is wrong, alert", so the cron line's behaviour is
+    # unchanged.
+    #
+    # ONLY when there is no common snapshot AT ALL. A target sharing any
+    # snapshot of the family is an ordinary incremental and must not be touched
+    # by this.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ] && [ -n "$DATASET" ]; then
+        for _src in "${SOURCES[@]}"; do
+            _tgt="$DATASET/$_src"
+            zfs list -H -o name "$_tgt" >/dev/null 2>&1 || continue
+            _tsnaps="$(zfs list -H -t snapshot -o name -d 1 "$_tgt" 2>/dev/null | grep "@${PREFIX}" | sed 's/.*@//')"
+            [ -n "$_tsnaps" ] || continue
+            _ssnaps="$(zfs list -H -t snapshot -o name -d 1 "$_src" 2>/dev/null | grep "@${PREFIX}" | sed 's/.*@//')"
+            _common=no
+            while IFS= read -r _one; do
+                [ -n "$_one" ] || continue
+                case "
+$_ssnaps
+" in *"
+$_one
+"*) _common=yes; break ;; esac
+            done <<EOF
+$_tsnaps
+EOF
+            [ "$_common" = yes ] && continue
+            say "REFUSING: '$_tgt' on this medium holds '$PREFIX' snapshots that '$_src' does not have, and they share none at all -- so this is a copy of a DIFFERENT lineage, not an older state of this one. The engine can neither send an increment (no common snapshot) nor seed over it (the target has snapshots), and would fail every run with a ZFS receive error."
+            say "  the medium holds:  $(printf '%s' "$_tsnaps" | tail -1)"
+            say "  the source is at:  $(printf '%s' "$_ssnaps" | tail -1)"
+            say "  Decide, then act: KEEP that copy by pointing this replica at a different --dst, or DISCARD it with 'zfs destroy -r $_tgt' and let the next run seed afresh. This tool will not choose between somebody's two backups."
+            bounded_export >/dev/null 2>&1 || :
+            rm -f "$OURS" 2>/dev/null || :
+            emit lineage_mismatch; exit 2
+        done
+    fi
+
     say "imported '$POOL' for '$LABEL' -- this run will export it again when it is done."
     emit imported; exit 0
     ;;
