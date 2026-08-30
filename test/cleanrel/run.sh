@@ -774,6 +774,70 @@ case "$out" in
 esac
 
 # ---------------------------------------------------------------------------
+# THE SOURCE HALF DOES NOT %q-QUOTE, and that is the shape that was actually
+# on a live host.
+#
+# Measured on pve1, 2026-08-30, tearing down a lab relationship:
+#
+#     PEER_JOIN_GRANTED_DATASETS="hdd/labsrc hdd/labsrc/vm-900-disk-0 ..."
+#
+# Double-quoted, BARE spaces. The splitter knew `\ ` and `,` and neither
+# matched, so three names arrived at `zfs list` as ONE string and the audit
+# answered ALREADY GONE for three datasets that were all present. The report an
+# operator acts on told them to walk away from live data.
+#
+# d5 is the carrying assertion: a build that splits only on `\ ` and `,` gets
+# ONE data line here instead of three, and every other assertion in this block
+# still passes.
+# ---------------------------------------------------------------------------
+S="$WORK/srcnames"; mkdir -p "$S/clients" "$S/peers" "$S/rel" "$S/keys" "$S/pairing" "$S/home" "$S/removed" "$S/bin"
+printf 'CLIENT_NAME=pve9\nSTATE=active\nPEER_JOIN_GRANTED_DATASETS="hdd/labsrc hdd/labsrc/vm-900-disk-0 hdd/labsrc/vm-900-disk-1"\nSTATE=removed\n' > "$S/clients/pve9.conf"
+# All three EXIST -- the bug reported every one of them as gone.
+#
+# The stub compares the LAST ARGUMENT EXACTLY, and that is not a detail. A
+# `case "$*" in *" hdd/labsrc/vm-900-disk-1")` stub matches the GLUED string
+# too, because the glue ends in that same name -- so the broken build scored a
+# PRESENT for one of the three and two of these assertions passed against it.
+# The stub has to be as strict as the claim.
+cat > "$S/bin/zfs" <<'SNEOD'
+#!/bin/sh
+last=""
+for a in "$@"; do last="$a"; done
+case "$last" in
+  hdd/labsrc|hdd/labsrc/vm-900-disk-0|hdd/labsrc/vm-900-disk-1) exit 0 ;;
+esac
+exit 1
+SNEOD
+chmod +x "$S/bin/zfs"
+out=$(ZFS_BIN="$S/bin/zfs" run_cr "$S")
+
+# d5 -- three datasets, three lines.
+n=$(printf '%s\n' "$out" | grep -c '^      data')
+if [ "$n" = 3 ]; then ok "srcnames: a bare-space list is reported as THREE datasets"
+else bad "srcnames: a bare-space list is reported as THREE datasets" "got $n" "$out"; fi
+
+# d6 -- and the consequence that made it dangerous.
+case "$out" in
+    *"ALREADY GONE"*) bad "srcnames: present data is NOT reported as gone" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "srcnames: present data is NOT reported as gone" ;;
+esac
+
+# d7 -- each name intact and individually verified.
+for want in hdd/labsrc hdd/labsrc/vm-900-disk-0 hdd/labsrc/vm-900-disk-1; do
+    case "$out" in
+        *"$want   (PRESENT)"*) ok "srcnames: $want survives the split and is PRESENT" ;;
+        *) bad "srcnames: $want survives the split and is PRESENT" "$(printf '%s' "$out" | grep data)" ;;
+    esac
+done
+
+# d8 -- the quotes must not survive into a name that gets pasted into a destroy.
+if printf '%s\n' "$out" | grep -qE 'data[[:space:]]+[^[:space:]]*"'; then
+    bad "srcnames: no reported name carries a quote" "$(printf '%s' "$out" | grep data)"
+else
+    ok "srcnames: no reported name carries a quote"
+fi
+
+# ---------------------------------------------------------------------------
 # "PROBABLY LEAKED" IS NOT A VERDICT.
 #
 # Reviewer, 2026-08-26: a hold may be called orphaned only against evidence --
