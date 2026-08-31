@@ -177,11 +177,62 @@ profile_check_field() {   # <kind> <field> <schema dump> <where>
         PROFILE_ERR="$where: '$field' is relationship-owned and must not appear in a profile (REV-20260808-073)"
         return 1
     fi
-    # A profile that overrode recursion on a prune scope would decide topology
-    # of the prune, which is the deployment's.
-    if [ "$kind" = prune ] && [ "$field" = recursive ]; then
-        PROFILE_ERR="$where: a profile may not override 'recursive' on a prune section"
+    # Recursion is TOPOLOGY -- which datasets a relationship covers and whether
+    # its subtree is re-expanded at every run. That is the deployment's answer,
+    # recorded at enrolment (RECURSION, PEER_SAVED_RECURSIVE_ROOTS); a profile
+    # cannot know whether the source it is about to be applied to is a subtree
+    # root at all.
+    #
+    # The [prune:] half of this rule has been here since REV-20260808-073. The
+    # [dataset:] half was missing, and its absence was read (in
+    # docs/project/PROFILE-VARIABLE-INVENTORY.md, 2026-08-24) as a ready place
+    # for a profile default -- "the archival profile is flat". Measured
+    # 2026-08-31, it was a landmine instead:
+    #
+    #   1. a profile carrying `recursive` in its [dataset] block VALIDATES;
+    #   2. emit_client_sections pastes the profile fragment into the section and
+    #      then writes its own `recursive` line for a recursive root, so the
+    #      section carries the field TWICE;
+    #   3. gen-cron refuses a duplicate field outright, naming the duplicate and
+    #      not the profile that caused it.
+    #
+    # So the profile was not defaulting anything: it was bricking every
+    # recursive relationship created from it. Refusing it at validation is the
+    # answer the [prune:] half already gives, and it names the real cause.
+    if [ "$field" = recursive ]; then
+        PROFILE_ERR="$where: a profile may not set 'recursive' on a $kind section -- recursion is the relationship's topology, chosen at enrolment, and a profile does not know whether its source is a subtree root"
         return 1
+    fi
+    # POLICY GOES IN A [template:], NOT IN A FRAGMENT -- the general form of the
+    # rule above, and the reason `recursive` needs its own line (it has no
+    # template layer, so it falls outside this one).
+    #
+    # A profile's [dataset]/[prune] block is pasted verbatim into every section
+    # the profile creates. Any field with a template layer put there is wrong
+    # twice over, and both were measured on 2026-08-31 with the real
+    # emit_client_sections:
+    #
+    #   * it COLLIDES. `send_schedule = 7 * * * *` in a [dataset] fragment
+    #     produced a section carrying both it and the staggered minute the
+    #     relationship writes -- `send_schedule = 7 * * * *` and
+    #     `send_schedule = 2 * * * *`, one after the other -- and gen-cron
+    #     refuses a duplicate field. Unlike the `recursive` case this hits EVERY
+    #     relationship, because the stagger always writes a minute;
+    #
+    #   * and it FLATTENS. A section-level value overrides every tier the
+    #     section names, so a profile with four cadences would collapse to one.
+    #     That is the same boundary the schedule stagger hit
+    #     (PROFILE-VARIABLE-INVENTORY.md section 4).
+    #
+    # The check is derived from gen-cron's own allow-lists rather than from a
+    # list kept here: if the field exists at the template layer, that is where
+    # it belongs. Nothing to keep in step, and a new policy field is covered the
+    # day gen-cron declares it.
+    if [ "$kind" = dataset ] || [ "$kind" = prune ]; then
+        if grep -qxF "template $field" "$dump"; then
+            PROFILE_ERR="$where: '$field' is policy and belongs in one of this profile's [template:] sections, not in its [$kind] block -- a value here is pasted into every section the profile creates, where it overrides every tier that section names and collides with the line the relationship writes for itself"
+            return 1
+        fi
     fi
     return 0
 }

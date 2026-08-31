@@ -1387,9 +1387,17 @@ apply_client_profile_choice() {   # <is_new_relationship 0|1> <chosen profile na
 # another edit here although gen-cron.sh already owns its semantics. The owner's
 # reduction direction and this finding point the same way.
 #
-# What the RELATIONSHIP owns -- recursive on a prune scope, pair_label, notify,
-# src -- is still written by the caller and cannot collide, because
-# lib-profile.sh refuses those fields inside a profile.
+# What the RELATIONSHIP owns -- recursive, pair_label, notify, src -- is still
+# written by the caller and cannot collide, because lib-profile.sh refuses those
+# fields inside a profile.
+#
+# "Cannot collide" is a claim about the refusal list, and until 2026-08-31 the
+# list did not carry the case that mattered: `recursive` was refused on a
+# [prune:] and allowed on a [dataset:]. A profile using it validated, this
+# function pasted it in, the caller wrote its own line below, and gen-cron
+# refused the finished config for a duplicate field. Both kinds are refused now.
+# The lesson is the shape of the sentence above, not the field: a collision is
+# impossible only for the exact fields the validator names.
 profile_emit() {   # <rendered fragment>
     local raw
     while IFS= read -r raw || [ -n "$raw" ]; do
@@ -3516,8 +3524,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # the subtree on the source at every run, so a child created there
             # tomorrow joins at the next cron tick -- which is what the signed
             # include_children=yes means over time. Dataset-level field, so it
-            # wins over any template default (and the profile fragment
-            # deliberately carries no 'recursive' of its own).
+            # wins over any template default. The profile fragment carries no
+            # 'recursive' of its own -- since 2026-08-31 because lib-profile.sh
+            # refuses one, rather than because the shipped profiles happen not
+            # to write it; a custom profile that did made this section carry the
+            # field twice and gen-cron refused the whole config.
             # RECURSION comes off the client record (sourced by
             # load_client_and_connection), so re-activation reproduces the shape
             # the operator chose at enrolment instead of resetting it to the
