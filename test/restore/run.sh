@@ -2077,8 +2077,31 @@ xh_refuses "xhost: a transport address is refused as a destination" \
     "not a transport address" pve2 root@pve3
 xh_refuses "xhost: --plan and a destination are refused together" \
     "The planner reads" pve2 pve1 --plan
-xh_refuses "xhost: --target and a destination are refused together" \
-    "select datasets WITHIN one relationship" pve2 pve1 --target rpool/data/vm-101-disk-0
+# REPLACED, not deleted (owner decision 2026-08-30). This case used to assert
+# that --target with a destination is REFUSED, and that refusal pointed the
+# operator at `label:dataset` -- the spelling the owner had already retired,
+# because ':' is legal inside a ZFS dataset name. So the one form an operator
+# needs for "one disk of this VM, onto a different machine" was reachable only
+# through the ambiguous spelling. The flags are the grammar in every form now;
+# what stays refused is naming the datasets twice.
+out="$(xh pve2 pve1 --target rpool/data/vm-101-disk-0)"
+case "$out" in
+    *"select datasets WITHIN one relationship"*)
+        bad "xhost: --target WITH a destination is the grammar now, not a refusal" "$out" ;;
+    *) ok "xhost: --target WITH a destination is the grammar now, not a refusal" ;;
+esac
+xh_refuses "xhost: --onto without a destination is refused" \
+    "no destination relationship was given" pve2 --onto hdd/data
+xh_refuses "xhost: --onto and the retired colon spelling are refused together" \
+    "--onto is the one that stays" pve2:rpool/data pve1:hdd/data --onto hdd/data
+# The colon still WORKS for one release, and says so. Deprecating in silence is
+# how two spellings stay alive; deleting outright breaks a spelling that is in
+# this project's own documents and in the 2026-08-28 campaign transcript.
+out="$(xh pve2:rpool/data pve1:rpool/data)"
+case "$out" in
+    *"retired spelling"*) ok "xhost: the colon spelling warns and names what replaces it" ;;
+    *) bad "xhost: the colon spelling warns and names what replaces it" "$(printf '%s' "$out" | head -3)" ;;
+esac
 xh_refuses "xhost: --snapshot and a destination are refused together" \
     "resolved on the SOURCE relation's copy" pve2 pve1 --snapshot=x
 xh_refuses "xhost: a half-specified pair is refused (source names a dataset, destination does not)" \
