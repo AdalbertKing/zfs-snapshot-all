@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e602957b5668f027 -->
+<!-- status-covers-digest: 87797d1f2465beef -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1596,6 +1596,33 @@
   **odwrócenie kolejności argumentów silnika** zabija dokładnie jedną asercję.
   Odwrotnie nie zawodzi — niszczy replikę i odtwarza ją z kopii, po cichu, a
   tego nikt nie cofnie.
+
+- **Weryfikacja po odzysku pytała KSIĘGOWO, a odpowiadała o TOŻSAMOŚCI — LAB,
+  2026-08-31.** Sprawdzenie „czy cel wylądował w punkcie" pytało `written@punkt`
+  — ile bajtów zapisano od tego snapshotu — i każdą wartość niezerową czytało
+  jako „nie w punkcie".
+  To jest właściwe pytanie **przed** odzyskiem (`restore_remote_ahead` nadal je
+  zadaje i łapie najczęstszą awarię: pliki skasowane z żywego systemu bez
+  snapshotu). Jest niewłaściwe **po**, bo **odzysk sam zapisuje** — predykat
+  mierzy wielkość, którą poprzedzający krok z definicji narusza.
+  **Zmierzone podczas kampanii wycelowanej w coś innego:** dwa datasety
+  wylądowały dokładnie w punkcie — najnowszy snapshot TO punkt, skasowane pliki
+  wróciły — a bieg zgłosił `CHANGED AND UNFINISHED … they need a person`, kod
+  wyjścia 2, bo `written@punkt` pokazało 8192. Najgłośniejszy alarm tego
+  narzędzia podniesiony nad **udanym** odzyskiem; w prawdziwej awarii wysyła
+  admina o trzeciej w nocy naprawiać to, co działa.
+  **Trzy hipotezy o tych 8192 bajtach sprawdzone, DWIE FAŁSZYWE:** to nie
+  opóźnienie txg (stabilne po 5 s), nie skutek zamontowania (cichy zamontowany
+  dataset pokazuje 0), nie samo cofnięcie (w izolacji 0). **Który krok je
+  zapisuje — nieustalone**, i poprawka celowo od tego nie zależy: predykat
+  odpowiadał na złe pytanie niezależnie od tego, jaka była odpowiedź.
+  Teraz pyta o tożsamość: snapshot **jest** i jest **tym** (po GUID, nie po
+  nazwie), a nad nim nic nie stoi. Oba to fakty, których udany odzysk nie może
+  zaburzyć.
+  Dowód: `test/restore/offpoint.sh` 6/6 i kontrola negatywna, która jest
+  **realnym poprzednim kodem z `main`**, nie wymyśloną mutacją — wywala
+  wszystkie sześć przypadków, w tym ten, że cel stojący w punkcie zgłasza jako
+  niebędący w punkcie.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

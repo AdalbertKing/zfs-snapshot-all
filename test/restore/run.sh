@@ -2587,6 +2587,10 @@ esac
 # feeds is deliberately NOT asserted in any suite -- see this file's header.
 . "$DIR/hasguid.sh"
 
+# The check that CLOSES a run: did the target land on the recovery point. Asked
+# as identity, after a lab campaign caught it asking as accounting.
+. "$DIR/offpoint.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"

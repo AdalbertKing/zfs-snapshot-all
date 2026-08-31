@@ -1840,17 +1840,60 @@ restore_remote_newer_snaps() {   # <account@host> <target root> <point> [depth]
 #
 # Prints one "<dataset> <reason>" line per dataset that is NOT at the point.
 # Silence means every one of them is.
-restore_remote_off_point() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
-    local peer="$1" root="$2" point="$3" depth="${4-}"
+# IS THE TARGET AT THE RECOVERY POINT? -- ASKED AS IDENTITY, NOT AS ACCOUNTING.
+#
+# This used to ask `written@<point>`: how many bytes the dataset has written
+# since that snapshot, with anything non-zero meaning "not at the point".
+#
+# That is the right question BEFORE a restore -- restore_remote_ahead still asks
+# it, and it catches the commonest disaster of all, files deleted from a live
+# filesystem with no snapshot taken since. It is the wrong question AFTER one,
+# because the restore itself writes: the quantity being measured is one the
+# immediately preceding step is guaranteed to disturb.
+#
+# Measured on the lab, 2026-08-31, in the campaign that was meant to prove
+# something else entirely: two datasets landed exactly on the recovery point --
+# newest snapshot IS the point, deleted files back -- and were reported as
+# `CHANGED AND UNFINISHED ... they need a person`, exit 2, because
+# `written@point` read 8192. The loudest alarm this tool has, raised over a
+# successful recovery, which in a real disaster sends somebody out at three in
+# the morning to fix what is already working.
+#
+# Three hypotheses about those 8192 bytes were tested and TWO WERE WRONG: it is
+# not a txg lag (stable after five seconds), not an effect of being mounted (a
+# quiet mounted dataset reads 0), and not the rollback (isolated, it reads 0).
+# Which step writes them is still not isolated -- and this correction
+# deliberately does not depend on knowing. The predicate was answering the wrong
+# question whatever the answer happened to be.
+#
+# What the verb actually promises is that the target's lineage ENDS at the
+# recovery point. So:
+#
+#   * the snapshot is there, and it is THE one -- by guid, never by name. A
+#     snapshot with the right name and a different guid is a different snapshot,
+#     which is the distinction this file spends most of its length on;
+#   * nothing sits on top of it.
+#
+# Both are facts about identity. Neither can be perturbed by the restore having
+# done its job.
+restore_remote_off_point() {   # <account@host> <target root> <recovery point> [depth] [expected guid]
+    local peer="$1" root="$2" point="$3" depth="${4-}" want="${5-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
         for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
-            w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
-            case \"\$w\" in
-                0)  ;;
-                -)  echo \"\$d does not have that snapshot\" ;;
-                '') echo \"\$d could not be read\" ;;
-                *)  echo \"\$d still differs from it by \$w bytes\" ;;
+            g=\$(zfs get -Hp -o value guid \"\$d@$point\" 2>/dev/null)
+            case \"\$g\" in
+                ''|-) echo \"\$d does not have that snapshot\"; continue ;;
             esac
+            if [ -n '$want' ] && [ \"\$g\" != '$want' ]; then
+                echo \"\$d has a snapshot NAMED $point but a DIFFERENT one -- guid \$g, expected $want\"
+                continue
+            fi
+            n=\$(zfs list -H -p -t snapshot -o name -s createtxg -d 1 \"\$d\" 2>/dev/null | tail -1)
+            if [ -z \"\$n\" ]; then
+                echo \"\$d could not be read\"
+            elif [ \"\$n\" != \"\$d@$point\" ]; then
+                echo \"\$d has \${n##*@} sitting on top of $point\"
+            fi
         done
         exit 0" 2>/dev/null
 }
@@ -2388,7 +2431,14 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 local _vdepth=""
                 [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _vdepth="-d 0"
                 local _orc
-                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth")"; _orc=$?
+                # The recovery point's guid, from the copy's own listing. Named
+                # rather than left out: without it the check would accept a
+                # snapshot that merely shares the NAME, which is the one mistake
+                # this file refuses everywhere else.
+                local _vguid
+                _vguid="$(printf '%s
+' "$rows" | awk -F'	' -v p="${copy}@${point}" '$1 == p {print $3; exit}')"
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth" "$_vguid")"; _orc=$?
                 if [ "$_orc" -ne 0 ]; then
                     # Same rule on the way out. "I could not check" is not
                     # "it is fine", and this is the last chance to say so.
