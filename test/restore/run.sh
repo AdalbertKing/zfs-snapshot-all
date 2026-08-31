@@ -2547,6 +2547,11 @@ esac
 # The relation-level failure policy (D + B) lives in its own file so a negative
 # control can run those cases alone against a mutated tree, in seconds. See its
 # header. Sourced, so its cases count in this suite's totals exactly as before.
+# What an unreadable relationship record is called, and what an incomplete one
+# is called -- separate file for the same reason as relpolicy.sh, its header
+# says which.
+. "$DIR/records.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"

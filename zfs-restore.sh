@@ -190,6 +190,26 @@ restore_relations_sane() {
         # LAST wins: these records are append-only. zfs-backup.sh re-states a
         # field instead of rewriting the file, so the first CLIENT_NAME line is
         # the relationship as it was at creation, not as it is.
+        # A FILE THIS PROCESS CANNOT OPEN IS NOT A FILE WITH A FIELD MISSING.
+        #
+        # The read below is `2>/dev/null`, so it produces nothing whether the
+        # field is absent or the open was refused -- and the refusal that follows
+        # then blames the record's CONTENT for a permission problem. Measured on
+        # pve9, 2026-08-31: the client records are 0600 root:root, the delegated
+        # account ran a recovery, and it was told the record "carries no
+        # CLIENT_NAME" for a field sitting in the file. An operator reading that
+        # goes looking for something that is already there, on the one verb where
+        # time spent on the wrong cause is time a machine stays down.
+        #
+        # Same distinction this file already makes about the far side -- "I could
+        # not reach it" and "there is nothing there" differ by an entire
+        # destroyed dataset -- applied to its own side of the wire.
+        if [ ! -r "$f" ]; then
+            local mode="" who=""
+            mode="$(stat -c '%A %U:%G' "$f" 2>/dev/null)" || mode=""
+            who="$(id -un 2>/dev/null)" || who=""
+            die "restore: relationship record $f cannot be READ by this account${who:+ ($who)}${mode:+ -- it is $mode}. That is a permission problem, not a malformed record: the file may be perfectly well formed and this process simply cannot open it. Run the recovery as an account that can read the relationship records. Nothing was read and nothing was changed."
+        fi
         name="$(sed -n 's/^CLIENT_NAME=//p' "$f" 2>/dev/null | tail -1)"
         [ -n "$name" ] || die "restore: relationship record $f carries no CLIENT_NAME -- refusing to plan against a record that cannot say what it is."
         case "$name" in
@@ -1037,7 +1057,8 @@ restore_pick_config() {   # <explicit --config or ""> <what for> -> prints the p
         if [ "${#found[@]}" -gt 1 ]; then
             die "restore: this host has more than one installed config and nothing in this command says which:
 $(printf '    %s
-' "${found[@]}")Each belongs to a different account and carries different relationships, so choosing for you could aim a recovery by the wrong records. Name it: --config=<path>. Nothing was read and nothing was changed."
+' "${found[@]}")
+Each belongs to a different account and carries different relationships, so choosing for you could aim a recovery by the wrong records. Name it: --config=<path>. Nothing was read and nothing was changed."
         fi
         [ "${#found[@]}" -eq 1 ] && c="${found[0]}"
     fi
