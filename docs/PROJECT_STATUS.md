@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bb4a955daef919e3 -->
+<!-- status-covers-digest: 9cbe4fe7442e48d4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1399,6 +1399,26 @@
   którą udaje, jest dokładnie tym, jak ta wada przeżyła zieloną suitę),
   `restoregrant` 108/108, i **czwarta kontrola negatywna**: drzewo bez granicy
   izolacji wywala 6 przypadków E.
+
+- **Nieczytelny rekord relacji nie jest rekordem bez pola — LAB pve9,
+  2026-08-31.** Restore uruchomiony z konta delegowanego odmawiał zdaniem
+  „relationship record .../src8.conf **carries no CLIENT_NAME**". Pole było w
+  pliku. Prawdziwa przyczyna: rekordy są `-rw------- root:root`, a konto nie
+  mogło pliku otworzyć w ogóle. Odczyt szedł przez `sed 2>/dev/null`, który
+  zwraca to samo nic w obu przypadkach, więc odmowa obwiniała treść za problem
+  uprawnień. Operator idzie wtedy szukać pola, które tam stoi — na czasowniku,
+  przy którym maszyna już leży. To ta sama różnica, którą ten plik od dawna robi
+  o drugiej stronie łącza („nie mogłem sięgnąć" ≠ „nic tam nie ma"), tylko
+  niezrobiona po własnej. Teraz `-r` sprawdzane przed odczytem, a komunikat
+  podaje konto i prawa pliku.
+  Przy okazji: odmowa przy dwóch configach skleja ścieżkę z następnym zdaniem
+  (`...zfsbackup.confEach belongs...`) — brak separatora, poprawione.
+  Dowód: `test/restore/records.sh` — 5/5 lokalnie plus kontrola, że czytelny
+  rekord BEZ pola nadal dostaje swoją własną, inną odmowę. Przypadki
+  nieczytelnego pliku **SKIP-ują na Windows** (Git Bash czyta 000) i mówią to
+  wprost; wykonują się na runnerze CI.
+  **Znalezione przez lab, nie przez suitę** — obie wady istniały, gdy cała
+  bateria była zielona.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
