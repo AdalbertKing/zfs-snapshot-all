@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 87797d1f2465beef -->
+<!-- status-covers-digest: ce68cd505a7d3e99 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1623,6 +1623,27 @@
   **realnym poprzednim kodem z `main`**, nie wymyśloną mutacją — wywala
   wszystkie sześć przypadków, w tym ten, że cel stojący w punkcie zgłasza jako
   niebędący w punkcie.
+
+- **`--at` na bezczynnym datasecie NIE ROBIŁ NIC — LAB, 2026-08-31.** Sonda
+  „czy cel różni się od punktu odzysku" — ta, której odpowiedź decyduje, czy w
+  ogóle uruchomi się cofnięcie — pytała wyłącznie `written@punkt`, czyli o
+  **bajty**. A dataset może mieć snapshoty nowsze od punktu przy **zerze
+  zapisanych bajtów**: bezczynny dataset pod godzinowym harmonogramem jest
+  dokładnie tym, czyli większość floty przez większość czasu.
+  Zmierzone podczas biegu `--at` do punktu historycznego: `vm-900-disk-1` miał
+  **dwa godzinowe snapshoty nad punktem** i `written@punkt = 0`. Sklasyfikował
+  się jako `increment`, cofnięcie **nie uruchomiło się**, silnik nic nie wysłał,
+  a jedyne, co to złapało, to weryfikacja końcowa poprawiona godzinę wcześniej.
+  **Odzysk `--at` bezczynnego datasetu po cichu nie robił nic.**
+  Nagłówek tej funkcji sam opisywał, że kiedyś zamieniono „jest nowszy" na
+  „różni się", bo tamto pytanie gubiło pliki skasowane bez snapshotu. Ta zamiana
+  była słuszna — i **zamieniła jedną ślepą plamę na drugą**, czego nikt nie
+  zauważył.
+  Teraz pytanie jest **sumą**: bajty zapisane od punktu **albo** jakikolwiek
+  snapshot nowszy od niego. W tej kolejności — tania własność najpierw, listing
+  dopiero gdy pokaże zero.
+  Dowód: `test/restore/ahead.sh` 5/5, a kontrolą negatywną jest **realny
+  poprzedni kod z `main`** — wywala dokładnie tę jedną asercję i nic poza nią.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

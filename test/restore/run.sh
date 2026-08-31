@@ -2591,6 +2591,10 @@ esac
 # as identity, after a lab campaign caught it asking as accounting.
 . "$DIR/offpoint.sh"
 
+# The probe that decides whether a rollback runs at all. Union of "bytes written"
+# and "snapshots newer", after a lab --at run found the second half missing.
+. "$DIR/ahead.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
