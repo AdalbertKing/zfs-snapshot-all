@@ -352,6 +352,21 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
     # namespace is harmless and strands nothing; destroying one somebody else just
     # created is not. The safer choice now costs nothing, so it wins.
     zfs create -p "${landing%/*}" || die "restore: could not create the restore namespace '${landing%/*}' -- nothing was received, nothing was left behind"
+    # AND THE STAGING NAMESPACE, which is a DIFFERENT path from the landing's
+    # parent and was getting created by accident.
+    #
+    # Found on the lab, 2026-08-31: `--from-copy ... --onto hdd/odzysk0` failed
+    # with `cannot open 'hdd/restore': dataset does not exist`. The line above
+    # creates the LANDING's parent, and for a relationship-addressed restore the
+    # landing sits INSIDE <pool>/restore/... -- so <pool>/restore came along as an
+    # ancestor and nobody noticed it was never asked for. A landing anywhere else
+    # has no such luck, and the failure lands after the preview and the
+    # confirmation, at the receive.
+    #
+    # The suites could not see it: they stub the landing half, which is the right
+    # boundary for what they test and the wrong one for a hidden coupling between
+    # two paths that only looked like one.
+    zfs create -p "$ns_root" || die "restore: could not create the staging namespace '$ns_root' -- nothing was received, nothing was left behind"
 
     if zfs list -H -o name "$staging" >/dev/null 2>&1; then
         die "restore: staging dataset '$staging' already exists, which should be impossible for a name unique to this attempt. Refusing rather than reusing it."
