@@ -5901,6 +5901,25 @@ czterech hostach w obu formach hosta.
 
 ## 6. Otwarte — i u kogo leży
 
+### LEDGER PUSTY — zero recenzji w toku (2026-08-31, `main` @ `bd6797f`)
+
+`docs/internal/reviews/REVIEW_LEDGER.md` nie ma **ani jednego** wiersza poza
+`CLOSED`: wszystkie **65** recenzji zamknięte, zero `OPEN | Claude`, zero
+`IMPLEMENTED | Reviewer`, zero otwartych Pull Requestów. Ostatnie dwie —
+REV-20260831-128 (proweniencja wyboru dla `--onto`) i REV-20260831-129
+(tożsamość per dataset w sprawdzeniu rekurencyjnym) — recenzent zatwierdził i
+zamknął tego dnia, PR #231 i #232.
+
+**Autorytetem jest wygenerowany ledger na świeżo opublikowanym `main`, nie ten
+akapit.** Jeśli oba się rozjadą, rację ma ledger, a to zdanie jest po prostu
+przeterminowane — dlatego nazywa commit, na którym zostało zmierzone. Ten
+dokument opisuje stan produktu i nigdy nie rozstrzyga, czyj jest ruch.
+
+Podsekcje niżej to **zapis historyczny** — kto na co czekał w sierpniu. Żadna z
+opisanych tam recenzji nie jest już otwarta; zostają, bo tłumaczą, skąd wzięły
+się dzisiejsze mechanizmy. Jedyne, co przeżyło jako **bieżące**, to nazwane
+luki produktowe pod „Znane luki" — i one nie są stanem recenzji.
+
 ### Zamknięte przez recenzenta
 
 - **REV-20260731-013 — odzyskiwanie po crashu: ZAMKNIĘTE** (REV-014). Sweep
@@ -5912,12 +5931,15 @@ czterech hostach w obu formach hosta.
 - **Transakcja grantu wraz z odzyskiwaniem po crashu** jest przez recenzenta
   uznana za akceptowalną infrastrukturę dla **opcjonalnego** remote quiesce.
 
-### Otwarte u implementera
+### Historia: co leżało u implementera (sierpień 2026 — wszystko zamknięte)
 
-- **REV-057 — zaimplementowane, czeka na werdykt.** Migracja wykonana i
-  zweryfikowana; odpowiedź: `docs/internal/reviews/responses/REV-20260807-057.md`.
-  REV-054, REV-055, REV-056 i REV-058 są **zamknięte przez recenzenta**.
-- **Znane luki, nazwane w odpowiedziach i nadal otwarte:** (1) `cron2conf.sh`
+- **REV-057 — ZAMKNIĘTE.** Migracja wykonana i zweryfikowana; odpowiedź:
+  `docs/internal/reviews/responses/REV-20260807-057.md`. REV-054, REV-055,
+  REV-056 i REV-058 zamknięte tak samo.
+- **Znane luki produktowe — to NIE jest stan recenzji.** Nazwane w odpowiedziach
+  z początku sierpnia i od tego czasu **nie weryfikowane ponownie**; (1) i (3)
+  sprawdzone pobieżnie 2026-08-31 i nadal wyglądają na otwarte, (2) i (4) nie
+  sprawdzone. Traktować jako listę do potwierdzenia, nie jako pomiar: (1) `cron2conf.sh`
   **nie parsuje w ogóle linii `snapget.sh`**, więc połowa round-tripu dla pull
   jest nietestowalna — usterka sprzed tych zmian, znaleziona przy budowie
   fixture'a (wątek #21d); (2) `--draft-config` nie ma testu behawioralnego, bo
@@ -5942,12 +5964,12 @@ czterech hostach w obu formach hosta.
   Nadanie grantu na rodzicu objęłoby przyszłych automatycznie, ale poszerza
   powierzchnię uprzywilejowaną (wątek #36). Prawdziwą naprawą klasy jest
   uzgadnianie zakresu — Etap 4 planu.
-- **REV-021 — zaimplementowane w `1edca10`, czeka na werdykt.** Instalacja nie
+- **REV-021 — ZAMKNIĘTE przez recenzenta** (zaimplementowane w `1edca10`). Instalacja nie
   może skasować zadań, które cel już wykonuje (`assert_target_block_not_clobbered`),
   a linie „porzucone" przez render konta trafiają do bloku ogólnohostowego
   **tylko** jeśli są rozpoznane jako ogólnohostowe — reszta zatrzymuje migrację
   z podaniem linii. Odpowiedź: `docs/internal/reviews/responses/REV-20260801-021.md`.
-- **REV-018/-019/-020 — zaimplementowane w `1d5a8c4`, czekają na werdykt.**
+- **REV-018/-019/-020 — ZAMKNIĘTE przez recenzenta** (zaimplementowane w `1d5a8c4`).
   Bramka duplikacji porównuje teraz **tożsamość zadań**, nie ścieżkę configu
   (`job_identity()` zdejmuje katalog skryptu i log, zostawia harmonogram,
   datasety, wzorzec, retencję, quiesce i progi). Doszedł czasownik
