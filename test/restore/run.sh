@@ -2090,6 +2090,19 @@ case "$out" in
         bad "xhost: --target WITH a destination is the grammar now, not a refusal" "$out" ;;
     *) ok "xhost: --target WITH a destination is the grammar now, not a refusal" ;;
 esac
+# THE PUBLIC-CLI PAIR FOR REV-20260831-128. The helper cases in onto.sh pin the
+# arithmetic; these two pin the GRAMMAR, which is the thing an operator types.
+# Two selected datasets and one --onto is a cardinality mistake -- the omitted
+# second path -- and used to be silently reinterpreted as "rebase the whole
+# relationship", building destinations nobody stated.
+xh_refuses "xhost: two selected datasets and ONE --onto refuses at the CLI"     "same length" pve2 pve1 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --onto hdd/x
+# The other half: the identical single --onto with NO selection is the
+# whole-relation form and must NOT hit that refusal.
+out="$(xh pve2 pve1 --onto hdd/x)"
+case "$out" in
+    *"same length"*) bad "xhost: ...while the same one --onto with no selection is the whole-relation form" "$out" ;;
+    *) ok "xhost: ...while the same one --onto with no selection is the whole-relation form" ;;
+esac
 xh_refuses "xhost: --onto without a destination is refused" \
     "no destination relationship was given" pve2 --onto hdd/data
 xh_refuses "xhost: --onto and the retired colon spelling are refused together" \

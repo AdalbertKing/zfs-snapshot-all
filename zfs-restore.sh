@@ -1855,69 +1855,53 @@ restore_remote_newer_snaps() {   # <account@host> <target root> <point> [depth]
         exit 0" 2>/dev/null
 }
 
-# IS EVERY DATASET OF THE SUBTREE ACTUALLY AT THE RECOVERY POINT NOW?
-#
-# Asked after the engine, because "the engine exited 0" and "the machine holds
-# the data again" are not the same sentence, and the lab has now produced a run
-# where the first was true and the second was false.
-#
-# The measure is the same property, read again: at the point means
-# `written@<point>` is exactly 0 -- no snapshot after it and nothing written
-# since. Anything else is named and the dataset is reported NOT recovered.
-#
-#   0     at the point
-#   >0    still diverged -- the recovery did not land
-#   -     the dataset does not have that snapshot at all
-#   ''    could not be read
-#
-# Prints one "<dataset> <reason>" line per dataset that is NOT at the point.
-# Silence means every one of them is.
-# IS THE TARGET AT THE RECOVERY POINT? -- ASKED AS IDENTITY, NOT AS ACCOUNTING.
+# IS THE TARGET AT THE RECOVERY POINT? -- ASKED AS IDENTITY, PER DATASET.
 #
 # This used to ask `written@<point>`: how many bytes the dataset has written
 # since that snapshot, with anything non-zero meaning "not at the point".
 #
 # That is the right question BEFORE a restore -- restore_remote_ahead still asks
-# it, and it catches the commonest disaster of all, files deleted from a live
-# filesystem with no snapshot taken since. It is the wrong question AFTER one,
-# because the restore itself writes: the quantity being measured is one the
-# immediately preceding step is guaranteed to disturb.
+# it -- and the wrong one AFTER, because the restore itself writes: the quantity
+# being measured is one the immediately preceding step is guaranteed to disturb.
+# Measured on the lab 2026-08-31, two datasets that landed exactly on the point
+# were reported CHANGED AND UNFINISHED because written@point read 8192.
 #
-# Measured on the lab, 2026-08-31, in the campaign that was meant to prove
-# something else entirely: two datasets landed exactly on the recovery point --
-# newest snapshot IS the point, deleted files back -- and were reported as
-# `CHANGED AND UNFINISHED ... they need a person`, exit 2, because
-# `written@point` read 8192. The loudest alarm this tool has, raised over a
-# successful recovery, which in a real disaster sends somebody out at three in
-# the morning to fix what is already working.
+# ONE GUID PER DATASET, NOT ONE FOR THE SUBTREE. REV-20260831-129: the first
+# version took a single expected guid and applied it to every dataset the
+# recursive enumeration found. A snapshot's guid belongs to that dataset's
+# snapshot, so a perfectly valid child was reported as "the right name, a
+# different snapshot" -- turning every successful recursive restore into a
+# report that it needs a human. Comparing a child's identity with its parent's
+# is a category error, not a strict check.
 #
-# Three hypotheses about those 8192 bytes were tested and TWO WERE WRONG: it is
-# not a txg lag (stable after five seconds), not an effect of being mounted (a
-# quiet mounted dataset reads 0), and not the rollback (isolated, it reads 0).
-# Which step writes them is still not isolated -- and this correction
-# deliberately does not depend on knowing. The predicate was answering the wrong
-# question whatever the answer happened to be.
+# So the caller sends a TABLE: one line per dataset, `<relative path>\t<guid>`,
+# taken from the COPY side where the recovery point's identities actually live.
+# The remote looks each dataset up by its own position under the root. A dataset
+# with no entry was not part of this recovery and is not this check's business.
 #
-# What the verb actually promises is that the target's lineage ENDS at the
-# recovery point. So:
-#
-#   * the snapshot is there, and it is THE one -- by guid, never by name. A
-#     snapshot with the right name and a different guid is a different snapshot,
-#     which is the distinction this file spends most of its length on;
-#   * nothing sits on top of it.
-#
-# Both are facts about identity. Neither can be perturbed by the restore having
-# done its job.
-restore_remote_off_point() {   # <account@host> <target root> <recovery point> [depth] [expected guid]
-    local peer="$1" root="$2" point="$3" depth="${4-}" want="${5-}"
+# What the verb promises is that each restored dataset's lineage ENDS at its own
+# recovery point, so that is what is asked: the snapshot is there, it is THE one
+# by guid, and nothing sits on top. Facts about identity, none of which a
+# successful restore can disturb.
+restore_remote_off_point() {   # <account@host> <target root> <recovery point> [depth] [map: rel<TAB>guid per line]
+    local peer="$1" root="$2" point="$3" depth="${4-}" map="${5-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        MAP='$map'
         for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
+            rel=\"\${d#$root}\"
+            want=''
+            if [ -n \"\$MAP\" ]; then
+                want=\$(printf '%s\n' \"\$MAP\" | awk -F'\t' -v r=\"\$rel\" '\$1==r{print \$2; exit}')
+                # Not in the table: this dataset was not part of the recovery,
+                # so its state is not this check's business.
+                [ -n \"\$want\" ] || continue
+            fi
             g=\$(zfs get -Hp -o value guid \"\$d@$point\" 2>/dev/null)
             case \"\$g\" in
                 ''|-) echo \"\$d does not have that snapshot\"; continue ;;
             esac
-            if [ -n '$want' ] && [ \"\$g\" != '$want' ]; then
-                echo \"\$d has a snapshot NAMED $point but a DIFFERENT one -- guid \$g, expected $want\"
+            if [ -n \"\$want\" ] && [ \"\$g\" != \"\$want\" ]; then
+                echo \"\$d has a snapshot NAMED $point but a DIFFERENT one -- guid \$g, expected \$want\"
                 continue
             fi
             n=\$(zfs list -H -p -t snapshot -o name -s createtxg -d 1 \"\$d\" 2>/dev/null | tail -1)
@@ -2467,10 +2451,30 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # rather than left out: without it the check would accept a
                 # snapshot that merely shares the NAME, which is the one mistake
                 # this file refuses everywhere else.
-                local _vguid
-                _vguid="$(printf '%s
-' "$rows" | awk -F'	' -v p="${copy}@${point}" '$1 == p {print $3; exit}')"
-                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth" "$_vguid")"; _orc=$?
+                # ONE EXPECTED IDENTITY PER DATASET, taken from the copy side
+                # where the recovery point's guids actually live, and keyed by
+                # each dataset's position UNDER THE COPY ROOT so the far side can
+                # match it to its own position under the target root.
+                # REV-20260831-129: a single guid applied to a whole subtree
+                # reported every valid child as a different snapshot.
+                local _vmap
+                _vmap="$(zfs list -H -p -t snapshot -o name,guid -r "$copy" 2>/dev/null                     | awk -F'	' -v c="$copy" -v pt="@${point}" '
+                        index($1, c) == 1 {
+                            n = $1
+                            if (substr(n, length(n) - length(pt) + 1) != pt) next
+                            ds = substr(n, 1, length(n) - length(pt))
+                            rel = substr(ds, length(c) + 1)
+                            # AT A NAME BOUNDARY. `index()==1` also matches a
+                            # dataset that merely STARTS with the copy is name --
+                            # hdd/copyOTHER under hdd/copy -- which would enter
+                            # the table under a nonsense relative path. `zfs list
+                            # -r` would not return one, but a table keyed by
+                            # position must not depend on that.
+                            if (rel != "" && substr(rel, 1, 1) != "/") next
+                            printf "%s	%s
+", rel, $2
+                        }')"
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth" "$_vmap")"; _orc=$?
                 if [ "$_orc" -ne 0 ]; then
                     # Same rule on the way out. "I could not check" is not
                     # "it is fine", and this is the last chance to say so.
@@ -2826,8 +2830,21 @@ restore_common_root() {   # <path>...
 # unchanged: writing the disks in a different order on the two sides says
 # something the operator did not mean, and sorting it out for them hides exactly
 # the mistake this form exists to let them state precisely.
-restore_onto_plan() {   # <onto list> <from root>...
-    local list="$1"; shift
+restore_onto_plan() {   # <selection given: 0|1> <onto list> <from root>...
+    # WHETHER A SELECTION WAS GIVEN IS PART OF THE GRAMMAR, not something to be
+    # inferred from how many roots arrived. REV-20260831-128: the two public
+    # forms have different contracts --
+    #
+    #   with --source/--target : --onto is a positional list of the SAME length
+    #   with no selection      : ONE --onto path rebases the whole relationship
+    #
+    # -- and both call sites handed over an array of roots in exactly the same
+    # shape, so the helper could not tell them apart. `--target a,b --onto x`
+    # then took the whole-relation branch: it derived a common root and built
+    # destinations the operator never stated as pairs. On a destructive
+    # cross-host restore, turning an invalid pairing request into a different
+    # valid mapping is a targeting error, not a convenience.
+    local selected="$1" list="$2"; shift 2
     RESTORE_ONTO_FROM=(); RESTORE_ONTO_TO=()
     local -a to=()
     local item
@@ -2847,7 +2864,13 @@ restore_onto_plan() {   # <onto list> <from root>...
     fi
 
     local -a from=()
-    if [ "$n_to" -eq 1 ] && [ "$n_from" -gt 1 ]; then
+    if [ "$selected" -eq 1 ]; then
+        # An explicit selection: lengths must match, including the case where
+        # one destination was given for several selected datasets. That is the
+        # mistake this refusal exists for -- an operator who left a path out.
+        [ "$n_to" -eq "$n_from" ]             || die "restore: --target/--source names $n_from dataset(s) and --onto names $n_to. When the datasets are selected explicitly the two lists are read as PAIRS, in order, so they have to be the same length. One --onto path rebases a WHOLE relationship, and that form is the one with no selection at all -- naming both is a different request, and guessing which you meant would aim a destructive recovery somewhere you did not write down."
+        from=("$@")
+    elif [ "$n_to" -eq 1 ] && [ "$n_from" -gt 1 ]; then
         # THE WHOLE RELATIONSHIP, REBASED. A VM with four disks is four recorded
         # sections, so "read the root, never infer it" would have refused the
         # exact disaster this form exists for. The base is derived -- and
@@ -4383,7 +4406,8 @@ cmd_restore() {
             # The selection IS the list of roots here: this path resolves exact
             # paths and expands nothing, so position i of --onto pairs with
             # position i of what the operator named.
-            [ -z "$onto_list" ] || restore_onto_plan "$onto_list" "${RESTORE_SCOPE_SRC[@]}"
+            # 1: these roots ARE the operator's selection.
+            [ -z "$onto_list" ] || restore_onto_plan 1 "$onto_list" "${RESTORE_SCOPE_SRC[@]}"
             restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
@@ -4484,7 +4508,9 @@ cmd_restore() {
                     [ -n "$_wr_s" ] || continue
                     _wr_roots+=("$_wr_s")
                 done <<< "$_rc_sel"
-                restore_onto_plan "$onto_list" "${_wr_roots[@]}"
+                # 0: no selection was given -- these are the relationship's
+                # recorded roots, and one --onto path may rebase all of them.
+                restore_onto_plan 0 "$onto_list" "${_wr_roots[@]}"
             fi
             restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"

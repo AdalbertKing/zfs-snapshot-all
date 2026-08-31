@@ -87,7 +87,7 @@ printf 'rpool/data 8192\n' > "$OP/written"
 
 # ---- the target IS at the point ---------------------------------------------
 printf 'rpool/data@p 111 10\n' > "$OP/snaps"
-out="$(op_run p 111)"
+out="$(op_run p "$(printf '	111')")"
 if [ -z "$out" ]; then ok "offpoint: a target whose newest snapshot IS the point reports nothing"
 else bad "offpoint: a target whose newest snapshot IS the point reports nothing" "$out"; fi
 
@@ -103,7 +103,7 @@ fi
 
 # ---- the snapshot is not there ----------------------------------------------
 printf 'rpool/data@inny 999 10\n' > "$OP/snaps"
-out="$(op_run p 111)"
+out="$(op_run p "$(printf '	111')")"
 case "$out" in
     *"does not have that snapshot"*) ok "offpoint: a target without the point says so" ;;
     *) bad "offpoint: a target without the point says so" "$out" ;;
@@ -113,7 +113,7 @@ esac
 # The distinction this file spends most of its length on, applied to the check
 # that closes the run: a name is not an identity.
 printf 'rpool/data@p 222 10\n' > "$OP/snaps"
-out="$(op_run p 111)"
+out="$(op_run p "$(printf '	111')")"
 case "$out" in
     *"DIFFERENT one"*) ok "offpoint: A SNAPSHOT WITH THE RIGHT NAME AND THE WRONG GUID IS NOT THE POINT" ;;
     *) bad "offpoint: A SNAPSHOT WITH THE RIGHT NAME AND THE WRONG GUID IS NOT THE POINT" "$out" ;;
@@ -121,7 +121,7 @@ esac
 
 # ---- something sits on top ---------------------------------------------------
 printf 'rpool/data@p 111 10\nrpool/data@nowszy 333 20\n' > "$OP/snaps"
-out="$(op_run p 111)"
+out="$(op_run p "$(printf '	111')")"
 case "$out" in
     *"sitting on top of p"*) ok "offpoint: a snapshot newer than the point is reported" ;;
     *) bad "offpoint: a snapshot newer than the point is reported" "$out" ;;
@@ -134,6 +134,55 @@ printf 'rpool/data@p 111 10\n' > "$OP/snaps"
 out="$(op_run p '')"
 if [ -z "$out" ]; then ok "offpoint: with no expected guid it still passes a target at the point"
 else bad "offpoint: with no expected guid it still passes a target at the point" "$out"; fi
+
+# ---- RECURSIVE: EACH DATASET AGAINST ITS OWN IDENTITY (REV-20260831-129) ----
+# A snapshot's guid belongs to that dataset's snapshot. The first version of this
+# probe took ONE expected guid and applied it to every dataset the recursive
+# enumeration found, so a perfectly valid child was reported as "the right name,
+# a different snapshot" -- turning every successful recursive restore into a
+# report that it needs a human. Comparing a child's identity with its parent's is
+# a category error, not a strict check.
+printf 'rpool/data
+rpool/data/child
+' > "$OP/list"
+printf 'rpool/data@p 111 10
+rpool/data/child@p 222 10
+' > "$OP/snaps"
+MAP="$(printf '	111
+/child	222
+')"
+out="$(op_run p "$MAP")"
+if [ -z "$out" ]; then ok "offpoint: A VALID CHILD IS CHECKED AGAINST ITS OWN GUID, NOT THE PARENT'S"
+else bad "offpoint: A VALID CHILD IS CHECKED AGAINST ITS OWN GUID, NOT THE PARENT'S" "$out"; fi
+
+# ...and the protection stays: a child with the right name and the wrong guid,
+# measured against ITS OWN expected identity, is still refused.
+printf 'rpool/data@p 111 10
+rpool/data/child@p 999 10
+' > "$OP/snaps"
+out="$(op_run p "$MAP")"
+case "$out" in
+    *"child has a snapshot NAMED p but a DIFFERENT one"*) ok "offpoint: ...while a child with the wrong guid is still caught" ;;
+    *) bad "offpoint: ...while a child with the wrong guid is still caught" "$out" ;;
+esac
+
+# A dataset the recovery never included has no entry in the table, so it is not
+# this check's business -- reporting it would be a false alarm about something
+# the run did not touch.
+printf 'rpool/data
+rpool/data/child
+rpool/data/obcy
+' > "$OP/list"
+printf 'rpool/data@p 111 10
+rpool/data/child@p 222 10
+' > "$OP/snaps"
+out="$(op_run p "$MAP")"
+case "$out" in
+    *obcy*) bad "offpoint: ...and a dataset outside the recovery is not reported" "$out" ;;
+    *) ok "offpoint: ...and a dataset outside the recovery is not reported" ;;
+esac
+printf 'rpool/data
+' > "$OP/list"
 
 if [ "${_op_standalone:-0}" = 1 ]; then
     echo "--------------------------------------------"

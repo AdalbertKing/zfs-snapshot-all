@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0b0cabb47dfb4516 -->
+<!-- status-covers-digest: 6004d9b67715f635 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1742,6 +1742,39 @@
   **Przy okazji:** `${#TABLICA[@]}` na nieustawionej tablicy **wywala `set -u`**
   (sprawdzone), więc fixture'y sterujące tą funkcją muszą ją podawać. Produkcja
   jest bezpieczna, bo tablica jest deklarowana na poziomie pliku.
+
+- **Dwa znaleziska recenzenta w kodzie z tego samego dnia (REV-128, REV-129,
+  2026-08-31).** Oba `CHANGES-REQUIRED`, oba P1, oba w rzeczach, które sam
+  dowodziłem kilka godzin wcześniej.
+  **REV-128 — gramatyka zgadywana z długości list.** `--onto` ma dwa publiczne
+  kształty o różnych kontraktach: z `--source`/`--target` to lista **pozycyjna
+  równej długości**, bez wyboru — **jedna** ścieżka przesadza całą relację.
+  Oba wywołania podawały korzenie w identycznym kształcie, więc funkcja nie
+  mogła ich odróżnić i `--target a,b --onto x` wchodziło w gałąź „cała relacja":
+  wyliczało wspólny korzeń i budowało cele, których operator nie podał jako par.
+  Odtworzone co do znaku na wskazanym SHA: `rc=0 pairs=1 from=rpool/data
+  to=hdd/recovered`. Przy niszczącym odzysku międzyhostowym **ciche zamienienie
+  błędnej pary na inną poprawną to błąd celowania**, nie ułatwienie. Pochodzenie
+  wyboru jest teraz jawnym parametrem, nie wnioskiem z liczby korzeni.
+  **REV-129 — jeden GUID rodzica przyłożony do całego poddrzewa.** GUID należy
+  do snapshotu **konkretnego** datasetu, więc przy weryfikacji rekurencyjnej
+  poprawne dziecko zgłaszało się jako „ta sama nazwa, inny snapshot" — czyli
+  **każdy udany odzysk rekurencyjny kończył się raportem, że wymaga człowieka**.
+  Odtworzone: `rpool/data/child has a snapshot NAMED p but a DIFFERENT one --
+  guid 222, expected 111`, na fixturze bez jednej wady. Teraz idzie **tabela
+  tożsamości per dataset**, budowana po stronie kopii i kluczowana pozycją pod
+  korzeniem; dataset spoza tabeli nie brał udziału w odzysku i nie jest sprawą
+  tej kontroli.
+  **Przy pisaniu tabeli test złapał wadę w niej samej:** `index($1,c)==1` łapie
+  dataset, który tylko *zaczyna się* nazwą kopii (`hdd/copyINNY` pod `hdd/copy`).
+  Ta sama pomyłka o granicę nazwy, którą naprawiałem tego dnia w korzeniu
+  `--onto`. `zfs list -r` tego nie zwróci, ale tabela kluczowana pozycją nie ma
+  się na tym opierać.
+  Dowód: `onto` 19/19, `offpoint` 9/9. **Kontrole na całych plikach byłyby
+  skażone** — zmieniły się sygnatury w harnessach, więc stary kod dostaje
+  przesunięte argumenty i pada z innego powodu niż wada. Zamiast tego kontrole
+  **punktowe na SHA-ach wskazanych przez recenzenta**, odtwarzające dokładnie
+  jego pomiar.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

@@ -75,9 +75,13 @@ if onto_root rpool/a hdd/b >/dev/null 2>&1; then
     bad "root: roots with nothing in common REFUSE rather than resolving to nothing"
 else ok "root: roots with nothing in common REFUSE rather than resolving to nothing"; fi
 
+# Default for the existing cases: no selection was given, which is the form they
+# were written for. The selected form gets its own cases at the foot of the file.
+SEL=0
+
 # ---------------------------------------------------------------------------
 # THE PAIRS
-onto_plan() {   # <onto list> <from root>... -> "from|to" per line
+onto_plan() {   # <onto list> <from root>...   ($SEL says whether a selection was given)
     local list="$1"; shift
     local t; t=$(mktemp)
     {
@@ -86,7 +90,7 @@ onto_plan() {   # <onto list> <from root>... -> "from|to" per line
         echo 'RESTORE_ONTO_FROM=(); RESTORE_ONTO_TO=()'
         awk -v want="restore_common_root() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="restore_onto_plan() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
-        printf 'restore_onto_plan %q' "$list"
+        printf 'restore_onto_plan %q %q' "$SEL" "$list"
         local p; for p in "$@"; do printf ' %q' "$p"; done
         printf '\n'
         echo 'for ((i=0;i<${#RESTORE_ONTO_FROM[@]};i++)); do printf "%s|%s\n" "${RESTORE_ONTO_FROM[$i]}" "${RESTORE_ONTO_TO[$i]}"; done'
@@ -142,7 +146,7 @@ out="$(onto_plan 'hdd/data' rpool/a hdd/b 2>&1)" && \
 
 # ---------------------------------------------------------------------------
 # THE MAPPING: children keep their relative position
-onto_dest() {   # <onto list> <from root>... ; scope in RESTORE_SCOPE_SRC via $SRCS
+onto_dest() {   # <onto list> <from root>...   ($SEL says whether a selection was given)
     local list="$1"; shift
     local t; t=$(mktemp)
     {
@@ -156,7 +160,7 @@ onto_dest() {   # <onto list> <from root>... ; scope in RESTORE_SCOPE_SRC via $S
         awk -v want="restore_common_root() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="restore_onto_plan() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="restore_scope_dest() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
-        printf 'restore_onto_plan %q' "$list"
+        printf 'restore_onto_plan %q %q' "$SEL" "$list"
         for p in "$@"; do printf ' %q' "$p"; done
         printf '\n'
         echo 'restore_scope_dest /dev/null "" onto-relation'
@@ -218,6 +222,35 @@ want="acct@peer:hdd/odzysk
 acct@peer:hdd/odzysk/vm-900-disk-0"
 if [ "$out" = "$want" ]; then ok "dest: A TRANSPORT-PREFIXED SOURCE STILL FINDS ITS REBASE ROOT"
 else bad "dest: A TRANSPORT-PREFIXED SOURCE STILL FINDS ITS REBASE ROOT" "$out"; fi
+
+# ---- SELECTION PROVENANCE (REV-20260831-128) --------------------------------
+# The two public forms have different contracts, and the helper used to be
+# unable to tell them apart because both call sites handed it roots in the same
+# shape. `--target a,b --onto x` then took the whole-relation branch: it derived
+# a common root and built destinations the operator never stated as pairs.
+SEL=1
+out="$(onto_plan 'hdd/a' rpool/x rpool/y 2>&1)" &&     bad "sel: TWO SELECTED DATASETS AND ONE --onto REFUSES" "it inferred a rebase instead" ||     case "$out" in
+        *"same length"*) ok "sel: TWO SELECTED DATASETS AND ONE --onto REFUSES" ;;
+        *) bad "sel: TWO SELECTED DATASETS AND ONE --onto REFUSES" "$out" ;;
+    esac
+# ...and the refusal has to say which form the single path WOULD have been, or
+# the operator reads it as "this is never allowed" and stops using the form.
+case "$out" in
+    *"rebases a WHOLE relationship"*) ok "sel: ...naming the form that does take one path" ;;
+    *) bad "sel: ...naming the form that does take one path" "$out" ;;
+esac
+# Equal lengths still pair, with a selection.
+out="$(onto_plan 'hdd/a,hdd/b' rpool/x rpool/y)"
+want="rpool/x|hdd/a
+rpool/y|hdd/b"
+if [ "$out" = "$want" ]; then ok "sel: an equal-length selection still pairs positionally"
+else bad "sel: an equal-length selection still pairs positionally" "$out"; fi
+# THE OTHER HALF OF THE PAIR: the same one-path call with NO selection is the
+# whole-relation form and stays accepted.
+SEL=0
+out="$(onto_plan 'hdd/a' rpool/x rpool/y)"
+if [ "$out" = "rpool|hdd/a" ]; then ok "sel: ...while the identical call with NO selection still rebases the whole relationship"
+else bad "sel: ...while the identical call with NO selection still rebases the whole relationship" "$out"; fi
 
 if [ "${_onto_standalone:-0}" = 1 ]; then
     echo "--------------------------------------------"
