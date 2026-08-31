@@ -1372,6 +1372,33 @@
   zauważyć, że nikt tej funkcji nie woła. Zdublowane opakowanie usunięte, żeby
   nie było dwóch polityk.
 
+- **POŁOWA B DOWIEDZIONA NA ŻYWYM ZFS — kampania i jej powtórka po sześciu
+  poprawkach (2026-08-31).** Dźwignia: `zfs hold` na snapshocie uszkodzenia.
+  Przechodzi pre-flight (blokady nie są tam sprawdzane) i wywala się dopiero na
+  `zfs rollback -r` — czyli daje dataset, który **przechodzi kwalifikację i pada
+  w wykonaniu**, dokładnie ten kształt, którego połowa B dotyczy. To nie jest
+  sztuczka: blokada wbita w snapshot to stan, który ten projekt już raz mierzył
+  przy pvesr.
+
+  | wariant | wynik |
+  |---|---|
+  | awaria na **ostatnim** datasecie | `OK`, `OK`, `NOT DONE` → `PARTIAL -- 2 recovered, 1 untouched`, RC=1 |
+  | awaria na **pierwszym** datasecie | `NOT DONE`, `OK`, `OK` → ten sam wynik, RC=1 |
+
+  **Rozstrzyga drugi wariant.** Przy blokadzie na ostatnim datasecie dostaje się
+  te same zielone liczby i **nie dowodzi niczego o kontynuacji** — po awarii nic
+  już nie zostało do zrobienia. Dopiero awaria na **pierwszym** pokazuje, że bieg
+  leci dalej. Miejsce, w którym umieszcza się awarię, jest tu całym testem.
+  **Raport zgodny z dyskiem, sprawdzony przez `ls`, nie zaufaniem komunikatowi:**
+  `znacznik.txt` NIE wrócił na dataset zgłoszony jako `NOT DONE` (cofnięcie było
+  zablokowane), a `dane.bin` wrócił na obu zgłoszonych jako `OK`.
+  **Powtórka potwierdziła też dwie poprawki w kierunku „ma nie krzyczeć":** oba
+  odzyskane datasety dostały `OK`, a nie `CHANGED` jak w pierwszej kampanii
+  (weryfikacja po tożsamości), a blok „co to kosztuje backup" **zamilkł**, bo
+  snapshoty uszkodzenia nigdy nie trafiły na kopię.
+  Po biegu: pliki na miejscu, blokady zdjęte, grant cofnięty, **zero pauz**,
+  następny pull `All datasets processed successfully`.
+
 - **Krok per dataset jest IZOLOWANY procesowo (REV-20260831-127 F1,
   2026-08-31).** Kontroler relacji klasyfikuje kod wyjścia `restore_one` — a
   może to zrobić tylko wtedy, gdy `restore_one` **wraca**. `die` w tym drzewie
