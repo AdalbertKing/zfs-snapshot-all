@@ -85,6 +85,36 @@ prawo mieć zdanie, tylko żaden wbudowany profil z tego nie korzysta.
 To jest gotowe miejsce na domyślną („profil archiwalny jest płaski"), a nie
 funkcja do dopisania.
 
+> **KOREKTA 2026-08-31 — to nie było gotowe miejsce, tylko dziura.**
+> Zmierzone przez prawdziwe `emit_client_sections`: profil z `recursive`
+> w bloku `[dataset]` przechodzi walidację, fragment zostaje wklejony do
+> sekcji, a `emit_client_sections` dopisuje **własną** linię `recursive`
+> dla korzenia rekursyjnego — sekcja ma pole dwa razy i `gen-cron` odmawia
+> całości, nazywając duplikat, nigdy profil. Czyli taki profil niczego nie
+> domyślał: unieruchamiał każdą relację rekursyjną z niego zbudowaną.
+>
+> Ta sama rodzina, groźniejszy przypadek: `send_schedule` w tym samym bloku
+> koliduje z minutą rozrzutu — a rozrzut pisze do **każdej** tworzonej
+> sekcji, nie tylko rekursyjnej.
+>
+> Obie odmawiane od 2026-08-31 przy walidacji profilu, czyli zanim powstanie
+> jakikolwiek config. Reguły dwie: rekursja to **topologia relacji** (profil
+> nie wie, czy jego źródło jest korzeniem poddrzewa), a cokolwiek ma warstwę
+> `[template:]` jest **polityką** i tam ma siedzieć — w sekcji nadpisuje
+> każdy tier, który ta sekcja referuje, czyli spłaszcza dokładnie tak jak
+> w §4 poniżej.
+>
+> Do bloku `[dataset]` profilu zostają więc `use_template` i `media`. To jest
+> wąsko i tak ma być: zadaniem fragmentu jest wskazać szablony, nie nosić
+> politykę.
+>
+> Uwaga do rozstrzygnięcia przez recenzenta: REV-20260808-076 stwierdza
+> „recursion remains profile-owned". To zdanie powstało, gdy projekt **nie
+> miał** rekursji na poziomie relacji — opisuje rewizję właściciela, która ją
+> właśnie usunęła. Dziś `--recursive=flat|atomic` jest z powrotem na
+> relacji i w rekordzie klienta, więc przesłanka tamtego zdania już nie
+> obowiązuje. Implementacja poszła za kodem, nie za zdaniem.
+
 ### 1. Warstwy nie mieszają się tak, jak mogłoby się wydawać
 
 Żadna wartość klasy **T** nie przechodzi przez profil — i to jest dobrze:
@@ -201,6 +231,46 @@ właściciela**: opcje łącza osobno od tożsamości osobno od decyzji relacji.
 Dopóki to jeden string, każda odpowiedź na pytanie „co ma wejść do profilu"
 jest ograniczona nie przez sens, tylko przez to, że pół odpowiedzi leży w
 worku oznaczonym „nie dotykać".
+
+### 5.4 Worek rozbity — stan po 2026-08-31
+
+Rozbicie poszło w dwóch krokach i jest skończone.
+
+| oś | pola | commit |
+|---|---|---|
+| **łącze** | `bandwidth`, `compression`, `cipher` | `6d71a3b`, 2026-08-24 |
+| **zakres** | `passive`, `exclude_snapshots`, `exclude_<n>` | etap profili, 2026-08-31 |
+| **tożsamość** | zostaje w `flags`: `-K -k -O -p` | — |
+
+Uwaga do §5.3 wyżej: napisała, że własne nazwy mają „tylko `quiesce`,
+`autotune` i `recursive`" — to było prawdą w chwili pomiaru i przestało nią
+być tego samego dnia, gdy wszedł `6d71a3b`. Sekcja została, bo jej argument
+jest nadal właściwym opisem PRZYCZYNY; tabela wyżej mówi, co z niej wynikło.
+
+Każde z sześciu pól renderuje dokładnie ten token, który operator wpisałby
+ręcznie, w tej samej kolejności — sprawdzane przez wyrenderowanie obu
+zapisów i porównanie wywołania silnika (`test/linkfields`, `test/scopefields`).
+Kolejność jest asercją, nie estetyką: przestawiony `flags` to szum w każdym
+`crontab diff` na estacie. Ta sama opcja przychodząca i z `flags`, i z pola
+jest **odmawiana**, nie scalana.
+
+`flags` jest odtąd profile-forbidden dlatego, że zawiera tożsamość — a nie
+dlatego, że zawiera wszystko.
+
+**Czego to jeszcze nie robi.** Trzy pola zakresu są na razie
+profile-forbidden, czyli węziej, niż argumentuje §5 i „Propozycja" niżej.
+Żeby profil mógł dać domyślną (**D**), brakuje dwóch rzeczy: warstwy
+`[template:]`, z której dałoby się dziedziczyć, i CLI, które odróżni „operator
+powiedział nie" od „operator nie powiedział nic" — dzisiejsze `--passive` to
+zwykły boolean, więc domyślna z profilu nigdy by nie doszła do głosu.
+Zakazanie jest kierunkiem odwracalnym: poszerzyć później to jedna linia,
+zawęzić później to zepsute profile, które ktoś już napisał.
+
+`zfs-backup.sh` **nadal pakuje `-X`/`-e`/`-E` do `flags`** przy tworzeniu
+i odświeżaniu sekcji. Przełączenie go na nowe pola to osobna decyzja, bo
+przepisuje sekcje każdej istniejącej relacji przy najbliższej reaktywacji,
+czyli produkuje różnicę w crontabie na całej estacie. Gramatyka jest gotowa;
+migracja czeka na decyzję właściciela.
 
 ## Propozycja podziału na potrzeby etapu profili
 

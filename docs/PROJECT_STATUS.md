@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c53d5ac67f2621c0 -->
+<!-- status-covers-digest: 71730c7e3a24279d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,44 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **ETAP PROFILI, krok 1: worek `flags` rozbity do końca (2026-08-31).**
+  `flags` w sekcji `[dataset:]` niósł trzy różne własności naraz. Oś **łącza**
+  (`bandwidth`, `compression`, `cipher`) wyszła 2026-08-24 w `6d71a3b`; teraz
+  wyszła oś **zakresu** — `passive` (`-e`), `exclude_snapshots` (`-E`, lista po
+  przecinku) i `exclude_<n>` (`-X`, numerowane, bo wartość to REGEX i może
+  zawierać każdy separator, który wybrałaby lista). W `flags` zostaje sama
+  **tożsamość**: `-K -k -O -p` — i to jest odtąd powód, dla którego pole jest
+  profile-forbidden.
+
+  Każde pole renderuje ten sam token i w tej samej kolejności co zapis ręczny —
+  asercja przez wyrenderowanie obu i porównanie wywołania silnika. Kolejność jest
+  częścią kontraktu, bo przestawiony `flags` to szum w każdym `crontab diff`.
+  Ta sama opcja z `flags` i z pola jest odmawiana, nie scalana; `passive = no`
+  obok ręcznego `-e` też, i to jest ostrzejszy przypadek — `no` nie renderuje
+  nic, więc nie ma duplikatu, jest tylko config czytający odwrotnie, niż działa.
+  Nowa suita `test/scopefields` 35/0 z wbudowaną kontrolą negatywną.
+
+  Przy okazji dwa defekty, oba zmierzone z kontrolą:
+  `gen-cron.sh` nie wiedział, że `-E` bierze argument, więc zbundlowane
+  `-Erepl_` (legalne dla obu silników) czytał jako pięć opcji i wymyślał literę
+  `r` — config wykluczający rodzinę na `r` był odrzucany za „deklarowanie
+  rekursji"; `-Ebulk_` wymyślało `-b` i kolidowało z polem `bandwidth`.
+  Drugi: profil mógł wpisać do bloku `[dataset]`/`[prune]` pole, które relacja
+  i tak pisze do tej samej sekcji (`recursive`, `send_schedule`) — duplikat pola
+  to twarda odmowa `gen-cron`, więc taki profil unieruchamiał każdą relację
+  z niego zbudowaną, a błąd nazywał duplikat, nigdy profil. Odmawiane teraz przy
+  walidacji profilu. Do bloku `[dataset]` zostają `use_template` i `media`.
+
+  **Czego to jeszcze NIE robi:** pola zakresu są profile-forbidden (węziej, niż
+  chce `PROFILE-VARIABLE-INVENTORY.md` §5) — brakuje warstwy `[template:]` i CLI
+  odróżniającego „nie" od „nic nie powiedziano"; `zfs-backup.sh` **nadal pakuje**
+  `-X`/`-e`/`-E` do `flags`, bo przełączenie go przepisuje sekcje całej estaty
+  przy reaktywacji i to jest osobna decyzja właściciela.
+
+  Do rozstrzygnięcia przez recenzenta: zdanie „recursion remains profile-owned"
+  z REV-20260808-076 powstało, gdy nie było rekursji na poziomie relacji; dziś
+  jest, więc implementacja poszła za kodem.
 
 - **Monit potwierdzenia był nieodpowiadalny ze strumienia — `ssh` zjadało stdin (2026-08-23).**
   `ssh` bez `-n` czyta swoje wejście do końca i przekazuje je zdalnej komendzie. Żadne
@@ -1893,6 +1931,10 @@
   zarezerwowane edytowalne z profilu → `default` jako jawny parametr → kształt
   profilu. Podstawa: `docs/project/PROFILE-VARIABLE-INVENTORY.md` oraz dwie
   decyzje właściciela z 2026-08-25.
+
+  Krok 1 **zrobiony** 2026-08-24 (oś łącza) i 2026-08-31 (oś zakresu) — patrz
+  wpis „ETAP PROFILI, krok 1" na początku tego pliku, razem z listą tego, czego
+  krok 1 świadomie nie robi.
 
 - **KROK 5, plaster 1: brak `--source` proponuje zrodla (2026-08-25).**
 

@@ -1989,8 +1989,20 @@ installed_dataset_src() {   # <cronfile> <local dataset path>
 # read this off the installed transfer `flags` (runtime truth) and never propose taking
 # destructive source-retention ownership of it -- no new state token, just the flag
 # that is already there.
+#
+# TWO SPELLINGS since 2026-08-31, and both have to be read. `-e` inside 'flags'
+# is what every installed section carries and what this tool still writes; the
+# named `passive` field is what CONFIG v4 gained when the scope options were
+# split out of the flags sack, and a hand-written config may already use it.
+# Reading only one of them would answer "not passive" for a job that is, and the
+# caller uses that answer to decide whether to propose taking DESTRUCTIVE
+# source-retention ownership of somebody else's snapshots.
 installed_dataset_is_passive() {   # <cronfile> <local dataset path>
-    local flags; flags="$(installed_dataset_field "$1" "$2" flags)"
+    local flags passive
+    passive="$(installed_dataset_field "$1" "$2" passive)"
+    [ "$passive" = yes ] && return 0
+    [ "$passive" = no ]  && return 1
+    flags="$(installed_dataset_field "$1" "$2" flags)"
     case " $flags " in *" -e "*) return 0 ;; *) return 1 ;; esac
 }
 

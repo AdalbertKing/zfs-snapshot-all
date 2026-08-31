@@ -95,6 +95,10 @@ set -o pipefail
 #       use_template = <tier>[,<tier>...]  # comma list -- one dataset can span several tiers
 #       notify       = <short label>
 #       flags        = <snapsend.sh flags, or snapget.sh flags when 'src' is set>
+#                                          # IDENTITY ONLY now: -K/-k/-O/-p. The
+#                                          # link and scope options below used to
+#                                          # ride in here and have their own
+#                                          # fields as of 2026-08-24/2026-08-31.
 #       flags_<tier> = <per-tier flags override>
 #       send_schedule_<tier>  = <per-tier send cadence override>
 #       prune_schedule_<tier> = <per-tier prune cadence override>
@@ -105,6 +109,26 @@ set -o pipefail
 #                                          # and profile-forbidden: a policy
 #                                          # carrier is shared by datasets that
 #                                          # do not share a destination.
+#       passive      = yes|no              # SCOPE fields: what this relationship
+#                                          # TAKES from its source. 'passive'
+#                                          # renders -e -- adopt the newest
+#                                          # existing snapshot instead of
+#                                          # stamping one of our own.
+#       exclude_snapshots = <fam>[,<fam>]  # -E per entry: families this pickup
+#                                          # refuses to adopt. Comma-separated,
+#                                          # like monitor_exclude, and safe
+#                                          # because a snapshot name cannot
+#                                          # contain a comma.
+#       exclude_<n>  = <regex>             # -X per field: children left behind.
+#                                          # NUMBERED from 1 with no gaps, not
+#                                          # comma-separated -- the value is a
+#                                          # regex and may contain any separator
+#                                          # a list would have used.
+#                                          # Section only and profile-forbidden,
+#                                          # same as the link fields; see
+#                                          # add_scope_flags for why that is
+#                                          # deliberately narrower than these
+#                                          # fields will eventually want.
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
 #       pair_label   = <name>              # REV-045: the zfs-backup.sh client
@@ -859,6 +883,202 @@ add_link_flags() {   # <flags> <bandwidth> <compression> <cipher> -> flags
     printf '%s' "$flags"
 }
 
+# ------------------------------------------------------------------------------
+# SCOPE FIELDS -- passive, exclude_snapshots, exclude_<n>.
+# ------------------------------------------------------------------------------
+# The second half of the split the link fields started. What was left in 'flags'
+# after 2026-08-24 was two unrelated things wearing one name:
+#
+#   IDENTITY   -K -k -O -p    the key, the pinned host key, the port. Genuinely
+#                             the relationship's, and the reason 'flags' is
+#                             profile-forbidden.
+#   DECISIONS  -e -E -X       what this relationship TAKES: whether it authors
+#                             snapshots or adopts somebody else's family, which
+#                             families it refuses to adopt, which children it
+#                             leaves behind.
+#
+# The three decisions are not identity and not policy. They describe the data:
+# whether the source is somebody else's to stamp, and which parts of it are ours
+# to carry. Naming them takes them out of the identity sack, which is the whole
+# point -- with them gone, 'flags' is identity and nothing else, and stays
+# profile-forbidden for a reason rather than for a mechanism.
+#
+# [dataset:] ONLY, and profile-forbidden for now. This is a narrower rule than
+# these fields will eventually want: docs/project/PROFILE-VARIABLE-INVENTORY.md
+# argues they are the natural place for a profile DEFAULT ("the archival profile
+# is flat and passive"), overridden per relationship. That needs two things this
+# change does not have -- a template layer to inherit from, and a CLI that can
+# tell "the operator said no" from "the operator said nothing", which today's
+# boolean --passive cannot. Forbidding is the reversible direction: widening
+# later is a line, narrowing later breaks profiles people wrote.
+#
+# ONE OPTION, ONE HOME, exactly as for the link fields: the same option arriving
+# from both 'flags' and a field is refused rather than merged. The check reads
+# 'flags' with the getopts-equivalent walk, so a bundled -eS is caught and an
+# argument that merely looks like a letter (-m e-daily_) is not.
+
+# Sets LINK_CONFLICT via link_flag_letter_present, whose message wording differs
+# per field; the letters are e (passive), E (excluded family), X (excluded child).
+lint_scope_passive() {   # <value> <flags> <ctx>
+    local val="$1" flags="$2" ctx="$3"
+    case "$val" in
+        yes|no) ;;
+        "") die "$ctx: 'passive' is present but blank -- expected yes or no, or remove the line" ;;
+        *) die "$ctx: passive='$val' -- expected yes or no" ;;
+    esac
+    # Checked for `no` as well as for `yes`, unlike the link fields, because
+    # `no` renders NOTHING: a section saying `passive = no` next to a hand
+    # written -e produces a passive job while its own field denies it. That is
+    # worse than a duplicated token -- there is no duplicate to trip over, just
+    # a config that reads the opposite of what it does.
+    link_flag_letter_present "$flags" e \
+        && die "$ctx: 'passive = $val' and 'flags' already carries -e -- one option, one home. Drop the -e from 'flags' and keep the field$([ "$val" = no ] && printf ', which is what makes this section non-passive; today it says no and sends -e anyway')."
+    return 0
+}
+
+# A comma-separated list, the same spelling monitor_exclude already uses for the
+# same values -- and safe for the same reason: a snapshot name cannot contain a
+# comma, so the separator can never appear inside an entry. (The child excludes
+# below are REGULAR EXPRESSIONS and get no such guarantee, which is why they are
+# numbered rather than listed.)
+lint_scope_exclude_snapshots() {   # <value> <flags> <ctx>
+    local val="$1" flags="$2" ctx="$3"
+    [ -z "$val" ] && die "$ctx: 'exclude_snapshots' is present but blank -- name at least one snapshot family, or remove the line"
+    # IFS is restored before the collision check below, and that is not tidiness.
+    # link_flag_letter_present splits flags_opt_letters' NEWLINE-separated output
+    # with `for`, so leaving IFS=, in place made the whole letter list one word
+    # and the check silently found nothing -- measured: `flags = "-K /k -E fam"`
+    # plus `exclude_snapshots = other` rendered a line carrying both -E options
+    # instead of being refused.
+    local one oldifs="$IFS"
+    IFS=,
+    for one in $val; do
+        [ -n "$one" ] || { IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' has an empty entry -- a stray comma, most likely"; }
+        case "$one" in
+            -*) IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' -- give the family NAME only; the '-E' is what this field renders for you" ;;
+            *[[:space:]]*) IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' -- one family per comma-separated entry, no spaces" ;;
+        esac
+    done
+    IFS="$oldifs"
+    link_flag_letter_present "$flags" E \
+        && die "$ctx: 'exclude_snapshots' is set and 'flags' already carries -E -- one option, one home. Drop the -E from 'flags' and keep the field."
+    return 0
+}
+
+# One child exclusion. NUMBERED, not comma-separated, because the value is a
+# regular expression and a regex may legally contain any separator anyone would
+# pick -- `automated_(a|b)` has the pipe, `x{2,3}` has the comma. The client
+# record numbers them (EXCLUDE_1..n) for exactly this reason; the config now
+# spells it the same way.
+lint_scope_exclude() {   # <value> <n> <flags> <ctx>
+    local val="$1" n="$2" flags="$3" ctx="$4"
+    [ -z "$val" ] && die "$ctx: 'exclude_$n' is present but blank -- give it a pattern, or remove the line"
+    # Only `-X` is refused, NOT every leading dash: unlike a rate or a cipher, a
+    # regular expression may legitimately start with one (`-swap$` matches a
+    # child whose name ends in -swap). Refusing those would make the field
+    # unable to express the exclusions the CLI already accepts.
+    case "$val" in
+        -X*) die "$ctx: exclude_$n='$val' -- give the pattern only; the '-X' is what this field renders for you" ;;
+    esac
+    # Only the first one checks 'flags': the message is about the string as a
+    # whole and saying it once per numbered field would be three copies of one
+    # complaint.
+    [ "$n" = 1 ] || return 0
+    link_flag_letter_present "$flags" X \
+        && die "$ctx: 'exclude_1' is set and 'flags' already carries -X -- one option, one home. Drop the -X from 'flags' and keep the fields."
+    return 0
+}
+
+# VALIDATION AND COLLECTION ARE TWO FUNCTIONS, and that separation is not a
+# style choice -- it is the rule stated above lint_link_bandwidth, learned again
+# here. The first cut did both in one function that the renderer called inside
+# `$( )`. Its `die` killed the SUBSHELL, printed the refusal to stderr, and left
+# the run going with whatever had been collected before it: measured, a config
+# with exclude_1 and exclude_3 printed
+#
+#   error: 'exclude_2' is missing but 'exclude_3' is present
+#
+# and then emitted a cron line carrying `-X a`, exit 0. A refusal that renders
+# the job anyway is worse than no refusal -- the operator's third exclusion was
+# gone and the generator said so in a message it did not act on.
+#
+# So: this half runs OUTSIDE any substitution and may die; the collector below
+# is dumb and safe inside one.
+#
+# The GAP is what makes the numbering a contract rather than a convention.
+# exclude_1 + exclude_3 with no exclude_2 would otherwise stop at the gap and
+# drop the third silently, which is the failure mode a numbered grammar exists
+# to avoid: the operator wrote an exclusion and the job does not carry it.
+lint_scope_excludes() {   # <section header> <flags> <ctx>
+    local sec="$1" flags="$2" ctx="$3" n=1 highest=0 key
+    for key in "${!INI[@]}"; do
+        case "$key" in "${sec}${SEP}exclude_"[0-9]*)
+            key="${key##*"$SEP"exclude_}"
+            case "$key" in *[!0-9]*) continue ;; esac
+            [ "$key" -gt "$highest" ] && highest="$key" ;;
+        esac
+    done
+    [ "$highest" -eq 0 ] && return 0
+    # The key is built into a VARIABLE before the lookup, and that is for the
+    # allow-list test in test/run.sh rather than for readability: it scrapes
+    # `ini_has "$sec" <word>` out of this file and checks the word against
+    # --dump-fields. A literal "exclude_$n" is scraped as the field `exclude_`,
+    # which is not a field and never can be -- the numbered family cannot appear
+    # in --dump-fields, which enumerates static names. Coverage for these fields
+    # comes from test/scopefields instead, which asserts the allow-list arm
+    # directly (`exclude_x` is refused, `exclude_2` is not).
+    local fld
+    while [ "$n" -le "$highest" ]; do
+        fld="exclude_$n"
+        ini_has "$sec" "$fld" \
+            || die "$ctx: 'exclude_$n' is missing but 'exclude_$highest' is present -- number the exclusions from 1 with no gaps, or the ones above the gap are silently dropped"
+        lint_scope_exclude "$(ini_get "$sec" "$fld")" "$n" "$flags" "$ctx"
+        n=$((n + 1))
+    done
+}
+
+# Every decision was made in the lint above, so this cannot fail.
+#
+# ini_get prints WITHOUT a trailing newline (every other caller wants it that
+# way, inside a command substitution). One line per value is this function's
+# whole contract, so the newline is added here -- without it `-swap$` and `/tmp`
+# ran together and arrived at the engine as one pattern.
+scope_exclude_values() {   # <section header> -> one pattern per line
+    local sec="$1" n=1 fld
+    while fld="exclude_$n"; ini_has "$sec" "$fld"; do
+        printf '%s\n' "$(ini_get "$sec" "$fld")"
+        n=$((n + 1))
+    done
+}
+
+# Deliberately dumb, same contract as add_link_flags: every decision was made in
+# the lint above, so this cannot fail and is safe inside a command substitution.
+#
+# ORDER MATTERS ONLY FOR THE DIFF, not for the engines: getopts does not care,
+# but a re-activated relationship whose cron line reorders its own flags shows up
+# as churn in every crontab diff on the estate. So this renders in the order
+# zfs-backup.sh's string always had -- child excludes, then passivity, then the
+# families it excludes -- and a section that names the fields produces the same
+# line as one that hand-wrote them.
+add_scope_flags() {   # <flags> <passive> <exclude_snapshots> <excludes, NL-separated> -> flags
+    local flags="$1" passive="$2" exsnap="$3" excl="$4" one
+    if [ -n "$excl" ]; then
+        while IFS= read -r one; do
+            [ -n "$one" ] || continue
+            flags="${flags:+$flags }-X $one"
+        done <<< "$excl"
+    fi
+    [ "$passive" = yes ] && flags="${flags:+$flags }-e"
+    if [ -n "$exsnap" ]; then
+        local IFS=,
+        for one in $exsnap; do
+            [ -n "$one" ] || continue
+            flags="${flags:+$flags }-E $one"
+        done
+    fi
+    printf '%s' "$flags"
+}
+
 # Splits legacy recursion OUT of a flags string, using the same option walk as
 # flags_opt_letters (REV-20260807-057 contract 1: detection must not be a
 # substring rule that mistakes `-m R-daily_` for recursion).
@@ -1195,9 +1415,15 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # [dataset:] only, never POLICY_FIELDS -- a policy carrier is shared by datasets
 # that do not share a destination, so there is no layer above the section where
 # a link value would be true for everything that inherited it.
+# passive/exclude_snapshots/exclude_<n> are the SCOPE fields (see
+# add_scope_flags): [dataset:] only for the same reason, and out of POLICY_FIELDS
+# for a different one -- they say what this relationship takes from its source,
+# which no layer above the section knows. exclude_<n> is numbered and therefore
+# not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive media \
-                        bandwidth compression cipher $DATASET_POLICY_FIELDS
+                        bandwidth compression cipher \
+                        passive exclude_snapshots $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
@@ -1301,9 +1527,22 @@ validate_field_names() {
         # schedules joined flags on 2026-08-26 so that a multi-cadence profile
         # can be spread across the clock without one section-level value
         # flattening every tier it names.
+        #
+        # exclude_<n> is the other suffix family, and a different one: the
+        # suffix is an INDEX, not a tier, so only digits are accepted here.
+        # `exclude_snapshots` must not fall through this arm -- it is a field in
+        # its own right, in the allow-list above, and reaching this case at all
+        # would mean it had been misspelled.
         case "$field" in
             flags_*|send_schedule_*|prune_schedule_*)
                 [ "$kind" = "dataset" ] && continue ;;
+            exclude_*)
+                if [ "$kind" = "dataset" ]; then
+                    case "${field#exclude_}" in
+                        ""|*[!0-9]*) ;;
+                        *) continue ;;
+                    esac
+                fi ;;
         esac
         elsewhere="$(field_valid_elsewhere "$field")"
         if [ -n "$elsewhere" ]; then
@@ -2031,6 +2270,25 @@ build_dataset() {
             prefix="$(resolve_field_or_omit prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: 'prefix' resolved to a blank value -- omit the field entirely for no-prefix, do not set it to nothing"
             tier_created_prefix="$prefix"; tier_creates=1
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
+            # SCOPE FIELDS -- passive, exclude_snapshots, exclude_<n>. Section
+            # only, and rendered FIRST so that the flags string keeps the order
+            # zfs-backup.sh's hand-packed one always had (identity, then -X, then
+            # -e, then -E, then the link options, then -A). Order is nothing to
+            # getopts and everything to a crontab diff.
+            #
+            # Every collision check reads the flags string as it was WRITTEN,
+            # before this function has added anything to it -- otherwise the
+            # second field would collide with the first field's own rendering.
+            local scope_passive="" scope_exsnap="" scope_excl="" scope_raw="$flags"
+            if scope_passive="$(resolve_field passive "$ds" "" "")"; then
+                lint_scope_passive "$scope_passive" "$scope_raw" "[dataset:$ds_path] tier=$tier"
+            else scope_passive=""; fi
+            if scope_exsnap="$(resolve_field exclude_snapshots "$ds" "" "")"; then
+                lint_scope_exclude_snapshots "$scope_exsnap" "$scope_raw" "[dataset:$ds_path] tier=$tier"
+            else scope_exsnap=""; fi
+            lint_scope_excludes "$ds" "$scope_raw" "[dataset:$ds_path] tier=$tier"
+            scope_excl="$(scope_exclude_values "$ds")"
+            flags="$(add_scope_flags "$flags" "$scope_passive" "$scope_exsnap" "$scope_excl")"
             # LINK FIELDS -- resolved from the [dataset:] section only (see the
             # block above link_flag_letter_present for why no template/defaults
             # layer), and rendered BEFORE -A is considered on purpose: an
