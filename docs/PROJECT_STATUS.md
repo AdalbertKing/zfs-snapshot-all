@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7bc40bd38f4904ac -->
+<!-- status-covers-digest: bcef0e69793ebc99 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1509,6 +1509,35 @@
   po kolejności listy zabija 3 przypadki, usunięta kontrola zajętego celu zabija
   5 (w tym asercję nośną „silnik lądowania NIE zostaje uruchomiony"), a
   lądowanie dobrych par mimo złej zabija 10, usunięte tworzenie przestrzeni stagingu zabija 2, a nierozwijanie dzieci zabija 3.
+
+- **Klasyfikator pytał o GŁOWĘ celu, a nie o punkt odzysku — LAB, 2026-08-31.**
+  Zdalna klasyfikacja pytała: „czy najnowszy snapshot celu jest jednym z tych,
+  które ma kopia?". Jeśli nie → `full-live` → tryb `replace`. To pytanie jest
+  **fałszywe dla każdej maszyny, która pracowała dalej po ostatnim dobrym
+  backupie** — czyli dla zwykłej awarii.
+  Zmierzone: kopia i źródło miały **ten sam GUID** `12279236860074163308` pod
+  dokładnie tym snapshotem, do którego bieg odtwarzał; na wierzchu leżał jeden
+  snapshot uszkodzenia. Bieg zaklasyfikował `replace` i zażądał grantu
+  niszczącego, podczas gdy cofnięcie o jeden snapshot trafiało w punkt **bez
+  jednego bajtu na łączu**.
+  Koszt nie jest kosmetyczny: `replace` niszczy dataset i wysyła go w całości —
+  godziny i pełny rozmiar zamiast sekund — i wymaga tego jednego grantu, przy
+  którym operatorowi każe się dwa razy pomyśleć. **Grant, którego zwykły
+  przypadek nie może użyć, to grant, który operatorzy uczą się pomijać** — a
+  tak niebezpieczny staje się domyślnym.
+  Właściwe pytanie brzmi: czy cel **wciąż niesie GUID punktu odzysku**. Jeśli
+  tak, cofnięcie go osiąga, cokolwiek narosło na wierzchu — a to, co narosło,
+  jest już sprawą sondy `_ahead` gałąź niżej.
+  `restore_remote_has_guid` odpowiada w **trzech stanach**, i trzeci jest całym
+  powodem, dla którego to funkcja: 0 jest, 1 nie ma, 2 nie dało się zapytać.
+  Zlanie 2 w 1 czyta nieosiągalny host jako „brak wspólnej bazy" i eskaluje do
+  zniszczenia datasetu — ten sam kształt co F14 i co błąd `_arc`, oba w tym
+  samym pliku.
+  Dowód: `test/restore/hasguid.sh` 6/6 na kontrakcie sondy, plus dwie kontrole
+  negatywne (zlanie „nie dało się zapytać" w „nie ma" zabija po jednej,
+  dokładnie swojej). **Samej klasyfikacji żadna suita nie asertuje i to jest
+  świadome** — decyduje o niej odpowiedź drugiej strony, więc asercja nad
+  zaatrapowanym klasyfikatorem dowodzi atrapy. Ta połowa jest dowodzona na labie.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

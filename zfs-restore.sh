@@ -1629,6 +1629,54 @@ restore_remote_state() {   # <account@host:dataset> -> "absent" | "bare" | <guid
 # Prints the datasets that differ, one per line. Empty means none does. A failed
 # read prints nothing AND returns non-zero, so the caller can tell "nothing to
 # do" from "I could not ask" -- they differ by an entire skipped rollback.
+# DOES THE TARGET STILL CARRY THE RECOVERY POINT?
+#
+# This is the question that decides rewind-versus-replace, and it is not the
+# question the classifier used to ask.
+#
+# It asked whether the target's HEAD snapshot is one the copy also has. That is
+# false for every machine which kept running after its last good backup -- which
+# is to say, for the ordinary disaster. Measured on the lab, 2026-08-31: the
+# copy held `...10-40-05` guid 12279236860074163308, the source held THE SAME
+# GUID plus one snapshot on top, and the run classified `replace` and demanded
+# the destructive grant. A rollback of one snapshot would have reached the
+# recovery point exactly, with no transfer at all.
+#
+# The cost of getting it wrong is not cosmetic. `replace` destroys the dataset
+# and re-sends it whole -- hours and the full size on the wire for what a
+# rollback does in seconds -- and it needs the one grant an operator is told to
+# think twice about. An escalation from rewind to replace in the COMMON case
+# makes the safe grant useless, which is a good way to teach people to hand out
+# the dangerous one by default.
+#
+# So the question is asked directly: does this dataset carry the guid of the
+# recovery point? If it does, a rollback reaches it, whatever else has grown on
+# top. What is on top is the existing `_ahead` probe's business.
+#
+# THREE ANSWERS, NOT TWO, and the third is why this is a function rather than a
+# test inline: 0 the guid is there, 1 it is not, 2 the question could not be
+# asked. Collapsing 2 into 1 would read an unreachable host as "no common base"
+# and escalate to destroying the dataset -- the same shape as F14, and as the
+# `_arc` bug in the caller below it, both in this file.
+restore_remote_has_guid() {   # <account@host> <dataset> <guid> -> 0 yes | 1 no | 2 unanswered
+    local peer="$1" ds="$2" want="$3"
+    [ -n "$peer" ] && [ -n "$ds" ] && [ -n "$want" ] || return 2
+    local out
+    out="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        zfs list -H -o name '$ds' >/dev/null 2>&1 || { echo NODS; exit 0; }
+        if zfs list -H -p -t snapshot -o guid -d 1 '$ds' 2>/dev/null | grep -qxF -- '$want'; then
+            echo YES
+        else
+            echo NO
+        fi
+        exit 0" 2>/dev/null)" || return 2
+    case "$out" in
+        YES)  return 0 ;;
+        NO|NODS) return 1 ;;
+        *)    return 2 ;;
+    esac
+}
+
 restore_remote_ahead() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
     local peer="$1" root="$2" point="$3" depth="${4-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
@@ -1801,7 +1849,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         *:*)
             # REMOTE target: ask it. restore_plan_strategy answers `remote` here
             # by design -- it is the read-only planner and does not open ssh.
-            local _st _guid
+            local _st
             _st="$(restore_remote_state "$src")"
             if [ -z "$_st" ]; then
                 RESTORE_ONE_VERDICT="could not read the state of '$src' -- the host did not answer"
@@ -1842,12 +1890,38 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # copy also carries at or before the recovery point. That is the
                 # same proof snapsend will require; asking early only names the
                 # mode for the grant.
-                _guid="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print; exit}')"
-                if [ -z "$_guid" ]; then
+                # THE QUESTION IS WHETHER THE TARGET STILL HAS THE RECOVERY
+                # POINT, not whether its HEAD is a snapshot the copy also has.
+                #
+                # The head test was wrong in the ordinary direction. A machine
+                # that kept running after its last good backup always has a head
+                # the copy never saw, so the commonest disaster of all
+                # classified `full-live` -- destroy the dataset and re-send it
+                # whole, under the one grant an operator is told to think twice
+                # about -- when rolling back a snapshot or two reaches the point
+                # exactly, with nothing on the wire.
+                #
+                # Measured on the lab, 2026-08-31: copy and source shared guid
+                # 12279236860074163308 under the very snapshot being restored
+                # to, one damage snapshot sat on top, and the run demanded
+                # `replace`. A grant the common case cannot use is a grant
+                # people learn to skip, which is how the dangerous one becomes
+                # the default.
+                local _pguid _hasrc
+                _pguid="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '$1 == p {print $3; exit}')"
+                restore_remote_has_guid "${src%%:*}" "${src#*:}" "$_pguid"; _hasrc=$?
+                if [ "$_hasrc" -eq 2 ]; then
+                    # Never read as "no". An unanswered question taken for
+                    # absence escalates straight to destroying the dataset.
+                    RESTORE_ONE_VERDICT="could not ask '$src' whether it still holds the recovery point $point"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: reading an unanswered question as 'no common base' is how a rewind becomes a full replace."
+                    return 1
+                fi
+                if [ "$_hasrc" -ne 0 ]; then
                     RESTORE_STRATEGY=full-live
                 else
-                    # The target's head is a snapshot this copy also has. Where
-                    # it sits RELATIVE TO THE RECOVERY POINT decides everything:
+                    # The target still holds the recovery point, so a rollback
+                    # can reach it. What has grown ON TOP of it decides the rest:
                     #
                     #   at or before the point -> an increment carries it forward
                     #   AFTER the point        -> going back, which no send can
