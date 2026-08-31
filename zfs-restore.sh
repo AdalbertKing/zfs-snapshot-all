@@ -3058,6 +3058,14 @@ restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2
     (
         RESTORE_ONE_VERDICT=""
         RESTORE_ONE_CHANGED=0
+        # EMPTIED, because the trap below carries the whole array out and the
+        # parent appends what it gets. A subshell inherits the parent's copy, so
+        # without this each dataset hands back everything the ones before it
+        # added -- and the list grows N(N+1)/2 instead of N. Measured on the lab
+        # 2026-08-31: a three-dataset rewind printed the first dataset's entry
+        # three times in "what this costs the backup", which is a report an
+        # operator has to read carefully to act on.
+        RESTORE_ROLLED_BACK=()
         trap 'printf "%s\n%s\n" "${RESTORE_ONE_CHANGED:-0}" "${RESTORE_ONE_VERDICT:-the dataset step ended without saying why}" > "$state"; printf "%s\n" ${RESTORE_ROLLED_BACK[@]+"${RESTORE_ROLLED_BACK[@]}"} >> "$state"' EXIT
         restore_one "$1" "$2"
     )

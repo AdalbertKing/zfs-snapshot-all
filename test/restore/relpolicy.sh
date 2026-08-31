@@ -77,6 +77,11 @@ restore_report_handover()     { :; }
 restore_report_backup_cost()  { :; }
 restore_one() {
     local ds="$2" tbl
+    # Recorded only during EXECUTION, the way the real one does it: the
+    # pre-flight returns at the boundary before anything is rolled back, so it
+    # has nothing to record. A stub that recorded in both passes would count
+    # every dataset twice and make the E3 case measure the stub.
+    [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ] || RESTORE_ROLLED_BACK+=("rolled:$ds")
     # EVERY execution is recorded, not only a failing one. An earlier stub
     # printed only on refusal, which made "no dataset was executed" pass against
     # a tree with no pre-flight at all whenever the execution table was clean --
@@ -113,7 +118,12 @@ STUB
         for d in "$@"; do
             printf 'RESTORE_SCOPE_SRC+=(%q); RESTORE_SCOPE_COPY+=(%q); RESTORE_SCOPE_DEST+=(%q)\n' "$d" "copy/$d" "$d"
         done
-        echo 'restore_run_scope'
+        echo 'restore_run_scope; _rc=$?'
+        # Printed by the HARNESS, not by the product: the array is what the
+        # boundary hands back, and asserting on it must not need a probe line
+        # shipped in the verb itself.
+        echo 'for e in ${RESTORE_ROLLED_BACK[@]+"${RESTORE_ROLLED_BACK[@]}"}; do echo "rolled-entry: $e"; done'
+        echo 'exit $_rc'
     } > "$t"
     # RETURNED, not assigned to a global: the caller reads this through
     # `out="$(run_policy ...)"`, which is a SUBSHELL -- a variable set here would
@@ -288,6 +298,29 @@ case "$out" in
     *"exec: c"*) ok "E2: ...while the rest of the scope still ran" ;;
     *) bad "E2: ...while the rest of the scope still ran" "$out" ;;
 esac
+
+# E3 -- THE ISOLATION BOUNDARY MUST NOT RE-EXPORT WHAT IT INHERITED.
+# restore_one appends to RESTORE_ROLLED_BACK, the boundary carries that array out
+# and the parent appends what it gets. A subshell inherits the parent's copy, so
+# without emptying it first every dataset hands back everything the ones before
+# it added: three datasets produce six entries, not three.
+#
+# Measured on the lab, 2026-08-31: a three-dataset rewind printed the first
+# dataset's entry three times under "what this costs the backup" -- a report an
+# operator has to act on, listing snapshots that are named more than once.
+printf 'a=0
+b=0
+c=0
+' > "$RP/pf"
+printf 'a=0
+b=0
+c=0
+' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"
+n="$(printf '%s
+' "$out" | grep -c 'rolled-entry:')"
+if [ "$n" -eq 3 ]; then ok "E3: three datasets record THREE entries, not six"
+else bad "E3: three datasets record THREE entries, not six" "got $n" "$out"; fi
 
 if [ "${_rp_standalone:-0}" = 1 ]; then
     echo "--------------------------------------------"
