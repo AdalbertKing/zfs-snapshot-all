@@ -2494,6 +2494,30 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # The engine's own diagnosis has already gone to stderr; do not paraphrase
     # it. What is added here is WHICH dataset it belonged to, because the caller
     # is looping and the operator is reading one report at the end.
+    # A `create` THAT FAILED DESTROYED NOTHING, IF NOTHING IS THERE.
+    #
+    # RESTORE_ONE_CHANGED is set unconditionally before the engine, which is the
+    # right default: from that line on the engine MAY destroy. For mode `create`
+    # it may not -- the destination did not exist, so there was nothing to
+    # destroy -- and reporting the dataset as "CHANGED AND UNFINISHED ... they
+    # need a person" sends somebody to inspect a machine where nothing happened.
+    #
+    # Measured on the lab, 2026-08-31: a `--onto` aimed outside the destination's
+    # grant failed on `create`, was reported CHANGED, and the summary said
+    # "(0 recovered, 0 untouched)" -- claiming nothing was untouched while the
+    # dataset plainly was. `rpool/proba` did not exist on that host before or
+    # after, checked by hand.
+    #
+    # So it is DEMOTED only on proof: the target says the dataset is absent. A
+    # partial receive that left something behind keeps the loud verdict, and so
+    # does a host that did not answer -- "I could not ask" has never been "it is
+    # fine" anywhere else in this file and is not going to start here.
+    if [ "$RESTORE_ONE_CHANGED" -eq 1 ] && [ "$mode" = create ]; then
+        case "$src" in
+            *:*) [ "$(restore_remote_state "$src")" = absent ] && RESTORE_ONE_CHANGED=0 ;;
+            *)   zfs list -H -o name "$src" >/dev/null 2>&1 || RESTORE_ONE_CHANGED=0 ;;
+        esac
+    fi
     RESTORE_ONE_VERDICT="the engine failed on '$mode' from $point (its own message is above)"
     return $((RESTORE_ONE_CHANGED + 1))
 }

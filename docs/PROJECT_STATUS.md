@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 270b025d4ccc51ed -->
+<!-- status-covers-digest: aebf8facdf8ecb1a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1675,6 +1675,27 @@
   Normalizacja siedzi teraz tam, gdzie odbywa się porównanie, a nie u
   wywołującego: dwie wielkości, które się zestawia, muszą być obcinane tą samą
   ręką.
+
+- **Nieudany `create` raportowany jako „wymaga człowieka" — LAB, 2026-08-31.**
+  Flaga „już dotknięte" jest ustawiana bezwarunkowo przed silnikiem i to jest
+  właściwa wartość domyślna: od tej linii silnik **może** niszczyć. Przy trybie
+  `create` nie może — celu nie było — więc werdykt „ZMIENIONE I NIEDOKOŃCZONE,
+  wymagają człowieka" wysyła kogoś do maszyny, na której nic się nie stało.
+  Zmierzone: `--onto` wycelowane poza nadanie maszyny docelowej padło na
+  `create`, dostało `CHANGED`, a podsumowanie powiedziało **„(0 recovered,
+  0 untouched)"** — twierdząc, że nic nie jest nietknięte, podczas gdy dataset
+  oczywiście był. `rpool/proba` na tamtym hoście nie istniał ani przed, ani po;
+  sprawdzone ręcznie.
+  Degradacja **wyłącznie na dowód**: cel mówi, że datasetu nie ma. Częściowy
+  odbiór, który coś zostawił, zachowuje głośny werdykt — i tak samo host, który
+  nie odpowiedział. „Nie dało się zapytać" nigdzie w tym drzewie nie znaczy „jest
+  dobrze".
+  Dowód: `test/restore/createfail.sh` 3/3, kontrolą jest realny kod z `main` —
+  wywala dokładnie asercję nośną, a przechodzi obie „nie wolno degradować", bo
+  nigdy nie degraduje.
+  **Test złapał po drodze moją trzecią dziś pomyłkę z podpowłoką:** atrapa
+  sekwencjonowała odpowiedzi zmienną, a każdy wywołujący sięga przez `$( )`.
+  Licznik mieszka teraz w pliku.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
