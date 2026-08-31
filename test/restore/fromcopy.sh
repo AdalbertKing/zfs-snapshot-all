@@ -50,6 +50,12 @@ zfs() {
                     f="$FC/rows.$(printf '%s' "$c" | tr '/' '_')"
                     [ -r "$f" ] || return 1
                     cat "$f"; return 0 ;;
+                *" -r "*)
+                    # Recursive listing: the dataset and everything under it,
+                    # parent first, the order `zfs list -r` gives.
+                    local d="${!#}"
+                    grep -qFx -- "$d" "$FC/exists" 2>/dev/null || return 1
+                    grep -E "^${d}(/|$)" "$FC/exists"; return 0 ;;
                 *)  local d="${!#}"
                     grep -qFx -- "$d" "$FC/exists" 2>/dev/null || return 1
                     printf '%s\n' "$d"; return 0 ;;
@@ -183,6 +189,60 @@ out="$(fc_run 'hdd/copyA,hdd/copyB' 'hdd/w1,hdd/w1' '' '')" && \
         *"twice"*) ok "fromcopy: two copies may not land on one destination" ;;
         *) bad "fromcopy: two copies may not land on one destination" "$out" ;;
     esac
+
+# ---- CHILDREN COME ALONG ---------------------------------------------------
+# Found on the LAB, on this function the hour it shipped: naming a parent
+# restored the parent alone and printed "Odtworzenie OK" while the two disks
+# under it were silently absent. A success reported over an incomplete recovery
+# is the worst thing this verb can do.
+printf 'hdd/rodzic
+hdd/rodzic/d0
+hdd/rodzic/d1
+hdd/copyA
+hdd/copyB
+hdd/taken
+hdd/pusty
+hdd/remis
+' > "$FC/exists"
+printf 'hdd/rodzic@s	1000	70
+'    > "$FC/rows.hdd_rodzic"
+printf 'hdd/rodzic/d0@s	1000	71
+' > "$FC/rows.hdd_rodzic_d0"
+printf 'hdd/rodzic/d1@s	1000	72
+' > "$FC/rows.hdd_rodzic_d1"
+out="$(fc_run 'hdd/rodzic' 'hdd/cel' '' '')"; rc=$?
+n=0
+for x in "hdd/rodzic@s -> hdd/cel" "hdd/rodzic/d0@s -> hdd/cel/d0" "hdd/rodzic/d1@s -> hdd/cel/d1"; do
+    case "$out" in *"LAND $x"*) n=$((n+1)) ;; esac
+done
+if [ "$n" -eq 3 ]; then ok "children: NAMING A PARENT BRINGS ITS CHILDREN, each at the same relative position"
+else bad "children: NAMING A PARENT BRINGS ITS CHILDREN, each at the same relative position" "landed $n of 3" "$out"; fi
+case "$rc" in
+    0) ok "children: ...and the run succeeds" ;;
+    *) bad "children: ...and the run succeeds" "rc=$rc" "$out" ;;
+esac
+# The preview has to name them too: a confirmation that does not list what will
+# be created is not the confirmation this contract means.
+n=0
+for x in hdd/cel hdd/cel/d0 hdd/cel/d1; do case "$out" in *"->  $x"*) n=$((n+1)) ;; esac; done
+if [ "$n" -eq 3 ]; then ok "children: ...and every one of them is in the preview, before the question"
+else bad "children: ...and every one of them is in the preview, before the question" "named $n of 3" "$out"; fi
+# An occupied child destination refuses the WHOLE thing, like any other bad pair.
+printf 'hdd/rodzic
+hdd/rodzic/d0
+hdd/rodzic/d1
+hdd/cel2/d1
+hdd/copyA
+hdd/copyB
+hdd/taken
+hdd/pusty
+hdd/remis
+' > "$FC/exists"
+out="$(fc_run 'hdd/rodzic' 'hdd/cel2' '' '')"; rc=$?
+case "$out" in
+    *"LAND "*) bad "children: an occupied CHILD destination refuses before anything lands" "$out" ;;
+    *) ok "children: an occupied CHILD destination refuses before anything lands" ;;
+esac
 
 # ---- THE STAGING NAMESPACE, for a landing OUTSIDE <pool>/restore ------------
 # Found on the lab, not here (2026-08-31): the landing half creates the LANDING's

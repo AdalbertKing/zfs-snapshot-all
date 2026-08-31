@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 98398ad189231474 -->
+<!-- status-covers-digest: 7bc40bd38f4904ac -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1495,10 +1495,20 @@
   odbiorze: `cannot open 'hdd/restore'`. Suity tego nie widziały, bo atrapują
   połowę lądującą — właściwa granica dla tego, co testują, i niewłaściwa dla
   sprzężenia między dwiema ścieżkami, które tylko wyglądały na jedną.
-  Dowód: `test/restore/fromcopy.sh` 17/17 i **cztery kontrole negatywne**: wybór
+  **Trzecia wada, znaleziona przez laba GODZINĘ po wdrożeniu tej formy:**
+  `--from-copy` wskazany na **rodzica** odtwarzał wyłącznie rodzica i drukował
+  „Odtworzenie OK", podczas gdy dwa dyski pod nim po prostu nie powstawały.
+  Sukces zgłoszony nad niekompletnym odzyskiem jest najgorszą rzeczą, jaką ten
+  czasownik może zrobić — i jest to dokładnie ta wada, której forma przez
+  relację nauczyła się unikać 27.08. Nowy adres napisałem **obok** tamtej lekcji,
+  a nie na niej. Dzieci jadą teraz razem, **jeden wpis na dataset, nie jeden
+  strumień rekurencyjny** — ten sam wybór i ten sam zmierzony powód: rekurencyjny
+  send rozwiązuje rodzica i potrafi zostawić nietknięte dziecko stojące za
+  punktem odzysku, a silnik wychodzi na tym zerem.
+  Dowód: `test/restore/fromcopy.sh` 21/21 i **pięć kontroli negatywnych**: wybór
   po kolejności listy zabija 3 przypadki, usunięta kontrola zajętego celu zabija
   5 (w tym asercję nośną „silnik lądowania NIE zostaje uruchomiony"), a
-  lądowanie dobrych par mimo złej zabija 10, a usunięte tworzenie przestrzeni stagingu zabija 2.
+  lądowanie dobrych par mimo złej zabija 10, usunięte tworzenie przestrzeni stagingu zabija 2, a nierozwijanie dzieci zabija 3.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
