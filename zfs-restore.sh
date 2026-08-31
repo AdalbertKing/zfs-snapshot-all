@@ -664,7 +664,18 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
             _t="${to[$i]}"
             [ -n "$_cfg" ] && [ -r "$_cfg" ] || continue
             while IFS="$(printf '\t')" read -r _sec _cp _knd _cns; do
-                [ "$_cp" = "$_t" ] || continue
+                # THE SECTION OR ANYTHING UNDER IT. A recursive relationship
+                # names its ROOT in the config -- `.../hdd/labsrc` -- while the
+                # datasets actually restored are its children. Measured on the
+                # lab, 2026-08-31, minutes after this block shipped: recovering
+                # `.../labsrc/vm-900-disk-0` reported "no installed relationship
+                # claims these destinations" and took no pause, while the pull
+                # that writes to it was live the whole time. Exact equality
+                # answers a narrower question than the one being asked.
+                case "$_t" in
+                    "$_cp"|"$_cp"/*) ;;
+                    *) continue ;;
+                esac
                 [ "$_cns" != atomic ] || die "restore --overwrite: '$_t' belongs to an ATOMIC relationship in $_cfg -- a subtree captured as ONE point in time. Recovering one dataset of it turns that into a per-dataset recovery, which is the confusion the whole atomic setting exists to prevent. Handing two paths in is not a way around that refusal. Nothing was changed."
                 # WHICH COLUMN IS THE CONFIG SECTION depends on the direction,
                 # and that asymmetry is restore_relations' own: for a remote PULL

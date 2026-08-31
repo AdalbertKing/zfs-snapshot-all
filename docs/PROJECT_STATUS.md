@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 156cd8919f0f50df -->
+<!-- status-covers-digest: 0d1a3c2f6250c4e7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1586,6 +1586,12 @@
   **pauzowana** na czas biegu, a jej `atomic` nadal odmawia; podanie dwóch
   ścieżek nie może być obejściem tej odmowy. Cele z **dwóch różnych relacji**
   odmawiają — każda ma własny harmonogram do postawienia.
+  **Żywy bieg złapał wadę w tym bloku minuty po jego wdrożeniu:** relacja
+  rekurencyjna nazywa w configu swój KORZEŃ (`.../labsrc`), a odtwarzane są jej
+  DZIECI. Porównanie na równość odpowiadało na węższe pytanie niż zadane, więc
+  odzysk `.../labsrc/vm-900-disk-0` meldował „no installed relationship claims
+  these destinations" i **nie brał pauzy**, podczas gdy pull pisał do tego
+  datasetu przez cały czas. Teraz dopasowanie obejmuje sekcję i wszystko pod nią.
   Dowód: `test/restore/fromcopy.sh` 26/26 i kontrole, w tym ta nośna:
   **odwrócenie kolejności argumentów silnika** zabija dokładnie jedną asercję.
   Odwrotnie nie zawodzi — niszczy replikę i odtwarza ją z kopii, po cichu, a
