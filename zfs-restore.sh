@@ -1783,13 +1783,45 @@ restore_remote_has_guid() {   # <account@host> <dataset> <guid> -> 0 yes | 1 no 
     esac
 }
 
+# DOES THE TARGET DIFFER FROM THE RECOVERY POINT? -- WRITES **OR** SNAPSHOTS.
+#
+# This asked `written@<point>` and nothing else, and the header it replaces
+# recorded why: the older question was "is the target AHEAD", which missed the
+# commonest disaster of all -- files deleted from a live filesystem with no
+# snapshot taken since. Nothing was newer, so nothing was ahead, so no rollback
+# ran and the run reported success over the damage.
+#
+# That trade was real and the fix was right. What nobody noticed is that it swapped
+# one blind spot for another: `written` counts BYTES, and a dataset can carry
+# snapshots newer than the point with zero bytes between them. An idle dataset
+# under an hourly schedule is exactly that, which is to say most of an estate at
+# most times.
+#
+# Measured on the lab, 2026-08-31, during a `--at` run to a historical point:
+# hdd/labsrc/vm-900-disk-1 sat idle with two hourly snapshots on top of the
+# recovery point and `written@point` = 0. It classified as `increment`, no
+# rollback ran, the engine sent nothing, and only the final verification caught
+# that the target had never gone back in time at all. A `--at` recovery of an
+# idle dataset silently did nothing.
+#
+# So the question is the UNION, because both are reasons a rollback is needed:
+# bytes written since the point, OR any snapshot newer than it. Asked in that
+# order -- the cheap property first, the listing only when it says zero.
 restore_remote_ahead() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
     local peer="$1" root="$2" point="$3" depth="${4-}"
     ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
         for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
             w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
-            case \"\$w\" in ''|-|0) continue ;; esac
-            echo \"\$d\"
+            case \"\$w\" in
+                ''|-) continue ;;
+                0)    ;;
+                *)    echo \"\$d\"; continue ;;
+            esac
+            c=\$(zfs get -Hp -o value creation \"\$d@$point\" 2>/dev/null)
+            case \"\$c\" in ''|-) continue ;; esac
+            n=\$(zfs list -H -p -t snapshot -o creation -s creation -d 1 \"\$d\" 2>/dev/null |
+                 awk -v c=\"\$c\" '\$1 > c {print; exit}')
+            [ -n \"\$n\" ] && echo \"\$d\"
         done
         exit 0" 2>/dev/null
 }
