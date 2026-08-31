@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 71730c7e3a24279d -->
+<!-- status-covers-digest: fda21872fb2c95c6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,36 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Silniki: pre-pass długich opcji miał DRUGĄ kopię option-stringa i kopie się
+  rozjechały (2026-08-31, zmiana w plikach ZAMROŻONYCH za zgodą właściciela).**
+  `OPTSTRING` — z którego pre-pass czyta, które litery biorą argument — był
+  utrzymywany ręcznie, tuż pod komentarzem mówiącym wprost, że ręcznie
+  utrzymywana lista dryfuje i że dryf będzie cichy. Lista, którą naprawdę
+  parsuje `getopts`, była osobnym literałem sto linii niżej; gdy dopisano tam
+  `-E`, tutaj nie. Pre-pass uznawał więc `-E` za boolean, brał NAZWĘ rodziny za
+  pierwszy argument pozycyjny i — regułą samego getopts — **kończył na niej
+  przetwarzanie opcji**:
+
+  ```
+  $ snapsend.sh -E foo --recursive=flat tank/a tank/b
+  snapsend.sh: illegal option -- -
+  $ snapsend.sh -X foo --recursive=flat tank/a tank/b     # kontrola: przechodzi
+  ```
+
+  Ten sam kształt, odwrotna odpowiedź, a jedyna różnica to litery, które druga
+  kopia akurat niosła. `-t` zdryfowało tak samo i było nieszkodliwe tylko
+  dlatego, że jest booleanem. Poprawka to **skasowanie kopii**: `getopts`
+  konsumuje teraz `$OPTSTRING`, więc rozbieżność przestała być wyrażalna;
+  wartość stringa jest ta sama, którą getopts już parsował.
+
+  Nic z tego, co generuje pakiet, nie było dotknięte — `gen-cron.sh` emituje
+  wyłącznie krótkie opcje, więc żadna linia crona na estacie nie może nieść
+  łamiącego kształtu. Łamie się operatorowi piszącemu oba zapisy razem i
+  wszystkiemu spoza pakietu, co woła silniki. `test/recursion` **70/0**, trzy
+  nowe przypadki na silnik; kontrola negatywna wobec poprzednich silników:
+  66 przechodzi, padają dokładnie cztery asercje dyskryminujące.
+  `./test/impact.sh --refreeze` wykonany, wpis w `ENGINE-FREEZE.md`.
 
 - **ETAP PROFILI, krok 1: worek `flags` rozbity do końca (2026-08-31).**
   `flags` w sekcji `[dataset:]` niósł trzy różne własności naraz. Oś **łącza**

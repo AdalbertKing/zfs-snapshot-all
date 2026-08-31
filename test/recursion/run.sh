@@ -138,6 +138,37 @@ for engine in snapsend.sh snapget.sh; do
     # argument, or a MESSAGE that looks like a flag becomes a declaration.
     understands "$engine" "-m --recursive=flat is a message, not a declaration" -m --recursive=flat
 
+    # The other half of the same requirement, and the one that was broken.
+    #
+    # The pre-pass reads which letters take an argument from OPTSTRING. That was
+    # a SECOND copy of the string `getopts` parses with, and the copies had
+    # disagreed about -E since -E existed: the pre-pass thought -E was a
+    # boolean, so it read the family NAME as the first non-option argument and
+    # STOPPED THERE -- getopts' own rule, applied to a token that was never a
+    # positional. Everything after it, including every long option, became data.
+    #
+    #   snapsend.sh -E foo --recursive=flat ...   ->  illegal option -- -
+    #   snapsend.sh -X foo --recursive=flat ...   ->  parsed
+    #
+    # Same shape, opposite answer, and the only difference was which letters the
+    # second copy happened to carry. Fixed by deleting the copy: getopts now
+    # consumes $OPTSTRING, so the two cannot disagree again. Owner-authorised
+    # frozen-file change, 2026-08-31.
+    #
+    # Two assertions, because "no unknown-option error" alone would also pass if
+    # the long form were silently ignored. The second one proves it was really
+    # PARSED: with -R alongside, it must count as the second declaration.
+    understands "$engine" "an -E argument does not end option processing" \
+                -E fam --recursive=flat
+    refuses "$engine" "a long form after -E is still a declaration" \
+            "declared more than once" -E fam --recursive=flat -R
+
+    # ...and the mirror, so the fix is not "treat everything after -E as
+    # options": the argument itself is DATA even when it looks like a long
+    # option, so this is one declaration and not two.
+    accepts "$engine" "-E --recursive=flat is an argument, not a declaration" \
+            -E --recursive=flat -r
+
     # Both of getopts' stop rules.
     accepts "$engine" "after -- a long form is data"        -- --recursive=flat
     accepts "$engine" "after a positional a long form is data" tank/first --recursive=flat

@@ -1877,11 +1877,28 @@ PAIR_LABEL=""
 # second list. A hand-kept list is a list that drifts, and a drift here is
 # silent: it mis-parses one specific invocation and looks fine everywhere else.
 #
+# AND IT DRIFTED, for as long as -E existed. This string was a SECOND list --
+# the one `getopts` actually parses with was a separate literal below, and when
+# -E (the excluded snapshot family) was added there it was not added here. So
+# the pre-pass did not know -E takes an argument, read the family NAME as the
+# first non-option argument, and stopped processing options at it:
+#
+#   $ snapget.sh -E foo --recursive=flat u@h:tank/a tank/b
+#   snapget.sh: illegal option -- -
+#
+# with `-X foo --recursive=flat` -- the same shape, a letter this string did
+# carry -- parsing fine. Measured both ways, both engines, 2026-08-31.
+#
+# The fix is not "add E: here", which would leave two literals to keep in step
+# for the next letter. `getopts` below consumes THIS variable, so there is one
+# string and the drift is not expressible. Owner direction, 2026-08-31:
+# "napraw silniki, masz zgode".
+#
 # The recursion long forms set the variables DIRECTLY and emit nothing, rather
 # than being rewritten to -r/-R. If they emitted short flags, getopts would
 # count a second declaration for the same one the user wrote, and the refusal
 # would quote a spelling that never appeared on the command line.
-OPTSTRING="m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:"
+OPTSTRING="m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:"
 
 opt_takes_arg() {   # <letter>
     case "$OPTSTRING" in *"$1:"*) return 0 ;; *) return 1 ;; esac
@@ -1963,7 +1980,9 @@ if [ $# -gt 0 ]; then
     set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
 fi
 
-while getopts "m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
+# $OPTSTRING, not a literal: this used to be the second copy, and the copies
+# disagreed about -E and -t. See the comment above the assignment.
+while getopts "$OPTSTRING" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
