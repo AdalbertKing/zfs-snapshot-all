@@ -2166,6 +2166,10 @@ ho="$(
     RESTORE_RELATION_LABEL=pve1
     RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
     RESTORE_SCOPE_DEST=("root@pve1:rpool/elsewhere")
+    # WHAT LANDED, because the first sentence now follows it. The runner appends
+    # here only for a dataset it verified, so an empty list means nothing reached
+    # that machine -- see the nothing-landed case below.
+    RESTORE_LANDED=("root@pve1:rpool/elsewhere")
     eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
     restore_report_handover
 )"
@@ -2186,11 +2190,47 @@ ho_same="$(
     RESTORE_RELATION_LABEL=pve2
     RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
     RESTORE_SCOPE_DEST=("rpool/data/vm-101-disk-0")
+    RESTORE_LANDED=("rpool/data/vm-101-disk-0")
     eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
     restore_report_handover
 )"
 if [ -z "$ho_same" ]; then ok "xhost: ...and says nothing when the destination is the same machine"
 else bad "xhost: ...and says nothing when the destination is the same machine" "$ho_same"; fi
+
+# ---- NOTHING LANDED: the block still prints, the first sentence changes -------
+# It is printed on failed runs on purpose -- a partial recovery leaves the same
+# split. What it must not do is OPEN with "the data is there". Measured on the
+# lab, 2026-08-31: a run that recovered nothing announced the data was on the
+# other machine and named the command to hand the backup over to it. Following
+# that points the schedule at a machine holding nothing.
+ho_none="$(
+    log() { shift; printf '%s
+' "$*"; }
+    RESTORE_SOURCE_LABEL=pve2
+    RESTORE_RELATION_LABEL=pve1
+    RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
+    RESTORE_SCOPE_DEST=("root@pve1:rpool/elsewhere")
+    RESTORE_LANDED=()
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+case "$ho_none" in
+    *"the data is there"*) bad "xhost: A RUN THAT LANDED NOTHING MUST NOT SAY THE DATA IS THERE" "$ho_none" ;;
+    *) ok "xhost: A RUN THAT LANDED NOTHING MUST NOT SAY THE DATA IS THERE" ;;
+esac
+case "$ho_none" in
+    *"NOTHING landed"*) ok "xhost: ...it says nothing landed, and why that matters" ;;
+    *) bad "xhost: ...it says nothing landed, and why that matters" "$ho_none" ;;
+esac
+case "$ho_none" in
+    *"went to a DIFFERENT machine"*) ok "xhost: ...while still naming the split, which is why the block exists" ;;
+    *) bad "xhost: ...while still naming the split, which is why the block exists" "$ho_none" ;;
+esac
+# And the claim its own caller falsifies one line later.
+case "$ho$ho_none" in
+    *"stays paused"*) bad "xhost: ...and never claims the relationship stays paused, which the next line undoes" "$ho$ho_none" ;;
+    *) ok "xhost: ...and never claims the relationship stays paused, which the next line undoes" ;;
+esac
 # NEGATIVE CONTROL, and it is the one that makes the two above mean something: a
 # recovery back onto the relation's own machine has no hand-over to do and must
 # not say it does.
