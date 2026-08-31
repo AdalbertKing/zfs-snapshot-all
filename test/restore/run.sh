@@ -2583,6 +2583,10 @@ esac
 # records are the thing that was lost.
 . "$DIR/fromcopy.sh"
 
+# The three-state contract of the recovery-point probe. The classification it
+# feeds is deliberately NOT asserted in any suite -- see this file's header.
+. "$DIR/hasguid.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
