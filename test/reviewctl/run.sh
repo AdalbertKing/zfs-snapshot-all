@@ -175,8 +175,26 @@ if [ -n "$ORPHAN" ]; then
       *"$R"*implementation*"$ORPHAN"*) ok "the refusal names the REV, the field and the SHA" ;;
       *) bad "the refusal names the REV, the field and the SHA" "$msg" ;;
     esac
+
+    # The same commit is valid while checking a PR candidate that contains it.
+    # Without this prospective boundary, the implementation PR cannot carry
+    # its generated ledger update: origin/main rejects the SHA until after the
+    # merge, guaranteeing a stale handoff or a second repair PR.
+    REVIEWCTL_REPO="$W" REVIEWCTL_PUBREF="$ORPHAN" "$CTL" --generate >/dev/null 2>&1
+    candidate_state="$(awk -F'|' -v r=" $R " '$2==r {gsub(/^ +| +$/,"",$3); print $3}' "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+    [ "$candidate_state" = IMPLEMENTED ] \
+        && ok "the same commit is accepted from a candidate ref that contains it" \
+        || bad "the same commit is accepted from a candidate ref that contains it" "got=$candidate_state"
 else
     bad "a REAL commit that is not on the published branch is refused" "could not build an orphan commit"
+fi
+
+world p4b; review $R CHANGES-REQUIRED -; respond $R IMPLEMENTED "$sha1"
+msg="$(REVIEWCTL_REPO="$W" REVIEWCTL_PUBREF=not-a-real-ref "$CTL" --generate 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$msg" in *"not-a-real-ref"*) true;; *) false;; esac; then
+    ok "an invalid candidate publication ref fails closed and is named"
+else
+    bad "an invalid candidate publication ref fails closed and is named" "$msg"
 fi
 
 # The reviewer's own header is held to the same standard -- a review that pins
@@ -383,8 +401,11 @@ OLD="$(git -C "$REPO" rev-parse origin/main~3)"
 # a world holding one submitted-but-unreviewed REV
 txworld() {   # <name>
     world "$1"
-    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
-        "$R" "$OLD" "$R" > "$W/docs/internal/reviews/$R.md"
+    # Use exactly the minimum reviewer header promised by PROTOCOL.md. The
+    # transactional writer must derive the canonical response path from REV;
+    # an optional legacy `response:` pointer cannot be a hidden precondition.
+    printf '<!-- rev: %s -->\n<!-- verdict: CHANGES-REQUIRED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+        "$R" "$OLD" > "$W/docs/internal/reviews/$R.md"
     respond "$R" IMPLEMENTED "$sha1"
 }
 tx()      { REVIEWCTL_REPO="$W" "$CTL" "$@" >"$TMPD/out" 2>&1; }
@@ -550,8 +571,10 @@ R120=REV-20260814-120
 APPROVAL=211d378628886c0683f817af31454f442dc3ada7
 APPROVED_IMPL=46c13a6c132f8ff7428876e6806ee2fd5709a583
 world t13
-printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n<!-- response: docs/internal/reviews/responses/%s.md -->\n\n# t\n' \
-    "$R120" "$APPROVED_IMPL" "$R120" > "$W/docs/internal/reviews/$R120.md"
+# Deliberately use the protocol's minimum reviewer header. Closure must derive
+# the canonical response path exactly as approval and the state generator do.
+printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+    "$R120" "$APPROVED_IMPL" > "$W/docs/internal/reviews/$R120.md"
 respond "$R120" IMPLEMENTED "$TIP"
 if tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP"; then
     bad "closure refuses when the approval covered a superseded implementation" "it succeeded"
@@ -584,6 +607,169 @@ fi
 REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1 \
     && ok "...and the tampered view is no longer accepted afterwards" \
     || bad "...and the tampered view is no longer accepted afterwards" ""
+
+# ==============================================================================
+# REV-20260829-125 F1 -- THE ROLLBACK SNAPSHOT MUST PROVE ITSELF
+#
+# Every case above assumes the transaction's backup exists. tx_guard used to
+# run its mkdir/cp/append unchecked, and the writer mutated the live role
+# artifact afterwards regardless. A failed snapshot left no file under present/
+# and no line under absent/, so tx_restore had no branch that matched, silently
+# left the mutation standing, and tx_cleanup then deleted the transaction
+# directory. The command exited nonzero -- and the reviewer's artifact had still
+# gone from CHANGES-REQUIRED to APPROVED with its implementation pointer moved.
+#
+# A nonzero exit is not the property. The property is that a refusal leaves the
+# role artifact byte-identical, and the next run reads the fact the reviewer
+# actually wrote.
+#
+# Driven by a PATH stub over `cp`, which is how the reviewer reproduced it: the
+# real transaction, the real writer, the real generator, and one system call
+# made to fail. Each world also carries an ORPHAN RESPONSE so that the generator
+# AFTER the mutation refuses -- that is what makes the transaction roll back at
+# all, and without it neither control would reach the code it is aiming at.
+# ==============================================================================
+CPBIN="$TMPD/cpstub"; mkdir -p "$CPBIN"
+# Fails a cp whose DESTINATION is inside the transaction snapshot: the backup
+# cannot be taken. Everything else is passed to the real cp.
+cat > "$CPBIN/cp" <<'CPEOF'
+#!/bin/sh
+for a in "$@"; do d="$a"; done
+case "$d" in *"/present/"*) exit 1 ;; esac
+exec /bin/cp "$@"
+CPEOF
+# Fails a cp whose SOURCE is inside the snapshot: the backup was taken, but
+# putting it back is what fails.
+cat > "$CPBIN/cp-restore-fails" <<'CPEOF'
+#!/bin/sh
+for a in "$@"; do case "$a" in *"/present/"*) src=1 ;; esac; break; done
+case "${1:-}" in -p) s="${2:-}" ;; *) s="${1:-}" ;; esac
+case "$s" in *"/present/"*) exit 1 ;; esac
+exec /bin/cp "$@"
+CPEOF
+# Fails only the DELIVERIES snapshot -- see X3 for why that surface and not the
+# ledger.
+cat > "$CPBIN/cp-deliveries-fails" <<'CPEOF'
+#!/bin/sh
+for a in "$@"; do d="$a"; done
+case "$d" in *"/present/"*DELIVERIES*) exit 1 ;; esac
+exec /bin/cp "$@"
+CPEOF
+chmod +x "$CPBIN/cp" "$CPBIN/cp-restore-fails" "$CPBIN/cp-deliveries-fails"
+
+orphan() { printf '<!-- rev: REV-20260808-999 -->\n<!-- response-status: IMPLEMENTED -->\n<!-- implementation: - -->\n\n# t\n' > "$W/docs/internal/reviews/responses/REV-20260808-999.md"; }
+
+# ---- X1. the snapshot cannot be taken --------------------------------------
+#
+# FIVE SURFACES, EACH ABLE TO FAIL ON ITS OWN. The first cut of this case ended
+# with an unconditional `ok` after a compound that always evaluated true -- a
+# line that recorded a PASS whatever happened, which is worse than no assertion
+# at all because it counts. Caught by the reviewer, and it is R6 in this
+# project's own error log: a green result is evidence only if you know what it
+# should have printed.
+#
+# The working tree and index are taken from the REAL repository rather than the
+# throwaway world, which is not a git checkout. reviewctl's every git call today
+# is read-only (rev-parse, cat-file -e, merge-base), so these two are a tripwire
+# for a future writer that starts staging, not a restatement of what the others
+# already say.
+digest() { [ -f "$1" ] && sha256sum -- "$1" | awk '{print $1}' || echo "(absent)"; }
+txworld x1; orphan
+X1_REV_B="$(digest "$W/docs/internal/reviews/$R.md")"
+X1_LED_B="$(digest "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+X1_THR_B="$(digest "$W/docs/project/OPEN-THREADS.md")"
+X1_TREE_B="$(git -C "$REPO" status --porcelain | sha256sum | awk '{print $1}')"
+X1_IDX_B="$(git -C "$REPO" diff --cached --stat | sha256sum | awk '{print $1}')"
+
+PATH="$CPBIN:$PATH" REVIEWCTL_REPO="$W" "$CTL" approve "$R" \
+     --implementation="$sha1" --expected-parent="$TIP" >"$TMPD/out" 2>&1
+X1_RC=$?
+
+[ "$X1_RC" -ne 0 ] && ok "X1: a transaction that cannot snapshot refuses" \
+                   || bad "X1: a transaction that cannot snapshot refuses" "rc=0"
+[ "$(digest "$W/docs/internal/reviews/$R.md")" = "$X1_REV_B" ] \
+    && ok "X1: THE ROLE ARTIFACT IS BYTE-IDENTICAL AFTER THE REFUSAL" \
+    || bad "X1: THE ROLE ARTIFACT IS BYTE-IDENTICAL AFTER THE REFUSAL" "$(revfile | head -3)"
+grep -q '^<!-- verdict: CHANGES-REQUIRED -->$' "$W/docs/internal/reviews/$R.md" \
+    && ok "X1: ...still CHANGES-REQUIRED, not APPROVED" \
+    || bad "X1: ...still CHANGES-REQUIRED, not APPROVED" "$(revfile | head -3)"
+grep -qF -- "refusing to change anything without a way back" "$TMPD/out" \
+    && ok "X1: ...and says the snapshot is why" \
+    || bad "X1: ...and says the snapshot is why" "$(head -2 "$TMPD/out")"
+[ "$(digest "$W/docs/internal/reviews/REVIEW_LEDGER.md")" = "$X1_LED_B" ] \
+    && ok "X1: THE LEDGER IS BYTE-IDENTICAL" \
+    || bad "X1: THE LEDGER IS BYTE-IDENTICAL" "was $X1_LED_B now $(digest "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+[ "$(digest "$W/docs/project/OPEN-THREADS.md")" = "$X1_THR_B" ] \
+    && ok "X1: THE ROUTING VIEW IS BYTE-IDENTICAL" \
+    || bad "X1: THE ROUTING VIEW IS BYTE-IDENTICAL" "was $X1_THR_B now $(digest "$W/docs/project/OPEN-THREADS.md")"
+[ "$(git -C "$REPO" status --porcelain | sha256sum | awk '{print $1}')" = "$X1_TREE_B" ] \
+    && ok "X1: the real working tree is unchanged" \
+    || bad "X1: the real working tree is unchanged"
+[ "$(git -C "$REPO" diff --cached --stat | sha256sum | awk '{print $1}')" = "$X1_IDX_B" ] \
+    && ok "X1: the real index is unchanged" \
+    || bad "X1: the real index is unchanged"
+
+# ---- X3. A SURFACE THE WRITER REALLY MUTATES --------------------------------
+#
+# X1's stub fails whichever guarded file is copied first, so it cannot say which
+# surface the stop protected. This one fails the snapshot of DELIVERIES.md --
+# a file `approve` genuinely writes, stamping a permanent reviewed-by line -- and
+# then proves that same file came through byte-identical.
+#
+# That pairing is what discriminates. tx_restore can only put back what tx_guard
+# managed to copy, so on canonical main the surface whose snapshot failed was
+# exactly the one left mutated with no way home. An earlier cut of this case
+# aimed at the LEDGER instead and did NOT discriminate, because the ledger is
+# written only by --generate, which refuses in this world and therefore never
+# moves it on either build. Recorded rather than quietly replaced: a control
+# that cannot fail is the thing this whole review round is about.
+txworld x3; orphan
+printf '<!-- delivered: %s reviewed-by: - -->\n' "$sha1" > "$W/docs/project/DELIVERIES.md"
+X3_REV_B="$(digest "$W/docs/internal/reviews/$R.md")"
+X3_DEL_B="$(digest "$W/docs/project/DELIVERIES.md")"
+cp "$CPBIN/cp-deliveries-fails" "$CPBIN/cp"
+PATH="$CPBIN:$PATH" REVIEWCTL_REPO="$W" "$CTL" approve "$R" \
+     --implementation="$sha1" --expected-parent="$TIP" >"$TMPD/out3" 2>&1
+X3_RC=$?
+rm -f "$CPBIN/cp"
+[ "$X3_RC" -ne 0 ] && ok "X3: a failed DELIVERIES snapshot stops the transaction" \
+                   || bad "X3: a failed DELIVERIES snapshot stops the transaction" "rc=0"
+[ "$(digest "$W/docs/project/DELIVERIES.md")" = "$X3_DEL_B" ] \
+    && ok "X3: AND THE DELIVERY RECORD IS BYTE-IDENTICAL -- the surface whose snapshot failed" \
+    || bad "X3: AND THE DELIVERY RECORD IS BYTE-IDENTICAL -- the surface whose snapshot failed" "$(cat "$W/docs/project/DELIVERIES.md" 2>/dev/null)"
+[ "$(digest "$W/docs/internal/reviews/$R.md")" = "$X3_REV_B" ] \
+    && ok "X3: ...and so is the role artifact" \
+    || bad "X3: ...and so is the role artifact" "$(revfile | head -3)"
+
+# ---- X2. the snapshot was taken, but restoring it fails ---------------------
+#
+# The other side of the same boundary. tx_restore ignored its own cp failures
+# and tx_cleanup deleted the only backup unconditionally, so a half-restored
+# tree was reported as a plain refusal and the copy that could have fixed it was
+# already gone.
+txworld x2; orphan
+cp "$CPBIN/cp-restore-fails" "$CPBIN/cp"
+X2_BEFORE="$(revfile)"
+PATH="$CPBIN:$PATH" REVIEWCTL_REPO="$W" "$CTL" approve "$R" \
+     --implementation="$sha1" --expected-parent="$TIP" >"$TMPD/out2" 2>&1
+X2_RC=$?
+[ "$X2_RC" -ne 0 ] && ok "X2: a transaction whose rollback fails still refuses" \
+                   || bad "X2: a transaction whose rollback fails still refuses" "rc=0"
+grep -qF "UNRECOVERED:" "$TMPD/out2" \
+    && ok "X2: IT NAMES THE PATH IT COULD NOT PUT BACK" \
+    || bad "X2: IT NAMES THE PATH IT COULD NOT PUT BACK" "$(cat "$TMPD/out2")"
+grep -qF "has been KEPT at" "$TMPD/out2" \
+    && ok "X2: ...and says the backup was kept" \
+    || bad "X2: ...and says the backup was kept" "$(cat "$TMPD/out2")"
+X2_TX="$(sed -n 's/.*has been KEPT at \([^ ]*\).*/\1/p' "$TMPD/out2" | head -1)"
+if [ -n "$X2_TX" ] && [ -d "$X2_TX" ]; then
+    ok "X2: THE BACKUP DIRECTORY ACTUALLY SURVIVES, AT THE PATH IT NAMED"
+else
+    bad "X2: THE BACKUP DIRECTORY ACTUALLY SURVIVES, AT THE PATH IT NAMED" "path='$X2_TX'"
+fi
+rm -rf "$X2_TX" 2>/dev/null || :
+rm -f "$CPBIN/cp" "$CPBIN/cp-restore-fails"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

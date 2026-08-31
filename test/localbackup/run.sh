@@ -129,7 +129,13 @@ else
 fi
 # ...and on DIFFERENT minutes, which is what keeps each line's identity stable
 # when a third source joins later.
-mc_min="$(printf '%s\n' "$out" | grep -oE '^[0-9]+ \* \* \* \* echo "\$\(date -Is\) ZFS-JOB BEGIN [^"]*backup' | awk '{print $1}' | sort -u | grep -c .)"
+# Taken from the ENGINE call, not from the envelope: the envelope moved to
+# zfs-job.sh on 2026-08-30 and a pattern anchored on its `echo ... ZFS-JOB
+# BEGIN` counted zero, which reads as 'both sends on one minute' -- the exact
+# failure this case exists to catch, reported for a reason that had nothing to
+# do with the stagger. The minute and the engine call are what the claim is
+# about; how the line is wrapped is not.
+mc_min="$(printf '%s\n' "$out" | grep -E 'snapsend[.]sh -m \"automated_hourly_\"' | awk '{print $1}' | sort -u | grep -c .)"
 [ "${mc_min:-0}" -ge 2 ] \
     && ok "101/comma-list: the two sends land on different minutes (no merge, stable identities)" \
     || bad "101/comma-list: the two sends land on different minutes" "distinct minutes: ${mc_min:-0}"

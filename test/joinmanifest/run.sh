@@ -434,6 +434,75 @@ else
 fi
 zfs_reset
 
+# ---------------------------------------------------------------------------
+# A REUSED DRAFT MUST STILL ANSWER THE CURRENT REQUEST
+#
+# The draft is deliberately reused rather than regenerated: it is a consent
+# document the administrator may have edited, and rebuilding it would discard
+# those edits. But the collector's request can change between join attempts,
+# and then the acceptance screen showed the CURRENT request directly above a
+# count and a grant computed from the STALE draft.
+#
+# Measured on pve9, 2026-08-29, while building the move-to-client lab: a first
+# join with no --datasets drafted the whole estate; add-client was re-run with
+# --datasets=hdd/movelab/src; the next join printed "the collector asked for
+# hdd/movelab/src" and, four lines below, "acceptance grants rights on 9
+# dataset(s)". A one-dataset ask, a nine-dataset grant, both on screen at once,
+# with nothing saying the draft predated the request.
+# ---------------------------------------------------------------------------
+zfs_reset
+SCOPE="$(peer_scope_path pve1)"; HASH="$(peer_scope_granted_hash_path pve1)"
+rm -f "$SCOPE" "$HASH" "$SCOPE.request"
+printf '[dataset:tank/data]\ninclude_parent = no\ninclude_children = yes\n' > "$SCOPE"
+
+# 1. the draft was built when the collector named NOTHING; now it names one.
+printf '%s\n' "" > "$SCOPE.request"
+: > "$GUIDED_CALLS"
+out="$(PEER_JOIN_DATASETS='tank/only-this' guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -s "$GUIDED_CALLS" ]; then
+    ok "STALE DRAFT: A GRANT IS NOT OFFERED FROM A DRAFT THAT PREDATES THE REQUEST"
+else
+    bad "STALE DRAFT: A GRANT IS NOT OFFERED FROM A DRAFT THAT PREDATES THE REQUEST" "rc=$rc calls=$(cat "$GUIDED_CALLS")"
+fi
+case "$out" in
+    *"INNEJ prosby"*) ok "stale draft: ...and says the draft was built for a different request" ;;
+    *) bad "stale draft: ...and says the draft was built for a different request" "$out" ;;
+esac
+case "$out" in
+    *"caly majatek hosta"*) ok "stale draft: ...naming what it was built for, not just that it differs" ;;
+    *) bad "stale draft: ...naming what it was built for, not just that it differs" "$out" ;;
+esac
+
+# 2. THE POSITIVE SIDE. A draft whose recorded request matches proceeds, or the
+#    check above would be indistinguishable from a blanket refusal.
+printf '%s\n' "tank/only-this" > "$SCOPE.request"
+: > "$GUIDED_CALLS"
+out="$(PEER_JOIN_DATASETS='tank/only-this' guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "matching draft: a draft built for THIS request is still accepted"
+else
+    bad "matching draft: a draft built for THIS request is still accepted" "rc=$rc out=$out"
+fi
+
+# 3. A draft from before this check exists on every host mid-join at upgrade
+#    time. Unknown provenance is said out loud, never turned into a refusal on
+#    evidence nobody has.
+rm -f "$SCOPE.request" "$HASH"
+printf '[dataset:tank/data]\ninclude_parent = no\ninclude_children = yes\n' > "$SCOPE"
+: > "$GUIDED_CALLS"
+out="$(PEER_JOIN_DATASETS='tank/only-this' guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "legacy draft: no recorded request is a warning, not a refusal"
+else
+    bad "legacy draft: no recorded request is a warning, not a refusal" "rc=$rc out=$out"
+fi
+case "$out" in
+    *"NIE zostal sprawdzony"*) ok "legacy draft: ...and the operator is told it was not checked" ;;
+    *) bad "legacy draft: ...and the operator is told it was not checked" "$out" ;;
+esac
+rm -f "$SCOPE" "$HASH" "$SCOPE.request"
+zfs_reset
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

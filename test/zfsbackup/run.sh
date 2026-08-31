@@ -6128,17 +6128,49 @@ got=$(ctx adopt "" "" "" "" PEER_SAVED_LOCAL_USER=acctfrommanifest)
     && ok "63f: it falls back to the pairing manifest when the record predates the field" \
     || bad "63f: it falls back to the pairing manifest when the record predates the field" "got=$got"
 
-# 63g. every config writer goes through the one decision layer. A writer that
-#      re-derives its own answer is the exact shape this extraction removed, so
-#      the count is pinned rather than left to review.
+# 63g. Every config writer goes through the one decision layer. A writer that
+#      re-derives its own answer is the exact shape this extraction removed.
+#
+#      ASSERTED PER FUNCTION, not by equal counts. Equal counts were a proxy that
+#      held only while writers were the sole callers of the resolver, and it
+#      stopped holding on 2026-08-29 when list-replicas -- a READER -- had to
+#      resolve too, so that a front end is shown the same config an install would
+#      write. The proxy then failed for a case that is correct, which is how a
+#      tripwire gets loosened to go green. Checking the real property instead
+#      makes it stronger: a reader may resolve without writing, but no writer may
+#      write without resolving.
+writer_gap=$(awk '
+    /^[a-z_]+\(\) \{/ { fn=$1; has_w=0; has_r=0; next }
+    /^\}/ { if (fn != "" && has_w && !has_r) print fn; fn=""; next }
+    fn != "" && /^[ \t]*atomic_replace_and_install / { has_w=1 }
+    fn != "" && /^[ \t]*cron_context_resolve [a-z]/  { has_r=1 }
+' "$ZFSBACKUP")
+if [ -z "$writer_gap" ]; then
+    ok "63g: EVERY function that installs a config also resolved the context first"
+else
+    bad "63g: EVERY function that installs a config also resolved the context first" \
+        "writes without resolving: $(printf '%s' "$writer_gap" | tr '\n' ' ')"
+fi
+# ...and the counts stay pinned on top of it, because the property above cannot
+# see a writer that resolves in a HELPER it calls -- correct, but no longer the
+# one decision layer. A new number here is a prompt to look, not a failure to
+# paper over.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-# SIX since 2026-08-26: set-bandwidth joined them, rewriting every active
-# relationship of one pair in a single transaction. The number is pinned rather
-# than merely compared so that ADDING a config writer forces this line to be
-# edited -- which is the moment to prove the new writer is aimed at a config
-# instead of guessing one. Bumping it is the acknowledgement, not a formality.
-if [ "$writers" -eq 6 ] && [ "$resolvers" -eq 6 ]; then
+# 9 writers / 12 resolvers, MEASURED on the merged tree rather than carried over
+# from either side. main had reached 8/11 and this branch adds set-bandwidth,
+# which rewrites every active relationship of one pair in a single transaction:
+# 9. The resolver count moves with it because a writer that does not resolve is
+# a writer aimed at a guessed config.
+#
+# The numbers are pinned rather than merely compared so that ADDING a config
+# writer forces this line to be edited -- which is the moment to prove the new
+# writer is aimed at a config instead of guessing one. Bumping it is the
+# acknowledgement, not a formality. Equality between the two was never the
+# property: the gap is READERS (list-replicas, run-replicas,
+# install-media-trigger) which resolve the same config an install would write,
+# so that what they show or run is what cron would.
+if [ "$writers" -eq 9 ] && [ "$resolvers" -eq 12 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -6547,7 +6579,14 @@ got=$(fam_probe "")
 # return anything", so there is one implementation for both questions.
 #
 # The implementation is the single remote `zfs list -H -t snapshot` in the file.
+# TWO probe implementations now, and they answer questions on opposite sides:
+# source_family_newest asks a REMOTE source over ssh, local_newest_snapshot asks
+# this collector's own copy (move-to-client's guid proof, 2026-08-29). The
+# remote one cannot serve the local case -- it always opens ssh to
+# LOAD_ACCOUNT@LOAD_HOST. Both are NAMED functions with their callers counted
+# below, so a third, hand-rolled one still trips this.
 n_impl=$(grep -c 'zfs list -H -t snapshot' "$ZFSBACKUP")
+n_local=$(grep -c 'local_newest_snapshot "\$' "$ZFSBACKUP")
 # The old idiom must be gone entirely, not merely reduced -- a lingering
 # `grep -q '@automated_'` would be a second existence test with its own depth.
 n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
@@ -6555,10 +6594,10 @@ n_inline=$(grep -c "grep -q '@automated_'" "$ZFSBACKUP")
 n_calls=$(grep -c 'source_family_exists "\$' "$ZFSBACKUP")
 # the wrapper itself, plus activate-client's rehearsal (the ex-copy).
 n_newest=$(grep -c 'source_family_newest "\$' "$ZFSBACKUP")
-if [ "$n_impl" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
+if [ "$n_impl" -eq 2 ] && [ "$n_local" -eq 1 ] && [ "$n_inline" -eq 0 ] &&    [ "$n_calls" -eq 3 ] && [ "$n_newest" -eq 2 ]; then
     ok "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"
 else
-    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
+    bad "67c: one probe implementation, every consumer through it (seed, catch-up, emit, activation rehearsal)"         "impl=$n_impl local-callers=$n_local inline=$n_inline exists-callers=$n_calls newest-callers=$n_newest"
 fi
 
 # 67c2. the activation rehearsal specifically: it must not re-derive the depth.
@@ -7912,6 +7951,40 @@ case "$m122_out" in
 esac
 _g="$(m122_retain)"
 if [ "$_g" = "-D10" ]; then ok "122j: ...leaving the edited retention in place"; else bad "122j: ...leaving the edited retention in place" "want [-D10] got [$_g]"; fi
+
+# THE INSTALLED BLOCK'S SOURCE IS CHECKED BEFORE IT IS REPLACED.
+#
+# There is one managed block per crontab, so whichever config last rendered it
+# owns the whole thing -- and a command resolving to a different config replaces
+# every job the first one installed, including ones it has never heard of.
+#
+# Measured on pve9, 2026-08-29: three replica jobs installed from
+# /root/replab.conf vanished when remove-client ran and resolved elsewhere.
+# Nothing said a word; they were noticed only because a hash in an unrelated
+# audit line was the one from before they existed.
+#
+# Asserted structurally -- the guard is wired into the single door every writer
+# goes through -- and that is what this can honestly claim. Its runtime behaviour
+# was checked on the lab: installing from /root/other.conf over a block rendered
+# from /root/replab.conf printed both paths and what would be lost.
+if grep -q '^warn_if_block_has_other_source()' "$ZFSBACKUP"; then
+    ok "block-source guard: the check exists"
+else
+    bad "block-source guard: the check exists"
+fi
+_air="$(awk '/^atomic_replace_and_install\(\)/,/^}/' "$ZFSBACKUP")"
+case "$_air" in
+    *warn_if_block_has_other_source*)
+        ok "BLOCK-SOURCE GUARD: CALLED FROM THE ONE DOOR EVERY WRITER USES" ;;
+    *)  bad "BLOCK-SOURCE GUARD: CALLED FROM THE ONE DOOR EVERY WRITER USES" \
+            "atomic_replace_and_install does not call it, so a writer could replace a foreign block silently" ;;
+esac
+# It must compare with the SAME normaliser the missing-config guard uses, or the
+# two would disagree about what "a different file" means.
+case "$(awk '/^warn_if_block_has_other_source\(\)/,/^}/' "$ZFSBACKUP")" in
+    *normalize_cron_source*) ok "block-source guard: shares the path normaliser" ;;
+    *) bad "block-source guard: shares the path normaliser" ;;
+esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

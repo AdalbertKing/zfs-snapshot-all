@@ -312,7 +312,34 @@ cron_write() {   # <user> <infile>  -> 0 ok, 1 failed
     else
         crontab -u "$who" "$in" 2>/dev/null; rc=$?
     fi
-    [ "$rc" -eq 0 ] || { CRON_ERR="crontab(1) refused the new content for '$who' (rc=$rc)"; return 1; }
+    if [ "$rc" -ne 0 ]; then
+        CRON_ERR="crontab(1) refused the new content for '$who' (rc=$rc)"
+        # WHY it refused, when the reason is one this package can produce.
+        #
+        # vixie-cron caps a command at 1000 bytes and says only
+        # "command too long", naming a line number in a file the operator never
+        # sees -- the caller then reports a rollback with no cause. Measured on
+        # pve9, 2026-08-30: a replica line with ONE source is already 934
+        # characters, and a second source took it to 1160.
+        #
+        # DIAGNOSED AFTER THE FAILURE, never checked before it. A pre-flight
+        # length gate would refuse lines some cron implementations accept, and
+        # this must not invent a limit it cannot see.
+        local _l _cmd _n=0 _over=""
+        while IFS= read -r _l; do
+            _n=$((_n+1))
+            case "$_l" in ''|'#'*) continue ;; esac
+            # Strip the five schedule fields; what is left is the command.
+            _cmd="$(printf '%s' "$_l" | sed -E 's/^([^ ]+ +){5}//')"
+            [ "${#_cmd}" -gt 1000 ] || continue
+            _over="$_over
+    line $_n: the command is ${#_cmd} bytes; cron's limit is 1000. It begins: $(printf '%.70s' "$_cmd")..."
+        done < "$in"
+        if [ -n "$_over" ]; then
+            CRON_ERR="$CRON_ERR -- at least one command is over cron's length limit:$_over"
+        fi
+        return 1
+    fi
     back=$(mktemp) || { CRON_ERR="mktemp failed while verifying the write"; return 1; }
     if ! cron_read "$who" "$back"; then rm -f "$back"; return 1; fi
     if ! cmp -s "$in" "$back"; then

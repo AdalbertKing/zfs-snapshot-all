@@ -142,6 +142,7 @@ read_input() {
 }
 
 declare -a BLOCK_LINES=()
+ZSA_REPO="" ZSA_LOG="" ZSA_NOTIFY="" ZSA_WARN=""
 extract_block() {
     local text in_block=0 line
     text="$(read_input)" || die "failed to read input"
@@ -153,6 +154,33 @@ extract_block() {
         [ "$in_block" -eq 1 ] || continue
         [[ "$line" == "# Source:"* ]] && continue
         [ -z "$(trim "$line")" ] && continue
+        # THE BLOCK NAMES ITS LONG PATHS ONCE.
+        #
+        # gen-cron.sh emits `ZSA_REPO=`, `ZSA_LOG=`, `ZSA_NOTIFY=` and
+        # `ZSA_WARN=` ahead of the jobs and writes `$ZSA_REPO/snapget.sh` in
+        # the commands, because cron refuses a command over 1000 bytes and an
+        # ordinary two-relationship host was already at 890. Every parser below
+        # matches on real paths, so the assignments are collected here and put
+        # back before anything else sees the line -- textually, and only for
+        # these four names, so nothing else in the command is touched.
+        #
+        # KEPT DELIBERATELY, and it is transitional. The assignments were on
+        # main only briefly -- they shortened the line by naming its paths, and
+        # were replaced by zfs-job.sh when it turned out a line copied out of the
+        # crontab no longer ran by hand. Hosts installed during that window carry
+        # them until something reinstalls there, and deployment is an hourly
+        # `git pull`, so this must keep reading them. A crontab from before or
+        # after that window has neither and takes this path unchanged.
+        case "$line" in
+            ZSA_REPO=*)   ZSA_REPO="${line#ZSA_REPO=}";     continue ;;
+            ZSA_LOG=*)    ZSA_LOG="${line#ZSA_LOG=}";       continue ;;
+            ZSA_NOTIFY=*) ZSA_NOTIFY="${line#ZSA_NOTIFY=}"; continue ;;
+            ZSA_WARN=*)   ZSA_WARN="${line#ZSA_WARN=}";     continue ;;
+        esac
+        [ -n "$ZSA_NOTIFY" ] && line="${line//\$ZSA_NOTIFY/$ZSA_NOTIFY}"
+        [ -n "$ZSA_WARN" ]   && line="${line//\$ZSA_WARN/$ZSA_WARN}"
+        [ -n "$ZSA_REPO" ]   && line="${line//\$ZSA_REPO/$ZSA_REPO}"
+        [ -n "$ZSA_LOG" ]    && line="${line//\$ZSA_LOG/$ZSA_LOG}"
         BLOCK_LINES+=("$line")
     done <<< "$text"
     [ "${#BLOCK_LINES[@]}" -gt 0 ] || die "no '$MARKER_BEGIN_PREFIX' ... '$MARKER_END' block found in the input"
@@ -211,9 +239,58 @@ strip_witness_markers() {
 # parse_job_envelope LINE -- the common wrapper job_cron_line() puts around
 # every send/prune line. Sets SCHED/CMD/CRONLOG/NOTIFYSCRIPT/NOTIFY/DETAIL on
 # success, returns 1 (leaves nothing set) if LINE does not match the shape.
+# THE ENVELOPE IS A SCRIPT NOW, and this reads that shape first.
+#
+# gen-cron.sh emits `<repo>/zfs-job.sh "<label>" --log=.. --notify=.. --detail=N
+# -- <command>` because the inline envelope was 336 characters repeated in every
+# line and cron caps a command at 1000. What it does NOT do is hide anything:
+# the engine command is still there after `--`, which is why this tool keeps
+# working at all.
+#
+# Tried FIRST and falling through to the inline form, which is not politeness to
+# old code: deployment is an hourly `git pull`, so a host keeps the block it was
+# last installed with until something reinstalls it. Both shapes are live at the
+# same time on the same estate.
+parse_job_envelope_script() {
+    local line="$1" rest
+    case "$line" in *"/zfs-job.sh "*) ;; *) return 1 ;; esac
+    # FIVE FIELDS, not "up to the first slash": a schedule may be `*/15 * * * *`
+    # and cutting at the slash would take the schedule apart.
+    SCHED="$(printf '%s' "$line" | awk '{print $1, $2, $3, $4, $5}')"
+    [ -n "$SCHED" ] || return 1
+    rest="${line#*/zfs-job.sh }"
+    # The label is double-quoted and cannot contain a double quote: notify_text
+    # builds it from a host label and a config word, both validated.
+    case "$rest" in \"*) ;; *) return 1 ;; esac
+    rest="${rest#\"}"; NOTIFY="${rest%%\"*}"; rest="${rest#*\"}"
+    CRONLOG=""; NOTIFYSCRIPT=""; DETAIL=""
+    rest="${rest# }"
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            "--log="*)     rest="${rest#--log=}";    CRONLOG="${rest%% *}";      rest="${rest#* }" ;;
+            "--notify="*)  rest="${rest#--notify=}"; NOTIFYSCRIPT="${rest%% *}"; rest="${rest#* }" ;;
+            "--detail="*)  rest="${rest#--detail=}"; DETAIL="${rest%% *}";       rest="${rest#* }" ;;
+            "-- "*)        CMD="${rest#-- }"; break ;;
+            *) return 1 ;;
+        esac
+    done
+    [ -n "${CMD:-}" ] || return 1
+    # A media bracket is shell syntax and travels as `/bin/sh -c '...'`, because
+    # zfs-job.sh execs its argument list and a bare `(` is not a command. The
+    # parsers below expect the bracket itself.
+    local _shq="'"   # one single quote, kept in a variable so the case stays readable
+    case "$CMD" in
+        "/bin/sh -c $_shq("*)
+            CMD="${CMD#/bin/sh -c $_shq}"
+            CMD="${CMD%$_shq}" ;;
+    esac
+    return 0
+}
+
 parse_job_envelope() {
     local line
     line="$(strip_witness_markers "$1")"
+    parse_job_envelope_script "$line" && return 0
     local D1=' e=$(mktemp); ' D2=' 2>"$e"; rc=$?; cat "$e" >>' D3='; [ $rc -ne 0 ] && ' D4=' "' D5='" "$(tail -n '
     [[ "$line" == *"$D1"* ]] || return 1
     SCHED="${line%%"$D1"*}"; local rest="${line#*"$D1"}"
@@ -300,9 +377,26 @@ parse_delsnaps_cmd() {
     if [[ "$rest" == "-G "* ]]; then C_MODE="gfs"; rest="${rest#-G }"
     elif [[ "$rest" == "-B "* ]]; then C_MODE="bookmark"; rest="${rest#-B }"
     fi
-    C_RECURSIVE=0; C_CLEARCUT=0; C_PROTECT=""
+    # -L and the ssh flags were missing entirely, and the consequence was not a
+    # lost field: `rest` then still began with '-L', the quoted-scope check below
+    # failed, parse_delsnaps_cmd returned 1, and the caller rejected the WHOLE
+    # crontab with "unrecognized job line". One paused relationship anywhere on a
+    # host made this tool useless for that host -- exactly as the pause rolls out
+    # across the estate.
+    C_RECURSIVE=0; C_CLEARCUT=0; C_PROTECT=""; C_PAIR_LABEL=""; C_SSHFLAGS=""
     while :; do
         if [[ "$rest" == "-R "* ]]; then C_RECURSIVE=1; rest="${rest#-R }"; continue; fi
+        if [[ "$rest" == "-L "* ]]; then
+            rest="${rest#-L }"; C_PAIR_LABEL="${rest%% *}"; rest="${rest#* }"; continue
+        fi
+        # The five options gen-cron's ssh_flags accept-list allows, each taking
+        # a value. Order-independent on purpose: this reads what is there rather
+        # than re-asserting the emitter's current sequence.
+        if [[ "$rest" =~ ^(-p|-k|-c|-K|-O)\  ]]; then
+            local _o="${rest%% *}"; rest="${rest#* }"
+            local _v="${rest%% *}"; rest="${rest#* }"
+            C_SSHFLAGS="${C_SSHFLAGS}${C_SSHFLAGS:+ }$_o $_v"; continue
+        fi
         if [ "$C_MODE" != "bookmark" ] && [[ "$rest" == "-F "* ]]; then C_CLEARCUT=1; rest="${rest#-F }"; continue; fi
         if [[ "$rest" == '-P "'* ]]; then
             rest="${rest#-P \"}"
@@ -365,6 +459,99 @@ parse_notify_text() {
 ###############################################################################
 #END 3
 
+# THE REMOVABLE-MEDIA BRACKET, taken back off.
+#
+# gen-cron wraps a replica job in
+#
+#   ( GATE attach POOL LABEL --dataset D; a=$?; if [ $a -eq 0 ]; then ENGINE;
+#     m=$?; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; GATE detach POOL LABEL;
+#     d=$?; [ $m -ne 0 ] && exit $m; exit $d )
+#
+# so the command no longer begins with a path to snapsend.sh, and every parser
+# below refused it -- which made the caller reject the WHOLE crontab as
+# unrecognized. One replica job on a host and this tool was useless for that
+# host, the same failure the -L work hit earlier the same day.
+#
+# Sets C_MEDIA_POOL / C_MEDIA_LABEL / C_MEDIA_DATASET / C_MEDIA_INNER, so the
+# parsers that follow see the call they already know how to read.
+#
+# It SETS rather than echoes, and the caller must not wrap it in $( ). The first
+# cut did, and every C_MEDIA_* assignment landed in the subshell and was gone by
+# the time the caller read it -- the sections came out as [replica:] with no
+# name, all three collapsed into one. The same trap test/linkfields/run.sh
+# records in its own header.
+C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""
+unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
+    local cmd="$1"
+    C_MEDIA_POOL=""; C_MEDIA_LABEL=""; C_MEDIA_DATASET=""; C_MEDIA_INNER=""; C_MEDIA_INNERS=()
+    case "$cmd" in
+        "( "*"/zfs-media-gate.sh attach "*) ;;
+        *) return 1 ;;
+    esac
+    local head="${cmd#*/zfs-media-gate.sh attach }"
+    C_MEDIA_POOL="${head%% *}";  head="${head#* }"
+    C_MEDIA_LABEL="${head%% *}"; head="${head#* }"
+    case "$head" in
+        "--dataset "*) head="${head#--dataset }"; C_MEDIA_DATASET="${head%%;*}" ;;
+    esac
+    # The engine sits between the `then` and the `elif` -- taken by those two
+    # anchors rather than by counting fields, because the engine's own
+    # arguments are quoted and contain spaces.
+    #
+    # TWO SHAPES, because a replica job may name several sources and they all
+    # share one import/export window:
+    #
+    #   one     CMD; m=$?
+    #   several m=0; for s in "A" "B"; do CMD "$s" DST; r=$?; [ $m -eq 0 ] && m=$r; done
+    #
+    # The `elif` anchor is common to both; the old `; m=$?; elif` anchor was
+    # not, and against the second shape it matched nothing and returned the
+    # whole tail as if it were one engine call.
+    #
+    # A LOOP AND NOT THE CALL REPEATED, because the line is measured against
+    # cron's 1000-byte command limit: repeating the whole invocation costs
+    # ~130 bytes per source against ~27 for one more quoted dataset. Measured
+    # on pve9, 2026-08-30 -- the ONE-source line is already 934 characters.
+    local inner="${cmd#*; then }"
+    inner="${inner%%; elif [ \$a -eq 1 ]*}"
+    [ -n "$inner" ] || return 1
+    C_MEDIA_INNERS=()
+    case "$inner" in
+        'm=0; for s in '*)
+            local _list="${inner#m=0; for s in }"
+            local _body="${_list#*; do }"
+            _list="${_list%%; do *}"
+            # QUOTED, because `[ $m -eq 0 ]` in an unquoted pattern is a glob
+            # character class, not that text -- the first cut of this matched
+            # nothing and handed the whole loop body to the engine parser.
+            local _tail='; r=$?; [ $m -eq 0 ] && m=$r; done'
+            _body="${_body%%"$_tail"*}"
+            [ -n "$_body" ] || return 1
+            # The list is `"A" "B" "C"`. Split on the quotes rather than on
+            # whitespace: this is the one place a dataset name arrives quoted,
+            # and unquoting by hand is how a name would get mangled.
+            local _one _srcs=()
+            while [ -n "$_list" ]; do
+                case "$_list" in
+                    \"*) _list="${_list#\"}"; _one="${_list%%\"*}"; _list="${_list#*\"}"
+                         [ -n "$_one" ] && _srcs+=("$_one")
+                         _list="${_list# }" ;;
+                    *) break ;;
+                esac
+            done
+            [ "${#_srcs[@]}" -gt 0 ] || return 1
+            # Put each source back where the loop variable stood, so the engine
+            # parsers below see the call they expect.
+            for _one in "${_srcs[@]}"; do
+                C_MEDIA_INNERS+=("${_body/\"\$s\"/\"$_one\"}")
+            done ;;
+        *)  C_MEDIA_INNERS+=("${inner%; m=\$?}") ;;
+    esac
+    [ "${#C_MEDIA_INNERS[@]}" -gt 0 ] || return 1
+    C_MEDIA_INNER="${C_MEDIA_INNERS[0]}"
+    return 0
+}
+
 ###############################################################################
 #BEGIN 4 [CLASSIFY EVERY LINE INTO ENTITIES]
 ###############################################################################
@@ -373,6 +560,7 @@ declare -a PRUNE_E=()     # sched<SEP>scope<SEP>pattern<SEP>retain<SEP>recursive
 declare -a GFS_E=()       # sched<SEP>scope<SEP>pattern<SEP>retain_parts<SEP>recursive<SEP>clearcut<SEP>protect<SEP>notify
 declare -a BOOK_E=()      # sched<SEP>scope<SEP>pattern<SEP>age<SEP>recursive<SEP>notify
 declare -a MON_E=()       # sched<SEP>scope<SEP>pattern<SEP>warn<SEP>crit<SEP>recursive<SEP>notify
+declare -a REPL_E=()      # sched<SEP>label<SEP>source<SEP>dst<SEP>prefix<SEP>media<SEP>recursive<SEP>notify
 DG_FOUND=0
 
 REPO_DIR="" CRON_LOG="" NOTIFY_SCRIPT="" WARN_SCRIPT="" DIGEST_SCRIPT="" HOST_LABEL=""
@@ -381,6 +569,53 @@ classify_lines() {
     local line
     for line in "${BLOCK_LINES[@]}"; do
         if parse_job_envelope "$line"; then
+            # A bracketed job is a replica onto removable media. Unwrapped
+            # first, so the engine parsers below see the call they expect.
+            if unwrap_media_bracket "$CMD"; then
+                CMD="$C_MEDIA_INNER"
+                parse_send_cmd "$CMD" || die "a removable-media job whose inner command is not snapsend.sh: $line"
+                # EVERY engine call in the bracket, folded back into the one
+                # section that produced them. They came from a single
+                # [replica:] so they must agree on everything except the
+                # source -- if they do not, this line was not written by
+                # gen-cron.sh and guessing which one is authoritative would be
+                # the wrong thing to do quietly.
+                local _rsrc="$C_SRC" _rdst="$C_DST" _rpref="$C_PREFIX" _rflags="$C_FLAGS" _k
+                for ((_k=1; _k<${#C_MEDIA_INNERS[@]}; _k++)); do
+                    parse_send_cmd "${C_MEDIA_INNERS[_k]}" \
+                        || die "a removable-media job whose inner command is not snapsend.sh: ${C_MEDIA_INNERS[_k]}"
+                    [ "$C_DST"    = "$_rdst"   ] || die "a replica bracket whose engine calls disagree on the target: '$_rdst' vs '$C_DST'"
+                    [ "$C_PREFIX" = "$_rpref"  ] || die "a replica bracket whose engine calls disagree on the snapshot prefix: '$_rpref' vs '$C_PREFIX'"
+                    [ "$C_FLAGS"  = "$_rflags" ] || die "a replica bracket whose engine calls disagree on the flags: '$_rflags' vs '$C_FLAGS'"
+                    _rsrc="$_rsrc,$C_SRC"
+                done
+                C_SRC="$_rsrc"; C_DST="$_rdst"; C_PREFIX="$_rpref"; C_FLAGS="$_rflags"
+                parse_notify_text "$NOTIFY" || die "cannot parse replica notify text: '$NOTIFY'"
+                # A crontab may hold replicas and nothing else -- a host that
+                # only carries copies of what it already has. Taken here rather
+                # than in the send/prune/monitor sweep below, which never sees
+                # these lines.
+                [ -n "$HOST_LABEL" ] || HOST_LABEL="$N_HOST"
+                REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
+                local _rec=0 _hist="" _rest="" _tok _want=0
+                # -R is the section's own 'recursive', not a transfer flag, and
+                # -i/-T are the 'history' field. Everything else is genuinely
+                # flags and was being DROPPED here -- a replica with -b would
+                # have come back without its bandwidth cap.
+                for _tok in $C_FLAGS; do
+                    if [ "$_want" -eq 1 ]; then _hist="$_hist $_tok"; _want=0; continue; fi
+                    case "$_tok" in
+                        -R) _rec=1 ;;
+                        -i) _hist="newest" ;;
+                        -T) _hist="auto:"; _want=1 ;;
+                        *)  _rest="${_rest:+$_rest }$_tok" ;;
+                    esac
+                done
+                # `-T 3` arrives as two tokens; the count is glued back on here.
+                case "$_hist" in "auto: "*) _hist="auto:${_hist#auto: }" ;; esac
+                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${_rec}${SEP}${N_LABEL}${SEP}${_hist}${SEP}${_rest}")
+                continue
+            fi
             if parse_send_cmd "$CMD"; then
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
                 SEND_E+=("${SCHED}${SEP}${C_FLAGS}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}${NOTIFY}")
@@ -389,11 +624,11 @@ classify_lines() {
             if parse_delsnaps_cmd "$CMD"; then
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
                 case "$C_MODE" in
-                    prune) PRUNE_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}") ;;
-                    gfs)   GFS_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}") ;;
+                    prune) PRUNE_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
+                    gfs)   GFS_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${C_CLEARCUT}${SEP}${C_PROTECT}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
                     bookmark)
                         parse_notify_text "$NOTIFY" || die "cannot parse bookmark notify text: '$NOTIFY'"
-                        BOOK_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${N_LABEL}") ;;
+                        BOOK_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_RETAIN}${SEP}${C_RECURSIVE}${SEP}${N_LABEL}${SEP}${C_PAIR_LABEL}${SEP}${C_SSHFLAGS}") ;;
                 esac
                 continue
             fi
@@ -425,9 +660,12 @@ classify_lines() {
         done
     fi
     if [ -z "$HOST_LABEL" ]; then
-        local e notify
+        # Named fields, not "the last one": notify stopped being last when
+        # pair_label and ssh_flags were appended, and ${e##*SEP} would have
+        # silently started reading ssh_flags as a notify string.
+        local e notify _d
         for e in "${PRUNE_E[@]}"; do
-            notify="${e##*"$SEP"}"
+            IFS="$SEP" read -r _d _d _d _d _d _d _d notify _d _d <<< "$e"
             parse_notify_text "$notify" && { HOST_LABEL="$N_HOST"; break; }
         done
     fi
@@ -438,7 +676,7 @@ classify_lines() {
             parse_notify_text "$notify" && { HOST_LABEL="$N_HOST"; break; }
         done
     fi
-    [ -n "$HOST_LABEL" ] || die "could not determine host_label -- no send/prune/monitor line had parseable notify text"
+    [ -n "$HOST_LABEL" ] || die "could not determine host_label -- no send/prune/monitor/replica line had parseable notify text"
 }
 ###############################################################################
 #END 4
@@ -496,7 +734,7 @@ build_excluded_sections() {
     local e protect_csv tok prefix keep
     declare -A seen=()
     for e in "${PRUNE_E[@]}" "${GFS_E[@]}"; do
-        IFS="$SEP" read -r _ _ _ _ _ _ protect_csv _ <<< "$e"
+        IFS="$SEP" read -r _ _ _ _ _ _ protect_csv _ _ _ <<< "$e"
         [ -n "$protect_csv" ] || continue
         local IFS_SAVE="$IFS"; IFS=','
         for tok in $protect_csv; do
@@ -601,8 +839,10 @@ declare -A SCOPE_VARIANTS=()   # scope -> space-joined set of "rec:cc" seen
 build_prune_buckets() {
     local e sched scope pattern retain rec cc protect notify bkey
     for e in "${PRUNE_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify <<< "$e"
-        bkey="${scope}${SEP}${rec}${SEP}${cc}"
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "$e"
+        # pair_label and ssh_flags join the bucket key: a [prune:] section
+        # carries ONE of each, so tiers that disagree cannot share a section.
+        bkey="${scope}${SEP}${rec}${SEP}${cc}${SEP}${plbl}${SEP}${sshf}"
         if [ -z "${PRUNE_BUCKET[$bkey]+x}" ]; then
             PRUNE_BUCKET["$bkey"]=""
             PRUNE_BUCKET_ORDER+=("$bkey")
@@ -632,10 +872,12 @@ emit_prune_and_monitor_sections() {
         local key="$SECTION_KEY"
         [ "$rec" = "1" ] && section_set_field "$key" recursive yes
         [ "$cc" = "1" ] && section_set_field "$key" clear_cut yes
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         members="${PRUNE_BUCKET[$bkey]}"
         while IFS= read -r line; do
             [ -n "$line" ] || continue
-            IFS="$SEP" read -r sched _ pattern retain _ _ protect notify <<< "$line"
+            IFS="$SEP" read -r sched _ pattern retain _ _ protect notify _ _ <<< "$line"
             local mon_warn="" mon_crit="" mon_tier="" mon_label=""
             local midx match_idx=-1
             for midx in "${!MON_E[@]}"; do
@@ -679,9 +921,9 @@ declare -A MON_USED=()
 
 # ---- gfs sections ----
 build_gfs_sections() {
-    local e sched scope pattern retain rec cc protect notify part
+    local e sched scope pattern retain rec cc protect notify plbl sshf part
     for e in "${GFS_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify <<< "$e"
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "$e"
         if [ -n "${SECTION_SEEN[prune${SEP}${scope}]+x}" ]; then
             warn "UNREPRESENTABLE: gfs prune on scope '$scope' collides with an existing [prune:$scope] section (different tiers there already claim that name) -- left out; merge by hand."
             continue
@@ -690,6 +932,8 @@ build_gfs_sections() {
         local key="$SECTION_KEY"
         section_set_field "$key" gfs yes
         section_set_field "$key" gfs_pattern "$pattern"
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         section_set_field "$key" pattern "$pattern"
         section_set_field "$key" prune_schedule "$sched"
         section_set_field "$key" notify_raw_prune "$notify"
@@ -706,17 +950,46 @@ build_gfs_sections() {
     done
 }
 
+# ---- replica sections ----
+#
+# A replica is reconstructed as the [replica:] section it came from, not as a
+# [dataset:] with a local dst: the two mean different things, and a round-trip
+# that turned one into the other would hand the next reader a config claiming a
+# backup relationship where there is only a copy.
+build_replica_sections() {
+    local e sched label source dst prefix media rec notify hist flags
+    for e in "${REPL_E[@]+"${REPL_E[@]}"}"; do
+        IFS="$SEP" read -r sched label source dst prefix media rec notify hist flags <<< "$e"
+        get_section replica "$label"
+        local key="$SECTION_KEY"
+        section_set_field "$key" source "$source"
+        section_set_field "$key" dst "$dst"
+        section_set_field "$key" schedule "$sched"
+        section_set_field "$key" prefix "$prefix"
+        [ -n "$media" ] && section_set_field "$key" media "$media"
+        [ "$rec" = "1" ] && section_set_field "$key" recursive yes
+        # 'all' is the default and gen-cron emits nothing for it, so writing it
+        # back would be a field the original config never had -- and the
+        # round-trip diff would start reporting a change that is not one.
+        [ -n "$hist" ] && section_set_field "$key" history "$hist"
+        [ -n "$flags" ] && section_set_field "$key" flags "$flags"
+        [ -n "$notify" ] && [ "$notify" != "$label" ] && section_set_field "$key" notify "$notify"
+    done
+}
+
 # ---- bookmark sections ----
 build_bookmark_sections() {
-    local e sched scope pattern age rec label
+    local e sched scope pattern age rec label plbl sshf
     for e in "${BOOK_E[@]}"; do
-        IFS="$SEP" read -r sched scope pattern age rec label <<< "$e"
+        IFS="$SEP" read -r sched scope pattern age rec label plbl sshf <<< "$e"
         get_section prune-bookmarks "$scope"
         local key="$SECTION_KEY"
         section_set_field "$key" schedule "$sched"
         section_set_field "$key" age "$age"
         [ "$pattern" != "tgt-" ] && section_set_field "$key" pattern "$pattern"
         [ "$rec" = "1" ] && section_set_field "$key" recursive yes
+        [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
+        [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         section_set_field "$key" notify "$label"
     done
 }
@@ -776,6 +1049,7 @@ build_prune_buckets
 emit_prune_and_monitor_sections
 build_gfs_sections
 build_bookmark_sections
+build_replica_sections
 
 RESULT="$(render_config)"
 if [ -n "$OUTFILE" ]; then

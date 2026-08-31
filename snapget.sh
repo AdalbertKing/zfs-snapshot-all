@@ -9,6 +9,30 @@ set -o pipefail
 # Usage: snapget.sh [options] REMOTE_DATASETS [LOCAL_BASE]
 # Options:
 #   -m <MESSAGE>      Use MESSAGE as prefix for snapshot name (to label snapshots)
+#   -t               The second argument is the EXACT dataset to write, not a
+#                    base to append the source name under.
+#
+#                    Default, unchanged: `snapget.sh host:A/B C/D` writes
+#                    `C/D/A/B`, and an omitted base writes `A/B` itself
+#                    (identity, which is what sync mode is). Both preserve the
+#                    source's name, which is right for a backup: a collector
+#                    holding twenty sources needs them to stay apart.
+#
+#                    A RESTORE is the one operation where that is wrong. The copy
+#                    lives at `hdd/backups/<peer>/hdd/data` and has to land back
+#                    as `hdd/data` -- neither mapping can say that, so before this
+#                    flag the engine composed a path nobody asked for. Measured on
+#                    the lab, 2026-08-27, which is where it was found.
+#
+#                    Refused with more than one dataset (one exact path cannot
+#                    receive several), without a base (there would be nothing to
+#                    be exact about) and with -R (flat-recursive expands into many
+#                    datasets, each of which needs its own name).
+#
+#                    Added to BOTH engines in one commit at the owner's
+#                    instruction. They are twins: a capability in one direction
+#                    and not the other is how the two drift, and test/twins
+#                    exists because that has happened before.
 #   -e               Use existing latest snapshot on source instead of creating a new one
 #   -z               Compress the data stream (default compressor: zstd). Redundant
 #                    against a remote source -- see "COMPRESSION DEFAULT" below,
@@ -461,6 +485,7 @@ human_bytes() {   # <bytes>
 }
 
 PORT=22
+TARGET_EXACT=0
 USE_EXISTING_SNAPSHOT=0
 declare -a EXCLUDE_SNAPS=()
 # -q: quiesce the Proxmox guest that owns each SOURCE dataset before
@@ -1355,7 +1380,19 @@ process_dataset() {
     record_inflight_snap "$tgt_dataset" "$src_dataset" "$snapshot"
 
     if [ $FORCE_FULL_SEND -ne 1 ]; then
-        log 2 "Creating target dataset: $tgt_dataset"
+        # SAY WHAT HAPPENED, NOT WHAT MIGHT. This used to log "Creating target
+        # dataset: $tgt_dataset" here, unconditionally, and it was wrong three
+        # ways at once: the creation below is guarded by `zfs list || zfs
+        # create`, so on every incremental run it announced a creation that did
+        # not happen; with -w the dataset actually created is the PARENT
+        # ($create_target), not $tgt_dataset; and the line ran before
+        # $create_target was even computed. Reported from the media lab
+        # 2026-08-29 and fixed on the owner's explicit direction -- see
+        # docs/internal/ENGINE-FREEZE.md.
+        #
+        # An operator watching a nightly job saw "Creating target dataset" every
+        # single night and had no way to tell a first seed from an increment,
+        # which is the one thing that line could usefully have told them.
         # canmount=noauto: a freshly created target starts unmounted and stays
         # that way across zfs receive's own mount/unmount cycles. On Linux,
         # unprivileged users can't mount/unmount at all (unlike illumos), so
@@ -1386,8 +1423,13 @@ process_dataset() {
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         }
-        zfs list "$create_target" >/dev/null 2>&1 || zfs create -o canmount=$TARGET_CANMOUNT "$create_target" || {
-            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1; }
+        if zfs list "$create_target" >/dev/null 2>&1; then
+            log 2 "Target dataset already exists: $create_target"
+        elif zfs create -o canmount=$TARGET_CANMOUNT "$create_target"; then
+            log 2 "Created target dataset: $create_target"
+        else
+            abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"; return 1
+        fi
     fi
 
     if [ $FORCE_FULL_SEND -eq 1 ]; then
@@ -1603,8 +1645,36 @@ process_dataset() {
             if [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
                     log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
+                elif [ "${#tgt_snaps[@]}" -gt 0 ] && [ "${tgt_snaps[-1]}" != "$recv_base" ]; then
+                    # THE COPY IS AHEAD, AND NOTHING WROTE TO IT.
+                    #
+                    # `written@<common>` counts everything after the common
+                    # point, and a SNAPSHOT taken after it counts the same as a
+                    # rogue writer. The two have opposite causes and opposite
+                    # remedies, and until this branch existed both got the
+                    # sentence below -- which sends the operator hunting for a
+                    # live guest that is not there.
+                    #
+                    # Measured on the lab, 2026-08-27: after a restore rolled
+                    # the SOURCE back to an earlier point, this copy still held
+                    # the snapshot of the damaged period. The dataset's own
+                    # `written` was 0 -- its filesystem was byte-identical to
+                    # its newest snapshot -- while `written@common` was 14.5K.
+                    # Nothing had written to it. The source had gone backwards.
+                    #
+                    # Discriminated from data already in hand: if the common
+                    # point is not the target's LAST snapshot, the excess is
+                    # snapshots, not writes. Naming them matters because they
+                    # are what -f destroys, and after a restore they are the
+                    # only remaining copy of the period that was rolled away.
+                    local _ahead="" _n=0 _t _seen=0
+                    for _t in "${tgt_snaps[@]}"; do
+                        if [ "$_seen" -eq 1 ]; then _ahead="$_ahead$_t "; _n=$((_n+1)); fi
+                        [ "$_t" = "$recv_base" ] && _seen=1
+                    done
+                    log 0 "Refusing: '$tgt_dataset' holds $_n snapshot(s) NEWER than the common snapshot '@${recv_base}', which the source no longer has: $_ahead-- so this pull cannot continue from that point without destroying them. Nothing wrote to this copy (its own written=0); the SOURCE went backwards, which is what a restore to an earlier point does. Those snapshots may be the only remaining copy of the period the source rolled away. One command clears it, and the account that owns this relationship can run it -- no root, and nothing re-sent: zfs rollback -r '${tgt_dataset}@${recv_base}'. That destroys those snapshots AND returns this copy's filesystem to the common point, which is what the next pull needs. Destroying the snapshots alone is NOT enough: the copy's live filesystem stays where they left it and the pull refuses again, on divergence instead of on snapshots. -f also clears it, by destroying and recreating the whole copy and re-sending every byte, and -f needs root. -F does NOT help here: it acts only on a name collision under a different GUID, which this is not. BEFORE YOU RUN IT: zfs rollback destroys BOOKMARKS on that dataset too, not just snapshots -- measured 2026-08-28, and it is the one way they die (zfs recv -F leaves them alone). A bookmark here is the anchor a replica onto removable media returns to; lose it and the next time that disk comes back it needs a full re-seed instead of an increment. Look first: zfs list -t bookmark -d 1 '${tgt_dataset}'."
                 else
-                    log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. Force explicitly with -f if the divergence is expected and safe to lose."
+                    log 0 "Refusing: '$tgt_dataset' has $written written since the common snapshot '@${recv_base}' -- something wrote to this target after the point this pull would resume from, and -F would silently discard it. If this is a live guest disk or otherwise not exclusively owned by this pull, investigate. If the divergence IS expected and safe to lose, one command discards it and needs no root: zfs rollback -r '${tgt_dataset}@${recv_base}'. (-f also works, by destroying and recreating the whole copy and re-sending every byte, and it does need root.) BEFORE YOU RUN IT: zfs rollback destroys BOOKMARKS on that dataset too, not just snapshots -- measured 2026-08-28, and it is the one way they die (zfs recv -F leaves them alone). A bookmark here is the anchor a replica onto removable media returns to; lose it and the next time that disk comes back it needs a full re-seed instead of an increment. Look first: zfs list -t bookmark -d 1 '${tgt_dataset}'."
                 fi
                 abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
                 return 1
@@ -1665,7 +1735,28 @@ process_dataset() {
     log 1 "Starting transfer..."
     transfer_data "$send_cmd" "$recv_cmd" "$remote_host" "$remote_user" || {
         log 0 "Transfer failed"
-        [ $FORCE_FULL_SEND -eq 1 ] && log 0 "Hint: a full pull/-f-style receive does a forced rollback, which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, this run needed root."
+        # THE HINT USED TO REQUIRE -f, AND THE CAUSE DOES NOT.
+        #
+        # Any receive carrying -F does a forced rollback, and rolling back a
+        # MOUNTED dataset unmounts it first -- which a delegated account cannot
+        # do on Linux, with or without `zfs allow`. -f is only one of the ways
+        # to arrive at -F: the ordinary reconcile path (-F) gets there too, and
+        # so does resuming this pull's own prior work.
+        #
+        # Measured on the lab, 2026-08-27: reconciling a copy after a restore
+        # failed with a bare "cannot unmount [...] permission denied / Transfer
+        # failed" and no hint at all, because FORCE_FULL_SEND was 0. The
+        # sibling dataset, which was not mounted, went through in the same run
+        # -- so the output showed one success and one unexplained failure over
+        # a difference the message never mentioned.
+        if [ -n "$recv_force_flag" ]; then
+            local _mnt; _mnt=$(zfs get -H -o value mounted "$tgt_dataset" 2>/dev/null)
+            if [ "$_mnt" = "yes" ] && [ "$(id -u)" -ne 0 ]; then
+                log 0 "Hint: this receive carries -F (a forced rollback) and '$tgt_dataset' is MOUNTED. Rolling back a mounted dataset unmounts it first, and on Linux a non-root user cannot unmount even with full 'zfs allow' delegation -- so this run could not have succeeded whatever else is true. A collector's copies are not meant to be mounted; that is what canmount=noauto is for. Unmount it once as root: zfs unmount '$tgt_dataset' -- then this pull goes through as the delegated account, with no further root involvement."
+            else
+                log 0 "Hint: this receive carries -F (a forced rollback), which needs to mount/unmount the (local) target. On Linux, non-root users cannot do that even with full 'zfs allow' delegation -- if this failed on a mount/unmount permission error, this run needed root."
+            fi
+        fi
         # Only keep the hold if it is actually still useful: a
         # receive_resume_token means the resume branch above will need this
         # exact source snapshot on a later run. Without one (e.g. zfs recv
@@ -1872,13 +1963,14 @@ if [ $# -gt 0 ]; then
     set -- "${TRANSLATED_ARGS[@]+"${TRANSLATED_ARGS[@]}"}"
 fi
 
-while getopts "m:ezZgNl:v:rRniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
+while getopts "m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:" opt; do
     case $opt in
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
         q) QUIESCE="$OPTARG";;
         Q) QUIESCE_DEADMAN="$OPTARG";;
+        t) TARGET_EXACT=1;;
         e) USE_EXISTING_SNAPSHOT=1;;
         E) EXCLUDE_SNAPS+=("$OPTARG");;
         z) COMPRESSION=1; COMPRESSOR="zstd"; COMPRESSION_SET=1;;
@@ -2409,10 +2501,32 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
     esac
 fi
 
+# -t REFUSES what it cannot mean. All three are decided before anything is sent,
+# because each of them would otherwise produce a target path nobody asked for --
+# and on a restore that path is a real dataset on a machine in trouble.
+if [ "$TARGET_EXACT" -eq 1 ]; then
+    if [ -z "$LOCAL_BASE" ]; then
+        echo "Error: -t says the second argument is the exact target, and there is no second argument. Give the dataset to write, or drop -t." >&2
+        exit 1
+    fi
+    if [ "${#DATASETS[@]}" -ne 1 ]; then
+        echo "Error: -t names ONE exact target and ${#DATASETS[@]} datasets were given. One path cannot receive several; run them one at a time." >&2
+        exit 1
+    fi
+    if [ "$FLAT_RECURSE" -eq 1 ]; then
+        echo "Error: -t and -R together. -R expands into many independent datasets and each needs its own name, which is the mapping -t exists to switch off. Use -r for one atomic recursive stream under the exact target, or drop -t." >&2
+        exit 1
+    fi
+fi
+
 declare -a FAILED_DATASETS=()
 ADOPT_SKIPPED=0
 for src_path in "${DATASETS[@]}"; do
-    if [ -n "$LOCAL_BASE" ]; then
+    if [ "$TARGET_EXACT" -eq 1 ]; then
+        # -t: the base IS the target. Same flag, same meaning, same commit as
+        # snapsend.sh -- see the note on the flag above.
+        dataset="$LOCAL_BASE"
+    elif [ -n "$LOCAL_BASE" ]; then
         dataset="${LOCAL_BASE}/${src_path}"
     else
         dataset="$src_path"

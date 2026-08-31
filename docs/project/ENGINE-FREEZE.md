@@ -1,8 +1,8 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 0f280f2e3a8aec280d8c3a396a0a01fb27e71903 -->
-<!-- frozen: snapget.sh 100755 45667de1f6dc45663c09b60db6125209fb3f7c2c -->
-<!-- frozen: delsnaps.sh 100755 6e6381924dd09d347c13fc71fce71607f72c80f8 -->
+<!-- frozen: snapsend.sh 100755 d8c8c4743f0374c829e7661493b99f95faaa7c1c -->
+<!-- frozen: snapget.sh 100755 2b61ddb2d40f9ca7b454d877591447bc097a4c28 -->
+<!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
 <!-- unfreeze: - -->
@@ -67,6 +67,227 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-29 (snapsend.sh, snapget.sh): **the log announced a creation that did
+  not happen.** Owner direction: "Tak" -- to the implementer's report from the
+  removable-media lab.
+
+  LOG TRUTH ONLY. No behaviour changes: the same guard decides whether the
+  dataset is created, the same failure aborts the same way, and the remote path
+  still costs exactly ONE ssh round trip.
+
+  Both engines logged, unconditionally, before doing anything:
+
+      log 2 "Creating target dataset: $tgt_dataset"
+
+  and it was wrong three ways at once.
+
+  1. The creation below it is guarded by `zfs list ... || zfs create ...`, so on
+     every incremental run -- which is every run after the first -- it announced
+     a creation that did not occur. Observed on pve9 during the media lab: the
+     line appeared while the copy was demonstrably NOT recreated, because the
+     target's older snapshots survived the transfer.
+  2. With `-w` the dataset actually created is `$create_target`, the PARENT of
+     `$tgt_dataset`. The line named the wrong path.
+  3. It ran BEFORE `$create_target` was computed, so it could not have named the
+     right one even in principle.
+
+  Now each branch says what it did: `Created target dataset: $create_target` or
+  `Target dataset already exists: $create_target`. On the remote side the
+  existing single `ssh` reports which branch it took rather than being asked a
+  second time -- the round-trip count is part of this package's contract and was
+  not going to be spent on a log line.
+
+  Why it was worth unfreezing for a message. An operator watching a nightly job
+  saw "Creating target dataset" every night and had no way to tell a first seed
+  from an increment -- the one thing that line could usefully have told them. A
+  log that says the same thing whatever happened is not information, and this
+  project has spent the day removing exactly that shape from `detach`, from
+  `pause-client`, and from a test that recorded a PASS unconditionally.
+
+
+- 2026-08-28 (snapget.sh): **the remedy this file prints destroys bookmarks, and
+  did not say so.** Owner direction: "Tak" -- to the implementer's proposal after
+  the measurement below.
+
+  DIAGNOSIS ONLY. Same refusal, same status, same way out; one sentence added to
+  each of the two branches that name `zfs rollback -r`.
+
+  Measured on the lab, 2026-08-28, on real ZFS:
+
+      recv -F, target NOT diverged      bookmark survives
+      recv -F, target diverged (rolled  bookmark SURVIVES -- recv destroys
+        back, snapshot destroyed)         snapshots, not bookmarks
+      zfs rollback -r to an earlier     bookmark DESTROYED
+        point
+
+  So the automatic path is safe and the MANUAL remedy is the one that kills
+  them -- and this file is where an operator is told to run it.
+
+  It matters because of what a bookmark on a copy is for. `record_send_bookmark`
+  leaves one per target, and for a replica onto removable media that bookmark is
+  the anchor the disk returns to: it lets a month-old disk take an increment
+  instead of a full re-seed, and it works even though the snapshot it points at
+  was pruned long ago. Measured the same afternoon: with the anchor gone and no
+  common snapshot left, the engine fails with "destination has snapshots (eg.
+  ...) must destroy them to overwrite it" -- loud and safe, and the only way
+  forward is -f, which re-seeds the whole disk.
+
+  The sentence names the command to look first (zfs list -t bookmark -d 1), so
+  the loss is a decision rather than a surprise.
+
+- 2026-08-27 (delsnaps.sh): **`-L` -- the pause reaches the engine that
+  destroys.** Owner direction, verbatim: "Jesli nalezy uzupelnic silnik, czyli
+  delsnaps o te funkcje i go odmrozic. Zrob to. pausa ma wstrzymac wszelkie
+  operacje cronowe naszego pakietu z prunem wlacznie."
+
+  This is a BEHAVIOUR change, not a diagnostic one, and it is the first on this
+  file since the freeze.
+
+  snapsend.sh, snapget.sh and check-snap-age.sh have honoured the logical pause
+  marker since REV-20260804-045. delsnaps.sh did not, and gen-cron emitted no
+  `-L` on any prune line -- by an explicit decision recorded in gen-cron.sh:
+  "retention of what already landed stays correct while a relationship is
+  paused; only new transfers and the alarms about their absence stop."
+
+  That reasoning was right about the case it considered and wrong about the one
+  it did not. Measured on the lab, 2026-08-27: during a restore campaign the
+  source-side prune fired at :21, applied its GFS ladder to a source the restore
+  had just rolled back, and destroyed the recovery point itself. The
+  relationship was left with no common snapshot at all. "Retention stays
+  correct" assumes the data underneath it is not moving; a restore is precisely
+  when it is.
+
+  Scope: one flag taking an argument, free in delsnaps' own parser, in both the
+  split and attached spellings its neighbours already accept. The gate is the
+  same contract as the other three engines, to the letter -- same marker path,
+  same charset rule, exit 0 so cron stays quiet, and its own `skipped_paused`
+  stats status so a skipped prune can never be read back as a prune that ran. A
+  run that omits `-L` is not gated: logical pause is an orchestration switch,
+  not a security boundary, and this file does not pretend otherwise either.
+
+  Placed after the arguments are named and before any ssh, any listing and any
+  destroy: a paused prune must not even ask the far side what it holds.
+
+  Considered and rejected: stopping cron. The host's crontab carries jobs that
+  are not ours, and stopping the daemon to pause one relationship stops those
+  too -- the owner named that trap before I could walk into it.
+
+- 2026-08-27 (snapget.sh): **the refusal named a remedy the account cannot run,
+  and the remedy that fits said nothing when it failed.** Same owner direction
+  as the entry below it ("az do braku zaciecia i koniecznych poprawek w kodzie").
+
+  DIAGNOSIS ONLY again. No input changes verdict, status or effect.
+
+  Measured on the lab, immediately after the entry below was proven. The
+  refusal ended "Force explicitly with -f". Run as the account that owns the
+  relationship, `-f` gives:
+
+      cannot create '...': dataset already exists
+      Hint: -f [...] requires root.
+
+  `-f` is the wrong size of hammer as well as unusable: it destroys the whole
+  copy and re-sends every byte, when what the situation needs is to drop the
+  handful of snapshots the source no longer has. Those are already NAMED in the
+  refusal, and the account that owns the relationship can destroy them --
+  measured, rc=0, no root and nothing re-sent.
+
+  **And destroying them is not enough either -- corrected again, same evening.**
+  Following that advice on the lab cleared the snapshot refusal and produced the
+  other one: "has 15872 written since the common snapshot". Destroying a
+  snapshot does not move the live filesystem, so the copy stayed where those
+  snapshots had left it, one refusal ahead. `zfs rollback -r <copy>@<common>`
+  does both halves in one command -- drops the snapshots and returns the
+  filesystem to the point -- and the relationship account can run it. Proven by
+  the pull then going through unaided: "All datasets processed successfully".
+
+  Both branches of the guard now name that command, including the
+  something-wrote-here branch, where it is the way out once the divergence is
+  known to be expected.
+
+  **`-F` is not it, and the first version of this entry said it was.** I ran
+  `-F`, watched the refusal not fire, and concluded reconcile had dropped the
+  snapshots. It had not: `-F` acts only on a name collision under a DIFFERENT
+  GUID, and what it actually did was escalate the run to a full re-pull -- same
+  cost as `-f`, reached by another road. The next `-F`, against a state with no
+  such collision, refused like any other run and exposed the mistake. One
+  observation, one inference, shipped: the cost of reading an outcome instead of
+  reading the flag.
+
+  `-F` also failed at the time, with no hint at all:
+
+      cannot unmount '/hdd/labcoll/.../vm-900-disk-0': permission denied
+      Transfer failed
+
+  ...while the SIBLING dataset, identical but not mounted, succeeded in the same
+  run. The hint that would have explained it was gated on `FORCE_FULL_SEND`, and
+  the cause is not `-f`: it is `recv -F`, which rolls back, which unmounts, which
+  a delegated account cannot do on Linux. The gate is now the actual cause
+  (`recv_force_flag` non-empty), and when the target is mounted and the caller is
+  not root the message says so and gives the one-off root command.
+
+  Proven by the same account finishing the pull unaided once the copy was
+  unmounted: "All datasets processed successfully".
+
+- 2026-08-27 (snapget.sh): **the copy being AHEAD is not the same event as
+  something writing to it, and the refusal now says which one happened.**
+  Owner direction, verbatim: "Testuj dalej. Rob nowy lab. [...] portem je
+  odzyskuj az do braku zaciecia i koniecznych poprawek w kodzie."
+
+  DIAGNOSIS ONLY. No behaviour changes: the same input is refused, at the same
+  place, with the same exit status, and `-f` remains the same way out. What
+  changes is the sentence the operator reads.
+
+  Found on the lab, 2026-08-27, in the state a restore leaves behind. A restore
+  had rolled the SOURCE back an hour. The copy still held the snapshot of the
+  period that had been rolled away, so `written@<common>` on the copy was 14.5K
+  and the pull refused with "something wrote to this target [...] if this is a
+  live guest disk [...] investigate."
+
+  Nothing had written to it. The copy's own `written` was **0** -- its
+  filesystem was byte-identical to its newest snapshot. The 14.5K was a
+  SNAPSHOT, and `written@` cannot tell the two apart because it counts
+  everything after the point, whatever made it.
+
+  The two causes are opposites. A rogue writer means the copy is contaminated
+  and `-f` restores its integrity. A copy that is ahead means the copy is the
+  only surviving record of a period the source destroyed, and `-f` is the one
+  command that ends it. Sending the operator to look for a live guest that is
+  not there is the least of it.
+
+  Discriminated from data the function already holds: if the common point is
+  not the target's LAST snapshot, the excess is snapshots. They are then named,
+  because they are exactly what `-f` would destroy.
+
+- 2026-08-27 (snapsend.sh AND snapget.sh, one commit): **`-t` -- the second
+  argument is the EXACT dataset, not a base to append the source name under.**
+  Owner direction, verbatim: "A. zmiany maja byc jednoczenie w snapsend i snapget
+  przeprowdzone."
+
+  Both engines composed the target as `BASE/<source name>`, or identity when the
+  base was omitted. Both preserve the source's name, which is right for a backup
+  -- a collector holding twenty sources needs them to stay apart. A RESTORE is
+  the one operation where it is wrong: the copy lives at
+  `hdd/backups/<peer>/hdd/data` and has to land back as `hdd/data`, and neither
+  mapping can say that.
+
+  FOUND ON THE LAB, not by reading. pve9 -> pve1, 2026-08-27: the grant was read
+  and enforced, the mode classified remotely as `rewind`, the recovery point
+  chosen -- and the engine then tried to create
+  `hdd/labsrc/hdd/labcoll/192.168.28.9/hdd/labsrc`. Every unit test passed
+  throughout, because none of them composed a real target path.
+
+  Both engines in ONE commit at the owner's instruction. They are twins, and
+  `test/twins` exists because a capability added to one direction and not the
+  other is how they drift. This is that rule applied before the drift instead of
+  after it.
+
+  Scope: one BOOLEAN flag, free in both optstrings, taking no argument -- so
+  gen-cron.sh's FLAGS_ARG_LETTERS contract is untouched. The composition gains a
+  new FIRST branch; the two existing branches are byte-identical, so every run
+  that does not pass `-t` behaves exactly as before. `-t` refuses what it cannot
+  mean: no base, more than one dataset, or `-R`.
+
 
 - 2026-08-27 (lib-zfs-snap.sh, snapsend.sh, snapget.sh): **the default answer to
   a failed freeze is inverted.** Owner direction, verbatim: "Przemyslalem i chce,

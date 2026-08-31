@@ -188,6 +188,22 @@ check "every declared suite appears in PROJECT_STATUS.md" "" "$missing"
 UNDER_TEST="${IMPACT_UNDER_TEST:-$IMPACT}"
 FRESH_TMP="$(mktemp -d)"; trap 'rm -rf "$FRESH_TMP"' EXIT
 
+# The protocol check is a real part of --verify, not merely a documented
+# command. The stub also pins the prospective boundary: PR verification must
+# ask whether commit-bearing facts are reachable from candidate HEAD, not from
+# origin/main before the candidate has been merged.
+PROTOCOL_STUB="$FRESH_TMP/reviewctl-fail.sh"
+cat > "$PROTOCOL_STUB" <<'EOF'
+#!/bin/bash
+[ "${REVIEWCTL_PUBREF:-}" = HEAD ] || { echo "wrong protocol publication ref"; exit 2; }
+echo "protocol gate sentinel"
+exit 1
+EOF
+chmod +x "$PROTOCOL_STUB"
+OUT="$(REVIEWCTL="$PROTOCOL_STUB" "$IMPACT" --verify 2>&1)"; rc=$?
+check "verify invokes the protocol gate against candidate HEAD" "1:1" \
+      "$([ "$rc" -ne 0 ] && printf 1 || printf 0):$(printf '%s\n' "$OUT" | grep -c 'protocol gate sentinel')"
+
 # fresh_world <name> -> $FW, a git repo whose status marker is current
 fresh_world() {
     FW="$FRESH_TMP/$1"; rm -rf "$FW"; mkdir -p "$FW/test" "$FW/docs"

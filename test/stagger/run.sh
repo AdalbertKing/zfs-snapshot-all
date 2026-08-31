@@ -277,6 +277,84 @@ else
     bad "the same relationship always lands on the same minute" "repeat runs disagreed"
 fi
 
+# --- THE PRUNE THAT REACHES THE SOURCE OVER SSH -----------------------------
+#
+# 63f69eb spread relationships "across the clock instead of stacking them on one
+# minute", and its own measurement named the cost: "all at :01 and all pruning
+# at :21 ... a thundering herd on the link, the source's disks and sshd". It
+# gave a minute to the send and to the LOCAL prune and never touched
+# append_source_prune_create -- so the one job class that opens an SSH session
+# to the source, and therefore hits every item in that sentence, stayed stacked.
+#
+# Measured on the lab 2026-08-30, two relationships: sends :57 and :01, local
+# prunes :17 and :21, and BOTH source prunes at :21 alongside the local one --
+# three jobs, two of them over SSH to different hosts, in one minute. It
+# reproduced identically on a rebuild, so it is deterministic.
+#
+# This suite had twenty cases and none of them looked at a source prune.
+emit_src_prune() {   # <schedule expr> -> the emitted section
+    local t; t=$(mktemp); local wf; wf=$(mktemp)
+    { echo 'set -u'
+      echo 'PROFILE_PRUNE_FILE=/dev/null'
+      echo 'emit_source_prune_fragment() { :; }'
+      echo 'is_recursive_root() { return 1; }'
+      lift append_source_prune_create
+      printf 'append_source_prune_create %q pve9 "# managed" %q "-p 22" hdd/labsrc /dev/null %q
+'              "$wf" "acct@1.2.3.4:hdd/labsrc" "$1"
+    } > "$t"
+    bash "$t" >/dev/null 2>&1
+    cat "$wf"; rm -f "$t" "$wf"
+}
+
+got="$(emit_src_prune "37 * * * *")"
+case "$got" in
+    *"prune_schedule = 37 * * * *"*)
+        ok "the source-side prune carries its own minute" ;;
+    *)  bad "the source-side prune carries its own minute" "$got" ;;
+esac
+
+# THE CONTROL, and it is not a formality: every source prune section written
+# before this carries no schedule and inherits the template's. An emitter that
+# always wrote one would silently move jobs on hosts that never asked for it.
+got="$(emit_src_prune "")"
+case "$got" in
+    *prune_schedule*)
+        bad "no expression means inherit the template, as before" "$got" ;;
+    *)  ok "no expression means inherit the template, as before" ;;
+esac
+# ...and the section is still emitted, or the control above would pass on an
+# emitter that produced nothing at all.
+case "$got" in
+    *"[prune:acct@1.2.3.4:hdd/labsrc]"*)
+        ok "control: the section itself is still written" ;;
+    *)  bad "control: the section itself is still written" "$got" ;;
+esac
+
+# THE THREE SLOTS ARE PAIRWISE 20 MINUTES APART, which is what makes this a
+# spread rather than a second pile. Asserted on the arithmetic the caller uses,
+# for a minute near the wrap so the modulo is exercised rather than assumed.
+for base in 0 45 57; do
+    lp=$(( (base + 20) % 60 ))
+    sp=$(( (base + 40) % 60 ))
+    if [ "$base" != "$lp" ] && [ "$lp" != "$sp" ] && [ "$base" != "$sp" ]; then
+        ok "send/local-prune/source-prune are three distinct minutes (base $base -> $base/$lp/$sp)"
+    else
+        bad "send/local-prune/source-prune are three distinct minutes (base $base)" "$base/$lp/$sp"
+    fi
+done
+
+# THE FLAG MUST NOT BE A POSITIONAL, and the first cut made it one.
+# emit_remote_source_prune ends in a variadic dataset list, so a fourth
+# positional in front of that list eats the first DATASET: the list came out
+# empty, the function returned early, and no section was written at all.
+#
+# NOT re-tested here. test/zfsbackup already drives that function with its real
+# dependencies, and it is what caught this -- as a CONTROL failing ("96x
+# control: a readable fragment still produces the source prune section"), which
+# is exactly the assertion that trap breaks. Lifting a function with that many
+# dependencies into this suite would mean a stub per dependency, and a harness
+# that elaborate is a second implementation to keep true, not a test.
+
 echo "--------------------------------------------"
 echo "stagger: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

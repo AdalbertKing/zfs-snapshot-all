@@ -2,18 +2,66 @@
 
 Status: OWNER DECISION (recorded by the implementer from the owner's messages of
 2026-08-26). Seven questions were put in one pass; all seven are answered.
+**Section 1 was reversed by the owner later the same day** -- see below; the
+other six stand as first recorded.
 
 These settle what `docs/design/client-granted-restore.md` § 9 listed as open, and
 narrow what `docs/project/OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` left to the
 implementer. They do not reopen anything already settled.
 
-## 1. Restore runs on the machine being restored
+## 1. THE COLLECTOR STARTS THE RESTORE  (reversed 2026-08-26, confirmed 2026-08-27)
 
-**Pull-first.** The server-initiated (push) form is built later, if at all.
+**Push.** The operator sits at the machine that holds the backups, starts the
+restore there, and that machine connects to the broken one and writes.
 
-Materially safer and materially less code: the machine that will be overwritten
-is the one that asks, so no capability has to be forged, delegated or verified
-across a link to authorise a destructive act.
+The owner's words, in the order they were said:
+
+> "Zacznij od push"
+
+and, when the implementer described a collector-initiated flow back to him:
+
+> "Kto zaczyna: **kolektor**"
+
+**This reverses what this section first said.** The seven answers were given
+earlier the same day, and question 1 was put as "restore runs on the machine
+being restored" -- answered "tak". The owner reversed it in the discussion that
+followed. The reasoning the first version gave is preserved below, because it is
+the cost being ACCEPTED, not an argument against the decision.
+
+**What pull-first would have bought, and what push therefore has to pay for:**
+the machine that gets overwritten would have been the one asking, so no
+capability would have to exist for writing onto another machine. Under push that
+capability DOES have to exist -- the collector must be able to destroy and
+replace data on a host it does not own.
+
+So the grant is the whole of the safety here, not a formality attached to it.
+Everything sections 2, 3 and 6 say about it is load-bearing in a way it would not
+have been under pull, and the two consequences named in section 3 -- a loud
+`status` and an explicit verb to take the grant back -- are not conveniences.
+They are what stands between "the collector can restore me when I ask" and "the
+collector can overwrite me whenever it likes".
+
+### REPLACE is granted explicitly, and separately
+
+Owner direction, same message:
+
+> "REPLACE jawnie przy nadawaniu"
+
+The destructive mode is not reachable merely because a grant exists. A grant that
+permits restoring into free space does NOT permit replacing what is already
+there. Whoever grants it has to say REPLACE, in the grant, at the moment of
+granting -- not at the moment of running, when the machine is already broken and
+the person is already in a hurry.
+
+### No expiry, no single use
+
+> "usun expires i nonce"
+
+Both were in the design analysis and both are gone. Section 3 records the reason
+the owner gave: a recovery may take an hour or a weekend, so a window is the
+wrong shape, and a single-use grant would have to be re-issued at 3 a.m. after a
+failure. The grant lives until it is taken back, and taking it back is a verb.
+
 
 ## 2. The grant is per RELATIONSHIP, not per dataset
 

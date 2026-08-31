@@ -136,6 +136,59 @@ ALERT_SHARED_DIR="${ALERT_SHARED_DIR:-/var/lib/zfs-snapshot-all}"
 # before the pair-gate section that used to define it.
 PAIR_GATE_STATE_DIR="${PAIR_GATE_STATE_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 
+# WHERE A RESTORE GRANT LIVES, and it is deliberately NOT under
+# $PAIR_GATE_STATE_DIR/<label>.
+#
+# That directory is root:<account> mode 0775 -- group-WRITABLE by the delegated
+# account, on purpose: the owner's 2026-08-06 model lets the relationship's own
+# key lift a hard pause, and lifting it means unlinking a marker IN that
+# directory. Anything else placed there inherits that permission.
+#
+# A restore grant placed there could therefore be CREATED BY THE COLLECTOR'S OWN
+# ACCOUNT. The grant exists precisely to stop the collector authorising itself
+# to overwrite this machine, so putting it in a directory the collector can
+# write is not a weakness in the mechanism -- it is the mechanism doing nothing
+# at all. `docs/design/client-granted-restore.md` § 3 said "root-owned, the
+# account has read-only access" and named a path that is neither.
+#
+# So: a separate tree, root:root, world-readable and writable by nobody but
+# root. The gate runs AS the account and only ever reads it.
+RESTORE_GRANT_DIR="${RESTORE_GRANT_DIR:-/var/lib/zfs-snapshot-all/restore-grants}"
+
+# WHAT A RESTORE NEEDS THAT A BACKUP NEVER DID, measured on the lab 2026-08-27.
+#
+# The relationship account on a SOURCE holds the backup set:
+#     bookmark,destroy,hold,mount,release,send,snapshot
+# It can read its data out and manage its own snapshots. It cannot `receive` and
+# it cannot `rollback`, so a collector reaching that account today physically
+# cannot overwrite the machine -- which corrects a claim made earlier in this
+# work, that the capability already existed and was merely ungated. It does not
+# exist.
+#
+# That is a better design than the one assumed, and it is the reason the grant
+# issues BOTH halves together: the file that says "you may" and the delegation
+# that makes it possible. Neither alone lets a restore happen, and revoking
+# takes both back, so the window is exactly the grant's lifetime.
+#
+# `mount` and `canmount` are here because a received dataset that cannot be
+# mounted is not a restored one; `create` because a subtree may need a level the
+# target no longer has.
+# `mountpoint` is here because a received stream carries properties and the
+# receive sets them. Without it the transfer still lands but says "cannot receive
+# mountpoint property: permission denied" -- a restore that put the data back and
+# not the property that says where it belongs. Measured on the lab 2026-08-27.
+# ONLY what a backup does not already have. The backup set on a source is
+# bookmark,destroy,hold,mount,release,send,snapshot -- and `destroy` and `mount`
+# are in it. Listing them here made --deny-restore revoke them too, leaving the
+# account unable to prune its own snapshots or mount anything: the RESTORE was
+# taken back and the BACKUP broke with it.
+#
+# Measured on the lab 2026-08-27, while cleaning up: after one revoke the
+# account held bookmark,hold,release,send,snapshot. A grant that quietly narrows
+# the capability it was supposed to leave alone is worse than one that fails to
+# widen, because nothing reports it until the next prune does nothing.
+RESTORE_ZFS_PERMS="${RESTORE_ZFS_PERMS:-receive,rollback,create,canmount,mountpoint}"
+
 # alert_dir_chgrp <dir> <group> <excluded subtree>
 #
 # Phase 4 used to do this with a plain `chgrp -R "$ALERT_GROUP"
@@ -225,6 +278,24 @@ LEAVE_LABEL=""
 # contend with while it is trying to re-establish replication in the other
 # direction. Goes through lib-cron.sh's own lock/read-back, same as every
 # other writer -- this is one more requester, not a bypass.
+# GIVEN is tracked apart from the value, and it is not a nicety. The dispatch
+# used to be `[ -n "$ALLOW_RESTORE_LABEL" ]`, so `--allow-restore=` with an
+# empty value fell straight through it and deploy.sh went on to Phase 1 and
+# started installing packages on the host. A verb that answers a PERMISSION
+# question must never provision the machine on its way past -- that is the
+# reviewer's F4 finding of 2026-08-26, and a typo is exactly how it recurs.
+# Same discriminator deploy.sh already uses for --bandwidth.
+ALLOW_RESTORE_GIVEN=0
+DENY_RESTORE_GIVEN=0
+SHOW_RESTORE_GIVEN=0
+ALLOW_RESTORE_LABEL=""
+DENY_RESTORE_LABEL=""
+SHOW_RESTORE_LABEL=""
+# `replace` is never implied. Owner direction 2026-08-26 ("REPLACE jawnie przy
+# nadawaniu"): a grant that lets the collector write into free space must not
+# also let it destroy what is already there. The operator says so when they are
+# calm, not when the machine is already broken.
+ALLOW_RESTORE_REPLACE=0
 PAUSE_MODE=0
 RESUME_MODE=0
 # Default --pause/--resume touch only OUR managed blocks (comment out the
@@ -380,6 +451,10 @@ while [ "$#" -gt 0 ]; do
         --commit-scope-check=*) COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${1#*=}"; shift ;;
         --commit-scope-check)   COMMIT_SCOPE_CHECK=1; COMMIT_SCOPE_LABEL="${2:-}"; shift 2 ;;
         --pause)        PAUSE_MODE=1; shift ;;
+        --allow-restore=*) ALLOW_RESTORE_LABEL="${1#*=}"; ALLOW_RESTORE_GIVEN=1; shift ;;
+        --deny-restore=*)  DENY_RESTORE_LABEL="${1#*=}"; DENY_RESTORE_GIVEN=1; shift ;;
+        --show-restore=*)  SHOW_RESTORE_LABEL="${1#*=}"; SHOW_RESTORE_GIVEN=1; shift ;;
+        --replace)         ALLOW_RESTORE_REPLACE=1; shift ;;
         --resume)       RESUME_MODE=1; shift ;;
         --fullcron)     FULLCRON_MODE=1; shift ;;
         --role=*)       PEER_ROLE="${1#*=}"; shift ;;
@@ -1483,6 +1558,22 @@ do_draft_scope() {
         rm -f "$tmp"
         die "could not write $sfile"
     fi
+    # WHAT THIS DRAFT WAS BUILT FROM, recorded beside it.
+    #
+    # A draft is reused on a later --join rather than regenerated, which is
+    # right: it is a consent document the administrator may have edited by
+    # hand, and silently rebuilding it would throw those edits away. But the
+    # collector's request can change between attempts -- re-run add-client with
+    # --datasets, hand over a new package -- and then the acceptance screen
+    # showed the CURRENT request beside a count and a grant computed from the
+    # STALE draft. Measured on pve9, 2026-08-29: "the collector asked for
+    # hdd/movelab/src" printed directly above "acceptance grants rights on 9
+    # dataset(s)", with nothing saying the draft predated the request.
+    #
+    # A sidecar rather than a line in the file: the scope file is hashed and
+    # enumerated, and a header comment would have to be excluded from both.
+    printf '%s
+' "$named" > "$sfile.request" 2>/dev/null         || die "drafted the scope but could not record the request it was built from ($sfile.request) -- refusing to leave a draft whose origin cannot be checked on the next run"
     log "drafted $sfile: ${#active[@]} active dataset(s) from ${#pools[@]} pool(s)"
     log "scope draft is ready for review"
 }
@@ -2405,6 +2496,258 @@ if [ "$SELF_UPDATE" -eq 1 ]; then exec_deployed_update_control --self-update; do
 if [ "$ROLLBACK" -eq 1 ]; then exec_deployed_update_control --rollback; do_rollback; exit $?; fi
 if [ "$RESUME_UPDATES" -eq 1 ]; then exec_deployed_update_control --resume-updates; do_resume_updates; exit $?; fi
 
+# ==============================================================================
+# RESTORE GRANT -- the fact on THIS machine that lets a collector overwrite it
+# ==============================================================================
+#
+# Owner decision, 2026-08-26/27: the COLLECTOR starts a restore. It connects to
+# the broken machine and writes. That is the direction the owner chose, and it
+# is the reason this file exists at all: under the pull form the machine being
+# overwritten would have been the one asking, and no capability to write onto
+# another machine would ever have to exist.
+#
+# Under push it does. So the grant is the whole of the safety, and its two
+# properties are the ones that make it worth anything:
+#
+#   * it is created HERE, by root, locally, on the machine at risk -- never by
+#     the collector and never over the link;
+#   * `replace` is never implied. A grant lets the collector write into free
+#     space; destroying what is already there has to be said out loud, in the
+#     grant, at a moment when nothing is broken and nobody is in a hurry.
+#
+# The grant does not expire and is not single-use (owner: a recovery may take an
+# hour or a weekend, and a grant that dies mid-recovery dies at the worst
+# possible moment). The price of that is a grant left behind stays live, so
+# --show-restore exists and the gate reports it.
+restore_grant_label_ok() {   # <label>
+    case "${1:-}" in
+        ''|.|..)              return 1 ;;
+        *[!A-Za-z0-9._-]*)    return 1 ;;
+    esac
+    return 0
+}
+
+restore_grant_path() {   # <label>
+    printf '%s/%s' "$RESTORE_GRANT_DIR" "$1"
+}
+
+# The modes a grant permits, as a stable, comparable string.
+restore_grant_modes() {   # <replace 0|1>
+    if [ "${1:-0}" -eq 1 ]; then printf 'create rewind replace'; else printf 'create rewind'; fi
+}
+
+restore_grant_read_modes() {   # <path> -> the modes it records, or nothing
+    [ -r "$1" ] || return 1
+    sed -n 's/^RESTORE_GRANT_MODES="\(.*\)"$/\1/p' "$1" 2>/dev/null | head -1
+}
+
+do_allow_restore() {
+    local label="$ALLOW_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
+    restore_grant_label_ok "$label" \
+        || die "--allow-restore='$label' is not a valid relationship label (letters, digits, dot, dash, underscore)"
+
+    # The relationship has to EXIST here. A grant naming a relationship this
+    # host has never enrolled is a typo, and a typo that silently creates a
+    # live permission is the failure this whole mechanism is about.
+    [ -d "$PAIR_GATE_STATE_DIR/$label" ] \
+        || die "no relationship '$label' is enrolled on this host ($PAIR_GATE_STATE_DIR/$label does not exist) -- a grant for a relationship that does not exist would be a permission nobody can see. Check the label with: ls $PAIR_GATE_STATE_DIR"
+
+    # WHO and WHAT, from the file that already recorded them: the peer manifest
+    # this host wrote when it was joined. Same source as the backup delegation,
+    # so a restore can never be granted on a wider scope than the relationship
+    # was ever given, and nothing has to be typed twice at three in the morning.
+    #
+    # Read through peer_manifest_path and sourced, the way every other reader in
+    # this file does it. A hand-rolled parser here would be a second opinion
+    # about the manifest's format.
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    [ -r "$_pm" ] || die "--allow-restore=$label: no pairing manifest at $_pm -- this host has no record of that relationship, so there is nobody to delegate to and no scope to delegate over."
+    # shellcheck disable=SC1090
+    . "$_pm"
+    local account="${PEER_JOIN_ACCOUNT:-}"
+    local RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    [ -n "$account" ] || die "--allow-restore=$label: the manifest names no account, so a grant file would say yes to nobody."
+    [ -n "$RESTORE_GRANT_DATASETS" ] || die "--allow-restore=$label: the manifest records no granted datasets, so the restore would have no scope. Refusing rather than guessing one."
+
+    local want; want="$(restore_grant_modes "$ALLOW_RESTORE_REPLACE")"
+    local gpath; gpath="$(restore_grant_path "$label")"
+
+    if [ -f "$gpath" ]; then
+        local have; have="$(restore_grant_read_modes "$gpath")" || have=""
+        if [ "$have" = "$want" ]; then
+            # Converges on a retry, the same way the gate's own `disable` verb
+            # does: re-asserting what is already true is a success, and the
+            # ORIGINAL grant time is the useful fact, so it is kept.
+            log "restore grant for '$label' already says exactly this ($want) -- nothing changed"
+            return 0
+        fi
+        die "a restore grant for '$label' already exists and says '${have:-<unreadable>}', not '$want'. Changing what a live grant permits is not a side effect of re-issuing it -- take it back first, deliberately:
+    $0 --deny-restore=$label
+  then grant again with the modes you want."
+    fi
+
+    mkdir -p "$RESTORE_GRANT_DIR" || die "could not create $RESTORE_GRANT_DIR"
+    # root:root, and NOT group-writable. See the comment on RESTORE_GRANT_DIR:
+    # the relationship's own state directory is group-writable by the delegated
+    # account by design, so a grant kept there could be written by the very
+    # account it exists to restrain.
+    chown root:root "$RESTORE_GRANT_DIR" 2>/dev/null || :
+    chmod 0755 "$RESTORE_GRANT_DIR" 2>/dev/null || :
+
+    local tmp; tmp="$(mktemp "$RESTORE_GRANT_DIR/.grant.XXXXXX")" || die "could not write in $RESTORE_GRANT_DIR"
+    {
+        printf '# Restore grant. Written by deploy.sh --allow-restore on this host.\n'
+        printf '# It permits the collector of relationship %s to restore ONTO this\n' "$label"
+        printf '# machine. It does not expire; take it back with:\n'
+        printf '#     deploy.sh --deny-restore=%s\n' "$label"
+        printf 'RESTORE_GRANT_LABEL="%s"\n' "$label"
+        printf 'RESTORE_GRANT_MODES="%s"\n' "$want"
+        printf 'RESTORE_GRANT_AT="%s"\n' "$(date -Is 2>/dev/null || date)"
+        printf 'RESTORE_GRANT_BY="%s@%s"\n' "${SUDO_USER:-root}" "$(hostname -s 2>/dev/null || hostname)"
+        # WHAT the grant covers, not only what it permits. Until 2026-08-28 this
+        # file recorded the modes and left the scope implicit -- readable only by
+        # going back to the pairing manifest it was built from.
+        #
+        # The collector needs it, for one reason that is not bookkeeping:
+        # `replace` destroys a dataset and recreates it, and a `zfs allow` lives
+        # ON the dataset. Replacing the ROOT of the delegated scope therefore
+        # destroys the delegation, and recreating it needs permission on the
+        # PARENT -- which a delegated account does not have and should not.
+        # Measured on the lab that day: it left the target with no dataset, no
+        # grant, and no way for the account to make either.
+        #
+        # So the roots travel with the grant, and the restore refuses that one
+        # shape before the engine runs.
+        printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
+    } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
+    chown root:root "$tmp" 2>/dev/null || :
+    chmod 0644 "$tmp" 2>/dev/null || :
+    mv -f "$tmp" "$gpath" || { rm -f "$tmp"; die "could not install $gpath"; }
+
+    # THE DELEGATION, and it is not a convenience: without it the grant is a file
+    # saying yes next to an account that cannot act. Done AFTER the file, so a
+    # failure here leaves a grant that refuses rather than a capability nobody
+    # declared -- the safe order of the two.
+    local _rg_ds _rg_failed=0
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ]; then
+        for _rg_ds in $RESTORE_GRANT_DATASETS; do
+            zfs allow -u "$account" "$RESTORE_ZFS_PERMS" -- "$_rg_ds" 2>/dev/null \
+                || { warn "could not delegate ($RESTORE_ZFS_PERMS) to '$account' on '$_rg_ds'"; _rg_failed=1; }
+        done
+        if [ "$_rg_failed" -eq 0 ]; then
+            log "  delegated:    $RESTORE_ZFS_PERMS to '$account' on: $RESTORE_GRANT_DATASETS"
+        else
+            warn "  the grant FILE is written but the delegation is incomplete -- a restore will be refused by ZFS, not by the grant. Fix the allow above and re-run."
+        fi
+    fi
+
+    log "restore grant WRITTEN: $gpath"
+    log "  relationship: $label"
+    log "  permits:      $want"
+    if [ "$ALLOW_RESTORE_REPLACE" -eq 1 ]; then
+        warn "  REPLACE IS INCLUDED. The collector for '$label' may now DESTROY data on this machine and put an older copy in its place. That is what you asked for; it stays true until you run: $0 --deny-restore=$label"
+    else
+        log "  replace:      NO -- the collector may write where there is free space, and may not overwrite what is already here. Add --replace only if you mean it."
+    fi
+    log "  this grant does NOT expire. See it with: $0 --show-restore=$label"
+    return 0
+}
+
+do_deny_restore() {
+    local label="$DENY_RESTORE_LABEL"
+    [ "$(id -u)" -eq 0 ] || die "--deny-restore must run as root on this machine"
+    restore_grant_label_ok "$label" \
+        || die "--deny-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        # A no-op success, deliberately: the state the operator asked for is the
+        # state that exists. Making this an error would mean a second
+        # `--deny-restore` after a lost acknowledgement reports a failure while
+        # the machine is, in fact, exactly as safe as they wanted.
+        log "no restore grant for '$label' on this host -- nothing to take back"
+        return 0
+    fi
+    local had; had="$(restore_grant_read_modes "$gpath")" || had=""
+    # The same two facts, from the same file and the same reader, so the revoke
+    # undoes exactly what the grant did rather than a set typed a second time.
+    local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
+    local _pm; _pm="$(peer_manifest_path "$label")"
+    if [ -r "$_pm" ]; then
+        # shellcheck disable=SC1090
+        . "$_pm"
+        RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
+        RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+    fi
+    rm -f "$gpath" || die "could not remove $gpath"
+    # Both halves, and the delegation first: while it is still delegated the
+    # account CAN act, so removing that is the half that actually closes the
+    # window. The file is the declaration; the allow is the capability.
+    local _rd_ds
+    if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
+        for _rd_ds in $RESTORE_GRANT_DATASETS; do
+            zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null \
+                || warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+        done
+        log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+    fi
+
+    log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
+    log "  the collector for '$label' can no longer write onto this machine."
+    return 0
+}
+
+do_show_restore() {
+    local label="$SHOW_RESTORE_LABEL"
+    restore_grant_label_ok "$label" \
+        || die "--show-restore='$label' is not a valid relationship label"
+    local gpath; gpath="$(restore_grant_path "$label")"
+    if [ ! -f "$gpath" ]; then
+        echo "RESTORE_GRANT=none"
+        echo "  no relationship '$label' may restore onto this machine."
+        return 0
+    fi
+    local modes at by
+    modes="$(restore_grant_read_modes "$gpath")" || modes=""
+    at="$(sed -n 's/^RESTORE_GRANT_AT="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    by="$(sed -n 's/^RESTORE_GRANT_BY="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
+    echo "RESTORE_GRANT=present"
+    echo "  relationship: $label"
+    echo "  permits:      ${modes:-<unreadable>}"
+    echo "  granted:      ${at:-unknown} by ${by:-unknown}"
+    case " ${modes:-} " in
+        *" replace "*)
+            echo "  WARNING: this grant includes REPLACE -- the collector may destroy data here."
+            echo "           It does not expire. Take it back with: $0 --deny-restore=$label" ;;
+        *)  echo "  replace:      no" ;;
+    esac
+    return 0
+}
+
+# A GRANT IS A DECISION ABOUT PERMISSIONS, so it dispatches here, beside
+# --pause, and not down among the host phases. That is the reviewer's F4 finding
+# of 2026-08-26 -- `--commit-scope` answered a permission question and installed
+# a capacity-check cron line on a production host on its way past -- applied
+# ahead of the same thing happening again.
+if [ "$ALLOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_allow_restore
+    exit $?
+fi
+if [ "$DENY_RESTORE_GIVEN" -eq 1 ]; then
+    do_deny_restore
+    exit $?
+fi
+if [ "$SHOW_RESTORE_GIVEN" -eq 1 ]; then
+    do_show_restore
+    exit $?
+fi
+
+# Placed ABOVE the global root gate on purpose. --show-restore only READS,
+# and "is anything allowed to overwrite this machine?" is a question an
+# operator must be able to ask without becoming root first. The two verbs
+# that CHANGE a grant check for root themselves, and say why they need it --
+# which the generic "run as root" below cannot.
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
 [ "$CHECK_ONLY" -eq 1 ] && log "CHECK-ONLY mode: nothing will be installed or modified"
@@ -2858,6 +3201,7 @@ do_pause_blocks_one() {   # <user>
     return 0
 }
 
+
 do_pause() {
     local user rc=0
     while IFS= read -r user; do
@@ -3071,14 +3415,604 @@ fi
 # then `zfs allow`. It needs root and zfs, and both are properties of the host,
 # not of this script's provisioning.
 #
-# NOT changed here, and worth a separate decision: --draft-scope and --leave sit
-# at that same late dispatch and have the same shape -- a scope decision and a
-# teardown, neither of which provisions anything. --join is different: enrolling
-# a host legitimately sets it up.
+# NOT changed here, and worth a separate decision: --draft-scope sits at that
+# same late dispatch and has the same shape -- a scope decision that provisions
+# nothing. --join is different: enrolling a host legitimately sets it up.
+# ------------------------------------------------------------------------------
+# MOVED HERE 2026-08-30, BECAUSE THE DISPATCH BELOW DID NOT WORK.
+#
+# Measured on pve2, a production host running main:
+#
+#     ./deploy.sh --commit-scope=nieistnieje
+#     ./deploy.sh: line 3388: do_commit_scope: command not found
+#
+# bash defines functions as it reads, and these sat at ~5900, AFTER the
+# dispatch. The 2026-08-26 move of --commit-scope before Phase 1 -- right in
+# intent, so that answering a permission question stops pulling the repo and
+# rewriting cron -- traded "provisions when it should not" for "does not run at
+# all". Nothing caught it because --join reaches do_commit_scope from its own
+# dispatch at the foot of the file, where the definition already exists, so
+# every enrolment kept working.
+#
+# --leave came with them and for the same reason. It ran behind all seven
+# phases, so tearing a relationship off a host PULLED THE REPO on the machine
+# being torn down -- and a checkout sitting on a branch could not be left at
+# all: "fatal: Not possible to fast-forward". Measured on pve9 the same day,
+# and it hit remove-client too, which reaches --unpair the same way.
+#
+# What travels with them is COMMIT_SCOPE_HOLD_TAG and nothing else. The
+# closure was computed rather than guessed (25 functions, 8 of them below the
+# dispatch) and the only file-scope value they read from further down is that
+# tag -- which decides whether a dataset is held before its grant is taken
+# away, so moving the functions without it would have left it empty at call
+# time. The PEER_JOIN_* names that look like globals are heredoc lines writing
+# the manifest, not assignments.
+# ------------------------------------------------------------------------------
+# do_commit_scope -- the deliberate, separate act (U2) that grants a PULL
+# peer's account exactly what the scope file at peer_scope_path selects.
+# Runs do_commit_scope_check itself first for its manifest/role/as/parse
+# preflight (the same function --commit-scope-check calls standalone, root-free,
+# for the validate-only path), which leaves the result in
+# COMMIT_SCOPE_MPATH/SFILE/ACCOUNT and SCOPE_ROOTS/etc for the rest of this to use.
+#
+# Permissions are granted per DATASET, never by granting the root and relying
+# on zfs allow's inheritance to cover the rest: inheritance has no matching
+# "deny", so an exclude_tree under an included root could not be honoured that
+# way. Walking each root's actual descendants and testing scope_includes
+# against them keeps exclusion simple at the cost of nothing new appearing
+# until the next commit -- the same tradeoff every explicit dataset list in
+# this project already makes.
+# The same tag lib-zfs-snap.sh's hold_snapshot() uses (HOLD_TAG there),
+# duplicated as a literal rather than sourcing lib-zfs-snap.sh -- deploy.sh
+# deliberately does not (that library is the send/receive engine the
+# transfer scripts source, not something the provisioning tool needs).
+# Keep this in sync if that tag ever changes.
+COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
+
+commit_scope_dataset_held() {   # <dataset>
+    local ds="$1" snap
+    while IFS= read -r snap; do
+        [ -n "$snap" ] || continue
+        zfs holds -H -- "$snap" 2>/dev/null | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+    done < <(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)
+    return 1
+}
+
+do_commit_scope() {
+    local label="$1"
+    do_commit_scope_check "$label"
+    local mpath="$COMMIT_SCOPE_MPATH" sfile="$COMMIT_SCOPE_SFILE" account="$COMMIT_SCOPE_ACCOUNT"
+    # do_commit_scope_check sourced the manifest, so a PRIOR commit's list (if
+    # any) is already in scope here, before this run's write below replaces it.
+    local prior_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
+
+    # REV-20260804-040: the durable UID binding --leave needs to revoke
+    # correctly after the account name may be gone. Verified/captured HERE,
+    # before any grant, because this is the one point a live account is
+    # guaranteed present (do_commit_scope_check already required it) --
+    # --leave, running later and possibly after the account is long gone,
+    # has no such guarantee and must never guess.
+    if [ "$account" != root ] && id "$account" >/dev/null 2>&1; then
+        local live_uid; live_uid=$(id -u "$account")
+        if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+            [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
+                || die "refusing to grant: account '$account' is uid $live_uid, but the manifest for '$label' recorded uid $PEER_JOIN_ACCOUNT_UID at join time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to grant through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry."
+        else
+            # Legacy manifest (joined before this field existed) -- capture
+            # now, while the account is confirmed live, rather than leaving
+            # --leave to face a missing account with nothing recorded.
+            grep -v '^PEER_JOIN_ACCOUNT_UID=' "$mpath" > "${mpath}.tmp"
+            printf 'PEER_JOIN_ACCOUNT_UID="%s"\n' "$live_uid" >> "${mpath}.tmp"
+            mv "${mpath}.tmp" "$mpath"
+            chmod 0600 "$mpath"
+            PEER_JOIN_ACCOUNT_UID="$live_uid"
+            log "recorded uid $live_uid for account '$account' in the manifest (legacy relationship, joined before this field existed)"
+        fi
+    fi
+
+    # Same enumerator the consent preview used. It was a separate loop here
+    # until REV #117 F2: the preview skipped an unreadable root and showed a
+    # smaller number, this loop skipped it too but was free to find it again on
+    # a retry, and nothing compared the two. Fail-closed now lives in one place.
+    local -a granted=()
+    local ds _cs_listing
+    _cs_listing=$(join_scope_enumerate "$sfile") || die "refusing to grant: $_cs_listing"
+    while IFS= read -r ds; do [ -n "$ds" ] && granted+=("$ds"); done <<< "$_cs_listing"
+
+    # THE BINDING. Set by guided_join_scope from the exact figures the operator
+    # was shown and typed back. Checked here, before the first zfs allow, so a
+    # pool that changed between the question and the answer -- a dataset
+    # created, a root vanishing, a transient read that under-reported -- stops
+    # the grant instead of quietly widening it. Absent when --commit-scope is
+    # driven directly, which has no preview to bind to.
+    if [ -n "${JOIN_ACCEPTED_COUNT:-}" ]; then
+        if [ "${#granted[@]}" != "$JOIN_ACCEPTED_COUNT" ]; then
+            die "refusing to grant: the operator accepted $JOIN_ACCEPTED_COUNT dataset(s), but ${#granted[@]} are selected now. The pool changed between the consent prompt and the grant. Re-run the join so the number shown is the number granted."
+        fi
+        if [ "$_cs_listing" != "${JOIN_ACCEPTED_SET:-}" ]; then
+            die "refusing to grant: the selected datasets are not the ones the operator accepted, even though the count matches. Something was created and something removed between the consent prompt and the grant. Re-run the join."
+        fi
+    fi
+
+    # ENROLMENT-AGREED-2026-08-02 U2: finalization is the deliberate act, and
+    # the diff it shows is against what is granted TODAY (the manifest's
+    # prior list), not the file's previous edit -- after a third edit nobody
+    # remembers which version last went out. So the WHOLE plan (grant,
+    # revoke, and revoke candidates a hold defers) is computed and printed
+    # BEFORE any zfs command runs, not discovered log line by log line as
+    # the loop below executes it.
+    local -a prior=() revoke_clean=() revoke_held=() revoke_gone=()
+    # shellcheck disable=SC2206
+    [ -n "$prior_datasets" ] && prior=($prior_datasets)
+    local p
+    for p in "${prior[@]:-}"; do
+        [ -n "$p" ] || continue
+        case " ${granted[*]:-} " in *" $p "*) continue ;; esac
+        if ! zfs list -H -o name -- "$p" >/dev/null 2>&1; then
+            revoke_gone+=("$p")
+        elif commit_scope_dataset_held "$p"; then
+            revoke_held+=("$p")
+        else
+            revoke_clean+=("$p")
+        fi
+    done
+
+    log "commit-scope plan for '$label' ($account):"
+    log "  grant:  ${granted[*]}"
+    [ "${#revoke_clean[@]}" -gt 0 ] && log "  revoke: ${revoke_clean[*]}"
+    [ "${#revoke_held[@]}" -gt 0 ] && log "  left granted, in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG): ${revoke_held[*]}"
+    [ "${#revoke_gone[@]}" -gt 0 ] && log "  already gone from this host, dropping from the record: ${revoke_gone[*]}"
+
+    # `mount` is in this list for a non-obvious reason: ZFS delegation requires
+    # the mount ability to DESTROY a snapshot (zfs-allow(8): "destroy ... Must
+    # also have the mount ability"), not to mount anything. Found live
+    # 2026-08-17 (lab3): the delegated source prune failed every run with
+    # 'cannot destroy snapshots: permission denied' while `zfs allow` showed
+    # destroy plainly granted -- the missing letter was mount.
+    local perms="snapshot,destroy,mount,send,hold,release,bookmark"
+    for ds in "${granted[@]}"; do
+        zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
+        log "delegated ($perms) on $ds to $account"
+    done
+
+    # Slice 3 (REV-20260802-033 U3): revoke-on-narrow, bounded strictly by
+    # what THIS relationship's own manifest recorded as granted last time --
+    # never by what `zfs allow` happens to show for the account now. A
+    # dataset is only ever a revoke CANDIDATE if it appears in that recorded
+    # list, so a foreign grant (another peer, an older deployment, a manual
+    # job) on a dataset this scope file never selected is never even looked
+    # at, let alone touched -- it was never a candidate, not spared after
+    # consideration.
+    local -a still_granted=("${granted[@]}")
+    for ds in "${revoke_gone[@]:-}"; do
+        [ -n "$ds" ] || continue
+        log "revoke-on-narrow: $ds no longer exists on this host -- nothing to revoke"
+    done
+    for ds in "${revoke_held[@]:-}"; do
+        [ -n "$ds" ] || continue
+        warn "revoke-on-narrow: $ds has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- refusing to revoke mid-transfer. Left granted; re-run --commit-scope=$label once the transfer completes to finish narrowing."
+        still_granted+=("$ds")
+    done
+    for ds in "${revoke_clean[@]:-}"; do
+        [ -n "$ds" ] || continue
+        if zfs unallow -u "$account" "$perms" -- "$ds" 2>/dev/null; then
+            log "revoke-on-narrow: revoked ($perms) on $ds from $account -- no longer in scope for '$label'"
+        else
+            warn "revoke-on-narrow: could not revoke $account's grant on $ds -- left as-is, resolve by hand"
+            still_granted+=("$ds")
+        fi
+    done
+
+    # Same list, so the quiesce scope cannot drift from the replication scope
+    # -- identical reasoning to the pre-slice-2 code this replaces. Uses
+    # still_granted, not granted: a dataset held back from revoke above keeps
+    # its quiesce grant too, for the same reason it keeps its ZFS permission.
+    if [ "$ALLOW_QUIESCE" -eq 1 ]; then
+        install_quiesce_grant "$account" "${still_granted[*]}"
+    else
+        log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."
+    fi
+
+    # Recorded for the NEXT narrower commit: what this relationship grants as
+    # of right now (still_granted), not what it merely selected this time
+    # (granted) -- a dataset held back above must stay recorded as granted,
+    # or the next commit would treat it as already gone and never retry the
+    # revoke.
+    grep -v '^PEER_JOIN_GRANTED_DATASETS=' "$mpath" > "${mpath}.tmp"
+    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "${still_granted[*]}" >> "${mpath}.tmp"
+    mv "${mpath}.tmp" "$mpath"
+    chmod 0600 "$mpath"
+
+    # ENROLMENT-AGREED-2026-08-02 T3: a hash instead of a second manifest. The
+    # collector (slice 6) fetches this alongside the scope file and refuses
+    # to generate/activate from a copy whose hash does not match -- proof
+    # that what it just fetched is EXACTLY what was granted from, not an
+    # edit made on the source after the last --commit-scope. World-readable
+    # for the same reason the scope file itself is (REV-033 slice 4
+    # follow-up): the collector reads it as its delegated account, not root.
+    local hpath; hpath=$(peer_scope_granted_hash_path "$label")
+    local digest; digest=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
+    [ -n "$digest" ] || die "could not compute a sha256 of $sfile -- grant already committed, but the hash sidecar is missing. Re-run --commit-scope=$label to retry writing it"
+    local htmp; htmp=$(mktemp) || die "mktemp failed"
+    printf '%s\n' "$digest" > "$htmp"
+    chmod 0644 "$htmp" 2>/dev/null
+    mv -f "$htmp" "$hpath" || die "could not write $hpath"
+
+    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_clean[@]} revoked, ${#revoke_held[@]} held back, ${#revoke_gone[@]} already gone"
+}
+
+join_scope_is_committed() {   # <label>
+    local label="$1" sfile hfile want got
+    sfile=$(peer_scope_path "$label")
+    hfile=$(peer_scope_granted_hash_path "$label")
+    [ -r "$sfile" ] && [ -r "$hfile" ] || return 1
+    want=$(awk 'NR==1 {print; exit}' "$hfile" 2>/dev/null)
+    got=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
+    [ -n "$want" ] && [ "$want" = "$got" ]
+}
+
+join_scope_enumerate() {   # <scope file> -> deduplicated, sorted dataset names, one per line
+    local sfile="$1" root ds listing
+    if ! scope_read "$sfile" >/dev/null 2>&1; then
+        printf 'scope file %s could not be read: %s' "$sfile" "${SCOPE_ERR:-unparseable}"
+        return 1
+    fi
+    local -a out=()
+    for root in "${SCOPE_ROOTS[@]}"; do
+        if ! zfs list -H -o name -- "$root" >/dev/null 2>&1; then
+            printf "scope root '%s' could not be read -- it does not exist on this host, or zfs list failed. Refusing rather than granting a scope nobody could measure; if the root is genuinely gone, edit it out of %s and retry." "$root" "$sfile"
+            return 1
+        fi
+        # Captured, not piped from a process substitution: a `zfs list -r` that
+        # dies half-way through a large pool used to end the loop with a short
+        # answer and no error anywhere.
+        listing=$(zfs list -H -o name -r -- "$root") || {
+            printf "zfs list -r failed under scope root '%s' -- the scope cannot be measured, so it will not be granted" "$root"
+            return 1
+        }
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            scope_includes "$ds" || continue
+            case " ${out[*]:-} " in *" $ds "*) continue ;; esac
+            out+=("$ds")
+        done <<< "$listing"
+    done
+    if [ "${#out[@]}" -eq 0 ]; then
+        printf 'scope file %s selects nothing that exists on this host -- nothing to grant' "$sfile"
+        return 1
+    fi
+    printf '%s
+' "${out[@]}" | LC_ALL=C sort
+}
+
+join_scope_summary() {   # <scope file> -> "<count> <guest-volume count> <bytes>"
+    local sfile="$1" ds g=0 bytes=0 used listing
+    listing=$(join_scope_enumerate "$sfile") || { printf '%s' "$listing"; return 1; }
+    local -a sel=()
+    while IFS= read -r ds; do [ -n "$ds" ] && sel+=("$ds"); done <<< "$listing"
+    for ds in "${sel[@]}"; do
+        case "${ds##*/}" in
+            vm-[0-9]*-disk-*|vm-[0-9]*-cloudinit|subvol-[0-9]*-disk-*) g=$((g + 1)) ;;
+        esac
+        # A failed `zfs get used` used to become 0 and quietly shrink the total
+        # the operator was shown. It is now a refusal like the rest.
+        used=$(zfs get -Hp -o value used -- "$ds" 2>/dev/null) || {
+            printf 'zfs get used failed for %s -- the size shown to the operator would understate the scope' "$ds"
+            return 1
+        }
+        case "$used" in ''|*[!0-9]*)
+            printf "zfs get used returned '%s' for %s -- refusing to present an unmeasured scope as a number" "$used" "$ds"
+            return 1 ;;
+        esac
+        bytes=$((bytes + used))
+    done
+    printf '%s %s %s' "${#sel[@]}" "$g" "$bytes"
+}
+
+join_human_bytes() {   # <bytes>
+    awk -v b="$1" 'BEGIN{
+        split("B KiB MiB GiB TiB PiB", u, " "); i = 1
+        while (b >= 1024 && i < 6) { b /= 1024; i++ }
+        printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
+    }'
+}
+
+guided_join_scope() {   # <label>
+    local label="$1" sfile choice editor
+    local _js_n _js_g _js_b _js_sum _js_set
+    sfile=$(peer_scope_path "$label")
+
+    if join_scope_is_committed "$label"; then
+        log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
+        return 0
+    fi
+    if [ ! -e "$sfile" ]; then
+        do_draft_scope "$label"
+    else
+        # THE DRAFT IS REUSED, SO IT MUST STILL ANSWER THE SAME QUESTION.
+        #
+        # Fail closed, and only in the direction that matters: a draft built
+        # when the collector named nothing is a proposal covering the whole
+        # estate, and reusing it against a request that names one dataset is
+        # how a one-dataset ask turns into a nine-dataset grant with the
+        # operator looking straight at both numbers. Refusing costs one command;
+        # the alternative costs a delegated account rights over the host.
+        # Only a PROVEN mismatch refuses. A missing sidecar means the draft
+        # predates this check -- every host mid-join at upgrade time has one --
+        # and turning that into a refusal would block work on evidence nobody
+        # has. It is said out loud instead, next to the request line the
+        # operator is already reading.
+        local _want _had
+        _want="${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+        if [ ! -r "$sfile.request" ]; then
+            echo "!!! Szkic zakresu $sfile pochodzi sprzed zapisywania prosby, wiec" >&2
+            echo "!!! NIE zostal sprawdzony wzgledem tego, o co kolektor prosi teraz." >&2
+            echo "!!! Porownaj ponizsza liste z linia 'Kolektor prosil o:' sam." >&2
+        else
+        _had="$(cat "$sfile.request" 2>/dev/null)"
+        if [ "$_had" != "$_want" ]; then
+            echo "!!! Szkic zakresu $sfile powstal dla INNEJ prosby niz obecna." >&2
+            echo "!!!   szkic zbudowano dla: ${_had:-(nic -- caly majatek hosta)}" >&2
+            echo "!!!   kolektor prosi teraz o: ${_want:-(nic -- caly majatek hosta)}" >&2
+            die "refusing to offer a grant computed from a draft that predates the current request. Review it and re-draft: rm $sfile $sfile.request, then re-run this --join (or edit the draft by hand if its contents are still what you mean, and re-run --commit-scope=$label)."
+        fi
+        fi
+    fi
+
+    while :; do
+        echo
+        echo "Proponowany zakres backupu dla '$label':"
+        echo "------------------------------------------------------------"
+        awk '/^# ==========================================================/{exit} {print}' "$sfile"
+        echo "------------------------------------------------------------"
+        # 1. What the collector did NOT say. Without this line the proposal
+        #    reads as a considered selection rather than "everything I have".
+        if [ -z "${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}" ]; then
+            echo "!!! Kolektor NIE wskazal zadnego datasetu -- podal tylko cel"
+            echo "!!! (--target=${PEER_JOIN_TARGET:-?}). Ta propozycja to zatem"
+            echo "!!! CALY majatek tego hosta, nie wybor zrobiony dla Ciebie."
+        else
+            echo ">>> Kolektor prosil o: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
+        fi
+        # 2. The magnitude, before the question. A measurement that failed is
+        #    not a small scope -- it is no scope, and the join stops here
+        #    rather than asking the operator to consent to a number nobody
+        #    could compute.
+        _js_sum=$(join_scope_summary "$sfile")             || die "refusing to ask for consent: $_js_sum"
+        read -r _js_n _js_g _js_b <<< "$_js_sum"
+        # The exact set behind that number, captured HERE, so what the operator
+        # accepts is what do_commit_scope must find when it grants. Re-reading
+        # the pool between the two is the whole hole this closes.
+        _js_set=$(join_scope_enumerate "$sfile")             || die "refusing to ask for consent: $_js_set"
+        echo ">>> Przyjecie nada kontu ${PEER_JOIN_ACCOUNT:-?} prawa"
+        echo ">>>   snapshot,destroy,mount,send,hold,release,bookmark"
+        echo ">>> na $_js_n dataset(ach), w tym $_js_g wolumen(ach) maszyn, lacznie $(join_human_bytes "$_js_b")."
+        echo "------------------------------------------------------------"
+        # 3. A consent reflex cannot give. Typing the count is trivial for
+        #    anyone who read the line above, and impossible to do by habit.
+        read -rp "Wpisz liczbe datasetow ($_js_n) aby ZAAKCEPTOWAC, [e]dytuj, [n]przerwij: " choice \
+            || die "join interrupted before scope acceptance"
+        case "$choice" in
+            "$_js_n")
+                # Bind the accepted count AND the accepted set to the grant.
+                # do_commit_scope refuses if either has moved since the number
+                # above was printed, BEFORE its first zfs allow.
+                JOIN_ACCEPTED_COUNT="$_js_n" JOIN_ACCEPTED_SET="$_js_set"                     do_commit_scope "$label"
+                join_scope_is_committed "$label" \
+                    || die "scope grant finished without a matching hash read-back"
+                log "scope accepted and committed for '$label'"
+                return 0
+                ;;
+            e|E|edit|EDIT)
+                editor="${VISUAL:-${EDITOR:-vi}}"
+                $editor "$sfile" \
+                    || die "editor '$editor' failed; scope was not committed"
+                do_commit_scope_check "$label"
+                ;;
+            n|N|nie|NIE|q|Q)
+                die "scope was not accepted; no ZFS grant was committed"
+                ;;
+            *)
+                warn "type the dataset count to accept, e to edit, or n to stop"
+                ;;
+        esac
+    done
+}
+
+do_leave() {
+    local label="$1"
+    [ -n "$label" ] || die "internal: do_leave needs a label"
+    local mpath; mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no join manifest for '$label' at $mpath -- nothing to leave (was --join even run here under this label?)"
+    # shellcheck disable=SC1090
+    . "$mpath"
+    [ "${PEER_JOIN_ROLE:-}" = pull ] \
+        || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- --leave only tears down the PULL side (a scope-granted account on this host); a push peer's teardown is --unpair on the COLLECTOR, which owns that receive delegation"
+    local account="${PEER_JOIN_ACCOUNT:-}"
+    [ -n "$account" ] || die "internal: manifest for '$label' has no account recorded"
+
+    if [ "${PEER_JOIN_AS:-}" = root ]; then
+        log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
+    else
+        # REV-20260804-040: the durable principal binding is the ONLY thing
+        # --leave may revoke by -- never a scan of `zfs allow`'s output. A
+        # dataset can carry more than one numeric/unknown principal (another
+        # relationship's own orphan, a second live delegated account); "the
+        # first unknown uid" or "any numeric grant" is not evidence of
+        # OWNERSHIP, and REV-20260804-039 F3's own first attempt at this
+        # (commit 1f6ca0b) revoked and residue-checked exactly that way --
+        # caught before merge, not live, but the review that caught it is
+        # correct that it could have taken another relationship's access
+        # with it.
+        local uid=""
+        if id "$account" >/dev/null 2>&1; then
+            local live_uid; live_uid=$(id -u "$account")
+            if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+                [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
+                    || die "refusing --leave='$label': account '$account' is uid $live_uid, but the manifest recorded uid $PEER_JOIN_ACCOUNT_UID at join/commit time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to tear down through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry. Nothing has been changed."
+                uid="$live_uid"
+            else
+                # Legacy manifest (joined before this field existed) and the
+                # account is still live -- safe to capture and use now,
+                # exactly as do_commit_scope does at grant time.
+                uid="$live_uid"
+                log "recording uid $uid for account '$account' before teardown (legacy relationship, no uid was on file)"
+            fi
+        elif [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
+            uid="$PEER_JOIN_ACCOUNT_UID"
+            warn "account '$account' already gone -- using the manifest-recorded uid $uid (never a guess) to find and revoke its grant"
+        else
+            die "refusing --leave='$label': account '$account' is already gone AND no uid was ever recorded for it (a legacy relationship joined before this field existed, never committed since). There is no durable identifier left to safely find its grant among possibly several numeric/unknown principals on these datasets -- guessing was REV-20260804-039 F3's own first, wrong attempt at this. Resolve by hand: 'zfs allow <dataset>' on each of: ${PEER_JOIN_GRANTED_DATASETS:-<none recorded>} -- identify which numeric uid is actually this relationship's (system logs, /var/log/auth.log around when the account was removed, etc.), then 'zfs unallow -u <that uid> <dataset>' yourself before removing $mpath by hand. Nothing has been changed."
+        fi
+
+        local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
+        local -a held=()
+        local ds
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            if zfs list -H -o name -- "$ds" >/dev/null 2>&1 && commit_scope_dataset_held "$ds"; then
+                held+=("$ds")
+            fi
+        done
+        if [ "${#held[@]}" -gt 0 ]; then
+            die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
+        fi
+
+        # Mirror of do_commit_scope's grant list, `mount` included -- revoke
+        # exactly what was granted, or a leave leaves a permission behind.
+        local perms="snapshot,destroy,mount,send,hold,release,bookmark"
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
+                log "leave: $ds no longer exists on this host -- nothing to revoke"
+                continue
+            fi
+            if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
+                log "leave: revoked ($perms) on $ds from uid $uid ($account)"
+            else
+                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
+            fi
+        done
+
+        # Verify before userdel, not after -- a grant that survives the loop
+        # above (permission denied, a property-level grant unallow -u didn't
+        # reach, etc.) must stop this here, not be discovered later as a
+        # residue nobody was looking for. Matches ONLY this relationship's
+        # exact bound uid, or the exact account name (a drift/collision
+        # signal if it still shows under some OTHER uid) -- never "any
+        # numeric grant", which would false-positive on a second legitimate
+        # delegated account sharing the same dataset.
+        local -a residual=()
+        for ds in "${datasets[@]}"; do
+            [ -n "$ds" ] || continue
+            zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
+            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
+                && residual+=("$ds")
+        done
+        if [ "${#residual[@]}" -gt 0 ]; then
+            die "refusing to proceed: ${residual[*]} still show a grant for uid $uid or account '$account' after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u $uid <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
+        fi
+
+        if id "$account" >/dev/null 2>&1; then
+            revoke_quiesce_grant "$account"
+            passwd -l "$account" >/dev/null 2>&1 || true
+            userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
+            log "leave: removed account '$account' (uid $uid) and its home directory"
+        else
+            log "leave: account '$account' (uid $uid) already gone; its orphaned grant is now cleared"
+        fi
+    fi
+
+    rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
+    log "leave: removed the join manifest and any scope file/hash for '$label'"
+
+    # THE PAIR GATE'S STATE DIRECTORY, which --leave used to leave behind while
+    # saying "fully torn down". Found on pve1 and pve2 tearing the lab down,
+    # 2026-08-30: clean-relationships.sh immediately called the same label an
+    # ORPHAN, so the package contradicted itself one command apart, and an
+    # operator who follows the documented teardown is then told there is
+    # residue -- which trains them to ignore the audit.
+    #
+    # The concrete part is worse than the noise. The directory is group-owned
+    # by the account this function has just deleted (measured: drwxrwsr-x,
+    # group 1001, setgid, and the very next --join on that host was handed uid
+    # 1001 again). A later, unrelated relationship therefore inherits group
+    # write on ANOTHER label's gate directory -- the one holding its `disabled`
+    # marker, which is the hard-disable boundary.
+    #
+    # Removed only when EMPTY, and that is not timidity: a non-empty gate dir
+    # holds live state for this label (a disable somebody set), and deleting
+    # that silently would lift a block this command was never asked to lift.
+    # It is named instead.
+    local gdir="$PAIR_GATE_STATE_DIR/$label"
+    if [ -d "$gdir" ]; then
+        if rmdir "$gdir" 2>/dev/null; then
+            log "leave: removed the pair-gate state directory $gdir"
+        else
+            warn "leave: $gdir is not empty, so it was left in place -- it still holds state for '$label' (a disable marker, most likely). Look at it and remove it by hand: ls -la $gdir"
+        fi
+    fi
+    log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."
+}
+
 if [ "$COMMIT_SCOPE_MODE" -eq 1 ]; then
     do_commit_scope "$COMMIT_SCOPE_LABEL"
     exit 0
 fi
+
+# SAME RULE, and the lab supplied the evidence. --leave ran behind all seven
+# phases, so tearing a relationship off a host PULLED THE REPO on the machine
+# being torn down; a checkout on a branch could not be left at all. On an
+# ordinary host it succeeded instead, having rewritten notify-fail.sh and added
+# host cron lines on the way out -- the same surprise the --commit-scope move
+# was made to end.
+#
+# Safe this early for the same reason: do_leave reads the manifest, revokes by
+# the recorded uid, removes the account and deletes state files. Nothing it
+# touches is built by the phases; it needs root, zfs and userdel, which are
+# properties of the host.
+if [ "$LEAVE_MODE" -eq 1 ]; then
+    do_leave "$LEAVE_LABEL"
+    exit 0
+fi
+
+# --leave BELONGS HERE TOO and is NOT moved yet, because moving it the obvious
+# way is how the dispatch above broke.
+#
+# Measured 2026-08-30, tearing the lab down: `--leave` runs behind all seven
+# phases, so it PULLS THE REPO on the machine being torn down. A checkout on a
+# branch could not be left at all --
+#
+#     Phase 2: deploy the repo into /root/scripts/zfs-snapshot-all
+#     fatal: Not possible to fast-forward, aborting.
+#     FATAL: git pull --ff-only failed
+#
+# -- the teardown blocked by a code UPDATE it never needed, on the one host the
+# command exists to disentangle. On an ordinary host it succeeds instead,
+# having rewritten notify-fail.sh and added host cron lines on the way out.
+#
+# AND THE DISPATCH ABOVE DOES NOT WORK. Measured the same day, on pve2 running
+# main:
+#
+#     ./deploy.sh --commit-scope=nieistnieje
+#     ./deploy.sh: line 3388: do_commit_scope: command not found
+#
+# bash defines functions as it reads, and do_commit_scope is defined at ~5921 --
+# after this point. The 2026-08-26 move traded "provisions when it shouldn't"
+# for "does not run at all", and nothing caught it because --join reaches
+# do_commit_scope from its own dispatch at the foot of the file, where the
+# definition already exists.
+#
+# The bounded fix is to move the definitions above this point, and it is not a
+# one-liner: the closure is 8 functions (commit_scope_dataset_held,
+# do_commit_scope, join_scope_is_committed, join_scope_enumerate,
+# join_scope_summary, join_human_bytes, guided_join_scope, do_leave) plus the
+# declarations they read -- COMMIT_SCOPE_HOLD_TAG above all, which is what
+# decides whether a dataset is held before its grant is taken away. Moving the
+# functions without it would leave that tag empty at call time.
+#
+# So --leave stays at the foot, where it WORKS, until that move is made
+# deliberately.
 
 # ------------------------------------------------------------------------------
 log "Phase 1: dependencies"
@@ -5567,26 +6501,6 @@ EOF
     log "===================================================================="
 }
 
-# do_commit_scope -- the deliberate, separate act (U2) that grants a PULL
-# peer's account exactly what the scope file at peer_scope_path selects.
-# Runs do_commit_scope_check itself first for its manifest/role/as/parse
-# preflight (the same function --commit-scope-check calls standalone, root-free,
-# for the validate-only path), which leaves the result in
-# COMMIT_SCOPE_MPATH/SFILE/ACCOUNT and SCOPE_ROOTS/etc for the rest of this to use.
-#
-# Permissions are granted per DATASET, never by granting the root and relying
-# on zfs allow's inheritance to cover the rest: inheritance has no matching
-# "deny", so an exclude_tree under an included root could not be honoured that
-# way. Walking each root's actual descendants and testing scope_includes
-# against them keeps exclusion simple at the cost of nothing new appearing
-# until the next commit -- the same tradeoff every explicit dataset list in
-# this project already makes.
-# The same tag lib-zfs-snap.sh's hold_snapshot() uses (HOLD_TAG there),
-# duplicated as a literal rather than sourcing lib-zfs-snap.sh -- deploy.sh
-# deliberately does not (that library is the send/receive engine the
-# transfer scripts source, not something the provisioning tool needs).
-# Keep this in sync if that tag ever changes.
-COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
 
 # Does <dataset> have a snapshot held under the in-flight transfer tag? A
 # resumable snapshot/send.py.load cycle holds its own snapshot for exactly as
@@ -5596,191 +6510,12 @@ COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
 # entry in PEER_JOIN_GRANTED_DATASETS is one real dataset (do_commit_scope
 # grants per descendant, never via inheritance), so that is also the unit a
 # revoke acts on.
-commit_scope_dataset_held() {   # <dataset>
-    local ds="$1" snap
-    while IFS= read -r snap; do
-        [ -n "$snap" ] || continue
-        zfs holds -H -- "$snap" 2>/dev/null | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
-    done < <(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)
-    return 1
-}
 
-do_commit_scope() {
-    local label="$1"
-    do_commit_scope_check "$label"
-    local mpath="$COMMIT_SCOPE_MPATH" sfile="$COMMIT_SCOPE_SFILE" account="$COMMIT_SCOPE_ACCOUNT"
-    # do_commit_scope_check sourced the manifest, so a PRIOR commit's list (if
-    # any) is already in scope here, before this run's write below replaces it.
-    local prior_datasets="${PEER_JOIN_GRANTED_DATASETS:-}"
-
-    # REV-20260804-040: the durable UID binding --leave needs to revoke
-    # correctly after the account name may be gone. Verified/captured HERE,
-    # before any grant, because this is the one point a live account is
-    # guaranteed present (do_commit_scope_check already required it) --
-    # --leave, running later and possibly after the account is long gone,
-    # has no such guarantee and must never guess.
-    if [ "$account" != root ] && id "$account" >/dev/null 2>&1; then
-        local live_uid; live_uid=$(id -u "$account")
-        if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
-            [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
-                || die "refusing to grant: account '$account' is uid $live_uid, but the manifest for '$label' recorded uid $PEER_JOIN_ACCOUNT_UID at join time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to grant through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry."
-        else
-            # Legacy manifest (joined before this field existed) -- capture
-            # now, while the account is confirmed live, rather than leaving
-            # --leave to face a missing account with nothing recorded.
-            grep -v '^PEER_JOIN_ACCOUNT_UID=' "$mpath" > "${mpath}.tmp"
-            printf 'PEER_JOIN_ACCOUNT_UID="%s"\n' "$live_uid" >> "${mpath}.tmp"
-            mv "${mpath}.tmp" "$mpath"
-            chmod 0600 "$mpath"
-            PEER_JOIN_ACCOUNT_UID="$live_uid"
-            log "recorded uid $live_uid for account '$account' in the manifest (legacy relationship, joined before this field existed)"
-        fi
-    fi
-
-    # Same enumerator the consent preview used. It was a separate loop here
-    # until REV #117 F2: the preview skipped an unreadable root and showed a
-    # smaller number, this loop skipped it too but was free to find it again on
-    # a retry, and nothing compared the two. Fail-closed now lives in one place.
-    local -a granted=()
-    local ds _cs_listing
-    _cs_listing=$(join_scope_enumerate "$sfile") || die "refusing to grant: $_cs_listing"
-    while IFS= read -r ds; do [ -n "$ds" ] && granted+=("$ds"); done <<< "$_cs_listing"
-
-    # THE BINDING. Set by guided_join_scope from the exact figures the operator
-    # was shown and typed back. Checked here, before the first zfs allow, so a
-    # pool that changed between the question and the answer -- a dataset
-    # created, a root vanishing, a transient read that under-reported -- stops
-    # the grant instead of quietly widening it. Absent when --commit-scope is
-    # driven directly, which has no preview to bind to.
-    if [ -n "${JOIN_ACCEPTED_COUNT:-}" ]; then
-        if [ "${#granted[@]}" != "$JOIN_ACCEPTED_COUNT" ]; then
-            die "refusing to grant: the operator accepted $JOIN_ACCEPTED_COUNT dataset(s), but ${#granted[@]} are selected now. The pool changed between the consent prompt and the grant. Re-run the join so the number shown is the number granted."
-        fi
-        if [ "$_cs_listing" != "${JOIN_ACCEPTED_SET:-}" ]; then
-            die "refusing to grant: the selected datasets are not the ones the operator accepted, even though the count matches. Something was created and something removed between the consent prompt and the grant. Re-run the join."
-        fi
-    fi
-
-    # ENROLMENT-AGREED-2026-08-02 U2: finalization is the deliberate act, and
-    # the diff it shows is against what is granted TODAY (the manifest's
-    # prior list), not the file's previous edit -- after a third edit nobody
-    # remembers which version last went out. So the WHOLE plan (grant,
-    # revoke, and revoke candidates a hold defers) is computed and printed
-    # BEFORE any zfs command runs, not discovered log line by log line as
-    # the loop below executes it.
-    local -a prior=() revoke_clean=() revoke_held=() revoke_gone=()
-    # shellcheck disable=SC2206
-    [ -n "$prior_datasets" ] && prior=($prior_datasets)
-    local p
-    for p in "${prior[@]:-}"; do
-        [ -n "$p" ] || continue
-        case " ${granted[*]:-} " in *" $p "*) continue ;; esac
-        if ! zfs list -H -o name -- "$p" >/dev/null 2>&1; then
-            revoke_gone+=("$p")
-        elif commit_scope_dataset_held "$p"; then
-            revoke_held+=("$p")
-        else
-            revoke_clean+=("$p")
-        fi
-    done
-
-    log "commit-scope plan for '$label' ($account):"
-    log "  grant:  ${granted[*]}"
-    [ "${#revoke_clean[@]}" -gt 0 ] && log "  revoke: ${revoke_clean[*]}"
-    [ "${#revoke_held[@]}" -gt 0 ] && log "  left granted, in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG): ${revoke_held[*]}"
-    [ "${#revoke_gone[@]}" -gt 0 ] && log "  already gone from this host, dropping from the record: ${revoke_gone[*]}"
-
-    # `mount` is in this list for a non-obvious reason: ZFS delegation requires
-    # the mount ability to DESTROY a snapshot (zfs-allow(8): "destroy ... Must
-    # also have the mount ability"), not to mount anything. Found live
-    # 2026-08-17 (lab3): the delegated source prune failed every run with
-    # 'cannot destroy snapshots: permission denied' while `zfs allow` showed
-    # destroy plainly granted -- the missing letter was mount.
-    local perms="snapshot,destroy,mount,send,hold,release,bookmark"
-    for ds in "${granted[@]}"; do
-        zfs allow -u "$account" "$perms" -- "$ds" || die "zfs allow failed for $ds"
-        log "delegated ($perms) on $ds to $account"
-    done
-
-    # Slice 3 (REV-20260802-033 U3): revoke-on-narrow, bounded strictly by
-    # what THIS relationship's own manifest recorded as granted last time --
-    # never by what `zfs allow` happens to show for the account now. A
-    # dataset is only ever a revoke CANDIDATE if it appears in that recorded
-    # list, so a foreign grant (another peer, an older deployment, a manual
-    # job) on a dataset this scope file never selected is never even looked
-    # at, let alone touched -- it was never a candidate, not spared after
-    # consideration.
-    local -a still_granted=("${granted[@]}")
-    for ds in "${revoke_gone[@]:-}"; do
-        [ -n "$ds" ] || continue
-        log "revoke-on-narrow: $ds no longer exists on this host -- nothing to revoke"
-    done
-    for ds in "${revoke_held[@]:-}"; do
-        [ -n "$ds" ] || continue
-        warn "revoke-on-narrow: $ds has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- refusing to revoke mid-transfer. Left granted; re-run --commit-scope=$label once the transfer completes to finish narrowing."
-        still_granted+=("$ds")
-    done
-    for ds in "${revoke_clean[@]:-}"; do
-        [ -n "$ds" ] || continue
-        if zfs unallow -u "$account" "$perms" -- "$ds" 2>/dev/null; then
-            log "revoke-on-narrow: revoked ($perms) on $ds from $account -- no longer in scope for '$label'"
-        else
-            warn "revoke-on-narrow: could not revoke $account's grant on $ds -- left as-is, resolve by hand"
-            still_granted+=("$ds")
-        fi
-    done
-
-    # Same list, so the quiesce scope cannot drift from the replication scope
-    # -- identical reasoning to the pre-slice-2 code this replaces. Uses
-    # still_granted, not granted: a dataset held back from revoke above keeps
-    # its quiesce grant too, for the same reason it keeps its ZFS permission.
-    if [ "$ALLOW_QUIESCE" -eq 1 ]; then
-        install_quiesce_grant "$account" "${still_granted[*]}"
-    else
-        log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."
-    fi
-
-    # Recorded for the NEXT narrower commit: what this relationship grants as
-    # of right now (still_granted), not what it merely selected this time
-    # (granted) -- a dataset held back above must stay recorded as granted,
-    # or the next commit would treat it as already gone and never retry the
-    # revoke.
-    grep -v '^PEER_JOIN_GRANTED_DATASETS=' "$mpath" > "${mpath}.tmp"
-    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "${still_granted[*]}" >> "${mpath}.tmp"
-    mv "${mpath}.tmp" "$mpath"
-    chmod 0600 "$mpath"
-
-    # ENROLMENT-AGREED-2026-08-02 T3: a hash instead of a second manifest. The
-    # collector (slice 6) fetches this alongside the scope file and refuses
-    # to generate/activate from a copy whose hash does not match -- proof
-    # that what it just fetched is EXACTLY what was granted from, not an
-    # edit made on the source after the last --commit-scope. World-readable
-    # for the same reason the scope file itself is (REV-033 slice 4
-    # follow-up): the collector reads it as its delegated account, not root.
-    local hpath; hpath=$(peer_scope_granted_hash_path "$label")
-    local digest; digest=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
-    [ -n "$digest" ] || die "could not compute a sha256 of $sfile -- grant already committed, but the hash sidecar is missing. Re-run --commit-scope=$label to retry writing it"
-    local htmp; htmp=$(mktemp) || die "mktemp failed"
-    printf '%s\n' "$digest" > "$htmp"
-    chmod 0644 "$htmp" 2>/dev/null
-    mv -f "$htmp" "$hpath" || die "could not write $hpath"
-
-    log "commit-scope complete for '$label': ${#granted[@]} dataset(s) granted to $account, ${#revoke_clean[@]} revoked, ${#revoke_held[@]} held back, ${#revoke_gone[@]} already gone"
-}
 
 # True only when the exact bytes currently visible in LABEL.scope are the bytes
 # most recently granted. This is the durable resume point for guided --join:
 # a completed rerun must not reopen an editor or re-grant merely because the
 # package was submitted again.
-join_scope_is_committed() {   # <label>
-    local label="$1" sfile hfile want got
-    sfile=$(peer_scope_path "$label")
-    hfile=$(peer_scope_granted_hash_path "$label")
-    [ -r "$sfile" ] && [ -r "$hfile" ] || return 1
-    want=$(awk 'NR==1 {print; exit}' "$hfile" 2>/dev/null)
-    got=$(sha256sum -- "$sfile" 2>/dev/null | awk '{print $1}')
-    [ -n "$want" ] && [ "$want" = "$got" ]
-}
 
 # Normal source-side enrolment after do_join publishes the manifest. The old
 # --draft-scope/--commit-scope verbs stay available for expert repair, but the
@@ -5828,144 +6563,9 @@ join_scope_is_committed() {   # <label>
 # Output is deduplicated and sorted so the set is comparable as a string.
 # Overlapping roots (rpool and rpool/data) previously counted a dataset twice
 # in the preview and once in the grant.
-join_scope_enumerate() {   # <scope file> -> deduplicated, sorted dataset names, one per line
-    local sfile="$1" root ds listing
-    if ! scope_read "$sfile" >/dev/null 2>&1; then
-        printf 'scope file %s could not be read: %s' "$sfile" "${SCOPE_ERR:-unparseable}"
-        return 1
-    fi
-    local -a out=()
-    for root in "${SCOPE_ROOTS[@]}"; do
-        if ! zfs list -H -o name -- "$root" >/dev/null 2>&1; then
-            printf "scope root '%s' could not be read -- it does not exist on this host, or zfs list failed. Refusing rather than granting a scope nobody could measure; if the root is genuinely gone, edit it out of %s and retry." "$root" "$sfile"
-            return 1
-        fi
-        # Captured, not piped from a process substitution: a `zfs list -r` that
-        # dies half-way through a large pool used to end the loop with a short
-        # answer and no error anywhere.
-        listing=$(zfs list -H -o name -r -- "$root") || {
-            printf "zfs list -r failed under scope root '%s' -- the scope cannot be measured, so it will not be granted" "$root"
-            return 1
-        }
-        while IFS= read -r ds; do
-            [ -n "$ds" ] || continue
-            scope_includes "$ds" || continue
-            case " ${out[*]:-} " in *" $ds "*) continue ;; esac
-            out+=("$ds")
-        done <<< "$listing"
-    done
-    if [ "${#out[@]}" -eq 0 ]; then
-        printf 'scope file %s selects nothing that exists on this host -- nothing to grant' "$sfile"
-        return 1
-    fi
-    printf '%s
-' "${out[@]}" | LC_ALL=C sort
-}
 
-join_scope_summary() {   # <scope file> -> "<count> <guest-volume count> <bytes>"
-    local sfile="$1" ds g=0 bytes=0 used listing
-    listing=$(join_scope_enumerate "$sfile") || { printf '%s' "$listing"; return 1; }
-    local -a sel=()
-    while IFS= read -r ds; do [ -n "$ds" ] && sel+=("$ds"); done <<< "$listing"
-    for ds in "${sel[@]}"; do
-        case "${ds##*/}" in
-            vm-[0-9]*-disk-*|vm-[0-9]*-cloudinit|subvol-[0-9]*-disk-*) g=$((g + 1)) ;;
-        esac
-        # A failed `zfs get used` used to become 0 and quietly shrink the total
-        # the operator was shown. It is now a refusal like the rest.
-        used=$(zfs get -Hp -o value used -- "$ds" 2>/dev/null) || {
-            printf 'zfs get used failed for %s -- the size shown to the operator would understate the scope' "$ds"
-            return 1
-        }
-        case "$used" in ''|*[!0-9]*)
-            printf "zfs get used returned '%s' for %s -- refusing to present an unmeasured scope as a number" "$used" "$ds"
-            return 1 ;;
-        esac
-        bytes=$((bytes + used))
-    done
-    printf '%s %s %s' "${#sel[@]}" "$g" "$bytes"
-}
 
-join_human_bytes() {   # <bytes>
-    awk -v b="$1" 'BEGIN{
-        split("B KiB MiB GiB TiB PiB", u, " "); i = 1
-        while (b >= 1024 && i < 6) { b /= 1024; i++ }
-        printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
-    }'
-}
 
-guided_join_scope() {   # <label>
-    local label="$1" sfile choice editor
-    local _js_n _js_g _js_b _js_sum _js_set
-    sfile=$(peer_scope_path "$label")
-
-    if join_scope_is_committed "$label"; then
-        log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
-        return 0
-    fi
-    if [ ! -e "$sfile" ]; then
-        do_draft_scope "$label"
-    fi
-
-    while :; do
-        echo
-        echo "Proponowany zakres backupu dla '$label':"
-        echo "------------------------------------------------------------"
-        awk '/^# ==========================================================/{exit} {print}' "$sfile"
-        echo "------------------------------------------------------------"
-        # 1. What the collector did NOT say. Without this line the proposal
-        #    reads as a considered selection rather than "everything I have".
-        if [ -z "${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}" ]; then
-            echo "!!! Kolektor NIE wskazal zadnego datasetu -- podal tylko cel"
-            echo "!!! (--target=${PEER_JOIN_TARGET:-?}). Ta propozycja to zatem"
-            echo "!!! CALY majatek tego hosta, nie wybor zrobiony dla Ciebie."
-        else
-            echo ">>> Kolektor prosil o: ${PEER_JOIN_DATASETS:-}${PEER_JOIN_REQUESTED:-}"
-        fi
-        # 2. The magnitude, before the question. A measurement that failed is
-        #    not a small scope -- it is no scope, and the join stops here
-        #    rather than asking the operator to consent to a number nobody
-        #    could compute.
-        _js_sum=$(join_scope_summary "$sfile")             || die "refusing to ask for consent: $_js_sum"
-        read -r _js_n _js_g _js_b <<< "$_js_sum"
-        # The exact set behind that number, captured HERE, so what the operator
-        # accepts is what do_commit_scope must find when it grants. Re-reading
-        # the pool between the two is the whole hole this closes.
-        _js_set=$(join_scope_enumerate "$sfile")             || die "refusing to ask for consent: $_js_set"
-        echo ">>> Przyjecie nada kontu ${PEER_JOIN_ACCOUNT:-?} prawa"
-        echo ">>>   snapshot,destroy,mount,send,hold,release,bookmark"
-        echo ">>> na $_js_n dataset(ach), w tym $_js_g wolumen(ach) maszyn, lacznie $(join_human_bytes "$_js_b")."
-        echo "------------------------------------------------------------"
-        # 3. A consent reflex cannot give. Typing the count is trivial for
-        #    anyone who read the line above, and impossible to do by habit.
-        read -rp "Wpisz liczbe datasetow ($_js_n) aby ZAAKCEPTOWAC, [e]dytuj, [n]przerwij: " choice \
-            || die "join interrupted before scope acceptance"
-        case "$choice" in
-            "$_js_n")
-                # Bind the accepted count AND the accepted set to the grant.
-                # do_commit_scope refuses if either has moved since the number
-                # above was printed, BEFORE its first zfs allow.
-                JOIN_ACCEPTED_COUNT="$_js_n" JOIN_ACCEPTED_SET="$_js_set"                     do_commit_scope "$label"
-                join_scope_is_committed "$label" \
-                    || die "scope grant finished without a matching hash read-back"
-                log "scope accepted and committed for '$label'"
-                return 0
-                ;;
-            e|E|edit|EDIT)
-                editor="${VISUAL:-${EDITOR:-vi}}"
-                $editor "$sfile" \
-                    || die "editor '$editor' failed; scope was not committed"
-                do_commit_scope_check "$label"
-                ;;
-            n|N|nie|NIE|q|Q)
-                die "scope was not accepted; no ZFS grant was committed"
-                ;;
-            *)
-                warn "type the dataset count to accept, e to edit, or n to stop"
-                ;;
-        esac
-    done
-}
 
 
 # do_revoke_old -- the ONLY step in this whole feature that removes something.
@@ -6206,114 +6806,6 @@ do_unpair() {
 # capture the UID, revoke by UID (works even if userdel already ran and the
 # name is gone -- makes a repeated call after a partial failure safe), VERIFY
 # nothing remains, only THEN userdel.
-do_leave() {
-    local label="$1"
-    [ -n "$label" ] || die "internal: do_leave needs a label"
-    local mpath; mpath=$(peer_manifest_path "$label")
-    [ -r "$mpath" ] || die "no join manifest for '$label' at $mpath -- nothing to leave (was --join even run here under this label?)"
-    # shellcheck disable=SC1090
-    . "$mpath"
-    [ "${PEER_JOIN_ROLE:-}" = pull ] \
-        || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- --leave only tears down the PULL side (a scope-granted account on this host); a push peer's teardown is --unpair on the COLLECTOR, which owns that receive delegation"
-    local account="${PEER_JOIN_ACCOUNT:-}"
-    [ -n "$account" ] || die "internal: manifest for '$label' has no account recorded"
-
-    if [ "${PEER_JOIN_AS:-}" = root ]; then
-        log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
-    else
-        # REV-20260804-040: the durable principal binding is the ONLY thing
-        # --leave may revoke by -- never a scan of `zfs allow`'s output. A
-        # dataset can carry more than one numeric/unknown principal (another
-        # relationship's own orphan, a second live delegated account); "the
-        # first unknown uid" or "any numeric grant" is not evidence of
-        # OWNERSHIP, and REV-20260804-039 F3's own first attempt at this
-        # (commit 1f6ca0b) revoked and residue-checked exactly that way --
-        # caught before merge, not live, but the review that caught it is
-        # correct that it could have taken another relationship's access
-        # with it.
-        local uid=""
-        if id "$account" >/dev/null 2>&1; then
-            local live_uid; live_uid=$(id -u "$account")
-            if [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
-                [ "$live_uid" = "$PEER_JOIN_ACCOUNT_UID" ] \
-                    || die "refusing --leave='$label': account '$account' is uid $live_uid, but the manifest recorded uid $PEER_JOIN_ACCOUNT_UID at join/commit time -- name/uid drift (account recreated under the same name?) is a collision signal, not something to tear down through. Resolve by hand: confirm which uid actually owns this relationship, fix the manifest, then retry. Nothing has been changed."
-                uid="$live_uid"
-            else
-                # Legacy manifest (joined before this field existed) and the
-                # account is still live -- safe to capture and use now,
-                # exactly as do_commit_scope does at grant time.
-                uid="$live_uid"
-                log "recording uid $uid for account '$account' before teardown (legacy relationship, no uid was on file)"
-            fi
-        elif [ -n "${PEER_JOIN_ACCOUNT_UID:-}" ]; then
-            uid="$PEER_JOIN_ACCOUNT_UID"
-            warn "account '$account' already gone -- using the manifest-recorded uid $uid (never a guess) to find and revoke its grant"
-        else
-            die "refusing --leave='$label': account '$account' is already gone AND no uid was ever recorded for it (a legacy relationship joined before this field existed, never committed since). There is no durable identifier left to safely find its grant among possibly several numeric/unknown principals on these datasets -- guessing was REV-20260804-039 F3's own first, wrong attempt at this. Resolve by hand: 'zfs allow <dataset>' on each of: ${PEER_JOIN_GRANTED_DATASETS:-<none recorded>} -- identify which numeric uid is actually this relationship's (system logs, /var/log/auth.log around when the account was removed, etc.), then 'zfs unallow -u <that uid> <dataset>' yourself before removing $mpath by hand. Nothing has been changed."
-        fi
-
-        local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
-        local -a held=()
-        local ds
-        for ds in "${datasets[@]}"; do
-            [ -n "$ds" ] || continue
-            if zfs list -H -o name -- "$ds" >/dev/null 2>&1 && commit_scope_dataset_held "$ds"; then
-                held+=("$ds")
-            fi
-        done
-        if [ "${#held[@]}" -gt 0 ]; then
-            die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
-        fi
-
-        # Mirror of do_commit_scope's grant list, `mount` included -- revoke
-        # exactly what was granted, or a leave leaves a permission behind.
-        local perms="snapshot,destroy,mount,send,hold,release,bookmark"
-        for ds in "${datasets[@]}"; do
-            [ -n "$ds" ] || continue
-            if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
-                log "leave: $ds no longer exists on this host -- nothing to revoke"
-                continue
-            fi
-            if zfs unallow -u "$uid" "$perms" -- "$ds" 2>/dev/null; then
-                log "leave: revoked ($perms) on $ds from uid $uid ($account)"
-            else
-                warn "leave: could not revoke uid $uid's grant on $ds -- check by hand: zfs allow $ds"
-            fi
-        done
-
-        # Verify before userdel, not after -- a grant that survives the loop
-        # above (permission denied, a property-level grant unallow -u didn't
-        # reach, etc.) must stop this here, not be discovered later as a
-        # residue nobody was looking for. Matches ONLY this relationship's
-        # exact bound uid, or the exact account name (a drift/collision
-        # signal if it still shows under some OTHER uid) -- never "any
-        # numeric grant", which would false-positive on a second legitimate
-        # delegated account sharing the same dataset.
-        local -a residual=()
-        for ds in "${datasets[@]}"; do
-            [ -n "$ds" ] || continue
-            zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
-            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
-                && residual+=("$ds")
-        done
-        if [ "${#residual[@]}" -gt 0 ]; then
-            die "refusing to proceed: ${residual[*]} still show a grant for uid $uid or account '$account' after the revoke attempt above -- resolve by hand ('zfs allow <dataset>' to see exactly what, 'zfs unallow -u $uid <dataset>' to remove it), then re-run --leave='$label'. Account (if it still exists) and key left in place."
-        fi
-
-        if id "$account" >/dev/null 2>&1; then
-            revoke_quiesce_grant "$account"
-            passwd -l "$account" >/dev/null 2>&1 || true
-            userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
-            log "leave: removed account '$account' (uid $uid) and its home directory"
-        else
-            log "leave: account '$account' (uid $uid) already gone; its orphaned grant is now cleared"
-        fi
-    fi
-
-    rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
-    log "leave: removed the join manifest and any scope file/hash for '$label'"
-    log "leave: '$label' fully torn down on this host. Nothing done on the collector -- see --unpair there."
-}
 
 # do_draft_config -- best-effort, deliberately conservative. gen-cron.sh's INI
 # is template-based ([dataset:X] refers to a [template:tier] this script has
@@ -6598,12 +7090,6 @@ if [ "$JOIN_MODE" -eq 1 ]; then
 fi
 if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
     do_draft_scope "$DRAFT_SCOPE_LABEL"
-    exit 0
-fi
-# --commit-scope is NOT dispatched here any more; it runs before Phase 1, beside
-# --pause/--resume. See the block there for why.
-if [ "$LEAVE_MODE" -eq 1 ]; then
-    do_leave "$LEAVE_LABEL"
     exit 0
 fi
 

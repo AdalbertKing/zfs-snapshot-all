@@ -298,6 +298,54 @@ Usage:
                                     before install. Backup-mode only; --target optional
                                     (proposed at pick time). --manual-join opts into the
                                     explicit two-sided form. Same resumability as above.
+Replicas -- more copies of what this host already holds, usually onto disks
+that get unplugged. Every field is a flag, and add-replica is an upsert, so a
+front end never edits the config file:
+  zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
+                                    Default schedule is 02:30 nightly, after the
+                                    daily tier: a replica is not an online mirror,
+                                    and every run is a window in which the medium
+                                    is at risk.
+                                    [--schedule='30 2 * * *'] [--prefix=replica_]
+                                    [--recursive=yes|no] [--fixed|--removable]
+                                    [--history=all|newest|auto:N]
+                                    [--notify=TEXT] [--plan|--install] [--yes]
+                                    Plans by default; --install swaps the config and
+                                    the crontab together. --removable (the default)
+                                    brackets the run in zpool import/export, so a
+                                    disk in a safe is a quiet skip, never an alert.
+                                    Prepare the medium once, by hand, before the
+                                    first run: zpool create POOL <device> and
+                                    zfs create POOL/BASE. That dataset is what tells
+                                    the gate the RIGHT disk is in the slot.
+  zfs-backup.sh list-replicas [--json]
+                                    Inventory plus live medium state: here (imported),
+                                    available (in the slot, not imported), away (in a
+                                    safe), wrong_medium (a disk IS in the slot and it
+                                    is not this one). --json is the GUI data layer,
+                                    same contract as `progress --json`.
+  zfs-backup.sh run-replicas [--config=F]
+                                    Run every replica job now. A medium that is
+                                    not here skips quietly, so this is safe to
+                                    fire on any insertion.
+  zfs-backup.sh install-media-trigger [--install]
+                                    OPTIONAL, and not implied by anything. A udev
+                                    rule that runs the replicas when a disk
+                                    carrying a ZFS label appears. add-replica
+                                    never touches udev; a host that only wants the
+                                    nightly run never runs this. Running both is
+                                    fine -- the nightly run then finds nothing
+                                    written and skips without importing.
+  zfs-backup.sh remove-media-trigger [--install]
+                                    Take that opt-in back. Removes only the rule
+                                    this tool wrote; cron entries are untouched.
+  zfs-backup.sh remove-replica NAME [--install] [--yes]
+                                    Stops the job. The copy on that medium is left
+                                    alone -- it is still a copy. Removing the LAST
+                                    job in the config removes the whole managed
+                                    cron block: an empty schedule is a legal
+                                    outcome of a removal, not a broken config.
+
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
                                     --bandwidth caps the LINK, not this one relationship: it is
@@ -345,6 +393,15 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
 Client state control:
   zfs-backup.sh pause-client NAME [--reason=TEXT]
   zfs-backup.sh resume-client NAME
+  zfs-backup.sh move-to-client FROM ONTO [--yes]
+                                    The relationship's MACHINE was replaced. Hands the
+                                    copy over to ONTO's machine: the copy does not move
+                                    on disk, only which machine it is backed up from --
+                                    so no re-seed. REFUSES until ONTO already holds the
+                                    copy, proven by guid per dataset; recover it there
+                                    first (restore FROM ONTO). Pauses FROM afterwards
+                                    and keeps its record. Does not retire the old
+                                    machine, and says so.
   zfs-backup.sh disable-client NAME [--reason=TEXT]
   zfs-backup.sh enable-client NAME
 
@@ -424,7 +481,11 @@ peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
 # Logical pause is an ORCHESTRATION feature, not a security boundary: a
 # command that omits -L is not blocked. The hard-disable half of REV-045
 # (peer-side SSH gate) is deliberately NOT implemented in this stage.
-RELATIONSHIPS_DIR="/var/lib/zfs-snapshot-all/relationships"
+# Overridable in the same form CLIENTS_DIR already uses. Not a new capability:
+# it is what lets a suite drive the pause-aware refusals below without a live
+# /var/lib, and the refusal that reads this was previously untestable for
+# exactly that reason.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 pause_marker_path() { echo "$RELATIONSHIPS_DIR/$1/paused"; }
 client_paused() { [ -f "$(pause_marker_path "$1")" ]; }
 # Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
@@ -1664,8 +1725,13 @@ source_prune_sflags() {
 # body: marker, the profile's SOURCE prune fragment, non-recursive scope, ssh_flags,
 # labels). Shared by the step-3 CREATE path and the step-5 retrofit so both write an
 # identical, independent, non-recursive source ladder.
-append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds> <retention fragment>
+append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <ds> <retention fragment> [prune schedule expr]
     local wf="$1" name="$2" marker="$3" scope="$4" sflags="$5" ds="$6" retfrag="${7:-$PROFILE_PRUNE_FILE}"
+    # EMPTY MEANS "inherit the template", which is what every section written
+    # before this did. Passed in rather than derived here: schedule_pick_minute
+    # reads the INSTALLED crontab, so calling it a second time inside one run
+    # can answer differently once the send line is in place.
+    local schedexpr="${8:-}"
     # Recursion here MIRRORS the pull's. A solid scope root pulls with -R, so
     # its children accumulate the tool-owned automated_ snapshots on the
     # source too -- a non-recursive source prune would cover the parent and
@@ -1680,6 +1746,7 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
         echo "[prune:$scope]"
         echo "	$marker"
         emit_source_prune_fragment "$retfrag"
+        [ -n "$schedexpr" ] && echo "	prune_schedule = $schedexpr"
         echo "	recursive    = $rec"
         echo "	ssh_flags    = $sflags"
         echo "	pair_label   = $name"
@@ -1697,8 +1764,15 @@ append_source_prune_create() {   # <workfile> <name> <marker> <scope> <sflags> <
 # delegated account must already hold `destroy` on each source (delegated by
 # deploy.sh --commit-scope) -- we verify, we do NOT widen. Only the (re)generated
 # datasets, so a preserved re-activation opens no SSH and rewrites nothing.
-emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
+emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] <source-ds...>
     local workfile="$1" name="$2" marker="$3"; shift 3
+    # NAMED, not a fourth positional, and that is a correction rather than a
+    # taste: the tail of this function is a variadic dataset list, so a new
+    # positional in front of it silently eats the first DATASET. Measured --
+    # the first cut did exactly that, the list came out empty, and the section
+    # was not emitted at all. A dataset name can never look like --schedule=.
+    local schedexpr=""
+    case "${1:-}" in --schedule=*) schedexpr="${1#--schedule=}"; shift ;; esac
     [ "$#" -gt 0 ] || return 0
     # NO SHAPE GATE. `PROFILE_GFS -eq 1` used to stand here and it silently
     # excused every flat profile from bounding the families it creates on the
@@ -1773,7 +1847,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> <source-ds...>
             # reasons to stop before publishing, and neither is a reason to
             # publish a relationship that prunes nothing on the source.
             [ -n "$retfrag" ] || die "refusing to create source retention for '$ds': profile '$PROFILE_ACTIVE' yielded no retention fragment. Either it declares none at all, or its rendered artifacts are not readable in this run. This relationship would create automated_* families on ${LOAD_HOST:-the source} and bound none of them there -- which is the defect REV-20260811-102 exists to prevent. Nothing was installed."
-            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
+            append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "$schedexpr" || return 1
         fi
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
@@ -1810,7 +1884,17 @@ emit_missing_source_prune() {   # <workfile> <name> <missing-source-scope...>
     local scope ds
     for scope in "$@"; do
         ds="${scope##*:}"
-        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" || return 1
+        # NO SCHEDULE, deliberately. This is the RETROFIT: it adds the bounded
+        # source prune an existing relationship was missing, and nothing else.
+        # A minute here would move a job on a host that never asked for it --
+        # the same thing the empty-expression control in test/stagger exists to
+        # forbid. The stagger belongs to CREATE, where the minute is chosen.
+        #
+        # Passed as an explicit empty string rather than left out: `schedexpr`
+        # is a local of emit_remote_source_prune, a DIFFERENT function, and
+        # bash would have handed this one whatever that caller happened to
+        # have in scope. CI caught it as 57b, the byte-identical assertion.
+        append_source_prune_create "$workfile" "$name" "$marker" "$scope" "$sflags" "$ds" "$retfrag" "" || return 1
         SOURCE_PRUNE_EMITTED_DS+=("$ds")
     done
 }
@@ -3326,6 +3410,27 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
     stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
+    # A THIRD SLOT, for the prune that reaches the SOURCE over SSH.
+    #
+    # 63f69eb spread relationships "across the clock instead of stacking them on
+    # one minute", and its own measurement named the cost: "all at :01 and all
+    # pruning at :21 ... a thundering herd on the link, the source's disks and
+    # sshd". It gave a minute to the send and to the LOCAL prune, and never
+    # touched append_source_prune_create -- so the one job class that opens an
+    # SSH session to the source, and therefore hits all three of the things that
+    # sentence lists, was the one left stacked.
+    #
+    # Measured on the lab, 2026-08-30, two relationships: sends at :57 and :01,
+    # local prunes at :17 and :21, and BOTH source prunes at :21 with the local
+    # one -- three jobs, two of them over SSH to different hosts, in one minute.
+    # It reproduced identically on a rebuild, so it is deterministic, not luck.
+    #
+    # +40 keeps the 20-minute gap the profile already had between send and
+    # prune, and puts this a further 20 from both: three evenly spaced slots per
+    # relationship rather than two and a pile-up.
+    local stagger_src stagger_src_prune_expr
+    stagger_src=$(( (stagger_min + 40) % 60 ))
+    stagger_src_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_src")
     # WHEN THE TIERS DISAGREE, SPREAD THEM ONE BY ONE instead of not at all.
     #
     # A section-level send_schedule overrides every tier the section names, so a
@@ -3542,7 +3647,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     elif [ "${RECURSION:-}" = atomic ]; then
         log "source retention NOT generated for '$name': atomic recursion keeps no bookmark, so a managed source prune could age out the only anchor this relationship has (target retention is unaffected)"
     else
-        emit_remote_source_prune "$workfile" "$name" "$marker" ${prune_src[@]+"${prune_src[@]}"} || return 1
+        emit_remote_source_prune "$workfile" "$name" "$marker" --schedule="$stagger_src_prune_expr" ${prune_src[@]+"${prune_src[@]}"} || return 1
     fi
     return 0
 }
@@ -4303,6 +4408,33 @@ path follow whoever runs the block. Nothing has been changed."
 # gen-cron.sh without --install prints the block to stdout, so both sides of the
 # cron diff are rendered the same way and a difference is real rather than a
 # formatting artifact.
+# THE INSTALLED BLOCK REMEMBERS WHICH CONFIG WROTE IT, AND SO SHOULD WE.
+#
+# There is ONE managed block in a crontab, and whichever config last rendered it
+# owns the whole thing. So a command that resolves to config B silently replaces
+# every line config A had put there -- including jobs B has never heard of.
+#
+# Measured the hard way on pve9, 2026-08-29: three replica jobs installed from
+# /root/replab.conf vanished when `remove-client` ran and resolved to the
+# canonical /etc/zfs-snapshot-all config instead. Nothing said a word; the
+# crontab simply had three fewer jobs, and the only reason it was noticed was a
+# hash in an unrelated audit line.
+#
+# The block already carries `# Source: <path>` on its second line. Comparing it
+# costs one grep and turns a silent replacement into a sentence.
+warn_if_block_has_other_source() {   # <config about to be installed>
+    local want="$1" have
+    have="$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')"
+    [ -n "$have" ] || return 0
+    # Same normaliser the missing-config guard uses, so the two agree on what
+    # "a different file" means rather than each having an opinion.
+    [ "$(normalize_cron_source "$have")" != "$(normalize_cron_source "$want")" ] || return 0
+    warn "the managed block currently installed was rendered from a DIFFERENT config:"
+    warn "    installed from: $have"
+    warn "    about to install from: $want"
+    warn "  There is one managed block per crontab, so this replaces every job the other config put there -- including any this one does not describe. If both are meant to be live, they belong in one file."
+}
+
 show_activation_proposal() {   # <current config> <proposed config>
     local cronfile="$1" workfile="$2" before after rc=0
     before=$(mktemp) || return 1
@@ -4409,6 +4541,9 @@ _restore_target_crontab() {   # <file>
 }
 
 atomic_replace_and_install() {
+    # Before anything is swapped: is this block somebody else's? Said here rather
+    # than in each caller, because this is the one door they all go through.
+    warn_if_block_has_other_source "${1:-}"
     local realfile="$1" workfile="$2"
     # From here the candidate is THIS function's: every path below either moves
     # it into place or removes it explicitly, so the exit-time net must let go
@@ -4836,6 +4971,582 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
         ''|*[!0-9]*) return 1 ;;
         *)           printf '%s' "$1" ;;
     esac
+}
+
+
+###############################################################################
+# REPLICAS -- the high-level face of [replica:] sections.
+#
+# Owner's direction, 2026-08-29: this has to be configurable from the top,
+# because it is going into a GUI. That is not a request for convenience, it is a
+# constraint on the shape: a form cannot hand-edit an INI file and cannot be told
+# to paste `zpool create`. So every field of a [replica:] section is a flag here,
+# add-replica is an UPSERT (the GUI's "save" is one call whether the row is new
+# or edited), and the listing has a machine-readable form -- the same contract
+# `progress --json` already sets as this project's data layer.
+#
+# What these verbs do NOT do is invent orchestration. The candidate config, the
+# rendered preview and the atomic swap are the same three helpers local-backup
+# and activate-client use, in the same order: plan by default, install only when
+# asked.
+###############################################################################
+
+# Replace or append one [replica:NAME] block in a config file, in place.
+# Everything outside the block is preserved byte for byte -- a config carries
+# other people's sections and comments somebody wrote by hand.
+replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history>
+    local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
+    local history="${10:-}"
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v want="[replica:$name]" '
+        $0 == want { skip=1; next }
+        skip && /^[[]/ { skip=0 }
+        skip { next }
+        { print }
+    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    {
+        printf '\n'
+        printf '[replica:%s]\n' "$name"
+        printf '\tsource    = %s\n' "$source"
+        printf '\tdst       = %s\n' "$dst"
+        printf '\tschedule  = %s\n' "$sched"
+        printf '\tprefix    = %s\n' "$pref"
+        [ -n "$media" ]  && printf '\tmedia     = %s\n' "$media"
+        [ "$rec" = "1" ] && printf '\trecursive = yes\n'
+        # 'all' is gen-cron's default and it emits nothing for it, so writing it
+        # would put a field in the file that changes nothing.
+        [ -n "$history" ] && [ "$history" != "all" ] && printf '\thistory   = %s\n' "$history"
+        [ -n "$notify" ] && printf '\tnotify    = %s\n' "$notify"
+        :
+    } >> "$tmp" || { rm -f "$tmp"; return 1; }
+    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    return 0
+}
+
+
+# run-replicas -- every [replica:] job in the config, once, now.
+#
+# The owner's second trigger, 2026-08-29: "or immediately when the disk is
+# plugged in". This is what udev calls; it is also what an administrator runs by
+# hand after carrying a disk back from the safe.
+#
+# It does not reimplement the job. It renders the config through the SAME
+# generator cron uses and runs the lines it produced, so there is exactly one
+# description of what a replica run is. A medium that is not here skips quietly
+# on its own -- that is the gate's whole contract -- so this can fire on every
+# insertion without knowing which disk arrived.
+cmd_run_replicas() {
+    local config="" a
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            -*)         die "run-replicas: unknown option '$a'" ;;
+            *)          die "run-replicas: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "run-replicas: no readable config at $config"
+
+    local block rc=0 n=0
+    block="$(gencron_as_target -c "$config")" \
+        || die "run-replicas: the config could not be rendered -- nothing was run"
+    # The replica lines and only those: a bracketed job is a replica by
+    # construction, because media_bracket is the only thing that emits one.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        n=$((n+1))
+        # Strip the five schedule fields; what is left is what cron runs.
+        bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1
+    done <<EOF
+$(printf '%s' "$block" | grep 'zfs-media-gate.sh attach')
+EOF
+    [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
+    return "$rc"
+}
+
+# install-media-trigger -- fire the replicas when a disk appears.
+#
+# OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the
+# insertion trigger is opt-in and must not arrive together with the schedule.
+# `add-replica` never touches udev, and a host that only ever wants the nightly
+# run simply never runs this verb. The two are independent: neither installs,
+# implies or requires the other.
+#
+# ITS OWN VERB for the same reason. A udev rule is a durable change to how this
+# machine reacts to hardware, which is a different layer from a cron entry; one
+# command that quietly altered both would be one command too clever. The rule is
+# printed before it is written, and writing it needs --install like everything
+# else here.
+#
+# Running both is fine and costs nothing: a disk inserted in the evening runs its
+# job, and the nightly run then finds nothing written since and skips without
+# importing the medium at all.
+cmd_install_media_trigger() {
+    local config="" do_install=0 rules=/etc/udev/rules.d/90-zfs-replica.rules a
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            --rules=*)  rules="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            -*)         die "install-media-trigger: unknown option '$a'" ;;
+            *)          die "install-media-trigger: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "install-media-trigger: no readable config at $config"
+    grep -q '^\[replica:' "$config" \
+        || die "install-media-trigger: $config has no [replica:] sections, so there is nothing for an inserted disk to trigger. Add one first: zfs-backup.sh add-replica ..."
+
+    command -v systemd-run >/dev/null 2>&1 \
+        || die "install-media-trigger: systemd-run is not on this host. The rule must not run the job itself -- a udev rule that blocks holds up every other device event on the machine -- and systemd-run --no-block is how it hands the work off."
+
+    local body
+    body="$(cat <<EOF
+# Managed by zfs-backup.sh install-media-trigger -- do not hand-edit.
+#
+# Fires when a disk carrying a ZFS label appears. It does NOT know which replica
+# the disk belongs to and does not need to: run-replicas tries them all and every
+# medium that is not present skips quietly.
+#
+# --no-block is not optional. udev serialises device events, so a rule that waits
+# for a backup would stall every other device on this machine for the length of
+# the transfer.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
+  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k $SCRIPT_DIR/zfs-backup.sh run-replicas --config=$config"
+EOF
+)"
+    echo ">>> reguła do zapisania w $rules:"
+    echo "------------------------------------------------------------"
+    printf '%s\n' "$body"
+    echo "------------------------------------------------------------"
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zapisane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        return 0
+    fi
+    printf '%s\n' "$body" > "$rules" || die "install-media-trigger: could not write $rules"
+    chmod 0644 "$rules" 2>/dev/null || :
+    udevadm control --reload-rules 2>/dev/null || warn "rule written, but 'udevadm control --reload-rules' failed -- it takes effect after the next reload or reboot"
+    log "media trigger installed at $rules -- plugging in a replica disk now runs its job, and the run exports the pool again when it is done."
+}
+
+# remove-media-trigger -- take the opt-in back.
+#
+# An option that cannot be undone is not an option. This removes only the file
+# this tool wrote, and says so rather than sweeping /etc/udev/rules.d for
+# anything that looks related.
+cmd_remove_media_trigger() {
+    local rules=/etc/udev/rules.d/90-zfs-replica.rules do_install=0 a
+    for a in "$@"; do
+        case "$a" in
+            --rules=*)  rules="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            -*)         die "remove-media-trigger: unknown option '$a'" ;;
+            *)          die "remove-media-trigger: takes no positional arguments" ;;
+        esac
+    done
+    [ -f "$rules" ] || { log "no media trigger installed at $rules -- nothing to remove."; return 0; }
+    grep -q 'Managed by zfs-backup.sh install-media-trigger' "$rules" \
+        || die "remove-media-trigger: $rules exists but was not written by this tool. Refusing to delete somebody else's udev rule -- look at it and remove it by hand if it is yours."
+    if [ "$do_install" -ne 1 ]; then
+        echo ">>> do usuniecia: $rules"
+        echo "To jest wylacznie plan -- nic nie zostalo usuniete."
+        echo "Aby usunac: powtorz to samo polecenie z --install."
+        return 0
+    fi
+    rm -f "$rules" || die "remove-media-trigger: could not remove $rules"
+    udevadm control --reload-rules 2>/dev/null || warn "rule removed, but 'udevadm control --reload-rules' failed -- it stops applying after the next reload or reboot"
+    log "media trigger removed. Replicas now run only on their schedule; the cron entries are untouched."
+}
+
+cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [...]
+    local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
+    local config="" do_install=0 assume_yes=0 a _ans
+    # --source IS REPEATABLE, and also takes a comma list, so a front end can
+    # send either shape. One medium often holds more than one thing worth
+    # keeping, and a second [replica:] onto the same disk is refused further
+    # down for a good reason: two jobs sharing a pool export it out from under
+    # each other mid-write. The list belongs on the job.
+    local -a sources=() _sp=()
+    local _s1
+    for a in "$@"; do
+        case "$a" in
+            --source=*)    IFS=',' read -ra _sp <<< "${a#*=}"
+                           for _s1 in "${_sp[@]}"; do [ -n "$_s1" ] && sources+=("$_s1"); done ;;
+            --dst=*)       dst="${a#*=}" ;;
+            --schedule=*)  sched="${a#*=}" ;;
+            --prefix=*)    pref="${a#*=}" ;;
+            --notify=*)    notify="${a#*=}" ;;
+            # HOW MUCH OF THE GAP TRAVELS when a common snapshot survived.
+            # Validated here as well as in gen-cron, so a typo fails at the
+            # command line instead of after the config has been composed.
+            --history=*)   history="${a#*=}"
+                           case "$history" in
+                               all|newest) ;;
+                               auto:*)     case "${history#auto:}" in
+                                               ''|*[!0-9]*) die "add-replica: --history=$history -- auto: takes a count, e.g. --history=auto:3" ;;
+                                           esac ;;
+                               *) die "add-replica: --history=$history -- expected 'all' (every snapshot in between, the default), 'newest' (only the diff to the newest) or 'auto:N' (let the engine decide, measured in this dataset's own snapshot intervals). It only matters when a common snapshot survived: once retention has eaten it, the bookmark anchors a single diff whatever this says." ;;
+                           esac ;;
+            --config=*)    config="${a#*=}" ;;
+            --recursive=*) case "${a#*=}" in yes|1|true) rec=1 ;; no|0|false) rec=0 ;; *) die "add-replica: --recursive takes yes or no" ;; esac ;;
+            # A replica onto a target that is ALWAYS there is a legitimate third
+            # copy -- another pool in the same box. It simply does not get the
+            # import/export bracket, and must not, or every run would export a
+            # pool nobody asked to unmount.
+            --fixed)       media="" ;;
+            --removable)   media="removable" ;;
+            --plan)        do_install=0 ;;
+            --install)     do_install=1 ;;
+            --yes|-y)      assume_yes=1 ;;
+            -*)            die "add-replica: unknown option '$a'" ;;
+            *)             if [ -z "$name" ]; then name="$a"; else die "add-replica: takes exactly one name; got a second: '$a'"; fi ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET [--source=DATASET2 ...] --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
+    case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
+    [ "${#sources[@]}" -gt 0 ] || die "add-replica: --source= names the dataset on THIS host to copy (repeat it for more than one)"
+    local _i _j
+    for ((_i=0; _i<${#sources[@]}; _i++)); do
+        for ((_j=_i+1; _j<${#sources[@]}; _j++)); do
+            [ "${sources[_i]}" = "${sources[_j]}" ] \
+                && die "add-replica: '${sources[_i]}' is named twice -- one run would send it into '$dst' twice"
+        done
+    done
+    source="$(IFS=,; printf '%s' "${sources[*]}")"
+    [ -n "$dst" ]    || die "add-replica: --dst= names the base dataset on the medium, e.g. usbrep1/replica"
+    # ONCE A NIGHT, AFTER THE DAILY TIER -- not hourly.
+    #
+    # Owner's model, 2026-08-29: a replica is not an online mirror. The medium is
+    # only at risk while its pool is imported, and every run opens that window,
+    # so the number of runs IS the exposure. The daily tier sends at 01:11 in the
+    # shipped profiles (00:11 in prod), so 02:30 is comfortably after it and
+    # still inside the night.
+    #
+    # A replica that wanted to be closer to live would not be a replica; it would
+    # be a second backup relationship, and those already exist.
+    [ -n "$sched" ]  || sched="30 2 * * *"
+
+    # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
+    # Every one of them, checked here: with a list it is the second entry a
+    # single check waves through, and the cost of that is discovered at 02:30.
+    local _s2
+    for _s2 in "${sources[@]}"; do
+        zfs list -H -o name "$_s2" >/dev/null 2>&1 \
+            || die "add-replica: '$_s2' is not a dataset on this host. A replica copies what this machine already holds."
+    done
+
+    # THE MEDIUM MAY BE IN A SAFE, AND THAT IS NOT AN ERROR.
+    #
+    # The base dataset on the target is what tells the gate the RIGHT disk is in
+    # the slot, so when the pool is here it is checked and a mismatch refused.
+    # When the pool is absent it CANNOT be checked -- and refusing would mean
+    # fetching a disk out of the safe merely to add a line to a config. It is
+    # said out loud instead, which is the rule the join scope follows too.
+    local pool="${dst%%/*}"
+    if zpool list -H -o name "$pool" >/dev/null 2>&1; then
+        zfs list -H -o name "$dst" >/dev/null 2>&1 \
+            || die "add-replica: pool '$pool' is imported but '$dst' is not on it. That dataset is what identifies the medium, so this is either the wrong disk or one that was never prepared: zfs create $dst"
+    elif zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
+        # In the slot, just not imported. Saying "not here" about a disk the
+        # operator can see would be the same falsehood the listing used to tell.
+        warn "medium '$pool' is in the slot but not imported, so '$dst' was not checked. The job imports it itself; if that dataset is not on it, the first run will refuse it as the wrong medium."
+    else
+        warn "medium '$pool' is not here, so '$dst' could not be checked. That is normal for a disk in a safe -- but if it was never prepared, the first run will refuse it as the wrong medium. Prepare it once: zpool create $pool <device> && zfs create $dst"
+    fi
+
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+
+    # ONE MEDIUM, ONE REPLICA. Two hazards, both refused, and both are what a
+    # form produces the first time somebody picks the same disk twice:
+    #
+    #   * the same dst -- two jobs writing one dataset, each with its own
+    #     snapshot family, racing;
+    #   * the same POOL under a different label -- worse, and not obvious. The
+    #     gate's ownership marker is per LABEL, so the two jobs each believe
+    #     they imported the pool, and whichever finishes first exports it out
+    #     from under the other mid-write.
+    #
+    # Checked against the INSTALLED config and skipping this replica's own
+    # section, so re-running add-replica for an existing name stays an upsert
+    # rather than a collision with itself.
+    if [ -f "$config" ]; then
+        local _other _odst _opool
+        while IFS="$(printf '	')" read -r _other _odst; do
+            [ -n "$_other" ] || continue
+            [ "$_other" = "$name" ] && continue
+            [ "$_odst" = "$dst" ]                 && die "add-replica: [replica:$_other] already writes to '$dst'. Two replicas onto one target would race, each with its own snapshot family. Give this one its own dataset, or edit '$_other'."
+            _opool="${_odst%%/*}"
+            [ "$_opool" = "$pool" ]                 && die "add-replica: [replica:$_other] already uses the medium '$pool' (as $_odst). The media gate records ownership per LABEL, so two labels on one pool would each believe they imported it -- and whichever finished first would export it out from under the other, mid-write. One medium, one replica."
+        done <<REPEOF
+$(awk '
+    /^\[replica:/ { if (n!="" && d!="") print n "\t" d
+                    n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); d=""; next }
+    /^\[/ { if (n!="" && d!="") print n "	" d; n=""; d=""; next }
+    n != "" { line=$0; sub(/^[ 	]+/,"",line); k=line; sub(/[ 	]*=.*$/,"",k); v=line; sub(/^[^=]*=[ 	]*/,"",v); if (k=="dst") d=v }
+    END { if (n!="" && d!="") print n "	" d }
+' "$config")
+REPEOF
+    fi
+
+    local cand; cand=$(mktemp) || die "mktemp failed"
+    chmod 0644 "$cand" 2>/dev/null || :
+    if [ -f "$config" ]; then
+        cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read $config to plan against it"; }
+    else
+        assert_config_not_claimed_if_missing "$config"
+        printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
+            || { rm -f "$cand"; die "could not create the candidate config"; }
+    fi
+    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" \
+        || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
+
+    show_activation_proposal "$config" "$cand" || {
+        rm -f "$cand"
+        die "gen-cron.sh could not render the proposed config -- nothing was touched"
+    }
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        rm -f "$cand"
+        return 0
+    fi
+    if [ "$assume_yes" -ne 1 ]; then
+        _ans=""
+        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
+    fi
+    atomic_replace_and_install "$config" "$cand" \
+        || die "add-replica: the install failed -- see above. The config and crontab were rolled back together."
+    log "replica '$name' installed: $source -> $dst"
+}
+
+
+# list-replicas [--json] -- the inventory, plus whether each medium is HERE.
+#
+# --json is the product, not a convenience, for the same reason it is on
+# `progress`: a GUI must not scrape human text. The two are deliberately the
+# same shape of answer -- one object, one array of records, fields named after
+# the config fields they came from -- so a front end learns the convention once.
+#
+# `present` is asked of the gate rather than inferred, because the gate is the
+# one piece that knows the difference between "the pool is not imported" and
+# "the pool is imported but this is the WRONG disk". A listing that flattened
+# those two into a boolean would hide the only dangerous one.
+cmd_list_replicas() {
+    local as_json=0 config="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)     as_json=1 ;;
+            --config=*) config="${a#*=}" ;;
+            -*)         die "list-replicas: unknown option '$a'" ;;
+            *)          die "list-replicas: takes no positional arguments" ;;
+        esac
+    done
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "list-replicas: no readable config at $config"
+
+    # Parsed with awk rather than sourced: a config is data, never a program.
+    local rows; rows=$(awk '
+        /^\[replica:/ {
+            if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist)
+            name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
+            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; next
+        }
+        /^\[/ { if (name != "") { print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist); name="" } next }
+        name != "" {
+            line=$0; sub(/^[ \t]+/,"",line)
+            k=line; sub(/[ \t]*=.*$/,"",k)
+            v=line; sub(/^[^=]*=[ \t]*/,"",v)
+            if (k=="source") src=v
+            else if (k=="dst") dst=v
+            else if (k=="schedule") sched=v
+            else if (k=="prefix") pref=v
+            else if (k=="media") media=v
+            else if (k=="recursive") rec=v
+            else if (k=="history") hist=v
+        }
+        END { if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist) }
+    ' "$config")
+
+    local gate="$SCRIPT_DIR/zfs-media-gate.sh"
+    local name src dst sched pref media rec hist pool present last first=1
+    if [ "$as_json" -eq 1 ]; then printf '{"replicas":['; fi
+    if [ -z "$rows" ]; then
+        if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
+        return 0
+    fi
+    while IFS="$(printf '\t')" read -r name src dst sched pref media rec hist; do
+        [ -n "$name" ] || continue
+        pool="${dst%%/*}"
+        present="unknown"; last=""
+        if [ -x "$gate" ]; then
+            if "$gate" status "$pool" "$name" --dataset "$dst" --quiet >/dev/null 2>&1; then
+                present="here"
+            else
+                case "$?" in
+                    1) present="away" ;;
+                    2) present="wrong_medium" ;;
+                esac
+            fi
+        fi
+        # THREE STATES, NOT TWO. The gate answers "is this pool imported", which
+        # is the right question for a job that is about to write. It is the
+        # wrong one for a person looking at a list: a disk sitting in the slot
+        # with its pool exported would read as "away", i.e. as a disk in a safe,
+        # and that is the single most misleading thing a front end could show.
+        # Asked here rather than in the gate so its exit contract, which the
+        # generated cron lines depend on, is left exactly as it is.
+        if [ "$present" = "away" ]; then
+            if zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
+                present="available"
+            fi
+        fi
+        [ -r "/var/lib/zfs-snapshot-all/media/$name.last-seen" ] \
+            && last="$(cat "/var/lib/zfs-snapshot-all/media/$name.last-seen" 2>/dev/null)"
+        if [ "$as_json" -eq 1 ]; then
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            # "source" stays the raw field, so a reader written against the
+            # one-dataset shape keeps working; "sources" is the array a front
+            # end should use, and it has one element when there is one source.
+            # Emitting only the string would make a GUI parse a config grammar.
+            local _js _jfirst=1 _jarr=""
+            while IFS= read -r _js; do
+                [ -n "$_js" ] || continue
+                [ "$_jfirst" -eq 1 ] || _jarr="$_jarr,"
+                _jfirst=0
+                _jarr="$_jarr\"$_js\""
+            done <<JSRC
+$(printf '%s' "$src" | tr ',' '\n')
+JSRC
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last"
+        else
+            printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
+            [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
+        fi
+    done <<EOF
+$rows
+EOF
+    if [ "$as_json" -eq 1 ]; then printf ']}\n'; fi
+    return 0
+}
+
+# Does this config still describe any JOB?
+#
+# gen-cron.sh resolves cron lines from [dataset:], [prune:], [prune-bookmarks:]
+# and [replica:]. [defaults], [template:] and [excluded:] are policy: they
+# describe HOW a job would run and emit nothing on their own. A file holding
+# only those is not a corrupt config, it is an EMPTY SCHEDULE.
+config_has_job_sections() {   # <file>
+    grep -qE '^\[(dataset|prune|prune-bookmarks|replica):' "$1"
+}
+
+# remove-replica NAME -- drop the section and reinstall the block.
+#
+# THE DATA ON THE MEDIUM IS NOT TOUCHED, and the message says so. Removing a
+# replica means stopping the job that feeds it; the copy on that disk is still a
+# copy, and deciding it is worthless is not this command's call to make.
+#
+# REMOVING THE LAST JOB HAD TO GO THROUGH gen-cron.sh AND COULD NOT.
+# Measured on pve9, 2026-08-30, tearing a lab down: the config held three
+# replicas, two came out, and the third died with
+#
+#     gen-cron.sh: error: no send/prune/monitor rules resolved from ...
+#     FATAL: gen-cron.sh could not render the proposed config -- nothing was touched
+#
+# leaving a scheduled job pointing at a dataset that no longer existed. That
+# guard is RIGHT when someone hands gen-cron.sh an emptied config -- it is a
+# config that lost its contents -- and wrong as the answer to "remove the last
+# job", where empty is the requested result.
+#
+# remove-client solved exactly this and the fix here is to use its answer, not
+# a second one: ask the shared cron writer to remove the zfs-backup-managed
+# block, THEN swap the config. Cron first, for its reason: if the config
+# swapped first and the cron removal then failed, the config would describe
+# zero jobs while the real cron lines survived, with nothing left recording
+# what they were.
+cmd_remove_replica() {
+    local name="" config="" do_install=0 assume_yes=0 a _ans
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            --plan)     do_install=0 ;;
+            --install)  do_install=1 ;;
+            --yes|-y)   assume_yes=1 ;;
+            -*)         die "remove-replica: unknown option '$a'" ;;
+            *)          if [ -z "$name" ]; then name="$a"; else die "remove-replica: takes exactly one name"; fi ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    [ -r "$config" ] || die "remove-replica: no readable config at $config"
+    grep -qxF "[replica:$name]" "$config" \
+        || die "remove-replica: there is no [replica:$name] in $config. 'zfs-backup.sh list-replicas' shows what is there."
+
+    local cand; cand=$(mktemp) || die "mktemp failed"
+    chmod 0644 "$cand" 2>/dev/null || :
+    awk -v want="[replica:$name]" '
+        $0 == want { skip=1; next }
+        skip && /^[[]/ { skip=0 }
+        skip { next }
+        { print }
+    ' "$config" > "$cand" || { rm -f "$cand"; die "could not compose the config without [replica:$name]"; }
+
+    local empties_schedule=0
+    config_has_job_sections "$cand" || empties_schedule=1
+
+    if [ "$empties_schedule" -eq 1 ]; then
+        echo
+        echo "'$name' is the LAST job in $config."
+        echo "Removing it leaves no send, prune or replica rule at all, so the whole"
+        echo "zfs-backup-managed block would be removed from $(cron_target_user)'s crontab."
+        echo "Nothing else in that crontab is touched, and no dataset is touched."
+    else
+        show_activation_proposal "$config" "$cand" || { rm -f "$cand"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
+    fi
+    if [ "$do_install" -ne 1 ]; then
+        echo
+        echo "To jest wylacznie plan -- nic nie zostalo zainstalowane."
+        echo "Aby zainstalowac: powtorz to samo polecenie z --install."
+        rm -f "$cand"
+        return 0
+    fi
+    if [ "$assume_yes" -ne 1 ]; then
+        _ans=""
+        read -rp "Zainstalowac powyzsze? [t/N] " _ans </dev/tty 2>/dev/null || _ans=""
+        case "$_ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$cand"; die "not confirmed -- nothing was installed" ;; esac
+    fi
+    if [ "$empties_schedule" -eq 1 ]; then
+        if ! cron_block_remove "$(cron_target_user)" zfs-backup-managed; then
+            rm -f "$cand"
+            die "remove-replica: could not remove the zfs-backup-managed cron block for $(cron_target_user): ${CRON_ERR:-unknown error} -- $config was NOT touched. Re-running remove-replica is safe once this is resolved."
+        fi
+        chmod 0644 "$cand" 2>/dev/null || :
+        if ! mv -f "$cand" "$config"; then
+            rm -f "$cand"
+            die "remove-replica: the zfs-backup-managed cron block for $(cron_target_user) has ALREADY been removed, but $config could not be updated to match (it still describes '$name'). Fix whatever blocked the rename, then re-run remove-replica -- cron_block_remove is idempotent, only this config swap remains."
+        fi
+    else
+        atomic_replace_and_install "$config" "$cand" \
+            || die "remove-replica: the install failed -- see above. The config and crontab were rolled back together."
+    fi
+    log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }
 
 cmd_local_backup() {
@@ -8759,13 +9470,18 @@ cmd_pause_client() {
     chmod 0644 "$marker.new" || { rm -f "$marker.new"; die "could not chmod $marker.new"; }
     mv "$marker.new" "$marker" || { rm -f "$marker.new"; die "could not commit $marker"; }
     log "client '$name' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship $name is paused' before any snapshot/SSH work."
-    # Said out loud because the old wording ("managed jobs") was read as all of
-    # them, and retention is managed too. Measured on metropolis 2026-08-20: a
-    # paused relationship still ran both of its delsnaps lines, the one over the
-    # SOURCE included. That is not a generator oversight -- the label becomes
-    # snapget/snapsend/check-snap-age -L, and delsnaps.sh has no such flag at
-    # all -- so the honest move is to name the gap rather than imply it away.
-    log "NOT covered: retention. This relationship's delsnaps lines carry no '-L' and keep pruning on schedule, on the source as well as the target. The GFS ladder bounds what that can erode, so a pause measured in hours or days cannot cost you the common base; a pause left running for months could."
+    # RETENTION IS NOW INSIDE THE PAUSE, AND THIS LINE HAD TO CHANGE WITH IT.
+    #
+    # It used to read "NOT covered: retention ... delsnaps lines carry no '-L'
+    # and keep pruning on schedule", which was true and measured on metropolis
+    # 2026-08-20. On the owner's direction delsnaps.sh gained -L and the
+    # generator now emits it on all four prune shapes, so the sentence became
+    # the exact inverse of the code -- REV-20260829-124 F2. An operator reading
+    # it during a pause would believe retention was still eroding the common
+    # base and could take recovery action that is both unnecessary and, if it
+    # means resuming early, actively wrong.
+    log "Covered: retention too. This relationship's delsnaps lines carry '-L $name' and exit before any listing, SSH or destroy while the pause stands -- on the source as well as the target."
+    log "NOT covered: an engine invoked BY HAND without -L. The pause is a property of the relationship label, so a manual snapsend/snapget/delsnaps that does not name the label is outside it by construction, and deliberately so: the pause exists to stop the schedule, not to take the machine away from the administrator sitting at it."
     # In-flight contract (REV-045 boundary 4): a run already past its
     # preflight finishes -- pause gates the NEXT run, it kills nothing.
     local running
@@ -9253,6 +9969,414 @@ remove_managed_sections() {   # <file> <client name> <target-path>...
     flush_section
 
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
+}
+
+# ==============================================================================
+# move-to-client -- the relationship's machine is replaced; the COPY stays put
+# ==============================================================================
+#
+# Owner decision, 2026-08-28 (docs/project/OWNER-MOVE-TO-CLIENT-2026-08-28.md):
+# a relationship whose machine is being replaced is not cloned, it MOVES. The
+# copy on this collector stays exactly where it is; what changes is which
+# machine the relationship points at.
+#
+# The shape this exists to avoid is the expensive one. Pairing the new machine
+# and letting it build its own copy costs a full re-seed: after recovering 10 TB
+# onto it, the next backup sends the same 10 TB back, because the two copies
+# share no snapshot. Moving the copy keeps ONE lineage across the machine swap,
+# which is also the honest description of what happened -- the data did not
+# change custodian, the machine under it did.
+#
+# This verb does NOT recover. It refuses until the data is already on the new
+# machine, and the GUID proof below is what it refuses on. Recovery and
+# hand-over are different failure domains: a recovery takes hours and may need
+# several attempts, the hand-over is seconds and transactional. Composed, they
+# make a verb that can be half-done in two incompatible ways, and a verb that
+# both produces the proof's condition and checks it is checking its own work.
+#
+# It does not retire the old relationship either -- it PAUSES it. A pause is
+# reversible and a retirement is not, and a move that dies halfway has to leave
+# a state the operator can walk back out of.
+#
+# And it decides nothing else. The old machine may still be alive and stops
+# being backed up; this says so plainly and does not require anyone to declare a
+# retirement or answer a question the tool invented. The admin has a tool.
+
+# Does the destination machine actually hold this copy? By GUID, per dataset.
+#
+# THE WHOLE SAFETY OF THE OPERATION. Without it move-to-client is a config edit
+# that silently repoints a backup at a machine which does not have the data, and
+# nothing discovers that until the next pull -- by which time the old
+# relationship is paused and the new one has no common base.
+#
+# GUID and not name: a name is what a host chose to call a snapshot, and this
+# estate has measured two hosts writing different names for the same instant.
+# The GUID is what `zfs send -I` will match on, so it is the thing that decides
+# whether the next backup is an increment or a re-seed.
+#
+# Prints nothing and returns 0 when proven; prints the reason and returns 1
+# otherwise. An unreadable answer is a refusal, never a pass.
+# The newest snapshot of a LOCAL dataset.
+#
+# source_family_newest answers the same question for a REMOTE source and cannot
+# be reused: it always opens ssh to LOAD_ACCOUNT@LOAD_HOST, and what
+# move_guid_proof needs is the collector's own copy, on this machine. So this is
+# a second probe -- named, in one place, rather than inlined, so the assertion
+# that pins "one probe implementation per side" keeps biting if a third appears.
+local_newest_snapshot() {   # <dataset> -> newest snapshot name, or nothing
+    zfs list -H -t snapshot -o name -s creation -d 1 "$1" 2>/dev/null | tail -1
+}
+
+move_guid_proof() {   # <copy dataset> <destination path> <account@host>
+    local copy="$1" destpath="$2" peer="$3" snap guid remote
+    snap=$(local_newest_snapshot "$copy")
+    [ -n "$snap" ] || { echo "    $copy has no snapshot at all, so there is nothing to prove it by"; return 1; }
+    snap="${snap#*@}"
+    guid=$(zfs get -H -o value guid "${copy}@${snap}" 2>/dev/null)
+    [ -n "$guid" ] || { echo "    could not read the guid of ${copy}@${snap} on this collector"; return 1; }
+    remote=$(ssh -n "${LOAD_SSH_OPTS[@]}" "$peer" \
+        "zfs get -H -o value guid '${destpath}@${snap}'" 2>/dev/null)
+    if [ -z "$remote" ]; then
+        echo "    ${destpath}@${snap} is not on ${peer%%@*}'s machine -- the copy's newest snapshot has not been recovered there"
+        return 1
+    fi
+    if [ "$remote" != "$guid" ]; then
+        echo "    ${destpath}@${snap} exists there but is a DIFFERENT snapshot (guid $remote, expected $guid) -- same name, other data"
+        return 1
+    fi
+    return 0
+}
+
+# Re-tag one section's managed-by marker. Not a field, so update_section_field
+# cannot do it: it is the second line of the section and it is what
+# section_owned_by reads to decide whose section this is. Changing it IS the
+# hand-over; everything else in this verb follows from it.
+section_retag_client() {   # <file> <exact header> <old name> <new name>
+    local file="$1" want="$2" old="$3" new="$4"
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v want="$want" -v old="# managed-by: zfs-backup.sh client=$old" \
+        -v new="# managed-by: zfs-backup.sh client=$new" '
+        $0 == want { emit=1; print; next }
+        emit && /^\[/ { emit=0 }
+        emit {
+            line=$0; sub(/^[ \t]+/, "", line)
+            if (line == old) { print new; hit=1; next }
+        }
+        { print }
+        END { exit(hit ? 0 : 3) }
+    ' "$file" > "$tmp"
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then rm -f "$tmp"; return "$rc"; fi
+    cat "$tmp" > "$file" && rm -f "$tmp"
+}
+
+# Swap the transport inside a flags string, leaving everything else byte for
+# byte. Rewriting the whole field would be easier and would silently drop the
+# bandwidth cap, the autotune flag and anything else a profile put there -- so
+# only the four things that name the OTHER MACHINE are touched: the key, the
+# known_hosts file, the host-key alias and the relationship label.
+move_reflag() {   # <old flags string> <new label>
+    local f="$1" newlabel="$2"
+    f=$(printf '%s' "$f" | sed -E \
+        -e "s#(-K )[^ ]+#\1${LOAD_KEYFILE}#" \
+        -e "s#(-k )[^ ]+#\1${LOAD_ALIAS_KH}#" \
+        -e "s#(-O HostKeyAlias=)[^ ]+#\1${LOAD_ALIAS}#" \
+        -e "s#(-L )[^ ]+#\1${newlabel}#")
+    printf '%s' "$f"
+}
+
+# Rename ONE section header, leaving its body untouched. The source-side
+# [prune:] scope carries the peer INSIDE the header --
+# [prune:acct@old-host:pool/ds] -- so a hand-over has to move the header, not
+# just a field. Refuses (3) when the header is not there rather than writing
+# nothing, for the same reason update_section_field does: a silent no-op would
+# leave the relationship pruning the OLD machine with no error.
+section_rename_header() {   # <file> <old header> <new header>
+    local file="$1" old="$2" new="$3"
+    grep -qxF "$old" "$file" 2>/dev/null || return 3
+    local tmp; tmp=$(mktemp) || return 1
+    awk -v old="$old" -v new="$new" '$0 == old { print new; next } { print }' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$file" && rm -f "$tmp"
+}
+
+# Every section the config marks as belonging to one relationship.
+#
+# NOT the client record's MANAGED_DATASETS/MANAGED_PRUNE_SCOPE. Those list the
+# collector-side paths, and a relationship owns more than that: the SOURCE-side
+# [prune:acct@host:path] section is not in either list, because its scope is not
+# a local path.
+#
+# Measured on the lab, 2026-08-28, in the diff of the first real move: the
+# transfer line and the monitor moved to the new machine and the source-side
+# prune stayed pointing at the OLD one -- so after the hand-over it would have
+# gone on destroying snapshots on a machine the relationship no longer covers,
+# on schedule, under a relationship that is supposed to be stopped.
+#
+# The marker is the authority on ownership -- it is what section_owned_by reads
+# and what the re-tag rewrites -- so asking the config directly cannot miss a
+# shape the record does not happen to track.
+config_sections_of_client() {   # <file> <client name> -> one exact header per line
+    local file="$1" name="$2"
+    awk -v marker="# managed-by: zfs-backup.sh client=$name" '
+        /^\[/ { hdr=$0; next }
+        {
+            line=$0; sub(/^[ \t]+/, "", line)
+            if (line == marker && hdr != "") { print hdr; hdr="" }
+        }
+    ' "$file"
+}
+
+cmd_move_to_client() {   # <from> <onto> [--yes]
+    local from="" to="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            -*) die "move-to-client: unknown option '$a'" ;;
+            *)  if   [ -z "$from" ]; then from="$a"
+                elif [ -z "$to" ];   then to="$a"
+                else die "move-to-client: takes exactly two relationships -- the one to move FROM and the one to move ONTO. Got a third: '$a'."
+                fi ;;
+        esac
+    done
+    [ -n "$from" ] && [ -n "$to" ] || die "uzycie: zfs-backup.sh move-to-client <from> <onto> [--yes]
+Moves a relationship's COPY to a different machine's relationship. The copy does
+not move on disk -- what changes is which machine it is backed up from. The data
+must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
+    [ "$from" != "$to" ] || die "move-to-client: '$from' onto itself is not a move."
+
+    local from_rec="$CLIENTS_DIR/$from.conf" to_rec="$CLIENTS_DIR/$to.conf"
+    [ -r "$from_rec" ] || die "move-to-client: no relationship record for '$from' ($from_rec). 'zfs-backup.sh status' lists them."
+    [ -r "$to_rec" ]   || die "move-to-client: no relationship record for '$to' ($to_rec). Pair the new machine first -- the destination is a relationship this host already holds a key for, not a hostname."
+
+    # A PAUSED DESTINATION WOULD RECEIVE A SCHEDULE THAT DOES NOT RUN.
+    #
+    # Found on the moveclient-live lab, 2026-08-29. The verb pauses the SOURCE at
+    # the end, and never asks about the destination. Move A onto B and then later
+    # B back onto A, and A is still paused from the first move: it takes the
+    # sections, the crontab is installed, the verb prints "'A' carries the
+    # schedule" -- and every one of those jobs exits SKIPPED, because the pause is
+    # a property of the label they now carry. Measured: snapget answered
+    # "SKIPPED: relationship alfa is paused" on the very line the hand-over had
+    # just installed.
+    #
+    # That is false health of the exact kind this package keeps finding, and the
+    # tool announces it as success.
+    #
+    # Refused rather than resumed. A paused destination is the NORMAL state
+    # mid-restore -- pause the twin, restore onto it, hand the schedule over --
+    # so lifting the pause silently would be the tool overruling the very
+    # transaction the administrator opened. It says which command ends it, and
+    # stops before touching anything.
+    if client_paused "$to"; then
+        die "move-to-client: '$to' is PAUSED, so the schedule this would hand it could not run -- every job carrying '-L $to' exits SKIPPED. That is the normal state while a machine is being restored onto; end it deliberately when the restore is done: zfs-backup.sh resume-client $to. Nothing has been changed."
+    fi
+
+    # What <from> manages, read from its own record -- the same source
+    # remove-client reads, so the two verbs cannot disagree about what belongs
+    # to a relationship.
+    # The record answers two questions and no more: WHICH config, and as WHICH
+    # account. What the relationship OWNS is asked of the config, because the
+    # marker there is the authority -- see config_sections_of_client, and the
+    # source-side prune the record's lists do not carry.
+    local rec_cfg rec_user
+    rec_cfg=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${CRON_CONFIG:-}" )
+    rec_user=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+
+    read_server_conf
+    cron_context_resolve adopt "" "" "$rec_cfg" "$rec_user"
+    local cronfile="$CRON_CTX_FILE"
+    [ -n "$cronfile" ] && [ -r "$cronfile" ] || die "move-to-client: no readable installed config for '$from' (${cronfile:-none resolved}) -- nothing to rewrite."
+
+    local mds="" mps="" _h
+    while IFS= read -r _h; do
+        case "$_h" in
+            "[dataset:"*) _h="${_h#[dataset:}"; mds="$mds ${_h%]}" ;;
+            "[prune:"*)   _h="${_h#[prune:}";   mps="$mps ${_h%]}" ;;
+        esac
+    done < <(config_sections_of_client "$cronfile" "$from")
+    [ -n "$mds" ] || die "move-to-client: $cronfile marks no [dataset:] section as managed by '$from', so there is nothing to hand over."
+
+    # The DESTINATION's connection: its key, its pinned host key, its port. Every
+    # question below is asked of that machine, and the flags written into the
+    # config are built from these same values, so the proof and the installed job
+    # cannot end up talking to different hosts.
+    load_client_and_connection "$to_rec" || die "move-to-client: could not load the connection for '$to'."
+    load_ssh_opts
+    local peer="${LOAD_ACCOUNT}@${LOAD_HOST}"
+
+    echo ">>> move-to-client: '$from' -> '$to'"
+    echo ">>>   the copy stays where it is; what moves is which machine it is backed up from."
+    echo ">>>   destination: $peer"
+    echo
+
+    # ---- THE PROOF, before a single signpost is touched --------------------
+    echo ">>> proving '$to' already holds the copy (by guid, per dataset)"
+    local ds srcfield destpath failed=0 proven=0
+    for ds in $mds; do
+        srcfield="$(section_field "$cronfile" "[dataset:$ds]" src)"
+        [ -n "$srcfield" ] || { echo "    [dataset:$ds] records no src -- cannot tell what path it should hold"; failed=1; continue; }
+        destpath="${srcfield#*@}"; destpath="${destpath#*:}"
+        if move_guid_proof "$ds" "$destpath" "$peer"; then
+            echo "    OK  $ds  ->  $peer:$destpath"
+            proven=$((proven + 1))
+        else
+            failed=1
+        fi
+    done
+    if [ "$failed" -ne 0 ]; then
+        die "move-to-client: NOTHING was changed. The datasets above are not on '$to' yet, so switching the backup over would point it at a machine without the data -- and nothing would discover that until the next pull, by which time '$from' is paused and '$to' has no common base.
+Recover them first:
+    zfs-backup.sh restore $from $to
+then run this again."
+    fi
+    echo ">>>   $proven dataset(s) proven present."
+    echo
+
+    # ---- the rewrite, on a workfile ---------------------------------------
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "move-to-client: mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cat "$cronfile" > "$workfile" || die "move-to-client: could not copy $cronfile"
+
+    local hdr newsrc newflags rc
+    for ds in $mds; do
+        hdr="[dataset:$ds]"
+        section_owned_by "$workfile" "$hdr" "$from" "$ds" \
+            || die "move-to-client: $hdr is not recorded as managed by '$from'. Refusing to take over a section this relationship does not own."
+        srcfield="$(section_field "$workfile" "$hdr" src)"
+        destpath="${srcfield#*@}"; destpath="${destpath#*:}"
+        newsrc="${peer}:${destpath}"
+        update_section_field "$workfile" "$hdr" src "$newsrc" \
+            || die "move-to-client: could not rewrite src in $hdr (rc=$?)"
+        newflags="$(move_reflag "$(section_field "$workfile" "$hdr" flags)" "$to")"
+        [ -z "$newflags" ] || update_section_field "$workfile" "$hdr" flags "$newflags" \
+            || die "move-to-client: could not rewrite flags in $hdr"
+        set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" \
+            || die "move-to-client: could not rewrite pair_label in $hdr"
+        section_retag_client "$workfile" "$hdr" "$from" "$to" \
+            || die "move-to-client: could not re-tag $hdr as managed by '$to' (rc=$?)"
+        echo ">>>   $hdr  src -> $newsrc"
+    done
+
+    # The prune scopes. Two shapes, and they move differently: a COLLECTOR-side
+    # scope is a local path and keeps its header, while a SOURCE-side scope
+    # carries the peer inside the header and has to be renamed outright.
+    # Every [prune:] the config marks as this relationship's, collector-side and
+    # source-side alike. $mps (the record's list) carries only the local scopes.
+    local newhdr sc
+    while IFS= read -r hdr; do
+        case "$hdr" in "[prune:"*) ;; *) continue ;; esac
+        sc="${hdr#[prune:}"; sc="${sc%]}"
+        case "$sc" in
+            *@*:*)
+                destpath="${sc#*@}"; destpath="${destpath#*:}"
+                newhdr="[prune:${peer}:${destpath}]"
+                newflags="$(move_reflag "$(section_field "$workfile" "$hdr" ssh_flags)" "$to")"
+                [ -z "$newflags" ] || update_section_field "$workfile" "$hdr" ssh_flags "$newflags" \
+                    || die "move-to-client: could not rewrite ssh_flags in $hdr"
+                set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" || die "move-to-client: pair_label in $hdr"
+                section_retag_client "$workfile" "$hdr" "$from" "$to" || die "move-to-client: re-tag $hdr"
+                if [ "$newhdr" != "$hdr" ]; then
+                    section_rename_header "$workfile" "$hdr" "$newhdr" \
+                        || die "move-to-client: could not rename $hdr to $newhdr (rc=$?)"
+                fi
+                echo ">>>   $hdr  ->  $newhdr" ;;
+            *)
+                set_or_remove_section_field "$workfile" "$hdr" pair_label "$to" || die "move-to-client: pair_label in $hdr"
+                section_retag_client "$workfile" "$hdr" "$from" "$to" || die "move-to-client: re-tag $hdr"
+                echo ">>>   $hdr  stays (collector-side scope), now '$to'" ;;
+        esac
+    done < <(config_sections_of_client "$workfile" "$from")
+    echo
+
+    # ---- the record transitions, PREPARED BEFORE ANYTHING GOES LIVE --------
+    #
+    # REV-20260829-123 F1. This used to install the config and both crontabs
+    # first and append to the records afterwards, with a failed append reduced
+    # to a warning -- so a full disk or a read-only /etc could leave the new
+    # sections installed while the destination's record said it owned nothing,
+    # or leave both records claiming the same datasets. `status`, a second move
+    # and remove-client all read those records, so the next administrative
+    # action would have operated on false ownership. And the command carried on
+    # to pause the old relationship and print success over it.
+    #
+    # Both new records are now written IN FULL, into temporary files in the same
+    # directory as the originals, before a single live byte is replaced. That is
+    # what proves the directory is writable and has room. What is left after the
+    # install is a rename within one directory -- and if even that fails, the
+    # rollback below puts the config, both crontabs and both records back, and
+    # the old relationship is never paused.
+    local to_tmp from_tmp
+    to_tmp="$(mktemp "$(dirname "$to_rec")/.movebak.XXXXXX")"     || die "move-to-client: mktemp failed next to $to_rec -- nothing has been changed."
+    from_tmp="$(mktemp "$(dirname "$from_rec")/.movebak.XXXXXX")" || { rm -f "$to_tmp"; die "move-to-client: mktemp failed next to $from_rec -- nothing has been changed."; }
+    _mv_cleanup() { rm -f "$to_tmp" "$from_tmp" 2>/dev/null || :; }
+
+    {
+        cat "$to_rec"
+        write_client_field MANAGED_DATASETS    "${mds# }"
+        write_client_field MANAGED_PRUNE_SCOPE "${mps# }"
+        write_client_field CRON_CONFIG         "$cronfile"
+        write_client_field LOCAL_USER          "${CRON_CTX_USER:-}"
+        write_client_field MOVED_FROM          "$from"
+        write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$to_tmp" || { _mv_cleanup; die "move-to-client: could not write '$to'\''s new record -- nothing has been changed."; }
+    {
+        cat "$from_rec"
+        write_client_field MANAGED_DATASETS    ""
+        write_client_field MANAGED_PRUNE_SCOPE ""
+        write_client_field MOVED_TO            "$to"
+        write_client_field MOVED_AT            "$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$from_tmp" || { _mv_cleanup; die "move-to-client: could not write '$from'\''s new record -- nothing has been changed."; }
+    [ -s "$to_tmp" ] && [ -s "$from_tmp" ] || { _mv_cleanup; die "move-to-client: a prepared record came out empty -- refusing to install a config whose ownership records cannot follow it. Nothing has been changed."; }
+
+    # Byte copies to go back to, because atomic_replace_and_install discards its
+    # own backups once it succeeds.
+    local cfg_bak rec_to_bak rec_from_bak cron_bak
+    cfg_bak="$(mktemp)"; rec_to_bak="$(mktemp)"; rec_from_bak="$(mktemp)"; cron_bak="$(mktemp)"
+    cp -p "$cronfile" "$cfg_bak" && cp -p "$to_rec" "$rec_to_bak" && cp -p "$from_rec" "$rec_from_bak" \
+        || { _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"; die "move-to-client: could not take a rollback copy of the config and records -- nothing has been changed."; }
+    crontab_for_target > "$cron_bak" 2>/dev/null || :
+
+    # ---- preview, confirm, install ----------------------------------------
+    show_activation_proposal "$cronfile" "$workfile" || { _mv_cleanup; die "move-to-client: the proposed config could not be previewed -- nothing has been changed."; }
+    if [ "$yes" -ne 1 ]; then
+        printf "Wykonac to przeniesienie? [t/N] "
+        local ans; read -r ans
+        case "$ans" in [tTyY]*) ;; *) die "move-to-client: przerwane -- nic nie zostalo zmienione." ;; esac
+    fi
+    atomic_replace_and_install "$cronfile" "$workfile" || { _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"; die "move-to-client: the install failed -- see above. The config and crontab were rolled back together, and neither record was touched."; }
+
+    # A rename within one directory, after the content was already written
+    # there. If it still fails, everything goes back and nothing is paused.
+    if ! mv -f "$to_tmp" "$to_rec" || ! mv -f "$from_tmp" "$from_rec"; then
+        warn "move-to-client: the config and crontab installed, but the ownership records could not be put in place. Rolling BOTH back so nothing is left claiming what it does not own."
+        cp -p "$cfg_bak" "$cronfile"      || warn "CRITICAL: could not restore $cronfile from $cfg_bak -- fix by hand"
+        cp -p "$rec_to_bak" "$to_rec"     || warn "CRITICAL: could not restore $to_rec -- fix by hand"
+        cp -p "$rec_from_bak" "$from_rec" || warn "CRITICAL: could not restore $from_rec -- fix by hand"
+        [ -s "$cron_bak" ] && { _restore_target_crontab "$cron_bak" || warn "CRITICAL: could not restore the crontab from $cron_bak -- restore by hand as $(cron_target_user): crontab $cron_bak"; }
+        _mv_cleanup; rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak"
+        die "move-to-client: NOTHING was moved. '$from' has NOT been paused and still owns its sections."
+    fi
+    rm -f "$cfg_bak" "$rec_to_bak" "$rec_from_bak" "$cron_bak" 2>/dev/null || :
+
+    # ---- and only now, the old relationship stands down --------------------
+    # AFTER the install, deliberately. Pausing first would stop the old
+    # machine's backups for however long the install takes, and if the install
+    # then failed the operator would be left with a paused relationship and an
+    # unchanged config -- a state that looks like a half-move and is not one.
+    if cmd_pause_client "$from" --reason="moved to '$to' on $(date -Is)" >/dev/null 2>&1; then
+        echo ">>> '$from' PAUSED -- its record and its manifest are untouched, and resume-client brings it back."
+    else
+        warn "the move is installed, but '$from' could NOT be paused. Its schedule still points at the old machine and will now find its sections gone. Pause it by hand: zfs-backup.sh pause-client $from"
+    fi
+
+    echo
+    echo ">>> done. What is now true:"
+    echo ">>>   the copy is unchanged on disk and is backed up from $peer."
+    echo ">>>   '$to' carries the schedule; '$from' is paused and keeps its record."
+    echo "!!!   the OLD machine is no longer backed up by anything. If it is still"
+    echo "!!!   running and still matters, that is now yours to decide -- this verb"
+    echo "!!!   does not retire it and has not touched it."
 }
 
 cmd_remove_client() {
@@ -10229,11 +11353,123 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         --source=*|--target=*) rux_entry "$@" ;;
         --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
+        add-replica)      shift; cmd_add_replica "$@" ;;
+        list-replicas)    shift; cmd_list_replicas "$@" ;;
+        remove-replica)   shift; cmd_remove_replica "$@" ;;
+        run-replicas)     shift; cmd_run_replicas "$@" ;;
+        install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
+        remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;
         # Forwarded, not implemented: restore lives in zfs-restore.sh since the
         # 2026-08-17 split -- it is the one operation whose active side writes
         # onto production, so it is not this file's code. Both spellings work
         # and behave identically; exec so exit codes pass through untouched.
-        restore)          shift; exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;
+        restore)
+            # THE CONNECTION IS RESOLVED HERE, where the paths are already known.
+            #
+            # A restore under push writes onto the machine being recovered, so it
+            # opens ssh to it -- with that relationship's key, its known_hosts and
+            # its port. This file owns those paths (load_client_and_connection);
+            # zfs-restore.sh deriving them a second time would be two answers to
+            # "which key reaches which host", and being wrong there aims a
+            # recovery at the wrong machine.
+            #
+            # Best-effort and silent on failure: a LOCAL restore needs no
+            # connection, `--plan` opens none, and an unresolvable relationship
+            # is refused by zfs-restore.sh with a better message than anything
+            # this dispatch could produce before it has parsed the arguments.
+            shift
+            # WHICH RELATIONSHIP'S CONNECTION: the one being WRITTEN TO, which is
+            # not always the one being read from.
+            #
+            # `restore A:ds B:ds` recovers relation A's copy onto relation B's
+            # machine (owner grammar, 2026-08-13). The copy is local to this
+            # collector and opens no connection; the ssh goes to B. So when there
+            # is a second address, it decides the key, the known_hosts and the
+            # port -- not the first.
+            #
+            # FOUND BY THE PROPERTY, NOT BY THE GRAMMAR. The first version of
+            # this walked the arguments counting bare words, which is a second
+            # opinion about the grammar living outside the parser that owns it --
+            # and it was wrong immediately: the split form `--at 2026-08-10
+            # 12:00` puts a bare word in the argument list that is a TIME, not an
+            # address.
+            #
+            # So it asks the only question this dispatch actually cares about:
+            # is there a readable client record under this word? A time is not.
+            # A dataset path is not. A relation label is. The LAST such word wins,
+            # which is the destination when there are two and the source when
+            # there is one -- today's behaviour, unchanged, for every existing
+            # form.
+            #
+            # zfs-restore.sh remains the only place that decides what the words
+            # MEAN. If this picks a connection the parser then disagrees with,
+            # the failure is a refused ssh against a named host, not a silent
+            # recovery aimed somewhere else.
+            # NOT `local`: this dispatch is at top level, not inside a
+            # function, and bash refuses `local` there -- "can only be used in a
+            # function", printed on every restore run. It did not break the
+            # connection resolution (the assignments below still happened), so
+            # the only symptom was a line of noise in front of a recovery, which
+            # is exactly where noise costs the most.
+            _rc_conn=""; _rc_a=""
+            for _rc_a in "$@"; do
+                case "$_rc_a" in
+                    -*) continue ;;
+                esac
+                [ -r "$CLIENTS_DIR/${_rc_a%%:*}.conf" ] && _rc_conn="$_rc_a"
+            done
+            if [ -n "$_rc_conn" ]; then
+                if load_client_and_connection "$CLIENTS_DIR/${_rc_conn%%:*}.conf" >/dev/null 2>&1; then
+                    # The same pinning the engines get, spelled as raw ssh
+                    # flags because zfs-restore.sh calls ssh directly rather than
+                    # through an engine -- and BUILT BY THE ONE BUILDER, not by
+                    # a second hand-written copy of the same option set.
+                    #
+                    # This WAS a hand-written string, and it shipped without
+                    # ConnectTimeout or ServerAlive* -- so a restore aimed at a
+                    # peer that never answers the SYN would have sat ~130s per
+                    # call, which is the hang this estate already paid for
+                    # (#44/#45/#46) and built a counting assertion against.
+                    # test/zfsbackup counts those options against the BatchMode
+                    # groups, and that count is what caught it.
+                    #
+                    # Adding the three missing options would have fixed the
+                    # instance. Using load_ssh_opts removes the class: there is
+                    # one place that decides how this host reaches a peer, every
+                    # other caller already uses it, and a fourth opinion about
+                    # ssh flags cannot drift from the other three if it does not
+                    # exist.
+                    #
+                    # Joined with "*" rather than passed as an array because it
+                    # crosses an exec boundary into zfs-restore.sh, which
+                    # word-splits it back -- see that file's own note on why
+                    # that is safe here (these are flags and paths, and neither
+                    # carries a space by this installer's own rules).
+                    load_ssh_opts
+                    RESTORE_SSH_OPTS="${LOAD_SSH_OPTS[*]}"
+                    # The engine speaks its OWN flags for the same pinning
+                    # (-K/-k/-O), not raw ssh flags. Both forms are exported from
+                    # the one place that knows the paths, so they cannot disagree
+                    # about which key reaches which host.
+                    RESTORE_ENGINE_SSH="-K ${LOAD_KEYFILE:-} -k ${LOAD_ALIAS_KH:-} -O HostKeyAlias=${LOAD_ALIAS:-} -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+                    [ -n "${LOAD_PORT:-}" ] && RESTORE_ENGINE_SSH="$RESTORE_ENGINE_SSH -p $LOAD_PORT"
+                    # AND WHO IT IS. A destination relationship only has to be
+                    # PAIRED, not activated: it contributes a machine to write
+                    # to, and that is in its client record, not in the config.
+                    #
+                    # Reading it from the config instead would force the twin to
+                    # be activated first -- and an activated twin owns its own
+                    # (empty) copy sections, so after move-to-client it would own
+                    # two sets: the real copy it took over and the empty one it
+                    # was born with, both pulling the same source into different
+                    # places. Found by walking the lab setup on paper before
+                    # running it.
+                    RESTORE_DEST_PEER="${LOAD_ACCOUNT:-}@${LOAD_HOST:-}"
+                    [ "$RESTORE_DEST_PEER" = "@" ] && RESTORE_DEST_PEER=""
+                    export RESTORE_SSH_OPTS RESTORE_ENGINE_SSH RESTORE_DEST_PEER
+                fi
+            fi
+            exec bash "$SCRIPT_DIR/zfs-restore.sh" "$@" ;;
         add-client)       shift; cmd_add_client "$@" ;;
         seed)             shift; cmd_seed "$@" ;;
         activate)         shift; cmd_activate "$@" ;;
@@ -10245,6 +11481,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
+        move-to-client)   shift; cmd_move_to_client "$@" ;;
         resume-client)    shift; cmd_resume_client "$@" ;;
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;

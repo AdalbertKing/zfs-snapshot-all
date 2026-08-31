@@ -25,9 +25,136 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Shared with zfs-backup.sh: die/warn, the server conf, and the installed-config
 # field reader. Sourced, not copied -- see lib-backup-common.sh's header.
 LIBCOMMON="$SCRIPT_DIR/lib-backup-common.sh"
+# The transport. snapsend.sh is the push engine, and a restore is that engine
+# driven in the other direction -- so it arrives with bookmarks, resume tokens,
+# compression, the bandwidth cap and the PVE-reserved-snapshot refusal already
+# proven, and the frozen file is not touched. Overridable so a suite can point
+# it at a recorder instead of a transfer.
+RESTORE_ENGINE="${RESTORE_ENGINE:-$SCRIPT_DIR/snapsend.sh}"
+
+# THE CONNECTION IS HANDED IN, not rebuilt here.
+#
+# A restore under push opens ssh to the machine being written to, and the key,
+# the known_hosts file and the port for that relationship are things zfs-backup.sh
+# already resolves (load_client_and_connection). Deriving them a second time in
+# this file would be two sources of truth about which key reaches which host --
+# and the failure mode of getting that wrong is a recovery aimed at the wrong
+# machine.
+#
+# So the caller exports RESTORE_SSH_OPTS as a plain string and this splits it.
+# Deliberately word-split: these are ssh flags, none of which can contain a
+# space in this project (paths are under /etc and /home, both space-free by the
+# installer's own rules), and an array cannot cross an `exec` boundary.
+#
+# Empty is legitimate: a LOCAL restore opens no connection at all.
+SSH_OPTS=()
+
+# Datasets whose target was rolled back during this run. Declared here, at file
+# scope, because restore_report_backup_cost reads its length under `set -u` and
+# an array that only exists when a rollback happened would make the ordinary
+# no-rollback run die on the closing report.
+RESTORE_ROLLED_BACK=()
+RESTORE_LANDED=()
+# Set when the whole-relation scope was expanded to one entry per dataset, so
+# the engine does not also recurse over what the scope already lists.
+# DELIBERATELY NEVER ASSIGNED, and declared here so that is visible rather than
+# looking like an omission. The collector does not record the peer-side label --
+# the peer chose it at join time and kept it -- so the grant check asks about
+# "whatever relationship this key opened". zfs-pair-gate derives that from the
+# KEY in its own forced command, which is a stronger guarantee than a string
+# comparison could be. See restore_grant_parse's header.
+RESTORE_LABEL=""
+RESTORE_SCOPE_EXPANDED=0
+# Where each dataset in scope is WRITTEN. Equals the recorded source unless a
+# destination relation was named -- see restore_scope_dest.
+RESTORE_SCOPE_DEST=()
+# The rebase pairs behind `--onto`: element i says that everything at or under
+# RESTORE_ONTO_FROM[i] lands at the same relative position under
+# RESTORE_ONTO_TO[i]. Empty means the recovery keeps the source paths, which is
+# every form that does not say --onto.
+RESTORE_ONTO_FROM=()
+RESTORE_ONTO_TO=()
+# The relationship whose COPY is being read. Equal to RESTORE_RELATION_LABEL
+# unless the recovery is aimed at another machine, in which case that one is the
+# destination and this one is where the data came from.
+RESTORE_SOURCE_LABEL=""
+# The datasets the target machine granted, as its gate reported them. Empty when
+# it reported none, which makes the replace-on-scope-root refusal below inert --
+# the safe way to be wrong about a shape that only matters when it is present.
+RESTORE_GRANT_SCOPE=""
+# The relationship this run is recovering, when the address named one. Used to
+# pause its scheduled jobs for the duration.
+RESTORE_RELATION_LABEL=""
+# Whether the engine command built for the current dataset carries -r. The
+# verification after it must measure exactly what was sent, no more.
+RESTORE_ENGINE_RECURSED=0
+if [ -n "${RESTORE_SSH_OPTS:-}" ]; then
+    # shellcheck disable=SC2206
+    SSH_OPTS=(${RESTORE_SSH_OPTS})
+fi
+
+# The rest of this file speaks in `echo`; the restore executor was written
+# against lib-zfs-snap.sh's `log <level> <message>`, which this script does not
+# source. Found on the lab, not in the suites -- every harness defined its own
+# log() stub, so the absence was invisible to all of them. That is the whole
+# argument for testing a transfer on real hosts.
+#
+# STDERR on purpose: restore_grant_parse and restore_point_unique have their
+# value read through $( ), and a diagnostic printed on stdout would BECOME the
+# value -- silently, and in the direction that looks like success.
+log() {   # <level> <message...>
+    local lvl="${1:-0}"; shift
+    [ "${VERBOSE:-1}" -ge "$lvl" ] && printf '%s
+' "$*" >&2
+    return 0
+}
 [ -r "$LIBCOMMON" ] || { echo "cannot read $LIBCOMMON -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
+
+# `die` FROM INSIDE A COMMAND SUBSTITUTION HAD TO END THE PROGRAM, AND DID NOT.
+#
+# lib-backup-common.sh's die is `echo >&2; exit 1`, which is correct in the main
+# shell and a no-op everywhere this file actually uses it: `config="$(pick ...)"`
+# runs pick in a SUBSHELL, so the exit kills the subshell, the assignment gets
+# the empty string, and the caller carries on.
+#
+# Measured on the lab, 2026-08-27, running `restore lab1 --plan` on a real
+# collector. It printed THREE consecutive FATALs -- no config, then "'lab1' is
+# not a relation label in ''" (note the empty config it had already refused
+# over), then "no cron config known" -- and exited 0. A recovery verb that
+# prints FATAL and returns success is worse than one that crashes.
+#
+# Fixed here rather than in the shared lib: this is the program where continuing
+# past a refusal writes onto production data, and the same change to
+# zfs-backup.sh's ~9000 lines is not something a lab evening can prove safe.
+# The general case is worth a review; this file cannot wait for it.
+#
+# $$ is the MAIN shell's pid even inside $( ); $BASHPID is the current shell's.
+# They differ exactly when we are in a subshell, which is the case that used to
+# fail open. Proven both ways before shipping: with the kill the caller's next
+# line does not run and the status is 1; without it the line runs and the status
+# is 0.
+# ARMED ONLY WHEN THIS FILE IS THE PROGRAM. `$$` is the shell that sourced it,
+# and a harness that sources this file to call its functions directly is that
+# shell -- so the signal would kill the harness instead of a run of this verb.
+# Measured immediately: test/restore/run.sh sources this file, and the first
+# `die` inside a `$( )` took the whole suite down with it, silently, before its
+# first assertion.
+#
+# When sourced, `die` therefore stays the shared lib's -- which is the fail-open
+# behaviour this fixes. That is stated here rather than papered over: a suite
+# that sources this file CANNOT observe the fatal-die property, and must not
+# claim to. It is proven where it was found, by running the program.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    RESTORE_MAIN_PID=$$
+    trap 'exit 1' TERM
+    die() {
+        echo "FATAL: $*" >&2
+        [ "$BASHPID" = "$RESTORE_MAIN_PID" ] || kill -TERM "$RESTORE_MAIN_PID" 2>/dev/null
+        exit 1
+    }
+fi
 
 # ------------------------------------------------------------------------------
 # A RELATIONSHIP NAME MUST IDENTIFY ONE RELATIONSHIP
@@ -69,6 +196,26 @@ restore_relations_sane() {
         # LAST wins: these records are append-only. zfs-backup.sh re-states a
         # field instead of rewriting the file, so the first CLIENT_NAME line is
         # the relationship as it was at creation, not as it is.
+        # A FILE THIS PROCESS CANNOT OPEN IS NOT A FILE WITH A FIELD MISSING.
+        #
+        # The read below is `2>/dev/null`, so it produces nothing whether the
+        # field is absent or the open was refused -- and the refusal that follows
+        # then blames the record's CONTENT for a permission problem. Measured on
+        # pve9, 2026-08-31: the client records are 0600 root:root, the delegated
+        # account ran a recovery, and it was told the record "carries no
+        # CLIENT_NAME" for a field sitting in the file. An operator reading that
+        # goes looking for something that is already there, on the one verb where
+        # time spent on the wrong cause is time a machine stays down.
+        #
+        # Same distinction this file already makes about the far side -- "I could
+        # not reach it" and "there is nothing there" differ by an entire
+        # destroyed dataset -- applied to its own side of the wire.
+        if [ ! -r "$f" ]; then
+            local mode="" who=""
+            mode="$(stat -c '%A %U:%G' "$f" 2>/dev/null)" || mode=""
+            who="$(id -un 2>/dev/null)" || who=""
+            die "restore: relationship record $f cannot be READ by this account${who:+ ($who)}${mode:+ -- it is $mode}. That is a permission problem, not a malformed record: the file may be perfectly well formed and this process simply cannot open it. Run the recovery as an account that can read the relationship records. Nothing was read and nothing was changed."
+        fi
         name="$(sed -n 's/^CLIENT_NAME=//p' "$f" 2>/dev/null | tail -1)"
         [ -n "$name" ] || die "restore: relationship record $f carries no CLIENT_NAME -- refusing to plan against a record that cannot say what it is."
         case "$name" in
@@ -674,9 +821,43 @@ restore_relations() {   # <config>
 # deterministic LOCAL file naming convention every other part of this tooling
 # writes and reads, not a network address inferred from a name. If the file is
 # not there either, the refusal still says exactly what to pass.
-restore_default_config() {
+# THE CONFIG BELONGS TO AN ACCOUNT, NOT ONLY TO A HOST.
+#
+# This returned `jobs.<host>.conf` and nothing else, which is root's historical
+# name. Since the fleet moved to delegated accounts (2026-08-01) the installed
+# file is `jobs.<host>.<account>.conf` -- zfs-backup.sh's default_cron_config
+# has said so since LAB6-F2, and this was a second, older implementation of the
+# same rule that never learned it.
+#
+# Measured on the lab, 2026-08-27: `restore lab1 --plan` on pve9 refused with
+# "tried [...] /etc/zfs-snapshot-all/jobs.pve9.conf" while
+# /etc/zfs-snapshot-all/jobs.pve9.zfsbackup.conf sat in the same directory. The
+# public restore surface was unusable on every host in this estate.
+#
+# Candidates, most specific first, one per line. The accounts come from OUR OWN
+# records -- the peer manifests and client records this host wrote -- never from
+# /home or passwd: an account exists for reasons unrelated to this project, and
+# treating one as ours because it has a home directory is a local fact standing
+# in for a decision (the reasoning cron_known_accounts already carries).
+restore_config_candidates() {
     local h; h=$(hostname -s 2>/dev/null || hostname)
-    printf '%s' "/etc/zfs-snapshot-all/jobs.${h}.conf"
+    local f u
+    {
+        printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.conf"
+        for f in /etc/zfs-snapshot-all/peers/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            [ -n "$u" ] && [ "$u" != root ] && printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
+        done
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -r "$f" ] || continue
+            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            [ -n "$u" ] && [ "$u" != root ] && printf '%s
+' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
+        done
+    } 2>/dev/null | awk 'NF && !seen[$0]++'
 }
 
 restore_resolve_token() {   # <config> <token>
@@ -744,11 +925,66 @@ restore_resolve_try() {   # <config> <label> <want> [namespace: ""|copy|orig]
         local src_plain="${src_id#*@}"; src_plain="${src_plain#*:}"
         if [ -n "$label" ] && [ "$l" != "$label" ]; then continue; fi
         if [ -n "$want" ]; then
+            # A DESCENDANT OF A RECURSIVE RELATIONSHIP IS A MEMBER OF IT.
+            #
+            # The config records one section per relationship, and a recursive
+            # one covers a whole subtree under a single recorded name. Matching
+            # only the recorded string meant `--target` could name the parent
+            # and nothing else -- so on this estate, where a relationship is a
+            # VM's disks under one parent, the flag that exists to scope a
+            # recovery to some of them could not name any of them.
+            #
+            # Measured on the lab, 2026-08-27:
+            #   restore lab1 --target hdd/labsrc/vm-900-disk-0
+            #   FATAL: 'hdd/labsrc/vm-900-disk-0' is not a dataset of relation
+            #          'lab1'
+            # ...pointing at `restore --plan`, which lists the parent only, so
+            # the advice named a list that could not contain the answer. And the
+            # case it locked out is the ordinary one: one disk of a VM is
+            # damaged, the other has hours of good writes on it, and restoring
+            # the whole relation rolls both back.
+            #
+            # A DERIVATION, not a guess (R-025's line). Both sides of a
+            # recursive relationship carry the same subtree shape, so the
+            # child's copy location is the recorded copy plus the same relative
+            # path -- arithmetic on two recorded facts, no probing, no
+            # inference. Fenced to sections whose own `recursive` field says the
+            # subtree is covered: for a non-recursive one the child genuinely is
+            # not a member, and it still matches only what it records.
+            local _rel="" _matched=0
             case "$ns" in
-                copy) [ "$copy_loc" = "$want" ] || continue ;;
-                orig) [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || continue ;;
-                *)    [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ] || continue ;;
+                copy) [ "$copy_loc" = "$want" ] && _matched=1 ;;
+                orig) { [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ]; } && _matched=1 ;;
+                *)    { [ "$src_plain" = "$want" ] || [ "$src_id" = "$want" ] || [ "$copy_loc" = "$want" ] || [ "$ds" = "$want" ]; } && _matched=1 ;;
             esac
+            if [ "$_matched" -eq 0 ]; then
+                local _recur; _recur="$(installed_dataset_field "$config" "$ds" recursive)"
+                case "$_recur" in
+                    yes|flat|1|true)
+                        case "$ns" in
+                            copy) [ "${want#"$copy_loc"/}"  != "$want" ] && _rel="${want#"$copy_loc"/}" ;;
+                            orig) [ "${want#"$src_plain"/}" != "$want" ] && _rel="${want#"$src_plain"/}" ;;
+                            *)    if   [ "${want#"$src_plain"/}" != "$want" ]; then _rel="${want#"$src_plain"/}"
+                                  elif [ "${want#"$copy_loc"/}"  != "$want" ]; then _rel="${want#"$copy_loc"/}"
+                                  fi ;;
+                        esac ;;
+                esac
+                [ -n "$_rel" ] || continue
+                # The copy has to be there. A descendant that was never captured
+                # is a typo, or a dataset created after the last backup, and both
+                # deserve "this relation does not cover it" rather than a plan
+                # that reaches the transfer before finding there is nothing to
+                # send. Asked only when the copy is LOCAL: a remote one would put
+                # an ssh round trip inside a resolver that has to stay a pure
+                # function of the config, and the per-dataset step already
+                # refuses on a copy with no snapshot.
+                case "$copy_loc" in
+                    *@*|*:*) : ;;
+                    *) zfs list -H -o name "${copy_loc}/${_rel}" >/dev/null 2>&1 || continue ;;
+                esac
+                src_id="${src_id}/${_rel}"
+                copy_loc="${copy_loc}/${_rel}"
+            fi
         fi
         printf '%s\t%s\n' "$src_id" "$copy_loc"
         hit=0
@@ -815,8 +1051,26 @@ restore_pick_config() {   # <explicit --config or ""> <what for> -> prints the p
     local want="$1" what="$2" c
     c="$want"
     [ -n "$c" ] || c="${CRON_CONFIG:-}"
-    [ -n "$c" ] || { c=$(restore_default_config); [ -r "$c" ] || c=""; }
-    [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against (tried \$CRON_CONFIG and $(restore_default_config)) -- pass --config=FILE"
+    if [ -z "$c" ]; then
+        local -a found=()
+        local cand
+        while IFS= read -r cand; do
+            [ -r "$cand" ] && found+=("$cand")
+        done < <(restore_config_candidates)
+        # More than one is a QUESTION, not a default. Two accounts on one host
+        # each carry their own relationships, and picking for the operator would
+        # aim a recovery using the other one's records. Refuse and name them.
+        if [ "${#found[@]}" -gt 1 ]; then
+            die "restore: this host has more than one installed config and nothing in this command says which:
+$(printf '    %s
+' "${found[@]}")
+Each belongs to a different account and carries different relationships, so choosing for you could aim a recovery by the wrong records. Name it: --config=<path>. Nothing was read and nothing was changed."
+        fi
+        [ "${#found[@]}" -eq 1 ] && c="${found[0]}"
+    fi
+    [ -n "$c" ] && [ -r "$c" ] || die "restore: no readable installed config to resolve $what against -- tried \$CRON_CONFIG and these, none readable:
+$(restore_config_candidates | sed 's/^/    /')
+Pass --config=FILE."
     printf '%s' "$c"
 }
 
@@ -1078,6 +1332,1511 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
     [ "$snaps" = dirty ] && left="${left:+$left oraz }techniczne snapshoty tego przebiegu (wypisane wyzej)"
     die "$msg UWAGA: '$src' NIE jest w stanie sprzed polecenia -- zostalo do naprawienia recznie: $left."
 }
+# ------------------------------------------------------------------------------
+# restore_one -- ONE dataset, from the copy back onto the machine it came from
+# What the TARGET already has. Under push the machine being written to is on the
+# far side, so the classification create/rewind/replace cannot be made from the
+# copy alone -- restore_plan_strategy says exactly that and returns `remote`.
+#
+# One ssh, two reads, and nothing written: does the dataset exist, and what is
+# the GUID of its newest snapshot. That is the whole question, because it is the
+# same question snapsend will answer for itself a moment later when it looks for
+# a common base -- this asks it early only so the right MODE can be named in the
+# grant check before anything is sent.
+#
+# Prints "absent", or the head GUID. Empty output means the host could not be
+# asked, which the caller must treat as unclassifiable rather than as absent --
+# "I could not reach it" and "there is nothing there" differ by an entire
+# destroyed dataset.
+# THREE ANSWERS, NOT TWO, AND SILENCE IS NOT ONE OF THEM.
+#
+# This used to print `absent`, or a GUID, or NOTHING for a dataset that exists
+# and holds no snapshots. Nothing is also what an unreachable host prints, so
+# the caller -- whose own comment says "'I could not reach it' and 'there is
+# nothing there' differ by an entire destroyed dataset" -- collapsed the two.
+#
+# Measured on the lab, 2026-08-27. A dataset was recreated empty at the target
+# path, which is a real disaster shape: something rebuilt the guest and the copy
+# is now the only history there is. The restore refused with "the host did not
+# answer". The host had answered, immediately and correctly. The right reading
+# is a target with no common base -- `replace`, a mode the grant governs and can
+# refuse for a stated reason, rather than a transport error that sends the
+# operator to go and look at the network.
+#
+#   absent             the dataset is not there
+#   bare               it is there and holds no snapshots -- no common base
+#   <guid>             its newest snapshot
+#   (empty, non-zero)  the question could not be asked
+restore_remote_state() {   # <account@host:dataset> -> "absent" | "bare" | <guid> | nothing
+    local spec="$1" peer="${1%%:*}" ds="${1#*:}"
+    [ -n "$peer" ] && [ -n "$ds" ] && [ "$peer" != "$spec" ] || return 1
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" \
+        "zfs list -H -o name '$ds' >/dev/null 2>&1 || { echo absent; exit 0; }; \
+         g=\$(zfs list -H -p -t snapshot -o guid -s creation -d 1 '$ds' 2>/dev/null | tail -1); \
+         [ -n \"\$g\" ] && echo \"\$g\" || echo bare" 2>/dev/null
+}
+# WHICH DATASETS OF THE SUBTREE DIFFER FROM THE RECOVERY POINT?
+#
+# This asked a narrower question -- "does it hold a snapshot NEWER than the
+# point" -- and that question has a false negative that costs the entire
+# recovery. Measured on the lab, 2026-08-27, on the most ordinary disaster
+# there is: files deleted from a live filesystem, no snapshot taken since.
+#
+#   hdd/labsrc: newest snapshot = the recovery point
+#               written@<point> = 73728
+#
+# No snapshot was newer, so nothing was ahead, so no rollback ran; the engine
+# then had a zero-length increment to send and exited 0; and the run reported
+# "all 1 dataset(s) in scope recovered" over a filesystem that still had the
+# damage in it and the deleted files still missing. Success, reported, having
+# changed nothing.
+#
+# `written@<point>` answers the question that actually matters, and answers both
+# halves of it at once: it is non-zero when snapshots exist after the point AND
+# when the live filesystem has diverged from it -- which is the same thing from
+# the restore's side, because both are state that has to go before the dataset
+# is at that point again. `zfs rollback` removes either.
+#
+# It also answers a third case honestly: "-" means the dataset does not have
+# that snapshot at all, so there is no point to roll back TO. Those are skipped
+# here and caught by the verification after the run instead, where the right
+# answer is "this dataset was not recovered", not "roll it back to something it
+# does not have".
+#
+# Prints the datasets that differ, one per line. Empty means none does. A failed
+# read prints nothing AND returns non-zero, so the caller can tell "nothing to
+# do" from "I could not ask" -- they differ by an entire skipped rollback.
+restore_remote_ahead() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
+            w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
+            case \"\$w\" in ''|-|0) continue ;; esac
+            echo \"\$d\"
+        done
+        exit 0" 2>/dev/null
+}
+
+# Which snapshots does the target hold that are NEWER than the recovery point?
+#
+# The narrow question, kept apart from restore_remote_ahead's broad one on
+# purpose. "Differs from the point" decides whether to roll back -- live writes
+# count there, because they have to go. "Holds snapshots after the point"
+# decides something else entirely: whether the COPY is about to be ahead of the
+# source, which is what jams the next backup.
+#
+# Measured on the lab, 2026-08-27: a rollback that discarded only live writes
+# destroyed no snapshot, left the relationship perfectly in sync -- and the run
+# still closed by announcing that the next backup would refuse. It did not; it
+# succeeded. A false alarm delivered in the middle of a recovery is not a small
+# thing: the true version of that warning is the one telling an operator their
+# only copy of a period is about to be destroyed, and it is worth exactly as
+# much as its false positives leave it worth.
+#
+# Prints "<dataset>@<snapshot>" per line, oldest first. Empty means none.
+restore_remote_newer_snaps() {   # <account@host> <target root> <point> [depth]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
+            c=\$(zfs get -H -p -o value creation \"\$d@$point\" 2>/dev/null) || continue
+            [ -n \"\$c\" ] || continue
+            zfs list -H -p -t snapshot -o creation,name -s creation -d 1 \"\$d\" 2>/dev/null |
+                awk -v c=\"\$c\" '\$1 > c {print \$2}'
+        done
+        exit 0" 2>/dev/null
+}
+
+# IS EVERY DATASET OF THE SUBTREE ACTUALLY AT THE RECOVERY POINT NOW?
+#
+# Asked after the engine, because "the engine exited 0" and "the machine holds
+# the data again" are not the same sentence, and the lab has now produced a run
+# where the first was true and the second was false.
+#
+# The measure is the same property, read again: at the point means
+# `written@<point>` is exactly 0 -- no snapshot after it and nothing written
+# since. Anything else is named and the dataset is reported NOT recovered.
+#
+#   0     at the point
+#   >0    still diverged -- the recovery did not land
+#   -     the dataset does not have that snapshot at all
+#   ''    could not be read
+#
+# Prints one "<dataset> <reason>" line per dataset that is NOT at the point.
+# Silence means every one of them is.
+restore_remote_off_point() {   # <account@host> <target root> <recovery point name> [depth: "" = subtree, "-d 0" = itself]
+    local peer="$1" root="$2" point="$3" depth="${4-}"
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "
+        for d in \$(zfs list -H -o name $depth -r '$root' 2>/dev/null); do
+            w=\$(zfs get -Hp -o value 'written@$point' \"\$d\" 2>/dev/null)
+            case \"\$w\" in
+                0)  ;;
+                -)  echo \"\$d does not have that snapshot\" ;;
+                '') echo \"\$d could not be read\" ;;
+                *)  echo \"\$d still differs from it by \$w bytes\" ;;
+            esac
+        done
+        exit 0" 2>/dev/null
+}
+
+
+# ------------------------------------------------------------------------------
+#
+# This is the step that writes. Everything above it decides whether it may, and
+# everything below it is snapsend.sh doing what it already does.
+#
+# The order is the design, and it is not arrangeable: nothing is asked of the
+# far side until the near side has proved it knows exactly what it would send.
+#
+#   1. the recovery point, resolved from the COPY's snapshots
+#   2. the point is unambiguous under the ENGINE's own matching rule
+#   3. the mode, CLASSIFIED from the data (never an operator choice)
+#   4. the grant, read from the target, requiring that exact mode
+#   5. the command, with flags DERIVED from the classification
+#   6. the engine
+#
+# Steps 1-3 are local and free. Step 4 is the only question asked of another
+# machine, and it is asked once the answer can be acted on -- asking first would
+# mean holding a permission while still deciding what to do with it.
+#
+# THE MODE MAPPING, from the planner's strategy to the three the grant names:
+#
+#   full-absent                          -> create    nothing there to lose
+#   increment | rollback | discard-live   -> rewind    a GUID-proven base exists
+#   full-live | unproven                  -> replace   no valid base; full overwrite
+#   ambiguous | remote | anything else    -> refuse
+#
+# `rollback` and `discard-live` remove divergent state, which is destructive in
+# the ordinary sense -- but they are `rewind` here because a proven common base
+# is what makes them a rewind rather than an overwrite, and that distinction is
+# the one owner decision 4 draws. `unproven` lands in `replace` deliberately:
+# unproven means the base could not be established, and sending an increment
+# from a base nobody proved is the one failure that corrupts instead of refusing.
+restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
+    local copy="$1" src="$2"
+    RESTORE_ONE_VERDICT=""
+    # HAS THIS RUN ALREADY TOUCHED THE TARGET? Everything above section 6a
+    # reads; everything from there down can destroy. A failure after the first
+    # mutation is NOT the same event as a refusal before it -- the dataset is no
+    # longer as it was found, and it is the only outcome that needs a human.
+    # Carried in the exit status (2, against 1 for "nothing was changed") rather
+    # than in a message, because the status is what the runner and a cron job
+    # read.
+    # NOT `local`, and that is the whole point: restore_one is run inside an
+    # isolation subshell (restore_one_isolated) whose EXIT trap has to be able to
+    # read this AFTER the function has left -- including when it left through a
+    # `die` deep in a helper, where the function's locals no longer exist.
+    RESTORE_ONE_CHANGED=0
+
+    # ---- 1. the recovery point --------------------------------------------
+    # Rows, not names: restore_plan_strategy needs creation and guid, and --at
+    # resolves by creation because that is when the data was captured. A name
+    # can disagree with it -- measured on this estate, where two hosts in
+    # different timezones write different names for the same instant.
+    local rows snaps point
+    rows=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null)
+    if [ -z "$rows" ]; then
+        RESTORE_ONE_VERDICT="the copy '$copy' has no snapshot to restore from"
+        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+        return 1
+    fi
+    snaps=$(printf '%s\n' "$rows" | awk -F'\t' '{print $1}' | awk -F'@' '{print $2}')
+
+    if [ -n "${RESTORE_AT_EPOCH:-}" ]; then
+        # Per dataset, nearest at-or-before -- for a FLAT relation each dataset
+        # has its own frontier, so "the state at 12:00" is not one instant across
+        # the subtree. A tie refuses rather than picking by list order.
+        local _row
+        _row="$(restore_at_pick "$RESTORE_AT_EPOCH" "$rows")"; local _prc=$?
+        case "$_prc" in
+            0) point="$(printf '%s' "$_row" | awk -F'\t' '{print $1}' | awk -F'@' '{print $2}')" ;;
+            2) RESTORE_ONE_VERDICT="two snapshots share the newest creation time at or before --at, so the recovery point is a tie"
+               log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing rather than resolving it by list order."
+               return 1 ;;
+            *) RESTORE_ONE_VERDICT="nothing on '$copy' was captured at or before --at"
+               log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+               return 1 ;;
+        esac
+    else
+        point="${RESTORE_POINT_NAME:-}"
+        [ -n "$point" ] || point="$(printf '%s\n' "$snaps" | tail -1)"
+    fi
+
+    # ---- 2. unambiguous under the engine's rule ----------------------------
+    if ! restore_point_unique "$point" "$snaps"; then
+        RESTORE_ONE_VERDICT="the recovery point '$point' is not unambiguous on '$copy'"
+        return 1
+    fi
+
+    # ---- 3. the mode, classified ------------------------------------------
+    # The strategy is computed HERE rather than handed in, so the runner needs
+    # to know nothing about it and one dataset's classification cannot leak into
+    # the next. The listing is filtered to the chosen point: a strategy derived
+    # from snapshots NEWER than the recovery point would answer a different
+    # question than the one being asked.
+    local mode
+    case "$src" in
+        *:*)
+            # REMOTE target: ask it. restore_plan_strategy answers `remote` here
+            # by design -- it is the read-only planner and does not open ssh.
+            local _st _guid
+            _st="$(restore_remote_state "$src")"
+            if [ -z "$_st" ]; then
+                RESTORE_ONE_VERDICT="could not read the state of '$src' -- the host did not answer"
+                log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: 'I could not reach it' and 'there is nothing there' differ by an entire destroyed dataset."
+                return 1
+            fi
+            if [ "$_st" = absent ]; then
+                RESTORE_STRATEGY=full-absent
+            elif [ "$_st" = bare ]; then
+                # THERE, AND EMPTY -- and that is not the same overwrite as
+                # "there, with a history that does not match".
+                #
+                # Both are `replace` to the grant: both put an older copy over
+                # what a machine holds now, and that is the decision the owner
+                # gates. They differ in what the ENGINE has to do, and the
+                # difference decides whether the recovery is possible at all.
+                #
+                # A dataset with no snapshots takes a full stream through
+                # `zfs recv -F` directly: no destroy, no re-create, and the only
+                # permission needed is `receive`. Measured on the lab
+                # 2026-08-28, sending into a freshly paired machine's empty
+                # scope root -- "All datasets processed successfully".
+                #
+                # A dataset WITH a mismatched history cannot: recv refuses a
+                # full stream onto existing snapshots, so that one really does
+                # need -f, which destroys and recreates.
+                #
+                # Keeping them apart is what makes the ordinary disaster
+                # recoverable. The fresh-machine case -- pair it, recover onto
+                # it -- lands on an empty dataset every time, and -f could never
+                # have done it: destroying the scope root destroys the
+                # delegation, and recreating it needs permission on the parent
+                # that a delegated account does not have (F23, same lab, same
+                # afternoon, learned by doing it).
+                RESTORE_STRATEGY=full-bare
+            else
+                # A common base exists when the target's head GUID is one this
+                # copy also carries at or before the recovery point. That is the
+                # same proof snapsend will require; asking early only names the
+                # mode for the grant.
+                _guid="$(printf '%s\n' "$rows" | awk -F'\t' -v g="$_st" '$3 == g {print; exit}')"
+                if [ -z "$_guid" ]; then
+                    RESTORE_STRATEGY=full-live
+                else
+                    # The target's head is a snapshot this copy also has. Where
+                    # it sits RELATIVE TO THE RECOVERY POINT decides everything:
+                    #
+                    #   at or before the point -> an increment carries it forward
+                    #   AFTER the point        -> going back, which no send can
+                    #                             do. The target has to be rolled
+                    #                             back, and that DESTROYS the
+                    #                             snapshots between.
+                    #
+                    # Getting this wrong is not a failed transfer, it is a
+                    # transfer that cannot exist: `zfs send -I A..B` with B older
+                    # than A. Measured on the lab, where restoring to 15:51 while
+                    # the target sat at 16:51 classified as `increment` and would
+                    # have asked the engine for a stream backwards in time.
+                    # THE WHOLE SUBTREE, not the root. A root sitting at the
+                    # recovery point says nothing about its children, and the
+                    # lab proved it: after one restore the root was at the point
+                    # and both children were still ahead, so a root-only check
+                    # said `increment`, skipped the rollback, and called the run
+                    # a success over untouched damage.
+                    #
+                    # And "differs from", not "is ahead of". The narrower
+                    # question missed the commonest disaster of all -- files
+                    # deleted from a live filesystem with no snapshot taken
+                    # since -- because nothing was newer, so nothing was ahead,
+                    # so no rollback ran and the run reported success over the
+                    # damage. See restore_remote_ahead's own header.
+                    local _ahead
+                    # Same depth rule as the verification below: when every
+                    # dataset is its own scope entry, this one answers for
+                    # itself. A parent would otherwise be rolled back because a
+                    # child differs, and that child is about to be handled on
+                    # its own line.
+                    local _adepth=""
+                    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _adepth="-d 0"; fi
+                    # THE EXIT STATUS, NOT ONLY THE STRING.
+                    #
+                    # restore_remote_ahead's own header promises the caller can
+                    # tell "nothing differs" from "I could not ask" -- empty and
+                    # zero versus empty and non-zero. The caller then tested
+                    # `[ -n "$_ahead" ]` and threw the status away, so an ssh
+                    # that never answered read as a target that needs nothing:
+                    # no rollback, an empty increment, and a clean report over
+                    # untouched damage.
+                    #
+                    # The same shape as F14 two hours earlier, in the same file:
+                    # a function that carefully distinguishes two cases, and a
+                    # caller that collapses them again. Writing the distinction
+                    # into the probe is half the work; the half that decides
+                    # anything is reading it.
+                    local _arc
+                    _ahead="$(restore_remote_ahead "${src%%:*}" "${src#*:}" "$point" "$_adepth")"; _arc=$?
+                    if [ "$_arc" -ne 0 ]; then
+                        RESTORE_ONE_VERDICT="could not ask '$src' whether it differs from $point"
+                        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: an unanswered question is not a clean target, and treating it as one is how a restore reports success over damage it never looked at."
+                        return 1
+                    fi
+                    if [ -n "$_ahead" ]; then
+                        RESTORE_STRATEGY=rollback
+                        RESTORE_ROLLBACK_TO="$point"
+                        log 1 "restore: differs from $point on the target: $(printf '%s' "$_ahead" | tr '\n' ' ')"
+                    else
+                        RESTORE_STRATEGY=increment
+                    fi
+                fi
+            fi ;;
+        *)
+            if [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
+                local _cut
+                _cut="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" '
+                    { print } $1 == p { exit }')"
+                restore_plan_strategy "$copy" "$src" "$_cut" "$point" >/dev/null 2>&1 || :
+            fi ;;
+    esac
+    case "${RESTORE_STRATEGY:-}" in
+        full-absent)                        mode=create ;;
+        increment|rollback|discard-live)    mode=rewind ;;
+        full-live|full-bare|unproven)       mode=replace ;;
+        ambiguous)
+            RESTORE_ONE_VERDICT="the recovery point on '$copy' is ambiguous, so no mode can be classified"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: guessing would destroy state under a decision nobody took."
+            return 1 ;;
+        *)
+            RESTORE_ONE_VERDICT="no strategy was established for '$src' (got '${RESTORE_STRATEGY:-<none>}')"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing to act on an undetermined state."
+            return 1 ;;
+    esac
+
+    # ---- 4. the grant ------------------------------------------------------
+    # The one question asked of the far side. A LOCAL target needs none: the
+    # machine at risk is this one, and whoever is running this already has root
+    # on it -- which is the whole argument the pull form would have rested on.
+    local host="${src%%:*}"
+    case "$src" in
+        *:*)
+            local answer
+            answer="$(restore_grant_ask "$host")" || answer=""
+            if ! restore_grant_require "${RESTORE_LABEL:-}" "$answer" "$mode" "$host"; then
+                RESTORE_ONE_VERDICT="'$host' does not grant '$mode' for this relationship"
+                return 1
+            fi ;;
+        *)  log 1 "restore: $src is on this machine, so no grant is asked for -- the host at risk is the one running this." ;;
+    esac
+
+    # ---- 4b. replace needs the target UNMOUNTED, and only replace does -----
+    #
+    # `replace` is the mode with no common base, so the engine runs a full send
+    # with -f: destroy the target and recreate it. Destroying a MOUNTED dataset
+    # unmounts it first, and on Linux a delegated account cannot unmount even
+    # with full `zfs allow` -- so on the delegated fleet this mode could be
+    # granted, classified and refused by physics, several seconds in.
+    #
+    # Measured on the lab, 2026-08-27. The grant said replace, the mode
+    # classified as replace, and the engine came back with:
+    #
+    #     cannot create 'hdd/labsrc/vm-900-disk-1': dataset already exists
+    #     Hint: [...] -f requires root on 192.168.28.9.
+    #
+    # That hint is true and it is a dead end: nobody can "run it as root on
+    # 192.168.28.9" -- the collector reaches that machine through a forced
+    # command as the relationship account, by design. What is actually needed is
+    # ONE unmount, by root, on the machine being recovered. The same restore then
+    # goes through as the delegated account, which is how the second attempt
+    # succeeded.
+    #
+    # Asked BEFORE the engine, not diagnosed after it: a destructive mode that
+    # cannot complete should change nothing at all, and the operator should get
+    # the one command that unblocks it rather than a hint pointing nowhere.
+    # Only on `replace`: the other modes do not destroy the dataset, and paying
+    # an ssh round trip on every ordinary recovery to answer a question only
+    # this one asks would be a cost for nothing.
+    if [ "$mode" = replace ]; then
+        case "$src" in
+            *:*)
+                # REPLACING THE ROOT OF A DELEGATED SCOPE DESTROYS THE
+                # DELEGATION ITSELF, and the account cannot put it back.
+                #
+                # `replace` runs the engine with -f, which destroys the target
+                # dataset and recreates it. A `zfs allow` lives ON a dataset:
+                # destroy it and the grant goes with it. Recreating it then
+                # needs `create` on the PARENT -- which a delegated account
+                # deliberately does not have, because that permission is the
+                # whole scope boundary.
+                #
+                # Measured on the lab, 2026-08-28, and it is not a near miss.
+                # A cross-host recovery aimed at a freshly paired machine
+                # destroyed hdd/labsrc there, failed to recreate it, and left
+                # the relationship unable to receive anything: no dataset, no
+                # delegation, and no permission to make either. Repairing it
+                # took root on the target and a re-grant.
+                #
+                # So it is refused BEFORE the engine, from the grant's own
+                # answer -- the scope it names is exactly the set of roots this
+                # applies to. A child of a granted dataset is fine: its parent
+                # survives the destroy and carries the delegation.
+                local _tgt_ds="${src#*:}" _ms
+                # Only when -f is actually going to run. `full-bare` reaches
+                # the same dataset through recv -F and destroys nothing, so
+                # refusing it here would block the one shape this whole verb
+                # exists for: a fresh machine, paired, with an empty dataset
+                # waiting.
+                local _g
+                if [ "${RESTORE_STRATEGY:-}" != full-bare ]; then
+                for _g in ${RESTORE_GRANT_SCOPE:-}; do
+                    [ "$_g" = "$_tgt_ds" ] || continue
+                    RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                    log 0 "restore: replace destroys the dataset and recreates it, but a 'zfs allow' lives ON the dataset -- destroying it takes the grant away, and recreating it needs permission on the PARENT, which a delegated account does not have and should not."
+                    log 0 "restore: two ways round it, and both are decisions somebody takes on '$host':"
+                    log 0 "restore:   recover the CHILDREN instead -- their parent survives and carries the delegation:  restore <from> <onto>:${_tgt_ds}/<child>"
+                    log 0 "restore:   or destroy and recreate '$_tgt_ds' there as root, then re-grant: deploy.sh --commit-scope=<label> and deploy.sh --allow-restore=<label> --replace"
+                    return 1
+                done
+                fi
+                _ms="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" \
+                       "zfs list -H -o mounted,type '$_tgt_ds'" 2>/dev/null)"
+                case "$_ms" in
+                    "")  log 1 "restore: could not read whether '$_tgt_ds' is mounted on '$host' -- going ahead; the engine will say if it cannot proceed." ;;
+                    yes*filesystem)
+                        RESTORE_ONE_VERDICT="'$_tgt_ds' is MOUNTED on '$host', and 'replace' destroys and recreates it"
+                        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                        log 0 "restore: destroying a mounted dataset unmounts it first, and on Linux a delegated account cannot unmount -- with or without 'zfs allow'. This is not something this side can work around."
+                        log 0 "restore: one command, as root ON $host, and then re-run this restore unchanged:"
+                        log 0 "restore:     zfs unmount '$_tgt_ds'"
+                        log 0 "restore: nothing else needs root: the transfer itself runs as the relationship account."
+                        return 1 ;;
+                esac ;;
+        esac
+    fi
+
+    # ---- 5. the command ----------------------------------------------------
+    if ! restore_engine_argv "$copy" "$src" "$point" "$mode"; then
+        RESTORE_ONE_VERDICT="could not build the engine command for mode '$mode'"
+        return 1
+    fi
+
+    # ---- THE LINE WHERE READING ENDS ---------------------------------------
+    #
+    # Everything above is measurement and refusal: the recovery point, the
+    # strategy, the grant, the scope-root and mounted-target checks, the engine
+    # command. Nothing above has changed anything. Everything below can.
+    #
+    # So this is where a pre-flight stops. It is the SAME function, not a second
+    # copy of those decisions -- a copy would be a separate list of refusals,
+    # and two lists of refusals is how a pre-flight comes to pass a dataset the
+    # real run then refuses. See restore_run_scope for why the whole scope is
+    # asked before any of it is touched.
+    if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
+        RESTORE_ONE_VERDICT="restorable by '$mode' from $point"
+        return 0
+    fi
+
+    # ---- 6a. going backwards, if that is what was asked --------------------
+    # A recovery point OLDER than what the target holds cannot be reached by
+    # sending: the snapshots in between have to go. This is the destructive half
+    # of a restore, it is why `rewind` is a mode the grant names, and it happens
+    # only after that grant has been read and required.
+    #
+    # -r on the rollback, and -R on nothing: `zfs rollback -r` destroys the
+    # snapshots and bookmarks NEWER than the one named, on that dataset. Each
+    # dataset of a subtree needs its own, because rollback is not recursive over
+    # children -- so the loop is remote and explicit rather than implied.
+    if [ "${RESTORE_STRATEGY:-}" = rollback ] && [ -n "${RESTORE_ROLLBACK_TO:-}" ]; then
+        local _peer="${src%%:*}" _tgt="${src#*:}" _ds _list _failed=0
+        log 0 "restore: $src -- the target differs from $point (snapshots after it, writes since it, or both); rolling it back to reach that point. Whatever came after is destroyed."
+
+        # TWO ssh calls, and no remote command substitution in either.
+        #
+        # The first version put `$(zfs list ...)` inside the remote command. It
+        # expanded HERE, on the collector, where that dataset does not exist --
+        # so the loop was empty, nothing was rolled back, and the run reported
+        # success. What made it look like it had worked was the engine's own
+        # `recv -F` rolling back the one dataset it received into.
+        #
+        # Measured on the lab: the parent came back to the recovery point and
+        # both children kept the damage, while the report said all recovered.
+        # A quoting mistake that silently narrows a destructive operation to a
+        # third of its scope is exactly the kind this project keeps paying for,
+        # so the substitution is gone rather than escaped more carefully.
+        local _rdepth=""
+        if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _rdepth="-d 0"; fi
+        local _newer _newer_n
+        _newer="$(restore_remote_newer_snaps "$_peer" "$_tgt" "$point" "$_rdepth")"
+        _newer_n="$(printf '%s' "$_newer" | grep -c . )"
+        _list="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" "zfs list -H -o name $_rdepth -r '$_tgt'" 2>/dev/null)"
+        if [ -z "$_list" ]; then
+            RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+            return $((RESTORE_ONE_CHANGED + 1))
+        fi
+        # Every dataset of the subtree, by name, one command. `zfs rollback` is
+        # not recursive over children -- -r there means "destroy the snapshots
+        # newer than this one", not "descend" -- so each needs its own.
+        while IFS= read -r _ds; do
+            [ -n "$_ds" ] || continue
+            if ! ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
+                 "zfs rollback -r '${_ds}@${RESTORE_ROLLBACK_TO}'" 2>/dev/null; then
+                # A dataset that never had this snapshot is not a failure: a
+                # child added after the recovery point legitimately has no such
+                # point to return to. One that HAS it and refuses is.
+                if ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$_peer" \
+                   "zfs list -H -o name '${_ds}@${RESTORE_ROLLBACK_TO}'" >/dev/null 2>&1; then
+                    log 0 "restore:   $_ds -- rollback to $RESTORE_ROLLBACK_TO REFUSED"
+                    _failed=1
+                else
+                    log 1 "restore:   $_ds has no $RESTORE_ROLLBACK_TO -- nothing to roll back to, left alone"
+                fi
+            else
+                log 1 "restore:   $_ds rolled back to $RESTORE_ROLLBACK_TO"
+                RESTORE_ONE_CHANGED=1
+            fi
+        done <<< "$_list"
+        if [ "$_failed" -eq 1 ]; then
+            RESTORE_ONE_VERDICT="the target could not be rolled back to $point (the datasets are named above)"
+            log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
+            return $((RESTORE_ONE_CHANGED + 1))
+        fi
+        # ONLY WHEN SNAPSHOTS ACTUALLY GO. A rollback that discards live
+        # writes destroys nothing the copy has, so the relationship stays in
+        # sync and the next backup runs -- measured on the lab, where the run
+        # announced a jam and the very next pull said "All datasets processed
+        # successfully". Asked before the rollback, because afterwards the
+        # answer is gone.
+        #
+        # Recorded so the run can close by saying what this costs the BACKUP.
+        # Rolling the source back to $point leaves the copy holding snapshots
+        # the source no longer has, and the next pull of this relationship
+        # refuses on exactly that -- correctly, because -F would destroy them.
+        # A recovery that silently leaves the machine's protection jammed is
+        # half an operation; the operator finds out at the next backup, or at
+        # the next monitor alarm, or not at all.
+        [ -n "$_newer" ] && RESTORE_ROLLED_BACK+=("$src -- ${_newer_n} snapshot(s): $(printf '%s' "$_newer" | tr '\n' ' ')")
+    fi
+
+    # ---- 6. the engine -----------------------------------------------------
+    log 0 "restore: $src <- $copy@$point  [$mode]"
+    # The engine warns that a dataset with children is being sent without -r.
+    # True, and not a problem here: those children are separate entries in this
+    # run, each with its own classification and its own line in the report. Said
+    # before the warning appears, so the operator is not left deciding whether a
+    # recovery just skipped half the machine.
+    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ] && [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 0 ]; then
+        log 1 "restore:   (children of $copy, if any, are their own entries in this run -- the engine's 'neither -r nor -R' warning below is expected)"
+    fi
+    log 1 "restore:   ${RESTORE_ENGINE:-snapsend.sh} ${RESTORE_ENGINE_ARGV[*]}"
+    if [ "${RESTORE_DRY_RUN:-0}" -eq 1 ]; then
+        RESTORE_ONE_VERDICT="dry run -- the command above was NOT executed"
+        return $((RESTORE_ONE_CHANGED + 1))
+    fi
+    # From here the engine may destroy: whatever happens next, this dataset
+    # can no longer be reported as untouched.
+    RESTORE_ONE_CHANGED=1
+    if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
+        # "THE ENGINE EXITED 0" AND "THE MACHINE HOLDS THE DATA AGAIN" ARE NOT
+        # THE SAME SENTENCE, and the lab has produced a run where the first was
+        # true and the second was false: a zero-length increment sent to a
+        # dataset whose live filesystem still had the damage in it. Every
+        # protection in this file sat upstream of that -- the grant was read,
+        # the mode was classified, the point was proved unambiguous -- and none
+        # of them is a measurement of the result.
+        #
+        # So the result is measured. Every dataset of the subtree must be AT the
+        # recovery point: written@<point> exactly 0. Anything else is named, and
+        # the dataset is reported NOT recovered, which is what it is.
+        #
+        # A LOCAL target is skipped only because the remote probe is what exists;
+        # the same measurement locally is the next slice, not a decision that it
+        # does not matter.
+        case "$src" in
+            *:*)
+                local _off
+                # MEASURED OVER EXACTLY WHAT WAS SENT. When the scope lists
+                # every dataset separately, the parent's entry is the parent and
+                # nothing else -- verifying its whole subtree judged it on
+                # children that are their own entries, still queued, and made
+                # the verdict depend on loop order. Measured on the lab: the
+                # parent reported NOT DONE while both its children were
+                # recovered two lines further down.
+                local _vdepth=""
+                [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _vdepth="-d 0"
+                local _orc
+                _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth")"; _orc=$?
+                if [ "$_orc" -ne 0 ]; then
+                    # Same rule on the way out. "I could not check" is not
+                    # "it is fine", and this is the last chance to say so.
+                    RESTORE_ONE_VERDICT="the engine reported success and the result could NOT be verified -- '$src' did not answer"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Reporting it as not done: the transfer may well have worked, and nobody here has seen that it did."
+                    return $((RESTORE_ONE_CHANGED + 1))
+                fi
+                if [ -n "$_off" ]; then
+                    RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}:"
+                    printf '%s\n' "$_off" | while IFS= read -r _l; do
+                        [ -n "$_l" ] && log 0 "restore:   $_l"
+                    done
+                    log 0 "restore: reporting this as NOT recovered. A run that changed nothing must not be indistinguishable from one that worked."
+                    return $((RESTORE_ONE_CHANGED + 1))
+                fi ;;
+        esac
+        RESTORE_ONE_VERDICT="$mode from $point"
+        return 0
+    fi
+    # The engine's own diagnosis has already gone to stderr; do not paraphrase
+    # it. What is added here is WHICH dataset it belonged to, because the caller
+    # is looping and the operator is reading one report at the end.
+    RESTORE_ONE_VERDICT="the engine failed on '$mode' from $point (its own message is above)"
+    return $((RESTORE_ONE_CHANGED + 1))
+}
+
+# ------------------------------------------------------------------------------
+# THE WHOLE-RELATION RUN -- continue past a failure, and report per dataset
+# What the recovery cost the BACKUP, said out loud at the end of the run.
+#
+# Measured on the lab, 2026-08-27: a restore rolled the source back an hour, the
+# recovery was correct and complete, and the NEXT hourly pull of that same
+# relationship refused -- because the copy still held the snapshot of the period
+# that had just been rolled away, and continuing would have destroyed it. That
+# refusal is right. What was wrong is that nothing said it was coming: the
+# restore reported a clean run and left the machine's protection jammed until
+# somebody read a cron log.
+#
+# So the run closes by naming it. Not a warning about a risk -- a statement of a
+# state that now exists, with the two ways out and what each one costs.
+restore_report_backup_cost() {
+    [ "${#RESTORE_ROLLED_BACK[@]}" -gt 0 ] || return 0
+    local d
+    log 0 "restore: ---- what this costs the backup ----"
+    log 0 "restore: the source was rolled back past snapshots it had, so the copy on this collector now holds snapshots the source no longer has:"
+    for d in "${RESTORE_ROLLED_BACK[@]}"; do
+        log 0 "restore:   $d"
+    done
+    log 0 "restore: the next backup of this relationship WILL REFUSE, naming those snapshots. That refusal is correct: they are the only remaining copy of the period the source rolled away."
+    log 0 "restore: two ways out, and they are not equivalent --"
+    log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
+    log 0 "restore:   discard them: zfs rollback -r <copy>@<the point this restore used>, one per dataset. That drops those snapshots AND returns the copy to the point, which is what the next pull needs -- destroying the snapshots alone leaves the copy's filesystem where they left it and the pull refuses again. No root, nothing re-sent. The period that was rolled away then exists nowhere."
+    log 0 "restore: the refusal names the snapshots and the common point, so no list has to be reconstructed. -f would also clear it, by destroying the copy and re-sending every byte, and -f needs root."
+    log 0 "restore: and BEFORE running that rollback -- it destroys BOOKMARKS on the copy as well as snapshots (measured 2026-08-28; zfs recv -F does not). A bookmark on a copy is the anchor a replica onto removable media comes back to, so losing it turns that disk's next return into a full re-seed. List them first: zfs list -t bookmark -d 1 <copy>."
+
+}
+
+# A RECOVERED FILESYSTEM THAT IS NOT MOUNTED IS NOT YET USABLE, AND THE RUN
+# USED TO END WITHOUT MENTIONING IT.
+#
+# Measured on the lab, 2026-08-27, restoring a dataset the disaster had removed
+# entirely. It came back with the right mountpoint and the right properties, the
+# run reported "all 1 dataset(s) in scope recovered" -- and /hdd/labsrc/
+# vm-900-disk-1 did not exist, because the dataset was not mounted.
+#
+# The cause is not a bug to fix silently: `canmount=noauto` travels in the
+# stream from the copy, and the collector sets it deliberately so that twenty
+# machines' filesystems do not mount themselves over each other on one host.
+# The right value on the copy is the wrong value on the machine being recovered,
+# and the stream cannot know which side it is landing on.
+#
+# So this REPORTS rather than mounts. A recovery is not the moment to mount
+# something automatically: the operator may want to look before the guest does,
+# the mountpoint may be occupied, and `canmount=noauto` may be exactly what that
+# dataset is supposed to carry. What they must not have to discover for
+# themselves is that the data is there and invisible.
+#
+# ZVOLs are skipped -- they have no mountpoint and nothing to say.
+restore_report_mount_state() {
+    [ "${#RESTORE_LANDED[@]}" -gt 0 ] || return 0
+    local d peer ds line name typ cm mnt said=0
+    for d in "${RESTORE_LANDED[@]}"; do
+        case "$d" in
+            *:*) peer="${d%%:*}"; ds="${d#*:}" ;;
+            *)   peer="";        ds="$d" ;;
+        esac
+        local out
+        if [ -n "$peer" ]; then
+            out="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "zfs list -H -o name,type,canmount,mounted -r '$ds'" 2>/dev/null)"
+        else
+            out="$(zfs list -H -o name,type,canmount,mounted -r "$ds" 2>/dev/null)"
+        fi
+        # An unreadable answer is not "everything is mounted". Say which it was.
+        if [ -z "$out" ]; then
+            log 0 "restore: could not read the mount state of '$d' after recovering it -- the data landed, but whether it is reachable is unverified."
+            said=1
+            continue
+        fi
+        while IFS=$'\t' read -r name typ cm mnt; do
+            [ "$typ" = filesystem ] || continue
+            [ "$mnt" = no ] || continue
+            if [ "$said" -eq 0 ]; then
+                log 0 "restore: ---- recovered, and not mounted ----"
+                said=1
+            fi
+            log 0 "restore:   $name (canmount=$cm) -- the data is there and the mountpoint is empty until it is mounted."
+        done <<< "$out"
+    done
+    [ "$said" -eq 1 ] || return 0
+    log 0 "restore: canmount=noauto travels in the stream from the copy, where it is correct -- a collector must not mount twenty machines' filesystems over each other. On the machine being recovered it is usually not what you want."
+    log 0 "restore: mount one now with:  zfs mount <dataset>    and to have it come back at boot:  zfs set canmount=on <dataset>"
+    log 0 "restore: not done for you on purpose: a recovery is not the moment to mount something without being asked."
+}
+
+# THE SCHEDULE KEEPS RUNNING WHILE A RECOVERY IS IN PROGRESS.
+#
+# Owner question, 2026-08-27: should the collector's cron not be paused while
+# the machine it backs up is being restored? It should, and the measurement
+# behind that is not hypothetical -- it happened during this lab. The
+# source-side prune fired at :21, applied its GFS retention to a source that a
+# restore had just rolled back, and destroyed
+# automated_hourly_2026-08-27_18-15-00 -- the recovery point itself. The
+# relationship was left with no common snapshot at all.
+#
+# Three jobs run from this collector against this relationship: the pull, the
+# prune of the copy, and the prune of the SOURCE over ssh. Every one of them can
+# collide with a recovery, and the two prunes are the ones that destroy things.
+#
+# WHICH PAUSE. Not the hard one. `disable-client` makes the PEER refuse this
+# relationship's data-plane commands -- and a push restore reaches that peer
+# through exactly those commands, so a hard disable would block the recovery it
+# was meant to protect. The logical pause is the right instrument: it stops the
+# jobs on this side, and leaves the channel this run needs open.
+#
+# A PRECONDITION, NOT A COURTESY. Owner decision, 2026-08-27: "kazdy restore
+# musi zostac poprzedzony pauza. Grant i pausa. [...] dopiero wtedy maszyna jest
+# gotowa do przyjmowania backupow z kolektora."
+#
+# Two things make a machine ready to be written to, and they answer different
+# questions. The GRANT is the target's consent: that machine agreed to receive
+# this. The PAUSE is the schedule standing down: nothing else is going to touch
+# either side while the recovery runs. A restore with one and not the other is
+# either unauthorised or racing.
+#
+# So a pause that cannot be taken REFUSES the run. The first version of this
+# warned and continued, on the reasoning that refusing a recovery over an
+# orchestration switch would be the worse mistake. The owner decided otherwise,
+# and the lab is the argument: the schedule destroyed a recovery point during a
+# recovery, and "we warned you" is not a state anybody can act on at 3am.
+#
+# WHAT IT COVERS. Since 2026-08-27, all four: snapget.sh, snapsend.sh,
+# check-snap-age.sh and -- new, and the reason this changed -- delsnaps.sh, the
+# only engine that destroys. What the marker cannot do by itself is reach a
+# crontab that was generated before delsnaps had -L, so the coverage is
+# MEASURED on the installed crontab rather than assumed; see
+# restore_pause_coverage.
+#
+# Only what we took is given back. A relationship a human paused before this run
+# stays paused after it -- their decision is not this run's to undo.
+RESTORE_PAUSED_BY_US=""
+
+# Overridable for the same reason snapsend.sh, snapget.sh and delsnaps.sh make
+# it overridable -- one spelling of where the marker lives, and a harness that
+# wants to test the paused path can create a REAL pause instead of being handed
+# a way around the check.
+RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
+
+restore_pause_take() {   # <relation label>
+    local label="$1"
+    [ -n "$label" ] || return 0
+    [ -x "$SCRIPT_DIR/zfs-backup.sh" ] || { log 1 "restore: no zfs-backup.sh beside this script, so the relationship cannot be paused for the run"; return 0; }
+    if [ -f "$RELATIONSHIPS_DIR/$label/paused" ]; then
+        log 0 "restore: '$label' is ALREADY paused -- leaving it that way, and not resuming it at the end. Somebody paused it deliberately."
+        # Coverage is a property of the PAUSE, not of who took it. Reported here
+        # too, or a recovery that ran under somebody else's pause would be the
+        # one that never heard the crontab was not gated.
+        restore_pause_coverage "$label"
+        return 0
+    fi
+    if bash "$SCRIPT_DIR/zfs-backup.sh" pause-client "$label" --reason="restore in progress" >/dev/null 2>&1; then
+        RESTORE_PAUSED_BY_US="$label"
+        log 0 "restore: paused '$label' for the duration of this run -- the scheduled pull, the prune and the monitor will all skip."
+        restore_pause_coverage "$label"
+        return 0
+    fi
+    log 0 "restore: could NOT pause '$label', so this recovery does not start. A restore needs BOTH: the target's grant, and this relationship's schedule stood down -- otherwise the pull, the prune and the monitor keep running against data that is being rewritten underneath them."
+    log 0 "restore: pausing writes $RELATIONSHIPS_DIR/$label/paused and needs root on THIS collector. Take it yourself and re-run:"
+    log 0 "restore:     zfs-backup.sh pause-client $label --reason='restore'"
+    log 0 "restore: a pause you took stays yours -- this run will not lift it at the end."
+    return 1
+}
+
+# IS THE PAUSE ACTUALLY COVERING THE PRUNE, on this host, right now?
+#
+# The marker is only as good as the jobs that read it. delsnaps.sh gained -L on
+# 2026-08-27 and gen-cron emits it -- but a crontab generated before that still
+# carries prune lines with no -L, and those keep destroying snapshots through
+# any pause. That is not a hypothetical: it is the state this estate was in when
+# the prune destroyed a recovery point mid-campaign.
+#
+# So it is measured rather than assumed, on the installed crontab, and reported
+# as a count of lines that cannot be gated at all. Attribution is deliberately
+# not attempted: a delsnaps line WITHOUT -L belongs to no relationship as far as
+# the pause is concerned, which is exactly what makes it dangerous, and guessing
+# which one it was meant for would be the same class of mistake as the guessing
+# this file refuses everywhere else.
+#
+# Advisory: it reports and does not refuse. The pause IS in effect for
+# everything that reads it, the grant has been checked, and stopping a recovery
+# over a stale crontab would strand the operator with no way forward but the one
+# this message already gives them.
+restore_pause_coverage() {   # <relation label>
+    local label="$1" u n=0 total=0 line
+    for u in root "${SUDO_USER:-}" zfsbackup "zfsbackup-$label"; do
+        [ -n "$u" ] || continue
+        while IFS= read -r line; do
+            case "$line" in
+                *delsnaps.sh*)
+                    total=$((total + 1))
+                    case "$line" in *" -L "*) ;; *) n=$((n + 1)) ;; esac ;;
+            esac
+        done < <(crontab -l -u "$u" 2>/dev/null)
+    done
+    [ "$total" -gt 0 ] || return 0
+    if [ "$n" -eq 0 ]; then
+        log 1 "restore: all $total prune line(s) in the installed crontab carry -L, so the pause reaches them."
+        return 0
+    fi
+    log 0 "restore: WARNING -- $n of $total prune line(s) in this host's crontab carry NO -L, so the pause does NOT stop them. They can destroy snapshots on either side while this recovery runs."
+    log 0 "restore: that is a crontab generated before delsnaps.sh had -L (2026-08-27). Regenerate it: zfs-backup.sh gen-cron --install (or re-run activate-client for the relationships involved)."
+    log 0 "restore: until then, the only complete stop is to hold the whole crontab off for the recovery -- which also stops jobs that are not ours, so it is a decision, not a default."
+    return 0
+}
+
+restore_pause_release() {
+    [ -n "$RESTORE_PAUSED_BY_US" ] || return 0
+    local label="$RESTORE_PAUSED_BY_US"
+    RESTORE_PAUSED_BY_US=""
+    if bash "$SCRIPT_DIR/zfs-backup.sh" resume-client "$label" >/dev/null 2>&1; then
+        log 0 "restore: resumed '$label' -- the schedule takes over again."
+    else
+        log 0 "restore: WARNING -- '$label' was paused for this run and could NOT be resumed. Its backups are STOPPED until you run: zfs-backup.sh resume-client $label"
+    fi
+}
+
+# Also on the way out of an interrupted run: a relationship left paused by a
+# crash is a backup that silently stops, which is the failure this project has
+# spent the most time making impossible elsewhere.
+#
+# Same fence as the die override above -- a harness that sources this file would
+# otherwise install an EXIT trap into ITS shell, and the explicit release in
+# restore_run_scope already covers every ordinary path.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    trap 'restore_pause_release' EXIT
+fi
+
+# WHERE DOES A DESTINATION RELATION LIVE?
+#
+# `restore A B` recovers relation A's copy onto relation B's machine. B supplies
+# one thing here and it is the only thing: the transport -- account@host. Its
+# dataset paths are NOT consulted, because the owner's grammar says the bare
+# form keeps the SOURCE paths, and the pair form names the destination path
+# explicitly. Reading B's paths and mapping onto them would be a third opinion
+# about where the data goes, which is one more than there should be.
+#
+# Taken from B's first recorded section, which is where every other reader in
+# this file gets a relationship's transport. A relation that records nothing has
+# no machine to name, and that is a refusal rather than a default.
+restore_dest_peer() {   # <config> <destination label> -> account@host
+    local config="$1" label="$2" rows first
+    rows="$(restore_resolve_try "$config" "$label" "" orig)" || return 1
+    first="$(printf '%s\n' "$rows" | head -1 | cut -f1)"
+    case "$first" in
+        *@*:*) printf '%s' "${first%%:*}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# THE DESTINATION FOR EVERY DATASET IN SCOPE.
+#
+# Fills RESTORE_SCOPE_DEST[] alongside RESTORE_SCOPE_SRC[]. With no destination
+# it is the recorded source, element for element -- which is what every restore
+# before 2026-08-28 did, so that path is unchanged rather than reimplemented.
+#
+# The two forms, and both come straight from the owner's grammar of 2026-08-13:
+#
+#   restore A    B        every dataset of A onto B, KEEPING THE SOURCE PATHS
+#   restore A:ds B:ds2    that dataset (and its subtree) onto B, under ds2
+#
+# The subtree case is why this is a relative-path rule rather than a rename: an
+# `A:ds` that covers children expands to all of them (see the expansion in
+# cmd_restore), and each child has to land under ds2 at the same relative
+# position. Arithmetic on two named paths -- no probing, no inference.
+# THE LONGEST PREFIX COMMON TO A SET OF DATASET PATHS, AT NAME BOUNDARIES.
+#
+# `rpool/data/vm-101` and `rpool/data/vm-1010` share `rpool/data`, NOT
+# `rpool/data/vm-101`. A character-wise prefix would rebase the second one under
+# a path built out of half of the first one's name -- which is a legal ZFS name,
+# so nothing downstream would object.
+#
+# Returns 1 with no output when the paths share nothing: that is a relationship
+# for which "rebased here" has no single meaning, and the caller refuses.
+restore_common_root() {   # <path>...
+    local base="$1"; shift
+    local p
+    for p in "$@"; do
+        while [ -n "$base" ] && [ "$p" != "$base" ] && [ "${p#"$base"/}" = "$p" ]; do
+            case "$base" in
+                */*) base="${base%/*}" ;;
+                *)   base="" ;;
+            esac
+        done
+        [ -n "$base" ] || return 1
+    done
+    printf '%s' "$base"
+}
+
+# BUILD THE `--onto` REBASE PAIRS.
+#
+# Two shapes, and both end as the same list of (from, to) pairs so that
+# restore_scope_dest has one rule rather than two:
+#
+#   selection given   pairs positionally with the selection, same length
+#   no selection      ONE destination, and the whole relationship is rebased
+#                     there from the common root of its recorded sources
+#
+# Positional rather than set-wise, per the owner's decision of 2026-08-26 applied
+# unchanged: writing the disks in a different order on the two sides says
+# something the operator did not mean, and sorting it out for them hides exactly
+# the mistake this form exists to let them state precisely.
+restore_onto_plan() {   # <onto list> <from root>...
+    local list="$1"; shift
+    RESTORE_ONTO_FROM=(); RESTORE_ONTO_TO=()
+    local -a to=()
+    local item
+    # `printf '%s'` and not '%s\n': without a trailing newline the LAST field has
+    # no line terminator, `read` returns non-zero on it, and the loop body never
+    # runs for it. Measured: a single-item --onto list resolved to ZERO items,
+    # and the refusal then complained the two lists were different lengths --
+    # a message describing a symptom two steps downstream of the cause.
+    while IFS= read -r item; do
+        [ -n "$item" ] || die "restore: --onto has an empty entry -- a stray comma. Every position has to name a dataset, because position is what pairs it with the one it replaces."
+        to+=("$item")
+    done < <(printf '%s\n' "$list" | tr ',' '\n')
+
+    local n_to="${#to[@]}" n_from="$#"
+    if [ "$n_from" -eq 0 ]; then
+        die "restore: --onto needs something to rebase, and nothing resolved."
+    fi
+
+    local -a from=()
+    if [ "$n_to" -eq 1 ] && [ "$n_from" -gt 1 ]; then
+        # THE WHOLE RELATIONSHIP, REBASED. A VM with four disks is four recorded
+        # sections, so "read the root, never infer it" would have refused the
+        # exact disaster this form exists for. The base is derived -- and
+        # therefore printed, see restore_report_rebase: an inference the operator
+        # confirms is not a guess, an inference nobody sees is.
+        local base
+        base="$(restore_common_root "$@")" || \
+            die "restore: --onto with one path means 'rebase the whole relationship here', and this relationship's recorded sources share no common root -- $*. There is no single position to rebase them from, so name each side explicitly with --target and a matching --onto list."
+        from=("$base")
+    else
+        [ "$n_to" -eq "$n_from" ] || \
+            die "restore: --onto names $n_to dataset(s) and the selection names $n_from. They are read as PAIRS, in order, so the two lists have to be the same length. Refusing rather than recovering fewer datasets than were named."
+        from=("$@")
+    fi
+
+    local i j
+    for (( i=0; i<${#to[@]}; i++ )); do
+        for (( j=0; j<i; j++ )); do
+            [ "${to[$i]}" != "${to[$j]}" ] || \
+                die "restore: --onto names '${to[$i]}' twice (positions $((j + 1)) and $((i + 1))). Two datasets cannot land on one, and deciding which of them wins is not this command's call."
+        done
+        RESTORE_ONTO_FROM+=("${from[$i]}")
+        RESTORE_ONTO_TO+=("${to[$i]}")
+    done
+    return 0
+}
+
+restore_scope_dest() {   # <config> <source address> <destination address or "">
+    local config="$1" from="$2" onto="$3"
+    RESTORE_SCOPE_DEST=()
+    local i n="${#RESTORE_SCOPE_SRC[@]}"
+
+    if [ -z "$onto" ]; then
+        for (( i=0; i<n; i++ )); do RESTORE_SCOPE_DEST+=("${RESTORE_SCOPE_SRC[$i]}"); done
+        return 0
+    fi
+
+    # HANDED IN BY THE FILE THAT OWNS THE ENDPOINTS, exactly like the ssh
+    # options beside it. zfs-backup.sh resolved the destination's client record
+    # to open the connection; the account@host it used is the same one the
+    # transfer must be addressed to, so taking a second answer from the config
+    # here would be two opinions about which machine this recovery is aimed at.
+    #
+    # It also means a destination only has to be PAIRED, not activated. An
+    # activated twin owns its own (empty) copy sections, so after
+    # move-to-client it would own two sets -- the real copy it took over and
+    # the empty one it was born with, both pulling the same source into
+    # different places. Found by walking the lab setup on paper before running
+    # it.
+    #
+    # The config lookup stays as the fallback for a destination that IS in the
+    # config but whose record the dispatch could not read.
+    local peer="${RESTORE_DEST_PEER:-}"
+    if [ -z "$peer" ]; then
+        peer="$(restore_dest_peer "$config" "${onto%%:*}")" || \
+            die "restore: the destination relationship '${onto%%:*}' is not one this host records, so there is no machine to recover onto. Pair it first -- a destination is a relationship this collector already holds a key for, not a hostname, and it is NOT read as one: guessing is how a recovery lands on the wrong machine."
+    fi
+
+    # THE REBASE PAIRS. `--onto` fills them (restore_onto_plan); the retired
+    # `A:ds B:ds2` spelling produces the single-pair case, which is why that
+    # form needs no separate arithmetic here and can be deleted without touching
+    # this loop.
+    local -a of=() ot=()
+    if [ "${#RESTORE_ONTO_FROM[@]}" -gt 0 ]; then
+        of=("${RESTORE_ONTO_FROM[@]}"); ot=("${RESTORE_ONTO_TO[@]}")
+    else
+        local from_root="" onto_root=""
+        case "$from" in *:*) from_root="${from#*:}" ;; esac
+        case "$onto" in *:*) onto_root="${onto#*:}" ;; esac
+        if [ -n "$onto_root" ]; then of=("$from_root"); ot=("$onto_root"); fi
+    fi
+
+    local srcpath rel j hit best best_i
+    for (( i=0; i<n; i++ )); do
+        srcpath="${RESTORE_SCOPE_SRC[$i]}"
+        srcpath="${srcpath#*@}"; srcpath="${srcpath#*:}"
+        if [ "${#of[@]}" -eq 0 ]; then
+            RESTORE_SCOPE_DEST+=("${peer}:${srcpath}")
+            continue
+        fi
+        # LONGEST MATCH, not first match. A selection may legally name both a
+        # dataset and one of its children -- each with its own destination --
+        # and first-match would send the child to the parent's new home while
+        # the entry that named it explicitly sat unused.
+        hit=0; best=""; best_i=-1
+        for (( j=0; j<${#of[@]}; j++ )); do
+            if [ "$srcpath" = "${of[$j]}" ] || [ "${srcpath#"${of[$j]}"/}" != "$srcpath" ]; then
+                if [ "${#of[$j]}" -gt "${#best}" ] || [ "$best_i" -lt 0 ]; then
+                    best="${of[$j]}"; best_i="$j"; hit=1
+                fi
+            fi
+        done
+        [ "$hit" -eq 1 ] || die "restore: '${RESTORE_SCOPE_SRC[$i]}' is not under any of the paths --onto rebases (${of[*]}), so there is no position to give it. Refusing rather than inventing one."
+        rel=""
+        [ "$srcpath" = "$best" ] || rel="${srcpath#"$best"}"
+        RESTORE_SCOPE_DEST+=("${peer}:${ot[$best_i]}${rel}")
+    done
+    return 0
+}
+
+# A CROSS-HOST RECOVERY IS HALF AN OPERATION, AND THE OTHER HALF IS SILENT.
+#
+# The data is on the new machine. The copy it came from is still recorded
+# against the OLD relationship, so the schedule still backs up the old machine
+# and everything looks healthy -- while the machine that now holds the data is
+# backed up by nobody. Nothing discovers that until somebody goes looking.
+#
+# Owner decision, 2026-08-28: this is answered with a sentence, not by composing
+# the hand-over into this verb. Recovery and hand-over are different failure
+# domains, and the tool reports rather than deciding for the admin. So the run
+# closes by saying exactly what is now true and naming the next step.
+#
+# Said on EVERY cross-host run, including the ones that failed: a partial
+# recovery leaves the same split, and the operator needs to know which machine
+# holds what before they decide anything.
+restore_report_handover() {
+    local n="${#RESTORE_SCOPE_DEST[@]}" i moved=0
+    for (( i=0; i<n; i++ )); do
+        [ "${RESTORE_SCOPE_DEST[$i]}" = "${RESTORE_SCOPE_SRC[$i]:-}" ] || moved=1
+    done
+    [ "$moved" -eq 1 ] || return 0
+    log 0 "restore: ---- this recovery went to a DIFFERENT machine ----"
+    log 0 "restore: the data is there. The copy it came from is still recorded against '${RESTORE_SOURCE_LABEL:-the source relationship}', so the schedule still backs up the OLD machine and the one you just recovered onto is backed up by nobody."
+    log 0 "restore: nothing here changed that, on purpose -- switching the backup over is its own step, with its own proof that this machine really holds the copy:"
+    log 0 "restore:     zfs-backup.sh move-to-client ${RESTORE_SOURCE_LABEL:-<from>} ${RESTORE_RELATION_LABEL:-<onto>}"
+    log 0 "restore: until then both relationships are as they were, and '${RESTORE_RELATION_LABEL:-the destination}' stays paused."
+}
+
+# ------------------------------------------------------------------------------
+#
+# Owner decision 7 (OWNER-RESTORE-GRANT-AND-MODES-2026-08-26). The implementer
+# recommended stopping at the first failure; the owner overruled, and the
+# reasoning is what makes continuing safe rather than merely convenient:
+#
+#   a recovery is not a deployment. Stopping at the first failure leaves the
+#   operator with a half-restored machine AND no information about the rest, at
+#   the moment they most need the complete picture. Continuing produces the same
+#   partial state plus the map.
+#
+# Two obligations follow, and they are not decoration:
+#
+#   * the report is a PER-DATASET VERDICT, never a count. "7/10" tells an
+#     operator nothing they can act on at 3am; the three names do;
+#   * the exit status distinguishes "everything" from "not everything". Nine of
+#     ten is not ten, and on a machine being recovered the exit status is the
+#     part a wrapper reads.
+#
+# TWO CODES, not three. 0 means every dataset in scope was recovered; 1 means it
+# was not. The planner already uses exactly that contract for an incomplete
+# `--at`, and a third code separating "some" from "none" would be a contract the
+# owner did not ask for -- the distinction that matters operationally is in the
+# report, where it can name datasets instead of counting them.
+#
+# An EMPTY scope is a refusal, not a clean run. "Nothing matched" exiting 0 is
+# how a mistyped scope becomes a recovery someone believes happened.
+# ONE DATASET, IN A PROCESS OF ITS OWN.
+#
+# REV-20260831-127 F1. The relation controller classifies restore_one's exit
+# status, which it can only do if restore_one RETURNS. `die` in this tree is
+# `exit 1`, and the single-dataset step reaches a lot of shared code -- config
+# reads, relationship resolution, strategy, the technical snapshot -- any of
+# which may grow a refusal that exits. One `exit` there and policy B silently
+# stops being "continue and give back what can be given back" and becomes "stop
+# here", with no summary at all: the datasets after it are never attempted and
+# the operator is left with a half-restored machine and no map of the rest.
+#
+# Measured on the tree of 2026-08-31, restore_one and every helper it calls are
+# return-based, so this is not a live incident. That is a fact about today's
+# code, not a guarantee: the next `die` added anywhere under this call graph
+# would reintroduce the defect silently, and the suite could not see it -- the
+# stub returns, and a stub with a different control-flow contract than the
+# function it stands for is exactly how this class of defect survives a green
+# suite.
+#
+# So the boundary is STRUCTURAL. restore_one runs in a subshell; whatever leaves
+# it -- return, exit, or a die deep in a helper -- leaves through the EXIT trap,
+# which hands the verdict and the mutation flag back through a file. The parent
+# always gets a status.
+#
+# What the trap carries out, and why each one:
+#   verdict  -- the runner prints it per dataset; without it a died dataset
+#               would be reported with "no reason recorded" while the reason
+#               went to stderr and scrolled past.
+#   changed  -- RESTORE_ONE_CHANGED, so a die AFTER the first mutation is still
+#               classified 2 (changed and unfinished) rather than demoted to an
+#               untouched failure. This is the one that decides whether an
+#               operator is told a machine needs a person tonight.
+#   rolled   -- restore_one appends to RESTORE_ROLLED_BACK, and a subshell's
+#               appends die with it.
+# THE BASE IS DERIVED, SO IT IS SHOWN.
+#
+# `--onto <one path>` over a whole relationship rebases from the longest prefix
+# common to the relationship's recorded roots. That is an inference: a VM with
+# four disks is four recorded sections, so "read the root, never infer it" would
+# have refused the exact disaster the form exists for -- a replacement machine
+# whose pool is not called rpool.
+#
+# An inference the operator confirms is not a guess; an inference nobody sees is.
+# So it prints once, above the per-dataset lines, naming both sides.
+restore_report_rebase() {
+    [ "${#RESTORE_ONTO_FROM[@]}" -gt 0 ] || return 0
+    local i
+    log 0 "restore: ---- rebasing onto different paths ----"
+    for (( i=0; i<${#RESTORE_ONTO_FROM[@]}; i++ )); do
+        log 0 "restore:   ${RESTORE_ONTO_FROM[$i]}  ->  ${RESTORE_ONTO_TO[$i]}"
+    done
+    log 0 "restore: every dataset below lands at its position relative to the left-hand path."
+}
+
+restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2 changed
+    local state
+    state="$(mktemp)" || {
+        RESTORE_ONE_VERDICT="could not create the temporary file this run needs to isolate the dataset step"
+        return 1
+    }
+    (
+        RESTORE_ONE_VERDICT=""
+        RESTORE_ONE_CHANGED=0
+        trap 'printf "%s\n%s\n" "${RESTORE_ONE_CHANGED:-0}" "${RESTORE_ONE_VERDICT:-the dataset step ended without saying why}" > "$state"; printf "%s\n" ${RESTORE_ROLLED_BACK[@]+"${RESTORE_ROLLED_BACK[@]}"} >> "$state"' EXIT
+        restore_one "$1" "$2"
+    )
+    local rc=$?
+    local changed="" verdict="" line n=0
+    while IFS= read -r line; do
+        n=$((n + 1))
+        case "$n" in
+            1) changed="$line" ;;
+            2) verdict="$line" ;;
+            *) [ -z "$line" ] || RESTORE_ROLLED_BACK+=("$line") ;;
+        esac
+    done < "$state"
+    rm -f "$state"
+    RESTORE_ONE_VERDICT="$verdict"
+    # A die is exit 1 and carries no idea of what it had already done. The flag
+    # does, so the promotion happens here rather than being lost with the
+    # process.
+    if [ "$rc" -ne 0 ] && [ "${changed:-0}" = 1 ]; then return 2; fi
+    return "$rc"
+}
+
+restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
+    local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0 changed_n=0
+    local -a verdict=()
+    # NOT local: restore_one appends to it. Reset here so a second call in one
+    # process cannot inherit the first call's list.
+    RESTORE_ROLLED_BACK=()
+    RESTORE_LANDED=()
+    if [ "$n" -eq 0 ]; then
+        log 0 "restore: the scope resolved to no datasets at all. That is not a completed recovery -- refusing rather than reporting a clean run over nothing."
+        return 1
+    fi
+
+    # restore_one is the per-dataset step, and it is the NEXT slice. Refusing
+    # here rather than noting the gap in a comment: a function that calls an
+    # undefined one fails at the moment it is first used, which for a recovery
+    # verb is the worst moment there is. Structural, so it cannot be forgotten
+    # -- and it disappears on its own the day the step exists.
+    if ! declare -F restore_one >/dev/null 2>&1; then
+        log 0 "restore: the per-dataset step is not built yet, so this cannot recover anything. Nothing was changed. (restore_one, the next slice.)"
+        return 1
+    fi
+
+    # LAST OF THE PRECONDITIONS, AND AFTER THE STRUCTURAL ONES ON PURPOSE.
+    #
+    # This is the one runner every writing shape of the verb goes through, so no
+    # path can forget it; --plan never reaches this function. But it is taken
+    # after the two checks above, not before: pausing a live relationship and
+    # then releasing it again for a run that was going to refuse anyway is real
+    # churn on a real host, and a pause that appears and vanishes in the same
+    # second is the kind of thing an operator later cannot explain.
+    #
+    # Owner decision, 2026-08-27: grant AND pause. A restore does not start
+    # unless this relationship's schedule is standing down.
+    if ! restore_pause_take "${RESTORE_RELATION_LABEL:-}"; then
+        log 0 "restore: NOTHING was attempted -- the relationship's schedule could not be stood down (above)."
+        return 1
+    fi
+
+    # ---- D: THE WHOLE SCOPE, BEFORE ANYTHING IS TOUCHED --------------------
+    #
+    # Owner decision, 2026-08-30. The primitive takes ONE dataset; a relationship
+    # routinely covers several, and a loop that starts destroying and discovers
+    # on the third that the fifth was never restorable has already made the
+    # machine worse for a run that could not have finished.
+    #
+    # RESTORE_PREFLIGHT_ONLY runs restore_one down to the line where reading
+    # ends and returns there -- the SAME classification, grant read and refusals
+    # the real pass will use, not a second copy of them.
+    #
+    # AFTER the pause, and that ordering was argued the other way first. The
+    # pre-flight writes nothing, so standing a live schedule down for a run that
+    # will refuse anyway looked like pure churn. But the owner's decision of
+    # 2026-08-27 is that a restore does not start unless the relationship's
+    # schedule is standing down, and a pre-flight IS the restore starting -- it
+    # asks the target host for its state and reads its grant. An implementer's
+    # convenience argument does not outrank that, so the churn is accepted and
+    # named rather than traded away quietly.
+    #
+    # And EVERY bad dataset is named, not the first. An operator who has to fix
+    # them one round trip at a time stops trusting the tool.
+    local -a unfit=()
+    local _pf_rc _pf_i
+    for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
+        RESTORE_ONE_VERDICT=""
+        RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
+        [ "$_pf_rc" -eq 0 ] || unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+    done
+    if [ "${#unfit[@]}" -gt 0 ]; then
+        log 0 "restore: REFUSED before anything was touched -- ${#unfit[@]} of $n dataset(s) in scope cannot be restored:"
+        for (( _pf_i=0; _pf_i<${#unfit[@]}; _pf_i++ )); do
+            log 0 "restore:   UNFIT    ${unfit[$_pf_i]}"
+        done
+        log 0 "restore: nothing was changed. This list is complete, not the first entry -- fix all of it and run again."
+        # THE SCHEDULE GOES BACK ON. The pause is taken above now, so every exit
+        # from here owes a release -- a relationship left paused is a backup that
+        # silently stops, which is the failure this project has spent the most
+        # effort making impossible.
+        restore_pause_release
+        return 2
+    fi
+
+
+    # Printed after the pre-flight passed and before the first dataset runs: a
+    # refused run rebases nothing, and saying so would describe work that is not
+    # going to happen.
+    restore_report_rebase
+
+    for (( i=0; i<n; i++ )); do
+        RESTORE_ONE_VERDICT=""
+        # The failure of one dataset must not end the run: that is the whole of
+        # decision 7. `|| :` is deliberate and is the only place in this
+        # function where a non-zero status is not propagated immediately.
+        restore_one_isolated "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}"; rc=$?
+        case "$rc" in
+            0)  ok_n=$((ok_n + 1))
+                RESTORE_LANDED+=("${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}")
+                verdict+=("OK       ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-recovered}") ;;
+            # THREE OUTCOMES, NOT TWO. `NOT DONE` used to cover both a dataset
+            # the run refused before touching it and one whose rollback had
+            # already destroyed snapshots when the transfer broke. Those are not
+            # degrees of one thing: the first machine is as it was found, the
+            # second is not, and only the second needs a human tonight. The
+            # rollback loop produces exactly that state -- it rolls each dataset
+            # of the subtree in turn, so a refusal on the third leaves the first
+            # two already rolled back.
+            2)  changed_n=$((changed_n + 1))
+                verdict+=("CHANGED  ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}") ;;
+            *)  bad_n=$((bad_n + 1))
+                verdict+=("NOT DONE ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}") ;;
+        esac
+    done
+
+    # Printed on EVERY path, including the one where nothing worked. A run that
+    # recovered nothing still owes the operator the map of what it tried.
+    log 0 "restore: per-dataset result"
+    for (( i=0; i<${#verdict[@]}; i++ )); do
+        log 0 "restore:   ${verdict[$i]}"
+    done
+
+    restore_report_mount_state
+    restore_report_handover
+    restore_report_backup_cost
+
+    restore_pause_release
+
+    # THE ONE THAT NEEDS A HUMAN WINS. A dataset left half-destroyed outranks an
+    # ordinary failure in the exit status, because burying it in a count is the
+    # only summary of this run worth nothing.
+    if [ "$changed_n" -gt 0 ]; then
+        log 0 "restore: $changed_n dataset(s) are CHANGED AND UNFINISHED -- they are NOT as they were found and NOT recovered. They are named above and they need a person. ($ok_n recovered, $bad_n untouched.)"
+        return 2
+    fi
+    if [ "$bad_n" -eq 0 ]; then
+        log 0 "restore: all $ok_n dataset(s) in scope recovered."
+        return 0
+    fi
+    if [ "$ok_n" -eq 0 ]; then
+        log 0 "restore: NOTHING was recovered -- all $bad_n dataset(s) are named above with the reason. None of them was changed."
+        return 1
+    fi
+    log 0 "restore: PARTIAL -- $ok_n recovered, $bad_n did not and were left untouched. The machine is in a mixed state and the datasets that did NOT recover are named above. Exit status is non-zero for exactly that reason: nine of ten is not ten."
+    return 1
+}
+
+
+# ------------------------------------------------------------------------------
+# DRIVING THE ENGINE -- what a restore actually runs, and the guard in front of it
+# ------------------------------------------------------------------------------
+#
+# The transport is `snapsend.sh`, at the owner's direction: restore under push is
+# the push engine run in the other direction, so it arrives with bookmarks,
+# resume tokens, compression, the bandwidth cap and the PVE-reserved-snapshot
+# refusal already proven. No new transfer code, and the frozen engine is not
+# touched.
+#
+# THE KNOB WAS ALREADY THERE, and it is worth recording how close this came to a
+# needless change to a frozen file. `-e` is documented as "use existing latest
+# snapshot", which reads like "the newest, and you get no say". The
+# implementation filters the candidate list by `-m` FIRST and takes the newest of
+# what survives (snapsend.sh, the `if [ -n "$MESSAGE" ]` block inside the
+# USE_EXISTING_SNAPSHOT branch). So a FULL snapshot name passed as `-m` leaves
+# exactly one candidate, and that one is sent. Measured before relying on it.
+#
+# WHICH MAKES THE MATCH RULE PART OF THIS CONTRACT. The engine selects with
+# `grep "^$MESSAGE"` -- a REGEX, anchored only at the front. Every name this
+# project generates is regex-inert, but a passive relationship adopts names from
+# a foreign system, and a `.` in one of those matches any character. Measured:
+# against `snap.2026`, `snapX2026` and `snap.2026b`, the pattern `^snap.2026`
+# matches all three.
+#
+# So the layer that CHOOSES the recovery point must prove the choice is
+# unambiguous before handing it over, using the engine's own rule rather than an
+# approximation of it. A restore that silently sent a different snapshot than the
+# one the operator picked is the failure this guard exists for, and it would look
+# like success.
+restore_point_unique() {   # <exact snapshot name> <candidate names, one per line> -> 0 = unambiguous
+    local want="$1" candidates="$2" hits
+    [ -n "$want" ] || { log 0 "restore: no recovery point was chosen -- refusing to let the engine pick one"; return 1; }
+
+    # The engine's own selector, verbatim. Not `grep -F`, not `=`: this must
+    # answer the question "what will snapsend do", and snapsend uses a regex.
+    hits="$(printf '%s\n' "$candidates" | grep -c "^$want" 2>/dev/null)" || hits=0
+    case "$hits" in
+        1)  return 0 ;;
+        0)  log 0 "restore: the chosen recovery point '$want' matches no snapshot on the copy. Nothing was changed."
+            return 1 ;;
+    esac
+    log 0 "restore: '$want' matches $hits snapshots on the copy, not one. The engine selects with a regular expression anchored at the front (grep \"^\$MESSAGE\"), so a name carrying '.' or another metacharacter can cover its neighbours -- and sending a different snapshot than the one chosen would look exactly like success. Refusing. The matches are:"
+    printf '%s\n' "$candidates" | grep "^$want" 2>/dev/null | while IFS= read -r _m; do
+        log 0 "restore:   $_m"
+    done
+    return 1
+}
+
+# The mode is a CLASSIFICATION, never an operator choice (owner decision 4,
+# OWNER-RESTORE-GRANT-AND-MODES-2026-08-26): the data says which of the three
+# this is, the grant says whether it is permitted, and only then does the engine
+# get flags. Deriving the flags HERE, from the same classification the grant was
+# checked against, is what stops there being two truths about one run -- the
+# planner's and the command line's.
+#
+#   create   target absent            -> ordinary send; snapsend creates it
+#   rewind   common base, GUID-proven -> ordinary incremental; snapsend finds it
+#   replace  no valid base            -> -f, which destroys the target and sends full
+#
+# `-e` and `-m <exact name>` are on every form: a restore never creates a
+# snapshot on the copy, and never lets the engine choose the point.
+restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapshot> <mode>
+    local copy="$1" target="$2" point="$3" mode="$4"
+    [ -n "$copy" ]   || { log 0 "restore: no copy dataset to send from"; return 1; }
+    [ -n "$target" ] || { log 0 "restore: no target to send to"; return 1; }
+    [ -n "$point" ]  || { log 0 "restore: no recovery point"; return 1; }
+
+    RESTORE_ENGINE_ARGV=()
+    case "$mode" in
+        create|rewind) ;;
+        replace)
+            # -f ONLY for the sub-case that needs it. `full-bare` is an empty
+            # dataset: recv -F fills it, and -f would destroy the very dataset
+            # the delegation hangs on. See the classification above.
+            [ "${RESTORE_STRATEGY:-}" = full-bare ] || RESTORE_ENGINE_ARGV+=(-f)
+            ;;
+        *) log 0 "restore: '$mode' is not a restore mode -- refusing to build a command for an undefined one"; return 1 ;;
+    esac
+    # -t: the target is an EXACT dataset, not a base to append the copy's name
+    # under. Without it the engine writes hdd/data/hdd/backups/<peer>/hdd/data --
+    # measured on the lab before the flag existed.
+    # RECURSION. A relationship that covers a subtree must restore the subtree:
+    # sending only the parent leaves every child exactly as the disaster left it,
+    # while reporting success -- measured on the lab, where the two disks of the
+    # VM kept their damage and the run said "all datasets recovered".
+    #
+    # -r, not -R: one atomic recursive stream lands the whole subtree under the
+    # exact target, which is what -t means. -R expands into independent datasets
+    # each needing its own name, which is the mapping -t switches off, so the
+    # engines refuse that pair.
+    #
+    # For a restore the atomic form is the stronger guarantee, not a weaker one:
+    # the operator asked for the state at a point, and -r gives exactly that
+    # across the subtree rather than per dataset.
+    #
+    # ...unless the SCOPE already lists every descendant, in which case each of
+    # them is its own entry with its own classification and its own report, and
+    # -r here would send the subtree a second time under a parent that is
+    # already at the point. One dataset, one stream. See the expansion in
+    # cmd_restore's whole-relation branch for why the scope grew.
+    RESTORE_ENGINE_RECURSED=0
+    if [ "${RESTORE_SCOPE_EXPANDED:-0}" -ne 1 ] \
+       && zfs list -H -o name -d 1 "$copy" 2>/dev/null | grep -qv "^${copy}$"; then
+        RESTORE_ENGINE_ARGV+=(-r)
+        RESTORE_ENGINE_RECURSED=1
+    fi
+    RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
+    # The relationship's own key, in the engine's flag spelling. Word-split
+    # deliberately: these are flags and paths, none of which carry a space in
+    # this project. Empty for a local restore, which opens no connection.
+    if [ -n "${RESTORE_ENGINE_SSH:-}" ]; then
+        # shellcheck disable=SC2206
+        RESTORE_ENGINE_ARGV+=(${RESTORE_ENGINE_SSH})
+    fi
+    RESTORE_ENGINE_ARGV+=("$copy" "$target")
+    return 0
+}
+
+# Ask the target what it permits. ONE question, over the relationship's own ssh
+# path, answered by zfs-pair-gate -- which derives the relationship from the KEY,
+# so this cannot ask about a relationship it does not hold a key for.
+#
+# Fails CLOSED and silently here: an unreachable host, a refused command, a
+# timeout and a host that answered nothing all produce the same empty string,
+# and restore_grant_parse then refuses. The diagnosis belongs to the caller,
+# which knows which dataset it was for; a message printed here would arrive
+# without that context and be repeated per dataset.
+restore_grant_ask() {   # <account@host> -> the gate's answer, or nothing
+    local peer="$1"
+    [ -n "$peer" ] || return 1
+    ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$peer" "PAIR-CONTROL status" 2>/dev/null
+}
+
 
 # Phase 7 -- the destructive execution step itself, INTERNAL ONLY.
 #
@@ -1136,6 +2895,157 @@ restore_die_after_cleanup() {   # <source> <fence: ok|dirty> <message> <snapshot
 #        NOT as it was found. Also a broken incremental or a failed final check.
 # A diagnosis is printed to stderr. The caller owns the fence and the
 # technical-snapshot cleanup.
+# ------------------------------------------------------------------------------
+# THE GRANT CHECK -- the collector reading the target's permission to overwrite it
+# ------------------------------------------------------------------------------
+#
+# Owner decision, 2026-08-26/27: the COLLECTOR starts a restore and writes onto
+# the machine being recovered. So the machine at risk is not the one running the
+# command, and the only thing standing between "restore me when I ask" and
+# "overwrite me whenever you like" is a fact that machine published itself:
+# a restore grant (deploy.sh --allow-restore, see test/restoregrant).
+#
+# WHAT MAKES THIS PARSER SECURITY CODE RATHER THAN STRING HANDLING: its input
+# arrives from ANOTHER MACHINE, over ssh, and the decision it produces is
+# "may I destroy that machine's data". Every ambiguity therefore resolves to NO.
+# The shapes that must not be readable as a yes:
+#
+#   * two RESTORE_GRANT_MODES lines -- a peer that answers twice has not
+#     answered once, and taking either would be picking on the peer's behalf;
+#   * an answer whose PAIR_LABEL is not the relationship we asked about -- the
+#     gate derives the label from the KEY, so a mismatch means the answer is
+#     about something else and cannot authorise this;
+#   * `present` with no modes, modes with no `present`, or a modes value
+#     carrying anything but lowercase letters and single spaces;
+#   * no answer at all, an empty answer, an ssh banner with nothing in it.
+#
+# The ONLY yes is: exactly one PAIR_LABEL matching, exactly one
+# RESTORE_GRANT=present, exactly one well-formed RESTORE_GRANT_MODES.
+restore_grant_parse() {   # <label we asked about> <the peer's answer> -> modes, or nothing (rc 1)
+    local want_label="$1" answer="$2" labels modes present
+
+    [ -n "$answer" ] || return 1
+
+    # Exactly one of each key. `grep -c` on an anchored pattern, so a line the
+    # peer indented or appended text to does not count -- the gate emits these
+    # at column zero and nothing else may look like them.
+    labels=$(printf '%s\n' "$answer" | grep -c '^PAIR_LABEL=')
+    [ "$labels" -eq 1 ] || return 1
+    # An EMPTY want_label means "whatever the key bound". Measured on the lab:
+    # the collector does not record the peer-side label anywhere -- the peer
+    # chose it at join time and kept it -- so demanding a match was a check that
+    # could never pass in production.
+    #
+    # The property it protected survives by a stronger mechanism than a string
+    # comparison: zfs-pair-gate derives the label from the KEY in its forced
+    # command, never from anything the caller says. An answer therefore concerns
+    # the relationship whose key opened the connection, and this side chose that
+    # key from the relationship record. A peer cannot answer about a different
+    # relationship even if it wanted to. When the caller DOES know the label it
+    # is still required to match -- then the comparison is free.
+    if [ -n "$want_label" ]; then
+        [ "$(printf '%s
+' "$answer" | sed -n 's/^PAIR_LABEL=//p')" = "$want_label" ] || return 1
+    fi
+
+    present=$(printf '%s\n' "$answer" | grep -c '^RESTORE_GRANT=present$')
+    [ "$present" -eq 1 ] || return 1
+
+    [ "$(printf '%s\n' "$answer" | grep -c '^RESTORE_GRANT_MODES=')" -eq 1 ] || return 1
+    modes=$(printf '%s\n' "$answer" | sed -n 's/^RESTORE_GRANT_MODES=//p')
+
+    # Whitelist. This value decides whether data gets destroyed; it came off a
+    # wire; and it is about to be compared against a mode name. Anything that is
+    # not lowercase letters and single spaces is not something this project
+    # writes, so it is not a grant.
+    case "$modes" in
+        ''|*[!a-z\ ]*|' '*|*' ') return 1 ;;
+        *'  '*)                  return 1 ;;
+    esac
+    printf '%s' "$modes"
+    return 0
+}
+
+# -> 0 when the peer's answer authorises <mode> for <label>; 1 otherwise, having
+#    said exactly what is missing and where to fix it.
+#
+# The remedy is always a command to run ON THE TARGET, never here. That is the
+# whole point: this side cannot grant itself anything, so the message must send
+# the operator to the machine that can.
+restore_grant_require() {   # <label> <peer answer> <needed mode> <target host, for the message>
+    local label="$1" answer="$2" need="$3" host="${4:-the target host}" modes
+    # THE LABEL IN THE MESSAGE COMES FROM THE ANSWER, because the caller does
+    # not have one. restore_grant_parse accepts an empty label deliberately --
+    # the collector never records the peer-side name, which the peer chose at
+    # join time -- and every refusal below then interpolated that empty string
+    # straight into the remedy it printed:
+    #
+    #     restore: '...' grants relationship '' only 'create rewind'
+    #     restore:     deploy.sh --allow-restore= --replace
+    #
+    # Measured on the lab, 2026-08-27. The command is not merely unhelpful: an
+    # empty --allow-restore= is the exact input that fell past the grant dispatch
+    # in deploy.sh and started reinstalling the host (error log E1). The refusal
+    # was telling the operator to run it.
+    #
+    # zfs-pair-gate puts PAIR_LABEL in its answer and derives it from the KEY in
+    # its own forced command, so it is the authoritative name and it is already
+    # here. Used only for DISPLAY -- the authorisation decision is unchanged and
+    # still belongs to restore_grant_parse.
+    local shown="$label"
+    if [ -z "$shown" ]; then
+        shown="$(printf '%s
+' "$answer" | sed -n 's/^PAIR_LABEL=//p' | head -1)"
+    fi
+    local grant_cmd
+    if [ -n "$shown" ]; then
+        grant_cmd="deploy.sh --allow-restore=$shown"
+    else
+        # Still nothing. Then the message must not fabricate a command: name the
+        # one step that produces the missing word.
+        shown="<unknown -- that machine did not name it>"
+        grant_cmd="deploy.sh --allow-restore=<the label that machine knows this relationship by; PAIR-CONTROL status there prints it>"
+    fi
+    case "$need" in
+        create|rewind|replace) ;;
+        *) log 0 "restore: '$need' is not a restore mode -- refusing rather than asking for something undefined"; return 1 ;;
+    esac
+
+    # The SCOPE travels with the answer since 2026-08-28. Kept in a global
+    # rather than returned, because restore_grant_parse's contract is the mode
+    # list and widening it would make every caller handle two values to use one.
+    #
+    # Read WITHOUT the whitelist the gate already applied: the gate is the side
+    # that owns the file and it reports an unparseable scope as empty. Applying
+    # a second opinion here would be two answers to one question.
+    RESTORE_GRANT_SCOPE=$(printf '%s\n' "$answer" | sed -n 's/^RESTORE_GRANT_DATASETS=//p' | head -1)
+    if ! modes="$(restore_grant_parse "$label" "$answer")"; then
+        log 0 "restore: '$host' did not publish a usable restore grant for relationship '$shown', so it has NOT agreed to be written to. Nothing was changed."
+        log 0 "restore: if that machine really is the one to recover, grant it THERE, as root:"
+        if [ "$need" = replace ]; then
+            log 0 "restore:     $grant_cmd --replace"
+            log 0 "restore: '--replace' is required here because this recovery would DESTROY data that machine holds now. Without it a grant only permits writing where there is free space."
+        else
+            log 0 "restore:     $grant_cmd"
+        fi
+        log 0 "restore: this side cannot grant itself anything -- that is what makes the grant worth having."
+        return 1
+    fi
+
+    case " $modes " in
+        *" $need "*) return 0 ;;
+    esac
+
+    log 0 "restore: '$host' grants relationship '$shown' only '$modes', and this recovery needs '$need'. Nothing was changed."
+    if [ "$need" = replace ]; then
+        log 0 "restore: 'replace' DESTROYS data that is on that machine now and puts an older copy in its place. It is never implied by a grant -- it is named in one, deliberately, when nothing is broken:"
+        log 0 "restore:     $grant_cmd --replace     (run as root ON $host)"
+    else
+        log 0 "restore:     $grant_cmd     (run as root ON $host)"
+    fi
+    return 1
+}
+
 restore_execute() {   # <src> <copy> <this run's own technical snapshots, full names...>
     local src="$1" copy="$2"; shift 2
     local own="" s
@@ -1353,6 +3263,43 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 # by name, as part of the approved set), so a refusal still leaves the source
 # byte-identical to how it was found and a success leaves nothing of this run
 # behind.
+# ------------------------------------------------------------------------------
+# RELATION-LEVEL DESTRUCTIVE RESTORE -- the failure policy, D + B.
+#
+# A relationship can span several datasets. The execution primitive below takes
+# ONE, and until now nothing said what a run over five of them does when the
+# third fails. That question has exactly one wrong answer -- decide it at the
+# moment it happens -- so it is decided here, and the owner chose the shape
+# (2026-08-30):
+#
+#   D  PRE-FLIGHT THE WHOLE SCOPE FIRST. Every dataset is resolved, planned and
+#      put through every refusal the single-dataset verb has, WITHOUT touching
+#      anything. If any one of them cannot be restored, the run refuses before
+#      the first mutation and names EVERY dataset that failed the check, not
+#      just the first -- an operator fixing them one round-trip at a time is an
+#      operator who stops trusting the tool.
+#
+#   B  THEN EXECUTE, AND CONTINUE PAST A FAILURE. Whatever can be recovered is
+#      recovered, and the run reports what each dataset ended as.
+#
+# Why B and not "stop at the first failure": with D in front, the predictable
+# reasons to fail -- no common base, an ambiguous recovery point, an atomic
+# relation, a remote source -- are all gone before anything is touched. What is
+# left is transport: a broken link, a full pool. Those hit one dataset, not the
+# plan, and giving back four of five beats giving back two.
+#
+# THE THREE PER-DATASET OUTCOMES ARE KEPT DISTINCT, because they are not
+# degrees of the same thing: `untouched` is a dataset the run never began,
+# `restored` is one verified by GUID, and `changed` is one whose destruction
+# started and whose transfer then broke. The last is the only state that needs
+# a human, and burying it in a count would be the one summary worth nothing.
+#
+# NO PUBLIC GRAMMAR HERE. The CLI is still the owner's open decision
+# (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md); this is the internal policy the
+# grammar will eventually call, exactly as the execution primitive below was
+# built ahead of it.
+
+
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -1396,7 +3343,7 @@ restore_replace_internal() {   # <dataset> <config> <yes>
 
     case "$RESTORE_STRATEGY" in
         remote)
-            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE. Ten czasownik dziala tylko lokalnie -- odtworzenie na zdalny host wymaga decyzji o tym, kto wykonuje zniszczenie po tamtej stronie, a tej decyzji nie ma." ;;
+            die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE, a zdalny wykonawca jeszcze nie istnieje. To, czego brakowalo tu wczesniej -- KTO wykonuje zniszczenie po tamtej stronie -- jest juz rozstrzygniete: kolektor zaczyna, a maszyna zagrozona publikuje zgode (deploy.sh --allow-restore). Sprawdzenie tej zgody jest zbudowane i przetestowane (restore_grant_require). Brakuje ostatniego kawalka: samego przeslania i zniszczenia po tamtej stronie. Nic nie zmieniono." ;;
         full-absent|full-live)
             die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost. Nie istnieje w tym wycinku i nie bedzie udawane przyrostem." ;;
         ambiguous)
@@ -1414,21 +3361,6 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     [ "$RESTORE_SET_STATE" = ok ] \
         || die "restore (odtworzenie niszczace): nie udalo sie ustalic pelnego zbioru snapshotow i bookmarkow '$src' nowszych niz wspolna baza. 'zfs rollback -r' kasuje jedne i drugie, wiec bez tej listy pytanie o zgode dotyczyloby zbioru, ktorego nikt nie zna. Nic nie zmieniono."
 
-    # ---- REV-119 F1: the confirmation has to be INFORMED -------------------
-    #
-    # The read-only preview above cannot state the live loss exactly, and REV-118
-    # is the proof: `written` on a live dataset reflects the last committed txg,
-    # so a write made seconds ago is invisible to it. Asking for approval on that
-    # basis asks the operator to approve a set nobody has measured.
-    #
-    # A snapshot is a committed point, so taking one BEFORE the loss set is shown
-    # turns the estimate into a fact. That is a mutation, and it reverses this
-    # path's earlier "not even a snapshot" rule -- deliberately: the mutation is
-    # what buys the property, and there is no read-only way to buy it.
-    #
-    # It is NOT preservation and must never be described as such: it is part of
-    # the set the execution step destroys by name. It is a measurement, and the
-    # operator text says measurement.
     local stamp="$$-$(date +%s)-${RANDOM}"
     local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
 
@@ -1639,8 +3571,8 @@ cmd_restore() {
     # identify one relationship each cannot answer "which relationship is X",
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
-    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch=""
+    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list=""
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -1670,6 +3602,11 @@ cmd_restore() {
             --source)     need_val --source "${2:-}"; scope_src="$2"; shift ;;
             --target=*)   scope_tgt="${a#*=}" ;;
             --target)     need_val --target "${2:-}"; scope_tgt="$2"; shift ;;
+            # WHERE IT LANDS on the destination machine -- a different axis from
+            # --source/--target, which say in which namespace the operator is
+            # NAMING the datasets. Owner decision 2026-08-30.
+            --onto=*)     onto_list="${a#*=}" ;;
+            --onto)       need_val --onto "${2:-}"; onto_list="$2"; shift ;;
             --snapshot=*) snapshot="${a#*=}" ;;
             --snapshot)   need_val --snapshot "${2:-}"; snapshot="$2"; shift ;;
             --config=*)   config="${a#*=}" ;;
@@ -1677,13 +3614,26 @@ cmd_restore() {
             --yes|-y)     yes=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
-                # Positional token: the public address (relation label,
-                # label:dataset, or a managed path). Resolved AFTER the loop,
-                # when --config is known. One address per invocation -- a
-                # second positional is the cross-host destination, which
-                # follows under R-025 once this door is reviewed.
-                [ -z "$addr" ] || die "restore: got two addresses ('$addr' and '$a') -- the cross-host destination form is not open yet (R-025 sequencing); one address per call"
-                addr="$a" ;;
+                # Positional tokens: the public addresses. Resolved AFTER the
+                # loop, when --config is known.
+                #
+                # ONE address is the relation (or one dataset of it) to recover,
+                # back onto its own machine. TWO is the cross-host form the
+                # owner's grammar of 2026-08-13 reserved and this opens:
+                #
+                #   restore A:ds B:ds   that dataset, onto relation B's machine
+                #   restore A    B      every dataset of A onto B, SAME PATHS
+                #
+                # B is a RELATION LABEL, never a hostname -- which is what keeps
+                # this consistent with R-025. The destination machine is reached
+                # by a relationship this collector already holds a key for, has
+                # already pinned, and can already ask for a grant. There is no
+                # new class of address here, and no way to name a machine this
+                # host has never been paired with.
+                if [ -z "$addr" ]; then addr="$a"
+                elif [ -z "$dest_addr" ]; then dest_addr="$a"
+                else die "restore: got three addresses ('$addr', '$dest_addr' and '$a'). The form is: restore <from> [<onto>] -- one relation to read, at most one to write."
+                fi ;;
         esac
         shift
     done
@@ -1697,6 +3647,47 @@ cmd_restore() {
     # the pairs are POSITIONAL and every pair must match the recorded mapping.
     # Saying both sides is the operator being explicit about what they already
     # are, not asking for them to be changed.
+    # THE DESTINATION'S REFUSALS, all decided before anything is resolved.
+    #
+    # Each of these would otherwise produce a recovery aimed somewhere nobody
+    # wrote down, which on this verb is the whole failure mode.
+    # --onto says WHERE on the destination machine, so without a destination
+    # there is nothing for it to mean. Refusing beats silently keeping the source
+    # paths: the operator who typed it wanted the data somewhere else.
+    if [ -n "$onto_list" ] && [ -z "$dest_addr" ]; then
+        die "restore: --onto names where the recovery lands on ANOTHER machine, and no destination relationship was given. Say: restore <from> <onto-relation> --onto <dataset>[,<dataset>...]"
+    fi
+
+    if [ -n "$dest_addr" ]; then
+        case "$dest_addr" in
+            *@*) die "restore: '$dest_addr' looks like user@host -- a destination is a RELATION this collector is already paired with, not a transport address (R-025). Pair the new machine first, then name it by its label." ;;
+        esac
+        [ "$plan" -eq 0 ] || die "restore: --plan and a destination. The planner reads; it has nothing to say about a machine it would not write to. Drop one."
+        [ -z "$snapshot" ] || die "restore: --snapshot names one exact snapshot on one copy; with a destination the recovery point is still resolved on the SOURCE relation's copy, so say --at instead, or drop the destination."
+        # THE COLON IS RETIRED (owner decision 2026-08-30). It is still read for
+        # one release, because it is a public spelling that appears in this
+        # project's own documents and in the 2026-08-28 two-host transcript --
+        # but it warns, because ':' is legal inside a ZFS dataset name and the
+        # ambiguity that made the owner replace it was not theoretical: it split
+        # a legal copy location `.../pool/data:archive` at the first colon and
+        # refused it while it sat in CONFIG (#132).
+        case "$addr$dest_addr" in
+            *:*) warn "restore: 'label:dataset' is the retired spelling and will be removed. Say the datasets with flags instead: restore ${addr%%:*} ${dest_addr%%:*} --target <dataset>[,<dataset>...] [--onto <dataset>[,<dataset>...]]" ;;
+        esac
+        case "$addr" in
+            *:*) case "$dest_addr" in
+                     *:*) ;;
+                     *) die "restore: '$addr' names a dataset and '$dest_addr' does not. Name both sides, or neither -- a half-specified pair is the shape that lands data on a path nobody chose." ;;
+                 esac ;;
+            *)  case "$dest_addr" in
+                    *:*) die "restore: '$dest_addr' names a dataset and '$addr' does not. Either name both sides, or give two bare relations -- which recovers every dataset of '$addr' onto '${dest_addr}' at the SAME paths." ;;
+                esac ;;
+        esac
+        [ -z "$onto_list" ] || case "$addr$dest_addr" in
+            *:*) die "restore: --onto and the retired 'label:dataset' spelling both say where the recovery lands. Give one -- and --onto is the one that stays." ;;
+        esac
+    fi
+
     if [ -n "$at_raw" ] && [ -n "$snapshot" ]; then
         die "restore: --at and --snapshot both name a recovery point. --snapshot is one exact name for one dataset; --at is a time, resolved per dataset. Give one."
     fi
@@ -1710,6 +3701,22 @@ cmd_restore() {
 
     if [ "$scope_any" -eq 1 ]; then
         [ -n "$addr" ] || die "restore: --source/--target select datasets WITHIN a relationship, so the relationship has to be named too: restore <relation> --target <dataset>[,<dataset>...]"
+        # A bare address here IS the relationship label -- the parser refuses
+        # every other spelling above. Recorded so the runner can pause it.
+        # THE LABEL, not the address. `restore lab1:hdd/x` puts a dataset in
+        # $addr, and a relationship label is letters, digits, dot, dash and
+        # underscore -- so pause-client would refuse it, and since the pause
+        # became a precondition on 2026-08-28 that refusal would take the
+        # whole recovery with it. Introduced by the precondition and caught
+        # while wiring the destination; the label form never reached the
+        # lab, which ran whole relations.
+        #
+        # And when there is a DESTINATION, the machine at risk is that one --
+        # it is the one being written to, so it is the one whose schedule has
+        # to stand down.
+        RESTORE_RELATION_LABEL="${dest_addr%%:*}"
+        [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
+        RESTORE_SOURCE_LABEL="${addr%%:*}"
         # The relationship name stands ALONE now. `label:dataset` said the same
         # thing a second way, and two ways to say one thing is how they come to
         # disagree.
@@ -1730,9 +3737,27 @@ cmd_restore() {
         if [ -n "$snapshot" ]; then
             [ "${#RESTORE_SCOPE_SRC[@]}" -eq 1 ] || die "restore: --snapshot names ONE recovery point and this list selects ${#RESTORE_SCOPE_SRC[@]} datasets. Equal snapshot names are not one atomic event (measured on pve2), so a shared name across several datasets would claim something untrue. Restore them one at a time, or use --at, which resolves per dataset and says so."
             dataset="${RESTORE_SCOPE_SRC[0]}"
-        else
-            plan=1
+        elif [ "$plan" -eq 1 ]; then
             addr_filter="$(printf '%s\n' "${RESTORE_SCOPE_SRC[@]}")"
+        else
+            # THE DOOR. Until now a resolved scope was forced into plan mode,
+            # because nothing could act on it -- `plan=1` sat here with no
+            # explanation because there was no alternative to explain.
+            #
+            # `--plan` is the read-only mode and stays exactly what it was. Its
+            # ABSENCE now means do it: the operator named a relationship, named
+            # the datasets, optionally named a time, and the machine at risk has
+            # already published a grant saying this collector may write to it.
+            # Asking again here would be the fourth time the same question is
+            # put, and the first three were asked when nothing was on fire.
+            # The selection IS the list of roots here: this path resolves exact
+            # paths and expands nothing, so position i of --onto pairs with
+            # position i of what the operator named.
+            [ -z "$onto_list" ] || restore_onto_plan "$onto_list" "${RESTORE_SCOPE_SRC[@]}"
+            restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
+            RESTORE_AT_EPOCH="$at_epoch"
+            restore_run_scope
+            return $?
         fi
         addr=""
     fi
@@ -1749,22 +3774,105 @@ cmd_restore() {
             # that equal names are one atomic event (measured otherwise on pve2).
             [ "$_rc_n" -eq 1 ] || die "restore: '$addr' selects $_rc_n datasets -- with --snapshot give one dataset (label:dataset), not a whole relation"
             dataset=$(printf '%s' "$_rc_sel" | cut -f1)
-        else
-            plan=1
+        elif [ "$plan" -eq 1 ]; then
             if [ "$_rc_n" -eq 1 ]; then
                 dataset=$(printf '%s' "$_rc_sel" | cut -f1)
             else
                 addr_filter=$(printf '%s\n' "$_rc_sel" | cut -f1)
             fi
+        else
+            # THE WHOLE RELATION. Naming it alone means every dataset it covers
+            # -- which is what an operator recovering a machine actually asks
+            # for, and the form the owner's grammar puts first.
+            #
+            # It builds the same scope arrays a --source/--target list produces,
+            # so there is one runner, one per-dataset step and one report for
+            # every shape of this verb. The alternative -- a second loop for the
+            # whole-relation case -- is how two paths come to disagree about
+            # what a failure means.
+            # THE LABEL, not the address. `restore lab1:hdd/x` puts a dataset in
+            # $addr, and a relationship label is letters, digits, dot, dash and
+            # underscore -- so pause-client would refuse it, and since the pause
+            # became a precondition on 2026-08-28 that refusal would take the
+            # whole recovery with it. Introduced by the precondition and caught
+            # while wiring the destination; the label form never reached the
+            # lab, which ran whole relations.
+            #
+            # And when there is a DESTINATION, the machine at risk is that one --
+            # it is the one being written to, so it is the one whose schedule has
+            # to stand down.
+            RESTORE_RELATION_LABEL="${dest_addr%%:*}"
+            [ -n "$RESTORE_RELATION_LABEL" ] || RESTORE_RELATION_LABEL="${addr%%:*}"
+            RESTORE_SOURCE_LABEL="${addr%%:*}"
+            RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=()
+            local _wr_s _wr_c
+            while IFS="$(printf '\t')" read -r _wr_s _wr_c; do
+                [ -n "$_wr_s" ] || continue
+                RESTORE_SCOPE_SRC+=("$_wr_s"); RESTORE_SCOPE_COPY+=("$_wr_c")
+                # EVERY DATASET OF THE SUBTREE, EACH ON ITS OWN.
+                #
+                # The recorded name covers a subtree, and this used to hand that
+                # one name to the runner and rely on the engine's recursive
+                # stream to carry the children. Measured on the lab, 2026-08-27,
+                # that fails in a way nothing upstream can see: the rollback
+                # brings the PARENT to the recovery point, which makes the
+                # recursive incremental from that parent a zero-length stream,
+                # and a child sitting BEHIND the point is never sent anything.
+                # The engine exits 0 over it.
+                #
+                # The child got behind by a supported operation -- an earlier
+                # `restore <relation> --target <one disk>`, which is the whole
+                # reason --target exists. So the state is not exotic; it is what
+                # using this tool produces.
+                #
+                # One dataset per entry makes each one its own question, which is
+                # what every other decision in this file already is: classified
+                # on its own state, granted on its own mode, reported on its own
+                # line. A child behind the point is then simply an increment.
+                #
+                # Only when the copy is LOCAL. A remote copy would need an ssh
+                # round trip here, and the collector case -- where the copies are
+                # local by construction -- is the one this estate runs.
+                case "$_wr_c" in
+                    *@*|*:*) : ;;
+                    *)  local _sub
+                        while IFS= read -r _sub; do
+                            [ -n "$_sub" ] || continue
+                            [ "$_sub" = "$_wr_c" ] && continue
+                            RESTORE_SCOPE_COPY+=("$_sub")
+                            RESTORE_SCOPE_SRC+=("${_wr_s}${_sub#"$_wr_c"}")
+                            RESTORE_SCOPE_EXPANDED=1
+                        done < <(zfs list -H -o name -r "$_wr_c" 2>/dev/null) ;;
+                esac
+            done <<< "$_rc_sel"
+            # THE RECORDED ROOTS, not the expanded scope. A child that exists on
+            # the pool but under no section of its own must not be able to drag
+            # the rebase base deeper than the relationship itself declares.
+            if [ -n "$onto_list" ]; then
+                local -a _wr_roots=()
+                while IFS="$(printf '	')" read -r _wr_s _wr_c; do
+                    [ -n "$_wr_s" ] || continue
+                    _wr_roots+=("$_wr_s")
+                done <<< "$_rc_sel"
+                restore_onto_plan "$onto_list" "${_wr_roots[@]}"
+            fi
+            restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
+            RESTORE_AT_EPOCH="$at_epoch"
+            restore_run_scope
+            return $?
         fi
         config="$_rc_cfg"
     fi
 
-    # Phase 7 slice 2: a SAFE restore is the plain verb. Destructive replacement of
-    # a live dataset stays a SEPARATE verb (slice 3), never a flag on this one --
-    # a --force that turns a safe command into a destructive one is exactly the
-    # shape the plan refuses.
-    [ -n "$at_epoch" ] && plan=1
+    # `--at` used to force plan mode, because a recovery point was something the
+    # verb could describe and not reach. It reaches it now: the point is resolved
+    # per dataset by creation, proved unambiguous under the engine's own matching
+    # rule, and the target is rolled back to it when it sits further forward.
+    #
+    # The note this replaces said destructive recovery "has no public grammar
+    # yet -- the owner is still deciding it". He decided: the collector starts,
+    # the machine at risk publishes a grant naming the modes, and `--plan` is the
+    # read-only half of the same verb rather than a different one.
 
     if [ "$plan" -ne 1 ]; then
         [ -n "$snapshot" ] || die "restore: give --plan to see what could be restored, or --snapshot=NAME (with --dataset=) to restore one safely into the restore namespace. Destructive recovery of the original path has no public grammar yet -- the owner is still deciding it."
@@ -1773,10 +3881,18 @@ cmd_restore() {
     fi
 
     read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || { config=$(restore_default_config); [ -r "$config" ] || config=""; }
-    [ -n "$config" ] || die "restore --plan: no cron config known -- pass --config=FILE or run setup-server"
-    [ -r "$config" ] || die "restore --plan: cannot read $config"
+    # THE SAME RESOLVER AS EVERY OTHER PATH. This site had its own copy of the
+    # old rule -- CRON_CONFIG, else jobs.<host>.conf -- so F11's fix reached
+    # `restore <label>` and not this one, and this is the form the refusals send
+    # operators to: "'restore --plan' lists the labels". On a delegated-account
+    # host it answered "no cron config known" while the config sat in the same
+    # directory under the account's name.
+    #
+    # The same defect at a second site, found by a dead-code sweep rather than
+    # by the fix: after F11 nothing should still have been calling
+    # restore_default_config, and something was. R3 -- grep every site that
+    # should honour the rule, do not assume the one you edited was the only one.
+    config="$(restore_pick_config "$config" "this plan")"
 
     # Collect (source, copy-location, kind) triples from the installed CONFIG.
     local -a src=() copy=() kind=() cons=()

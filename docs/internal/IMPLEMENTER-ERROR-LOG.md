@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10.*
+*Evidence: E4, E5, E6, E10, E17, E23.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2.*
+*Evidence: E7, E2, E14, E16, E19, E21.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -63,14 +63,14 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11.*
+*Evidence: E11, E20.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9.*
+*Evidence: E3, E9, E15, E24.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -87,6 +87,23 @@ renderer already uses.
 
 *Evidence: E7, E3, E12.*
 
+### R12 — A pass proves the shapes it ran, and the report must name them
+
+Never write "proven end to end". Write which variants ran, which did not, and
+what each one measured. A campaign that exercised one shape of a problem has
+said nothing about the others, and the sentence "it works" is the mechanism by
+which that silence becomes a claim.
+
+The test of whether a pass is finished is not "did every step succeed". It is
+"what did I not try", answered out loud.
+
+A special case worth naming because it keeps happening: **testing the piece I
+wrote instead of what comes out of it.** A component with a thorough suite,
+wired into a caller with none, is an untested feature with a reassuring number
+attached.
+
+*Evidence: E13, E22.*
+
 ### R9, R10, R11 — on running suites
 
 Stated with their measurements in section 2b, because the case for them is the
@@ -99,6 +116,7 @@ cost data rather than an argument:
 ---
 
 ## 2. The entries
+
 
 ### E1 — `--allow-restore=` with an empty value provisioned the host
 **2026-08-27, restore grant.**
@@ -367,3 +385,318 @@ between what the code says it does and what it does was never measured.** The
 mechanisms that actually catch these — negative controls, the engine freeze, the
 status-digest gate, an owner asking "napewno?" — work because they force that
 measurement. Personal care does not scale; a control that fails loudly does.
+
+### E13 — "Proven end to end", after running one shape of the problem
+**2026-08-27, restore, second lab pass.**
+
+*Genesis.* The first restore lab found eight defects, ended green, and I reported
+it as working end to end. The owner asked for a second pass. It found **fourteen
+more**, and the first of them was reachable by doing the one thing the first pass
+never did: **running a backup after the restore**. The worst of them was reachable
+by damaging data the way a real failure damages it — deleting files with **no
+snapshot taken since** — at which point the verb reported
+`all 3 dataset(s) in scope recovered` and changed nothing.
+
+*Cause.* Every damage in the first pass had been snapshotted by a backup before
+the restore ran, so the classifier's question ("is anything NEWER than the
+point?") happened to be true every time. One shape, exercised repeatedly, read as
+coverage. And the pass ended where the restore ended, so the state it left the
+relationship in was never observed.
+
+*Rule.* **R12.** Two concrete habits fall out of it: run the NEXT operation the
+system would normally perform, because a verb's real output is the state it
+leaves behind; and construct the damage the way the failure does, not the way the
+fixture does.
+
+### E14 — A distinction written into a function, dropped by its caller. Twice, in one file, in one hour
+**2026-08-27, restore classification and verification.**
+
+*Genesis.* `restore_remote_state` returned `absent`, a GUID, or nothing — and
+nothing meant BOTH "the dataset exists and has no snapshots" and "the host did
+not answer". Fixed by adding a third answer (F14). An hour later
+`restore_remote_ahead`, whose own header says the caller can tell "nothing
+differs" from "I could not ask" by the exit status, was being called as
+`x="$(f ...)"; if [ -n "$x" ]` — status discarded (F20). An unanswered ssh read
+as a clean target: no rollback, an empty increment, a clean report.
+
+*Cause.* Producing a distinction feels like the work. Consuming it is the work.
+The comment above the function made the file *look* careful at exactly the line
+where it stopped being careful.
+
+*Rule.* **R3.** When a function's contract has more outcomes than a string, grep
+every call site and check that each reads all of them. In bash specifically:
+`x="$(f)"` throws away `$?` — if the contract has a status, capture it on the
+same line.
+
+### E15 — I read an outcome and called it a mechanism
+**2026-08-27, snapget `-F`.**
+
+*Genesis.* A pull refused because the copy was ahead. I ran `-F`, saw the refusal
+not appear, and shipped a message telling operators that `-F` "destroys exactly
+those snapshots and then pulls the increment". `-F` does nothing of the kind: it
+acts only on a name collision under a different GUID, and what it had actually
+done was escalate that run to a full re-pull. The next `-F`, against a state with
+no collision, refused like any other run and exposed it.
+
+*Cause.* One observation, one inference, no reading of the flag the message was
+about. The flag's own documentation was twenty lines above the code I was editing.
+
+*Rule.* **R6**, in its product form: an outcome tells you what happened, not why.
+Before describing a mechanism in a message an operator will act on, read the
+mechanism. A remedy printed by a tool is a promise made in the tool's name.
+
+### E16 — The remedy printed was the input that once broke a host
+**2026-08-27, restore grant refusal.**
+
+*Genesis.* Refusing an ungranted `replace`, the message printed
+`deploy.sh --allow-restore= --replace` — empty label, because the collector never
+records the peer's name for the relationship and the display took the caller's
+(deliberately empty) variable. That exact input is **E1**: `--allow-restore=` with
+no value fell past the grant dispatch and started reinstalling the machine.
+
+*Cause.* A value correct for a decision (empty means "whatever the key bound")
+was reused for display without asking whether it was printable. The authoritative
+label was in hand the whole time, in the peer's own answer.
+
+*Rule.* **R3**, plus: a message that contains a command is code. Check what it
+renders when its inputs are empty, exactly as you would check a code path.
+
+### E17 — Half a remedy, shipped twice, corrected by the step after the fix
+**2026-08-27, the copy-is-ahead jam.**
+
+*Genesis.* Three versions of one message. First `-f` (the account cannot run it).
+Then "destroy the named snapshots" (measured, rc=0 — and the very next pull
+refused again, because destroying a snapshot does not move the live filesystem,
+so the copy stayed exactly where those snapshots had left it). Finally
+`zfs rollback -r <copy>@<common>`, which does both halves in one command.
+
+*Cause.* Each fix was verified by the step that had failed, and not by the step
+after it. "The refusal is gone" is not "the operator can now get back to work".
+
+*Rule.* **R2** across a boundary in TIME: a fix is proven by the next operation
+the user would perform, not by the disappearance of the symptom. Run the workflow
+one step further than the bug.
+
+### E18 — A false alarm delivered in the middle of a recovery
+**2026-08-27, the "what this costs the backup" report.**
+
+*Genesis.* The run closed by telling the operator their next backup would refuse
+and their only copy of a period was at stake. The next backup succeeded. The
+record was written for every rollback, and a rollback that discards only live
+writes destroys no snapshot — which is the ordinary case, because the ordinary
+disaster is damage nobody has snapshotted yet.
+
+*Cause.* One flag answering two questions: "did we roll back" and "is the copy
+now ahead". Related, not the same, and the second is the one the warning is
+about.
+
+*Rule.* **R1**, from the other side: prove the guard does NOT fire when it should
+not. A warning is a claim, and a claim that is often wrong costs exactly what the
+true version of it was worth — here, telling somebody their last copy of a period
+is about to be destroyed.
+
+### E19 — A fourth opinion about ssh flags, missing the property the other three carry
+**2026-08-27, restore connection handoff.**
+
+*Genesis.* zfs-restore.sh needs its ssh options as a STRING (they cross an
+`exec`), so I wrote one: key, alias, known_hosts, StrictHostKeyChecking,
+BatchMode. It shipped without `ConnectTimeout` or `ServerAlive*`. A restore
+aimed at a peer that never answers the SYN would have sat about 130 seconds per
+call -- and a restore opens several probes per dataset before it transfers
+anything, so that is minutes of silence in front of somebody recovering a
+machine. This estate has already paid for that hang once (#44/#45/#46) and
+built a counting assertion against it: test/zfsbackup counts ConnectTimeout and
+ServerAlive against the BatchMode groups. It went 4 / 3 / 3 and failed.
+
+*Cause.* `load_ssh_opts` builds exactly this set, bounded, and eight callers use
+it. I did not look, because what I needed was "a string" and what existed was
+"an array" -- so the shape of the container hid the fact that the content was
+already written. The comment I wrote even said "the same pinning the engines
+get", which was the moment to go and read what the engines get.
+
+*Rule.* **R8.** And a sharper form of it for this shape: when a file already
+builds three of something and you are writing the fourth, you are not writing a
+new thing, you are copying an existing one -- so copy the whole contract, or
+better, call the builder. Adding the three missing options would have fixed the
+instance; using `load_ssh_opts` removed the class, because a fourth opinion
+cannot drift from the other three if it does not exist.
+
+*Also worth naming:* the assertion caught this on CI, four commits after I
+introduced it, because I deferred the big suite to CI (correct by R9) and then
+did not read CI until the end. R9 says run only what you edited; it does not say
+read the result late. When you add a member of a class some suite exists to
+guard, that suite is the one to run -- policy or no policy.
+
+### E20 — A 488/0 that measured no single tree
+**2026-08-28, test/zfsbackup in the background.**
+
+*Genesis.* I started the big suite in the background against the tree as it
+stood, then -- while it ran -- edited `zfs-backup.sh` to fix the ssh options CI
+had just failed on. The suite finished PASS=488 FAIL=0, including the very
+assertion that had been red.
+
+*Cause.* E11 was editing a suite while it was RUNNING. This is the same rule one
+step out: I edited the suite's SUBJECT. `test/zfsbackup` greps `zfs-backup.sh`
+at assertion time, so section 7a read the file in whatever state it was in when
+the run reached it -- after the fix, as it happens. Earlier sections read the
+file before it. The number is a mix of two trees and is a measurement of
+neither.
+
+It would have been just as easy to go the other way: an assertion that passed
+early and a file that broke later reads as green over a defect.
+
+*Rule.* **R5.** A suite measures a tree, so the tree has to hold still for it.
+If a fix cannot wait, kill the run rather than let it produce a number that
+looks like evidence. The authority for this change is CI on 31e6ccd and 7e13dd6,
+which ran against a fixed checkout -- not the local 488/0, which I am recording
+here precisely because it looked like the better number.
+
+### E21 — I appended a field to a tuple; two readers assumed the old last one
+**2026-08-29, gen-cron send entities.**
+
+*Genesis.* `media` went on the end of SEND_ENTITIES. Two consumers broke, both
+silently: one matched the tuple's TAIL (`case "$rest" in *"${SEP}pull")`), and
+one gave its last variable the whole remainder, because that is what `read`
+does. Every pull section stopped being recognised -- in a coverage report whose
+entire job is to say what is NOT covered.
+
+*Cause.* I changed a shared data shape and looked only at the code I was
+editing. The tuple has no schema; its readers each encode their own assumption
+about it, and "direction is last" was one of them, written nowhere.
+
+*Rule.* **R3.** When a shared structure grows, grep every reader of it, not
+every reader you remembered. And the concrete idiom: a positional tuple should
+be read by NAMING every field with a trailing catch-all, never by matching its
+tail -- the first breaks loudly when the shape changes, the second does not
+break at all.
+
+*Caught by:* the reconcile suite, on CI, three commits after I introduced it.
+Locally I had run the golden suite and the generator suites and they were all
+green, because none of them exercises a pull section's coverage.
+
+
+### E22 — 34/0 on the gate, and the line it was wired into had never once been run
+
+**Genesis.** The removable-media replica. I wrote `zfs-media-gate.sh` and a suite
+for it: attach, detach, the wrong medium, two disks of the same name, a failed
+export, ownership recorded, ownership NOT recorded. 34 assertions, 0 failures,
+every branch of the gate covered in both directions. The gate was fine.
+
+Then the lab on pve0 ran the thing an operator would actually run -- the cron
+line the generator emits -- and it had two defects, either of which alone would
+have made the feature worse than not having it:
+
+* the bracket was emitted as a command SEQUENCE (`if ...; fi; detach`) into a
+  slot `job_cron_line` builds for ONE command (`CMD 2>"$e"; rc=$?`). Both halves
+  of the wrapper bound to `detach` alone. So the engine's stderr never reached
+  the job log -- it went to cron's own stderr, the mail flood this package
+  exists to prevent -- and the recorded status was detach's. Measured: engine
+  exited 1, the job logged rc=0, nobody was told. The whole point of the field
+  is to buy ONE silence, the disk in a safe. It was buying all of them,
+  including "your backup failed";
+* the gate was handed the LANDING path, which the engine creates. On a freshly
+  prepared disk it does not exist yet, so the first sync was refused as "the
+  wrong medium" -- the right disk, refused, and after the first fix, alerting.
+  A new removable disk could never be seeded.
+
+**Cause.** I tested the component I wrote and never the thing it produces. The
+gate's suite could not have caught either defect: neither lives in the gate.
+They live in eleven characters of generated shell, and nothing anywhere executed
+that text. I read the rendered line several times while writing it and it looked
+right -- which is exactly the reading that a subshell's absence survives.
+
+The same day, a third one from the same root: `detach` asked who owned the pool
+before asking whether the pool was there, so the commonest case of all -- the
+disk in a safe -- was answered with "leaving POOL imported". The suite passed on
+BOTH orders. It asserted the exit status and never the sentence, so it was not
+discriminating anything; it was counting.
+
+**Rule.** R12, plus its new special case. A component suite is not a feature
+suite. Run what the user runs: the generated line, executed, with only the leaf
+commands stubbed -- `test/mediagate/run.sh` section G now does exactly that, and
+the old bracket fails it. And when an assertion passes on both sides of a change,
+it is not evidence, whatever the total says (R6).
+
+
+### E23 — I reported an infrastructure fault from a probe the design never uses
+
+**Genesis.** Closing out the day's queue, I had listed as an open item:
+"metropolis: pve1 (28.9) does not accept pve9's key -- a leftover from an
+earlier lab." It came from one command:
+
+    pve9 $ ssh root@192.168.28.9        -> Permission denied (publickey)
+
+I reported that to the owner twice, in two separate summaries, as an
+infrastructure problem awaiting attention.
+
+**It was not a problem at all.** The relationship between those two hosts is
+healthy and has been all along: pve9 PULLS from metropolis hourly, and the
+backups were arriving on schedule the whole time I was calling the link broken --
+`automated_hourly_2026-08-29_17-51-01` had landed 47 minutes before I wrote it
+down again. Measured with the identity the job actually uses:
+
+    su zfsbackup -c 'ssh -i pairing-192.168.28.9_ed25519 ... zfsbackup-pve9@192.168.28.9 "zfs list ..."'
+    hdd/labsrc
+    rc=0
+
+**Cause.** I probed root-to-root. The package does not use root-to-root, and has
+not since the fleet migrated to delegated accounts on 2026-08-01. A relationship
+runs as its own account with a per-peer pairing key, a pinned `HostKeyAlias`, and
+its own `known_hosts` -- and the ABSENCE of root trust between two hosts is the
+point of that design, not a defect in it. I tested the one path the architecture
+deliberately does not have, and read its refusal as a fault.
+
+Two further tells I walked past. `crontab -l` as root showed no job for that
+peer, which should have prompted "then who is fetching this, and as whom?"
+instead of confirming the fault. And a `grep -c "28\.9"` returned 4, which I
+took as matches -- they were `28.98`, a different host entirely.
+
+**Rule.** R2, and this is the sharpest form of it yet: the boundary is not only
+host-to-host, it is IDENTITY. State which account and which key a probe used,
+because "cannot connect" is meaningless without it. Before reporting a link
+broken, find the job that uses it and run what IT runs. If no job uses the path
+being probed, that is the finding -- not the refusal.
+
+### E24 — I called two working mechanisms missing, from readings of zero
+
+**Genesis.** Closing the lab round I handed the owner three open items. Two of
+them were mine, not the package's.
+
+*"Objetosci i przepustowosci nie ma."* I read 119 progress records and counted:
+
+    wire_bytes  > 0 :  0 / 119
+    rate_bps    > 0 :  0 / 119
+
+and reported that the schema has the fields but nothing fills them — a gap to
+close before the GUI. **The mechanism is complete.** `progress_watch` parses
+`size`/progress lines for total and done, reads mbuffer's own log for wire, and
+computes rate between ticks. It ticks every 2 seconds; every transfer in my
+sample lasted 0-1 second and moved a few MB. One 600 MB run settled it:
+
+    total_bytes = 630279464   done_bytes = 551425752
+    wire_bytes  = 617611264   rate_bps   = 116537608   (6 s)
+
+and the two sub-second datasets in the SAME run stayed at zero, exactly as the
+design implies.
+
+*"Rekordy rosna bez ograniczenia."* I grepped for cleanup patterns, found
+nothing, and extrapolated to ~100k files a year. `progress_reap()` exists, is
+called by BOTH engines on every run, keeps 7 days and skips records still
+running. The oldest record on the host was seven days old — the reaper
+working, which I read as its absence.
+
+**Cause.** A reading of zero is a reading, and I treated it as a fact about the
+code. I never asked what a NON-zero would have required: a transfer longer than
+the sampler's tick, and a file older than the reaper's window. Neither existed
+in anything I looked at. The grep for the reaper was the same mistake in the
+other direction — I searched for words I expected (`clean`, `prune`, `rm -f`)
+instead of for the thing (`progress_`), and concluded from my own vocabulary.
+
+The cost was not only noise: I put both on the owner's list as work to do, and
+he approved doing it. Two of the three items he authorised did not exist.
+
+**Rule.** R6, from the other side. A zero, an empty grep and a missing field
+are results, and a result is evidence only against a control that would have
+produced the opposite. Before reporting a mechanism absent: build the case that
+should exercise it, and only then say what you saw.
+

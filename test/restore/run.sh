@@ -93,8 +93,13 @@ out="$(run "$cfg")"; rc=$?
 out="$(run "$cfg" --plan --bogus)"; rc=$?
 [ "$rc" -ne 0 ] && ok "an unknown option refuses" || bad "an unknown option refuses" "rc=$rc"
 
+# The wording moved on 2026-08-27: this path had its OWN copy of the config
+# rule (CRON_CONFIG, else jobs.<host>.conf) and could not see a delegated
+# account's file, so it now calls restore_pick_config like every other path.
+# What is pinned is the substance -- it refuses, and it names what to pass --
+# rather than the sentence that used to carry it.
 out="$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" cmd_restore --plan ) 2>&1 )"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'no cron config known'; } \
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'no readable installed config'; } \
     && ok "no config and no server.conf refuses rather than guessing" \
     || bad "no config and no server.conf refuses rather than guessing" "rc=$rc"
 
@@ -1902,7 +1907,28 @@ cat > "$SC/cfg" <<'CFGEOF'
 	pair_label   = pve1
 CFGEOF
 
-sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+# ---------------------------------------------------------------------------
+# WHY --plan APPEARS ON THESE CALLS, AND DID NOT USE TO
+#
+# Until 2026-08-27 a resolved scope was FORCED into plan mode: `--at` or
+# `--source/--target` set plan=1 unconditionally, because nothing downstream
+# could act on a resolved scope. These assertions were written against that, and
+# they inspect plan output ("Zrodlo:", "WYBRANO", the strategy captions) while
+# passing no --plan.
+#
+# That forcing is gone deliberately. The scope resolves and then RUNS, which is
+# the whole point of the verb, and it is proven on live hosts (pve9 -> pve1,
+# 2026-08-27, nine variants). So the assertions below have to ask for the plan
+# they are reading -- and the fact that they are read-only is now something the
+# call says rather than something the program imposes.
+#
+# The behaviour they used to pin -- "a scope never writes" -- is not silently
+# dropped. It is inverted and pinned the other way, at the foot of this section:
+# a scoped call WITHOUT --plan must reach the per-dataset runner. Deleting the
+# old assertion without adding that one would have left the change untested in
+# both directions.
+# ---------------------------------------------------------------------------
+sc_run() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --plan --config="$SC/cfg" 2>&1; }
 sc_ok() {   # <desc> <expected substring> <args...>
     local desc="$1" want="$2"; shift 2
     local out; out="$(sc_run "$@")"
@@ -1973,6 +1999,209 @@ out="$(sc_run pve2 --target rpool/data/vm-101-disk-0, 2>&1)"
 n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
 if [ "$n" = 0 ]; then ok "scope: a trailing comma refuses BEFORE any plan is shown"
 else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lines were printed"; fi
+
+# THE OTHER DIRECTION OF THE SAME CHANGE. A scoped call with no --plan must not
+# print a plan and stop: it must reach the per-dataset runner. Before 2026-08-27
+# it planned and returned, and every assertion above passed either way -- which
+# is exactly how a contract change slips through a suite that only pins one side
+# of it.
+#
+# Asserted on the RUNNER's own output, not on an exit code: this fixture has no
+# snapshots, so the run correctly gets as far as "nothing to restore from" and
+# reports it per dataset. That is the runner speaking, and the planner never
+# produces those lines.
+mkdir -p "$SC/rel/pve2" && : > "$SC/rel/pve2/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    # EITHER of the runner's two reports proves the point, and the point is that
+    # the planner was not what answered. Since the relation-level pre-flight (D,
+    # owner 2026-08-30) this snapshot-less fixture refuses in the pre-flight
+    # instead of reaching the per-dataset loop -- still the runner speaking, and
+    # the planner produces neither string.
+    *"per-dataset result"*|*"REFUSED before anything was touched"*)
+        ok "scope: without --plan the scope RUNS, it does not plan" ;;
+    *) bad "scope: without --plan the scope RUNS, it does not plan" \
+           "expected the per-dataset runner's report" "got: $(printf '%s' "$out" | head -2)" ;;
+esac
+n="$(printf '%s\n' "$out" | grep -c 'Zrodlo:')"
+if [ "$n" = 0 ]; then ok "scope: ...and prints no plan while doing it"
+else bad "scope: ...and prints no plan while doing it" "$n plan lines were printed by a run"; fi
+
+# THE PRECONDITION, BOTH WAYS ROUND. Owner decision 2026-08-27: a restore needs
+# the target's grant AND the relationship's schedule stood down. The run above
+# proves it proceeds when the pause is in place; this proves it refuses when it
+# is not, and that it refuses BEFORE touching anything.
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel-none" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"could NOT pause"*) ok "pause: a restore that cannot stand the schedule down refuses" ;;
+    *) bad "pause: a restore that cannot stand the schedule down refuses" "got: $(printf '%s' "$out" | head -2)" ;;
+esac
+case "$out" in
+    *"per-dataset result"*) bad "pause: ...and refuses BEFORE the runner touches a dataset" "the runner ran anyway" ;;
+    *) ok "pause: ...and refuses BEFORE the runner touches a dataset" ;;
+esac
+case "$out" in
+    *"pause-client pve2"*) ok "pause: ...and names the command that unblocks it" ;;
+    *) bad "pause: ...and names the command that unblocks it" "got: $(printf '%s' "$out" | head -3)" ;;
+esac
+
+# ===========================================================================
+# CROSS-HOST: recovering onto a DIFFERENT machine (owner grammar 2026-08-13,
+# opened 2026-08-28)
+#
+#   restore A    B        every dataset of A onto B's machine, SAME paths
+#   restore A:ds B:ds2    that dataset (and its subtree) onto B, under ds2
+#
+# B is a RELATION LABEL, never a hostname. That is what keeps this inside
+# R-025: the destination is a machine this collector is already paired with,
+# has already pinned, and can already ask for a grant -- there is no way to
+# name a machine it has never met.
+#
+# The fixture's two relations are pve2 (two datasets) and pve1 (one), so
+# "pve2 onto pve1's machine" is expressible without inventing anything.
+# ===========================================================================
+
+# The refusals first, because every one of them is a recovery that would
+# otherwise land somewhere nobody wrote down.
+xh() { PATH="$WORK/bin:$PATH" bash "$ZB" "$@" --config="$SC/cfg" 2>&1; }
+xh_refuses() {   # <desc> <substring> <args...>
+    local desc="$1" want="$2"; shift 2
+    local out; out="$(xh "$@")"; local rc=$?
+    if [ "$rc" -eq 0 ]; then bad "$desc" "expected a refusal, got rc=0"; return; fi
+    case "$out" in *"$want"*) ok "$desc" ;; *) bad "$desc" "want: $want" "got: $(printf '%s' "$out" | head -2)" ;; esac
+}
+
+xh_refuses "xhost: a destination that is not a relation is refused, not read as a host" \
+    "is not one this host records" pve2 nosuchrelation
+xh_refuses "xhost: a transport address is refused as a destination" \
+    "not a transport address" pve2 root@pve3
+xh_refuses "xhost: --plan and a destination are refused together" \
+    "The planner reads" pve2 pve1 --plan
+# REPLACED, not deleted (owner decision 2026-08-30). This case used to assert
+# that --target with a destination is REFUSED, and that refusal pointed the
+# operator at `label:dataset` -- the spelling the owner had already retired,
+# because ':' is legal inside a ZFS dataset name. So the one form an operator
+# needs for "one disk of this VM, onto a different machine" was reachable only
+# through the ambiguous spelling. The flags are the grammar in every form now;
+# what stays refused is naming the datasets twice.
+out="$(xh pve2 pve1 --target rpool/data/vm-101-disk-0)"
+case "$out" in
+    *"select datasets WITHIN one relationship"*)
+        bad "xhost: --target WITH a destination is the grammar now, not a refusal" "$out" ;;
+    *) ok "xhost: --target WITH a destination is the grammar now, not a refusal" ;;
+esac
+xh_refuses "xhost: --onto without a destination is refused" \
+    "no destination relationship was given" pve2 --onto hdd/data
+xh_refuses "xhost: --onto and the retired colon spelling are refused together" \
+    "--onto is the one that stays" pve2:rpool/data pve1:hdd/data --onto hdd/data
+# The colon still WORKS for one release, and says so. Deprecating in silence is
+# how two spellings stay alive; deleting outright breaks a spelling that is in
+# this project's own documents and in the 2026-08-28 campaign transcript.
+out="$(xh pve2:rpool/data pve1:rpool/data)"
+case "$out" in
+    *"retired spelling"*) ok "xhost: the colon spelling warns and names what replaces it" ;;
+    *) bad "xhost: the colon spelling warns and names what replaces it" "$(printf '%s' "$out" | head -3)" ;;
+esac
+xh_refuses "xhost: --snapshot and a destination are refused together" \
+    "resolved on the SOURCE relation's copy" pve2 pve1 --snapshot=x
+xh_refuses "xhost: a half-specified pair is refused (source names a dataset, destination does not)" \
+    "a half-specified pair" pve2:rpool/data/vm-101-disk-0 pve1
+xh_refuses "xhost: ...and the other way round" \
+    "Either name both sides" pve2 pve1:rpool/other
+xh_refuses "xhost: three addresses are refused" \
+    "one relation to read, at most one to write" pve2 pve1 pve0
+
+# THE MAPPING. Asserted on the runner's per-dataset report, which names the
+# DESTINATION -- the machine being written to -- rather than the recorded
+# source. The fixture has no snapshots, so each dataset gets as far as "no
+# snapshot to restore from"; that is the runner speaking, and it prints the
+# address the recovery was aimed at, which is the thing under test.
+#
+# The pause is satisfied with a REAL marker for the destination relation,
+# because the destination is the machine at risk and its schedule is the one
+# that has to stand down.
+mkdir -p "$SC/rel/pve1" && : > "$SC/rel/pve1/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2 pve1 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"root@pve1:rpool/data/vm-101-disk-0"*) ok "xhost: a bare pair keeps the SOURCE path on the destination machine" ;;
+    *) bad "xhost: a bare pair keeps the SOURCE path on the destination machine" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+case "$out" in
+    *"root@pve1:rpool/data/vm-101-disk-1"*) ok "xhost: ...for every dataset of the relation, not just the first" ;;
+    *) bad "xhost: ...for every dataset of the relation, not just the first" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+# ...and it must not have aimed at the ORIGINAL machine, which is the failure
+# this whole form exists to avoid: a cross-host recovery that quietly went home.
+case "$out" in
+    *"root@pve2:rpool/data"*) bad "xhost: ...and nothing was aimed at the source machine" "pve2 appears as a destination" ;;
+    *) ok "xhost: ...and nothing was aimed at the source machine" ;;
+esac
+
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2:rpool/data/vm-101-disk-0 pve1:rpool/elsewhere --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"root@pve1:rpool/elsewhere"*) ok "xhost: a named pair lands on the named destination path" ;;
+    *) bad "xhost: a named pair lands on the named destination path" "got: $(printf '%s' "$out" | grep -E 'OK|NOT DONE' | head -2)" ;;
+esac
+case "$out" in
+    *"vm-101-disk-1"*) bad "xhost: ...and only the dataset that was named" "the sibling came along" ;;
+    *) ok "xhost: ...and only the dataset that was named" ;;
+esac
+
+# THE HAND-OVER SENTENCE. A cross-host recovery leaves the data on one machine
+# and the backup pointing at another, and that split is silent -- the old
+# relationship keeps running and looks healthy. Owner decision 2026-08-28: the
+# run says so and names the next step; it does not compose the hand-over into
+# itself.
+# DRIVEN DIRECTLY, and the reason is a contract change rather than convenience.
+# These two used to read the fixture run above, which reached the report because
+# a copy with no snapshots still got as far as the per-dataset loop. Since the
+# relation-level pre-flight (D, owner 2026-08-30) that fixture refuses before the
+# loop -- correctly, because a run that touched nothing has no hand-over to
+# announce. Rather than make the refusal print a sentence that would be false,
+# the report is exercised on its own state, which is what these two ever tested.
+ho="$(
+    log() { shift; printf '%s
+' "$*"; }
+    RESTORE_SOURCE_LABEL=pve2
+    RESTORE_RELATION_LABEL=pve1
+    RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
+    RESTORE_SCOPE_DEST=("root@pve1:rpool/elsewhere")
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+case "$ho" in
+    *"went to a DIFFERENT machine"*) ok "xhost: the run says the recovery went elsewhere" ;;
+    *) bad "xhost: the run says the recovery went elsewhere" "got: $ho" ;;
+esac
+case "$ho" in
+    *"move-to-client pve2 pve1"*) ok "xhost: ...and names the step that switches the backup over" ;;
+    *) bad "xhost: ...and names the step that switches the backup over" "got: $ho" ;;
+esac
+# The control that keeps those two honest: same report, destination on the SAME
+# machine, must say nothing at all.
+ho_same="$(
+    log() { shift; printf '%s
+' "$*"; }
+    RESTORE_SOURCE_LABEL=pve2
+    RESTORE_RELATION_LABEL=pve2
+    RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
+    RESTORE_SCOPE_DEST=("rpool/data/vm-101-disk-0")
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+if [ -z "$ho_same" ]; then ok "xhost: ...and says nothing when the destination is the same machine"
+else bad "xhost: ...and says nothing when the destination is the same machine" "$ho_same"; fi
+# NEGATIVE CONTROL, and it is the one that makes the two above mean something: a
+# recovery back onto the relation's own machine has no hand-over to do and must
+# not say it does.
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel2" bash "$ZB" pve2 --config="$SC/cfg" 2>&1)"
+mkdir -p "$SC/rel2/pve2" && : > "$SC/rel2/pve2/paused"
+out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel2" bash "$ZB" pve2 --config="$SC/cfg" 2>&1)"
+case "$out" in
+    *"went to a DIFFERENT machine"*) bad "xhost control: a same-machine recovery says nothing about a hand-over" "it did" ;;
+    *) ok "xhost control: a same-machine recovery says nothing about a hand-over" ;;
+esac
+
 
 # POSITIVE CONTROL, and it is what makes the six refusals above mean something:
 # a well-formed list of the same length still resolves completely, in the order
@@ -2061,7 +2290,7 @@ exit 0
 ATSTUB
 chmod +x "$AT/bin/zfs"
 
-at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 at_rc=$?
 
 # at1 -- neither the newest nor the oldest.
@@ -2110,7 +2339,7 @@ else bad "at: an incomplete plan exits non-zero" "rc=0"; fi
 
 # The positive control for that status: when every dataset resolves, rc is 0 --
 # otherwise the assertion above would pass against a plan that always failed.
-at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+at_ok_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 at_ok_rc=$?
 if [ "$at_ok_rc" -eq 0 ]; then ok "at: a plan that resolves everything exits 0"
 else bad "at: a plan that resolves everything exits 0" "rc=$at_ok_rc" "$(printf '%s' "$at_ok_out" | tail -3)"; fi
@@ -2137,7 +2366,7 @@ esac
 # was measured correct -- but the criticism of the test stands: counting
 # `Zrodlo:` lines cannot tell a correct pair from a mangled one, and a mangled
 # pair is exactly what a `\t`-that-is-really-`t` would produce.
-f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+f1_out="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --plan --config="$SC/cfg" 2>&1)"
 case "$f1_out" in
     *"root@pve2:rpool/data/vm-101-disk-0"*) ok "f1: the ORIGINAL side resolves to its exact recorded value" ;;
     *) bad "f1: the ORIGINAL side resolves to its exact recorded value" "$(printf '%s' "$f1_out" | grep Zrodlo | head -2)" ;;
@@ -2188,7 +2417,7 @@ exit 0
 F2STUB
 chmod +x "$F2/bin/zfs"
 
-f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$F2/cfg" 2>&1)"
+f2_out="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$F2/cfg" 2>&1)"
 # The block under "Punkt docelowy" is what the confirmation would be about.
 f2_point="$(printf '%s\n' "$f2_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$f2_point" in
@@ -2208,7 +2437,7 @@ esac
 # NEGATIVE CONTROL: without --at the default policy is in force and says so, and
 # the newest IS the point -- otherwise the two assertions above would pass
 # against a build that had simply stopped classifying anything.
-f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --config="$F2/cfg" 2>&1)"
+f2_plain="$(PATH="$F2/bin:$PATH" bash "$ZB" loc --plan --config="$F2/cfg" 2>&1)"
 f2_ppoint="$(printf '%s\n' "$f2_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$f2_ppoint" in
     *toonew*) ok "f2: without --at the newest is still the point" ;;
@@ -2219,7 +2448,7 @@ case "$f2_plain" in
     *) bad "f2: ...and the default caption is still shown" ;;
 esac
 # When --at resolved nothing for a dataset, no strategy is computed at all.
-f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --config="$AT/cfg" 2>&1)"
+f2_none="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-1 --at '2026-08-10 12:00' --plan --config="$AT/cfg" 2>&1)"
 case "$f2_none" in
     *"Strategia:  (POMINIETA"*) ok "f2: a dataset --at could not resolve gets NO strategy" ;;
     *) bad "f2: a dataset --at could not resolve gets NO strategy" "$(printf '%s' "$f2_none" | grep Strategia | head -2)" ;;
@@ -2228,7 +2457,7 @@ esac
 # --- F3: both sides may be stated, and then they are PAIRED -----------------
 # The mutual exclusion was the reviewer's tightening of an approved UX and was
 # withdrawn. All three forms work; stating both is not remapping.
-f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
+f3_both="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store,hdd/store2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --plan --config="$SC/cfg" 2>&1)"
 f3_n="$(printf '%s\n' "$f3_both" | grep -c 'Zrodlo:')"
 if [ "$f3_n" = 2 ]; then ok "f3: both sides stated explicitly is accepted"
 else bad "f3: both sides stated explicitly is accepted" "expected 2 datasets, got $f3_n" "$(printf '%s' "$f3_both" | head -3)"; fi
@@ -2244,9 +2473,9 @@ case "$f3_len" in
     *) bad "f3: lists of different lengths are refused" "$(printf '%s' "$f3_len" | head -2)" ;;
 esac
 # And the single-sided forms still work, both ways round.
-f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --config="$SC/cfg" 2>&1)"
+f3_s="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --source hdd/store --plan --config="$SC/cfg" 2>&1)"
 case "$f3_s" in *"vm-101-disk-0"*) ok "f3: --source alone still works" ;; *) bad "f3: --source alone still works" ;; esac
-f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --config="$SC/cfg" 2>&1)"
+f3_t="$(PATH="$AT/bin:$PATH" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0 --plan --config="$SC/cfg" 2>&1)"
 case "$f3_t" in *"vm-101-disk-0"*) ok "f3: --target alone still works" ;; *) bad "f3: --target alone still works" ;; esac
 
 # ============================================================================
@@ -2302,7 +2531,7 @@ exit 1
 BBSTUB
 chmod +x "$BB/bin/zfs"
 
-bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --config="$BB/cfg" 2>&1)"
+bb_out="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --at '2026-08-10 12:00' --plan --config="$BB/cfg" 2>&1)"
 bb_point="$(printf '%s\n' "$bb_out" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$bb_point" in
     *WANTED*guid=G2*) ok "base: --at still selects the target it chose" ;;
@@ -2330,12 +2559,27 @@ esac
 # NEGATIVE CONTROL for the whole block: without --at the newest IS the target and
 # the base is still found, so these assertions are about --at and not about the
 # strategy having stopped working.
-bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --config="$BB/cfg" 2>&1)"
+bb_plain="$(PATH="$BB/bin:$PATH" bash "$ZB" loc --plan --config="$BB/cfg" 2>&1)"
 bb_ppoint="$(printf '%s\n' "$bb_plain" | sed -n '/Punkt docelowy/,+1p' | tail -1)"
 case "$bb_ppoint" in
     *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;
     *) bad "base: without --at the newest is the target, as before" "got: $bb_ppoint" ;;
 esac
+
+
+# The relation-level failure policy (D + B) lives in its own file so a negative
+# control can run those cases alone against a mutated tree, in seconds. See its
+# header. Sourced, so its cases count in this suite's totals exactly as before.
+# What an unreadable relationship record is called, and what an incomplete one
+# is called -- separate file for the same reason as relpolicy.sh, its header
+# says which.
+. "$DIR/records.sh"
+
+# `--onto`: the rebase arithmetic behind a cross-host recovery. Its own file for
+# the same reason as the two above.
+. "$DIR/onto.sh"
+
+. "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

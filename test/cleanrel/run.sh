@@ -774,6 +774,70 @@ case "$out" in
 esac
 
 # ---------------------------------------------------------------------------
+# THE SOURCE HALF DOES NOT %q-QUOTE, and that is the shape that was actually
+# on a live host.
+#
+# Measured on pve1, 2026-08-30, tearing down a lab relationship:
+#
+#     PEER_JOIN_GRANTED_DATASETS="hdd/labsrc hdd/labsrc/vm-900-disk-0 ..."
+#
+# Double-quoted, BARE spaces. The splitter knew `\ ` and `,` and neither
+# matched, so three names arrived at `zfs list` as ONE string and the audit
+# answered ALREADY GONE for three datasets that were all present. The report an
+# operator acts on told them to walk away from live data.
+#
+# d5 is the carrying assertion: a build that splits only on `\ ` and `,` gets
+# ONE data line here instead of three, and every other assertion in this block
+# still passes.
+# ---------------------------------------------------------------------------
+S="$WORK/srcnames"; mkdir -p "$S/clients" "$S/peers" "$S/rel" "$S/keys" "$S/pairing" "$S/home" "$S/removed" "$S/bin"
+printf 'CLIENT_NAME=pve9\nSTATE=active\nPEER_JOIN_GRANTED_DATASETS="hdd/labsrc hdd/labsrc/vm-900-disk-0 hdd/labsrc/vm-900-disk-1"\nSTATE=removed\n' > "$S/clients/pve9.conf"
+# All three EXIST -- the bug reported every one of them as gone.
+#
+# The stub compares the LAST ARGUMENT EXACTLY, and that is not a detail. A
+# `case "$*" in *" hdd/labsrc/vm-900-disk-1")` stub matches the GLUED string
+# too, because the glue ends in that same name -- so the broken build scored a
+# PRESENT for one of the three and two of these assertions passed against it.
+# The stub has to be as strict as the claim.
+cat > "$S/bin/zfs" <<'SNEOD'
+#!/bin/sh
+last=""
+for a in "$@"; do last="$a"; done
+case "$last" in
+  hdd/labsrc|hdd/labsrc/vm-900-disk-0|hdd/labsrc/vm-900-disk-1) exit 0 ;;
+esac
+exit 1
+SNEOD
+chmod +x "$S/bin/zfs"
+out=$(ZFS_BIN="$S/bin/zfs" run_cr "$S")
+
+# d5 -- three datasets, three lines.
+n=$(printf '%s\n' "$out" | grep -c '^      data')
+if [ "$n" = 3 ]; then ok "srcnames: a bare-space list is reported as THREE datasets"
+else bad "srcnames: a bare-space list is reported as THREE datasets" "got $n" "$out"; fi
+
+# d6 -- and the consequence that made it dangerous.
+case "$out" in
+    *"ALREADY GONE"*) bad "srcnames: present data is NOT reported as gone" "$(printf '%s' "$out" | grep data)" ;;
+    *) ok "srcnames: present data is NOT reported as gone" ;;
+esac
+
+# d7 -- each name intact and individually verified.
+for want in hdd/labsrc hdd/labsrc/vm-900-disk-0 hdd/labsrc/vm-900-disk-1; do
+    case "$out" in
+        *"$want   (PRESENT)"*) ok "srcnames: $want survives the split and is PRESENT" ;;
+        *) bad "srcnames: $want survives the split and is PRESENT" "$(printf '%s' "$out" | grep data)" ;;
+    esac
+done
+
+# d8 -- the quotes must not survive into a name that gets pasted into a destroy.
+if printf '%s\n' "$out" | grep -qE 'data[[:space:]]+[^[:space:]]*"'; then
+    bad "srcnames: no reported name carries a quote" "$(printf '%s' "$out" | grep data)"
+else
+    ok "srcnames: no reported name carries a quote"
+fi
+
+# ---------------------------------------------------------------------------
 # "PROBABLY LEAKED" IS NOT A VERDICT.
 #
 # Reviewer, 2026-08-26: a hold may be called orphaned only against evidence --
@@ -948,6 +1012,135 @@ out=$(proof_run --release-hold=tank/nothing@here --yes)
 case "$out" in
     *"does not carry"*) ok "release: a snapshot without our hold is refused, not silently ok" ;;
     *) bad "release: a snapshot without our hold is refused, not silently ok" "$out" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# WHAT THE AUDIT COULD NOT SEE, AND SAID NOTHING ABOUT.
+#
+# Measured on pve9, 2026-08-30, clearing the lab. The run ended with
+#
+#     no relationship traces on this host at all
+#
+# while the same host carried:
+#
+#   * 35 `<name>.conf.removed-<ts>` records, holding peer addresses, delegated
+#     account names, dataset paths and key fingerprints;
+#   * THREE replica jobs in root's crontab, scheduled to copy `hdd/labcoll`
+#     onto removable media -- a dataset the SAME run had just listed under
+#     DATA WITHOUT A RELATIONSHIP.
+#
+# Neither is an orphan and neither is this tool's to delete. The defect is the
+# sentence: a tool whose question is "what is on this host" answered "nothing"
+# while both were there.
+# ---------------------------------------------------------------------------
+V="$WORK/unseen"; mkdir -p "$V/clients" "$V/peers" "$V/rel" "$V/keys" \
+                           "$V/pairing" "$V/home" "$V/removed" "$V/bin"
+
+# A. Archived records are named.
+printf 'CLIENT_NAME=alfa\nPEER_HOST=192.0.2.7\nSTATE=removed\n' \
+    > "$V/clients/alfa.conf.removed-20260829-130116"
+printf 'CLIENT_NAME=alfa\nPEER_HOST=192.0.2.7\nSTATE=removed\n' \
+    > "$V/clients/alfa.conf.removed-20260829-130150"
+out=$(run_cr "$V")
+case "$out" in
+    *"ARCHIVED RECORDS (2)"*) ok "unseen: archived records are counted and reported" ;;
+    *) bad "unseen: archived records are counted and reported" "$out" ;;
+esac
+case "$out" in
+    *"alfa.conf.removed-20260829-130116"*) ok "unseen: ...and one is named, so it can be read" ;;
+    *) bad "unseen: ...and one is named, so it can be read" "$out" ;;
+esac
+# THE CARRYING ASSERTION for this half: the old sentence claimed the opposite.
+case "$out" in
+    *"no relationship traces on this host at all"*)
+        bad "unseen: the audit no longer claims the host is empty while it is not" "$out" ;;
+    *) ok "unseen: the audit no longer claims the host is empty while it is not" ;;
+esac
+rm -f "$V"/clients/*.removed-*
+
+# B. Replica jobs are found through the crontab's own "# Source:" line -- the
+#    line this tool already hashed for its safety check and never read. The
+#    config deliberately sits OUTSIDE the package's own directories, because on
+#    pve9 it did.
+mkdir -p "$V/home/opuser"
+cat > "$V/jobs-elsewhere.conf" <<VEOF
+[defaults]
+	host_label = h9
+[replica:weekly]
+	source = tank/here,tank/gone
+	dst = usbrep1/replica
+	schedule = 30 2 * * *
+	prefix = replica_
+VEOF
+cat > "$V/bin/crontab" <<VEOF
+#!/bin/sh
+# only root has a managed block, and only for -l
+case "\$*" in
+  *"-l -u root"|"-l") ;;
+  *) exit 1 ;;
+esac
+cat <<'BLK'
+# BEGIN zfs-backup-managed (generated by gen-cron.sh -- do not hand-edit, re-run gen-cron.sh instead)
+# Source: $V/jobs-elsewhere.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+30 2 * * * echo placeholder
+# END zfs-backup-managed
+BLK
+VEOF
+chmod +x "$V/bin/crontab"
+# `id root` does not resolve on the box this suite runs on, so the loop that
+# walks the host's crontabs skipped root entirely. Stubbed for ROOT ONLY --
+# every other lookup still fails, which is what the rest of the audit expects.
+cat > "$V/bin/id" <<'VIEOF'
+#!/bin/sh
+for a in "$@"; do last="$a"; done
+[ "$last" = root ] && exit 0
+exit 1
+VIEOF
+chmod +x "$V/bin/id"
+# tank/here exists, tank/gone does not -- so one report can show both.
+cat > "$V/bin/zfs" <<'VZEOF'
+#!/bin/sh
+for a in "$@"; do last="$a"; done
+case "$last" in
+  tank/here) exit 0 ;;
+esac
+exit 1
+VZEOF
+chmod +x "$V/bin/zfs"
+out=$(PATH="$V/bin:$PATH" ZFS_BIN="$V/bin/zfs" run_cr "$V")
+case "$out" in
+    *"REPLICA JOBS"*) ok "unseen: a replica job is reported at all" ;;
+    *) bad "unseen: a replica job is reported at all" "$out" ;;
+esac
+case "$out" in
+    *"weekly"*) ok "unseen: ...by name" || : ;;
+    *) bad "unseen: ...by name" "$out" ;;
+esac
+case "$out" in
+    *"jobs-elsewhere.conf"*) ok "unseen: ...naming the config, which lives outside the package's own dirs" ;;
+    *) bad "unseen: ...naming the config, which lives outside the package's own dirs" "$out" ;;
+esac
+# THE CARRYING ASSERTION for this half. A job whose source is gone fires
+# nightly and alerts; reporting the job without checking its source would read
+# as healthy.
+case "$out" in
+    *"SOURCE GONE"*tank/gone*) ok "unseen: A REPLICA WHOSE SOURCE IS GONE IS CALLED OUT" ;;
+    *) bad "unseen: A REPLICA WHOSE SOURCE IS GONE IS CALLED OUT" "$out" ;;
+esac
+# NEGATIVE CONTROL: the source that DOES exist must not be flagged, or the
+# assertion above would pass against a build that flagged everything.
+case "$out" in
+    *"SOURCE GONE"*tank/here*) bad "unseen: a source that exists is NOT flagged" "$out" ;;
+    *) ok "unseen: a source that exists is NOT flagged" ;;
+esac
+
+# C. A managed block whose config is gone is its own finding: the jobs still
+#    run and nothing on the host can regenerate or amend them.
+rm -f "$V/jobs-elsewhere.conf"
+out=$(PATH="$V/bin:$PATH" ZFS_BIN="$V/bin/zfs" run_cr "$V")
+case "$out" in
+    *"SCHEDULE WITHOUT ITS CONFIG"*) ok "unseen: a managed block whose config is gone is reported" ;;
+    *) bad "unseen: a managed block whose config is gone is reported" "$out" ;;
 esac
 
 echo "--------------------------------------------"

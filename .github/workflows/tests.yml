@@ -47,16 +47,13 @@ jobs:
     name: dependency graph matches the tree
     runs-on: ubuntu-latest
     steps:
-      # Shallow again since 2026-08-20. This job carried `fetch-depth: 0` for
-      # ONE reason (REV-20260812-115 F1): --verify ran reviewctl, which asserts
-      # that every commit-bearing review header names a SHA reachable from the
-      # published branch, so CI had to clone the repository's entire history to
-      # validate docs/internal/reviews/. That check is no longer part of
-      # --verify -- HANDOFF.md retired the review protocol on 2026-08-15 and the
-      # gate outlived it by five days -- so the history is not needed here.
-      # The archive and reviewctl.sh both stay; run ./test/reviewctl.sh --verify
-      # by hand if it is ever wanted.
+      # Full history is required by reviewctl's commit reachability checks.
+      # In PR CI impact.sh verifies against candidate HEAD; on main it verifies
+      # the same tree after publication. A shallow clone can falsely reject an
+      # older reviewed or delivered SHA whose ancestor is simply absent.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # --verify is the anti-drift assertion: every tracked shell file must be
       # declared in test/deps.conf, every declared suite must exist and be
       # executable, contract membership must be symmetric. An unregistered new
